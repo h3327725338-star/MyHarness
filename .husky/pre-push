@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+
+set -e
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+	[ -z "$local_sha" ] && continue
+	case "$local_sha" in
+		0000000000000000000000000000000000000000) continue ;;
+	esac
+	node scripts/release-audit.mjs --ref "$local_sha"
+done

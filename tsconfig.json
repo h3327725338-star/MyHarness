@@ -1,0 +1,25 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"paths": {
+			"*": ["./*"],
+			"@myharness/ai": ["./packages/ai/src/index.ts"],
+			"@myharness/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@myharness/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@myharness/ai/dist/*": ["./packages/ai/src/*"],
+			"@myharness/agent-core": ["./packages/agent/src/index.ts"],
+			"@myharness/agent-core/*": ["./packages/agent/src/*"],
+			"@myharness/agent-sqlite-node": ["./packages/storage/sqlite-node/src/index.ts"],
+			"@myharness/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@myharness/coding-agent/*": ["./packages/coding-agent/src/*"],
+			"typebox": ["./node_modules/typebox"],
+			"@myharness/tui": ["./packages/tui/src/index.ts"],
+			"@myharness/tui/*": ["./packages/tui/src/*"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/storage/*/src/**/*", "packages/storage/*/test/**/*", "packages/coding-agent/examples/**/*"],
+	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/gondolin/**"]
+}

@@ -1,0 +1,20 @@
+{
+	"name": "@myharness/coding-agent-install",
+	"version": "0.80.10",
+	"private": true,
+	"license": "Apache-2.0",
+	"description": "Lockfile root used by the MyHarness installer and updater.",
+	"dependencies": {
+		"@myharness/coding-agent": "0.80.10"
+	},
+	"overrides": {
+		"rimraf": "6.1.2",
+		"brace-expansion": "5.0.12",
+		"gaxios": {
+			"rimraf": "6.1.2"
+		}
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}

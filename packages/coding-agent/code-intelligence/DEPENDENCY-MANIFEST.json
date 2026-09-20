@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "project": "myharness",
+  "releaseVersion": "0.4.0",
+  "myharnessVersionRange": ">=0.80.10 <0.81.0",
+  "platform": {
+    "os": "Windows",
+    "architecture": "x64",
+    "defaultMode": "lightweight",
+    "optionalInstall": "per-language",
+    "offlineAtRuntime": true,
+    "globalInstallation": "none"
+  },
+  "sourceRuntime": {
+    "lightweightIndex": "packages/coding-agent/src/symbols/index",
+    "languageServers": "not stored in the source checkout",
+    "releaseManifest": "runtime-manifest.json"
+  },
+  "entries": [
+    {"languages":["typescript","javascript"],"server":"typescript-language-server","version":"5.3.0","license":"Apache-2.0","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["python"],"server":"Pyright","version":"1.1.413","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["json"],"server":"vscode-json-language-server","version":"4.10.0","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["scss"],"server":"vscode-css-language-server","version":"4.10.0","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["shell"],"server":"bash-language-server","version":"5.6.0","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["svelte"],"server":"svelte-language-server","version":"0.18.4","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["vue"],"server":"@vue/language-server","version":"3.3.11","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["yaml"],"server":"yaml-language-server","version":"1.24.0","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["php"],"server":"Devsense PHP Language Server","version":"1.0.19264","license":"ISC package license; Windows binary terms retained","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["sql"],"server":"sqllens-language-server","version":"0.5.0","license":"MIT","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download"},
+    {"languages":["c","cpp"],"server":"clangd","version":"22.1.0","license":"Apache-2.0 with LLVM exceptions","runtime":"installed module artifact","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/CLANGD-LICENSE.txt"]},
+    {"languages":["java"],"server":"Eclipse JDT Language Server","version":"1.51.0","license":"EPL-2.0","runtime":"installed module artifact plus shared JRE","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/JDTLS-LICENSE"]},
+    {"languages":["rust"],"server":"rust-analyzer","version":"2026-09-07","license":"MIT OR Apache-2.0","runtime":"installed module artifact plus shared Rust toolchain","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/RUST-ANALYZER-LICENSE-MIT","licenses/RUST-ANALYZER-LICENSE-APACHE"]},
+    {"languages":["go"],"server":"gopls","version":"v0.23.0","license":"BSD-3-Clause","runtime":"installed module artifact plus shared Go runtime","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/GO-LICENSE"]},
+    {"languages":["csharp"],"server":"csharp-ls","version":"0.26.0","license":"MIT","runtime":"installed module artifact plus shared .NET SDK","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/CSHARP-LS-LICENSE","licenses/DOTNET-LICENSE.txt","licenses/DOTNET-THIRD-PARTY-NOTICES.txt"]},
+    {"languages":["kotlin"],"server":"Kotlin Language Server","version":"1.3.9","license":"Apache-2.0","runtime":"installed module artifact plus shared JRE","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/KOTLIN-LANGUAGE-SERVER-LICENSE.txt","licenses/KOTLIN-LICENSE-REPORT.html"]},
+    {"languages":["ruby"],"server":"Solargraph","version":"0.60.3","license":"MIT; Ruby runtime licenses retained","runtime":"installed module artifact plus shared Ruby runtime","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/RUBY-LICENSE.txt"]},
+    {"languages":["xml"],"server":"Eclipse LemMinX","version":"0.31.0","license":"EPL-2.0","runtime":"installed module artifact plus shared JRE","source":"MyHarness release artifact","distribution":"optional-download","licenseFiles":["licenses/LEMMINX-LICENSE"]},
+    {"languages":["swift"],"server":"SourceKit-LSP","version":"6.3.3","license":"Apache-2.0","runtime":"not downloaded","source":"Official Swift.org Windows distribution requires external MSVC, Windows SDK, Python, Git and Developer Mode","distribution":"external-prerequisites-required"}
+  ]
+}

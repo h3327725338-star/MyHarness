@@ -1,0 +1,13 @@
+Devsense PHP Language Server 1.0.19264
+
+The npm package declares ISC. Its Windows x64 executable is distributed under
+the package's freemium terms; free and premium features are not equivalent.
+Premium activation is not included in this plugin. The upstream package
+requires visible attribution to its README and directs users to the official
+purchase/activation pages:
+
+https://www.devsense.com/
+https://www.devsense.com/purchase
+
+The original package README and package metadata remain under
+runtime/node_modules/devsense-php-ls.

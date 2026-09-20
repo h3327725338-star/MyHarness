@@ -1,0 +1,62 @@
+node_modules/
+dist/
+.artifacts/
+*.log
+.DS_Store
+*.tsbuildinfo
+# packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+packages/ai/src/providers/data/
+packages/ai/src/providers/.model-generation-*/
+*.cpuprofile
+
+# Environment
+.env
+
+# Editor files
+.vscode/
+.zed/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Package specific
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+myharness-*.html
+out.html
+packages/coding-agent/binaries/
+# Optional, user-installed Windows language-server modules. The source tree
+# carries only the manifest, launcher, and redistribution notices.
+packages/coding-agent/code-intelligence/runtime/
+packages/coding-agent/code-intelligence/.staging/
+packages/coding-agent/code-intelligence/.downloads/
+packages/coding-agent/code-intelligence/data/
+/data/
+packages/coding-agent/data/
+/profiles-node/
+/test-artifacts/
+*.dmp
+*.sqlite
+*.sqlite3
+*.db
+tools/dev-launcher/target/
+todo.md
+plans/
+.myharness/hf-sessions/
+.myharness/hf-sessions-backup/
+# User-local Provider credentials and model registry. The normal agent
+# directory is outside the repository; this protects an in-repo override.
+/.myharness/agent/
+collect.sh

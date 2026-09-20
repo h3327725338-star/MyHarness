@@ -1,0 +1,61 @@
+# 仓库脚本说明与维护
+
+`scripts/` 里的脚本服务于检查、构建、发布、统计和本地启动。脚本的真实行为以脚本源码和根 `package.json` 为准；本文件只提供导航和写入边界。
+
+维护规则见 [maintenance.md](maintenance.md)，后续开发边界见 [roadmap.md](roadmap.md)。
+
+## 检查脚本
+
+| 脚本 | 作用 | 默认写入 |
+| --- | --- | --- |
+| `run-checks-parallel.mjs` | 并行运行 pinned deps、TS imports、shrinkwrap、install-lock、`tsgo` 和 browser smoke | 子进程缓存/构建产物可能更新 |
+| `check-pinned-deps.mjs` | 检查外部依赖是否使用精确版本 | 否 |
+| `check-ts-relative-imports.mjs` | 检查 `.ts` 中相对 `.js` import | 否 |
+| `check-browser-smoke.mjs` | 运行 browser smoke 检查 | 由 smoke 运行决定 |
+| `generate-coding-agent-shrinkwrap.mjs` | 生成或 `--check` 校验发布 shrinkwrap；不带 `--check` 会写文件 | 是（不带 `--check`） |
+| `generate-coding-agent-install-lock.mjs` | 生成或 `--check` 校验独立安装 lock；不带 `--check` 会写目录文件 | 是（不带 `--check`） |
+| `check-lockfile-commit.mjs` | 提交前阻止不符合锁文件约束的状态 | 否 |
+| `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式、用户路径、运行时产物、License 和 manifest | 否 |
+
+`npm run check` 先执行 `biome check --write`，再调用 `run-checks-parallel.mjs`；不要在自动化中把它当作纯诊断命令。
+
+## 构建、测试和性能
+
+- `build-binaries.sh` 使用 Bun 编译多平台 binary，并打包 docs、examples、system-prompts、assets 和 native bindings；它会清理指定的 binary 输出目录。
+- `profile-coding-agent-node.mjs` 测量 Node/Bun 启动路径，可选择 profile 目录和 CPU profile；性能数值只有在实际运行后才成立。
+- `agent-treeshake-smoke-entry.ts` 和 `browser-smoke-entry.ts` 是针对构建/runtime 边界的入口，不等于普通单元测试。Code Intelligence 的安装状态由 `packages/coding-agent/test/code-intelligence/runtime-manager.test.ts` 覆盖；真实语言服务器 E2E 需要已发布且有完整校验元数据的 Windows 归档。
+- `smoke-cli-local-provider.mjs` 验证本地 Provider smoke；需要明确区分本地 stub、真实外部 Provider 和完整交互启动。
+- `test-dev-launcher.ps1`、`repro-5893-wsl-bash.mjs` 等脚本是开发/回归工具，执行前先阅读参数和目标目录。
+
+## 发布和版本
+
+| 脚本 | 作用 |
+| --- | --- |
+| `sync-versions.js` | 检查 workspace lockstep version，并更新内部依赖版本；会写 package.json |
+| `release.mjs` | 执行版本、构建/检查和 release 流程 |
+| `local-release.mjs` | 本地发布流程 |
+| `publish.mjs` | 发布或 dry-run 发布 |
+| `release-notes.mjs` | 修复/生成 release notes 相关链接 |
+| `pre-commit.mjs` | 将 Biome 修改过且仍存在的已暂存文件重新加入 index |
+
+常用发布前命令：
+
+```powershell
+npm.cmd run audit:release
+npm.cmd run audit:public
+```
+
+`.husky/pre-commit` 审计 staged 内容；`.husky/pre-push` 按待推送 commit
+审计完整 tree；`release.mjs` 在版本变更前执行 worktree 审计。审计只输出
+类别、路径和行号，不输出匹配到的 credential 或个人值。测试中的明确
+synthetic fixture（例如 `test-secret`、`example.invalid`）不会被当成真实
+凭据；它们仍需保持明显为测试值。
+
+版本、发布、shrinkwrap、install lock 和 binary 脚本都属于写入操作。不要在未确认工作区和发布目标前加 `--force` 或清理输出。
+
+## 维护规则
+
+- 新脚本先添加到根 `package.json` 或对应 workflow 的明确入口，避免只能靠 undocumented 参数运行。
+- 脚本涉及 workspace、lockfile、dist、binary、用户目录或外部网络时，在本文件和脚本帮助文本中说明写入范围。
+- 任何脚本输出都必须脱敏，不打印 credential、token、cookie 或完整 authorization header。
+- 修改脚本后至少做静态语法检查；真实 build、publish、binary 和外部 smoke 必须单独报告是否执行。

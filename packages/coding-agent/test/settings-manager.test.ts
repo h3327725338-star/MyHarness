@@ -1,0 +1,830 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SettingsManager } from "../src/config/settings/index.ts";
+import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/platform/process/http-dispatcher.ts";
+
+describe("SettingsManager", () => {
+	const testDir = join(process.cwd(), "test-settings-tmp");
+	const agentDir = join(testDir, "agent");
+	const projectDir = join(testDir, "project");
+
+	beforeEach(() => {
+		// Clean up and create fresh directories
+		if (existsSync(testDir)) {
+			rmSync(testDir, { recursive: true });
+		}
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(join(projectDir, ".myharness"), { recursive: true });
+	});
+
+	afterEach(() => {
+		if (existsSync(testDir)) {
+			rmSync(testDir, { recursive: true });
+		}
+	});
+
+	describe("auto memory", () => {
+		it("persists the memory model configuration globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAutoMemorySettings({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+			});
+			await manager.flush();
+
+			expect(manager.getAutoMemorySettings()).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+			});
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.autoMemory).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+			});
+		});
+
+		it("keeps the selected model when automatic memory is turned off", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAutoMemorySettings({
+				enabled: false,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "medium",
+			});
+
+			expect(manager.getAutoMemorySettings()).toEqual({
+				enabled: false,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "medium",
+			});
+		});
+	});
+
+	describe("web search", () => {
+		it("persists endpoints, scope, engines, and strategy settings globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setWebSearchSettings({
+				enabled: true,
+				searxngUrl: "https://searx.example/",
+				crawl4aiUrl: "https://crawl.example/",
+				engineMode: "selected",
+				engines: ["brave"],
+				scope: "allowlist",
+				allowedDomains: ["Example.com"],
+				parallelPages: { mode: "manual", value: 3 },
+				searchRounds: { mode: "manual", value: 2 },
+			});
+			await manager.flush();
+
+			expect(manager.getWebSearchSettings()).toMatchObject({
+				enabled: true,
+				searxngUrl: "https://searx.example",
+				crawl4aiUrl: "https://crawl.example",
+				engineMode: "selected",
+				engines: ["brave"],
+				scope: "allowlist",
+				allowedDomains: ["example.com"],
+				parallelPages: { mode: "manual", value: 3 },
+				searchRounds: { mode: "manual", value: 2 },
+			});
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.webSearch).toMatchObject({ enabled: true, engineMode: "selected", scope: "allowlist" });
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getWebSearchSettings().parallelPages).toEqual({ mode: "manual", value: 3 });
+		});
+	});
+
+	describe("sub agent", () => {
+		it("persists the sub-agent configuration globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setSubAgentSettings({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+				taskTimeoutMs: 900_000,
+			});
+			await manager.flush();
+
+			expect(manager.getSubAgentSettings()).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+				taskTimeoutMs: 900_000,
+				totalRuntimeLimitMs: 900_000,
+				maxTurns: 0,
+				stallTimeoutMs: 600_000,
+				noProgressDetection: true,
+				repeatedOperationDetection: true,
+			});
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.subAgent).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+				taskTimeoutMs: 900_000,
+			});
+		});
+
+		it("keeps the selected model when sub-agent execution is turned off", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setSubAgentSettings({
+				enabled: false,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "medium",
+			});
+
+			expect(manager.getSubAgentSettings()).toEqual({
+				enabled: false,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "medium",
+				taskTimeoutMs: 0,
+				totalRuntimeLimitMs: 0,
+				maxTurns: 0,
+				stallTimeoutMs: 600_000,
+				noProgressDetection: true,
+				repeatedOperationDetection: true,
+			});
+		});
+
+		it("normalizes convergence settings and keeps unlimited values explicit", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setSubAgentSettings({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+				maxTurns: 20,
+				totalRuntimeLimitMs: 0,
+				stallTimeoutMs: 0,
+				noProgressDetection: false,
+				repeatedOperationDetection: true,
+			});
+			await manager.flush();
+
+			expect(manager.getSubAgentSettings()).toMatchObject({
+				maxTurns: 20,
+				taskTimeoutMs: 0,
+				totalRuntimeLimitMs: 0,
+				stallTimeoutMs: 0,
+				noProgressDetection: false,
+				repeatedOperationDetection: true,
+			});
+		});
+	});
+
+	describe("context window", () => {
+		it("persists independent Main Agent and Subagent limits", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setContextWindowSettings({ main: 262144, subagent: 65536 });
+			await manager.flush();
+
+			expect(manager.getContextWindowSettings()).toEqual({ main: 262144, subagent: 65536 });
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.contextWindow).toEqual({ main: 262144, subagent: 65536 });
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getConfiguredContextWindow("main")).toBe(262144);
+			expect(reloaded.getConfiguredContextWindow("subagent")).toBe(65536);
+		});
+
+		it("filters corrupt values from persisted settings", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ contextWindow: { main: "NaN" } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getContextWindowSettings()).toEqual({});
+		});
+	});
+
+	describe("vision assistant", () => {
+		it("persists the selected vision model globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setVisionAssistantSettings({
+				enabled: true,
+				provider: "openai",
+				model: "vision-test",
+				thinkingLevel: "medium",
+			});
+			await manager.flush();
+
+			expect(manager.getVisionAssistantSettings()).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "vision-test",
+				thinkingLevel: "medium",
+			});
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.visionAssistant).toEqual({
+				enabled: true,
+				provider: "openai",
+				model: "vision-test",
+				thinkingLevel: "medium",
+			});
+		});
+
+		it("keeps the selected model when the vision assistant is turned off", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setVisionAssistantSettings({
+				enabled: false,
+				provider: "openai",
+				model: "vision-test",
+				thinkingLevel: "low",
+			});
+
+			expect(manager.getVisionAssistantSettings()).toEqual({
+				enabled: false,
+				provider: "openai",
+				model: "vision-test",
+				thinkingLevel: "low",
+			});
+		});
+
+		it("persists manual vision capability test results globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setVisionCapabilityTest("custom", "vision/model", "supported");
+			await manager.flush();
+
+			const record = manager.getVisionCapabilityTest("custom", "vision/model");
+			expect(record?.status).toBe("supported");
+			expect(record?.testedAt).toEqual(expect.any(Number));
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.visionCapabilityTests["custom/vision%2Fmodel"]).toEqual(record);
+		});
+	});
+
+	describe("Git integration", () => {
+		it("persists the switch in project settings without changing global settings", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setGitIntegrationEnabled(true);
+			await manager.flush();
+
+			expect(manager.getGitIntegrationSettings()).toEqual({ enabled: true });
+			const projectSettings = JSON.parse(readFileSync(join(projectDir, ".myharness", "settings.json"), "utf-8"));
+			expect(projectSettings.gitIntegration).toEqual({ enabled: true });
+			expect(existsSync(join(agentDir, "settings.json"))).toBe(false);
+
+			manager.setGitIntegrationEnabled(false);
+			await manager.flush();
+			expect(manager.getGitIntegrationSettings()).toEqual({ enabled: false });
+		});
+	});
+
+	describe("usage ranking", () => {
+		it("persists slash-command and settings-item usage globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.recordSlashCommandUsage("model");
+			manager.recordSlashCommandUsage("model");
+			manager.recordSlashCommandUsage("mode");
+			manager.recordSettingsItemUsage("auto-memory");
+			await manager.flush();
+
+			expect(manager.getSlashCommandUsageCounts()).toEqual({ model: 2, mode: 1 });
+			expect(manager.getSettingsItemUsageCounts()).toEqual({ "auto-memory": 1 });
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getSlashCommandUsageCounts()).toEqual({ model: 2, mode: 1 });
+			expect(reloaded.getSettingsItemUsageCounts()).toEqual({ "auto-memory": 1 });
+		});
+
+		it("ignores invalid stored counts", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					usageRanking: {
+						slashCommands: { model: 3, settings: -1, compact: "many" },
+					},
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSlashCommandUsageCounts()).toEqual({ model: 3 });
+		});
+	});
+
+	describe("preserves externally added settings", () => {
+		it("should preserve enabledModels when changing thinking level", async () => {
+			// Create initial settings file
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					theme: "dark",
+					defaultModel: "claude-sonnet",
+				}),
+			);
+
+			// Create SettingsManager (simulates MyHarness starting up)
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// Simulate user editing settings.json externally to add enabledModels
+			const currentSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			currentSettings.enabledModels = ["claude-opus-4-5", "gpt-5.2-codex"];
+			writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 2));
+
+			// User changes thinking level via Shift+Tab
+			manager.setDefaultThinkingLevel("high");
+			await manager.flush();
+
+			// Verify enabledModels is preserved
+			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(savedSettings.enabledModels).toEqual(["claude-opus-4-5", "gpt-5.2-codex"]);
+			expect(savedSettings.defaultThinkingLevel).toBe("high");
+			expect(savedSettings.theme).toBe("dark");
+			expect(savedSettings.defaultModel).toBe("claude-sonnet");
+		});
+
+		it("should preserve custom settings when changing theme", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					defaultModel: "claude-sonnet",
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// User adds custom settings externally
+			const currentSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			currentSettings.shellPath = "/bin/zsh";
+			currentSettings.extensions = ["/path/to/extension.ts"];
+			writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 2));
+
+			// User changes theme
+			manager.setTheme("light");
+			await manager.flush();
+
+			// Verify all settings preserved
+			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(savedSettings.shellPath).toBe("/bin/zsh");
+			expect(savedSettings.extensions).toEqual(["/path/to/extension.ts"]);
+			expect(savedSettings.theme).toBe("light");
+		});
+
+		it("should let in-memory changes override file changes for same key", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					theme: "dark",
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// User externally sets thinking level to "low"
+			const currentSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			currentSettings.defaultThinkingLevel = "low";
+			writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 2));
+
+			// But then changes it via UI to "high"
+			manager.setDefaultThinkingLevel("high");
+			await manager.flush();
+
+			// In-memory change should win
+			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(savedSettings.defaultThinkingLevel).toBe("high");
+		});
+	});
+
+	describe("packages migration", () => {
+		it("should keep local-only extensions in extensions array", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					extensions: ["/local/ext.ts", "./relative/ext.ts"],
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getPackages()).toEqual([]);
+			expect(manager.getExtensionPaths()).toEqual(["/local/ext.ts", "./relative/ext.ts"]);
+		});
+
+		it("should handle packages with filtering objects", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					packages: [
+						"npm:simple-pkg",
+						{
+							source: "npm:shitty-extensions",
+							extensions: ["extensions/oracle.ts"],
+							skills: [],
+						},
+					],
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			const packages = manager.getPackages();
+			expect(packages).toHaveLength(2);
+			expect(packages[0]).toBe("npm:simple-pkg");
+			expect(packages[1]).toEqual({
+				source: "npm:shitty-extensions",
+				extensions: ["extensions/oracle.ts"],
+				skills: [],
+			});
+		});
+	});
+
+	describe("reload", () => {
+		it("should reload global settings from disk", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					theme: "dark",
+					extensions: ["/before.ts"],
+				}),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					theme: "light",
+					extensions: ["/after.ts"],
+					defaultModel: "claude-sonnet",
+				}),
+			);
+
+			await manager.reload();
+
+			expect(manager.getTheme()).toBe("light");
+			expect(manager.getExtensionPaths()).toEqual(["/after.ts"]);
+			expect(manager.getDefaultModel()).toBe("claude-sonnet");
+		});
+
+		it("should keep previous settings when file is invalid", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			writeFileSync(settingsPath, "{ invalid json");
+			await manager.reload();
+
+			expect(manager.getTheme()).toBe("dark");
+		});
+	});
+
+	describe("theme setting", () => {
+		it("stores slash-separated automatic theme settings separately from fixed theme names", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "light/dark" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getTheme()).toBeUndefined();
+			expect(manager.getThemeSetting()).toBe("light/dark");
+
+			manager.setTheme("solarized-light/tokyo-night");
+			await manager.flush();
+
+			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(savedSettings.theme).toBe("solarized-light/tokyo-night");
+		});
+	});
+
+	describe("error tracking", () => {
+		it("should collect and clear load errors via drainErrors", () => {
+			const globalSettingsPath = join(agentDir, "settings.json");
+			const projectSettingsPath = join(projectDir, ".myharness", "settings.json");
+			writeFileSync(globalSettingsPath, "{ invalid global json");
+			writeFileSync(projectSettingsPath, "{ invalid project json");
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			const errors = manager.drainErrors();
+
+			expect(errors).toHaveLength(2);
+			expect(errors.map((e) => e.scope).sort()).toEqual(["global", "project"]);
+			expect(manager.drainErrors()).toEqual([]);
+		});
+	});
+
+	describe("project trust", () => {
+		it("should skip project settings when project is not trusted", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "global" }));
+			writeFileSync(join(projectDir, ".myharness", "settings.json"), JSON.stringify({ theme: "project" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir, { projectTrusted: false });
+
+			expect(manager.isProjectTrusted()).toBe(false);
+			expect(manager.getTheme()).toBe("global");
+			expect(manager.getProjectSettings()).toEqual({});
+		});
+
+		it("should reload project settings after trust changes to true", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "global" }));
+			writeFileSync(join(projectDir, ".myharness", "settings.json"), JSON.stringify({ theme: "project" }));
+			const manager = SettingsManager.create(projectDir, agentDir, { projectTrusted: false });
+
+			manager.setProjectTrusted(true);
+
+			expect(manager.isProjectTrusted()).toBe(true);
+			expect(manager.getTheme()).toBe("project");
+		});
+
+		it("should fail project settings writes when project is not trusted", async () => {
+			const projectSettingsPath = join(projectDir, ".myharness", "settings.json");
+			writeFileSync(projectSettingsPath, JSON.stringify({ packages: ["npm:existing"] }));
+			const manager = SettingsManager.create(projectDir, agentDir, { projectTrusted: false });
+
+			expect(() => manager.setProjectPackages(["npm:new"])).toThrow(
+				"Project is not trusted; refusing to write project settings",
+			);
+			await manager.flush();
+
+			expect(manager.getProjectSettings()).toEqual({});
+			expect(JSON.parse(readFileSync(projectSettingsPath, "utf-8"))).toEqual({ packages: ["npm:existing"] });
+		});
+
+		it("should read default project trust from global settings only", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+			writeFileSync(
+				join(projectDir, ".myharness", "settings.json"),
+				JSON.stringify({ defaultProjectTrust: "never" }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getDefaultProjectTrust()).toBe("always");
+		});
+
+		it("should default invalid project trust settings to ask", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "sometimes" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getDefaultProjectTrust()).toBe("ask");
+		});
+	});
+
+	describe("project settings directory creation", () => {
+		it("should not create .myharness folder when only reading project settings", () => {
+			// Create agent dir with global settings, but NO .myharness folder in project
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+
+			// Delete the .myharness folder that beforeEach created
+			rmSync(join(projectDir, ".myharness"), { recursive: true });
+
+			// Create SettingsManager (reads both global and project settings)
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// .myharness folder should NOT have been created just from reading
+			expect(existsSync(join(projectDir, ".myharness"))).toBe(false);
+
+			// Settings should still be loaded from global
+			expect(manager.getTheme()).toBe("dark");
+		});
+
+		it("should create .myharness folder when writing project settings", async () => {
+			// Create agent dir with global settings, but NO .myharness folder in project
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+
+			// Delete the .myharness folder that beforeEach created
+			rmSync(join(projectDir, ".myharness"), { recursive: true });
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// .myharness folder should NOT exist yet
+			expect(existsSync(join(projectDir, ".myharness"))).toBe(false);
+
+			// Write a project-specific setting
+			manager.setProjectPackages([{ source: "npm:test-pkg" }]);
+			await manager.flush();
+
+			// Now .myharness folder should exist
+			expect(existsSync(join(projectDir, ".myharness"))).toBe(true);
+
+			// And settings file should be created
+			expect(existsSync(join(projectDir, ".myharness", "settings.json"))).toBe(true);
+		});
+	});
+
+	describe("httpIdleTimeoutMs", () => {
+		it("should default to 5 minutes", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getHttpIdleTimeoutMs()).toBe(DEFAULT_HTTP_IDLE_TIMEOUT_MS);
+		});
+
+		it("should use merged global and project settings", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 300000 }));
+			writeFileSync(join(projectDir, ".myharness", "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 0 }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getHttpIdleTimeoutMs()).toBe(0);
+		});
+
+		it("should reject invalid timeout values", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: -1 }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(() => manager.getHttpIdleTimeoutMs()).toThrow("Invalid httpIdleTimeoutMs setting");
+		});
+	});
+
+	describe("externalEditor", () => {
+		const originalVisual = process.env.VISUAL;
+		const originalEditor = process.env.EDITOR;
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+		function setEditorEnv(visual?: string, editor?: string): void {
+			if (visual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = visual;
+			if (editor === undefined) delete process.env.EDITOR;
+			else process.env.EDITOR = editor;
+		}
+
+		afterEach(() => {
+			setEditorEnv(originalVisual, originalEditor);
+			if (originalPlatform) {
+				Object.defineProperty(process, "platform", originalPlatform);
+			}
+		});
+
+		it("should resolve editor commands by precedence", () => {
+			setEditorEnv("vim", "nano");
+			expect(SettingsManager.inMemory({ externalEditor: "code --wait" }).getExternalEditorCommand()).toBe(
+				"code --wait",
+			);
+			expect(SettingsManager.inMemory().getExternalEditorCommand()).toBe("vim");
+
+			setEditorEnv(undefined, "emacs");
+			expect(SettingsManager.inMemory().getExternalEditorCommand()).toBe("emacs");
+		});
+
+		it("should fall back to platform defaults", () => {
+			setEditorEnv();
+			Object.defineProperty(process, "platform", { value: "win32" });
+			expect(SettingsManager.inMemory().getExternalEditorCommand()).toBe("notepad");
+
+			Object.defineProperty(process, "platform", { value: "darwin" });
+			expect(SettingsManager.inMemory().getExternalEditorCommand()).toBe("nano");
+
+			Object.defineProperty(process, "platform", { value: "linux" });
+			expect(SettingsManager.inMemory().getExternalEditorCommand()).toBe("nano");
+		});
+	});
+
+	describe("outputPad", () => {
+		it("should default to 1 and persist binary values", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getOutputPad()).toBe(1);
+
+			manager.setOutputPad(0);
+			await manager.flush();
+
+			expect(manager.getOutputPad()).toBe(0);
+			const savedSettings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(savedSettings.outputPad).toBe(0);
+		});
+
+		it("should treat unsupported outputPad values as default padding", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ outputPad: 2 }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getOutputPad()).toBe(1);
+		});
+	});
+
+	describe("shellCommandPrefix", () => {
+		it("should load shellCommandPrefix from settings", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ shellCommandPrefix: "shopt -s expand_aliases" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getShellCommandPrefix()).toBe("shopt -s expand_aliases");
+		});
+
+		it("should return undefined when shellCommandPrefix is not set", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getShellCommandPrefix()).toBeUndefined();
+		});
+
+		it("should preserve shellCommandPrefix when saving unrelated settings", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ shellCommandPrefix: "shopt -s expand_aliases" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setTheme("light");
+			await manager.flush();
+
+			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(savedSettings.shellCommandPrefix).toBe("shopt -s expand_aliases");
+			expect(savedSettings.theme).toBe("light");
+		});
+	});
+
+	describe("getSessionDir", () => {
+		it("should return undefined when not set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSessionDir()).toBeUndefined();
+		});
+
+		it("should return global sessionDir", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "/tmp/sessions" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSessionDir()).toBe("/tmp/sessions");
+		});
+
+		it("should return project sessionDir, overriding global", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "/global/sessions" }));
+			writeFileSync(join(projectDir, ".myharness", "settings.json"), JSON.stringify({ sessionDir: "./sessions" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSessionDir()).toBe("./sessions");
+		});
+
+		it("should expand ~ in sessionDir", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "~/sessions" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSessionDir()).toBe(join(homedir(), "sessions"));
+		});
+	});
+
+	describe("getShellPath", () => {
+		it("should return undefined when not set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBeUndefined();
+		});
+
+		it("should return an absolute shellPath unchanged", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath: "/bin/zsh" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe("/bin/zsh");
+		});
+
+		it("should expand ~ in shellPath", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ shellPath: "~/.local/bin/agent-shell-sandbox" }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe(join(homedir(), ".local/bin/agent-shell-sandbox"));
+		});
+
+		it("should expand a bare ~ in shellPath", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath: "~" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe(homedir());
+		});
+	});
+
+	describe("provider enable state", () => {
+		it("keeps providers enabled by default and persists disabled providers globally", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.isProviderEnabled("anthropic")).toBe(true);
+			expect(manager.getDisabledProviders()).toEqual([]);
+
+			manager.setProviderEnabled("anthropic", false);
+			await manager.flush();
+
+			expect(manager.isProviderEnabled("anthropic")).toBe(false);
+			expect(manager.getDisabledProviders()).toEqual(["anthropic"]);
+			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).disabledProviders).toEqual([
+				"anthropic",
+			]);
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.isProviderEnabled("anthropic")).toBe(false);
+
+			reloaded.setProviderEnabled("anthropic", true);
+			await reloaded.flush();
+			expect(reloaded.isProviderEnabled("anthropic")).toBe(true);
+			expect(reloaded.getDisabledProviders()).toEqual([]);
+		});
+	});
+});

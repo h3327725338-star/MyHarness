@@ -1,0 +1,15 @@
+#!/bin/sh
+
+node scripts/check-lockfile-commit.mjs || exit 1
+
+echo "Running formatting, linting, and type checking..."
+npm run check || {
+  echo "Checks failed. Please fix the errors before committing."
+  exit 1
+}
+
+node scripts/pre-commit.mjs || exit 1
+
+node scripts/release-audit.mjs --staged || exit 1
+
+echo "All pre-commit checks passed!"

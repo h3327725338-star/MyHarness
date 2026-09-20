@@ -1,0 +1,19 @@
+{
+	"name": "myharness-extension-gondolin",
+	"private": true,
+	"version": "0.80.10",
+	"type": "module",
+	"scripts": {
+		"clean": "echo 'nothing to clean'",
+		"build": "echo 'nothing to build'",
+		"check": "echo 'nothing to check'"
+	},
+	"myharness": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {
+		"@earendil-works/gondolin": "0.5.0"
+	}
+}

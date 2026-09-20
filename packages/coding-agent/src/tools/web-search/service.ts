@@ -1,0 +1,715 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import type { ResolvedWebSearchSettings } from "../../config/settings/types.ts";
+import type { SessionManager } from "../../session/manager/index.ts";
+import { WebSearchCache } from "./cache.ts";
+import type {
+	WebFetchedPage,
+	WebFetchResponse,
+	WebSearchFailure,
+	WebSearchResponse,
+	WebSearchResult,
+	WebSearchSettingsSource,
+} from "./types.ts";
+import { canonicalizeHttpUrl, isFreshnessSensitiveQuery, isHostnameAllowed, validatePublicHttpUrl } from "./url.ts";
+
+export type WebSearchErrorCode = WebSearchFailure["code"];
+
+export class WebSearchError extends Error {
+	readonly code: WebSearchErrorCode;
+
+	constructor(code: WebSearchErrorCode, message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "WebSearchError";
+		this.code = code;
+	}
+}
+
+export const WEB_SEARCH_LIMITS = {
+	maxQueriesPerCall: 16,
+	maxResultsPerCall: 100,
+	maxPagesPerCall: 50,
+	maxSearchConcurrency: 4,
+	maxFetchConcurrency: 8,
+	maxAgentSearchRounds: 8,
+	requestTimeoutMs: 60_000,
+	maxTaskPolls: 120,
+	taskPollIntervalMs: 500,
+} as const;
+
+export interface WebSearchServiceOptions {
+	settings: WebSearchSettingsSource;
+	sessionManager?: SessionManager;
+	fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+	now?: () => number;
+	cache?: WebSearchCache;
+}
+
+export interface SearchRequest {
+	queries: string[];
+	engines?: string[];
+	timeRange?: "day" | "month" | "year";
+	maxResults?: number;
+	fresh?: boolean;
+}
+
+export interface FetchRequest {
+	urls: string[];
+	fresh?: boolean;
+}
+
+interface RawSearchResult {
+	title: string;
+	url: string;
+	snippet: string;
+	source: string;
+	engineRank: number;
+	engines: string[];
+	publishedAt?: string;
+	query: string;
+}
+
+interface SearchOneResponse {
+	results: RawSearchResult[];
+	failures: WebSearchFailure[];
+}
+
+interface CrawlResultRecord {
+	url?: unknown;
+	success?: unknown;
+	markdown?: unknown;
+	metadata?: unknown;
+	title?: unknown;
+	error_message?: unknown;
+	status_code?: unknown;
+	redirected_url?: unknown;
+}
+
+function sha256(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+	if (!Number.isSafeInteger(value)) return fallback;
+	return Math.min(max, Math.max(min, value!));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function failureFromError(error: unknown, fallbackCode: WebSearchErrorCode, fallbackMessage: string): WebSearchFailure {
+	if (error instanceof WebSearchError) {
+		return { code: error.code, message: error.message };
+	}
+	return { code: fallbackCode, message: error instanceof Error ? error.message : fallbackMessage };
+}
+
+function errorForSignal(signal: AbortSignal | undefined): WebSearchError | undefined {
+	if (signal?.aborted) return new WebSearchError("aborted", "联网操作已取消。", { cause: signal.reason });
+	return undefined;
+}
+
+function waitForDelay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const aborted = errorForSignal(signal);
+		if (aborted) {
+			reject(aborted);
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			reject(new WebSearchError("aborted", "联网操作已取消.", { cause: signal?.reason }));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+async function mapWithConcurrency<T, R>(
+	items: readonly T[],
+	concurrency: number,
+	worker: (item: T, index: number) => Promise<R>,
+	signal?: AbortSignal,
+): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let nextIndex = 0;
+	const run = async (): Promise<void> => {
+		while (true) {
+			const aborted = errorForSignal(signal);
+			if (aborted) throw aborted;
+			const index = nextIndex++;
+			if (index >= items.length) return;
+			results[index] = await worker(items[index]!, index);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, () => run()));
+	return results;
+}
+
+function cleanMarkdown(markdown: string): string {
+	return markdown
+		.replace(/\r\n?/gu, "\n")
+		.replace(/[ \t]+\n/gu, "\n")
+		.replace(/\n{4,}/gu, "\n\n")
+		.trim();
+}
+
+function extractMarkdown(result: CrawlResultRecord): string | undefined {
+	if (typeof result.markdown === "string") return cleanMarkdown(result.markdown);
+	if (!isRecord(result.markdown)) return undefined;
+	for (const key of ["fit_markdown", "raw_markdown", "markdown_with_citations"]) {
+		const value = stringValue(result.markdown[key]);
+		if (value) return cleanMarkdown(value);
+	}
+	return undefined;
+}
+
+function extractTitle(result: CrawlResultRecord): string | undefined {
+	const direct = stringValue(result.title);
+	if (direct) return direct;
+	if (isRecord(result.metadata)) {
+		return stringValue(result.metadata.title) ?? stringValue(result.metadata["og:title"]);
+	}
+	return undefined;
+}
+
+function resultArray(payload: unknown): CrawlResultRecord[] {
+	if (Array.isArray(payload)) return payload.filter(isRecord) as CrawlResultRecord[];
+	if (isRecord(payload) && Array.isArray(payload.results)) {
+		return payload.results.filter(isRecord) as CrawlResultRecord[];
+	}
+	if (isRecord(payload)) return [payload as CrawlResultRecord];
+	return [];
+}
+
+function normalizeEndpoint(base: string | undefined, path: string, label: string): string {
+	if (!base)
+		throw new WebSearchError("not_configured", `${label} URL 尚未配置。请在 /settings -> Web Search 中填写。`);
+	let parsed: URL;
+	try {
+		parsed = new URL(base);
+	} catch {
+		throw new WebSearchError("not_configured", `${label} URL 格式无效。`);
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		throw new WebSearchError("not_configured", `${label} URL 只允许 http:// 或 https://。`);
+	}
+	if (parsed.username || parsed.password) {
+		throw new WebSearchError("not_configured", `${label} URL 不允许携带用户名或密码。`);
+	}
+	const prefix = parsed.pathname.replace(/\/+$/u, "");
+	parsed.pathname = `${prefix}/${path.replace(/^\/+|\/+$/gu, "")}`;
+	parsed.search = "";
+	parsed.hash = "";
+	return parsed.toString();
+}
+
+export class WebSearchService {
+	private readonly options: WebSearchServiceOptions;
+	private readonly fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response>;
+	private readonly now: () => number;
+	private readonly cache: WebSearchCache;
+	private searchRound = 0;
+	private completedFetchInRound = false;
+	private engineCache: { fetchedAt: number; names: string[] } | undefined;
+
+	constructor(options: WebSearchServiceOptions) {
+		this.options = options;
+		this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
+		this.now = options.now ?? Date.now;
+		this.cache =
+			options.cache ??
+			new WebSearchCache(
+				options.sessionManager?.isPersisted()
+					? join(options.sessionManager.getSessionDir(), "web-cache")
+					: undefined,
+				this.now,
+			);
+	}
+
+	private settings(): ResolvedWebSearchSettings {
+		return this.options.settings.getWebSearchSettings();
+	}
+
+	private isCachedPageAllowed(page: WebFetchedPage, settings: ResolvedWebSearchSettings): boolean {
+		const finalUrl = typeof page.finalUrl === "string" ? page.finalUrl : undefined;
+		if (!finalUrl) return false;
+		const validation = validatePublicHttpUrl(finalUrl);
+		if (!validation.ok || !validation.hostname) return false;
+		return settings.scope !== "allowlist" || isHostnameAllowed(validation.hostname, settings.allowedDomains);
+	}
+
+	private ensureEnabled(): ResolvedWebSearchSettings {
+		const settings = this.settings();
+		if (!settings.enabled) throw new WebSearchError("blocked", "Web Search 已关闭，请先在 /settings 中启用。");
+		return settings;
+	}
+
+	private async requestJson(
+		url: string,
+		init: RequestInit,
+		signal: AbortSignal | undefined,
+		label: string,
+	): Promise<unknown> {
+		const aborted = errorForSignal(signal);
+		if (aborted) throw aborted;
+		const timeoutSignal = AbortSignal.timeout(WEB_SEARCH_LIMITS.requestTimeoutMs);
+		const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, { ...init, signal: requestSignal });
+		} catch (error) {
+			if (signal?.aborted) throw new WebSearchError("aborted", "联网操作已取消。", { cause: error });
+			if (timeoutSignal.aborted) throw new WebSearchError("timeout", `${label} 请求超时。`, { cause: error });
+			if ((error as { name?: string })?.name === "TimeoutError") {
+				throw new WebSearchError("timeout", `${label} 请求超时。`, { cause: error });
+			}
+			throw new WebSearchError("unavailable", `${label} 服务不可用。`, { cause: error });
+		}
+		let text: string;
+		try {
+			text = await response.text();
+		} catch (error) {
+			throw new WebSearchError("invalid_response", `${label} 响应无法读取。`, { cause: error });
+		}
+		if (!response.ok) {
+			throw new WebSearchError("http", `${label} 返回 HTTP ${response.status}。`);
+		}
+		try {
+			return JSON.parse(text) as unknown;
+		} catch (error) {
+			throw new WebSearchError("invalid_response", `${label} 返回的不是有效 JSON。`, { cause: error });
+		}
+	}
+
+	private authHeaders(): Record<string, string> {
+		const token = process.env.MYHARNESS_CRAWL4AI_API_TOKEN?.trim();
+		return token ? { Authorization: `Bearer ${token}` } : {};
+	}
+
+	async getAvailableEngines(signal?: AbortSignal, forceRefresh = false): Promise<string[]> {
+		const settings = this.settings();
+		if (!forceRefresh && this.engineCache && this.now() - this.engineCache.fetchedAt < 30_000) {
+			return [...this.engineCache.names];
+		}
+		const configUrl = normalizeEndpoint(settings.searxngUrl, "config", "SearXNG");
+		const payload = await this.requestJson(
+			configUrl,
+			{ method: "GET", headers: { Accept: "application/json" } },
+			signal,
+			"SearXNG /config",
+		);
+		const rawEngines = isRecord(payload) && Array.isArray(payload.engines) ? payload.engines : undefined;
+		if (!rawEngines) throw new WebSearchError("invalid_response", "SearXNG /config 未返回 engines 列表。");
+		const names = [
+			...new Set(
+				rawEngines
+					.filter(isRecord)
+					.filter((engine) => engine.inactive !== true)
+					.map((engine) => stringValue(engine.name))
+					.filter((name): name is string => Boolean(name)),
+			),
+		].sort((a, b) => a.localeCompare(b));
+		this.engineCache = { fetchedAt: this.now(), names };
+		return [...names];
+	}
+
+	private async resolveEngines(
+		requested: string[] | undefined,
+		settings: ResolvedWebSearchSettings,
+		signal: AbortSignal | undefined,
+	): Promise<{ engines?: string[]; availableEngines?: string[]; failures?: WebSearchFailure[] }> {
+		const requestedEngines = requested?.length ? requested : undefined;
+		const selectedEngines = settings.engineMode === "selected" ? settings.engines : undefined;
+		const configured = requestedEngines ?? selectedEngines;
+		if (!configured) return {};
+		const selectedSet = selectedEngines && new Set(selectedEngines.map((engine) => engine.trim().toLowerCase()));
+		const deniedBySettings = requestedEngines?.filter(
+			(engine) => selectedSet !== undefined && !selectedSet.has(engine.trim().toLowerCase()),
+		);
+		const candidates =
+			requestedEngines?.filter(
+				(engine) => selectedSet === undefined || selectedSet.has(engine.trim().toLowerCase()),
+			) ?? configured;
+		if (candidates.length === 0) {
+			throw new WebSearchError("engine_failure", "请求的搜索引擎不在 Web Search 设置允许的列表中。");
+		}
+		const availableEngines = await this.getAvailableEngines(signal);
+		const available = new Map(availableEngines.map((name) => [name.toLowerCase(), name]));
+		const engines = [
+			...new Set(candidates.map((name) => available.get(name.trim().toLowerCase())).filter(Boolean)),
+		] as string[];
+		if (engines.length === 0) {
+			throw new WebSearchError("engine_failure", "没有选择到当前 SearXNG 实例可用的搜索引擎。");
+		}
+		const missing = [...new Set(candidates.filter((name) => !available.has(name.trim().toLowerCase())))];
+		return {
+			engines,
+			availableEngines,
+			failures: [
+				...(deniedBySettings ?? []).map((engine) => ({
+					code: "engine_failure" as const,
+					message: `SearXNG engine ${engine} 未被 Web Search 设置允许。`,
+				})),
+				...missing.map((engine) => ({
+					code: "engine_failure" as const,
+					message: `SearXNG engine ${engine} 当前不可用。`,
+				})),
+			],
+		};
+	}
+
+	private beginSearchRound(settings: ResolvedWebSearchSettings): number {
+		if (this.searchRound === 0) this.searchRound = 1;
+		else if (this.completedFetchInRound) {
+			this.searchRound += 1;
+			this.completedFetchInRound = false;
+		}
+		const limit =
+			settings.searchRounds.mode === "manual" ? settings.searchRounds.value : WEB_SEARCH_LIMITS.maxAgentSearchRounds;
+		if (limit !== undefined && this.searchRound > limit) {
+			throw new WebSearchError("no_results", `已达到 Search Rounds 上限（${limit}）。`);
+		}
+		return this.searchRound;
+	}
+
+	private async searchOne(
+		query: string,
+		engines: string[] | undefined,
+		timeRange: SearchRequest["timeRange"],
+		signal: AbortSignal | undefined,
+	): Promise<SearchOneResponse> {
+		const settings = this.settings();
+		const searchUrl = normalizeEndpoint(settings.searxngUrl, "search", "SearXNG");
+		const url = new URL(searchUrl);
+		url.searchParams.set("q", query);
+		url.searchParams.set("format", "json");
+		if (timeRange) url.searchParams.set("time_range", timeRange);
+		if (engines && engines.length > 0) url.searchParams.set("engines", engines.join(","));
+		const payload = await this.requestJson(
+			url.toString(),
+			{ method: "GET", headers: { Accept: "application/json" } },
+			signal,
+			"SearXNG search",
+		);
+		if (!isRecord(payload) || !Array.isArray(payload.results)) {
+			throw new WebSearchError("invalid_response", "SearXNG search 未返回 results 列表。");
+		}
+		const results = payload.results.flatMap((item, index) => {
+			if (!isRecord(item)) return [];
+			const rawUrl = stringValue(item.url);
+			const title = stringValue(item.title);
+			if (!rawUrl || !title) return [];
+			const validation = validatePublicHttpUrl(rawUrl);
+			if (!validation.ok || !validation.url) return [];
+			const rawEngines = Array.isArray(item.engines)
+				? item.engines.filter((engine): engine is string => typeof engine === "string")
+				: stringValue(item.engine)
+					? [stringValue(item.engine)!]
+					: (engines ?? ["searxng"]);
+			return [
+				{
+					title,
+					url: validation.url,
+					snippet: stringValue(item.content) ?? stringValue(item.snippet) ?? "",
+					source: rawEngines.join(", ") || "searxng",
+					engineRank: index + 1,
+					engines: rawEngines,
+					publishedAt: stringValue(item.publishedDate) ?? stringValue(item.published_at),
+					query,
+				},
+			];
+		});
+		const unresponsiveEngines = Array.isArray(payload.unresponsive_engines) ? payload.unresponsive_engines : [];
+		const failures = unresponsiveEngines.flatMap((entry): WebSearchFailure[] => {
+			let engine: string | undefined;
+			let reason: string | undefined;
+			if (typeof entry === "string") {
+				engine = entry;
+			} else if (Array.isArray(entry)) {
+				engine = stringValue(entry[0]);
+				reason = stringValue(entry[1]);
+			} else if (isRecord(entry)) {
+				engine = stringValue(entry.engine) ?? stringValue(entry.name);
+				reason = stringValue(entry.error) ?? stringValue(entry.message);
+			}
+			if (!engine) return [];
+			return [
+				{
+					query,
+					code: "engine_failure",
+					message: `SearXNG engine ${engine} 未返回结果${reason ? `：${reason}` : ""}。`,
+				},
+			];
+		});
+		return { results, failures };
+	}
+
+	private rankResults(
+		results: RawSearchResult[],
+		maxResults: number,
+		settings: ResolvedWebSearchSettings,
+	): WebSearchResult[] {
+		const grouped = new Map<string, RawSearchResult & { occurrences: number; score: number }>();
+		for (const result of results) {
+			let key: string;
+			try {
+				key = canonicalizeHttpUrl(result.url);
+			} catch {
+				continue;
+			}
+			const existing = grouped.get(key);
+			if (existing) {
+				existing.occurrences += 1;
+				existing.score += 16;
+				if (result.engineRank < existing.engineRank) existing.engineRank = result.engineRank;
+				if (!existing.snippet && result.snippet) existing.snippet = result.snippet;
+				for (const engine of result.engines) if (!existing.engines.includes(engine)) existing.engines.push(engine);
+				continue;
+			}
+			const validation = validatePublicHttpUrl(result.url);
+			if (!validation.ok || !validation.hostname) continue;
+			if (settings.scope === "allowlist" && !isHostnameAllowed(validation.hostname, settings.allowedDomains))
+				continue;
+			const freshnessScore =
+				result.publishedAt && !Number.isNaN(Date.parse(result.publishedAt))
+					? Math.max(0, 10 - Math.floor((this.now() - Date.parse(result.publishedAt)) / (24 * 60 * 60 * 1_000)))
+					: 0;
+			grouped.set(key, { ...result, occurrences: 1, score: 100 - result.engineRank + freshnessScore });
+		}
+		return [...grouped.values()]
+			.sort((a, b) => b.score - a.score || a.engineRank - b.engineRank || a.title.localeCompare(b.title))
+			.slice(0, maxResults)
+			.map(({ occurrences: _occurrences, score: _score, ...result }) => result);
+	}
+
+	async search(request: SearchRequest, signal?: AbortSignal): Promise<WebSearchResponse> {
+		const settings = this.ensureEnabled();
+		const queries = [...new Set(request.queries.map((query) => query.trim()).filter(Boolean))];
+		if (queries.length === 0) throw new WebSearchError("no_results", "至少需要一个非空搜索问题。");
+		if (queries.length > WEB_SEARCH_LIMITS.maxQueriesPerCall) {
+			throw new WebSearchError("no_results", `单次最多支持 ${WEB_SEARCH_LIMITS.maxQueriesPerCall} 个查询。`);
+		}
+		const round = this.beginSearchRound(settings);
+		const maxResults = clampInteger(request.maxResults, 10, 1, WEB_SEARCH_LIMITS.maxResultsPerCall);
+		const resolvedEngines = await this.resolveEngines(request.engines, settings, signal);
+		const fresh = request.fresh === true || queries.some(isFreshnessSensitiveQuery);
+		const cacheKey = sha256(
+			JSON.stringify({
+				endpoint: settings.searxngUrl,
+				queries,
+				engines: resolvedEngines.engines,
+				timeRange: request.timeRange,
+				maxResults,
+				scope: settings.scope,
+				domains: settings.allowedDomains,
+			}),
+		);
+		const cached = await this.cache.get<WebSearchResponse>("search", cacheKey, settings.searchCacheTtlMs, fresh);
+		if (cached) return { ...cached, cacheHit: true, searchRound: round };
+
+		const failures: WebSearchFailure[] = [...(resolvedEngines.failures ?? [])];
+		const perQuery = await mapWithConcurrency(
+			queries,
+			WEB_SEARCH_LIMITS.maxSearchConcurrency,
+			async (query) => {
+				try {
+					return await this.searchOne(query, resolvedEngines.engines, request.timeRange, signal);
+				} catch (error) {
+					if (signal?.aborted) throw error;
+					return {
+						results: [],
+						failures: [{ query, ...failureFromError(error, "unavailable", "搜索请求失败。") }],
+					};
+				}
+			},
+			signal,
+		);
+		failures.push(...perQuery.flatMap((response) => response.failures));
+		const results = this.rankResults(
+			perQuery.flatMap((response) => response.results),
+			maxResults,
+			settings,
+		);
+		if (results.length === 0 && failures.length === queries.length) {
+			throw new WebSearchError(failures[0]?.code ?? "unavailable", failures[0]?.message ?? "所有搜索请求均失败。");
+		}
+		const response: WebSearchResponse = {
+			results,
+			failures,
+			cacheHit: false,
+			availableEngines: resolvedEngines.availableEngines,
+			searchRound: round,
+		};
+		await this.cache.set("search", cacheKey, response);
+		return response;
+	}
+
+	private async crawlOne(url: string, signal?: AbortSignal): Promise<{ page: WebFetchedPage; fullMarkdown: string }> {
+		const settings = this.settings();
+		const crawlUrl = normalizeEndpoint(settings.crawl4aiUrl, "crawl", "Crawl4AI");
+		const payload = await this.requestJson(
+			crawlUrl,
+			{
+				method: "POST",
+				headers: { Accept: "application/json", "Content-Type": "application/json", ...this.authHeaders() },
+				body: JSON.stringify({
+					urls: [url],
+					browser_config: { type: "BrowserConfig", params: { headless: true } },
+					crawler_config: {
+						type: "CrawlerRunConfig",
+						params: {
+							stream: false,
+							cache_mode: "bypass",
+							excluded_tags: ["script", "style", "nav", "header", "footer", "form", "noscript"],
+						},
+					},
+				}),
+			},
+			signal,
+			"Crawl4AI /crawl",
+		);
+		let completedPayload = payload;
+		if (isRecord(payload) && typeof payload.task_id === "string") {
+			for (let attempt = 0; attempt < WEB_SEARCH_LIMITS.maxTaskPolls; attempt += 1) {
+				const taskPayload = await this.requestJson(
+					normalizeEndpoint(settings.crawl4aiUrl, `task/${encodeURIComponent(payload.task_id)}`, "Crawl4AI"),
+					{ method: "GET", headers: { Accept: "application/json", ...this.authHeaders() } },
+					signal,
+					"Crawl4AI task",
+				);
+				completedPayload = taskPayload;
+				const status = isRecord(taskPayload) ? stringValue(taskPayload.status)?.toLowerCase() : undefined;
+				if (status === "completed" || (isRecord(taskPayload) && Array.isArray(taskPayload.results))) break;
+				if (status === "failed" || status === "error")
+					throw new WebSearchError("unavailable", "Crawl4AI 页面读取失败。");
+				await waitForDelay(WEB_SEARCH_LIMITS.taskPollIntervalMs, signal);
+			}
+		}
+		const record =
+			resultArray(completedPayload).find((candidate) => candidate.success !== false) ??
+			resultArray(completedPayload)[0];
+		if (!record) throw new WebSearchError("invalid_response", "Crawl4AI 未返回页面结果。");
+		if (record.success === false) {
+			throw new WebSearchError("unavailable", stringValue(record.error_message) ?? "Crawl4AI 页面读取失败。");
+		}
+		const markdown = extractMarkdown(record);
+		if (!markdown) throw new WebSearchError("invalid_response", "Crawl4AI 未返回 Markdown 内容。");
+		const finalUrl = stringValue(record.redirected_url) ?? stringValue(record.url) ?? url;
+		const validation = validatePublicHttpUrl(finalUrl);
+		if (!validation.ok || !validation.url || !validation.hostname) {
+			throw new WebSearchError("blocked", validation.message ?? "Crawl4AI 返回了不安全的最终 URL。");
+		}
+		const settingsForScope = this.settings();
+		if (
+			settingsForScope.scope === "allowlist" &&
+			!isHostnameAllowed(validation.hostname, settingsForScope.allowedDomains)
+		) {
+			throw new WebSearchError("blocked", "页面重定向到了 Website Scope 之外的域名。");
+		}
+		return {
+			page: { url, finalUrl: validation.url, title: extractTitle(record), markdown, cacheHit: false },
+			fullMarkdown: markdown,
+		};
+	}
+
+	async fetch(request: FetchRequest, signal?: AbortSignal): Promise<WebFetchResponse> {
+		const settings = this.ensureEnabled();
+		const uniqueUrls = [...new Map(request.urls.map((url) => [url, url])).values()];
+		const failures: WebSearchFailure[] = [];
+		const normalizedUrls = new Set<string>();
+		for (const input of uniqueUrls) {
+			const validation = validatePublicHttpUrl(input);
+			if (!validation.ok || !validation.url || !validation.hostname) {
+				failures.push({ url: input, code: "blocked", message: validation.message ?? "URL 无效或被安全策略阻止。" });
+				continue;
+			}
+			if (settings.scope === "allowlist" && !isHostnameAllowed(validation.hostname, settings.allowedDomains)) {
+				failures.push({ url: input, code: "blocked", message: "URL 不在 Website Scope allowlist 中。" });
+				continue;
+			}
+			normalizedUrls.add(canonicalizeHttpUrl(validation.url));
+		}
+		const maxPages =
+			settings.parallelPages.mode === "manual"
+				? (settings.parallelPages.value ?? 1)
+				: WEB_SEARCH_LIMITS.maxPagesPerCall;
+		const selectedUrls = [...normalizedUrls].slice(0, Math.min(maxPages, WEB_SEARCH_LIMITS.maxPagesPerCall));
+		if (normalizedUrls.size > selectedUrls.length) {
+			failures.push({
+				code: "no_results",
+				message: `Parallel Pages 只允许本次读取前 ${selectedUrls.length} 个 URL。`,
+			});
+		}
+		const fresh = request.fresh === true;
+		const pages = await mapWithConcurrency(
+			selectedUrls,
+			WEB_SEARCH_LIMITS.maxFetchConcurrency,
+			async (url) => {
+				const cacheKey = sha256(JSON.stringify({ endpoint: settings.crawl4aiUrl, url }));
+				const cached = await this.cache.get<WebFetchedPage>("fetch", cacheKey, settings.fetchCacheTtlMs, fresh);
+				if (cached && this.isCachedPageAllowed(cached, this.settings())) return { ...cached, cacheHit: true };
+				try {
+					const fetched = await this.crawlOne(url, signal);
+					await this.cache.set("fetch", cacheKey, fetched.page);
+					return fetched.page;
+				} catch (error) {
+					if (signal?.aborted) throw error;
+					failures.push({ url, ...failureFromError(error, "unavailable", "网页读取失败。") });
+					return undefined;
+				}
+			},
+			signal,
+		);
+		this.completedFetchInRound = true;
+		return {
+			pages: pages.filter((page): page is WebFetchedPage => Boolean(page)),
+			failures,
+			cacheHit: pages.some((page) => page?.cacheHit === true),
+		};
+	}
+
+	async health(signal?: AbortSignal): Promise<{
+		searxng: { ok: boolean; message: string; engines?: string[] };
+		crawl4ai: { ok: boolean; message: string };
+	}> {
+		const searxng = await (async () => {
+			try {
+				const engines = await this.getAvailableEngines(signal, true);
+				return { ok: true, message: `可用引擎 ${engines.length} 个`, engines };
+			} catch (error) {
+				const failure = failureFromError(error, "unavailable", "SearXNG 检查失败。");
+				return { ok: false, message: failure.message };
+			}
+		})();
+		const crawl4ai = await (async () => {
+			try {
+				const healthUrl = normalizeEndpoint(this.settings().crawl4aiUrl, "health", "Crawl4AI");
+				await this.requestJson(
+					healthUrl,
+					{ method: "GET", headers: { Accept: "application/json", ...this.authHeaders() } },
+					signal,
+					"Crawl4AI /health",
+				);
+				return { ok: true, message: "健康检查成功" };
+			} catch (error) {
+				const failure = failureFromError(error, "unavailable", "Crawl4AI 检查失败。");
+				return { ok: false, message: failure.message };
+			}
+		})();
+		return { searxng, crawl4ai };
+	}
+}
+
+export function createWebSearchService(options: WebSearchServiceOptions): WebSearchService {
+	return new WebSearchService(options);
+}
