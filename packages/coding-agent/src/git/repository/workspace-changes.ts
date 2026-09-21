@@ -66,7 +66,7 @@ export interface WorkspaceBaselineEntry {
 	/** 小文件：内容 sha256；大文件：空串（仅 stat 指纹可用）。 */
 	hash: string;
 	size: number;
-	/** size:mtime 指纹；一致即视为未变化，跳过内容读取。 */
+	/** size:mtime:ctime 指纹；一致即视为未变化，跳过内容读取。 */
 	statKey: string;
 }
 
@@ -107,7 +107,7 @@ function pathCompareKey(value: string): string {
 }
 
 /**
- * 对任务工作目录做一次基线快照。扫描使用 stat 指纹（size:mtime），仅对小文件
+ * 对任务工作目录做一次基线快照。扫描使用 stat 指纹（size:mtime:ctime），仅对小文件
  * （≤512KB，且内容读取总量 ≤ maxBytes）额外计算内容 sha256；不跟随符号链接，
  * 排除常见重目录（node_modules、dist、.git 等）。文件数超过 maxFiles 或内容
  * 读取预算耗尽时标记 truncated：基线仍可用于检测（含 added/deleted/modified），
@@ -171,7 +171,7 @@ export async function captureWorkspaceBaseline(
 			return;
 		}
 		const size = Number(stat.size);
-		const statKey = `${stat.size}:${stat.mtimeNs}`;
+		const statKey = `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 		let hash = "";
 		if (size <= BASELINE_CONTENT_HASH_MAX_BYTES) {
 			if (hashedBytes + size > maxBytes) {
@@ -262,7 +262,7 @@ export async function detectWorkspaceChangesFromBaseline(
 			} catch {
 				continue;
 			}
-			const statKey = `${stat.size}:${stat.mtimeNs}`;
+			const statKey = `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 			if (statKey !== baselineEntry.statKey) {
 				// 基线期未读内容的大文件：stat 变化即保守报告 modified。
 				changes.push({ path: relativePath, status: "modified" });
