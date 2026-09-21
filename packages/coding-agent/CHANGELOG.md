@@ -3886,7 +3886,7 @@ These methods are only on `HookCommandContext` (not `HookContext`) because they 
 - `hookTimeout` setting (hooks no longer have timeouts; use Ctrl+C to abort)
 - `resolveApiKey` parameter (use `ctx.modelRegistry.getApiKey(model)`)
 
-See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](../examples/extensions/) for the current API.
+See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/) for the current API.
 
 ### Custom Tools Migration
 
@@ -3922,7 +3922,7 @@ The new `ctx: CustomToolContext` provides `sessionManager`, `modelRegistry`, `mo
 - Reasons: `"start" | "switch" | "branch" | "tree" | "shutdown"` (no separate `"new"` reason; `/new` triggers `"switch"`)
 - `dispose()` method removed. Use `onSession` with `reason: "shutdown"` for cleanup
 
-See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](../examples/extensions/) for the current API.
+See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/) for the current API.
 
 ### SDK Migration
 
@@ -4068,7 +4068,7 @@ Total color count increased from 46 to 50. See [docs/themes.md](docs/themes.md) 
 - HTML export supports keyboard shortcuts: Ctrl+T to toggle thinking blocks, Ctrl+O to toggle tool outputs
 - HTML export supports theme-configurable background colors via optional `export` section in theme JSON ([#387](https://github.com/badlogic/pi-mono/pull/387) by [@mitsuhiko](https://github.com/mitsuhiko))
 - HTML export syntax highlighting now uses theme colors and matches TUI rendering
-- **Snake game example hook**: Demonstrates `ui.custom()`, `registerCommand()`, and session persistence. See [examples/hooks/snake.ts](examples/hooks/snake.ts).
+- **Snake game example hook**: Demonstrates `ui.custom()`, `registerCommand()`, and session persistence. See [examples/extensions/snake.ts](examples/extensions/snake.ts).
 - **`thinkingText` theme token**: Configurable color for thinking block text. ([#366](https://github.com/badlogic/pi-mono/pull/366) by [@paulbettner](https://github.com/paulbettner))
 
 ### Changed
@@ -4492,7 +4492,7 @@ Total color count increased from 46 to 50. See [docs/themes.md](docs/themes.md) 
 
 ### Added
 
-- **Custom tools**: Extend pi with custom tools written in TypeScript. Tools can provide custom TUI rendering, interact with users via `pi.ui` (select, confirm, input, notify), and maintain state across sessions via `onSession` callback. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](../examples/extensions/). ([#190](https://github.com/badlogic/pi-mono/issues/190))
+- **Custom tools**: Extend pi with custom tools written in TypeScript. Tools can provide custom TUI rendering, interact with users via `pi.ui` (select, confirm, input, notify), and maintain state across sessions via `onSession` callback. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/). ([#190](https://github.com/badlogic/pi-mono/issues/190))
 
 - **Hook and tool examples**: Added `examples/hooks/` and `examples/custom-tools/` with working examples. Examples are now bundled in npm and binary releases.
 
@@ -4670,7 +4670,7 @@ _Dedicated to Peter's shoulder ([@steipete](https://twitter.com/steipete))_
 
 ### Breaking Changes
 
-- **New RPC protocol**: The RPC mode (`--mode rpc`) has been completely redesigned with a new JSON protocol. The old protocol is no longer supported. See [`docs/rpc.md`](docs/rpc.md) for the new protocol documentation and [`test/rpc-example.ts`](test/rpc-example.ts) for a working example. Includes `RpcClient` TypeScript class for easy integration. ([#91](https://github.com/badlogic/pi-mono/issues/91))
+- **New RPC protocol**: The RPC mode (`--mode rpc`) has been completely redesigned with a new JSON protocol. The old protocol is no longer supported. See [`docs/rpc.md`](docs/rpc.md) for the current RPC status; the original working example was `test/rpc-example.ts` and is no longer present in this tree. Includes `RpcClient` TypeScript class for easy integration. ([#91](https://github.com/badlogic/pi-mono/issues/91))
 
 ### Changed
 
