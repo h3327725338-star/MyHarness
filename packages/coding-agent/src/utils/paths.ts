@@ -1,10 +1,30 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnProcessSync } from "./child-process.ts";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+const MAX_CANONICAL_PATH_CACHE_ENTRIES = 4096;
+const canonicalPathCache = new Map<string, { exists: boolean; value: string }>();
+
+function readCachedCanonicalPath(path: string): string | undefined {
+	const cached = canonicalPathCache.get(path);
+	if (!cached) return undefined;
+	if (cached.exists !== existsSync(path)) {
+		canonicalPathCache.delete(path);
+		return undefined;
+	}
+	return cached.value;
+}
+
+function cacheCanonicalPath(path: string, value: string, exists: boolean): void {
+	if (canonicalPathCache.size >= MAX_CANONICAL_PATH_CACHE_ENTRIES) {
+		const oldest = canonicalPathCache.keys().next().value;
+		if (oldest !== undefined) canonicalPathCache.delete(oldest);
+	}
+	canonicalPathCache.set(path, { exists, value });
+}
 
 export interface PathInputOptions {
 	/** Trim leading/trailing whitespace before normalization. */
@@ -40,17 +60,34 @@ export function canonicalizePath(path: string): string {
  */
 export function resolveCanonicalPath(input: string, baseDir: string = process.cwd()): string {
 	const resolved = resolvePath(input, baseDir);
+	const cached = readCachedCanonicalPath(resolved);
+	if (cached !== undefined) return cached;
 	const missingSegments: string[] = [];
 	let current = resolved;
 	while (true) {
+		const cachedBase = readCachedCanonicalPath(current);
+		if (cachedBase !== undefined) {
+			const value = missingSegments.length === 0 ? cachedBase : join(cachedBase, ...missingSegments.reverse());
+			cacheCanonicalPath(resolved, value, false);
+			return value;
+		}
 		try {
 			const canonicalBase = realpathSync.native(current);
-			return missingSegments.length === 0 ? canonicalBase : join(canonicalBase, ...missingSegments.reverse());
+			cacheCanonicalPath(current, canonicalBase, true);
+			const value = missingSegments.length === 0 ? canonicalBase : join(canonicalBase, ...missingSegments.reverse());
+			cacheCanonicalPath(resolved, value, missingSegments.length === 0);
+			return value;
 		} catch {
 			const parent = dirname(current);
-			if (parent === current) return resolved;
+			if (parent === current) {
+				cacheCanonicalPath(resolved, resolved, false);
+				return resolved;
+			}
 			const segment = basename(current);
-			if (!segment) return resolved;
+			if (!segment) {
+				cacheCanonicalPath(resolved, resolved, false);
+				return resolved;
+			}
 			missingSegments.push(segment);
 			current = parent;
 		}
@@ -154,14 +191,25 @@ export function resolvePath(input: string, baseDir: string = process.cwd(), opti
 }
 
 export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
-	const resolvedCwd = resolveCanonicalPath(cwd);
-	const resolvedPath = resolveCanonicalPath(filePath, resolvedCwd);
-	const relativePath = relative(resolvedCwd, resolvedPath);
+	const resolvedCwd = resolvePath(cwd);
+	const resolvedPath = resolvePath(filePath, resolvedCwd);
+	const lexicalRelativePath = relative(resolvedCwd, resolvedPath);
 	const isInsideCwd =
-		relativePath === "" ||
-		(relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+		lexicalRelativePath === "" ||
+		(lexicalRelativePath !== ".." && !lexicalRelativePath.startsWith(`..${sep}`) && !isAbsolute(lexicalRelativePath));
 
-	return isInsideCwd ? relativePath || "." : undefined;
+	if (isInsideCwd) return lexicalRelativePath || ".";
+
+	const canonicalCwd = resolveCanonicalPath(resolvedCwd);
+	const canonicalPath = resolveCanonicalPath(filePath, canonicalCwd);
+	const canonicalRelativePath = relative(canonicalCwd, canonicalPath);
+	const isCanonicalPathInsideCwd =
+		canonicalRelativePath === "" ||
+		(canonicalRelativePath !== ".." &&
+			!canonicalRelativePath.startsWith(`..${sep}`) &&
+			!isAbsolute(canonicalRelativePath));
+
+	return isCanonicalPathInsideCwd ? canonicalRelativePath || "." : undefined;
 }
 
 export function formatPathRelativeToCwdOrAbsolute(filePath: string, cwd: string): string {
