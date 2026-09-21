@@ -73,7 +73,7 @@ Static option values are used directly. System-prompt provider callbacks are inv
 
 Resource arrays are shallow-copied when a snapshot is created. Individual skill and prompt-template objects are not deep-copied.
 
-Stream options are shallow-copied when a snapshot is created. `headers` and `metadata` maps are shallow-copied; their values are not deep-copied. Provider authentication is resolved by the harness `Models` collection for each request so expiring credentials can refresh, while configured stream options and the derived session id come from the current turn snapshot. `AgentHarness` no longer accepts a `getApiKeyAndHeaders()` callback.
+Stream options are shallow-copied when a snapshot is created. `headers` and `metadata` maps are shallow-copied; their values are not deep-copied. Provider authentication is resolved by the harness `Models` collection for each request so expiring credentials can refresh, while configured stream options and the derived session id come from the current turn snapshot. Provider-initiated tool calls may be exposed through the optional host-owned `toolCallHandler`; the Agent Core routes them through the same validation, execution, events, cancellation, and persistence path as ordinary tool calls. `AgentHarness` no longer accepts a `getApiKeyAndHeaders()` callback.
 
 ### Session
 

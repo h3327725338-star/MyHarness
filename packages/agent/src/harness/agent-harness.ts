@@ -387,6 +387,7 @@ export class AgentHarness<
 				reasoning: streamOptions?.reasoning,
 				signal: streamOptions?.signal,
 				sessionId: turnState.sessionId,
+				toolCallHandler: streamOptions?.toolCallHandler,
 				timeoutMs: requestOptions.timeoutMs,
 				transport: requestOptions.transport,
 			});

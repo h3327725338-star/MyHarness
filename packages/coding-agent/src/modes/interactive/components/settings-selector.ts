@@ -1030,8 +1030,8 @@ class ApiKeysSubmenu extends Container {
 		if (provider.auth.oauth?.login) {
 			options.push({
 				value: "oauth-login",
-				label: "OAuth 登录（浏览器）",
-				description: "打开官方登录页并导入登录状态",
+				label: provider.auth.oauth.loginLabel ?? "OAuth 登录（浏览器）",
+				description: "打开官方登录页并完成登录",
 			});
 		}
 		for (const key of overview.apiKeys) {
@@ -1042,11 +1042,13 @@ class ApiKeysSubmenu extends Container {
 				description: key.active ? "正在使用" : "管理或设为当前",
 			});
 		}
-		options.push({
-			value: "add",
-			label: "添加新的 API Key",
-			description: "保存 Provider 密钥",
-		});
+		if (provider.auth.apiKey?.login) {
+			options.push({
+				value: "add",
+				label: "添加新的 API Key",
+				description: "保存 Provider 密钥",
+			});
+		}
 		options.push({ value: "back", label: "返回", description: "返回 Provider 列表" });
 		this.setContent(
 			new SelectSubmenu(
@@ -1597,6 +1599,9 @@ class ProvidersSubmenu extends Container {
 	}
 
 	private providerDescription(entry: ManagedProvider): string {
+		if (entry.provider.auth.oauth?.login && !entry.provider.auth.apiKey?.login) {
+			return entry.credentials.hasOAuth ? "OAuth · 已连接" : "OAuth · 未连接";
+		}
 		const kind = entry.custom ? "自定义" : "内置";
 		return `${kind} · ${entry.credentials.apiKeys.length} 个 Key`;
 	}
@@ -1628,7 +1633,10 @@ class ProvidersSubmenu extends Container {
 			...available.map((entry) => ({
 				value: `provider:${entry.provider.id}`,
 				label: entry.provider.name,
-				description: "添加 API Key",
+				description:
+					entry.provider.auth.oauth?.login && !entry.provider.auth.apiKey?.login
+						? (entry.provider.auth.oauth.loginLabel ?? "浏览器登录")
+						: "添加 API Key",
 			})),
 			{ value: "custom", label: "创建自定义 Provider", description: "接入兼容 API 服务" },
 		];
@@ -1728,8 +1736,8 @@ class ProvidersSubmenu extends Container {
 		if (supportsOAuthLogin) {
 			options.push({
 				value: "oauth-login",
-				label: "OAuth 登录（浏览器）",
-				description: "打开官方登录页并导入登录状态",
+				label: entry.provider.auth.oauth?.loginLabel ?? "OAuth 登录（浏览器）",
+				description: "打开官方登录页并完成登录",
 			});
 		}
 		if (supportsApiKeys) {
@@ -1744,6 +1752,13 @@ class ProvidersSubmenu extends Container {
 			label: "刷新模型",
 			description: "从当前 Provider 的模型目录读取可用模型",
 		});
+		if (entry.provider.getDiagnostics) {
+			options.push({
+				value: "diagnostics",
+				label: "运行诊断",
+				description: "查看 runtime、App Server、Prompt 和 Tool 状态",
+			});
+		}
 		if (entry.custom) {
 			options.push({
 				value: "custom",
@@ -1775,6 +1790,8 @@ class ProvidersSubmenu extends Container {
 						this.openApiKeys(entry.provider.id);
 					} else if (value === "refresh-models") {
 						void this.refreshProviderModels(entry);
+					} else if (value === "diagnostics") {
+						this.showProviderDiagnostics(entry);
 					} else if (value === "custom") {
 						this.openCustomProvider(entry.provider.id);
 					} else {
@@ -1782,6 +1799,24 @@ class ProvidersSubmenu extends Container {
 					}
 				},
 				() => void this.showRootMenu(),
+			),
+		);
+	}
+
+	private showProviderDiagnostics(entry: ManagedProvider): void {
+		const diagnostics = entry.provider.getDiagnostics?.() ?? {};
+		const lines = Object.entries(diagnostics).map(([key, value]) => {
+			const rendered = typeof value === "string" ? value : JSON.stringify(value);
+			return `${key}: ${rendered ?? "-"}`;
+		});
+		this.setContent(
+			new SelectSubmenu(
+				`${entry.provider.name} 运行诊断`,
+				lines.length > 0 ? lines.join("\n") : "暂无诊断信息",
+				[{ value: "back", label: "返回", description: "返回 Provider 设置" }],
+				"back",
+				() => this.showProviderActions(entry),
+				() => this.showProviderActions(entry),
 			),
 		);
 	}
@@ -1879,8 +1914,11 @@ class ProvidersSubmenu extends Container {
 
 	private async setProviderEnabled(entry: ManagedProvider, enabled: boolean, hasCredential: boolean): Promise<void> {
 		if (enabled && !hasCredential) {
-			this.showError("无法启用 Provider", "请先添加 API Key，再启用这个 Provider。", () =>
-				this.showProviderActions(entry),
+			const supportsOAuth = Boolean(entry.provider.auth.oauth?.login);
+			this.showError(
+				"无法启用 Provider",
+				supportsOAuth ? "请先登录或添加 API Key，再启用这个 Provider。" : "请先添加 API Key，再启用这个 Provider。",
+				() => this.showProviderActions(entry),
 			);
 			return;
 		}

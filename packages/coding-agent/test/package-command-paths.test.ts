@@ -390,7 +390,12 @@ describe("package commands", () => {
 
 	it("refreshes only model catalogs with update --models", async () => {
 		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map<string, Error>() }));
-		const create = vi.spyOn(ModelRuntime, "create").mockResolvedValue({ refresh } as unknown as ModelRuntime);
+		const modelRuntime = {
+			getProviderCatalogProvider: vi.fn(() => undefined),
+			registerNativeProvider: vi.fn(),
+			refresh,
+		} as unknown as ModelRuntime;
+		const create = vi.spyOn(ModelRuntime, "create").mockResolvedValue(modelRuntime);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

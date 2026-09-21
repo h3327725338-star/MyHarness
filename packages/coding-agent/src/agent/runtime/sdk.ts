@@ -10,7 +10,7 @@ import type { ExtensionRunner } from "../../extensions/runtime/runner.ts";
 import { time } from "../../observability/timings.ts";
 import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
 import { formatNoModelsAvailableMessage } from "../../providers/runtime/auth-guidance.ts";
-import { ModelRuntime } from "../../providers/runtime/index.ts";
+import { ModelRuntime, registerBuiltInOpenAIChatGPTProvider } from "../../providers/runtime/index.ts";
 import { findInitialModel } from "../../providers/runtime/model-resolver.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import {
@@ -186,6 +186,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
 	const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create({ authPath, modelsPath }));
+	await registerBuiltInOpenAIChatGPTProvider(modelRuntime, agentDir);
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager =

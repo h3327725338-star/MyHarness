@@ -90,6 +90,12 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	readonly auth: ProviderAuth;
 
+	/** Optional provider-owned logout hook, used for managed auth runtimes. */
+	readonly logout?: () => Promise<void>;
+
+	/** Optional read-only provider diagnostics for settings and debug surfaces. */
+	readonly getDiagnostics?: () => Record<string, unknown>;
+
 	/**
 	 * Current known models, sync. Static providers return their catalog;
 	 * dynamic providers return the list as of the last `refreshModels()`
@@ -447,6 +453,8 @@ class ModelsImpl implements MutableModels {
 	}
 
 	async logout(providerId: string): Promise<void> {
+		const provider = this.providers.get(providerId);
+		if (provider?.logout) await provider.logout();
 		try {
 			await this.credentials.delete(providerId);
 		} catch (error) {

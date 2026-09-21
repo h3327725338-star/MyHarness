@@ -347,6 +347,8 @@ AgentSession
   → Provider SDK / HTTP endpoint
 ~~~
 
+OpenAI ChatGPT 是产品层的一个独立 Provider 变体：它在 `packages/coding-agent/src/providers/openai-chatgpt/` 中通过受版本固定、由 MyHarness 管理的官方 Codex App Server `stdio` transport 连接 ChatGPT OAuth。App Server thread、独立 `CODEX_HOME`、sandbox 和最小 runtime state 只属于 Provider 实现细节；MyHarness 的 Session、Context、Compact、Prompt、Tool Registry、Tool 执行和正式 persistence 仍沿用上面的产品链路。dynamic tool 请求从 App Server 回到 Agent Core 的 host-owned tool bridge，不把 App Server 变成第二套 Agent。
+
 ### Session persistence 链
 
 ~~~text

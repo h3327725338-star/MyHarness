@@ -14,6 +14,8 @@
 - explicit refresh 的 network/cache/cancel/error 结果；
 - login/logout 和 stream/complete delegation。
 
+Provider 可以额外实现 `logout()` 来清理宿主拥有的认证运行时，也可以实现只读的 `getDiagnostics()` 供设置/调试界面显示脱敏状态；`StreamOptions.toolCallHandler` 是可选的 host-owned tool bridge，Provider 只负责转发流式期间收到的工具调用，工具权限、执行、事件和持久化仍由宿主负责。
+
 静态模型读取不能被写成“远程目录一定最新”。Provider refresh 失败时要保留已有列表并暴露错误。
 
 ## 当前 catalog 规则

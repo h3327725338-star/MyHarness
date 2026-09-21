@@ -1710,4 +1710,50 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(messages.length).toBe(1);
 		expect(messages[0].role).toBe("assistant");
 	});
+
+	it("routes provider-initiated tool calls through the host tool executor", async () => {
+		const tool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Read a file",
+			parameters: Type.Object({ path: Type.String() }),
+			execute: async (_toolCallId, args) => ({ content: [{ type: "text", text: `read:${args.path}` }] }),
+		};
+		const context: AgentContext = { systemPrompt: "system", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		let providerToolResult: string | undefined;
+		const streamFn = (
+			_model: Model<any>,
+			_context: unknown,
+			options: { toolCallHandler?: AgentLoopConfig["toolCallHandler"] } | undefined,
+		) => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(async () => {
+				const toolResult = await options?.toolCallHandler?.({
+					type: "toolCall",
+					id: "provider-call-1",
+					name: "read",
+					arguments: { path: "README.md" },
+				});
+				providerToolResult = toolResult?.content[0]?.type === "text" ? toolResult.content[0].text : undefined;
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "done" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("use the tool")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+
+		const messages = await stream.result();
+		expect(providerToolResult).toBe("read:README.md");
+		expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		expect(messages[2]).toMatchObject({ toolCallId: "provider-call-1", isError: false });
+		expect(events.some((event) => event.type === "tool_execution_start")).toBe(true);
+		expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
+	});
 });

@@ -10,7 +10,7 @@ import {
 import { SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import type { SessionStartEvent, ToolDefinition } from "../../extensions/compat/types.ts";
-import { ModelRuntime } from "../../providers/runtime/index.ts";
+import { ModelRuntime, registerBuiltInOpenAIChatGPTProvider } from "../../providers/runtime/index.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import { CodeIntelligenceRuntime } from "../../symbols/runtime/runtime.ts";
 import type { SymbolsCodeIntelligenceServices } from "../../tools/symbols-runtime.ts";
@@ -151,6 +151,7 @@ export async function createAgentSessionServices(
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 		}));
+	await registerBuiltInOpenAIChatGPTProvider(modelRuntime, agentDir);
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	modelRuntime.setDisabledProviders(settingsManager.getDisabledProviders());
 	const visionAssistant = settingsManager.getVisionAssistantSettings();

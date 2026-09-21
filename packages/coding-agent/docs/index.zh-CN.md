@@ -14,7 +14,7 @@ npm.cmd run build
 .\dev.cmd
 ```
 
-启动 model-backed session 前，请先在 `models.json`、Settings 或 extension 中配置 Provider 和 model。当前 MyHarness tree 没有默认 Provider catalog。首次运行流程见 [Quickstart](quickstart.md)。
+启动 model-backed session 前，请先登录内置的 OpenAI ChatGPT Provider，或在 `models.json`、Settings、extension 中配置其他 Provider 和 model。library 层的 `ModelRuntime.create()` 仍然不会自动加载 Provider，只有产品入口或 extension 显式注册后才会出现 catalog。首次运行流程见 [Quickstart](quickstart.md)。
 
 ## 从这里开始
 

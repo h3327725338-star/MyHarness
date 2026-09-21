@@ -64,7 +64,7 @@ instead; the process still operates on the directory from which you invoke it.
 
 ## Configure Provider and authentication
 
-First configure a Provider and model in Settings, `models.json`, or an extension. The current MyHarness tree has no default Provider catalog, so an environment variable alone does not create a selectable model.
+First sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider and model in Settings, `models.json`, or an extension. An environment variable alone does not create a selectable model.
 
 Then provide the credential for that configured Provider before launching MyHarness:
 

@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	type ToolCall,
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@myharness/ai";
@@ -247,6 +248,37 @@ function validateAssistantMessage(
 	}
 }
 
+function createProviderToolCallMessage(model: AgentLoopConfig["model"], toolCall: ToolCall): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [toolCall],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+function createErrorToolResultMessage(toolCall: ToolCall, message: string): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId: toolCall.id,
+		toolName: toolCall.name,
+		content: [{ type: "text", text: message }],
+		isError: true,
+		timestamp: Date.now(),
+	};
+}
+
 /**
  * Main loop logic shared by agentLoop and agentLoopContinue.
  */
@@ -303,6 +335,60 @@ async function runLoop(
 				};
 			}
 
+			// Providers such as the OpenAI ChatGPT App Server can ask the host to
+			// execute a tool while their response is still in flight. Route those
+			// calls through the same execution path as ordinary assistant tool calls
+			// so permissions, hooks, events, and persistence remain host-owned.
+			const providerToolResults: ToolResultMessage[] = [];
+			const providerToolCallHandler = async (
+				toolCall: ToolCall,
+				toolSignal?: AbortSignal,
+			): Promise<ToolResultMessage> => {
+				if (toolCallIds.has(toolCall.id)) {
+					const duplicateResult = createErrorToolResultMessage(
+						toolCall,
+						`Tool call id "${toolCall.id}" was already used in this agent turn.`,
+					);
+					providerToolResults.push(duplicateResult);
+					currentContext.messages.push(duplicateResult);
+					newMessages.push(duplicateResult);
+					await emit({ type: "message_start", message: duplicateResult });
+					await emit({ type: "message_end", message: duplicateResult });
+					return duplicateResult;
+				}
+
+				toolCallIds.add(toolCall.id);
+				const assistantMessage = createProviderToolCallMessage(config.model, toolCall);
+				currentContext.messages.push(assistantMessage);
+				newMessages.push(assistantMessage);
+				await emit({ type: "message_start", message: assistantMessage });
+				await emit({ type: "message_end", message: assistantMessage });
+
+				const executedToolBatch = await executeToolCalls(
+					currentContext,
+					assistantMessage,
+					config,
+					toolSignal ?? signal,
+					emit,
+				);
+				const toolResult = executedToolBatch.messages[0];
+				if (!toolResult) {
+					const fallback = createErrorToolResultMessage(
+						toolCall,
+						`Tool "${toolCall.name}" did not return a result.`,
+					);
+					providerToolResults.push(fallback);
+					currentContext.messages.push(fallback);
+					newMessages.push(fallback);
+					return fallback;
+				}
+
+				providerToolResults.push(toolResult);
+				currentContext.messages.push(toolResult);
+				newMessages.push(toolResult);
+				return toolResult;
+			};
+
 			// Stream assistant response
 			const message = await streamAssistantResponse(
 				currentContext,
@@ -311,11 +397,12 @@ async function runLoop(
 				emit,
 				streamFunction,
 				toolCallIds,
+				providerToolCallHandler,
 			);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				await emit({ type: "turn_end", message, toolResults: [] });
+				await emit({ type: "turn_end", message, toolResults: providerToolResults });
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -323,7 +410,7 @@ async function runLoop(
 			// Check for tool calls
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
-			const toolResults: ToolResultMessage[] = [];
+			const toolResults: ToolResultMessage[] = [...providerToolResults];
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -336,7 +423,7 @@ async function runLoop(
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
-				for (const result of toolResults) {
+				for (const result of executedToolBatch.messages) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
@@ -411,6 +498,7 @@ async function streamAssistantResponse(
 	emit: AgentEventSink,
 	streamFunction: StreamFn,
 	toolCallIds: Set<string>,
+	toolCallHandler: NonNullable<AgentLoopConfig["toolCallHandler"]>,
 ): Promise<AssistantMessage> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
@@ -436,6 +524,7 @@ async function streamAssistantResponse(
 		...config,
 		apiKey: resolvedApiKey,
 		signal,
+		toolCallHandler,
 	});
 
 	let partialMessage: AssistantMessage | null = null;

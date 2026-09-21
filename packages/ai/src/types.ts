@@ -261,6 +261,12 @@ export interface StreamOptions {
 	 * proxy variables.
 	 */
 	env?: ProviderEnv;
+	/**
+	 * Optional host-owned tool bridge for providers that receive client-executed
+	 * tool calls while a response is streaming. The host remains responsible for
+	 * permission checks, execution, persistence, and cancellation.
+	 */
+	toolCallHandler?: (toolCall: ToolCall, signal?: AbortSignal) => Promise<ToolResultMessage>;
 }
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;

@@ -6,7 +6,7 @@
 
 ## Provider / Model 维护
 
-当前 MyHarness AI package 没有默认 Provider catalog。`ModelRuntime` 从 `models.json`、模型 store、credential 和 extension/native Provider registration 组装 catalog 和 active collection；Provider 环境变量只在相应 Provider 已存在时参与 auth resolution。修改 Provider 时同步检查：
+当前 MyHarness AI package 和 `ModelRuntime.create()` 没有默认 Provider catalog。Coding Agent 产品入口会显式注册 OpenAI ChatGPT；除此之外，`ModelRuntime` 从 `models.json`、模型 store、credential 和 extension/native Provider registration 组装 catalog 和 active collection；Provider 环境变量只在相应 Provider 已存在时参与 auth resolution。修改 Provider 时同步检查：
 
 - `providers/models/config.ts` 的 models.json schema；
 - `providers/models/composer.ts` 的 base/config/extension 组合；

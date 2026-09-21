@@ -5,6 +5,7 @@
 ## 目录
 
 - [Provider catalog 与注册](#provider-catalog)
+- [OpenAI ChatGPT（官方 App Server）](#openai-chatgpt)
 - [API Keys](#api-keys)
 - [Auth File（认证文件）](#auth-file)
 - [Legacy Provider 配置参考](#legacy-provider-configuration-reference)
@@ -15,7 +16,22 @@
 <a id="provider-catalog"></a>
 ## Provider catalog 与注册
 
-当前源码可以确认默认 built-in Provider catalog 为空。需要区分 Provider API implementation、model 配置和运行时注册结果；后两者可能来自 `models.json` 或 Extension。具体 Provider 是否可用需要结合当前配置和运行时状态确认。
+当前 library 层的 built-in Provider catalog 仍为空。Coding Agent 产品入口会额外注册一个受控的 **OpenAI ChatGPT** Provider；`ModelRuntime.create()` 本身保持无内置 Provider，供 library/SDK 测试和嵌入式调用保持原有语义。
+
+<a id="openai-chatgpt"></a>
+## OpenAI ChatGPT（官方 App Server）
+
+这个 Provider 使用 OpenAI 官方公开的 [Codex App Server 协议](https://learn.chatgpt.com/docs/app-server)，通过本机 JSONL/JSON-RPC `stdio` 连接受版本固定的 `@openai/codex` Windows x64 runtime。它不是 OpenAI API Key Provider，也不会调用 ChatGPT 私有 HTTP 接口、CLI 交互 UI、浏览器 Cookie 或自行解析 OAuth token。
+
+- `/settings` → **Providers** → **OpenAI ChatGPT** → **Sign in with ChatGPT** 使用 App Server 的 `account/login/start` (`type: "chatgpt"`) 官方浏览器 OAuth 流程；MyHarness 只保存 opaque managed credential marker，实际登录状态由 App Server 的独立 `CODEX_HOME` 管理。
+- 模型通过 `model/list` 动态发现并缓存到现有 Provider model store；模型选择、MyHarness Session、Context、事件和持久化仍由 MyHarness 管理。
+- App Server 使用 `<agentDir>/providers/openai-chatgpt/codex-home`，每个 MyHarness session 使用独立的 `<agentDir>/providers/openai-chatgpt/sandboxes/<session>` cwd。真实 workspace 不会作为 App Server cwd；真实文件操作只能通过 MyHarness dynamic tools 回到既有 Tool Registry 和权限链路。
+- Provider 在独立 `CODEX_HOME/config.toml` 中写入官方 named permission profile：拒绝 `:root`，仅通过 `:workspace_roots` 开放当前隔离 sandbox 的读权限，并关闭 web search、shell/unified exec、apps、plugins 和 multi-agent。`thread/start`/`thread/resume`/`turn/start` 显式传入该 profile 和 sandbox `runtimeWorkspaceRoots`；返回的 `activePermissionProfile` 与 `instructionSources` 都会审计，发现不匹配时 fail closed。
+- Dynamic tools 是 App Server 的 experimental public capability。`item/tool/call` 会回到 Agent Core 的 host-owned tool bridge，继续使用已有参数校验、before/after hooks、执行事件、取消和 Session message persistence。
+- Provider 设置页的「运行诊断」只读显示 runtime 版本/路径、独立 `CODEX_HOME`、App Server 最近握手状态、账号状态、兼容性标记、Prompt/Tool audit 和最近脱敏错误；它不显示 OAuth credential 内容。
+- managed runtime 当前固定为 `@openai/codex@0.155.1`；首次需要时安装到 `<agentDir>/runtimes/openai-chatgpt/codex-0.155.1`，并校验 package-lock 中 generic 与 Windows x64 tarball integrity。不会依赖系统 PATH 中的 Codex，也不会 global install。
+
+当前实现明确保留这些限制：Provider 只支持 Windows x64；App Server 的 dynamic tools 和 named permission profile 仍标记为 experimental；由于公开协议没有提供一个已验证的“移除所有内置 Codex tools”能力，MyHarness 还会拒绝未支持的 App Server server requests，但不能把“内置 tools 已从模型工具表完全消失”宣称为已验证事实。真实 OAuth、账号配额、模型可用性、Windows sandbox 后端的实际强制效果和 runtime 安装仍需在用户机器上用官方服务验证。
 
 <a id="api-keys"></a>
 ## API Keys
