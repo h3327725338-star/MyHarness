@@ -16,11 +16,10 @@ npm.cmd test
 npm.cmd run audit:public
 ```
 
-其中 `audit:public` 只在当前仓库存在本地 `public-release/initial` 时使用，
-并确认该 ref 是单提交 orphan history。真实 Provider、OAuth、已发布的
+其中 `audit:public` 针对当前公开 `main` ref 使用。真实 Provider、OAuth、已发布的
 Code Intelligence 归档和 Linux/macOS 行为仍需单独记录，不能由这组命令推断。
 
-Fresh checkout 验收应从 `public-release/initial` 建立新的临时 checkout，
+Fresh checkout 验收应从公开 `main` 建立新的临时 checkout，
 不复用当前 `node_modules`、`dist`、cache 或 `data`，再按 README 的安装、
 check、build 和 `--help` 步骤运行。Windows 上若 PowerShell execution policy
 阻止脚本，使用文档中的显式 `-ExecutionPolicy Bypass` 命令，并把它记录为
@@ -40,7 +39,7 @@ check、build 和 `--help` 步骤运行。Windows 上若 PowerShell execution po
 ```powershell
 npm.cmd run audit:release   # 当前 worktree 的 tracked 内容
 npm.cmd run audit:staged    # index 中将要提交的内容
-npm.cmd run audit:public    # public-release/initial 的完整 tree
+npm.cmd run audit:public    # 当前公开 main 的完整 tree
 ```
 
 脚本只打印类别、路径和行号，不打印匹配到的值。测试和文档中的明显
@@ -56,7 +55,7 @@ Secret Scanner，未知的个人信息、第三方 attribution 和新类型凭�
 | --- | --- | --- |
 | 本机运行数据 | 根目录 `data/` 曾有大量 session/workspace 运行文件；它们是本地用户数据，不是源码。 | 保留在本机，不删除；`.gitignore`、staged audit 和 public-tree audit 阻止进入公开 tree。 |
 | 用户级 credential/session | `.myharness/agent/`、`auth.json`、trace 和下载 runtime 属于用户目录边界。 | 由路径规则和文档约束检测；只提交源码、manifest 和 notices。 |
-| 私有历史中的大型 runtime | 私有 Git/LFS 历史仍有旧 Code Intelligence 二进制；它不属于 `public-release/initial`。 | 不重写私有 `main`；用 `git lfs ls-files --all --size` 和 public ref audit 分别检查历史与待公开 tree。 |
+| 私有历史中的大型 runtime | 私有 Git/LFS 历史仍有旧 Code Intelligence 二进制；它不属于当前公开 `main`。 | 不重写私有 `main`；用 `git lfs ls-files --all --size` 和 public ref audit 分别检查历史与待公开 tree。 |
 | 继承示例中的本机绝对路径 | 一个示例脚本包含具体 POSIX 用户目录样式路径，已改为 `/Users/example/...`。 | 审计 concrete `/Users/<name>`、`/home/<name>` 和 Windows user paths；fixture 使用 `user`/`example` 等明显占位名。 |
 | 测试 credential-like 字符串 | Provider、redaction 和 OAuth 测试需要 synthetic key/token/header 值；它们不是真实凭据。 | 保留测试语义但使用 `test`、`secret`、`example`、`local` 等占位词；扫描器不输出值并按测试路径降噪。 |
 

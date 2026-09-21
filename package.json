@@ -24,7 +24,7 @@
 		"check": "biome check --write --error-on-warnings . && node scripts/run-checks-parallel.mjs",
 		"audit:release": "node scripts/release-audit.mjs --worktree",
 		"audit:staged": "node scripts/release-audit.mjs --staged",
-		"audit:public": "node scripts/release-audit.mjs --ref public-release/initial --require-orphan",
+		"audit:public": "node scripts/release-audit.mjs --ref main",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:shrinkwrap": "node scripts/generate-coding-agent-shrinkwrap.mjs --check",
