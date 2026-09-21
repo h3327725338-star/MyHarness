@@ -59,9 +59,10 @@ release.
   supplied Provider/model and credential. No credential is stored in this
   repository.
 - A fresh Linux/macOS checkout was not run in this Windows audit.
-- The full Coding Agent suite has two known parallel-sensitive failures in
-  `session-pressure-recovery` and `sub-agent`; isolated reruns have passed, but
-  the concurrency behavior is not declared fixed.
+- The local public-release validation covered the Windows Coding Agent suite and
+  the targeted recovery tests. Hosted runner results and path spelling behavior
+  remain separate CI evidence; they should not be generalized to all Windows
+  machines or to external Provider behavior.
 
 ## Deliberately deferred
 
@@ -80,17 +81,15 @@ release.
   manifest is available.
 - Runtime modules and Code Intelligence workspace data are kept outside the
   source checkout and outside project Session data.
-- The source repository is not made public by this cleanup; public history is
-  prepared separately from the existing private history. A local one-commit
-  `public-release/initial` ref now contains the current source tree; it has not
-  been pushed or used to change remote visibility.
+- The public repository is served from a separate one-commit orphan history;
+  the local `main` branch still retains its private history. Public-history
+  updates must continue to be audited separately from private development.
 
 ## Next project-level work
 
 1. Make and verify the release-asset publication process, including exact
    hashes, sizes, notices and Windows language-server startup.
-2. Review the local `public-release/initial` tree with an independent
-   privacy/license check (`npm run audit:public`) before changing repository
-   visibility or pushing it.
-3. Publish a reproducible package or release artifact only after the source
+2. Publish a reproducible package or release artifact only after the source
    and runtime paths have their own clean-clone and install evidence.
+3. Continue platform-specific CI and external Provider validation without
+   presenting it as a default product guarantee.

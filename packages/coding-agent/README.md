@@ -78,8 +78,6 @@ Other services require a compatible custom Provider in `models.json` or an exten
 
 ## Interactive Mode
 
-<p align="center"><img src="docs/images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
-
 The interface from top to bottom:
 
 - **Startup header** - Shows loaded AGENTS.md files, prompt templates, skills, and extensions

@@ -56,15 +56,14 @@ npm.cmd run build
 
 不要在日志、文档、测试输出或 diff 中写入 API key、OAuth token、cookie、authorization header、refresh token、PKCE/state 或真实用户 Session 内容。发布脚本、版本脚本、shrinkwrap 和 binary 构建会写入多个文件，执行前应先确认目标。
 
-CI、发布和提交钩子的实际入口见 [`scripts/README.md`](scripts/README.md) 和 [`.github/README.md`](.github/README.md)。
+CI、发布和提交钩子的实际入口见 [`scripts/README.md`](scripts/README.md) 和 [GitHub 自动化维护文档](docs/maintenance/github-automation.md)。
 提交前、推送前和版本发布前的敏感信息检查统一由
 [`scripts/release-audit.mjs`](scripts/release-audit.mjs) 提供；固定流程和匿名事故记录见
 [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md)。
 
-## 首次公开发布边界
+## 公开历史边界
 
-当前 `main` 保留既有私有历史；源码清理不会自动改变远程可见性，也不会
-force-push 或重写这个历史。需要公开时，应先从最终源码树生成单独的干净
-public history，重新检查敏感数据、第三方声明、Git LFS 对象和发布资产，
-再由维护者单独确认远程和仓库可见性操作。当前项目阶段、明确未完成项和
-Code Intelligence 发布前置条件见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
+公开仓库使用独立的 orphan public history；本地 `main` 仍保留既有私有历史。
+后续公开版本应从准备好的公开源码树重新执行隐私、License、LFS 对象和发布
+资产审计，不应直接把本地私有历史推送到公开分支。当前项目阶段、明确未完成项
+和 Code Intelligence 发布前置条件见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。

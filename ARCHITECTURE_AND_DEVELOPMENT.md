@@ -642,4 +642,4 @@ Code Intelligence 的默认实现是 source 内轻量索引；Windows 语义模�
 - AI/Provider：packages/ai/README.md 和 packages/ai/docs/（index、maintenance、roadmap）。
 - TUI：packages/tui/README.md 和 packages/tui/docs/（index、maintenance、roadmap）。
 - SQLite Node：packages/storage/sqlite-node/README.md 和 packages/storage/sqlite-node/docs/（index、maintenance、roadmap）。
-- 脚本/CI/项目配置：scripts/README.md、scripts/maintenance.md、scripts/roadmap.md；.github/README.md、maintenance.md、roadmap.md；.myharness/README.md、maintenance.md、roadmap.md。
+- 脚本/CI/项目配置：scripts/README.md、scripts/maintenance.md、scripts/roadmap.md；docs/maintenance/github-automation.md、.github/maintenance.md、.github/roadmap.md；.myharness/README.md、maintenance.md、roadmap.md。

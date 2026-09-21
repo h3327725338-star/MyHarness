@@ -4,8 +4,6 @@
 
 ## 交互模式（Interactive Mode）
 
-<p align="center"><img src="images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
-
 界面主要分为四个区域：
 
 - **启动 Header**：显示快捷键、已加载的 context files、prompt templates、skills 和 extensions；

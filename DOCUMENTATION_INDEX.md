@@ -26,7 +26,7 @@
 | SQLite Node 存储 | [SQLite 文档索引](packages/storage/sqlite-node/docs/index.md)、[README](packages/storage/sqlite-node/README.md) | [SQLite 维护](packages/storage/sqlite-node/docs/maintenance.md) | [SQLite 后续开发](packages/storage/sqlite-node/docs/roadmap.md) | `node:sqlite`、migration、session repo、materialized state |
 | System Prompts | [Prompt 说明](system-prompts/README.md) | [Prompt 维护](system-prompts/maintenance.md) | [Prompt 后续开发](system-prompts/roadmap.md) | 资源文件、加载顺序、替代目录 |
 | 项目自动化 | [脚本说明](scripts/README.md)、[Release Gate](docs/RELEASE_GATE.md) | [脚本维护](scripts/maintenance.md) | [脚本后续开发](scripts/roadmap.md) | `scripts/`、`.husky`、隐私与发布审计 |
-| CI / GitHub | [CI 说明](.github/README.md) | [CI 维护](.github/maintenance.md) | [CI 后续开发](.github/roadmap.md) | workflows、issue gate、audit、binary build |
+| CI / GitHub | [GitHub 自动化](docs/maintenance/github-automation.md) | [CI 维护](.github/maintenance.md) | [CI 后续开发](.github/roadmap.md) | workflows、issue gate、audit、binary build |
 | 项目配置 | [.myharness 说明](.myharness/README.md) | [配置维护](.myharness/maintenance.md) | [配置后续开发](.myharness/roadmap.md) | 项目级设置和被忽略的运行时数据 |
 
 ## 说明、维护、后续开发分别解决什么
@@ -58,7 +58,7 @@
 | Agent 生命周期、Session JSONL、migration、持久化 | Agent/Coding Agent 维护手册、session 文档、相关测试 |
 | CLI、命令、配置、路径、启动方式 | Coding Agent `usage.md`、`settings.md`、`development.md`、Windows 文档 |
 | Prompt 文件或加载顺序 | `system-prompts/README.md`、AI loader、Coding Agent composer |
-| 脚本、CI、发布、锁文件 | `scripts/README.md`、`.github/README.md`、根 `package.json` |
+| 脚本、CI、发布、锁文件 | `scripts/README.md`、`docs/maintenance/github-automation.md`、根 `package.json` |
 | License、第三方或继承代码 | `LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`、对应源码 notice |
 | 项目阶段和长期决策 | `PROJECT_STATUS.md`、`docs/decisions/` |
 | Storage、Session、用户数据和运行时目录 | `docs/STORAGE.md`、架构手册、Coding Agent Session 文档 |

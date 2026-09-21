@@ -9,6 +9,24 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 可以直接编辑文件，也可以使用 `/settings` 修改常用选项。
 
+## Popup notifications（任务结束提醒）
+
+Interactive mode 可以在任务完成、失败或中断后显示桌面提醒，默认开启。可以在全局或项目 settings 中配置：
+
+```json
+{
+  "popupNotifications": {
+    "enabled": true,
+    "style": "toast",
+    "onCompleted": true,
+    "onError": true,
+    "onInterrupted": true
+  }
+}
+```
+
+也可以在会话内通过 `/settings` 切换总开关。`style` 支持默认的 `toast` 和需要手动关闭的 `window`；三个 `on...` 字段分别控制完成、异常和中断提醒。
+
 ## GitHub Connect
 
 打开 `/settings` → **GitHub Connect** → **连接 GitHub**。在 GitHub 中输入界面显示的 code 并确认授权。这里没有 third-party account list 或多页 wizard。如果缺少 Client ID，单个 setup screen 会提供所需的表单字段和注册 OAuth App 的链接。已有 Client IDs 仍可使用；`MYHARNESS_GITHUB_CLIENT_ID` 会覆盖已保存的值。不需要 Client Secret。

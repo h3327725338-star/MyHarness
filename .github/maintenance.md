@@ -1,6 +1,6 @@
 # `.github` 维护手册
 
-workflow 总览见 [README](README.md)，根脚本边界见 [scripts/maintenance.md](../scripts/maintenance.md)。YAML、Issue template 和 GitHub 实际执行结果分别是不同证据。
+workflow 总览见[根目录的 GitHub 自动化维护文档](../docs/maintenance/github-automation.md)，根脚本边界见 [scripts/maintenance.md](../scripts/maintenance.md)。YAML、Issue template 和 GitHub 实际执行结果分别是不同证据。
 
 ## 修改规则
 

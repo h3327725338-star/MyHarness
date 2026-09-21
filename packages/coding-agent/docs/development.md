@@ -11,8 +11,6 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 ```
 
-当前远端可见性仍未在本机匿名访问中确认；这段命令描述公开后的入口。
-
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
