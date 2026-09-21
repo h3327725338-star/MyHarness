@@ -63,6 +63,8 @@ git diff --stat
 
 确认 `git status` 中没有 `.myharness/`、`data/`、`dist/`、`node_modules/` 或其他本机生成物后再提交。若 `git push` 报 non-fast-forward，先停止并检查远端提交；没有明确授权时不要使用 `--force` 或 `--force-with-lease` 覆盖远端历史。
 
+交互式产品流程使用 `/commit` 创建本地 commit、使用 `/push` 发布已有 commit。`/push` 会基于当前 Workspace 的 upstream 做 fetch、fast-forward 检查、精确 branch Push、remote SHA 验证和当前 commit 的 branch-push CI 验收；它不会代替 `/commit` 整理普通工作树修改，也不会绕过 non-fast-forward、branch protection 或 CI 质量门槛。
+
 ## Fork / Rebranding
 
 通过 `package.json` 配置：

@@ -298,6 +298,62 @@ export class AccountConnections {
 		};
 	}
 
+	/**
+	 * Read a text endpoint such as a GitHub Actions job log. GitHub may return
+	 * a short-lived signed redirect for logs; follow that redirect without
+	 * forwarding the GitHub OAuth token to the storage host.
+	 */
+	async apiText(path: string, signal: AbortSignal): Promise<string> {
+		if (!path.startsWith("/") || path.startsWith("//") || /[\\\r\n]/.test(path))
+			throw new Error("GitHub API path 必须是以 / 开头的相对路径。");
+		const url = new URL(path, "https://api.github.com");
+		if (url.origin !== "https://api.github.com" || url.username || url.password || url.hash)
+			throw new Error("只允许访问 api.github.com。");
+		const credential = await this.credential(signal);
+		const redact = (text: string) =>
+			[credential.token, credential.refreshToken]
+				.filter((value): value is string => Boolean(value))
+				.reduce((result, secret) => result.split(secret).join("[REDACTED]"), text);
+		let response: Response;
+		try {
+			response = await this.request(url.href, {
+				method: "GET",
+				redirect: "manual",
+				signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+				headers: {
+					Accept: "text/plain",
+					Authorization: `Bearer ${credential.token}`,
+					"X-GitHub-Api-Version": "2022-11-28",
+					"User-Agent": "myharness",
+				},
+			});
+		} catch {
+			signal.throwIfAborted();
+			throw new Error("GitHub 日志请求失败或超时，请检查网络。");
+		}
+		if (response.status === 401) throw new Error("GitHub 登录已失效，请在 /settings → GitHub Connect 中重新授权。");
+		if (response.status >= 300 && response.status < 400) {
+			const location = response.headers.get("location");
+			if (!location) throw new Error("GitHub 日志下载地址无效。");
+			const signedUrl = new URL(location, url);
+			if (signedUrl.protocol !== "https:" || signedUrl.username || signedUrl.password || signedUrl.hash)
+				throw new Error("GitHub 日志下载地址不安全。");
+			try {
+				response = await this.request(signedUrl.href, {
+					method: "GET",
+					redirect: "error",
+					signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+					headers: { Accept: "text/plain", "User-Agent": "myharness" },
+				});
+			} catch {
+				signal.throwIfAborted();
+				throw new Error("GitHub 日志下载失败或超时，请检查网络。");
+			}
+		}
+		if (!response.ok) throw new Error(`GitHub 日志请求失败（HTTP ${response.status}）。`);
+		return redact(await response.text());
+	}
+
 	async connect(signal: AbortSignal, onDevice: (prompt: GitHubDevicePrompt) => void): Promise<ConnectedAccount> {
 		const clientId = this.getClientId();
 		if (!clientId) throw new Error("请先配置 GitHub OAuth App Client ID，并在应用中启用 Device Flow。");

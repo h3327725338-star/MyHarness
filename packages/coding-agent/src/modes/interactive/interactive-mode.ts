@@ -57,6 +57,12 @@ import {
 	gitFailureSignature,
 	normalizeGitCommitTarget,
 } from "../../application/use-cases/git-commit.ts";
+import {
+	type GitPushRepositoryState,
+	type GitPushTaskPhase,
+	GitPushUseCase,
+	type GitPushWorkflowResult,
+} from "../../application/use-cases/git-push.ts";
 import { GitWorktreeUseCase } from "../../application/use-cases/git-worktree.ts";
 import { ProviderSettingsUseCase } from "../../application/use-cases/provider-settings.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
@@ -92,6 +98,7 @@ import {
 	listGitCheckpoints,
 	restoreGitCheckpoint,
 } from "../../git/checkpoints/checkpoint.ts";
+import type { GitPushCiFailure } from "../../git/ci/types.ts";
 import { type GeneratedCommitMessage, generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
 import {
 	beginRepositoryDirectoryMove,
@@ -231,6 +238,26 @@ interface GitCommitTaskState {
 	activity: string;
 	/** Session captured at start so late failures cannot close a newer session's checkpoint. */
 	session?: AgentSession;
+}
+
+function hasActiveGitOperationState(
+	gitCommitTask: { phase: string } | undefined,
+	gitPushTask: { phase: string } | undefined,
+): boolean {
+	const active = (task: { phase: string } | undefined): boolean =>
+		task !== undefined && task.phase !== "completed" && task.phase !== "failed";
+	return active(gitCommitTask) || active(gitPushTask);
+}
+
+const GIT_PUSH_AGENT_REPAIR_MAX = 2;
+
+interface GitPushTaskState {
+	phase: GitPushTaskPhase;
+	startedAt: number;
+	activity: string;
+	session?: AgentSession;
+	controller: AbortController;
+	repairAttempts: number;
 }
 
 /** 提交失败后等待 Agent 修复并自动重试的挂起状态（防无限循环的关键载体）。 */
@@ -472,6 +499,12 @@ export class InteractiveMode {
 	private gitCommitTask: GitCommitTaskState | undefined;
 	/** Non-visual Git commit workflow; this shell only supplies progress and result handling. */
 	private gitCommitUseCase: GitCommitUseCase | undefined;
+	/** Non-visual Git Push + remote verification + CI workflow. */
+	private gitPushUseCase: GitPushUseCase | undefined;
+	/** 后台 Git Push 任务状态；与 /commit 共用一个 Git 状态指示器。 */
+	private gitPushTask: GitPushTaskState | undefined;
+	/** Keep normal completion checkpoint decisions out of a CI repair turn. */
+	private gitPushRepairActive = false;
 	private readonly providerSettingsUseCase: ProviderSettingsUseCase;
 	private readonly workspaceSessionUseCase: WorkspaceSessionUseCase;
 	private readonly gitWorktreeUseCase: GitWorktreeUseCase;
@@ -571,6 +604,14 @@ export class InteractiveMode {
 			});
 		}
 		return this.gitCommitUseCase;
+	}
+	private getGitPushUseCase(): GitPushUseCase {
+		if (!this.gitPushUseCase) {
+			this.gitPushUseCase = new GitPushUseCase({
+				updatePhase: (phase, activity) => this.updateGitPushTask(phase, activity),
+			});
+		}
+		return this.gitPushUseCase;
 	}
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
@@ -1743,12 +1784,8 @@ export class InteractiveMode {
 			commandContextActions: {
 				waitForIdle: () => this.session.waitForIdle(),
 				newSession: async (options) => {
-					if (
-						this.gitCommitTask &&
-						this.gitCommitTask.phase !== "completed" &&
-						this.gitCommitTask.phase !== "failed"
-					) {
-						this.showWarning("Git：本地提交正在进行，完成前不能创建新 Session。");
+					if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+						this.showWarning("Git：本地操作正在进行，完成前不能创建新 Session。");
 						return { cancelled: true };
 					}
 					this.clearStatusIndicator();
@@ -1759,12 +1796,8 @@ export class InteractiveMode {
 					}
 				},
 				fork: async (entryId, options) => {
-					if (
-						this.gitCommitTask &&
-						this.gitCommitTask.phase !== "completed" &&
-						this.gitCommitTask.phase !== "failed"
-					) {
-						this.showWarning("Git：本地提交正在进行，完成前不能 Fork Session。");
+					if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+						this.showWarning("Git：本地操作正在进行，完成前不能 Fork Session。");
 						return { cancelled: true };
 					}
 					try {
@@ -2817,6 +2850,12 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
+			if (this.gitPushTask && hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+				this.gitPushTask.controller.abort();
+				if (this.session.isStreaming) this.restoreQueuedMessagesToEditor({ abort: true });
+				this.showStatus("Git：Push 已取消；已完成的本地或远端操作不会回滚。");
+				return;
+			}
 			// Also covers the compaction setup window, before compaction_start
 			// installs its own Esc handler.
 			if (this.session.isCompacting) {
@@ -2911,9 +2950,14 @@ export class InteractiveMode {
 				await this.handleCommitCommand();
 				return;
 			}
-			if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
+			if (text === "/push") {
+				this.editor.setText("");
+				await this.handlePushCommand();
+				return;
+			}
+			if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
 				this.editor.setText(text);
-				this.showStatus("Git：提交任务正在进行，请稍候。");
+				this.showStatus("Git：当前 Git 操作正在进行，请稍候。");
 				return;
 			}
 			if (text === "/settings" || text === "/setting") {
@@ -3747,6 +3791,12 @@ export class InteractiveMode {
 			this.completionVerificationStatus = "passed";
 			this.publishBufferedAssistantMessage();
 			responseReady = true;
+			if (this.gitPushRepairActive) {
+				// A CI repair turn is owned by /push. Do not offer the normal
+				// Keep / Restore decision or report its checkpoint as an ordinary
+				// unfinished user task; the push workflow commits it explicitly.
+				return;
+			}
 
 			const decisionCheckpoint = this.session.getGitCheckpoint();
 			const hasCheckpointDelta =
@@ -4456,6 +4506,11 @@ export class InteractiveMode {
 		if (text === "/git") {
 			this.editor.setText("");
 			this.showLocalGitRepositorySidebar();
+			return;
+		}
+		if (text === "/push") {
+			this.editor.setText("");
+			await this.handlePushCommand();
 			return;
 		}
 
@@ -5246,7 +5301,7 @@ export class InteractiveMode {
 	 * 后台提交 workflow。普通任务完成、恢复或新消息路径不会调用这个入口。
 	 */
 	private async handleCommitCommand(): Promise<void> {
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
 			this.showStatus("Git：已有提交任务正在进行，请稍候。");
 			return;
 		}
@@ -5318,6 +5373,351 @@ export class InteractiveMode {
 		this.startGitCommitTask({ repositoryRoot, checkpoint });
 	}
 
+	/**
+	 * Explicit /push entry point. It never turns ordinary dirty files into a
+	 * commit; the use case only publishes commits that already exist on HEAD.
+	 */
+	private async handlePushCommand(): Promise<void> {
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showStatus("Git：已有 Git 操作正在进行，请稍候。");
+			return;
+		}
+		if (
+			this.session.isStreaming ||
+			this.session.isCompacting ||
+			this.isReloading ||
+			this.completionWorkflowActive ||
+			this.completionWorkflowPromise
+		) {
+			this.showWarning("Git：当前任务仍在运行，请等待任务完成后再执行 /push。");
+			return;
+		}
+		if (!this.settingsManager.isProjectTrusted()) {
+			this.showError("Git：当前项目未被信任，不能执行 Push。");
+			return;
+		}
+		const state = inspectGitRepository(this.sessionManager.getCwd());
+		if (!state.gitAvailable) {
+			this.showError(`Git：当前电脑无法使用 Git。${state.error ? `\n${state.error}` : ""}`);
+			return;
+		}
+		if (!state.isRepository || !state.root) {
+			this.showError("Git：当前 Workspace 不是 Git 仓库。");
+			return;
+		}
+		if (!state.hasBaseline) {
+			this.showError("Git：当前仓库没有可 Push 的初始 commit。");
+			return;
+		}
+		this.startGitPushTask();
+	}
+
+	private startGitPushTask(): void {
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showStatus("Git：已有 Git 操作正在进行，请稍候。");
+			return;
+		}
+		this.gitPushTask = {
+			phase: "checking",
+			startedAt: Date.now(),
+			activity: "正在检查仓库、分支和 upstream",
+			session: this.session,
+			controller: new AbortController(),
+			repairAttempts: 0,
+		};
+		this.showGitPushIndicator();
+		void this.runGitPushTask().catch((error) => {
+			this.finishGitPushTaskAsFailed(`Push 任务异常终止：${error instanceof Error ? error.message : String(error)}`);
+		});
+	}
+
+	private async runGitPushTask(): Promise<void> {
+		const task = this.gitPushTask;
+		if (!task) return;
+		const session = task.session ?? this.session;
+		const result = await this.getGitPushUseCase().execute(this.sessionManager.getCwd(), task.controller.signal);
+		if (this.gitPushTask !== task) return;
+		if (result.status === "no-push-needed") {
+			this.clearGitPushTask();
+			this.showStatus(`${result.message}\n${this.formatGitPushRepositoryState(result.repository)}`);
+			return;
+		}
+		if (result.status === "success") {
+			this.clearGitPushTask();
+			const summary = `Git Push 完成\n${this.formatGitPushRepositoryState(result.repository)}\nCI：${result.ci.workflows.map((workflow) => workflow.name).join(", ")} 全部通过`;
+			this.showStatus(summary);
+			this.showOperationPopup(true, `Git Push 完成 · ${result.repository.localSha.slice(0, 7)}\nCI 全部通过`);
+			return;
+		}
+		if (result.status === "ci-failure") {
+			const repairable = result.failures.some((failure) => failure.autoRepairable);
+			if (repairable && task.repairAttempts < GIT_PUSH_AGENT_REPAIR_MAX) {
+				task.repairAttempts += 1;
+				this.updateGitPushTask(
+					"fixing-ci",
+					`正在请求 Agent 修复 CI 根因（${task.repairAttempts}/${GIT_PUSH_AGENT_REPAIR_MAX}）`,
+				);
+				const repaired = await this.requestAgentGitPushRepair(
+					result.failures,
+					session,
+					result.repository.repositoryRoot,
+				);
+				if (repaired) {
+					await this.runGitPushTask();
+					return;
+				}
+			}
+			this.finishGitPushCiFailure(result);
+			return;
+		}
+		if (result.status === "ci-unavailable") {
+			this.clearGitPushTask();
+			const reason = result.ci.reason ?? "无法确认当前 commit 的 CI 状态";
+			this.showError(
+				`Git：远端已收到当前 commit，但 CI 未得到可验证的通过结果。\n${reason}\n${this.formatGitPushRepositoryState(result.repository)}`,
+			);
+			this.showOperationPopup(false, `Git Push 已完成，但 CI 未确认\n${reason}`);
+			return;
+		}
+		if (result.status === "blocked") {
+			this.clearGitPushTask();
+			this.showError(
+				`Git：已阻止 Push。\n${result.reason}${result.repository ? `\n${this.formatGitPushRepositoryState(result.repository)}` : ""}`,
+			);
+			this.showOperationPopup(false, `Git Push 已阻止\n${result.reason}`);
+			return;
+		}
+		if (result.status === "cancelled") {
+			this.clearGitPushTask();
+			this.showStatus(
+				`${result.reason}${result.repository ? `\n${this.formatGitPushRepositoryState(result.repository)}` : ""}`,
+			);
+			return;
+		}
+		this.clearGitPushTask();
+		this.showError(
+			`Git：Push 未完成。\n${result.reason}${result.repository ? `\n${this.formatGitPushRepositoryState(result.repository)}` : ""}${
+				result.remoteMayHaveChanged ? "\n远端状态可能已经改变，请以当前 Git 状态为准。" : ""
+			}`,
+		);
+		this.showOperationPopup(false, `Git Push 失败\n${result.reason}`);
+	}
+
+	private finishGitPushTaskAsFailed(reason: string): void {
+		this.clearGitPushTask();
+		this.showError(`Git：Push 任务未完成。\n${reason}`);
+		this.showOperationPopup(false, `Git Push 失败\n${reason}`);
+	}
+
+	private finishGitPushCiFailure(result: Extract<GitPushWorkflowResult, { status: "ci-failure" }>): void {
+		this.clearGitPushTask();
+		const categories = [...new Set(result.failures.map((failure) => failure.category))].join(", ");
+		this.showError(
+			`Git：Push 已验证成功，但当前 commit 的 CI 未通过（${categories || "unknown"}）。\n${this.formatGitPushRepositoryState(result.repository)}`,
+		);
+		this.showGitPushCiEvidence(result.failures);
+		this.showOperationPopup(false, `Git Push 完成，但 CI 未通过\n${categories || "unknown"}`);
+	}
+
+	private async requestAgentGitPushRepair(
+		failures: GitPushCiFailure[],
+		session: AgentSession,
+		repositoryRoot: string,
+	): Promise<boolean> {
+		this.gitPushRepairActive = true;
+		try {
+			const existingCheckpoint = session.getGitCheckpoint();
+			if (existingCheckpoint?.status === "created" || this.pendingStartupGitCheckpoint?.status === "created") {
+				this.showWarning(
+					"Git：当前会话已有未完成的 checkpoint，无法安全区分 CI 修复与既有未提交修改；未自动创建 follow-up commit。",
+				);
+				return false;
+			}
+			const evidenceText = failures
+				.map((failure) => {
+					const failedJobs = failure.evidence.jobs
+						.filter((job) => job.conclusion !== "success")
+						.map((job) => {
+							const failedSteps = job.steps
+								.filter((step) => step.conclusion !== "success")
+								.map((step) => `${step.name}: ${step.conclusion ?? step.status ?? "unknown"}`)
+								.join("; ");
+							return `${job.name}: ${job.conclusion ?? job.status ?? "unknown"}${failedSteps ? ` [${failedSteps}]` : ""}`;
+						})
+						.join("\n");
+					const logText = failure.evidence.jobs
+						.map((job) => (job.log ? `\n--- ${job.name} log ---\n${job.log.slice(0, 8_000)}` : ""))
+						.join("");
+					return [
+						`category=${failure.category}`,
+						`workflow=${failure.evidence.run.workflowName}`,
+						failedJobs,
+						logText,
+					]
+						.filter(Boolean)
+						.join("\n");
+				})
+				.join("\n\n");
+			await session.sendCustomMessage(
+				{
+					customType: "git-push-ci-failure",
+					content: [
+						{
+							type: "text",
+							text: [
+								"The just-pushed commit has a CI failure. Fix the actual root cause using the evidence below.",
+								"Do not amend the pushed commit, do not push, and do not lower or bypass any quality gate.",
+								"Make a normal follow-up commit if and only if the fix is real; the system will run /push again afterward.",
+								"",
+								evidenceText,
+							].join("\n"),
+						},
+					],
+					display: true,
+					details: {
+						failures: failures.map((failure) => ({
+							category: failure.category,
+							workflow: failure.evidence.run.workflowName,
+							runId: failure.evidence.run.id,
+							headSha: failure.evidence.run.headSha,
+						})),
+					},
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+			await session.waitForIdle();
+			await this.eventProcessingQueue;
+			if (this.completionWorkflowPromise) await this.completionWorkflowPromise;
+			const runState = session.getRunStateSnapshot();
+			if (runState.state !== "completed") {
+				this.showWarning(
+					`Git：CI 修复回合未完成（${runState.terminalReason ?? runState.state}），未创建 follow-up commit。`,
+				);
+				return false;
+			}
+			const checkpoint = session.getGitCheckpoint();
+			if (!checkpoint || checkpoint.status !== "created") {
+				this.showWarning("Git：无法确认 CI 修复回合产生的 checkpoint，未自动提交可能的修改。");
+				return false;
+			}
+			if (path.resolve(checkpoint.repositoryRoot) !== path.resolve(repositoryRoot)) {
+				this.showWarning("Git：CI 修复 checkpoint 与当前 Push 仓库不一致，未自动提交。");
+				return false;
+			}
+			const commitUseCase = new GitCommitUseCase({
+				updatePhase: (_phase, activity) => this.updateGitPushTask("fixing-ci", activity),
+			});
+			const commitResult = await commitUseCase.execute({ repositoryRoot: checkpoint.repositoryRoot, checkpoint });
+			if (commitResult.status === "committed") {
+				const completed = completeGitCommitCheckpoint(session, checkpoint);
+				if (!completed.ok) {
+					this.showWarning(
+						`Git：follow-up commit 已创建，但无法完成 checkpoint：${completed.error ?? "未知错误"}`,
+					);
+					return false;
+				}
+				this.clearPendingStartupGitCheckpoint?.(checkpoint);
+				this.showStatus(`Git：已创建 CI 修复 follow-up commit ${commitResult.commitHash?.slice(0, 7) ?? ""}。`);
+				return true;
+			}
+			if (commitResult.status === "no-changes") {
+				const completed = completeGitCommitCheckpoint(session, checkpoint);
+				if (completed.ok) this.clearPendingStartupGitCheckpoint?.(checkpoint);
+				this.showWarning("Git：Agent 没有产生可提交的 CI 修复修改。");
+				return false;
+			}
+			if (commitResult.status === "read-error") {
+				this.showWarning(`Git：无法读取 CI 修复修改：${commitResult.error}`);
+			} else {
+				this.showGitFailure(commitResult.failure, "Git：CI 修复 follow-up commit 失败。");
+			}
+			return false;
+		} catch (error) {
+			this.showWarning(`Git：无法启动或完成 CI 修复：${error instanceof Error ? error.message : String(error)}`);
+			return false;
+		} finally {
+			this.gitPushRepairActive = false;
+		}
+	}
+
+	private formatGitPushRepositoryState(repository: GitPushRepositoryState): string {
+		const dirty = repository.workingTree;
+		const dirtySummary = dirty.dirty
+			? `工作树仍有未提交内容（staged ${dirty.stagedPaths.length}，unstaged ${dirty.unstagedPaths.length}，untracked ${dirty.untrackedPaths.length}）`
+			: "工作树干净";
+		return [
+			`branch=${repository.branch} → ${repository.remote}/${repository.remoteBranch}`,
+			`HEAD=${repository.localSha}`,
+			`remote=${repository.remoteSha}`,
+			`ahead=${repository.ahead}, behind=${repository.behind}`,
+			dirtySummary,
+		].join("\n");
+	}
+
+	private showGitPushCiEvidence(failures: GitPushCiFailure[]): void {
+		const detail = failures
+			.map((failure) => {
+				const run = failure.evidence.run;
+				const jobs = failure.evidence.jobs
+					.map((job) => {
+						const steps = job.steps
+							.filter((step) => step.conclusion !== "success")
+							.map((step) => `  - ${step.name}: ${step.conclusion ?? step.status ?? "unknown"}`)
+							.join("\n");
+						return [`- ${job.name}: ${job.conclusion ?? job.status ?? "unknown"}`, steps]
+							.filter(Boolean)
+							.join("\n");
+					})
+					.join("\n");
+				return [
+					`workflow=${run.workflowName} run=${run.id} sha=${run.headSha}`,
+					run.htmlUrl ? `url=${run.htmlUrl}` : "",
+					`category=${failure.category}`,
+					jobs,
+					...(failure.evidence.logWarnings ?? []),
+					...failure.evidence.jobs.filter((job) => job.log).map((job) => `--- ${job.name} log ---\n${job.log}`),
+				]
+					.filter(Boolean)
+					.join("\n");
+			})
+			.join("\n\n");
+		this.chatContainer.addChild(
+			new ExpandableText(
+				() => `CI 失败证据（${keyText("app.tools.expand")} 展开 / 收起）`,
+				() => detail,
+				this.toolOutputExpanded,
+				1,
+				0,
+			),
+		);
+		this.ui.requestRender();
+	}
+
+	private showGitPushIndicator(): void {
+		const task = this.gitPushTask;
+		if (!task) return;
+		const indicator = this.statusIndicators.get("gitCommit");
+		if (indicator instanceof GitCommitStatusIndicator) {
+			indicator.setActivity(task.activity);
+		} else {
+			this.showStatusIndicator(new GitCommitStatusIndicator(this.ui, task.activity, "Git Push"));
+		}
+		this.ui.requestRender();
+	}
+
+	private updateGitPushTask(phase: GitPushTaskPhase, activity: string): void {
+		if (!this.gitPushTask) return;
+		this.gitPushTask.phase = phase;
+		this.gitPushTask.activity = activity;
+		this.showGitPushIndicator();
+	}
+
+	private clearGitPushTask(): void {
+		this.gitPushTask = undefined;
+		this.clearStatusIndicator("gitCommit");
+		this.syncTaskLifecycleUI?.(true);
+	}
+
 	private cancelTaskDecisionForCommit(): void {
 		this.extensionSelectorCancel?.();
 		this.taskDecisionActive = false;
@@ -5326,8 +5726,8 @@ export class InteractiveMode {
 
 	private async maybeOfferGitVersionSave(checkpointOverride?: GitCheckpoint): Promise<void> {
 		// 提交任务进行中禁止重新弹出决策框，防止与后台提交产生竞态。
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
-			this.showStatus("Git：提交任务正在进行，请稍候。");
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showStatus("Git：本地操作正在进行，请稍候。");
 			return;
 		}
 		const checkpoint = checkpointOverride ?? this.session.getGitCheckpoint();
@@ -5402,8 +5802,8 @@ export class InteractiveMode {
 	 * 提交、失败分析、自动修复与重试都在后台进行。
 	 */
 	private startGitCommitTask(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): void {
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
-			this.showStatus("Git：已有提交任务正在进行。");
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showStatus("Git：已有 Git 操作正在进行。");
 			return;
 		}
 		const target = normalizeGitCommitTarget(targetOrCheckpoint);
@@ -5831,8 +6231,8 @@ export class InteractiveMode {
 	private currentRepositoryMutationError(repositoryRoot: string): string | undefined {
 		if (!this.isRepositoryUsedByCurrentSession(repositoryRoot)) return undefined;
 		if (!this.session.isIdle) return "当前会话正在运行，完成后才能修改它正在使用的仓库。";
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
-			return "Git：本地提交正在进行，完成前不能修改当前仓库。";
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			return "Git：本地操作正在进行，完成前不能修改当前仓库。";
 		}
 		if (this.hasPendingGitCheckpointDecision()) {
 			return "Git：请先完成当前任务的 Keep / Restore 决策，再修改仓库目录。";
@@ -6218,12 +6618,8 @@ export class InteractiveMode {
 				void this.handleResumeSession(sessionPath);
 			},
 			onNewSessionInWorkspace: async (rootPath) => {
-				if (
-					this.gitCommitTask &&
-					this.gitCommitTask.phase !== "completed" &&
-					this.gitCommitTask.phase !== "failed"
-				) {
-					return "Git：本地提交正在进行，完成前不能切换 Workspace 或创建新 Session。";
+				if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+					return "Git：本地操作正在进行，完成前不能切换 Workspace 或创建新 Session。";
 				}
 				const error = await this.workspaceSessionUseCase.createSessionInWorkspace(
 					rootPath,
@@ -6618,8 +7014,8 @@ export class InteractiveMode {
 		sessionPath: string,
 		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
 	): Promise<{ cancelled: boolean }> {
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
-			this.showWarning("Git：本地提交正在进行，完成前不能切换 Workspace 或 Session。");
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showWarning("Git：本地操作正在进行，完成前不能切换 Workspace 或 Session。");
 			return { cancelled: true };
 		}
 		this.clearStatusIndicator();
@@ -6656,8 +7052,8 @@ export class InteractiveMode {
 	}
 
 	private async handleClearCommand(): Promise<void> {
-		if (this.gitCommitTask && this.gitCommitTask.phase !== "completed" && this.gitCommitTask.phase !== "failed") {
-			this.showWarning("Git：本地提交正在进行，完成前不能创建新 Session。");
+		if (hasActiveGitOperationState(this.gitCommitTask, this.gitPushTask)) {
+			this.showWarning("Git：本地操作正在进行，完成前不能创建新 Session。");
 			return;
 		}
 		this.clearStatusIndicator();

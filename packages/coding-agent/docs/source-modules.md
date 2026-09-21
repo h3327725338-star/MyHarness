@@ -18,7 +18,7 @@
 | 目录 | 当前源码职责 | 修改时保持的边界 | 后续代码应放在哪里 |
 | --- | --- | --- | --- |
 | `agent/` | `AgentSession` 生命周期、runtime/sdk、delegation、vision | 复用 AgentSession/runtime；不把 TUI I/O 放进 Agent runtime | session lifecycle、后台 Explore、delegation/vision |
-| `application/` | 跨领域 use-case、`ResourceLoader`、WorkspaceStore facade | 只编排领域模块；持久化实现留在 `data/`/`session/` | 跨 Settings/Provider/Session/Workspace 的流程 |
+| `application/` | 跨领域 use-case、`ResourceLoader`、WorkspaceStore facade；`git-push.ts` 编排显式 Push、remote 验证和 CI 验收 | 只编排领域模块；持久化实现留在 `data/`/`session/`；不把 Push 细节塞进 TUI | 跨 Git/Provider/Session/Workspace 的流程 |
 | `bun/` | Bun CLI、Bedrock 注册、sandbox 恢复 | Bun-specific 适配不反向污染普通 Node CLI | Bun 编译和运行时兼容 |
 | `cli/` | 参数、帮助、文件参数、trust、startup UI、model/config selector、slash commands | 解析和展示后调用 domain/runtime；不复制业务 | CLI flag、命令入口和 CLI 错误呈现 |
 | `config/` | paths、SettingsManager、settings storage/migration、Project Trust | 配置格式、路径和信任语义集中管理 | settings、paths、trust、config migration |
@@ -26,7 +26,7 @@
 | `data/` | Workspace registry/persistence/migration 的实际实现 | Workspace identity 不由 Session manager 重写 | workspace 数据格式和 migration |
 | `exports/` | Session/tool 结果到 HTML 的导出、主题和 ToolHtmlRenderer | 只渲染/导出，不改变 Session 或 tool execution contract | 新导出格式 |
 | `extensions/` | Extension contract、兼容入口、发现/loader、packages、event bus、runner/wrapper | 通过 contracts/API entry/runtime wrapper 连接；避免 loader 循环依赖 | extension API、加载、包管理和 runtime |
-| `git/` | Git command、repository/workspace changes、checkpoint、commit、local repository、worktree | Git metadata 和命令集中在本域；不放进 Session persistence | 新 Git 原语、review、checkpoint、worktree |
+| `git/` | Git command、repository/workspace changes、checkpoint、commit、local repository、worktree，以及 GitHub Actions CI 查询适配 | Git metadata、remote/CI 原语集中在本域；不放进 Session persistence | 新 Git 原语、remote/CI provider、review、checkpoint、worktree |
 | `modes/` | InteractiveMode、print mode、组件编排、theme、task lifecycle、keybindings、model search | mode 负责 I/O；通用业务留在领域模块 | 新运行模式或 mode-specific presentation |
 | `observability/` | timing、usage totals、cache stats、runtime trace、diagnostic sanitization | 只观察和脱敏，不反向承载业务状态 | 指标、trace 和诊断采集 |
 | `platform/` | process exec、HTTP dispatcher、stdout/output guard | 平台差异留在 platform；CLI/tool 不复制进程接管逻辑 | Node/Windows/Bun process 适配 |

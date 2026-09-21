@@ -116,6 +116,7 @@ Built-in commands:
 | `/compact [prompt]` | Manually compact context, optional custom instructions |
 | `/effort` | Cycle thinking/effort level |
 | `/commit` | Commit the current workspace's local Git changes |
+| `/push` | Push existing commits to the current upstream and verify the remote plus configured CI |
 | `/workflow <task>` | Run a multi-agent workflow |
 | `/ultracode <task>` | Handle a complex task with stricter investigation |
 
@@ -216,7 +217,7 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 `/settings` provides one **Providers** entry for configured, extension/native and custom services. Enabled and saved-but-disabled Providers are listed separately. Each Provider screen manages one Provider-level API Key collection, its models, and its enabled state. The selected current key is shared by every model under that Provider, including Vision Assistant models; MyHarness never rotates keys automatically. Keys are stored in `~/.myharness/agent/auth.json`. Existing keys in the legacy `vision-auth.json` file are merged into this collection on startup. See [settings](docs/settings.md#providers-api-keys-and-default-model).
 
-The optional **Git** setting creates and uses local version history for the current project. Repository initialization, the first baseline, and each task commit require user confirmation. MyHarness does not configure a remote or upload commits.
+The optional **Git** setting creates and uses local version history for the current project. Repository initialization, the first baseline, and each task commit require user confirmation. `/commit` remains the local commit workflow. `/push` is an explicit separate operation: it fetches the current branch's configured upstream, refuses remote-ahead or divergent history, pushes only the current branch ref, verifies the remote SHA, and checks the local repository's branch-push CI when a supported GitHub Actions connection is available. If CI cannot be verified, the command reports that state instead of claiming success. It never stages or commits ordinary dirty files, force-pushes, pushes all refs, or creates tags/releases. A dirty worktree may remain alongside an already committed push.
 
 ### Project Trust
 

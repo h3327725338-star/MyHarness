@@ -112,11 +112,12 @@ export class VisionStatusIndicator extends StatusIndicator {
  */
 export class GitCommitStatusIndicator extends StatusIndicator {
 	private activity: string;
+	private readonly label: string;
 	private readonly startedAt = Date.now();
 	private lastActivityAt = this.startedAt;
 	private heartbeat: NodeJS.Timeout | undefined;
 
-	constructor(ui: TUI, activity: string) {
+	constructor(ui: TUI, activity: string, label = "Git 提交") {
 		super(
 			"gitCommit",
 			ui,
@@ -125,6 +126,7 @@ export class GitCommitStatusIndicator extends StatusIndicator {
 			"",
 		);
 		this.activity = activity;
+		this.label = label;
 		this.updateMessage();
 		this.heartbeat = setInterval(() => this.updateMessage(), 1000);
 	}
@@ -147,7 +149,7 @@ export class GitCommitStatusIndicator extends StatusIndicator {
 		const now = Date.now();
 		const elapsed = formatDuration(now - this.startedAt);
 		const lastActivity = formatDuration(now - this.lastActivityAt);
-		this.setMessage(`Git 提交 · ${this.activity} · 已运行 ${elapsed} · 最近活动 ${lastActivity} 前`);
+		this.setMessage(`${this.label} · ${this.activity} · 已运行 ${elapsed} · 最近活动 ${lastActivity} 前`);
 	}
 }
 

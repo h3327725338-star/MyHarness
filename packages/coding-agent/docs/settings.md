@@ -274,7 +274,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 3. 将现有 local 或 global Git name 和 email 显示为可编辑的 defaults；保存时只写入当前 repository 的 `.git/config`。
 4. 显示首次 baseline 包含的 files，并在运行 `git add` 和 `git commit` 前先询问。
 
-task 修改 files 后，MyHarness 会发布已验证的结果，然后提供 `Save` 或 `Later`。`Save` 只会 preview 并 commit 当前 task 通过 `edit` 和 `write` calls 修改过的 paths。项目 repository 之外的 files（例如 desktop 上的 paths）不在 checkpoints 覆盖范围内：写入这些 files 不会 snapshot，restore 也不会触碰它们。MyHarness 不会 push、pull、fetch、clone、创建 remote 或上传 commit。关闭此 setting 只会停止 MyHarness 自动使用 Git，不会删除 `.git`、commits 或 file changes。
+task 修改 files 后，MyHarness 会发布已验证的结果，然后提供 `Save` 或 `Later`。`Save` 只会 preview 并 commit 当前 task 通过 `edit` 和 `write` calls 修改过的 paths。项目 repository 之外的 files（例如 desktop 上的 paths）不在 checkpoints 覆盖范围内：写入这些 files 不会 snapshot，restore 也不会触碰它们。Git integration 的 checkpoint/save 流程不会自动 push、pull、fetch、clone、创建 remote 或上传 commit；只有用户明确执行 `/push` 时，MyHarness 才会对当前 branch 的真实 upstream 执行受限 Push，并在支持的 GitHub Actions 连接可用时验证远端 SHA 与当前 commit 的 branch-push CI。无法验证 CI 时会保留真实未确认状态。关闭此 setting 只会停止 MyHarness 自动使用 Git，不会删除 `.git`、commits 或 file changes。
 
 启用 Git 后，task changes 会通过 repository 的 task checkpoint 进行跟踪。
 

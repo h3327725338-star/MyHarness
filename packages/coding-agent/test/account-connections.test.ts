@@ -140,6 +140,24 @@ describe("GitHub device authorization", () => {
 		await expect(connections.verify(controller.signal)).rejects.toThrow();
 		expect(request).not.toHaveBeenCalled();
 	});
+
+	it("follows Actions log redirects without forwarding the OAuth token", async () => {
+		const { connections, request, storage } = setup([
+			new Response(null, { status: 302, headers: { location: "https://logs.example.test/job?signature=abc" } }),
+			new Response("log contains test-token-never-render", { status: 200 }),
+		]);
+		storage.withLock(() => ({
+			result: undefined,
+			next: JSON.stringify({ github: { account: identity, token: token.access_token, clientId: "own-app" } }),
+		}));
+		const result = await connections.apiText("/repos/acme/project/actions/jobs/7/logs", new AbortController().signal);
+		expect(result).not.toContain(token.access_token);
+		expect(result).toContain("[REDACTED]");
+		expect(request).toHaveBeenCalledTimes(2);
+		expect(request.mock.calls[0][1]?.headers).toHaveProperty("Authorization", `Bearer ${token.access_token}`);
+		expect(request.mock.calls[1][0]).toBe("https://logs.example.test/job?signature=abc");
+		expect(request.mock.calls[1][1]?.headers).not.toHaveProperty("Authorization");
+	});
 	it("polls pending and slow_down, saves identity separately, restores and removes credentials", async () => {
 		const { connections, request, storage } = setup([
 			device,

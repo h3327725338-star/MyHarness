@@ -24,6 +24,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "compact", description: "手动压缩上下文" },
 	{ name: "effort", description: "切换思考强度" },
 	{ name: "commit", description: "提交当前工作区的本地 Git 改动" },
+	{ name: "push", description: "将已提交的 Git 改动 Push 到 upstream 并完成 CI 验收" },
 	{ name: "workflow", description: "运行多智能体工作流", argumentHint: "任务" },
 	{ name: "ultracode", description: "全面处理复杂任务", argumentHint: "任务" },
 ];

@@ -49,6 +49,7 @@ Editor 可能会临时被内置 UI（例如 `/settings`）或 extension 提供�
 | `/compact [prompt]` | 手动压缩 context，可选自定义 instructions |
 | `/effort` | 循环切换 thinking/effort level |
 | `/commit` | 提交当前 workspace 的本地 Git changes |
+| `/push` | 将已有 commit 推送到当前 upstream，并验证 remote 与当前 commit 的 CI |
 | `/workflow <task>` | 运行 multi-agent workflow |
 | `/ultracode <task>` | 使用更严格的调查流程处理复杂 task |
 
@@ -58,6 +59,8 @@ Editor 可能会临时被内置 UI（例如 `/settings`）或 extension 提供�
 /workflow
 检查登录系统的实现、配置和测试
 ```
+
+`/commit` 只负责创建本地 commit；`/push` 只发布已经存在的 commit。`/push` 会先 fetch 当前 branch 的真实 upstream，拒绝 remote-ahead 或 divergence，只推送当前 branch，验证 remote SHA，并在支持的 GitHub Actions 连接可用时等待仓库自身配置的 branch-push CI；无法验证 CI 时会明确报告未确认，不会声称成功。它不会自动 stage、commit、stash、force-push、推送 tags 或其他 refs；未提交的 staged、unstaged 和 untracked 文件会保留并在结果中报告。
 
 `/workflow` 会要求 main AI 创建一个包含一个或多个 sequential phases 的 workflow。每个 phase 可以并行运行多个独立的 Explore tasks，后续 phase 会收到前一阶段的结果。`/ultracode` 会附加更严格的中文 instructions：从不同角度调查、独立质疑重要结论、在第一次运行不足时继续执行后续 Ultracode runs，并在 main AI 修改后验证结果。Workflow children 使用配置的 **Sub Agent** model 和 thinking level；它们不能编辑文件，也不能创建 child agents。
 

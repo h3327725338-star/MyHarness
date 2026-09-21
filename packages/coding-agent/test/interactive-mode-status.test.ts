@@ -1702,6 +1702,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			"git",
 			"effort",
 			"commit",
+			"push",
 			"workflow",
 			"ultracode",
 		]);

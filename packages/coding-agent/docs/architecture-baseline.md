@@ -167,7 +167,7 @@ Provider credentials 不属于 settings JSON；它们仍由下面的 `auth.json`
 
 ### Commit
 
-`git-integration.ts` 使用 repository-local Git，baseline 和 commit 范围由当前实现决定；save/commit 只处理当前 task 通过 edit/write 修改的路径，提交前后核对 commit hash 并处理失败重试/恢复。Git 不会由这些流程自动 push、pull、fetch 或修改 remote。
+`git-integration.ts` 使用 repository-local Git，baseline 和 commit 范围由当前实现决定；save/commit 只处理当前 task 通过 edit/write 修改的路径，提交前后核对 commit hash 并处理失败重试/恢复。`/commit` 不负责远端操作。显式 `/push` 由 `application/use-cases/git-push.ts` 编排：从当前 branch 的真实 upstream fetch，检查 ahead/behind 与 dirty 状态，只执行精确 branch ref 的非强制 Push，重新验证 remote SHA，然后按 `.github/workflows` 中匹配当前 branch 的 branch-push workflow 查询最终 commit 的 CI；CI 修复只允许通过新的 follow-up commit 再走同一流程。
 
 ## 8. Windows 启动和 Bun binary
 
@@ -197,7 +197,7 @@ Provider credentials 不属于 settings JSON；它们仍由下面的 `auth.json`
 | Session fork / tree / branch | `test/session-manager/tree-traversal.test.ts`、`agent-session-branching.test.ts`、`agent-session-tree-navigation.test.ts` |
 | Context compact | `test/agent-session-compact-flow.test.ts`、`compaction.test.ts`、`compaction-serialization.test.ts`、`agent-session-compaction.test.ts` |
 | Git checkpoint | `test/git-checkpoint.test.ts`、`agent-session-git-checkpoint-events.test.ts` |
-| Git commit | `test/git-integration.test.ts`、`git-commit-message.test.ts` |
+| Git commit / Push / Actions evidence | `test/git-integration.test.ts`、`git-commit-message.test.ts`、`git-push.test.ts`、`account-connections.test.ts` |
 | Provider loading | `test/configured-providers.test.ts`、`test/agent-session-dynamic-provider.test.ts`、`test/custom-provider-manager.test.ts`、`test/phase7-provider-architecture.test.ts` |
 | Extension loading | `test/extensions-discovery.test.ts`、`test/extensions-runner.test.ts` |
 | Prompt loading/injection | `test/system-prompt-files.test.ts`、`test/system-prompt.test.ts` |
