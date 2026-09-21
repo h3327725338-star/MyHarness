@@ -26,11 +26,12 @@ export const DEFAULT_WORKSPACE_BASELINE_MAX_FILES = 100_000;
 export const DEFAULT_WORKSPACE_BASELINE_MAX_BYTES = 1024 * 1024 * 1024;
 /**
  * 小文件（≤512KB）在基线建立时读取内容做 sha256，检测阶段能区分“内容未变的
- * touch”与真实修改；大文件只记录 stat 指纹（size:mtime），不读内容，保证
- * 大仓库扫描成本可控。stat 指纹变化的大文件保守按 modified 报告。
+ * touch”与真实修改；超出内容预算的文件记录 stat 指纹（size:mtime:ctime）和有界的
+ * 首尾内容样本，避免 Windows 文件时间精度导致真实修改漏检，同时控制大仓库成本。
  * maxBytes 约束的是小文件内容读取总量（基线建立的一次性成本）。
  */
 const BASELINE_CONTENT_HASH_MAX_BYTES = 512 * 1024;
+const BASELINE_CONTENT_SAMPLE_BYTES = 4096;
 
 const BASELINE_EXCLUDED_DIRECTORIES = new Set([
 	".git",
@@ -63,11 +64,13 @@ export interface WorkspaceBaselineOptions {
 }
 
 export interface WorkspaceBaselineEntry {
-	/** 小文件：内容 sha256；大文件：空串（仅 stat 指纹可用）。 */
+	/** 小文件：内容 sha256；未纳入完整内容预算的文件为空串并使用 sampleHash。 */
 	hash: string;
 	size: number;
 	/** size:mtime:ctime 指纹；一致即视为未变化，跳过内容读取。 */
 	statKey: string;
+	/** 未纳入完整内容预算时使用的首尾内容样本指纹。 */
+	sampleHash?: string;
 }
 
 export interface WorkspaceBaseline {
@@ -104,6 +107,31 @@ function isExcludedBaselineFile(name: string): boolean {
 /** Windows 文件系统大小写不敏感：仅 Windows 平台归一化为小写比较。 */
 function pathCompareKey(value: string): string {
 	return process.platform === "win32" ? value.toLowerCase() : value;
+}
+
+async function readContentSample(filePath: string, size: number): Promise<string | undefined> {
+	try {
+		const hash = createHash("sha256");
+		if (size <= BASELINE_CONTENT_SAMPLE_BYTES * 2) {
+			hash.update(await fs.promises.readFile(filePath));
+			return hash.digest("hex");
+		}
+
+		const handle = await fs.promises.open(filePath, "r");
+		try {
+			const head = Buffer.allocUnsafe(BASELINE_CONTENT_SAMPLE_BYTES);
+			const tail = Buffer.allocUnsafe(BASELINE_CONTENT_SAMPLE_BYTES);
+			const headRead = await handle.read(head, 0, head.length, 0);
+			const tailRead = await handle.read(tail, 0, tail.length, size - tail.length);
+			hash.update(head.subarray(0, headRead.bytesRead));
+			hash.update(tail.subarray(0, tailRead.bytesRead));
+			return hash.digest("hex");
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -173,9 +201,11 @@ export async function captureWorkspaceBaseline(
 		const size = Number(stat.size);
 		const statKey = `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 		let hash = "";
+		let sampleHash: string | undefined;
 		if (size <= BASELINE_CONTENT_HASH_MAX_BYTES) {
 			if (hashedBytes + size > maxBytes) {
 				truncated = true;
+				sampleHash = await readContentSample(job.absolutePath, size);
 			} else {
 				let content: Buffer;
 				try {
@@ -187,7 +217,8 @@ export async function captureWorkspaceBaseline(
 				hash = createHash("sha256").update(content).digest("hex");
 			}
 		}
-		files.set(job.relativePath, { hash, size, statKey });
+		if (!hash && sampleHash === undefined) sampleHash = await readContentSample(job.absolutePath, size);
+		files.set(job.relativePath, { hash, size, statKey, sampleHash });
 	};
 	const workers = Array.from({ length: 24 }, async () => {
 		for (;;) {
@@ -266,6 +297,13 @@ export async function detectWorkspaceChangesFromBaseline(
 			if (statKey !== baselineEntry.statKey) {
 				// 基线期未读内容的大文件：stat 变化即保守报告 modified。
 				changes.push({ path: relativePath, status: "modified" });
+				continue;
+			}
+			if (baselineEntry.sampleHash) {
+				const sampleHash = await readContentSample(absolutePath, Number(stat.size));
+				if (sampleHash !== undefined && sampleHash !== baselineEntry.sampleHash) {
+					changes.push({ path: relativePath, status: "modified" });
+				}
 			}
 		}
 	};
