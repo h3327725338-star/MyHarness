@@ -31,6 +31,7 @@ vi.mock("../src/git/repository/workspace-changes.ts", async (importOriginal) => 
 const checkpointMocks = vi.hoisted(() => ({
 	listGitCheckpoints: vi.fn(),
 	hasGitCheckpointTaskChanges: vi.fn(),
+	hasGitCheckpointTaskChangesAsync: vi.fn(),
 	restoreGitCheckpoint: vi.fn(),
 	getGitCheckpointPendingTaskPaths: vi.fn(),
 	getGitCheckpointPendingTaskPathsAsync: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("../src/git/checkpoints/checkpoint.ts", async (importOriginal) => {
 		...actual,
 		listGitCheckpoints: checkpointMocks.listGitCheckpoints,
 		hasGitCheckpointTaskChanges: checkpointMocks.hasGitCheckpointTaskChanges,
+		hasGitCheckpointTaskChangesAsync: checkpointMocks.hasGitCheckpointTaskChangesAsync,
 		restoreGitCheckpoint: checkpointMocks.restoreGitCheckpoint,
 		getGitCheckpointPendingTaskPaths: checkpointMocks.getGitCheckpointPendingTaskPaths,
 		getGitCheckpointPendingTaskPathsAsync: checkpointMocks.getGitCheckpointPendingTaskPathsAsync,
@@ -282,6 +284,8 @@ describe("InteractiveMode completion gate", () => {
 		checkpointMocks.listGitCheckpoints.mockReset();
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReset();
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReturnValue(true);
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockReset();
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockResolvedValue(true);
 		checkpointMocks.restoreGitCheckpoint.mockReset();
 		checkpointMocks.getGitCheckpointPendingTaskPaths.mockReset();
 		checkpointMocks.getGitCheckpointPendingTaskPaths.mockReturnValue({ paths: ["src/a.ts"] });
@@ -660,9 +664,42 @@ describe("InteractiveMode completion gate", () => {
 		expect(retain).not.toHaveBeenCalled();
 	});
 
+	test("marks a failed restore invalid so the task can continue after recovery error", async () => {
+		initTheme("dark");
+		const checkpoint = makeCreatedCheckpoint("checkpoint-restore-failed");
+		const fakeThis: any = {
+			taskDecisionActive: false,
+			completionWorkflowActive: false,
+			completionWorkflowPromise: undefined,
+			taskSettlementPending: false,
+			lastTerminalRunState: undefined,
+			pendingResponseReadyMessages: [{ role: "assistant" }],
+			clearGitCommitTask: vi.fn(),
+			session: {
+				isStreaming: false,
+				getRunStateSnapshot: () => ({ state: "idle", activity: "", lastActivityAt: Date.now() }),
+				getGitCheckpoint: () => checkpoint,
+			},
+			showExtensionSelector: vi.fn(async () => "恢复到任务开始前"),
+			showError: vi.fn(),
+			showWarning: vi.fn(),
+			showStatus: vi.fn(),
+		};
+		fakeThis.getTaskLifecyclePhase = (InteractiveMode as any).prototype.getTaskLifecyclePhase;
+		fakeThis.hasPendingGitCheckpointDecision = (InteractiveMode as any).prototype.hasPendingGitCheckpointDecision;
+		checkpointMocks.restoreGitCheckpoint.mockResolvedValue({ ok: false, error: "restore failed" });
+
+		await (InteractiveMode as any).prototype.offerGitCheckpointRecovery.call(fakeThis);
+
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("restore failed"));
+		expect(checkpoint.status).toBe("invalid");
+		expect(fakeThis.getTaskLifecyclePhase()).toBe("idle");
+	});
+
 	test("Test C1b: no workspace changes closes the checkpoint without a selector", async () => {
 		initTheme("dark");
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReturnValue(false);
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockResolvedValue(false);
 		const checkpoint = makeCreatedCheckpoint("checkpoint-no-changes");
 		const retain = vi.fn((cp: any) => {
 			cp.status = "retained";
@@ -733,6 +770,8 @@ describe("InteractiveMode completion gate", () => {
 			messages: [{ role: "assistant", content: [], stopReason: "error" }],
 			willRetry: false,
 		});
+		fakeThis.checkShutdownRequested = vi.fn(async () => {});
+		await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, { type: "agent_settled" });
 
 		// Main Agent error → terminal（Test D7：不得使用 continuable，因为后面没有
 		// Completion Workflow 会继续处理该 checkpoint）。
@@ -788,6 +827,8 @@ describe("InteractiveMode completion gate", () => {
 			messages: [{ role: "assistant", content: [], stopReason: "aborted" }],
 			willRetry: false,
 		});
+		fakeThis.checkShutdownRequested = vi.fn(async () => {});
+		await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, { type: "agent_settled" });
 
 		expect(fakeThis.offerGitCheckpointRecovery.mock.calls[0][0]?.lifecycle).not.toBe("continuable");
 		expect(checkpoint.status).toBe("retained");
@@ -830,6 +871,8 @@ describe("InteractiveMode completion gate", () => {
 			messages: [{ role: "assistant", content: [], stopReason: "error" }],
 			willRetry: false,
 		});
+		fakeThis.checkShutdownRequested = vi.fn(async () => {});
+		await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, { type: "agent_settled" });
 
 		expect(checkpointMocks.restoreGitCheckpoint).toHaveBeenCalledWith(checkpoint);
 		expect(retain).not.toHaveBeenCalled();
@@ -839,6 +882,7 @@ describe("InteractiveMode completion gate", () => {
 	test("Test D4: terminal + noChanges retains without a selector", async () => {
 		initTheme("dark");
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReturnValue(false);
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockResolvedValue(false);
 		const checkpoint = makeCreatedCheckpoint("checkpoint-no-changes");
 		const retain = vi.fn((cp: any) => {
 			cp.status = "retained";
@@ -869,6 +913,7 @@ describe("InteractiveMode completion gate", () => {
 	test("Test D5: Main Agent aborted + noChanges retains without a selector", async () => {
 		initTheme("dark");
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReturnValue(false);
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockResolvedValue(false);
 		const checkpoint = makeCreatedCheckpoint("checkpoint-aborted-no-changes");
 		const retain = vi.fn((cp: any) => {
 			cp.status = "retained";
@@ -911,6 +956,8 @@ describe("InteractiveMode completion gate", () => {
 			messages: [{ role: "assistant", content: [], stopReason: "aborted" }],
 			willRetry: false,
 		});
+		fakeThis.checkShutdownRequested = vi.fn(async () => {});
+		await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, { type: "agent_settled" });
 
 		expect(fakeThis.showExtensionSelector).not.toHaveBeenCalled();
 		expect(checkpoint.status).toBe("retained");
@@ -919,6 +966,7 @@ describe("InteractiveMode completion gate", () => {
 	test("Test E3: explicit noChanges loaded checkpoint terminates", async () => {
 		initTheme("dark");
 		checkpointMocks.hasGitCheckpointTaskChanges.mockReturnValue(false);
+		checkpointMocks.hasGitCheckpointTaskChangesAsync.mockResolvedValue(false);
 		const loadedA = makeCreatedCheckpoint("checkpoint-loaded-E3");
 		const sessionX = makeCreatedCheckpoint("checkpoint-session-E3");
 		const retain = vi.fn((cp: any) => {

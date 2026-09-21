@@ -97,6 +97,18 @@ describe("InteractiveMode queued-message handling", () => {
 		expect(context.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 	});
 
+	it("routes UI cancellation through AgentSession when the session exposes abort", () => {
+		const context: any = createQueueContext();
+		const sessionAbort = vi.fn().mockResolvedValue(undefined);
+		context.session.abort = sessionAbort;
+		context.requestSessionAbort = (InteractiveMode as any).prototype.requestSessionAbort;
+
+		prototype.restoreQueuedMessagesToEditor.call(context, { abort: true });
+
+		expect(sessionAbort).toHaveBeenCalledOnce();
+		expect(context.agent.abort).not.toHaveBeenCalled();
+	});
+
 	it("clears queued input when the session is rebound", () => {
 		const context: RenderStateContext = {
 			loadedResourcesContainer: new Container(),

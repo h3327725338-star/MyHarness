@@ -1246,6 +1246,14 @@ export class AgentSession {
 		return this._gitCheckpointCoordinator.retain(checkpoint);
 	}
 
+	/** Close a checkpoint as invalid when recovery itself failed, so the session can continue. */
+	invalidateGitCheckpointRecovery(
+		checkpoint: GitCheckpoint | undefined,
+		reason: string,
+	): { ok: boolean; error?: string } {
+		return this._gitCheckpointCoordinator.invalidate(checkpoint, reason);
+	}
+
 	getGitCheckpoint(): GitCheckpoint | undefined {
 		return this._gitCheckpointCoordinator.current;
 	}

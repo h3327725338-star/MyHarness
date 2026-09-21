@@ -161,8 +161,8 @@ Provider credentials 不属于 settings JSON；它们仍由下面的 `auth.json`
 - `CHECKPOINT_VERSION = 2`，仍兼容 legacy v1。
 - 默认 metadata 存放在 `~/.myharness/agent/checkpoints/<sessionId>/<checkpointId>/checkpoint.json`；文件写入使用 atomic write 和 `0600`。
 - Git 内部使用隐藏 refs：`refs/myharness/checkpoints/<session>/<id>/worktree` 和 `.../index`。
-- checkpoint 记录 session/run/actor、cwd/repository root、HEAD/ref/status hash、排除路径、local refs、worktree/index tree 和状态。
-- restore 覆盖仓库 worktree、index、HEAD 和普通 local refs，但明确不恢复 ignored files、仓库外文件、global config、credential helper 或 remote 效果；linked worktree、submodule dirty state、rebase state 等也不在保证范围。
+- checkpoint 记录 session/run/actor、cwd/repository root、HEAD/ref/status hash、排除路径、local refs、worktree/index tree 和状态；恢复失败时会持久化 `invalid` 状态及诊断原因，避免会话无限重复进入 recovery。
+- restore 覆盖仓库 worktree、index、HEAD 和普通 local refs；只移除 checkpoint 之后新增的精确未跟踪路径，并保留其中的嵌套 Git 仓库。它明确不恢复 ignored files、仓库外文件、global config、credential helper 或 remote 效果；linked worktree、submodule dirty state、rebase state 等也不在保证范围。
 - created checkpoint TTL 为 7 天，resolved checkpoint TTL 为 1 小时；普通 Git 操作默认 timeout 为 30 秒，checkpoint Git 操作另用 180 秒。
 
 ### Commit

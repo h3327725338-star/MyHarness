@@ -5,6 +5,7 @@ import {
 	createGitCheckpoint,
 	type GitCheckpoint,
 	type GitCheckpointToolName,
+	invalidateGitCheckpoint,
 	isPathInsideRepository,
 	persistGitCheckpoint,
 	retainGitCheckpoint,
@@ -111,6 +112,12 @@ export class AgentSessionGitCheckpointCoordinator {
 		if (!checkpoint) return { ok: true };
 		const result = retainGitCheckpoint(checkpoint);
 		return result.ok ? { ok: true } : { ok: false, error: result.error ?? "无法关闭任务检查点。" };
+	}
+
+	invalidate(checkpoint = this.checkpoint, reason = "恢复检查点失败。"): { ok: boolean; error?: string } {
+		if (!checkpoint) return { ok: true };
+		const result = invalidateGitCheckpoint(checkpoint, reason.trim());
+		return result.ok ? { ok: true } : { ok: false, error: result.error ?? "无法记录检查点恢复失败。" };
 	}
 
 	get current(): GitCheckpoint | undefined {

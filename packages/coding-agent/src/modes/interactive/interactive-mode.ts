@@ -87,6 +87,8 @@ import {
 	completeGitCheckpoint,
 	type GitCheckpoint,
 	hasGitCheckpointTaskChanges,
+	hasGitCheckpointTaskChangesAsync,
+	invalidateGitCheckpoint,
 	listGitCheckpoints,
 	restoreGitCheckpoint,
 } from "../../git/checkpoints/checkpoint.ts";
@@ -454,12 +456,18 @@ export class InteractiveMode {
 	private completionVerificationStatus: CompletionVerificationStatus = "passed";
 	private completionWorkflowActive = false;
 	private completionWorkflowPromise: Promise<void> | undefined;
+	/** True while AgentSession has emitted a terminal outcome but not agent_settled. */
+	private taskSettlementPending = false;
+	/** Terminal failure/abort must not enter the success-only completion workflow. */
+	private completionWorkflowEligibleForRun = false;
 	/** Terminal outcome retained for the bottom bar after AgentSession returns to idle. */
 	private lastTerminalRunState: RunStateSnapshot | undefined;
 	/** Dedup guard so one terminal outcome triggers at most one popup reminder. */
 	private lastPopupRunStateKey: string | undefined;
 	/** True only while a task-level Save/Restore decision is waiting for input. */
 	private taskDecisionActive = false;
+	/** Deduplicates recovery triggers from agent_end, prompt rejection, and completion errors. */
+	private gitCheckpointRecoveryPromise: Promise<void> | undefined;
 	/** 后台 Git 提交任务状态（UI 展示用；存于进程级单例实例，不随组件渲染丢失）。 */
 	private gitCommitTask: GitCommitTaskState | undefined;
 	/** Non-visual Git commit workflow; this shell only supplies progress and result handling. */
@@ -1883,6 +1891,9 @@ export class InteractiveMode {
 		this.pendingTools.clear();
 		this.activeToolNames.clear();
 		this.lastTerminalRunState = undefined;
+		this.taskSettlementPending = false;
+		this.completionWorkflowEligibleForRun = false;
+		this.lastRenderedTaskLifecyclePhase = undefined;
 		this.taskStatusBar.clear();
 		this.renderInitialMessages();
 	}
@@ -2005,7 +2016,7 @@ export class InteractiveMode {
 
 	private hasPendingGitCheckpointDecision(): boolean {
 		const checkpoint = this.session.getGitCheckpoint();
-		if (checkpoint?.status === "created") return true;
+		if (checkpoint?.status === "created") return hasGitCheckpointTaskChanges(checkpoint);
 		const startupCheckpoint = this.pendingStartupGitCheckpoint;
 		return startupCheckpoint?.status === "created" && hasGitCheckpointTaskChanges(startupCheckpoint);
 	}
@@ -2019,7 +2030,8 @@ export class InteractiveMode {
 	private getTaskLifecyclePhase(): TaskLifecyclePhase {
 		const runSnapshot =
 			typeof this.session.getRunStateSnapshot === "function" ? this.session.getRunStateSnapshot() : undefined;
-		const agentIsActive = runSnapshot ? isRunStateActive(runSnapshot.state) : this.session.isStreaming;
+		const agentIsActive =
+			this.taskSettlementPending || (runSnapshot ? isRunStateActive(runSnapshot.state) : this.session.isStreaming);
 		return deriveTaskLifecyclePhase({
 			agentIsActive,
 			completionWorkflowActive: this.completionWorkflowActive,
@@ -2808,7 +2820,8 @@ export class InteractiveMode {
 			// Also covers the compaction setup window, before compaction_start
 			// installs its own Esc handler.
 			if (this.session.isCompacting) {
-				this.session.abortCompaction();
+				if (typeof this.requestSessionAbort === "function") this.requestSessionAbort();
+				else this.session.abortCompaction();
 			} else if (this.session.isStreaming) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {
@@ -3061,6 +3074,8 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start": {
+				this.taskSettlementPending = true;
+				this.completionWorkflowEligibleForRun = true;
 				this.pendingTools.clear();
 				this.activeToolNames.clear();
 				this.lastTerminalRunState = undefined;
@@ -3376,6 +3391,7 @@ export class InteractiveMode {
 					!event.willRetry &&
 					lastAssistant.stopReason !== "error" &&
 					lastAssistant.stopReason !== "aborted";
+				if (!event.willRetry) this.completionWorkflowEligibleForRun = agentRunSucceeded;
 				if (agentRunSucceeded) {
 					this.pendingResponseReadyMessages = [...event.messages];
 				}
@@ -3393,16 +3409,18 @@ export class InteractiveMode {
 				this.clearTransientStatus();
 				this.syncTaskLifecycleUI?.();
 				this.ui.requestRender();
-				if (!event.willRetry && !agentRunSucceeded) {
-					// Main Agent 自己 error / aborted：这是终结路径，
-					// 默认 terminal 语义，KEEP 时 checkpoint 关闭为 retained。
-					await this.offerGitCheckpointRecovery();
-				}
+				// Recovery is deferred to agent_settled. AgentSession may still run
+				// provider recovery, compaction, or a continuation after agent_end;
+				// opening a Restore/Keep selector here can race that work.
 				break;
 			}
 
 			case "agent_settled":
-				if (!this.shutdownRequested) this.maybeStartCompletionWorkflow();
+				if (!this.shutdownRequested) {
+					if (this.completionWorkflowEligibleForRun ?? true) this.maybeStartCompletionWorkflow();
+					else await this.offerGitCheckpointRecovery();
+				}
+				this.taskSettlementPending = false;
 				this.syncTaskLifecycleUI?.();
 				await this.checkShutdownRequested();
 				break;
@@ -3444,7 +3462,8 @@ export class InteractiveMode {
 				// Keep editor active; submissions are queued during compaction.
 				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
-					this.session.abortCompaction();
+					if (typeof this.requestSessionAbort === "function") this.requestSessionAbort();
+					else this.session.abortCompaction();
 				};
 				this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason));
 				this.ui.requestRender();
@@ -3493,8 +3512,11 @@ export class InteractiveMode {
 					// emits idle. Keep this event so the bottom bar can show the outcome
 					// after post-run completion work has actually finished.
 					this.lastTerminalRunState = event.state;
+					if (event.state.state !== "completed") this.completionWorkflowEligibleForRun = false;
 					this.maybeShowPopupNotification(event.state);
 				} else if (isRunStateActive(event.state.state)) {
+					this.taskSettlementPending = true;
+					this.completionWorkflowEligibleForRun = true;
 					if (
 						event.state.state === "queued" ||
 						event.state.state === "starting" ||
@@ -4780,7 +4802,8 @@ export class InteractiveMode {
 		if (allQueued.length === 0) {
 			this.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.agent.abort();
+				if (typeof this.requestSessionAbort === "function") this.requestSessionAbort();
+				else this.agent.abort();
 			}
 			return 0;
 		}
@@ -4790,9 +4813,22 @@ export class InteractiveMode {
 		this.editor.setText(combinedText);
 		this.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.agent.abort();
+			if (typeof this.requestSessionAbort === "function") this.requestSessionAbort();
+			else this.agent.abort();
 		}
 		return allQueued.length;
+	}
+
+	/** Route UI cancellation through AgentSession so retry, compaction and bash cleanup share one path. */
+	private requestSessionAbort(): void {
+		const session = this.session as AgentSession & { abort?: () => Promise<void> };
+		if (typeof session.abort !== "function") {
+			this.agent.abort();
+			return;
+		}
+		void session.abort().catch((error: unknown) => {
+			this.showError(`中断任务时发生错误：${error instanceof Error ? error.message : String(error)}`);
+		});
 	}
 
 	private queueCompactionMessage(
@@ -4945,44 +4981,39 @@ export class InteractiveMode {
 		}
 	}
 
-	private async offerGitCheckpointRecovery(options: { checkpoint?: GitCheckpoint } = {}): Promise<void> {
-		const checkpoint = options.checkpoint ?? this.session.getGitCheckpoint();
-		const hasChanges = checkpoint !== undefined && hasGitCheckpointTaskChanges(checkpoint);
-		if (this.taskDecisionActive || !checkpoint || checkpoint.status !== "created") {
+	private async offerGitCheckpointRecovery(
+		options: { checkpoint?: GitCheckpoint; lifecycle?: "terminal" | "continuable" } = {},
+	): Promise<void> {
+		if (this.gitCheckpointRecoveryPromise) {
+			await this.gitCheckpointRecoveryPromise;
 			return;
 		}
-		if (!hasChanges) {
-			// 没有可恢复的 Agent 差异：不弹无意义的恢复选择器。
-			// 但终结路径下 checkpoint 的生命周期仍必须结束（任务已结束，不能以 created 泄漏）。
-			// 同时清理可能仍在运行的后台提交任务（其目标 checkpoint 即将关闭）。
-			this.clearGitCommitTask();
-			this.gitCommitAgentRetry = undefined;
-			this.closeRecoveryCheckpoint(checkpoint);
-			this.clearPendingStartupGitCheckpoint?.(checkpoint);
-			return;
-		}
-
-		this.taskDecisionActive = true;
-		this.syncTaskLifecycleUI?.(true);
+		let resolveRecovery!: () => void;
+		const recovery = new Promise<void>((resolve) => {
+			resolveRecovery = resolve;
+		});
+		this.gitCheckpointRecoveryPromise = recovery;
 		try {
-			const choice = await this.showExtensionSelector(
-				[
-					"本次任务修改失败。",
-					`已创建检查点：${checkpoint.id}`,
-					"当前工作区仍保留，系统不会自动覆盖。",
-					`检查点位置：${checkpoint.storagePath}`,
-					"是否恢复到任务开始前状态？任务期间的所有修改都按 Agent 修改处理，恢复时会一起撤销。",
-				].join("\n"),
-				["恢复到任务开始前", "保留当前修改"],
-			);
-			if (choice === undefined) {
-				this.showStatus("Git：未完成恢复决策；checkpoint 继续保留，当前工作区修改不变。");
+			const checkpoint = options.checkpoint ?? this.session.getGitCheckpoint();
+			const terminalRecovery = options.lifecycle !== "continuable";
+			const failRecovery = (reason: string): void => {
+				if (typeof this.failGitCheckpointRecovery === "function") {
+					this.failGitCheckpointRecovery(checkpoint!, reason);
+					return;
+				}
+				if (checkpoint) {
+					checkpoint.status = "invalid";
+					checkpoint.failureReason = reason;
+				}
+			};
+			const hasChanges = checkpoint !== undefined && (await hasGitCheckpointTaskChangesAsync(checkpoint));
+			if (this.taskDecisionActive || !checkpoint || checkpoint.status !== "created") {
 				return;
 			}
-			if (choice !== "恢复到任务开始前") {
-				// 用户选择保留当前修改：一旦做出这个决策，checkpoint 的生命周期就结束。
-				// 收尾为 retained（不表示验证通过），终结路径下不再允许它继续 active。
-				// 同时清理可能仍在运行的后台提交任务。
+			if (!hasChanges) {
+				// 没有可恢复的 Agent 差异：不弹无意义的恢复选择器。
+				// 但终结路径下 checkpoint 的生命周期仍必须结束（任务已结束，不能以 created 泄漏）。
+				// 同时清理可能仍在运行的后台提交任务（其目标 checkpoint 即将关闭）。
 				this.clearGitCommitTask();
 				this.gitCommitAgentRetry = undefined;
 				this.closeRecoveryCheckpoint(checkpoint);
@@ -4990,33 +5021,93 @@ export class InteractiveMode {
 				return;
 			}
 
-			const result = await restoreGitCheckpoint(checkpoint);
-			if (!result.ok) {
-				this.showError(
-					["Git：没有恢复工作区。", result.error ?? "未知错误", `检查点仍保留：${checkpoint.storagePath}`].join(
-						"\n",
-					),
-				);
-				return;
-			}
-			this.showStatus(
-				result.externalSideEffectsUnknown
-					? "Git：已恢复本地状态；本任务执行过无法静态验证外部副作用的不透明命令，本地 Restore 无法保证撤销其可能产生的远端或外部副作用。"
-					: "Git：已恢复到任务开始前状态。检查点暂时保留，之后会按过期策略清理。",
-			);
-			// The failed edits no longer exist after a successful restore.
-			this.pendingResponseReadyMessages = [];
-			// 恢复成功即终结：清理可能仍在运行的后台提交任务。
-			this.clearGitCommitTask();
-			this.gitCommitAgentRetry = undefined;
-			this.clearPendingStartupGitCheckpoint?.(checkpoint);
-			if (result.cleanupError) this.showWarning(`Git：${result.cleanupError}`);
-		} catch (error) {
-			this.showError(`Git：恢复检查点时发生错误。\n${error instanceof Error ? error.message : String(error)}`);
-		} finally {
-			this.taskDecisionActive = false;
+			this.taskDecisionActive = true;
 			this.syncTaskLifecycleUI?.(true);
+			try {
+				const choice = await this.showExtensionSelector(
+					[
+						"本次任务修改失败。",
+						`已创建检查点：${checkpoint.id}`,
+						"当前工作区仍保留，系统不会自动覆盖。",
+						`检查点位置：${checkpoint.storagePath}`,
+						"是否恢复到任务开始前状态？任务期间的所有修改都按 Agent 修改处理，恢复时会一起撤销。",
+					].join("\n"),
+					["恢复到任务开始前", "保留当前修改"],
+				);
+				if (choice === undefined) {
+					this.showStatus("Git：未完成恢复决策；checkpoint 继续保留，当前工作区修改不变。");
+					return;
+				}
+				if (choice !== "恢复到任务开始前") {
+					if (!terminalRecovery) {
+						this.showStatus?.("Git：保留当前修改，任务继续。");
+						return;
+					}
+					// 用户选择保留当前修改：一旦做出这个决策，checkpoint 的生命周期就结束。
+					// 收尾为 retained（不表示验证通过），终结路径下不再允许它继续 active。
+					// 同时清理可能仍在运行的后台提交任务。
+					this.clearGitCommitTask();
+					this.gitCommitAgentRetry = undefined;
+					this.closeRecoveryCheckpoint(checkpoint);
+					this.clearPendingStartupGitCheckpoint?.(checkpoint);
+					return;
+				}
+
+				const result = await restoreGitCheckpoint(checkpoint);
+				if (!result.ok) {
+					const reason = result.error ?? "未知错误";
+					this.showError(["Git：没有恢复工作区。", reason, `检查点仍保留：${checkpoint.storagePath}`].join("\n"));
+					failRecovery(reason);
+					return;
+				}
+				this.showStatus(
+					result.externalSideEffectsUnknown
+						? "Git：已恢复本地状态；本任务执行过无法静态验证外部副作用的不透明命令，本地 Restore 无法保证撤销其可能产生的远端或外部副作用。"
+						: "Git：已恢复到任务开始前状态。检查点暂时保留，之后会按过期策略清理。",
+				);
+				// The failed edits no longer exist after a successful restore.
+				this.pendingResponseReadyMessages = [];
+				// 恢复成功即终结：清理可能仍在运行的后台提交任务。
+				this.clearGitCommitTask();
+				this.gitCommitAgentRetry = undefined;
+				this.clearPendingStartupGitCheckpoint?.(checkpoint);
+				if (result.cleanupError) this.showWarning(`Git：${result.cleanupError}`);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				this.showError(`Git：恢复检查点时发生错误。\n${reason}`);
+				failRecovery(reason);
+			} finally {
+				this.taskDecisionActive = false;
+				this.syncTaskLifecycleUI?.(true);
+			}
+		} finally {
+			resolveRecovery();
+			if (this.gitCheckpointRecoveryPromise === recovery) this.gitCheckpointRecoveryPromise = undefined;
 		}
+	}
+
+	private failGitCheckpointRecovery(checkpoint: GitCheckpoint, reason: string): void {
+		this.clearGitCommitTask();
+		this.gitCommitAgentRetry = undefined;
+		this.pendingResponseReadyMessages = [];
+		const result =
+			typeof this.session.invalidateGitCheckpointRecovery === "function"
+				? this.session.invalidateGitCheckpointRecovery(checkpoint, reason)
+				: invalidateGitCheckpoint(checkpoint, reason);
+		if (!result.ok) {
+			// Even if metadata cannot be written, stop reusing the in-memory
+			// checkpoint so this session is not permanently held in recovery.
+			checkpoint.status = "invalid";
+			checkpoint.failureReason = reason;
+			this.showWarning(
+				`Git：恢复失败且无法持久化检查点状态；本次会话已解除阻塞，但请手动检查工作区。${result.error ?? ""}`,
+			);
+		} else {
+			this.showWarning(
+				"Git：恢复失败，检查点已标记为 invalid；当前工作区未被确认恢复，请手动检查。会话已解除阻塞。",
+			);
+		}
+		this.clearPendingStartupGitCheckpoint?.(checkpoint);
 	}
 
 	/**
@@ -5282,13 +5373,11 @@ export class InteractiveMode {
 				this.gitCommitAgentRetry = undefined;
 				const restored = await restoreGitCheckpoint(checkpoint);
 				if (!restored.ok) {
+					const reason = restored.error ?? "未知错误";
 					this.showError(
-						[
-							"Git：未恢复任务修改。",
-							restored.error ?? "未知错误",
-							`checkpoint 仍保留：${checkpoint.storagePath}`,
-						].join("\n"),
+						["Git：未恢复任务修改。", reason, `checkpoint 仍保留：${checkpoint.storagePath}`].join("\n"),
 					);
+					this.failGitCheckpointRecovery(checkpoint, reason);
 					return;
 				}
 				this.pendingResponseReadyMessages = [];

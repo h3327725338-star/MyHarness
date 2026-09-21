@@ -11,6 +11,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { lstat as lstatAsync, readdir as readdirAsync, rm as rmAsync } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
@@ -22,7 +23,7 @@ import { runGitAsync } from "../repository/integration.ts";
  *
  * 恢复承诺边界（documented edge cases）：
  * - 恢复范围是 worktree、index、HEAD、refs/*（排除 refs/myharness/checkpoints/**）；
- *   不承诺恢复 ignored 文件（.env、本地缓存等不进快照，git clean -x 的删除无法恢复）。
+ *   不承诺恢复 ignored 文件（.env、本地缓存等不进快照，恢复流程也不会主动清理它们）。
  * - 仓库外文件（如桌面路径）、global Git config、credential helper 不属于 repo checkpoint。
  * - remote 副作用（push 等）不会回滚，只通过 hadBashExecution 标记"外部副作用未知"；
  *   git push --mirror 等显式全 refs 操作可能把内部 checkpoint refs 推走，属 documented edge case。
@@ -77,6 +78,8 @@ export interface GitCheckpoint {
 	checkpointRef?: string;
 	indexCheckpointRef?: string;
 	status: GitCheckpointStatus;
+	/** Diagnostic detail when recovery could not be completed safely. */
+	failureReason?: string;
 	storagePath: string;
 }
 
@@ -195,6 +198,15 @@ function lstatIfExists(absolutePath: string): ReturnType<typeof lstatSync> | und
 	}
 }
 
+async function lstatIfExistsAsync(absolutePath: string): Promise<Awaited<ReturnType<typeof lstatAsync>> | undefined> {
+	try {
+		return await lstatAsync(absolutePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
 function runCheckpointGit(
 	cwd: string,
 	args: string[],
@@ -225,11 +237,13 @@ async function runCheckpointGitAsync(
 	args: string[],
 	preserveOutput = false,
 	env?: NodeJS.ProcessEnv,
+	input?: string,
 ): Promise<GitCommandResult> {
 	const result = await runGit(args, {
 		cwd,
 		timeoutMs: GIT_CHECKPOINT_TIMEOUT_MS,
 		env: { GIT_OPTIONAL_LOCKS: "0", ...env },
+		input,
 	});
 	// `runGit` returns raw stdout; `runGitSync` trims unless preserveOutput is
 	// set. Match that contract so callers (e.g. `git write-tree`) receive a bare
@@ -575,6 +589,29 @@ export function retainGitCheckpoint(checkpoint: GitCheckpoint): GitCheckpointMut
 	}
 }
 
+/**
+ * Close a checkpoint after recovery itself failed. `invalid` is intentionally
+ * distinct from `retained`: the workspace may need manual inspection, and the
+ * checkpoint must not keep the interactive session in an endless decision
+ * state or be offered automatically after restart.
+ */
+export function invalidateGitCheckpoint(checkpoint: GitCheckpoint, reason: string): GitCheckpointMutationResult {
+	if (checkpoint.status !== "created") {
+		return { ok: false, error: `检查点当前状态为 ${checkpoint.status}，不能标记为恢复失败。` };
+	}
+	const previousReason = checkpoint.failureReason;
+	checkpoint.status = "invalid";
+	checkpoint.failureReason = reason;
+	try {
+		updateCheckpointMetadata(checkpoint);
+		return { ok: true };
+	} catch (error) {
+		checkpoint.status = "created";
+		checkpoint.failureReason = previousReason;
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 interface GitCheckpointRefChange {
 	ref: string;
 	kind: "created" | "deleted" | "moved";
@@ -623,6 +660,41 @@ function parseGitNameStatus(value: string): GitCheckpointHeadChange[] {
 	return changes;
 }
 
+function isIndexPathAtWorktreeBaseline(checkpoint: GitCheckpoint, path: string): { same?: boolean; error?: string } {
+	if (!checkpoint.worktreeTree) return { error: "checkpoint 缺少工作区基线树。" };
+	const result = runCheckpointGit(checkpoint.repositoryRoot, [
+		"diff",
+		"--cached",
+		"--quiet",
+		"--no-renames",
+		checkpoint.worktreeTree,
+		"--",
+		path,
+	]);
+	if (result.ok) return { same: true };
+	if (result.exitCode === 1) return { same: false };
+	return { error: formatGitFailure(result) };
+}
+
+async function isIndexPathAtWorktreeBaselineAsync(
+	checkpoint: GitCheckpoint,
+	path: string,
+): Promise<{ same?: boolean; error?: string }> {
+	if (!checkpoint.worktreeTree) return { error: "checkpoint 缺少工作区基线树。" };
+	const result = await runCheckpointGitAsync(checkpoint.repositoryRoot, [
+		"diff",
+		"--cached",
+		"--quiet",
+		"--no-renames",
+		checkpoint.worktreeTree,
+		"--",
+		path,
+	]);
+	if (result.ok) return { same: true };
+	if (result.exitCode === 1) return { same: false };
+	return { error: formatGitFailure(result) };
+}
+
 /**
  * Compare the checkpoint's saved worktree tree with the repository as it is
  * now. This is intentionally independent of tool calls and command parsing.
@@ -642,19 +714,42 @@ export function collectGitCheckpointWorkingTreeChanges(checkpoint: GitCheckpoint
 	const baselinePaths = new Set(parseNulSeparated(baseline.stdout));
 	// 真实 index 中的 tracked 路径。基线 tree 快照过的 untracked 文件不在其中，
 	// 不能参与 index/worktree diff（会被误报为 deleted），改用 blob 内容对比。
-	const tracked = new Set(
-		parseNulSeparated(runCheckpointGit(checkpoint.repositoryRoot, ["ls-files", "-z"], true).stdout ?? ""),
-	);
-	for (const args of [
+	const trackedResult = runCheckpointGit(checkpoint.repositoryRoot, ["ls-files", "-z"], true);
+	if (!trackedResult.ok) return { error: formatGitFailure(trackedResult) };
+	const tracked = new Set(parseNulSeparated(trackedResult.stdout));
+	const worktreeDiff = runCheckpointGit(
+		checkpoint.repositoryRoot,
 		["diff", "--name-status", "-z", "--no-renames", checkpoint.worktreeTree, "--"],
-		["diff", "--cached", "--name-status", "-z", "--no-renames", checkpoint.worktreeTree, "--"],
-	]) {
-		const result = runCheckpointGit(checkpoint.repositoryRoot, args, true);
-		if (!result.ok) return { error: formatGitFailure(result) };
-		for (const change of parseGitNameStatus(result.stdout)) {
-			if (baselinePaths.has(change.path) && !tracked.has(change.path)) continue;
-			changes.set(change.path, change);
+		true,
+	);
+	if (!worktreeDiff.ok) return { error: formatGitFailure(worktreeDiff) };
+	for (const change of parseGitNameStatus(worktreeDiff.stdout)) {
+		if (baselinePaths.has(change.path) && !tracked.has(change.path)) continue;
+		changes.set(change.path, change);
+	}
+
+	const indexDiff = runCheckpointGit(
+		checkpoint.repositoryRoot,
+		[
+			"diff",
+			"--cached",
+			"--name-status",
+			"-z",
+			"--no-renames",
+			checkpoint.indexTree ?? checkpoint.worktreeTree,
+			"--",
+		],
+		true,
+	);
+	if (!indexDiff.ok) return { error: formatGitFailure(indexDiff) };
+	for (const change of parseGitNameStatus(indexDiff.stdout)) {
+		if (baselinePaths.has(change.path) && !tracked.has(change.path)) continue;
+		if (!changes.has(change.path)) {
+			const baseline = isIndexPathAtWorktreeBaseline(checkpoint, change.path);
+			if (baseline.error) return { error: baseline.error };
+			if (baseline.same) continue;
 		}
+		changes.set(change.path, change);
 	}
 
 	// 基线快照过的 untracked 文件：把当前工作区内容与基线 blob 对比。
@@ -665,7 +760,7 @@ export function collectGitCheckpointWorkingTreeChanges(checkpoint: GitCheckpoint
 			["rev-parse", "--verify", `${checkpoint.worktreeTree}:${path}`],
 			true,
 		);
-		if (!baselineOid.ok || !baselineOid.stdout) continue;
+		if (!baselineOid.ok || !baselineOid.stdout) return { error: formatGitFailure(baselineOid) };
 		const currentPath = resolve(checkpoint.repositoryRoot, path);
 		const stat = lstatIfExists(currentPath);
 		if (!stat) {
@@ -673,12 +768,106 @@ export function collectGitCheckpointWorkingTreeChanges(checkpoint: GitCheckpoint
 			continue;
 		}
 		const currentOid = runCheckpointGit(checkpoint.repositoryRoot, ["hash-object", currentPath], true);
-		if (currentOid.ok && currentOid.stdout && currentOid.stdout !== baselineOid.stdout) {
+		if (!currentOid.ok || !currentOid.stdout) return { error: formatGitFailure(currentOid) };
+		if (currentOid.stdout !== baselineOid.stdout) {
 			changes.set(path, { path, status: "modified" });
 		}
 	}
 
 	const untracked = runCheckpointGit(
+		checkpoint.repositoryRoot,
+		["ls-files", "--others", "--exclude-standard", "-z"],
+		true,
+	);
+	if (!untracked.ok) return { error: formatGitFailure(untracked) };
+	for (const path of parseNulSeparated(untracked.stdout)) {
+		if (!baselinePaths.has(path)) changes.set(path, { path, status: "added" });
+	}
+	const excludedPaths = (checkpoint.excludedPaths ?? []).map((path) => path.replace(/\\/gu, "/"));
+	return {
+		changes: [...changes.values()]
+			.filter(
+				(change) =>
+					!excludedPaths.some((excluded) => change.path === excluded || change.path.startsWith(`${excluded}/`)),
+			)
+			.sort((left, right) => left.path.localeCompare(right.path)),
+	};
+}
+
+/** Async counterpart for interactive recovery decisions; never blocks the TUI on Git subprocesses. */
+export async function collectGitCheckpointWorkingTreeChangesAsync(checkpoint: GitCheckpoint): Promise<{
+	changes?: GitCheckpointHeadChange[];
+	error?: string;
+}> {
+	if (!checkpoint.worktreeTree) return { error: "checkpoint 缺少工作区基线树。" };
+	const changes = new Map<string, GitCheckpointHeadChange>();
+	const baseline = await runCheckpointGitAsync(
+		checkpoint.repositoryRoot,
+		["ls-tree", "-r", "-z", "--name-only", checkpoint.worktreeTree],
+		true,
+	);
+	if (!baseline.ok) return { error: formatGitFailure(baseline) };
+	const baselinePaths = new Set(parseNulSeparated(baseline.stdout));
+	const trackedResult = await runCheckpointGitAsync(checkpoint.repositoryRoot, ["ls-files", "-z"], true);
+	if (!trackedResult.ok) return { error: formatGitFailure(trackedResult) };
+	const tracked = new Set(parseNulSeparated(trackedResult.stdout));
+	const worktreeDiff = await runCheckpointGitAsync(
+		checkpoint.repositoryRoot,
+		["diff", "--name-status", "-z", "--no-renames", checkpoint.worktreeTree, "--"],
+		true,
+	);
+	if (!worktreeDiff.ok) return { error: formatGitFailure(worktreeDiff) };
+	for (const change of parseGitNameStatus(worktreeDiff.stdout)) {
+		if (baselinePaths.has(change.path) && !tracked.has(change.path)) continue;
+		changes.set(change.path, change);
+	}
+
+	const indexDiff = await runCheckpointGitAsync(
+		checkpoint.repositoryRoot,
+		[
+			"diff",
+			"--cached",
+			"--name-status",
+			"-z",
+			"--no-renames",
+			checkpoint.indexTree ?? checkpoint.worktreeTree,
+			"--",
+		],
+		true,
+	);
+	if (!indexDiff.ok) return { error: formatGitFailure(indexDiff) };
+	for (const change of parseGitNameStatus(indexDiff.stdout)) {
+		if (baselinePaths.has(change.path) && !tracked.has(change.path)) continue;
+		if (!changes.has(change.path)) {
+			const baseline = await isIndexPathAtWorktreeBaselineAsync(checkpoint, change.path);
+			if (baseline.error) return { error: baseline.error };
+			if (baseline.same) continue;
+		}
+		changes.set(change.path, change);
+	}
+
+	for (const path of baselinePaths) {
+		if (tracked.has(path)) continue;
+		const baselineOid = await runCheckpointGitAsync(
+			checkpoint.repositoryRoot,
+			["rev-parse", "--verify", `${checkpoint.worktreeTree}:${path}`],
+			true,
+		);
+		if (!baselineOid.ok || !baselineOid.stdout) return { error: formatGitFailure(baselineOid) };
+		const currentPath = resolve(checkpoint.repositoryRoot, path);
+		const stat = await lstatIfExistsAsync(currentPath);
+		if (!stat) {
+			changes.set(path, { path, status: "deleted" });
+			continue;
+		}
+		const currentOid = await runCheckpointGitAsync(checkpoint.repositoryRoot, ["hash-object", currentPath], true);
+		if (!currentOid.ok || !currentOid.stdout) return { error: formatGitFailure(currentOid) };
+		if (currentOid.stdout !== baselineOid.stdout) {
+			changes.set(path, { path, status: "modified" });
+		}
+	}
+
+	const untracked = await runCheckpointGitAsync(
 		checkpoint.repositoryRoot,
 		["ls-files", "--others", "--exclude-standard", "-z"],
 		true,
@@ -783,13 +972,62 @@ export async function getGitCheckpointPendingTaskPathsAsync(
 
 /** Checkpoint task changes are the real repository delta from its saved baseline. */
 export function hasGitCheckpointTaskChanges(checkpoint: GitCheckpoint): boolean {
+	let workingTree: ReturnType<typeof collectGitCheckpointWorkingTreeChanges>;
+	try {
+		workingTree = collectGitCheckpointWorkingTreeChanges(checkpoint);
+	} catch {
+		return true;
+	}
+	// The status code/path hash is only a cheap index of Git state. It cannot
+	// distinguish a file whose content was changed before the checkpoint and
+	// then changed again by the task. Prefer the tree/blob comparison whenever
+	// a v2 baseline is available; if inspection fails, fail closed and keep the
+	// recovery decision visible instead of silently taking the no-op path.
+	if (checkpoint.worktreeTree) {
+		if (workingTree.changes) {
+			if (workingTree.changes.length > 0) return true;
+		} else {
+			return true;
+		}
+	}
+
 	const status = getStatus(checkpoint.repositoryRoot);
 	if (!status.entries || statusHash(status.entries, checkpoint.excludedPaths) !== checkpoint.statusBeforeHash)
 		return true;
 	const head = getHeadState(checkpoint.repositoryRoot);
 	if (head.commit !== checkpoint.headCommit || head.ref !== checkpoint.headRef) return true;
 	const refs = getLocalRefs(checkpoint.repositoryRoot);
-	return refs.refs !== undefined && localRefsState(refs.refs) !== checkpoint.localRefsState;
+	return refs.refs === undefined || localRefsState(refs.refs) !== checkpoint.localRefsState;
+}
+
+/** Async counterpart used before opening a recovery decision in the interactive UI. */
+export async function hasGitCheckpointTaskChangesAsync(checkpoint: GitCheckpoint): Promise<boolean> {
+	try {
+		if (checkpoint.worktreeTree) {
+			const workingTree = await collectGitCheckpointWorkingTreeChangesAsync(checkpoint);
+			if (!workingTree.changes) return true;
+			if (workingTree.changes.length > 0) return true;
+		}
+
+		const statusResult = await runCheckpointGitAsync(
+			checkpoint.repositoryRoot,
+			["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+			true,
+		);
+		const statusEntries = statusResult.ok ? parseGitStatus(statusResult.stdout) : undefined;
+		if (!statusEntries || statusHash(statusEntries, checkpoint.excludedPaths) !== checkpoint.statusBeforeHash)
+			return true;
+		const [head, refs] = await Promise.all([
+			getHeadStateAsync(checkpoint.repositoryRoot),
+			getLocalRefsAsync(checkpoint.repositoryRoot),
+		]);
+		if (head.commit !== checkpoint.headCommit || head.ref !== checkpoint.headRef) return true;
+		return refs.refs === undefined || localRefsState(refs.refs) !== checkpoint.localRefsState;
+	} catch {
+		// Recovery decisions must fail closed: an inspection error is a reason to
+		// show the user a decision, never a reason to silently skip recovery.
+		return true;
+	}
 }
 
 function createCheckpointId(sessionId: string, runId: string, timestamp: number): string {
@@ -979,25 +1217,57 @@ export function isPathInsideRepository(checkpoint: GitCheckpoint, mutationPath: 
 	}
 }
 
-function restoreCheckpointRefs(repositoryRoot: string, refs: Record<string, string>): string | undefined {
+async function getHeadStateAsync(repositoryRoot: string): Promise<GitHeadState> {
+	const [commit, ref] = await Promise.all([
+		runCheckpointGitAsync(repositoryRoot, ["rev-parse", "--verify", "HEAD"]),
+		runCheckpointGitAsync(repositoryRoot, ["symbolic-ref", "--quiet", "HEAD"]),
+	]);
+	return {
+		commit: commit.ok && commit.stdout ? commit.stdout : undefined,
+		ref: ref.ok && ref.stdout ? ref.stdout : undefined,
+	};
+}
+
+async function getLocalRefsAsync(repositoryRoot: string): Promise<{ refs?: Record<string, string>; error?: string }> {
+	const result = await runCheckpointGitAsync(
+		repositoryRoot,
+		["for-each-ref", "--format=%(refname)%00%(objectname)", "refs"],
+		true,
+	);
+	if (!result.ok) return { error: formatGitFailure(result) };
+	const refs: Record<string, string> = {};
+	for (const line of result.stdout.split(/\r?\n/gu)) {
+		const [ref, sha] = line.split("\0");
+		if (ref && sha && !ref.startsWith("refs/myharness/checkpoints/")) refs[ref] = sha;
+	}
+	return { refs };
+}
+
+async function restoreCheckpointRefs(
+	repositoryRoot: string,
+	refs: Record<string, string>,
+): Promise<string | undefined> {
 	// 批量恢复：git update-ref --stdin 一次事务写入全部 refs 快照。
 	// 注意行模式要求每条 update 以 LF 终止，最后一行也不能省略。
 	const entries = Object.entries(refs);
 	if (entries.length === 0) return undefined;
 	const input = `${entries.map(([ref, oid]) => `update ${ref} ${oid}`).join("\n")}\n`;
-	const result = runCheckpointGit(repositoryRoot, ["update-ref", "--stdin"], false, undefined, input);
+	const result = await runCheckpointGitAsync(repositoryRoot, ["update-ref", "--stdin"], false, undefined, input);
 	return result.ok ? undefined : formatGitFailure(result);
 }
 
-function removeCheckpointNewRefs(repositoryRoot: string, refs: Record<string, string>): string | undefined {
-	const current = getLocalRefs(repositoryRoot);
+async function removeCheckpointNewRefs(
+	repositoryRoot: string,
+	refs: Record<string, string>,
+): Promise<string | undefined> {
+	const current = await getLocalRefsAsync(repositoryRoot);
 	if (!current.refs) return current.error ?? "无法读取当前 refs。";
 	// 批量删除 checkpoint 后新增的 refs（快照中不存在的），与恢复同一事务方式。
 	const deletions = Object.keys(current.refs)
 		.filter((ref) => refs[ref] === undefined)
 		.map((ref) => `delete ${ref}`);
 	if (deletions.length === 0) return undefined;
-	const result = runCheckpointGit(
+	const result = await runCheckpointGitAsync(
 		repositoryRoot,
 		["update-ref", "--stdin"],
 		false,
@@ -1007,18 +1277,108 @@ function removeCheckpointNewRefs(repositoryRoot: string, refs: Record<string, st
 	return result.ok ? undefined : formatGitFailure(result);
 }
 
-function restoreCheckpointHead(repositoryRoot: string, checkpoint: GitCheckpoint): string | undefined {
+async function restoreCheckpointHead(repositoryRoot: string, checkpoint: GitCheckpoint): Promise<string | undefined> {
 	return restoreGitHeadState(repositoryRoot, { ref: checkpoint.headRef, commit: checkpoint.headCommit });
 }
 
-function restoreGitHeadState(repositoryRoot: string, head: GitHeadState): string | undefined {
+async function restoreGitHeadState(repositoryRoot: string, head: GitHeadState): Promise<string | undefined> {
 	if (head.ref) {
-		const result = runCheckpointGit(repositoryRoot, ["symbolic-ref", "HEAD", head.ref]);
+		const result = await runCheckpointGitAsync(repositoryRoot, ["symbolic-ref", "HEAD", head.ref]);
 		return result.ok ? undefined : formatGitFailure(result);
 	}
 	if (!head.commit) return undefined;
-	const update = runCheckpointGit(repositoryRoot, ["update-ref", "--no-deref", "HEAD", head.commit]);
+	const update = await runCheckpointGitAsync(repositoryRoot, ["update-ref", "--no-deref", "HEAD", head.commit]);
 	return update.ok ? undefined : formatGitFailure(update);
+}
+
+async function getCheckpointAddedUntrackedPaths(
+	checkpoint: GitCheckpoint,
+): Promise<{ paths?: string[]; error?: string; baselinePaths?: Set<string> }> {
+	if (!checkpoint.worktreeTree) return { error: "checkpoint 缺少工作区基线树。" };
+	const baseline = await runCheckpointGitAsync(
+		checkpoint.repositoryRoot,
+		["ls-tree", "-r", "-z", "--name-only", checkpoint.worktreeTree],
+		true,
+	);
+	if (!baseline.ok) return { error: formatGitFailure(baseline) };
+	const baselinePaths = new Set(parseNulSeparated(baseline.stdout));
+	const untracked = await runCheckpointGitAsync(
+		checkpoint.repositoryRoot,
+		["ls-files", "--others", "--exclude-standard", "-z"],
+		true,
+	);
+	if (!untracked.ok) return { error: formatGitFailure(untracked) };
+	const excluded = (checkpoint.excludedPaths ?? []).map((path) => path.replace(/\\/gu, "/"));
+	const paths = parseNulSeparated(untracked.stdout)
+		.filter((path) => !baselinePaths.has(path))
+		.filter((path) => !excluded.some((excludedPath) => path === excludedPath || path.startsWith(`${excludedPath}/`)));
+	return { paths, baselinePaths };
+}
+
+async function containsGitMetadata(directoryPath: string): Promise<boolean> {
+	try {
+		const entries = await readdirAsync(directoryPath, { withFileTypes: true });
+		for (const entry of entries) {
+			if (entry.name === ".git") return true;
+			if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+			if (await containsGitMetadata(join(directoryPath, entry.name))) return true;
+		}
+		return false;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+async function removeEmptyCheckpointParentDirectories(
+	repositoryRoot: string,
+	targetPath: string,
+	baselinePaths: ReadonlySet<string>,
+): Promise<void> {
+	const resolvedRepositoryRoot = resolve(repositoryRoot);
+	let current = dirname(targetPath);
+	while (current !== resolvedRepositoryRoot) {
+		const relation = relative(resolvedRepositoryRoot, current);
+		if (!relation || relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation)) return;
+		const normalized = relation.split(sep).join("/");
+		if ([...baselinePaths].some((path) => path === normalized || path.startsWith(`${normalized}/`))) return;
+		const stat = await lstatIfExistsAsync(current);
+		if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) return;
+		const entries = await readdirAsync(current);
+		if (entries.length > 0) return;
+		await rmAsync(current, { recursive: true, force: true });
+		current = dirname(current);
+	}
+}
+
+async function removeCheckpointAddedUntrackedPaths(
+	checkpoint: GitCheckpoint,
+	paths: readonly string[],
+	baselinePaths: ReadonlySet<string>,
+): Promise<string | undefined> {
+	const repositoryRoot = resolve(checkpoint.repositoryRoot);
+	try {
+		for (const relativePath of paths) {
+			const target = resolve(repositoryRoot, relativePath);
+			const relation = relative(repositoryRoot, target);
+			if (!relation || relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
+				return `恢复路径越界：${relativePath}`;
+			}
+			const stat = await lstatIfExistsAsync(target);
+			if (!stat) continue;
+			if (stat.isDirectory() && !stat.isSymbolicLink() && (await containsGitMetadata(target))) {
+				// 与既有恢复承诺一致：嵌套 Git 仓库不是外层 checkpoint 的内容，保留它。
+				continue;
+			}
+			// `recursive: true` is safe here because `target` is one exact path
+			// reported as a new untracked path, never a repository-wide pathspec.
+			await rmAsync(target, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: true });
+			await removeEmptyCheckpointParentDirectories(repositoryRoot, target, baselinePaths);
+		}
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
 }
 
 async function restoreTreeCheckpoint(checkpoint: GitCheckpoint): Promise<GitCheckpointRestoreResult> {
@@ -1027,39 +1387,60 @@ async function restoreTreeCheckpoint(checkpoint: GitCheckpoint): Promise<GitChec
 	}
 	// 记录恢复前的 refs/HEAD：恢复中途失败时尽量回滚 Git 元数据，
 	// 避免仓库停留在"HEAD/refs 已恢复但工作区未恢复"的混合状态。
-	const previousRefsResult = getLocalRefs(checkpoint.repositoryRoot);
+	const previousRefsResult = await getLocalRefsAsync(checkpoint.repositoryRoot);
 	if (!previousRefsResult.refs) {
 		return { ok: false, checkpoint, error: `读取恢复前 refs 失败：${previousRefsResult.error ?? "未知错误"}` };
 	}
 	const previousRefs = previousRefsResult.refs;
-	const previousHead = getHeadState(checkpoint.repositoryRoot);
+	const previousHead = await getHeadStateAsync(checkpoint.repositoryRoot);
 	try {
-		const refsError = restoreCheckpointRefs(checkpoint.repositoryRoot, checkpoint.localRefs);
+		const addedUntracked = await getCheckpointAddedUntrackedPaths(checkpoint);
+		if (!addedUntracked.paths || !addedUntracked.baselinePaths) {
+			throw new Error(`读取 checkpoint 新增未跟踪路径失败：${addedUntracked.error ?? "未知错误"}`);
+		}
+
+		const refsError = await restoreCheckpointRefs(checkpoint.repositoryRoot, checkpoint.localRefs);
 		if (refsError) throw new Error(`恢复 refs 失败：${refsError}`);
-		const headError = restoreCheckpointHead(checkpoint.repositoryRoot, checkpoint);
+		const headError = await restoreCheckpointHead(checkpoint.repositoryRoot, checkpoint);
 		if (headError) throw new Error(`恢复 HEAD 失败：${headError}`);
-		const deleteRefsError = removeCheckpointNewRefs(checkpoint.repositoryRoot, checkpoint.localRefs);
+		const deleteRefsError = await removeCheckpointNewRefs(checkpoint.repositoryRoot, checkpoint.localRefs);
 		if (deleteRefsError) throw new Error(`删除 checkpoint 后新增的 refs 失败：${deleteRefsError}`);
 
 		// A checkpoint is a recovery mechanism. Do not infer what the prior Git
 		// command meant: materialize its saved worktree, then restore its index.
-		const clean = runCheckpointGit(checkpoint.repositoryRoot, ["clean", "-fd"]);
-		if (!clean.ok) throw new Error(`移除 checkpoint 后新增的未跟踪文件失败：${formatGitFailure(clean)}`);
-		const worktree = runCheckpointGit(checkpoint.repositoryRoot, [
+		const cleanupError = await removeCheckpointAddedUntrackedPaths(
+			checkpoint,
+			addedUntracked.paths,
+			addedUntracked.baselinePaths,
+		);
+		if (cleanupError) throw new Error(`移除 checkpoint 后新增的未跟踪文件失败：${cleanupError}`);
+		const worktree = await runCheckpointGitAsync(checkpoint.repositoryRoot, [
 			"read-tree",
 			"--reset",
 			"-u",
 			checkpoint.worktreeTree,
 		]);
 		if (!worktree.ok) throw new Error(`恢复工作区树失败：${formatGitFailure(worktree)}`);
-		const index = runCheckpointGit(checkpoint.repositoryRoot, ["read-tree", "--reset", checkpoint.indexTree]);
+		const index = await runCheckpointGitAsync(checkpoint.repositoryRoot, [
+			"read-tree",
+			"--reset",
+			checkpoint.indexTree,
+		]);
 		if (!index.ok) throw new Error(`恢复暂存区树失败：${formatGitFailure(index)}`);
-		const verifiedIndex = runCheckpointGit(checkpoint.repositoryRoot, ["write-tree"]);
+		const verifiedIndex = await runCheckpointGitAsync(checkpoint.repositoryRoot, ["write-tree"]);
 		if (!verifiedIndex.ok || verifiedIndex.stdout !== checkpoint.indexTree)
 			throw new Error("恢复后的暂存区与 checkpoint 不一致。");
 
+		const previousStatus = checkpoint.status;
 		checkpoint.status = "restored";
-		updateCheckpointMetadata(checkpoint);
+		try {
+			updateCheckpointMetadata(checkpoint);
+		} catch (metadataError) {
+			// Keep the in-memory object retryable when the final metadata write
+			// fails; the caller can then record the recovery failure explicitly.
+			checkpoint.status = previousStatus;
+			throw metadataError;
+		}
 		return {
 			ok: true,
 			checkpoint,
@@ -1069,13 +1450,20 @@ async function restoreTreeCheckpoint(checkpoint: GitCheckpoint): Promise<GitChec
 	} catch (error) {
 		// 失败补偿：尽量把 refs/HEAD 回滚到恢复前状态；checkpoint 保持 created，
 		// 用户可再次触发 restore（restore 从 checkpoint tree 恢复，是可重试的）。
-		const rollbackError = [
-			restoreCheckpointRefs(checkpoint.repositoryRoot, previousRefs),
-			removeCheckpointNewRefs(checkpoint.repositoryRoot, previousRefs),
-			restoreGitHeadState(checkpoint.repositoryRoot, previousHead),
-		]
-			.filter(Boolean)
-			.join("\n");
+		const rollbackErrors: string[] = [];
+		for (const rollback of [
+			() => restoreCheckpointRefs(checkpoint.repositoryRoot, previousRefs),
+			() => removeCheckpointNewRefs(checkpoint.repositoryRoot, previousRefs),
+			() => restoreGitHeadState(checkpoint.repositoryRoot, previousHead),
+		]) {
+			try {
+				const rollbackResult = await rollback();
+				if (rollbackResult) rollbackErrors.push(rollbackResult);
+			} catch (rollback) {
+				rollbackErrors.push(rollback instanceof Error ? rollback.message : String(rollback));
+			}
+		}
+		const rollbackError = rollbackErrors.join("\n");
 		const rollbackNote = rollbackError
 			? `；回滚 refs/HEAD 时出错：${rollbackError}`
 			: "；已回滚 refs/HEAD 到恢复前状态，可重试 restore";

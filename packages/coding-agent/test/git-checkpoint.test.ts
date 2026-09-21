@@ -22,6 +22,8 @@ import {
 	deleteGitCheckpoint,
 	GIT_CHECKPOINT_TIMEOUT_MS,
 	hasGitCheckpointTaskChanges,
+	hasGitCheckpointTaskChangesAsync,
+	invalidateGitCheckpoint,
 	isGitStatusEntryStaged,
 	isGitStatusEntryUntracked,
 	isGitStatusEntryWorkingTreeDirty,
@@ -542,6 +544,28 @@ describe.skipIf(!gitAvailable)("Git checkpoints", () => {
 		expect(retainGitCheckpoint(checkpoint).ok).toBe(false);
 	});
 
+	it("persists a recovery failure as invalid without making it look restored", async () => {
+		const { project, storageRoot } = createRepository();
+		const created = await createGitCheckpoint({
+			cwd: project,
+			sessionId: "session-invalidate",
+			runId: "run-invalidate",
+			storageRoot,
+		});
+		const checkpoint = created.checkpoint!;
+
+		const invalidated = invalidateGitCheckpoint(checkpoint, "restore command failed");
+		expect(invalidated.ok).toBe(true);
+		expect(checkpoint.status).toBe("invalid");
+		expect(checkpoint.failureReason).toBe("restore command failed");
+
+		const loaded = loadGitCheckpoint(checkpoint.storagePath);
+		expect(loaded.ok).toBe(true);
+		expect(loaded.checkpoint?.status).toBe("invalid");
+		expect(loaded.checkpoint?.failureReason).toBe("restore command failed");
+		expect((await restoreGitCheckpoint(checkpoint)).ok).toBe(false);
+	});
+
 	it("reports unknown external side effects after restore when opaque Bash ran", async () => {
 		const { project, storageRoot } = createRepository();
 		const created = await createGitCheckpoint({ cwd: project, sessionId: "session-bash-effects", storageRoot });
@@ -636,6 +660,24 @@ describe.skipIf(!gitAvailable)("Git checkpoints", () => {
 		expect(hasGitCheckpointTaskChanges(checkpoint)).toBe(true);
 	});
 
+	it("detects content changes to a path that was already dirty at checkpoint time", async () => {
+		const { project, storageRoot } = createRepository();
+		writeFileSync(join(project, "tracked.txt"), "user change before task\n", "utf8");
+		const created = await createGitCheckpoint({
+			cwd: project,
+			sessionId: "session-preexisting-dirty-content",
+			storageRoot,
+		});
+		const checkpoint = created.checkpoint!;
+
+		expect(hasGitCheckpointTaskChanges(checkpoint)).toBe(false);
+		expect(await hasGitCheckpointTaskChangesAsync(checkpoint)).toBe(false);
+		writeFileSync(join(project, "tracked.txt"), "agent changed the same path\n", "utf8");
+
+		expect(hasGitCheckpointTaskChanges(checkpoint)).toBe(true);
+		expect(await hasGitCheckpointTaskChangesAsync(checkpoint)).toBe(true);
+	});
+
 	it("restores nested untracked files inside a new subdirectory", async () => {
 		const { project, storageRoot } = createRepository();
 		const created = await createGitCheckpoint({ cwd: project, sessionId: "session-nested-untracked", storageRoot });
@@ -661,8 +703,8 @@ describe.skipIf(!gitAvailable)("Git checkpoints", () => {
 
 		const restored = await restoreGitCheckpoint(checkpoint);
 		expect(restored.ok, restored.error).toBe(true);
-		// git clean -fd skips nested repositories: the untracked nested repo is
-		// kept on disk rather than being deleted by the restore.
+		// Recovery only removes exact task-added paths and preserves nested Git
+		// repositories rather than treating them as outer-worktree files.
 		expect(existsSync(join(nested, "inner.txt"))).toBe(true);
 		expect(readText(join(nested, "inner.txt"))).toBe("inner content\n");
 		expect(runGit(project, ["status", "--porcelain"]).stdout).toBe("?? vendor/");

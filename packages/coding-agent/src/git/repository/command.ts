@@ -41,6 +41,8 @@ export interface GitCommandOptions {
 	signal?: AbortSignal;
 	env?: NodeJS.ProcessEnv;
 	stdio?: "capture" | "inherit" | "ignore";
+	/** Write the supplied text to stdin before awaiting process completion. */
+	input?: string;
 	/** Keep trailing whitespace/newlines in synchronous stdout. */
 	preserveOutput?: boolean;
 }
@@ -139,7 +141,7 @@ export function runGit(args: string[], options: GitCommandOptions = {}): Promise
 		const spawnOptions: SpawnOptions = {
 			cwd: options.cwd,
 			env: getGitEnvironment(options.env),
-			stdio: getStdio(stdio),
+			stdio: options.input === undefined ? getStdio(stdio) : ["pipe", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 			windowsHide: true,
 		};
@@ -306,6 +308,7 @@ export function runGit(args: string[], options: GitCommandOptions = {}): Promise
 			const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 			timeoutTimer = setTimeout(() => terminate("timeout"), timeoutMs);
 		}
+		if (options.input !== undefined) child.stdin?.end(options.input);
 	});
 }
 

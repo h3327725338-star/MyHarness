@@ -189,6 +189,34 @@ describe("InteractiveMode task lifecycle across agent events", () => {
 		expect(context.statusIndicators.size).toBe(0);
 	});
 
+	test("terminal failure skips completion and stays busy until agent_settled", async () => {
+		initTheme("dark");
+		const { context, snapshot, handleEvent } = createLifecycleContext("idle");
+
+		await setRunState(handleEvent, snapshot, "running");
+		await handleEvent({ type: "agent_start" });
+		await setRunState(handleEvent, snapshot, "waiting");
+		await handleEvent({
+			type: "agent_end",
+			willRetry: false,
+			messages: [{ role: "assistant", stopReason: "error", content: [] }],
+		});
+		expect(context.maybeStartCompletionWorkflow).not.toHaveBeenCalled();
+		expect(context.offerGitCheckpointRecovery).not.toHaveBeenCalled();
+
+		await setRunState(handleEvent, snapshot, "failed");
+		await setRunState(handleEvent, snapshot, "idle");
+		// AgentSession exposes idle before delivering agent_settled. The UI must
+		// keep the task boundary active during that hand-off window.
+		expect(context.getTaskLifecyclePhase()).toBe("main_agent");
+		expect(context.ui.terminal.setProgress).toHaveBeenLastCalledWith(true);
+
+		await handleEvent({ type: "agent_settled" });
+		expect(context.maybeStartCompletionWorkflow).not.toHaveBeenCalled();
+		expect(context.offerGitCheckpointRecovery).toHaveBeenCalledOnce();
+		expect(context.ui.terminal.setProgress).toHaveBeenLastCalledWith(false);
+	});
+
 	test("abort during compaction restores the escape handler and never fakes idle", async () => {
 		initTheme("dark");
 		const { context, snapshot, handleEvent, originalEscape } = createLifecycleContext("recovering");
