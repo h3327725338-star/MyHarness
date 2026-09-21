@@ -10,7 +10,7 @@ Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with
 
 `workspace-id` and `session-id` are stable path-safe identities. The working directory is retained as the Session header's `cwd` and is not used as the Workspace identity.
 
-The registry is the source of truth for Workspace records. Opening or listing a Session does not add or remove registry records. When a registry entry has missing or stale per-Workspace metadata, the metadata is repaired from the registry; a missing filesystem root is reported but is not silently re-registered. Only Session creation flows resolve the canonical `cwd` to an existing Workspace or create the single Workspace record for that root. The legacy `<project root>/data/sessions/` tree is an explicit migration input only; normal startup and Session operations do not use it as a second storage location, and a clean migration retires it after verifying that it contains no data.
+The registry is the source of truth for Workspace records. Opening or listing a Session does not add or remove registry records. When a registry entry has missing or stale per-Workspace metadata, the metadata is repaired from the registry; a missing filesystem root is reported but is not silently re-registered. Only Session creation flows resolve the absolute `cwd` and compare its canonical filesystem identity to an existing Workspace or create the single Workspace record for that root. The legacy `<project root>/data/sessions/` tree is an explicit migration input only; normal startup and Session operations do not use it as a second storage location, and a clean migration retires it after verifying that it contains no data.
 
 ## Deleting Sessions
 

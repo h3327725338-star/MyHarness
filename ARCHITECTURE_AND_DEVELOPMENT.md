@@ -12,6 +12,32 @@
 
 文中的路径默认相对于仓库根目录 C:\myharness。涉及用户数据时只描述文件名和格式，不记录真实 credential、Token、Session 内容或个人路径。
 
+## Agent 项目规则入口
+
+修改 MyHarness 的 Agent 先读取根 `AGENTS.md`，再由
+`DOCUMENTATION_INDEX.md` 路由到当前任务的专题文档；随后必须回到真实源码、
+调用方、配置和测试确认当前实现。这个入口设计避免建立第二套项目规则系统，
+也不要求每次任务遍历整个仓库的 Markdown。
+
+根 `AGENTS.md` 是本仓库的开发规则和维护路由器。根目录
+`system-prompts/` 则是 MyHarness 产品运行时、面向所有用户项目的静态 System
+Prompt 资源；仓库自己的 CI、维护流程和开发细节不应写入其中。产品从本仓库根
+或子目录启动时，`AGENTS.md`/`CLAUDE.md` 会由 project context loader 作为项目
+上下文加载；这解释运行时行为，但不改变根 `AGENTS.md` 作为仓库开发入口的职责。
+
+## CI baseline 与用户平台边界
+
+`.github/workflows/ci.yml` 是正式 CI baseline，固定使用 GitHub-hosted Windows
+x64 runner `windows-2022` 和 `windows-2025` 的 matrix。两个 job 每次正常触发
+都执行相同的安装、release/privacy audit、`ffmpeg-static` rebuild、build、check、
+搜索工具安装和 test 流程；两者必须全部通过。`windows-latest` 不属于该 baseline。
+
+CI baseline 只描述 GitHub 自动化构建/测试环境。MyHarness 的用户平台是 Windows
+桌面 x64；不能把 CI 的 Windows Server label 写成“只支持 Windows Server”，也
+不能把这两个 runner 的通过结果扩大解释为已经逐一验证 Windows 10/11 的每个
+桌面版本。其他 release、audit 或协作 workflow 的 runner 是各自自动化的范围，
+不改变这两个 Windows runner 构成的正式 CI baseline。
+
 ## 1. 项目整体概览
 
 MyHarness 是一个 npm workspace monorepo。它由五个主要 Package 组成：产品层 coding-agent、底层 Agent Core agent、模型和 Provider API 层 ai、终端 UI 层 tui，以及独立的 Node SQLite 存储后端 storage/sqlite-node。
@@ -140,7 +166,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
 - test.sh：清理部分 Provider 环境变量后执行 workspace 测试；它会临时移动用户 auth 文件，因此不是严格零写入脚本。
-- .github/workflows/ci.yml：CI 的安装、构建、检查和测试流程。
+- .github/workflows/ci.yml：正式 CI baseline；使用 `windows-2022` 与 `windows-2025` matrix 执行安装、构建、检查和测试流程。
 - .husky/pre-commit：提交前检查；其中调用的 npm run check 包含 Biome --write。
 - scripts/：并行检查、lockfile、browser smoke、发布、profile 和 Code Intelligence 安装验证脚本。真实语言服务器归档不在源码 checkout 中。
 - system-prompts/：实际的系统提示 Markdown 资源，不是 TypeScript loader。
@@ -376,7 +402,7 @@ ResourceLoader
 root system-prompts/*.md
   → packages/ai system-prompt-loader
   → coding-agent system-prompts/loader
-  → ResourceLoader project resources
+  → ResourceLoader project resources / context loader
   → system-prompts/composer/buildSystemPrompt
   → role / tools / context / skills / model injection
   → Agent Core initial system message
@@ -506,9 +532,31 @@ context/project-context-loader.ts        项目上下文文件
 
 系统提示资源由 packages/ai loader 按环境选择：环境变量覆盖、Bun executable adjacent、monorepo root 或安装包旁的 system-prompts。当前资源加载顺序由 composer 组织，包含 global core、Tool/routing/guidelines、custom/append、project context、Skills、working directory、Model、output language 和 role boundary。
 
-项目中的 AGENTS.md、CLAUDE.md 等上下文文件由项目 context loader 处理；它们与本仓库根目录给 Agent 的操作规则是不同概念。
+项目中的 `AGENTS.md`、`CLAUDE.md` 等上下文文件由
+`context/project-context-loader.ts` 处理；它们从全局 Agent 目录开始，再按
+最上层 ancestor 到当前 cwd 的顺序进入 composer，并与仓库根 `AGENTS.md` 作为
+开发规则入口的职责区分开。`AGENTS.md`/`CLAUDE.md` 不在 Project Trust 的
+protected resource 列表中，除非使用 `--no-context-files`，否则即使项目未受信任
+也会作为纯文本上下文加载；角色过滤仍由 context policy 和 composer 执行。
+
+用户的 `SYSTEM.md` 和 `APPEND_SYSTEM.md` 是另一条由
+`system-prompts/loader/` 负责的输入链：受信任时 `<cwd>/.myharness/SYSTEM.md`
+或 `APPEND_SYSTEM.md` 优先于全局 `<agentDir>/SYSTEM.md` 或对应 append 文件；
+不受信任时回退全局文件。每个名称只选择一个有效来源，项目文件不是与全局文件
+简单叠加；`SYSTEM.md` 作为 custom system prompt，`APPEND_SYSTEM.md` 作为追加
+内容进入 composer。它们都不是根 `system-prompts/` 静态资源，也不承载本仓库的
+CI 或开发规则。
 
 ## 12. Build、Test 和 Validation
+
+### CI 与平台验证边界
+
+正式 `.github/workflows/ci.yml` 的两个 GitHub runner 是 `windows-2022` 和
+`windows-2025`，matrix 两边必须都通过。它们证明的是该 workflow 在两个
+Windows Server 环境中的安装、构建、检查和测试结果；不能替代最终用户 Windows
+桌面 x64 的完整支持矩阵，也不能单凭 CI 结果声称 Windows 10/11 每个版本、真实
+Provider、OAuth、终端或 LSP 已验证。`.github/workflows/` 中的 release、audit
+和协作 workflow 另有自己的运行环境，不是这条正式 CI baseline 的额外平台承诺。
 
 ### 常用命令
 

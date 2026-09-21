@@ -2,6 +2,26 @@
 
 本文件是 MyHarness 当前 checkout 的文档入口。它把“功能说明”“日常维护”“后续开发”分开，并明确每类内容的事实来源。
 
+## Agent 修改入口
+
+后续 Agent 开发 MyHarness 时，根 `AGENTS.md` 是项目级规则入口和文档路由器；
+`DOCUMENTATION_INDEX.md` 是不知道专题位置时使用的文档地图。最小工作顺序是：
+先读根 `AGENTS.md`，按任务读取对应专题文档，再核对真实源码、调用方、配置和
+测试，修改后同步直接受影响的文档并验证。无需每次无条件读取整个仓库的 Markdown。
+
+常用路由如下：
+
+| 任务 | 入口 |
+| --- | --- |
+| 架构 / 模块边界 | `ARCHITECTURE_AND_DEVELOPMENT.md` |
+| 日常维护 | `MAINTENANCE.md` |
+| CI / GitHub Actions | `.github/maintenance.md`、`docs/maintenance/github-automation.md` |
+| Release / 隐私审计 | `docs/RELEASE_GATE.md` |
+| System Prompt | `system-prompts/README.md`、`system-prompts/maintenance.md` |
+| Coding Agent | `packages/coding-agent/docs/index.md`、`development.md`、`maintenance.md`、`settings.md` |
+| Agent Core / AI / TUI | 各自 `packages/<package>/docs/index.md` 和 `maintenance.md` |
+| 项目配置 / Project Trust | `.myharness/README.md`、`.myharness/maintenance.md`、Coding Agent `settings.md` |
+
 ## 事实优先级
 
 涉及“现在能做什么”时，按以下顺序判断：
@@ -44,6 +64,9 @@
 - Coding Agent 的实际 Provider/Model 来自 `models.json`、Provider credential、模型缓存和 Extension/native Provider registration；环境变量本身不会创建 Provider。
 - Agent Core 不内置 SQLite；Node SQLite 实现位于独立的 `packages/storage/sqlite-node`，其测试入口主要在 `packages/agent/test/harness`。
 - `npm run check` 会先执行 `biome check --write`，因此它不是只读检查；提交钩子还会重新暂存被格式化的已存在文件。
+- 正式 GitHub CI 由 `.github/workflows/ci.yml` 的 `windows-2022` + `windows-2025` matrix 构成；两套 runner 执行相同完整流程且都必须通过，不使用 `windows-latest`。
+- CI baseline 是 GitHub Windows Server 自动化环境，不等同于最终用户平台支持矩阵。MyHarness 面向 Windows 桌面 x64；当前仓库没有据此逐一验证 Windows 10/11 的每个桌面版本。
+- 根 `AGENTS.md` 是本仓库 Agent 开发规则入口；产品运行时的 `system-prompts/` 是另一层、面向所有 MyHarness 项目的静态 System Prompt 资源。二者不能互相替代。
 - `packages/coding-agent/code-intelligence/runtime-manifest.json` 当前是 `published: false`，下载归档的 `sizeBytes` 和 `sha256` 为空；在真实 Release 资产和校验值出现前，语义模块应保持 unavailable。
 - `system-prompts/session/commit-authorization.md` 当前不存在；`/commit` 的边界由 Coding Agent 源码中的 Git/Session 流程处理，不能把缺失文件当成可加载 Prompt。
 - `packages/coding-agent/docs/architecture-baseline.md`、`phase*-architecture-boundaries.md`、`docs/rpc.md` 等明确标为 historical 的文档只用于理解历史，不作为当前实现说明。
@@ -54,6 +77,7 @@
 
 | 修改内容 | 必查文档 |
 | --- | --- |
+| Agent 项目规则、文档路由或开发入口 | `AGENTS.md`、`DOCUMENTATION_INDEX.md`、对应专题维护手册 |
 | package export、公共类型、Provider/API contract | 对应包的 README、`docs/index.md`、维护手册、架构手册 |
 | Agent 生命周期、Session JSONL、migration、持久化 | Agent/Coding Agent 维护手册、session 文档、相关测试 |
 | CLI、命令、配置、路径、启动方式 | Coding Agent `usage.md`、`settings.md`、`development.md`、Windows 文档 |

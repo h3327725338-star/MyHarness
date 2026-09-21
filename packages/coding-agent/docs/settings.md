@@ -84,6 +84,11 @@ Custom Providers 会出现在与其他 configured/extension services 相同的 *
 
 交互模式启动时，如果项目文件夹包含 project-local settings、resources 或 project `.agents/skills`，且该文件夹或其 parent folder 在 `~/.myharness/agent/trust.json` 中没有已保存的决定，MyHarness 会先询问是否信任项目。信任项目后，MyHarness 才会加载 `.myharness/settings.json` 和 `.myharness` resources、安装缺少的 project packages，并执行 project extensions。
 
+`AGENTS.md` 和 `CLAUDE.md` 是单独的项目上下文文件，不属于上述需要信任的
+protected resource；除非使用 `--no-context-files`，否则项目未受信任时也会加载。
+项目 `.myharness/SYSTEM.md`/`APPEND_SYSTEM.md` 只有在受信任时才优先于全局同名
+文件，未受信任时回退全局文件；它们不是根 `system-prompts/` 静态资源。
+
 Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如果没有适用的已保存 trust decision，它们使用 global settings 中的 `defaultProjectTrust`：`ask`（默认）和 `never` 会忽略 project resources，`always` 表示信任。使用 `--approve`/`-a` 或 `--no-approve`/`-na` 可以对单次运行覆盖 Project Trust。
 
 如果没有适用的 extension 或 saved decision，`defaultProjectTrust` 控制 fallback behavior。可以在 `~/.myharness/agent/settings.json` 中将它设置为 `"ask"`、`"always"` 或 `"never"`，也可以通过 `/settings` 修改。

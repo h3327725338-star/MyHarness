@@ -19,6 +19,17 @@ npm.cmd run audit:public
 其中 `audit:public` 针对当前公开 `main` ref 使用。真实 Provider、OAuth、已发布的
 Code Intelligence 归档和 Linux/macOS 行为仍需单独记录，不能由这组命令推断。
 
+## GitHub CI baseline 与用户平台
+
+正式 `.github/workflows/ci.yml` 固定在 `windows-2022` 和 `windows-2025` 两个
+GitHub-hosted Windows x64 runner 上运行相同的完整流程；两边都必须通过，且不使用
+`windows-latest`。本地 Release Gate 不能替代两个远端 job 的实际结果。
+
+这只是 GitHub CI baseline。MyHarness 的用户平台是 Windows 桌面 x64；不能把 CI
+Windows Server runner 写成“只支持 Windows Server”，也不能声称仅凭这两个 runner
+已经逐一验证 Windows 10/11 的每个桌面版本。发布 binary、npm、audit 和协作
+workflow 的其他 runner 仍按各自 workflow 单独记录。
+
 Fresh checkout 验收应从公开 `main` 建立新的临时 checkout，
 不复用当前 `node_modules`、`dist`、cache 或 `data`，再按 README 的安装、
 check、build 和 `--help` 步骤运行。Windows 上若 PowerShell execution policy
@@ -32,7 +43,8 @@ check、build 和 `--help` 步骤运行。Windows 上若 PowerShell execution po
 - `.husky/pre-push` 按 Git 提供的 local commit SHA 审计完整 tree；删除远端分支
   的零 SHA 不会被误审计。
 - `scripts/release.mjs` 在版本变更前运行 `npm run audit:release`，实际 push
-  仍受脚本既有流程和 pre-push hook 约束。本轮不会调用 release、publish 或 push。
+  仍受脚本既有流程和 pre-push hook 约束；本地 Release Gate 不代表 release、publish
+  或 push 已经执行或成功。
 
 审计入口：
 
@@ -72,4 +84,5 @@ Secret Scanner，未知的个人信息、第三方 attribution 和新类型凭�
 - `runtime-manifest.json` 在 `published: false` 时不伪造 hash、size 或 asset；
 - public ref 不含 `data/`、`node_modules/`、dist、LFS pointer、submodule 或下载 runtime；
 - fresh checkout 的失败和未验证项被记录，而不是改测试断言来制造全绿；
-- 远端 visibility 和 push 由维护者另行确认，本轮不执行。
+- 远端 visibility、push 和对应 GitHub Actions run 必须在实际操作后单独确认；本地
+  Release Gate 不能替代这些结果。

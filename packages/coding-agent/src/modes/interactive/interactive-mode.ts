@@ -141,7 +141,7 @@ import { readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { collectInputImageAttachments } from "../../utils/input-image-attachments.ts";
 import { getMyHarnessUserAgent } from "../../utils/myharness-user-agent.ts";
-import { canonicalizePath, getCwdRelativePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, pathIdentityKey } from "../../utils/paths.ts";
 import {
 	describeTerminalRunState,
 	popupKindForRunState,
@@ -6023,7 +6023,7 @@ export class InteractiveMode {
 	private isCurrentSessionPath(sessionPath: string): boolean {
 		return (
 			this.session.sessionFile !== undefined &&
-			canonicalizePath(sessionPath) === canonicalizePath(this.session.sessionFile)
+			pathIdentityKey(sessionPath) === pathIdentityKey(this.session.sessionFile)
 		);
 	}
 
@@ -6045,7 +6045,7 @@ export class InteractiveMode {
 	}
 
 	private renameSessionWithAi(sessionPath: string, signal?: AbortSignal): Promise<ConversationTitleResult> {
-		const key = canonicalizePath(sessionPath);
+		const key = pathIdentityKey(sessionPath);
 		const existing = this.activeConversationRenames.get(key);
 		if (existing) return existing;
 

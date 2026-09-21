@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { resolvePath } from "../../utils/paths.ts";
+import { basename, dirname, join } from "node:path";
+import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { type GitCommandResult, runGitSync } from "../repository/command.ts";
 
 const WORKTREE_TIMEOUT_MS = 30_000;
@@ -59,16 +59,11 @@ function formatGitFailure(result: GitCommandResult): string {
 }
 
 function pathsEqual(a: string, b: string): boolean {
-	const resolvedA = resolvePath(a);
-	const resolvedB = resolvePath(b);
-	return process.platform === "win32" ? resolvedA.toLowerCase() === resolvedB.toLowerCase() : resolvedA === resolvedB;
+	return pathIdentityKey(a) === pathIdentityKey(b);
 }
 
 function isPathInside(pathToCheck: string, parentPath: string): boolean {
-	const child = resolve(pathToCheck);
-	const parent = resolve(parentPath);
-	const relativePath = relative(parent, child);
-	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+	return getCwdRelativePath(pathToCheck, parentPath) !== undefined;
 }
 
 function safePathSegment(value: string, fallback: string): string {

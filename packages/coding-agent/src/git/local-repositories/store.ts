@@ -13,8 +13,8 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse, relative, sep } from "node:path";
-import { resolvePath } from "../../utils/paths.ts";
+import { basename, dirname, join, parse } from "node:path";
+import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { type GitCommandResult, initializeGitRepository, inspectGitRepository } from "../repository/integration.ts";
 
 export interface LocalGitRepository {
@@ -61,19 +61,11 @@ export function getLocalGitRepositoriesPath(agentDir: string): string {
 }
 
 export function localGitRepositoryPathsEqual(a: string, b: string): boolean {
-	const normalizedA = resolvePath(a);
-	const normalizedB = resolvePath(b);
-	return process.platform === "win32"
-		? normalizedA.toLowerCase() === normalizedB.toLowerCase()
-		: normalizedA === normalizedB;
+	return pathIdentityKey(a) === pathIdentityKey(b);
 }
 
 function isPathInside(pathToCheck: string, parentPath: string): boolean {
-	const relativePath = relative(resolvePath(parentPath), resolvePath(pathToCheck));
-	return (
-		relativePath === "" ||
-		(relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
-	);
+	return getCwdRelativePath(pathToCheck, parentPath) !== undefined;
 }
 
 function repositoryName(rootPath: string): string {

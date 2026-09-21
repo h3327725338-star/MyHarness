@@ -103,19 +103,27 @@ Session 管理：
 MyHarness 启动时会从以下位置加载 `AGENTS.md` 或 `CLAUDE.md`：
 
 - `~/.myharness/agent/AGENTS.md`：全局 instructions；
-- 从当前工作目录向上遍历的 parent directories；
-- 当前目录。
+- 从当前工作目录向上遍历的 parent directories 和当前目录；最上层 ancestor 到当前 cwd 的顺序进入 system prompt；
+- 每个目录按 `AGENTS.md`、大小写变体、`CLAUDE.md`、大小写变体选择可读文件。
 
 Context files 可用于声明项目约定、命令、安全规则和个人偏好。使用 `--no-context-files` 或 `-nc` 可以关闭加载。
+
+如果从 MyHarness 仓库根目录或其子目录启动，根 `AGENTS.md` 会作为适用的项目
+上下文加载；它同时是本仓库 Agent 开发规则的入口。后一个职责属于仓库协作，
+不要把它复制到根 `system-prompts/`，也不要把运行时 context files 和产品静态
+System Prompt 当成同一套规则系统。
 
 ### System Prompt Files（系统提示文件）
 
 使用以下文件替换默认 system prompt：
 
-- 项目中的 `.myharness/SYSTEM.md`；
-- 全局的 `~/.myharness/agent/SYSTEM.md`。
+- 受信任项目中的 `.myharness/SYSTEM.md`；
+- 如果项目未受信任，或项目文件不存在，则使用全局的 `~/.myharness/agent/SYSTEM.md`。
 
-如果只想在默认 prompt 后追加内容，可以在任一位置使用 `APPEND_SYSTEM.md`。
+项目 `SYSTEM.md` 会覆盖全局同名文件，不会与全局文件简单叠加。若只想在默认
+prompt 后追加内容，可以在项目或全局位置使用 `APPEND_SYSTEM.md`；它也遵循同样
+的项目优先、未受信任时回退全局的选择规则。`AGENTS.md`/`CLAUDE.md` 是独立的
+项目上下文，Project Trust 不会跳过它们（除非使用 `--no-context-files`）。
 
 ### Project Trust（项目级信任）
 

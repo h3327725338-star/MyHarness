@@ -40,6 +40,19 @@
 
 这里的 global 表示编程会话共享规则，不表示所有辅助模型请求都套用编程 Agent 的规则。
 
+## 与仓库开发规则的边界
+
+根 `system-prompts/` 是 MyHarness 产品本身运行时使用的静态 System Prompt 资源，
+面向所有使用 MyHarness 的项目。它不承载 MyHarness 仓库自己的 CI runner、维护
+流程、开发细节或 Agent 项目规则；这些内容应放在根 `AGENTS.md`、
+`DOCUMENTATION_INDEX.md` 和对应专题文档中。
+
+用户项目的 `AGENTS.md`/`CLAUDE.md`、`SYSTEM.md`/`APPEND_SYSTEM.md`、skills 和
+Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理，
+不应在本目录再建立一套重复的 project-rules loader。`AGENTS.md` 是纯文本项目
+上下文，除非关闭 context loading，否则不因 Project Trust 被跳过；它与本目录的
+产品 System Prompt 不是同一种资源。
+
 ## 加载、顺序与异常
 
 唯一文本入口：`packages/ai/src/api/system-prompt-loader.ts` 的 `loadSystemPrompt` / `loadSystemPromptLines`。编程会话的组合入口是 `packages/coding-agent/src/system-prompts/composer/index.ts`，本地 loader 边界是 `packages/coding-agent/src/system-prompts/loader/index.ts`；各独立任务只加载自己的文件，不遍历目录或按字母序自动注入。
@@ -56,6 +69,12 @@
 - 模块常量在进程加载时读取，部分工具及动态模板在构建时读取；重启是使所有编辑一致生效的方式。
 - 文件系统不可用的运行时会 warning + skip；浏览器打包兼容不等于浏览器能够读取本地文件。
 
+`SYSTEM.md` 和 `APPEND_SYSTEM.md` 不属于本目录的静态资源清单。当前 Coding
+Agent loader 在项目受信任时优先使用 `<cwd>/.myharness/SYSTEM.md` 或对应的
+`APPEND_SYSTEM.md`，否则回退到全局 `<agentDir>/SYSTEM.md` 或对应的 append
+文件；每个文件名只选择一个来源，不把全局和项目文件简单合并。前者作为 custom
+system prompt，后者作为 composer 的追加内容。
+
 ## 注入链路与保留内容
 
 主链路：CLI/SDK → ResourceLoader 加载用户自定义与项目上下文 → AgentSession `_rebuildSystemPrompt` 收集有效工具 → `buildSystemPrompt` → `before_agent_start` 扩展变换 → `_getTurnSystemPrompt` 重施角色及 commit 边界 → Agent state → agent-loop 的 `Context.systemPrompt` → ModelRuntime / provider stream → adapter 组包 → SDK HTTP 请求。`onPayload` 扩展仍可按原接口变换最终请求。
@@ -66,7 +85,7 @@
 
 代码仍生成工具集合、schema、技能列表与 XML 转义、项目文件路径及正文、cwd、模型/provider 名称、对话和运行状态。这些是实际运行时数据；上述系统字段周围的固定自然语言模板已外置。
 
-用户拥有的 SYSTEM.md、APPEND_SYSTEM.md、AGENTS.md、Skill 内容、扩展提供的自定义 Prompt 保留原加载方式，未复制到此目录。工具 API schema 的 description、压缩任务的 user 消息格式模板、恢复/续接 user 消息和 slash-command 模板并非系统指令，保留原职责和消息角色。本次没有把这些内容提升为 system，也没有迁移示例扩展或第三方 LSP 工具链的指令。
+用户拥有的 SYSTEM.md、APPEND_SYSTEM.md、AGENTS.md、CLAUDE.md、Skill 内容和扩展提供的自定义 Prompt 保留原加载方式，未复制到此目录。工具 API schema 的 description、压缩任务的 user 消息格式模板、恢复/续接 user 消息和 slash-command 模板并非系统指令，保留原职责和消息角色。本次没有把这些内容提升为 system，也没有迁移示例扩展或第三方 LSP 工具链的指令。
 
 ## 迁移验证记录与当前核对
 

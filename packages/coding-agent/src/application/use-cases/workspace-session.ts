@@ -1,7 +1,7 @@
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
 import type { SessionInfo } from "../../session/types.ts";
-import { canonicalizePath, getCwdRelativePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, pathIdentityKey } from "../../utils/paths.ts";
 
 export interface WorkspaceSessionUseCaseHost {
 	getSessionDir: () => string | undefined;
@@ -37,7 +37,7 @@ export class WorkspaceSessionUseCase {
 		const activeFile = this.host.getCurrentSessionPath();
 		const activeIncluded =
 			activeFile !== undefined &&
-			sessions.some((session) => canonicalizePath(session.path) === canonicalizePath(activeFile));
+			sessions.some((session) => pathIdentityKey(session.path) === pathIdentityKey(activeFile));
 		if (activeIncluded) {
 			const error = await this.replaceCurrentSession();
 			if (error) return error;
@@ -63,7 +63,7 @@ export class WorkspaceSessionUseCase {
 
 	private isCurrentSession(sessionPath: string): boolean {
 		const current = this.host.getCurrentSessionPath();
-		return current !== undefined && canonicalizePath(sessionPath) === canonicalizePath(current);
+		return current !== undefined && pathIdentityKey(sessionPath) === pathIdentityKey(current);
 	}
 
 	private async replaceCurrentSession(): Promise<string | undefined> {

@@ -10,7 +10,7 @@ import {
 } from "../config/paths/index.ts";
 import { getAgentDir } from "../config.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
-import { getCwdRelativePath, pathIdentityKey, resolveCanonicalPath, resolvePath } from "../utils/paths.ts";
+import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../utils/paths.ts";
 
 const LEGACY_WORKSPACES_FILE_VERSION = 1;
 const WORKSPACES_FILE_VERSION = 2;
@@ -101,9 +101,9 @@ function pathLength(path: string): number {
 	return pathIdentityKey(path).length;
 }
 
-/** Normalize a Workspace root for stable identity and persisted metadata. */
+/** Normalize a Workspace root while preserving the caller's valid path spelling. */
 export function normalizeWorkspaceRoot(input: string, baseDir: string = process.cwd()): string {
-	return resolveCanonicalPath(input, baseDir);
+	return resolvePath(input, baseDir);
 }
 
 function relativeWorkspacePath(path: string, workspaceRoot: string): string | undefined {
@@ -277,7 +277,7 @@ export class WorkspaceStore {
 
 	static create(agentDir: string, dataRoot?: string): WorkspaceStore {
 		const legacyFilePath = getWorkspacesPath(agentDir);
-		const resolvedDataRoot = dataRoot ? resolveCanonicalPath(dataRoot) : undefined;
+		const resolvedDataRoot = dataRoot ? resolvePath(dataRoot) : undefined;
 		const filePath = resolvedDataRoot ? getWorkspaceRegistryPath(resolvedDataRoot) : legacyFilePath;
 		let workspaces: Workspace[] = [];
 		let migrated = false;
@@ -589,7 +589,7 @@ export function resolveWorkspaceDataContext(
 	rootPath: string,
 	options: { agentDir?: string; dataRoot?: string } = {},
 ): WorkspaceDataContext {
-	const dataRoot = resolveCanonicalPath(options.dataRoot ?? getDataDir());
+	const dataRoot = resolvePath(options.dataRoot ?? getDataDir());
 	const store = WorkspaceStore.create(options.agentDir ?? getAgentDir(), dataRoot);
 	return { dataRoot, workspace: store.ensureForPath(rootPath) };
 }
@@ -603,7 +603,7 @@ export function findWorkspaceDataContext(
 	rootPath: string,
 	options: { agentDir?: string; dataRoot?: string } = {},
 ): WorkspaceDataContext | undefined {
-	const dataRoot = resolveCanonicalPath(options.dataRoot ?? getDataDir());
+	const dataRoot = resolvePath(options.dataRoot ?? getDataDir());
 	const store = WorkspaceStore.create(options.agentDir ?? getAgentDir(), dataRoot);
 	const workspace = store.getByPath(rootPath);
 	return workspace ? { dataRoot, workspace } : undefined;

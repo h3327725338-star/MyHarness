@@ -19,7 +19,7 @@ import {
 } from "../../../agent/runtime/conversation-title.ts";
 import type { Workspace, WorkspaceStore } from "../../../application/workspace-store.ts";
 import type { SessionInfo } from "../../../session/types.ts";
-import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
+import { pathIdentityKey as _pathIdentityKey } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 
 export interface WorkspaceSidebarOptions {
@@ -89,7 +89,7 @@ function formatSessionDate(date: Date): string {
 function canonicalizePath(pathText: string | undefined): string | undefined {
 	if (!pathText) return pathText;
 	try {
-		return _canonicalizePath(pathText);
+		return _pathIdentityKey(pathText);
 	} catch {
 		return pathText;
 	}

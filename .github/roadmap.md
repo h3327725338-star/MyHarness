@@ -4,7 +4,7 @@
 
 ## 候选方向
 
-- 增加 Windows 与非 Windows runner 的关键命令一致性检查。
+- 保持正式 `ci.yml` 的 `windows-2022` / `windows-2025` runner label 和关键命令一致性检查；辅助 workflow 的平台变化必须单独记录，不改变正式 CI baseline。
 - 为 docs-only 变更提供不触发外部 Provider、发布或 binary 构建的最小验证路径。
 - 让 workflow 对 lockfile、shrinkwrap、package exports 和 generated assets 的差异给出更直接的失败原因。
 - 收紧 artifact、日志和第三方 action 的权限与敏感信息过滤。

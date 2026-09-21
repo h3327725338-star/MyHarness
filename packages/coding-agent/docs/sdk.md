@@ -372,7 +372,7 @@ const { session } = await createAgentSession({
 - Custom models (`models.json`)
 - Provider credentials (`auth.json`); legacy `vision-auth.json` keys are imported on startup
 
-For default Session persistence, `cwd` is canonicalized to resolve one Workspace identity and is stored in the Session header. Session files are persisted under the project `data/workspaces/<workspace-id>/sessions/<session-id>/conversation/` root. `dataRoot` changes only the Data Framework root; it does not change Workspace identity semantics.
+For default Session persistence, `cwd` is resolved to an absolute path and stored in the Session header. Workspace identity comparisons use the filesystem's canonical identity, so Windows long/8.3 spellings, case, separators, `.`/`..`, and junction aliases do not create a second Workspace; the persisted path spelling follows the resolved caller path. Session files are persisted under the project `data/workspaces/<workspace-id>/sessions/<session-id>/conversation/` root. `dataRoot` changes only the Data Framework root; it does not change Workspace identity semantics.
 
 When you pass a custom `ResourceLoader`, `cwd` and `agentDir` no longer control resource discovery. `cwd` still influences Workspace resolution, Session metadata, and tool path resolution; `agentDir` remains the global configuration/resource root.
 

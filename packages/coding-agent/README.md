@@ -246,16 +246,21 @@ Use `--offline` or `MYHARNESS_OFFLINE=1` to disable all startup network operatio
 
 MyHarness loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 - `~/.myharness/agent/AGENTS.md` (global)
-- Parent directories (walking up from cwd)
-- Current directory
+- Parent directories (walking up from cwd) and the current directory; files enter the prompt from the outermost ancestor to cwd
+- In each directory, `AGENTS.md` / case variant wins over `CLAUDE.md` / case variant
 
-Use for project instructions (`AGENTS.md`/`CLAUDE.md`), conventions, common commands. All matching files are concatenated.
+Use these files for project instructions (`AGENTS.md`/`CLAUDE.md`), conventions, and common commands. The repository root `AGENTS.md` is also the development-rule entry point for agents working on this MyHarness checkout; it is not a second `system-prompts/` resource tree.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
 ### System Prompt
 
-Add project instructions from `.myharness/SYSTEM.md` (project) or `~/.myharness/agent/SYSTEM.md` (global), appended to the default prompt. Use `APPEND_SYSTEM.md` in either location to append additional instructions.
+When the project is trusted, `.myharness/SYSTEM.md` takes precedence over
+`~/.myharness/agent/SYSTEM.md`; when it is not trusted, the global file is used.
+The selected `SYSTEM.md` replaces the custom system-prompt input rather than being
+merged with both files. `APPEND_SYSTEM.md` follows the same project-over-global
+selection and is appended separately. These files are loaded by the Coding Agent
+resource loader, not from the repository-owned `system-prompts/` tree.
 
 ---
 

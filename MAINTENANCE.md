@@ -2,6 +2,9 @@
 
 本手册只描述当前仓库的维护边界。产品使用方法见 `packages/coding-agent/docs/`；整体目录和依赖方向见 `ARCHITECTURE_AND_DEVELOPMENT.md`。
 
+修改 MyHarness 的 Agent 先读根 `AGENTS.md`，再按 `DOCUMENTATION_INDEX.md` 路由到
+对应专题文档；只读取与任务相关的专题，不要求无条件遍历整个仓库的 Markdown。
+
 ## 仓库边界
 
 - 根目录是 npm/TypeScript/ESM monorepo，workspace 包在 `packages/*` 和 `packages/storage/*`。
@@ -34,6 +37,19 @@ npm.cmd run build
 
 如果需要只读证据，优先单独运行对应的 `check:*`；不要把 `npm run check` 称为只读检查。
 
+## CI baseline 与用户平台
+
+正式 GitHub CI 是 `.github/workflows/ci.yml`，固定使用 `windows-2022` 和
+`windows-2025` 两个 GitHub-hosted Windows x64 runner。matrix 两边执行相同的
+`npm ci --ignore-scripts`、release/privacy audit、`ffmpeg-static` rebuild、build、
+check、搜索工具安装和 test 流程；两边都必须通过，不能使用 `windows-latest`。
+
+这是自动化验证 baseline，不是最终用户支持矩阵。MyHarness 面向 Windows 桌面 x64，
+不能把 CI 的 Windows Server runner 写成“只支持 Windows Server”，也不能声称已
+逐一验证 Windows 10/11 的每个桌面版本。其他 release、audit、binary 或协作
+workflow 的 runner 只属于各自自动化范围；本仓库没有为这条正式 CI baseline 新增
+Linux/macOS runner。
+
 ## 改动流程
 
 1. 先看 `git status --short`，保留已有工作区改动。
@@ -50,7 +66,7 @@ npm.cmd run build
 - Session：格式、版本、migration、JSONL 容错和 projection 必须一起检查；不要让 UI 直接写 Session 文件。
 - SQLite：schema 变更必须有 migration、materialized state 更新和 `packages/agent/test/harness` 覆盖。
 - TUI：组件必须遵守 `render(width)`、`invalidate()`、焦点和 overlay contract；展示层不能反向承载业务状态。
-- Prompt：固定文本在仓库 `system-prompts/`，组合逻辑在 Coding Agent composer；用户项目的 `SYSTEM.md`、`AGENTS.md` 和 skills 仍由各自 loader 管理。
+- Prompt：固定文本在仓库 `system-prompts/`，组合逻辑在 Coding Agent composer；用户项目的 `SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、`CLAUDE.md` 和 skills 仍由各自 loader 管理。仓库自身的开发规则、CI 和维护流程只放在根 `AGENTS.md` 与仓库文档中。
 
 ## 敏感数据和发布
 
@@ -60,6 +76,9 @@ CI、发布和提交钩子的实际入口见 [`scripts/README.md`](scripts/READM
 提交前、推送前和版本发布前的敏感信息检查统一由
 [`scripts/release-audit.mjs`](scripts/release-audit.mjs) 提供；固定流程和匿名事故记录见
 [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md)。
+
+机器可检查的约束应由 workflow、脚本和测试执行；Agent Prompt 和维护文档负责
+说明规则、边界和路由，不能替代实际命令或远端 run 证据。
 
 ## 公开历史边界
 

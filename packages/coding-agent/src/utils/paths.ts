@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnProcessSync } from "./child-process.ts";
 
@@ -40,10 +40,20 @@ export function canonicalizePath(path: string): string {
  */
 export function resolveCanonicalPath(input: string, baseDir: string = process.cwd()): string {
 	const resolved = resolvePath(input, baseDir);
-	try {
-		return realpathSync.native(resolved);
-	} catch {
-		return resolved;
+	const missingSegments: string[] = [];
+	let current = resolved;
+	while (true) {
+		try {
+			const canonicalBase = realpathSync.native(current);
+			return missingSegments.length === 0 ? canonicalBase : join(canonicalBase, ...missingSegments.reverse());
+		} catch {
+			const parent = dirname(current);
+			if (parent === current) return resolved;
+			const segment = basename(current);
+			if (!segment) return resolved;
+			missingSegments.push(segment);
+			current = parent;
+		}
 	}
 }
 
@@ -144,8 +154,8 @@ export function resolvePath(input: string, baseDir: string = process.cwd(), opti
 }
 
 export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
-	const resolvedCwd = resolvePath(cwd);
-	const resolvedPath = resolvePath(filePath, resolvedCwd);
+	const resolvedCwd = resolveCanonicalPath(cwd);
+	const resolvedPath = resolveCanonicalPath(filePath, resolvedCwd);
 	const relativePath = relative(resolvedCwd, resolvedPath);
 	const isInsideCwd =
 		relativePath === "" ||

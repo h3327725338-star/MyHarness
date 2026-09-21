@@ -1,9 +1,16 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { canonicalizePath, getCwdRelativePath, isLocalPath, normalizePath, resolvePath } from "../src/utils/paths.ts";
+import {
+	canonicalizePath,
+	getCwdRelativePath,
+	isLocalPath,
+	normalizePath,
+	pathIdentityKey,
+	resolvePath,
+} from "../src/utils/paths.ts";
 
 let tempDir: string;
 
@@ -92,6 +99,16 @@ describe("canonicalizePath", () => {
 		const nonexistent = join(dir, "no-such-file");
 		expect(canonicalizePath(nonexistent)).toBe(nonexistent);
 	});
+
+	it.skipIf(process.platform !== "win32" || !existsSync("C:\\PROGRA~1"))(
+		"resolves Windows short names consistently for identity comparisons",
+		() => {
+			const longPath = "C:\\Program Files";
+			const shortPath = "C:\\PROGRA~1";
+			expect(pathIdentityKey(shortPath)).toBe(pathIdentityKey(longPath));
+			expect(getCwdRelativePath(shortPath, longPath)).toBe(".");
+		},
+	);
 
 	it.skipIf(!canCreateFileSymlink())("falls back to the raw path for a dangling symlink", () => {
 		const dir = createTempDir();

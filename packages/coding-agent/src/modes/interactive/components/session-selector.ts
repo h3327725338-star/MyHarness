@@ -12,7 +12,7 @@ import {
 } from "@myharness/tui";
 import { deleteSessionFile } from "../../../session/storage/jsonl/file-operations.ts";
 import type { SessionInfo, SessionListProgress } from "../../../session/types.ts";
-import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
+import { pathIdentityKey as _pathIdentityKey } from "../../../utils/paths.ts";
 import { KeybindingsManager } from "../keybindings.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -48,7 +48,7 @@ function formatSessionDate(date: Date): string {
 
 function canonicalizePath(path: string | undefined): string | undefined {
 	if (!path) return path;
-	return _canonicalizePath(path);
+	return _pathIdentityKey(path);
 }
 
 class SessionSelectorHeader implements Component {

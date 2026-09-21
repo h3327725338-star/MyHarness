@@ -2,6 +2,19 @@
 
 仓库级 Agent 硬规则见 [根目录 AGENTS.md](../../../AGENTS.md)；整体模块归属和依赖边界见 [架构与开发维护手册](../../../ARCHITECTURE_AND_DEVELOPMENT.md)。
 
+## Agent 修改入口
+
+修改 Coding Agent 前先读根 `AGENTS.md`，需要定位专题时使用
+[`DOCUMENTATION_INDEX.md`](../../../DOCUMENTATION_INDEX.md)。按任务范围读取本页、
+`maintenance.md`、`settings.md`、`usage.md` 或对应源码模块文档，再检查真实源码、
+调用方、配置和测试；不要求无条件遍历整个仓库的 Markdown。仓库根 `AGENTS.md`
+是开发规则入口，产品运行时的 `AGENTS.md`/`CLAUDE.md` 则由 context loader 作为
+项目上下文注入，二者不要通过第二套规则系统复制。
+
+CI 的正式 baseline 见 [GitHub 自动化维护文档](../../../docs/maintenance/github-automation.md)：
+只使用 `windows-2022` 和 `windows-2025`，两边执行相同流程且都必须通过。它们是
+GitHub Windows Server 验证环境，不等于最终用户 Windows 桌面版本支持矩阵。
+
 ## 环境准备
 
 公开仓库可用后，先从零建立 checkout：
