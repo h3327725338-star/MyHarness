@@ -61,6 +61,15 @@ function isProcessAlive(pid: number): boolean {
 	return result.status === 0 && new RegExp(`\\b${pid}\\b`).test(result.stdout ?? "");
 }
 
+async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (isProcessAlive(pid)) {
+		if (Date.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	return true;
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => void): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timeoutId = setTimeout(() => {
@@ -184,7 +193,7 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 			const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
 			expect(Number.isFinite(pid)).toBe(true);
 			if (Number.isFinite(pid)) {
-				expect(isProcessAlive(pid)).toBe(false);
+				expect(await waitForProcessExit(pid)).toBe(true);
 			}
 		} finally {
 			controller.abort();

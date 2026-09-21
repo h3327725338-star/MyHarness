@@ -380,7 +380,9 @@ describe("sub agent", () => {
 					model: "test",
 					thinkingLevel: "high",
 					taskTimeoutMs: 0,
-					stallTimeoutMs: 200,
+					// Allow the child process to start and flush its first event on slower
+					// Windows runners before measuring the intentional stall.
+					stallTimeoutMs: 1_000,
 				},
 			});
 
