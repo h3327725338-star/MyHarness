@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../../config.ts";
 import { writeFileAtomicallySync } from "../../utils/atomic-write.ts";
-import { resolveCanonicalPath } from "../../utils/paths.ts";
+import { canonicalizePath, pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { getProjectConfigDir, getTrustStorePath } from "../paths/index.ts";
 
 export type ProjectTrustDecision = boolean | null;
@@ -45,15 +45,19 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 ] as const;
 
 function normalizeCwd(cwd: string): string {
-	return resolveCanonicalPath(cwd);
+	// Preserve the caller's established path spelling for trust prompts and the
+	// persisted file. Use pathIdentityKey when comparing aliases.
+	return canonicalizePath(resolvePath(cwd));
 }
 
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
 	let currentDir = normalizeCwd(cwd);
 	while (true) {
-		const value = data[currentDir];
-		if (value === true || value === false) {
-			return { path: currentDir, decision: value };
+		const currentIdentity = pathIdentityKey(currentDir);
+		for (const [storedPath, value] of Object.entries(data)) {
+			if ((value === true || value === false) && pathIdentityKey(storedPath) === currentIdentity) {
+				return { path: storedPath, decision: value };
+			}
 		}
 
 		const parentDir = dirname(currentDir);
@@ -203,9 +207,10 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
  * trusted user resource and is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	const homeDir = resolveCanonicalPath(process.env.HOME || homedir());
+	const homeDir = normalizeCwd(process.env.HOME || homedir());
 	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
-	let currentDir = resolveCanonicalPath(cwd);
+	const userAgentsSkillsIdentity = pathIdentityKey(userAgentsSkillsDir);
+	let currentDir = normalizeCwd(cwd);
 
 	const configDir = getProjectConfigDir(currentDir, CONFIG_DIR_NAME);
 	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
@@ -214,7 +219,7 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 
 	while (true) {
 		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (agentsSkillsDir !== userAgentsSkillsDir && existsSync(agentsSkillsDir)) {
+		if (pathIdentityKey(agentsSkillsDir) !== userAgentsSkillsIdentity && existsSync(agentsSkillsDir)) {
 			return true;
 		}
 
@@ -253,8 +258,16 @@ export class ProjectTrustStore {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
 				const key = normalizeCwd(path);
+				const identity = pathIdentityKey(key);
+				for (const storedPath of Object.keys(data)) {
+					if (pathIdentityKey(storedPath) === identity && storedPath !== key) {
+						delete data[storedPath];
+					}
+				}
 				if (decision === null) {
-					delete data[key];
+					for (const storedPath of Object.keys(data)) {
+						if (pathIdentityKey(storedPath) === identity) delete data[storedPath];
+					}
 				} else {
 					data[key] = decision;
 				}
