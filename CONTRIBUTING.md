@@ -1,5 +1,7 @@
 # Contributing to MyHarness
 
+[English](CONTRIBUTING.md) | [简体中文](CONTRIBUTING.zh-CN.md)
+
 MyHarness is maintained in the repository at
 <https://github.com/h3327725338-star/MyHarness>. Please keep changes focused,
 preserve existing user data and configuration formats, and explain any
@@ -12,15 +14,15 @@ are recorded in `docs/decisions/`.
 
 ## Local checks
 
-从公开仓库开始时，先执行：
+For a fresh public checkout, start with:
 
 ```text
 git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 ```
 
-当前项目仍处于 Early-stage / Work in Progress；Node.js `>=22.19.0` 和
-Windows 上的 Git Bash 是当前维护环境前置条件。
+The project is Early-stage / Work in Progress. Node.js `>=22.19.0` and Git
+Bash on Windows are the current maintenance-environment prerequisites.
 
 From the repository root:
 

@@ -17,8 +17,8 @@
 
 | 范围 | 功能说明 | 维护文档 | 后续开发文档 | 事实范围 |
 | --- | --- | --- | --- | --- |
-| 整个仓库 | [README](README.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
-| Coding Agent 产品层 | [产品文档索引](packages/coding-agent/docs/index.md) | [产品维护手册](packages/coding-agent/docs/maintenance.md) | [产品后续开发](packages/coding-agent/docs/roadmap.md) | CLI、AgentSession、Session、Provider runtime、TUI mode |
+| 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
+| Coding Agent 产品层 | [产品文档索引](packages/coding-agent/docs/index.md)、[中文索引](packages/coding-agent/docs/index.zh-CN.md) | [产品维护手册](packages/coding-agent/docs/maintenance.md) | [产品后续开发](packages/coding-agent/docs/roadmap.md) | CLI、AgentSession、Session、Provider runtime、TUI mode |
 | Coding Agent 源码模块 | [源码模块地图](packages/coding-agent/docs/source-modules.md) | 同左 | 同左 | `packages/coding-agent/src` 的 24 个一级目录和顶层入口 |
 | Agent Core | [Agent Core 文档索引](packages/agent/docs/index.md)、[README](packages/agent/README.md) | [Agent Core 维护](packages/agent/docs/maintenance.md) | [Agent Core 后续开发](packages/agent/docs/roadmap.md) | Agent、agent loop、harness、session contract |
 | AI/Provider | [AI 文档索引](packages/ai/docs/index.md)、[README](packages/ai/README.md) | [AI 维护](packages/ai/docs/maintenance.md) | [AI 后续开发](packages/ai/docs/roadmap.md) | Models、Provider、API、auth、OAuth contract |
