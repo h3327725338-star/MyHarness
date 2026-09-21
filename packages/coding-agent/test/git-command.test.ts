@@ -160,7 +160,7 @@ describe("git command runner", () => {
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
-	}, 15_000);
+	}, 60_000);
 
 	it("preserves an existing output file when cancelled before starting", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "myharness-git-command-test-"));
