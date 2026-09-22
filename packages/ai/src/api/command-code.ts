@@ -19,8 +19,7 @@ import type {
 import { anthropicMessagesApi } from "./anthropic-messages.lazy.ts";
 import { openAICompletionsApi } from "./openai-completions.lazy.ts";
 
-/** @deprecated Historical private CLI route; this adapter no longer calls it. */
-export const COMMAND_CODE_GENERATE_ROUTE = "/alpha/generate";
+export { COMMAND_CODE_GENERATE_ROUTE } from "./command-code-constants.ts";
 
 /** Header accepted by Command Code's official Provider API to request ZDR routing. */
 export const COMMAND_CODE_ZDR_HEADER = "x-cmd-zdr";

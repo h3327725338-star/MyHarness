@@ -1712,12 +1712,16 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("routes provider-initiated tool calls through the host tool executor", async () => {
-		const tool: AgentTool = {
+		const parameters = Type.Object({ path: Type.String() });
+		const tool: AgentTool<typeof parameters, undefined> = {
 			name: "read",
 			label: "Read",
 			description: "Read a file",
-			parameters: Type.Object({ path: Type.String() }),
-			execute: async (_toolCallId, args) => ({ content: [{ type: "text", text: `read:${args.path}` }] }),
+			parameters,
+			execute: async (_toolCallId, args) => ({
+				content: [{ type: "text", text: `read:${args.path}` }],
+				details: undefined,
+			}),
 		};
 		const context: AgentContext = { systemPrompt: "system", messages: [], tools: [tool] };
 		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
