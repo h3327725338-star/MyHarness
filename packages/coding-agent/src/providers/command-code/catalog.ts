@@ -1,23 +1,25 @@
 /**
- * Command Code platform model catalog.
+ * Command Code Provider API model catalog.
  *
- * Snapshot of the gateway-lane catalog served on Command Code platform credits.
- * The platform exposes no model-list route on this lane — the only listing
- * endpoint is the public `/provider/v1/models` surface, which this provider
- * deliberately does not use — so the catalog is client-side data, exactly as in
- * Command Code's own client.
+ * The static metadata supplies capabilities and local cost estimates. The
+ * public `/provider/v1/models` endpoint supplies live names, context windows,
+ * and endpoint support; it is used by the provider's normal model refresh.
  *
- * Regenerate by reading `getModelCatalog()` from the installed client's
- * `@commandcode/shared` package and re-running the generator.
+ * Capability and pricing metadata is a checked-in snapshot because the live
+ * model endpoint does not provide those fields. Refresh it when the official
+ * model list or pricing changes.
  *
- * Captured: 2026-09-22 (77 models).
+ * Captured: 2026-09-23 (77 models).
  */
 
 import type { Model, ThinkingLevelMap } from "@myharness/ai";
 
 export const COMMAND_CODE_PROVIDER_ID = "command-code";
-export const COMMAND_CODE_API = "command-code";
-export const COMMAND_CODE_BASE_URL = "https://api.commandcode.ai";
+export const COMMAND_CODE_OPENAI_BASE_URL = "https://api.commandcode.ai/provider/v1";
+export const COMMAND_CODE_ANTHROPIC_BASE_URL = "https://api.commandcode.ai/provider";
+export const COMMAND_CODE_MODELS_URL = `${COMMAND_CODE_OPENAI_BASE_URL}/models`;
+
+export type CommandCodeApi = "openai-completions" | "anthropic-messages";
 
 export interface CommandCodeCatalogEntry {
 	id: string;
@@ -368,7 +370,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 0 },
+		cost: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: "xhigh", max: null },
 	},
 	{
@@ -404,7 +406,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: false,
 		input: ["text"],
-		cost: { input: 2.5, output: 7.5, cacheRead: 0.5, cacheWrite: 0 },
+		cost: { input: 2.5, output: 7.5, cacheRead: 0.5, cacheWrite: 3.13 },
 		thinkingLevelMap: undefined,
 	},
 	{
@@ -416,7 +418,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: false,
 		input: ["text", "image"],
-		cost: { input: 0.4, output: 1.6, cacheRead: 0.08, cacheWrite: 0 },
+		cost: { input: 0.4, output: 1.6, cacheRead: 0.08, cacheWrite: 0.5 },
 		thinkingLevelMap: undefined,
 	},
 	{
@@ -428,7 +430,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: false,
 		input: ["text", "image"],
-		cost: { input: 0.03, output: 0.13, cacheRead: 0.006, cacheWrite: 0 },
+		cost: { input: 0.03, output: 0.13, cacheRead: 0.006, cacheWrite: 0.038 },
 		thinkingLevelMap: undefined,
 	},
 	{
@@ -440,7 +442,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: false,
 		input: ["text"],
-		cost: { input: 1.3, output: 7.8, cacheRead: 0.26, cacheWrite: 0 },
+		cost: { input: 1.3, output: 7.8, cacheRead: 0.26, cacheWrite: 1.63 },
 		thinkingLevelMap: undefined,
 	},
 	{
@@ -596,7 +598,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+		cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -608,7 +610,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -620,7 +622,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 0 },
+		cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -632,7 +634,19 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
+		cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+	},
+	{
+		id: "claude-opus-5-5",
+		name: "Claude Opus 5.5",
+		group: "Anthropic",
+		description: "latest Claude Opus model for demanding reasoning and agent workflows",
+		contextWindow: 1000000,
+		maxTokens: 64000,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -644,7 +658,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 },
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -656,7 +670,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 },
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -668,7 +682,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 },
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -680,20 +694,8 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: false,
 		input: ["text", "image"],
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 0 },
+		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
 		thinkingLevelMap: undefined,
-	},
-	{
-		id: "gpt-6-astra",
-		name: "GPT-6 Astra",
-		group: "OpenAI",
-		description: "most capable OpenAI model for demanding reasoning & agents",
-		contextWindow: 1050000,
-		maxTokens: 64000,
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
-		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
 		id: "gpt-5.6-sol",
@@ -704,7 +706,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+		cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -716,7 +718,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+		cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -728,7 +730,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0 },
+		cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
 	},
 	{
@@ -800,7 +802,7 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 		maxTokens: 64000,
 		reasoning: true,
 		input: ["text", "image"],
-		cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+		cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0.08334 },
 		thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: "high", xhigh: null, max: null },
 	},
 	{
@@ -962,13 +964,13 @@ export const COMMAND_CODE_CATALOG: readonly CommandCodeCatalogEntry[] = [
 ];
 
 /** Build MyHarness models for every catalog entry. */
-export function buildCommandCodeModels(): Model<"command-code">[] {
+export function buildCommandCodeModels(): Model<CommandCodeApi>[] {
 	return COMMAND_CODE_CATALOG.map((entry) => ({
 		id: entry.id,
 		name: entry.name,
-		api: COMMAND_CODE_API,
+		api: entry.group === "Anthropic" ? "anthropic-messages" : "openai-completions",
 		provider: COMMAND_CODE_PROVIDER_ID,
-		baseUrl: COMMAND_CODE_BASE_URL,
+		baseUrl: entry.group === "Anthropic" ? COMMAND_CODE_ANTHROPIC_BASE_URL : COMMAND_CODE_OPENAI_BASE_URL,
 		reasoning: entry.reasoning,
 		thinkingLevelMap: entry.thinkingLevelMap,
 		input: entry.input,
@@ -976,4 +978,53 @@ export function buildCommandCodeModels(): Model<"command-code">[] {
 		contextWindow: entry.contextWindow,
 		maxTokens: entry.maxTokens,
 	}));
+}
+
+interface LiveCommandCodeModel {
+	id?: unknown;
+	name?: unknown;
+	context_length?: unknown;
+	supported_endpoints?: unknown;
+}
+
+function apiForSupportedEndpoints(endpoints: unknown): CommandCodeApi | undefined {
+	if (!Array.isArray(endpoints) || endpoints.some((endpoint) => typeof endpoint !== "string")) return undefined;
+	if (endpoints.includes("/chat/completions")) return "openai-completions";
+	if (endpoints.includes("/messages")) return "anthropic-messages";
+	return undefined;
+}
+
+/**
+ * Map the live, public model list onto metadata this client has verified.
+ * Unknown models are omitted until their capabilities and price data are known.
+ */
+export function mapCommandCodeModels(payload: unknown): Model<CommandCodeApi>[] {
+	if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) {
+		throw new Error("Command Code returned an invalid model catalog");
+	}
+
+	const staticModels = new Map(buildCommandCodeModels().map((model) => [model.id, model]));
+	const models: Model<CommandCodeApi>[] = [];
+	for (const value of (payload as { data: unknown[] }).data) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+		const live = value as LiveCommandCodeModel;
+		if (typeof live.id !== "string") continue;
+		const known = staticModels.get(live.id);
+		const api = apiForSupportedEndpoints(live.supported_endpoints);
+		if (!known || !api) continue;
+		const baseUrl = api === "anthropic-messages" ? COMMAND_CODE_ANTHROPIC_BASE_URL : COMMAND_CODE_OPENAI_BASE_URL;
+		models.push({
+			...known,
+			api,
+			baseUrl,
+			...(typeof live.name === "string" && live.name.trim() ? { name: live.name } : {}),
+			...(typeof live.context_length === "number" &&
+			Number.isSafeInteger(live.context_length) &&
+			live.context_length > 0
+				? { contextWindow: live.context_length }
+				: {}),
+		});
+	}
+	if (models.length === 0) throw new Error("Command Code returned no supported models with known metadata");
+	return models;
 }

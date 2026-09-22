@@ -1,10 +1,13 @@
 export {
 	buildCommandCodeModels,
-	COMMAND_CODE_API,
-	COMMAND_CODE_BASE_URL,
+	COMMAND_CODE_ANTHROPIC_BASE_URL,
 	COMMAND_CODE_CATALOG,
+	COMMAND_CODE_MODELS_URL,
+	COMMAND_CODE_OPENAI_BASE_URL,
 	COMMAND_CODE_PROVIDER_ID,
+	type CommandCodeApi,
 	type CommandCodeCatalogEntry,
+	mapCommandCodeModels,
 } from "./catalog.ts";
 export {
 	COMMAND_CODE_API_KEY_ENV_VAR,

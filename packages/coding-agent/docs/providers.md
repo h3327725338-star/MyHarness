@@ -18,6 +18,8 @@
 
 当前 library 层的 built-in Provider catalog 仍为空。Coding Agent 产品入口会额外注册一个受控的 **OpenAI ChatGPT** Provider；`ModelRuntime.create()` 本身保持无内置 Provider，供 library/SDK 测试和嵌入式调用保持原有语义。
 
+Coding Agent 还会注册 **Command Code** Provider。它调用 Command Code 官方 [Provider API](https://commandcode.ai/docs/provider)：OpenAI 和开放模型走 Chat Completions，Claude 模型走 Anthropic Messages；模型刷新读取官方 `/provider/v1/models`，请求格式、流处理和取消复用 MyHarness 已有的 OpenAI / Anthropic API implementations。MyHarness 仍负责 Prompt、Tools、Session 和 Agent loop。Command Code API key 可以来自 MyHarness 当前选中的 key、`COMMAND_CODE_API_KEY`，或 Command Code 客户端的 `~/.commandcode/auth.json`。Go plan 不提供 Provider API 推理权限；保存了有效 CLI key 也不代表该 key 能调用 Provider API。
+
 <a id="openai-chatgpt"></a>
 ## OpenAI ChatGPT（官方 App Server）
 

@@ -20,6 +20,7 @@ export type KnownApi =
 	| "azure-openai-responses"
 	| "anthropic-messages"
 	| "bedrock-converse-stream"
+	| "command-code"
 	| "google-generative-ai"
 	| "google-vertex"
 	| "myharness-messages";

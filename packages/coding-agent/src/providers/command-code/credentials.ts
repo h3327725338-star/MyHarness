@@ -57,7 +57,15 @@ export async function readCommandCodeAuthFile(
 	try {
 		const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-		return parsed as CommandCodeAuthFile;
+		const record = parsed as Record<string, unknown>;
+		if (record.apiKey !== undefined && typeof record.apiKey !== "string") return undefined;
+		return {
+			...(typeof record.apiKey === "string" ? { apiKey: record.apiKey } : {}),
+			...(typeof record.userId === "string" ? { userId: record.userId } : {}),
+			...(typeof record.userName === "string" ? { userName: record.userName } : {}),
+			...(typeof record.keyName === "string" ? { keyName: record.keyName } : {}),
+			...(typeof record.authenticatedAt === "string" ? { authenticatedAt: record.authenticatedAt } : {}),
+		};
 	} catch {
 		return undefined;
 	}

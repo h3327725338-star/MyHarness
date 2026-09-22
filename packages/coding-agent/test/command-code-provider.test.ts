@@ -1,18 +1,24 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type AuthContext, InMemoryCredentialStore } from "@myharness/ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { type AuthContext, type AuthInteraction, InMemoryCredentialStore } from "@myharness/ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../src/config.ts";
 import {
 	buildCommandCodeModels,
+	COMMAND_CODE_ANTHROPIC_BASE_URL,
 	COMMAND_CODE_CATALOG,
+	COMMAND_CODE_OPENAI_BASE_URL,
 	COMMAND_CODE_PROVIDER_ID,
 	createCommandCodeProvider,
 	getCommandCodeAuthPath,
+	mapCommandCodeModels,
 	readCommandCodeAuthFile,
 	resolveCommandCodeCredential,
 } from "../src/providers/command-code/index.ts";
+import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { ModelRuntime, registerBuiltInCommandCodeProvider } from "../src/providers/runtime/index.ts";
+import { getMyHarnessUserAgent } from "../src/utils/myharness-user-agent.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -69,6 +75,10 @@ describe("command-code credential discovery", () => {
 		const arrayFile = join(directory, "array.json");
 		writeFileSync(arrayFile, "[]");
 		await expect(readCommandCodeAuthFile(arrayFile)).resolves.toBeUndefined();
+
+		const invalidField = join(directory, "invalid-field.json");
+		writeFileSync(invalidField, JSON.stringify({ apiKey: 42, userName: "safe-name" }));
+		await expect(readCommandCodeAuthFile(invalidField)).resolves.toBeUndefined();
 	});
 
 	it("prefers the environment override over the stored login", async () => {
@@ -108,19 +118,78 @@ describe("command-code credential discovery", () => {
 });
 
 describe("command-code model catalog", () => {
-	it("builds every catalog entry as a command-code model", () => {
+	it("builds every catalog entry with the matching official API", () => {
 		const models = buildCommandCodeModels();
 		expect(models.length).toBe(COMMAND_CODE_CATALOG.length);
 		expect(models.length).toBeGreaterThan(0);
 
 		for (const model of models) {
-			expect(model.api).toBe("command-code");
 			expect(model.provider).toBe(COMMAND_CODE_PROVIDER_ID);
-			expect(model.baseUrl).toBe("https://api.commandcode.ai");
+			expect(model.api).toBe(
+				model.baseUrl === COMMAND_CODE_ANTHROPIC_BASE_URL ? "anthropic-messages" : "openai-completions",
+			);
+			expect(model.baseUrl).toBe(
+				model.api === "anthropic-messages" ? COMMAND_CODE_ANTHROPIC_BASE_URL : COMMAND_CODE_OPENAI_BASE_URL,
+			);
 			expect(model.contextWindow).toBeGreaterThan(0);
 			expect(model.maxTokens).toBeGreaterThan(0);
 			expect(model.maxTokens).toBeLessThanOrEqual(model.contextWindow);
-			expect(model.cost.cacheWrite).toBe(0);
+		}
+	});
+
+	it("uses the live endpoint catalog and excludes models without known metadata or chat routes", () => {
+		const models = mapCommandCodeModels({
+			data: [
+				{
+					id: "deepseek/deepseek-v4-flash",
+					name: "DeepSeek V4 Flash (latest)",
+					context_length: 900000,
+					supported_endpoints: ["/chat/completions", "/responses"],
+				},
+				{
+					id: "claude-opus-5-5",
+					name: "Claude Opus 5.5",
+					context_length: 1000000,
+					supported_endpoints: ["/messages"],
+				},
+				{ id: "unknown/model", supported_endpoints: ["/chat/completions"] },
+				{ id: "typesafe/jev", supported_endpoints: ["/systemone"] },
+			],
+		});
+
+		expect(models.map(({ id }) => id)).toEqual(["deepseek/deepseek-v4-flash", "claude-opus-5-5"]);
+		expect(models[0]).toMatchObject({
+			api: "openai-completions",
+			baseUrl: COMMAND_CODE_OPENAI_BASE_URL,
+			contextWindow: 900000,
+		});
+		expect(models[1]).toMatchObject({ api: "anthropic-messages", baseUrl: COMMAND_CODE_ANTHROPIC_BASE_URL });
+		expect(() => mapCommandCodeModels({ data: [] })).toThrow("no supported models");
+	});
+
+	it("includes current cache-write rates from the installed Command Code catalog", () => {
+		const expected = new Map([
+			["Qwen/Qwen3.8-Max", 2.5],
+			["Qwen/Qwen3.7-Max", 3.13],
+			["Qwen/Qwen3.7-Plus", 0.5],
+			["Qwen/Qwen3.7-Flash", 0.038],
+			["Qwen/Qwen3.6-Max-Preview", 1.63],
+			["claude-sonnet-5", 2.5],
+			["claude-sonnet-4-6", 3.75],
+			["claude-fable-5-1", 12.5],
+			["claude-fable-5", 12.5],
+			["claude-opus-5-5", 5],
+			["claude-opus-5", 6.25],
+			["claude-opus-4-8", 6.25],
+			["claude-opus-4-7", 6.25],
+			["claude-haiku-4-5-20251001", 1.25],
+			["gpt-5.6-sol", 6.25],
+			["gpt-5.6-terra", 2.5],
+			["gpt-5.6-luna", 0.25],
+			["google/gemini-3.7-flash", 0.08334],
+		]);
+		for (const [id, cacheWrite] of expected) {
+			expect(buildCommandCodeModels().find((model) => model.id === id)?.cost.cacheWrite).toBe(cacheWrite);
 		}
 	});
 
@@ -153,17 +222,34 @@ describe("command-code provider", () => {
 		const provider = createCommandCodeProvider();
 		expect(provider.id).toBe(COMMAND_CODE_PROVIDER_ID);
 		expect(provider.name).toBe("Command Code");
-		expect(provider.baseUrl).toBe("https://api.commandcode.ai");
+		expect(provider.baseUrl).toBe(COMMAND_CODE_OPENAI_BASE_URL);
 		expect(provider.getModels().length).toBe(COMMAND_CODE_CATALOG.length);
 		expect(provider.auth.apiKey).toBeDefined();
 	});
 
-	it("resolves auth from the environment override without a login flow", async () => {
+	it("resolves auth from the environment override", async () => {
 		const provider = createCommandCodeProvider();
 		const resolution = await provider.auth.apiKey!.resolve({
 			ctx: authContext({ COMMAND_CODE_API_KEY: "env-key" }),
 		});
-		expect(resolution).toEqual({ auth: { apiKey: "env-key" }, source: "COMMAND_CODE_API_KEY" });
+		expect(resolution).toEqual({
+			auth: { apiKey: "env-key", headers: { "User-Agent": getMyHarnessUserAgent(VERSION) } },
+			source: "COMMAND_CODE_API_KEY",
+		});
+	});
+
+	it("uses an explicit, truthful MyHarness User-Agent", async () => {
+		const provider = createCommandCodeProvider();
+		const resolution = await provider.auth.apiKey!.resolve({
+			ctx: authContext({ COMMAND_CODE_API_KEY: "env-key" }),
+		});
+
+		const userAgent = resolution?.auth.headers?.["User-Agent"];
+		expect(userAgent).toBe(getMyHarnessUserAgent(VERSION));
+		expect(userAgent).toMatch(/^myharness\/\d+\.\d+\.\d+ \(/);
+		expect(userAgent).not.toBe("node");
+		// The header must carry no secret material.
+		expect(userAgent).not.toContain("env-key");
 	});
 
 	it("reports availability through check() for the same source", async () => {
@@ -174,8 +260,30 @@ describe("command-code provider", () => {
 		expect(check).toEqual({ type: "api_key", source: "COMMAND_CODE_API_KEY" });
 	});
 
-	it("does not offer an interactive login, since it reuses Command Code's own", () => {
-		expect(createCommandCodeProvider().auth.apiKey!.login).toBeUndefined();
+	it("supports a MyHarness-saved key alongside ambient Command Code auth", async () => {
+		const auth = createCommandCodeProvider().auth.apiKey!;
+		const resolution = await auth.resolve({
+			ctx: authContext({ COMMAND_CODE_API_KEY: "env-key" }),
+			credential: { type: "api_key", key: "stored-key" },
+		});
+		expect(resolution?.auth.apiKey).toBe("stored-key");
+		expect(resolution?.source).toBe("MyHarness saved API key");
+		await expect(
+			auth.check!({ ctx: authContext(), credential: { type: "api_key", key: "stored-key" } }),
+		).resolves.toEqual({
+			type: "api_key",
+			source: "MyHarness saved API key",
+		});
+	});
+
+	it("accepts API keys through the shared MyHarness login flow", async () => {
+		const prompt = vi.fn(async () => "  entered-key  ");
+		const interaction = { prompt, notify: () => {} } as unknown as AuthInteraction;
+		await expect(createCommandCodeProvider().auth.apiKey!.login!(interaction)).resolves.toEqual({
+			type: "api_key",
+			key: "entered-key",
+		});
+		expect(prompt).toHaveBeenCalledWith({ type: "secret", message: "Enter a Command Code API key" });
 	});
 });
 
@@ -212,5 +320,137 @@ describe("command-code provider registration", () => {
 		// the Command Code credential check, not by MyHarness's own credential store.
 		expect(runtime.getConfiguredProviderIds()).toContain(COMMAND_CODE_PROVIDER_ID);
 		expect(runtime.getProviderCatalogModel(COMMAND_CODE_PROVIDER_ID, "deepseek/deepseek-v4-pro")).toBeDefined();
+	});
+
+	it("stores multiple named Command Code keys in MyHarness's existing credential store", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		await registerBuiltInCommandCodeProvider(runtime);
+		const keys = ["first-private-key", "second-private-key"];
+		const interaction = {
+			prompt: async () => keys.shift() ?? "",
+			notify: () => {},
+		} as unknown as AuthInteraction;
+
+		await runtime.addProviderApiKey(COMMAND_CODE_PROVIDER_ID, "first account", interaction);
+		await runtime.addProviderApiKey(COMMAND_CODE_PROVIDER_ID, "second account", interaction);
+		const overview = await runtime.getProviderCredentialOverview(COMMAND_CODE_PROVIDER_ID);
+
+		expect(overview.apiKeys.map(({ label }) => label)).toEqual(["first account", "second account"]);
+		expect(overview.active?.type).toBe("api_key");
+		expect(runtime.getProviderAuthStatus(COMMAND_CODE_PROVIDER_ID)).toMatchObject({
+			configured: true,
+			source: "stored",
+		});
+	});
+});
+
+describe("command-code request headers", () => {
+	const originalFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it("uses OpenAI Chat Completions for open models without claiming a CLI version", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: new InMemoryCredentialStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		await registerBuiltInCommandCodeProvider(runtime);
+
+		const model = runtime.getProviderCatalogModel(COMMAND_CODE_PROVIDER_ID, "deepseek/deepseek-v4-pro")!;
+		expect(model).toBeDefined();
+
+		let captured: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
+		globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+			const request = input instanceof Request ? input : new Request(input, init);
+			const record: Record<string, string> = {};
+			new Headers(request.headers).forEach((value, key) => {
+				record[key] = value;
+			});
+			captured = { url: request.url, method: request.method, headers: record, body: await request.clone().text() };
+			return new Response(
+				[
+					`data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "deepseek/deepseek-v4-pro", choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] })}`,
+					`data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "deepseek/deepseek-v4-pro", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}`,
+					"data: [DONE]",
+				].join("\n\n"),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as typeof fetch;
+
+		for await (const _event of runtime.stream(
+			model,
+			{ systemPrompt: "probe", messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [] },
+			{ env: { COMMAND_CODE_API_KEY: "probe-key" } },
+		)) {
+			// Drain the stream; the assertion is on the captured request.
+		}
+
+		expect(captured).toBeDefined();
+		expect(captured!.url).toBe(`${COMMAND_CODE_OPENAI_BASE_URL}/chat/completions`);
+		expect(captured!.method).toBe("POST");
+		expect(captured!.headers["user-agent"]).toBe(getMyHarnessUserAgent(VERSION));
+		expect(captured!.headers.authorization).toBe("Bearer probe-key");
+		expect(captured!.headers["x-command-code-version"]).toBeUndefined();
+		expect(JSON.parse(captured!.body)).toMatchObject({
+			model: "deepseek/deepseek-v4-pro",
+			stream: true,
+			messages: [
+				{ role: "system", content: "probe" },
+				{ role: "user", content: "hi" },
+			],
+		});
+	});
+
+	it("uses Anthropic Messages for Claude models", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: new InMemoryCredentialStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		await registerBuiltInCommandCodeProvider(runtime);
+		const model = runtime.getProviderCatalogModel(COMMAND_CODE_PROVIDER_ID, "claude-opus-5-5")!;
+		expect(model).toBeDefined();
+
+		let captured: { url: string; headers: Record<string, string>; body: string } | undefined;
+		globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+			const request = input instanceof Request ? input : new Request(input, init);
+			const record: Record<string, string> = {};
+			new Headers(request.headers).forEach((value, key) => {
+				record[key] = value;
+			});
+			captured = { url: request.url, headers: record, body: await request.clone().text() };
+			return new Response(
+				[
+					`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "msg_test", type: "message", role: "assistant", content: [], model: "claude-opus-5-5", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } })}`,
+					`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}`,
+					`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } })}`,
+					`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+					`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } })}`,
+					`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}`,
+				].join("\n\n"),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as typeof fetch;
+
+		for await (const _event of runtime.stream(
+			model,
+			{ systemPrompt: "probe", messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [] },
+			{ env: { COMMAND_CODE_API_KEY: "probe-key" } },
+		)) {
+			// Drain the native Anthropic stream.
+		}
+
+		expect(captured).toBeDefined();
+		expect(captured!.url).toBe(`${COMMAND_CODE_ANTHROPIC_BASE_URL}/v1/messages`);
+		expect(captured!.headers["user-agent"]).toBe(getMyHarnessUserAgent(VERSION));
+		expect(captured!.headers["x-api-key"]).toBe("probe-key");
+		expect(JSON.parse(captured!.body)).toMatchObject({ model: "claude-opus-5-5", stream: true, max_tokens: 64000 });
 	});
 });

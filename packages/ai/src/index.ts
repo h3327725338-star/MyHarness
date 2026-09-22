@@ -16,7 +16,8 @@ export type {
 	CommandCodeWirePart,
 	CommandCodeWireUsage,
 } from "./api/command-code.ts";
-export { COMMAND_CODE_CLIENT_VERSION, COMMAND_CODE_GENERATE_ROUTE } from "./api/command-code.ts";
+/** @deprecated Historical private route, no longer used by the adapter. */
+export { COMMAND_CODE_GENERATE_ROUTE } from "./api/command-code.ts";
 export type { GoogleOptions } from "./api/google-generative-ai.ts";
 export type { GoogleThinkingLevel } from "./api/google-shared.ts";
 export type { GoogleVertexOptions } from "./api/google-vertex.ts";
