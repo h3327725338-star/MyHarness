@@ -169,21 +169,27 @@ describe("CustomProviderSubmenu", () => {
 		submenu.handleInput("\x1b[B");
 		submenu.handleInput("\x1b[B");
 		submenu.handleInput("\r");
-		expect(render(submenu)).toContain("管理模型");
+		await vi.waitFor(() => expect(render(submenu)).toContain("管理模型"));
 		expect(render(submenu)).toContain("First Model");
 		expect(render(submenu)).toContain("添加模型");
 
 		submenu.handleInput("\x1b[B");
 		submenu.handleInput("\r");
-		expect(render(submenu)).toContain("自动读取模型");
-		expect(render(submenu)).toContain("手动填写");
+		await vi.waitFor(() => {
+			expect(render(submenu)).toContain("自动读取模型");
+			expect(render(submenu)).toContain("手动填写");
+		});
 
 		submenu.handleInput("\x1b[B");
 		submenu.handleInput("\r");
+		await vi.waitFor(() => expect(render(submenu)).toContain("新模型 ID"));
 		submenu.handleInput("second-model");
 		submenu.handleInput("\r");
+		await vi.waitFor(() => expect(render(submenu)).toContain("模型显示名称"));
 		submenu.handleInput("\r");
+		await vi.waitFor(() => expect(render(submenu)).toContain("图片输入能力"));
 		submenu.handleInput("\r");
+		await vi.waitFor(() => expect(render(submenu)).toContain("思考能力"));
 		submenu.handleInput("\r");
 
 		await vi.waitFor(
