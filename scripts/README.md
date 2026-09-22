@@ -15,7 +15,7 @@
 | `generate-coding-agent-shrinkwrap.mjs` | 生成或 `--check` 校验发布 shrinkwrap；不带 `--check` 会写文件 | 是（不带 `--check`） |
 | `generate-coding-agent-install-lock.mjs` | 生成或 `--check` 校验独立安装 lock；不带 `--check` 会写目录文件 | 是（不带 `--check`） |
 | `check-lockfile-commit.mjs` | 提交前阻止不符合锁文件约束的状态 | 否 |
-| `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式、用户路径、运行时产物、License 和 manifest | 否 |
+| `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式、用户路径、运行时产物、License 和 manifest；staged 模式还检查整个 index 中是否残留 Agent/Harness/IDE 本地状态目录 | 否 |
 
 `npm run check` 先执行 `biome check --write`，再调用 `run-checks-parallel.mjs`；不要在自动化中把它当作纯诊断命令。
 
@@ -45,8 +45,8 @@ npm.cmd run audit:release
 npm.cmd run audit:public
 ```
 
-`.husky/pre-commit` 审计 staged 内容；`.husky/pre-push` 按待推送 commit
-审计完整 tree；`release.mjs` 在版本变更前执行 worktree 审计。审计只输出
+`.husky/pre-commit` 审计 staged 文件内容及整个 index 中的禁止路径；`.husky/pre-push` 按待推送 commit
+审计完整 tree，包括已跟踪的 Agent/Harness/IDE 本地状态目录；`release.mjs` 在版本变更前执行 worktree 审计。审计只输出
 类别、路径和行号，不输出匹配到的 credential 或个人值。测试中的明确
 synthetic fixture（例如 `test-secret`、`example.invalid`）不会被当成真实
 凭据；它们仍需保持明显为测试值。

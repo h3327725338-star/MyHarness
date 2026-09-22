@@ -26,6 +26,7 @@
 | 任务范围 | 先读的专题入口 |
 | --- | --- |
 | 不知道相关文档在哪 | `DOCUMENTATION_INDEX.md` |
+| Git 写操作、提交与推送 | `docs/maintenance/git-workflow.md` |
 | 整体架构、模块边界、Public API | `ARCHITECTURE_AND_DEVELOPMENT.md` |
 | 日常维护、构建和验证 | `MAINTENANCE.md` |
 | CI / GitHub Actions | `.github/maintenance.md`、`docs/maintenance/github-automation.md` |
@@ -36,6 +37,17 @@
 | Provider / AI API | `packages/ai/docs/index.md`、`packages/ai/docs/maintenance.md` |
 | TUI | `packages/tui/docs/index.md`、`packages/tui/docs/maintenance.md` |
 | 项目配置和 Project Trust | `.myharness/README.md`、`.myharness/maintenance.md`、Coding Agent `settings.md` |
+
+## Git 写操作路由
+
+准备执行以下任一 Git 写操作前，必须先读取
+[`docs/maintenance/git-workflow.md`](docs/maintenance/git-workflow.md)：
+
+- `git add`、stage/unstage、commit/amend、merge/rebase、tag、push/force push；
+- 修改 remote/upstream，删除或修改远端 branch；
+- 其他会改变 Git 历史、index、ref 或远端状态的操作。
+
+普通源码阅读和只读 Git 查询不要求读取该专题。
 
 ## CI baseline 与用户平台
 

@@ -53,10 +53,12 @@ Linux/macOS runner。
 ## 改动流程
 
 1. 先看 `git status --short`，保留已有工作区改动。
-2. 根据领域读取真实源码、package exports、调用方、测试和相关文档。
-3. 修改后只同步直接受影响的文档；不要为历史 changelog 或历史 Phase 文档改写当前语义。
-4. 用 `git diff --check`、相关测试或静态检查验证，并确认改动文件没有越出任务范围。
-5. 若涉及 build、lockfile、Session、配置、发布或用户目录，单独报告这些写入影响。
+2. 准备 stage、commit、push 或执行其他 Git 写操作前，先读
+   [`docs/maintenance/git-workflow.md`](docs/maintenance/git-workflow.md)；普通源码阅读不需要读该文档。
+3. 根据领域读取真实源码、package exports、调用方、测试和相关文档。
+4. 修改后只同步直接受影响的文档；不要为历史 changelog 或历史 Phase 文档改写当前语义。
+5. 用 `git diff --check`、相关测试或静态检查验证，并确认改动文件没有越出任务范围。
+6. 若涉及 build、lockfile、Session、配置、发布或用户目录，单独报告这些写入影响。
 
 ## 公共 contract 的维护重点
 
@@ -72,7 +74,9 @@ Linux/macOS runner。
 
 不要在日志、文档、测试输出或 diff 中写入 API key、OAuth token、cookie、authorization header、refresh token、PKCE/state 或真实用户 Session 内容。发布脚本、版本脚本、shrinkwrap 和 binary 构建会写入多个文件，执行前应先确认目标。
 
-CI、发布和提交钩子的实际入口见 [`scripts/README.md`](scripts/README.md) 和 [GitHub 自动化维护文档](docs/maintenance/github-automation.md)。
+CI、发布和提交钩子的实际入口见 [`scripts/README.md`](scripts/README.md) 和
+[GitHub 自动化维护文档](docs/maintenance/github-automation.md)；Git stage、commit 和
+push 的检查顺序以 [`docs/maintenance/git-workflow.md`](docs/maintenance/git-workflow.md) 为准。
 提交前、推送前和版本发布前的敏感信息检查统一由
 [`scripts/release-audit.mjs`](scripts/release-audit.mjs) 提供；固定流程和匿名事故记录见
 [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md)。

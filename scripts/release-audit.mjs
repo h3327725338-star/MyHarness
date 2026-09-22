@@ -48,7 +48,13 @@ const TEXT_EXTENSIONS = new Set([
 	".yml",
 ]);
 
+const LOCAL_TOOL_STATE_PATH_RULE = {
+	pattern: /(^|\/)\.(?:workbuddy|claude|codex|cursor|continue|opencode|agent|agents|pi_config|vscode|zed|idea)(\/|$)/i,
+	category: "Agent/Harness/IDE local state directory",
+};
+
 const FORBIDDEN_PATH_RULES = [
+	LOCAL_TOOL_STATE_PATH_RULE,
 	{ pattern: /^(?:data|packages\/[^/]+\/data)(\/|$)/i, category: "user-data directory" },
 	{ pattern: /(^|\/)node_modules(\/|$)/i, category: "installed dependency directory" },
 	{ pattern: /(^|\/)dist(\/|$)/i, category: "generated build directory" },
@@ -205,6 +211,15 @@ function getEntries(options) {
 			};
 		})
 		.filter(Boolean);
+}
+
+function checkStagedIndexToolDirectories(findings) {
+	for (const entry of parseIndexEntries()) {
+		const path = toPosixPath(entry.path);
+		if (LOCAL_TOOL_STATE_PATH_RULE.pattern.test(path)) {
+			addFinding(findings, `${LOCAL_TOOL_STATE_PATH_RULE.category} is tracked`, path, "", 0);
+		}
+	}
 }
 
 function lineNumber(text, index) {
@@ -366,10 +381,11 @@ function checkLicenseFiles(entries, findings) {
 	}
 }
 
-function checkTreeShape(entries, findings) {
+function checkTreeShape(entries, findings, skipLocalToolStatePaths = false) {
 	for (const entry of entries) {
 		const path = toPosixPath(entry.path);
 		for (const rule of FORBIDDEN_PATH_RULES) {
+			if (skipLocalToolStatePaths && rule === LOCAL_TOOL_STATE_PATH_RULE) continue;
 			if (rule.pattern.test(path)) {
 				addFinding(findings, `${rule.category} is tracked`, path, "", 0);
 				break;
@@ -413,8 +429,9 @@ function main() {
 	const entries = getEntries(options);
 	const findings = [];
 
+	if (options.mode === "staged") checkStagedIndexToolDirectories(findings);
 	if (options.mode === "ref" && options.requireOrphan) checkOrphan(options.ref, findings);
-	checkTreeShape(entries, findings);
+	checkTreeShape(entries, findings, options.mode === "staged");
 	if (options.mode !== "staged") {
 		checkManifest(entries, findings);
 		checkLicenseFiles(entries, findings);

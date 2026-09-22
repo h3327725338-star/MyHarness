@@ -38,10 +38,12 @@ check、build 和 `--help` 步骤运行。Windows 上若 PowerShell execution po
 
 ## Hook 和 release 入口
 
-- `.husky/pre-commit` 在格式化后审计 staged 内容，阻止明显的用户数据目录、
-  credential 文件、私钥、真实用户路径、异常大文件和已下载 runtime 被提交。
+- `.husky/pre-commit` 在格式化后审计 staged 内容及整个 index 的禁止路径，阻止
+  Agent/Harness/IDE 本地状态目录、明显的用户数据目录、credential 文件、私钥、
+  真实用户路径、异常大文件和已下载 runtime 被提交。
 - `.husky/pre-push` 按 Git 提供的 local commit SHA 审计完整 tree；删除远端分支
-  的零 SHA 不会被误审计。
+  的零 SHA 不会被误审计。完整 tree 审计同样拦截已跟踪的 Agent/Harness/IDE
+  本地状态目录。
 - `scripts/release.mjs` 在版本变更前运行 `npm run audit:release`，实际 push
   仍受脚本既有流程和 pre-push hook 约束；本地 Release Gate 不代表 release、publish
   或 push 已经执行或成功。
