@@ -29,6 +29,16 @@ describe("SelectList", () => {
 		assert.deepEqual(selected, ["first", "first"]);
 	});
 
+	it("keeps an empty filtered list unfocused when navigating", () => {
+		const list = new SelectList([], 5, testTheme);
+
+		list.handleInput("\x1b[A");
+		list.handleInput("\x1b[B");
+
+		assert.equal(list.getSelectedItem(), null);
+		assert.match(list.render(40).join("\n"), /No matching commands/);
+	});
+
 	it("normalizes multiline descriptions to single line", () => {
 		const items = [
 			{

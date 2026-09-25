@@ -95,6 +95,18 @@ export function isRunStateActive(state: RunState): boolean {
 	);
 }
 
+/** Whether the snapshot represents a settled run outcome, not live activity. */
+export function isRunStateTerminal(state: RunState): boolean {
+	return (
+		state === "completed" ||
+		state === "failed" ||
+		state === "blocked" ||
+		state === "timed_out" ||
+		state === "cancelled" ||
+		state === "interrupted"
+	);
+}
+
 /**
  * Derive the initial snapshot for a fresh run.
  */

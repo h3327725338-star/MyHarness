@@ -31,6 +31,7 @@ npm.cmd run build
 - [Compaction](compaction.md) — context compaction 和 branch summaries。
 - [Git Worktrees](worktrees.md) — 通过 `/git` 管理开发 worktree。
 - [快捷键](keybindings.md) — 默认快捷键和自定义方式。
+- [TUI 设计系统](tui-design-system.md) — 视觉层级、共享 token、状态投影和终端交互规则。
 
 ## 扩展能力
 

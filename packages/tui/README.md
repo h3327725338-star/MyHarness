@@ -15,6 +15,19 @@ Minimal terminal UI framework with differential rendering and synchronized outpu
 - **Inline Images**: Renders images in terminals that support Kitty or iTerm2 graphics protocols
 - **Autocomplete Support**: File paths and slash commands
 
+### Shared presentation tokens
+
+`TUI_SYMBOLS` and `TUI_SPACING` provide the small, presentation-only tokens
+shared by list, status, and tree-style components. They do not define colors;
+applications continue to supply semantic colors through their theme callbacks.
+
+```typescript
+import { TUI_SPACING, TUI_SYMBOLS } from "@myharness/tui";
+
+const selected = `${TUI_SYMBOLS.selected}Setting`;
+const gap = " ".repeat(TUI_SPACING.inline);
+```
+
 ## Quick Start
 
 ```typescript

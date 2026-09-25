@@ -7,6 +7,7 @@ import {
 	Input,
 	Spacer,
 	Text,
+	TUI_SYMBOLS,
 	truncateToWidth,
 	visibleWidth,
 } from "@myharness/tui";
@@ -523,7 +524,7 @@ class SessionList implements Component, Focusable {
 		}
 
 		const parts = node.ancestorContinues.map((continues) => (continues ? "│  " : "   "));
-		const branch = node.isLast ? "└─ " : "├─ ";
+		const branch = `${node.isLast ? TUI_SYMBOLS.treeLastBranch : TUI_SYMBOLS.treeBranch} `;
 		return parts.join("") + branch;
 	}
 

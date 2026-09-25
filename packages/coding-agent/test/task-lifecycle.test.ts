@@ -95,16 +95,6 @@ describe("Task lifecycle derivation", () => {
 				taskDecisionActive: true,
 			},
 		],
-		[
-			"awaiting_decision",
-			{
-				agentIsStreaming: false,
-				completionWorkflowActive: false,
-				completionWorkflowPending: false,
-				taskDecisionActive: false,
-				checkpointDecisionPending: true,
-			},
-		],
 	];
 
 	test.each(lifecycleCases)("derives %s from authoritative inputs", (expected, inputs) => {
@@ -116,6 +106,13 @@ describe("Task lifecycle derivation", () => {
 		expect(isTaskLifecycleBusy("awaiting_decision")).toBe(false);
 		expect(isTaskLifecycleBusy("main_agent")).toBe(true);
 		expect(isTaskLifecycleBusy("completion")).toBe(true);
+	});
+
+	test("does not turn a persisted checkpoint into an active decision phase", () => {
+		const context = createLifecycleUIContext();
+		context.hasPendingGitCheckpointDecision = () => true;
+
+		expect(context.getTaskLifecyclePhase()).toBe("idle");
 	});
 
 	test("keeps a terminal failure visible during completion cleanup", () => {
@@ -140,6 +137,29 @@ describe("Task lifecycle derivation", () => {
 		(InteractiveMode.prototype as any).syncTaskStatusBar.call(context, "completion", currentSnapshot);
 
 		expect(taskStatusBar.setState).toHaveBeenCalledWith(terminalFailure, "completion");
+	});
+
+	test("keeps the terminal outcome visible while a decision selector is open", () => {
+		const terminalOutcome = {
+			state: "completed",
+			activity: "任务完成",
+			startedAt: 1,
+			lastActivityAt: 2,
+		};
+		const taskStatusBar = { setState: vi.fn() };
+		const context = {
+			taskStatusBar,
+			lastTerminalRunState: terminalOutcome,
+		};
+		const currentSnapshot = {
+			state: "idle",
+			activity: "",
+			lastActivityAt: 3,
+		};
+
+		(InteractiveMode.prototype as any).syncTaskStatusBar.call(context, "awaiting_decision", currentSnapshot);
+
+		expect(taskStatusBar.setState).toHaveBeenCalledWith(terminalOutcome, "awaiting_decision");
 	});
 });
 

@@ -146,6 +146,46 @@ describe("TaskStatusBar", () => {
 		bar.dispose();
 	});
 
+	test("keeps terminal outcomes ahead of transient completion and decision phases", () => {
+		initTheme("dark");
+		const ui = { requestRender: vi.fn() } as any;
+		const bar = new TaskStatusBar(ui);
+		const startedAt = Date.now() - 5_000;
+		const lastActivityAt = Date.now();
+
+		bar.setState(
+			{
+				state: "completed",
+				activity: "任务完成",
+				startedAt,
+				lastActivityAt,
+			},
+			"awaiting_decision",
+		);
+		const completed = stripAnsi(bar.render(100)[0] ?? "");
+		expect(completed).toContain("✓ 已完成");
+		expect(completed).not.toContain("等待确认");
+		expect(completed).not.toContain("已等待");
+		expect(completed).not.toContain("正在完成任务");
+
+		bar.setState(
+			{
+				state: "failed",
+				activity: "任务失败",
+				startedAt,
+				lastActivityAt,
+				error: "request failed",
+			},
+			"completion",
+		);
+		const failed = stripAnsi(bar.render(100)[0] ?? "");
+		expect(failed).toContain("✕ 发生错误");
+		expect(failed).not.toContain("等待确认");
+		expect(failed).not.toContain("已等待");
+		expect(failed).not.toContain("正在完成任务");
+		bar.dispose();
+	});
+
 	test("prefers the latest activity over a stale tool detail", () => {
 		initTheme("dark");
 		const ui = { requestRender: vi.fn() } as any;

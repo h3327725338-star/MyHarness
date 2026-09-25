@@ -47,7 +47,7 @@ import {
 	validateConversationTitle,
 } from "../../agent/runtime/conversation-title.ts";
 import { createReloadSummaryMessage } from "../../agent/runtime/messages.ts";
-import { isRunStateActive, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
+import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import {
 	classifyGitCommitFailure,
@@ -2070,8 +2070,6 @@ export class InteractiveMode {
 			completionWorkflowActive: this.completionWorkflowActive,
 			completionWorkflowPending: this.completionWorkflowPromise !== undefined,
 			taskDecisionActive: this.taskDecisionActive,
-			checkpointDecisionPending:
-				typeof this.hasPendingGitCheckpointDecision === "function" && this.hasPendingGitCheckpointDecision(),
 		});
 	}
 
@@ -2094,9 +2092,13 @@ export class InteractiveMode {
 			terminalRunFailed && phase !== "awaiting_decision"
 				? this.lastTerminalRunState
 				: runSnapshot &&
-						(isRunStateActive(runSnapshot.state) || phase === "completion" || phase === "awaiting_decision")
+						(isRunStateActive(runSnapshot.state) ||
+							(phase === "completion" && !isRunStateTerminal(runSnapshot.state)) ||
+							(phase === "awaiting_decision" &&
+								!isRunStateTerminal(runSnapshot.state) &&
+								this.lastTerminalRunState === undefined))
 					? runSnapshot
-					: this.lastTerminalRunState;
+					: (this.lastTerminalRunState ?? runSnapshot);
 		if (snapshot) this.taskStatusBar.setState(snapshot, phase as TaskStatusBarPhase);
 	}
 
@@ -3047,7 +3049,9 @@ export class InteractiveMode {
 					: this.session.isStreaming
 						? "main_agent"
 						: "idle");
-			if (taskPhase === "awaiting_decision" && !this.taskDecisionActive && this.hasPendingGitCheckpointDecision()) {
+			const hasPendingCheckpoint =
+				typeof this.hasPendingGitCheckpointDecision === "function" && this.hasPendingGitCheckpointDecision();
+			if (taskPhase === "idle" && !this.taskDecisionActive && hasPendingCheckpoint) {
 				this.editor.setText(text);
 				await this.reopenPendingGitCheckpointDecision();
 				this.showStatus("请先执行 /commit 或完成当前任务的 Keep / Restore 决策，再提交新的任务。");

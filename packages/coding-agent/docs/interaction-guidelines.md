@@ -1,6 +1,6 @@
 # MyHarness Interaction Guidelines
 
-这份文档是 Coding Agent 产品层和 `@myharness/tui` 组件层共同遵循的交互 contract。它描述用户应该能够从界面预测出的行为，不是视觉主题规范。
+这份文档是 Coding Agent 产品层和 `@myharness/tui` 组件层共同遵循的交互 contract。它描述用户应该能够从界面预测出的行为，不是完整的视觉主题规范；视觉层级、状态投影和共享符号见 [TUI design system](tui-design-system.md)。
 
 ## 适用范围
 

@@ -7,6 +7,7 @@ import {
 	matchesKey,
 	type OverlayHandle,
 	type TUI,
+	TUI_SYMBOLS,
 	truncateToWidth,
 	visibleWidth,
 } from "@myharness/tui";
@@ -1127,7 +1128,7 @@ export class WorkspaceSidebarComponent implements Component, Focusable {
 			const pendingMark = this.confirmDeleteWorkspaceId === row.workspace.id ? theme.fg("error", " !") : "";
 			const isCurrent = this.options.store.getByPath(this.options.currentCwd)?.id === row.workspace.id;
 			const disclosure = theme.fg(isCurrent ? "accent" : "muted", row.expanded ? "▾" : "▸");
-			const currentMark = isCurrent ? theme.fg("accent", "● ") : "  ";
+			const currentMark = isCurrent ? theme.fg("accent", `${TUI_SYMBOLS.active} `) : "  ";
 			const prefix = `${cursor}${disclosure} ${currentMark}`;
 			const rawName = truncateToWidth(
 				`${row.workspace.name}${pendingMark}`,
@@ -1138,22 +1139,24 @@ export class WorkspaceSidebarComponent implements Component, Focusable {
 			if (isSelected) name = theme.bold(name);
 			return `${prefix}${name}`;
 		}
-		if (row.kind === "chat-loading") return theme.fg("muted", truncateToWidth("    └─ Loading chats…", width, "…"));
+		if (row.kind === "chat-loading") {
+			return theme.fg("muted", truncateToWidth(`    ${TUI_SYMBOLS.treeLastBranch} Loading chats…`, width, "…"));
+		}
 		if (row.kind === "workspace-new-chat") {
-			const prefix = `${cursor}  └─ `;
+			const prefix = `${cursor}  ${TUI_SYMBOLS.treeLastBranch} `;
 			const label = truncateToWidth("+ New Chat", Math.max(0, width - visibleWidth(prefix)), "…");
 			return `${theme.fg("dim", prefix)}${theme.fg(isSelected ? "accent" : "muted", label)}`;
 		}
 
 		const isCurrentChat = canonicalizePath(row.session.path) === canonicalizePath(this.getCurrentSessionPath());
-		const branch = row.isLast ? "└─" : "├─";
+		const branch = row.isLast ? TUI_SYMBOLS.treeLastBranch : TUI_SYMBOLS.treeBranch;
 		const pendingMark = this.confirmDeletePath === row.session.path ? theme.fg("error", " !") : "";
 		const selectionMark = this.isBatchDeleteTarget(row)
 			? this.selectedSessionPaths.has(this.sessionSelectionKey(row.session.path))
 				? "[x] "
 				: "[ ] "
 			: "";
-		const currentMark = isCurrentChat ? theme.fg("accent", "● ") : "  ";
+		const currentMark = isCurrentChat ? theme.fg("accent", `${TUI_SYMBOLS.active} `) : "  ";
 		const prefix = `${cursor} ${selectionMark}${theme.fg("dim", branch)} ${currentMark}`;
 		let age = formatSessionDate(row.session.modified);
 		if (width - visibleWidth(prefix) - visibleWidth(age) - 1 < 6) age = "";

@@ -1,6 +1,7 @@
-import { type Component, type TUI, truncateToWidth } from "@myharness/tui";
+import { type Component, type TUI, TUI_SYMBOLS, truncateToWidth } from "@myharness/tui";
 import type { RunStateSnapshot } from "../../../agent/runtime/run-state.ts";
-import { isRunStateActive, RUN_STATE_LABELS } from "../../../agent/runtime/run-state.ts";
+import { isRunStateActive, isRunStateTerminal, RUN_STATE_LABELS } from "../../../agent/runtime/run-state.ts";
+import { formatDuration, formatRecentActivity } from "../status-format.ts";
 import { theme } from "../theme/theme.ts";
 
 export type TaskStatusBarPhase = "idle" | "main_agent" | "completion" | "awaiting_decision";
@@ -13,20 +14,6 @@ type TaskStatusBarState = {
 };
 
 const STATUS_BAR_REFRESH_INTERVAL_MS = 1000;
-
-function formatDuration(durationMs: number): string {
-	const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-function formatRecentActivity(durationMs: number): string {
-	const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-	if (totalSeconds < 1) return "刚刚";
-	if (totalSeconds < 60) return `${totalSeconds}s 前`;
-	return `${Math.floor(totalSeconds / 60)}m 前`;
-}
 
 /**
  * Fixed, one-line task status rendered after the footer.
@@ -90,7 +77,7 @@ export class TaskStatusBar implements Component {
 		const state = this.state;
 		const active = this.isActive();
 		const timing =
-			state.phase === "awaiting_decision"
+			state.phase === "awaiting_decision" && !isRunStateTerminal(state.snapshot.state)
 				? ` · 已等待 ${formatDuration(now - state.lastActivityAt)}`
 				: active
 					? ` · 已运行 ${formatDuration(state.snapshot.startedAt ? now - state.snapshot.startedAt : 0)} · 最近活动 ${formatRecentActivity(now - state.lastActivityAt)}`
@@ -103,8 +90,8 @@ export class TaskStatusBar implements Component {
 
 	private isActive(): boolean {
 		if (!this.state) return false;
+		if (isRunStateTerminal(this.state.snapshot.state)) return false;
 		if (this.state.phase === "awaiting_decision") return true;
-		if (this.isTerminalNonSuccess()) return false;
 		return (
 			this.state.phase === "main_agent" ||
 			this.state.phase === "completion" ||
@@ -112,47 +99,48 @@ export class TaskStatusBar implements Component {
 		);
 	}
 
-	private isTerminalNonSuccess(): boolean {
-		return (
-			this.state?.snapshot.state === "failed" ||
-			this.state?.snapshot.state === "blocked" ||
-			this.state?.snapshot.state === "timed_out" ||
-			this.state?.snapshot.state === "cancelled" ||
-			this.state?.snapshot.state === "interrupted"
-		);
-	}
-
 	private getStatusText(): string {
 		if (!this.state) return "";
-		if (this.state.phase === "awaiting_decision") return "● 等待确认";
-		if (this.state.snapshot.state === "failed") return "✕ 发生错误";
-		if (this.state.snapshot.state === "blocked") return "⛔ 已阻止";
-		if (this.state.snapshot.state === "timed_out") return "⚠ 已超时";
-		if (this.state.snapshot.state === "cancelled") return "■ 已取消";
-		if (this.state.snapshot.state === "interrupted") return "■ 已中断";
-		if (this.state.phase === "completion") return "● 正在完成任务";
+		switch (this.state.snapshot.state) {
+			case "completed":
+				return `${TUI_SYMBOLS.success} 已完成`;
+			case "failed":
+				return `${TUI_SYMBOLS.error} 发生错误`;
+			case "blocked":
+				return `${TUI_SYMBOLS.blocked} 已阻止`;
+			case "timed_out":
+				return `${TUI_SYMBOLS.warning} 已超时`;
+			case "cancelled":
+				return `${TUI_SYMBOLS.interrupted} 已取消`;
+			case "interrupted":
+				return `${TUI_SYMBOLS.interrupted} 已中断`;
+		}
+		if (this.state.phase === "awaiting_decision") return `${TUI_SYMBOLS.active} 等待确认`;
+		if (this.state.phase === "completion") return `${TUI_SYMBOLS.active} 正在完成任务`;
 
 		const activity = this.state.activity?.trim();
 		switch (this.state.snapshot.state) {
-			case "completed":
-				return "✓ 已完成";
 			case "waiting":
 				if (activity === "等待工具返回") {
-					return this.state.snapshot.detail ? `● 执行工具中 · ${this.state.snapshot.detail}` : "● 执行工具中";
+					return this.state.snapshot.detail
+						? `${TUI_SYMBOLS.active} 执行工具中 · ${this.state.snapshot.detail}`
+						: `${TUI_SYMBOLS.active} 执行工具中`;
 				}
 				if (activity === "工具输出中" && this.state.snapshot.detail) {
-					return `● 工具输出中 · ${this.state.snapshot.detail}`;
+					return `${TUI_SYMBOLS.active} 工具输出中 · ${this.state.snapshot.detail}`;
 				}
-				if (activity) return `● ${activity}`;
-				return this.state.snapshot.detail ? `● 执行工具中 · ${this.state.snapshot.detail}` : "● 等待中";
+				if (activity) return `${TUI_SYMBOLS.active} ${activity}`;
+				return this.state.snapshot.detail
+					? `${TUI_SYMBOLS.active} 执行工具中 · ${this.state.snapshot.detail}`
+					: `${TUI_SYMBOLS.active} 等待中`;
 			case "recovering":
-				return activity ? `↻ ${activity}` : "↻ 正在恢复";
+				return activity ? `${TUI_SYMBOLS.retry} ${activity}` : `${TUI_SYMBOLS.retry} 正在恢复`;
 			case "starting":
-				return activity ? `● ${activity}` : "● 启动中";
+				return activity ? `${TUI_SYMBOLS.active} ${activity}` : `${TUI_SYMBOLS.active} 启动中`;
 			case "queued":
-				return activity ? `● ${activity}` : "● 排队中";
+				return activity ? `${TUI_SYMBOLS.active} ${activity}` : `${TUI_SYMBOLS.active} 排队中`;
 			case "running":
-				return activity ? `● ${activity}` : "● 正在运行";
+				return activity ? `${TUI_SYMBOLS.active} ${activity}` : `${TUI_SYMBOLS.active} 正在运行`;
 			case "idle":
 				return RUN_STATE_LABELS.idle;
 		}
@@ -160,16 +148,17 @@ export class TaskStatusBar implements Component {
 
 	private colorize(text: string): string {
 		if (!this.state) return text;
+		if (this.state.snapshot.state === "completed") return theme.fg("success", text);
+		if (this.state.snapshot.state === "failed") return theme.fg("error", text);
+		if (this.state.snapshot.state === "timed_out" || this.state.snapshot.state === "cancelled") {
+			return theme.fg("warning", text);
+		}
+		if (this.state.snapshot.state === "blocked" || this.state.snapshot.state === "interrupted") {
+			return theme.fg("warning", text);
+		}
 		if (this.state.phase === "awaiting_decision") return theme.fg("warning", text);
-		if (this.state.phase === "completion" && !this.isTerminalNonSuccess()) return theme.fg("accent", text);
+		if (this.state.phase === "completion") return theme.fg("accent", text);
 		switch (this.state.snapshot.state) {
-			case "completed":
-				return theme.fg("success", text);
-			case "failed":
-				return theme.fg("error", text);
-			case "timed_out":
-			case "cancelled":
-				return theme.fg("warning", text);
 			case "recovering":
 				return theme.fg("warning", text);
 			default:

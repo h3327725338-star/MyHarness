@@ -15,6 +15,7 @@ export { convertToLlm } from "./agent/runtime/messages.ts";
 export {
 	createInitialRunSnapshot,
 	isRunStateActive,
+	isRunStateTerminal,
 	RUN_STATE_LABELS,
 	type RunState,
 	type RunStateSnapshot,

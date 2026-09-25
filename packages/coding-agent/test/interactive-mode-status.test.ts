@@ -545,8 +545,13 @@ describe("InteractiveMode completion gate", () => {
 		const retain = vi.fn(() => ({ ok: true }));
 		const fakeThis: any = {
 			gitCheckpointRecoveryActive: false,
+			taskDecisionActive: false,
+			completionWorkflowActive: false,
+			completionWorkflowPromise: undefined,
+			taskSettlementPending: false,
 			session: {
 				getGitCheckpoint: () => checkpoint,
+				getRunStateSnapshot: () => ({ state: "idle", activity: "", lastActivityAt: Date.now() }),
 				retainGitCheckpointWithoutVerification: retain,
 			},
 			showExtensionSelector: vi.fn(async () => undefined),
@@ -559,6 +564,8 @@ describe("InteractiveMode completion gate", () => {
 		expect(retain).not.toHaveBeenCalled();
 		expect(checkpoint.status).toBe("created");
 		expect(fakeThis.showStatus).toHaveBeenCalledWith(expect.stringContaining("未完成恢复决策"));
+		fakeThis.getTaskLifecyclePhase = (InteractiveMode as any).prototype.getTaskLifecyclePhase;
+		expect(fakeThis.getTaskLifecyclePhase()).toBe("idle");
 	});
 
 	test("keeps the checkpoint open when the user keeps modifications on a non-terminal path", async () => {

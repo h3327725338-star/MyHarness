@@ -16,10 +16,8 @@ export interface TaskLifecycleInputs {
 	completionWorkflowActive: boolean;
 	/** Whether a completion workflow promise still exists. */
 	completionWorkflowPending: boolean;
-	/** Whether a Save/Restore-style user decision is currently open. */
+	/** Whether a Save/Restore-style user decision control is currently open. */
 	taskDecisionActive: boolean;
-	/** Whether a previous decision was cancelled and must be completed before a new task. */
-	checkpointDecisionPending?: boolean;
 }
 
 /**
@@ -27,7 +25,7 @@ export interface TaskLifecycleInputs {
  * Decision prompts have highest priority so they are never rendered as busy.
  */
 export function deriveTaskLifecyclePhase(inputs: TaskLifecycleInputs): TaskLifecyclePhase {
-	if (inputs.taskDecisionActive || inputs.checkpointDecisionPending) return "awaiting_decision";
+	if (inputs.taskDecisionActive) return "awaiting_decision";
 	if (inputs.completionWorkflowActive || inputs.completionWorkflowPending) return "completion";
 	if (inputs.agentIsActive ?? inputs.agentIsStreaming ?? false) return "main_agent";
 	return "idle";

@@ -1,5 +1,6 @@
 import { type Component, Loader, type TUI } from "@myharness/tui";
 import type { WorkingIndicatorOptions } from "../../../extensions/compat/types.ts";
+import { formatDuration } from "../status-format.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { keyText } from "./keybinding-hints.ts";
@@ -14,13 +15,6 @@ export type StatusIndicatorKind =
 	| "gitCommit";
 
 const STATUS_ANIMATION_INTERVAL_MS = 250;
-
-function formatDuration(durationMs: number): string {
-	const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
 
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;

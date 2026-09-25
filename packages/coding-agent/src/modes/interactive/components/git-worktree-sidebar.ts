@@ -7,6 +7,7 @@ import {
 	matchesKey,
 	type OverlayHandle,
 	type TUI,
+	TUI_SYMBOLS,
 	truncateToWidth,
 	visibleWidth,
 } from "@myharness/tui";
@@ -436,7 +437,7 @@ export class GitWorktreeSidebarComponent implements Component, Focusable {
 	private renderRow(worktree: GitWorktree, selected: boolean, width: number): string {
 		const cursor = selected ? theme.fg("accent", "› ") : "  ";
 		const current = this.isCurrentWorktree(worktree);
-		const currentMark = current ? theme.fg("accent", "● ") : "  ";
+		const currentMark = current ? theme.fg("accent", `${TUI_SYMBOLS.active} `) : "  ";
 		const branchLabel = worktree.isMain
 			? `${worktree.branch ?? "main"} · stable`
 			: (worktree.branch ?? "Detached HEAD");

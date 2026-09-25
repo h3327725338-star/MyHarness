@@ -1,3 +1,4 @@
+import { TUI_SPACING, TUI_SYMBOLS } from "../design-tokens.ts";
 import { fuzzyFilter } from "../fuzzy.ts";
 import { getKeybindings } from "../keybindings.ts";
 import type { Component, Focusable } from "../tui.ts";
@@ -166,7 +167,7 @@ export class SettingsList implements Component, Focusable {
 			44,
 			Math.max(...this.items.map((item) => visibleWidth(this.getDisplayValue(item)))),
 		);
-		const inlineDescriptionSeparator = "  ";
+		const inlineDescriptionSeparator = " ".repeat(TUI_SPACING.inline);
 		const inlineValueWidth = Math.max(8, maxValueWidth);
 		const inlineDescriptionMinWidth = 16;
 		const showInlineDescriptions =
@@ -316,15 +317,15 @@ export class SettingsList implements Component, Focusable {
 	}
 
 	private getDisplayValue(item: SettingItem): string {
-		if (item.disabled) return item.currentValue ? `${item.currentValue}  ⊘` : "Disabled";
+		if (item.disabled) return item.currentValue ? `${item.currentValue}  ${TUI_SYMBOLS.disabled}` : "Disabled";
 		const interaction = this.getInteraction(item);
 		if (interaction === "navigate" || interaction === "select") {
-			return item.currentValue ? `${item.currentValue}  ›` : "›";
+			return item.currentValue ? `${item.currentValue}  ${TUI_SYMBOLS.navigate}` : TUI_SYMBOLS.navigate;
 		}
 		if (interaction === "action") {
-			return item.currentValue ? `${item.currentValue}  ▶` : "▶";
+			return item.currentValue ? `${item.currentValue}  ${TUI_SYMBOLS.action}` : TUI_SYMBOLS.action;
 		}
-		if (interaction === "cycle") return `${item.currentValue}  ↻`;
+		if (interaction === "cycle") return `${item.currentValue}  ${TUI_SYMBOLS.cycle}`;
 		return item.currentValue;
 	}
 

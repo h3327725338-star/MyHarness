@@ -7,6 +7,7 @@ import {
 	Spacer,
 	Text,
 	type TUI,
+	TUI_SYMBOLS,
 	truncateToWidth,
 } from "@myharness/tui";
 import type { ToolDefinition } from "../../../extensions/compat/types.ts";
@@ -425,7 +426,7 @@ export class ToolExecutionComponent extends Container {
 
 	private renderCompact(width: number): string[] {
 		const isSettled = this.result !== undefined && !this.isPartial;
-		const marker = process.platform === "darwin" ? "⏺" : "●";
+		const marker = process.platform === "darwin" ? "⏺" : TUI_SYMBOLS.active;
 		const markerColor = !isSettled
 			? (text: string) => theme.fg(this.executionStarted ? "accent" : "muted", text)
 			: this.result?.isError
@@ -433,7 +434,11 @@ export class ToolExecutionComponent extends Container {
 				: (text: string) => theme.fg("success", text);
 		const call = theme.fg("toolTitle", theme.bold(this.formatCompactCall()));
 		const result = theme.fg(this.result?.isError ? "error" : "toolOutput", this.formatCompactResult());
-		return new Text(`${markerColor(marker)} ${call}\n  ${theme.fg("muted", "⎿")} ${result}`, 1, 0).render(width);
+		return new Text(
+			`${markerColor(marker)} ${call}\n  ${theme.fg("muted", TUI_SYMBOLS.result)} ${result}`,
+			1,
+			0,
+		).render(width);
 	}
 
 	private renderCompactAgent(width: number): string[] {
@@ -448,7 +453,7 @@ export class ToolExecutionComponent extends Container {
 		const hasError = Boolean(
 			this.result?.isError || results.some((result) => result.status !== "running" && result.status !== "completed"),
 		);
-		const marker = process.platform === "darwin" ? "⏺" : "●";
+		const marker = process.platform === "darwin" ? "⏺" : TUI_SYMBOLS.active;
 		const markerColor = !isSettled
 			? (text: string) => theme.fg(this.executionStarted ? "accent" : "muted", text)
 			: hasError
@@ -464,7 +469,7 @@ export class ToolExecutionComponent extends Container {
 			const stats = task ? this.formatCompactAgentStats(task) : "";
 			const suffix = stats ? ` · ${stats}` : "";
 			return new Text(
-				`${markerColor(marker)} ${title}${expandHint}\n  ${theme.fg("muted", "⎿")} ${this.colorAgentStatus(task, `${status}${suffix}`)}`,
+				`${markerColor(marker)} ${title}${expandHint}\n  ${theme.fg("muted", TUI_SYMBOLS.result)} ${this.colorAgentStatus(task, `${status}${suffix}`)}`,
 				1,
 				0,
 			).render(width);
@@ -483,8 +488,8 @@ export class ToolExecutionComponent extends Container {
 		for (let index = 0; index < taskCount; index++) {
 			const task = results[index];
 			const isLast = index === taskCount - 1;
-			const branch = isLast ? "└─" : "├─";
-			const continuation = isLast ? "   " : "│  ";
+			const branch = isLast ? TUI_SYMBOLS.treeLastBranch : TUI_SYMBOLS.treeBranch;
+			const continuation = isLast ? TUI_SYMBOLS.treeLastContinuation : TUI_SYMBOLS.treeContinuation;
 			const description = this.truncate(
 				String(task?.description ?? taskArgs[index]?.description ?? `探索任务 ${index + 1}`),
 				72,
@@ -494,7 +499,9 @@ export class ToolExecutionComponent extends Container {
 				`   ${theme.fg("muted", branch)} ${theme.bold(description)}${stats ? theme.fg("muted", ` · ${stats}`) : ""}`,
 			);
 			const status = this.formatCompactAgentStatus(task, isSettled && completed >= taskCount);
-			lines.push(`   ${theme.fg("muted", `${continuation}⎿`)} ${this.colorAgentStatus(task, status)}`);
+			lines.push(
+				`   ${theme.fg("muted", `${continuation}${TUI_SYMBOLS.result}`)} ${this.colorAgentStatus(task, status)}`,
+			);
 		}
 
 		return new Text(lines.join("\n"), 1, 0).render(width);
@@ -513,7 +520,7 @@ export class ToolExecutionComponent extends Container {
 					(phase) => phase.status === "failed" || phase.status === "timeout" || phase.status === "cancelled",
 				),
 		);
-		const marker = process.platform === "darwin" ? "⏺" : "●";
+		const marker = process.platform === "darwin" ? "⏺" : TUI_SYMBOLS.active;
 		const markerColor = !isSettled
 			? (text: string) => theme.fg(this.executionStarted ? "accent" : "muted", text)
 			: hasError
@@ -536,8 +543,8 @@ export class ToolExecutionComponent extends Container {
 			const phase = phases[index];
 			const phaseArg = phaseArgs[index];
 			const isLast = index === phaseCount - 1;
-			const branch = isLast ? "└─" : "├─";
-			const continuation = isLast ? "   " : "│  ";
+			const branch = isLast ? TUI_SYMBOLS.treeLastBranch : TUI_SYMBOLS.treeBranch;
+			const continuation = isLast ? TUI_SYMBOLS.treeLastContinuation : TUI_SYMBOLS.treeContinuation;
 			const phaseName = truncateToWidth(
 				String(phase?.name ?? phaseArg?.name ?? `阶段 ${index + 1}`),
 				Math.max(12, width - 16),
@@ -560,7 +567,9 @@ export class ToolExecutionComponent extends Container {
 			const taskCount = Math.max(tasks.length, taskSpecs.length);
 			if (taskCount === 0) {
 				const statusText = this.formatPhaseStatusText(phaseStatus, index);
-				lines.push(`   ${theme.fg("muted", `${continuation}⎿`)} ${this.colorPhaseStatus(phaseStatus, statusText)}`);
+				lines.push(
+					`   ${theme.fg("muted", `${continuation}${TUI_SYMBOLS.result}`)} ${this.colorPhaseStatus(phaseStatus, statusText)}`,
+				);
 				continue;
 			}
 
@@ -568,8 +577,8 @@ export class ToolExecutionComponent extends Container {
 				const task = tasks[taskIndex];
 				const spec = taskSpecs[taskIndex];
 				const taskIsLast = taskIndex === taskCount - 1;
-				const taskBranch = taskIsLast ? "└─" : "├─";
-				const taskContinuation = taskIsLast ? "   " : "│  ";
+				const taskBranch = taskIsLast ? TUI_SYMBOLS.treeLastBranch : TUI_SYMBOLS.treeBranch;
+				const taskContinuation = taskIsLast ? TUI_SYMBOLS.treeLastContinuation : TUI_SYMBOLS.treeContinuation;
 				const description = truncateToWidth(
 					String(task?.description ?? spec?.description ?? `任务 ${taskIndex + 1}`),
 					Math.max(12, width - 42),
@@ -585,12 +594,12 @@ export class ToolExecutionComponent extends Container {
 				const colored = task
 					? this.colorAgentStatus(task, taskStatus)
 					: this.colorPhaseStatus(phaseStatus, taskStatus);
-				lines.push(`   ${theme.fg("muted", `${continuation}${taskContinuation}⎿`)} ${colored}`);
+				lines.push(`   ${theme.fg("muted", `${continuation}${taskContinuation}${TUI_SYMBOLS.result}`)} ${colored}`);
 			}
 		}
 
 		if (phaseCount === 0) {
-			lines.push(`  ${theme.fg("muted", "⎿")} ${this.executionStarted ? "初始化中…" : "等待中…"}`);
+			lines.push(`  ${theme.fg("muted", TUI_SYMBOLS.result)} ${this.executionStarted ? "初始化中…" : "等待中…"}`);
 		}
 		return new Text(lines.join("\n"), 1, 0).render(width);
 	}
@@ -912,7 +921,7 @@ export class ReadSearchToolGroupComponent extends Container {
 		}).length;
 		const allSettled = tools.every((tool) => tool.isSettled());
 		const hasError = tools.some((tool) => tool.hasError());
-		const marker = process.platform === "darwin" ? "⏺" : "●";
+		const marker = process.platform === "darwin" ? "⏺" : TUI_SYMBOLS.active;
 		const markerColor = !allSettled
 			? (value: string) => theme.fg("accent", value)
 			: hasError
@@ -923,7 +932,7 @@ export class ReadSearchToolGroupComponent extends Container {
 		if (searchCount > 0) parts.push(`searched for ${searchCount} pattern${searchCount === 1 ? "" : "s"}`);
 		const status = allSettled ? (hasError ? "部分失败" : "完成") : "运行中…";
 		const title = parts.join(", ");
-		const text = `${markerColor(marker)} ${theme.fg("toolTitle", theme.bold(title))}  ${keyHint("app.tools.expand", "展开")}\n  ${theme.fg("muted", "⎿")} ${theme.fg(hasError ? "error" : "muted", status)}`;
+		const text = `${markerColor(marker)} ${theme.fg("toolTitle", theme.bold(title))}  ${keyHint("app.tools.expand", "展开")}\n  ${theme.fg("muted", TUI_SYMBOLS.result)} ${theme.fg(hasError ? "error" : "muted", status)}`;
 		return new Text(text, 1, 0).render(width);
 	}
 }

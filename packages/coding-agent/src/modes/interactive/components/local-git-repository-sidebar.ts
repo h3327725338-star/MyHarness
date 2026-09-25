@@ -7,6 +7,7 @@ import {
 	matchesKey,
 	type OverlayHandle,
 	type TUI,
+	TUI_SYMBOLS,
 	truncateToWidth,
 	visibleWidth,
 } from "@myharness/tui";
@@ -446,7 +447,7 @@ export class LocalGitRepositorySidebarComponent implements Component, Focusable 
 
 		const { repository, status } = row.view;
 		const current = this.isCurrentRepository(repository);
-		const currentMark = current ? theme.fg("accent", "● ") : "  ";
+		const currentMark = current ? theme.fg("accent", `${TUI_SYMBOLS.active} `) : "  ";
 		const statusText =
 			status.kind === "repository"
 				? "Git"

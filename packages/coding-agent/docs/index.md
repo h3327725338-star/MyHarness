@@ -32,6 +32,7 @@ Sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider a
 - [Git Worktrees](worktrees.md) — managing development worktrees through `/git`.
 - [Keybindings](keybindings.md) — default shortcuts and customization.
 - [Interaction guidelines](interaction-guidelines.md) — the shared contract for settings, navigation, actions, dialogs, feedback, and keyboard behavior.
+- [TUI design system](tui-design-system.md) — shared visual hierarchy, tokens, status projection, and terminal interaction rules.
 
 ## Extensibility
 

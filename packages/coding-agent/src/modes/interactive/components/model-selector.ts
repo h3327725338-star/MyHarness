@@ -1,5 +1,15 @@
 import { type Model, modelsAreEqual } from "@myharness/ai";
-import { Container, type Focusable, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@myharness/tui";
+import {
+	Container,
+	type Focusable,
+	fuzzyFilter,
+	getKeybindings,
+	Input,
+	Spacer,
+	Text,
+	type TUI,
+	TUI_SYMBOLS,
+} from "@myharness/tui";
 import type { SettingsManager } from "../../../config/settings/index.ts";
 import type { ModelRuntime } from "../../../providers/runtime/index.ts";
 import { getModelSelectorSearchText } from "../model-search.ts";
@@ -300,15 +310,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 			let line = "";
 			if (isSelected) {
-				const prefix = theme.fg("accent", "→ ");
+				const prefix = theme.fg("accent", TUI_SYMBOLS.selected);
 				const modelText = `${item.id}`;
 				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
+				const checkmark = isCurrent ? theme.fg("success", ` ${TUI_SYMBOLS.success}`) : "";
 				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${checkmark}${descriptionText}`;
 			} else {
 				const modelText = `  ${item.id}`;
 				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
+				const checkmark = isCurrent ? theme.fg("success", ` ${TUI_SYMBOLS.success}`) : "";
 				line = `${modelText} ${providerBadge}${checkmark}${descriptionText}`;
 			}
 
