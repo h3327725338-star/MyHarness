@@ -3325,13 +3325,15 @@ export class SettingsSelectorComponent extends Container {
 						getWebSearchConfig(),
 						(settings) => {
 							const current = getWebSearchConfig();
-							config.webSearch = {
+							const next: ResolvedWebSearchSettings = {
 								...current,
 								...settings,
+								engineMode: settings.engineMode === "selected" ? "selected" : "auto",
 								parallelPages: { ...current.parallelPages, ...settings.parallelPages },
 								searchRounds: { ...current.searchRounds, ...settings.searchRounds },
 							};
-							callbacks.onWebSearchChange?.(config.webSearch);
+							config.webSearch = next;
+							callbacks.onWebSearchChange?.(next);
 						},
 						dependencies,
 						done,

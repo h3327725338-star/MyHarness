@@ -7,11 +7,18 @@ import type {
 	WebFetchedPage,
 	WebFetchResponse,
 	WebSearchFailure,
+	WebSearchFailureCode,
 	WebSearchResponse,
 	WebSearchResult,
 	WebSearchSettingsSource,
 } from "./types.ts";
-import { canonicalizeHttpUrl, isFreshnessSensitiveQuery, isHostnameAllowed, validatePublicHttpUrl } from "./url.ts";
+import {
+	canonicalizeHttpUrl,
+	isFreshnessSensitiveQuery,
+	isHostnameAllowed,
+	normalizeAllowedDomain,
+	validatePublicHttpUrl,
+} from "./url.ts";
 
 export type WebSearchErrorCode = WebSearchFailure["code"];
 
@@ -37,6 +44,27 @@ export const WEB_SEARCH_LIMITS = {
 	taskPollIntervalMs: 500,
 } as const;
 
+export const WEB_SEARCH_E2E_QUERY = "SearXNG official documentation";
+
+export interface WebSearchE2EPhase {
+	ok: boolean;
+	durationMs: number;
+	message: string;
+	code?: WebSearchFailureCode;
+	url?: string;
+}
+
+export interface WebSearchE2EResult {
+	ok: boolean;
+	query: string;
+	search: WebSearchE2EPhase;
+	fetch: WebSearchE2EPhase;
+	extraction: WebSearchE2EPhase;
+	totalDurationMs: number;
+	url?: string;
+	diagnostics: WebSearchFailure[];
+}
+
 export interface WebSearchServiceOptions {
 	settings: WebSearchSettingsSource;
 	sessionManager?: SessionManager;
@@ -51,11 +79,15 @@ export interface SearchRequest {
 	timeRange?: "day" | "month" | "year";
 	maxResults?: number;
 	fresh?: boolean;
+	/** Optional per-research narrowing; it can never broaden the Settings scope. */
+	allowedDomains?: string[];
 }
 
 export interface FetchRequest {
 	urls: string[];
 	fresh?: boolean;
+	/** Optional per-research narrowing; it can never broaden the Settings scope. */
+	allowedDomains?: string[];
 }
 
 interface RawSearchResult {
@@ -240,12 +272,21 @@ export class WebSearchService {
 		return this.options.settings.getWebSearchSettings();
 	}
 
-	private isCachedPageAllowed(page: WebFetchedPage, settings: ResolvedWebSearchSettings): boolean {
+	/** Read the current resolved settings without exposing the settings manager itself. */
+	getSettings(): ResolvedWebSearchSettings {
+		return this.settings();
+	}
+
+	private isCachedPageAllowed(
+		page: WebFetchedPage,
+		settings: ResolvedWebSearchSettings,
+		researchDomains?: string[],
+	): boolean {
 		const finalUrl = typeof page.finalUrl === "string" ? page.finalUrl : undefined;
 		if (!finalUrl) return false;
 		const validation = validatePublicHttpUrl(finalUrl);
 		if (!validation.ok || !validation.hostname) return false;
-		return settings.scope !== "allowlist" || isHostnameAllowed(validation.hostname, settings.allowedDomains);
+		return this.isAllowedByScope(validation.hostname, settings, researchDomains);
 	}
 
 	private ensureEnabled(): ResolvedWebSearchSettings {
@@ -368,6 +409,20 @@ export class WebSearchService {
 		};
 	}
 
+	private normalizeResearchDomains(domains: string[] | undefined): string[] | undefined {
+		if (!domains) return undefined;
+		return [...new Set(domains.map(normalizeAllowedDomain).filter((domain): domain is string => Boolean(domain)))];
+	}
+
+	private isAllowedByScope(
+		hostname: string,
+		settings: ResolvedWebSearchSettings,
+		researchDomains?: string[],
+	): boolean {
+		if (settings.scope === "allowlist" && !isHostnameAllowed(hostname, settings.allowedDomains)) return false;
+		return researchDomains === undefined || isHostnameAllowed(hostname, researchDomains);
+	}
+
 	private beginSearchRound(settings: ResolvedWebSearchSettings): number {
 		if (this.searchRound === 0) this.searchRound = 1;
 		else if (this.completedFetchInRound) {
@@ -458,8 +513,18 @@ export class WebSearchService {
 		results: RawSearchResult[],
 		maxResults: number,
 		settings: ResolvedWebSearchSettings,
+		researchDomains?: string[],
 	): WebSearchResult[] {
-		const grouped = new Map<string, RawSearchResult & { occurrences: number; score: number }>();
+		const grouped = new Map<
+			string,
+			RawSearchResult & {
+				occurrences: number;
+				querySet: Set<string>;
+				engineSet: Set<string>;
+				domain: string;
+				score: number;
+			}
+		>();
 		for (const result of results) {
 			let key: string;
 			try {
@@ -470,26 +535,89 @@ export class WebSearchService {
 			const existing = grouped.get(key);
 			if (existing) {
 				existing.occurrences += 1;
-				existing.score += 16;
+				existing.querySet.add(result.query);
+				for (const engine of result.engines) existing.engineSet.add(engine);
+				existing.score += 10;
 				if (result.engineRank < existing.engineRank) existing.engineRank = result.engineRank;
 				if (!existing.snippet && result.snippet) existing.snippet = result.snippet;
 				for (const engine of result.engines) if (!existing.engines.includes(engine)) existing.engines.push(engine);
+				if (!existing.publishedAt && result.publishedAt) existing.publishedAt = result.publishedAt;
 				continue;
 			}
 			const validation = validatePublicHttpUrl(result.url);
 			if (!validation.ok || !validation.hostname) continue;
-			if (settings.scope === "allowlist" && !isHostnameAllowed(validation.hostname, settings.allowedDomains))
-				continue;
+			if (!this.isAllowedByScope(validation.hostname, settings, researchDomains)) continue;
 			const freshnessScore =
 				result.publishedAt && !Number.isNaN(Date.parse(result.publishedAt))
-					? Math.max(0, 10 - Math.floor((this.now() - Date.parse(result.publishedAt)) / (24 * 60 * 60 * 1_000)))
+					? Math.max(
+							0,
+							18 - Math.floor((this.now() - Date.parse(result.publishedAt)) / (7 * 24 * 60 * 60 * 1_000)),
+						)
 					: 0;
-			grouped.set(key, { ...result, occurrences: 1, score: 100 - result.engineRank + freshnessScore });
+			const titleAndSnippet = `${result.title} ${result.snippet}`.toLowerCase();
+			const queryTerms = result.query
+				.toLowerCase()
+				.split(/[^\p{L}\p{N}]+/u)
+				.filter((term) => term.length >= 3);
+			const relevanceScore = queryTerms.filter((term) => titleAndSnippet.includes(term)).length * 5;
+			const sourceQualityScore = /\b(?:docs?|developer|api|reference|manual|official)\b/iu.test(result.url) ? 12 : 0;
+			const contentTypeScore = /(?:\/docs?\/|\/api\/|\/reference\/|\.gov(?:\.|\/)|\.edu(?:\.|\/))/iu.test(result.url)
+				? 8
+				: 0;
+			grouped.set(key, {
+				...result,
+				occurrences: 1,
+				querySet: new Set([result.query]),
+				engineSet: new Set(result.engines),
+				domain: validation.hostname,
+				score: 100 - result.engineRank + freshnessScore + relevanceScore + sourceQualityScore + contentTypeScore,
+			});
 		}
-		return [...grouped.values()]
-			.sort((a, b) => b.score - a.score || a.engineRank - b.engineRank || a.title.localeCompare(b.title))
+		const domainCounts = new Map<string, number>();
+		for (const result of grouped.values())
+			domainCounts.set(result.domain, (domainCounts.get(result.domain) ?? 0) + 1);
+		const ranked = [...grouped.values()]
+			.map((result) => ({
+				...result,
+				score:
+					result.score +
+					Math.max(0, 12 - (domainCounts.get(result.domain) ?? 1) * 2) +
+					Math.max(0, result.engineSet.size - 1) * 6,
+			}))
+			.sort((a, b) => b.score - a.score || a.engineRank - b.engineRank || a.title.localeCompare(b.title));
+		const queries = [...new Set(results.map((result) => result.query))];
+		const selected = new Set<string>();
+		const coverage: typeof ranked = [];
+		for (const query of queries) {
+			const match = ranked.find(
+				(result) => !selected.has(canonicalizeHttpUrl(result.url)) && result.querySet.has(query),
+			);
+			if (!match) continue;
+			selected.add(canonicalizeHttpUrl(match.url));
+			coverage.push(match);
+		}
+		for (const result of ranked) {
+			if (coverage.length >= maxResults) break;
+			const key = canonicalizeHttpUrl(result.url);
+			if (selected.has(key)) continue;
+			selected.add(key);
+			coverage.push(result);
+		}
+		return coverage
 			.slice(0, maxResults)
-			.map(({ occurrences: _occurrences, score: _score, ...result }) => result);
+			.map(
+				({
+					occurrences: _occurrences,
+					querySet: _querySet,
+					engineSet: _engineSet,
+					domain: _domain,
+					score: _score,
+					...result
+				}) => ({
+					...result,
+					queries: [..._querySet],
+				}),
+			);
 	}
 
 	async search(request: SearchRequest, signal?: AbortSignal): Promise<WebSearchResponse> {
@@ -503,6 +631,7 @@ export class WebSearchService {
 		const maxResults = clampInteger(request.maxResults, 10, 1, WEB_SEARCH_LIMITS.maxResultsPerCall);
 		const resolvedEngines = await this.resolveEngines(request.engines, settings, signal);
 		const fresh = request.fresh === true || queries.some(isFreshnessSensitiveQuery);
+		const researchDomains = this.normalizeResearchDomains(request.allowedDomains);
 		const cacheKey = sha256(
 			JSON.stringify({
 				endpoint: settings.searxngUrl,
@@ -512,6 +641,7 @@ export class WebSearchService {
 				maxResults,
 				scope: settings.scope,
 				domains: settings.allowedDomains,
+				researchDomains,
 			}),
 		);
 		const cached = await this.cache.get<WebSearchResponse>("search", cacheKey, settings.searchCacheTtlMs, fresh);
@@ -539,6 +669,7 @@ export class WebSearchService {
 			perQuery.flatMap((response) => response.results),
 			maxResults,
 			settings,
+			researchDomains,
 		);
 		if (results.length === 0 && failures.length === queries.length) {
 			throw new WebSearchError(failures[0]?.code ?? "unavailable", failures[0]?.message ?? "所有搜索请求均失败。");
@@ -550,11 +681,15 @@ export class WebSearchService {
 			availableEngines: resolvedEngines.availableEngines,
 			searchRound: round,
 		};
-		await this.cache.set("search", cacheKey, response);
+		if (results.length > 0) await this.cache.set("search", cacheKey, response);
 		return response;
 	}
 
-	private async crawlOne(url: string, signal?: AbortSignal): Promise<{ page: WebFetchedPage; fullMarkdown: string }> {
+	private async crawlOne(
+		url: string,
+		signal?: AbortSignal,
+		researchDomains?: string[],
+	): Promise<{ page: WebFetchedPage; fullMarkdown: string }> {
 		const settings = this.settings();
 		const crawlUrl = normalizeEndpoint(settings.crawl4aiUrl, "crawl", "Crawl4AI");
 		const payload = await this.requestJson(
@@ -580,6 +715,7 @@ export class WebSearchService {
 		);
 		let completedPayload = payload;
 		if (isRecord(payload) && typeof payload.task_id === "string") {
+			let taskCompleted = false;
 			for (let attempt = 0; attempt < WEB_SEARCH_LIMITS.maxTaskPolls; attempt += 1) {
 				const taskPayload = await this.requestJson(
 					normalizeEndpoint(settings.crawl4aiUrl, `task/${encodeURIComponent(payload.task_id)}`, "Crawl4AI"),
@@ -589,11 +725,15 @@ export class WebSearchService {
 				);
 				completedPayload = taskPayload;
 				const status = isRecord(taskPayload) ? stringValue(taskPayload.status)?.toLowerCase() : undefined;
-				if (status === "completed" || (isRecord(taskPayload) && Array.isArray(taskPayload.results))) break;
+				if (status === "completed" || (isRecord(taskPayload) && Array.isArray(taskPayload.results))) {
+					taskCompleted = true;
+					break;
+				}
 				if (status === "failed" || status === "error")
 					throw new WebSearchError("unavailable", "Crawl4AI 页面读取失败。");
 				await waitForDelay(WEB_SEARCH_LIMITS.taskPollIntervalMs, signal);
 			}
+			if (!taskCompleted) throw new WebSearchError("fetch_timeout", "Crawl4AI 页面任务轮询超时。");
 		}
 		const record =
 			resultArray(completedPayload).find((candidate) => candidate.success !== false) ??
@@ -603,17 +743,15 @@ export class WebSearchService {
 			throw new WebSearchError("unavailable", stringValue(record.error_message) ?? "Crawl4AI 页面读取失败。");
 		}
 		const markdown = extractMarkdown(record);
-		if (!markdown) throw new WebSearchError("invalid_response", "Crawl4AI 未返回 Markdown 内容。");
+		if (markdown === undefined) throw new WebSearchError("invalid_response", "Crawl4AI 未返回 Markdown 内容。");
+		if (!markdown) throw new WebSearchError("empty_content", "Crawl4AI 返回了空的页面正文。");
 		const finalUrl = stringValue(record.redirected_url) ?? stringValue(record.url) ?? url;
 		const validation = validatePublicHttpUrl(finalUrl);
 		if (!validation.ok || !validation.url || !validation.hostname) {
 			throw new WebSearchError("blocked", validation.message ?? "Crawl4AI 返回了不安全的最终 URL。");
 		}
 		const settingsForScope = this.settings();
-		if (
-			settingsForScope.scope === "allowlist" &&
-			!isHostnameAllowed(validation.hostname, settingsForScope.allowedDomains)
-		) {
+		if (!this.isAllowedByScope(validation.hostname, settingsForScope, researchDomains)) {
 			throw new WebSearchError("blocked", "页面重定向到了 Website Scope 之外的域名。");
 		}
 		return {
@@ -624,6 +762,7 @@ export class WebSearchService {
 
 	async fetch(request: FetchRequest, signal?: AbortSignal): Promise<WebFetchResponse> {
 		const settings = this.ensureEnabled();
+		const researchDomains = this.normalizeResearchDomains(request.allowedDomains);
 		const uniqueUrls = [...new Map(request.urls.map((url) => [url, url])).values()];
 		const failures: WebSearchFailure[] = [];
 		const normalizedUrls = new Set<string>();
@@ -633,7 +772,7 @@ export class WebSearchService {
 				failures.push({ url: input, code: "blocked", message: validation.message ?? "URL 无效或被安全策略阻止。" });
 				continue;
 			}
-			if (settings.scope === "allowlist" && !isHostnameAllowed(validation.hostname, settings.allowedDomains)) {
+			if (!this.isAllowedByScope(validation.hostname, settings, researchDomains)) {
 				failures.push({ url: input, code: "blocked", message: "URL 不在 Website Scope allowlist 中。" });
 				continue;
 			}
@@ -655,11 +794,12 @@ export class WebSearchService {
 			selectedUrls,
 			WEB_SEARCH_LIMITS.maxFetchConcurrency,
 			async (url) => {
-				const cacheKey = sha256(JSON.stringify({ endpoint: settings.crawl4aiUrl, url }));
+				const cacheKey = sha256(JSON.stringify({ endpoint: settings.crawl4aiUrl, url, researchDomains }));
 				const cached = await this.cache.get<WebFetchedPage>("fetch", cacheKey, settings.fetchCacheTtlMs, fresh);
-				if (cached && this.isCachedPageAllowed(cached, this.settings())) return { ...cached, cacheHit: true };
+				if (cached && this.isCachedPageAllowed(cached, this.settings(), researchDomains))
+					return { ...cached, cacheHit: true };
 				try {
-					const fetched = await this.crawlOne(url, signal);
+					const fetched = await this.crawlOne(url, signal, researchDomains);
 					await this.cache.set("fetch", cacheKey, fetched.page);
 					return fetched.page;
 				} catch (error) {
@@ -707,6 +847,96 @@ export class WebSearchService {
 			}
 		})();
 		return { searxng, crawl4ai };
+	}
+
+	/** Run the complete search -> fetch -> extraction -> evidence chunk smoke path for the Settings UI. */
+	async runE2ETest(signal?: AbortSignal): Promise<WebSearchE2EResult> {
+		const startedAt = this.now();
+		const diagnostics: WebSearchFailure[] = [];
+		let searchPhase: WebSearchE2EPhase = { ok: false, durationMs: 0, message: "未执行" };
+		let fetchPhase: WebSearchE2EPhase = { ok: false, durationMs: 0, message: "未执行" };
+		let extractionPhase: WebSearchE2EPhase = { ok: false, durationMs: 0, message: "未执行" };
+		let selectedUrl: string | undefined;
+		try {
+			const searchStartedAt = this.now();
+			const searchResponse = await this.search(
+				{ queries: [WEB_SEARCH_E2E_QUERY], maxResults: 5, fresh: true },
+				signal,
+			);
+			searchPhase = {
+				ok: searchResponse.results.length > 0,
+				durationMs: Math.max(0, this.now() - searchStartedAt),
+				message:
+					searchResponse.results.length > 0 ? `返回 ${searchResponse.results.length} 个结果` : "没有返回结果",
+			};
+			diagnostics.push(...searchResponse.failures);
+			const first = searchResponse.results[0];
+			if (!first) {
+				const failure: WebSearchFailure = { code: "no_results", message: "E2E 搜索没有可读取的 URL。" };
+				diagnostics.push(failure);
+				searchPhase = { ...searchPhase, code: failure.code, message: failure.message };
+			} else {
+				selectedUrl = first.url;
+				const fetchStartedAt = this.now();
+				const fetchResponse = await this.fetch({ urls: [first.url], fresh: true }, signal);
+				fetchPhase = {
+					ok: fetchResponse.pages.length > 0,
+					durationMs: Math.max(0, this.now() - fetchStartedAt),
+					message: fetchResponse.pages.length > 0 ? "返回页面正文" : "页面读取失败",
+				};
+				diagnostics.push(...fetchResponse.failures);
+				const page = fetchResponse.pages[0];
+				const extractionStartedAt = this.now();
+				const markdown = page?.markdown?.trim() ?? "";
+				const contentLength = markdown.length;
+				const evidenceChunk = markdown.slice(0, 1_200).trim();
+				extractionPhase = {
+					ok: evidenceChunk.length > 0,
+					durationMs: Math.max(0, this.now() - extractionStartedAt),
+					message:
+						evidenceChunk.length > 0
+							? `提取 ${contentLength} 字符并生成 Evidence Chunk (${evidenceChunk.length} 字符)`
+							: "正文为空",
+				};
+				if (contentLength === 0)
+					diagnostics.push({ code: "empty_content", url: first.url, message: "E2E 页面正文为空。" });
+			}
+		} catch (error) {
+			const failedStage =
+				!searchPhase.ok && searchPhase.message === "未执行"
+					? "search"
+					: !fetchPhase.ok && fetchPhase.message === "未执行"
+						? "fetch"
+						: "extraction";
+			const rawFailure = failureFromError(error, "unavailable", "E2E 联网操作失败。");
+			const code =
+				rawFailure.code === "timeout"
+					? failedStage === "search"
+						? "search_timeout"
+						: "fetch_timeout"
+					: rawFailure.code === "unavailable"
+						? failedStage === "search"
+							? "search_unavailable"
+							: "crawl_failed"
+						: rawFailure.code;
+			const failure = { ...rawFailure, code, url: selectedUrl };
+			diagnostics.push(failure);
+			if (!searchPhase.ok && searchPhase.message === "未执行")
+				searchPhase = { ...searchPhase, code: failure.code, message: failure.message };
+			else if (!fetchPhase.ok && fetchPhase.message === "未执行")
+				fetchPhase = { ...fetchPhase, code: failure.code, message: failure.message };
+			else extractionPhase = { ...extractionPhase, code: failure.code, message: failure.message };
+		}
+		return {
+			ok: searchPhase.ok && fetchPhase.ok && extractionPhase.ok,
+			query: WEB_SEARCH_E2E_QUERY,
+			search: searchPhase,
+			fetch: fetchPhase,
+			extraction: extractionPhase,
+			totalDurationMs: Math.max(0, this.now() - startedAt),
+			url: selectedUrl,
+			diagnostics,
+		};
 	}
 }
 

@@ -1299,31 +1299,18 @@ export class AgentSession {
 		this._recordAgentRuntimeEvent(event, willRetry);
 		await this._emitExtensionEvent(event);
 		if (!this._ownsRuntimeGeneration(generation)) return;
+		// Persist finalized messages before publishing message_end. Agent Core has
+		// already appended the message to its in-memory transcript, so roll that
+		// append back if persistence fails; otherwise a disk error would leave the
+		// live transcript/UI ahead of the resumable SessionManager history.
+		if (event.type === "message_end") {
+			this._persistMessageEnd(event);
+		}
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: willRetry ?? false } : event);
 
-		// Handle session persistence
+		// Handle post-persistence assistant bookkeeping
 		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-					event.message.excludeFromContext,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
-			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
-
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
 				this._lastAssistantMessage = event.message;
@@ -1347,6 +1334,36 @@ export class AgentSession {
 			}
 		}
 	};
+
+	private _persistMessageEnd(event: Extract<AgentEvent, { type: "message_end" }>): void {
+		try {
+			// Check if this is a custom message from extensions
+			if (event.message.role === "custom") {
+				this.sessionManager.appendCustomMessageEntry(
+					event.message.customType,
+					event.message.content,
+					event.message.display,
+					event.message.details,
+					event.message.excludeFromContext,
+				);
+			} else if (
+				event.message.role === "user" ||
+				event.message.role === "assistant" ||
+				event.message.role === "toolResult"
+			) {
+				// Regular LLM message - persist as SessionMessageEntry
+				this.sessionManager.appendMessage(event.message);
+			}
+			// Other message types (bashExecution, compactionSummary, branchSummary)
+			// are persisted elsewhere.
+		} catch (error) {
+			const messages = this.agent.state.messages;
+			if (messages.at(-1) === event.message) {
+				this.agent.state.messages = messages.slice(0, -1);
+			}
+			throw error;
+		}
+	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		const settings = this.settingsManager.getRetrySettings();
@@ -1740,7 +1757,7 @@ export class AgentSession {
 		const canUseTool = (name: string): boolean =>
 			(!this._allowedToolNames || this._allowedToolNames.has(name)) && !this._excludedToolNames?.has(name);
 		if (webSearchEnabled) {
-			for (const name of ["web_search", "web_fetch"]) {
+			for (const name of ["web_search", "web_fetch", "web_research"]) {
 				if (canUseTool(name) && !activeToolNames.includes(name)) activeToolNames.push(name);
 			}
 		}
@@ -3751,7 +3768,8 @@ export class AgentSession {
 		const isAllowedToolName = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
 		const isAllowedBuiltInTool = (name: string): boolean =>
-			isAllowedToolName(name) && (webSearchEnabled || (name !== "web_search" && name !== "web_fetch"));
+			isAllowedToolName(name) &&
+			(webSearchEnabled || (name !== "web_search" && name !== "web_fetch" && name !== "web_research"));
 
 		const registeredTools = this._agentRole === "delegated" ? [] : this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [
@@ -3920,7 +3938,9 @@ export class AgentSession {
 					"write",
 					"symbols",
 					"github",
-					...(this.settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
+					...(this.settingsManager.getWebSearchSettings().enabled
+						? ["web_search", "web_fetch", "web_research"]
+						: []),
 				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		const subAgentEnabled = this.settingsManager.getSubAgentSettings().enabled;

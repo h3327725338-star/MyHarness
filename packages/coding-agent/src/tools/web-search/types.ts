@@ -1,6 +1,6 @@
 import type { ResolvedWebSearchSettings } from "../../config/settings/types.ts";
 
-export type WebSearchToolName = "web_search" | "web_fetch";
+export type WebSearchToolName = "web_search" | "web_fetch" | "web_research";
 
 export type WebSearchFailureCode =
 	| "aborted"
@@ -11,7 +11,14 @@ export type WebSearchFailureCode =
 	| "http"
 	| "invalid_response"
 	| "engine_failure"
-	| "no_results";
+	| "no_results"
+	| "search_timeout"
+	| "search_unavailable"
+	| "fetch_timeout"
+	| "crawl_failed"
+	| "empty_content"
+	| "extraction_failed"
+	| "all_sources_failed";
 
 export interface WebSearchResult {
 	title: string;
@@ -19,6 +26,8 @@ export interface WebSearchResult {
 	snippet: string;
 	source: string;
 	query: string;
+	/** Independent queries that produced this URL after result fusion. */
+	queries?: string[];
 	engineRank: number;
 	engines: string[];
 	publishedAt?: string;

@@ -107,7 +107,7 @@ class EngineSelectionSubmenu extends Container {
 				id: engine,
 				label: engine,
 				interaction: "toggle",
-				currentValue: this.initial.engineMode === "all" || selected.has(engine.toLowerCase()) ? "On" : "Off",
+				currentValue: this.initial.engineMode === "auto" || selected.has(engine.toLowerCase()) ? "On" : "Off",
 				values: ["Off", "On"],
 			}));
 			const commitSelection = (): void => {
@@ -115,7 +115,7 @@ class EngineSelectionSubmenu extends Container {
 				const allEnabled = enabled.size === engines.length;
 				this.onChange({
 					...this.initial,
-					engineMode: allEnabled ? "all" : "selected",
+					engineMode: allEnabled ? "auto" : "selected",
 					engines: allEnabled ? [] : [...enabled].sort((a, b) => a.localeCompare(b)),
 				});
 			};
@@ -243,13 +243,74 @@ class HealthSubmenu extends Container {
 	}
 }
 
+class E2ETestSubmenu extends Container {
+	private activeComponent: Component | undefined;
+	private readonly service: WebSearchService;
+	private readonly tui: TUI;
+
+	constructor(service: WebSearchService, tui: TUI, onDone: () => void) {
+		super();
+		this.service = service;
+		this.tui = tui;
+		this.setContent(new Text(theme.fg("muted", "正在执行 Search → Fetch → Extraction 测试…"), 0, 0));
+		void this.load(onDone);
+	}
+
+	handleInput(data: string): void {
+		this.activeComponent?.handleInput?.(data);
+	}
+
+	private setContent(component: Component): void {
+		this.clear();
+		this.activeComponent = component;
+		this.addChild(component);
+		this.tui.requestRender();
+	}
+
+	private async load(onDone: () => void): Promise<void> {
+		const result = await this.service.runE2ETest();
+		const phase = (name: string, item: { ok: boolean; durationMs: number; message: string; code?: string }): string =>
+			`${name}：${item.ok ? "OK" : "失败"} · ${item.message} · ${item.durationMs}ms${item.code ? ` · ${item.code}` : ""}`;
+		const diagnostics = result.diagnostics.length
+			? `\nDiagnostics:\n${result.diagnostics.map((item) => `- [${item.code}] ${item.url ?? item.query ?? "test"}: ${item.message}`).join("\n")}`
+			: "";
+		const message = [
+			`固定 Query：${result.query}`,
+			phase("Search", result.search),
+			phase("Fetch", result.fetch),
+			phase("Extraction", result.extraction),
+			`Total：${result.totalDurationMs}ms · ${result.ok ? "E2E 正常" : "E2E 未通过"}`,
+			result.url ? `URL：${result.url}` : "",
+			diagnostics,
+		]
+			.filter(Boolean)
+			.join("\n");
+		const list = new SettingsList(
+			[
+				{
+					id: "back",
+					label: "返回",
+					interaction: "action",
+					currentValue: "Back",
+					onActivate: onDone,
+				},
+			],
+			1,
+			getSettingsListTheme(),
+			() => {},
+			onDone,
+		);
+		this.setContent(new ContainerWithMessage(message, list));
+	}
+}
+
 function formatStrategy(strategy: ResolvedWebSearchSettings["parallelPages"], label: string): string {
 	return strategy.mode === "agent" ? `${label}: Agent decides` : `${label}: ${strategy.value ?? "未设置"}`;
 }
 
 function formatSummary(settings: ResolvedWebSearchSettings): string {
 	if (!settings.enabled) return "Off";
-	const engines = settings.engineMode === "all" ? "all engines" : `${settings.engines.length} engines`;
+	const engines = settings.engineMode === "auto" ? "Auto (SearXNG)" : `${settings.engines.length} selected engines`;
 	const scope = settings.scope === "allowlist" ? `${settings.allowedDomains.length} sites` : "all sites";
 	return `On · ${engines} · ${scope}`;
 }
@@ -298,7 +359,7 @@ export class WebSearchSettingsSubmenu extends Container {
 			{
 				id: "enabled",
 				label: "Web Search",
-				description: "实际控制 web_search 和 web_fetch 是否注册给主 Agent",
+				description: "实际控制 web_research、web_search 和 web_fetch 是否注册给主 Agent",
 				interaction: "toggle",
 				currentValue: this.state.enabled ? "On" : "Off",
 				values: ["Off", "On"],
@@ -321,7 +382,7 @@ export class WebSearchSettingsSubmenu extends Container {
 				id: "engines",
 				label: "Search Engines",
 				description: "从当前 SearXNG 实例读取并选择引擎",
-				currentValue: this.state.engineMode === "all" ? "All engines" : `${this.state.engines.length} selected`,
+				currentValue: this.state.engineMode === "auto" ? "Auto (SearXNG)" : `${this.state.engines.length} selected`,
 				submenu: () =>
 					new EngineSelectionSubmenu(
 						this.service,
@@ -378,6 +439,13 @@ export class WebSearchSettingsSubmenu extends Container {
 				description: "检查 SearXNG 引擎发现和 Crawl4AI /health",
 				currentValue: "检查",
 				submenu: () => new HealthSubmenu(this.service, this.dependencies.tui, () => this.showRoot()),
+			},
+			{
+				id: "e2e-test",
+				label: "Run Web Search Test",
+				description: "真实执行固定 Query → Search → Fetch → Extraction",
+				currentValue: "运行",
+				submenu: () => new E2ETestSubmenu(this.service, this.dependencies.tui, () => this.showRoot()),
 			},
 		];
 		const list = new SettingsList(

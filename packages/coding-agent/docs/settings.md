@@ -113,7 +113,7 @@ Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `subAgent` | object | `{ "enabled": false }` | Global built-in exploration-agent 和 workflow configuration。通过 `/settings` 设置。 |
-| `webSearch` | object | `{ "enabled": false }` | Global optional SearXNG/Crawl4AI configuration；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
+| `webSearch` | object | `{ "enabled": false }` | Global optional SearXNG/Crawl4AI configuration；只在启用时向 main Agent 注册 `web_research`、`web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
@@ -194,7 +194,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 
 #### webSearch（Web Search）
 
-`Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
+`Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_research`、`web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
 
 它需要两个由用户部署并配置的服务地址：SearXNG 基础 URL 和 Crawl4AI Docker/API 基础 URL。MyHarness 不假设默认 host/port，也不会自动安装、登录或启动这两个服务。Search Engines 从配置的 SearXNG `/config` 动态读取；Website Scope 会对搜索结果和直接 Fetch URL 都做 hostname 边界检查。
 
@@ -204,7 +204,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
     "enabled": true,
     "searxngUrl": "https://search.example",
     "crawl4aiUrl": "http://127.0.0.1:11235",
-    "engineMode": "all",
+    "engineMode": "auto",
     "scope": "unrestricted",
     "parallelPages": { "mode": "agent" },
     "searchRounds": { "mode": "agent" }

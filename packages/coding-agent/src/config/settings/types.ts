@@ -103,7 +103,12 @@ export interface VisionCapabilityTestRecord {
 	testedAt: number;
 }
 
-export type WebSearchEngineMode = "all" | "selected";
+/**
+ * `all` is retained only as a read-compatible legacy value. Resolved settings
+ * normalize it to `auto`, which means SearXNG decides the active engines.
+ */
+export type WebSearchEngineMode = "auto" | "selected" | "all";
+export type ResolvedWebSearchEngineMode = "auto" | "selected";
 export type WebSearchScope = "unrestricted" | "allowlist";
 export type WebSearchStrategyMode = "agent" | "manual";
 
@@ -142,7 +147,7 @@ export interface ResolvedWebSearchSettings {
 	enabled: boolean;
 	searxngUrl?: string;
 	crawl4aiUrl?: string;
-	engineMode: WebSearchEngineMode;
+	engineMode: ResolvedWebSearchEngineMode;
 	engines: string[];
 	scope: WebSearchScope;
 	allowedDomains: string[];

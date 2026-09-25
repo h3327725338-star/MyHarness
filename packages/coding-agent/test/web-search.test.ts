@@ -60,6 +60,11 @@ describe("web search URL policy", () => {
 });
 
 describe("WebSearchService", () => {
+	it("normalizes the legacy all-engine setting to SearXNG Auto", () => {
+		const settings = createSettings({ engineMode: "all" });
+		expect(settings.getWebSearchSettings().engineMode).toBe("auto");
+	});
+
 	it("discovers dynamic engines and runs independent queries concurrently", async () => {
 		const settings = createSettings({ engineMode: "selected", engines: ["brave"] });
 		let active = 0;
@@ -119,6 +124,83 @@ describe("WebSearchService", () => {
 			.map(([input]) => new URL(String(input)))
 			.filter((url) => url.pathname === "/search");
 		expect(searchUrls.every((url) => url.searchParams.get("engines") === "brave")).toBe(true);
+	});
+
+	it("deduplicates multi-query results, preserves query coverage, and rewards engine diversity", async () => {
+		const settings = createSettings();
+		const fetchImpl = vi.fn(async (input: string | URL) => {
+			const url = new URL(String(input));
+			if (url.pathname !== "/search") throw new Error(`Unexpected URL: ${url}`);
+			const query = url.searchParams.get("q");
+			if (query === "alpha") {
+				return Response.json({
+					results: [
+						{
+							title: "Shared result",
+							url: "https://example.com/shared?utm_source=test",
+							content: "alpha beta",
+							engines: ["brave", "google"],
+						},
+					],
+				});
+			}
+			return Response.json({
+				results: [
+					{
+						title: "Shared result",
+						url: "https://example.com/shared",
+						content: "alpha beta",
+						engines: ["duckduckgo"],
+					},
+					{
+						title: "Beta result",
+						url: "https://beta.example/beta",
+						content: "beta",
+						engines: ["duckduckgo"],
+					},
+				],
+			});
+		});
+		const service = new WebSearchService({ settings, fetchImpl, cache: new WebSearchCache(undefined) });
+
+		const response = await service.search({ queries: ["alpha", "beta"], maxResults: 2 });
+
+		expect(response.results.map((result) => result.url)).toEqual([
+			"https://example.com/shared?utm_source=test",
+			"https://beta.example/beta",
+		]);
+		expect(response.results[0]).toMatchObject({
+			queries: ["alpha", "beta"],
+			engines: ["brave", "google", "duckduckgo"],
+		});
+		expect(response.results[1]?.queries).toEqual(["beta"]);
+
+		const coverageResponse = await service.search({ queries: ["alpha", "beta"], maxResults: 2, fresh: true });
+		expect(coverageResponse.results.map((result) => result.queries)).toEqual([["alpha", "beta"], ["beta"]]);
+	});
+
+	it("uses engine diversity as a deterministic ranking signal", async () => {
+		const settings = createSettings();
+		const fetchImpl = vi.fn(async (input: string | URL) => {
+			const url = new URL(String(input));
+			if (url.pathname !== "/search") throw new Error(`Unexpected URL: ${url}`);
+			return Response.json({
+				results: [
+					{ title: "Single engine", url: "https://example.com/single", content: "diverse", engines: ["brave"] },
+					{
+						title: "Multi engine",
+						url: "https://example.com/multi",
+						content: "diverse",
+						engines: ["brave", "google"],
+					},
+				],
+			});
+		});
+		const service = new WebSearchService({ settings, fetchImpl, cache: new WebSearchCache(undefined) });
+
+		const response = await service.search({ queries: ["diverse"], maxResults: 1 });
+
+		expect(response.results[0]?.url).toBe("https://example.com/multi");
 	});
 
 	it("does not let an Agent override the selected engine allowlist", async () => {

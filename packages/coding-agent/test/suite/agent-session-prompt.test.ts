@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxToolCall, type Model } from "@myharness/ai";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InputEvent } from "../../src/extensions/compat/index.ts";
 import { createSyntheticSourceInfo } from "../../src/extensions/contracts/source-info.ts";
 import type { PromptTemplate } from "../../src/prompts/loader/index.ts";
@@ -38,6 +38,38 @@ describe("AgentSession prompt characterization", () => {
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 		expect(getMessageText(harness.session.messages[0]!)).toBe("hi");
 		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("keeps the live transcript aligned when finalized-message persistence fails", async () => {
+		const harness = await createHarness({ responses: [fauxAssistantMessage("answer")] });
+		harnesses.push(harness);
+
+		const appendMessage = harness.sessionManager.appendMessage.bind(harness.sessionManager);
+		let failAssistantAppend = true;
+		vi.spyOn(harness.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant" && failAssistantAppend) {
+				failAssistantAppend = false;
+				throw new Error("simulated persistence failure");
+			}
+			return appendMessage(message);
+		});
+
+		await harness.session.prompt("hi");
+
+		const persistedMessages = harness.sessionManager
+			.getEntries()
+			.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+		expect(persistedMessages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(persistedMessages.at(-1)).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "simulated persistence failure",
+		});
+		expect(harness.session.agent.state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(harness.session.agent.state.messages.some((message) => getMessageText(message) === "answer")).toBe(false);
+		expect(harness.eventsOfType("message_end").some((event) => getMessageText(event.message) === "answer")).toBe(
+			false,
+		);
 	});
 
 	it.each(["/workflow\n检查登录系统", "/workflows 检查登录系统", "/reload"])(

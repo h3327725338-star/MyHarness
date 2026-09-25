@@ -87,7 +87,7 @@ function normalizeWebSearchStrategy(
 
 function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): ResolvedWebSearchSettings {
 	const source = settings ?? {};
-	const engineMode = source.engineMode === "selected" ? "selected" : "all";
+	const engineMode = source.engineMode === "selected" ? "selected" : "auto";
 	const scope = source.scope === "allowlist" ? "allowlist" : "unrestricted";
 	const normalizeList = (values: unknown): string[] =>
 		Array.isArray(values)

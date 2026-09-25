@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
+import { runWebResearch, type WebResearchRequest, type WebResearchResponse } from "./research.ts";
 import {
 	createWebSearchService,
 	WebSearchError,
@@ -38,8 +39,24 @@ const webFetchSchema = Type.Object({
 	fresh: Type.Optional(Type.Boolean({ description: "跳过会话内网页缓存" })),
 });
 
+const webResearchSchema = Type.Object({
+	question: Type.String({ minLength: 1, description: "需要调查的现实世界问题" }),
+	freshness: Type.Optional(
+		Type.Union([Type.Literal("auto"), Type.Literal("day"), Type.Literal("month"), Type.Literal("year")]),
+	),
+	domains: Type.Optional(
+		Type.Array(Type.String({ minLength: 1 }), {
+			maxItems: 16,
+			description: "可选的 hostname 限定；只能进一步收窄 Website Scope",
+		}),
+	),
+	maxSources: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+	maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })),
+});
+
 export type WebSearchToolInput = Static<typeof webSearchSchema>;
 export type WebFetchToolInput = Static<typeof webFetchSchema>;
+export type WebResearchToolInput = Static<typeof webResearchSchema>;
 
 export interface WebSearchToolOptions extends Omit<WebSearchServiceOptions, "settings"> {
 	settings?: WebSearchServiceOptions["settings"];
@@ -60,10 +77,12 @@ export interface WebFetchToolDetails {
 	cacheHit: boolean;
 }
 
+export type WebResearchToolDetails = WebResearchResponse;
+
 const disabledSettings = {
 	getWebSearchSettings: () => ({
 		enabled: false,
-		engineMode: "all" as const,
+		engineMode: "auto" as const,
 		engines: [],
 		scope: "unrestricted" as const,
 		allowedDomains: [],
@@ -135,6 +154,83 @@ function formatFetchResponse(response: WebFetchResponse): { preview: string; ful
 	};
 }
 
+function formatResearchResponse(response: WebResearchResponse): { preview: string; fullText: string } {
+	const lines: string[] = [
+		`Research status: ${response.status}`,
+		`Research question: ${response.question}`,
+		`Research message: ${response.message}`,
+		`Research rounds: ${response.researchRounds}`,
+		`Queries used: ${response.queries.length}`,
+	];
+	if (response.queries.length > 0) {
+		lines.push(`\nQueries:\n${response.queries.map((query, index) => `${index + 1}. ${query}`).join("\n")}`);
+	}
+	if (response.rounds.length > 0) {
+		lines.push(
+			"\nRound diagnostics:\n" +
+				response.rounds
+					.map(
+						(round) =>
+							`- Round ${round.round}: ${round.status}; queries=${round.queries.length}; searchResults=${round.searchResultCount}; selectedSources=${round.selectedSourceCount}; fetched=${round.fetchedSourceCount}; evidence=${round.evidenceChunkCount}; cacheHit=${round.cacheHit}`,
+					)
+					.join("\n"),
+		);
+	}
+	if (response.sources.length > 0) {
+		lines.push(
+			"\nSources:\n" +
+				response.sources
+					.map(
+						(source) =>
+							`[${source.id}] ${source.title}\nURL: ${source.url}\nDomain: ${source.domain}\nType: ${source.sourceType}\nPublished: ${source.publishedAt ?? "unknown"}\nQueries: ${source.queries.join(" | ")}\nFetched: ${source.fetched}; Evidence chunks: ${source.evidenceCount}`,
+					)
+					.join("\n\n"),
+		);
+	}
+	if (response.evidence.length > 0) {
+		lines.push(
+			"\nEvidence Pack:\n" +
+				response.evidence
+					.map(
+						(evidence) =>
+							`[${evidence.sourceId}] ${evidence.title}\nURL: ${evidence.url}\nSection: ${evidence.heading ?? "(page body)"}\nPublished: ${evidence.publishedAt ?? "unknown"}\nEvidence:\n${evidence.excerpt}`,
+					)
+					.join("\n\n"),
+		);
+	}
+	if (response.fullPages?.length) {
+		lines.push(
+			"\nComplete fetched page archive (persisted full output only):\n" +
+				response.fullPages
+					.map(
+						(page) =>
+							`## ${page.title ?? page.url}\nURL: ${page.url}\nPublished: ${page.publishedAt ?? "unknown"}\n\n${page.markdown}`,
+					)
+					.join("\n\n"),
+		);
+	}
+	if (response.failures.length > 0) {
+		lines.push(
+			"\nDiagnostics:\n" +
+				response.failures
+					.map(
+						(failure) =>
+							`- [${failure.stage}/${failure.code}] ${failure.query ?? failure.url ?? "research"}: ${failure.message}`,
+					)
+					.join("\n"),
+		);
+	}
+	if (response.unresolvedConflicts.length > 0)
+		lines.push(`\nUnresolved conflicts:\n- ${response.unresolvedConflicts.join("\n- ")}`);
+	if (response.cacheHit) lines.push("\nCache: at least one search or fetch stage used the session cache.");
+	const fullText = lines.join("\n\n");
+	const preview =
+		fullText.length > 16_000
+			? `${fullText.slice(0, 16_000)}\n\n[Evidence Pack preview truncated; full output is saved below]`
+			: fullText;
+	return { preview, fullText };
+}
+
 export function createWebSearchToolDefinition(
 	_cwd: string,
 	options?: WebSearchToolOptions,
@@ -196,6 +292,56 @@ export function createWebFetchToolDefinition(
 	};
 }
 
+export function createWebResearchToolDefinition(
+	_cwd: string,
+	options?: WebSearchToolOptions,
+): BusinessToolDefinition<typeof webResearchSchema, WebResearchToolDetails> {
+	const service = getService(options);
+	return {
+		name: "web_research",
+		label: "web_research",
+		description:
+			"Investigate a real-world question through bounded multi-query planning, SearXNG search, deterministic source fusion/ranking, Crawl4AI fetching, relevant long-page chunk selection, evidence sufficiency checks, and limited reformulation rounds. Returns a cited Evidence Pack with diagnostics; it does not claim success when all sources fail.",
+		promptSnippet: loadSystemPrompt("tools/web-research/snippet.md"),
+		promptGuidelines: loadSystemPromptLines("tools/web-research/guidelines.md"),
+		parameters: webResearchSchema,
+		async execute(_toolCallId, params: WebResearchToolInput, signal, onUpdate) {
+			const response = await runWebResearch(service, params satisfies WebResearchRequest, signal, (progress) => {
+				onUpdate?.({
+					content: [{ type: "text", text: `Web Research: ${progress.message}` }],
+					details: {
+						...responseProgressDetails(progress),
+					} as WebResearchToolDetails,
+				});
+			});
+			const formatted = formatResearchResponse(response);
+			const { fullPages: _fullPages, ...details } = response;
+			return textResult(formatted.preview, details, formatted.fullText);
+		},
+	};
+}
+
+function responseProgressDetails(progress: {
+	stage: string;
+	round: number;
+	queries: string[];
+	message: string;
+}): Partial<WebResearchResponse> {
+	return {
+		question: "",
+		queries: progress.queries,
+		sources: [],
+		evidence: [],
+		rounds: [],
+		failures: [],
+		unresolvedConflicts: [],
+		cacheHit: false,
+		researchRounds: progress.round,
+		status: "insufficient",
+		message: `${progress.stage}: ${progress.message}`,
+	};
+}
+
 export function createWebSearchTool(_cwd: string, options?: WebSearchToolOptions): AgentTool {
 	const definition = createWebSearchToolDefinition(_cwd, options);
 	return {
@@ -220,17 +366,31 @@ export function createWebFetchTool(_cwd: string, options?: WebSearchToolOptions)
 	};
 }
 
+export function createWebResearchTool(_cwd: string, options?: WebSearchToolOptions): AgentTool {
+	const definition = createWebResearchToolDefinition(_cwd, options);
+	return {
+		name: definition.name,
+		label: definition.label,
+		description: definition.description,
+		parameters: definition.parameters,
+		execute: (toolCallId, params, signal, onUpdate) =>
+			definition.execute(toolCallId, params as WebResearchToolInput, signal, onUpdate, undefined),
+	};
+}
+
 export function createWebSearchToolDefinitions(
 	_cwd: string,
 	options?: WebSearchToolOptions,
 ): {
 	web_search: ReturnType<typeof createWebSearchToolDefinition>;
 	web_fetch: ReturnType<typeof createWebFetchToolDefinition>;
+	web_research: ReturnType<typeof createWebResearchToolDefinition>;
 } {
 	const service = getService(options);
 	return {
 		web_search: createWebSearchToolDefinition(_cwd, { service }),
 		web_fetch: createWebFetchToolDefinition(_cwd, { service }),
+		web_research: createWebResearchToolDefinition(_cwd, { service }),
 	};
 }
 

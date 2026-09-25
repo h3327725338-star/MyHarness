@@ -120,9 +120,12 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 
 		expect(session.getAllTools().map((tool) => tool.name)).not.toEqual(
-			expect.arrayContaining(["web_search", "web_fetch"]),
+			expect.arrayContaining(["web_research", "web_search", "web_fetch"]),
 		);
-		expect(session.getActiveToolNames()).not.toEqual(expect.arrayContaining(["web_search", "web_fetch"]));
+		expect(session.getActiveToolNames()).not.toEqual(
+			expect.arrayContaining(["web_research", "web_search", "web_fetch"]),
+		);
+		expect(session.systemPrompt).not.toContain("- web_research:");
 
 		settingsManager.setWebSearchSettings({
 			enabled: true,
@@ -131,16 +134,20 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 		session.refreshToolsAfterSettingsChange();
 		expect(session.getAllTools().map((tool) => tool.name)).toEqual(
-			expect.arrayContaining(["web_search", "web_fetch"]),
+			expect.arrayContaining(["web_research", "web_search", "web_fetch"]),
 		);
-		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["web_search", "web_fetch"]));
+		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["web_research", "web_search", "web_fetch"]));
+		expect(session.systemPrompt).toContain("- web_research:");
 
 		settingsManager.setWebSearchSettings({ enabled: false });
 		session.refreshToolsAfterSettingsChange();
 		expect(session.getAllTools().map((tool) => tool.name)).not.toEqual(
-			expect.arrayContaining(["web_search", "web_fetch"]),
+			expect.arrayContaining(["web_research", "web_search", "web_fetch"]),
 		);
-		expect(session.getActiveToolNames()).not.toEqual(expect.arrayContaining(["web_search", "web_fetch"]));
+		expect(session.getActiveToolNames()).not.toEqual(
+			expect.arrayContaining(["web_research", "web_search", "web_fetch"]),
+		);
+		expect(session.systemPrompt).not.toContain("- web_research:");
 
 		session.dispose();
 	});

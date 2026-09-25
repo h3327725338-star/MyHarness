@@ -273,7 +273,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					"write",
 					"symbols",
 					"github",
-					...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
+					...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch", "web_research"] : []),
 				] as ToolName[])
 			: (restrictToolNamesForRole(agentRole, undefined) as ToolName[]);
 	const requestedToolNames =

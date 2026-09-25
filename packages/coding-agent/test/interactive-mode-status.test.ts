@@ -1195,7 +1195,7 @@ describe("InteractiveMode completion gate", () => {
 			expect(fakeThis.session.completeGitCheckpointAfterVerification).toHaveBeenCalledOnce();
 		});
 
-		test("index.lock 残留时删除锁文件后重试成功", async () => {
+		test("index.lock 残留时保留锁文件并停止自动重试", async () => {
 			gitCommitMocks.createGitCommitForPathsAsync
 				.mockResolvedValueOnce({
 					ok: false,
@@ -1205,7 +1205,7 @@ describe("InteractiveMode completion gate", () => {
 				})
 				.mockResolvedValueOnce({ ok: true, stdout: "", stderr: "", exitCode: 0 });
 			const fakeThis = createCommitThis();
-			// 在真实临时目录中放置 index.lock，验证修复逻辑会删除它。
+			// 在真实临时目录中放置 index.lock，验证自动修复不会删除未知归属的锁。
 			const lockDir = mkdtempSync(path.join(tmpdir(), "myharness-git-lock-"));
 			try {
 				const gitDir = path.join(lockDir, ".git");
@@ -1216,9 +1216,12 @@ describe("InteractiveMode completion gate", () => {
 
 				await (InteractiveMode as any).prototype.runGitCommitTask.call(fakeThis, lockCheckpoint);
 
-				expect(existsSync(lockPath)).toBe(false);
-				expect(gitCommitMocks.createGitCommitForPathsAsync).toHaveBeenCalledTimes(2);
-				expect(fakeThis.showStatus).toHaveBeenCalledWith(expect.stringContaining("已本地提交任务修改"));
+				expect(existsSync(lockPath)).toBe(true);
+				expect(gitCommitMocks.createGitCommitForPathsAsync).toHaveBeenCalledTimes(1);
+				expect(fakeThis.finishGitCommitTaskAsFailed).toHaveBeenCalledWith(
+					expect.objectContaining({ stderr: "fatal: Unable to create '.git/index.lock'" }),
+					"该问题无法安全自动修复",
+				);
 			} finally {
 				rmSync(lockDir, { recursive: true, force: true });
 			}

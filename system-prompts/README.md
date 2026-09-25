@@ -21,8 +21,8 @@
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
 | `skills/harness.md` | 通用 AgentHarness 的技能说明；原文不同，独立维护 |
 | `harness/default.md` | 通用 AgentHarness 未提供自定义 systemPrompt 时的默认身份 |
-| `tools/{read,bash,pwsh,edit,write,find,grep,ls,github,symbols,agent,workflow,ultracode,web-search,web-fetch}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合 |
-| `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合 |
+| `tools/{read,bash,pwsh,edit,write,find,grep,ls,github,symbols,agent,workflow,ultracode,web-search,web-fetch,web-research}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合 |
+| `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch,web-research}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合 |
 | `tools/no-snippets.md` | 有工具但无简短说明时的提示 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |
 | `tools/routing/symbols.md`、`evidence-heading.md` | symbols 启用时的证据工具路由及标题 |

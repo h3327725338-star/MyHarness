@@ -3550,12 +3550,7 @@ export class InteractiveMode {
 			}
 
 			case "run_state_changed": {
-				if (
-					event.state.state === "completed" ||
-					event.state.state === "failed" ||
-					event.state.state === "timed_out" ||
-					event.state.state === "cancelled"
-				) {
+				if (isRunStateTerminal(event.state.state)) {
 					// AgentSession emits the terminal snapshot immediately before it
 					// emits idle. Keep this event so the bottom bar can show the outcome
 					// after post-run completion work has actually finished.
@@ -6904,7 +6899,7 @@ export class InteractiveMode {
 						this.session.refreshToolsAfterSettingsChange();
 						this.showStatus(
 							settings.enabled
-								? "Web Search 已启用；web_search 和 web_fetch 将从下一轮 Agent 调用开始可用。"
+								? "Web Search 已启用；web_research、web_search 和 web_fetch 将从下一轮 Agent 调用开始可用。"
 								: "Web Search 已关闭；相关工具已从当前 Agent 注册表移除，历史记录未删除。",
 						);
 					},

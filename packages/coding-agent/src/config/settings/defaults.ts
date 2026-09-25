@@ -62,7 +62,7 @@ export const SETTINGS_DEFAULTS = {
 	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 	webSearch: {
 		enabled: false,
-		engineMode: "all",
+		engineMode: "auto",
 		scope: "unrestricted",
 		parallelPages: { mode: "agent" },
 		searchRounds: { mode: "agent" },

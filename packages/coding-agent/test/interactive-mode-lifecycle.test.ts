@@ -189,6 +189,20 @@ describe("InteractiveMode task lifecycle across agent events", () => {
 		expect(context.statusIndicators.size).toBe(0);
 	});
 
+	test.each(["blocked", "interrupted"] as const)(
+		"retains the %s terminal outcome for the settled UI projection",
+		async (terminalState) => {
+			initTheme("dark");
+			const { context, snapshot, handleEvent } = createLifecycleContext("idle");
+			snapshot.state = terminalState;
+
+			await handleEvent({ type: "run_state_changed", state: snapshot });
+
+			expect(context.lastTerminalRunState).toBe(snapshot);
+			expect(context.completionWorkflowEligibleForRun).toBe(false);
+		},
+	);
+
 	test("terminal failure skips completion and stays busy until agent_settled", async () => {
 		initTheme("dark");
 		const { context, snapshot, handleEvent } = createLifecycleContext("idle");

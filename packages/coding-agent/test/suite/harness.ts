@@ -62,6 +62,8 @@ export interface HarnessOptions {
 	/** Agent config directory used by built-in tools (Auto Memory storage root). */
 	agentDir?: string;
 	models?: FauxModelDefinition[];
+	/** Initial response sequence for the faux provider. */
+	responses?: FauxResponseStep[];
 	settings?: Partial<Settings>;
 	systemPrompt?: string;
 	tools?: AgentTool[];
@@ -104,7 +106,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		models: options.models,
 	});
-	fauxProvider.setResponses([]);
+	fauxProvider.setResponses(options.responses ?? []);
 	const model = fauxProvider.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;

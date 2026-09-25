@@ -1,5 +1,3 @@
-import { existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import {
 	type GitCheckpoint,
 	getGitCheckpointPendingTaskPathsAsync,
@@ -98,8 +96,11 @@ export function classifyGitCommitFailure(failure: GitCommandResult): GitCommitFa
 	if (isGitNoChangesFailure(failure)) return "no-changes";
 	if (failure.stderr.includes("没有可保存的本轮修改路径")) return "no-changes";
 	const detail = `${failure.error ?? ""}\n${failure.stderr}`.toLowerCase();
+	// Git's index.lock is a mutual-exclusion lock. MyHarness cannot prove that
+	// a lock belongs to a stale process, so it is never safe to auto-repair.
+	if (detail.includes("index.lock")) return "unrecoverable";
 	if (failure.failureKind === "timeout" || failure.failureKind === "spawn") return "transient";
-	if (detail.includes("index.lock") || detail.includes("unable to create")) return "transient";
+	if (detail.includes("unable to create")) return "transient";
 	const fatalLines = detail.split(/\r?\n/).filter((line) => line.trim().startsWith("fatal:"));
 	if (UNRECOVERABLE_GIT_FAILURE_PATTERNS.some((pattern) => fatalLines.some((line) => line.includes(pattern)))) {
 		return "unrecoverable";
@@ -195,19 +196,7 @@ export class GitCommitUseCase {
 		return !pending.error && pending.paths?.length === 0;
 	}
 
-	planRepair(repositoryRoot: string, failure: GitCommandResult): number | undefined {
-		const detail = `${failure.error ?? ""}\n${failure.stderr}`.toLowerCase();
-		if (detail.includes("index.lock") || detail.includes("unable to create")) {
-			const lockPath = join(repositoryRoot, ".git", "index.lock");
-			try {
-				if (existsSync(lockPath)) {
-					rmSync(lockPath, { force: true });
-					return GIT_COMMIT_TIMEOUT_MS;
-				}
-			} catch {
-				return undefined;
-			}
-		}
+	planRepair(_repositoryRoot: string, failure: GitCommandResult): number | undefined {
 		if (failure.failureKind === "timeout") return GIT_COMMIT_RETRY_TIMEOUT_MS;
 		if (failure.failureKind === "spawn") return GIT_COMMIT_TIMEOUT_MS;
 		return undefined;
