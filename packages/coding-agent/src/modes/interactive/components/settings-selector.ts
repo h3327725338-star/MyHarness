@@ -97,6 +97,39 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 	Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value as DefaultProjectTrust]),
 );
 
+const STEERING_MODE_LABELS: Record<SettingsConfig["steeringMode"], string> = {
+	"one-at-a-time": "One at a time",
+	all: "All",
+};
+
+const STEERING_MODE_BY_LABEL = new Map(
+	Object.entries(STEERING_MODE_LABELS).map(([value, label]) => [label, value as SettingsConfig["steeringMode"]]),
+);
+
+const TRANSPORT_LABELS: Record<Transport, string> = {
+	auto: "Auto",
+	sse: "SSE",
+	websocket: "WebSocket",
+	"websocket-cached": "WebSocket (cached)",
+};
+
+const TRANSPORT_BY_LABEL = new Map(
+	Object.entries(TRANSPORT_LABELS).map(([value, label]) => [label, value as Transport]),
+);
+
+const DOUBLE_ESCAPE_ACTION_LABELS: Record<SettingsConfig["doubleEscapeAction"], string> = {
+	none: "None",
+	tree: "Tree",
+	fork: "Fork",
+};
+
+const DOUBLE_ESCAPE_ACTION_BY_LABEL = new Map(
+	Object.entries(DOUBLE_ESCAPE_ACTION_LABELS).map(([value, label]) => [
+		label,
+		value as SettingsConfig["doubleEscapeAction"],
+	]),
+);
+
 export interface SettingsConfig {
 	autoMemory: AutoMemorySettings & { enabled: boolean };
 	subAgent: SubAgentSettings & { enabled: boolean };
@@ -222,8 +255,9 @@ class WarningSettingsSubmenu extends Container {
 				id: "anthropic-extra-usage",
 				label: "Anthropic extra usage",
 				description: "Anthropic 订阅认证可能产生额外付费用量时显示警告",
-				currentValue: (this.state.anthropicExtraUsage ?? true) ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: (this.state.anthropicExtraUsage ?? true) ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 		];
 
@@ -234,7 +268,7 @@ class WarningSettingsSubmenu extends Container {
 			(id, newValue) => {
 				switch (id) {
 					case "anthropic-extra-usage":
-						this.state = { ...this.state, anthropicExtraUsage: newValue === "true" };
+						this.state = { ...this.state, anthropicExtraUsage: newValue === "On" };
 						onChange({ ...this.state });
 						break;
 				}
@@ -333,6 +367,56 @@ class SelectSubmenu extends Container {
 			return;
 		}
 		this.selectList.handleInput(data);
+	}
+}
+
+function createSettingsChoiceSubmenu(
+	title: string,
+	description: string,
+	options: SelectItem[],
+	currentValue: string,
+	done: (selectedValue?: string) => void,
+): SelectSubmenu {
+	return new SelectSubmenu(title, description, options, currentValue, done, () => done());
+}
+
+class BooleanToggleSubmenu extends Container {
+	private readonly settingsList: SettingsList;
+
+	constructor(
+		title: string,
+		description: string,
+		enabled: boolean,
+		onChange: (enabled: boolean) => void,
+		onCancel: () => void,
+	) {
+		super();
+		this.addChild(new Text(theme.bold(theme.fg("accent", title)), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", description), 0, 0));
+		this.addChild(new Spacer(1));
+		this.settingsList = new SettingsList(
+			[
+				{
+					id: "enabled",
+					label: "Enabled",
+					description: "按 Enter 或 Space 立即切换此设置。",
+					interaction: "toggle",
+					currentValue: enabled ? "On" : "Off",
+					values: ["Off", "On"],
+				},
+			],
+			1,
+			getSettingsListTheme(),
+			(_id, value) => onChange(value === "On"),
+			onCancel,
+			{ inlineDescriptions: true },
+		);
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
 	}
 }
 
@@ -2058,35 +2142,31 @@ class DefaultModelSubmenu extends Container {
 }
 
 class GitIntegrationSubmenu extends Container {
-	private readonly select: SelectSubmenu;
+	private readonly toggle: BooleanToggleSubmenu;
 
 	constructor(enabled: boolean, onChange: (enabled: boolean) => void, onDone: (selectedValue?: string) => void) {
 		super();
-		this.select = new SelectSubmenu(
+		this.toggle = new BooleanToggleSubmenu(
 			"Git",
 			"为当前项目启用本地版本记录。开启时会检查仓库，并让你确认身份和首次保存内容。",
-			[
-				{ value: "on", label: "On", description: "设置当前项目的本地版本记录" },
-				{ value: "off", label: "Off", description: "停止 MyHarness 自动使用 Git" },
-			],
-			enabled ? "on" : "off",
-			(value) => {
-				if (value === "off") {
+			enabled,
+			(nextEnabled) => {
+				if (!nextEnabled) {
 					onChange(false);
 					onDone("Off");
 					return;
 				}
 				// Close /settings before the interactive setup dialogs replace the editor.
-				onDone(enabled ? "On" : "Off");
+				onDone("On");
 				onChange(true);
 			},
 			() => onDone(),
 		);
-		this.addChild(this.select);
+		this.addChild(this.toggle);
 	}
 
 	handleInput(data: string): void {
-		this.select.handleInput(data);
+		this.toggle.handleInput(data);
 	}
 }
 
@@ -2123,16 +2203,12 @@ class AutoMemorySubmenu extends Container {
 
 	private showToggle(): void {
 		this.setContent(
-			new SelectSubmenu(
+			new BooleanToggleSubmenu(
 				"Auto Memory",
 				"开启后，会把相关对话发送给所选模型整理长期记忆，并在以后相关任务开始前自动召回；记忆不能覆盖全局、项目或当前用户指令。",
-				[
-					{ value: "on", label: "On", description: "开启并选择记忆模型与思考强度" },
-					{ value: "off", label: "Off", description: "关闭自动提取和召回，不删除已经保存的记忆" },
-				],
-				this.original.enabled ? "on" : "off",
-				(value) => {
-					if (value === "off") {
+				this.original.enabled,
+				(nextEnabled) => {
+					if (!nextEnabled) {
 						this.callbacks.onAutoMemoryChange({ ...this.original, enabled: false });
 						this.onDone("Off");
 						return;
@@ -2231,16 +2307,12 @@ class VisionAssistantSubmenu extends Container {
 
 	private showToggle(): void {
 		this.setContent(
-			new SelectSubmenu(
+			new BooleanToggleSubmenu(
 				"Vision Assistant",
 				"开启后，图片会交给所选视觉模型识别；分析完成后会写入会话供主模型后续使用。大型文档可能在后台处理；Block images 开启时不会向任何模型发送图片。",
-				[
-					{ value: "on", label: "On", description: "开启并选择视觉模型与思考强度" },
-					{ value: "off", label: "Off", description: "关闭专用视觉模型，恢复主模型原有图片处理方式" },
-				],
-				this.original.enabled ? "on" : "off",
-				(value) => {
-					if (value === "off") {
+				this.original.enabled,
+				(nextEnabled) => {
+					if (!nextEnabled) {
 						this.callbacks.onVisionAssistantChange({ ...this.original, enabled: false });
 						this.onDone("Off");
 						return;
@@ -2550,15 +2622,17 @@ class SubAgentConvergenceSubmenu extends Container {
 				id: "no-progress",
 				label: "No Progress Detection",
 				description: "检测连续无新增信息或连续工具失败",
-				currentValue: this.state.noProgressDetection === false ? "off" : "on",
-				values: ["on", "off"],
+				interaction: "toggle",
+				currentValue: this.state.noProgressDetection === false ? "Off" : "On",
+				values: ["Off", "On"],
 			},
 			{
 				id: "repeated-operation",
 				label: "Repeated Operation Detection",
 				description: "检测同一工具、参数和结果的重复调用",
-				currentValue: this.state.repeatedOperationDetection === false ? "off" : "on",
-				values: ["on", "off"],
+				interaction: "toggle",
+				currentValue: this.state.repeatedOperationDetection === false ? "Off" : "On",
+				values: ["Off", "On"],
 			},
 		];
 		this.settingsList = new SettingsList(
@@ -2581,10 +2655,10 @@ class SubAgentConvergenceSubmenu extends Container {
 						this.state = { ...this.state, stallTimeoutMs: Number(newValue) };
 						break;
 					case "no-progress":
-						this.state = { ...this.state, noProgressDetection: newValue === "on" };
+						this.state = { ...this.state, noProgressDetection: newValue === "On" };
 						break;
 					case "repeated-operation":
-						this.state = { ...this.state, repeatedOperationDetection: newValue === "on" };
+						this.state = { ...this.state, repeatedOperationDetection: newValue === "On" };
 						break;
 				}
 				onChange({ ...this.state });
@@ -2657,20 +2731,12 @@ class SubAgentSubmenu extends Container implements Focusable {
 
 	private showToggle(): void {
 		this.setContent(
-			new SelectSubmenu(
+			new BooleanToggleSubmenu(
 				"Sub Agent",
 				"开启后，主 AI 可根据任务复杂度启动最多 18 个 Explore 子智能体并行调查；它们没有 edit/write，但 Bash 防护不是严格只读沙箱。",
-				[
-					{ value: "on", label: "On", description: "开启并选择子智能体模型与思考强度" },
-					{
-						value: "off",
-						label: "Off",
-						description: "关闭子智能体，不向主 AI 提供 Agent、Workflow 和 Ultracode 工具",
-					},
-				],
-				this.currentSettings.enabled ? "on" : "off",
-				(value) => {
-					if (value === "off") {
+				this.currentSettings.enabled,
+				(nextEnabled) => {
+					if (!nextEnabled) {
 						this.currentSettings = { ...this.currentSettings, enabled: false };
 						this.callbacks.onSubAgentChange({ ...this.currentSettings });
 						this.onDone("Off");
@@ -2855,8 +2921,9 @@ class CodeIntelligenceSubmenu extends Container {
 				id: "enabled",
 				label: "Enable semantic features",
 				description: "关闭后只保留轻量级源码索引；安装的语言包不会被删除。",
-				currentValue: this.state.enabled ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: this.state.enabled ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			...statuses.map((status) => ({
 				id: `module:${status.id}`,
@@ -2873,7 +2940,7 @@ class CodeIntelligenceSubmenu extends Container {
 			getSettingsListTheme(),
 			(id, value) => {
 				if (id === "enabled") {
-					this.state = { ...this.state, enabled: value === "true" };
+					this.state = { ...this.state, enabled: value === "On" };
 					this.callbacks.onCodeIntelligenceChange({ enabled: this.state.enabled });
 				}
 			},
@@ -3073,15 +3140,22 @@ class ThemeSubmenu extends Container {
 				id: "apply",
 				label: "Apply",
 				description: "保存设置并返回",
-				currentValue: "save and go back",
-				values: ["save and go back"],
+				interaction: "action",
+				currentValue: "Apply",
+				onActivate: () => this.apply(this.getAutomaticThemeSetting()),
 			},
 			{
 				id: "single-mode",
 				label: "Change mode",
 				description: "切换为明暗外观共用一个主题",
-				currentValue: "switch to single theme",
-				values: ["switch to single theme"],
+				interaction: "action",
+				currentValue: "Change",
+				onActivate: () => {
+					this.mode = "single";
+					this.singleTheme = this.getActiveAutomaticTheme();
+					this.callbacks.onThemePreview?.(this.singleTheme);
+					this.showSingleMenu();
+				},
 			},
 		];
 
@@ -3089,19 +3163,7 @@ class ThemeSubmenu extends Container {
 			items,
 			Math.min(items.length, 10),
 			getSettingsListTheme(),
-			(id) => {
-				switch (id) {
-					case "single-mode":
-						this.mode = "single";
-						this.singleTheme = this.getActiveAutomaticTheme();
-						this.callbacks.onThemePreview?.(this.singleTheme);
-						this.showSingleMenu();
-						break;
-					case "apply":
-						this.apply(this.getAutomaticThemeSetting());
-						break;
-				}
-			},
+			() => {},
 			() => this.cancel(),
 			{ inlineDescriptions: true },
 		);
@@ -3429,91 +3491,151 @@ export class SettingsSelectorComponent extends Container {
 				id: "autocompact",
 				label: "Auto-compact",
 				description: "自动压缩过长对话",
-				currentValue: config.autoCompact ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.autoCompact ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "steering-mode",
 				label: "Steering mode",
 				description: "回复中消息发送方式",
-				currentValue: config.steeringMode,
-				values: ["one-at-a-time", "all"],
+				currentValue: STEERING_MODE_LABELS[config.steeringMode],
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Steering mode",
+						"选择回复进行中收到新消息时的处理方式。",
+						[
+							{ value: "One at a time", label: "One at a time" },
+							{ value: "All", label: "All" },
+						],
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "follow-up-mode",
 				label: "Follow-up mode",
 				description: "任务后消息发送方式",
-				currentValue: config.followUpMode,
-				values: ["one-at-a-time", "all"],
+				currentValue: STEERING_MODE_LABELS[config.followUpMode],
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Follow-up mode",
+						"选择任务完成后排队消息的处理方式。",
+						[
+							{ value: "One at a time", label: "One at a time" },
+							{ value: "All", label: "All" },
+						],
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "transport",
 				label: "Transport",
 				description: "选择模型连接方式",
-				currentValue: config.transport,
-				values: ["sse", "websocket", "websocket-cached", "auto"],
+				currentValue: TRANSPORT_LABELS[config.transport],
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Transport",
+						"选择模型请求的连接方式。",
+						[...Object.entries(TRANSPORT_LABELS).map(([_value, label]) => ({ value: label, label }))],
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "http-idle-timeout",
 				label: "HTTP idle timeout",
 				description: "设置连接空闲时限",
 				currentValue: formatHttpIdleTimeoutMs(config.httpIdleTimeoutMs),
-				values: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => choice.label),
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"HTTP idle timeout",
+						"连接在指定时间内没有数据时自动断开。",
+						HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => ({ value: choice.label, label: choice.label })),
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "hide-thinking",
 				label: "Collapse transcript",
 				description: "折叠思考和工具输出",
-				currentValue: config.hideThinkingBlock ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.hideThinkingBlock ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
 				description: "提示缓存复用失败",
-				currentValue: config.showCacheMissNotices ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.showCacheMissNotices ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "collapse-changelog",
 				label: "Collapse changelog",
 				description: "精简更新日志",
-				currentValue: config.collapseChangelog ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.collapseChangelog ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "quiet-startup",
 				label: "Quiet startup",
 				description: "隐藏启动详情",
-				currentValue: config.quietStartup ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.quietStartup ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "install-telemetry",
 				label: "Install telemetry",
 				description: "发送匿名版本统计",
-				currentValue: config.enableInstallTelemetry ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.enableInstallTelemetry ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "default-project-trust",
 				label: "Default project trust",
 				description: "设置新项目默认信任",
 				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
-				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Default project trust",
+						"选择新项目未明确授权时的默认处理方式。",
+						Object.values(DEFAULT_PROJECT_TRUST_LABELS).map((label) => ({ value: label, label })),
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "double-escape-action",
 				label: "Double-escape action",
 				description: "兼容设置，当前无效",
-				currentValue: config.doubleEscapeAction,
-				values: ["tree", "fork", "none"],
+				currentValue: DOUBLE_ESCAPE_ACTION_LABELS[config.doubleEscapeAction],
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Double-escape action",
+						"该兼容设置当前不会触发操作。",
+						[...Object.entries(DOUBLE_ESCAPE_ACTION_LABELS).map(([_value, label]) => ({ value: label, label }))],
+						currentValue,
+						done,
+					),
 			},
 			{
 				id: "warnings",
 				label: "Warnings",
 				description: "管理费用相关警告",
-				currentValue: "configure",
+				currentValue: "Configure",
 				submenu: (_currentValue, done) =>
 					new WarningSettingsSubmenu(
 						currentWarnings,
@@ -3563,15 +3685,24 @@ export class SettingsSelectorComponent extends Container {
 				id: "show-images",
 				label: "Show images",
 				description: "在终端显示图片",
-				currentValue: config.showImages ? "true" : "false",
-				values: ["true", "false"],
+				interaction: "toggle",
+				currentValue: config.showImages ? "On" : "Off",
+				values: ["Off", "On"],
 			});
 			items.splice(2, 0, {
 				id: "image-width-cells",
 				label: "Image width",
 				description: "调整图片显示宽度",
 				currentValue: String(config.imageWidthCells),
-				values: ["60", "80", "120"],
+				interaction: "select",
+				submenu: (currentValue, done) =>
+					createSettingsChoiceSubmenu(
+						"Image width",
+						"选择终端内联图片占用的最大列数。",
+						["60", "80", "120"].map((value) => ({ value, label: `${value} columns` })),
+						currentValue,
+						done,
+					),
 			});
 		}
 
@@ -3580,8 +3711,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "auto-resize-images",
 			label: "Auto-resize images",
 			description: "自动缩小过大图片",
-			currentValue: config.autoResizeImages ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.autoResizeImages ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Block images toggle (always available, insert after auto-resize-images)
@@ -3590,8 +3722,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "block-images",
 			label: "Block images",
 			description: "禁止向模型发送图片",
-			currentValue: config.blockImages ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.blockImages ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Skill commands toggle (insert after block-images)
@@ -3600,8 +3733,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "skill-commands",
 			label: "Skill commands",
 			description: "把技能加入斜杠命令",
-			currentValue: config.enableSkillCommands ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.enableSkillCommands ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Hardware cursor toggle (insert after skill-commands)
@@ -3610,8 +3744,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "show-hardware-cursor",
 			label: "Show hardware cursor",
 			description: "显示终端输入光标",
-			currentValue: config.showHardwareCursor ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.showHardwareCursor ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Editor padding toggle (insert after show-hardware-cursor)
@@ -3621,7 +3756,15 @@ export class SettingsSelectorComponent extends Container {
 			label: "Editor padding",
 			description: "调整输入框留白",
 			currentValue: String(config.editorPaddingX),
-			values: ["0", "1", "2", "3"],
+			interaction: "select",
+			submenu: (currentValue, done) =>
+				createSettingsChoiceSubmenu(
+					"Editor padding",
+					"选择输入框左右留白的列数。",
+					["0", "1", "2", "3"].map((value) => ({ value, label: `${value} columns` })),
+					currentValue,
+					done,
+				),
 		});
 
 		// Output padding toggle (insert after editor-padding)
@@ -3631,7 +3774,18 @@ export class SettingsSelectorComponent extends Container {
 			label: "Output padding",
 			description: "调整消息左右留白",
 			currentValue: String(config.outputPad),
-			values: ["0", "1"],
+			interaction: "select",
+			submenu: (currentValue, done) =>
+				createSettingsChoiceSubmenu(
+					"Output padding",
+					"选择消息输出的左右留白级别。",
+					[
+						{ value: "0", label: "Compact" },
+						{ value: "1", label: "Comfortable" },
+					],
+					currentValue,
+					done,
+				),
 		});
 
 		// Autocomplete max visible toggle (insert after output-padding)
@@ -3641,7 +3795,15 @@ export class SettingsSelectorComponent extends Container {
 			label: "Autocomplete max items",
 			description: "设置候选显示数量",
 			currentValue: String(config.autocompleteMaxVisible),
-			values: ["3", "5", "7", "10", "15", "20"],
+			interaction: "select",
+			submenu: (currentValue, done) =>
+				createSettingsChoiceSubmenu(
+					"Autocomplete max items",
+					"选择输入时最多显示多少个候选。",
+					["3", "5", "7", "10", "15", "20"].map((value) => ({ value, label: value })),
+					currentValue,
+					done,
+				),
 		});
 
 		// Clear on shrink toggle (insert after autocomplete-max-visible)
@@ -3650,8 +3812,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "clear-on-shrink",
 			label: "Clear on shrink",
 			description: "清除终端残留文字",
-			currentValue: config.clearOnShrink ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.clearOnShrink ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Terminal progress toggle (insert after clear-on-shrink)
@@ -3660,8 +3823,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "terminal-progress",
 			label: "Terminal progress",
 			description: "显示任务运行状态",
-			currentValue: config.showTerminalProgress ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.showTerminalProgress ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		// Popup notifications toggle (insert after terminal-progress)
@@ -3670,8 +3834,9 @@ export class SettingsSelectorComponent extends Container {
 			id: "popup-notifications",
 			label: "Popup notifications",
 			description: "任务结束弹窗提醒",
-			currentValue: config.popupNotifications ? "true" : "false",
-			values: ["true", "false"],
+			interaction: "toggle",
+			currentValue: config.popupNotifications ? "On" : "Off",
+			values: ["Off", "On"],
 		});
 
 		const submenuIds = new Set<string>();
@@ -3702,31 +3867,31 @@ export class SettingsSelectorComponent extends Container {
 				if (!submenuIds.has(id)) dependencies.settingsManager.recordSettingsItemUsage(id);
 				switch (id) {
 					case "autocompact":
-						callbacks.onAutoCompactChange(newValue === "true");
+						callbacks.onAutoCompactChange(newValue === "On");
 						break;
 					case "show-images":
-						callbacks.onShowImagesChange(newValue === "true");
+						callbacks.onShowImagesChange(newValue === "On");
 						break;
 					case "image-width-cells":
 						callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
 						break;
 					case "auto-resize-images":
-						callbacks.onAutoResizeImagesChange(newValue === "true");
+						callbacks.onAutoResizeImagesChange(newValue === "On");
 						break;
 					case "block-images":
-						callbacks.onBlockImagesChange(newValue === "true");
+						callbacks.onBlockImagesChange(newValue === "On");
 						break;
 					case "skill-commands":
-						callbacks.onEnableSkillCommandsChange(newValue === "true");
+						callbacks.onEnableSkillCommandsChange(newValue === "On");
 						break;
 					case "steering-mode":
-						callbacks.onSteeringModeChange(newValue as "all" | "one-at-a-time");
+						callbacks.onSteeringModeChange(STEERING_MODE_BY_LABEL.get(newValue) ?? config.steeringMode);
 						break;
 					case "follow-up-mode":
-						callbacks.onFollowUpModeChange(newValue as "all" | "one-at-a-time");
+						callbacks.onFollowUpModeChange(STEERING_MODE_BY_LABEL.get(newValue) ?? config.followUpMode);
 						break;
 					case "transport":
-						callbacks.onTransportChange(newValue as Transport);
+						callbacks.onTransportChange(TRANSPORT_BY_LABEL.get(newValue) ?? config.transport);
 						break;
 					case "http-idle-timeout": {
 						const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
@@ -3736,19 +3901,19 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "hide-thinking":
-						callbacks.onHideThinkingBlockChange(newValue === "true");
+						callbacks.onHideThinkingBlockChange(newValue === "On");
 						break;
 					case "cache-miss-notices":
-						callbacks.onShowCacheMissNoticesChange(newValue === "true");
+						callbacks.onShowCacheMissNoticesChange(newValue === "On");
 						break;
 					case "collapse-changelog":
-						callbacks.onCollapseChangelogChange(newValue === "true");
+						callbacks.onCollapseChangelogChange(newValue === "On");
 						break;
 					case "quiet-startup":
-						callbacks.onQuietStartupChange(newValue === "true");
+						callbacks.onQuietStartupChange(newValue === "On");
 						break;
 					case "install-telemetry":
-						callbacks.onEnableInstallTelemetryChange(newValue === "true");
+						callbacks.onEnableInstallTelemetryChange(newValue === "On");
 						break;
 					case "default-project-trust": {
 						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
@@ -3758,10 +3923,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "double-escape-action":
-						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");
+						callbacks.onDoubleEscapeActionChange(
+							DOUBLE_ESCAPE_ACTION_BY_LABEL.get(newValue) ?? config.doubleEscapeAction,
+						);
 						break;
 					case "show-hardware-cursor":
-						callbacks.onShowHardwareCursorChange(newValue === "true");
+						callbacks.onShowHardwareCursorChange(newValue === "On");
 						break;
 					case "editor-padding":
 						callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
@@ -3773,13 +3940,13 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
 						break;
 					case "clear-on-shrink":
-						callbacks.onClearOnShrinkChange(newValue === "true");
+						callbacks.onClearOnShrinkChange(newValue === "On");
 						break;
 					case "terminal-progress":
-						callbacks.onShowTerminalProgressChange(newValue === "true");
+						callbacks.onShowTerminalProgressChange(newValue === "On");
 						break;
 					case "popup-notifications":
-						callbacks.onPopupNotificationsChange(newValue === "true");
+						callbacks.onPopupNotificationsChange(newValue === "On");
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

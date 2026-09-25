@@ -31,6 +31,7 @@ Sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider a
 - [Compaction](compaction.md) — context compaction and branch summaries.
 - [Git Worktrees](worktrees.md) — managing development worktrees through `/git`.
 - [Keybindings](keybindings.md) — default shortcuts and customization.
+- [Interaction guidelines](interaction-guidelines.md) — the shared contract for settings, navigation, actions, dialogs, feedback, and keyboard behavior.
 
 ## Extensibility
 

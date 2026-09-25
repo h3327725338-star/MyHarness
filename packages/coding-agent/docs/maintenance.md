@@ -26,6 +26,7 @@
 
 - `tools/` 的 execution details 与 `tools/presentation/` 的展示保持分离。
 - `modes/interactive` 负责产品交互；可复用 terminal component 应放 `packages/tui`。
+- UI 交互修改遵循 [Interaction guidelines](interaction-guidelines.md)；共享 `SettingItem`/`SettingsList` contract 在产品层统一 Settings、导航、Action、状态和键盘行为。
 - `platform/process` 负责 Windows/Bun/Node 进程和 stdout 边界；不要在每个 tool 中复制。
 - `symbols` 的结果要保留 backend/source 信息；semantic backend 不可用时不能伪称已成功启动语言服务器。
 

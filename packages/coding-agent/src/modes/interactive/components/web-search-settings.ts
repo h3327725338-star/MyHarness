@@ -106,16 +106,12 @@ class EngineSelectionSubmenu extends Container {
 			const engineItems: SettingItem[] = engines.map((engine) => ({
 				id: engine,
 				label: engine,
-				currentValue: this.initial.engineMode === "all" || selected.has(engine.toLowerCase()) ? "on" : "off",
-				values: ["on", "off"],
+				interaction: "toggle",
+				currentValue: this.initial.engineMode === "all" || selected.has(engine.toLowerCase()) ? "On" : "Off",
+				values: ["Off", "On"],
 			}));
-			const items: SettingItem[] = [
-				{ id: "__select-all", label: "Select all", currentValue: "run", values: ["run"] },
-				{ id: "__clear-all", label: "Clear all", currentValue: "run", values: ["run"] },
-				...engineItems,
-			];
 			const commitSelection = (): void => {
-				const enabled = new Set(engineItems.filter((item) => item.currentValue === "on").map((item) => item.id));
+				const enabled = new Set(engineItems.filter((item) => item.currentValue === "On").map((item) => item.id));
 				const allEnabled = enabled.size === engines.length;
 				this.onChange({
 					...this.initial,
@@ -123,16 +119,35 @@ class EngineSelectionSubmenu extends Container {
 					engines: allEnabled ? [] : [...enabled].sort((a, b) => a.localeCompare(b)),
 				});
 			};
+			const items: SettingItem[] = [
+				{
+					id: "__select-all",
+					label: "Select all",
+					interaction: "action",
+					currentValue: "Run",
+					onActivate: () => {
+						for (const item of engineItems) item.currentValue = "On";
+						commitSelection();
+					},
+				},
+				{
+					id: "__clear-all",
+					label: "Clear all",
+					interaction: "action",
+					currentValue: "Run",
+					onActivate: () => {
+						for (const item of engineItems) item.currentValue = "Off";
+						commitSelection();
+					},
+				},
+				...engineItems,
+			];
 			const list = new SettingsList(
 				items,
 				10,
 				getSettingsListTheme(),
 				(id) => {
-					if (id === "__select-all" || id === "__clear-all") {
-						const enabled = id === "__select-all";
-						for (const item of engineItems) item.currentValue = enabled ? "on" : "off";
-					}
-					commitSelection();
+					if (id !== "__select-all" && id !== "__clear-all") commitSelection();
 				},
 				this.onDone,
 				{ inlineDescriptions: true },
@@ -145,10 +160,18 @@ class EngineSelectionSubmenu extends Container {
 
 	private showError(message: string): void {
 		const list = new SettingsList(
-			[{ id: "back", label: "返回", currentValue: "", values: [""] }],
+			[
+				{
+					id: "back",
+					label: "返回",
+					interaction: "action",
+					currentValue: "Back",
+					onActivate: () => this.onDone(),
+				},
+			],
 			1,
 			getSettingsListTheme(),
-			() => this.onDone(),
+			() => {},
 			this.onDone,
 		);
 		this.setContent(new ContainerWithMessage(message, list));
@@ -194,10 +217,18 @@ class HealthSubmenu extends Container {
 			crawl4ai: { ok: false, message: "未执行" },
 		}));
 		const list = new SettingsList(
-			[{ id: "back", label: "返回", currentValue: "", values: [""] }],
+			[
+				{
+					id: "back",
+					label: "返回",
+					interaction: "action",
+					currentValue: "Back",
+					onActivate: onDone,
+				},
+			],
 			1,
 			getSettingsListTheme(),
-			onDone,
+			() => {},
 			onDone,
 		);
 		this.setContent(
@@ -268,8 +299,9 @@ export class WebSearchSettingsSubmenu extends Container {
 				id: "enabled",
 				label: "Web Search",
 				description: "实际控制 web_search 和 web_fetch 是否注册给主 Agent",
-				currentValue: this.state.enabled ? "on" : "off",
-				values: ["on", "off"],
+				interaction: "toggle",
+				currentValue: this.state.enabled ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			{
 				id: "searxng-url",
@@ -289,7 +321,7 @@ export class WebSearchSettingsSubmenu extends Container {
 				id: "engines",
 				label: "Search Engines",
 				description: "从当前 SearXNG 实例读取并选择引擎",
-				currentValue: this.state.engineMode === "all" ? "all" : `${this.state.engines.length} selected`,
+				currentValue: this.state.engineMode === "all" ? "All engines" : `${this.state.engines.length} selected`,
 				submenu: () =>
 					new EngineSelectionSubmenu(
 						this.service,
@@ -302,7 +334,7 @@ export class WebSearchSettingsSubmenu extends Container {
 				id: "scope",
 				label: "Website Scope",
 				description: "限制搜索结果和网页读取的 hostname 范围",
-				currentValue: this.state.scope === "unrestricted" ? "unrestricted" : "allowlist",
+				currentValue: this.state.scope === "unrestricted" ? "All websites" : "Only selected websites",
 				submenu: () =>
 					new ChoiceSubmenu(
 						"Website Scope",
@@ -354,7 +386,7 @@ export class WebSearchSettingsSubmenu extends Container {
 			getSettingsListTheme(),
 			(id, value) => {
 				if (id === "enabled") {
-					this.commit({ ...this.state, enabled: value === "on" });
+					this.commit({ ...this.state, enabled: value === "On" });
 				}
 			},
 			() => this.onDone(formatSummary(this.state)),

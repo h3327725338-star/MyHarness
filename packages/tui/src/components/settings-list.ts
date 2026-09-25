@@ -13,9 +13,24 @@ export interface SettingItem {
 	description?: string;
 	/** Current value to display (right side) */
 	currentValue: string;
-	/** If provided, Enter/Space cycles through these values */
+	/**
+	 * Semantic interaction contract for the row.
+	 *
+	 * - toggle: an immediate binary setting; Enter/Space toggles it.
+	 * - select: Enter/Space opens a single-selection submenu.
+	 * - navigate: Enter/Space enters a detail page/submenu.
+	 * - action: Enter/Space runs an immediate command.
+	 * - status: read-only information.
+	 * - cycle: legacy compatibility for older callers that still cycle values inline.
+	 */
+	interaction?: "toggle" | "select" | "navigate" | "action" | "status" | "cycle";
+	/** Binary or legacy inline values. New UI should use `toggle` or a submenu instead. */
 	values?: string[];
-	/** If provided, Enter opens this submenu. Receives current value and done callback. */
+	/** Disabled rows remain visible but never activate. Explain the reason in the description or hint. */
+	disabled?: boolean;
+	/** Immediate command used by `action` rows. */
+	onActivate?: () => void;
+	/** If provided, Enter/Space opens this submenu. Receives current value and done callback. */
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 }
 
@@ -147,7 +162,10 @@ export class SettingsList implements Component, Focusable {
 		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
 		const prefixColumnWidth = Math.max(2, visibleWidth(this.theme.cursor));
-		const maxValueWidth = Math.min(44, Math.max(...this.items.map((item) => visibleWidth(item.currentValue))));
+		const maxValueWidth = Math.min(
+			44,
+			Math.max(...this.items.map((item) => visibleWidth(this.getDisplayValue(item)))),
+		);
 		const inlineDescriptionSeparator = "  ";
 		const inlineValueWidth = Math.max(8, maxValueWidth);
 		const inlineDescriptionMinWidth = 16;
@@ -178,7 +196,7 @@ export class SettingsList implements Component, Focusable {
 			const separator = "  ";
 			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
 			if (showInlineDescriptions) {
-				const value = truncateToWidth(item.currentValue, inlineValueWidth, "");
+				const value = truncateToWidth(this.getDisplayValue(item), inlineValueWidth, "");
 				const valuePadded = value + " ".repeat(Math.max(0, inlineValueWidth - visibleWidth(value)));
 				const valueText = this.theme.value(valuePadded, isSelected);
 				const descriptionMaxWidth = width - usedWidth - inlineValueWidth - visibleWidth(inlineDescriptionSeparator);
@@ -192,7 +210,10 @@ export class SettingsList implements Component, Focusable {
 				);
 			} else {
 				const valueMaxWidth = width - usedWidth - 2;
-				const valueText = this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
+				const valueText = this.theme.value(
+					truncateToWidth(this.getDisplayValue(item), valueMaxWidth, ""),
+					isSelected,
+				);
 				lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
 			}
 		}
@@ -214,7 +235,7 @@ export class SettingsList implements Component, Focusable {
 		}
 
 		// Add hint
-		this.addHintLine(lines, width);
+		this.addHintLine(lines, width, displayItems[this.selectedIndex]);
 
 		return lines;
 	}
@@ -253,6 +274,7 @@ export class SettingsList implements Component, Focusable {
 	private activateItem(): void {
 		const item = this.searchEnabled ? this.filteredItems[this.selectedIndex] : this.items[this.selectedIndex];
 		if (!item) return;
+		if (item.disabled) return;
 
 		if (item.submenu) {
 			// Open submenu, passing current value so it can pre-select correctly
@@ -265,14 +287,57 @@ export class SettingsList implements Component, Focusable {
 				this.closeSubmenu();
 			});
 			this.updateFocusedChild();
+		} else if (item.onActivate) {
+			item.onActivate();
+		} else if (this.getInteraction(item) === "toggle") {
+			const values = item.values?.length === 2 ? item.values : ["Off", "On"];
+			const currentIndex = values.indexOf(item.currentValue);
+			const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % values.length;
+			const newValue = values[nextIndex];
+			if (newValue === undefined) return;
+			item.currentValue = newValue;
+			this.onChange(item.id, newValue);
 		} else if (item.values && item.values.length > 0) {
-			// Cycle through values
+			// Keep the old inline-cycle behavior for compatibility with extensions and
+			// older callers. Product UI should use `toggle` or a submenu instead.
 			const currentIndex = item.values.indexOf(item.currentValue);
 			const nextIndex = (currentIndex + 1) % item.values.length;
 			const newValue = item.values[nextIndex];
 			item.currentValue = newValue;
 			this.onChange(item.id, newValue);
 		}
+	}
+
+	private getInteraction(item: SettingItem): NonNullable<SettingItem["interaction"]> {
+		if (item.interaction) return item.interaction;
+		if (item.submenu) return "navigate";
+		if (item.values && item.values.length > 0) return "cycle";
+		return "status";
+	}
+
+	private getDisplayValue(item: SettingItem): string {
+		if (item.disabled) return item.currentValue ? `${item.currentValue}  ⊘` : "Disabled";
+		const interaction = this.getInteraction(item);
+		if (interaction === "navigate" || interaction === "select") {
+			return item.currentValue ? `${item.currentValue}  ›` : "›";
+		}
+		if (interaction === "action") {
+			return item.currentValue ? `${item.currentValue}  ▶` : "▶";
+		}
+		if (interaction === "cycle") return `${item.currentValue}  ↻`;
+		return item.currentValue;
+	}
+
+	private getInteractionHint(item: SettingItem | undefined): string {
+		if (!item) return "Enter/Space to interact";
+		if (item.disabled) return "Disabled";
+		if (item.submenu || item.interaction === "navigate" || item.interaction === "select") {
+			return "Enter/Space to open";
+		}
+		if (item.onActivate || item.interaction === "action") return "Enter/Space to run";
+		if (item.interaction === "toggle") return "Enter/Space to toggle";
+		if (item.values && item.values.length > 0) return "Enter/Space to cycle";
+		return "Read-only";
 	}
 
 	private closeSubmenu(): void {
@@ -293,14 +358,14 @@ export class SettingsList implements Component, Focusable {
 		this.selectedIndex = 0;
 	}
 
-	private addHintLine(lines: string[], width: number): void {
+	private addHintLine(lines: string[], width: number, selectedItem?: SettingItem): void {
 		lines.push("");
 		lines.push(
 			truncateToWidth(
 				this.theme.hint(
 					this.searchEnabled
-						? "  Type to search · Enter/Space to change · Esc to cancel"
-						: "  Enter/Space to change · Esc to cancel",
+						? `  Type to search · ${this.getInteractionHint(selectedItem)} · Esc to cancel`
+						: `  ${this.getInteractionHint(selectedItem)} · Esc to cancel`,
 				),
 				width,
 			),

@@ -18,6 +18,17 @@ const visibleIndexOf = (line: string, text: string): number => {
 };
 
 describe("SelectList", () => {
+	it("uses Enter and Space consistently for selection", () => {
+		const selected: string[] = [];
+		const list = new SelectList([{ value: "first", label: "First" }], 5, testTheme);
+		list.onSelect = (item) => selected.push(item.value);
+
+		list.handleInput(" ");
+		list.handleInput("\r");
+
+		assert.deepEqual(selected, ["first", "first"]);
+	});
+
 	it("normalizes multiline descriptions to single line", () => {
 		const items = [
 			{

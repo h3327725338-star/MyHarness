@@ -11,6 +11,10 @@
 是开发规则入口，产品运行时的 `AGENTS.md`/`CLAUDE.md` 则由 context loader 作为
 项目上下文注入，二者不要通过第二套规则系统复制。
 
+修改产品交互前先阅读 [Interaction guidelines](interaction-guidelines.md)。它是
+Settings、导航、Action、确认、反馈和键盘焦点行为的统一 contract；如果具体 Provider、
+Session 或 Workspace 流程需要偏离，必须保留其数据关系并在代码中说明原因。
+
 CI 的正式 baseline 见 [GitHub 自动化维护文档](../../../docs/maintenance/github-automation.md)：
 只使用 `windows-2022` 和 `windows-2025`，两边执行相同流程且都必须通过。它们是
 GitHub Windows Server 验证环境，不等于最终用户 Windows 桌面版本支持矩阵。

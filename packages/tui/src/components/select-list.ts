@@ -122,7 +122,7 @@ export class SelectList implements Component {
 			this.notifySelectionChange();
 		}
 		// Enter
-		else if (kb.matches(keyData, "tui.select.confirm")) {
+		else if (kb.matches(keyData, "tui.select.confirm") || keyData === " ") {
 			const selectedItem = this.filteredItems[this.selectedIndex];
 			if (selectedItem && this.onSelect) {
 				this.onSelect(selectedItem);

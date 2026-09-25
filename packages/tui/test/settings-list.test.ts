@@ -18,6 +18,88 @@ const items = [
 ];
 
 describe("SettingsList inline descriptions", () => {
+	it("uses explicit toggle, navigation, action, and status semantics", () => {
+		const activated = { count: 0 };
+		const changes: string[] = [];
+		const list = new SettingsList(
+			[
+				{
+					id: "toggle",
+					label: "Toggle",
+					interaction: "toggle",
+					currentValue: "Off",
+					values: ["Off", "On"],
+				},
+				{
+					id: "details",
+					label: "Details",
+					interaction: "navigate",
+					currentValue: "Current",
+					submenu: () => ({ render: () => ["submenu"], handleInput: () => {}, invalidate: () => {} }) as Component,
+				},
+				{
+					id: "run",
+					label: "Run",
+					interaction: "action",
+					currentValue: "Run",
+					onActivate: () => {
+						activated.count += 1;
+					},
+				},
+				{ id: "status", label: "Status", interaction: "status", currentValue: "Ready" },
+			],
+			10,
+			testTheme,
+			(id, value) => changes.push(`${id}:${value}`),
+			() => {},
+		);
+
+		const initial = list.render(100).join("\n");
+		assert.match(initial, /Current {2}›/);
+		assert.match(initial, /Run {2}▶/);
+		assert.doesNotMatch(initial, /true|false/);
+
+		list.handleInput("\r");
+		assert.deepEqual(changes, ["toggle:On"]);
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		list.handleInput("\r");
+		assert.equal(activated.count, 1);
+		assert.equal(list.render(100).join("\n").includes("Enter/Space to run"), true);
+		list.handleInput("\x1b[B");
+		assert.equal(list.render(100).join("\n").includes("Read-only"), true);
+		list.handleInput("\r");
+		assert.deepEqual(changes, ["toggle:On"]);
+	});
+
+	it("shows disabled state and ignores activation", () => {
+		let activated = false;
+		const list = new SettingsList(
+			[
+				{
+					id: "unavailable",
+					label: "Unavailable",
+					interaction: "action",
+					currentValue: "Requires setup",
+					disabled: true,
+					onActivate: () => {
+						activated = true;
+					},
+				},
+			],
+			1,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		const rendered = list.render(100).join("\n");
+		assert.match(rendered, /Requires setup {2}⊘/);
+		assert.match(rendered, /Disabled/);
+		list.handleInput("\r");
+		assert.equal(activated, false);
+	});
+
 	it("shows every visible description in an aligned right-side column", () => {
 		const list = new SettingsList(
 			items,

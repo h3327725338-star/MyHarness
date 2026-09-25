@@ -94,6 +94,18 @@ describe("Vision Assistant settings", () => {
 			scopedModels: [],
 		});
 		const items = (selector.getSettingsList() as unknown as { items: SettingItem[] }).items;
+		const inlineValues = items.filter((item) => item.values);
+		expect(inlineValues.length).toBeGreaterThan(0);
+		for (const item of inlineValues) {
+			expect(item.interaction).toBe("toggle");
+			expect(item.values).toEqual(["Off", "On"]);
+			expect(["Off", "On"]).toContain(item.currentValue);
+		}
+		expect(items.map((item) => item.currentValue)).not.toContain("true");
+		expect(items.map((item) => item.currentValue)).not.toContain("false");
+		expect(items.map((item) => item.currentValue)).not.toContain("one-at-a-time");
+		expect(items.map((item) => item.currentValue)).not.toContain("unrestricted");
+		expect(items.map((item) => item.currentValue)).not.toContain("allowlist");
 		const item = items.find((candidate) => candidate.id === "vision-assistant");
 		if (!item?.submenu) throw new Error("Missing Vision Assistant submenu");
 		const submenu = item.submenu(item.currentValue, vi.fn());

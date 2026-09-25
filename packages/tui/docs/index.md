@@ -14,6 +14,7 @@
 - [TUI README](../README.md)：公共 API、内置组件和 custom component 示例。
 - [维护手册](maintenance.md)：render/invalidate/focus/terminal contract、测试和 native 边界。
 - [后续开发](roadmap.md)：组件、渲染和平台适配边界。
+- [Coding Agent interaction guidelines](../../coding-agent/docs/interaction-guidelines.md)：产品层 Settings、导航、Action、状态和键盘行为的统一语义。
 
 ## 关键 contract
 
