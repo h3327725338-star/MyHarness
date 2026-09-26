@@ -259,6 +259,28 @@ describe.skipIf(!gitAvailable)("Git checkpoints", () => {
 		}
 	});
 
+	it("never expires an unresolved checkpoint by default", async () => {
+		const { project, storageRoot } = createRepository();
+		const created = await createGitCheckpoint({
+			cwd: project,
+			sessionId: "session-no-expiry",
+			storageRoot,
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+		});
+		expect(created.ok).toBe(true);
+		const checkpoint = created.checkpoint!;
+
+		const cleanup = cleanupGitCheckpoints({
+			storageRoot,
+			sessionId: "session-no-expiry",
+			now: () => new Date("2036-01-01T00:00:00.000Z"),
+		});
+		expect(cleanup).toEqual({ removed: 0, failed: [] });
+		expect(existsSync(checkpoint.storagePath)).toBe(true);
+		expect(runGit(project, ["show-ref", "--verify", checkpoint.checkpointRef!]).ok).toBe(true);
+		expect(runGit(project, ["show-ref", "--verify", checkpoint.indexCheckpointRef!]).ok).toBe(true);
+	});
+
 	it("cleans expired checkpoints without touching the project", async () => {
 		const { project, storageRoot } = createRepository();
 		const created = await createGitCheckpoint({
@@ -279,6 +301,7 @@ describe.skipIf(!gitAvailable)("Git checkpoints", () => {
 			storageRoot,
 			sessionId: "session-five",
 			now: () => new Date("2026-01-09T00:00:00.000Z"),
+			ttlMs: 7 * 24 * 60 * 60 * 1000,
 		});
 		expect(cleanup.removed).toBe(1);
 		expect(cleanup.failed).toEqual([]);

@@ -84,7 +84,7 @@ function createLifecycleContext(initialRunState: RunState) {
 		},
 		maybeStartCompletionWorkflow: vi.fn(),
 		checkShutdownRequested: vi.fn(async () => {}),
-		offerGitCheckpointRecovery: vi.fn(async () => {}),
+		settleFailedTaskGitCheckpoint: vi.fn(async () => {}),
 	};
 
 	context.getTaskLifecyclePhase = prototype.getTaskLifecyclePhase;
@@ -216,7 +216,7 @@ describe("InteractiveMode task lifecycle across agent events", () => {
 			messages: [{ role: "assistant", stopReason: "error", content: [] }],
 		});
 		expect(context.maybeStartCompletionWorkflow).not.toHaveBeenCalled();
-		expect(context.offerGitCheckpointRecovery).not.toHaveBeenCalled();
+		expect(context.settleFailedTaskGitCheckpoint).not.toHaveBeenCalled();
 
 		await setRunState(handleEvent, snapshot, "failed");
 		await setRunState(handleEvent, snapshot, "idle");
@@ -227,7 +227,7 @@ describe("InteractiveMode task lifecycle across agent events", () => {
 
 		await handleEvent({ type: "agent_settled" });
 		expect(context.maybeStartCompletionWorkflow).not.toHaveBeenCalled();
-		expect(context.offerGitCheckpointRecovery).toHaveBeenCalledOnce();
+		expect(context.settleFailedTaskGitCheckpoint).toHaveBeenCalledOnce();
 		expect(context.ui.terminal.setProgress).toHaveBeenLastCalledWith(false);
 	});
 

@@ -33,7 +33,9 @@ import { runGitAsync } from "../repository/integration.ts";
 
 const CHECKPOINT_VERSION = 2;
 const LEGACY_CHECKPOINT_VERSION = 1;
-const CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Unresolved (created) checkpoints never expire: they are the only way to undo
+// task changes with an explicit /restore, so they are kept until resolved.
+const CHECKPOINT_TTL_MS = Number.POSITIVE_INFINITY;
 const RESOLVED_CHECKPOINT_TTL_MS = 60 * 60 * 1000;
 export const GIT_CHECKPOINT_TIMEOUT_MS = 180_000;
 

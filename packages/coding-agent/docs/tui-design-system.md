@@ -75,7 +75,7 @@
 
 终态优先于 transient phase。Git checkpoint 或其他真实决策仍可打开 selector；selector 是当前可操作控件，底部任务锚点仍应保留已经发生的终态，而不是把任务改写成“正在等待”。
 
-持久化的未决 checkpoint 不是活动 selector：用户取消选择器后，checkpoint 可以继续保留以便下一次输入时重新打开，但任务 phase 回到 `idle`，不能因此继续显示等待计时或把输入框锁在一个已经关闭的控件上。
+持久化的未决 checkpoint 不是活动 selector：用户取消选择器后，checkpoint 可以继续保留，之后只能由用户输入 `/undo` 重新打开；任务 phase 回到 `idle`，下一条普通消息照常发送，不能被 checkpoint 拦截、清空或替换成恢复选择。
 
 ## 交互与焦点
 

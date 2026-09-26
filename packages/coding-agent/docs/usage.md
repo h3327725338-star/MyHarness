@@ -50,6 +50,8 @@ Editor 可能会临时被内置 UI（例如 `/settings`）或 extension 提供�
 | `/effort` | 循环切换 thinking/effort level |
 | `/commit` | 提交当前 workspace 的本地 Git changes |
 | `/push` | 将已有 commit 推送到当前 upstream，并验证 remote 与当前 commit 的 CI |
+| `/restore` | 丢弃所有未提交的改动和未跟踪文件，把仓库退回最新提交（HEAD）；执行前列出会丢失的内容并要求确认 |
+| `/undo` | 只保留或撤销当前任务检查点记录的修改 |
 | `/workflow <task>` | 运行 multi-agent workflow |
 | `/ultracode <task>` | 使用更严格的调查流程处理复杂 task |
 
@@ -59,6 +61,8 @@ Editor 可能会临时被内置 UI（例如 `/settings`）或 extension 提供�
 /workflow
 检查登录系统的实现、配置和测试
 ```
+
+`/restore` 以当前 HEAD 为目标，不区分提交是由 `/commit` 还是 `git commit` 创建；它会 `git reset --hard` 并删除未跟踪文件（包括 Windows 保留名文件如 `nul`），但保留 `.gitignore` 忽略的文件、嵌套 Git 仓库和 MyHarness 的 agent 目录，且无法撤销。`/undo` 基于任务检查点，只撤销这次任务的修改，任务开始前已有的未提交改动会保留。
 
 `/commit` 只负责创建本地 commit；`/push` 只发布已经存在的 commit。`/push` 会先 fetch 当前 branch 的真实 upstream，拒绝 remote-ahead 或 divergence，只推送当前 branch，验证 remote SHA，并在支持的 GitHub Actions 连接可用时等待仓库自身配置的 branch-push CI；无法验证 CI 时会明确报告未确认，不会声称成功。它不会自动 stage、commit、stash、force-push、推送 tags 或其他 refs；未提交的 staged、unstaged 和 untracked 文件会保留并在结果中报告。
 

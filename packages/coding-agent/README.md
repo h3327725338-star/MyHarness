@@ -117,6 +117,8 @@ Built-in commands:
 | `/effort` | Cycle thinking/effort level |
 | `/commit` | Commit the current workspace's local Git changes |
 | `/push` | Push existing commits to the current upstream and verify the remote plus configured CI |
+| `/restore` | Discard all uncommitted changes and untracked files and return to the latest commit (HEAD); shows what will be lost and asks first |
+| `/undo` | Keep or undo only the changes recorded by the open task checkpoint |
 | `/workflow <task>` | Run a multi-agent workflow |
 | `/ultracode <task>` | Handle a complex task with stricter investigation |
 

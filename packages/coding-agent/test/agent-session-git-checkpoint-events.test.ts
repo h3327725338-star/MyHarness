@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@myharness/ai";
@@ -380,26 +380,160 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 		});
 	});
 
-	it("emits a failed end when checkpoint preparation blocks a non-repository run", async () => {
+	it("emits a failed end but still runs the tool in a non-repository directory", async () => {
 		await withTemporaryAgentDirectory(async (harness) => {
 			harness.settingsManager.setGitIntegrationEnabled(true);
 			expect(harness.settingsManager.getGitIntegrationSettings().enabled).toBe(true);
 			harness.setResponses([
-				fauxAssistantMessage(
-					fauxToolCall("edit", {
-						path: "missing-repository.txt",
-						edits: [{ oldText: "before\n", newText: "after\n" }],
-					}),
-					{ stopReason: "toolUse" },
-				),
+				fauxAssistantMessage(fauxToolCall("write", { path: "outside-repository.txt", content: "written\n" }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("done"),
 			]);
 			await harness.session.prompt("start");
 
 			expect(harness.eventsOfType("git_checkpoint_start")).toHaveLength(1);
 			expect(harness.eventsOfType("git_checkpoint_end")).toHaveLength(1);
 			expect(harness.eventsOfType("git_checkpoint_end")[0]).toMatchObject({ ok: false });
+			expect(readFileSync(join(harness.tempDir, "outside-repository.txt"), "utf8")).toBe("written\n");
 		});
 	});
+
+	function initializeRepository(harness: Harness): void {
+		harness.settingsManager.setGitIntegrationEnabled(true);
+		writeFileSync(join(harness.tempDir, "initial.txt"), "initial\n", "utf8");
+		expect(initializeGitRepository(harness.tempDir).ok).toBe(true);
+		expect(
+			setLocalGitIdentity(harness.tempDir, {
+				name: "MyHarness checkpoint degraded test",
+				email: "checkpoint-degraded@example.invalid",
+			}).ok,
+		).toBe(true);
+		expect(createInitialGitBaseline(harness.tempDir).ok).toBe(true);
+	}
+
+	function toolErrors(harness: Harness): unknown[] {
+		return harness.eventsOfType("tool_execution_end").filter((event) => event.isError);
+	}
+
+	it("treats ordinary untracked files as normal repository state", async () => {
+		await withTemporaryAgentDirectory(async (harness) => {
+			initializeRepository(harness);
+			writeFileSync(join(harness.tempDir, "notes.md"), "user notes\n", "utf8");
+			mkdirSync(join(harness.tempDir, "scratch"));
+			writeFileSync(join(harness.tempDir, "scratch", "a.txt"), "a\n", "utf8");
+			writeFileSync(join(harness.tempDir, "scratch", "b.txt"), "b\n", "utf8");
+
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("edit", { path: "initial.txt", edits: [{ oldText: "initial\n", newText: "changed\n" }] }),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+			await harness.session.prompt("edit with untracked files present");
+
+			expect(harness.eventsOfType("git_checkpoint_end")).toEqual([
+				expect.objectContaining({ ok: true, checkpointId: expect.stringContaining("checkpoint-") }),
+			]);
+			expect(toolErrors(harness)).toEqual([]);
+			expect(readFileSync(join(harness.tempDir, "initial.txt"), "utf8")).toBe("changed\n");
+			expect(readFileSync(join(harness.tempDir, "notes.md"), "utf8")).toBe("user notes\n");
+			expect(readFileSync(join(harness.tempDir, "scratch", "b.txt"), "utf8")).toBe("b\n");
+			// Pre-existing untracked files are baseline state, not task changes.
+			const changes = collectGitCheckpointWorkingTreeChanges(harness.session.getGitCheckpoint()!).changes;
+			expect(changes).toEqual([{ path: "initial.txt", status: "modified" }]);
+		});
+	});
+
+	it("keeps editing, running tools and accepting the next message when Git cannot snapshot a path", async () => {
+		await withTemporaryAgentDirectory(async (harness) => {
+			initializeRepository(harness);
+			// A nested repository without commits makes `git add -A` fail on every platform.
+			mkdirSync(join(harness.tempDir, "sub"));
+			expect(runGit(join(harness.tempDir, "sub"), ["init"]).ok).toBe(true);
+
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("edit", { path: "initial.txt", edits: [{ oldText: "initial\n", newText: "changed\n" }] }),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					fauxToolCall("bash", {
+						command: `node -e "require('fs').writeFileSync('bash-output.txt', 'ok')"`,
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(fauxToolCall("write", { path: "created.txt", content: "created\n" }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(fauxToolCall("read", { path: "created.txt" }), { stopReason: "toolUse" }),
+				fauxAssistantMessage("done"),
+			]);
+			await harness.session.prompt("edit while Git is degraded");
+
+			// One attempt per run: three mutating tools did not retry the failing snapshot.
+			expect(harness.eventsOfType("git_checkpoint_start")).toHaveLength(1);
+			const [end] = harness.eventsOfType("git_checkpoint_end");
+			expect(end).toMatchObject({ ok: false });
+			expect(end.error).toContain("adding files failed");
+			expect(end.error).toContain("sub/");
+			expect(end.error).toContain("嵌套 Git 仓库");
+			expect(toolErrors(harness)).toEqual([]);
+			expect(readFileSync(join(harness.tempDir, "initial.txt"), "utf8")).toBe("changed\n");
+			expect(readFileSync(join(harness.tempDir, "bash-output.txt"), "utf8")).toBe("ok");
+			expect(readFileSync(join(harness.tempDir, "created.txt"), "utf8")).toBe("created\n");
+			expect(harness.session.getGitCheckpoint()).toBeUndefined();
+			// The problematic path is reported, never removed.
+			expect(existsSync(join(harness.tempDir, "sub", ".git"))).toBe(true);
+
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("edit", { path: "created.txt", edits: [{ oldText: "created\n", newText: "next\n" }] }),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("next done"),
+			]);
+			await harness.session.prompt("next message");
+
+			expect(readFileSync(join(harness.tempDir, "created.txt"), "utf8")).toBe("next\n");
+			// The next run gets exactly one fresh attempt.
+			expect(harness.eventsOfType("git_checkpoint_start")).toHaveLength(2);
+			expect(toolErrors(harness)).toEqual([]);
+		});
+	});
+
+	it.runIf(process.platform === "win32")(
+		"reports a Windows reserved file name without blocking edits or deleting the file",
+		async () => {
+			await withTemporaryAgentDirectory(async (harness) => {
+				initializeRepository(harness);
+				// `nul` is a device name, so the real file needs the \\?\ verbatim prefix.
+				const reservedPath = `\\\\?\\${join(harness.tempDir, "nul")}`;
+				writeFileSync(reservedPath, "");
+
+				harness.setResponses([
+					fauxAssistantMessage(
+						fauxToolCall("edit", {
+							path: "initial.txt",
+							edits: [{ oldText: "initial\n", newText: "changed\n" }],
+						}),
+						{ stopReason: "toolUse" },
+					),
+					fauxAssistantMessage("done"),
+				]);
+				await harness.session.prompt("edit next to nul");
+
+				const [end] = harness.eventsOfType("git_checkpoint_end");
+				expect(end).toMatchObject({ ok: false });
+				expect(end.error).toContain("invalid path 'nul'");
+				expect(end.error).toContain("Windows 保留设备名");
+				expect(toolErrors(harness)).toEqual([]);
+				expect(readFileSync(join(harness.tempDir, "initial.txt"), "utf8")).toBe("changed\n");
+				expect(existsSync(reservedPath)).toBe(true);
+			});
+		},
+	);
 
 	it("creates a fresh checkpoint for the next task after the previous one is retained", async () => {
 		await withTemporaryAgentDirectory(async (harness) => {

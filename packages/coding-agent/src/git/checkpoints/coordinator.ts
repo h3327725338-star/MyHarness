@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@myharness/agent-core";
 import { isBashCommandReadOnly } from "../repository/bash-command-classifier.ts";
+import { describeGitPathFailure } from "../repository/failure-diagnosis.ts";
 import {
 	completeGitCheckpoint,
 	createGitCheckpoint,
@@ -62,10 +63,18 @@ export interface AgentSessionGitCheckpointHost {
 	onActivity: (activity: string) => void;
 }
 
-/** Owns the task checkpoint lifecycle while AgentSession coordinates when it runs. */
+/**
+ * Owns the task checkpoint lifecycle while AgentSession coordinates when it runs.
+ *
+ * A checkpoint is a safety net for a later explicit restore, not a precondition
+ * for editing. When Git cannot create one (invalid paths, permissions, broken
+ * repository state) the run continues without it: the failure is reported once
+ * and creation is not retried until the next run.
+ */
 export class AgentSessionGitCheckpointCoordinator {
 	private checkpoint: GitCheckpoint | undefined;
 	private preparationPromise: Promise<void> | undefined;
+	private creationFailure: string | undefined;
 
 	private readonly host: AgentSessionGitCheckpointHost;
 
@@ -75,6 +84,7 @@ export class AgentSessionGitCheckpointCoordinator {
 
 	async prepare(): Promise<void> {
 		if (this.checkpoint?.status === "created") return;
+		if (this.creationFailure !== undefined) return;
 		if (this.preparationPromise) {
 			await this.preparationPromise;
 			return;
@@ -126,36 +136,36 @@ export class AgentSessionGitCheckpointCoordinator {
 
 	resetIfNotCreated(): void {
 		if (this.checkpoint?.status !== "created") this.checkpoint = undefined;
+		// Give each new run one fresh attempt, e.g. after the user fixed the path.
+		this.creationFailure = undefined;
 	}
 
 	private async create(): Promise<void> {
 		this.checkpoint = undefined;
 		this.host.onEvent({ type: "git_checkpoint_start" });
 		this.host.onActivity("正在创建 Git 检查点");
-		let ended = false;
-		const end = (event: Extract<GitCheckpointLifecycleEvent, { type: "git_checkpoint_end" }>) => {
-			if (ended) return;
-			ended = true;
-			this.host.onEvent(event);
-		};
 
 		await new Promise<void>((resolve) => setImmediate(resolve));
+		let result: Awaited<ReturnType<typeof createGitCheckpoint>>;
 		try {
-			const result = await createGitCheckpoint({
+			result = await createGitCheckpoint({
 				cwd: this.host.cwd,
 				sessionId: this.host.sessionId,
 				excludedPaths: this.host.excludedPaths,
 			});
-			if (!result.ok || !result.checkpoint) {
-				throw new Error(["Git：未创建任务检查点，本次修改已阻止。", result.error ?? "未知错误"].join("\n"));
-			}
-			this.checkpoint = result.checkpoint;
-			end({ type: "git_checkpoint_end", ok: true, checkpointId: result.checkpoint.id });
-			this.host.onActivity("Git 检查点已创建");
 		} catch (error) {
-			end({ type: "git_checkpoint_end", ok: false, error: error instanceof Error ? error.message : String(error) });
-			this.host.onActivity("Git 检查点创建失败");
-			throw error;
+			result = { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
+		if (result.ok && result.checkpoint) {
+			this.checkpoint = result.checkpoint;
+			this.host.onEvent({ type: "git_checkpoint_end", ok: true, checkpointId: result.checkpoint.id });
+			this.host.onActivity("Git 检查点已创建");
+			return;
+		}
+		const failure = result.error ?? "未知错误";
+		const diagnosis = describeGitPathFailure(failure);
+		this.creationFailure = [failure, ...(diagnosis ? [diagnosis] : [])].join("\n");
+		this.host.onEvent({ type: "git_checkpoint_end", ok: false, error: this.creationFailure });
+		this.host.onActivity("Git 检查点创建失败，继续执行");
 	}
 }

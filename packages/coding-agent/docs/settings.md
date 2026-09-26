@@ -278,6 +278,8 @@ task 修改 files 后，MyHarness 会发布已验证的结果，然后提供 `Sa
 
 启用 Git 后，task changes 会通过 repository 的 task checkpoint 进行跟踪。
 
+任务出错、被中断或 Provider/Tool 失败后，MyHarness 只显示真实错误并原样保留工作区，不会自动弹出恢复选择，也不会拦截下一条消息；checkpoint 仍有未处理的修改时，可以随时输入 `/undo` 选择保留或只撤销这次任务的修改；输入 `/restore` 则丢弃所有未提交内容并退回最新提交。如果 Git 无法创建 checkpoint（例如仓库里有 Windows 保留名文件 `nul`、没有提交的嵌套仓库或权限问题），MyHarness 会显示 Git 原始错误和涉及的路径，本轮不再重复尝试，Agent 继续读写文件、运行命令和接收消息，只是本轮修改无法通过 `/undo` 撤销。MyHarness 不会自动删除或清理这些文件。
+
 Project `.myharness/settings.json`:
 
 ```json

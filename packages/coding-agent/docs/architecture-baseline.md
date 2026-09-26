@@ -163,7 +163,10 @@ Provider credentials 不属于 settings JSON；它们仍由下面的 `auth.json`
 - Git 内部使用隐藏 refs：`refs/myharness/checkpoints/<session>/<id>/worktree` 和 `.../index`。
 - checkpoint 记录 session/run/actor、cwd/repository root、HEAD/ref/status hash、排除路径、local refs、worktree/index tree 和状态；恢复失败时会持久化 `invalid` 状态及诊断原因，避免会话无限重复进入 recovery。
 - restore 覆盖仓库 worktree、index、HEAD 和普通 local refs；只移除 checkpoint 之后新增的精确未跟踪路径，并保留其中的嵌套 Git 仓库。它明确不恢复 ignored files、仓库外文件、global config、credential helper 或 remote 效果；linked worktree、submodule dirty state、rebase state 等也不在保证范围。
-- created checkpoint TTL 为 7 天，resolved checkpoint TTL 为 1 小时；普通 Git 操作默认 timeout 为 30 秒，checkpoint Git 操作另用 180 秒。
+- checkpoint 只是后续显式 `/undo` 的安全网，不是修改的前置条件：`git/checkpoints/coordinator.ts` 创建失败时发出 `git_checkpoint_end { ok: false }`（附 `git/repository/failure-diagnosis.ts` 的路径诊断），本 run 不再重试，tools 照常执行；下一个 run 再尝试一次。
+- 任务异常结束后 Interactive mode 只做非交互收尾（无修改则关闭 checkpoint，有修改则保留并提示 `/undo`）；Keep / Restore 选择只由用户执行 `/undo` 打开，不会在下一条消息发送时自动弹出。
+- `/restore` 不使用 checkpoint：`git/repository/discard-changes.ts` 先预览，用户确认后 `git reset --hard HEAD` 并删除预览中列出的未跟踪路径（用 `\\?\` 路径删除 Windows 保留名），保留 ignored 文件、嵌套仓库和 agent 目录；确认后 HEAD 变化则拒绝执行。
+- created（未处理）checkpoint 默认永不过期，直到用户 `/commit`、`/undo` 或以其他方式处理；resolved checkpoint TTL 为 1 小时；普通 Git 操作默认 timeout 为 30 秒，checkpoint Git 操作另用 180 秒。
 
 ### Commit
 
