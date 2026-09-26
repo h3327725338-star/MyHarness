@@ -8,7 +8,13 @@ import {
 } from "../../context/context-window.ts";
 import { normalizePath } from "../../utils/paths.ts";
 import { assertProjectSettingsWritable, canReadProjectSettings } from "../trust/index.ts";
-import { mergeSettings, parseTimeoutSetting, SETTINGS_DEFAULTS } from "./defaults.ts";
+import {
+	mergeSettings,
+	parseTimeoutSetting,
+	SETTINGS_DEFAULTS,
+	WEB_SEARCH_ENGINE_IDS,
+	WEB_SEARCH_SETTING_RANGES,
+} from "./defaults.ts";
 import { migrateSettings } from "./migrations.ts";
 import { FileSettingsStorage, InMemorySettingsStorage, type SettingsStorage } from "./storage.ts";
 import type {
@@ -31,8 +37,8 @@ import type {
 	VisionAssistantSettings,
 	VisionCapabilityTestRecord,
 	WarningSettings,
+	WebSearchEngineId,
 	WebSearchSettings,
-	WebSearchStrategySettings,
 } from "./types.ts";
 
 export type { SettingsStorage } from "./storage.ts";
@@ -63,57 +69,58 @@ export type {
 	VisionAssistantSettings,
 	VisionCapabilityTestRecord,
 	WarningSettings,
+	WebSearchEngineId,
 	WebSearchSettings,
-	WebSearchStrategySettings,
 } from "./types.ts";
 
-function normalizeWebSearchEndpoint(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed ? trimmed.replace(/\/+$/u, "") : undefined;
+function clampWebSearchNumber(value: unknown, range: { min: number; max: number }, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.min(range.max, Math.max(range.min, Math.floor(value)));
 }
 
-function normalizeWebSearchStrategy(
-	settings: WebSearchStrategySettings | undefined,
-	defaultMode: "agent" | "manual",
-): { mode: "agent" | "manual"; value?: number } {
-	const mode = settings?.mode === "manual" || settings?.mode === "agent" ? settings.mode : defaultMode;
-	const value = settings?.value;
-	if (mode === "manual" && typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-		return { mode, value: value as number };
-	}
-	return { mode };
-}
-
+/**
+ * Resolve stored Web Search settings, migrating the SearXNG/Crawl4AI-era fields:
+ * a manual `parallelPages` limit becomes `maxUrlsPerFetch`, SearXNG engine names
+ * that match a built-in engine are kept, and every other legacy field is ignored.
+ */
 function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): ResolvedWebSearchSettings {
 	const source = settings ?? {};
-	const engineMode = source.engineMode === "selected" ? "selected" : "auto";
-	const scope = source.scope === "allowlist" ? "allowlist" : "unrestricted";
-	const normalizeList = (values: unknown): string[] =>
-		Array.isArray(values)
-			? [
-					...new Set(
-						values
-							.filter((value): value is string => typeof value === "string")
-							.map((value) => value.trim())
-							.filter(Boolean),
-					),
-				]
-			: [];
-	const positiveTtl = (value: unknown, fallback: number): number =>
-		typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+	const defaults = SETTINGS_DEFAULTS.webSearch;
+	const known = new Set<string>(WEB_SEARCH_ENGINE_IDS);
+	const requested = Array.isArray(source.engines)
+		? source.engines
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.trim().toLowerCase())
+		: undefined;
+	const selected = WEB_SEARCH_ENGINE_IDS.filter((id) => requested?.includes(id));
+	// An explicit empty list is a valid "nothing selected" state; a legacy list that
+	// matched none of the built-in engines falls back to the defaults instead.
+	const engines: WebSearchEngineId[] =
+		requested === undefined || (selected.length === 0 && requested.some((name) => !known.has(name)))
+			? [...defaults.engines]
+			: selected;
+	const legacyPages =
+		source.maxUrlsPerFetch === undefined && source.parallelPages?.mode === "manual"
+			? source.parallelPages.value
+			: undefined;
 	return {
 		enabled: source.enabled === true,
-		searxngUrl: normalizeWebSearchEndpoint(source.searxngUrl),
-		crawl4aiUrl: normalizeWebSearchEndpoint(source.crawl4aiUrl),
-		engineMode,
-		engines: normalizeList(source.engines),
-		scope,
-		allowedDomains: normalizeList(source.allowedDomains).map((domain) => domain.toLowerCase()),
-		parallelPages: normalizeWebSearchStrategy(source.parallelPages, "agent"),
-		searchRounds: normalizeWebSearchStrategy(source.searchRounds, "agent"),
-		searchCacheTtlMs: positiveTtl(source.searchCacheTtlMs, SETTINGS_DEFAULTS.webSearch.searchCacheTtlMs),
-		fetchCacheTtlMs: positiveTtl(source.fetchCacheTtlMs, SETTINGS_DEFAULTS.webSearch.fetchCacheTtlMs),
+		engines,
+		pagesPerSearch: clampWebSearchNumber(
+			source.pagesPerSearch,
+			WEB_SEARCH_SETTING_RANGES.pagesPerSearch,
+			defaults.pagesPerSearch,
+		),
+		maxUrlsPerFetch: clampWebSearchNumber(
+			source.maxUrlsPerFetch ?? legacyPages,
+			WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch,
+			defaults.maxUrlsPerFetch,
+		),
+		fetchConcurrency: clampWebSearchNumber(
+			source.fetchConcurrency,
+			WEB_SEARCH_SETTING_RANGES.fetchConcurrency,
+			defaults.fetchConcurrency,
+		),
 	};
 }
 
@@ -700,20 +707,8 @@ export class SettingsManager {
 	}
 
 	setWebSearchSettings(settings: WebSearchSettings): void {
-		const normalized = normalizeWebSearchSettings(settings);
-		this.globalSettings.webSearch = {
-			enabled: normalized.enabled,
-			searxngUrl: normalized.searxngUrl,
-			crawl4aiUrl: normalized.crawl4aiUrl,
-			engineMode: normalized.engineMode,
-			engines: normalized.engines,
-			scope: normalized.scope,
-			allowedDomains: normalized.allowedDomains,
-			parallelPages: normalized.parallelPages,
-			searchRounds: normalized.searchRounds,
-			searchCacheTtlMs: normalized.searchCacheTtlMs,
-			fetchCacheTtlMs: normalized.fetchCacheTtlMs,
-		};
+		// Replacing the whole object also drops the legacy SearXNG/Crawl4AI fields.
+		this.globalSettings.webSearch = { ...normalizeWebSearchSettings(settings) };
 		this.markModified("webSearch");
 		this.save();
 	}

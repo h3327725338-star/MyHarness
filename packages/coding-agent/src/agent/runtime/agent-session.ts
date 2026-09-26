@@ -107,6 +107,7 @@ import type { RuntimeTrace, RuntimeTraceScope } from "../../observability/runtim
 import { AgentSessionTraceCoordinator } from "../../observability/session-trace.ts";
 import { addUsageToTotals, createUsageTotals } from "../../observability/usage-totals.ts";
 import { expandPromptTemplate, type PromptTemplate } from "../../prompts/loader/index.ts";
+import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
 import { clearApiKeyCache } from "../../providers/models/composer.ts";
 import { ModelRegistry } from "../../providers/models/registry.ts";
 import { ProviderRecoveryCoordinator } from "../../providers/recovery/coordinator.ts";
@@ -1270,7 +1271,6 @@ export class AgentSession {
 		if (!this._ownsRuntimeGeneration(generation)) return;
 
 		if (event.type === "agent_start") {
-			this._webSearchService?.resetSearchRounds();
 			const onRunStart = this._pendingRunStartCallback;
 			this._pendingRunStartCallback = undefined;
 			onRunStart?.();
@@ -1761,7 +1761,7 @@ export class AgentSession {
 		const canUseTool = (name: string): boolean =>
 			(!this._allowedToolNames || this._allowedToolNames.has(name)) && !this._excludedToolNames?.has(name);
 		if (webSearchEnabled) {
-			for (const name of ["web_search", "web_fetch", "web_research"]) {
+			for (const name of ["web_search", "web_fetch"]) {
 				if (canUseTool(name) && !activeToolNames.includes(name)) activeToolNames.push(name);
 			}
 		}
@@ -3772,8 +3772,7 @@ export class AgentSession {
 		const isAllowedToolName = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
 		const isAllowedBuiltInTool = (name: string): boolean =>
-			isAllowedToolName(name) &&
-			(webSearchEnabled || (name !== "web_search" && name !== "web_fetch" && name !== "web_research"));
+			isAllowedToolName(name) && (webSearchEnabled || (name !== "web_search" && name !== "web_fetch"));
 
 		const registeredTools = this._agentRole === "delegated" ? [] : this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [
@@ -3863,6 +3862,7 @@ export class AgentSession {
 		if (!this._baseToolsOverride && !this._webSearchService) {
 			this._webSearchService = createWebSearchService({
 				settings: this.settingsManager,
+				keys: new WebSearchApiKeys(),
 				sessionManager: this.sessionManager,
 			});
 		}
@@ -3947,9 +3947,7 @@ export class AgentSession {
 					"write",
 					"symbols",
 					"github",
-					...(this.settingsManager.getWebSearchSettings().enabled
-						? ["web_search", "web_fetch", "web_research"]
-						: []),
+					...(this.settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
 				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		const subAgentEnabled = this.settingsManager.getSubAgentSettings().enabled;

@@ -58,6 +58,8 @@
 		"jiti": "2.7.0",
 		"jxl-wasm": "0.7.0",
 		"minimatch": "10.2.5",
+		"node-html-markdown": "2.0.0",
+		"node-html-parser": "6.1.13",
 		"officeparser": "8.0.0",
 		"pdfjs-dist": "6.2.108",
 		"pngjs": "7.0.0",

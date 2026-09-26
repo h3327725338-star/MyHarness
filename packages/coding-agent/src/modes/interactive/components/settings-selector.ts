@@ -3228,14 +3228,10 @@ export class SettingsSelectorComponent extends Container {
 			if (!config.webSearch) {
 				config.webSearch = dependencies.settingsManager.getWebSearchSettings?.() ?? {
 					enabled: SETTINGS_DEFAULTS.webSearch.enabled,
-					engineMode: SETTINGS_DEFAULTS.webSearch.engineMode,
-					engines: [],
-					scope: SETTINGS_DEFAULTS.webSearch.scope,
-					allowedDomains: [],
-					parallelPages: { ...SETTINGS_DEFAULTS.webSearch.parallelPages },
-					searchRounds: { ...SETTINGS_DEFAULTS.webSearch.searchRounds },
-					searchCacheTtlMs: SETTINGS_DEFAULTS.webSearch.searchCacheTtlMs,
-					fetchCacheTtlMs: SETTINGS_DEFAULTS.webSearch.fetchCacheTtlMs,
+					engines: [...SETTINGS_DEFAULTS.webSearch.engines],
+					pagesPerSearch: SETTINGS_DEFAULTS.webSearch.pagesPerSearch,
+					maxUrlsPerFetch: SETTINGS_DEFAULTS.webSearch.maxUrlsPerFetch,
+					fetchConcurrency: SETTINGS_DEFAULTS.webSearch.fetchConcurrency,
 				};
 			}
 			return config.webSearch;
@@ -3324,16 +3320,8 @@ export class SettingsSelectorComponent extends Container {
 					new WebSearchSettingsSubmenu(
 						getWebSearchConfig(),
 						(settings) => {
-							const current = getWebSearchConfig();
-							const next: ResolvedWebSearchSettings = {
-								...current,
-								...settings,
-								engineMode: settings.engineMode === "selected" ? "selected" : "auto",
-								parallelPages: { ...current.parallelPages, ...settings.parallelPages },
-								searchRounds: { ...current.searchRounds, ...settings.searchRounds },
-							};
-							config.webSearch = next;
-							callbacks.onWebSearchChange?.(next);
+							config.webSearch = settings;
+							callbacks.onWebSearchChange?.(settings);
 						},
 						dependencies,
 						done,

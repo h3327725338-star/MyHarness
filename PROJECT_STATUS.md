@@ -38,8 +38,9 @@ release.
 
 - `agent`, `workflow` and `ultracode` are optional exploration tools. They are
   disabled by default and their child Bash guard is not a security sandbox.
-- Web Search is optional, disabled by default, and depends on configured
-  SearXNG/Crawl4AI-compatible services.
+- Web Search is optional and disabled by default. It uses built-in search
+  engines; the keyless DuckDuckGo/Brave engines scrape result pages and can be
+  rate-limited or challenged, while Brave Search API needs a user API key.
 - GitHub tools and OAuth/account integrations require user credentials and
   external network access.
 - The SQLite Node backend is maintained and tested as a separate backend; the

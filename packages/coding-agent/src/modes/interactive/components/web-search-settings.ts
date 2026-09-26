@@ -11,9 +11,16 @@ import {
 	Text,
 	type TUI,
 } from "@myharness/tui";
-import type { ResolvedWebSearchSettings, SettingsManager, WebSearchSettings } from "../../../config/settings/index.ts";
-import { type WebSearchE2EResult, WebSearchService } from "../../../tools/web-search/service.ts";
-import { normalizeAllowedDomain } from "../../../tools/web-search/url.ts";
+import {
+	type ResolvedWebSearchSettings,
+	type SettingsManager,
+	WEB_SEARCH_ENGINE_IDS,
+	WEB_SEARCH_SETTING_RANGES,
+	type WebSearchEngineId,
+} from "../../../config/settings/index.ts";
+import { WebSearchApiKeys } from "../../../providers/credentials/web-search-keys.ts";
+import { WEB_SEARCH_ENGINES } from "../../../tools/web-search/engines.ts";
+import { type EngineTestResult, WEB_SEARCH_TEST_QUERY, WebSearchService } from "../../../tools/web-search/service.ts";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.ts";
 import { ExtensionInputComponent } from "./extension-input.ts";
 
@@ -22,6 +29,8 @@ const SELECT_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 32 } a
 interface WebSearchSettingsDependencies {
 	tui: TUI;
 	settingsManager: SettingsManager;
+	/** Injectable for tests; defaults to the owner-only key file in the agent directory. */
+	webSearchKeys?: WebSearchApiKeys;
 }
 
 function isFocusable(component: Component | undefined): component is Component & Focusable {
@@ -138,7 +147,7 @@ function messagePage(message: string, onBack: () => void): Component {
 /**
  * Runs one network task behind a loading page. Esc is honored while the task is
  * pending: it aborts the request and returns immediately, so leaving the page
- * never depends on an unreachable SearXNG or Crawl4AI instance answering.
+ * never depends on a slow search engine answering.
  */
 class CancellableTaskPage extends PageHost {
 	private readonly controller = new AbortController();
@@ -186,226 +195,203 @@ class CancellableTaskPage extends PageHost {
 	}
 }
 
-function engineSelectionPage(
-	tui: TUI,
-	service: WebSearchService,
-	getSettings: () => ResolvedWebSearchSettings,
-	onChange: (settings: ResolvedWebSearchSettings) => void,
-	onDone: () => void,
-): Component {
-	return new CancellableTaskPage(tui, "正在从 SearXNG /config 读取当前引擎…", onDone, async (signal, back) => {
-		const engines = await service.getAvailableEngines(signal);
-		if (engines.length === 0) return messagePage("SearXNG 返回了空的引擎列表。请检查实例配置。", back);
-		const initial = getSettings();
-		const selected = new Set(initial.engines.map((engine) => engine.toLowerCase()));
-		const engineItems: SettingItem[] = engines.map((engine) => ({
-			id: engine,
-			label: engine,
-			interaction: "toggle",
-			currentValue: initial.engineMode === "auto" || selected.has(engine.toLowerCase()) ? "On" : "Off",
-			values: ["Off", "On"],
-		}));
-		const commitSelection = (): void => {
-			const enabled = new Set(engineItems.filter((item) => item.currentValue === "On").map((item) => item.id));
-			const allEnabled = enabled.size === engines.length;
-			onChange({
-				...getSettings(),
-				engineMode: allEnabled ? "auto" : "selected",
-				engines: allEnabled ? [] : [...enabled].sort((a, b) => a.localeCompare(b)),
-			});
-		};
-		const items: SettingItem[] = [
-			{
-				id: "__select-all",
-				label: "Select all",
-				interaction: "action",
-				currentValue: "Run",
-				onActivate: () => {
-					for (const item of engineItems) item.currentValue = "On";
-					commitSelection();
-					tui.requestRender();
-				},
-			},
-			{
-				id: "__clear-all",
-				label: "Clear all",
-				description: "至少保留一个引擎，否则搜索会被拒绝",
-				interaction: "action",
-				currentValue: "Run",
-				onActivate: () => {
-					for (const item of engineItems) item.currentValue = "Off";
-					commitSelection();
-					tui.requestRender();
-				},
-			},
-			...engineItems,
-		];
-		return new SettingsList(
-			items,
-			10,
-			getSettingsListTheme(),
-			(id) => {
-				if (id !== "__select-all" && id !== "__clear-all") commitSelection();
-			},
-			back,
-			{ inlineDescriptions: true },
-		);
-	});
+type NumberSetting = "pagesPerSearch" | "maxUrlsPerFetch" | "fetchConcurrency";
+
+/** Labels and explanations for the three numbers; every range comes from WEB_SEARCH_SETTING_RANGES. */
+const NUMBER_SETTINGS: Record<NumberSetting, { id: string; label: string; description: string; detail: string }> = {
+	pagesPerSearch: {
+		id: "pages-per-search",
+		label: "Pages to Read per Search",
+		description: "每次搜索后自动读取前几个结果的网页正文",
+		detail: "web_search 搜到结果后，按排名读取前 N 个网页的正文交给 Agent。0 表示只返回搜索结果列表，不读网页。",
+	},
+	maxUrlsPerFetch: {
+		id: "max-urls-per-fetch",
+		label: "Max URLs per Fetch",
+		description: "web_fetch 一次最多读取几个网址",
+		detail: "Agent 一次调用 web_fetch 最多能读取的网址数量。超出的网址不会被读取，并会明确告诉 Agent 哪些没读。",
+	},
+	fetchConcurrency: {
+		id: "fetch-concurrency",
+		label: "Concurrent Downloads",
+		description: "最多同时下载几个网页",
+		detail: "同一时间最多有几个网页在下载，所有联网工具调用共用这个上限。调低更省网络，调高读取更快。",
+	},
+};
+
+const NUMBER_SETTING_KEYS = Object.keys(NUMBER_SETTINGS) as NumberSetting[];
+
+function formatRange(key: NumberSetting): string {
+	const range = WEB_SEARCH_SETTING_RANGES[key];
+	return `${range.min}–${range.max}`;
 }
 
-function healthPage(tui: TUI, service: WebSearchService, onDone: () => void): Component {
-	return new CancellableTaskPage(tui, "正在检查 SearXNG 和 Crawl4AI…", onDone, async (signal, back) => {
-		const health = await service.health(signal);
-		return messagePage(
-			[
-				`SearXNG：${health.searxng.ok ? "OK" : "失败"} · ${health.searxng.message}`,
-				`Crawl4AI：${health.crawl4ai.ok ? "OK" : "失败"} · ${health.crawl4ai.message}`,
-			].join("\n"),
-			back,
-		);
-	});
+function formatNumber(settings: ResolvedWebSearchSettings, key: NumberSetting): string {
+	return `${settings[key]}  (${formatRange(key)})`;
 }
 
-function formatE2EResult(result: WebSearchE2EResult): string {
-	const phase = (name: string, item: { ok: boolean; durationMs: number; message: string; code?: string }): string =>
-		`${name}：${item.ok ? "OK" : "失败"} · ${item.message} · ${item.durationMs}ms${item.code ? ` · ${item.code}` : ""}`;
-	const diagnostics = result.diagnostics.length
-		? `\nDiagnostics:\n${result.diagnostics.map((item) => `- [${item.code}] ${item.url ?? item.query ?? "test"}: ${item.message}`).join("\n")}`
-		: "";
-	return [
-		`固定 Query：${result.query}`,
-		phase("Search", result.search),
-		phase("Fetch", result.fetch),
-		phase("Extraction", result.extraction),
-		`Total：${result.totalDurationMs}ms · ${result.ok ? "E2E 正常" : "E2E 未通过"}`,
-		result.url ? `URL：${result.url}` : "",
-		diagnostics,
-	]
-		.filter(Boolean)
-		.join("\n");
-}
-
-function e2eTestPage(tui: TUI, service: WebSearchService, onDone: () => void): Component {
-	return new CancellableTaskPage(tui, "正在执行 Search → Fetch → Extraction 测试…", onDone, async (signal, back) =>
-		messagePage(formatE2EResult(await service.runE2ETest(signal)), back),
+function numberPage(key: NumberSetting, current: number, onSelect: (value: number) => void, onCancel: () => void) {
+	const meta = NUMBER_SETTINGS[key];
+	const range: { min: number; max: number } = WEB_SEARCH_SETTING_RANGES[key];
+	const options: SelectItem[] = [];
+	for (let value = range.min; value <= range.max; value += 1) {
+		options.push({
+			value: String(value),
+			label: String(value),
+			description:
+				key === "pagesPerSearch" && value === 0 ? "只返回搜索结果" : value === range.max ? "最大值" : undefined,
+		});
+	}
+	return new ChoiceSubmenu(
+		`${meta.label}（范围 ${range.min}–${range.max}，当前 ${current}）`,
+		meta.detail,
+		options,
+		String(current),
+		(value) => onSelect(Number(value)),
+		onCancel,
 	);
 }
 
-/** Text input that re-prompts with the typed value and an inline error until it validates. */
-class ValidatedInputPage extends PageHost {
-	private readonly title: string;
-	private readonly placeholder: string;
-	private readonly validate: (input: string) => string | undefined;
-	private readonly onSubmit: (input: string) => void;
-	private readonly onCancel: () => void;
-
-	constructor(
-		tui: TUI,
-		title: string,
-		placeholder: string,
-		initialValue: string | undefined,
-		validate: (input: string) => string | undefined,
-		onSubmit: (input: string) => void,
-		onCancel: () => void,
-	) {
-		super(tui);
-		this.title = title;
-		this.placeholder = placeholder;
-		this.validate = validate;
-		this.onSubmit = onSubmit;
-		this.onCancel = onCancel;
-		this.showInput(initialValue);
-	}
-
-	private showInput(value: string | undefined, error?: string): void {
-		this.show(
-			new ExtensionInputComponent(
-				error ? `${this.title}（${error}）` : this.title,
-				this.placeholder,
-				(input) => {
-					const problem = this.validate(input);
-					if (problem) this.showInput(input, problem);
-					else this.onSubmit(input);
-				},
-				this.onCancel,
-				{ initialValue: value },
-			),
-		);
-	}
-}
-
-/** Agent decides / Manual picker; Manual continues to a number page whose Esc returns to the picker. */
-class StrategyPage extends PageHost {
-	private readonly title: string;
-	private readonly current: ResolvedWebSearchSettings["parallelPages"];
-	private readonly onSubmit: (strategy: ResolvedWebSearchSettings["parallelPages"]) => void;
-	private readonly onCancel: () => void;
-
-	constructor(
-		tui: TUI,
-		title: string,
-		current: ResolvedWebSearchSettings["parallelPages"],
-		onSubmit: (strategy: ResolvedWebSearchSettings["parallelPages"]) => void,
-		onCancel: () => void,
-	) {
-		super(tui);
-		this.title = title;
-		this.current = current;
-		this.onSubmit = onSubmit;
-		this.onCancel = onCancel;
-		this.showPicker();
-	}
-
-	private showPicker(): void {
-		this.show(
-			new ChoiceSubmenu(
-				this.title,
-				"Agent decides 使用内置有限安全上限；Manual 使用你输入的正整数。",
-				[
-					{ value: "agent", label: "Agent decides" },
-					{ value: "manual", label: "Manual" },
-				],
-				this.current.mode,
-				(value) => {
-					if (value === "agent") this.onSubmit({ mode: "agent" });
-					else this.showNumberInput();
-				},
-				this.onCancel,
-			),
-		);
-	}
-
-	private showNumberInput(): void {
-		this.show(
-			new ValidatedInputPage(
-				this.tui,
-				`${this.title} 数量`,
-				"输入正整数",
-				this.current.value === undefined ? undefined : String(this.current.value),
-				(input) => {
-					const parsed = Number(input.trim());
-					return Number.isSafeInteger(parsed) && parsed > 0 ? undefined : "请输入正整数";
-				},
-				(input) => this.onSubmit({ mode: "manual", value: Number(input.trim()) }),
-				() => this.showPicker(),
-			),
-		);
-	}
-}
-
-function formatStrategy(strategy: ResolvedWebSearchSettings["parallelPages"], label: string): string {
-	return strategy.mode === "agent" ? `${label}: Agent decides` : `${label}: ${strategy.value ?? "未设置"}`;
-}
-
 function formatEngines(settings: ResolvedWebSearchSettings): string {
-	return settings.engineMode === "auto" ? "Auto (SearXNG)" : `${settings.engines.length} selected`;
+	return settings.engines.length
+		? settings.engines.map((engine) => WEB_SEARCH_ENGINES[engine].label).join(", ")
+		: "未选择";
 }
 
 function formatSummary(settings: ResolvedWebSearchSettings): string {
-	if (!settings.enabled) return "Off";
-	const engines = settings.engineMode === "auto" ? "Auto (SearXNG)" : `${settings.engines.length} selected engines`;
-	const scope = settings.scope === "allowlist" ? `${settings.allowedDomains.length} sites` : "all sites";
-	return `On · ${engines} · ${scope}`;
+	return settings.enabled ? `On · ${formatEngines(settings)}` : "Off";
+}
+
+function formatTestResults(results: EngineTestResult[]): string {
+	if (results.length === 0) return "没有已启用的搜索引擎可以测试。";
+	return [
+		`测试搜索：${WEB_SEARCH_TEST_QUERY}`,
+		...results.map(
+			(result) => `${result.label}：${result.ok ? "OK" : "失败"} · ${result.message} · ${result.durationMs}ms`,
+		),
+	].join("\n");
+}
+
+/**
+ * Engine choice page: one toggle per built-in engine, the Brave Search API key,
+ * and a live test of the enabled engines. Esc on the list leaves the page;
+ * nested pages return to the list.
+ */
+class EngineSelectionPage extends PageHost {
+	private readonly getSettings: () => ResolvedWebSearchSettings;
+	private readonly onChange: (settings: ResolvedWebSearchSettings) => void;
+	private readonly keys: WebSearchApiKeys;
+	private readonly service: WebSearchService;
+	private readonly list: SettingsList;
+
+	constructor(
+		tui: TUI,
+		keys: WebSearchApiKeys,
+		service: WebSearchService,
+		getSettings: () => ResolvedWebSearchSettings,
+		onChange: (settings: ResolvedWebSearchSettings) => void,
+		onDone: () => void,
+	) {
+		super(tui);
+		this.getSettings = getSettings;
+		this.onChange = onChange;
+		this.keys = keys;
+		this.service = service;
+		this.list = new SettingsList(
+			this.createItems(),
+			10,
+			getSettingsListTheme(),
+			(id, value) => this.toggle(id, value === "On"),
+			() => onDone(),
+			{ inlineDescriptions: true },
+		);
+		this.show(this.list);
+	}
+
+	private keyStatus(): string {
+		if (this.keys.hasStored("brave_api")) return "已填写";
+		return this.keys.get("brave_api") ? `使用 ${WebSearchApiKeys.environmentVariable("brave_api")}` : "未填写";
+	}
+
+	private createItems(): SettingItem[] {
+		const enabled = new Set(this.getSettings().engines);
+		const engineItems: SettingItem[] = WEB_SEARCH_ENGINE_IDS.map((engine) => ({
+			id: engine,
+			label: WEB_SEARCH_ENGINES[engine].label,
+			description: WEB_SEARCH_ENGINES[engine].description,
+			interaction: "toggle",
+			currentValue: enabled.has(engine) ? "On" : "Off",
+			values: ["Off", "On"],
+		}));
+		return [
+			...engineItems,
+			{
+				id: "brave-api-key",
+				label: "Brave Search API Key",
+				description: "只给 Brave Search API 使用；保存在本机私有文件中，不写入 settings.json",
+				interaction: "action",
+				currentValue: this.keyStatus(),
+				onActivate: () => this.showKeyInput(),
+			},
+			{
+				id: "test",
+				label: "Test Selected Engines",
+				description: "用每个已启用的引擎真实搜索一次，看看现在能不能用",
+				interaction: "action",
+				currentValue: "Run",
+				onActivate: () => this.showTest(),
+			},
+		];
+	}
+
+	private toggle(id: string, on: boolean): void {
+		if (!(WEB_SEARCH_ENGINE_IDS as readonly string[]).includes(id)) return;
+		const current = new Set(this.getSettings().engines);
+		if (on) current.add(id as WebSearchEngineId);
+		else current.delete(id as WebSearchEngineId);
+		// Keep the fixed display order so the saved list is stable.
+		this.onChange({ ...this.getSettings(), engines: WEB_SEARCH_ENGINE_IDS.filter((engine) => current.has(engine)) });
+		this.tui.requestRender();
+	}
+
+	private backToList(): void {
+		this.list.updateValue("brave-api-key", this.keyStatus());
+		this.show(this.list);
+	}
+
+	private showKeyInput(): void {
+		this.show(
+			new ExtensionInputComponent(
+				"Brave Search API Key（回车保存；留空回车删除已保存的 Key）",
+				"粘贴 API Key",
+				(input) => {
+					if (input.trim()) this.keys.set("brave_api", input);
+					else this.keys.clear("brave_api");
+					this.backToList();
+				},
+				() => this.backToList(),
+				{ maskInput: true },
+			),
+		);
+	}
+
+	private showTest(): void {
+		const engines = this.getSettings().engines;
+		this.show(
+			new CancellableTaskPage(
+				this.tui,
+				`正在测试 ${engines.length} 个搜索引擎…`,
+				() => this.backToList(),
+				async (signal, back) =>
+					messagePage(formatTestResults(await this.service.testEngines(engines, signal)), back),
+			),
+		);
+	}
+
+	handleInput(data: string): void {
+		super.handleInput(data);
+		this.tui.requestRender();
+	}
 }
 
 /**
@@ -415,22 +401,24 @@ function formatSummary(settings: ResolvedWebSearchSettings): string {
  */
 export class WebSearchSettingsSubmenu extends Container implements Focusable {
 	private readonly service: WebSearchService;
+	private readonly keys: WebSearchApiKeys;
 	private state: ResolvedWebSearchSettings;
 	private readonly list: SettingsList;
-	private readonly onChange: (settings: WebSearchSettings) => void;
+	private readonly onChange: (settings: ResolvedWebSearchSettings) => void;
 	private readonly dependencies: WebSearchSettingsDependencies;
 
 	constructor(
 		settings: ResolvedWebSearchSettings,
-		onChange: (settings: WebSearchSettings) => void,
+		onChange: (settings: ResolvedWebSearchSettings) => void,
 		dependencies: WebSearchSettingsDependencies,
 		onDone: (summary?: string) => void,
 	) {
 		super();
-		this.state = { ...settings, engines: [...settings.engines], allowedDomains: [...settings.allowedDomains] };
+		this.state = { ...settings, engines: [...settings.engines] };
 		this.onChange = onChange;
 		this.dependencies = dependencies;
-		this.service = new WebSearchService({ settings: dependencies.settingsManager });
+		this.keys = dependencies.webSearchKeys ?? new WebSearchApiKeys();
+		this.service = new WebSearchService({ settings: dependencies.settingsManager, keys: this.keys });
 		this.list = new SettingsList(
 			this.createItems(),
 			10,
@@ -458,172 +446,59 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 	}
 
 	private commit(next: ResolvedWebSearchSettings): void {
-		this.state = { ...next, engines: [...next.engines], allowedDomains: [...next.allowedDomains] };
+		this.state = { ...next, engines: [...next.engines] };
 		this.onChange(this.state);
-		this.refreshValues();
-	}
-
-	private refreshValues(): void {
-		const values: Record<string, string> = {
-			enabled: this.state.enabled ? "On" : "Off",
-			"searxng-url": this.state.searxngUrl ?? "未设置",
-			"crawl4ai-url": this.state.crawl4aiUrl ?? "未设置",
-			engines: formatEngines(this.state),
-			scope: this.state.scope === "unrestricted" ? "All websites" : "Only selected websites",
-			"allowed-domains": this.state.allowedDomains.length ? this.state.allowedDomains.join(", ") : "未设置",
-			"parallel-pages": formatStrategy(this.state.parallelPages, "Pages"),
-			"search-rounds": formatStrategy(this.state.searchRounds, "Rounds"),
-		};
-		for (const [id, value] of Object.entries(values)) this.list.updateValue(id, value);
+		this.list.updateValue("enabled", this.state.enabled ? "On" : "Off");
+		this.list.updateValue("engines", formatEngines(this.state));
+		for (const key of NUMBER_SETTING_KEYS) {
+			this.list.updateValue(NUMBER_SETTINGS[key].id, formatNumber(this.state, key));
+		}
 		this.dependencies.tui.requestRender();
 	}
 
 	private createItems(): SettingItem[] {
 		const tui = this.dependencies.tui;
+		const numberItems: SettingItem[] = NUMBER_SETTING_KEYS.map((key) => ({
+			id: NUMBER_SETTINGS[key].id,
+			label: NUMBER_SETTINGS[key].label,
+			description: `${NUMBER_SETTINGS[key].description}（${formatRange(key)}）`,
+			currentValue: formatNumber(this.state, key),
+			submenu: (_value, done) =>
+				numberPage(
+					key,
+					this.state[key],
+					(value) => {
+						this.commit({ ...this.state, [key]: value });
+						done();
+					},
+					() => done(),
+				),
+		}));
 		return [
 			{
 				id: "enabled",
 				label: "Web Search",
-				description: "实际控制 web_research、web_search 和 web_fetch 是否注册给主 Agent",
+				description: "开启后 Agent 可以用 web_search 和 web_fetch 联网",
 				interaction: "toggle",
 				currentValue: this.state.enabled ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "searxng-url",
-				label: "SearXNG URL",
-				description: "SearXNG 基础 URL；引擎从实例 /config 动态读取",
-				currentValue: this.state.searxngUrl ?? "未设置",
-				submenu: (_value, done) => this.endpointInput("SearXNG URL", "searxngUrl", done),
-			},
-			{
-				id: "crawl4ai-url",
-				label: "Crawl4AI URL",
-				description: "Crawl4AI Docker/API 基础 URL",
-				currentValue: this.state.crawl4aiUrl ?? "未设置",
-				submenu: (_value, done) => this.endpointInput("Crawl4AI URL", "crawl4aiUrl", done),
-			},
-			{
 				id: "engines",
 				label: "Search Engines",
-				description: "从当前 SearXNG 实例读取并选择引擎",
+				description: "选择用哪些搜索引擎；可以同时开多个，结果会合并去重",
 				currentValue: formatEngines(this.state),
 				submenu: (_value, done) =>
-					engineSelectionPage(
+					new EngineSelectionPage(
 						tui,
+						this.keys,
 						this.service,
 						() => this.state,
 						(settings) => this.commit(settings),
 						() => done(),
 					),
 			},
-			{
-				id: "scope",
-				label: "Website Scope",
-				description: "限制搜索结果和网页读取的 hostname 范围",
-				currentValue: this.state.scope === "unrestricted" ? "All websites" : "Only selected websites",
-				submenu: (_value, done) =>
-					new ChoiceSubmenu(
-						"Website Scope",
-						"allowlist 使用精确 hostname 和子域名匹配，例如 openai.com 允许 platform.openai.com，但不允许 openai.com.attacker.example。",
-						[
-							{ value: "unrestricted", label: "Unrestricted" },
-							{ value: "allowlist", label: "Only selected websites" },
-						],
-						this.state.scope,
-						(value) => {
-							this.commit({ ...this.state, scope: value as ResolvedWebSearchSettings["scope"] });
-							done();
-						},
-						() => done(),
-					),
-			},
-			{
-				id: "allowed-domains",
-				label: "Allowed Websites",
-				description: "输入逗号分隔的 hostname；直接 URL 也会经过此范围检查",
-				currentValue: this.state.allowedDomains.length ? this.state.allowedDomains.join(", ") : "未设置",
-				submenu: (_value, done) => this.domainInput(done),
-			},
-			{
-				id: "parallel-pages",
-				label: "Parallel Pages",
-				description: "Agent decides 或手动限制单次最多读取的网页数",
-				currentValue: formatStrategy(this.state.parallelPages, "Pages"),
-				submenu: (_value, done) => this.strategyInput("Parallel Pages", "parallelPages", done),
-			},
-			{
-				id: "search-rounds",
-				label: "Search Rounds",
-				description: "Agent decides 或手动限制每次任务的完整调查阶段数",
-				currentValue: formatStrategy(this.state.searchRounds, "Rounds"),
-				submenu: (_value, done) => this.strategyInput("Search Rounds", "searchRounds", done),
-			},
-			{
-				id: "health",
-				label: "Health",
-				description: "检查 SearXNG 引擎发现和 Crawl4AI /health",
-				currentValue: "检查",
-				submenu: (_value, done) => healthPage(tui, this.service, () => done()),
-			},
-			{
-				id: "e2e-test",
-				label: "Run Web Search Test",
-				description: "真实执行固定 Query → Search → Fetch → Extraction",
-				currentValue: "运行",
-				submenu: (_value, done) => e2eTestPage(tui, this.service, () => done()),
-			},
+			...numberItems,
 		];
-	}
-
-	private endpointInput(
-		field: "SearXNG URL" | "Crawl4AI URL",
-		key: "searxngUrl" | "crawl4aiUrl",
-		done: () => void,
-	): Component {
-		return new ExtensionInputComponent(
-			field,
-			"例如：https://search.example 或 http://127.0.0.1:8080",
-			(input) => {
-				this.commit({ ...this.state, [key]: input.trim() || undefined });
-				done();
-			},
-			() => done(),
-			{ initialValue: this.state[key] },
-		);
-	}
-
-	private domainInput(done: () => void): Component {
-		return new ValidatedInputPage(
-			this.dependencies.tui,
-			"Allowed Websites",
-			"例如：openai.com, docs.example.org",
-			this.state.allowedDomains.join(", "),
-			(input) => {
-				const parts = input.split(",").filter((part) => part.trim());
-				return parts.every((part) => normalizeAllowedDomain(part)) ? undefined : "存在无效 hostname";
-			},
-			(input) => {
-				const domains = [...new Set(input.split(",").map(normalizeAllowedDomain))].filter(
-					(domain): domain is string => Boolean(domain),
-				);
-				this.commit({ ...this.state, allowedDomains: domains });
-				done();
-			},
-			() => done(),
-		);
-	}
-
-	private strategyInput(title: string, key: "parallelPages" | "searchRounds", done: () => void): Component {
-		return new StrategyPage(
-			this.dependencies.tui,
-			title,
-			this.state[key],
-			(strategy) => {
-				this.commit({ ...this.state, [key]: strategy });
-				done();
-			},
-			() => done(),
-		);
 	}
 }

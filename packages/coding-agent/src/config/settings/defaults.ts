@@ -62,13 +62,24 @@ export const SETTINGS_DEFAULTS = {
 	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 	webSearch: {
 		enabled: false,
-		engineMode: "auto",
-		scope: "unrestricted",
-		parallelPages: { mode: "agent" },
-		searchRounds: { mode: "agent" },
-		searchCacheTtlMs: 5 * 60 * 1_000,
-		fetchCacheTtlMs: 15 * 60 * 1_000,
+		engines: ["duckduckgo", "brave"],
+		pagesPerSearch: 3,
+		maxUrlsPerFetch: 10,
+		fetchConcurrency: 4,
 	},
+} as const;
+
+/** Every Web Search engine id, in the order the settings page lists them. */
+export const WEB_SEARCH_ENGINE_IDS = ["duckduckgo", "brave", "brave_api"] as const;
+
+/**
+ * Inclusive ranges for the Web Search numbers. They are the real hard limits:
+ * the settings page offers exactly these values and the tools never exceed them.
+ */
+export const WEB_SEARCH_SETTING_RANGES = {
+	pagesPerSearch: { min: 0, max: 10 },
+	maxUrlsPerFetch: { min: 1, max: 20 },
+	fetchConcurrency: { min: 1, max: 8 },
 } as const;
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively. */

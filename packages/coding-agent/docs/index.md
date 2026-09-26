@@ -26,7 +26,7 @@ Sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider a
 - [Containerization](containerization.md) — isolate MyHarness with Gondolin, Docker, or OpenShell.
 - [Settings](settings.md) — global and project settings.
 - [Windows](windows.md) — Bash and Windows-specific setup.
-- [Web Search](web-search.md) — optional SearXNG and Crawl4AI-compatible search and page reading.
+- [Web Search](web-search.md) — optional built-in web search (DuckDuckGo, Brave, Brave Search API) and page reading.
 - [Sessions](sessions.md) — Session management, branching, and navigation.
 - [Compaction](compaction.md) — context compaction and branch summaries.
 - [Git Worktrees](worktrees.md) — managing development worktrees through `/git`.

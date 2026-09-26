@@ -1,4 +1,10 @@
-export { mergeSettings, parseTimeoutSetting, SETTINGS_DEFAULTS } from "./defaults.ts";
+export {
+	mergeSettings,
+	parseTimeoutSetting,
+	SETTINGS_DEFAULTS,
+	WEB_SEARCH_ENGINE_IDS,
+	WEB_SEARCH_SETTING_RANGES,
+} from "./defaults.ts";
 export { SettingsManager } from "./manager.ts";
 export { migrateSettings } from "./migrations.ts";
 export type { SettingsStorage } from "./storage.ts";

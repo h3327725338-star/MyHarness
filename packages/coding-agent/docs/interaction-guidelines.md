@@ -26,7 +26,7 @@ MyHarness 当前的产品 UI 是 TypeScript/ESM 的终端 TUI：`InteractiveMode
 
 ### 当前值和标签
 
-- 设置行显示用户可理解的值，例如 `On`、`Off`、`Auto (SearXNG)`、`Only selected websites` 和 `One at a time`。
+- 设置行显示用户可理解的值，例如 `On`、`Off`、`DuckDuckGo, Brave`、`3  (0–10)` 和 `One at a time`。数字设置在当前值旁显示合法范围，选择页只列出范围内的值。
 - Provider、Model、Workspace、Session 等身份摘要可以显示真实名称，因为它们是用户需要识别的对象；不要显示 `enabled = true`、`scope = allowlist` 这类内部字段表达。
 - 选项的存储值可以继续使用稳定的内部 enum；通过选项的 `label` 和回调映射隔离内部值，不要为 UI 改动 Provider、Credential、Model 或 Session 数据模型。
 
@@ -71,7 +71,7 @@ MyHarness 当前的产品 UI 是 TypeScript/ESM 的终端 TUI：`InteractiveMode
 - Empty：说明“没有数据”和“加载失败”的区别。搜索无匹配与真实空列表必须可区分。
 - Authentication required：明确告诉用户需要登录/凭据，不要用普通“未设置”掩盖认证状态。
 
-专题页面可以为 Provider、外部 Web Search、Code Intelligence 安装和模型刷新实现自己的异步状态，但必须保持以上语义。
+专题页面可以为 Provider、Web Search 引擎测试、Code Intelligence 安装和模型刷新实现自己的异步状态，但必须保持以上语义。
 
 ## Keyboard、Focus 和 Accessibility
 

@@ -26,7 +26,7 @@ npm.cmd run build
 - [Containerization](containerization.md) — 使用 Gondolin、Docker 或 OpenShell 隔离 MyHarness。
 - [设置](settings.md) — 全局和项目级设置。
 - [Windows](windows.md) — Bash 和 Windows 专用设置。
-- [Web Search](web-search.md) — 可选的 SearXNG 与 Crawl4AI-compatible 搜索和网页读取。
+- [Web Search](web-search.md) — 可选的内置联网搜索（DuckDuckGo、Brave、Brave Search API）和网页读取。
 - [Sessions](sessions.md) — Session 管理、分支和导航。
 - [Compaction](compaction.md) — context compaction 和 branch summaries。
 - [Git Worktrees](worktrees.md) — 通过 `/git` 管理开发 worktree。

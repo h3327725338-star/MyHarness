@@ -121,15 +121,11 @@ export {
 export {
 	createWebFetchTool,
 	createWebFetchToolDefinition,
-	createWebResearchTool,
-	createWebResearchToolDefinition,
 	createWebSearchTool,
 	createWebSearchToolDefinition,
 	createWebSearchToolDefinitions,
 	type WebFetchToolDetails,
 	type WebFetchToolInput,
-	type WebResearchToolDetails,
-	type WebResearchToolInput,
 	type WebSearchToolDetails,
 	type WebSearchToolInput,
 	type WebSearchToolOptions,
@@ -162,8 +158,6 @@ import { createSymbolsTool, createSymbolsToolDefinition, type SymbolsToolOptions
 import {
 	createWebFetchTool,
 	createWebFetchToolDefinition,
-	createWebResearchTool,
-	createWebResearchToolDefinition,
 	createWebSearchTool,
 	createWebSearchToolDefinition,
 	createWebSearchToolDefinitions,
@@ -187,8 +181,7 @@ export type ToolName =
 	| "ultracode"
 	| "github"
 	| "web_search"
-	| "web_fetch"
-	| "web_research";
+	| "web_fetch";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
@@ -205,7 +198,6 @@ export const allToolNames: Set<ToolName> = new Set([
 	"github",
 	"web_search",
 	"web_fetch",
-	"web_research",
 ]);
 
 export interface ToolsOptions {
@@ -257,8 +249,6 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWebSearchToolDefinition(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchToolDefinition(cwd, options?.webSearch);
-		case "web_research":
-			return createWebResearchToolDefinition(cwd, options?.webSearch);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -296,8 +286,6 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createWebSearchTool(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchTool(cwd, options?.webSearch);
-		case "web_research":
-			return createWebResearchTool(cwd, options?.webSearch);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -339,7 +327,6 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		github: createGitHubToolDefinition(cwd, options?.github),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
-		web_research: webSearchTools.web_research,
 	};
 }
 
@@ -378,6 +365,5 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		github: createGitHubTool(cwd, options?.github),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
-		web_research: createWebResearchTool(cwd, options?.webSearch),
 	};
 }

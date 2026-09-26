@@ -6949,11 +6949,11 @@ export class InteractiveMode {
 						const wasEnabled = this.settingsManager.getWebSearchSettings().enabled;
 						this.settingsManager.setWebSearchSettings(settings);
 						this.session.refreshToolsAfterSettingsChange();
-						// Endpoint, engine and scope edits apply on the next call; only the switch changes the tool list.
+						// Engine and number edits apply on the next call; only the switch changes the tool list.
 						if (wasEnabled === settings.enabled) return;
 						this.showStatus(
 							settings.enabled
-								? "Web Search 已启用；web_research、web_search 和 web_fetch 将从下一轮 Agent 调用开始可用。"
+								? "Web Search 已启用；web_search 和 web_fetch 将从下一轮 Agent 调用开始可用。"
 								: "Web Search 已关闭；相关工具已从当前 Agent 注册表移除，历史记录未删除。",
 						);
 					},

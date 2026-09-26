@@ -101,8 +101,8 @@ export {
 	SettingsManager,
 	type SettingsManagerCreateOptions,
 	type SubAgentSettings,
+	type WebSearchEngineId,
 	type WebSearchSettings,
-	type WebSearchStrategySettings,
 } from "./config/settings/index.ts";
 export {
 	hasTrustRequiringProjectResources,
@@ -527,8 +527,6 @@ export {
 	createSubAgentTool,
 	createWebFetchTool,
 	createWebFetchToolDefinition,
-	createWebResearchTool,
-	createWebResearchToolDefinition,
 	createWebSearchTool,
 	createWebSearchToolDefinition,
 	createWebSearchToolDefinitions,
@@ -586,8 +584,6 @@ export {
 	truncateTail,
 	type WebFetchToolDetails,
 	type WebFetchToolInput,
-	type WebResearchToolDetails,
-	type WebResearchToolInput,
 	type WebSearchToolDetails,
 	type WebSearchToolInput,
 	type WebSearchToolOptions,

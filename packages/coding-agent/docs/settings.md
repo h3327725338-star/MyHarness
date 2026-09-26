@@ -113,7 +113,7 @@ Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `subAgent` | object | `{ "enabled": false }` | Global built-in exploration-agent 和 workflow configuration。通过 `/settings` 设置。 |
-| `webSearch` | object | `{ "enabled": false }` | Global optional SearXNG/Crawl4AI configuration；只在启用时向 main Agent 注册 `web_research`、`web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
+| `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和三个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
@@ -194,25 +194,30 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 
 #### webSearch（Web Search）
 
-`Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_research`、`web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
+`Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
 
-它需要两个由用户部署并配置的服务地址：SearXNG 基础 URL 和 Crawl4AI Docker/API 基础 URL。MyHarness 不假设默认 host/port，也不会自动安装、登录或启动这两个服务。Search Engines 从配置的 SearXNG `/config` 动态读取；Website Scope 会对搜索结果和直接 Fetch URL 都做 hostname 边界检查。
+搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户只需要选择搜索引擎和三个数量：
+
+| 字段 | 含义 | 范围 | 默认 |
+| --- | --- | --- | --- |
+| `engines` | 启用的搜索引擎：`duckduckgo`、`brave`、`brave_api`（需要 API Key） | 任意组合 | `["duckduckgo", "brave"]` |
+| `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–10 | 3 |
+| `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–20 | 10 |
+| `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–8 | 4 |
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "searxngUrl": "https://search.example",
-    "crawl4aiUrl": "http://127.0.0.1:11235",
-    "engineMode": "auto",
-    "scope": "unrestricted",
-    "parallelPages": { "mode": "agent" },
-    "searchRounds": { "mode": "agent" }
+    "engines": ["duckduckgo", "brave"],
+    "pagesPerSearch": 3,
+    "maxUrlsPerFetch": 10,
+    "fetchConcurrency": 4
   }
 }
 ```
 
-完整 Tool schema、缓存、超时、取消和部署协议见 [Web Search 文档](web-search.md)。
+超出范围的数字按最近的上下限处理。Brave Search API Key 不在 `settings.json` 中，保存在 agent 目录的 `web-search-keys.json`。旧的 `searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`parallelPages`、`searchRounds` 和缓存 TTL 字段的迁移方式、各引擎的稳定性说明、Tool schema、缓存、超时和取消见 [Web Search 文档](web-search.md)。
 
 #### visionAssistant
 

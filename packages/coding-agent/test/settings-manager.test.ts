@@ -70,37 +70,106 @@ describe("SettingsManager", () => {
 	});
 
 	describe("web search", () => {
-		it("persists endpoints, scope, engines, and strategy settings globally", async () => {
+		it("persists engines and the three numbers globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setWebSearchSettings({
 				enabled: true,
-				searxngUrl: "https://searx.example/",
-				crawl4aiUrl: "https://crawl.example/",
-				engineMode: "selected",
-				engines: ["brave"],
-				scope: "allowlist",
-				allowedDomains: ["Example.com"],
-				parallelPages: { mode: "manual", value: 3 },
-				searchRounds: { mode: "manual", value: 2 },
+				engines: ["brave_api", "duckduckgo"],
+				pagesPerSearch: 0,
+				maxUrlsPerFetch: 20,
+				fetchConcurrency: 1,
 			});
 			await manager.flush();
 
-			expect(manager.getWebSearchSettings()).toMatchObject({
+			const expected = {
 				enabled: true,
-				searxngUrl: "https://searx.example",
-				crawl4aiUrl: "https://crawl.example",
-				engineMode: "selected",
+				engines: ["duckduckgo", "brave_api"],
+				pagesPerSearch: 0,
+				maxUrlsPerFetch: 20,
+				fetchConcurrency: 1,
+			};
+			expect(manager.getWebSearchSettings()).toEqual(expected);
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.webSearch).toEqual(expected);
+			expect(SettingsManager.create(projectDir, agentDir).getWebSearchSettings()).toEqual(expected);
+		});
+
+		it("uses the defaults and clamps out-of-range numbers to the real limits", () => {
+			expect(SettingsManager.inMemory({}).getWebSearchSettings()).toEqual({
+				enabled: false,
+				engines: ["duckduckgo", "brave"],
+				pagesPerSearch: 3,
+				maxUrlsPerFetch: 10,
+				fetchConcurrency: 4,
+			});
+			const manager = SettingsManager.inMemory({
+				webSearch: { enabled: true, pagesPerSearch: 99, maxUrlsPerFetch: 0, fetchConcurrency: 1000 },
+			});
+			expect(manager.getWebSearchSettings()).toMatchObject({
+				pagesPerSearch: 10,
+				maxUrlsPerFetch: 1,
+				fetchConcurrency: 8,
+			});
+			const invalid = SettingsManager.inMemory({
+				webSearch: { pagesPerSearch: "5" as never, maxUrlsPerFetch: Number.NaN, engines: "brave" as never },
+			});
+			expect(invalid.getWebSearchSettings()).toMatchObject({
+				pagesPerSearch: 3,
+				maxUrlsPerFetch: 10,
+				engines: ["duckduckgo", "brave"],
+			});
+			expect(SettingsManager.inMemory({ webSearch: { engines: [] } }).getWebSearchSettings().engines).toEqual([]);
+		});
+
+		it("migrates a SearXNG/Crawl4AI configuration and drops the legacy fields on save", async () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					theme: "dark",
+					webSearch: {
+						enabled: true,
+						searxngUrl: "https://searx.example",
+						crawl4aiUrl: "http://127.0.0.1:11235",
+						engineMode: "selected",
+						engines: ["brave", "google"],
+						scope: "allowlist",
+						allowedDomains: ["example.com"],
+						parallelPages: { mode: "manual", value: 7 },
+						searchRounds: { mode: "manual", value: 2 },
+						searchCacheTtlMs: 1000,
+						fetchCacheTtlMs: 1000,
+					},
+				}),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getWebSearchSettings()).toEqual({
+				enabled: true,
 				engines: ["brave"],
-				scope: "allowlist",
-				allowedDomains: ["example.com"],
-				parallelPages: { mode: "manual", value: 3 },
-				searchRounds: { mode: "manual", value: 2 },
+				pagesPerSearch: 3,
+				maxUrlsPerFetch: 7,
+				fetchConcurrency: 4,
 			});
 
+			manager.setWebSearchSettings(manager.getWebSearchSettings());
+			await manager.flush();
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
-			expect(saved.webSearch).toMatchObject({ enabled: true, engineMode: "selected", scope: "allowlist" });
-			const reloaded = SettingsManager.create(projectDir, agentDir);
-			expect(reloaded.getWebSearchSettings().parallelPages).toEqual({ mode: "manual", value: 3 });
+			expect(saved.theme).toBe("dark");
+			expect(saved.webSearch).toEqual({
+				enabled: true,
+				engines: ["brave"],
+				pagesPerSearch: 3,
+				maxUrlsPerFetch: 7,
+				fetchConcurrency: 4,
+			});
+		});
+
+		it("falls back to default engines when a legacy SearXNG list names no built-in engine", () => {
+			const manager = SettingsManager.inMemory({
+				webSearch: { enabled: true, engineMode: "selected", engines: ["google", "bing"] },
+			});
+			expect(manager.getWebSearchSettings().engines).toEqual(["duckduckgo", "brave"]);
+			const huge = SettingsManager.inMemory({ webSearch: { parallelPages: { mode: "manual", value: 500 } } });
+			expect(huge.getWebSearchSettings().maxUrlsPerFetch).toBe(20);
 		});
 	});
 

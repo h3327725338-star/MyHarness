@@ -1,2 +1,2 @@
 # 工具说明
-- Search current web information through the configured SearXNG service. Send one or more focused queries, then use web_fetch for the pages that provide evidence.
+- Search the web with the search engines the user enabled. Returns merged, deduplicated results and, by default, the most relevant excerpts of the top result pages.

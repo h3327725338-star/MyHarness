@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 const TRACKING_QUERY_PARAMETERS = new Set([
@@ -72,14 +73,14 @@ function isPrivateIpv6(hostname: string): boolean {
 	);
 }
 
-function isPrivateAddress(hostname: string): boolean {
+export function isPrivateAddress(hostname: string): boolean {
 	const lower = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
 	if (lower === "localhost" || lower.endsWith(".localhost") || lower === "local") return true;
 	const ipVersion = isIP(lower);
 	return ipVersion === 4 ? isPrivateIpv4(lower) : ipVersion === 6 ? isPrivateIpv6(lower) : false;
 }
 
-/** Validate a URL before it is sent to a remote search/crawl service. */
+/** Validate a URL before MyHarness requests it. */
 export function validatePublicHttpUrl(input: string): UrlValidationResult {
 	let parsed: URL;
 	try {
@@ -98,6 +99,32 @@ export function validatePublicHttpUrl(input: string): UrlValidationResult {
 	}
 	parsed.hash = "";
 	return { ok: true, url: parsed.toString(), hostname: parsed.hostname.toLowerCase().replace(/\.$/u, "") };
+}
+
+/** Resolves a hostname to all of its addresses. Injectable so tests never touch real DNS. */
+export type HostLookup = (hostname: string) => Promise<string[]>;
+
+export const defaultHostLookup: HostLookup = async (hostname) =>
+	(await dnsLookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+
+/**
+ * Reject a public-looking hostname that resolves to a local or private address
+ * (for example a DNS record pointing at 127.0.0.1). Returns the refusal message,
+ * or undefined when the host may be requested. A failed lookup is left to the
+ * request itself, which reports the network error or goes through a proxy.
+ */
+export async function checkResolvedHost(hostname: string, lookup: HostLookup): Promise<string | undefined> {
+	const bare = hostname.replace(/^\[|\]$/gu, "");
+	if (isIP(bare)) return undefined;
+	let addresses: string[];
+	try {
+		addresses = await lookup(bare);
+	} catch {
+		return undefined;
+	}
+	return addresses.some((address) => isPrivateAddress(address))
+		? `出于 SSRF 安全原因，${bare} 解析到了本机或私有地址，已阻止访问。`
+		: undefined;
 }
 
 function deleteTrackingParameters(parsed: URL): void {
@@ -130,24 +157,6 @@ export function canonicalizeHttpUrl(input: string): string {
 	for (const [key, value] of sortedParameters) parsed.searchParams.append(key, value);
 	const result = parsed.toString();
 	return result.length > parsed.origin.length + 1 && result.endsWith("/") ? result.slice(0, -1) : result;
-}
-
-export function normalizeAllowedDomain(input: string): string | undefined {
-	const trimmed = input.trim().toLowerCase().replace(/^\.+/u, "").replace(/\.$/u, "");
-	if (!trimmed || trimmed.includes("/") || trimmed.includes(":") || trimmed.includes("@")) return undefined;
-	if (trimmed === "localhost" || isPrivateAddress(trimmed)) return undefined;
-	return trimmed;
-}
-
-export function isHostnameAllowed(hostname: string, domains: readonly string[]): boolean {
-	const normalizedHostname = hostname.toLowerCase().replace(/\.$/u, "");
-	return domains.some((domain) => {
-		const normalizedDomain = normalizeAllowedDomain(domain);
-		return Boolean(
-			normalizedDomain &&
-				(normalizedHostname === normalizedDomain || normalizedHostname.endsWith(`.${normalizedDomain}`)),
-		);
-	});
 }
 
 export function isFreshnessSensitiveQuery(query: string): boolean {

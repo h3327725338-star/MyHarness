@@ -126,8 +126,20 @@
 		"semver@7.8.5"
 	],
 	"added": [
+		"boolbase@1.0.0",
 		"cbor@10.0.12",
 		"chai@6.2.2",
+		"css-select@5.2.2",
+		"css-what@6.2.2",
+		"dom-serializer@2.0.0",
+		"domelementtype@2.3.0",
+		"domhandler@5.0.3",
+		"domutils@3.2.2",
+		"entities@4.5.0",
+		"he@1.2.0",
+		"node-html-markdown@2.0.0",
+		"node-html-parser@6.1.13",
+		"nth-check@2.1.1",
 		"nofilter@3.1.0"
 	],
 	"changed": [

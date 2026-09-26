@@ -1,104 +1,102 @@
 import type { AgentTool, AgentToolResult } from "@myharness/agent-core";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SETTINGS_DEFAULTS, WEB_SEARCH_SETTING_RANGES } from "../../config/settings/defaults.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
-import { runWebResearch, type WebResearchRequest, type WebResearchResponse } from "./research.ts";
+import { WEB_SEARCH_ENGINES } from "./engines.ts";
+import { selectExcerpts } from "./excerpts.ts";
 import {
 	createWebSearchService,
+	WEB_SEARCH_LIMITS,
 	WebSearchError,
 	type WebSearchService,
 	type WebSearchServiceOptions,
 } from "./service.ts";
-import type { WebFetchedPage, WebFetchResponse, WebSearchResponse } from "./types.ts";
+import type { WebFetchedPage, WebFetchResponse, WebSearchFailure, WebSearchResponse } from "./types.ts";
 
 const webSearchSchema = Type.Object({
 	queries: Type.Array(Type.String({ minLength: 1, description: "自然语言搜索问题" }), {
 		minItems: 1,
-		maxItems: 16,
-		description: "一个或多个相互独立的搜索问题；服务会并行执行并合并结果",
+		maxItems: WEB_SEARCH_LIMITS.maxQueriesPerCall,
+		description: "一个或多个相互独立的搜索问题；每个问题会发给所有已启用的搜索引擎，结果合并去重",
 	}),
-	engines: Type.Optional(
-		Type.Array(Type.String({ minLength: 1 }), {
-			maxItems: 64,
-			description: "可选的 SearXNG 引擎名称；应来自 /settings 中动态发现的列表",
+	timeRange: Type.Optional(
+		Type.Union([Type.Literal("day"), Type.Literal("month"), Type.Literal("year")], {
+			description: "只要最近一天/一月/一年的结果",
 		}),
 	),
-	timeRange: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("month"), Type.Literal("year")])),
-	maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-	fresh: Type.Optional(Type.Boolean({ description: "跳过会话内搜索缓存" })),
+	maxResults: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: WEB_SEARCH_LIMITS.maxResultsPerCall,
+			description: `合并后返回的结果数，默认 ${WEB_SEARCH_LIMITS.defaultResultsPerCall}`,
+		}),
+	),
+	readPages: Type.Optional(
+		Type.Integer({
+			minimum: 0,
+			maximum: WEB_SEARCH_SETTING_RANGES.pagesPerSearch.max,
+			description: "搜索后读取前几个结果的网页正文；0 表示只要结果列表。默认且最多为用户设置的数量",
+		}),
+	),
+	fresh: Type.Optional(Type.Boolean({ description: "跳过会话内缓存" })),
 });
 
 const webFetchSchema = Type.Object({
 	urls: Type.Array(Type.String({ minLength: 1, description: "要读取的 http(s) URL" }), {
 		minItems: 1,
-		maxItems: 50,
-		description: "一个或多个 URL；服务会并行读取并逐个报告失败",
+		maxItems: WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch.max,
+		description: "一个或多个 URL；超过用户设置上限的部分不会读取并会在诊断中列出",
 	}),
 	fresh: Type.Optional(Type.Boolean({ description: "跳过会话内网页缓存" })),
 });
 
-const webResearchSchema = Type.Object({
-	question: Type.String({ minLength: 1, description: "需要调查的现实世界问题" }),
-	freshness: Type.Optional(
-		Type.Union([Type.Literal("auto"), Type.Literal("day"), Type.Literal("month"), Type.Literal("year")]),
-	),
-	domains: Type.Optional(
-		Type.Array(Type.String({ minLength: 1 }), {
-			maxItems: 16,
-			description: "可选的 hostname 限定；只能进一步收窄 Website Scope",
-		}),
-	),
-	maxSources: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
-	maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })),
-});
-
 export type WebSearchToolInput = Static<typeof webSearchSchema>;
 export type WebFetchToolInput = Static<typeof webFetchSchema>;
-export type WebResearchToolInput = Static<typeof webResearchSchema>;
 
 export interface WebSearchToolOptions extends Omit<WebSearchServiceOptions, "settings"> {
 	settings?: WebSearchServiceOptions["settings"];
 	service?: WebSearchService;
 }
 
+type PageSummary = Pick<WebFetchedPage, "url" | "finalUrl" | "title" | "publishedAt" | "truncated" | "cacheHit"> & {
+	contentLength: number;
+};
+
 export interface WebSearchToolDetails {
 	queries: string[];
+	engines: WebSearchResponse["engines"];
 	results: WebSearchResponse["results"];
-	failures: WebSearchResponse["failures"];
+	pages: PageSummary[];
+	failures: WebSearchFailure[];
 	cacheHit: boolean;
-	searchRound: number;
 }
 
 export interface WebFetchToolDetails {
-	pages: Array<Pick<WebFetchedPage, "url" | "finalUrl" | "title" | "cacheHit"> & { contentLength: number }>;
+	pages: PageSummary[];
 	failures: WebFetchResponse["failures"];
 	cacheHit: boolean;
 }
 
-export type WebResearchToolDetails = WebResearchResponse;
+/** Visible preview budget for page text; full Markdown goes to the persisted output. */
+const PAGE_PREVIEW_BUDGET = 24_000;
+const EXCERPTS_PER_SEARCH_PAGE = 2;
 
 const disabledSettings = {
 	getWebSearchSettings: () => ({
 		enabled: false,
-		engineMode: "auto" as const,
 		engines: [],
-		scope: "unrestricted" as const,
-		allowedDomains: [],
-		parallelPages: { mode: "agent" as const },
-		searchRounds: { mode: "agent" as const },
-		searchCacheTtlMs: 1,
-		fetchCacheTtlMs: 1,
+		pagesPerSearch: SETTINGS_DEFAULTS.webSearch.pagesPerSearch,
+		maxUrlsPerFetch: SETTINGS_DEFAULTS.webSearch.maxUrlsPerFetch,
+		fetchConcurrency: SETTINGS_DEFAULTS.webSearch.fetchConcurrency,
 	}),
 };
 
 function getService(options?: WebSearchToolOptions): WebSearchService {
 	if (options?.service) return options.service;
-	return createWebSearchService({
-		...options,
-		settings: options?.settings ?? disabledSettings,
-	});
+	return createWebSearchService({ ...options, settings: options?.settings ?? disabledSettings });
 }
 
 function textResult<TDetails>(text: string, details: TDetails, fullText?: string): AgentToolResult<TDetails> {
@@ -110,125 +108,102 @@ function textResult<TDetails>(text: string, details: TDetails, fullText?: string
 	return result;
 }
 
-function formatSearchResponse(response: WebSearchResponse): string {
-	const lines: string[] = [`Search round ${response.searchRound}.`];
-	if (response.results.length === 0) lines.push("No search results matched the configured scope.");
-	for (const [index, result] of response.results.entries()) {
-		lines.push(
-			`${index + 1}. ${result.title}\nURL: ${result.url}\nSource: ${result.source}\nSnippet: ${result.snippet || "(no snippet)"}`,
+function summarizePage(page: WebFetchedPage): PageSummary {
+	return {
+		url: page.url,
+		finalUrl: page.finalUrl,
+		title: page.title,
+		publishedAt: page.publishedAt,
+		truncated: page.truncated,
+		cacheHit: page.cacheHit,
+		contentLength: page.markdown?.length ?? 0,
+	};
+}
+
+function formatFailures(failures: readonly WebSearchFailure[]): string | undefined {
+	if (failures.length === 0) return undefined;
+	return `Diagnostics:\n${failures
+		.map((failure) => {
+			const where = [failure.engine && WEB_SEARCH_ENGINES[failure.engine].label, failure.query, failure.url]
+				.filter(Boolean)
+				.join(" · ");
+			return `- [${failure.code}] ${where ? `${where}: ` : ""}${failure.message}`;
+		})
+		.join("\n")}`;
+}
+
+function pageHeader(page: WebFetchedPage, label: string): string {
+	const lines = [`## ${label}${page.title ?? page.finalUrl ?? page.url}`, `URL: ${page.finalUrl ?? page.url}`];
+	if (page.publishedAt) lines.push(`Published: ${page.publishedAt}`);
+	if (page.truncated) lines.push("Note: page was longer than the download limit; only the first part was read.");
+	return lines.join("\n");
+}
+
+function formatSearchResponse(response: WebSearchResponse, queries: string[]): { preview: string; fullText?: string } {
+	const sections: string[] = [
+		`Engines: ${response.engines.map((engine) => WEB_SEARCH_ENGINES[engine].label).join(", ")}`,
+	];
+	if (response.results.length === 0) sections.push("No search results.");
+	else {
+		sections.push(
+			response.results
+				.map((result, index) =>
+					[
+						`[${index + 1}] ${result.title}`,
+						`URL: ${result.url}`,
+						`Source: ${result.source}${result.publishedAt ? ` · Published: ${result.publishedAt}` : ""}`,
+						`Snippet: ${result.snippet || "(no snippet)"}`,
+					].join("\n"),
+				)
+				.join("\n\n"),
 		);
 	}
-	if (response.failures.length > 0) {
-		lines.push("\nDiagnostics:");
-		for (const failure of response.failures) {
-			lines.push(`- ${failure.query ? `query=${failure.query}: ` : ""}[${failure.code}] ${failure.message}`);
-		}
+	const resultIndex = new Map(response.results.map((result, index) => [result.url, index + 1]));
+	const pagePreviews: string[] = [];
+	const pageFull: string[] = [];
+	for (const page of response.pages) {
+		const index = resultIndex.get(page.url);
+		const header = pageHeader(page, index ? `[${index}] ` : "");
+		const query = queries.join(" ");
+		const excerpts = selectExcerpts(page.markdown ?? "", query, EXCERPTS_PER_SEARCH_PAGE)
+			.map((excerpt) => (excerpt.heading ? `### ${excerpt.heading}\n${excerpt.text}` : excerpt.text))
+			.join("\n\n");
+		pagePreviews.push(`${header}\n\n${excerpts || "(no readable text)"}`);
+		pageFull.push(`${header}\n\n${page.markdown ?? ""}`);
 	}
-	if (response.cacheHit) lines.push("\nCache: session cache hit.");
-	return lines.join("\n\n");
+	if (pagePreviews.length > 0) {
+		sections.push(
+			`Pages read (${pagePreviews.length}; most relevant excerpts shown, full text is saved):\n\n${pagePreviews.join("\n\n")}`,
+		);
+	}
+	const diagnostics = formatFailures(response.failures);
+	if (diagnostics) sections.push(diagnostics);
+	if (response.cacheHit) sections.push("Cache: session cache hit.");
+	const preview = sections.join("\n\n");
+	return {
+		preview,
+		fullText: pageFull.length > 0 ? `${preview}\n\n# Full page text\n\n${pageFull.join("\n\n")}` : undefined,
+	};
 }
 
 function formatFetchResponse(response: WebFetchResponse): { preview: string; fullText?: string } {
 	const sections: string[] = [];
 	const fullSections: string[] = [];
+	const perPage = Math.max(1_000, Math.floor(PAGE_PREVIEW_BUDGET / Math.max(1, response.pages.length)));
 	for (const page of response.pages) {
-		const title = page.title ? `${page.title}\n` : "";
+		const header = pageHeader(page, "");
 		const body = page.markdown ?? "";
-		fullSections.push(
-			`## ${page.title ?? page.finalUrl ?? page.url}\n\nURL: ${page.finalUrl ?? page.url}\n\n${body}`,
-		);
+		fullSections.push(`${header}\n\n${body}`);
 		sections.push(
-			`## ${title ? title : ""}${page.finalUrl ?? page.url}\n\n${body.slice(0, 3_000)}${body.length > 3_000 ? "\n\n[preview truncated; full Markdown is saved below]" : ""}`,
+			`${header}\n\n${body.slice(0, perPage)}${body.length > perPage ? "\n\n[preview truncated; full Markdown is saved]" : ""}`,
 		);
 	}
-	if (response.failures.length > 0) {
-		sections.push(
-			`## Diagnostics\n\n${response.failures
-				.map((failure) => `- ${failure.url ? `${failure.url}: ` : ""}[${failure.code}] ${failure.message}`)
-				.join("\n")}`,
-		);
-	}
+	const diagnostics = formatFailures(response.failures);
+	if (diagnostics) sections.push(diagnostics);
 	return {
 		preview: sections.length > 0 ? sections.join("\n\n") : "No pages were fetched.",
 		fullText: fullSections.length ? fullSections.join("\n\n") : undefined,
 	};
-}
-
-function formatResearchResponse(response: WebResearchResponse): { preview: string; fullText: string } {
-	const lines: string[] = [
-		`Research status: ${response.status}`,
-		`Research question: ${response.question}`,
-		`Research message: ${response.message}`,
-		`Research rounds: ${response.researchRounds}`,
-		`Queries used: ${response.queries.length}`,
-	];
-	if (response.queries.length > 0) {
-		lines.push(`\nQueries:\n${response.queries.map((query, index) => `${index + 1}. ${query}`).join("\n")}`);
-	}
-	if (response.rounds.length > 0) {
-		lines.push(
-			"\nRound diagnostics:\n" +
-				response.rounds
-					.map(
-						(round) =>
-							`- Round ${round.round}: ${round.status}; queries=${round.queries.length}; searchResults=${round.searchResultCount}; selectedSources=${round.selectedSourceCount}; fetched=${round.fetchedSourceCount}; evidence=${round.evidenceChunkCount}; cacheHit=${round.cacheHit}`,
-					)
-					.join("\n"),
-		);
-	}
-	if (response.sources.length > 0) {
-		lines.push(
-			"\nSources:\n" +
-				response.sources
-					.map(
-						(source) =>
-							`[${source.id}] ${source.title}\nURL: ${source.url}\nDomain: ${source.domain}\nType: ${source.sourceType}\nPublished: ${source.publishedAt ?? "unknown"}\nQueries: ${source.queries.join(" | ")}\nFetched: ${source.fetched}; Evidence chunks: ${source.evidenceCount}`,
-					)
-					.join("\n\n"),
-		);
-	}
-	if (response.evidence.length > 0) {
-		lines.push(
-			"\nEvidence Pack:\n" +
-				response.evidence
-					.map(
-						(evidence) =>
-							`[${evidence.sourceId}] ${evidence.title}\nURL: ${evidence.url}\nSection: ${evidence.heading ?? "(page body)"}\nPublished: ${evidence.publishedAt ?? "unknown"}\nEvidence:\n${evidence.excerpt}`,
-					)
-					.join("\n\n"),
-		);
-	}
-	if (response.fullPages?.length) {
-		lines.push(
-			"\nComplete fetched page archive (persisted full output only):\n" +
-				response.fullPages
-					.map(
-						(page) =>
-							`## ${page.title ?? page.url}\nURL: ${page.url}\nPublished: ${page.publishedAt ?? "unknown"}\n\n${page.markdown}`,
-					)
-					.join("\n\n"),
-		);
-	}
-	if (response.failures.length > 0) {
-		lines.push(
-			"\nDiagnostics:\n" +
-				response.failures
-					.map(
-						(failure) =>
-							`- [${failure.stage}/${failure.code}] ${failure.query ?? failure.url ?? "research"}: ${failure.message}`,
-					)
-					.join("\n"),
-		);
-	}
-	if (response.unresolvedConflicts.length > 0)
-		lines.push(`\nUnresolved conflicts:\n- ${response.unresolvedConflicts.join("\n- ")}`);
-	if (response.cacheHit) lines.push("\nCache: at least one search or fetch stage used the session cache.");
-	const fullText = lines.join("\n\n");
-	const preview =
-		fullText.length > 16_000
-			? `${fullText.slice(0, 16_000)}\n\n[Evidence Pack preview truncated; full output is saved below]`
-			: fullText;
-	return { preview, fullText };
 }
 
 export function createWebSearchToolDefinition(
@@ -240,22 +215,25 @@ export function createWebSearchToolDefinition(
 		name: "web_search",
 		label: "web_search",
 		description:
-			"Search the web through the configured SearXNG instance. Accepts multiple independent queries, returns only ranked lightweight results with title/URL/snippet/source, applies Website Scope, and never substitutes page content for search results.",
+			"Search the web with the search engines the user enabled. Sends every query to each engine, merges and dedupes the results, then reads the top results' pages (up to the user's Pages to Read per Search setting) and returns ranked results plus the most relevant page excerpts. Failed engines or pages are listed in Diagnostics.",
 		promptSnippet: loadSystemPrompt("tools/web-search/snippet.md"),
-		promptGuidelines: [
-			...loadSystemPromptLines("tools/web-search/guidelines.md"),
-			"Search Rounds are complete investigation phases; stop when the user question is answered or the reported round limit is reached.",
-		],
+		promptGuidelines: loadSystemPromptLines("tools/web-search/guidelines.md"),
 		parameters: webSearchSchema,
 		async execute(_toolCallId, params: WebSearchToolInput, signal) {
 			const response = await service.search(params, signal);
-			return textResult(formatSearchResponse(response), {
-				queries: params.queries,
-				results: response.results,
-				failures: response.failures,
-				cacheHit: response.cacheHit,
-				searchRound: response.searchRound,
-			} satisfies WebSearchToolDetails);
+			const formatted = formatSearchResponse(response, params.queries);
+			return textResult(
+				formatted.preview,
+				{
+					queries: params.queries,
+					engines: response.engines,
+					results: response.results,
+					pages: response.pages.map(summarizePage),
+					failures: response.failures,
+					cacheHit: response.cacheHit,
+				} satisfies WebSearchToolDetails,
+				formatted.fullText,
+			);
 		},
 	};
 }
@@ -269,7 +247,7 @@ export function createWebFetchToolDefinition(
 		name: "web_fetch",
 		label: "web_fetch",
 		description:
-			"Fetch one or more explicit http(s) URLs through Crawl4AI and return cleaned Markdown that preserves headings, code, tables, lists, quotes, and link text. Each URL has an independent status and diagnostic.",
+			"Read one or more explicit public http(s) URLs and return each page as Markdown that keeps headings, code, tables, lists and link text. Each URL succeeds or fails on its own; local and private addresses are refused.",
 		promptSnippet: loadSystemPrompt("tools/web-fetch/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/web-fetch/guidelines.md"),
 		parameters: webFetchSchema,
@@ -277,68 +255,12 @@ export function createWebFetchToolDefinition(
 			const response = await service.fetch(params, signal);
 			const formatted = formatFetchResponse(response);
 			const details: WebFetchToolDetails = {
-				pages: response.pages.map((page) => ({
-					url: page.url,
-					finalUrl: page.finalUrl,
-					title: page.title,
-					cacheHit: page.cacheHit,
-					contentLength: page.markdown?.length ?? 0,
-				})),
+				pages: response.pages.map(summarizePage),
 				failures: response.failures,
 				cacheHit: response.cacheHit,
 			};
 			return textResult(formatted.preview, details, formatted.fullText);
 		},
-	};
-}
-
-export function createWebResearchToolDefinition(
-	_cwd: string,
-	options?: WebSearchToolOptions,
-): BusinessToolDefinition<typeof webResearchSchema, WebResearchToolDetails> {
-	const service = getService(options);
-	return {
-		name: "web_research",
-		label: "web_research",
-		description:
-			"Investigate a real-world question through bounded multi-query planning, SearXNG search, deterministic source fusion/ranking, Crawl4AI fetching, relevant long-page chunk selection, evidence sufficiency checks, and limited reformulation rounds. Returns a cited Evidence Pack with diagnostics; it does not claim success when all sources fail.",
-		promptSnippet: loadSystemPrompt("tools/web-research/snippet.md"),
-		promptGuidelines: loadSystemPromptLines("tools/web-research/guidelines.md"),
-		parameters: webResearchSchema,
-		async execute(_toolCallId, params: WebResearchToolInput, signal, onUpdate) {
-			const response = await runWebResearch(service, params satisfies WebResearchRequest, signal, (progress) => {
-				onUpdate?.({
-					content: [{ type: "text", text: `Web Research: ${progress.message}` }],
-					details: {
-						...responseProgressDetails(progress),
-					} as WebResearchToolDetails,
-				});
-			});
-			const formatted = formatResearchResponse(response);
-			const { fullPages: _fullPages, ...details } = response;
-			return textResult(formatted.preview, details, formatted.fullText);
-		},
-	};
-}
-
-function responseProgressDetails(progress: {
-	stage: string;
-	round: number;
-	queries: string[];
-	message: string;
-}): Partial<WebResearchResponse> {
-	return {
-		question: "",
-		queries: progress.queries,
-		sources: [],
-		evidence: [],
-		rounds: [],
-		failures: [],
-		unresolvedConflicts: [],
-		cacheHit: false,
-		researchRounds: progress.round,
-		status: "insufficient",
-		message: `${progress.stage}: ${progress.message}`,
 	};
 }
 
@@ -366,31 +288,17 @@ export function createWebFetchTool(_cwd: string, options?: WebSearchToolOptions)
 	};
 }
 
-export function createWebResearchTool(_cwd: string, options?: WebSearchToolOptions): AgentTool {
-	const definition = createWebResearchToolDefinition(_cwd, options);
-	return {
-		name: definition.name,
-		label: definition.label,
-		description: definition.description,
-		parameters: definition.parameters,
-		execute: (toolCallId, params, signal, onUpdate) =>
-			definition.execute(toolCallId, params as WebResearchToolInput, signal, onUpdate, undefined),
-	};
-}
-
 export function createWebSearchToolDefinitions(
 	_cwd: string,
 	options?: WebSearchToolOptions,
 ): {
 	web_search: ReturnType<typeof createWebSearchToolDefinition>;
 	web_fetch: ReturnType<typeof createWebFetchToolDefinition>;
-	web_research: ReturnType<typeof createWebResearchToolDefinition>;
 } {
 	const service = getService(options);
 	return {
 		web_search: createWebSearchToolDefinition(_cwd, { service }),
 		web_fetch: createWebFetchToolDefinition(_cwd, { service }),
-		web_research: createWebResearchToolDefinition(_cwd, { service }),
 	};
 }
 

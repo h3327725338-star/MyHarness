@@ -210,21 +210,21 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 
 ### Web Search 组合边界
 
-可选的联网搜索能力沿用现有 Agent Loop 和 Tool Result persistence，不建立第二套 Agent 或结果系统：
+可选的联网搜索能力沿用现有 Agent Loop 和 Tool Result persistence，不建立第二套 Agent 或结果系统，也不依赖外部搜索/抓取服务：
 
 ```text
 Agent Loop
   → tools/registry.ts
-  → tools/web-search/tool.ts
-  → tools/web-search/service.ts
-       ├── SearXNG /config + /search
-       ├── Crawl4AI /crawl
-       ├── URL policy / Website Scope
-       └── Session-scoped WebSearchCache
+  → tools/web-search/tool.ts            web_search / web_fetch 的 schema 与结果格式
+  → tools/web-search/service.ts         多 query × 多引擎、合并去重排序、引擎退避、共享下载上限、缓存
+       ├── engines.ts                   DuckDuckGo / Brave 结果页解析、Brave Search API
+       ├── page.ts                      网页下载、逐跳 URL/DNS 安全检查、HTML → Markdown
+       ├── url.ts                       URL policy（SSRF）与规范化
+       └── cache.ts                     Session-scoped WebSearchCache
   → existing Tool Result persistence / Session lifecycle
 ```
 
-`SettingsManager` 保存全局 `webSearch` 配置；`AgentSession` 根据开关重建当前 Tool registry 和 system prompt。搜索结果只返回轻量字段，网页 Markdown 通过既有的大 Tool Result 处理通道保存，服务自身只负责有限并发、缓存、取消、超时、Round 状态和逐项诊断。InteractiveMode 只负责 `/settings` 的产品交互，不能承载搜索业务逻辑。
+`SettingsManager` 保存全局 `webSearch` 配置（引擎和三个数量，范围由 `WEB_SEARCH_SETTING_RANGES` 统一定义）并负责迁移旧 SearXNG/Crawl4AI 字段；Brave Search API Key 由 `providers/credentials/web-search-keys.ts` 保存在独立的私有文件中。`AgentSession` 根据开关重建当前 Tool registry 和 system prompt。搜索规划（搜什么、搜几轮、读哪些页）由 Agent 决定，工具只负责有限并发、缓存、取消、超时和逐项诊断。InteractiveMode 只负责 `/settings` 的产品交互，不能承载搜索业务逻辑。
 
 ### 当前不存在的目录
 

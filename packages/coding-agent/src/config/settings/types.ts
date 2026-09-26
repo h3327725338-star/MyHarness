@@ -103,58 +103,44 @@ export interface VisionCapabilityTestRecord {
 	testedAt: number;
 }
 
+/** Search sources built into MyHarness. `brave_api` additionally needs a user API key. */
+export type WebSearchEngineId = "duckduckgo" | "brave" | "brave_api";
+
 /**
- * `all` is retained only as a read-compatible legacy value. Resolved settings
- * normalize it to `auto`, which means SearXNG decides the active engines.
+ * Pre-built-in-search fields. They are read once for migration and dropped the
+ * next time Web Search settings are saved; nothing in the runtime uses them.
  */
-export type WebSearchEngineMode = "auto" | "selected" | "all";
-export type ResolvedWebSearchEngineMode = "auto" | "selected";
-export type WebSearchScope = "unrestricted" | "allowlist";
-export type WebSearchStrategyMode = "agent" | "manual";
-
-export interface WebSearchStrategySettings {
-	mode?: WebSearchStrategyMode;
-	/** Positive number used when mode is "manual". */
-	value?: number;
-}
-
-/** Global configuration for the optional SearXNG/Crawl4AI web tools. */
-export interface WebSearchSettings {
-	enabled?: boolean;
-	/** Base URL of the SearXNG instance. Kept configurable; no host is assumed. */
+export interface LegacyWebSearchSettings {
 	searxngUrl?: string;
-	/** Base URL of the Crawl4AI Docker/API service. Kept configurable; no host is assumed. */
 	crawl4aiUrl?: string;
-	engineMode?: WebSearchEngineMode;
-	/** Engine names returned by the configured SearXNG /config endpoint. */
-	engines?: string[];
-	scope?: WebSearchScope;
-	/** Hostnames; exact matches and subdomains are allowed. */
+	engineMode?: string;
+	scope?: string;
 	allowedDomains?: string[];
-	parallelPages?: WebSearchStrategySettings;
-	searchRounds?: WebSearchStrategySettings;
-	/** Cache TTLs are deliberately configurable for future freshness policies. */
+	parallelPages?: { mode?: string; value?: number };
+	searchRounds?: { mode?: string; value?: number };
 	searchCacheTtlMs?: number;
 	fetchCacheTtlMs?: number;
 }
 
-export interface ResolvedWebSearchStrategy {
-	mode: WebSearchStrategyMode;
-	value?: number;
+/** Global configuration for the optional built-in web tools. */
+export interface WebSearchSettings extends LegacyWebSearchSettings {
+	enabled?: boolean;
+	/** Enabled search sources; unknown names are ignored. */
+	engines?: string[];
+	/** How many top results web_search reads after searching (0 = results only). */
+	pagesPerSearch?: number;
+	/** Most URLs one web_fetch call may read. */
+	maxUrlsPerFetch?: number;
+	/** Most page downloads running at the same time, across all web tool calls. */
+	fetchConcurrency?: number;
 }
 
 export interface ResolvedWebSearchSettings {
 	enabled: boolean;
-	searxngUrl?: string;
-	crawl4aiUrl?: string;
-	engineMode: ResolvedWebSearchEngineMode;
-	engines: string[];
-	scope: WebSearchScope;
-	allowedDomains: string[];
-	parallelPages: ResolvedWebSearchStrategy;
-	searchRounds: ResolvedWebSearchStrategy;
-	searchCacheTtlMs: number;
-	fetchCacheTtlMs: number;
+	engines: WebSearchEngineId[];
+	pagesPerSearch: number;
+	maxUrlsPerFetch: number;
+	fetchConcurrency: number;
 }
 
 export interface GitIntegrationSettings {
@@ -253,7 +239,7 @@ export interface Settings {
 	visionAssistant?: VisionAssistantSettings; // Global-only dedicated image analysis configuration
 	codeIntelligence?: CodeIntelligenceSettings;
 	visionCapabilityTests?: Record<string, VisionCapabilityTestRecord>; // Global cache for manually probed custom models
-	webSearch?: WebSearchSettings; // Global-only optional SearXNG/Crawl4AI tool configuration
+	webSearch?: WebSearchSettings; // Global-only optional built-in web search/fetch configuration
 	disabledProviders?: string[]; // Global-only Provider enable state; disabled entries keep configuration and credentials
 	gitIntegration?: GitIntegrationSettings; // Project-only local version history integration
 	usageRanking?: UsageRankingSettings; // Global-only usage counts for adaptive menu ordering

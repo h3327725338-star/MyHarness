@@ -1,177 +1,268 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/config/settings/index.ts";
-import type { WebSearchSettings } from "../src/config/settings/types.ts";
+import type { ResolvedWebSearchSettings, WebSearchSettings } from "../src/config/settings/types.ts";
 import { WebSearchSettingsSubmenu } from "../src/modes/interactive/components/web-search-settings.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { InMemoryAuthStorageBackend } from "../src/providers/credentials/auth-storage.ts";
+import { WebSearchApiKeys } from "../src/providers/credentials/web-search-keys.ts";
 
 const enter = "\r";
 const esc = "\u001b";
 const down = "\u001b[B";
-// Prefilled inputs start with the cursor at column 0; move to the end (Ctrl+E) before editing.
-const end = "\u0005";
+const up = "\u001b[A";
 
-/** A fetch that never settles until its AbortSignal fires, like an unreachable service. */
-function hangingFetch() {
-	const signals: AbortSignal[] = [];
-	const fetchMock = vi.fn(
-		(_input: string | URL, init?: RequestInit) =>
-			new Promise<Response>((_resolve, reject) => {
-				const signal = init?.signal;
-				if (signal) {
-					signals.push(signal);
-					signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-				}
-			}),
-	);
-	return { fetchMock, signals };
-}
+// The service's default transport is a plain undici request; route it through the
+// stubbed global fetch so these tests never reach the real network.
+vi.mock("../src/tools/web-search/http.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/tools/web-search/http.ts")>()),
+	plainHttpFetch: (input: string | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
 
 function createSubmenu(overrides: WebSearchSettings = {}) {
-	const settingsManager = SettingsManager.inMemory({
-		webSearch: {
-			enabled: true,
-			searxngUrl: "https://searx.test",
-			crawl4aiUrl: "https://crawl.test",
-			...overrides,
-		},
-	});
-	const onChange = vi.fn((settings: WebSearchSettings) => settingsManager.setWebSearchSettings(settings));
+	const settingsManager = SettingsManager.inMemory({ webSearch: { enabled: true, ...overrides } });
+	const keys = new WebSearchApiKeys(new InMemoryAuthStorageBackend());
+	const onChange = vi.fn((settings: ResolvedWebSearchSettings) => settingsManager.setWebSearchSettings(settings));
 	const onDone = vi.fn();
 	const requestRender = vi.fn();
 	const submenu = new WebSearchSettingsSubmenu(
 		settingsManager.getWebSearchSettings(),
 		onChange,
-		{ tui: { requestRender } as never, settingsManager },
+		{ tui: { requestRender } as never, settingsManager, webSearchKeys: keys },
 		onDone,
 	);
-	const text = () => submenu.render(120).join("\n");
-	const openItem = (label: string) => {
-		for (let i = 0; i < 12 && !selectedLine(text()).includes(label); i++) submenu.handleInput(down);
+	const text = () => submenu.render(140).join("\n");
+	const moveTo = (label: string) => {
+		for (let i = 0; i < 25 && !selectedLine(text()).includes(label); i++) submenu.handleInput(down);
 		expect(selectedLine(text())).toContain(label);
+	};
+	const openItem = (label: string) => {
+		moveTo(label);
 		submenu.handleInput(enter);
 	};
-	return { submenu, settingsManager, onChange, onDone, requestRender, text, openItem };
+	return { submenu, settingsManager, keys, onChange, onDone, text, moveTo, openItem };
 }
 
 function selectedLine(text: string): string {
 	return text.split("\n").find((line) => line.includes("→")) ?? "";
 }
 
-describe("Web Search settings navigation", () => {
+describe("Web Search settings page", () => {
 	beforeEach(() => initTheme("dark"));
 	afterEach(() => vi.unstubAllGlobals());
 
-	for (const label of ["Search Engines", "Health", "Run Web Search Test"]) {
-		it(`${label}: Esc leaves the loading page immediately and aborts the in-flight request`, async () => {
-			const { fetchMock, signals } = hangingFetch();
-			vi.stubGlobal("fetch", fetchMock);
-			const { submenu, text, openItem, onDone } = createSubmenu();
-			openItem(label);
-			await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-			expect(text()).not.toContain("Crawl4AI URL");
+	it("shows only the switch, the engines and the three numbers with their ranges", () => {
+		const { text } = createSubmenu();
+		const page = text();
+		for (const label of [
+			"Web Search",
+			"Search Engines",
+			"Pages to Read per Search",
+			"Max URLs per Fetch",
+			"Concurrent Downloads",
+		]) {
+			expect(page).toContain(label);
+		}
+		expect(page).toContain("DuckDuckGo, Brave");
+		expect(page).toContain("3  (0–10)");
+		expect(page).toContain("10  (1–20)");
+		expect(page).toContain("4  (1–8)");
+		for (const removed of ["SearXNG", "Crawl4AI", "Website Scope", "Search Rounds", "Health", "Parallel Pages"]) {
+			expect(page).not.toContain(removed);
+		}
+	});
 
-			submenu.handleInput(esc);
-			expect(text()).toContain("Crawl4AI URL");
-			expect(selectedLine(text())).toContain(label);
-			expect(onDone).not.toHaveBeenCalled();
-			expect(signals.every((signal) => signal.aborted)).toBe(true);
+	it("turns Web Search off and on", () => {
+		const { submenu, settingsManager, onDone } = createSubmenu();
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().enabled).toBe(false);
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().enabled).toBe(true);
+		submenu.handleInput(esc);
+		expect(onDone).toHaveBeenCalledWith("On · DuckDuckGo, Brave");
+	});
 
-			// The root list still works after returning.
-			submenu.handleInput(esc);
-			expect(onDone).toHaveBeenCalledTimes(1);
-		});
-	}
-
-	it("renders the engine list as soon as SearXNG answers and returns to the same row", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => Response.json({ engines: [{ name: "brave" }, { name: "duckduckgo" }] })),
-		);
-		const { submenu, text, openItem, requestRender, settingsManager } = createSubmenu();
+	it("toggles engines, persists the choice and returns to the same row", () => {
+		const { submenu, text, openItem, settingsManager } = createSubmenu();
 		openItem("Search Engines");
-		await vi.waitFor(() => expect(text()).toContain("duckduckgo"));
-		expect(requestRender).toHaveBeenCalled();
-		// Rows: Select all, Clear all, brave, duckduckgo. Turn brave off.
+		expect(text()).toContain("Brave Search API Key");
+		expect(text()).toContain("未填写");
+		// Rows: DuckDuckGo, Brave, Brave Search API. Turn DuckDuckGo off, Brave Search API on.
+		submenu.handleInput(enter);
 		submenu.handleInput(down);
 		submenu.handleInput(down);
 		submenu.handleInput(enter);
-		expect(settingsManager.getWebSearchSettings()).toMatchObject({
-			engineMode: "selected",
-			engines: ["duckduckgo"],
-		});
+		expect(settingsManager.getWebSearchSettings().engines).toEqual(["brave", "brave_api"]);
 		submenu.handleInput(esc);
 		expect(selectedLine(text())).toContain("Search Engines");
-		expect(text()).toContain("1 selected");
+		expect(text()).toContain("Brave, Brave Search API");
 	});
 
-	it("keeps the cursor on the edited row after an input page returns", () => {
+	it("offers exactly the real range for each number and saves the choice", () => {
 		const { submenu, text, openItem, settingsManager } = createSubmenu();
-		openItem("Crawl4AI URL");
-		submenu.handleInput(end);
-		for (let i = 0; i < 40; i++) submenu.handleInput("\u007f");
-		for (const char of "https://crawl2.test") submenu.handleInput(char);
-		submenu.handleInput(enter);
-		expect(settingsManager.getWebSearchSettings().crawl4aiUrl).toBe("https://crawl2.test");
-		expect(selectedLine(text())).toContain("Crawl4AI URL");
-		openItem("Crawl4AI URL");
-		submenu.handleInput(esc);
-		expect(selectedLine(text())).toContain("Crawl4AI URL");
-	});
-
-	it("re-prompts for a number instead of jumping back to the mode picker on invalid input", () => {
-		const { submenu, text, openItem, settingsManager } = createSubmenu();
-		openItem("Search Rounds");
+		openItem("Concurrent Downloads");
+		expect(text()).toContain("Concurrent Downloads（范围 1–8，当前 4）");
+		// The list holds exactly 1..8: four steps down from 4 reach 8, one more wraps to 1, not 9.
+		for (let i = 0; i < 4; i++) submenu.handleInput(down);
+		expect(selectedLine(text())).toMatch(/→\s*8\b/u);
 		submenu.handleInput(down);
-		submenu.handleInput(enter); // Manual
-		for (const char of "abc") submenu.handleInput(char);
+		expect(selectedLine(text())).toMatch(/→\s*1\b/u);
+		submenu.handleInput(up);
 		submenu.handleInput(enter);
-		expect(text()).toContain("请输入正整数");
-		expect(text()).not.toContain("Agent decides");
-		submenu.handleInput(end);
-		for (let i = 0; i < 3; i++) submenu.handleInput("\u007f");
-		submenu.handleInput("3");
-		submenu.handleInput(enter);
-		expect(settingsManager.getWebSearchSettings().searchRounds).toEqual({ mode: "manual", value: 3 });
-		expect(selectedLine(text())).toContain("Search Rounds");
-	});
+		expect(settingsManager.getWebSearchSettings().fetchConcurrency).toBe(8);
+		expect(selectedLine(text())).toContain("Concurrent Downloads");
+		expect(text()).toContain("8  (1–8)");
 
-	it("keeps invalid Allowed Websites input visible with the error", () => {
-		const { submenu, text, openItem, settingsManager } = createSubmenu();
-		openItem("Allowed Websites");
-		for (const char of "example.com, http://bad/") submenu.handleInput(char);
+		openItem("Pages to Read per Search");
+		expect(text()).toContain("范围 0–10");
+		for (let i = 0; i < 3; i++) submenu.handleInput(up);
+		expect(selectedLine(text())).toMatch(/→\s*0\b/u);
 		submenu.handleInput(enter);
-		expect(text()).toContain("存在无效 hostname");
-		expect(text()).toContain("http://bad/");
-		expect(settingsManager.getWebSearchSettings().allowedDomains).toEqual([]);
+		expect(settingsManager.getWebSearchSettings().pagesPerSearch).toBe(0);
+
+		openItem("Max URLs per Fetch");
+		expect(text()).toContain("范围 1–20");
 		submenu.handleInput(esc);
-		expect(selectedLine(text())).toContain("Allowed Websites");
+		expect(settingsManager.getWebSearchSettings().maxUrlsPerFetch).toBe(10);
+		expect(selectedLine(text())).toContain("Max URLs per Fetch");
 	});
 
-	it("can run the settings E2E test repeatedly without hitting the Agent Search Rounds limit", async () => {
+	it("stores the Brave Search API key masked, outside settings, and can delete it", () => {
+		const { submenu, text, openItem, keys, settingsManager } = createSubmenu();
+		openItem("Search Engines");
+		for (let i = 0; i < 3; i++) submenu.handleInput(down);
+		expect(selectedLine(text())).toContain("Brave Search API Key");
+		submenu.handleInput(enter);
+		for (const char of "my-secret") submenu.handleInput(char);
+		expect(text()).not.toContain("my-secret");
+		submenu.handleInput(enter);
+		expect(keys.get("brave_api")).toBe("my-secret");
+		expect(JSON.stringify(settingsManager.getGlobalSettings())).not.toContain("my-secret");
+		expect(selectedLine(text())).toContain("已填写");
+
+		submenu.handleInput(enter);
+		submenu.handleInput(enter);
+		expect(keys.hasStored("brave_api")).toBe(false);
+	});
+
+	it("tests the enabled engines, and Esc cancels a test that is still waiting", async () => {
+		const signals: AbortSignal[] = [];
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async (input: string | URL) => {
-				const url = new URL(String(input));
-				if (url.pathname === "/search") {
-					return Response.json({
-						results: [{ title: "SearXNG docs", url: "https://docs.searxng.org/", content: "docs" }],
-					});
-				}
-				if (url.pathname === "/crawl") {
-					return Response.json({
-						results: [{ url: "https://docs.searxng.org/", success: true, markdown: "# SearXNG\n\nBody" }],
-					});
-				}
-				throw new Error(`Unexpected URL ${url}`);
-			}),
+			vi.fn(
+				(_input: string | URL, init?: RequestInit) =>
+					new Promise<Response>((_resolve, reject) => {
+						if (init?.signal) {
+							signals.push(init.signal);
+							init.signal.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+						}
+					}),
+			),
 		);
-		const { submenu, text, openItem } = createSubmenu({ searchRounds: { mode: "manual", value: 1 } });
-		for (let run = 0; run < 3; run++) {
-			openItem("Run Web Search Test");
-			await vi.waitFor(() => expect(text()).toContain("Total："));
-			expect(text()).toContain("E2E 正常");
-			submenu.handleInput(esc);
-			expect(selectedLine(text())).toContain("Run Web Search Test");
-		}
+		const { submenu, text, openItem, moveTo } = createSubmenu();
+		openItem("Search Engines");
+		moveTo("Test Selected Engines");
+		submenu.handleInput(enter);
+		await vi.waitFor(() => expect(signals).toHaveLength(2));
+		expect(text()).toContain("正在测试 2 个搜索引擎");
+		submenu.handleInput(esc);
+		expect(signals.every((signal) => signal.aborted)).toBe(true);
+		expect(selectedLine(text())).toContain("Test Selected Engines");
+
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL) =>
+				new URL(String(input)).hostname === "search.brave.com"
+					? new Response("slow down", { status: 429 })
+					: new Response(
+							`<form><input name="q"></form><table><tr><td><a class='result-link' href="https://a.example/">A</a></td></tr></table>`,
+							{ headers: { "Content-Type": "text/html" } },
+						),
+			),
+		);
+		submenu.handleInput(enter);
+		await vi.waitFor(() => expect(text()).toContain("DuckDuckGo：OK"));
+		expect(text()).toContain("Brave：失败");
+		expect(text()).toContain("429");
+		submenu.handleInput(esc);
+		expect(selectedLine(text())).toContain("Test Selected Engines");
+	});
+});
+
+describe("/settings root → Web Search", () => {
+	beforeEach(() => initTheme("dark"));
+
+	it("opens the Web Search page from /settings, saves changes through the callback and shows the summary", async () => {
+		const { SettingsSelectorComponent } = await import("../src/modes/interactive/components/settings-selector.ts");
+		const settingsManager = SettingsManager.inMemory({ webSearch: { enabled: false } });
+		const onWebSearchChange = vi.fn((settings: ResolvedWebSearchSettings) =>
+			settingsManager.setWebSearchSettings(settings),
+		);
+		const callbacks = new Proxy({ onWebSearchChange } as Record<string, unknown>, {
+			get: (target, key) => target[key as string] ?? vi.fn(),
+		});
+		const config = {
+			autoMemory: { enabled: false },
+			subAgent: { enabled: false },
+			visionAssistant: { enabled: false },
+			disabledProviders: [],
+			gitIntegration: { enabled: false },
+			autoCompact: true,
+			showImages: true,
+			imageWidthCells: 60,
+			autoResizeImages: true,
+			blockImages: false,
+			enableSkillCommands: true,
+			steeringMode: "one-at-a-time",
+			followUpMode: "one-at-a-time",
+			transport: "auto",
+			httpIdleTimeoutMs: 0,
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			currentTheme: "dark",
+			terminalTheme: "dark",
+			availableThemes: ["dark"],
+			hideThinkingBlock: true,
+			showCacheMissNotices: false,
+			collapseChangelog: false,
+			enableInstallTelemetry: true,
+			doubleEscapeAction: "none",
+			showHardwareCursor: false,
+			editorPaddingX: 0,
+			outputPad: 1,
+			autocompleteMaxVisible: 5,
+			quietStartup: false,
+			defaultProjectTrust: "ask",
+			clearOnShrink: false,
+			showTerminalProgress: false,
+			popupNotifications: false,
+			warnings: {},
+		};
+		const selector = new SettingsSelectorComponent(
+			config as never,
+			callbacks as never,
+			{
+				tui: { requestRender: vi.fn() } as never,
+				settingsManager,
+				modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as never,
+				scopedModels: [],
+				webSearchKeys: new WebSearchApiKeys(new InMemoryAuthStorageBackend()),
+			} as never,
+		);
+		const items = (selector.getSettingsList() as unknown as { items: import("@myharness/tui").SettingItem[] }).items;
+		const row = items.find((item) => item.id === "web-search")!;
+		expect(row.currentValue).toBe("Off");
+		const done = vi.fn();
+		const page = row.submenu!(row.currentValue, done);
+		page.handleInput?.(enter); // Web Search: Off → On
+		for (let i = 0; i < 4; i++) page.handleInput?.(down); // → Concurrent Downloads
+		page.handleInput?.(enter);
+		page.handleInput?.(up); // 4 → 3
+		page.handleInput?.(enter);
+		page.handleInput?.(esc);
+		expect(settingsManager.getWebSearchSettings()).toMatchObject({ enabled: true, fetchConcurrency: 3 });
+		expect(onWebSearchChange).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: true, fetchConcurrency: 3 }),
+		);
+		expect(done).toHaveBeenCalledWith("On · DuckDuckGo, Brave");
 	});
 });

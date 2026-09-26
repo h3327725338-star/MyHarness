@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Rebuilt Web Search on built-in engines (DuckDuckGo, Brave, Brave Search API) and a built-in page reader; SearXNG and Crawl4AI are no longer used. The settings page now has only the switch, the engine choice and three numbers with explicit ranges (Pages to Read per Search 0–10, Max URLs per Fetch 1–20, Concurrent Downloads 1–8). Old SearXNG/Crawl4AI settings are migrated or ignored. The `web_research` tool and its exports (`createWebResearchTool`, `createWebResearchToolDefinition`, `WebResearchToolDetails`, `WebResearchToolInput`) and the `WebSearchStrategySettings` type were removed; `web_search` now also reads the top result pages.
 - Rebranded active package metadata, repository links, and extension-facing package names to MyHarness while retaining explicit compatibility aliases for existing extensions.
 - Moved Code Intelligence language servers out of the source checkout and added verified, per-language Windows installation management.
 

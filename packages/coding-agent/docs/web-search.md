@@ -1,85 +1,111 @@
 # Web Search
 
-MyHarness 的 Web Search 是一个可选的 Agent 工具层：SearXNG 负责发现来源，Crawl4AI 负责读取公开网页并生成 Markdown。默认关闭，也不会假设任何本机端口或远程服务地址。
+MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI 或任何其他服务。默认关闭；打开后 Agent 会获得 `web_search` 和 `web_fetch` 两个工具。
 
-## 启用与配置
+## 设置
 
-在交互模式打开 `/settings` → **Web Search**，然后设置：
+在交互模式打开 `/settings` → **Web Search**：
 
-- **Web Search**：关闭时，`web_research`、`web_search` 和 `web_fetch` 不会出现在当前 Agent 的工具注册表或系统提示中；关闭不会删除历史 Session。
-- **SearXNG URL**：SearXNG 基础 URL。实例需要允许 JSON 搜索格式。
-- **Crawl4AI URL**：Crawl4AI Docker/API 基础 URL。
-- **Search Engines**：从配置的 SearXNG `/config` 动态读取。`Auto` 不发送 `engines` 参数，由 SearXNG 按实例配置选择引擎；`Selected` 只发送当前动态发现且被用户保存的引擎。不会使用 MyHarness 内置的固定引擎清单。
-- **Website Scope**：`Unrestricted`，或 `Only selected websites`。allowlist 按真实 hostname 匹配，允许根域名及其子域名，不接受字符串包含式绕过。
-- **Allowed Websites**：逗号分隔的 hostname，例如 `openai.com, docs.python.org`。搜索结果和直接提供给 `web_fetch` 的 URL 都会经过同一范围检查。
-- **Parallel Pages**：`Agent decides` 使用有限的内置安全上限；`Manual` 接受任意正整数，控制单次最多读取的 URL 数量。
-- **Search Rounds**：`Agent decides` 使用有限的内置安全上限；`Manual` 接受任意正整数。一次 Round 是“搜索 → 读取网页”的完整调查阶段，不是 Tool Call 次数。上限按每次 Agent 运行（一次用户任务）计算，下一条消息开始时重新计数；达到上限时 `web_search` 返回 `round_limit` 错误。
+| 选项 | 含义 | 范围 | 默认 |
+| --- | --- | --- | --- |
+| **Web Search** | 总开关。关闭时两个工具不会出现在 Agent 的工具列表和系统提示中；已有 Session 和工具结果不会被删除 | On / Off | Off |
+| **Search Engines** | 允许使用哪些搜索引擎，可以同时开多个 | 见下表 | DuckDuckGo、Brave |
+| **Pages to Read per Search** | 每次 `web_search` 搜完后，自动按排名读取前几个结果的网页正文；0 = 只返回结果列表 | 0–10 | 3 |
+| **Max URLs per Fetch** | 一次 `web_fetch` 最多读取几个网址；超出的网址不读取，并在结果里列出来告诉 Agent | 1–20 | 10 |
+| **Concurrent Downloads** | 同一时间最多下载几个网页。这是整个进程的共享上限：Agent 并行调用多个联网工具时也不会超过它 | 1–8 | 4 |
 
-也可以直接写入 global settings：
+三个数字只能在设置页的列表里选择，列表里就是全部合法值；工具内部用的是同一组上限，不会出现“设置允许但运行时悄悄截断”的情况。手动编辑 `settings.json` 写入超出范围的数字时，会按最近的上下限处理。
+
+### 搜索引擎
+
+| 引擎 | 接入方式 | 需要配置 | 稳定性 |
+| --- | --- | --- | --- |
+| DuckDuckGo | 请求 `lite.duckduckgo.com` 的纯 HTML 结果页并解析 | 无 | 免费，但短时间内请求较多时会返回人机验证（HTTP 202） |
+| Brave | 请求 `search.brave.com` 的结果页并解析 | 无 | 免费，但请求较多时会返回 HTTP 429 限流 |
+| Brave Search API | 官方 API `api.search.brave.com/res/v1/web/search` | API Key | 最稳定；需要在 Brave 申请 Key，按 Brave 的套餐计费/限额 |
+
+DuckDuckGo 和 Brave 属于网页抓取方式：它们不是公开 API，页面结构或反爬策略改变时可能失效，也可能因为网络环境（IP、地区）被要求验证。遇到人机验证或 429 时，MyHarness 会在 2 分钟内暂停使用该引擎，避免继续请求；其他已启用的引擎照常工作，失败原因会出现在工具结果的 Diagnostics 中。需要稳定结果时建议开启 Brave Search API。
+
+Google、Bing、百度目前没有内置：Google 结果页需要执行 JavaScript，Bing 对程序请求返回空结果，百度对程序请求返回验证码页面，都无法在不绕过验证的前提下稳定使用。
+
+**Brave Search API Key** 在 Search Engines 页面里填写。输入时会被遮挡，保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`。留空回车会删除已保存的 Key。没有保存 Key 时会读取环境变量 `BRAVE_SEARCH_API_KEY`。
+
+Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引擎真实搜索一次，分别显示是否可用、结果数和耗时；等待时按 Esc 会取消请求并返回。
+
+`settings.json` 示例：
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "searxngUrl": "https://search.example",
-    "crawl4aiUrl": "http://127.0.0.1:11235",
-    "engineMode": "selected",
-    "engines": ["brave", "duckduckgo"],
-    "scope": "allowlist",
-    "allowedDomains": ["example.com"],
-    "parallelPages": { "mode": "manual", "value": 10 },
-    "searchRounds": { "mode": "agent" }
+    "engines": ["duckduckgo", "brave", "brave_api"],
+    "pagesPerSearch": 3,
+    "maxUrlsPerFetch": 10,
+    "fetchConcurrency": 4
   }
 }
 ```
 
-如果 Crawl4AI 服务启用了 JWT/API token，可将 token 放在运行 MyHarness 的进程环境变量 `MYHARNESS_CRAWL4AI_API_TOKEN` 中。该值不会写入 Settings，也不会出现在 Tool 参数或诊断文本里。
+### 旧配置迁移
+
+基于 SearXNG/Crawl4AI 的旧字段不再使用，读取时按下面方式处理，下一次在设置页修改 Web Search 时从文件中删除：
+
+- `enabled` 保留；
+- `parallelPages` 为手动数值时，迁移为 `maxUrlsPerFetch`（超出 1–20 时取最近的上下限）；
+- 旧 `engines` 中与内置引擎同名的（`duckduckgo`、`brave`）保留；一个都不匹配时使用默认引擎；
+- `searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`searchRounds`、`searchCacheTtlMs`、`fetchCacheTtlMs` 被忽略。旧的 Website Scope allowlist 不再生效；需要限定网站时可以在搜索词中使用 `site:example.com`。
+
+环境变量 `MYHARNESS_CRAWL4AI_API_TOKEN` 不再使用。
 
 ## Agent 工具
 
-Agent 只接触 MyHarness 自己的三个 Web 工具：
-
-| Tool | 用途 | 返回内容 |
+| Tool | 参数 | 返回 |
 | --- | --- | --- |
-| `web_research` | 接受一个现实世界问题，可选 freshness、hostname 限定、来源数和最大 Research Rounds | 自动规划互补 Query，按 Query coverage、engine/domain diversity、relevance、freshness 和 source quality 融合排序，读取来源并返回 Evidence Pack |
-| `web_search` | 接受一个或多个 query，可选引擎、`day`/`month`/`year` 时间范围、结果数量和 freshness 标志 | 去重、过滤、透明 heuristic 排序后的 title、URL、snippet、source；不直接返回网页全文 |
-| `web_fetch` | 接受一个或多个明确的 HTTP(S) URL，可选 freshness 标志 | 每个 URL 独立成功/失败状态；成功内容为保留标题、代码、表格、列表、引用和链接文字的 Markdown |
+| `web_search` | `queries`（1–5 个独立问题）、可选 `timeRange`（`day`/`month`/`year`）、`maxResults`（1–20，默认 10）、`readPages`（0–10，默认且最多为 Pages to Read per Search）、`fresh` | 合并去重后的结果（标题、URL、来源引擎、摘要、发布日期）；以及前几个结果网页里与问题最相关的片段 |
+| `web_fetch` | `urls`（1–20 个，实际最多读取 Max URLs per Fetch 个）、`fresh` | 每个 URL 的 Markdown 正文或独立的失败原因 |
 
-`web_research` 的每个 Evidence Chunk 都保留 source ID、标题、URL、hostname、heading、excerpt、发布日期（若可靠获得）和 source type。长页面会先完整保存，再按问题/Query 对所有正文段落打分，不只取页面开头；完整 Evidence Pack 通过既有 Tool Result persistence 保存，模型收到有界预览和路径引用。
+搜索规划由 Agent 负责：它决定搜什么、搜几次、读哪些网页、证据够不够。原来把查询改写、多轮搜索和“证据是否充分”判断固定在工具里的 `web_research` 已删除；旧 Session 里的 `web_research` 调用和结果记录不会被删除或改写，和其他已停用工具的历史记录一样保留在 Session 中。
 
-一次 Research Round 表示完整的 `Query → Search → Source Selection → Fetch → Evidence Evaluation` 周期。Evidence 不足时会在硬上限内 reformulate；所有来源失败会返回 `failed` 状态和明确 diagnostics，不伪装成成功。
+数据流：
 
-不知道来源时先 Search；已经知道 URL，或用户直接给出 URL 时直接 Fetch，不要求先执行 Search。多个 Query 和多个 URL 都会在受控并发下执行。一个 URL 失败不会掩盖同一批次的其他成功结果。
+```text
+Agent 调用 web_search
+  → 每个 query × 每个已启用引擎并行请求（最多 4 个同时进行）
+  → 按规范化 URL 合并去重、过滤不安全 URL、排序（多个引擎都返回的结果排名更高）
+  → 取前 N 个结果（N = Pages to Read per Search）
+  → 通过共享下载上限读取网页正文 → Markdown → 挑出与问题最相关的片段
+  → 返回结果列表 + 片段；完整正文进入 Tool Result 持久化文件
+```
 
-网页正文的可见结果是短预览；完整 Markdown 通过现有 Tool Result persistence 通道保存，让 Agent 可以沿用当前 Session 的大结果处理和生命周期，而不是把所有正文直接塞进 Context。每个页面仍保留自己的来源 URL。
+每个 query 至少保留一个最佳结果，避免一个 query 的结果挤掉其他 query。长网页会按问题给所有段落打分，不只取开头。
 
-## 缓存、错误和安全
+## 网页读取
 
-- Search 和 Fetch 使用当前 Session 作用域的缓存；持久化 Session 的缓存位于该 Session 目录下的 `web-cache/`，非持久化运行只使用内存缓存。TTL 有设置字段，`fresh: true` 或明显的“最新/今天/现在”等查询会绕过对应缓存。内存缓存最多保留 256 条最近使用的记录；磁盘缓存写入失败不会让已成功的请求变成失败，超过 24 小时的磁盘记录会被定期清理。失败的 Search/Fetch 不会写入缓存。
-- `web_fetch` 按规范化 URL 去重和缓存，但实际请求的是原始 URL（只去掉 `utm_*` 等跟踪参数），不会改写主机名。Crawl4AI 报告成功但页面状态码 ≥ 400 时按该 URL 失败处理。
-- SearXNG、Crawl4AI 未配置、不可用、HTTP 错误、无效 JSON、超时、取消和 URL 阻止会使用独立诊断，不会被伪装成“没有结果”。
-- Research diagnostics 会区分 `search_timeout`、`search_unavailable`、`fetch_timeout`、`crawl_failed`、`empty_content`、`extraction_failed`、`all_sources_failed` 和 `aborted` 等阶段；部分 Query、engine 或 URL 失败不会掩盖同一轮的成功结果。
-- URL 只允许 `http`/`https`，拒绝凭据、localhost、本机地址和常见私有/保留 IP；allowlist 使用 hostname 边界匹配。Crawl4AI 返回的重定向 URL 还会重新校验。
-- MyHarness 不管理网页登录、Cookie、账号 Session、表单、CAPTCHA、点击操作或 Computer Use。页面需要登录时，Tool 会失败或只能读取公开部分。
+`web_fetch` 和 `web_search` 的读网页部分使用同一个读取器，与搜索引擎无关：
 
-## 服务协议
+- 只允许 `http`/`https`；拒绝带用户名密码的 URL、`localhost`、本机地址和私有/保留 IP；
+- 域名先做 DNS 解析，解析到本机或私有地址时拒绝（防止借公网域名访问内网）；
+- 跳转不自动跟随，每一跳都重新做以上检查，最多 5 次；
+- 单个网页请求 20 秒超时，最多下载 5 MB，Markdown 最多保留 300,000 字符，超出时在结果里注明；
+- 按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF 等其他类型返回“不支持”的明确错误；
+- 不执行 JavaScript，也不管理登录、Cookie、表单或验证码。依赖前端渲染或需要登录的页面只能读到公开 HTML 中已有的部分。
 
-MyHarness 使用 SearXNG 的 `/config` 和 `/search?format=json`，并使用 `time_range`、动态引擎选择及 JSON result 字段。Crawl4AI 使用非流式 `POST /crawl`，读取其 `CrawlResult` 中的 Markdown；不会使用流式端点或另起一套 Agent Loop。服务的具体版本、认证和绑定地址由部署方负责。
+一个 URL 失败不会影响同一批其他 URL。工具可见结果是有长度上限的预览，完整 Markdown 通过现有 Tool Result persistence 保存到 Session 目录，Agent 可以按返回的路径读取。
 
-## Health Check 与真实 E2E
+## 缓存、错误和取消
 
-设置中的 **Search Engines**、**Health** 和 **Run Web Search Test** 在等待网络时都可以按 Esc 立即返回，返回会同时取消正在进行的请求；从任一子页面返回后光标停在打开它的那一行。
+- 搜索结果缓存 5 分钟，网页缓存 15 分钟，作用域是当前 Session：持久化 Session 保存在 Session 目录的 `web-cache/`，非持久化运行只用内存（最多 256 条）。`fresh: true` 或包含“最新/今天/现在/latest/today”等词的搜索会跳过缓存。失败结果不缓存。
+- 错误类型会分开报告：`captcha`、`rate_limited`、`missing_api_key`、`timeout`、`unavailable`（附带 `ECONNREFUSED` 等底层原因）、`http`、`blocked`、`too_many_redirects`、`unsupported_content`、`empty_content`、`limit` 等。部分引擎或网页失败时，成功的部分照常返回，失败写在 Diagnostics 里；所有引擎都失败时工具调用本身报错，并列出每个引擎的原因。
+- 取消（Esc/abort）会中止所有正在进行和排队中的请求，工具调用以“已取消”结束，Session 可以继续使用。
 
-设置中的 **Health** 仍只检查 SearXNG `/config` 和 Crawl4AI `/health`，两者并行检查。**Run Web Search Test** 会额外执行固定 Query `SearXNG official documentation`，选择一个安全公开 URL，完成 Search → Fetch → Extraction → Evidence Chunk，并分别显示阶段状态、耗时、失败阶段和 diagnostics。
+## 真实联网测试
 
-普通离线测试不依赖公网。配置真实服务后可以显式执行：
+普通测试不访问公网。需要验证真实链路时运行：
 
 ```powershell
-$env:MYHARNESS_WEB_SEARCH_SEARXNG_URL = "http://127.0.0.1:8080"
-$env:MYHARNESS_WEB_SEARCH_CRAWL4AI_URL = "http://127.0.0.1:11235"
 npm.cmd run test:web-search:e2e
 ```
 
-该命令失败时只能说明当前配置的真实服务链路未通过；mock 单测不会替代真实联网验证。
+它会真实读取公开网页（包括一次跳转和一次被拒绝的本机地址），并用 DuckDuckGo 和 Brave 真实搜索。可用 `MYHARNESS_WEB_SEARCH_E2E_ENGINES=brave_api` 等方式指定引擎（`brave_api` 需要 `BRAVE_SEARCH_API_KEY`）。搜索部分失败通常说明当前网络环境被引擎要求验证或限流，不代表网页读取有问题。
 
-参考：[SearXNG Search API](https://docs.searxng.org/dev/search_api.html)、[SearXNG engine settings](https://docs.searxng.org/admin/settings/settings_engines.html)、[Crawl4AI Docker API](https://github.com/unclecode/crawl4ai/blob/main/deploy/docker/README.md)、[Crawl4AI CrawlResult](https://docs.crawl4ai.com/core/crawler-result/)。
+参考：[Brave Search API](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)。
