@@ -8,7 +8,9 @@ import { InMemoryAuthStorageBackend } from "../src/providers/credentials/auth-st
 import { WebSearchApiKeys } from "../src/providers/credentials/web-search-keys.ts";
 import { FULL_TEXT_OUTPUT } from "../src/tools/tool-result-persistence.ts";
 import { WebSearchCache } from "../src/tools/web-search/cache.ts";
-import { parseBraveApi, parseBraveHtml, parseDuckDuckGoLite } from "../src/tools/web-search/engines.ts";
+import { parseBraveHtml } from "../src/tools/web-search/engines/brave.ts";
+import { parseBraveApi } from "../src/tools/web-search/engines/brave-api.ts";
+import { parseDuckDuckGoLite } from "../src/tools/web-search/engines/duckduckgo.ts";
 import { plainHttpFetch, requestBytes } from "../src/tools/web-search/http.ts";
 import { htmlToMarkdown } from "../src/tools/web-search/page.ts";
 import { WebSearchService } from "../src/tools/web-search/service.ts";
@@ -80,7 +82,10 @@ function createService(
 	routes: Record<string, Route>,
 	options: { keys?: WebSearchApiKeys; lookup?: (host: string) => Promise<string[]> } = {},
 ) {
-	const settingsManager = SettingsManager.inMemory({ webSearch: { enabled: true, ...settings } });
+	// browserFallback marks these as current-format settings, so the old-default engine migration does not apply.
+	const settingsManager = SettingsManager.inMemory({
+		webSearch: { enabled: true, browserFallback: true, ...settings },
+	});
 	const network = fakeNetwork(routes);
 	const service = new WebSearchService({
 		settings: settingsManager,
@@ -88,6 +93,8 @@ function createService(
 		lookup: options.lookup ?? publicLookup,
 		keys: options.keys,
 		cache: new WebSearchCache(undefined),
+		// Unit tests never start a real Firefox; the browser path has its own tests.
+		browser: null,
 	});
 	return { service, settingsManager, ...network };
 }
@@ -168,6 +175,7 @@ describe("search engine parsers", () => {
 				{ title: "LogRocket", url: "https://blog.example/fetch", snippet: "January 22, 2025 - Learn about fetch" },
 				{ title: "Docs", url: "https://docs.example/", snippet: "Plain snippet" },
 			]),
+			Date.UTC(2026, 0, 1),
 		);
 		expect(results).toEqual([
 			{
@@ -199,7 +207,7 @@ describe("search engine parsers", () => {
 describe("page reading", () => {
 	it("converts the main content to Markdown and drops navigation, scripts and anchors", () => {
 		const page = htmlToMarkdown(
-			`<html><head><title>T</title><meta property="article:published_time" content="2026-02-03"></head><body>
+			`<!DOCTYPE HTML><html><head><title>T</title><meta property="article:published_time" content="2026-02-03"></head><body>
 <nav>menu</nav><script>alert(1)</script><article><h2><a href="#x">Section</a></h2><p>Text with <a href="/rel">link</a> and <a href="javascript:void(0)">js</a>.</p>
 <pre><code>const a = 1;</code></pre><table><tr><th>k</th></tr><tr><td>v</td></tr></table></article><footer>foot</footer></body></html>`,
 			"https://site.example/dir/page",
@@ -210,6 +218,7 @@ describe("page reading", () => {
 		expect(page.markdown).toContain("[link](https://site.example/rel)");
 		expect(page.markdown).toContain("const a = 1;");
 		expect(page.markdown).toContain("| k |");
+		expect(page.markdown).not.toMatch(/^<!doctype/iu);
 		for (const noise of ["menu", "alert", "foot", "javascript", "#x"]) expect(page.markdown).not.toContain(noise);
 	});
 
@@ -363,7 +372,7 @@ describe("WebSearchService search", () => {
 	it("backs off from an engine that asked for a captcha instead of retrying it", async () => {
 		let now = 1_000_000;
 		const settingsManager = SettingsManager.inMemory({
-			webSearch: { enabled: true, engines: ["duckduckgo", "brave"], pagesPerSearch: 0 },
+			webSearch: { enabled: true, engines: ["duckduckgo", "brave"], pagesPerSearch: 0, browserFallback: true },
 		});
 		const network = fakeNetwork({
 			...engineRoutes,
@@ -375,6 +384,7 @@ describe("WebSearchService search", () => {
 			lookup: publicLookup,
 			now: () => now,
 			cache: new WebSearchCache(undefined),
+			browser: null,
 		});
 		await service.search({ queries: ["a", "b", "c"] });
 		// Only the first DuckDuckGo request is sent in this call; later queries skip it.
@@ -384,7 +394,13 @@ describe("WebSearchService search", () => {
 		const before = network.calls.length;
 		const second = await service.search({ queries: ["d"] });
 		expect(network.calls.slice(before).map((url) => url.hostname)).toEqual(["search.brave.com"]);
-		expect(second.failures).toEqual([expect.objectContaining({ engine: "duckduckgo", code: "rate_limited" })]);
+		expect(second.failures).toEqual([
+			expect.objectContaining({
+				engine: "duckduckgo",
+				code: "captcha",
+				message: expect.stringContaining("暂停使用"),
+			}),
+		]);
 		now += 3 * 60 * 1_000;
 		const after = network.calls.length;
 		await service.search({ queries: ["e"] });
@@ -590,7 +606,7 @@ describe("web tools", () => {
 		expect(definition.promptSnippet).not.toMatch(/SearXNG|Crawl4AI/u);
 		const result = await definition.execute("call-1", { queries: ["fetch api"] }, undefined, undefined, undefined);
 		const visible = result.content.find((part) => part.type === "text")?.text ?? "";
-		expect(visible).toContain("Engines: DuckDuckGo");
+		expect(visible).toContain("Engines: DuckDuckGo (HTTP)");
 		expect(visible).toContain("[1] Doc");
 		expect(visible).toContain("Pages read (1");
 		expect(visible).toContain("the fetch api answer");

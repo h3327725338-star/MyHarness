@@ -11,22 +11,55 @@ vi.mock("../../src/tools/web-search/http.ts", async (importOriginal) => ({
 	plainHttpFetch: (input: string | URL, init?: RequestInit) => globalThis.fetch(input, init),
 }));
 
+/** Stand-in for the shared Firefox transport; tests decide whether it exists and what it shows. */
+const firefox = vi.hoisted(() => ({
+	available: true,
+	loads: [] as string[],
+	page: (url: string) => ({ url, html: "" }),
+}));
+vi.mock("../../src/tools/web-search/browser/firefox.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../src/tools/web-search/browser/firefox.ts")>()),
+	getSharedFirefoxBrowser: () => ({
+		state: () =>
+			firefox.available
+				? { available: true, executable: "firefox.exe" }
+				: { available: false, reason: "没有找到 Firefox。" },
+		load: async (request: { url: string }) => {
+			firefox.loads.push(request.url);
+			const shown = firefox.page(request.url);
+			return { status: 200, url: shown.url, text: shown.html, headers: new Headers(), via: "browser", ready: true };
+		},
+		solveChallenge: async () => {
+			throw new Error("no person in tests");
+		},
+	}),
+}));
+
 type FetchHandler = (url: URL, init?: RequestInit) => Promise<Response>;
 
 function html(body: string, status = 200): Response {
 	return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
-function duckDuckGoPage(query: string): string {
+/** Google's WML layout, as the lightweight path receives it. */
+function googleWmlPage(query: string): string {
 	const target = `https://docs.example.com/${encodeURIComponent(query)}`;
-	return `<form><input name="q"></form><table><tr><td>1.</td><td><a class='result-link' href="//duckduckgo.com/l/?uddg=${encodeURIComponent(target)}">Result ${query}</a></td></tr>
-<tr><td></td><td class='result-snippet'>About ${query}</td></tr></table>`;
+	return `<?xml version="1.0" encoding="UTF-8"?><html><body><form><input name="q" value="${query}"/></form>
+<div class="zMzFAb"><a class="fuLhoc" href="/url?q=${encodeURIComponent(target)}&amp;sa=U"><span class="CVA68e">Result ${query}</span></a><div class="taTFJ"><span class="FrIlee">About ${query}</span></div></div></body></html>`;
 }
 
-function bravePage(query: string): string {
-	return `<div class="snippet" data-type="web"><a href="https://docs.example.com/${encodeURIComponent(query)}"><div class="title" title="Result ${query}">Result ${query}</div></a>
-<div class="generic-snippet"><div class="content">About ${query}</div></div></div>
-<div class="snippet" data-type="web"><a href="https://brave-only.example.org/${encodeURIComponent(query)}"><div class="title" title="Brave ${query}">Brave ${query}</div></a></div>`;
+/** Google's normal page as Firefox renders it (udm=14). */
+function googleDesktopPage(query: string): string {
+	return `<html><body><div id="rso"><div data-hveid="1"><a href="/url?q=${encodeURIComponent(`https://firefox-found.example/${encodeURIComponent(query)}`)}"><h3>Firefox result ${query}</h3></a><div class="VwiC3b">Rendered ${query}</div></div></div></body></html>`;
+}
+
+function bingPage(query: string): string {
+	const link = (url: string) =>
+		`https://www.bing.com/ck/a?!&amp;&amp;p=1&amp;u=a1${Buffer.from(url).toString("base64url")}&amp;ntb=1`;
+	return `<html><body><ol id="b_results">
+<li class="b_algo"><h2><a href="${link(`https://docs.example.com/${encodeURIComponent(query)}`)}">Result ${query}</a></h2><div class="b_caption"><p>About ${query}</p></div></li>
+<li class="b_algo"><h2><a href="${link(`https://bing-only.example.org/${encodeURIComponent(query)}`)}">Bing ${query}</a></h2><div class="b_caption"><p>More on ${query}</p></div></li>
+</ol></body></html>`;
 }
 
 /** Stand-in for the search engines and web pages; tests swap the handler to inject failures. */
@@ -34,8 +67,8 @@ function installWeb(): { setHandler: (handler: FetchHandler) => void; calls: URL
 	const calls: URL[] = [];
 	const defaultHandler: FetchHandler = async (url) => {
 		const q = url.searchParams.get("q") ?? "";
-		if (url.hostname === "lite.duckduckgo.com") return html(duckDuckGoPage(q));
-		if (url.hostname === "search.brave.com") return html(bravePage(q));
+		if (url.hostname === "www.google.com") return html(googleWmlPage(q));
+		if (url.hostname === "www.bing.com") return html(bingPage(q));
 		return html(
 			`<html><head><title>Page ${url.pathname}</title></head><body><main><h1>Page</h1><p>Evidence body for ${url.pathname}</p></main></body></html>`,
 		);
@@ -78,12 +111,16 @@ describe("Web tools inside the Agent loop", () => {
 	afterEach(() => {
 		while (harnesses.length > 0) harnesses.pop()?.cleanup();
 		vi.unstubAllGlobals();
+		firefox.available = true;
+		firefox.loads.length = 0;
 	});
 
 	async function createWebHarness(persisted = false) {
 		const harness = await createHarness({
 			persisted,
-			settings: { webSearch: { enabled: true, engines: ["duckduckgo", "brave"], pagesPerSearch: 1 } },
+			settings: {
+				webSearch: { enabled: true, engines: ["google", "bing"], pagesPerSearch: 1, browserFallback: true },
+			},
 		});
 		harnesses.push(harness);
 		expect(harness.session.getActiveToolNames()).toEqual(expect.arrayContaining(["web_search", "web_fetch"]));
@@ -97,7 +134,7 @@ describe("Web tools inside the Agent loop", () => {
 		harness.setResponses([
 			fauxAssistantMessage([fauxToolCall("web_search", { queries: ["alpha", "beta"] })], { stopReason: "toolUse" }),
 			fauxAssistantMessage(
-				[fauxToolCall("web_fetch", { urls: ["https://docs.example.com/x", "https://brave-only.example.org/y"] })],
+				[fauxToolCall("web_fetch", { urls: ["https://docs.example.com/x", "https://bing-only.example.org/y"] })],
 				{ stopReason: "toolUse" },
 			),
 			fauxAssistantMessage("answer from evidence"),
@@ -106,15 +143,16 @@ describe("Web tools inside the Agent loop", () => {
 
 		const [search, fetch] = toolEnds(harness);
 		expect(search).toMatchObject({ name: "web_search", isError: false });
-		expect(search?.text).toContain("Engines: DuckDuckGo, Brave");
+		expect(search?.text).toContain("Engines: Google (HTTP), Bing (HTTP)");
 		expect(search?.text).toContain("Result alpha");
-		expect(search?.text).toContain("Source: DuckDuckGo, Brave");
+		expect(search?.text).toContain("Source: Google, Bing");
 		expect(search?.text).toContain("Pages read (1");
 		expect(fetch).toMatchObject({ name: "web_fetch", isError: false });
 		expect(fetch?.text).toContain("Evidence body for /y");
-		// Both engines were asked for both queries.
-		expect(web.calls.filter((url) => url.hostname === "lite.duckduckgo.com")).toHaveLength(2);
-		expect(web.calls.filter((url) => url.hostname === "search.brave.com")).toHaveLength(2);
+		// Both engines were asked for both queries, without the browser.
+		expect(web.calls.filter((url) => url.hostname === "www.google.com")).toHaveLength(2);
+		expect(web.calls.filter((url) => url.hostname === "www.bing.com")).toHaveLength(2);
+		expect(firefox.loads).toEqual([]);
 
 		const fullOutputPath = search?.details?.fullOutputPath;
 		expect(typeof fullOutputPath).toBe("string");
@@ -177,10 +215,40 @@ describe("Web tools inside the Agent loop", () => {
 		]);
 	});
 
-	it("reports every engine failing as a tool error and continues the conversation", async () => {
+	it("moves a blocked engine to Firefox inside the Agent loop and tells the Agent how it searched", async () => {
 		const web = installWeb();
 		web.setHandler(async (url) => {
-			if (url.hostname === "search.brave.com") return html("rate limited", 429);
+			const q = url.searchParams.get("q") ?? "";
+			if (url.hostname === "www.google.com") {
+				return new Response(null, { status: 302, headers: { location: "https://www.google.com/sorry/index" } });
+			}
+			if (url.hostname === "www.bing.com") return html(bingPage(q));
+			return html(`<html><body><main><p>Evidence body for ${url.pathname}</p></main></body></html>`);
+		});
+		firefox.page = (url) => ({ url, html: googleDesktopPage(new URL(url).searchParams.get("q") ?? "") });
+		const harness = await createWebHarness();
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("web_search", { queries: ["gamma"] })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("search gamma");
+		const [end] = toolEnds(harness);
+		expect(end).toMatchObject({ name: "web_search", isError: false });
+		expect(end?.text).toContain("Engines: Google (Firefox), Bing (HTTP)");
+		expect(end?.text).toContain("Firefox result gamma");
+		expect(end?.text).toContain("https://firefox-found.example/gamma");
+		expect(firefox.loads).toEqual([expect.stringContaining("udm=14")]);
+		expect(end?.details?.routes).toEqual([
+			expect.objectContaining({ engine: "google", via: "browser", note: expect.stringContaining("sorry") }),
+			expect.objectContaining({ engine: "bing", via: "http" }),
+		]);
+	});
+
+	it("reports every engine failing as a tool error and continues the conversation", async () => {
+		const web = installWeb();
+		firefox.available = false;
+		web.setHandler(async (url) => {
+			if (url.hostname === "www.bing.com") return html("rate limited", 429);
 			throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect"), { code: "ECONNREFUSED" }) });
 		});
 		const harness = await createWebHarness();
@@ -194,6 +262,7 @@ describe("Web tools inside the Agent loop", () => {
 		expect(end?.text).toContain("所有搜索引擎的请求都失败了");
 		expect(end?.text).toContain("ECONNREFUSED");
 		expect(end?.text).toContain("429");
+		expect(end?.text).toContain("没有找到 Firefox");
 		expect(harness.session.isStreaming).toBe(false);
 	});
 

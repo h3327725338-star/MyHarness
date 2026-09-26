@@ -3864,6 +3864,8 @@ export class AgentSession {
 				settings: this.settingsManager,
 				keys: new WebSearchApiKeys(),
 				sessionManager: this.sessionManager,
+				// Only the terminal UI has a person who can pass a CAPTCHA in Firefox.
+				interactiveChallenges: () => this._extensionMode === "tui",
 			});
 		}
 		const baseToolDefinitions = this._baseToolsOverride

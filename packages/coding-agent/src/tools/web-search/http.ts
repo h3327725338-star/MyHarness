@@ -1,9 +1,26 @@
 import { pipeline, Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
-import { request } from "undici";
+import { type Dispatcher, EnvHttpProxyAgent, request } from "undici";
 import { abortError, WebSearchError } from "./errors.ts";
 
-export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+/** Request options understood by the web tools' HTTP layer. */
+export interface HttpInit extends RequestInit {
+	/**
+	 * Connect over IPv4 only. Some engines block whole IPv6 ranges that they
+	 * serve normally over IPv4; proxies from HTTP(S)_PROXY still apply.
+	 */
+	ipFamily?: 4;
+}
+
+export type FetchLike = (input: string | URL, init?: HttpInit) => Promise<Response>;
+
+let ipv4Dispatcher: Dispatcher | undefined;
+
+function dispatcherFor(init: HttpInit | undefined): Dispatcher | undefined {
+	if (init?.ipFamily !== 4) return undefined; // the global dispatcher (proxy-aware)
+	ipv4Dispatcher ??= new EnvHttpProxyAgent({ connect: { family: 4 } });
+	return ipv4Dispatcher;
+}
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 
@@ -20,6 +37,7 @@ export const plainHttpFetch: FetchLike = async (input, init) => {
 		headers: init?.headers as Record<string, string> | undefined,
 		body: typeof init?.body === "string" ? init.body : undefined,
 		signal: init?.signal ?? undefined,
+		dispatcher: dispatcherFor(init),
 	});
 	const headers = new Headers();
 	for (const [name, value] of Object.entries(response.headers)) {
@@ -121,7 +139,7 @@ async function readLimited(response: Response, maxBytes: number): Promise<{ byte
 export async function requestBytes(
 	fetchImpl: FetchLike,
 	url: string,
-	init: RequestInit,
+	init: HttpInit,
 	options: HttpRequestOptions,
 ): Promise<HttpBytesResponse> {
 	const aborted = abortError(options.signal);

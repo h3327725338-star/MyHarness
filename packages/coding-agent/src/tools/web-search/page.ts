@@ -98,6 +98,7 @@ export function htmlToMarkdown(
 		.replace(/\r\n?/gu, "\n")
 		.replace(/[ \t]+\n/gu, "\n")
 		.replace(/\n{3,}/gu, "\n\n")
+		.replace(/^\s*<!doctype[^>]*>\s*/iu, "")
 		.trim();
 	return { title, markdown, publishedAt };
 }
@@ -147,7 +148,11 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 			if (hop >= PAGE_LIMITS.maxRedirects) {
 				throw new WebSearchError("too_many_redirects", `页面跳转超过 ${PAGE_LIMITS.maxRedirects} 次，已停止。`);
 			}
-			current = new URL(location, validation.url).toString();
+			try {
+				current = new URL(location, validation.url).toString();
+			} catch {
+				throw new WebSearchError("http", `目标网页返回了无效的跳转地址：${location.slice(0, 200)}`);
+			}
 			continue;
 		}
 		if (response.status >= 400) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}。`);

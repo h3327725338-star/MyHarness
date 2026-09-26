@@ -70,23 +70,25 @@ describe("SettingsManager", () => {
 	});
 
 	describe("web search", () => {
-		it("persists engines and the three numbers globally", async () => {
+		it("persists engines, the three numbers and Firefox Fallback globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setWebSearchSettings({
 				enabled: true,
-				engines: ["brave_api", "duckduckgo"],
+				engines: ["brave_api", "duckduckgo", "bing"],
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
+				browserFallback: false,
 			});
 			await manager.flush();
 
 			const expected = {
 				enabled: true,
-				engines: ["duckduckgo", "brave_api"],
+				engines: ["bing", "duckduckgo", "brave_api"],
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
+				browserFallback: false,
 			};
 			expect(manager.getWebSearchSettings()).toEqual(expected);
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
@@ -97,10 +99,11 @@ describe("SettingsManager", () => {
 		it("uses the defaults and clamps out-of-range numbers to the real limits", () => {
 			expect(SettingsManager.inMemory({}).getWebSearchSettings()).toEqual({
 				enabled: false,
-				engines: ["duckduckgo", "brave"],
+				engines: ["google", "bing"],
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 10,
 				fetchConcurrency: 4,
+				browserFallback: true,
 			});
 			const manager = SettingsManager.inMemory({
 				webSearch: { enabled: true, pagesPerSearch: 99, maxUrlsPerFetch: 0, fetchConcurrency: 1000 },
@@ -116,8 +119,12 @@ describe("SettingsManager", () => {
 			expect(invalid.getWebSearchSettings()).toMatchObject({
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 10,
-				engines: ["duckduckgo", "brave"],
+				engines: ["google", "bing"],
 			});
+			expect(
+				SettingsManager.inMemory({ webSearch: { browserFallback: "no" as never } }).getWebSearchSettings()
+					.browserFallback,
+			).toBe(true);
 			expect(SettingsManager.inMemory({ webSearch: { engines: [] } }).getWebSearchSettings().engines).toEqual([]);
 		});
 
@@ -142,12 +149,14 @@ describe("SettingsManager", () => {
 				}),
 			);
 			const manager = SettingsManager.create(projectDir, agentDir);
+			// SearXNG's "google" now means the built-in Google engine.
 			expect(manager.getWebSearchSettings()).toEqual({
 				enabled: true,
-				engines: ["brave"],
+				engines: ["google", "brave"],
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
+				browserFallback: true,
 			});
 
 			manager.setWebSearchSettings(manager.getWebSearchSettings());
@@ -156,20 +165,56 @@ describe("SettingsManager", () => {
 			expect(saved.theme).toBe("dark");
 			expect(saved.webSearch).toEqual({
 				enabled: true,
-				engines: ["brave"],
+				engines: ["google", "brave"],
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
+				browserFallback: true,
 			});
 		});
 
 		it("falls back to default engines when a legacy SearXNG list names no built-in engine", () => {
 			const manager = SettingsManager.inMemory({
-				webSearch: { enabled: true, engineMode: "selected", engines: ["google", "bing"] },
+				webSearch: { enabled: true, engineMode: "selected", engines: ["wikipedia", "qwant"] },
 			});
-			expect(manager.getWebSearchSettings().engines).toEqual(["duckduckgo", "brave"]);
+			expect(manager.getWebSearchSettings().engines).toEqual(["google", "bing"]);
 			const huge = SettingsManager.inMemory({ webSearch: { parallelPages: { mode: "manual", value: 500 } } });
 			expect(huge.getWebSearchSettings().maxUrlsPerFetch).toBe(20);
+		});
+
+		it("moves the untouched previous default engine list to Google and Bing, but keeps real choices", async () => {
+			// Written by the previous version: the old default list and no browserFallback field.
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					webSearch: {
+						enabled: true,
+						engines: ["duckduckgo", "brave"],
+						pagesPerSearch: 6,
+						maxUrlsPerFetch: 20,
+						fetchConcurrency: 8,
+					},
+				}),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getWebSearchSettings()).toEqual({
+				enabled: true,
+				engines: ["google", "bing"],
+				pagesPerSearch: 6,
+				maxUrlsPerFetch: 20,
+				fetchConcurrency: 8,
+				browserFallback: true,
+			});
+			// Saved once in the new format, the same list is a deliberate choice and stays.
+			manager.setWebSearchSettings({ ...manager.getWebSearchSettings(), engines: ["duckduckgo", "brave"] });
+			await manager.flush();
+			expect(SettingsManager.create(projectDir, agentDir).getWebSearchSettings().engines).toEqual([
+				"duckduckgo",
+				"brave",
+			]);
+			// Any other old list was a choice too.
+			const chosen = SettingsManager.inMemory({ webSearch: { engines: ["brave"] } });
+			expect(chosen.getWebSearchSettings().engines).toEqual(["brave"]);
 		});
 	});
 

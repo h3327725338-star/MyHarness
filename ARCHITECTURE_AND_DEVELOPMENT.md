@@ -217,14 +217,17 @@ Agent Loop
   → tools/registry.ts
   → tools/web-search/tool.ts            web_search / web_fetch 的 schema 与结果格式
   → tools/web-search/service.ts         多 query × 多引擎、合并去重排序、引擎退避、共享下载上限、缓存
-       ├── engines.ts                   DuckDuckGo / Brave 结果页解析、Brave Search API
+       ├── engine-runner.ts             HTTP 优先、访问拦截分类、Firefox 兜底和引擎冷却
+       ├── engines/*.ts                 Google / Bing / DuckDuckGo / Brave / Brave API 引擎与解析器
+       ├── transport.ts                 HTTP 与 Firefox Browser Transport contract
+       ├── browser/*.ts                 专用 Firefox profile、扩展、localhost bridge、RDP
        ├── page.ts                      网页下载、逐跳 URL/DNS 安全检查、HTML → Markdown
        ├── url.ts                       URL policy（SSRF）与规范化
        └── cache.ts                     Session-scoped WebSearchCache
   → existing Tool Result persistence / Session lifecycle
 ```
 
-`SettingsManager` 保存全局 `webSearch` 配置（引擎和三个数量，范围由 `WEB_SEARCH_SETTING_RANGES` 统一定义）并负责迁移旧 SearXNG/Crawl4AI 字段；Brave Search API Key 由 `providers/credentials/web-search-keys.ts` 保存在独立的私有文件中。`AgentSession` 根据开关重建当前 Tool registry 和 system prompt。搜索规划（搜什么、搜几轮、读哪些页）由 Agent 决定，工具只负责有限并发、缓存、取消、超时和逐项诊断。InteractiveMode 只负责 `/settings` 的产品交互，不能承载搜索业务逻辑。
+`SettingsManager` 保存全局 `webSearch` 配置（引擎、Firefox Fallback 和三个数量，范围由 `WEB_SEARCH_SETTING_RANGES` 统一定义；当前默认引擎是 Google 与 Bing）并负责迁移旧 SearXNG/Crawl4AI 字段；Brave Search API Key 由 `providers/credentials/web-search-keys.ts` 保存在独立的私有文件中。Google/Bing 等网页引擎先走轻量 HTTP，只有验证码、限流、403、需要 JavaScript、同意页或 Bing 降级结果等访问拦截才允许切到 Firefox；API Engine 是独立可选路径，不是 Google/Bing 的兜底。Firefox Fallback 可以关闭，且使用与用户 Firefox 隔离的 MyHarness 专用 profile；遇到真实 CAPTCHA/consent 时，交互模式可要求用户在弹出的 Firefox 中人工完成验证，无人值守模式返回 `challenge_required`。`AgentSession` 根据开关重建当前 Tool registry 和 system prompt。搜索规划（搜什么、搜几轮、读哪些页）由 Agent 决定，工具只负责有限并发、缓存、取消、超时和逐项诊断。InteractiveMode 只负责 `/settings` 的产品交互，不能承载搜索业务逻辑。
 
 ### 当前不存在的目录
 

@@ -14,6 +14,13 @@ export type WebSearchFailureCode =
 	| "missing_api_key"
 	| "rate_limited"
 	| "captcha"
+	| "forbidden"
+	| "js_required"
+	| "consent"
+	| "degraded"
+	| "challenge_required"
+	| "browser_unavailable"
+	| "internal"
 	| "unsupported_content"
 	| "too_many_redirects"
 	| "empty_content"
@@ -58,6 +65,16 @@ export interface WebFetchResponse {
 	cacheHit: boolean;
 }
 
+/** Which transport answered one engine x query of a search. */
+export interface WebSearchRoute {
+	engine: WebSearchEngineId;
+	query: string;
+	via: "http" | "browser";
+	/** Why the browser was used, when it was. */
+	note?: string;
+	resultCount: number;
+}
+
 export interface WebSearchResponse {
 	results: WebSearchResult[];
 	/** Top results read after searching; empty when page reading is off. */
@@ -65,6 +82,8 @@ export interface WebSearchResponse {
 	failures: WebSearchFailure[];
 	/** Engines actually queried for this call. */
 	engines: WebSearchEngineId[];
+	/** Successful engine x query runs and how each was reached; empty on a cache hit. */
+	routes: WebSearchRoute[];
 	cacheHit: boolean;
 }
 

@@ -5,6 +5,7 @@ import { WebSearchSettingsSubmenu } from "../src/modes/interactive/components/we
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { InMemoryAuthStorageBackend } from "../src/providers/credentials/auth-storage.ts";
 import { WebSearchApiKeys } from "../src/providers/credentials/web-search-keys.ts";
+import type { BrowserTransport } from "../src/tools/web-search/transport.ts";
 
 const enter = "\r";
 const esc = "\u001b";
@@ -18,7 +19,17 @@ vi.mock("../src/tools/web-search/http.ts", async (importOriginal) => ({
 	plainHttpFetch: (input: string | URL, init?: RequestInit) => globalThis.fetch(input, init),
 }));
 
-function createSubmenu(overrides: WebSearchSettings = {}) {
+const fakeBrowser: BrowserTransport = {
+	state: () => ({ available: true, executable: "C:\\Program Files\\Mozilla Firefox\\firefox.exe" }),
+	load: async () => {
+		throw new Error("no browser in unit tests");
+	},
+	solveChallenge: async () => {
+		throw new Error("no browser in unit tests");
+	},
+};
+
+function createSubmenu(overrides: WebSearchSettings = {}, browser: BrowserTransport | null = fakeBrowser) {
 	const settingsManager = SettingsManager.inMemory({ webSearch: { enabled: true, ...overrides } });
 	const keys = new WebSearchApiKeys(new InMemoryAuthStorageBackend());
 	const onChange = vi.fn((settings: ResolvedWebSearchSettings) => settingsManager.setWebSearchSettings(settings));
@@ -27,7 +38,7 @@ function createSubmenu(overrides: WebSearchSettings = {}) {
 	const submenu = new WebSearchSettingsSubmenu(
 		settingsManager.getWebSearchSettings(),
 		onChange,
-		{ tui: { requestRender } as never, settingsManager, webSearchKeys: keys },
+		{ tui: { requestRender } as never, settingsManager, webSearchKeys: keys, webSearchBrowser: browser },
 		onDone,
 	);
 	const text = () => submenu.render(140).join("\n");
@@ -50,19 +61,20 @@ describe("Web Search settings page", () => {
 	beforeEach(() => initTheme("dark"));
 	afterEach(() => vi.unstubAllGlobals());
 
-	it("shows only the switch, the engines and the three numbers with their ranges", () => {
+	it("shows the switch, the engines, Firefox Fallback and the three numbers with their ranges", () => {
 		const { text } = createSubmenu();
 		const page = text();
 		for (const label of [
 			"Web Search",
 			"Search Engines",
+			"Firefox Fallback",
 			"Pages to Read per Search",
 			"Max URLs per Fetch",
 			"Concurrent Downloads",
 		]) {
 			expect(page).toContain(label);
 		}
-		expect(page).toContain("DuckDuckGo, Brave");
+		expect(page).toContain("Google, Bing");
 		expect(page).toContain("3  (0–10)");
 		expect(page).toContain("10  (1–20)");
 		expect(page).toContain("4  (1–8)");
@@ -78,7 +90,26 @@ describe("Web Search settings page", () => {
 		submenu.handleInput(enter);
 		expect(settingsManager.getWebSearchSettings().enabled).toBe(true);
 		submenu.handleInput(esc);
-		expect(onDone).toHaveBeenCalledWith("On · DuckDuckGo, Brave");
+		expect(onDone).toHaveBeenCalledWith("On · Google, Bing");
+	});
+
+	it("turns Firefox Fallback off and on and says whether Firefox was found", () => {
+		const { submenu, text, moveTo, settingsManager } = createSubmenu();
+		moveTo("Firefox Fallback");
+		expect(selectedLine(text())).toContain("On");
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().browserFallback).toBe(false);
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().browserFallback).toBe(true);
+		const missing = createSubmenu(
+			{},
+			{
+				...fakeBrowser,
+				state: () => ({ available: false, reason: "没有找到 Firefox。" }),
+			},
+		);
+		missing.moveTo("Firefox Fallback");
+		expect(missing.text()).toContain("没有找到 Firefox");
 	});
 
 	it("toggles engines, persists the choice and returns to the same row", () => {
@@ -86,15 +117,14 @@ describe("Web Search settings page", () => {
 		openItem("Search Engines");
 		expect(text()).toContain("Brave Search API Key");
 		expect(text()).toContain("未填写");
-		// Rows: DuckDuckGo, Brave, Brave Search API. Turn DuckDuckGo off, Brave Search API on.
+		// Rows: Google, Bing, DuckDuckGo, Brave, Brave Search API. Turn Google off, Brave Search API on.
 		submenu.handleInput(enter);
-		submenu.handleInput(down);
-		submenu.handleInput(down);
+		for (let i = 0; i < 4; i++) submenu.handleInput(down);
 		submenu.handleInput(enter);
-		expect(settingsManager.getWebSearchSettings().engines).toEqual(["brave", "brave_api"]);
+		expect(settingsManager.getWebSearchSettings().engines).toEqual(["bing", "brave_api"]);
 		submenu.handleInput(esc);
 		expect(selectedLine(text())).toContain("Search Engines");
-		expect(text()).toContain("Brave, Brave Search API");
+		expect(text()).toContain("Bing, Brave Search API");
 	});
 
 	it("offers exactly the real range for each number and saves the choice", () => {
@@ -129,7 +159,7 @@ describe("Web Search settings page", () => {
 	it("stores the Brave Search API key masked, outside settings, and can delete it", () => {
 		const { submenu, text, openItem, keys, settingsManager } = createSubmenu();
 		openItem("Search Engines");
-		for (let i = 0; i < 3; i++) submenu.handleInput(down);
+		for (let i = 0; i < 5; i++) submenu.handleInput(down);
 		expect(selectedLine(text())).toContain("Brave Search API Key");
 		submenu.handleInput(enter);
 		for (const char of "my-secret") submenu.handleInput(char);
@@ -158,7 +188,8 @@ describe("Web Search settings page", () => {
 					}),
 			),
 		);
-		const { submenu, text, openItem, moveTo } = createSubmenu();
+		// No browser path here, so Bing's refusal is reported as it is.
+		const { submenu, text, openItem, moveTo } = createSubmenu({}, null);
 		openItem("Search Engines");
 		moveTo("Test Selected Engines");
 		submenu.handleInput(enter);
@@ -171,17 +202,18 @@ describe("Web Search settings page", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string | URL) =>
-				new URL(String(input)).hostname === "search.brave.com"
+				new URL(String(input)).hostname === "www.bing.com"
 					? new Response("slow down", { status: 429 })
 					: new Response(
-							`<form><input name="q"></form><table><tr><td><a class='result-link' href="https://a.example/">A</a></td></tr></table>`,
+							`<html><body><form><input name="q"/></form><div class="zMzFAb"><a class="fuLhoc" href="/url?q=https://a.example/&amp;sa=U"><span class="CVA68e">A</span></a></div></body></html>`,
 							{ headers: { "Content-Type": "text/html" } },
 						),
 			),
 		);
 		submenu.handleInput(enter);
-		await vi.waitFor(() => expect(text()).toContain("DuckDuckGo：OK"));
-		expect(text()).toContain("Brave：失败");
+		await vi.waitFor(() => expect(text()).toContain("Google：OK"));
+		expect(text()).toContain("轻量请求");
+		expect(text()).toContain("Bing：失败");
 		expect(text()).toContain("429");
 		submenu.handleInput(esc);
 		expect(selectedLine(text())).toContain("Test Selected Engines");
@@ -246,6 +278,7 @@ describe("/settings root → Web Search", () => {
 				modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as never,
 				scopedModels: [],
 				webSearchKeys: new WebSearchApiKeys(new InMemoryAuthStorageBackend()),
+				webSearchBrowser: fakeBrowser,
 			} as never,
 		);
 		const items = (selector.getSettingsList() as unknown as { items: import("@myharness/tui").SettingItem[] }).items;
@@ -254,7 +287,7 @@ describe("/settings root → Web Search", () => {
 		const done = vi.fn();
 		const page = row.submenu!(row.currentValue, done);
 		page.handleInput?.(enter); // Web Search: Off → On
-		for (let i = 0; i < 4; i++) page.handleInput?.(down); // → Concurrent Downloads
+		for (let i = 0; i < 5; i++) page.handleInput?.(down); // → Concurrent Downloads
 		page.handleInput?.(enter);
 		page.handleInput?.(up); // 4 → 3
 		page.handleInput?.(enter);
@@ -263,6 +296,6 @@ describe("/settings root → Web Search", () => {
 		expect(onWebSearchChange).toHaveBeenLastCalledWith(
 			expect.objectContaining({ enabled: true, fetchConcurrency: 3 }),
 		);
-		expect(done).toHaveBeenCalledWith("On · DuckDuckGo, Brave");
+		expect(done).toHaveBeenCalledWith("On · Google, Bing");
 	});
 });

@@ -62,15 +62,23 @@ export const SETTINGS_DEFAULTS = {
 	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 	webSearch: {
 		enabled: false,
-		engines: ["duckduckgo", "brave"],
+		engines: ["google", "bing"],
 		pagesPerSearch: 3,
 		maxUrlsPerFetch: 10,
 		fetchConcurrency: 4,
+		browserFallback: true,
 	},
 } as const;
 
 /** Every Web Search engine id, in the order the settings page lists them. */
-export const WEB_SEARCH_ENGINE_IDS = ["duckduckgo", "brave", "brave_api"] as const;
+export const WEB_SEARCH_ENGINE_IDS = ["google", "bing", "duckduckgo", "brave", "brave_api"] as const;
+
+/**
+ * The default engine list before Google and Bing were added. A saved list equal
+ * to it, written by a version without `browserFallback`, was the untouched
+ * default rather than a choice, so it migrates to the current default.
+ */
+export const PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES = ["duckduckgo", "brave"] as const;
 
 /**
  * Inclusive ranges for the Web Search numbers. They are the real hard limits:

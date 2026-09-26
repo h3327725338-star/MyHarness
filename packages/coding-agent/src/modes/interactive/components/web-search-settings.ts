@@ -19,8 +19,10 @@ import {
 	type WebSearchEngineId,
 } from "../../../config/settings/index.ts";
 import { WebSearchApiKeys } from "../../../providers/credentials/web-search-keys.ts";
-import { WEB_SEARCH_ENGINES } from "../../../tools/web-search/engines.ts";
+import { getSharedFirefoxBrowser } from "../../../tools/web-search/browser/firefox.ts";
+import { WEB_SEARCH_ENGINES } from "../../../tools/web-search/engines/index.ts";
 import { type EngineTestResult, WEB_SEARCH_TEST_QUERY, WebSearchService } from "../../../tools/web-search/service.ts";
+import type { BrowserTransport } from "../../../tools/web-search/transport.ts";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.ts";
 import { ExtensionInputComponent } from "./extension-input.ts";
 
@@ -31,6 +33,8 @@ interface WebSearchSettingsDependencies {
 	settingsManager: SettingsManager;
 	/** Injectable for tests; defaults to the owner-only key file in the agent directory. */
 	webSearchKeys?: WebSearchApiKeys;
+	/** Injectable for tests; defaults to the shared Firefox transport. `null` = no browser. */
+	webSearchBrowser?: BrowserTransport | null;
 }
 
 function isFocusable(component: Component | undefined): component is Component & Focusable {
@@ -258,6 +262,13 @@ function formatEngines(settings: ResolvedWebSearchSettings): string {
 		: "未选择";
 }
 
+function browserDescription(browser: BrowserTransport | undefined): string {
+	const what = "搜索引擎拦截轻量请求时，用本机 Firefox 的 MyHarness 专用配置打开真实搜索页";
+	if (!browser) return `当前环境不可用 · ${what}`;
+	const state = browser.state();
+	return state.available ? `已找到 Firefox · ${what}` : `${state.reason} · ${what}`;
+}
+
 function formatSummary(settings: ResolvedWebSearchSettings): string {
 	return settings.enabled ? `On · ${formatEngines(settings)}` : "Off";
 }
@@ -402,6 +413,7 @@ class EngineSelectionPage extends PageHost {
 export class WebSearchSettingsSubmenu extends Container implements Focusable {
 	private readonly service: WebSearchService;
 	private readonly keys: WebSearchApiKeys;
+	private readonly browser: BrowserTransport | undefined;
 	private state: ResolvedWebSearchSettings;
 	private readonly list: SettingsList;
 	private readonly onChange: (settings: ResolvedWebSearchSettings) => void;
@@ -418,13 +430,24 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 		this.onChange = onChange;
 		this.dependencies = dependencies;
 		this.keys = dependencies.webSearchKeys ?? new WebSearchApiKeys();
-		this.service = new WebSearchService({ settings: dependencies.settingsManager, keys: this.keys });
+		this.browser =
+			dependencies.webSearchBrowser === null
+				? undefined
+				: (dependencies.webSearchBrowser ?? getSharedFirefoxBrowser());
+		// A person is on this page, so a test may open Firefox for a CAPTCHA.
+		this.service = new WebSearchService({
+			settings: dependencies.settingsManager,
+			keys: this.keys,
+			browser: this.browser ?? null,
+			interactiveChallenges: () => true,
+		});
 		this.list = new SettingsList(
 			this.createItems(),
 			10,
 			getSettingsListTheme(),
 			(id, value) => {
 				if (id === "enabled") this.commit({ ...this.state, enabled: value === "On" });
+				if (id === "browser-fallback") this.commit({ ...this.state, browserFallback: value === "On" });
 			},
 			() => onDone(formatSummary(this.state)),
 			{ inlineDescriptions: true },
@@ -450,6 +473,7 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 		this.onChange(this.state);
 		this.list.updateValue("enabled", this.state.enabled ? "On" : "Off");
 		this.list.updateValue("engines", formatEngines(this.state));
+		this.list.updateValue("browser-fallback", this.state.browserFallback ? "On" : "Off");
 		for (const key of NUMBER_SETTING_KEYS) {
 			this.list.updateValue(NUMBER_SETTINGS[key].id, formatNumber(this.state, key));
 		}
@@ -497,6 +521,14 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 						(settings) => this.commit(settings),
 						() => done(),
 					),
+			},
+			{
+				id: "browser-fallback",
+				label: "Firefox Fallback",
+				description: browserDescription(this.browser),
+				interaction: "toggle",
+				currentValue: this.state.browserFallback ? "On" : "Off",
+				values: ["Off", "On"],
 			},
 			...numberItems,
 		];

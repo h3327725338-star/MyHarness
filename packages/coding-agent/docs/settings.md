@@ -196,11 +196,12 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 
 `Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
 
-搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户只需要选择搜索引擎和三个数量：
+搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户可以选择搜索引擎、Firefox 兜底和三个数量：
 
 | 字段 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |
-| `engines` | 启用的搜索引擎：`duckduckgo`、`brave`、`brave_api`（需要 API Key） | 任意组合 | `["duckduckgo", "brave"]` |
+| `engines` | 启用的搜索引擎：`google`、`bing`、`duckduckgo`、`brave`、`brave_api`（需要 API Key） | 任意组合 | `["google", "bing"]` |
+| `browserFallback` | 轻量请求被拦截时，是否允许使用 MyHarness 专用 Firefox 配置打开真实搜索页 | On / Off | `true` |
 | `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–10 | 3 |
 | `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–20 | 10 |
 | `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–8 | 4 |
@@ -209,13 +210,16 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 {
   "webSearch": {
     "enabled": true,
-    "engines": ["duckduckgo", "brave"],
+    "engines": ["google", "bing"],
+    "browserFallback": true,
     "pagesPerSearch": 3,
     "maxUrlsPerFetch": 10,
     "fetchConcurrency": 4
   }
 }
 ```
+
+`browserFallback` 使用 MyHarness 专用 Firefox profile，与用户自己的 Firefox 隔离，并复用该 profile 中的 Cookie/Session。Firefox 未安装、扩展无法连接或 profile 被占用时会在 Diagnostics 中说明原因；如果页面仍要求 CAPTCHA/consent，交互界面会提示用户在弹出的 Firefox 页面完成验证，无人值守模式返回 `challenge_required`。
 
 超出范围的数字按最近的上下限处理。Brave Search API Key 不在 `settings.json` 中，保存在 agent 目录的 `web-search-keys.json`。旧的 `searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`parallelPages`、`searchRounds` 和缓存 TTL 字段的迁移方式、各引擎的稳定性说明、Tool schema、缓存、超时和取消见 [Web Search 文档](web-search.md)。
 

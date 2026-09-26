@@ -5,7 +5,7 @@ import { SETTINGS_DEFAULTS, WEB_SEARCH_SETTING_RANGES } from "../../config/setti
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
-import { WEB_SEARCH_ENGINES } from "./engines.ts";
+import { WEB_SEARCH_ENGINES } from "./engines/index.ts";
 import { selectExcerpts } from "./excerpts.ts";
 import {
 	createWebSearchService,
@@ -68,6 +68,7 @@ type PageSummary = Pick<WebFetchedPage, "url" | "finalUrl" | "title" | "publishe
 export interface WebSearchToolDetails {
 	queries: string[];
 	engines: WebSearchResponse["engines"];
+	routes: WebSearchResponse["routes"];
 	results: WebSearchResponse["results"];
 	pages: PageSummary[];
 	failures: WebSearchFailure[];
@@ -91,6 +92,7 @@ const disabledSettings = {
 		pagesPerSearch: SETTINGS_DEFAULTS.webSearch.pagesPerSearch,
 		maxUrlsPerFetch: SETTINGS_DEFAULTS.webSearch.maxUrlsPerFetch,
 		fetchConcurrency: SETTINGS_DEFAULTS.webSearch.fetchConcurrency,
+		browserFallback: SETTINGS_DEFAULTS.webSearch.browserFallback,
 	}),
 };
 
@@ -139,10 +141,20 @@ function pageHeader(page: WebFetchedPage, label: string): string {
 	return lines.join("\n");
 }
 
+/** "Google (Firefox), Bing (HTTP)": which transport actually answered each engine. */
+function formatEngines(response: WebSearchResponse): string {
+	return response.engines
+		.map((engine) => {
+			const vias = new Set(response.routes.filter((route) => route.engine === engine).map((route) => route.via));
+			const label = WEB_SEARCH_ENGINES[engine].label;
+			if (vias.size === 0) return label;
+			return `${label} (${[...vias].map((via) => (via === "browser" ? "Firefox" : "HTTP")).join("+")})`;
+		})
+		.join(", ");
+}
+
 function formatSearchResponse(response: WebSearchResponse, queries: string[]): { preview: string; fullText?: string } {
-	const sections: string[] = [
-		`Engines: ${response.engines.map((engine) => WEB_SEARCH_ENGINES[engine].label).join(", ")}`,
-	];
+	const sections: string[] = [`Engines: ${formatEngines(response)}`];
 	if (response.results.length === 0) sections.push("No search results.");
 	else {
 		sections.push(
@@ -215,18 +227,37 @@ export function createWebSearchToolDefinition(
 		name: "web_search",
 		label: "web_search",
 		description:
-			"Search the web with the search engines the user enabled. Sends every query to each engine, merges and dedupes the results, then reads the top results' pages (up to the user's Pages to Read per Search setting) and returns ranked results plus the most relevant page excerpts. Failed engines or pages are listed in Diagnostics.",
+			"Search the web with the search engines the user enabled (Google, Bing, ...). Sends every query to each engine, merges and dedupes the results, then reads the top results' pages (up to the user's Pages to Read per Search setting) and returns ranked results plus the most relevant page excerpts. Failed engines or pages are listed in Diagnostics.",
 		promptSnippet: loadSystemPrompt("tools/web-search/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/web-search/guidelines.md"),
 		parameters: webSearchSchema,
-		async execute(_toolCallId, params: WebSearchToolInput, signal) {
-			const response = await service.search(params, signal);
+		async execute(_toolCallId, params: WebSearchToolInput, signal, onUpdate) {
+			const response = await service.search(
+				{
+					...params,
+					onProgress: (message) =>
+						onUpdate?.({
+							content: [{ type: "text", text: message }],
+							details: {
+								queries: params.queries,
+								engines: [],
+								routes: [],
+								results: [],
+								pages: [],
+								failures: [],
+								cacheHit: false,
+							},
+						}),
+				},
+				signal,
+			);
 			const formatted = formatSearchResponse(response, params.queries);
 			return textResult(
 				formatted.preview,
 				{
 					queries: params.queries,
 					engines: response.engines,
+					routes: response.routes,
 					results: response.results,
 					pages: response.pages.map(summarizePage),
 					failures: response.failures,

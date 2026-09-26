@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ResolvedWebSearchSettings, WebSearchEngineId } from "../../config/settings/types.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
+import { getSharedFirefoxBrowser } from "./browser/firefox.ts";
 import { WebSearchCache } from "./cache.ts";
-import { type EngineResult, type SearchTimeRange, WEB_SEARCH_ENGINES } from "./engines.ts";
+import { EngineRunner } from "./engine-runner.ts";
+import { type EngineResult, type SearchTimeRange, WEB_SEARCH_ENGINES } from "./engines/index.ts";
 import { abortError, failureFromError, WebSearchError } from "./errors.ts";
 import { type FetchLike, plainHttpFetch } from "./http.ts";
 import { readPage } from "./page.ts";
+import { type BrowserTransport, HttpTransport } from "./transport.ts";
 import type {
 	WebFetchedPage,
 	WebFetchResponse,
@@ -14,6 +17,7 @@ import type {
 	WebSearchKeySource,
 	WebSearchResponse,
 	WebSearchResult,
+	WebSearchRoute,
 	WebSearchSettingsSource,
 } from "./types.ts";
 import {
@@ -34,8 +38,6 @@ export const WEB_SEARCH_LIMITS = {
 	defaultResultsPerCall: 10,
 	/** Engine requests in flight at once within one web_search call. */
 	searchConcurrency: 4,
-	/** An engine that answered with a captcha or HTTP 429 is skipped for this long. */
-	engineCooldownMs: 2 * 60 * 1_000,
 	searchCacheTtlMs: 5 * 60 * 1_000,
 	fetchCacheTtlMs: 15 * 60 * 1_000,
 } as const;
@@ -48,6 +50,13 @@ export interface WebSearchServiceOptions {
 	lookup?: HostLookup;
 	now?: () => number;
 	cache?: WebSearchCache;
+	/**
+	 * Real-browser transport for blocked engines. Defaults to the shared Firefox
+	 * transport; `null` disables the browser path entirely (tests, embedders).
+	 */
+	browser?: BrowserTransport | null;
+	/** True when a person can be asked to pass a CAPTCHA in a visible Firefox window. */
+	interactiveChallenges?: () => boolean;
 }
 
 export interface SearchRequest {
@@ -57,6 +66,8 @@ export interface SearchRequest {
 	/** Top results to read after searching; capped by the `pagesPerSearch` setting. */
 	readPages?: number;
 	fresh?: boolean;
+	/** Short status lines while the search runs (e.g. "waiting for you in Firefox"). */
+	onProgress?: (message: string) => void;
 }
 
 export interface FetchRequest {
@@ -71,6 +82,7 @@ export interface EngineTestResult {
 	resultCount: number;
 	durationMs: number;
 	message: string;
+	via?: "http" | "browser";
 }
 
 export const WEB_SEARCH_TEST_QUERY = "open source software";
@@ -165,7 +177,7 @@ export class WebSearchService {
 	private readonly lookup: HostLookup;
 	private readonly now: () => number;
 	private readonly cache: WebSearchCache;
-	private readonly engineCooldownUntil = new Map<WebSearchEngineId, number>();
+	private readonly runner: EngineRunner;
 	readonly downloads: DownloadSlots;
 
 	constructor(options: WebSearchServiceOptions) {
@@ -182,6 +194,14 @@ export class WebSearchService {
 				this.now,
 			);
 		this.downloads = new DownloadSlots(() => this.settings().fetchConcurrency);
+		this.runner = new EngineRunner({
+			http: new HttpTransport(this.fetchImpl),
+			browser: options.browser === null ? undefined : (options.browser ?? getSharedFirefoxBrowser()),
+			keys: options.keys,
+			now: this.now,
+			browserFallbackEnabled: () => this.settings().browserFallback,
+			interactiveChallenges: options.interactiveChallenges ?? (() => false),
+		});
 	}
 
 	private settings(): ResolvedWebSearchSettings {
@@ -199,32 +219,18 @@ export class WebSearchService {
 		return settings;
 	}
 
-	private cooldownRemainingMs(engine: WebSearchEngineId): number {
-		return Math.max(0, (this.engineCooldownUntil.get(engine) ?? 0) - this.now());
-	}
-
 	private async runEngine(
 		engine: WebSearchEngineId,
 		query: string,
 		timeRange: SearchTimeRange | undefined,
 		signal: AbortSignal | undefined,
-	): Promise<RawResult[]> {
-		const definition = WEB_SEARCH_ENGINES[engine];
-		try {
-			const results = await definition.search(query, {
-				fetchImpl: this.fetchImpl,
-				signal,
-				timeRange,
-				apiKey: definition.requiresApiKey ? this.options.keys?.get("brave_api") : undefined,
-			});
-			return results.map((result) => ({ ...result, engine, query }));
-		} catch (error) {
-			if (error instanceof WebSearchError && (error.code === "captcha" || error.code === "rate_limited")) {
-				// Back off instead of hammering an engine that is already refusing us.
-				this.engineCooldownUntil.set(engine, this.now() + WEB_SEARCH_LIMITS.engineCooldownMs);
-			}
-			throw error;
-		}
+		onProgress?: (message: string) => void,
+	): Promise<{ results: RawResult[]; route: WebSearchRoute }> {
+		const run = await this.runner.run(engine, { query, timeRange }, signal, onProgress);
+		return {
+			results: run.results.map((result) => ({ ...result, engine, query })),
+			route: { engine, query, via: run.via, note: run.note, resultCount: run.results.length },
+		};
 	}
 
 	/** Merge per-engine results: dedupe by canonical URL, then rank with transparent heuristics. */
@@ -330,6 +336,7 @@ export class WebSearchService {
 		);
 		const fresh = request.fresh === true || queries.some(isFreshnessSensitiveQuery);
 		const failures: WebSearchFailure[] = [];
+		const routes: WebSearchRoute[] = [];
 
 		const cacheKey = sha256(
 			JSON.stringify({ queries, engines: settings.engines, timeRange: request.timeRange, maxResults }),
@@ -343,12 +350,12 @@ export class WebSearchService {
 		const cacheHit = results !== undefined;
 		if (!results) {
 			const activeEngines = settings.engines.filter((engine) => {
-				const remaining = this.cooldownRemainingMs(engine);
-				if (remaining === 0) return true;
+				const cooldown = this.runner.cooldown(engine);
+				if (!cooldown) return true;
 				failures.push({
 					engine,
-					code: "rate_limited",
-					message: `${WEB_SEARCH_ENGINES[engine].label} 刚刚拒绝了自动请求，${Math.ceil(remaining / 1_000)} 秒内暂不使用。`,
+					code: cooldown.reason.code,
+					message: `${WEB_SEARCH_ENGINES[engine].label} 暂停使用 ${Math.ceil(cooldown.remainingMs / 1_000)} 秒，原因是刚才的失败：${cooldown.reason.message}`,
 				});
 				return false;
 			});
@@ -358,11 +365,13 @@ export class WebSearchService {
 				WEB_SEARCH_LIMITS.searchConcurrency,
 				async ({ query, engine }): Promise<RawResult[] | undefined> => {
 					// An engine that refused an earlier query of this call is not asked again.
-					if (this.cooldownRemainingMs(engine) > 0 && failures.some((failure) => failure.engine === engine)) {
+					if (this.runner.cooldown(engine) && failures.some((failure) => failure.engine === engine)) {
 						return undefined;
 					}
 					try {
-						return await this.runEngine(engine, query, request.timeRange, signal);
+						const run = await this.runEngine(engine, query, request.timeRange, signal, request.onProgress);
+						routes.push(run.route);
+						return run.results;
 					} catch (error) {
 						if (signal?.aborted) throw abortError(signal) ?? error;
 						failures.push({ query, engine, ...failureFromError(error, "搜索请求失败。") });
@@ -376,6 +385,11 @@ export class WebSearchService {
 				settings.engines.indexOf(failure.engine!) * WEB_SEARCH_LIMITS.maxQueriesPerCall +
 				(failure.query ? queries.indexOf(failure.query) : -1);
 			failures.sort((a, b) => order(a) - order(b));
+			routes.sort(
+				(a, b) =>
+					settings.engines.indexOf(a.engine) - settings.engines.indexOf(b.engine) ||
+					queries.indexOf(a.query) - queries.indexOf(b.query),
+			);
 			const succeeded = perTask.filter((item): item is RawResult[] => item !== undefined);
 			if (succeeded.length === 0) {
 				const perEngine = [...new Map(failures.map((failure) => [failure.engine, failure])).values()];
@@ -413,6 +427,7 @@ export class WebSearchService {
 			pages: read.pages,
 			failures,
 			engines: settings.engines,
+			routes,
 			cacheHit: cacheHit || read.cacheHit,
 		};
 	}
@@ -490,14 +505,16 @@ export class WebSearchService {
 				const startedAt = this.now();
 				const label = WEB_SEARCH_ENGINES[engine].label;
 				try {
-					const results = await this.runEngine(engine, WEB_SEARCH_TEST_QUERY, undefined, signal);
+					const { results, route } = await this.runEngine(engine, WEB_SEARCH_TEST_QUERY, undefined, signal);
+					const how = route.via === "browser" ? "（通过 Firefox）" : "（轻量请求）";
 					return {
 						engine,
 						label,
 						ok: results.length > 0,
 						resultCount: results.length,
 						durationMs: this.now() - startedAt,
-						message: results.length > 0 ? `返回 ${results.length} 个结果` : "没有返回结果",
+						message: results.length > 0 ? `返回 ${results.length} 个结果${how}` : `没有返回结果${how}`,
+						via: route.via,
 					};
 				} catch (error) {
 					if (signal?.aborted) throw abortError(signal) ?? error;

@@ -10,6 +10,7 @@ import { normalizePath } from "../../utils/paths.ts";
 import { assertProjectSettingsWritable, canReadProjectSettings } from "../trust/index.ts";
 import {
 	mergeSettings,
+	PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES,
 	parseTimeoutSetting,
 	SETTINGS_DEFAULTS,
 	WEB_SEARCH_ENGINE_IDS,
@@ -95,8 +96,15 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 	const selected = WEB_SEARCH_ENGINE_IDS.filter((id) => requested?.includes(id));
 	// An explicit empty list is a valid "nothing selected" state; a legacy list that
 	// matched none of the built-in engines falls back to the defaults instead.
+	const savedBeforeGoogleAndBing =
+		source.browserFallback === undefined &&
+		requested !== undefined &&
+		requested.length === PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES.length &&
+		PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES.every((id) => requested.includes(id));
 	const engines: WebSearchEngineId[] =
-		requested === undefined || (selected.length === 0 && requested.some((name) => !known.has(name)))
+		requested === undefined ||
+		savedBeforeGoogleAndBing ||
+		(selected.length === 0 && requested.some((name) => !known.has(name)))
 			? [...defaults.engines]
 			: selected;
 	const legacyPages =
@@ -121,6 +129,7 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 			WEB_SEARCH_SETTING_RANGES.fetchConcurrency,
 			defaults.fetchConcurrency,
 		),
+		browserFallback: typeof source.browserFallback === "boolean" ? source.browserFallback : defaults.browserFallback,
 	};
 }
 
