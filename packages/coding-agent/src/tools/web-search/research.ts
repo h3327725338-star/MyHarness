@@ -100,6 +100,16 @@ const DEFAULT_MAX_SOURCES = 8;
 const DEFAULT_MAX_ROUNDS = 3;
 const MAX_CHUNK_LENGTH = 1_200;
 const MAX_CHUNKS_PER_SOURCE = 4;
+const NON_RETRYABLE_SEARCH_FAILURES = new Set<WebSearchFailureCode>([
+	"search_unavailable",
+	"search_timeout",
+	"aborted",
+	"not_configured",
+	"blocked",
+	"engine_failure",
+	"http",
+	"round_limit",
+]);
 const STOP_WORDS = new Set([
 	"about",
 	"after",
@@ -656,10 +666,8 @@ export async function runWebResearch(
 				status: "failed",
 				failures: [...roundFailures],
 			});
-			if (
-				roundFailures.some((failure) => ["search_unavailable", "search_timeout", "aborted"].includes(failure.code))
-			)
-				break;
+			// A reformulated query cannot fix a service, configuration, scope or round-limit failure.
+			if (roundFailures.some((failure) => NON_RETRYABLE_SEARCH_FAILURES.has(failure.code))) break;
 		}
 
 		if (round >= maxRounds) break;

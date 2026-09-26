@@ -6895,8 +6895,11 @@ export class InteractiveMode {
 						this.settingsManager.setWarnings(warnings);
 					},
 					onWebSearchChange: (settings) => {
+						const wasEnabled = this.settingsManager.getWebSearchSettings().enabled;
 						this.settingsManager.setWebSearchSettings(settings);
 						this.session.refreshToolsAfterSettingsChange();
+						// Endpoint, engine and scope edits apply on the next call; only the switch changes the tool list.
+						if (wasEnabled === settings.enabled) return;
 						this.showStatus(
 							settings.enabled
 								? "Web Search 已启用；web_research、web_search 和 web_fetch 将从下一轮 Agent 调用开始可用。"

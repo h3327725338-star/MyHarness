@@ -137,6 +137,7 @@ import {
 	persistToolText,
 	wrapToolWithResultPersistence,
 } from "../../tools/tool-result-persistence.ts";
+import { createWebSearchService, type WebSearchService } from "../../tools/web-search/service.ts";
 import { stripFrontmatter } from "../../utils/frontmatter.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { sleep } from "../../utils/sleep.ts";
@@ -519,6 +520,8 @@ export class AgentSession {
 	private _customTools: ToolDefinition[];
 	private _codeIntelligence?: SymbolsCodeIntelligenceServices;
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
+	/** One Web service per session so cache and per-run Search Rounds survive tool registry rebuilds. */
+	private _webSearchService?: WebSearchService;
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
@@ -1267,6 +1270,7 @@ export class AgentSession {
 		if (!this._ownsRuntimeGeneration(generation)) return;
 
 		if (event.type === "agent_start") {
+			this._webSearchService?.resetSearchRounds();
 			const onRunStart = this._pendingRunStartCallback;
 			this._pendingRunStartCallback = undefined;
 			onRunStart?.();
@@ -3856,6 +3860,12 @@ export class AgentSession {
 		const omitDocumentPreviewImages = this.settingsManager.getVisionAssistantSettings().enabled;
 		const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
 		const shellPath = this.settingsManager.getShellPath();
+		if (!this._baseToolsOverride && !this._webSearchService) {
+			this._webSearchService = createWebSearchService({
+				settings: this.settingsManager,
+				sessionManager: this.sessionManager,
+			});
+		}
 		const baseToolDefinitions = this._baseToolsOverride
 			? Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
@@ -3899,8 +3909,7 @@ export class AgentSession {
 						onControlsRelease: (toolCallId) => this._workflowControls.delete(toolCallId),
 					},
 					webSearch: {
-						settings: this.settingsManager,
-						sessionManager: this.sessionManager,
+						service: this._webSearchService,
 					},
 				});
 

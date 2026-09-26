@@ -105,4 +105,40 @@ describe("web research", () => {
 		);
 		expect(response.message).toContain("所有候选来源");
 	});
+
+	it("stops reformulating after a failure that another query cannot fix", async () => {
+		const fetchImpl = vi.fn(async () => new Response("rate limited", { status: 429 }));
+		const service = new WebSearchService({
+			settings: createSettings(),
+			fetchImpl,
+			cache: new WebSearchCache(undefined),
+		});
+
+		const response = await runWebResearch(service, { question: "What changed in the latest release?" });
+
+		expect(response.status).toBe("failed");
+		expect(response.rounds).toHaveLength(1);
+		const firstRoundRequests = fetchImpl.mock.calls.length;
+		expect(firstRoundRequests).toBe(response.queries.length);
+		expect(response.failures).toEqual(expect.arrayContaining([expect.objectContaining({ code: "http" })]));
+	});
+
+	it("aborts a running research call promptly", async () => {
+		const fetchImpl = vi.fn(
+			(_input: string | URL, init?: RequestInit) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+				}),
+		);
+		const service = new WebSearchService({
+			settings: createSettings(),
+			fetchImpl,
+			cache: new WebSearchCache(undefined),
+		});
+		const controller = new AbortController();
+		const pending = runWebResearch(service, { question: "Slow question" }, controller.signal);
+		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({ code: "aborted" });
+	});
 });

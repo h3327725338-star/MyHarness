@@ -13,7 +13,7 @@ MyHarness 的 Web Search 是一个可选的 Agent 工具层：SearXNG 负责发�
 - **Website Scope**：`Unrestricted`，或 `Only selected websites`。allowlist 按真实 hostname 匹配，允许根域名及其子域名，不接受字符串包含式绕过。
 - **Allowed Websites**：逗号分隔的 hostname，例如 `openai.com, docs.python.org`。搜索结果和直接提供给 `web_fetch` 的 URL 都会经过同一范围检查。
 - **Parallel Pages**：`Agent decides` 使用有限的内置安全上限；`Manual` 接受任意正整数，控制单次最多读取的 URL 数量。
-- **Search Rounds**：`Agent decides` 使用有限的内置安全上限；`Manual` 接受任意正整数。一次 Round 是“搜索 → 读取网页”的完整调查阶段，不是 Tool Call 次数。
+- **Search Rounds**：`Agent decides` 使用有限的内置安全上限；`Manual` 接受任意正整数。一次 Round 是“搜索 → 读取网页”的完整调查阶段，不是 Tool Call 次数。上限按每次 Agent 运行（一次用户任务）计算，下一条消息开始时重新计数；达到上限时 `web_search` 返回 `round_limit` 错误。
 
 也可以直接写入 global settings：
 
@@ -55,7 +55,8 @@ Agent 只接触 MyHarness 自己的三个 Web 工具：
 
 ## 缓存、错误和安全
 
-- Search 和 Fetch 使用当前 Session 作用域的缓存；持久化 Session 的缓存位于该 Session 目录下，非持久化运行只使用内存缓存。TTL 有设置字段，`fresh: true` 或明显的“最新/今天/现在”等查询会绕过对应缓存。
+- Search 和 Fetch 使用当前 Session 作用域的缓存；持久化 Session 的缓存位于该 Session 目录下的 `web-cache/`，非持久化运行只使用内存缓存。TTL 有设置字段，`fresh: true` 或明显的“最新/今天/现在”等查询会绕过对应缓存。内存缓存最多保留 256 条最近使用的记录；磁盘缓存写入失败不会让已成功的请求变成失败，超过 24 小时的磁盘记录会被定期清理。失败的 Search/Fetch 不会写入缓存。
+- `web_fetch` 按规范化 URL 去重和缓存，但实际请求的是原始 URL（只去掉 `utm_*` 等跟踪参数），不会改写主机名。Crawl4AI 报告成功但页面状态码 ≥ 400 时按该 URL 失败处理。
 - SearXNG、Crawl4AI 未配置、不可用、HTTP 错误、无效 JSON、超时、取消和 URL 阻止会使用独立诊断，不会被伪装成“没有结果”。
 - Research diagnostics 会区分 `search_timeout`、`search_unavailable`、`fetch_timeout`、`crawl_failed`、`empty_content`、`extraction_failed`、`all_sources_failed` 和 `aborted` 等阶段；部分 Query、engine 或 URL 失败不会掩盖同一轮的成功结果。
 - URL 只允许 `http`/`https`，拒绝凭据、localhost、本机地址和常见私有/保留 IP；allowlist 使用 hostname 边界匹配。Crawl4AI 返回的重定向 URL 还会重新校验。
@@ -67,7 +68,9 @@ MyHarness 使用 SearXNG 的 `/config` 和 `/search?format=json`，并使用 `ti
 
 ## Health Check 与真实 E2E
 
-设置中的 **Health** 仍只检查 SearXNG `/config` 和 Crawl4AI `/health`。**Run Web Search Test** 会额外执行固定 Query `SearXNG official documentation`，选择一个安全公开 URL，完成 Search → Fetch → Extraction → Evidence Chunk，并分别显示阶段状态、耗时、失败阶段和 diagnostics。
+设置中的 **Search Engines**、**Health** 和 **Run Web Search Test** 在等待网络时都可以按 Esc 立即返回，返回会同时取消正在进行的请求；从任一子页面返回后光标停在打开它的那一行。
+
+设置中的 **Health** 仍只检查 SearXNG `/config` 和 Crawl4AI `/health`，两者并行检查。**Run Web Search Test** 会额外执行固定 Query `SearXNG official documentation`，选择一个安全公开 URL，完成 Search → Fetch → Extraction → Evidence Chunk，并分别显示阶段状态、耗时、失败阶段和 diagnostics。
 
 普通离线测试不依赖公网。配置真实服务后可以显式执行：
 

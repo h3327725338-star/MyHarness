@@ -18,7 +18,8 @@ export type WebSearchFailureCode =
 	| "crawl_failed"
 	| "empty_content"
 	| "extraction_failed"
-	| "all_sources_failed";
+	| "all_sources_failed"
+	| "round_limit";
 
 export interface WebSearchResult {
 	title: string;

@@ -1,6 +1,8 @@
 import {
 	type Component,
 	Container,
+	type Focusable,
+	getKeybindings,
 	type SelectItem,
 	SelectList,
 	type SettingItem,
@@ -10,7 +12,7 @@ import {
 	type TUI,
 } from "@myharness/tui";
 import type { ResolvedWebSearchSettings, SettingsManager, WebSearchSettings } from "../../../config/settings/index.ts";
-import { WebSearchService } from "../../../tools/web-search/service.ts";
+import { type WebSearchE2EResult, WebSearchService } from "../../../tools/web-search/service.ts";
 import { normalizeAllowedDomain } from "../../../tools/web-search/url.ts";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.ts";
 import { ExtensionInputComponent } from "./extension-input.ts";
@@ -20,6 +22,48 @@ const SELECT_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 32 } a
 interface WebSearchSettingsDependencies {
 	tui: TUI;
 	settingsManager: SettingsManager;
+}
+
+function isFocusable(component: Component | undefined): component is Component & Focusable {
+	return component !== undefined && "focused" in component;
+}
+
+/**
+ * Shows exactly one page of a multi-step flow. Every page swap moves focus to
+ * the visible page and requests a render, so async completions become visible
+ * without waiting for the next key press.
+ */
+class PageHost extends Container implements Focusable {
+	private activePage: Component | undefined;
+	private _focused = false;
+	protected readonly tui: TUI;
+
+	constructor(tui: TUI) {
+		super();
+		this.tui = tui;
+	}
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		if (isFocusable(this.activePage)) this.activePage.focused = value;
+	}
+
+	protected show(page: Component): void {
+		if (isFocusable(this.activePage)) this.activePage.focused = false;
+		this.clear();
+		this.activePage = page;
+		this.addChild(page);
+		if (isFocusable(page)) page.focused = this._focused;
+		this.tui.requestRender();
+	}
+
+	handleInput(data: string): void {
+		this.activePage?.handleInput?.(data);
+	}
 }
 
 class ChoiceSubmenu extends Container {
@@ -63,249 +107,298 @@ class ChoiceSubmenu extends Container {
 	}
 }
 
-class EngineSelectionSubmenu extends Container {
-	private activeComponent: Component | undefined;
-	private readonly service: WebSearchService;
-	private readonly initial: ResolvedWebSearchSettings;
-	private readonly onChange: (settings: WebSearchSettings) => void;
-	private readonly onDone: () => void;
-
-	constructor(
-		service: WebSearchService,
-		settings: ResolvedWebSearchSettings,
-		onChange: (settings: WebSearchSettings) => void,
-		onDone: () => void,
-	) {
-		super();
-		this.service = service;
-		this.initial = settings;
-		this.onChange = onChange;
-		this.onDone = onDone;
-		this.setContent(new Text(theme.fg("muted", "正在从 SearXNG /config 读取当前引擎…"), 0, 0));
-		void this.load();
-	}
-
-	handleInput(data: string): void {
-		this.activeComponent?.handleInput?.(data);
-	}
-
-	private setContent(component: Component): void {
-		this.clear();
-		this.activeComponent = component;
-		this.addChild(component);
-	}
-
-	private async load(): Promise<void> {
-		try {
-			const engines = await this.service.getAvailableEngines();
-			if (engines.length === 0) {
-				this.showError("SearXNG 返回了空的引擎列表。请检查实例配置。");
-				return;
-			}
-			const selected = new Set(this.initial.engines.map((engine) => engine.toLowerCase()));
-			const engineItems: SettingItem[] = engines.map((engine) => ({
-				id: engine,
-				label: engine,
-				interaction: "toggle",
-				currentValue: this.initial.engineMode === "auto" || selected.has(engine.toLowerCase()) ? "On" : "Off",
-				values: ["Off", "On"],
-			}));
-			const commitSelection = (): void => {
-				const enabled = new Set(engineItems.filter((item) => item.currentValue === "On").map((item) => item.id));
-				const allEnabled = enabled.size === engines.length;
-				this.onChange({
-					...this.initial,
-					engineMode: allEnabled ? "auto" : "selected",
-					engines: allEnabled ? [] : [...enabled].sort((a, b) => a.localeCompare(b)),
-				});
-			};
-			const items: SettingItem[] = [
-				{
-					id: "__select-all",
-					label: "Select all",
-					interaction: "action",
-					currentValue: "Run",
-					onActivate: () => {
-						for (const item of engineItems) item.currentValue = "On";
-						commitSelection();
-					},
-				},
-				{
-					id: "__clear-all",
-					label: "Clear all",
-					interaction: "action",
-					currentValue: "Run",
-					onActivate: () => {
-						for (const item of engineItems) item.currentValue = "Off";
-						commitSelection();
-					},
-				},
-				...engineItems,
-			];
-			const list = new SettingsList(
-				items,
-				10,
-				getSettingsListTheme(),
-				(id) => {
-					if (id !== "__select-all" && id !== "__clear-all") commitSelection();
-				},
-				this.onDone,
-				{ inlineDescriptions: true },
-			);
-			this.setContent(list);
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private showError(message: string): void {
-		const list = new SettingsList(
-			[
-				{
-					id: "back",
-					label: "返回",
-					interaction: "action",
-					currentValue: "Back",
-					onActivate: () => this.onDone(),
-				},
-			],
-			1,
-			getSettingsListTheme(),
-			() => {},
-			this.onDone,
-		);
-		this.setContent(new ContainerWithMessage(message, list));
-	}
-}
-
 class ContainerWithMessage extends Container {
+	private readonly child: Component;
+
 	constructor(message: string, child: Component) {
 		super();
+		this.child = child;
 		this.addChild(new Text(theme.fg("warning", message), 0, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(child);
 	}
+
+	handleInput(data: string): void {
+		this.child.handleInput?.(data);
+	}
 }
 
-class HealthSubmenu extends Container {
-	private activeComponent: Component | undefined;
-	private readonly service: WebSearchService;
-	private readonly tui: TUI;
+/** A result/error message with a single Back action; Enter and Esc both return. */
+function messagePage(message: string, onBack: () => void): Component {
+	const list = new SettingsList(
+		[{ id: "back", label: "返回", interaction: "action", currentValue: "Back", onActivate: onBack }],
+		1,
+		getSettingsListTheme(),
+		() => {},
+		onBack,
+	);
+	return new ContainerWithMessage(message, list);
+}
 
-	constructor(service: WebSearchService, tui: TUI, onDone: () => void) {
-		super();
-		this.service = service;
-		this.tui = tui;
-		this.setContent(new Text(theme.fg("muted", "正在检查 SearXNG 和 Crawl4AI…"), 0, 0));
-		void this.load(onDone);
+/**
+ * Runs one network task behind a loading page. Esc is honored while the task is
+ * pending: it aborts the request and returns immediately, so leaving the page
+ * never depends on an unreachable SearXNG or Crawl4AI instance answering.
+ */
+class CancellableTaskPage extends PageHost {
+	private readonly controller = new AbortController();
+	private pending = true;
+	private readonly onDone: () => void;
+
+	constructor(
+		tui: TUI,
+		loadingMessage: string,
+		onDone: () => void,
+		task: (signal: AbortSignal, back: () => void) => Promise<Component>,
+	) {
+		super(tui);
+		this.onDone = onDone;
+		const loading = new Container();
+		loading.addChild(new Text(theme.fg("muted", loadingMessage), 0, 0));
+		loading.addChild(new Spacer(1));
+		loading.addChild(new Text(theme.fg("dim", "  Esc 取消并返回"), 0, 0));
+		this.show(loading);
+		const back = () => this.leave();
+		void task(this.controller.signal, back).then(
+			(page) => this.settle(page),
+			(error: unknown) => this.settle(messagePage(error instanceof Error ? error.message : String(error), back)),
+		);
+	}
+
+	private settle(page: Component): void {
+		if (this.controller.signal.aborted) return;
+		this.pending = false;
+		this.show(page);
+	}
+
+	private leave(): void {
+		if (this.pending) this.controller.abort();
+		this.pending = false;
+		this.onDone();
 	}
 
 	handleInput(data: string): void {
-		this.activeComponent?.handleInput?.(data);
+		if (this.pending) {
+			if (getKeybindings().matches(data, "tui.select.cancel")) this.leave();
+			return;
+		}
+		super.handleInput(data);
 	}
+}
 
-	private setContent(component: Component): void {
-		this.clear();
-		this.activeComponent = component;
-		this.addChild(component);
-		this.tui.requestRender();
-	}
-
-	private async load(onDone: () => void): Promise<void> {
-		const health = await this.service.health().catch((error) => ({
-			searxng: { ok: false, message: error instanceof Error ? error.message : String(error) },
-			crawl4ai: { ok: false, message: "未执行" },
+function engineSelectionPage(
+	tui: TUI,
+	service: WebSearchService,
+	getSettings: () => ResolvedWebSearchSettings,
+	onChange: (settings: ResolvedWebSearchSettings) => void,
+	onDone: () => void,
+): Component {
+	return new CancellableTaskPage(tui, "正在从 SearXNG /config 读取当前引擎…", onDone, async (signal, back) => {
+		const engines = await service.getAvailableEngines(signal);
+		if (engines.length === 0) return messagePage("SearXNG 返回了空的引擎列表。请检查实例配置。", back);
+		const initial = getSettings();
+		const selected = new Set(initial.engines.map((engine) => engine.toLowerCase()));
+		const engineItems: SettingItem[] = engines.map((engine) => ({
+			id: engine,
+			label: engine,
+			interaction: "toggle",
+			currentValue: initial.engineMode === "auto" || selected.has(engine.toLowerCase()) ? "On" : "Off",
+			values: ["Off", "On"],
 		}));
-		const list = new SettingsList(
-			[
-				{
-					id: "back",
-					label: "返回",
-					interaction: "action",
-					currentValue: "Back",
-					onActivate: onDone,
+		const commitSelection = (): void => {
+			const enabled = new Set(engineItems.filter((item) => item.currentValue === "On").map((item) => item.id));
+			const allEnabled = enabled.size === engines.length;
+			onChange({
+				...getSettings(),
+				engineMode: allEnabled ? "auto" : "selected",
+				engines: allEnabled ? [] : [...enabled].sort((a, b) => a.localeCompare(b)),
+			});
+		};
+		const items: SettingItem[] = [
+			{
+				id: "__select-all",
+				label: "Select all",
+				interaction: "action",
+				currentValue: "Run",
+				onActivate: () => {
+					for (const item of engineItems) item.currentValue = "On";
+					commitSelection();
+					tui.requestRender();
 				},
-			],
-			1,
+			},
+			{
+				id: "__clear-all",
+				label: "Clear all",
+				description: "至少保留一个引擎，否则搜索会被拒绝",
+				interaction: "action",
+				currentValue: "Run",
+				onActivate: () => {
+					for (const item of engineItems) item.currentValue = "Off";
+					commitSelection();
+					tui.requestRender();
+				},
+			},
+			...engineItems,
+		];
+		return new SettingsList(
+			items,
+			10,
 			getSettingsListTheme(),
-			() => {},
-			onDone,
+			(id) => {
+				if (id !== "__select-all" && id !== "__clear-all") commitSelection();
+			},
+			back,
+			{ inlineDescriptions: true },
 		);
-		this.setContent(
-			new ContainerWithMessage(
-				[
-					`SearXNG：${health.searxng.ok ? "OK" : "失败"} · ${health.searxng.message}`,
-					`Crawl4AI：${health.crawl4ai.ok ? "OK" : "失败"} · ${health.crawl4ai.message}`,
-				].join("\n"),
-				list,
+	});
+}
+
+function healthPage(tui: TUI, service: WebSearchService, onDone: () => void): Component {
+	return new CancellableTaskPage(tui, "正在检查 SearXNG 和 Crawl4AI…", onDone, async (signal, back) => {
+		const health = await service.health(signal);
+		return messagePage(
+			[
+				`SearXNG：${health.searxng.ok ? "OK" : "失败"} · ${health.searxng.message}`,
+				`Crawl4AI：${health.crawl4ai.ok ? "OK" : "失败"} · ${health.crawl4ai.message}`,
+			].join("\n"),
+			back,
+		);
+	});
+}
+
+function formatE2EResult(result: WebSearchE2EResult): string {
+	const phase = (name: string, item: { ok: boolean; durationMs: number; message: string; code?: string }): string =>
+		`${name}：${item.ok ? "OK" : "失败"} · ${item.message} · ${item.durationMs}ms${item.code ? ` · ${item.code}` : ""}`;
+	const diagnostics = result.diagnostics.length
+		? `\nDiagnostics:\n${result.diagnostics.map((item) => `- [${item.code}] ${item.url ?? item.query ?? "test"}: ${item.message}`).join("\n")}`
+		: "";
+	return [
+		`固定 Query：${result.query}`,
+		phase("Search", result.search),
+		phase("Fetch", result.fetch),
+		phase("Extraction", result.extraction),
+		`Total：${result.totalDurationMs}ms · ${result.ok ? "E2E 正常" : "E2E 未通过"}`,
+		result.url ? `URL：${result.url}` : "",
+		diagnostics,
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+function e2eTestPage(tui: TUI, service: WebSearchService, onDone: () => void): Component {
+	return new CancellableTaskPage(tui, "正在执行 Search → Fetch → Extraction 测试…", onDone, async (signal, back) =>
+		messagePage(formatE2EResult(await service.runE2ETest(signal)), back),
+	);
+}
+
+/** Text input that re-prompts with the typed value and an inline error until it validates. */
+class ValidatedInputPage extends PageHost {
+	private readonly title: string;
+	private readonly placeholder: string;
+	private readonly validate: (input: string) => string | undefined;
+	private readonly onSubmit: (input: string) => void;
+	private readonly onCancel: () => void;
+
+	constructor(
+		tui: TUI,
+		title: string,
+		placeholder: string,
+		initialValue: string | undefined,
+		validate: (input: string) => string | undefined,
+		onSubmit: (input: string) => void,
+		onCancel: () => void,
+	) {
+		super(tui);
+		this.title = title;
+		this.placeholder = placeholder;
+		this.validate = validate;
+		this.onSubmit = onSubmit;
+		this.onCancel = onCancel;
+		this.showInput(initialValue);
+	}
+
+	private showInput(value: string | undefined, error?: string): void {
+		this.show(
+			new ExtensionInputComponent(
+				error ? `${this.title}（${error}）` : this.title,
+				this.placeholder,
+				(input) => {
+					const problem = this.validate(input);
+					if (problem) this.showInput(input, problem);
+					else this.onSubmit(input);
+				},
+				this.onCancel,
+				{ initialValue: value },
 			),
 		);
 	}
 }
 
-class E2ETestSubmenu extends Container {
-	private activeComponent: Component | undefined;
-	private readonly service: WebSearchService;
-	private readonly tui: TUI;
+/** Agent decides / Manual picker; Manual continues to a number page whose Esc returns to the picker. */
+class StrategyPage extends PageHost {
+	private readonly title: string;
+	private readonly current: ResolvedWebSearchSettings["parallelPages"];
+	private readonly onSubmit: (strategy: ResolvedWebSearchSettings["parallelPages"]) => void;
+	private readonly onCancel: () => void;
 
-	constructor(service: WebSearchService, tui: TUI, onDone: () => void) {
-		super();
-		this.service = service;
-		this.tui = tui;
-		this.setContent(new Text(theme.fg("muted", "正在执行 Search → Fetch → Extraction 测试…"), 0, 0));
-		void this.load(onDone);
+	constructor(
+		tui: TUI,
+		title: string,
+		current: ResolvedWebSearchSettings["parallelPages"],
+		onSubmit: (strategy: ResolvedWebSearchSettings["parallelPages"]) => void,
+		onCancel: () => void,
+	) {
+		super(tui);
+		this.title = title;
+		this.current = current;
+		this.onSubmit = onSubmit;
+		this.onCancel = onCancel;
+		this.showPicker();
 	}
 
-	handleInput(data: string): void {
-		this.activeComponent?.handleInput?.(data);
-	}
-
-	private setContent(component: Component): void {
-		this.clear();
-		this.activeComponent = component;
-		this.addChild(component);
-		this.tui.requestRender();
-	}
-
-	private async load(onDone: () => void): Promise<void> {
-		const result = await this.service.runE2ETest();
-		const phase = (name: string, item: { ok: boolean; durationMs: number; message: string; code?: string }): string =>
-			`${name}：${item.ok ? "OK" : "失败"} · ${item.message} · ${item.durationMs}ms${item.code ? ` · ${item.code}` : ""}`;
-		const diagnostics = result.diagnostics.length
-			? `\nDiagnostics:\n${result.diagnostics.map((item) => `- [${item.code}] ${item.url ?? item.query ?? "test"}: ${item.message}`).join("\n")}`
-			: "";
-		const message = [
-			`固定 Query：${result.query}`,
-			phase("Search", result.search),
-			phase("Fetch", result.fetch),
-			phase("Extraction", result.extraction),
-			`Total：${result.totalDurationMs}ms · ${result.ok ? "E2E 正常" : "E2E 未通过"}`,
-			result.url ? `URL：${result.url}` : "",
-			diagnostics,
-		]
-			.filter(Boolean)
-			.join("\n");
-		const list = new SettingsList(
-			[
-				{
-					id: "back",
-					label: "返回",
-					interaction: "action",
-					currentValue: "Back",
-					onActivate: onDone,
+	private showPicker(): void {
+		this.show(
+			new ChoiceSubmenu(
+				this.title,
+				"Agent decides 使用内置有限安全上限；Manual 使用你输入的正整数。",
+				[
+					{ value: "agent", label: "Agent decides" },
+					{ value: "manual", label: "Manual" },
+				],
+				this.current.mode,
+				(value) => {
+					if (value === "agent") this.onSubmit({ mode: "agent" });
+					else this.showNumberInput();
 				},
-			],
-			1,
-			getSettingsListTheme(),
-			() => {},
-			onDone,
+				this.onCancel,
+			),
 		);
-		this.setContent(new ContainerWithMessage(message, list));
+	}
+
+	private showNumberInput(): void {
+		this.show(
+			new ValidatedInputPage(
+				this.tui,
+				`${this.title} 数量`,
+				"输入正整数",
+				this.current.value === undefined ? undefined : String(this.current.value),
+				(input) => {
+					const parsed = Number(input.trim());
+					return Number.isSafeInteger(parsed) && parsed > 0 ? undefined : "请输入正整数";
+				},
+				(input) => this.onSubmit({ mode: "manual", value: Number(input.trim()) }),
+				() => this.showPicker(),
+			),
+		);
 	}
 }
 
 function formatStrategy(strategy: ResolvedWebSearchSettings["parallelPages"], label: string): string {
 	return strategy.mode === "agent" ? `${label}: Agent decides` : `${label}: ${strategy.value ?? "未设置"}`;
+}
+
+function formatEngines(settings: ResolvedWebSearchSettings): string {
+	return settings.engineMode === "auto" ? "Auto (SearXNG)" : `${settings.engines.length} selected`;
 }
 
 function formatSummary(settings: ResolvedWebSearchSettings): string {
@@ -315,12 +408,16 @@ function formatSummary(settings: ResolvedWebSearchSettings): string {
 	return `On · ${engines} · ${scope}`;
 }
 
-export class WebSearchSettingsSubmenu extends Container {
+/**
+ * Web Search settings page. Every child page closes through the root list's own
+ * `done` callback, so Esc/Back always returns to the row that opened it and the
+ * root list is never rebuilt behind the user's back.
+ */
+export class WebSearchSettingsSubmenu extends Container implements Focusable {
 	private readonly service: WebSearchService;
 	private state: ResolvedWebSearchSettings;
-	private activeComponent: Component | undefined;
+	private readonly list: SettingsList;
 	private readonly onChange: (settings: WebSearchSettings) => void;
-	private readonly onDone: (summary?: string) => void;
 	private readonly dependencies: WebSearchSettingsDependencies;
 
 	constructor(
@@ -333,29 +430,57 @@ export class WebSearchSettingsSubmenu extends Container {
 		this.state = { ...settings, engines: [...settings.engines], allowedDomains: [...settings.allowedDomains] };
 		this.onChange = onChange;
 		this.dependencies = dependencies;
-		this.onDone = onDone;
 		this.service = new WebSearchService({ settings: dependencies.settingsManager });
-		this.showRoot();
+		this.list = new SettingsList(
+			this.createItems(),
+			10,
+			getSettingsListTheme(),
+			(id, value) => {
+				if (id === "enabled") this.commit({ ...this.state, enabled: value === "On" });
+			},
+			() => onDone(formatSummary(this.state)),
+			{ inlineDescriptions: true },
+		);
+		this.addChild(this.list);
+	}
+
+	get focused(): boolean {
+		return this.list.focused;
+	}
+
+	set focused(value: boolean) {
+		this.list.focused = value;
 	}
 
 	handleInput(data: string): void {
-		this.activeComponent?.handleInput?.(data);
-	}
-
-	private setContent(component: Component): void {
-		this.clear();
-		this.activeComponent = component;
-		this.addChild(component);
+		this.list.handleInput(data);
 		this.dependencies.tui.requestRender();
 	}
 
 	private commit(next: ResolvedWebSearchSettings): void {
 		this.state = { ...next, engines: [...next.engines], allowedDomains: [...next.allowedDomains] };
 		this.onChange(this.state);
+		this.refreshValues();
 	}
 
-	private showRoot(): void {
-		const items: SettingItem[] = [
+	private refreshValues(): void {
+		const values: Record<string, string> = {
+			enabled: this.state.enabled ? "On" : "Off",
+			"searxng-url": this.state.searxngUrl ?? "未设置",
+			"crawl4ai-url": this.state.crawl4aiUrl ?? "未设置",
+			engines: formatEngines(this.state),
+			scope: this.state.scope === "unrestricted" ? "All websites" : "Only selected websites",
+			"allowed-domains": this.state.allowedDomains.length ? this.state.allowedDomains.join(", ") : "未设置",
+			"parallel-pages": formatStrategy(this.state.parallelPages, "Pages"),
+			"search-rounds": formatStrategy(this.state.searchRounds, "Rounds"),
+		};
+		for (const [id, value] of Object.entries(values)) this.list.updateValue(id, value);
+		this.dependencies.tui.requestRender();
+	}
+
+	private createItems(): SettingItem[] {
+		const tui = this.dependencies.tui;
+		return [
 			{
 				id: "enabled",
 				label: "Web Search",
@@ -369,26 +494,27 @@ export class WebSearchSettingsSubmenu extends Container {
 				label: "SearXNG URL",
 				description: "SearXNG 基础 URL；引擎从实例 /config 动态读取",
 				currentValue: this.state.searxngUrl ?? "未设置",
-				submenu: (_value, _done) => this.endpointInput("SearXNG URL", "searxngUrl", this.state.searxngUrl),
+				submenu: (_value, done) => this.endpointInput("SearXNG URL", "searxngUrl", done),
 			},
 			{
 				id: "crawl4ai-url",
 				label: "Crawl4AI URL",
 				description: "Crawl4AI Docker/API 基础 URL",
 				currentValue: this.state.crawl4aiUrl ?? "未设置",
-				submenu: (_value, _done) => this.endpointInput("Crawl4AI URL", "crawl4aiUrl", this.state.crawl4aiUrl),
+				submenu: (_value, done) => this.endpointInput("Crawl4AI URL", "crawl4aiUrl", done),
 			},
 			{
 				id: "engines",
 				label: "Search Engines",
 				description: "从当前 SearXNG 实例读取并选择引擎",
-				currentValue: this.state.engineMode === "auto" ? "Auto (SearXNG)" : `${this.state.engines.length} selected`,
-				submenu: () =>
-					new EngineSelectionSubmenu(
+				currentValue: formatEngines(this.state),
+				submenu: (_value, done) =>
+					engineSelectionPage(
+						tui,
 						this.service,
-						this.state,
-						(settings) => this.commit(settings as ResolvedWebSearchSettings),
-						() => this.showRoot(),
+						() => this.state,
+						(settings) => this.commit(settings),
+						() => done(),
 					),
 			},
 			{
@@ -396,7 +522,7 @@ export class WebSearchSettingsSubmenu extends Container {
 				label: "Website Scope",
 				description: "限制搜索结果和网页读取的 hostname 范围",
 				currentValue: this.state.scope === "unrestricted" ? "All websites" : "Only selected websites",
-				submenu: () =>
+				submenu: (_value, done) =>
 					new ChoiceSubmenu(
 						"Website Scope",
 						"allowlist 使用精确 hostname 和子域名匹配，例如 openai.com 允许 platform.openai.com，但不允许 openai.com.attacker.example。",
@@ -407,9 +533,9 @@ export class WebSearchSettingsSubmenu extends Container {
 						this.state.scope,
 						(value) => {
 							this.commit({ ...this.state, scope: value as ResolvedWebSearchSettings["scope"] });
-							this.showRoot();
+							done();
 						},
-						() => this.showRoot(),
+						() => done(),
 					),
 			},
 			{
@@ -417,130 +543,87 @@ export class WebSearchSettingsSubmenu extends Container {
 				label: "Allowed Websites",
 				description: "输入逗号分隔的 hostname；直接 URL 也会经过此范围检查",
 				currentValue: this.state.allowedDomains.length ? this.state.allowedDomains.join(", ") : "未设置",
-				submenu: () => this.domainInput(),
+				submenu: (_value, done) => this.domainInput(done),
 			},
 			{
 				id: "parallel-pages",
 				label: "Parallel Pages",
 				description: "Agent decides 或手动限制单次最多读取的网页数",
 				currentValue: formatStrategy(this.state.parallelPages, "Pages"),
-				submenu: () => this.strategyInput("Parallel Pages", "parallelPages"),
+				submenu: (_value, done) => this.strategyInput("Parallel Pages", "parallelPages", done),
 			},
 			{
 				id: "search-rounds",
 				label: "Search Rounds",
-				description: "Agent decides 或手动限制完整调查阶段数",
+				description: "Agent decides 或手动限制每次任务的完整调查阶段数",
 				currentValue: formatStrategy(this.state.searchRounds, "Rounds"),
-				submenu: () => this.strategyInput("Search Rounds", "searchRounds"),
+				submenu: (_value, done) => this.strategyInput("Search Rounds", "searchRounds", done),
 			},
 			{
 				id: "health",
 				label: "Health",
 				description: "检查 SearXNG 引擎发现和 Crawl4AI /health",
 				currentValue: "检查",
-				submenu: () => new HealthSubmenu(this.service, this.dependencies.tui, () => this.showRoot()),
+				submenu: (_value, done) => healthPage(tui, this.service, () => done()),
 			},
 			{
 				id: "e2e-test",
 				label: "Run Web Search Test",
 				description: "真实执行固定 Query → Search → Fetch → Extraction",
 				currentValue: "运行",
-				submenu: () => new E2ETestSubmenu(this.service, this.dependencies.tui, () => this.showRoot()),
+				submenu: (_value, done) => e2eTestPage(tui, this.service, () => done()),
 			},
 		];
-		const list = new SettingsList(
-			items,
-			10,
-			getSettingsListTheme(),
-			(id, value) => {
-				if (id === "enabled") {
-					this.commit({ ...this.state, enabled: value === "On" });
-				}
-			},
-			() => this.onDone(formatSummary(this.state)),
-			{ inlineDescriptions: true },
-		);
-		this.setContent(list);
 	}
 
 	private endpointInput(
 		field: "SearXNG URL" | "Crawl4AI URL",
 		key: "searxngUrl" | "crawl4aiUrl",
-		value?: string,
+		done: () => void,
 	): Component {
 		return new ExtensionInputComponent(
 			field,
 			"例如：https://search.example 或 http://127.0.0.1:8080",
 			(input) => {
-				const next = { ...this.state, [key]: input.trim() || undefined };
-				this.commit(next);
-				this.showRoot();
+				this.commit({ ...this.state, [key]: input.trim() || undefined });
+				done();
 			},
-			() => this.showRoot(),
-			{ initialValue: value },
+			() => done(),
+			{ initialValue: this.state[key] },
 		);
 	}
 
-	private domainInput(error?: string): Component {
-		return new ExtensionInputComponent(
-			error ? `Allowed Websites（${error}）` : "Allowed Websites",
+	private domainInput(done: () => void): Component {
+		return new ValidatedInputPage(
+			this.dependencies.tui,
+			"Allowed Websites",
 			"例如：openai.com, docs.example.org",
+			this.state.allowedDomains.join(", "),
+			(input) => {
+				const parts = input.split(",").filter((part) => part.trim());
+				return parts.every((part) => normalizeAllowedDomain(part)) ? undefined : "存在无效 hostname";
+			},
 			(input) => {
 				const domains = [...new Set(input.split(",").map(normalizeAllowedDomain))].filter(
 					(domain): domain is string => Boolean(domain),
 				);
-				if (input.trim() && domains.length !== input.split(",").filter((part) => part.trim()).length) {
-					this.setContent(this.domainInput("存在无效 hostname"));
-					return;
-				}
 				this.commit({ ...this.state, allowedDomains: domains });
-				this.showRoot();
+				done();
 			},
-			() => this.showRoot(),
-			{ initialValue: this.state.allowedDomains.join(", ") },
+			() => done(),
 		);
 	}
 
-	private strategyInput(title: string, key: "parallelPages" | "searchRounds"): Component {
-		const current = this.state[key];
-		return new ChoiceSubmenu(
+	private strategyInput(title: string, key: "parallelPages" | "searchRounds", done: () => void): Component {
+		return new StrategyPage(
+			this.dependencies.tui,
 			title,
-			"Agent decides 使用内置有限安全上限；Manual 使用你输入的正整数。",
-			[
-				{ value: "agent", label: "Agent decides" },
-				{ value: "manual", label: "Manual" },
-			],
-			current.mode,
-			(value) => {
-				if (value === "agent") {
-					this.commit({ ...this.state, [key]: { mode: "agent" } });
-					this.showRoot();
-					return;
-				}
-				this.setContent(
-					new ExtensionInputComponent(
-						`${title} 数量`,
-						"输入正整数",
-						(input) => {
-							const parsed = Number(input.trim());
-							if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-								this.setContent(this.strategyInputValue(title, key, "请输入正整数"));
-								return;
-							}
-							this.commit({ ...this.state, [key]: { mode: "manual", value: parsed } });
-							this.showRoot();
-						},
-						() => this.showRoot(),
-						{ initialValue: current.value === undefined ? undefined : String(current.value) },
-					),
-				);
+			this.state[key],
+			(strategy) => {
+				this.commit({ ...this.state, [key]: strategy });
+				done();
 			},
-			() => this.showRoot(),
+			() => done(),
 		);
-	}
-
-	private strategyInputValue(title: string, key: "parallelPages" | "searchRounds", error: string): Component {
-		const component = this.strategyInput(title, key);
-		return new ContainerWithMessage(error, component);
 	}
 }

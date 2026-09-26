@@ -17,6 +17,7 @@ import {
 	isFreshnessSensitiveQuery,
 	isHostnameAllowed,
 	normalizeAllowedDomain,
+	stripTrackingParameters,
 	validatePublicHttpUrl,
 } from "./url.ts";
 
@@ -146,6 +147,21 @@ function errorForSignal(signal: AbortSignal | undefined): WebSearchError | undef
 	return undefined;
 }
 
+/** Surface the low-level network reason (ECONNREFUSED, ENOTFOUND, ...) that `fetch` wraps in `cause`. */
+function networkErrorDetail(error: unknown): string {
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+	let innermostMessage: string | undefined;
+	while (current && typeof current === "object" && !seen.has(current)) {
+		seen.add(current);
+		const code = (current as { code?: unknown }).code;
+		if (typeof code === "string" && code) return `（${code}）`;
+		if (current !== error && current instanceof Error && current.message) innermostMessage = current.message;
+		current = (current as { cause?: unknown }).cause;
+	}
+	return innermostMessage ? `（${innermostMessage.slice(0, 120)}）` : "";
+}
+
 function waitForDelay(ms: number, signal: AbortSignal | undefined): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const aborted = errorForSignal(signal);
@@ -252,7 +268,7 @@ export class WebSearchService {
 	private readonly cache: WebSearchCache;
 	private searchRound = 0;
 	private completedFetchInRound = false;
-	private engineCache: { fetchedAt: number; names: string[] } | undefined;
+	private engineCache: { endpoint: string; fetchedAt: number; names: string[] } | undefined;
 
 	constructor(options: WebSearchServiceOptions) {
 		this.options = options;
@@ -305,22 +321,34 @@ export class WebSearchService {
 		if (aborted) throw aborted;
 		const timeoutSignal = AbortSignal.timeout(WEB_SEARCH_LIMITS.requestTimeoutMs);
 		const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		// The same signal covers headers and body, so cancellation and timeout must be
+		// classified identically for both phases instead of reporting a body abort as bad data.
+		const classify = (error: unknown, fallback: WebSearchError): WebSearchError => {
+			if (signal?.aborted) return new WebSearchError("aborted", "联网操作已取消。", { cause: error });
+			if (timeoutSignal.aborted || (error as { name?: string })?.name === "TimeoutError") {
+				return new WebSearchError("timeout", `${label} 请求超时。`, { cause: error });
+			}
+			return fallback;
+		};
 		let response: Response;
 		try {
 			response = await this.fetchImpl(url, { ...init, signal: requestSignal });
 		} catch (error) {
-			if (signal?.aborted) throw new WebSearchError("aborted", "联网操作已取消。", { cause: error });
-			if (timeoutSignal.aborted) throw new WebSearchError("timeout", `${label} 请求超时。`, { cause: error });
-			if ((error as { name?: string })?.name === "TimeoutError") {
-				throw new WebSearchError("timeout", `${label} 请求超时。`, { cause: error });
-			}
-			throw new WebSearchError("unavailable", `${label} 服务不可用。`, { cause: error });
+			throw classify(
+				error,
+				new WebSearchError("unavailable", `${label} 服务不可用${networkErrorDetail(error)}。`, { cause: error }),
+			);
 		}
 		let text: string;
 		try {
 			text = await response.text();
 		} catch (error) {
-			throw new WebSearchError("invalid_response", `${label} 响应无法读取。`, { cause: error });
+			throw classify(
+				error,
+				new WebSearchError("unavailable", `${label} 响应在读取过程中中断${networkErrorDetail(error)}。`, {
+					cause: error,
+				}),
+			);
 		}
 		if (!response.ok) {
 			throw new WebSearchError("http", `${label} 返回 HTTP ${response.status}。`);
@@ -339,10 +367,15 @@ export class WebSearchService {
 
 	async getAvailableEngines(signal?: AbortSignal, forceRefresh = false): Promise<string[]> {
 		const settings = this.settings();
-		if (!forceRefresh && this.engineCache && this.now() - this.engineCache.fetchedAt < 30_000) {
+		const configUrl = normalizeEndpoint(settings.searxngUrl, "config", "SearXNG");
+		// Keyed by endpoint so switching SearXNG instances never reuses the previous instance's engines.
+		if (
+			!forceRefresh &&
+			this.engineCache?.endpoint === configUrl &&
+			this.now() - this.engineCache.fetchedAt < 30_000
+		) {
 			return [...this.engineCache.names];
 		}
-		const configUrl = normalizeEndpoint(settings.searxngUrl, "config", "SearXNG");
 		const payload = await this.requestJson(
 			configUrl,
 			{ method: "GET", headers: { Accept: "application/json" } },
@@ -360,7 +393,7 @@ export class WebSearchService {
 					.filter((name): name is string => Boolean(name)),
 			),
 		].sort((a, b) => a.localeCompare(b));
-		this.engineCache = { fetchedAt: this.now(), names };
+		this.engineCache = { endpoint: configUrl, fetchedAt: this.now(), names };
 		return [...names];
 	}
 
@@ -371,6 +404,12 @@ export class WebSearchService {
 	): Promise<{ engines?: string[]; availableEngines?: string[]; failures?: WebSearchFailure[] }> {
 		const requestedEngines = requested?.length ? requested : undefined;
 		const selectedEngines = settings.engineMode === "selected" ? settings.engines : undefined;
+		if (selectedEngines?.length === 0) {
+			throw new WebSearchError(
+				"engine_failure",
+				"Search Engines 设置为手动选择，但没有选择任何引擎。请在 /settings -> Web Search -> Search Engines 中至少选择一个。",
+			);
+		}
 		const configured = requestedEngines ?? selectedEngines;
 		if (!configured) return {};
 		const selectedSet = selectedEngines && new Set(selectedEngines.map((engine) => engine.trim().toLowerCase()));
@@ -423,6 +462,15 @@ export class WebSearchService {
 		return researchDomains === undefined || isHostnameAllowed(hostname, researchDomains);
 	}
 
+	/**
+	 * Search Rounds limit one Agent run, not the whole process lifetime. The owner
+	 * of the service calls this when a new run starts.
+	 */
+	resetSearchRounds(): void {
+		this.searchRound = 0;
+		this.completedFetchInRound = false;
+	}
+
 	private beginSearchRound(settings: ResolvedWebSearchSettings): number {
 		if (this.searchRound === 0) this.searchRound = 1;
 		else if (this.completedFetchInRound) {
@@ -432,7 +480,10 @@ export class WebSearchService {
 		const limit =
 			settings.searchRounds.mode === "manual" ? settings.searchRounds.value : WEB_SEARCH_LIMITS.maxAgentSearchRounds;
 		if (limit !== undefined && this.searchRound > limit) {
-			throw new WebSearchError("no_results", `已达到 Search Rounds 上限（${limit}）。`);
+			throw new WebSearchError(
+				"round_limit",
+				`本次任务已达到 Search Rounds 上限（${limit}）。请基于已有结果作答，或在 /settings -> Web Search 中调整上限。`,
+			);
 		}
 		return this.searchRound;
 	}
@@ -651,15 +702,13 @@ export class WebSearchService {
 		const perQuery = await mapWithConcurrency(
 			queries,
 			WEB_SEARCH_LIMITS.maxSearchConcurrency,
-			async (query) => {
+			async (query): Promise<SearchOneResponse & { requestFailure?: WebSearchFailure }> => {
 				try {
 					return await this.searchOne(query, resolvedEngines.engines, request.timeRange, signal);
 				} catch (error) {
 					if (signal?.aborted) throw error;
-					return {
-						results: [],
-						failures: [{ query, ...failureFromError(error, "unavailable", "搜索请求失败。") }],
-					};
+					const requestFailure = { query, ...failureFromError(error, "unavailable", "搜索请求失败。") };
+					return { results: [], failures: [requestFailure], requestFailure };
 				}
 			},
 			signal,
@@ -671,8 +720,18 @@ export class WebSearchService {
 			settings,
 			researchDomains,
 		);
-		if (results.length === 0 && failures.length === queries.length) {
-			throw new WebSearchError(failures[0]?.code ?? "unavailable", failures[0]?.message ?? "所有搜索请求均失败。");
+		// Only whole-request failures count here; an unresponsive engine inside a
+		// successful SearXNG response is a diagnostic, not a failed query.
+		const requestFailures = perQuery.flatMap((response) =>
+			response.requestFailure ? [response.requestFailure] : [],
+		);
+		if (results.length === 0 && requestFailures.length === queries.length) {
+			const first = requestFailures[0]!;
+			const detail =
+				queries.length > 1
+					? `所有 ${queries.length} 个搜索请求均失败；第一个错误：${first.message}`
+					: first.message;
+			throw new WebSearchError(first.code, detail);
 		}
 		const response: WebSearchResponse = {
 			results,
@@ -742,6 +801,10 @@ export class WebSearchService {
 		if (record.success === false) {
 			throw new WebSearchError("unavailable", stringValue(record.error_message) ?? "Crawl4AI 页面读取失败。");
 		}
+		// Crawl4AI can report success for an error page; the page status decides whether it is content.
+		if (typeof record.status_code === "number" && record.status_code >= 400) {
+			throw new WebSearchError("http", `目标网页返回 HTTP ${record.status_code}。`);
+		}
 		const markdown = extractMarkdown(record);
 		if (markdown === undefined) throw new WebSearchError("invalid_response", "Crawl4AI 未返回 Markdown 内容。");
 		if (!markdown) throw new WebSearchError("empty_content", "Crawl4AI 返回了空的页面正文。");
@@ -765,7 +828,9 @@ export class WebSearchService {
 		const researchDomains = this.normalizeResearchDomains(request.allowedDomains);
 		const uniqueUrls = [...new Map(request.urls.map((url) => [url, url])).values()];
 		const failures: WebSearchFailure[] = [];
-		const normalizedUrls = new Set<string>();
+		// Keyed by the canonical form for dedupe/cache, but the validated original URL is what gets
+		// crawled: canonicalization drops `www.` and tracking parameters, which can change the page.
+		const normalizedUrls = new Map<string, string>();
 		for (const input of uniqueUrls) {
 			const validation = validatePublicHttpUrl(input);
 			if (!validation.ok || !validation.url || !validation.hostname) {
@@ -776,7 +841,8 @@ export class WebSearchService {
 				failures.push({ url: input, code: "blocked", message: "URL 不在 Website Scope allowlist 中。" });
 				continue;
 			}
-			normalizedUrls.add(canonicalizeHttpUrl(validation.url));
+			const key = canonicalizeHttpUrl(validation.url);
+			if (!normalizedUrls.has(key)) normalizedUrls.set(key, stripTrackingParameters(validation.url));
 		}
 		const maxPages =
 			settings.parallelPages.mode === "manual"
@@ -793,8 +859,10 @@ export class WebSearchService {
 		const pages = await mapWithConcurrency(
 			selectedUrls,
 			WEB_SEARCH_LIMITS.maxFetchConcurrency,
-			async (url) => {
-				const cacheKey = sha256(JSON.stringify({ endpoint: settings.crawl4aiUrl, url, researchDomains }));
+			async ([canonicalUrl, url]) => {
+				const cacheKey = sha256(
+					JSON.stringify({ endpoint: settings.crawl4aiUrl, url: canonicalUrl, researchDomains }),
+				);
 				const cached = await this.cache.get<WebFetchedPage>("fetch", cacheKey, settings.fetchCacheTtlMs, fresh);
 				if (cached && this.isCachedPageAllowed(cached, this.settings(), researchDomains))
 					return { ...cached, cacheHit: true };
@@ -822,7 +890,7 @@ export class WebSearchService {
 		searxng: { ok: boolean; message: string; engines?: string[] };
 		crawl4ai: { ok: boolean; message: string };
 	}> {
-		const searxng = await (async () => {
+		const checkSearxng = async (): Promise<{ ok: boolean; message: string; engines?: string[] }> => {
 			try {
 				const engines = await this.getAvailableEngines(signal, true);
 				return { ok: true, message: `可用引擎 ${engines.length} 个`, engines };
@@ -830,8 +898,8 @@ export class WebSearchService {
 				const failure = failureFromError(error, "unavailable", "SearXNG 检查失败。");
 				return { ok: false, message: failure.message };
 			}
-		})();
-		const crawl4ai = await (async () => {
+		};
+		const checkCrawl4ai = async (): Promise<{ ok: boolean; message: string }> => {
 			try {
 				const healthUrl = normalizeEndpoint(this.settings().crawl4aiUrl, "health", "Crawl4AI");
 				await this.requestJson(
@@ -845,12 +913,16 @@ export class WebSearchService {
 				const failure = failureFromError(error, "unavailable", "Crawl4AI 检查失败。");
 				return { ok: false, message: failure.message };
 			}
-		})();
+		};
+		// Independent services are checked together so one slow endpoint does not double the wait.
+		const [searxng, crawl4ai] = await Promise.all([checkSearxng(), checkCrawl4ai()]);
 		return { searxng, crawl4ai };
 	}
 
 	/** Run the complete search -> fetch -> extraction -> evidence chunk smoke path for the Settings UI. */
 	async runE2ETest(signal?: AbortSignal): Promise<WebSearchE2EResult> {
+		// The smoke test is a standalone run and must not consume or be blocked by Agent rounds.
+		this.resetSearchRounds();
 		const startedAt = this.now();
 		const diagnostics: WebSearchFailure[] = [];
 		let searchPhase: WebSearchE2EPhase = { ok: false, durationMs: 0, message: "未执行" };

@@ -100,17 +100,31 @@ export function validatePublicHttpUrl(input: string): UrlValidationResult {
 	return { ok: true, url: parsed.toString(), hostname: parsed.hostname.toLowerCase().replace(/\.$/u, "") };
 }
 
+function deleteTrackingParameters(parsed: URL): void {
+	for (const key of [...parsed.searchParams.keys()]) {
+		if (TRACKING_QUERY_PARAMETERS.has(key.toLowerCase()) || key.toLowerCase().startsWith("utm_")) {
+			parsed.searchParams.delete(key);
+		}
+	}
+}
+
+/**
+ * The URL that is actually requested: tracking parameters removed, but host,
+ * path and remaining query kept exactly, since those can select a different page.
+ */
+export function stripTrackingParameters(input: string): string {
+	const parsed = new URL(input);
+	deleteTrackingParameters(parsed);
+	return parsed.toString();
+}
+
 /** Stable key used for deduplication and the session-scoped response cache. */
 export function canonicalizeHttpUrl(input: string): string {
 	const validation = validatePublicHttpUrl(input);
 	if (!validation.ok || !validation.url) throw new Error(validation.message ?? "URL 无效。");
 	const parsed = new URL(validation.url);
 	if (parsed.hostname.startsWith("www.")) parsed.hostname = parsed.hostname.slice(4);
-	for (const key of [...parsed.searchParams.keys()]) {
-		if (TRACKING_QUERY_PARAMETERS.has(key.toLowerCase()) || key.toLowerCase().startsWith("utm_")) {
-			parsed.searchParams.delete(key);
-		}
-	}
+	deleteTrackingParameters(parsed);
 	const sortedParameters = [...parsed.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b));
 	parsed.search = "";
 	for (const [key, value] of sortedParameters) parsed.searchParams.append(key, value);
