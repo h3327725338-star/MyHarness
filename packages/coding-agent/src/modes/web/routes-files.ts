@@ -1,6 +1,6 @@
 /** Web API routes for the workspace file browser and for change/diff review. */
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
@@ -341,26 +341,63 @@ function runInfo(record: import("./changes.ts").RunChangeRecord) {
 }
 
 /** Folder picker for "Add workspace": lists sub-folders only (never file names or contents). */
-export function registerFolderBrowser(server: WebHttpServer, host: WebHost): void {
-	server.route("GET", "/api/fs/browse", ({ url }) => {
-		const requested = url.searchParams.get("path") ?? "";
-		if (!requested) {
-			if (process.platform === "win32") {
-				const drives: Array<{ name: string; path: string }> = [];
-				for (let code = 65; code <= 90; code++) {
-					const letter = String.fromCharCode(code);
-					try {
-						if (existsSync(`${letter}:\\`)) drives.push({ name: `${letter}:`, path: `${letter}:\\` });
-					} catch {
-						// inaccessible drive: skip
-					}
-				}
-				return { path: "", parent: null, dirs: drives, home: process.env.USERPROFILE ?? null };
-			}
-			return browse("/", host);
+interface FolderPlace {
+	id: string;
+	name: string;
+	path: string;
+}
+
+const SKIPPED_FOLDER_NAMES = new Set(["$RECYCLE.BIN", "System Volume Information", "Recovery", "Config.Msi"]);
+
+function isDirectory(target: string): boolean {
+	try {
+		return statSync(target).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** Windows drive roots that exist right now. */
+function listDrives(): FolderPlace[] {
+	if (process.platform !== "win32") return [{ id: "root", name: "/", path: "/" }];
+	const drives: FolderPlace[] = [];
+	for (let code = 65; code <= 90; code++) {
+		const letter = String.fromCharCode(code);
+		try {
+			const root = `${letter}:${path.sep}`;
+			if (existsSync(root)) drives.push({ id: `drive-${letter}`, name: `${letter}:`, path: root });
+		} catch {
+			// inaccessible drive: skip
 		}
-		return browse(requested, host);
-	});
+	}
+	return drives;
+}
+
+/** The usual starting folders of a desktop user (Desktop, Documents, Downloads … and the home folder). */
+function listPlaces(): FolderPlace[] {
+	const home = process.env.USERPROFILE ?? process.env.HOME ?? undefined;
+	const oneDrive = process.env.OneDrive ?? process.env.OneDriveConsumer ?? undefined;
+	const places: FolderPlace[] = [];
+	const seen = new Set<string>();
+	const add = (id: string, name: string, candidates: Array<string | undefined>) => {
+		for (const candidate of candidates) {
+			if (!candidate || !isDirectory(candidate)) continue;
+			const key = path.resolve(candidate).toLowerCase();
+			if (seen.has(key)) return;
+			seen.add(key);
+			places.push({ id, name, path: path.resolve(candidate) });
+			return;
+		}
+	};
+	if (home) add("home", path.basename(home), [home]);
+	for (const [id, name] of [
+		["desktop", "Desktop"],
+		["documents", "Documents"],
+		["downloads", "Downloads"],
+	] as const) {
+		add(id, name, [oneDrive && path.join(oneDrive, name), home && path.join(home, name)]);
+	}
+	return places;
 }
 
 function browse(target: string, host: WebHost) {
@@ -373,14 +410,70 @@ function browse(target: string, host: WebHost) {
 		throw new HttpError(403, error instanceof Error ? error.message : "Cannot read folder");
 	}
 	const parent = path.dirname(absolute);
+	const registered = new Set(
+		host.workspaceStore.list().map((workspace) => path.resolve(workspace.rootPath).toLowerCase()),
+	);
 	return {
 		path: absolute,
 		parent: parent === absolute ? "" : parent,
 		dirs: names
-			.filter((entry) => entry.isDirectory() && !entry.name.startsWith("$"))
-			.map((entry) => ({ name: entry.name, path: path.join(absolute, entry.name) }))
-			.sort((a, b) => a.name.localeCompare(b.name)),
-		home: process.env.USERPROFILE ?? process.env.HOME ?? null,
+			.filter((entry) => entry.isDirectory() && !SKIPPED_FOLDER_NAMES.has(entry.name))
+			.map((entry) => {
+				const full = path.join(absolute, entry.name);
+				return {
+					name: entry.name,
+					path: full,
+					hidden: entry.name.startsWith("."),
+					workspace: registered.has(full.toLowerCase()),
+				};
+			})
+			.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })),
+		workspace: registered.has(absolute.toLowerCase()),
 		current: host.session.sessionManager.getCwd(),
 	};
+}
+
+export function registerFolderBrowser(server: WebHttpServer, host: WebHost): void {
+	server.route("GET", "/api/fs/places", () => ({
+		places: listPlaces(),
+		drives: listDrives(),
+		current: host.session.sessionManager.getCwd(),
+		separator: path.sep,
+	}));
+
+	server.route("GET", "/api/fs/browse", ({ url }) => {
+		const requested = url.searchParams.get("path") ?? "";
+		if (!requested) {
+			// "This PC": the drives (or the file system root) instead of a folder.
+			const drives = listDrives();
+			return {
+				path: "",
+				parent: null,
+				dirs: drives.map((drive) => ({ ...drive, hidden: false, workspace: false })),
+				workspace: false,
+			};
+		}
+		return browse(requested, host);
+	});
+
+	server.route("POST", "/api/fs/mkdir", ({ body }) => {
+		const payload = (body ?? {}) as { parent?: unknown; name?: unknown };
+		if (typeof payload.parent !== "string" || typeof payload.name !== "string") {
+			throw new HttpError(400, '"parent" and "name" must be strings');
+		}
+		const name = payload.name.trim();
+		if (!name || name === "." || name === ".." || /[\\/:*?"<>|]/.test(name) || /[. ]$/.test(name)) {
+			throw new HttpError(400, "That is not a valid folder name.");
+		}
+		const parent = path.resolve(payload.parent);
+		if (!isDirectory(parent)) throw new HttpError(404, "Not a folder");
+		const created = path.join(parent, name);
+		if (existsSync(created)) throw new HttpError(409, "A file or folder with that name already exists.");
+		try {
+			mkdirSync(created);
+		} catch (error) {
+			throw new HttpError(403, error instanceof Error ? error.message : "Cannot create the folder");
+		}
+		return { path: created };
+	});
 }

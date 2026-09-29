@@ -11,8 +11,8 @@ import {
 	createAgentSessionServices,
 } from "../src/agent/runtime/session-runtime.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
-import { WebHost } from "../src/modes/web/host.ts";
 import { WebHttpServer } from "../src/modes/web/http-server.ts";
+import { WebHostHub } from "../src/modes/web/hub.ts";
 import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
 import { registerFileRoutes } from "../src/modes/web/routes-files.ts";
 import { registerGitRoutes } from "../src/modes/web/routes-git.ts";
@@ -27,8 +27,8 @@ interface Fixture {
 	port: number;
 	project: string;
 	events: Array<{ event: string; data: any }>;
-	get(path: string): Promise<any>;
-	post(path: string, body?: unknown): Promise<any>;
+	get(path: string, slot?: string): Promise<any>;
+	post(path: string, body?: unknown, slot?: string): Promise<any>;
 	waitFor(event: string, predicate?: (data: any) => boolean, timeoutMs?: number): Promise<any>;
 	faux: ReturnType<typeof registerFauxProvider>;
 }
@@ -118,14 +118,15 @@ describe("Web host (real runtime with a faux provider)", () => {
 
 		const server = new WebHttpServer();
 		const dialogs = new WebDialogBridge();
-		const host = new WebHost({ runtimeHost, server, dialogs, version: "test" });
+		const hub = new WebHostHub({ server, version: "test", onShutdown: () => {} });
+		const host = hub.host;
 		registerCoreRoutes(server, host);
-		registerSessionRoutes(server, host);
+		registerSessionRoutes(server, host, hub);
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
 		registerProviderRoutes(server, host);
-		await host.start();
+		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());
 
@@ -157,10 +158,14 @@ describe("Web host (real runtime with a faux provider)", () => {
 			sse.destroy();
 		});
 
-		const call = async (method: string, path: string, body?: unknown) => {
+		const call = async (method: string, path: string, body?: unknown, slot?: string) => {
 			const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
 				method,
-				headers: { "x-myharness-web": "1", "content-type": "application/json" },
+				headers: {
+					"x-myharness-web": "1",
+					"content-type": "application/json",
+					...(slot ? { "x-myharness-slot": slot } : {}),
+				},
 				body: body === undefined ? undefined : JSON.stringify(body),
 			});
 			const json = (await response.json()) as any;
@@ -172,8 +177,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 			project,
 			events,
 			faux,
-			get: (path) => call("GET", path),
-			post: (path, body) => call("POST", path, body ?? {}),
+			get: (path, slot) => call("GET", path, undefined, slot),
+			post: (path, body, slot) => call("POST", path, body ?? {}, slot),
 			waitFor: (event, predicate = () => true, timeoutMs = 15_000) =>
 				new Promise((resolve, reject) => {
 					const find = () => events.find((entry) => entry.event === event && predicate(entry.data));
@@ -305,11 +310,61 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(tree.rows.some((row: any) => row.kind === "user")).toBe(true);
 		await fx.post("/api/sessions/rename", { path: before.session.file, title: "Renamed chat" });
 		expect((await fx.get("/api/state")).session.name).toBe("Renamed chat");
-		await fx.post("/api/sessions/new", {});
-		await fx.waitFor("session_replaced");
-		const after = await fx.get("/api/state");
+		// A new chat opens next to the existing one; the first chat keeps its content and slot.
+		const created = await fx.post("/api/sessions/new", {});
+		expect(created.created).toBe(true);
+		expect(created.slot).not.toBe(before.slot);
+		const after = await fx.get("/api/state", created.slot);
 		expect(after.session.id).not.toBe(before.session.id);
-		expect((await fx.get("/api/transcript")).items).toHaveLength(0);
+		expect((await fx.get("/api/transcript", created.slot)).items).toHaveLength(0);
+		expect((await fx.get("/api/transcript", before.slot)).items.length).toBeGreaterThan(0);
+		// An untouched empty chat is reused instead of piling up more empty ones.
+		expect((await fx.post("/api/sessions/new", {}, created.slot)).slot).toBe(created.slot);
+		// Opening a chat that is already loaded returns its slot instead of loading it twice.
+		const reopened = await fx.post("/api/sessions/open", { path: before.session.file }, created.slot);
+		expect(reopened).toEqual({ slot: before.slot, created: false });
+	});
+
+	it("runs agents in several sessions at the same time without mixing their events", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("slow answer")]);
+			},
+		]);
+		void fx.post("/api/prompt", { text: "slow task" }, first.slot);
+		await fx.waitFor("agent_start", (data) => data.slot === first.slot);
+		expect((await fx.get("/api/state", first.slot)).active).toBe(true);
+		const other = await fx.post("/api/sessions/new", {}, first.slot);
+		expect(other.slot).not.toBe(first.slot);
+		fx.faux.appendResponses([fauxAssistantMessage([fauxText("fast answer")])]);
+		await fx.post("/api/prompt", { text: "fast task" }, other.slot);
+		await fx.waitFor("run_finished", (data) => data.slot === other.slot);
+		// The slow session is still running while the second one has already finished.
+		expect((await fx.get("/api/state", first.slot)).active).toBe(true);
+		expect((await fx.get("/api/state", other.slot)).active).toBe(false);
+		release();
+		await fx.waitFor("run_finished", (data) => data.slot === first.slot);
+		const texts = (slot: string) =>
+			fx
+				.get("/api/transcript", slot)
+				.then((t: any) =>
+					t.items.flatMap((item: any) =>
+						item.kind === "assistant"
+							? item.blocks.filter((b: any) => b.type === "text").map((b: any) => b.text)
+							: [],
+					),
+				);
+		expect(await texts(first.slot)).toEqual(["slow answer"]);
+		expect(await texts(other.slot)).toEqual(["fast answer"]);
+		const slots = (await fx.get("/api/slots")).slots;
+		expect(slots.map((s: any) => s.slot).sort()).toEqual([first.slot, other.slot].sort());
 	});
 
 	it("runs direct shell commands and streams their output", async () => {

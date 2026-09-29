@@ -825,6 +825,33 @@ export class AgentSessionRuntime {
 		return { cancelled: false };
 	}
 
+	/**
+	 * Create an independent runtime (its own session and cwd-bound services) from the same
+	 * factory. The current runtime is not touched, so hosts that show several sessions at once
+	 * (the Web UI) can keep one runtime per open session and let them run concurrently.
+	 */
+	async createSibling(options: {
+		sessionManager: SessionManager;
+		sessionStartEvent: SessionStartEvent;
+		projectTrustContext?: ProjectTrustContext;
+	}): Promise<AgentSessionRuntime> {
+		assertSessionCwdExists(options.sessionManager, this.cwd);
+		const result = await this.createRuntime({
+			cwd: options.sessionManager.getCwd(),
+			agentDir: this.services.agentDir,
+			sessionManager: options.sessionManager,
+			sessionStartEvent: options.sessionStartEvent,
+			projectTrustContext: options.projectTrustContext,
+		});
+		return new AgentSessionRuntime(
+			result.session,
+			result.services,
+			this.createRuntime,
+			result.diagnostics,
+			result.modelFallbackMessage,
+		);
+	}
+
 	async dispose(): Promise<void> {
 		if (this.disposePromiseValue) return this.disposePromiseValue;
 		this.disposePromiseValue = this.disposeInternal();

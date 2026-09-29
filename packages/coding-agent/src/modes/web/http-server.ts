@@ -49,6 +49,12 @@ export interface RequestContext {
 
 export type RouteHandler = (ctx: RequestContext) => Promise<unknown> | unknown;
 
+/** Wraps every API route call, e.g. to bind the request to one of several sessions. */
+export type RequestScope = (
+	request: { req: IncomingMessage; url: URL },
+	run: () => Promise<unknown> | unknown,
+) => Promise<unknown> | unknown;
+
 interface Route {
 	method: string;
 	pattern: RegExp;
@@ -102,6 +108,11 @@ export class WebHttpServer {
 	private indexFile: string | undefined;
 	onSseConnect: ((client: SseClient) => void) | undefined;
 	onSseDisconnect: ((client: SseClient) => void) | undefined;
+	private requestScope: RequestScope | undefined;
+
+	setRequestScope(scope: RequestScope): void {
+		this.requestScope = scope;
+	}
 
 	route(method: "GET" | "POST" | "PUT" | "DELETE", pattern: string, handler: RouteHandler): void {
 		const { regex, keys } = compileRoute(pattern);
@@ -226,7 +237,10 @@ export class WebHttpServer {
 					params[key] = decodeURIComponent(match[index + 1] ?? "");
 				});
 				const body = method === "GET" ? undefined : await this.readJson(req);
-				const result = await route.handler({ method, url, req, res, body, params });
+				const ctx: RequestContext = { method, url, req, res, body, params };
+				const result = this.requestScope
+					? await this.requestScope({ req, url }, () => route.handler(ctx))
+					: await route.handler(ctx);
 				if (res.writableEnded || res.headersSent) return;
 				this.writeJson(res, 200, result === undefined ? { ok: true } : result);
 				return;

@@ -1,4 +1,18 @@
 // Formatting helpers and small pure utilities.
+import { N_, count, t } from "./i18n.js";
+import { getLang } from "./lang.js";
+
+/** Reasoning-effort levels: the level name (translated) and a one-line hint. */
+const EFFORT_NAME = { off: N_("off"), minimal: N_("minimal"), low: N_("low"), medium: N_("medium"), high: N_("high"), xhigh: N_("xhigh"), max: N_("max") };
+const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal"), low: N_("Light"), medium: N_("Balanced"), high: N_("Deep"), xhigh: N_("Very deep"), max: N_("Maximum") };
+export const effortName = (level) => (EFFORT_NAME[level] ? t(EFFORT_NAME[level]) : level);
+export const effortHint = (level) => (EFFORT_HINT[level] ? t(EFFORT_HINT[level]) : "");
+
+/** Title of a saved chat: its name, else the first message. The storage layer's "(no messages)" placeholder counts as no message. */
+export function chatTitle(info) {
+	const first = info.firstMessage === "(no messages)" ? "" : info.firstMessage || "";
+	return info.name || clip(first.replace(/\s+/g, " ").trim(), 80) || t("Untitled chat");
+}
 
 export function normPath(p) {
 	return String(p || "").replace(/\\/g, "/");
@@ -27,12 +41,11 @@ export function shortPath(p, cwd) {
 
 export function fmtDuration(ms) {
 	const total = Math.max(0, Math.round(ms / 1000));
-	if (total < 60) return `${total}s`;
+	if (total < 60) return t("{s}s", { s: total });
 	const m = Math.floor(total / 60);
 	const s = total % 60;
-	if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
-	const hrs = Math.floor(m / 60);
-	return `${hrs}h ${m % 60}m`;
+	if (m < 60) return s ? t("{m}m {s}s", { m, s }) : t("{m}m", { m });
+	return t("{h}h {m}m", { h: Math.floor(m / 60), m: m % 60 });
 }
 
 export function fmtShortDuration(ms) {
@@ -41,24 +54,25 @@ export function fmtShortDuration(ms) {
 	return fmtDuration(ms);
 }
 
+/** Compact "how long ago" for narrow columns: 5m, 2h, 3d. */
 export function relTime(ts) {
 	if (!ts) return "";
 	const diff = Date.now() - ts;
 	const min = Math.floor(diff / 60000);
-	if (min < 1) return "now";
-	if (min < 60) return `${min}m`;
+	if (min < 1) return t("now");
+	if (min < 60) return t("{n}m", { n: min });
 	const hr = Math.floor(diff / 3600000);
-	if (hr < 24) return `${hr}h`;
+	if (hr < 24) return t("{n}h", { n: hr });
 	const day = Math.floor(diff / 86400000);
-	if (day < 7) return `${day}d`;
-	if (day < 30) return `${Math.floor(day / 7)}w`;
-	if (day < 365) return `${Math.floor(day / 30)}mo`;
-	return `${Math.floor(day / 365)}y`;
+	if (day < 7) return t("{n}d", { n: day });
+	if (day < 30) return t("{n}w", { n: Math.floor(day / 7) });
+	if (day < 365) return t("{n}mo", { n: Math.floor(day / 30) });
+	return t("{n}y", { n: Math.floor(day / 365) });
 }
 
 export function fmtDateTime(ts) {
 	if (!ts) return "";
-	return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+	return new Date(ts).toLocaleString(getLang(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export function fmtTokens(n) {
@@ -79,8 +93,9 @@ export function fmtCost(v) {
 	return v < 0.01 ? `<$0.01` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
+/** A counted noun: "3 files" in English, with a measure word in Chinese (see i18n.js count). */
 export function plural(n, one, many) {
-	return `${n} ${n === 1 ? one : many || `${one}s`}`;
+	return count(n, one, many);
 }
 
 export function clip(text, n) {
@@ -104,6 +119,30 @@ export function safeJson(value, space = 2) {
 	} catch {
 		return String(value);
 	}
+}
+
+/**
+ * Readable form of structured data (tool arguments, result details). JSON.stringify would show every line break inside
+ * a string as a literal "\n", which makes commands, file contents and diffs unreadable; here multi-line text keeps its
+ * real line breaks and each value sits under its own key.
+ */
+export function formatData(value, depth = 0) {
+	const pad = "  ".repeat(depth);
+	const scalar = (v) => (v === null ? "null" : v === undefined ? "" : typeof v === "string" ? (v === "" ? '""' : v) : String(v));
+	const block = (text, indent) => text.replace(/\r\n?/g, "\n").split("\n").map((line) => `${indent}${line}`).join("\n");
+	if (value === null || typeof value !== "object") {
+		return typeof value === "string" && depth === 0 ? value : `${pad}${scalar(value)}`;
+	}
+	const entries = Array.isArray(value) ? value.map((v, i) => [i, v]) : Object.entries(value);
+	if (!entries.length) return `${pad}${Array.isArray(value) ? "[]" : "{}"}`;
+	return entries
+		.map(([key, v]) => {
+			const label = Array.isArray(value) ? "-" : `${key}:`;
+			if (typeof v === "string" && /[\r\n]/.test(v)) return `${pad}${label}${Array.isArray(value) ? "" : " |"}\n${block(v, `${pad}  `)}`;
+			if (v !== null && typeof v === "object") return Object.keys(v).length ? `${pad}${label}\n${formatData(v, depth + 1)}` : `${pad}${label} ${Array.isArray(v) ? "[]" : "{}"}`;
+			return `${pad}${label} ${scalar(v)}`;
+		})
+		.join("\n");
 }
 
 // ---- ANSI (SGR) -> spans -----------------------------------------------------------------

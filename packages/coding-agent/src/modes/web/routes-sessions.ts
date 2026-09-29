@@ -11,10 +11,12 @@ import {
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
+import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
 import type { SessionEntry, SessionTreeNode } from "../../session/types.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import type { WebHostHub } from "./hub.ts";
 
 function asObject(body: unknown): Record<string, unknown> {
 	if (body && typeof body === "object" && !Array.isArray(body)) return body as Record<string, unknown>;
@@ -107,12 +109,13 @@ function flattenTree(nodes: SessionTreeNode[], pathIds: Set<string>, leafId: str
 	return rows;
 }
 
-export function registerSessionRoutes(server: WebHttpServer, host: WebHost): void {
+export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub: WebHostHub): void {
 	const sessionDir = () =>
 		host.session.sessionManager.usesDefaultSessionDir() ? undefined : host.session.sessionManager.getSessionDir();
 	const useCase = new WorkspaceSessionUseCase({
 		getSessionDir: sessionDir,
-		getCurrentSessionPath: () => host.session.sessionFile,
+		// Deleting is handled by this file (it is aware of every open session); the use case only lists.
+		getCurrentSessionPath: () => undefined,
 		isSessionIdle: () => host.session.isIdle,
 		newSession: () => host.runtimeHost.newSession(),
 		switchWorkspace: (cwd) =>
@@ -128,6 +131,8 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost): voi
 			throw new HttpError(409, `Cannot ${what} while a task is running.`);
 		}
 	};
+
+	server.route("GET", "/api/slots", () => ({ slots: hub.statuses() }));
 
 	server.route("GET", "/api/workspaces", () => {
 		const cwd = host.session.sessionManager.getCwd();
@@ -190,62 +195,78 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost): voi
 		return { ok: true };
 	});
 
+	// Neither route touches the session the request came from: it keeps running in its own slot.
 	server.route("POST", "/api/sessions/new", async ({ body }) => {
-		requireIdle("start a new session");
 		const rootPath =
 			typeof asObject(body ?? {}).rootPath === "string" ? (asObject(body).rootPath as string) : undefined;
-		const cwd = host.session.sessionManager.getCwd();
-		const error = rootPath
-			? await useCase.createSessionInWorkspace(rootPath, cwd)
-			: await host.runtimeHost.newSession().then((result) => (result.cancelled ? "Cancelled." : undefined));
-		if (error) throw new HttpError(400, error);
-		return { ok: true };
+		return hub.newSession(host, rootPath);
 	});
 
 	server.route("POST", "/api/sessions/open", async ({ body }) => {
-		requireIdle("switch sessions");
 		const path = asString(asObject(body).path, "path");
 		const cwdOverride =
 			typeof asObject(body).cwdOverride === "string" ? (asObject(body).cwdOverride as string) : undefined;
 		try {
-			const result = await host.runtimeHost.switchSession(path, {
-				cwdOverride,
-				projectTrustContextFactory: (cwd) => host.createProjectTrustContext(cwd),
-			});
-			return { cancelled: result.cancelled };
+			return await hub.openSession(host, path, cwdOverride);
 		} catch (error) {
-			if (error instanceof MissingSessionCwdError) {
-				throw new HttpError(409, `${error.message}`);
-			}
+			if (error instanceof MissingSessionCwdError) throw new HttpError(409, `${error.message}`);
+			if (error instanceof HttpError) throw error;
 			throw new HttpError(500, error instanceof Error ? error.message : String(error));
 		}
 	});
 
+	/**
+	 * A session that is open in a slot must be released before its file is deleted. A running one is refused.
+	 * The slot the request came from stays alive with a fresh chat, so the browser always has a session to show.
+	 */
+	const releaseSessionSlots = async (path: string): Promise<void> => {
+		const showing = hub.slotsShowing(path);
+		for (const slot of showing) {
+			if (!slot.session.isIdle || slot.completionActive) {
+				throw new HttpError(409, "A running chat cannot be deleted. Stop it first.");
+			}
+		}
+		for (const slot of showing) {
+			if (slot === host || hub.all().length === 1) {
+				const result = await slot.runtimeHost.newSession();
+				if (result.cancelled) throw new HttpError(409, "Cancelled.");
+			} else {
+				await hub.closeSlot(slot);
+			}
+		}
+	};
+
 	server.route("POST", "/api/sessions/delete", async ({ body }) => {
 		const path = asString(asObject(body).path, "path");
-		const error = await useCase.deleteSession(path);
-		if (error) throw new HttpError(409, error);
+		await releaseSessionSlots(path);
+		const deleted = await deleteSessionFile(path);
+		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
 		return { ok: true };
 	});
 
 	server.route("POST", "/api/sessions/clear", async ({ body }) => {
 		const rootPath = asString(asObject(body).rootPath, "rootPath");
-		const error = await useCase.clearSessions(rootPath);
-		if (error) throw new HttpError(409, error);
+		const sessions = await useCase.listSessions(rootPath);
+		for (const session of sessions) await releaseSessionSlots(session.path);
+		for (const session of sessions) {
+			const deleted = await deleteSessionFile(session.path);
+			if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
+		}
 		return { ok: true };
 	});
 
-	const isCurrent = (path: string) =>
-		host.session.sessionFile !== undefined && pathIdentityKey(path) === pathIdentityKey(host.session.sessionFile);
+	/** The slot that has this session open, if any: its runtime owns the file while it is loaded. */
+	const openSlot = (path: string): WebHost | undefined => hub.slotsShowing(path)[0];
 
 	const applyTitle = (path: string, rawTitle: string, manager?: SessionManager): string => {
 		const title = normalizeConversationTitle(rawTitle);
 		const validation = validateConversationTitle(title);
 		if (validation) throw new HttpError(400, validation);
-		if (isCurrent(path)) {
-			if (!host.session.isIdle)
+		const owner = openSlot(path);
+		if (owner) {
+			if (!owner.session.isIdle)
 				throw new HttpError(409, "The title cannot be changed while the session is running.");
-			host.session.setSessionName(title);
+			owner.session.setSessionName(title);
 		} else {
 			(manager ?? SessionManager.open(path)).appendSessionInfo(title);
 		}
@@ -264,10 +285,10 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost): voi
 		const existing = activeRenames.get(key);
 		if (existing) return existing;
 		const operation = (async () => {
-			const current = isCurrent(path);
-			if (current && !host.session.isIdle)
+			const owner = openSlot(path);
+			if (owner && !owner.session.isIdle)
 				throw new HttpError(409, "The title cannot be generated while the session is running.");
-			const manager = current ? host.session.sessionManager : SessionManager.open(path);
+			const manager = owner ? owner.session.sessionManager : SessionManager.open(path);
 			const result = await generateConversationTitle({
 				sessionManager: manager,
 				modelRuntime: host.session.modelRuntime,

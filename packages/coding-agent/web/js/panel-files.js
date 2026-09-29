@@ -5,6 +5,7 @@ import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
 import { basename, debounce, dirname, fmtBytes } from "./util.js";
+import { t } from "./i18n.js";
 
 const ST = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 
@@ -19,8 +20,8 @@ function TreeNode({ entry, depth, expanded, onToggle, children, statusMap, taskM
 			${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span style="width:13px" />`}
 			<${Icon} name=${isDir ? (expanded ? "folderOpen" : "folder") : "file"} size=${14} class=${isDir ? "c-folder" : "c-dim"} />
 			<span class="truncate grow">${entry.name}</span>
-			${task ? html`<span class="dot accent" title="Changed by the last task" />` : null}
-			${status ? html`<span class=${`st st-${status}`} title=${`Uncommitted: ${status}`}>${ST[status]}</span>` : null}
+			${task ? html`<span class="dot accent" title=${t("Changed by the last task")} />` : null}
+			${status ? html`<span class=${`st st-${status}`} title=${t("Uncommitted: {status}", { status: t(status) })}>${ST[status]}</span>` : null}
 		</div>
 		${isDir && expanded ? children : null}
 	</div>`;
@@ -127,15 +128,15 @@ export function FilesPanel() {
 	return html`<div class="files-panel">
 		<div class=${`files-tree ${viewing ? "hidden" : ""}`}>
 			<div class="panel-toolbar">
-				<div class="pop-search grow"><${Icon} name="search" size=${14} /><input placeholder="Find file…" value=${query} onInput=${(e) => setQuery(e.target.value)} /></div>
-				<button class=${`icon-btn sm ${showIgnored ? "active" : ""}`} title="Show ignored files" aria-pressed=${showIgnored} onClick=${() => setShowIgnored(!showIgnored)}><${Icon} name="eye" size=${15} /></button>
-				<button class="icon-btn sm" title="Reload" aria-label="Reload tree" onClick=${() => (loadDir(""), Object.keys(expanded).forEach((d) => expanded[d] && loadDir(d)), loadStatus())}><${Icon} name="refresh" size=${15} /></button>
+				<div class="pop-search grow"><${Icon} name="search" size=${14} /><input placeholder=${t("Find file…")} value=${query} onInput=${(e) => setQuery(e.target.value)} /></div>
+				<button class=${`icon-btn sm ${showIgnored ? "active" : ""}`} title=${t("Show ignored files")} aria-pressed=${showIgnored} onClick=${() => setShowIgnored(!showIgnored)}><${Icon} name="eye" size=${15} /></button>
+				<button class="icon-btn sm" title=${t("Reload")} aria-label=${t("Reload tree")} onClick=${() => (loadDir(""), Object.keys(expanded).forEach((d) => expanded[d] && loadDir(d)), loadStatus())}><${Icon} name="refresh" size=${15} /></button>
 			</div>
 			<div class="panel-scroll" role="tree">
 				${results
 					? results.length
 						? results.map((p) => html`<div class="tree-row" key=${p} onClick=${() => open(p)} role="treeitem" tabindex="0" onKeyDown=${(e) => e.key === "Enter" && open(p)}><${Icon} name="file" size=${14} class="c-dim" /><span class="truncate"><strong>${basename(p)}</strong> <span class="dim">${dirname(p)}</span></span></div>`)
-						: html`<div class="empty">No matching files</div>`
+						: html`<div class="empty">${t("No matching files")}</div>`
 					: renderDir("", 0)}
 				${!results && !tree[""] && !error ? html`<div class="empty"><${Spinner} /></div>` : null}
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
@@ -161,16 +162,16 @@ function FileViewer({ viewing, file, error, onBack, hasDiff }) {
 	}, [file, viewing.line]);
 	return html`<div class="file-viewer">
 		<div class="panel-toolbar">
-			<button class="icon-btn sm" onClick=${onBack} title="Back to files" aria-label="Back to files"><${Icon} name="chevronLeft" size=${16} /></button>
+			<button class="icon-btn sm" onClick=${onBack} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>
 			<span class="truncate grow" title=${path}><span class="dim">${dirname(path)}${dirname(path) ? "/" : ""}</span><strong>${basename(path)}</strong></span>
 			${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
-			<${CopyButton} text=${path} label="Copy path" />
-			<button class="icon-btn sm" title="Mention in the prompt (@)" aria-label="Mention in prompt" onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
-			${hasDiff ? html`<button class="btn sm" onClick=${() => actions.openChanges({ path })}>View diff</button>` : null}
+			<${CopyButton} text=${path} label=${t("Copy path")} />
+			<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
+			${hasDiff ? html`<button class="btn sm" onClick=${() => actions.openChanges({ path })}>${t("View diff")}</button>` : null}
 		</div>
 		<div class="panel-scroll code-view">
-			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">Binary file (${fmtBytes(file.size)}) — no preview.</div>` : file.kind === "large" ? html`<div class="empty">File is too large to preview (${fmtBytes(file.size)}).</div>` : html`
-				${file.truncated ? html`<div class="notice warn">Showing the first ${fmtBytes(file.content.length)} of ${fmtBytes(file.size)}.</div>` : null}
+			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</div>` : file.kind === "large" ? html`<div class="empty">${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</div>` : html`
+				${file.truncated ? html`<div class="notice warn">${t("Showing the first {fmtBytes} of {fmtBytes2}.", { fmtBytes: fmtBytes(file.content.length), fmtBytes2: fmtBytes(file.size) })}</div>` : null}
 				<div class="code-lines mono">${lines.map((line, i) => html`<div class=${`cl ${viewing.line === i + 1 ? "target" : ""}`} key=${i} ref=${viewing.line === i + 1 ? targetRef : null}><span class="cl-no">${i + 1}</span>${line.html !== null ? html`<span class="cl-text hljs" dangerouslySetInnerHTML=${{ __html: line.html || " " }} />` : html`<span class="cl-text">${line.text || " "}</span>`}</div>`)}</div>`}
 		</div>
 	</div>`;

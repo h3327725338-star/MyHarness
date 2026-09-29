@@ -1,19 +1,20 @@
 // Transcript model: wire items -> turns, with tool calls translated into plain-language actions.
 // Three information layers: turn summary -> readable steps -> raw tool details.
-import { basename, clip, firstLine, plural, shellOutcome, shortPath } from "./util.js";
+import { N_, count, t } from "./i18n.js";
+import { basename, clip, firstLine, shellOutcome, shortPath } from "./util.js";
 
 const TENSES = {
-	read: ["Reading", "Read", "read"],
-	list: ["Listing", "Listed", "list"],
-	find: ["Finding files", "Found files", "find files"],
-	search: ["Searching", "Searched", "search"],
-	run: ["Running", "Ran", "run"],
-	edit: ["Editing", "Edited", "edit"],
-	write: ["Writing", "Wrote", "write"],
-	web: ["Searching the web", "Searched the web", "search the web"],
-	fetch: ["Reading page", "Read page", "read the page"],
-	agent: ["Delegating", "Delegated", "delegate"],
-	tool: ["Using", "Used", "use"],
+	read: [N_("Reading"), N_("Read"), N_("read")],
+	list: [N_("Listing"), N_("Listed"), N_("list")],
+	find: [N_("Finding files"), N_("Found files"), N_("find files")],
+	search: [N_("Searching"), N_("Searched"), N_("search")],
+	run: [N_("Running"), N_("Ran"), N_("run")],
+	edit: [N_("Editing"), N_("Edited"), N_("edit")],
+	write: [N_("Writing"), N_("Wrote"), N_("write")],
+	web: [N_("Searching the web"), N_("Searched the web"), N_("search the web")],
+	fetch: [N_("Reading page"), N_("Read page"), N_("read the page")],
+	agent: [N_("Delegating"), N_("Delegated"), N_("delegate")],
+	tool: [N_("Using"), N_("Used"), N_("use")],
 };
 
 function str(v) {
@@ -46,7 +47,7 @@ export function describeAction(call, result, run, cwd) {
 			kind = "read";
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
-			if (args.offset || args.limit) detail = `lines ${args.offset || 1}–${(args.offset || 1) + (args.limit || 0) - 1}`;
+			if (args.offset || args.limit) detail = t("lines {from}–{to}", { from: args.offset || 1, to: (args.offset || 1) + (args.limit || 0) - 1 });
 			break;
 		}
 		case "ls":
@@ -57,17 +58,17 @@ export function describeAction(call, result, run, cwd) {
 		case "find":
 			kind = "find";
 			target = str(args.pattern || args.glob || args.name || "");
-			detail = args.path ? `in ${shortPath(str(args.path), cwd)}` : "";
+			detail = args.path ? t("in {path}", { path: shortPath(str(args.path), cwd) }) : "";
 			break;
 		case "grep":
 			kind = "search";
 			target = str(args.pattern || args.query || "");
-			detail = args.path ? `in ${shortPath(str(args.path), cwd)}` : args.glob ? `in ${args.glob}` : "";
+			detail = args.path ? t("in {path}", { path: shortPath(str(args.path), cwd) }) : args.glob ? t("in {path}", { path: args.glob }) : "";
 			break;
 		case "symbols":
 			kind = "search";
-			target = str(args.query || args.symbol || args.name || args.path || args.action || "code symbols");
-			detail = "symbols";
+			target = str(args.query || args.symbol || args.name || args.path || args.action || t("code symbols"));
+			detail = t("symbols");
 			break;
 		case "bash":
 		case "pwsh":
@@ -91,7 +92,7 @@ export function describeAction(call, result, run, cwd) {
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
 			const lines = str(args.content).split("\n").length;
-			detail = `${lines} line${lines === 1 ? "" : "s"}`;
+			detail = count(lines, "line");
 			break;
 		}
 		case "web_search":
@@ -127,8 +128,8 @@ export function describeAction(call, result, run, cwd) {
 	const shell = kind === "run" && result ? shellOutcome(result) : null;
 	const isError = shell === "cancelled" ? false : result ? result.isError : run?.status === "error";
 	const status = shell === "cancelled" ? "cancelled" : result ? (result.isError ? "error" : "done") : run?.status === "running" ? "running" : run?.status || "pending";
-	const [ing, past, base] = TENSES[kind] || TENSES.tool;
-	const verb = status === "running" || status === "pending" ? ing : shell === "cancelled" ? "Stopped" : shell === "timeout" ? `Timed out: ${base}` : isError ? `Failed to ${base}` : past;
+	const [ing, past, base] = (TENSES[kind] || TENSES.tool).map((word) => t(word));
+	const verb = status === "running" || status === "pending" ? ing : shell === "cancelled" ? t("Stopped") : shell === "timeout" ? t("Timed out: {action}", { action: base }) : isError ? t("Failed to {action}", { action: base }) : past;
 	return { kind, verb, target, detail, path, extra, status, isError: !!isError };
 }
 
@@ -137,29 +138,30 @@ export function groupLabel(kind, actions) {
 	const running = actions.some((a) => a.status === "running" || a.status === "pending");
 	const n = actions.length;
 	const distinct = (arr) => new Set(arr.filter(Boolean)).size || n;
+	const pick = (doing, done, params) => t(running ? doing : done, params);
 	switch (kind) {
 		case "read":
-			return `${running ? "Reading" : "Read"} ${plural(distinct(actions.map((a) => a.path)), "file")}`;
+			return pick(N_("Reading {files}"), N_("Read {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "list":
-			return `${running ? "Listing" : "Listed"} ${plural(n, "folder")}`;
+			return pick(N_("Listing {folders}"), N_("Listed {folders}"), { folders: count(n, "folder") });
 		case "find":
-			return `${running ? "Finding" : "Found"} files (${plural(n, "search", "searches")})`;
+			return pick(N_("Finding files ({searches})"), N_("Found files ({searches})"), { searches: count(n, "search", "searches") });
 		case "search":
-			return `${running ? "Searching" : "Searched"} ${plural(n, "time")}`;
+			return pick(N_("Searching {times}"), N_("Searched {times}"), { times: count(n, "time") });
 		case "run":
-			return `${running ? "Running" : "Ran"} ${plural(n, "command")}`;
+			return pick(N_("Running {commands}"), N_("Ran {commands}"), { commands: count(n, "command") });
 		case "edit":
-			return `${running ? "Editing" : "Edited"} ${plural(distinct(actions.map((a) => a.path)), "file")}`;
+			return pick(N_("Editing {files}"), N_("Edited {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "write":
-			return `${running ? "Writing" : "Wrote"} ${plural(distinct(actions.map((a) => a.path)), "file")}`;
+			return pick(N_("Writing {files}"), N_("Wrote {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "web":
-			return `${running ? "Searching" : "Searched"} the web ${plural(n, "time")}`;
+			return pick(N_("Searching the web {times}"), N_("Searched the web {times}"), { times: count(n, "time") });
 		case "fetch":
-			return `${running ? "Reading" : "Read"} ${plural(n, "web page")}`;
+			return pick(N_("Reading {pages}"), N_("Read {pages}"), { pages: count(n, "web page") });
 		case "agent":
-			return `${running ? "Delegating" : "Delegated"} ${plural(n, "task")}`;
+			return pick(N_("Delegating {tasks}"), N_("Delegated {tasks}"), { tasks: count(n, "task") });
 		default:
-			return `${running ? "Using" : "Used"} ${plural(n, "tool")}`;
+			return pick(N_("Using {tools}"), N_("Used {tools}"), { tools: count(n, "tool") });
 	}
 }
 
@@ -225,9 +227,9 @@ export function buildTurns(items, ctx, previous) {
 		if (item.kind === "assistant") turn.assistants.push(item);
 	});
 
-	for (const t of turns) {
-		if (t.standalone) continue;
-		const list = t.assistants;
+	for (const turn of turns) {
+		if (turn.standalone) continue;
+		const list = turn.assistants;
 		const lastAssistant = list[list.length - 1];
 		for (let ai = 0; ai < list.length; ai++) {
 			const message = list[ai];
@@ -238,17 +240,29 @@ export function buildTurns(items, ctx, previous) {
 			message.blocks.forEach((block, bi) => {
 				const key = `${message.liveId || message.id || message.ts}-${bi}`;
 				if (block.type === "thinking") {
-					t.steps.push({ type: "thinking", text: block.text, redacted: block.redacted, key, live: !message.final && !!message.liveId && isLast && bi === message.blocks.length - 1 });
+					const live = !message.final && !!message.liveId && isLast && bi === message.blocks.length - 1;
+					const text = block.text?.trim() ? block.text : "";
+					// A thinking block without text carries nothing to read (the model kept its reasoning private).
+					if (!text && !block.redacted && !live) return;
+					const before = turn.steps[turn.steps.length - 1];
+					if (before?.type === "thinking") {
+						// Several thinking blocks in a row are one stretch of reasoning: show them as one row.
+						before.text = [before.text, text].filter(Boolean).join("\n\n");
+						before.live = live;
+						before.redacted = before.redacted && !before.text;
+						return;
+					}
+					turn.steps.push({ type: "thinking", text, redacted: block.redacted, key, live });
 				} else if (block.type === "text") {
 					if (finalText && block.text.trim()) return; // shown as the final answer
-					if (block.text.trim()) t.steps.push({ type: "note", text: block.text, key, streaming: !message.final && !!message.liveId });
+					if (block.text.trim()) turn.steps.push({ type: "note", text: block.text, key, streaming: !message.final && !!message.liveId });
 				} else if (block.type === "toolCall") {
 					const result = results.get(block.id);
 					const run = ctx.toolRuns[block.id];
 					const call = { id: block.id, name: block.name, args: block.args };
 					const described = describeAction(call, result, run, ctx.cwd);
 					const failedByAbort = !result && failed && !(run?.status === "running");
-					t.steps.push({
+					turn.steps.push({
 						type: "action",
 						key: `a-${block.id}`,
 						call,
@@ -262,16 +276,16 @@ export function buildTurns(items, ctx, previous) {
 				}
 			});
 			if (finalText.trim() && !failed) {
-				t.final = { text: finalText, message, streaming: !message.final && !!message.liveId };
+				turn.final = { text: finalText, message, streaming: !message.final && !!message.liveId };
 			} else if (isLast && failed) {
 				const partial = textFromBlocks(message.blocks);
-				if (partial.trim() && !hasCalls) t.final = { text: partial, message, partial: true };
-				t.error = { message: message.error || (message.stopReason === "aborted" ? "Stopped before finishing." : "The model request failed."), stopReason: message.stopReason };
+				if (partial.trim() && !hasCalls) turn.final = { text: partial, message, partial: true };
+				turn.error = { message: message.error || (message.stopReason === "aborted" ? t("Stopped before finishing.") : t("The model request failed.")), stopReason: message.stopReason };
 			}
 		}
-		t.lastAssistant = lastAssistant;
-		const actions = t.steps.filter((s) => s.type === "action");
-		t.stats = {
+		turn.lastAssistant = lastAssistant;
+		const actions = turn.steps.filter((s) => s.type === "action");
+		turn.stats = {
 			actions: actions.length,
 			failedActions: actions.filter((a) => a.isError).length,
 			files: new Set(actions.filter((a) => (a.kind === "edit" || a.kind === "write") && !a.isError && a.status === "done" && a.path).map((a) => a.path)).size,
@@ -323,13 +337,13 @@ export function groupSteps(steps) {
 }
 
 export const OUTCOME_LABEL = {
-	running: "Working",
-	waiting: "Waiting for you",
-	completed: "Completed",
-	partial: "Partially completed",
-	failed: "Failed",
-	cancelled: "Cancelled",
-	unanswered: "No response",
+	running: N_("Working"),
+	waiting: N_("Waiting for you"),
+	completed: N_("Completed"),
+	partial: N_("Partially completed"),
+	failed: N_("Failed"),
+	cancelled: N_("Cancelled"),
+	unanswered: N_("No response"),
 };
 
 /** Match a run_finished record to a turn: the newest turn that started at or before the run. */

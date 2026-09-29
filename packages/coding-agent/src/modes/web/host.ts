@@ -55,11 +55,37 @@ export interface RunFinishedPayload {
 	toolFileOps: number;
 }
 
+/** What the sidebar needs to show about one open session (running, waiting, last outcome). */
+export interface SlotStatus {
+	slot: string;
+	sessionFile: string | null;
+	sessionId: string;
+	cwd: string;
+	name: string | null;
+	/** First user message, so a session that is not saved to disk yet can still be listed by title. */
+	firstMessage: string;
+	active: boolean;
+	waiting: boolean;
+	completion: boolean;
+	lastOutcome: RunOutcome | null;
+}
+
+/** The parts of the hub that a single WebHost reports back to. */
+export interface WebHostHubLink {
+	hostBroadcast(host: WebHost, event: string): void;
+	requestShutdown(): void;
+}
+
 export interface WebHostOptions {
 	runtimeHost: AgentSessionRuntime;
 	server: WebHttpServer;
 	dialogs: WebDialogBridge;
 	version: string;
+	/** Identifies this runtime in every event and request. One WebHost owns one runtime ("slot"). */
+	slotId?: string;
+	/** Shared by all slots so the workspace list stays consistent. */
+	workspaceStore?: WorkspaceStore;
+	hub?: WebHostHubLink;
 }
 
 function textOf(content: unknown): { text: string; images: Array<{ mimeType: string; data: string }> } {
@@ -81,8 +107,12 @@ export class WebHost {
 	readonly dialogs: WebDialogBridge;
 	readonly version: string;
 	readonly workspaceStore: WorkspaceStore;
+	readonly slotId: string;
 	readonly startedAt = Date.now();
+	/** Last time a request addressed this slot; the hub evicts the least recently used idle slots. */
+	touchedAt = Date.now();
 	tracker: ChangeTracker;
+	private readonly hub: WebHostHubLink | undefined;
 
 	private unsubscribe: (() => void) | undefined;
 	private generation = 0;
@@ -114,7 +144,10 @@ export class WebHost {
 		this.server = options.server;
 		this.dialogs = options.dialogs;
 		this.version = options.version;
-		this.workspaceStore = WorkspaceStoreImpl.create(options.runtimeHost.services.agentDir, getDataDir());
+		this.slotId = options.slotId ?? "s1";
+		this.hub = options.hub;
+		this.workspaceStore =
+			options.workspaceStore ?? WorkspaceStoreImpl.create(options.runtimeHost.services.agentDir, getDataDir());
 		this.tracker = new ChangeTracker(this.cwd);
 		this.dialogs.onDialogsChanged = () => this.broadcast("dialogs", { requests: this.dialogs.requests });
 		this.dialogs.onSurfaceChanged = () => this.broadcast("surface", this.dialogs.surfaceState);
@@ -130,8 +163,39 @@ export class WebHost {
 		return this.session.sessionManager.getCwd();
 	}
 
+	/** Send an event to every browser tab, tagged with this slot so the client can route it. */
 	broadcast(event: string, data: unknown): void {
-		this.server.broadcast(event, data);
+		const payload = data !== null && typeof data === "object" ? { ...(data as object), slot: this.slotId } : data;
+		this.server.broadcast(event, payload);
+		this.hub?.hostBroadcast(this, event);
+	}
+
+	private firstUserText(): string {
+		for (const message of this.session.messages) {
+			if (message.role !== "user") continue;
+			const text =
+				typeof message.content === "string"
+					? message.content
+					: message.content.map((part) => (part.type === "text" ? part.text : "")).join(" ");
+			return text.replace(/\s+/g, " ").trim().slice(0, 120);
+		}
+		return "";
+	}
+
+	get status(): SlotStatus {
+		const run = this.session.getRunStateSnapshot();
+		return {
+			slot: this.slotId,
+			sessionFile: this.session.sessionFile ?? null,
+			sessionId: this.session.sessionId,
+			cwd: this.cwd,
+			name: this.session.sessionName ?? null,
+			firstMessage: this.firstUserText(),
+			active: isRunStateActive(run.state),
+			waiting: this.dialogs.requests.length > 0,
+			completion: this.completionActive,
+			lastOutcome: this.latestRunFinished()?.outcome ?? null,
+		};
 	}
 
 	// ------------------------------------------------------------------
@@ -282,10 +346,22 @@ export class WebHost {
 		};
 	}
 
+	/** Stop forwarding events and release the runtime. Used when the hub closes an idle or deleted slot. */
+	async dispose(): Promise<void> {
+		this.generation += 1;
+		this.unsubscribe?.();
+		this.unsubscribe = undefined;
+		this.resetLiveState();
+		this.dialogs.dismissAll();
+		this.dialogs.resetSurface();
+		await this.runtimeHost.dispose();
+	}
+
 	requestShutdown(): void {
 		if (this.shutdownRequested) return;
 		this.shutdownRequested = true;
-		this.onShutdown?.();
+		if (this.hub) this.hub.requestShutdown();
+		else this.onShutdown?.();
 	}
 
 	// ------------------------------------------------------------------
@@ -792,6 +868,7 @@ export class WebHost {
 		}
 		const run = session.getRunStateSnapshot();
 		return {
+			slot: this.slotId,
 			app: { version: this.version, startedAt: this.startedAt, platform: process.platform },
 			cwd,
 			workspace: workspace

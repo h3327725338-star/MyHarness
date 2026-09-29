@@ -1,6 +1,7 @@
 // Markdown rendering (marked + highlight.js, both vendored with the HTML export). Raw HTML is escaped, never rendered.
 import { h } from "/vendor/preact.js";
 import { Component } from "/vendor/preact.js";
+import { t } from "./i18n.js";
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
@@ -21,7 +22,7 @@ function getEngine() {
 			},
 			code({ text, lang }) {
 				const language = (lang || "").trim().split(/\s+/)[0];
-				return `<div class="code-block"><div class="code-head"><span class="code-lang">${esc(language || "text")}</span><button class="code-copy" type="button">Copy</button></div><pre><code class="hljs">${highlight(text, language)}</code></pre></div>`;
+				return `<div class="code-block"><div class="code-head"><span class="code-lang">${esc(language || "text")}</span><button class="code-copy" type="button">${esc(t("Copy"))}</button></div><pre><code class="hljs">${highlight(text, language)}</code></pre></div>`;
 			},
 			codespan({ text }) {
 				const raw = text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
@@ -87,8 +88,8 @@ export class Markdown extends Component {
 		if (copy) {
 			const code = copy.closest(".code-block")?.querySelector("code");
 			navigator.clipboard?.writeText(code?.textContent || "").then(() => {
-				copy.textContent = "Copied";
-				setTimeout(() => (copy.textContent = "Copy"), 1200);
+				copy.textContent = t("Copied");
+				setTimeout(() => (copy.textContent = t("Copy")), 1200);
 			});
 			return;
 		}

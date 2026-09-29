@@ -1,7 +1,8 @@
 import { Component, h, render } from "/vendor/preact.js";
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { App } from "./app.js";
-import { boot, subscribe, version } from "./store.js";
+import { boot, state, subscribe, version } from "./store.js";
+import { t } from "./i18n.js";
 
 // A rendering bug must never leave a blank page: show the error and let the user reload.
 class ErrorBoundary extends Component {
@@ -18,10 +19,10 @@ class ErrorBoundary extends Component {
 			h(
 				"div",
 				{ class: "splash-card" },
-				h("h2", null, "The interface hit an error"),
+				h("h2", null, t("The interface hit an error")),
 				h("pre", { class: "git-lines err", style: "max-width:100%;white-space:pre-wrap" }, String(error?.stack || error)),
-				h("div", { class: "dim" }, "Your session and running task are not affected; they live in the MyHarness server."),
-				h("button", { class: "btn primary", onClick: () => location.reload() }, "Reload"),
+				h("div", { class: "dim" }, t("Your session and running task are not affected; they live in the MyHarness server.")),
+				h("button", { class: "btn primary", onClick: () => location.reload() }, t("Reload")),
 			),
 		);
 	}
@@ -40,7 +41,8 @@ function Root() {
 		if (version !== seen.current) update();
 		return subscribe(update);
 	}, []);
-	return h(ErrorBoundary, null, h(App, null));
+	// The language is part of the key: switching it rebuilds the interface so every text is drawn again in the new language.
+	return h(ErrorBoundary, null, h(App, { key: state.view.lang }));
 }
 
 render(h(Root, null), document.getElementById("app"));

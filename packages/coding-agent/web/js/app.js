@@ -13,12 +13,13 @@ import { GitDialog } from "./overlays-git.js";
 import { SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
 import { clip, plural } from "./util.js";
+import { t, N_, serverText } from "./i18n.js";
 
 const OUTCOME_UI = {
-	completed: { label: "Completed", cls: "ok", icon: "checkCircle" },
-	partial: { label: "Partially completed", cls: "warn", icon: "alertTriangle" },
-	failed: { label: "Failed", cls: "danger", icon: "alertCircle" },
-	cancelled: { label: "Cancelled", cls: "", icon: "stopCircle" },
+	completed: { label: N_("Completed"), cls: "ok", icon: "checkCircle" },
+	partial: { label: N_("Partially completed"), cls: "warn", icon: "alertTriangle" },
+	failed: { label: N_("Failed"), cls: "danger", icon: "alertCircle" },
+	cancelled: { label: N_("Cancelled"), cls: "", icon: "stopCircle" },
 };
 
 function StatusPill() {
@@ -27,17 +28,17 @@ function StatusPill() {
 	const compaction = useStore((s) => s.compaction);
 	const completion = useStore((s) => s.completion);
 	if (!snap) return null;
-	if (dialogs.length && snap.active) return html`<span class="status-pill warn" role="status"><${Icon} name="clock" size=${13} />Waiting for you</span>`;
-	if (compaction) return html`<span class="status-pill" role="status"><${Spinner} />Compacting context</span>`;
+	if (dialogs.length && snap.active) return html`<span class="status-pill warn" role="status"><${Icon} name="clock" size=${13} />${t("Waiting for you")}</span>`;
+	if (compaction) return html`<span class="status-pill" role="status"><${Spinner} />${t("Compacting context")}</span>`;
 	if (snap.active) {
-		const detail = snap.run.state === "recovering" ? "Recovering" : "Working";
-		return html`<span class="status-pill live" role="status" title=${snap.run.activity}><${Spinner} />${detail}</span>`;
+		const detail = snap.run.state === "recovering" ? t("Recovering") : t("Working");
+		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} />${detail}</span>`;
 	}
-	if (completion) return html`<span class="status-pill" role="status"><${Spinner} />Finishing up</span>`;
+	if (completion) return html`<span class="status-pill" role="status"><${Spinner} />${t("Finishing up")}</span>`;
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {
 		const ui = OUTCOME_UI[last.outcome];
-		return html`<button class=${`status-pill ${ui.cls}`} role="status" onClick=${() => last.changeCount && actions.openChanges({ runId: last.runId })} title=${last.error || (last.changeCount ? "Review the changes" : ui.label)}><${Icon} name=${ui.icon} size=${13} />${ui.label}</button>`;
+		return html`<button class=${`status-pill ${ui.cls}`} role="status" onClick=${() => last.changeCount && actions.openChanges({ runId: last.runId })} title=${last.error || (last.changeCount ? t("Review the changes") : t(ui.label))}><${Icon} name=${ui.icon} size=${13} />${t(ui.label)}</button>`;
 	}
 	return null;
 }
@@ -52,7 +53,7 @@ function Header() {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	const firstUser = items.find((i) => i.kind === "user" && i.text);
-	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : "New chat");
+	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : t("New chat"));
 	const commit = async () => {
 		setEditing(false);
 		const next = value.trim();
@@ -61,26 +62,26 @@ function Header() {
 	const changeCount = snap?.lastRun?.changeCount || 0;
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	return html`<header class="main-header">
-		${!sidebarOpen ? html`<button class="icon-btn" title="Show sidebar (Ctrl+B)" aria-label="Show sidebar" onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
+		${!sidebarOpen ? html`<button class="icon-btn" title=${t("Show sidebar (Ctrl+B)")} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
-			: html`<button class="title-btn truncate" title=${`${title} — double-click to rename`} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>`}
+			: html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>`}
 		${snap?.workspace ? html`<button class="header-chip truncate" title=${snap.cwd} onClick=${() => actions.togglePanel("files")}><${Icon} name="folder" size=${13} /><span class="truncate">${snap.workspace.name}</span></button>` : null}
 		<span class="grow" />
 		<${StatusPill} />
-		${tabBtn("changes", "fileDiff", "Changes", changeCount ? String(changeCount) : "")}
-		${tabBtn("files", "folder", "Files")}
-		${tabBtn("terminal", "terminal", "Terminal", runningBash ? "•" : "")}
-		${tabBtn("context", "layers", "Session")}
-		<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn" aria-label="More" title="More" onClick=${toggle}><${Icon} name="moreV" size=${17} /></button>`} width=${220}>
+		${tabBtn("changes", "fileDiff", t("Changes"), changeCount ? String(changeCount) : "")}
+		${tabBtn("files", "folder", t("Files"))}
+		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
+		${tabBtn("context", "layers", t("Session"))}
+		<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn" aria-label=${t("More")} title=${t("More")} onClick=${toggle}><${Icon} name="moreV" size=${17} /></button>`} width=${220}>
 			${(close) => html`
-				<${MenuItem} icon="edit" label="New chat" hint="Ctrl+N" onClick=${() => (close(), actions.newSession())} />
-				<${MenuItem} icon="search" label="Search & commands" hint="Ctrl+K" onClick=${() => (close(), setView({ palette: true }))} />
-				<${MenuItem} icon="layers" label="Compact context" disabled=${snap?.active} onClick=${() => (close(), actions.compact())} />
-				<${MenuItem} icon="download" label="Export chat as HTML" onClick=${() => (close(), actions.exportSession())} />
+				<${MenuItem} icon="edit" label=${t("New chat")} hint="Ctrl+N" onClick=${() => (close(), actions.newSession())} />
+				<${MenuItem} icon="search" label=${t("Search & commands")} hint="Ctrl+K" onClick=${() => (close(), setView({ palette: true }))} />
+				<${MenuItem} icon="layers" label=${t("Compact context")} disabled=${snap?.active} onClick=${() => (close(), actions.compact())} />
+				<${MenuItem} icon="download" label=${t("Export chat as HTML")} onClick=${() => (close(), actions.exportSession())} />
 				<${MenuSep} />
-				<${MenuItem} icon="gitBranch" label="Git tools…" onClick=${() => (close(), actions.openGitDialog("more"))} />
-				<${MenuItem} icon="gear" label="Settings" hint="Ctrl+," onClick=${() => (close(), setView({ settingsOpen: true }))} />`}
+				<${MenuItem} icon="gitBranch" label=${t("Git tools…")} onClick=${() => (close(), actions.openGitDialog("more"))} />
+				<${MenuItem} icon="gear" label=${t("Settings")} hint="Ctrl+," onClick=${() => (close(), setView({ settingsOpen: true }))} />`}
 		<//>
 	</header>`;
 }
@@ -96,17 +97,17 @@ function PanelContainer() {
 	const panelRef = useRef(null);
 	useWidthClass(panelRef, [], [440, 440]);
 	const tabs = [
-		{ id: "changes", label: "Changes", icon: "fileDiff" },
-		{ id: "files", label: "Files", icon: "folder" },
-		{ id: "terminal", label: "Terminal", icon: "terminal" },
-		{ id: "context", label: "Session", icon: "layers" },
+		{ id: "changes", label: t("Changes"), icon: "fileDiff" },
+		{ id: "files", label: t("Files"), icon: "folder" },
+		{ id: "terminal", label: t("Terminal"), icon: "terminal" },
+		{ id: "context", label: t("Session"), icon: "layers" },
 	];
-	return html`<aside class="panel" aria-label="Details" ref=${panelRef}>
+	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
 		<div class="panel-tabs" role="tablist">
-			${tabs.map((t) => html`<button key=${t.id} role="tab" class="tab" title=${t.label} aria-selected=${tab === t.id} onClick=${() => setView({ panelTab: t.id })}><${Icon} name=${t.icon} size=${14} /><span class="tab-label">${t.label}</span>${t.id === "terminal" && bashRunning ? html`<${Spinner} />` : null}</button>`)}
+			${tabs.map((tab_) => html`<button key=${tab_.id} role="tab" class="tab" title=${tab_.label} aria-selected=${tab === tab_.id} onClick=${() => setView({ panelTab: tab_.id })}><${Icon} name=${tab_.icon} size=${14} /><span class="tab-label">${tab_.label}</span>${tab_.id === "terminal" && bashRunning ? html`<${Spinner} />` : null}</button>`)}
 			<span class="grow" />
-			<button class="icon-btn sm" aria-label="Close panel" title="Close panel" onClick=${() => setView({ panelOpen: false })}><${Icon} name="x" size=${15} /></button>
+			<button class="icon-btn sm" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => setView({ panelOpen: false })}><${Icon} name="x" size=${15} /></button>
 		</div>
 		<div class="panel-body">
 			<div class="panel-pane" hidden=${tab !== "changes"}>${tab === "changes" ? html`<${ChangesPanel} />` : null}</div>
@@ -119,16 +120,16 @@ function PanelContainer() {
 
 function Toasts() {
 	const toasts = useStore((s) => s.toasts);
-	return html`<div class="toasts" aria-live="polite">${toasts.map((t) => html`<div key=${t.id} class=${`toast ${t.type}`} role=${t.type === "error" ? "alert" : "status"}>
-		<${Icon} name=${t.type === "error" ? "alertCircle" : t.type === "warning" ? "alertTriangle" : "info"} size=${15} class=${t.type === "error" ? "c-danger" : t.type === "warning" ? "c-warn" : "c-dim"} />
-		<span class="msg grow">${t.message}</span>
-		<button class="icon-btn sm" aria-label="Dismiss" onClick=${() => dismissToast(t.id)}><${Icon} name="x" size=${13} /></button>
+	return html`<div class="toasts" aria-live="polite">${toasts.map((item) => html`<div key=${item.id} class=${`toast ${item.type}`} role=${item.type === "error" ? "alert" : "status"}>
+		<${Icon} name=${item.type === "error" ? "alertCircle" : item.type === "warning" ? "alertTriangle" : "info"} size=${15} class=${item.type === "error" ? "c-danger" : item.type === "warning" ? "c-warn" : "c-dim"} />
+		<span class="msg grow">${item.message}</span>
+		<button class="icon-btn sm" aria-label=${t("Dismiss")} onClick=${() => dismissToast(item.id)}><${Icon} name="x" size=${13} /></button>
 	</div>`)}</div>`;
 }
 
 function ConfirmModal({ dialog }) {
 	return html`<${Modal} title=${dialog.title} onClose=${() => resolveConfirm(false)} width=${480}
-		footer=${html`<button class="btn" onClick=${() => resolveConfirm(false)}>Cancel</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus onClick=${() => resolveConfirm(true)}>${dialog.confirmLabel}</button>`}>
+		footer=${html`<button class="btn" onClick=${() => resolveConfirm(false)}>${t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus onClick=${() => resolveConfirm(true)}>${dialog.confirmLabel}</button>`}>
 		<div style="white-space:pre-wrap">${dialog.message}</div>${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
 	<//>`;
 }
@@ -137,7 +138,7 @@ function InputModal({ dialog }) {
 	const [value, setValue] = useState(dialog.initial || "");
 	const submit = () => resolveConfirm(value.trim() ? value.trim() : undefined);
 	return html`<${Modal} title=${dialog.title} onClose=${() => resolveConfirm(undefined)} width=${440}
-		footer=${html`<button class="btn" onClick=${() => resolveConfirm(undefined)}>Cancel</button><button class="btn primary" onClick=${submit}>${dialog.confirmLabel}</button>`}>
+		footer=${html`<button class="btn" onClick=${() => resolveConfirm(undefined)}>${t("Cancel")}</button><button class="btn primary" onClick=${submit}>${dialog.confirmLabel}</button>`}>
 		<label class="col field-label">${dialog.label}<input class="field" autofocus value=${value} placeholder=${dialog.placeholder} onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && submit()} /></label>
 	<//>`;
 }
@@ -147,7 +148,7 @@ function BootDialogs({ dialogs }) {
 	const answer = (id, value) => attempt(() => post("/api/ui/respond", { id, value }));
 	return html`${dialogs.map((d) => html`<${Modal} key=${d.id} title=${String(d.title).split("\n")[0]} onClose=${null} width=${520} closeOnScrim=${false}>
 		<div style="white-space:pre-wrap">${[String(d.title).split("\n").slice(1).join("\n"), d.message].filter(Boolean).join("\n")}</div>
-		<div class="col" style="gap:8px;margin-top:14px">${d.kind === "select" ? d.options.map((o) => html`<button class="btn" key=${o} onClick=${() => answer(d.id, o)}>${o}</button>`) : d.kind === "confirm" ? html`<div class="row"><button class="btn" onClick=${() => answer(d.id, false)}>No</button><button class="btn primary" onClick=${() => answer(d.id, true)}>Yes</button></div>` : null}</div>
+		<div class="col" style="gap:8px;margin-top:14px">${d.kind === "select" ? d.options.map((o) => html`<button class="btn" key=${o} onClick=${() => answer(d.id, o)}>${o}</button>`) : d.kind === "confirm" ? html`<div class="row"><button class="btn" onClick=${() => answer(d.id, false)}>${t("No")}</button><button class="btn primary" onClick=${() => answer(d.id, true)}>${t("Yes")}</button></div>` : null}</div>
 	<//>`)}`;
 }
 
@@ -214,17 +215,17 @@ export function App() {
 		document.title = snap?.session?.name ? `${snap.session.name} · MyHarness` : "MyHarness";
 	}, [snap?.session?.name]);
 
-	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>MyHarness has stopped</h2><div class="dim">The local server was shut down. You can close this tab; start MyHarness again to continue.</div></div></div>`;
+	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;
 	if (boot.phase !== "ready" || !snap) {
 		return html`<div class="splash"><div class="splash-card">
-			${boot.phase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>MyHarness could not start</h2><div class="dim">${boot.detail}</div>` : html`<${Spinner} /><div>${boot.phase === "connecting" ? "Connecting to the local MyHarness server…" : "Starting MyHarness…"}</div>`}
+			${boot.phase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${boot.detail}</div>` : html`<${Spinner} /><div>${boot.phase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
 		</div>${boot.dialogs?.length ? html`<${BootDialogs} dialogs=${boot.dialogs} />` : null}</div>`;
 	}
 	const layoutClass = `app ${view.sidebarOpen ? "" : "sidebar-collapsed"} ${view.panelOpen ? "panel-open" : ""}`;
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
-			${everConnected && !connected ? html`<div class="conn-banner" role="alert">Connection to the local server lost — reconnecting…</div>` : null}
+			${everConnected && !connected ? html`<div class="conn-banner" role="alert">${t("Connection to the local server lost — reconnecting…")}</div>` : null}
 			<${Header} />
 			<${Transcript} />
 			<${Composer} />

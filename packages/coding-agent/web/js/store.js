@@ -1,16 +1,18 @@
 // Client state: one plain store fed by /api/* and the /api/events Server-Sent Events stream.
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
+import { normalizeLang, setLang } from "./lang.js";
 import { loadPrefs, savePrefs, uid } from "./util.js";
+import { t, N_, serverText } from "./i18n.js";
 
 const listeners = new Set();
 const prefs = loadPrefs();
 
-export const state = {
-	boot: { phase: "connecting", detail: null, dialogs: [] },
-	connected: false,
-	everConnected: false,
-	shutdown: false,
+// ---- Per-session state ("slots") ---------------------------------------------------------------
+// The server runs one Agent runtime per open session, so several sessions can work at once. Everything that belongs
+// to one session lives in a bag. `state.snap`, `state.items` … always read and write the bag of the session on screen
+// (or, while an event is being applied, the bag of the session the event belongs to), so components stay unchanged.
+const SLOT_DEFAULTS = () => ({
 	snap: null,
 	items: [],
 	toolRuns: {},
@@ -18,12 +20,6 @@ export const state = {
 	queue: { steering: [], followUp: [] },
 	dialogs: [],
 	surface: { statuses: {}, widgets: {}, workingVisible: true, notices: [] },
-	toasts: [],
-	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, loading: false },
-	models: null,
-	resources: null,
-	settings: null,
-	providers: null,
 	userBash: {},
 	userBashOrder: [],
 	gitTask: null,
@@ -32,6 +28,50 @@ export const state = {
 	recovery: null,
 	completion: false,
 	subAgents: {},
+	resources: null,
+	gitStatus: undefined,
+	currentRunId: undefined,
+});
+const SLOT_KEYS = Object.keys(SLOT_DEFAULTS());
+const bags = new Map();
+let activeSlot = null;
+let targetSlot = null;
+
+function bagOf(slot) {
+	const id = slot ?? "_none";
+	let bag = bags.get(id);
+	if (!bag) {
+		bag = { ...SLOT_DEFAULTS(), loaded: false };
+		bags.set(id, bag);
+	}
+	return bag;
+}
+
+/** Apply `fn` with state accessors bound to one session's bag (used for events of sessions that are not on screen). */
+function runFor(slot, fn) {
+	const previous = targetSlot;
+	targetSlot = slot ?? null;
+	try {
+		return fn();
+	} finally {
+		targetSlot = previous;
+	}
+}
+
+export const activeSlotId = () => activeSlot;
+
+export const state = {
+	boot: { phase: "connecting", detail: null, dialogs: [] },
+	connected: false,
+	everConnected: false,
+	shutdown: false,
+	slots: [],
+	activeSlot: null,
+	toasts: [],
+	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, loading: false },
+	models: null,
+	settings: null,
+	providers: null,
 	editorInsert: null,
 	loginEvent: null,
 	view: {
@@ -55,8 +95,23 @@ export const state = {
 		processDefault: prefs.processDefault ?? "collapsed",
 		readWidth: prefs.readWidth ?? 780,
 		notify: prefs.notify ?? false,
+		lang: normalizeLang(prefs.lang),
+		cmd: null,
 	},
 };
+
+setLang(state.view.lang);
+
+for (const key of SLOT_KEYS) {
+	Object.defineProperty(state, key, {
+		enumerable: true,
+		configurable: true,
+		get: () => bagOf(targetSlot ?? activeSlot)[key],
+		set: (value) => {
+			bagOf(targetSlot ?? activeSlot)[key] = value;
+		},
+	});
+}
 
 export function subscribe(fn) {
 	listeners.add(fn);
@@ -65,7 +120,9 @@ export function subscribe(fn) {
 
 let pending = false;
 export let version = 0;
-export function emit() {
+export function emit(force = false) {
+	// Changes to a session that is not on screen do not need a render; they are shown when it is opened.
+	if (!force && targetSlot && targetSlot !== activeSlot) return;
 	version += 1;
 	if (pending) return;
 	pending = true;
@@ -86,7 +143,7 @@ export function setView(patch) {
 	emit();
 }
 
-const PERSISTED = ["sidebarOpen", "sidebarW", "panelOpen", "panelTab", "panelW", "expanded", "theme", "density", "motion", "processDefault", "readWidth", "notify"];
+const PERSISTED = ["sidebarOpen", "sidebarW", "panelOpen", "panelTab", "panelW", "expanded", "theme", "density", "motion", "processDefault", "readWidth", "notify", "lang"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -96,6 +153,7 @@ function persistView() {
 
 export function applyAppearance() {
 	const root = document.documentElement;
+	setLang(state.view.lang);
 	const mode = state.view.theme;
 	const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 	root.dataset.theme = dark ? "dark" : "light";
@@ -130,7 +188,9 @@ export function useStore(selector = (s) => s) {
 
 // ---- HTTP ------------------------------------------------------------------------------------
 export async function api(path, options = {}) {
+	const slot = options.slot ?? targetSlot ?? activeSlot;
 	const init = { method: options.method || "GET", headers: { "x-myharness-web": "1" } };
+	if (slot) init.headers["x-myharness-slot"] = slot;
 	if (options.body !== undefined) {
 		init.headers["content-type"] = "application/json";
 		init.body = JSON.stringify(options.body);
@@ -139,7 +199,7 @@ export async function api(path, options = {}) {
 	try {
 		res = await fetch(path, init);
 	} catch (error) {
-		const err = new Error("Cannot reach the MyHarness server.");
+		const err = new Error(t("Cannot reach the MyHarness server."));
 		err.cause = error;
 		throw err;
 	}
@@ -153,19 +213,20 @@ export async function api(path, options = {}) {
 		}
 	}
 	if (!res.ok) {
-		const err = new Error(data?.error || `Request failed (${res.status})`);
+		const err = new Error(serverText(data?.error, t("Request failed ({status})", { status: res.status })));
 		err.status = res.status;
+		if (res.status === 410 && slot) recoverLostSlot(slot);
 		throw err;
 	}
 	return data;
 }
 
-export const post = (path, body) => api(path, { method: "POST", body: body ?? {} });
+export const post = (path, body, slot) => api(path, { method: "POST", body: body ?? {}, slot });
 
 export function toast(message, type = "info", ttl = 6000) {
 	const id = uid("toast");
 	state.toasts = [...state.toasts.slice(-4), { id, message, type }];
-	emit();
+	emit(true);
 	if (ttl > 0) setTimeout(() => dismissToast(id), ttl);
 	return id;
 }
@@ -181,33 +242,53 @@ export async function attempt(fn, { success, quiet } = {}) {
 		if (success) toast(success, "info", 3500);
 		return result ?? true;
 	} catch (error) {
-		if (!quiet) toast(error.message || String(error), "error", 9000);
+		if (!quiet) toast(serverText(error.message || String(error), t("The operation failed.")), "error", 9000);
 		return undefined;
 	}
 }
 
 // ---- Loading ---------------------------------------------------------------------------------
-export async function loadSnapshot() {
-	const snap = await api("/api/state");
-	state.snap = snap;
-	state.queue = snap.queue;
-	state.dialogs = snap.dialogs;
-	state.surface = snap.surface;
-	state.completion = snap.flags.completion;
-	emit();
+export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
+	const snap = await api("/api/state", { slot: slot ?? "" });
+	const id = slot ?? snap.slot;
+	runFor(id, () => {
+		state.snap = snap;
+		state.queue = snap.queue;
+		state.dialogs = snap.dialogs;
+		state.surface = snap.surface;
+		state.completion = snap.flags.completion;
+		emit();
+	});
 	return snap;
 }
 
-export async function loadTranscript() {
-	const data = await api("/api/transcript");
+export async function loadTranscript(slot = targetSlot ?? activeSlot) {
+	const data = await api("/api/transcript", { slot: slot ?? "" });
 	const toolRuns = {};
 	for (const item of data.items) {
 		if (item.kind === "toolResult") toolRuns[item.toolCallId] = { status: item.isError ? "error" : "done", endedAt: item.ts };
 	}
-	state.items = data.items;
-	state.toolRuns = toolRuns;
-	state.runs = {};
-	emit();
+	runFor(slot, () => {
+		state.items = data.items;
+		state.toolRuns = toolRuns;
+		state.runs = {};
+		emit();
+	});
+}
+
+/** Load one session's snapshot and transcript into its bag. */
+export async function refreshSlot(slot = activeSlot) {
+	await Promise.all([loadSnapshot(slot), loadTranscript(slot)]);
+	bagOf(slot).loaded = true;
+}
+
+export async function loadSlots() {
+	try {
+		const data = await api("/api/slots", { slot: "" });
+		set({ slots: data.slots });
+	} catch {
+		// The list is refreshed by the next slots event.
+	}
 }
 
 export async function loadWorkspaces() {
@@ -220,14 +301,34 @@ export async function loadWorkspaces() {
 	await Promise.all([...targets].map((root) => loadSessions(root)));
 }
 
-export async function loadSessions(rootPath) {
-	try {
-		const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}`);
-		state.workspaces = { ...state.workspaces, sessions: { ...state.workspaces.sessions, [rootPath]: data.sessions } };
-		emit();
-	} catch {
-		// A workspace whose folder disappeared simply lists no sessions.
+// Listing a workspace's chats reads every saved session file on the server, so requests for the same workspace are
+// merged: one runs at a time, and requests made while it runs cause exactly one more read afterwards.
+const sessionLoads = new Map();
+export function loadSessions(rootPath) {
+	const running = sessionLoads.get(rootPath);
+	if (running) {
+		running.again = true;
+		return running.promise;
 	}
+	const load = { again: false, promise: null };
+	load.promise = (async () => {
+		try {
+			do {
+				load.again = false;
+				try {
+					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}`);
+					state.workspaces = { ...state.workspaces, sessions: { ...state.workspaces.sessions, [rootPath]: data.sessions } };
+					emit();
+				} catch {
+					// A workspace whose folder disappeared simply lists no sessions.
+				}
+			} while (load.again);
+		} finally {
+			sessionLoads.delete(rootPath);
+		}
+	})();
+	sessionLoads.set(rootPath, load);
+	return load.promise;
 }
 
 export async function loadModels(refresh = false) {
@@ -240,39 +341,94 @@ export async function loadModels(refresh = false) {
 }
 
 export async function loadResources() {
+	const slot = targetSlot ?? activeSlot;
 	try {
-		state.resources = await api("/api/resources");
-		emit();
+		const data = await api("/api/resources", { slot });
+		runFor(slot, () => {
+			state.resources = data;
+			emit();
+		});
 	} catch (error) {
 		toast(error.message, "error");
 	}
 }
 
 export async function loadGitStatus() {
+	const slot = targetSlot ?? activeSlot;
+	let status = null;
 	try {
-		set({ gitStatus: await api("/api/git/status") });
+		status = await api("/api/git/status", { slot });
 	} catch {
-		set({ gitStatus: null });
+		status = null;
 	}
+	runFor(slot, () => set({ gitStatus: status }));
 }
 
 export async function refreshAll() {
-	await Promise.all([loadSnapshot(), loadTranscript(), loadWorkspaces()]);
+	for (const [id, bag] of bags) if (id !== activeSlot) bag.loaded = false;
+	await Promise.all([refreshSlot(activeSlot), loadWorkspaces(), loadSlots()]);
+}
+
+// ---- Switching between sessions ------------------------------------------------------------------
+/** Show another open session. Sessions keep running in the background, so this only changes which bag is on screen. */
+export async function activateSlot(slot) {
+	if (!slot || slot === activeSlot) return;
+	if (!bagOf(slot).loaded) await refreshSlot(slot);
+	activeSlot = slot;
+	state.activeSlot = slot;
+	state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
+	emit();
+	const bag = bagOf(slot);
+	if (!bag.resources) loadResources();
+	if (bag.gitStatus === undefined) loadGitStatus();
+	// The sidebar already knows every workspace and chat; only fetch what it has never loaded.
+	const root = state.snap?.workspace?.rootPath;
+	if (root && !state.workspaces.list.some((w) => w.rootPath === root)) loadWorkspaces().catch(() => {});
+	else if (root && state.workspaces.sessions[root] === undefined) loadSessions(root);
+}
+
+/** The session on screen is gone from the server (released or deleted elsewhere): reopen it, or start a fresh chat. */
+const recovering = new Set();
+function recoverLostSlot(slot) {
+	if (recovering.has(slot)) return;
+	const file = bags.get(slot)?.snap?.session?.file;
+	bags.delete(slot);
+	if (activeSlot !== slot) return;
+	recovering.add(slot);
+	(async () => {
+		try {
+			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", {}, "");
+			activeSlot = null;
+			await activateSlot(result.slot);
+			await loadSlots();
+		} catch (error) {
+			toast(error.message, "error");
+		} finally {
+			recovering.delete(slot);
+		}
+	})();
 }
 
 // ---- Boot + SSE ------------------------------------------------------------------------------
 let source = null;
 let booted = false;
 
+async function initialLoad() {
+	const snap = await api("/api/state", { slot: "" });
+	activeSlot = snap.slot;
+	state.activeSlot = snap.slot;
+	await refreshAll();
+}
+
 export async function boot() {
 	applyAppearance();
 	matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyAppearance);
 	const poll = async () => {
 		try {
-			const boot = await api("/api/boot");
+			const boot = await api("/api/boot", { slot: "" });
 			set({ boot: { ...boot } });
 			if (boot.phase === "ready" && !booted) {
-				await refreshAll();
+				await initialLoad();
 				booted = true;
 				loadModels();
 				connectEvents();
@@ -299,6 +455,7 @@ function connectEvents() {
 	source.onerror = () => {
 		set({ connected: false });
 	};
+	// Handlers receive (data, slot) and run with the state accessors bound to that session.
 	const on = (name, fn) =>
 		source.addEventListener(name, (event) => {
 			let data = {};
@@ -308,18 +465,20 @@ function connectEvents() {
 				return;
 			}
 			try {
-				fn(data);
+				runFor(data.slot, () => fn(data, data.slot ?? activeSlot));
 			} catch (error) {
 				console.error(`event ${name} failed`, error);
 			}
 		});
 
 	on("boot", (d) => set({ boot: { ...state.boot, ...d } }));
-	on("dialogs", (d) => set({ dialogs: d.requests, boot: { ...state.boot, dialogs: d.requests } }));
+	on("dialogs", (d) => (d.slot ? set({ dialogs: d.requests }) : set({ boot: { ...state.boot, dialogs: d.requests } })));
 	on("surface", (d) => set({ surface: d }));
-	on("editor_text", (d) => set({ editorInsert: { text: d.text, nonce: Date.now() } }));
+	on("editor_text", (d, slot) => slot === activeSlot && set({ editorInsert: { text: d.text, nonce: Date.now() } }));
 	on("notice", (d) => toast(d.message, d.type === "error" ? "error" : d.type === "warning" ? "warning" : "info", d.type === "error" ? 10000 : 6000));
 	on("shutdown", () => set({ shutdown: true }));
+	on("slots", (d) => set({ slots: d.slots }));
+	on("slot_closed", (d) => recoverLostSlot(d.slot));
 
 	on("agent_start", (d) => {
 		state.currentRunId = d.runId;
@@ -336,12 +495,12 @@ function connectEvents() {
 		state.snap = { ...state.snap, run: d, active: ["queued", "starting", "running", "waiting", "recovering"].includes(d.state) };
 		emit();
 	});
-	on("run_finished", (d) => {
+	on("run_finished", (d, slot) => {
 		state.runs = { ...state.runs, [d.runId]: d };
 		state.snap = state.snap ? { ...state.snap, lastRun: d, active: false } : state.snap;
 		emit();
-		notifyFinished(d);
-		refreshSoon();
+		notifyFinished(d, state.snap);
+		refreshSoon(slot);
 	});
 
 	on("message_start", (d) => {
@@ -407,48 +566,55 @@ function connectEvents() {
 		emit();
 	});
 	on("compaction_start", (d) => set({ compaction: { reason: d.reason, startedAt: Date.now() } }));
-	on("compaction_end", async (d) => {
+	on("compaction_end", async (d, slot) => {
 		set({ compaction: null });
-		if (d.aborted) toast("Compaction cancelled", "warning");
-		else if (d.errorMessage) toast(`Compaction failed: ${d.errorMessage}`, "error");
+		if (d.aborted) toast(t("Compaction cancelled"), "warning");
+		else if (d.errorMessage) toast(t("Compaction failed: {errorMessage}", { errorMessage: serverText(d.errorMessage, t("unknown error")) }), "error");
 		await attempt(async () => {
-			await loadTranscript();
-			await loadSnapshot();
+			await loadTranscript(slot);
+			await loadSnapshot(slot);
 		}, { quiet: true });
 	});
 	on("auto_retry_start", (d) => set({ retry: { ...d, at: Date.now() } }));
 	on("auto_retry_end", (d) => {
 		set({ retry: null });
-		if (!d.success && d.finalError) toast(`Retry failed after ${d.attempt} attempts: ${d.finalError}`, "error");
+		if (!d.success && d.finalError) toast(t("Retry failed after {attempt} attempts: {finalError}", { attempt: d.attempt, finalError: serverText(d.finalError, t("unknown error")) }), "error");
 	});
 	on("provider_recovery", (d) => set({ recovery: d }));
-	on("git_checkpoint", (d) => {
-		if (d.phase === "end" && !d.ok) toast(`Git checkpoint was not created. The agent continues, but this task cannot be undone with Undo.\n${d.error || ""}`, "warning", 9000);
-		if (d.phase === "end") loadSnapshot();
+	on("git_checkpoint", (d, slot) => {
+		if (d.phase === "end" && !d.ok) toast(t("Git checkpoint was not created. The agent continues, but this task cannot be undone with Undo.\n{error}", { error: d.error || "" }), "warning", 9000);
+		if (d.phase === "end") loadSnapshot(slot);
 	});
 	on("git_task", (d) => set({ gitTask: d.active ? d : null }));
-	on("checkpoint_changed", () => {
-		loadSnapshot();
-		loadGitStatus();
+	on("checkpoint_changed", (d, slot) => {
+		loadSnapshot(slot);
+		if (slot === activeSlot) loadGitStatus();
 	});
-	on("session_replaced", async () => {
-		state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
+	on("session_replaced", async (d, slot) => {
 		state.userBash = {};
 		state.userBashOrder = [];
 		state.subAgents = {};
 		state.compaction = null;
 		state.retry = null;
-		await attempt(refreshAll, { quiet: true });
-		loadResources();
-		loadGitStatus();
+		state.resources = null;
+		state.gitStatus = undefined;
+		if (slot === activeSlot) state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
+		await attempt(async () => {
+			await refreshSlot(slot);
+			if (slot === activeSlot) await loadWorkspaces();
+		}, { quiet: true });
+		if (slot === activeSlot) {
+			loadResources();
+			loadGitStatus();
+		}
 	});
-	on("resources_changed", () => loadResources());
-	on("models_changed", async () => {
+	on("resources_changed", (d, slot) => (slot === activeSlot ? loadResources() : (state.resources = null)));
+	on("models_changed", async (d, slot) => {
 		await loadModels();
-		await attempt(loadSnapshot, { quiet: true });
+		await attempt(() => loadSnapshot(slot), { quiet: true });
 		if (state.providers) loadProviders();
 	});
-	on("settings_changed", () => attempt(loadSnapshot, { quiet: true }));
+	on("settings_changed", (d, slot) => attempt(() => loadSnapshot(slot), { quiet: true }));
 	on("login_event", (d) => set({ loginEvent: d.type === "done" ? null : d }));
 
 	on("bash_start", (d) => {
@@ -462,13 +628,13 @@ function connectEvents() {
 		state.userBash = { ...state.userBash, [d.id]: { ...entry, output: (entry.output + d.chunk).slice(-400_000) } };
 		emit();
 	});
-	on("bash_end", (d) => {
+	on("bash_end", (d, slot) => {
 		const entry = state.userBash[d.id];
 		if (!entry) return;
 		const status = d.error ? "error" : d.cancelled ? "cancelled" : d.timedOut ? "timeout" : d.exitCode ? "failed" : "done";
 		state.userBash = { ...state.userBash, [d.id]: { ...entry, ...d, output: d.output || entry.output, status, endedAt: d.ts } };
 		emit();
-		if (!state.snap?.active) refreshSoon();
+		if (!state.snap?.active) refreshSoon(slot);
 	});
 }
 
@@ -504,32 +670,36 @@ function attachEntryId(d) {
 	}
 }
 
-let refreshTimer;
-function refreshSoon() {
-	clearTimeout(refreshTimer);
-	refreshTimer = setTimeout(() => {
-		attempt(loadSnapshot, { quiet: true });
-		const current = state.workspaces.list.find((w) => w.current);
-		if (current) loadSessions(current.rootPath);
-		if (state.view.panelOpen && state.view.panelTab === "changes") emit();
-		loadGitStatus();
-	}, 250);
+const refreshTimers = new Map();
+function refreshSoon(slot = activeSlot) {
+	clearTimeout(refreshTimers.get(slot));
+	refreshTimers.set(
+		slot,
+		setTimeout(() => {
+			attempt(() => loadSnapshot(slot), { quiet: true });
+			if (slot !== activeSlot) return;
+			const root = state.snap?.workspace?.rootPath;
+			if (root) loadSessions(root);
+			if (state.view.panelOpen && state.view.panelTab === "changes") emit();
+			loadGitStatus();
+		}, 250),
+	);
 }
 let sessionsTimer;
 function refreshSessionsSoon() {
 	clearTimeout(sessionsTimer);
 	sessionsTimer = setTimeout(() => {
-		const current = state.workspaces.list.find((w) => w.current);
-		if (current) loadSessions(current.rootPath);
+		const root = state.snap?.workspace?.rootPath;
+		if (root) loadSessions(root);
 	}, 400);
 }
 
-function notifyFinished(run) {
+function notifyFinished(run, snap) {
 	if (!state.view.notify || document.visibilityState === "visible") return;
 	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-	const titles = { completed: "Task completed", partial: "Task partially completed", failed: "Task failed", cancelled: "Task cancelled" };
+	const titles = { completed: N_("Task completed"), partial: N_("Task partially completed"), failed: N_("Task failed"), cancelled: N_("Task cancelled") };
 	try {
-		new Notification(`MyHarness · ${titles[run.outcome] || "Task finished"}`, { body: state.snap?.session?.name || state.snap?.workspace?.name || "" });
+		new Notification(`MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, { body: snap?.session?.name || snap?.workspace?.name || "" });
 	} catch {
 		// Notifications are optional.
 	}

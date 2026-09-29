@@ -106,3 +106,27 @@
 .provider-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-raised); }
 .key-list { display: flex; flex-direction: column; gap: 4px; }
 .key-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+
+/* Context usage details (meter popover and Session panel) */
+.cu { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 8px; font-size: var(--fs-sm); }
+.cu-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.cu-big { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cu-big .dim { font-size: var(--fs-sm); font-weight: 400; }
+.cu-big.warn { color: var(--warn); } .cu-big.danger { color: var(--danger); }
+.cu-sub { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cu-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-inset); border: 1px solid var(--border); }
+.cu-bar .seg { display: block; height: 100%; min-width: 0; flex: none; }
+.cu-title { margin-top: 4px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; }
+.cu-rows { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; row-gap: 3px; }
+.cu-row { display: contents; }
+.cu-label { display: flex; align-items: center; gap: 7px; color: var(--text-2); min-width: 0; }
+.cu-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.cu-hint { grid-column: 1 / -1; font-size: var(--fs-xs); margin: -2px 0 2px 0; }
+.cu-rows .cu-label + .cu-value + .cu-hint { padding-left: 0; }
+.cu-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.cu-note { font-size: var(--fs-xs); line-height: 1.5; }
+.cu-actions { display: flex; gap: 8px; margin-top: 4px; }
+.s0 { background: #6f9bf0; } .s1 { background: #63c08a; } .s2 { background: #d9b95b; } .s3 { background: #b98ae0; }
+.s4 { background: #e0865f; } .s5 { background: #5cc2c8; } .s6 { background: #e06c9f; } .s7 { background: #9ec25c; }
+.s8 { background: #8a90d6; } .s9 { background: #d6a25c; } .s10 { background: #7f8a96; }
+.reserved { background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, transparent 3px 6px); }

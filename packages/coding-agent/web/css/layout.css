@@ -82,3 +82,8 @@
 
 .panel[data-w="xs"] .tab-label, .panel[data-w="s"] .tab-label { display: none; }
 .panel[data-w="xs"] .tab, .panel[data-w="s"] .tab { padding: 0 9px; }
+
+/* Workspace children: height animates 0 -> auto with a grid row so folding never jumps. */
+.ws-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
+.ws-collapse.open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.ws-collapse-inner { min-height: 0; overflow: hidden; }

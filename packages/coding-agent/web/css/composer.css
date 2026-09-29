@@ -92,3 +92,35 @@
 .menu-hint { font-size: var(--fs-xs); color: var(--text-3); }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 .menu-wrap { position: relative; }
+
+/* Inline command panel: /settings, /model, /git … open here, above the input, and are driven from the keyboard. */
+.cp { display: flex; flex-direction: column; max-height: min(460px, 52vh); background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.cp-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); flex: none; }
+.cp-title { font-weight: 600; font-size: 13px; min-width: 0; }
+.cp-title .cur { color: var(--text); }
+.cp-sep { margin: 0 6px; color: var(--text-4); }
+.cp-keys { font-size: var(--fs-xs); white-space: nowrap; }
+.main[data-w="s"] .cp-keys, .main[data-w="xs"] .cp-keys { display: none; }
+.cp-screen { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; outline: none; }
+.cp-sub { padding: 8px 14px 2px; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.cp-filter { display: flex; align-items: center; gap: 8px; height: 34px; margin: 6px 10px 2px; padding: 0 10px; border-radius: var(--r-md); background: var(--bg-inset); color: var(--text-3); flex: none; }
+.cp-filter input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font-size: 13px; }
+.cp-list { overflow-y: auto; overscroll-behavior: contain; padding: 4px; min-height: 0; flex: 1 1 auto; }
+.cp-group { padding: 8px 10px 4px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; }
+.cp-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 13px; cursor: pointer; }
+.cp-row.sel { background: var(--surface-active); color: var(--text); }
+.cp-row.disabled { opacity: 0.45; cursor: default; }
+.cp-row.danger { color: var(--danger); }
+.cp-ico { width: 16px; flex: none; display: grid; place-items: center; color: var(--text-3); }
+.cp-main { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.cp-desc { font-size: var(--fs-xs); }
+.cp-value { color: var(--text-3); font-size: var(--fs-sm); max-width: 45%; text-align: right; }
+.cp-tail { width: 16px; flex: none; display: grid; place-items: center; }
+.cp-switch { width: 28px; height: 16px; border-radius: 8px; background: var(--border-strong); position: relative; flex: none; transition: background var(--t-fast) var(--ease); }
+.cp-switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-raised); transition: transform var(--t-fast) var(--ease); }
+.cp-switch.on { background: var(--accent); }
+.cp-switch.on i { transform: translateX(12px); }
+.cp-input { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.cp-screen > .inline-frame { overflow-y: auto; min-height: 0; padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.inline-frame .modal-body { display: flex; flex-direction: column; gap: 10px; }
+.inline-frame .modal-foot { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }

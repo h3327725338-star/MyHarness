@@ -2,6 +2,7 @@
 import { html, memo, useMemo, useState } from "./ui.js";
 import { highlight } from "./markdown.js";
 import { parsePatch } from "./diff-parse.js";
+import { t } from "./i18n.js";
 
 function pairRows(hunk) {
 	const rows = [];
@@ -56,7 +57,7 @@ export const DiffView = memo(function DiffView({ patch, mode = "unified", langua
 	const total = hunks.reduce((n, h) => n + h.lines.length, 0);
 	const plain = total > 2500;
 	let budget = limit;
-	if (!hunks.length) return html`<div class="diff-empty dim">No textual changes.</div>`;
+	if (!hunks.length) return html`<div class="diff-empty dim">${t("No textual changes.")}</div>`;
 	return html`<div class=${`diff ${mode}`}>
 		${hunks.map((hunk, index) => {
 			if (budget <= 0) return null;
@@ -70,7 +71,7 @@ export const DiffView = memo(function DiffView({ patch, mode = "unified", langua
 					: slice.map((line, i) => html`<${UnifiedLine} key=${i} line=${line} language=${language} plain=${plain} />`)}
 			</div>`;
 		})}
-		${total > limit ? html`<button class="btn sm ghost diff-more" onClick=${() => setLimit(limit + MAX_LINES)}>Show more (${total - limit} lines)</button>` : null}
+		${total > limit ? html`<button class="btn sm ghost diff-more" onClick=${() => setLimit(limit + MAX_LINES)}>${t("Show more ({limit} lines)", { limit: total - limit })}</button>` : null}
 	</div>`;
 });
 

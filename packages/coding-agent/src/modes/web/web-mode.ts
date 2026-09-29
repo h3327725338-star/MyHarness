@@ -10,8 +10,8 @@ import { getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { WebDialogBridge } from "./dialogs.ts";
-import { WebHost } from "./host.ts";
 import { WebHttpServer } from "./http-server.ts";
+import { WebHostHub } from "./hub.ts";
 import { registerCoreRoutes } from "./routes-core.ts";
 import { registerFileRoutes, registerFolderBrowser } from "./routes-files.ts";
 import { registerGitRoutes } from "./routes-git.ts";
@@ -29,6 +29,8 @@ export interface WebBootstrap {
 	url: string;
 	/** ProjectTrustContext dialogs answered in the browser. */
 	trustUi: ProjectTrustContext["ui"];
+	/** Lets dialogs owned by other sessions be answered through the same /api/ui/respond route. */
+	addDialogResponder(responder: (id: string, value: string | boolean | undefined) => boolean): void;
 	setPhase(phase: "starting" | "ready" | "error", detail?: string): void;
 }
 
@@ -45,6 +47,7 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	const dialogs = new WebDialogBridge();
 	let phase: "starting" | "ready" | "error" = "starting";
 	let detail: string | undefined;
+	const dialogResponders: Array<(id: string, value: string | boolean | undefined) => boolean> = [];
 
 	server.mount({ prefix: "/assets/", directory: getWebUiDir() });
 	server.mount({ prefix: "/vendor/", directory: join(getWebUiDir(), "vendor") });
@@ -62,12 +65,11 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	}));
 	server.route("POST", "/api/ui/respond", ({ body }) => {
 		const payload = (body ?? {}) as { id?: unknown; value?: unknown };
+		const value = typeof payload.value === "string" || typeof payload.value === "boolean" ? payload.value : undefined;
+		const id = payload.id;
 		const ok =
-			typeof payload.id === "string" &&
-			dialogs.respond(
-				payload.id,
-				typeof payload.value === "string" || typeof payload.value === "boolean" ? payload.value : undefined,
-			);
+			typeof id === "string" &&
+			(dialogs.respond(id, value) || dialogResponders.some((respond) => respond(id, value)));
 		return { ok };
 	});
 	dialogs.onDialogsChanged = () => server.broadcast("dialogs", { requests: dialogs.requests });
@@ -110,6 +112,9 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 				console.error(`${type ?? "info"}: ${message}`);
 			},
 		},
+		addDialogResponder(responder) {
+			dialogResponders.push(responder);
+		},
 		setPhase(next, nextDetail) {
 			phase = next;
 			detail = nextDetail;
@@ -125,35 +130,35 @@ export async function runWebMode(
 	options: WebModeOptions = {},
 ): Promise<number> {
 	const { server, dialogs } = bootstrap;
-	const host = new WebHost({ runtimeHost, server, dialogs, version: VERSION });
+	let resolveExit: (code: number) => void = () => {};
+	const exited = new Promise<number>((resolve) => {
+		resolveExit = resolve;
+	});
+	let shuttingDown = false;
+	const hub = new WebHostHub({ server, version: VERSION, onShutdown: () => void shutdown(0) });
+	bootstrap.addDialogResponder((id, value) => hub.respondToDialog(id, value));
+	const host = hub.host;
 	registerCoreRoutes(server, host);
-	registerSessionRoutes(server, host);
+	registerSessionRoutes(server, host, hub);
 	registerFileRoutes(server, host);
 	registerFolderBrowser(server, host);
 	registerGitRoutes(server, host);
 	registerSettingsRoutes(server, host);
 	registerProviderRoutes(server, host);
 
-	let resolveExit: (code: number) => void = () => {};
-	const exited = new Promise<number>((resolve) => {
-		resolveExit = resolve;
-	});
-	let shuttingDown = false;
 	const shutdown = async (code: number) => {
 		if (shuttingDown) return;
 		shuttingDown = true;
 		server.broadcast("shutdown", {});
 		dialogs.dismissAll();
 		try {
-			await runtimeHost.dispose();
-			await runtimeHost.services.settingsManager.flush();
+			await hub.dispose();
 		} catch (error) {
 			console.error(`Shutdown error: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		await server.close();
 		resolveExit(code);
 	};
-	host.onShutdown = () => void shutdown(0);
 	server.route("POST", "/api/shutdown", () => {
 		setTimeout(() => void shutdown(0), 50);
 		return { ok: true };
@@ -166,7 +171,7 @@ export async function runWebMode(
 		return { signal, handler };
 	});
 
-	await host.start();
+	const primary = await hub.addPrimary(runtimeHost, dialogs);
 	bootstrap.setPhase("ready");
 
 	const startup = [options.initialMessage, ...(options.initialMessages ?? [])].filter((text): text is string =>
@@ -175,11 +180,11 @@ export async function runWebMode(
 	if (startup.length > 0) {
 		void (async () => {
 			try {
-				await host.submit(startup[0], { images: options.initialImages });
+				await primary.submit(startup[0], { images: options.initialImages });
 				for (const message of startup.slice(1)) {
-					await host.session.waitForIdle();
-					await host.waitForCompletion();
-					await host.submit(message);
+					await primary.session.waitForIdle();
+					await primary.waitForCompletion();
+					await primary.submit(message);
 				}
 			} catch (error) {
 				server.broadcast("notice", {

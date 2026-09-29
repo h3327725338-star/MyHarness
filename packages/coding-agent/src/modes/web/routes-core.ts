@@ -3,6 +3,9 @@
 import type { ThinkingLevel } from "@myharness/agent-core";
 import type { ImageContent } from "@myharness/ai";
 import { modelsAreEqual } from "@myharness/ai/compat";
+import { AUTO_MEMORY_SYSTEM_PROMPT } from "../../agent/runtime/auto-memory.ts";
+import { buildContextBreakdown } from "../../context/context-breakdown.ts";
+import { formatSkillsForPrompt } from "../../skills/loader/index.ts";
 import { resizeImage } from "../../utils/image-resize.ts";
 import { collectInputImageAttachments } from "../../utils/input-image-attachments.ts";
 import type { WebHost } from "./host.ts";
@@ -171,6 +174,53 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// ---- Context ---------------------------------------------------------------
+	/** What the next model request is made of, measured on the real system prompt, tool definitions and messages. */
+	server.route("GET", "/api/context", () => {
+		const session = host.session;
+		const { agent } = session;
+		const loader = session.resourceLoader;
+		const extensionTools = new Set<string>();
+		for (const extension of loader.getExtensions().extensions)
+			for (const name of extension.tools.keys()) extensionTools.add(name);
+		const active = new Set(session.getActiveToolNames());
+		const tools = session
+			.getAllTools()
+			.filter((tool) => active.has(tool.name))
+			.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+				extension: extensionTools.has(tool.name),
+			}));
+		const messages = agent.state.messages;
+		const compat = session.model?.compat as
+			| { supportsToolSearch?: boolean; supportsToolReferences?: boolean }
+			| undefined;
+		const deferred = new Set<string>();
+		if (compat?.supportsToolSearch === true || compat?.supportsToolReferences === true) {
+			const called = new Set<string>();
+			for (const message of messages) {
+				if (message.role === "assistant") {
+					for (const block of message.content) if (block.type === "toolCall") called.add(block.name);
+				} else if (message.role === "toolResult") {
+					for (const name of message.addedToolNames ?? [])
+						if (!called.has(name) && active.has(name)) deferred.add(name);
+				}
+			}
+		}
+		const skills = loader.getSkills().skills;
+		return buildContextBreakdown({
+			budget: session.contextBudget,
+			systemPrompt: agent.state.systemPrompt,
+			contextFiles: loader.getAgentsFiles().agentsFiles,
+			skillsPromptText: active.has("read") ? formatSkillsForPrompt(skills).trim() : "",
+			memoryPolicyText: session.settingsManager.getAutoMemorySettings().enabled ? AUTO_MEMORY_SYSTEM_PROMPT : "",
+			tools,
+			deferredTools: [...deferred],
+			messages,
+		});
+	});
+
 	server.route("POST", "/api/compact", async ({ body }) => {
 		const instructions =
 			typeof asObject(body ?? {}).instructions === "string" ? (asObject(body).instructions as string) : undefined;

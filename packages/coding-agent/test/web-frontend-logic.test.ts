@@ -124,6 +124,37 @@ describe("Web UI: turns", () => {
 	});
 });
 
+describe("Web UI: reasoning steps", () => {
+	it("skips empty reasoning, merges consecutive reasoning blocks and keeps real reasoning", () => {
+		const items = [
+			{ kind: "user", ts: 1, text: "x", images: [] },
+			assistant(
+				[
+					{ type: "thinking", text: "" },
+					{ type: "thinking", text: "First part." },
+					{ type: "thinking", text: "Second part." },
+					{ type: "toolCall", id: "c1", name: "read", args: { path: "a.ts" } },
+				],
+				{ stopReason: "toolUse", ts: 2 },
+			),
+			{ kind: "toolResult", ts: 3, toolCallId: "c1", toolName: "read", text: "content", images: [], isError: false },
+			assistant(
+				[
+					{ type: "thinking", text: "After the tool." },
+					{ type: "text", text: "Done." },
+				],
+				{ ts: 4 },
+			),
+		];
+		const [turn] = buildTurns(items, { cwd: "", toolRuns: {} });
+		const thinking = turn.steps.filter((s: any) => s.type === "thinking");
+		expect(thinking).toHaveLength(2);
+		expect(thinking[0].text).toContain("First part.");
+		expect(thinking[0].text).toContain("Second part.");
+		expect(thinking[1].text).toBe("After the tool.");
+	});
+});
+
 describe("Web UI: diff parsing and utilities", () => {
 	it("parses hunks with correct line numbers", () => {
 		const hunks = parsePatch("--- a/x\n+++ b/x\n@@ -3,3 +3,3 @@ fn\n keep\n-old\n+new\n tail\n");

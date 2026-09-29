@@ -148,6 +148,8 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 ├── biome.json
 ├── dev.cmd
 ├── dev-web.cmd
+├── dev-web.vbs
+├── dev-web.ps1
 ├── dev.ps1
 ├── myharness-test.ps1
 ├── myharness-test.sh
@@ -165,7 +167,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
-- dev-web.cmd：双击启动 Web UI 的包装器，等价于 `dev.cmd --web`（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
+- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志写入 `data/logs/web-launch.*.log`，启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
 - test.sh：清理部分 Provider 环境变量后执行 workspace 测试；它会临时移动用户 auth 文件，因此不是严格零写入脚本。

@@ -1,8 +1,9 @@
 // Command palette (Ctrl+K): app actions, chats and workspace files in one keyboard-driven list.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { api, setView, state, useStore } from "./store.js";
-import { actions } from "./actions.js";
-import { debounce, relTime } from "./util.js";
+import { actions, openCommand } from "./actions.js";
+import { chatTitle, debounce, relTime } from "./util.js";
+import { t } from "./i18n.js";
 
 function score(query, text) {
 	const q = query.toLowerCase();
@@ -55,41 +56,43 @@ export function CommandPalette() {
 			fn();
 		};
 		const cmds = [
-			{ label: "New chat", icon: "edit", hint: "Ctrl+N", run: run(() => actions.newSession()) },
-			{ label: "Open Changes", icon: "fileDiff", hint: "Ctrl+Shift+D", run: run(() => actions.togglePanel("changes")) },
-			{ label: "Open Files", icon: "folder", hint: "Ctrl+Shift+E", run: run(() => actions.togglePanel("files")) },
-			{ label: "Open Terminal", icon: "terminal", hint: "Ctrl+J", run: run(() => actions.togglePanel("terminal")) },
-			{ label: "Open Session details", icon: "layers", run: run(() => actions.togglePanel("context")) },
-			{ label: "Toggle sidebar", icon: "sidebar", hint: "Ctrl+B", run: run(() => setView({ sidebarOpen: !state.view.sidebarOpen })) },
-			{ label: "Compact context", icon: "layers", run: run(() => actions.compact()) },
-			{ label: "Commit changes…", icon: "gitCommit", run: run(() => actions.openGitDialog("commit")) },
-			{ label: "Push to upstream…", icon: "gitBranch", run: run(() => actions.openGitDialog("push")) },
-			{ label: "Undo or keep task changes…", icon: "undo", run: run(() => actions.openGitDialog("undo")) },
-			{ label: "Git tools & worktrees…", icon: "gitBranch", run: run(() => actions.openGitDialog("more")) },
-			{ label: "Switch model", icon: "cpu", run: run(() => setTimeout(() => state.modelPickerNonce !== undefined && actions.insertIntoComposer("/model "), 0)) },
-			{ label: "Settings", icon: "gear", hint: "Ctrl+,", run: run(() => setView({ settingsOpen: true })) },
-			{ label: "Providers & API keys", icon: "key", run: run(() => setView({ settingsOpen: true, settingsSection: "providers" })) },
-			{ label: "Export chat as HTML", icon: "download", run: run(() => actions.exportSession()) },
-			{ label: "Theme: dark", icon: "eye", run: run(() => setView({ theme: "dark" })) },
-			{ label: "Theme: light", icon: "eye", run: run(() => setView({ theme: "light" })) },
-			{ label: "Theme: follow system", icon: "eye", run: run(() => setView({ theme: "system" })) },
+			{ label: t("New chat"), icon: "edit", hint: "Ctrl+N", run: run(() => actions.newSession()) },
+			{ label: t("Open Changes"), icon: "fileDiff", hint: "Ctrl+Shift+D", run: run(() => actions.togglePanel("changes")) },
+			{ label: t("Open Files"), icon: "folder", hint: "Ctrl+Shift+E", run: run(() => actions.togglePanel("files")) },
+			{ label: t("Open Terminal"), icon: "terminal", hint: "Ctrl+J", run: run(() => actions.togglePanel("terminal")) },
+			{ label: t("Open Session details"), icon: "layers", run: run(() => actions.togglePanel("context")) },
+			{ label: t("Toggle sidebar"), icon: "sidebar", hint: "Ctrl+B", run: run(() => setView({ sidebarOpen: !state.view.sidebarOpen })) },
+			{ label: t("Compact context"), icon: "layers", run: run(() => actions.compact()) },
+			{ label: t("Commit changes…"), icon: "gitCommit", run: run(() => openCommand("commit")) },
+			{ label: t("Push to upstream…"), icon: "gitBranch", run: run(() => openCommand("push")) },
+			{ label: t("Undo or keep task changes…"), icon: "undo", run: run(() => openCommand("undo")) },
+			{ label: t("Git tools & worktrees…"), icon: "gitBranch", run: run(() => openCommand("git")) },
+			{ label: t("Switch model"), icon: "cpu", run: run(() => openCommand("model")) },
+			{ label: t("Settings"), icon: "gear", hint: "Ctrl+,", run: run(() => setView({ settingsOpen: true })) },
+			{ label: t("Providers & API keys"), icon: "key", run: run(() => setView({ settingsOpen: true, settingsSection: "providers" })) },
+			{ label: t("Export chat as HTML"), icon: "download", run: run(() => actions.exportSession()) },
+			{ label: t("Theme: dark"), icon: "eye", run: run(() => setView({ theme: "dark" })) },
+			{ label: t("Theme: light"), icon: "eye", run: run(() => setView({ theme: "light" })) },
+			{ label: t("Theme: follow system"), icon: "eye", run: run(() => setView({ theme: "system" })) },
+			{ label: t("Language: English"), icon: "globe", run: run(() => setView({ lang: "en" })) },
+			{ label: t("Language: 简体中文"), icon: "globe", run: run(() => setView({ lang: "zh-CN" })) },
 		];
 		for (const c of cmds) {
 			const s = score(query, c.label);
-			if (s) list.push({ ...c, group: "Actions", s });
+			if (s) list.push({ ...c, group: t("Actions"), s });
 		}
 		for (const [root, sessions] of Object.entries(ws.sessions)) {
 			const w = ws.list.find((x) => x.rootPath === root);
 			for (const info of sessions) {
-				const title = info.name || info.firstMessage || "Untitled chat";
+				const title = chatTitle(info);
 				const s = query ? score(query, `${title} ${w?.name || ""}`) : 0;
 				if (!query && !info.current) continue;
 				if (query && !s) continue;
-				list.push({ label: title.slice(0, 90), sub: `${w?.name || ""} · ${relTime(info.modified)}`, icon: "chat", group: "Chats", s: s + 1, run: () => (close(), actions.openSession(info.path)) });
+				list.push({ label: title.slice(0, 90), sub: `${w?.name || ""} · ${relTime(info.modified)}`, icon: "chat", group: t("Chats"), s: s + 1, run: () => (close(), actions.openSession(info.path)) });
 			}
 		}
-		for (const file of files) list.push({ label: file, icon: "file", group: "Files", s: 5, run: () => (close(), actions.openFile(file)) });
-		const order = { Actions: 0, Chats: 1, Files: 2 };
+		for (const file of files) list.push({ label: file, icon: "file", group: t("Files"), s: 5, run: () => (close(), actions.openFile(file)) });
+		const order = { [t("Actions")]: 0, [t("Chats")]: 1, [t("Files")]: 2 };
 		return list.sort((a, b) => order[a.group] - order[b.group] || b.s - a.s).slice(0, 40);
 	}, [query, ws, files, snap?.active]);
 
@@ -106,8 +109,8 @@ export function CommandPalette() {
 	};
 	let lastGroup = "";
 	return html`<div class="scrim top" onMouseDown=${(e) => e.target === e.currentTarget && close()}>
-		<div class="palette" role="dialog" aria-label="Command palette">
-			<div class="palette-input"><${Icon} name="search" size=${16} /><input autofocus placeholder="Search actions, chats and files…" value=${query} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${onKey} /><span class="kbd">Esc</span></div>
+		<div class="palette" role="dialog" aria-label=${t("Command palette")}>
+			<div class="palette-input"><${Icon} name="search" size=${16} /><input autofocus placeholder=${t("Search actions, chats and files…")} value=${query} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${onKey} /><span class="kbd">${t("Esc")}</span></div>
 			<div class="palette-list" ref=${listRef}>
 				${entries.map((entry, i) => {
 					const header = entry.group !== lastGroup ? html`<div class="pop-group" key=${`g-${entry.group}`}>${entry.group}</div>` : null;
@@ -115,7 +118,7 @@ export function CommandPalette() {
 					return html`${header}<button key=${`${entry.group}-${entry.label}-${i}`} class=${`palette-item ${i === sel ? "sel" : ""}`} onMouseEnter=${() => setSel(i)} onClick=${entry.run}>
 						<${Icon} name=${entry.icon} size=${15} /><span class="truncate grow">${entry.label}</span>${entry.sub ? html`<span class="dim">${entry.sub}</span>` : null}${entry.hint ? html`<span class="kbd">${entry.hint}</span>` : null}</button>`;
 				})}
-				${!entries.length ? html`<div class="empty">Nothing matches “${query}”.</div>` : null}
+				${!entries.length ? html`<div class="empty">${t("Nothing matches “{query}”.", { query })}</div>` : null}
 			</div>
 		</div>
 	</div>`;

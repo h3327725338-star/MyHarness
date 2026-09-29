@@ -1,11 +1,15 @@
 // Shared UI primitives: htm binding, hooks re-exports, popovers, modals, small controls.
-import { Component, Fragment, h, render } from "/vendor/preact.js";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "/vendor/preact-hooks.js";
+import { Component, Fragment, createContext, h, render } from "/vendor/preact.js";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "/vendor/preact-hooks.js";
 import htm from "/vendor/htm.js";
 import { Icon } from "./icons.js";
+import { t } from "./i18n.js";
 
 export const html = htm.bind(h);
-export { Component, Fragment, h, render, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon };
+export { Component, Fragment, createContext, h, render, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon };
+
+/** Set by the inline command panel: a Modal inside it is drawn in place (no scrim) and closing it goes back one level. */
+export const InlineFrame = createContext(null);
 
 function shallowEqual(a, b) {
 	if (a === b) return true;
@@ -56,8 +60,8 @@ export function useKey(handler, deps = []) {
 export function Popover({ anchor, open, onClose, placement = "bottom", align = "start", width, minWidth, maxHeight = 420, children, class: cls }) {
 	const ref = useRef(null);
 	const [style, setStyle] = useState({ visibility: "hidden" });
-	useLayoutEffect(() => {
-		if (!open || !anchor.current || !ref.current) return;
+	const place = () => {
+		if (!anchor.current || !ref.current) return;
 		const a = anchor.current.getBoundingClientRect();
 		const p = ref.current.getBoundingClientRect();
 		const margin = 6;
@@ -67,6 +71,15 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		let left = align === "end" ? a.right - p.width : a.left;
 		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
 		setStyle({ top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" });
+	};
+	useLayoutEffect(() => {
+		if (!open) return undefined;
+		place();
+		// Content that loads after opening (a list, a chart) changes the size: keep the popover anchored.
+		if (typeof ResizeObserver === "undefined" || !ref.current) return undefined;
+		const observer = new ResizeObserver(place);
+		observer.observe(ref.current);
+		return () => observer.disconnect();
 	}, [open, children]);
 	useClickOutside([ref, anchor], () => onClose?.(), open);
 	useEffect(() => {
@@ -109,7 +122,12 @@ export function Menu({ trigger, placement = "bottom", align = "start", width, ch
 
 export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true }) {
 	const ref = useRef(null);
+	const inline = useContext(InlineFrame);
 	useEffect(() => {
+		if (inline) {
+			ref.current?.querySelector("[autofocus], input, textarea, select")?.focus?.();
+			return undefined;
+		}
 		const onKey = (event) => {
 			if (event.key === "Escape") {
 				event.stopPropagation();
@@ -125,11 +143,18 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 			previous?.focus?.();
 		};
 	}, []);
+	if (inline) {
+		return html`<div class=${`inline-frame ${cls || ""}`} ref=${ref} role="group" aria-label=${title}>
+			${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}
+			<div class="modal-body">${children}</div>
+			${footer ? html`<div class="modal-foot">${footer}</div>` : null}
+		</div>`;
+	}
 	return html`<div class="scrim" onMouseDown=${(event) => closeOnScrim && event.target === event.currentTarget && onClose?.()}>
 		<div class=${`modal ${cls || ""}`} style=${{ width: `${width}px` }} ref=${ref} role="dialog" aria-modal="true" aria-label=${title}>
 			<div class="modal-head">
 				<div class="col grow"><div class="modal-title truncate">${title}</div>${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}</div>
-				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label="Close"><${Icon} name="x" size=${15} /></button>` : null}
+				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>` : null}
 			</div>
 			<div class="modal-body">${children}</div>
 			${footer ? html`<div class="modal-foot">${footer}</div>` : null}
@@ -183,9 +208,9 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 	return html`<div class=${`resizer ${side || ""} ${dragging ? "dragging" : ""}`} onMouseDown=${start} role="separator" aria-orientation="vertical" />`;
 }
 
-export function CopyButton({ text, label = "Copy", size = 14, class: cls }) {
+export function CopyButton({ text, label = t("Copy"), size = 14, class: cls }) {
 	const [done, setDone] = useState(false);
-	return html`<button class=${`icon-btn sm ${cls || ""}`} title=${done ? "Copied" : label} aria-label=${label}
+	return html`<button class=${`icon-btn sm ${cls || ""}`} title=${done ? t("Copied") : label} aria-label=${label}
 		onClick=${async (event) => {
 			event.stopPropagation();
 			try {

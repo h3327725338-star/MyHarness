@@ -43,7 +43,7 @@
 .group-head:disabled { cursor: default; }
 .group-label { font-size: 13px; }
 .group-body { margin-left: 10px; padding-left: 10px; border-left: 1px dashed var(--border); }
-.thinking-text { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); color: var(--text-2); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
+.thinking-text { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); color: var(--text-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
 .action { border-radius: var(--r-sm); }
 .action-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 1px 4px; border-radius: var(--r-sm); cursor: pointer; color: var(--text-2); font-size: 13px; }
 .action-row:hover { background: var(--surface-hover); }
@@ -134,9 +134,8 @@
 .custom-type { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
 
 /* Welcome */
-.welcome { margin: auto; padding: 8vh 0 4vh; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.welcome-mark { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--accent); }
-.welcome h1 { margin: 8px 0 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.welcome { margin: auto; width: 100%; min-width: 0; box-sizing: border-box; padding: 2vh 0 8vh; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.welcome h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
 .welcome .ws { color: var(--accent); }
 .welcome-meta { font-size: var(--fs-sm); max-width: 100%; }
 .welcome-tips { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; margin-top: 10px; font-size: var(--fs-sm); }
