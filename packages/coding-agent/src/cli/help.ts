@@ -29,6 +29,9 @@ export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
 		options: [
 			{ flags: "-p, --print [message]", description: "Print response and exit (also reads piped stdin)" },
 			{ flags: "--mode <text|json>", description: "Output mode (default: text in print mode)" },
+			{ flags: "--web", description: "Start the local Web UI (loopback only) instead of the terminal UI" },
+			{ flags: "--port <n>", description: "Web UI port (default 7878; 0 picks a free port)" },
+			{ flags: "--no-open", description: "Do not open the browser automatically in Web UI mode" },
 			{ flags: "--export <file>", description: "Export a session file to HTML and exit" },
 		],
 	},

@@ -19,6 +19,7 @@ npm.cmd run build
 ## 从这里开始
 
 - [Quickstart](quickstart.md) — 安装、配置认证并运行第一个 Session。
+- [Web UI](web-ui.md) — 本机浏览器界面（`myharness --web`）：对话、Diff、文件、Terminal、Git、设置，以及它如何与 CLI 共用同一套 runtime。
 - [使用说明](usage.md) — Interactive mode、Slash Commands、context files 和 CLI 参考。
 - [Providers](providers.md) — Provider 配置、credentials 和 model runtime 边界。
 - [llama.cpp](llama-cpp.md) — 运行本地 router 和管理 models。

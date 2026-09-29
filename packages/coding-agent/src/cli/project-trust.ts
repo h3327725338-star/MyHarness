@@ -9,7 +9,12 @@ export function createProjectTrustContext(options: {
 	mode: AppMode;
 	settingsManager: SettingsManager;
 	hasUI: boolean;
+	/** Dialog implementation for Web UI mode (trust questions are answered in the browser). */
+	webUi?: ProjectTrustContext["ui"];
 }): ProjectTrustContext {
+	if (options.mode === "web" && options.webUi) {
+		return { cwd: options.cwd, mode: "web", hasUI: true, ui: options.webUi };
+	}
 	return {
 		cwd: options.cwd,
 		mode: options.mode === "interactive" ? "tui" : options.mode,

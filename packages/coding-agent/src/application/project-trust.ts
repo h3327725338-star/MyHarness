@@ -9,7 +9,7 @@ import { CONFIG_DIR_NAME } from "../config.ts";
 import type { LoadExtensionsResult, ProjectTrustContext } from "../extensions/compat/types.ts";
 import { emitProjectTrustEvent } from "../extensions/runtime/runner.ts";
 
-export type AppMode = "interactive" | "print" | "json";
+export type AppMode = "interactive" | "web" | "print" | "json";
 
 export interface ResolveProjectTrustedOptions {
 	cwd: string;

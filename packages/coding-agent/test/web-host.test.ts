@@ -1,0 +1,322 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@myharness/ai/compat";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionFromServices,
+	createAgentSessionRuntime,
+	createAgentSessionServices,
+} from "../src/agent/runtime/session-runtime.ts";
+import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
+import { WebHost } from "../src/modes/web/host.ts";
+import { WebHttpServer } from "../src/modes/web/http-server.ts";
+import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
+import { registerFileRoutes } from "../src/modes/web/routes-files.ts";
+import { registerGitRoutes } from "../src/modes/web/routes-git.ts";
+import { registerProviderRoutes } from "../src/modes/web/routes-providers.ts";
+import { registerSessionRoutes } from "../src/modes/web/routes-sessions.ts";
+import { registerSettingsRoutes } from "../src/modes/web/routes-settings.ts";
+import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
+import { ModelRuntime } from "../src/providers/runtime/index.ts";
+import { SessionManager } from "../src/session/manager/index.ts";
+
+interface Fixture {
+	port: number;
+	project: string;
+	events: Array<{ event: string; data: any }>;
+	get(path: string): Promise<any>;
+	post(path: string, body?: unknown): Promise<any>;
+	waitFor(event: string, predicate?: (data: any) => boolean, timeoutMs?: number): Promise<any>;
+	faux: ReturnType<typeof registerFauxProvider>;
+}
+
+describe("Web host (real runtime with a faux provider)", () => {
+	const cleanups: Array<() => Promise<void> | void> = [];
+	let previousAgentDir: string | undefined;
+	const previousCwd = process.cwd();
+
+	afterEach(async () => {
+		while (cleanups.length > 0) await cleanups.pop()?.();
+		if (previousAgentDir === undefined) delete process.env.MYHARNESS_CODING_AGENT_DIR;
+		else process.env.MYHARNESS_CODING_AGENT_DIR = previousAgentDir;
+	});
+
+	function tempDir(prefix: string): string {
+		const dir = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(dir, { recursive: true });
+		cleanups.push(() => {
+			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+		});
+		return dir;
+	}
+
+	async function start(): Promise<Fixture> {
+		const project = tempDir("myharness-web-project");
+		const dataRoot = tempDir("myharness-web-data");
+		const agentDir = tempDir("myharness-web-agent");
+		process.chdir(dataRoot);
+		cleanups.push(() => process.chdir(previousCwd));
+		previousAgentDir = process.env.MYHARNESS_CODING_AGENT_DIR;
+		process.env.MYHARNESS_CODING_AGENT_DIR = agentDir;
+
+		const faux = registerFauxProvider();
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(agentDir, "models.json"),
+		});
+		const model = faux.getModel();
+		modelRuntime.registerProvider(model.provider, {
+			baseUrl: model.baseUrl,
+			api: model.api,
+			models: [
+				{
+					id: model.id,
+					name: model.name,
+					api: model.api,
+					reasoning: model.reasoning,
+					input: model.input,
+					cost: model.cost,
+					contextWindow: model.contextWindow,
+					maxTokens: model.maxTokens,
+					baseUrl: model.baseUrl,
+				},
+			],
+		});
+		const runtimeOptions = {
+			agentDir,
+			modelRuntime,
+			model: faux.getModel(),
+			resourceLoaderOptions: { noSkills: true, noPromptTemplates: true, noThemes: true },
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: faux.getModel(),
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
+			cwd: project,
+			agentDir,
+			sessionManager: SessionManager.create(project),
+		});
+		cleanups.push(async () => {
+			await runtimeHost.dispose();
+			faux.unregister();
+		});
+
+		const server = new WebHttpServer();
+		const dialogs = new WebDialogBridge();
+		const host = new WebHost({ runtimeHost, server, dialogs, version: "test" });
+		registerCoreRoutes(server, host);
+		registerSessionRoutes(server, host);
+		registerFileRoutes(server, host);
+		registerGitRoutes(server, host);
+		registerSettingsRoutes(server, host);
+		registerProviderRoutes(server, host);
+		await host.start();
+		const address = await server.listen(0);
+		cleanups.push(() => server.close());
+
+		const events: Array<{ event: string; data: any }> = [];
+		const listeners: Array<() => void> = [];
+		const sse = request(
+			{ host: "127.0.0.1", port: address.port, path: "/api/events", headers: { host: `127.0.0.1:${address.port}` } },
+			(res) => {
+				res.setEncoding("utf8");
+				let buffer = "";
+				res.on("data", (chunk) => {
+					buffer += chunk;
+					let index = buffer.indexOf("\n\n");
+					while (index >= 0) {
+						const frame = buffer.slice(0, index);
+						buffer = buffer.slice(index + 2);
+						const event = /^event: (.*)$/m.exec(frame)?.[1];
+						const data = /^data: (.*)$/m.exec(frame)?.[1];
+						if (event && data) events.push({ event, data: JSON.parse(data) });
+						for (const listener of listeners) listener();
+						index = buffer.indexOf("\n\n");
+					}
+				});
+			},
+		);
+		sse.on("error", () => {});
+		sse.end();
+		cleanups.push(() => {
+			sse.destroy();
+		});
+
+		const call = async (method: string, path: string, body?: unknown) => {
+			const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+				method,
+				headers: { "x-myharness-web": "1", "content-type": "application/json" },
+				body: body === undefined ? undefined : JSON.stringify(body),
+			});
+			const json = (await response.json()) as any;
+			if (!response.ok) throw new Error(`${response.status}: ${json.error}`);
+			return json;
+		};
+		return {
+			port: address.port,
+			project,
+			events,
+			faux,
+			get: (path) => call("GET", path),
+			post: (path, body) => call("POST", path, body ?? {}),
+			waitFor: (event, predicate = () => true, timeoutMs = 15_000) =>
+				new Promise((resolve, reject) => {
+					const find = () => events.find((entry) => entry.event === event && predicate(entry.data));
+					const found = find();
+					if (found) return resolve(found.data);
+					const timer = setTimeout(() => reject(new Error(`timeout waiting for ${event}`)), timeoutMs);
+					const listener = () => {
+						const hit = find();
+						if (hit) {
+							clearTimeout(timer);
+							resolve(hit.data);
+						}
+					};
+					listeners.push(listener);
+				}),
+		};
+	}
+
+	it("exposes the real session state, models and workspace", async () => {
+		const fx = await start();
+		const state = await fx.get("/api/state");
+		expect(state.model.provider).toBe(fx.faux.getModel().provider);
+		expect(state.cwd).toBe(fx.project);
+		expect(state.run.state).toBe("idle");
+		expect(state.workspace.name).toBeTruthy();
+		const models = await fx.get("/api/models");
+		expect(models.providers.flatMap((provider: any) => provider.models.map((m: any) => m.id))).toContain(
+			fx.faux.getModel().id,
+		);
+		const workspaces = await fx.get("/api/workspaces");
+		expect(workspaces.workspaces.some((w: any) => w.current)).toBe(true);
+	});
+
+	it("runs a prompt through the real Agent loop, streams events and reports the file change with a diff", async () => {
+		const fx = await start();
+		writeFileSync(join(fx.project, "notes.txt"), "alpha\n");
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\n" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxText("All done.")]),
+		]);
+		await fx.post("/api/prompt", { text: "append beta to notes.txt" });
+		const finished = await fx.waitFor("run_finished");
+		expect(finished.outcome).toBe("completed");
+		expect(finished.changeCount).toBe(1);
+		expect(readFileSync(join(fx.project, "notes.txt"), "utf8")).toBe("alpha\nbeta\n");
+
+		const names = new Set(fx.events.map((entry) => entry.event));
+		for (const expected of [
+			"agent_start",
+			"message_start",
+			"message_update",
+			"message_end",
+			"tool_start",
+			"tool_end",
+			"run_state",
+			"agent_settled",
+		]) {
+			expect(names.has(expected)).toBe(true);
+		}
+
+		const transcript = await fx.get("/api/transcript");
+		expect(transcript.items.map((item: any) => item.kind)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+
+		const changes = await fx.get("/api/changes?scope=run");
+		expect(changes.files).toHaveLength(1);
+		expect(changes.files[0]).toMatchObject({ path: "notes.txt", status: "modified", additions: 1, deletions: 0 });
+		const diff = await fx.get("/api/changes/diff?scope=run&path=notes.txt");
+		expect(diff.patch).toContain("+beta");
+	});
+
+	it("marks a run whose provider fails as failed and keeps the error", async () => {
+		const fx = await start();
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxText("")], { stopReason: "error", errorMessage: "provider exploded" }),
+		]);
+		await fx.post("/api/prompt", { text: "hello" });
+		const finished = await fx.waitFor("run_finished", undefined, 30_000);
+		expect(["failed", "partial"]).toContain(finished.outcome);
+		expect(finished.changeCount).toBe(0);
+		const transcript = await fx.get("/api/transcript");
+		const last = transcript.items[transcript.items.length - 1];
+		expect(last).toMatchObject({ kind: "assistant", stopReason: "error", error: "provider exploded" });
+	});
+
+	it("serves workspace files safely and refuses paths outside the workspace", async () => {
+		const fx = await start();
+		writeFileSync(join(fx.project, "a.ts"), "export const a = 1;\n");
+		mkdirSync(join(fx.project, "src"));
+		const listing = await fx.get("/api/files/list?dir=");
+		expect(listing.entries.map((entry: any) => entry.name).sort()).toEqual(["a.ts", "src"]);
+		const file = await fx.get("/api/files/read?path=a.ts");
+		expect(file).toMatchObject({ kind: "text", language: "typescript" });
+		await expect(fx.get("/api/files/read?path=..%2F..%2Fsecret")).rejects.toThrow(/outside the workspace/);
+		const found = await fx.get("/api/files/search?q=a.t");
+		expect(found.files).toContain("a.ts");
+	});
+
+	it("lists settings, resources and providers and validates setting writes", async () => {
+		const fx = await start();
+		const settings = await fx.get("/api/settings");
+		expect(settings.items.find((item: any) => item.id === "steeringMode")).toBeTruthy();
+		await expect(fx.post("/api/settings", { id: "nope", value: 1 })).rejects.toThrow(/Unknown setting/);
+		// Every setting the UI lists must accept its own current value.
+		for (const item of settings.items) {
+			await fx.post("/api/settings", { id: item.id, value: item.value });
+		}
+		await fx.post("/api/settings", { id: "steeringMode", value: "all" });
+		expect((await fx.get("/api/state")).queueModes.steering).toBe("all");
+		const resources = await fx.get("/api/resources");
+		expect(resources.tools.map((tool: any) => tool.name)).toContain("read");
+		expect(resources.commands.some((command: any) => command.name === "compact")).toBe(true);
+		const providers = await fx.get("/api/providers");
+		expect(providers.providers.length).toBeGreaterThan(0);
+		// Credentials never leave the server: no key material in the provider listing.
+		expect(JSON.stringify(providers)).not.toContain("faux-key");
+	});
+
+	it("supports session creation, renaming, listing and the branch tree", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("hi there")])]);
+		await fx.post("/api/prompt", { text: "first message" });
+		await fx.waitFor("run_finished");
+		const before = await fx.get("/api/state");
+		const sessions = await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`);
+		expect(sessions.sessions.some((s: any) => s.current)).toBe(true);
+		const tree = await fx.get("/api/sessions/tree");
+		expect(tree.rows.some((row: any) => row.kind === "user")).toBe(true);
+		await fx.post("/api/sessions/rename", { path: before.session.file, title: "Renamed chat" });
+		expect((await fx.get("/api/state")).session.name).toBe("Renamed chat");
+		await fx.post("/api/sessions/new", {});
+		await fx.waitFor("session_replaced");
+		const after = await fx.get("/api/state");
+		expect(after.session.id).not.toBe(before.session.id);
+		expect((await fx.get("/api/transcript")).items).toHaveLength(0);
+	});
+
+	it("runs direct shell commands and streams their output", async () => {
+		const fx = await start();
+		const started = await fx.post("/api/bash", { command: "echo web-ui-shell", excludeFromContext: false });
+		const end = await fx.waitFor("bash_end", (data) => data.id === started.id);
+		expect(end.output).toContain("web-ui-shell");
+		expect(end.exitCode).toBe(0);
+	});
+});

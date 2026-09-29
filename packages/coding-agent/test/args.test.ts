@@ -2,6 +2,27 @@ import { describe, expect, test } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
 
 describe("parseArgs", () => {
+	describe("Web UI flags", () => {
+		test("parses --web, --port and --no-open", () => {
+			const result = parseArgs(["--web", "--port", "8123", "--no-open"]);
+			expect(result.web).toBe(true);
+			expect(result.webPort).toBe(8123);
+			expect(result.noOpenBrowser).toBe(true);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("accepts --port=0 (system-assigned port)", () => {
+			expect(parseArgs(["--web", "--port=0"]).webPort).toBe(0);
+		});
+
+		test("rejects an invalid or missing --port value", () => {
+			for (const args of [["--port", "70000"], ["--port", "abc"], ["--port"]]) {
+				const result = parseArgs(args);
+				expect(result.diagnostics.some((diagnostic) => diagnostic.type === "error")).toBe(true);
+			}
+		});
+	});
+
 	describe("--version flag", () => {
 		test("parses --version flag", () => {
 			const result = parseArgs(["--version"]);

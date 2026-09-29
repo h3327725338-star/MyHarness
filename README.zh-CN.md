@@ -11,7 +11,7 @@ MyHarness 是一个面向项目目录的终端 AI 编程协作工具，处于 Ea
 ## 核心能力
 
 - **代码协作**：Coding Agent 产品层提供文件、Shell、PowerShell、编辑、写入、Symbols、Git 和 GitHub 工作流。
-- **CLI 模式**：支持 Interactive、Print 和 JSON event stream 模式，也提供 Node.js SDK 供进程内集成。
+- **入口**：终端 TUI（Interactive）、Print 和 JSON event stream 模式；本机浏览器 **Web UI**（`myharness --web`，只监听 loopback，与 CLI 共用同一套 runtime）；也提供 Node.js SDK 供进程内集成。
 - **项目上下文**：支持 project trust、`AGENTS.md` / `CLAUDE.md` context files、Workspace 与 Session 管理、Git 集成和 context compaction。
 - **可扩展**：支持 TypeScript extensions、skills、prompt templates、themes、custom Provider 和 MyHarness packages。
 - **Code Intelligence**：源码中提供 lightweight Symbols index。语义 language-server 模块仍是可选能力，只有在发布并提供校验值的 runtime manifest 后才会可用。

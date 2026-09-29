@@ -184,6 +184,7 @@ myharness config [-l]               # 编辑 settings；-l 表示 project overri
 | Flag | 说明 |
 |------|-------------|
 | default | Interactive mode |
+| `--web` | 启动本机 [Web UI](web-ui.md)（只监听 `127.0.0.1`）；可配合 `--port <n>`（默认 7878）和 `--no-open`；不能与 `--print`、`--mode`、`--list-models` 同时使用 |
 | `-p`、`--print` | 输出回复后退出 |
 | `--mode text` | Text output；TTY 中使用 interactive mode，否则使用 print mode |
 | `--mode json` | 将所有 events 以 JSON lines 输出，详见 [JSON mode](json.md) |

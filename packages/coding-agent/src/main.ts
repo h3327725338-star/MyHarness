@@ -31,7 +31,7 @@ import { exportFromFile } from "./exports/html/index.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode } from "./modes/index.ts";
+import { InteractiveMode, runPrintMode, runWebMode, startWebBootstrap, type WebBootstrap } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { printTimings, resetTimings, time } from "./observability/timings.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
@@ -98,6 +98,9 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+	if (parsed.web) {
+		return "web";
+	}
 	if (parsed.mode === "json") {
 		return "json";
 	}
@@ -546,8 +549,13 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	if (parsed.web && (parsed.print || parsed.mode !== undefined || parsed.listModels !== undefined)) {
+		console.error(chalk.red("Error: --web cannot be combined with --print, --mode or --list-models"));
+		process.exit(1);
+	}
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
+	const shouldTakeOverStdout =
+		appMode !== "interactive" && appMode !== "web" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
@@ -600,6 +608,11 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
+	// The Web UI server starts before the runtime so startup questions (Project Trust) can be answered in the browser.
+	const webBootstrap: WebBootstrap | undefined =
+		appMode === "web"
+			? await startWebBootstrap({ port: parsed.webPort, openBrowser: !parsed.noOpenBrowser })
+			: undefined;
 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
@@ -680,7 +693,9 @@ export async function main(args: string[], options?: MainOptions) {
 										cwd,
 										mode: isInitialRuntime ? trustPromptMode : appMode,
 										settingsManager: startupSettingsManager,
-										hasUI: isInitialRuntime && trustPromptMode === "interactive",
+										hasUI:
+											isInitialRuntime && (trustPromptMode === "interactive" || trustPromptMode === "web"),
+										webUi: webBootstrap?.trustUi,
 									}),
 								onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
 							});
@@ -787,7 +802,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	// Read piped stdin content (if any)
-	const stdinContent: string | undefined = await readPipedStdin();
+	const stdinContent: string | undefined = appMode === "web" ? undefined : await readPipedStdin();
 	if (stdinContent !== undefined && appMode === "interactive") {
 		appMode = "print";
 	}
@@ -819,7 +834,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
-	if (appMode !== "interactive" && !session.model) {
+	if (appMode !== "interactive" && appMode !== "web" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
 		process.exit(1);
 	}
@@ -830,7 +845,7 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	if (!offlineMode && appMode === "interactive") {
+	if (!offlineMode && (appMode === "interactive" || appMode === "web")) {
 		const refreshController = new AbortController();
 		const refreshTimeout = setTimeout(() => refreshController.abort(), 15_000);
 		void modelRuntime
@@ -869,6 +884,16 @@ export async function main(args: string[], options?: MainOptions) {
 
 		printTimings();
 		await interactiveMode.run();
+	} else if (appMode === "web" && webBootstrap) {
+		printTimings();
+		const exitCode = await runWebMode(runtime, webBootstrap, {
+			initialMessage,
+			initialImages,
+			initialMessages: parsed.messages,
+			verbose: parsed.verbose,
+		});
+		stopThemeWatcher();
+		process.exit(exitCode);
 	} else {
 		printTimings();
 		const exitCode = await runPrintMode(runtime, {

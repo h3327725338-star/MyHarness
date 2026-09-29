@@ -36,6 +36,12 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
+	/** Start the local Web UI instead of the TUI. */
+	web?: boolean;
+	/** Loopback port for the Web UI (0 or undefined: default port). */
+	webPort?: number;
+	/** Do not open the browser automatically in Web UI mode. */
+	noOpenBrowser?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -81,6 +87,7 @@ const VALUE_FLAGS = new Set([
 	"prompt-template",
 	"theme",
 	"mode",
+	"port",
 ]);
 
 /** Short forms of value-taking flags, for "requires a value" diagnostics. */
@@ -223,6 +230,21 @@ export function parseArgs(rawArgs: string[]): Args {
 					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
 				});
 			}
+		} else if (arg === "--web") {
+			result.web = true;
+		} else if (arg === "--port") {
+			const rawPort = i + 1 < args.length ? args[++i] : undefined;
+			const port = rawPort === undefined ? Number.NaN : Number(rawPort);
+			if (!Number.isInteger(port) || port < 0 || port > 65535) {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid --port value "${rawPort ?? ""}". Use an integer from 0 to 65535.`,
+				});
+			} else {
+				result.webPort = port;
+			}
+		} else if (arg === "--no-open") {
+			result.noOpenBrowser = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 			const next = args[i + 1];

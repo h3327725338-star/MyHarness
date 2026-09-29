@@ -20,6 +20,7 @@ Sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider a
 
 - [Quickstart](quickstart.md) — install, configure authentication, and run a first session.
 - [Usage](usage.md) — Interactive mode, Slash Commands, context files, and CLI reference.
+- [Web UI](web-ui.md) — the local browser UI (`myharness --web`): conversation, diffs, files, terminal, Git, settings, and how it shares the CLI's runtime.
 - [Providers](providers.md) — Provider configuration, credentials, and model runtime boundaries.
 - [llama.cpp](llama-cpp.md) — run a local router and manage models.
 - [Security](security.md) — Project Trust, sandbox boundaries, and vulnerability reporting.

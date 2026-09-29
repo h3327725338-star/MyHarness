@@ -14,6 +14,12 @@ material they cover:
 - `packages/coding-agent/src/exports/html/vendor/marked.min.js` retains the
   MarkedJS and Christopher Jeffrey notices, and `highlight.min.js` retains its
   BSD-3-Clause notice.
+- `packages/coding-agent/web/vendor/` contains the Web UI runtime libraries
+  Preact (MIT, Jason Miller; `LICENSE.preact`) and htm (Apache-2.0, Jason
+  Miller; `LICENSE.htm`) as unmodified ES module builds, except that the bare
+  `preact` import in `preact-hooks.js` is rewritten to a relative path so the
+  page needs no import map. The Web UI also loads the `marked` and
+  `highlight.js` files listed above.
 - `packages/agent/src/harness/compaction/CODEX-NOTICE.md` and
   `CODEX-LICENSE` identify the adapted OpenAI Codex source and its Apache-2.0
   terms.

@@ -449,6 +449,15 @@ export function getExportTemplateDir(): string {
 	return join(packageDir, srcOrDist, "exports", "html");
 }
 
+/**
+ * Get path to the Web UI static assets (HTML/CSS/ES modules, no build step).
+ * - For Bun binary: web/ next to executable
+ * - For Node.js (dist/ or src/): web/ in the package root
+ */
+export function getWebUiDir(): string {
+	return join(getPackageDir(), "web");
+}
+
 /** Get path to package.json */
 export function getPackageJsonPath(): string {
 	return join(getPackageDir(), "package.json");

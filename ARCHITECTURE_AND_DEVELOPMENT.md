@@ -118,6 +118,7 @@ coding-agent/src/main.ts
 ~~~text
 AgentSessionRuntime
    ├── InteractiveMode ──→ coding-agent UI components ──→ packages/tui
+   ├── WebMode (--web) ──→ modes/web（loopback HTTP + SSE）──→ 浏览器 packages/coding-agent/web/
    └── PrintMode ────────→ text/json output
 ~~~
 
@@ -146,6 +147,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 ├── tsconfig.json
 ├── biome.json
 ├── dev.cmd
+├── dev-web.cmd
 ├── dev.ps1
 ├── myharness-test.ps1
 ├── myharness-test.sh
@@ -163,6 +165,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
+- dev-web.cmd：双击启动 Web UI 的包装器，等价于 `dev.cmd --web`（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
 - test.sh：清理部分 Provider 环境变量后执行 workspace 测试；它会临时移动用户 auth 文件，因此不是严格零写入脚本。
@@ -193,7 +196,7 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 | extensions/ | Extension contracts、发现、加载、API entry、Runner、事件、Tool、Command、UI、Provider 注册 | 不应让 loader 通过公共根 facade 反向依赖自身；不把 Extension API 逻辑塞进 TUI | extensions/contracts/、api-entry.ts、loader/、runtime/；由 ResourceLoader、AgentSession、ModelRuntime 使用 | 新 Extension contract、registration、lifecycle、loader 或 runtime 能力 |
 | exports/ | Session HTML/JSONL 导出、模板和 ANSI/Markdown 转换 | 不是 npm package exports 配置；不负责普通 Public API re-export | exports/html/；由 AgentSession export 方法调用 | 新导出格式、模板或 export renderer |
 | git/ | Git repository、命令、状态、commit、checkpoint、local repository、worktree | 不负责页面交互；业务流程入口可在 Application use case，但 Git 原语仍在此 | git/repository/、checkpoints/、worktrees/、local-repositories/；由 AgentSession、Application、InteractiveMode 使用 | Git 状态/命令、checkpoint、commit 或 worktree 原语 |
-| modes/ | InteractiveMode 的输入/UI 编排，以及 PrintMode 的 text/json 输出 | InteractiveMode 当前仍直接使用部分 Application/Git/Provider/Session 服务；不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui |
+| modes/ | InteractiveMode 的输入/UI 编排，PrintMode 的 text/json 输出，以及 Web mode（`modes/web/`：loopback HTTP/SSE 服务、WebHost、路由；浏览器前端静态文件在包根 `web/`） | InteractiveMode 当前仍直接使用部分 Application/Git/Provider/Session 服务；Web mode 只做传输与展示投影，调用现有 use case，不复制 Agent/Session/Git/Provider 逻辑；均不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts、modes/web/web-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui；Web UI 见 packages/coding-agent/docs/web-ui.md |
 | observability/ | Runtime trace、usage totals、cache stats、诊断脱敏、telemetry 和 timing | 不负责业务状态持久化；Trace 不是 Session JSONL | observability/runtime-trace.ts、session-trace.ts、diagnostic-sanitizer.ts；由 AgentSession/Provider 使用 | 新运行诊断、脱敏、usage 或 trace 事件 |
 | platform/ | HTTP dispatcher、进程执行、输出保护和 OS/命令边界 | 不负责 Provider 选择、Agent 状态或 TUI | platform/process/；由 Shell、Provider 和启动逻辑使用 | Node/Windows/Bash 进程与网络适配 |
 | prompts/ | Prompt Template 的发现和加载 | 不负责 system prompt 的核心组装；不负责 Skills | prompts/loader/；由 ResourceLoader、AgentSession 调用 | Prompt Template loader 或 template 资源接线 |
@@ -256,6 +259,7 @@ src/application/bootstrap/
 | 低层 Provider API adapter | packages/ai/src/api/ | packages/ai/src/models.ts、auth helpers、Provider API 类型 | coding-agent 的 InteractiveMode |
 | 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
 | TUI 页面/产品 UI | modes/interactive/ | interactive-mode.ts、components/、theme | Provider、Session 或 Git 目录 |
+| Web UI 服务端 / API / 事件 | modes/web/ | routes-*.ts、host.ts、wire.ts；前端在 packages/coding-agent/web/ | 在路由里复制 Session/Git/Provider 规则；把 UI 状态机放进 host.ts |
 | 可复用 TUI 基础组件 | packages/tui/src/ | TUI component、terminal、focus/input 基础能力 | coding-agent 的业务模块 |
 | Extension API | extensions/contracts/、api-entry.ts | loader、runtime、Runner、compat、examples | 直接把内部实现暴露给 Extension |
 | 内置 Slash Command | cli/slash-commands.ts | AgentSession prompt expansion、Interactive dispatch 或 Extension registration | TUI component 中硬编码完整业务流程 |
@@ -317,7 +321,7 @@ resolve app mode → migrations → Trust → Session Manager
         ↓
 createAgentSessionRuntime()
         ↓
-InteractiveMode.run() 或 runPrintMode()
+InteractiveMode.run()、runPrintMode() 或 runWebMode()（`--web`；HTTP 服务先于 runtime 启动，以便在浏览器里回答 Project Trust）
 ~~~
 
 ### Agent 执行链
@@ -621,6 +625,7 @@ Code Intelligence 的默认实现是 source 内轻量索引；Windows 语义模�
 | Tool | schema、执行结果、错误、取消、结果 persistence、presentation 和 Agent Loop tests |
 | Extension | contracts、loader discovery、Runner lifecycle、Tool/Command/Provider/UI registration 和 examples |
 | TUI | component/unit tests、InteractiveMode 直接调用方；必要时进行真实终端运行验证 |
+| Web UI | test/web-*.test.ts（HTTP 安全、wire/changes/dialogs、前端纯逻辑、真实 runtime 的 HTTP/SSE 集成）；渲染与交互需要在真实浏览器中运行验证 |
 | 启动流程 / Windows / Bun | args/help/source path、Windows wrapper、构建资源路径、Bun binary；源码静态检查不能替代实际启动 |
 
 ## 13. 高风险区域

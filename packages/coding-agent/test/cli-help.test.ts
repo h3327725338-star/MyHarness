@@ -8,6 +8,7 @@ const SAMPLE_VALUE: Record<string, string> = {
 	thinking: "high",
 	"agent-role": "main",
 	"context-window": "256K",
+	port: "0",
 };
 
 describe("top-level CLI help", () => {

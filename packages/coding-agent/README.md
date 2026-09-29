@@ -10,7 +10,7 @@ MyHarness is a minimal terminal coding harness. Adapt MyHarness to your workflow
 
 MyHarness ships with optional built-in `agent`, `workflow`, and `ultracode` tools for parallel, read-only exploration. `/workflow` runs a staged investigation, while `/ultracode` applies a stricter multi-workflow strategy. All three use the model and thinking level selected under **Sub Agent**.
 
-The CLI supports interactive, print, and JSON event-stream modes. The package also exposes an SDK for embedding MyHarness in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
+The CLI supports interactive, print, and JSON event-stream modes, and `myharness --web` starts a local browser UI on the same runtime (see [Web UI](docs/web-ui.md)). The package also exposes an SDK for embedding MyHarness in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
 
 ## Table of Contents
 

@@ -11,6 +11,7 @@
 ### Added
 
 - Added root licensing, contribution, security, third-party notice, and Code Intelligence distribution documentation.
+- Added the local browser Web UI (`myharness --web [--port <n>] [--no-open]`): a loopback-only server in `src/modes/web/` plus a no-build front end in `web/`, sharing the CLI's `AgentSessionRuntime` (conversation with quiet run summaries, steer/queue/interrupt, real diffs, files, terminal, Git commit/push/undo/restore/worktrees, Sessions/Workspaces, models/providers/settings, extension approvals). `ExtensionMode` gained `"web"`. See `docs/web-ui.md`.
 
 > Entries from 0.80.10 and earlier are inherited upstream release history. Their links and package names are retained as historical attribution, not as current MyHarness identifiers.
 

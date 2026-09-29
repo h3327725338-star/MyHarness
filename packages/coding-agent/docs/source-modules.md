@@ -27,7 +27,7 @@
 | `exports/` | Session/tool 结果到 HTML 的导出、主题和 ToolHtmlRenderer | 只渲染/导出，不改变 Session 或 tool execution contract | 新导出格式 |
 | `extensions/` | Extension contract、兼容入口、发现/loader、packages、event bus、runner/wrapper | 通过 contracts/API entry/runtime wrapper 连接；避免 loader 循环依赖 | extension API、加载、包管理和 runtime |
 | `git/` | Git command、repository/workspace changes、checkpoint、commit、local repository、worktree，以及 GitHub Actions CI 查询适配 | Git metadata、remote/CI 原语集中在本域；不放进 Session persistence | 新 Git 原语、remote/CI provider、review、checkpoint、worktree |
-| `modes/` | InteractiveMode、print mode、组件编排、theme、task lifecycle、keybindings、model search | mode 负责 I/O；通用业务留在领域模块 | 新运行模式或 mode-specific presentation |
+| `modes/` | InteractiveMode、print mode、Web mode（`modes/web/`：HTTP/SSE 服务、WebHost、路由）、组件编排、theme、task lifecycle、keybindings、model search | mode 负责 I/O；通用业务留在领域模块；Web 前端静态文件在包根 `web/`，不在 `src` 内 | 新运行模式或 mode-specific presentation |
 | `observability/` | timing、usage totals、cache stats、runtime trace、diagnostic sanitization | 只观察和脱敏，不反向承载业务状态 | 指标、trace 和诊断采集 |
 | `platform/` | process exec、HTTP dispatcher、stdout/output guard | 平台差异留在 platform；CLI/tool 不复制进程接管逻辑 | Node/Windows/Bun process 适配 |
 | `prompts/` | 用户/项目 prompt templates 的发现、frontmatter、去重和 diagnostics | 与固定 system prompt 分离；保留 sourceInfo/diagnostics | prompt template loader/parser |
