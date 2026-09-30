@@ -287,3 +287,29 @@ describe("Web UI: provider model catalog", () => {
 		);
 	});
 });
+
+describe("Web UI: shared slash-command registry", () => {
+	it("gives every built-in command the registry offers to the Web a way to run, and nothing else", async () => {
+		const { BUILTIN_COMMAND_KINDS } = await import(new URL("builtin-commands.js", webDir).href);
+		const { builtinSlashCommandsFor, findBuiltinSlashCommand } = await import("../src/cli/slash-commands.ts");
+		const web = builtinSlashCommandsFor("web").map((command) => command.name);
+		expect([...web].sort()).toEqual(Object.keys(BUILTIN_COMMAND_KINDS).sort());
+		expect(new Set(Object.values(BUILTIN_COMMAND_KINDS))).toEqual(new Set(["panel", "action", "prompt"]));
+		// Everything the terminal UI offers is also there for the Web (the Web adds panels of its own on top).
+		for (const command of builtinSlashCommandsFor("cli")) expect(web).toContain(command.name);
+		// An alias resolves to its command.
+		expect(findBuiltinSlashCommand("setting")?.name).toBe("settings");
+	});
+
+	it("starts a model without declared reasoning with no effort levels assumed, only off", () => {
+		const unknown = models.modelDraft({ id: "new-model" });
+		expect(
+			Object.entries(unknown.levels)
+				.filter(([, on]) => on)
+				.map(([level]) => level),
+		).toEqual(["off"]);
+		const declared = models.modelDraft({ id: "m", reasoning: true, thinkingLevelMap: { minimal: null, low: null } });
+		expect(declared.levels.minimal).toBe(false);
+		expect(declared.levels.medium).toBe(true);
+	});
+});

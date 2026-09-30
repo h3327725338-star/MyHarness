@@ -1,14 +1,14 @@
 // Inline command panel: slash commands with several levels of choices (/settings, /model, /effort, /git …) open here, above the
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
-import { html, InlineFrame, useEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
+import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
 import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { NAV as SETTINGS_NAV, SECTION_OF } from "./overlays-settings.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
-import { chatTitle, clip, effortHint, effortName, fmtDateTime, fmtTokens, relTime } from "./util.js";
+import { chatTitle, clip, effortHint, effortName, refEffortModel, fmtDateTime, fmtTokens, relTime } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -33,6 +33,7 @@ function confirmScreen({ title, message, confirmLabel, danger, onConfirm }) {
 	return {
 		title,
 		subtitle: message,
+		filterable: false,
 		rows: [
 			{ key: "cancel", label: t("Cancel"), onEnter: (ctx) => ctx.pop() },
 			{ key: "ok", label: confirmLabel, danger, onEnter: onConfirm },
@@ -49,7 +50,8 @@ function inputScreen({ title, label, value = "", type = "text", placeholder, sub
 
 function effortScreen() {
 	const thinking = state.snap?.thinking;
-	if (!thinking?.supported) return { title: t("Reasoning effort"), empty: t("The current model does not support reasoning effort.") , rows: [] };
+	if (!thinking?.supported) return { title: t("Reasoning effort"), empty: t("The current model does not support reasoning effort."), rows: [] };
+	if (thinking.levels.length < 2) return { title: t("Reasoning effort"), empty: t("The current model has no reasoning effort options to choose from."), rows: [] };
 	return optionsScreen({
 		title: t("Reasoning effort"),
 		options: thinking.levels.map((level) => ({ value: level, label: effortName(level), desc: effortHint(level) })),
@@ -107,15 +109,28 @@ function modelScreen(ctx, arg) {
 // ---- /settings ----------------------------------------------------------------------------------------------
 
 function settingsRoot() {
+	const settings = useStore((s) => s.settings);
+	useEffect(() => {
+		if (!state.settings) loadSettings();
+	}, []);
+	const sectionLabel = (item) => t(SETTINGS_NAV.find((n) => n.id === SECTION_OF[item.section])?.label ?? item.section);
 	return {
 		title: t("Settings"),
-		rows: SETTINGS_NAV.map((section) => ({
-			key: section.id,
-			label: t(section.label),
-			icon: section.icon,
-			chevron: true,
-			onEnter: (ctx) => ctx.push((c) => settingsSection(c, section.id)),
-		})),
+		placeholder: t("Search settings…"),
+		rows: [
+			...SETTINGS_NAV.map((section) => ({
+				key: section.id,
+				label: t(section.label),
+				icon: section.icon,
+				chevron: true,
+				onEnter: (ctx) => ctx.push((c) => settingsSection(c, section.id)),
+			})),
+			// Typing searches every individual setting too, wherever it lives; these rows only appear while searching.
+			...(settings?.items || []).map((item) => {
+				const row = itemRow(item);
+				return { ...row, key: `item-${item.id}`, onlyFiltered: true, desc: [sectionLabel(item), row.desc].filter(Boolean).join(" · ") };
+			}),
+		],
 	};
 }
 
@@ -235,6 +250,10 @@ function modelRefScreen(ctx, id) {
 				],
 			})),
 	});
+	// Only the efforts of the chosen model (or the main model when none is chosen); no effort to pick means no row.
+	const refModel = refEffortModel(models, state.snap?.model, v);
+	const refLevels = refModel?.reasoning ? refModel.thinkingLevels || [] : [];
+	if (refLevels.length > 1)
 	rows.push({
 		key: "thinking",
 		label: t("Reasoning"),
@@ -244,7 +263,7 @@ function modelRefScreen(ctx, id) {
 			c.push(() =>
 				optionsScreen({
 					title: t("Reasoning effort"),
-					options: [{ value: "", label: t("Default reasoning") }, ...["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((l) => ({ value: l, label: effortName(l) }))],
+					options: [{ value: "", label: t("Default reasoning") }, ...refLevels.map((l) => ({ value: l, label: effortName(l) }))],
 					value: v.thinkingLevel || "",
 					onPick: async (level, cc) => (await commit({ thinkingLevel: level || undefined }), cc.pop()),
 				}),
@@ -359,7 +378,7 @@ function settingsSection(ctx, id) {
 		}
 		rows.push(itemRow(item));
 	}
-	return { title: t(nav.label), rows, filterable: rows.length > 12, placeholder: t("Search settings…") };
+	return { title: t(nav.label), rows, placeholder: t("Search settings…") };
 }
 
 function aboutScreen() {
@@ -385,7 +404,6 @@ function providersScreen(ctx) {
 	return {
 		title: t("Providers"),
 		loading: !providers,
-		filterable: (providers?.providers.length || 0) > 8,
 		placeholder: t("Search providers…"),
 		rows: [
 			...(providers?.providers || []).map((p) => ({
@@ -801,7 +819,10 @@ function InputView({ spec, ctx }) {
 	</form>`;
 }
 
-function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
+// A list with this many choices or more is searchable: typing goes straight into the filter, nothing needs a click first.
+const FILTER_MIN_ROWS = 5;
+
+function Screen({ build, ctx, entry, onTitle, arg }) {
 	// Screens read live state (settings, models, providers …); any change re-runs the builder so the rows stay current.
 	useStore((s) => s.settings);
 	useStore((s) => s.snap);
@@ -810,33 +831,50 @@ function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
 	useStore((s) => s.gitStatus);
 	useStore((s) => s.view);
 	const spec = build(ctx, arg);
-	const [filter, setFilter] = useState(spec.initialFilter || "");
-	const [sel, setSel] = useState(initialSel || Math.max(0, (spec.rows || []).findIndex((row) => row.check)));
+	const allRows = spec.rows || [];
+	const filterable = !spec.input && !spec.custom && (spec.filterable ?? allRows.filter((row) => !row.group).length >= FILTER_MIN_ROWS);
+	// Filter text and selected row are remembered per level, so coming back from a deeper level lands where the user was.
+	const [filter, setFilter] = useState(entry.filter ?? spec.initialFilter ?? "");
+	const [selKey, setSelKey] = useState(entry.selKey ?? allRows.find((row) => row.check && !row.group)?.key);
 	const [busyKey, setBusyKey] = useState(null);
 	const root = useRef(null);
 	const filterRef = useRef(null);
 	const list = useRef(null);
+	const alive = useRef(true);
 	const rows = useMemo(() => {
-		const all = spec.rows || [];
 		const q = filter.trim().toLowerCase();
-		if (!q || !spec.filterable) return all;
-		return all.filter((row) => !row.group && `${row.search || ""} ${row.label || ""} ${row.desc || ""}`.toLowerCase().includes(q));
-	}, [spec.rows, filter, spec.filterable]);
+		if (!q || !filterable) return allRows.filter((row) => !row.onlyFiltered);
+		return allRows.filter((row) => !row.group && `${row.search || ""} ${row.label || ""} ${row.desc || ""}`.toLowerCase().includes(q));
+	}, [spec.rows, filter, filterable]);
 	const selectable = rows.map((row, i) => (row.group || row.disabled ? -1 : i)).filter((i) => i >= 0);
-	const current = selectable.includes(sel) ? sel : (selectable[0] ?? -1);
+	const found = rows.findIndex((row) => row.key === selKey);
+	const current = selectable.includes(found) ? found : (selectable[0] ?? -1);
+	const focusInput = () => (filterable ? filterRef.current : root.current)?.focus();
 	useEffect(() => {
-		(spec.filterable ? filterRef.current : root.current)?.focus();
+		alive.current = true;
+		return () => {
+			alive.current = false;
+		};
 	}, []);
+	// Focus lands in the search box (or on the panel when there is none) as soon as the panel is drawn — before the next
+	// keystroke, so typing right after Enter already searches — and stays there while the list changes.
+	useLayoutEffect(() => focusInput(), [filterable]);
 	useEffect(() => {
 		list.current?.querySelector(".cp-row.sel")?.scrollIntoView({ block: "nearest" });
 	}, [current, rows.length]);
-	useEffect(() => onSel?.(current), [current]);
+	useEffect(() => {
+		entry.selKey = rows[current]?.key;
+	}, [current, rows]);
+	useEffect(() => {
+		entry.filter = filter;
+	}, [filter]);
 	useEffect(() => onTitle?.(spec.title), [spec.title]);
 
+	const selectRow = (index) => setSelKey(rows[index]?.key);
 	const stepTo = (delta) => {
 		if (!selectable.length) return;
 		const at = selectable.indexOf(current);
-		setSel(selectable[(at + delta + selectable.length) % selectable.length]);
+		selectRow(selectable[(at + delta + selectable.length) % selectable.length]);
 	};
 	const activate = async (row) => {
 		if (!row || row.disabled || !row.onEnter) return;
@@ -844,7 +882,11 @@ function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
 		try {
 			await row.onEnter(ctx);
 		} finally {
-			setBusyKey(null);
+			if (alive.current) {
+				setBusyKey(null);
+				// A row that changed something in place (a toggle) leaves the screen where it was: keep the keyboard in it.
+				if (!root.current?.contains(document.activeElement)) focusInput();
+			}
 		}
 	};
 	const onKeyDown = (e) => {
@@ -852,7 +894,7 @@ function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
-			if (spec.filterable && filter) return setFilter("");
+			if (filterable && filter) return setFilter("");
 			return ctx.pop();
 		}
 		if (spec.input || spec.custom) return;
@@ -862,29 +904,32 @@ function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
 				return e.preventDefault(), stepTo(1);
 			case "ArrowUp":
 				return e.preventDefault(), stepTo(-1);
+			case "Tab":
+				return e.preventDefault(), stepTo(e.shiftKey ? -1 : 1);
 			case "PageDown":
 				return e.preventDefault(), stepTo(6);
 			case "PageUp":
 				return e.preventDefault(), stepTo(-6);
 			case "Home":
-				if (!spec.filterable) return e.preventDefault(), setSel(selectable[0] ?? 0);
+				if (!filterable) return e.preventDefault(), selectRow(selectable[0] ?? 0);
 				return;
 			case "End":
-				if (!spec.filterable) return e.preventDefault(), setSel(selectable[selectable.length - 1] ?? 0);
+				if (!filterable) return e.preventDefault(), selectRow(selectable[selectable.length - 1] ?? 0);
 				return;
 			case "Enter":
 				return e.preventDefault(), activate(row);
 			case "ArrowRight":
-				if (row?.chevron && !(spec.filterable && filterRef.current?.value)) return e.preventDefault(), activate(row);
+				if (row?.chevron && !(filterable && filterRef.current?.value)) return e.preventDefault(), activate(row);
 				return;
 			case " ":
-				if (row && row.toggle !== undefined && !spec.filterable) return e.preventDefault(), activate(row);
+				// Space flips a switch, unless it is part of what is being searched for.
+				if (row && row.toggle !== undefined && !(filterable && filter)) return e.preventDefault(), activate(row);
 				return;
 			case "ArrowLeft":
-				if (spec.filterable && filterRef.current?.value) return;
+				if (filterable && filterRef.current?.value) return;
 				return e.preventDefault(), ctx.pop();
 			case "Backspace":
-				if (spec.filterable && filter) return;
+				if (filterable && filter) return;
 				return e.preventDefault(), ctx.pop();
 			default:
 		}
@@ -897,11 +942,11 @@ function Screen({ build, ctx, initialSel, onSel, onTitle, arg }) {
 				? html`<${InlineFrame.Provider} value=${{ onClose: ctx.pop }}>${spec.custom(ctx)}<//>`
 				: html`
 			${spec.subtitle ? html`<div class="cp-sub dim">${spec.subtitle}</div>` : null}
-			${spec.filterable ? html`<div class="cp-filter"><${Icon} name="search" size=${14} /><input ref=${filterRef} value=${filter} placeholder=${spec.placeholder || t("Search…")} onInput=${(e) => { setFilter(e.target.value); setSel(0); }} aria-label=${spec.placeholder || t("Search…")} /></div>` : null}
+			${filterable ? html`<div class="cp-filter"><${Icon} name="search" size=${14} /><input ref=${filterRef} value=${filter} placeholder=${spec.placeholder || t("Search…")} onInput=${(e) => { setFilter(e.target.value); setSelKey(undefined); }} aria-label=${spec.placeholder || t("Search…")} autocomplete="off" spellcheck="false" /></div>` : null}
 			${spec.error ? html`<div class="notice danger">${spec.error}</div>` : null}
-			<div class="cp-list" role="listbox" ref=${list}>
+			<div class="cp-list" role="listbox" ref=${list} onMouseDown=${(e) => filterable && e.preventDefault()}>
 				${spec.loading ? html`<div class="empty"><${Spinner} /></div>` : null}
-				${rows.map((row, i) => html`<${Row} key=${row.key} row=${row} selected=${i === current} busy=${busyKey === row.key} onHover=${() => !row.group && !row.disabled && i !== current && setSel(i)} onClick=${() => (setSel(i), activate(row))} />`)}
+				${rows.map((row, i) => html`<${Row} key=${row.key} row=${row} selected=${i === current} busy=${busyKey === row.key} onHover=${() => !row.group && !row.disabled && i !== current && selectRow(i)} onClick=${() => (selectRow(i), activate(row))} />`)}
 				${!spec.loading && !rows.filter((r) => !r.group).length ? html`<div class="empty">${spec.empty || t("Nothing to show.")}</div>` : null}
 			</div>`}
 	</div>`;
@@ -913,7 +958,7 @@ export function CommandPanel() {
 }
 
 let entryId = 0;
-const entry = (build) => ({ id: ++entryId, build, sel: 0 });
+const entry = (build) => ({ id: ++entryId, build, selKey: undefined, filter: undefined });
 
 function initialStack(cmd) {
 	const stack = [entry(ROOT[cmd.name] || (() => ({ title: cmd.name, rows: [] })))];
@@ -948,6 +993,6 @@ function PanelBody({ cmd }) {
 			<span class="cp-keys dim">↑↓ ${t("select")} · ↵ ${t("open")} · ← ${t("back")} · Esc ${t("close")}</span>
 			<button class="icon-btn sm" onClick=${closeCommand} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>
 		</div>
-		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} initialSel=${top.sel} onSel=${(index) => { top.sel = index; }} onTitle=${(title) => setTitles((previous) => (previous[top.id] === title ? previous : { ...previous, [top.id]: title }))} />
+		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} entry=${top} onTitle=${(title) => setTitles((previous) => (previous[top.id] === title ? previous : { ...previous, [top.id]: title }))} />
 	</div>`;
 }

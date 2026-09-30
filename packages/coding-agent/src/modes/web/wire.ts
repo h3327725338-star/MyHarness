@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage } from "@myharness/agent-core";
-import type { Model } from "@myharness/ai/compat";
+import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { parseExpandedBuiltinPromptCommand } from "../../cli/slash-commands.ts";
 import type { SessionEntry } from "../../session/types.ts";
@@ -123,6 +123,8 @@ export function toWireModel(model: Model<any>): WireModel {
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
 		input: [...model.input],
+		// This model's own effort options (what the Composer offers after switching to it).
+		thinkingLevels: getSupportedThinkingLevels(model),
 	};
 }
 

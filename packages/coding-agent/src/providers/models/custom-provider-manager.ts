@@ -4,6 +4,7 @@ import type { ThinkingLevelMap } from "@myharness/ai";
 import { stripJsonComments } from "../../utils/json.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 import { ModelConfig } from "./config.ts";
+import { resolveThinkingCapability, type ThinkingSource } from "./official-thinking.ts";
 
 export const CUSTOM_PROVIDER_API_TYPES = [
 	"openai-completions",
@@ -39,6 +40,11 @@ export interface DiscoveredProviderModel {
 	maxTokens?: number;
 	/** Thinking levels the catalog says the model accepts (`null` = unsupported); absent when the catalog lists none. */
 	thinkingLevelMap?: ThinkingLevelMap;
+	/**
+	 * Where the thinking capability comes from: the endpoint's catalog, the provider's official documentation, or
+	 * `unconfirmed` (the model reasons but no source names its efforts, so no effort level is offered).
+	 */
+	thinkingSource?: ThinkingSource;
 }
 
 export type ProviderModelDiscoveryErrorCode =
@@ -86,6 +92,8 @@ function publicUrl(url: URL): string {
 
 export interface DiscoveredModelsSyncResult {
 	added: number;
+	/** Existing models whose thinking capability was brought in line with the catalog / official documentation. */
+	updated: number;
 	existing: number;
 }
 
@@ -297,6 +305,38 @@ function isCopilotModelSelectable(value: Record<string, unknown>): boolean {
 	);
 }
 
+/** Fills the thinking capability from the catalog, else the provider's documentation, else records that it is unknown. */
+function applyThinkingCapability(model: DiscoveredProviderModel, baseUrl: string): void {
+	const capability = resolveThinkingCapability({
+		baseUrl,
+		modelId: model.id,
+		reasoning: model.reasoning,
+		thinkingLevelMap: model.thinkingLevelMap,
+	});
+	if (capability.reasoning !== undefined) model.reasoning = capability.reasoning;
+	if (capability.thinkingLevelMap) model.thinkingLevelMap = capability.thinkingLevelMap;
+	if (capability.source) model.thinkingSource = capability.source;
+}
+
+/**
+ * Merges a discovered thinking map into an existing one. Levels the source marks unsupported become `null`; supported
+ * levels keep the value already written (a custom provider-side name) when there is one.
+ */
+function mergeThinkingLevelMap(current: ThinkingLevelMap | undefined, discovered: ThinkingLevelMap): ThinkingLevelMap {
+	const merged: ThinkingLevelMap = { ...discovered };
+	for (const [level, value] of Object.entries(discovered) as Array<
+		[keyof ThinkingLevelMap, string | null | undefined]
+	>) {
+		const existing = current?.[level];
+		if (typeof value === "string" && typeof existing === "string") merged[level] = existing;
+	}
+	return merged;
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
 function parseModelPage(
 	body: unknown,
 	api: string,
@@ -452,6 +492,7 @@ export async function discoverProviderModels(options: {
 		}
 		const parsed = parseModelPage(body, options.api, options.providerId);
 		for (const model of parsed.models) {
+			applyThinkingCapability(model, options.baseUrl);
 			const previous = unique.get(model.id);
 			if (!previous || previous.name === previous.id) unique.set(model.id, model);
 		}
@@ -510,9 +551,10 @@ export class CustomProviderManager {
 
 	/**
 	 * Append newly discovered models to one provider without replacing any
-	 * existing definitions. This deliberately has no removal or metadata update
-	 * path because models.json currently does not record whether a model was
-	 * entered manually or discovered remotely.
+	 * existing definitions. There is no removal path because models.json does not
+	 * record whether a model was entered manually or discovered remotely; the only
+	 * change to an existing model is its thinking capability, and only when the
+	 * endpoint's catalog or the provider's documentation names the efforts.
 	 */
 	async mergeDiscoveredModels(
 		providerId: string,
@@ -525,6 +567,19 @@ export class CustomProviderManager {
 		const existingIds = new Set(existingModels.map((model) => model.id));
 		const additions: ModelsJsonModel[] = [];
 		const seen = new Set(existingIds);
+		const discoveredById = new Map(models.map((model) => [model.id.trim(), model]));
+		let updated = 0;
+
+		// A refresh also brings existing models' thinking capability up to date, but only from a source that names
+		// the efforts (catalog or official documentation); an unconfirmed capability never overwrites anything.
+		const updatedModels = existingModels.map((existing) => {
+			const found = discoveredById.get(existing.id);
+			if (!found?.thinkingLevelMap || found.thinkingSource === "unconfirmed") return existing;
+			const thinkingLevelMap = mergeThinkingLevelMap(existing.thinkingLevelMap, found.thinkingLevelMap);
+			if (existing.reasoning === true && sameJson(existing.thinkingLevelMap, thinkingLevelMap)) return existing;
+			updated++;
+			return { ...existing, reasoning: true, thinkingLevelMap };
+		});
 
 		for (const model of models) {
 			const id = model.id.trim();
@@ -534,19 +589,21 @@ export class CustomProviderManager {
 				id,
 				...(model.name.trim() && model.name.trim() !== id ? { name: model.name.trim() } : {}),
 				api,
+				...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+				...(model.reasoning === true && model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
 			});
 		}
 
-		if (additions.length === 0) {
-			return { added: 0, existing: models.length };
+		if (additions.length === 0 && updated === 0) {
+			return { added: 0, updated: 0, existing: models.length };
 		}
 
 		document.providers[providerId] = {
 			...provider,
-			models: [...existingModels, ...additions],
+			models: [...updatedModels, ...additions],
 		};
 		await this.writeDocument(document);
-		return { added: additions.length, existing: models.length - additions.length };
+		return { added: additions.length, updated, existing: models.length - additions.length };
 	}
 
 	async snapshot(): Promise<ModelsJsonSnapshot> {

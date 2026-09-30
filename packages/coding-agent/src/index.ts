@@ -70,11 +70,14 @@ export { type Args, parseArgs } from "./cli/args.ts";
 export {
 	BUILTIN_SLASH_COMMANDS,
 	type BuiltinSlashCommand,
+	builtinSlashCommandsFor,
 	type ExpandedBuiltinPromptCommand,
 	expandBuiltinPromptCommand,
+	findBuiltinSlashCommand,
 	parseExpandedBuiltinPromptCommand,
 	parseSlashCommandInvocation,
 	type SlashCommandInvocation,
+	type SlashSurface,
 } from "./cli/slash-commands.ts";
 export {
 	getSessionConversationPath,

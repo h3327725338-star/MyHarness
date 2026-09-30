@@ -31,6 +31,44 @@ function fileToImage(file) {
 // ---- Pending dialogs (extension select / confirm / input / editor). Approvals live here, not in a modal.
 function DialogBar({ dialog }) {
 	const [value, setValue] = useState(dialog.initialValue || "");
+	const root = useRef(null);
+	// Choice dialogs (Allow / Deny, a list of options) are answered from the keyboard: ←/→/↑/↓/Tab move, Enter answers,
+	// Esc denies or cancels, 1-9 pick an option. Alt+A brings the keyboard here from anywhere.
+	const choices =
+		dialog.kind === "confirm"
+			? [{ label: t("Deny"), value: false }, { label: t("Allow"), value: true }]
+			: dialog.kind === "select"
+				? [...dialog.options.map((option) => ({ label: option, value: option })), { label: t("Cancel"), value: undefined, ghost: true }]
+				: [];
+	const [pick, setPick] = useState(dialog.kind === "confirm" ? 1 : 0);
+	const claimFocus = () => root.current?.focus();
+	useLayoutEffect(() => {
+		// Take the keyboard when a dialog appears, unless the user is in the middle of typing a message.
+		const active = document.activeElement;
+		const typing = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value;
+		if (!typing && choices.length) claimFocus();
+	}, [dialog.id]);
+	useEffect(() => {
+		const onKey = (event) => {
+			if (event.altKey && event.key.toLowerCase() === "a" && choices.length) {
+				event.preventDefault();
+				claimFocus();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [dialog.id]);
+	const onChoiceKey = (event) => {
+		if (!choices.length || event.isComposing) return;
+		const move = (delta) => (event.preventDefault(), setPick((pick + delta + choices.length) % choices.length));
+		if (event.key === "ArrowLeft" || event.key === "ArrowUp") return move(-1);
+		if (event.key === "ArrowRight" || event.key === "ArrowDown") return move(1);
+		if (event.key === "Tab") return move(event.shiftKey ? -1 : 1);
+		if (event.key === "Enter") return event.preventDefault(), answer(choices[pick].value);
+		if (event.key === "Escape") return event.preventDefault(), answer(dialog.kind === "confirm" ? false : undefined);
+		const digit = Number(event.key);
+		if (dialog.kind === "select" && digit >= 1 && digit <= dialog.options.length) return event.preventDefault(), answer(dialog.options[digit - 1]);
+	};
 	const [left, setLeft] = useState(dialog.deadline ? Math.max(0, Math.ceil((dialog.deadline - Date.now()) / 1000)) : null);
 	useEffect(() => {
 		if (!dialog.deadline) return undefined;
@@ -41,13 +79,13 @@ function DialogBar({ dialog }) {
 	const lines = String(dialog.title || "").split("\n");
 	const head = lines[0];
 	const rest = lines.slice(1).join("\n");
-	return html`<div class="dialog-bar fade-in" role="alertdialog" aria-label=${head}>
+	return html`<div class="dialog-bar fade-in" role="alertdialog" aria-label=${head} ref=${root} tabindex="-1" onKeyDown=${onChoiceKey}>
 		<div class="dialog-head"><${Icon} name="alertCircle" size=${15} class="c-warn" /><strong class="grow">${head}</strong>${left != null ? html`<span class="dim">${left}s</span>` : null}</div>
 		${rest || dialog.message ? html`<div class="dialog-msg">${[rest, dialog.message].filter(Boolean).join("\n")}</div>` : null}
 		${dialog.kind === "confirm"
-			? html`<div class="dialog-actions"><button class="btn sm" onClick=${() => answer(false)}>${t("Deny")}</button><button class="btn sm primary" autofocus onClick=${() => answer(true)}>${t("Allow")}</button></div>`
+			? html`<div class="dialog-actions"><button class=${`btn sm ${pick === 0 ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(false)} onMouseMove=${() => setPick(0)}>${t("Deny")}</button><button class=${`btn sm primary ${pick === 1 ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(true)} onMouseMove=${() => setPick(1)}>${t("Allow")}</button></div><div class="dialog-keys dim">${t("←/→ choose · Enter answer · Esc deny · Alt+A focus here")}</div>`
 			: dialog.kind === "select"
-				? html`<div class="dialog-options">${dialog.options.map((option) => html`<button class="btn sm" key=${option} onClick=${() => answer(option)}>${option}</button>`)}<button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button></div>`
+				? html`<div class="dialog-options">${dialog.options.map((option, i) => html`<button class=${`btn sm ${pick === i ? "kbd-sel" : ""}`} tabindex="-1" key=${option} onClick=${() => answer(option)} onMouseMove=${() => setPick(i)}>${i < 9 ? html`<span class="dim">${i + 1}</span> ` : null}${option}</button>`)}<button class=${`btn sm ghost ${pick === dialog.options.length ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(undefined)} onMouseMove=${() => setPick(dialog.options.length)}>${t("Cancel")}</button></div><div class="dialog-keys dim">${t("↑/↓ choose · Enter answer · 1-9 pick · Esc cancel · Alt+A focus here")}</div>`
 				: dialog.kind === "input"
 					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field grow" autofocus value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
 					: html`<div class="dialog-editor"><textarea class="field" rows="6" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} /><div class="dialog-actions"><button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" onClick=${() => answer(value)}>${t("Submit")}</button></div></div>`}
@@ -174,7 +212,8 @@ function EffortPicker() {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const thinking = snap?.thinking;
-	if (!thinking || !thinking.supported) return null;
+	// A model with nothing to choose beyond "off" has no selector at all.
+	if (!thinking || !thinking.supported || thinking.levels.length < 2) return null;
 	const choose = async (level) => {
 		setOpen(false);
 		await attempt(() => post("/api/thinking", { level }));
@@ -229,7 +268,7 @@ function useSuggestions(text, caret) {
 		if (token.type === "slash") {
 			const q = token.query.toLowerCase();
 			return (resources?.commands || [])
-				.filter((c) => c.name.toLowerCase().includes(q))
+				.filter((c) => [c.name, ...(c.aliases || [])].some((name) => name.toLowerCase().includes(q)))
 				.sort((a, b) => Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)))
 				.slice(0, 12)
 				.map((c) => ({ command: c.name, key: `/${c.name}`, label: `/${c.name}`, hint: c.source === "builtin" ? serverText(c.description) : c.description, tag: t(c.source), insert: `/${c.name} ` }));
@@ -265,6 +304,10 @@ export function Composer() {
 	const lastSession = useRef(null);
 	const modeAnchor = useRef(null);
 	const [modeOpen, setModeOpen] = useState(false);
+	// The command registry (names, aliases) is needed the moment a command is typed; load it up front.
+	useEffect(() => {
+		if (!state.resources) loadResources().catch(() => {});
+	}, [sessionId]);
 
 	// Drafts follow the session so switching chats does not lose typed text.
 	useEffect(() => {
@@ -423,7 +466,7 @@ export function Composer() {
 			<div class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""}`}
 				onDragOver=${(e) => (e.preventDefault(), setDragOver(true))} onDragLeave=${() => setDragOver(false)}
 				onDrop=${(e) => (e.preventDefault(), setDragOver(false), addFiles(e.dataTransfer.files))}>
-				${menuOpen ? html`<div class="suggest" role="listbox">${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseEnter=${() => setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
+				${menuOpen ? html`<div class="suggest" role="listbox">${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${() => setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				<textarea ref=${area} class="composer-input" rows="1" value=${text} placeholder=${placeholder} spellcheck="false"

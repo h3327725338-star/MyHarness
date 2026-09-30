@@ -422,7 +422,15 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(detected.ok).toBe(true);
 		expect(detected.models).toEqual([
 			{ id: "plain", name: "plain" },
-			{ id: "thinker", name: "thinker", reasoning: true, input: ["text", "image"], contextWindow: 32000 },
+			{
+				id: "thinker",
+				name: "thinker",
+				reasoning: true,
+				input: ["text", "image"],
+				contextWindow: 32000,
+				thinkingLevelMap: { minimal: null, low: null, medium: null, high: null },
+				thinkingSource: "unconfirmed",
+			},
 		]);
 		// A failed lookup is reported, not thrown, so the form can fall back to manual entry.
 		const unreachable = await fx.post("/api/providers/custom/detect", {

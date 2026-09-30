@@ -9,14 +9,26 @@ export interface SlashCommandInfo {
 	sourceInfo: SourceInfo;
 }
 
+/** The interfaces a command is offered in. Every command runs the same underlying capability wherever it is offered. */
+export type SlashSurface = "cli" | "web";
+
 export interface BuiltinSlashCommand {
 	name: string;
 	description: string;
 	argumentHint?: string;
+	/** Other names that run the same command. */
+	aliases?: readonly string[];
+	/** Where the command is offered; omitted means every interface. Only for things that exist in one interface (a Web panel). */
+	surfaces?: readonly SlashSurface[];
 }
 
+/**
+ * The one registry of built-in slash commands, read by the terminal UI (autocomplete and dispatch) and by the Web UI (the
+ * `/` menu and the command handlers). Adding, renaming or removing a command here changes both; a command that only makes
+ * sense in one interface says so in `surfaces` instead of being defined twice.
+ */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
-	{ name: "settings", description: "打开设置菜单" },
+	{ name: "settings", description: "打开设置菜单", aliases: ["setting"] },
 	{ name: "model", description: "选择模型" },
 	{ name: "new", description: "开始新会话" },
 	{ name: "workspace", description: "打开 Workspace / Chat 管理侧栏" },
@@ -29,7 +41,23 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "undo", description: "保留或撤销当前任务检查点记录的修改" },
 	{ name: "workflow", description: "运行多智能体工作流", argumentHint: "任务" },
 	{ name: "ultracode", description: "全面处理复杂任务", argumentHint: "任务" },
+	// The Web UI has panels the terminal UI does not (the terminal shows these inline).
+	{ name: "diff", description: "打开改动（Diff）面板", surfaces: ["web"] },
+	{ name: "terminal", description: "打开 Terminal 面板（命令历史与直接运行命令）", surfaces: ["web"] },
+	{ name: "files", description: "打开文件面板", surfaces: ["web"] },
 ];
+
+/** The built-in commands offered in one interface. */
+export function builtinSlashCommandsFor(surface: SlashSurface): ReadonlyArray<BuiltinSlashCommand> {
+	return BUILTIN_SLASH_COMMANDS.filter((command) => !command.surfaces || command.surfaces.includes(surface));
+}
+
+/** Looks a built-in command up by its name or one of its aliases. */
+export function findBuiltinSlashCommand(nameOrAlias: string): BuiltinSlashCommand | undefined {
+	return BUILTIN_SLASH_COMMANDS.find(
+		(command) => command.name === nameOrAlias || command.aliases?.includes(nameOrAlias),
+	);
+}
 
 export interface SlashCommandInvocation {
 	name: string;

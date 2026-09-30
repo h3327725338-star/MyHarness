@@ -12,6 +12,7 @@ import { openBrowser } from "../../utils/open-browser.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { WebHttpServer } from "./http-server.ts";
 import { WebHostHub } from "./hub.ts";
+import { WebLifecycle } from "./lifecycle.ts";
 import { registerCoreRoutes } from "./routes-core.ts";
 import { registerFileRoutes, registerFolderBrowser } from "./routes-files.ts";
 import { registerGitRoutes } from "./routes-git.ts";
@@ -146,9 +147,19 @@ export async function runWebMode(
 	registerSettingsRoutes(server, host);
 	registerProviderRoutes(server, host, hub);
 
+	// The server belongs to its browser pages: once the last one is gone for the grace period, it exits.
+	const lifecycle = new WebLifecycle({
+		getGraceSeconds: () => runtimeHost.services.settingsManager.getWebShutdownGraceSeconds(),
+		onExpire: () => void shutdown(0),
+	});
+	server.onClientCountChange = (count) => lifecycle.clientCountChanged(count);
+	// A page may have connected while the runtime was still starting.
+	lifecycle.attach(server.clientCount, server.hadClient);
+
 	const shutdown = async (code: number) => {
 		if (shuttingDown) return;
 		shuttingDown = true;
+		lifecycle.dispose();
 		server.broadcast("shutdown", {});
 		dialogs.dismissAll();
 		try {

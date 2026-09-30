@@ -2806,6 +2806,8 @@ export class AgentSession {
 				(await this._modelRuntime.checkAuth(refreshed.provider))
 			) {
 				this.agent.state.model = refreshed;
+				// The refreshed model may offer different thinking efforts; keep the selected one valid for it.
+				this.setThinkingLevel(this.thinkingLevel);
 				return;
 			}
 		}

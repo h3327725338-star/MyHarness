@@ -8,6 +8,20 @@ import { t } from "./i18n.js";
 export const html = htm.bind(h);
 export { Component, Fragment, createContext, h, render, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon };
 
+// The browser honours `autofocus` only until the page has focused something once, so a search box that appears later
+// (palette, model search, rename fields) would not get the keyboard. Focus elements that arrive with `autofocus` ourselves.
+if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+	new MutationObserver((records) => {
+		for (const record of records) {
+			for (const node of record.addedNodes) {
+				if (node.nodeType !== 1) continue;
+				const target = node.matches("[autofocus]") ? node : node.querySelector("[autofocus]");
+				if (target && target !== document.activeElement && target.isConnected) return target.focus({ preventScroll: true });
+			}
+		}
+	}).observe(document.documentElement, { childList: true, subtree: true });
+}
+
 /** Set by the inline command panel: a Modal inside it is drawn in place (no scrim) and closing it goes back one level. */
 export const InlineFrame = createContext(null);
 

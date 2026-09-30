@@ -167,7 +167,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
-- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个小进度窗口（进度来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
+- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个深色无边框的小启动窗口（阶段文字来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - scripts/dev-fast-loader.mjs：仅供 dev.ps1 使用的 Node `--import` 加载器，按根 tsconfig.json 的 `@myharness/*` paths 解析 workspace 源码；源码是 erasable-only TypeScript，所以不需要 tsx 转换。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
@@ -199,7 +199,7 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 | extensions/ | Extension contracts、发现、加载、API entry、Runner、事件、Tool、Command、UI、Provider 注册 | 不应让 loader 通过公共根 facade 反向依赖自身；不把 Extension API 逻辑塞进 TUI | extensions/contracts/、api-entry.ts、loader/、runtime/；由 ResourceLoader、AgentSession、ModelRuntime 使用 | 新 Extension contract、registration、lifecycle、loader 或 runtime 能力 |
 | exports/ | Session HTML/JSONL 导出、模板和 ANSI/Markdown 转换 | 不是 npm package exports 配置；不负责普通 Public API re-export | exports/html/；由 AgentSession export 方法调用 | 新导出格式、模板或 export renderer |
 | git/ | Git repository、命令、状态、commit、checkpoint、local repository、worktree | 不负责页面交互；业务流程入口可在 Application use case，但 Git 原语仍在此 | git/repository/、checkpoints/、worktrees/、local-repositories/；由 AgentSession、Application、InteractiveMode 使用 | Git 状态/命令、checkpoint、commit 或 worktree 原语 |
-| modes/ | InteractiveMode 的输入/UI 编排，PrintMode 的 text/json 输出，以及 Web mode（`modes/web/`：loopback HTTP/SSE 服务、WebHost、路由；浏览器前端静态文件在包根 `web/`） | InteractiveMode 当前仍直接使用部分 Application/Git/Provider/Session 服务；Web mode 只做传输与展示投影，调用现有 use case，不复制 Agent/Session/Git/Provider 逻辑；均不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts、modes/web/web-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui；Web UI 见 packages/coding-agent/docs/web-ui.md |
+| modes/ | InteractiveMode 的输入/UI 编排，PrintMode 的 text/json 输出，以及 Web mode（`modes/web/`：loopback HTTP/SSE 服务、WebHost、路由、WebLifecycle（最后一个页面断开后按 `webShutdownGraceSeconds` 宽限退出）；浏览器前端静态文件在包根 `web/`） | InteractiveMode 当前仍直接使用部分 Application/Git/Provider/Session 服务；Web mode 只做传输与展示投影，调用现有 use case，不复制 Agent/Session/Git/Provider 逻辑；均不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts、modes/web/web-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui；Web UI 见 packages/coding-agent/docs/web-ui.md |
 | observability/ | Runtime trace、usage totals、cache stats、诊断脱敏、telemetry 和 timing | 不负责业务状态持久化；Trace 不是 Session JSONL | observability/runtime-trace.ts、session-trace.ts、diagnostic-sanitizer.ts；由 AgentSession/Provider 使用 | 新运行诊断、脱敏、usage 或 trace 事件 |
 | platform/ | HTTP dispatcher、进程执行、输出保护和 OS/命令边界 | 不负责 Provider 选择、Agent 状态或 TUI | platform/process/；由 Shell、Provider 和启动逻辑使用 | Node/Windows/Bash 进程与网络适配 |
 | prompts/ | Prompt Template 的发现和加载 | 不负责 system prompt 的核心组装；不负责 Skills | prompts/loader/；由 ResourceLoader、AgentSession 调用 | Prompt Template loader 或 template 资源接线 |
@@ -258,14 +258,14 @@ src/application/bootstrap/
 | Git commit / checkpoint / worktree | Git 对应子目录 | git/repository/、checkpoints/、worktrees/；跨领域流程再加 application/use-cases/ | Interactive component 内直接实现 Git 规则 |
 | Provider runtime | providers/runtime/ | Model resolver、Recovery、attribution、Settings | TUI 或 main.ts 内增加 Provider 状态 |
 | Credential / OAuth | providers/credentials/ | auth-storage.ts、manager、runtime、account connections | Settings JSON 或普通 utils/ |
-| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、store | 直接修改 TUI model selector |
+| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、official-thinking（Provider 官方文档记载的 Thinking Effort，仅第一方 API 主机）、store | 直接修改 TUI model selector |
 | 低层 Provider API adapter | packages/ai/src/api/ | packages/ai/src/models.ts、auth helpers、Provider API 类型 | coding-agent 的 InteractiveMode |
 | 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
 | TUI 页面/产品 UI | modes/interactive/ | interactive-mode.ts、components/、theme | Provider、Session 或 Git 目录 |
 | Web UI 服务端 / API / 事件 | modes/web/ | routes-*.ts、host.ts、wire.ts；前端在 packages/coding-agent/web/ | 在路由里复制 Session/Git/Provider 规则；把 UI 状态机放进 host.ts |
 | 可复用 TUI 基础组件 | packages/tui/src/ | TUI component、terminal、focus/input 基础能力 | coding-agent 的业务模块 |
 | Extension API | extensions/contracts/、api-entry.ts | loader、runtime、Runner、compat、examples | 直接把内部实现暴露给 Extension |
-| 内置 Slash Command | cli/slash-commands.ts | AgentSession prompt expansion、Interactive dispatch 或 Extension registration | TUI component 中硬编码完整业务流程 |
+| 内置 Slash Command | cli/slash-commands.ts（唯一注册表，含别名与 `surfaces`：cli / web；TUI 与 Web `/api/resources` 共用） | AgentSession prompt expansion、Interactive dispatch、Web 的 web/js/builtin-commands.js 执行方式表 或 Extension registration | TUI component 中硬编码完整业务流程 |
 | System Prompt 内容 | 根目录 system-prompts/ | 对应 role/tool/task/provider Markdown | src/system-prompts/ 中写大段实际 prompt 文本 |
 | System Prompt 加载/组装 | system-prompts/ | packages/ai loader、coding-agent loader/composer | TUI 或 Provider adapter |
 | Settings | config/settings/ | types、defaults、manager、storage、migration、paths | 任意业务模块中直接读写 JSON |

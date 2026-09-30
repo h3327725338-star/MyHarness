@@ -184,9 +184,9 @@ function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 					<label class="col field-label">${t("Max output (tokens)")}${d.maxTokens ? html` <${Detected} />` : null}<input class="field mono" inputmode="numeric" value=${model.maxTokens} onInput=${(e) => set({ maxTokens: e.target.value })} /></label>
 				</div>
 				${model.reasoning
-					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${t("Read from the endpoint's model list")} />` : null}</span>
+					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "official" ? t("From the provider's official documentation") : t("Read from the endpoint's model list")} />` : null}</span>
 						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} onClick=${() => set({ levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? t("These are the levels the endpoint lists for this model.") : t("The endpoint did not list the levels of this model, so the usual ones are offered. Untick what it does not accept.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "official" ? t("These are the levels the provider's official documentation lists for this model.") : t("These are the levels the endpoint lists for this model.")) : t("Neither the endpoint nor the provider's documentation lists the levels of this model, so none is assumed. Tick only the ones you know it accepts.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
 					: null}
 				${changes.length
 					? html`<div class="pf-conflict">

@@ -24,6 +24,16 @@ function Output({ text, max = 20_000, tail = false }) {
 		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
+const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
+
+/** Text read from a Markdown file renders like the chat; everything else stays plain/code output. */
+function MarkdownOutput({ text, max = 60_000 }) {
+	const [all, setAll] = useState(false);
+	const shown = !all && text.length > max ? text.slice(0, max) : text;
+	return html`<div class="raw-block raw-md"><${Markdown} text=${shown} onOpenFile=${actions.openFile} />
+		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
+}
+
 function RawDetails({ step }) {
 	const { call, result, run } = step;
 	const details = result?.details;
@@ -39,7 +49,7 @@ function RawDetails({ step }) {
 		</div>
 		<div class="raw-label">${t("Arguments")}</div>
 		<pre class="raw-pre">${formatData(call.args)}</pre>
-		${output ? html`<div class="raw-label">${result ? (result.isError ? t("Error output") : t("Result")) : t("Output so far")}</div><${Output} text=${output} tail=${step.kind === "run"} />` : null}
+		${output ? html`<div class="raw-label">${result ? (result.isError ? t("Error output") : t("Result")) : t("Output so far")}</div>${step.kind === "read" && result && !result.isError && MARKDOWN_PATH.test(step.path || "") ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}` : null}
 		${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => html`<img key=${i} src=${`data:${img.mimeType};base64,${img.data}`} alt=${t("tool image")} />`)}</div>` : null}
 		${details && Object.keys(details).length ? html`<button class="btn sm ghost" onClick=${() => setShowDetails(!showDetails)}>${showDetails ? t("Hide result details") : t("Show result details")}</button>${showDetails ? html`<pre class="raw-pre">${formatData(details)}</pre>` : null}` : null}
 	</div>`;

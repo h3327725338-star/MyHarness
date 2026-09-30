@@ -68,7 +68,7 @@ import { ProviderSettingsUseCase } from "../../application/use-cases/provider-se
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { WorkspaceStore } from "../../application/workspace-store.ts";
 import {
-	BUILTIN_SLASH_COMMANDS,
+	builtinSlashCommandsFor,
 	parseExpandedBuiltinPromptCommand,
 	parseSlashCommandInvocation,
 } from "../../cli/slash-commands.ts";
@@ -755,7 +755,7 @@ export class InteractiveMode {
 	}
 
 	private getBuiltInCommandConflictDiagnostics(extensionRunner: ExtensionRunner): ResourceDiagnostic[] {
-		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
+		const builtinNames = new Set(builtinSlashCommandsFor("cli").map((command) => command.name));
 		return extensionRunner
 			.getRegisteredCommands()
 			.filter((command) => builtinNames.has(command.name))
@@ -771,7 +771,7 @@ export class InteractiveMode {
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
 		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
+		const slashCommands: SlashCommand[] = builtinSlashCommandsFor("cli").map((command) => ({
 			name: command.name,
 			description: command.description,
 			...(command.argumentHint && { argumentHint: command.argumentHint }),
@@ -5018,7 +5018,9 @@ export class InteractiveMode {
 		if (!commandName) return;
 
 		const recognized =
-			BUILTIN_SLASH_COMMANDS.some((command) => command.name === commandName) ||
+			builtinSlashCommandsFor("cli").some(
+				(command) => command.name === commandName || command.aliases?.includes(commandName),
+			) ||
 			!!this.session.extensionRunner.getCommand(commandName) ||
 			this.skillCommands.has(commandName) ||
 			this.session.promptTemplates.some((command) => command.name === commandName);

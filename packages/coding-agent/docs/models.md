@@ -296,6 +296,15 @@ Example for a model where thinking cannot be disabled:
 }
 ```
 
+Where the Web UI and TUI get the levels of a model, in order of trust:
+
+1. the map you wrote in `models.json`;
+2. what the provider's model catalog lists when models are discovered (for example OpenRouter `supported_efforts`, Anthropic `capabilities.effort`);
+3. the levels the provider's own documentation names for that model, kept in `src/providers/models/official-thinking.ts` and matched only by the first-party API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`) plus the model ID. A relay serving the same model ID is not matched. A model declared with `"reasoning": true` but without its own map takes this documented map when one exists at load time;
+4. otherwise nothing is assumed. Model discovery records such a model as `reasoning: true` with every level from `minimal` to `high` set to `null`, so only `off` remains and the effort selector is hidden. A hand-written `"reasoning": true` model without a map keeps the runtime default described in the table above.
+
+Refreshing a provider's models also brings the map of models already in `models.json` up to date from source 2 or 3 (values you customised for levels that stay supported are kept); it never overwrites a map with source 4.
+
 Migration: older configs that used `compat.reasoningEffortMap` should move that mapping to model-level `thinkingLevelMap`. Use `null` for levels that should not appear in the UI.
 
 <a id="overriding-registered-providers"></a>

@@ -9,6 +9,7 @@ import {
 	discoverProviderModels,
 	ProviderModelDiscoveryError,
 } from "../src/providers/models/custom-provider-manager.ts";
+import { UNCONFIRMED_THINKING_LEVEL_MAP } from "../src/providers/models/official-thinking.ts";
 import { FileModelsStore } from "../src/providers/models/store.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 
@@ -36,6 +37,62 @@ afterEach(async () => {
 });
 
 describe("CustomProviderManager", () => {
+	it("brings an existing model's thinking efforts up to date only from a source that names them", async () => {
+		const path = await createTemporaryModelsPath();
+		await writeFile(
+			path,
+			JSON.stringify({
+				providers: {
+					relay: {
+						baseUrl: "https://relay.example/v1",
+						api: "openai-completions",
+						models: [
+							{ id: "listed", reasoning: true, thinkingLevelMap: { high: "custom-high" } },
+							{ id: "unlisted", reasoning: true, thinkingLevelMap: { high: "high" } },
+							{ id: "plain" },
+						],
+					},
+				},
+			}),
+			"utf8",
+		);
+		const manager = new CustomProviderManager(path);
+		const catalog = { minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh" } as const;
+
+		const result = await manager.mergeDiscoveredModels(
+			"relay",
+			[
+				{ id: "listed", name: "listed", reasoning: true, thinkingLevelMap: catalog, thinkingSource: "catalog" },
+				// Reasoning without any named effort must not overwrite what the user has.
+				{
+					id: "unlisted",
+					name: "unlisted",
+					reasoning: true,
+					thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
+					thinkingSource: "unconfirmed",
+				},
+				{ id: "plain", name: "plain" },
+			],
+			"openai-completions",
+		);
+		expect(result).toEqual({ added: 0, updated: 1, existing: 3 });
+
+		const saved = JSON.parse(await readFile(path, "utf8")) as { providers: { relay: { models: any[] } } };
+		const byId = new Map(saved.providers.relay.models.map((model) => [model.id, model]));
+		// Levels the catalog names replace the stored ones; a value the user customised for a level that stays supported survives.
+		expect(byId.get("listed").thinkingLevelMap).toEqual({ ...catalog, high: "custom-high" });
+		expect(byId.get("unlisted").thinkingLevelMap).toEqual({ high: "high" });
+		expect(byId.get("plain")).toEqual({ id: "plain" });
+
+		// Running it again changes nothing.
+		const again = await manager.mergeDiscoveredModels(
+			"relay",
+			[{ id: "listed", name: "listed", reasoning: true, thinkingLevelMap: catalog, thinkingSource: "catalog" }],
+			"openai-completions",
+		);
+		expect(again).toEqual({ added: 0, updated: 0, existing: 1 });
+	});
+
 	it("adds a provider without removing unrelated configuration and keeps a source backup", async () => {
 		const path = await createTemporaryModelsPath();
 		const original = `{
@@ -309,6 +366,9 @@ describe("CustomProviderManager", () => {
 				contextWindow: 200000,
 				maxTokens: 64000,
 				reasoning: true,
+				// The endpoint says the model reasons but not which efforts it takes: none is assumed.
+				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
+				thinkingSource: "unconfirmed",
 				input: ["text", "image"],
 			},
 			{
@@ -317,6 +377,8 @@ describe("CustomProviderManager", () => {
 				contextWindow: 200000,
 				maxTokens: 16000,
 				reasoning: true,
+				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
+				thinkingSource: "unconfirmed",
 				input: ["text", "image"],
 			},
 			{ id: "router-b", name: "router-b", reasoning: false, input: ["text"] },
@@ -324,7 +386,15 @@ describe("CustomProviderManager", () => {
 
 		const gemini = await discoverProviderModels({ baseUrl: `${baseUrl}/gemini/v1beta`, api: "google-generative-ai" });
 		expect(gemini).toEqual([
-			{ id: "gem-chat", name: "Gem Chat", contextWindow: 1048576, maxTokens: 8192, reasoning: true },
+			{
+				id: "gem-chat",
+				name: "Gem Chat",
+				contextWindow: 1048576,
+				maxTokens: 8192,
+				reasoning: true,
+				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
+				thinkingSource: "unconfirmed",
+			},
 		]);
 	});
 
@@ -387,15 +457,15 @@ describe("CustomProviderManager", () => {
 			thinkingLevelMap: { minimal: null, medium: null, max: "max", off: null },
 		});
 		expect(byId.get("router-all")?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
-		// A model that only says "reasoning" gets no invented level map.
-		expect(byId.get("router-no-list")).toMatchObject({ reasoning: true });
-		expect(byId.get("router-no-list")?.thinkingLevelMap).toBeUndefined();
+		// A model that only says "reasoning" gets no invented efforts: every level is marked unsupported until confirmed.
+		expect(byId.get("router-no-list")).toMatchObject({ reasoning: true, thinkingSource: "unconfirmed" });
+		expect(byId.get("router-no-list")?.thinkingLevelMap).toEqual(UNCONFIRMED_THINKING_LEVEL_MAP);
 
 		const anthropic = await discoverProviderModels({ baseUrl: `${baseUrl}/anthropic/v1`, api: "anthropic-messages" });
 		const claude = new Map(anthropic.map((model) => [model.id, model]));
 		expect(claude.get("claude-effort")?.thinkingLevelMap).toEqual({ minimal: null, xhigh: "xhigh" });
 		expect(claude.get("claude-effort")?.reasoning).toBe(true);
-		expect(claude.get("claude-budget")?.thinkingLevelMap).toBeUndefined();
+		expect(claude.get("claude-budget")?.thinkingLevelMap).toEqual(UNCONFIRMED_THINKING_LEVEL_MAP);
 		expect(claude.get("claude-budget")?.reasoning).toBe(true);
 	});
 
@@ -681,7 +751,7 @@ describe("CustomProviderManager", () => {
 		const runtime = await ModelRuntime.create({ credentials, modelsPath: path, allowModelNetwork: false });
 
 		const first = await runtime.refreshProviderModels("custom");
-		expect(first).toEqual({ providerId: "custom", discovered: 3, added: 2, existing: 1, removed: 0 });
+		expect(first).toEqual({ providerId: "custom", discovered: 3, added: 2, existing: 1, removed: 0, updated: 0 });
 		expect(runtime.getModel("custom", "manual-model")?.reasoning).toBe(true);
 		expect(runtime.getModel("custom", "auto-a")).toMatchObject({ api: "openai-completions" });
 		expect(runtime.getModel("custom", "auto-b")?.name).toBe("Auto B");
@@ -702,12 +772,19 @@ describe("CustomProviderManager", () => {
 		]);
 
 		const repeat = await runtime.refreshProviderModels("custom");
-		expect(repeat).toEqual({ providerId: "custom", discovered: 3, added: 0, existing: 3, removed: 0 });
+		expect(repeat).toEqual({ providerId: "custom", discovered: 3, added: 0, existing: 3, removed: 0, updated: 0 });
 		expect(await readFile(path, "utf8")).toBe(savedAfterFirst);
 
 		empty = true;
 		const emptyResult = await runtime.refreshProviderModels("custom");
-		expect(emptyResult).toEqual({ providerId: "custom", discovered: 0, added: 0, existing: 0, removed: 0 });
+		expect(emptyResult).toEqual({
+			providerId: "custom",
+			discovered: 0,
+			added: 0,
+			existing: 0,
+			removed: 0,
+			updated: 0,
+		});
 		expect(await readFile(path, "utf8")).toBe(savedAfterFirst);
 		empty = false;
 

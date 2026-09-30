@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChangeTracker, countPatchLines, makePatch } from "../src/modes/web/changes.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
-import { entriesToWire, messageToWire, sanitizeDetails } from "../src/modes/web/wire.ts";
+import { entriesToWire, messageToWire, sanitizeDetails, toWireModel } from "../src/modes/web/wire.ts";
 import type { SessionEntry } from "../src/session/types.ts";
 
 describe("web wire format", () => {
@@ -85,6 +85,33 @@ describe("web wire format", () => {
 			truncatedDetails: true,
 			originalChars: expect.any(Number),
 		});
+	});
+});
+
+describe("web wire model", () => {
+	const model = (reasoning: boolean, thinkingLevelMap?: Record<string, string | null>) =>
+		({
+			provider: "p",
+			id: "m",
+			name: "M",
+			api: "openai-completions",
+			baseUrl: "https://x.example/v1",
+			reasoning,
+			thinkingLevelMap,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1000,
+			maxTokens: 100,
+		}) as never;
+
+	it("sends each model's own thinking efforts, none for a model that does not reason", () => {
+		expect(toWireModel(model(false)).thinkingLevels).toEqual(["off"]);
+		const limited = toWireModel(model(true, { minimal: null, low: null, medium: null, high: "high", off: null }));
+		expect(limited.thinkingLevels).toEqual(["high"]);
+		// Reasoning without any named effort offers only "off", so the Composer has nothing to choose and hides the selector.
+		expect(toWireModel(model(true, { minimal: null, low: null, medium: null, high: null })).thinkingLevels).toEqual([
+			"off",
+		]);
 	});
 });
 

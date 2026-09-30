@@ -1,9 +1,9 @@
 // Command palette (Ctrl+K): app actions, chats and workspace files in one keyboard-driven list.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
-import { api, setView, state, useStore } from "./store.js";
+import { api, loadResources, setView, state, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
 import { chatTitle, debounce, relTime } from "./util.js";
-import { t } from "./i18n.js";
+import { serverText, t } from "./i18n.js";
 
 function score(query, text) {
 	const q = query.toLowerCase();
@@ -23,11 +23,16 @@ function score(query, text) {
 export function CommandPalette() {
 	const ws = useStore((s) => s.workspaces);
 	const snap = useStore((s) => s.snap);
+	const resources = useStore((s) => s.resources);
 	const [query, setQuery] = useState("");
 	const [sel, setSel] = useState(0);
 	const [files, setFiles] = useState([]);
 	const listRef = useRef(null);
 	const close = () => setView({ palette: false });
+
+	useEffect(() => {
+		if (!resources) loadResources().catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		if (query.trim().length < 2) {
@@ -81,6 +86,16 @@ export function CommandPalette() {
 			const s = score(query, c.label);
 			if (s) list.push({ ...c, group: t("Actions"), s });
 		}
+		// Slash commands come from the same registry as the composer's "/" menu (and the terminal UI); running one here is
+		// exactly typing it.
+		for (const c of resources?.commands || []) {
+			if (!query && c.source !== "builtin") continue;
+			const description = c.source === "builtin" ? serverText(c.description) : c.description;
+			const s = score(query, `/${c.name} ${(c.aliases || []).join(" ")} ${description || ""}`);
+			if (!s) continue;
+			const run = () => (close(), c.source === "builtin" ? actions.submit(`/${c.name}`) : actions.insertIntoComposer(`/${c.name} `, { replace: true }));
+			list.push({ label: `/${c.name}`, sub: description, icon: "bolt", group: t("Commands"), s, run });
+		}
 		for (const [root, sessions] of Object.entries(ws.sessions)) {
 			const w = ws.list.find((x) => x.rootPath === root);
 			for (const info of sessions) {
@@ -92,9 +107,9 @@ export function CommandPalette() {
 			}
 		}
 		for (const file of files) list.push({ label: file, icon: "file", group: t("Files"), s: 5, run: () => (close(), actions.openFile(file)) });
-		const order = { [t("Actions")]: 0, [t("Chats")]: 1, [t("Files")]: 2 };
+		const order = { [t("Actions")]: 0, [t("Commands")]: 1, [t("Chats")]: 2, [t("Files")]: 3 };
 		return list.sort((a, b) => order[a.group] - order[b.group] || b.s - a.s).slice(0, 40);
-	}, [query, ws, files, snap?.active]);
+	}, [query, ws, files, snap?.active, resources]);
 
 	useEffect(() => setSel(0), [query]);
 	useEffect(() => {
@@ -115,7 +130,7 @@ export function CommandPalette() {
 				${entries.map((entry, i) => {
 					const header = entry.group !== lastGroup ? html`<div class="pop-group" key=${`g-${entry.group}`}>${entry.group}</div>` : null;
 					lastGroup = entry.group;
-					return html`${header}<button key=${`${entry.group}-${entry.label}-${i}`} class=${`palette-item ${i === sel ? "sel" : ""}`} onMouseEnter=${() => setSel(i)} onClick=${entry.run}>
+					return html`${header}<button key=${`${entry.group}-${entry.label}-${i}`} class=${`palette-item ${i === sel ? "sel" : ""}`} onMouseMove=${() => setSel(i)} onClick=${entry.run}>
 						<${Icon} name=${entry.icon} size=${15} /><span class="truncate grow">${entry.label}</span>${entry.sub ? html`<span class="dim">${entry.sub}</span>` : null}${entry.hint ? html`<span class="kbd">${entry.hint}</span>` : null}</button>`;
 				})}
 				${!entries.length ? html`<div class="empty">${t("Nothing matches “{query}”.", { query })}</div>` : null}

@@ -96,7 +96,7 @@ describe("Web UI: interface language", () => {
 		lang.setLang("zh-CN");
 		expect(i18n.serverText("Steering messages")).toBe("引导消息");
 		expect(i18n.serverText("Retry transient provider errors (up to 3 times).")).toBe(
-			"遇到临时性的提供商错误时自动重试（最多 3 次）。",
+			"遇到临时性的 Provider 错误时自动重试（最多 3 次）。",
 		);
 		expect(i18n.serverText("Trust parent folder (C:\\work)")).toBe("信任上级文件夹（C:\\work）");
 		expect(i18n.serverText("30 sec")).toBe("30 秒");
@@ -104,9 +104,43 @@ describe("Web UI: interface language", () => {
 		lang.setLang("en");
 	});
 
+	it("keeps developer terms in English inside Chinese sentences instead of translating them mechanically", () => {
+		lang.setLang("zh-CN");
+		const terms = [
+			"Terminal",
+			"Session",
+			"Workspace",
+			"Provider",
+			"Commit",
+			"Push",
+			"Diff",
+			"Thinking Effort",
+			"Worktree",
+		];
+		const zh = zhCN as Record<string, string>;
+		// Labels that name one of these things are the English term itself, with normal spacing around it in a sentence.
+		expect(i18n.t("Terminal")).toBe("Terminal");
+		expect(i18n.t("Diff")).toBe("Diff");
+		expect(i18n.t("Push")).toBe("Push");
+		expect(i18n.t("Session details")).toBe("Session 详情");
+		expect(i18n.t("Open in Terminal")).toBe("在 Terminal 中打开");
+		expect(i18n.t("Reasoning effort")).toBe("Thinking Effort");
+		// The mechanical Chinese renderings are gone from the UI dictionary.
+		for (const value of Object.values(zh)) {
+			for (const word of ["提供商", "会话", "思考强度", "工作树", "终端面板"]) expect(value).not.toContain(word);
+		}
+		// English terms are separated from neighbouring Chinese by a space, never glued to it.
+		for (const value of Object.values(zh)) {
+			for (const term of terms) {
+				expect(value, value).not.toMatch(new RegExp(`[\\u4e00-\\u9fff]${term}|${term}[\\u4e00-\\u9fff]`));
+			}
+		}
+		lang.setLang("en");
+	});
+
 	it("translates reasoning-effort level names and hints", () => {
 		lang.setLang("zh-CN");
-		expect(effortName("xhigh")).toBe("超高");
+		expect(effortName("xhigh")).toBe("xhigh"); // API values are shown as they are sent
 		expect(effortName("custom-level")).toBe("custom-level");
 		lang.setLang("en");
 		expect(effortName("xhigh")).toBe("xhigh");

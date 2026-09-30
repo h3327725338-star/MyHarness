@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	BUILTIN_SLASH_COMMANDS,
+	builtinSlashCommandsFor,
 	expandBuiltinPromptCommand,
+	findBuiltinSlashCommand,
 	parseExpandedBuiltinPromptCommand,
 	parseSlashCommandInvocation,
 } from "../src/cli/slash-commands.ts";
@@ -9,7 +11,7 @@ import {
 describe("BUILTIN_SLASH_COMMANDS", () => {
 	it("uses Chinese descriptions", () => {
 		expect(BUILTIN_SLASH_COMMANDS).toEqual([
-			{ name: "settings", description: "打开设置菜单" },
+			{ name: "settings", description: "打开设置菜单", aliases: ["setting"] },
 			{ name: "model", description: "选择模型" },
 			{ name: "new", description: "开始新会话" },
 			{ name: "workspace", description: "打开 Workspace / Chat 管理侧栏" },
@@ -22,7 +24,23 @@ describe("BUILTIN_SLASH_COMMANDS", () => {
 			{ name: "undo", description: "保留或撤销当前任务检查点记录的修改" },
 			{ name: "workflow", description: "运行多智能体工作流", argumentHint: "任务" },
 			{ name: "ultracode", description: "全面处理复杂任务", argumentHint: "任务" },
+			{ name: "diff", description: "打开改动（Diff）面板", surfaces: ["web"] },
+			{ name: "terminal", description: "打开 Terminal 面板（命令历史与直接运行命令）", surfaces: ["web"] },
+			{ name: "files", description: "打开文件面板", surfaces: ["web"] },
 		]);
+	});
+
+	it("is the one registry for both interfaces: web-only panels are marked, everything else is shared", () => {
+		const cli = builtinSlashCommandsFor("cli").map((command) => command.name);
+		const web = builtinSlashCommandsFor("web").map((command) => command.name);
+		expect(cli).not.toContain("diff");
+		expect(web).toEqual(
+			expect.arrayContaining(["settings", "model", "effort", "workspace", "diff", "terminal", "files"]),
+		);
+		// Every command the terminal UI offers is also offered on the Web.
+		expect(cli.filter((name) => !web.includes(name))).toEqual([]);
+		expect(findBuiltinSlashCommand("setting")?.name).toBe("settings");
+		expect(findBuiltinSlashCommand("nope")).toBeUndefined();
 	});
 
 	it("parses arguments after a newline", () => {

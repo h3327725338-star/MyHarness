@@ -17,6 +17,12 @@ export function levelsFromMap(map) {
 	return levels;
 }
 
+/**
+ * No level offered but "off": nothing states which levels a model accepts, so none is assumed. Used for models that do not
+ * declare reasoning (a new model, or reasoning switched on by hand) until the user ticks what they know it accepts.
+ */
+const unknownLevels = () => Object.fromEntries([...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => [level, level === "off"]));
+
 export function positive(text) {
 	const value = Number(String(text).trim());
 	return Number.isFinite(value) && value > 0 && Number.isInteger(value) ? value : undefined;
@@ -30,7 +36,9 @@ export function modelDraft(model = {}, detected = {}) {
 		id: model.id ?? "",
 		name: model.name ?? "",
 		reasoning: model.reasoning === true,
-		levels: levelsFromMap(model.thinkingLevelMap),
+		// A model that declares reasoning without a map keeps the runtime's meaning (no level is excluded); one that does
+		// not declare reasoning has no known levels.
+		levels: model.thinkingLevelMap || model.reasoning === true ? levelsFromMap(model.thinkingLevelMap) : unknownLevels(),
 		image: model.input?.includes("image") === true,
 		contextWindow: String(model.contextWindow ?? DEFAULT_CONTEXT),
 		maxTokens: String(model.maxTokens ?? DEFAULT_MAX_TOKENS),
@@ -80,7 +88,10 @@ export function seedFromDetected(found) {
 	if (found.thinkingLevelMap) seed.thinkingLevelMap = found.thinkingLevelMap;
 	const detected = {};
 	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (found[key] !== undefined) detected[key] = true;
-	if (found.thinkingLevelMap) detected.levels = true;
+	// Levels are marked "auto" only when the catalog or the provider's documentation names them; an unconfirmed map
+	// (reasoning without any listed efforts) offers no level and says so.
+	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed") detected.levels = true;
+	if (found.thinkingSource) detected.levelsSource = found.thinkingSource;
 	return modelDraft(seed, detected);
 }
 
@@ -102,7 +113,7 @@ export function detectedChanges(model, found) {
 	for (const field of ["contextWindow", "maxTokens"]) {
 		if (found[field] !== undefined && String(found[field]) !== String(model[field]).trim()) changes.push({ field, from: String(model[field]).trim(), to: found[field] });
 	}
-	if (found.thinkingLevelMap && (found.reasoning ?? model.reasoning)) {
+	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed" && (found.reasoning ?? model.reasoning)) {
 		const levels = levelsFromMap(found.thinkingLevelMap);
 		if (!sameLevels(levels, model.levels)) changes.push({ field: "levels", from: model.levels, to: levels });
 	}
@@ -125,6 +136,7 @@ export function applyDetected(model, found) {
 			// Forget the old mapping values so the catalog's levels are what gets written.
 			next.raw = { ...model.raw, thinkingLevelMap: found.thinkingLevelMap };
 			next.detected.levels = true;
+			next.detected.levelsSource = found.thinkingSource;
 		} else {
 			next[field] = String(found[field]);
 			next.detected[field] = true;

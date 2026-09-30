@@ -29,6 +29,7 @@ import {
 	resolveHeadersOrThrow,
 } from "../credentials/value-resolution.ts";
 import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./config.ts";
+import { resolveOfficialThinking } from "./official-thinking.ts";
 
 export interface ExtensionOAuthConfig {
 	name: string;
@@ -163,7 +164,13 @@ function modelFromJson(
 		provider: providerId,
 		baseUrl,
 		reasoning: definition.reasoning ?? false,
-		thinkingLevelMap: definition.thinkingLevelMap,
+		// A declared reasoning model without its own map takes the efforts its provider documents for it (first-party
+		// API hosts only); with no documentation the map stays absent and the user's declaration stands.
+		thinkingLevelMap:
+			definition.thinkingLevelMap ??
+			(definition.reasoning === true
+				? resolveOfficialThinking({ baseUrl, modelId: definition.id })?.thinkingLevelMap
+				: undefined),
 		input: (definition.input ?? ["text"]) as ("text" | "image")[],
 		// A user-entered image declaration is a claim, not verified provider metadata.
 		// Keep it testable until the built-in image probe succeeds.

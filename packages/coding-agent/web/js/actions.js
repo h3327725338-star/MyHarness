@@ -1,5 +1,6 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { activateSlot, api, attempt, loadGitStatus, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
+import { activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
+import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { normPath, shortPath } from "./util.js";
 import { t } from "./i18n.js";
 
@@ -38,11 +39,23 @@ function normalizeFilePath(input) {
 	return { path: shortPath(path, cwd), line };
 }
 
-/** Commands with several levels of choices open the inline panel above the composer; everything else runs at once. */
-export const INTERACTIVE_COMMANDS = new Set(["settings", "setting", "model", "effort", "git", "commit", "push", "restore", "undo", "workspace"]);
+/** What each "action" built-in command does (BUILTIN_COMMAND_KINDS says which commands are actions). */
+const COMMAND_ACTIONS = {
+	new: () => actions.newSession(),
+	compact: (arg) => actions.compact(arg || undefined),
+	diff: () => actions.openChanges(),
+	terminal: () => actions.openTerminal(),
+	files: () => setView({ panelOpen: true, panelTab: "files" }),
+};
+
+/** The registry entry for a typed command name (or alias), reading the shared registry delivered by /api/resources. */
+async function builtinCommand(name) {
+	if (!state.resources) await loadResources().catch(() => {});
+	return (state.resources?.commands || []).find((c) => c.source === "builtin" && (c.name === name || c.aliases?.includes(name)));
+}
 
 export function openCommand(name, arg = "") {
-	setView({ cmd: { name: name === "setting" ? "settings" : name, arg, nonce: Date.now() } });
+	setView({ cmd: { name, arg, nonce: Date.now() } });
 }
 
 export function closeCommand() {
@@ -83,17 +96,19 @@ export const actions = {
 		const [head, ...rest] = text.split(/\s+/);
 		const arg = rest.join(" ").trim();
 		const active = state.snap?.active;
-		const builtin = {
-			"/new": () => actions.newSession(),
-			"/compact": () => actions.compact(arg || undefined),
-		};
-		if (head.startsWith("/") && INTERACTIVE_COMMANDS.has(head.slice(1)) && images.length === 0) {
-			openCommand(head.slice(1), arg);
-			return { handled: true };
-		}
-		if (builtin[head] && images.length === 0) {
-			builtin[head]();
-			return { handled: true };
+		if (head.startsWith("/") && images.length === 0) {
+			// A canonical name is handled at once (the panel must exist before the next keystroke); an alias needs the registry.
+			const typed = head.slice(1);
+			const name = BUILTIN_COMMAND_KINDS[typed] ? typed : (await builtinCommand(typed))?.name;
+			const kind = name && BUILTIN_COMMAND_KINDS[name];
+			if (kind === "panel") {
+				openCommand(name, arg);
+				return { handled: true };
+			}
+			if (kind === "action") {
+				COMMAND_ACTIONS[name](arg);
+				return { handled: true };
+			}
 		}
 		if (text.startsWith("!") && images.length === 0) {
 			const excluded = text.startsWith("!!");

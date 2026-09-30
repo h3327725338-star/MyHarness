@@ -94,6 +94,8 @@ export interface ProviderModelRefreshResult {
 	providerId: string;
 	discovered: number;
 	added: number;
+	/** Existing models whose thinking capability was updated from the catalog or official documentation. */
+	updated: number;
 	existing: number;
 	removed: number;
 }
@@ -507,12 +509,17 @@ export class ModelRuntime implements Models {
 				signal: controller.signal,
 			});
 			const localIds = new Set(this.models.getModels(providerId).map((model) => model.id));
-			const candidates = discovered.filter((model) => !localIds.has(model.id));
-			if (candidates.length === 0) {
+			const hasNewModels = discovered.some((model) => !localIds.has(model.id));
+			// Existing models are only touched when a source names their thinking efforts (the merge checks for changes).
+			const hasCapabilities = discovered.some(
+				(model) => localIds.has(model.id) && model.thinkingLevelMap && model.thinkingSource !== "unconfirmed",
+			);
+			if (!hasNewModels && !hasCapabilities) {
 				return {
 					providerId,
 					discovered: discovered.length,
 					added: 0,
+					updated: 0,
 					existing: discovered.length,
 					removed: 0,
 				};
@@ -529,12 +536,13 @@ export class ModelRuntime implements Models {
 			}
 
 			try {
-				const sync = await manager.mergeDiscoveredModels(providerId, candidates, api);
-				await this.reloadProviderConfig(providerId);
+				const sync = await manager.mergeDiscoveredModels(providerId, discovered, api);
+				if (sync.added > 0 || sync.updated > 0) await this.reloadProviderConfig(providerId);
 				return {
 					providerId,
 					discovered: discovered.length,
 					added: sync.added,
+					updated: sync.updated,
 					existing: discovered.length - sync.added,
 					removed: 0,
 				};

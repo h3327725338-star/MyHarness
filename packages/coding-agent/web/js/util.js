@@ -8,6 +8,12 @@ const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal"), low
 export const effortName = (level) => (EFFORT_NAME[level] ? t(EFFORT_NAME[level]) : level);
 export const effortHint = (level) => (EFFORT_HINT[level] ? t(EFFORT_HINT[level]) : "");
 
+/** Efforts for a model reference of a setting (provider + model), or the current main model when none is chosen. */
+export function refEffortModel(models, mainModel, ref) {
+	if (ref?.provider && ref?.model) return models?.providers?.find((g) => g.id === ref.provider)?.models.find((m) => m.id === ref.model);
+	return mainModel;
+}
+
 /** Title of a saved chat: its name, else the first message. The storage layer's "(no messages)" placeholder counts as no message. */
 export function chatTitle(info) {
 	const first = info.firstMessage === "(no messages)" ? "" : info.firstMessage || "";

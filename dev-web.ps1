@@ -80,34 +80,100 @@ function Get-StartupProgress([string]$OutText, [string]$ErrText) {
 
 $script:Splash = $null
 
+# 启动窗口：无边框深色小窗，配色/字体取自 Web UI 的设计 token（tokens.css 的 dark 主题），
+# 只画品牌标记、标题、当前阶段文字和一条细进度线。进度值向真实阶段平滑靠近，不做假进度。
 function Show-Splash {
 	try {
 		Add-Type -AssemblyName System.Windows.Forms
 		Add-Type -AssemblyName System.Drawing
+		if (-not ("MyHarnessSplashNative" -as [type])) {
+			Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class MyHarnessSplashNative {
+	[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+}
+"@
+		}
 		$form = New-Object System.Windows.Forms.Form
 		$form.Text = "MyHarness"
-		$form.FormBorderStyle = "FixedDialog"
-		$form.ControlBox = $false
+		$form.FormBorderStyle = "None"
 		$form.ShowInTaskbar = $false
 		$form.TopMost = $true
 		$form.StartPosition = "CenterScreen"
-		$form.ClientSize = New-Object System.Drawing.Size(420, 96)
-		$title = New-Object System.Windows.Forms.Label
-		$title.Text = "正在启动 MyHarness Web UI…"
-		$title.Location = New-Object System.Drawing.Point(16, 12)
-		$title.Size = New-Object System.Drawing.Size(388, 22)
-		$title.Font = New-Object System.Drawing.Font($title.Font, [System.Drawing.FontStyle]::Bold)
-		$detail = New-Object System.Windows.Forms.Label
-		$detail.Location = New-Object System.Drawing.Point(16, 36)
-		$detail.Size = New-Object System.Drawing.Size(388, 20)
-		$bar = New-Object System.Windows.Forms.ProgressBar
-		$bar.Location = New-Object System.Drawing.Point(16, 62)
-		$bar.Size = New-Object System.Drawing.Size(388, 16)
-		$bar.Minimum = 0
-		$bar.Maximum = 100
-		$form.Controls.AddRange(@($title, $detail, $bar))
+		$form.ClientSize = New-Object System.Drawing.Size(360, 116)
+		$form.BackColor = [System.Drawing.Color]::FromArgb(20, 21, 21)
+		# WinForms 没有公开的双缓冲开关，用反射打开，避免进度线闪烁。
+		[void]$form.GetType().GetProperty("DoubleBuffered", [System.Reflection.BindingFlags]"Instance,NonPublic").SetValue($form, $true, $null)
+		# Windows 11：系统圆角；Windows 10 不支持时退回到手工圆角区域。
+		$corner = 2
+		$rounded = $false
+		try { $rounded = ([MyHarnessSplashNative]::DwmSetWindowAttribute($form.Handle, 33, [ref]$corner, 4) -eq 0) } catch { }
+		if (-not $rounded) {
+			$path = New-Object System.Drawing.Drawing2D.GraphicsPath
+			$d = 20
+			$path.AddArc(0, 0, $d, $d, 180, 90)
+			$path.AddArc(360 - $d, 0, $d, $d, 270, 90)
+			$path.AddArc(360 - $d, 116 - $d, $d, $d, 0, 90)
+			$path.AddArc(0, 116 - $d, $d, $d, 90, 90)
+			$path.CloseFigure()
+			$form.Region = New-Object System.Drawing.Region($path)
+		}
+		$state = @{ Text = ""; Target = 0.0; Shown = 0.0 }
+		$form.Add_Paint({
+			param($sender, $e)
+			$g = $e.Graphics
+			$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+			$flags = [System.Windows.Forms.TextFormatFlags]"NoPadding,EndEllipsis,SingleLine,VerticalCenter,Left"
+			# 品牌标记：圆角深色方块 + 浅蓝 M（与 favicon.svg 相同的形状）。
+			$tile = New-Object System.Drawing.Drawing2D.GraphicsPath
+			$x = 24; $y = 22; $size = 32; $r = 8
+			$tile.AddArc($x, $y, $r * 2, $r * 2, 180, 90)
+			$tile.AddArc($x + $size - $r * 2, $y, $r * 2, $r * 2, 270, 90)
+			$tile.AddArc($x + $size - $r * 2, $y + $size - $r * 2, $r * 2, $r * 2, 0, 90)
+			$tile.AddArc($x, $y + $size - $r * 2, $r * 2, $r * 2, 90, 90)
+			$tile.CloseFigure()
+			$g.FillPath((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(34, 36, 36))), $tile)
+			$g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(58, 61, 61)), 1), $tile)
+			$pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(121, 168, 245)), 2.4
+			$pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+			$pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+			$pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+			$sx = $x + 8; $sy = $y + 8; $u = 16 / 24
+			$pts = @(
+				(New-Object System.Drawing.PointF ($sx + 0), ($sy + 16 * 1.0)),
+				(New-Object System.Drawing.PointF ($sx + 0), ($sy + 4 * 1.0)),
+				(New-Object System.Drawing.PointF ($sx + 8), ($sy + 12 * 1.0)),
+				(New-Object System.Drawing.PointF ($sx + 16), ($sy + 4 * 1.0)),
+				(New-Object System.Drawing.PointF ($sx + 16), ($sy + 16 * 1.0))
+			)
+			$g.DrawLines($pen, [System.Drawing.PointF[]]$pts)
+			$titleFont = New-Object System.Drawing.Font("Segoe UI Semibold", 12.5, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Point)
+			$subFont = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Point)
+			[System.Windows.Forms.TextRenderer]::DrawText($g, "MyHarness", $titleFont, (New-Object System.Drawing.Rectangle 68, 20, 200, 20), [System.Drawing.Color]::FromArgb(227, 229, 229), $flags)
+			[System.Windows.Forms.TextRenderer]::DrawText($g, "正在启动 Web UI", $subFont, (New-Object System.Drawing.Rectangle 68, 39, 200, 16), [System.Drawing.Color]::FromArgb(122, 128, 128), $flags)
+			# 当前阶段文字（右下方一行，过长以省略号截断）。
+			[System.Windows.Forms.TextRenderer]::DrawText($g, $script:Splash.State.Text, $subFont, (New-Object System.Drawing.Rectangle 24, 68, 312, 18), [System.Drawing.Color]::FromArgb(168, 173, 173), $flags)
+			# 细进度线：2px 轨道 + 浅蓝填充，圆头。
+			$trackY = 98; $trackX = 24; $trackW = 312
+			$track = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(43, 45, 45)), 2
+			$track.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+			$track.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+			$g.DrawLine($track, $trackX + 1, $trackY, $trackX + $trackW - 1, $trackY)
+			$fill = [Math]::Max(0.0, [Math]::Min(1.0, $script:Splash.State.Shown / 100.0)) * ($trackW - 2)
+			if ($fill -gt 0.5) {
+				$bar = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(121, 168, 245)), 2
+				$bar.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+				$bar.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+				$g.DrawLine($bar, $trackX + 1, $trackY, $trackX + 1 + $fill, $trackY)
+				$bar.Dispose()
+			}
+			$track.Dispose(); $pen.Dispose(); $titleFont.Dispose(); $subFont.Dispose(); $tile.Dispose()
+			# 1px 边框
+			$g.DrawRectangle((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(43, 45, 45)), 1), 0, 0, $form.ClientSize.Width - 1, $form.ClientSize.Height - 1)
+		})
 		$form.Show()
-		$script:Splash = @{ Form = $form; Detail = $detail; Bar = $bar }
+		$script:Splash = @{ Form = $form; State = $state }
 	} catch {
 		$script:Splash = $null
 	}
@@ -115,8 +181,18 @@ function Show-Splash {
 
 function Update-Splash($Progress) {
 	if (-not $script:Splash) { return }
-	$script:Splash.Detail.Text = $Progress.Text
-	$script:Splash.Bar.Value = [Math]::Min(100, [Math]::Max(0, $Progress.Percent))
+	$state = $script:Splash.State
+	$state.Text = $Progress.Text
+	$state.Target = [Math]::Min(100, [Math]::Max(0, $Progress.Percent))
+	Step-Splash
+}
+
+# 每个循环调用：进度值按比例靠近目标（只增不减），然后重绘。
+function Step-Splash {
+	if (-not $script:Splash) { return }
+	$state = $script:Splash.State
+	if ($state.Shown -lt $state.Target) { $state.Shown = [Math]::Min($state.Target, $state.Shown + [Math]::Max(0.6, ($state.Target - $state.Shown) * 0.18)) }
+	$script:Splash.Form.Invalidate()
 	[System.Windows.Forms.Application]::DoEvents()
 }
 
@@ -179,12 +255,20 @@ while ((Get-Date) -lt $deadline) {
 	}
 	if ($process.HasExited) { break }
 	if (-not $script:Splash -and $clock.ElapsedMilliseconds -ge $SplashDelayMilliseconds) { Show-Splash }
-	if ($script:Splash) { Update-Splash (Get-StartupProgress (Read-Log $OutLog) $errText) }
-	Start-Sleep -Milliseconds 150
+	if ($script:Splash) {
+		# 日志约每 150ms 读一次；其间只推进进度动画，让进度线平滑移动。
+		Update-Splash (Get-StartupProgress (Read-Log $OutLog) $errText)
+		for ($tick = 0; $tick -lt 4; $tick++) { Start-Sleep -Milliseconds 35; Step-Splash }
+	} else {
+		Start-Sleep -Milliseconds 150
+	}
 }
 
 if ($ready) {
-	if ($script:Splash) { Update-Splash (Get-StartupProgress "" "MyHarness Web UI: http"); Start-Sleep -Milliseconds 250 }
+	if ($script:Splash) {
+		Update-Splash (Get-StartupProgress "" "MyHarness Web UI: http")
+		for ($tick = 0; $tick -lt 10; $tick++) { Start-Sleep -Milliseconds 30; Step-Splash }
+	}
 	Close-Splash
 	exit 0
 }

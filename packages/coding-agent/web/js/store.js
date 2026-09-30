@@ -388,6 +388,8 @@ export async function loadModels(refresh = false) {
 	try {
 		state.models = await api(`/api/models${refresh ? "?refresh=1" : ""}`);
 		emit();
+		// A refreshed catalog can change what the current model supports (thinking efforts included).
+		if (refresh) await loadSnapshot().catch(() => {});
 	} catch (error) {
 		toast(error.message, "error");
 	}

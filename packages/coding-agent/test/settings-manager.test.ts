@@ -25,6 +25,19 @@ describe("SettingsManager", () => {
 		}
 	});
 
+	describe("web shutdown grace", () => {
+		it("defaults to 10 seconds, persists a change globally and rejects invalid values", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getWebShutdownGraceSeconds()).toBe(10);
+			manager.setWebShutdownGraceSeconds(30);
+			await manager.flush();
+			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).webShutdownGraceSeconds).toBe(30);
+			expect(SettingsManager.create(projectDir, agentDir).getWebShutdownGraceSeconds()).toBe(30);
+			expect(() => manager.setWebShutdownGraceSeconds(-1)).toThrow();
+			expect(() => manager.setWebShutdownGraceSeconds(Number.NaN)).toThrow();
+		});
+	});
+
 	describe("auto memory", () => {
 		it("persists the memory model configuration globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

@@ -962,6 +962,23 @@ export class SettingsManager {
 		};
 	}
 
+	/** Seconds the Web UI server waits after its last browser page disconnects before exiting. */
+	getWebShutdownGraceSeconds(): number {
+		const value = this.settings.webShutdownGraceSeconds;
+		return typeof value === "number" && Number.isFinite(value) && value >= 0
+			? value
+			: SETTINGS_DEFAULTS.webShutdownGraceSeconds;
+	}
+
+	setWebShutdownGraceSeconds(seconds: number): void {
+		if (!Number.isFinite(seconds) || seconds < 0) {
+			throw new Error(`Invalid webShutdownGraceSeconds setting: ${String(seconds)}`);
+		}
+		this.globalSettings.webShutdownGraceSeconds = seconds;
+		this.markModified("webShutdownGraceSeconds");
+		this.save();
+	}
+
 	getWebSocketConnectTimeoutMs(): number | undefined {
 		return parseTimeoutSetting(this.settings.websocketConnectTimeoutMs, "websocketConnectTimeoutMs");
 	}

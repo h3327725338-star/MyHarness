@@ -1982,6 +1982,7 @@ class ProvidersSubmenu extends Container {
 					[
 						`发现：${result.discovered} 个`,
 						`新增：${result.added} 个`,
+						`更新推理强度：${result.updated} 个`,
 						`已存在：${result.existing} 个`,
 						`删除：${result.removed} 个（刷新失败或结果不完整时不会删除）`,
 					].join("\n"),

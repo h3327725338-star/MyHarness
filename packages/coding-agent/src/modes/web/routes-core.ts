@@ -113,6 +113,8 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			} finally {
 				clearTimeout(timer);
 			}
+			// The refresh can change what the current model supports (thinking efforts included).
+			if (!host.session.isStreaming) await host.session.reconcileModelAfterConfigChange().catch(() => {});
 		}
 		const available = await runtime.getAvailable();
 		const current = host.session.model;

@@ -2,7 +2,7 @@
 import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
 import { api, attempt, loadModels, loadProviders, loadSettings, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog, inputDialog } from "./actions.js";
-import { clip, effortName } from "./util.js";
+import { clip, effortName, refEffortModel } from "./util.js";
 import { N_, serverText, t, tNodes } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { ProviderEditor } from "./provider-form.js";
@@ -60,10 +60,13 @@ function SettingControl({ item, models, onApply }) {
 			const hasEnable = item.note === "enabled";
 			const v = draft || {};
 			const commit = (next) => onApply(item.id, next);
+			// Only the efforts of the chosen model (the main model when none is chosen).
+			const refModel = refEffortModel(models, state.snap?.model, v);
+			const levels = refModel?.reasoning ? refModel.thinkingLevels || [] : [];
 			return html`<div class="col" style="gap:6px;align-items:flex-end;width:100%">
 				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => commit({ ...v, enabled: on })} />` : null}
 				<${ModelSelect} value=${v} models=${models} onChange=${(next) => commit({ ...v, ...next })} />
-				<select class="select" value=${v.thinkingLevel || ""} onChange=${(e) => commit({ ...v, thinkingLevel: e.target.value || undefined })}><option value="">${t("Default reasoning")}</option>${["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((l) => html`<option key=${l} value=${l}>${effortName(l)}</option>`)}</select>
+				${levels.length > 1 ? html`<select class="select" value=${v.thinkingLevel || ""} onChange=${(e) => commit({ ...v, thinkingLevel: e.target.value || undefined })}><option value="">${t("Default reasoning")}</option>${levels.map((l) => html`<option key=${l} value=${l}>${effortName(l)}</option>`)}</select>` : null}
 			</div>`;
 		}
 		default:

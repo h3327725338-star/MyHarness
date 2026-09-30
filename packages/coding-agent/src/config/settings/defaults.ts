@@ -60,6 +60,7 @@ export const SETTINGS_DEFAULTS = {
 	defaultSubAgentNoProgressDetection: true,
 	defaultSubAgentRepeatedOperationDetection: true,
 	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
+	webShutdownGraceSeconds: 10,
 	webSearch: {
 		enabled: false,
 		engines: ["google", "bing"],

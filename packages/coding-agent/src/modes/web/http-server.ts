@@ -108,6 +108,8 @@ export class WebHttpServer {
 	private indexFile: string | undefined;
 	onSseConnect: ((client: SseClient) => void) | undefined;
 	onSseDisconnect: ((client: SseClient) => void) | undefined;
+	/** Called with the number of connected browser pages whenever it changes (page opened, reloaded, closed, or its connection died). */
+	onClientCountChange: ((count: number) => void) | undefined;
 	private requestScope: RequestScope | undefined;
 
 	setRequestScope(scope: RequestScope): void {
@@ -130,6 +132,9 @@ export class WebHttpServer {
 	get clientCount(): number {
 		return this.sseClients.size;
 	}
+
+	/** Whether any browser page has connected since the server started (it may already be gone again). */
+	hadClient = false;
 
 	/** Broadcast an event to every connected browser tab. */
 	broadcast(event: string, data: unknown): void {
@@ -262,6 +267,8 @@ export class WebHttpServer {
 		res.write("retry: 1500\n\n");
 		const id = this.nextClientId++;
 		this.sseClients.set(id, res);
+		this.hadClient = true;
+		this.onClientCountChange?.(this.sseClients.size);
 		const client: SseClient = {
 			id,
 			send: (event, data) => {
@@ -270,7 +277,7 @@ export class WebHttpServer {
 			close: () => res.end(),
 		};
 		req.on("close", () => {
-			this.sseClients.delete(id);
+			if (this.sseClients.delete(id)) this.onClientCountChange?.(this.sseClients.size);
 			this.onSseDisconnect?.(client);
 		});
 		this.onSseConnect?.(client);

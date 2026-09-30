@@ -62,6 +62,10 @@
 .dialog-bar { border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border-strong)); border-radius: var(--r-lg); background: var(--bg-raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 0 0 3px var(--warn-soft); }
 .dialog-head { display: flex; align-items: center; gap: 8px; }
 .dialog-msg { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; max-height: 200px; overflow: auto; }
+.dialog-bar:focus { outline: none; }
+.dialog-bar:focus-within { box-shadow: 0 0 0 3px var(--warn-soft), 0 0 0 1px var(--border-focus); }
+.dialog-bar .btn.kbd-sel { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.dialog-keys { font-size: var(--fs-xs); }
 .dialog-actions, .dialog-options { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .dialog-input { display: flex; gap: 6px; }
 .dialog-editor { display: flex; flex-direction: column; gap: 6px; }

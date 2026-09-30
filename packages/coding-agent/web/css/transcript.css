@@ -66,6 +66,7 @@
 .raw code { font-size: 12px; } .raw code.err { color: var(--danger); }
 .raw-label { color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 3px; }
 .raw-pre { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
+.raw-md { padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm); max-height: 480px; overflow: auto; overscroll-behavior: contain; font-size: 13px; }
 .raw-images img { max-width: 100%; max-height: 240px; border-radius: 6px; margin-top: 6px; }
 
 /* Final answer */

@@ -8,7 +8,7 @@
  */
 
 import type { ThinkingLevel } from "@myharness/agent-core";
-import { BUILTIN_SLASH_COMMANDS } from "../../cli/slash-commands.ts";
+import { builtinSlashCommandsFor } from "../../cli/slash-commands.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import {
 	getProjectTrustOptions,
@@ -291,6 +291,19 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					label: choice.label,
 				})),
 			},
+			{
+				id: "webShutdownGraceSeconds",
+				section: "Network",
+				label: "Web UI exit delay (seconds)",
+				description:
+					"After the last browser page of this Web UI closes, MyHarness waits this long before it stops the local server. Reloading or reopening the page within that time keeps it running. Applies the next time the last page closes.",
+				type: "number",
+				value: s.getWebShutdownGraceSeconds(),
+				// Below a few seconds a page reload (F5) could outlast the wait and stop the server.
+				min: 3,
+				max: 3600,
+				unit: "seconds",
+			},
 			// Shell
 			{
 				id: "shellPath",
@@ -502,6 +515,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				configureHttpDispatcher(timeout);
 				return;
 			}
+			case "webShutdownGraceSeconds":
+				s.setWebShutdownGraceSeconds(Math.floor(numberValue(value, id, 3, 3600)));
+				return;
 			case "shellPath":
 				s.setShellPath(typeof value === "string" && value.trim() ? value.trim() : undefined);
 				return;
@@ -641,10 +657,11 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				.getAgentsFiles()
 				.agentsFiles.map((file) => ({ path: file.path, chars: file.content.length })),
 			commands: [
-				...BUILTIN_SLASH_COMMANDS.map((command) => ({
+				...builtinSlashCommandsFor("web").map((command) => ({
 					name: command.name,
 					description: command.description,
 					argumentHint: command.argumentHint ?? null,
+					aliases: [...(command.aliases ?? [])],
 					source: "builtin" as const,
 				})),
 				...runner.getRegisteredCommands().map((command) => ({
