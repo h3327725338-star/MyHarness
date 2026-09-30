@@ -92,4 +92,11 @@
 .pf-detect-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
 .pf-auto { margin-left: 4px; }
 .field-label .pf-auto { align-self: flex-start; margin-left: 0; }
+/* The provider editor opens from inside Settings, where `.settings-modal .modal-body { padding: 0 }` would also strip the padding of this nested dialog. */
+.pf-modal .modal-head, .pf-modal .modal-foot { padding-left: 24px; padding-right: 24px; }
+.settings-modal .pf-modal .modal-body, .pf-modal .modal-body { padding: 8px 24px 20px; }
+.pf-conflict { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); }
+.pf-changes { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: var(--fs-sm); color: var(--text-2); }
+.pf-review .pf-detect-list { max-height: 280px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-inset); }
+.pf-review .pf-detect-row { cursor: pointer; }
 @media (max-width: 760px) { .pf-two, .pf-model-grid { grid-template-columns: 1fr; } }

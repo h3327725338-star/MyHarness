@@ -16,6 +16,7 @@ import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts
 import type { WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
 import { getDataDir } from "../../config.ts";
+import { ensureDefaultWorkingDir } from "../../data/workspace-store.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { WebDialogBridge } from "./dialogs.ts";
@@ -35,6 +36,7 @@ const STATUS_EVENTS = new Set([
 	"dialogs",
 	"session_info",
 	"session_replaced",
+	"workspaces_changed",
 ]);
 const STATUS_DEBOUNCE_MS = 80;
 
@@ -206,25 +208,40 @@ export class WebHostHub implements WebHostHubLink {
 		}
 	}
 
-	/** Start a fresh chat. The session the request came from keeps running untouched. */
-	async newSession(from: WebHost, rootPath?: string): Promise<{ slot: string; created: boolean }> {
-		const cwd = rootPath ? resolvePath(rootPath) : from.cwd;
+	/**
+	 * Start a fresh chat. The session the request came from keeps running untouched.
+	 *
+	 * With `rootPath` the chat belongs to that Workspace. Without one it follows the session it was started from: a
+	 * chat that belongs to no Workspace stays that way, and `unbound` asks for one explicitly. A new unbound chat runs in
+	 * MyHarness's own default working directory, not in the folder of a Workspace it may have been removed from.
+	 */
+	async newSession(from: WebHost, rootPath?: string, unbound = false): Promise<{ slot: string; created: boolean }> {
+		const manager = from.session.sessionManager;
+		const defaultStorage = manager.usesDefaultSessionDir() && manager.isPersisted();
+		const wantUnbound = defaultStorage && (unbound || (!rootPath && from.unbound));
+		const cwd = rootPath
+			? resolvePath(rootPath)
+			: wantUnbound
+				? ensureDefaultWorkingDir(from.runtimeHost.services.agentDir)
+				: from.cwd;
 		if (!existsSync(cwd)) throw new HttpError(400, `Workspace directory does not exist: ${cwd}`);
 		if (!statSync(cwd).isDirectory()) throw new HttpError(400, `Workspace path is not a directory: ${cwd}`);
-		// An untouched empty chat in the same workspace is already what the user asks for.
+		// An untouched empty chat of the same kind in the same folder is already what the user asks for.
 		const reusable = [from, ...this.all()].find(
 			(host) =>
 				pathIdentityKey(host.cwd) === pathIdentityKey(cwd) &&
 				host.session.isIdle &&
 				!host.completionActive &&
+				(!defaultStorage || host.unbound === wantUnbound) &&
 				host.session.sessionManager.buildSessionContext().messages.length === 0,
 		);
 		if (reusable) return { slot: reusable.slotId, created: false };
-		const manager = from.session.sessionManager;
 		const sessionDir = manager.usesDefaultSessionDir() ? undefined : manager.getSessionDir();
-		const sessionManager = manager.isPersisted()
-			? SessionManager.create(cwd, sessionDir)
-			: SessionManager.inMemory(cwd);
+		const sessionManager = !manager.isPersisted()
+			? SessionManager.inMemory(cwd)
+			: wantUnbound
+				? SessionManager.createUnbound(cwd, undefined, { dataRoot: manager.getDataRoot() })
+				: SessionManager.create(cwd, sessionDir);
 		const runtime = await from.runtimeHost.createSibling({
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile: from.session.sessionFile },

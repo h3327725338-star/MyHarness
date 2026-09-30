@@ -184,3 +184,14 @@ export function parseSessionDataPath(filePath: string): SessionDataPathInfo | un
 		conversationDir,
 	};
 }
+
+/**
+ * Reserved container id for Sessions that belong to no registered Workspace. It is never written to the Workspace
+ * registry, so it is not listed as a Workspace; it only names the directory below workspaces/ that holds those Sessions.
+ */
+export const UNBOUND_WORKSPACE_ID = "unbound";
+
+/** MyHarness's own working directory for Sessions that have no Workspace. It is not a user Workspace. */
+export function getDefaultWorkingDir(agentDir: string): string {
+	return join(resolvePath(agentDir), "default-workspace");
+}

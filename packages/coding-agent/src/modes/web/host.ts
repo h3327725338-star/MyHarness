@@ -12,8 +12,9 @@ import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
-import type { WorkspaceStore } from "../../application/workspace-store.ts";
+import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
+import { UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import { hasTrustRequiringProjectResources } from "../../config/trust/index.ts";
 import { getDataDir } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
@@ -70,6 +71,8 @@ export interface SlotStatus {
 	lastOutcome: RunOutcome | null;
 	/** A run finished and its result has not been read in the browser yet. */
 	unread: boolean;
+	/** The session belongs to no registered Workspace (created without one, or its Workspace was removed). */
+	unbound: boolean;
 }
 
 /** The parts of the hub that a single WebHost reports back to. */
@@ -201,7 +204,28 @@ export class WebHost {
 			completion: this.completionActive,
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
 			unread: this.unread,
+			unbound: this.unbound,
 		};
+	}
+
+	/** The session belongs to no registered Workspace: created without one, or its Workspace was removed. */
+	get unbound(): boolean {
+		const manager = this.session.sessionManager;
+		if (!manager.usesDefaultSessionDir() || !manager.isPersisted()) return false;
+		const workspaceId = manager.getWorkspaceId();
+		if (!workspaceId) return false;
+		return workspaceId === UNBOUND_WORKSPACE_ID || !this.workspaceStore.getById(workspaceId);
+	}
+
+	/**
+	 * The registered Workspace this session belongs to, or undefined for an unbound one. The Workspace is resolved
+	 * from where the session is stored, not from its folder: an unbound chat may run inside a registered Workspace's
+	 * folder (for example the one it was removed from) without belonging to it.
+	 */
+	get workspace(): Workspace | undefined {
+		const manager = this.session.sessionManager;
+		const workspaceId = manager.usesDefaultSessionDir() ? manager.getWorkspaceId() : undefined;
+		return workspaceId ? this.workspaceStore.getById(workspaceId) : this.workspaceStore.getByPath(manager.getCwd());
 	}
 
 	get unread(): boolean {
@@ -869,7 +893,7 @@ export class WebHost {
 		const session = this.session;
 		const manager = session.sessionManager;
 		const cwd = manager.getCwd();
-		const workspace = this.workspaceStore.getByPath(cwd);
+		const workspace = this.workspace;
 		const model = session.model;
 		const checkpoint = this.openCheckpoint() ?? session.getGitCheckpoint();
 		const settings = session.settingsManager;

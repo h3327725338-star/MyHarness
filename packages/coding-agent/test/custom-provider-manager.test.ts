@@ -168,6 +168,39 @@ describe("CustomProviderManager", () => {
 		expect(JSON.parse(backup).providers.kept).toBeDefined();
 	});
 
+	it("removes only the API key of a provider entry, also from the models.json backup", async () => {
+		const path = await createTemporaryModelsPath();
+		await writeFile(
+			path,
+			JSON.stringify({
+				providers: {
+					keyed: {
+						name: "Keyed",
+						baseUrl: "https://keyed.example/v1",
+						api: "openai-completions",
+						apiKey: "literal-secret",
+						models: [{ id: "m" }],
+					},
+				},
+			}),
+			"utf8",
+		);
+		const manager = new CustomProviderManager(path);
+
+		expect(await manager.removeApiKey("keyed")).toBe(true);
+		expect(await manager.removeApiKey("keyed")).toBe(false);
+		expect(await manager.removeApiKey("missing")).toBe(false);
+
+		expect(await manager.get("keyed")).toEqual({
+			name: "Keyed",
+			baseUrl: "https://keyed.example/v1",
+			api: "openai-completions",
+			models: [{ id: "m" }],
+		});
+		expect(await readFile(path, "utf8")).not.toContain("literal-secret");
+		expect(await readFile(`${path}.bak`, "utf8")).not.toContain("literal-secret");
+	});
+
 	it("restores the exact previous source or removes a newly created file", async () => {
 		const path = await createTemporaryModelsPath();
 		const manager = new CustomProviderManager(path);
@@ -334,6 +367,30 @@ describe("CustomProviderManager", () => {
 			{ id: "model-b", name: "Model B" },
 			{ id: "model-c", name: "model-c" },
 		]);
+	});
+
+	it("lists Gemini models under /v1beta when the Base URL carries no version", async () => {
+		const urls: string[] = [];
+		const server = createServer((request, response) => {
+			urls.push(request.url ?? "");
+			response.setHeader("content-type", "application/json");
+			response.end(
+				JSON.stringify({ models: [{ name: "models/gemini-x", supportedGenerationMethods: ["generateContent"] }] }),
+			);
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Test server did not expose a port.");
+
+		const models = await discoverProviderModels({
+			baseUrl: `http://127.0.0.1:${address.port}/gemini`,
+			api: "google-generative-ai",
+			apiKey: "g-key",
+		});
+
+		expect(urls).toEqual(["/gemini/v1beta/models?key=g-key"]);
+		expect(models.map((model) => model.id)).toEqual(["gemini-x"]);
 	});
 
 	it("uses provider-family listing paths and authentication conventions", async () => {

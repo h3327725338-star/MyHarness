@@ -20,6 +20,8 @@ Workspace-level data belongs beside `sessions/`, for example `docs/` and `instru
 
 The one-time registry cleanup writes `.workspace-registry-migrated.json`. Known test-temporary roots are removed from the active registry only after their Session headers are verified and are recorded in `.unresolved-workspaces.json`; their Workspace directories are retained. Records that cannot be proven safe remain active and are listed as unresolved.
 
+Sessions that belong to no Workspace are kept in the reserved container `data/workspaces/unbound/` (it is never written to the registry, so it is not a Workspace) and run in MyHarness's own default working directory, `<agent dir>/default-workspace/`. Removing a Workspace from the registry moves nothing: its `workspaces/<workspace-id>/` directory, the project folder and every Session stay where they are, and those Sessions are simply unbound (`SessionManager.isUnbound()`, `SessionManager.listUnbound()`). Adding the same folder again reuses the old Workspace ID, which reattaches them. `SessionManager.createLike()` keeps an unbound Session unbound, so "new session" never re-registers a removed Workspace.
+
 The `/workspace` sidebar lists only active registry Workspaces. Expanding one reads Sessions from that Workspace's `sessions/<session-id>/` tree; an unregistered current directory is not shown as a synthetic Workspace.
 
 SDK hosts can pass `dataRoot` to `createAgentSession` or `SessionManager` storage options when they need an isolated Data root. The `MYHARNESS_DATA_ROOT` environment override is intended for the same host/test isolation case; an explicit project root passed to migration APIs remains authoritative.

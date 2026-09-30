@@ -6,10 +6,10 @@ import { t } from "./i18n.js";
 let dialogResolver = null;
 
 /** Promise-based confirmation modal (rendered by overlays.js). */
-export function confirmDialog({ title, message, confirmLabel = t("Confirm"), danger = false, detail }) {
+export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail }) {
 	return new Promise((resolve) => {
 		dialogResolver = resolve;
-		setView({ dialog: { type: "confirm", title, message, confirmLabel, danger, detail } });
+		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail } });
 	});
 }
 /** Promise-based text prompt (rendered by app.js). Resolves undefined when cancelled. */
@@ -159,9 +159,12 @@ export const actions = {
 		if (result?.tokensAfter != null) toast(t("Context compacted to about {tokensAfter} tokens.", { tokensAfter: result.tokensAfter }), "info", 4000);
 	},
 
-	/** Start a chat in a new session. A running chat keeps working in the background. */
-	async newSession(rootPath) {
-		const result = await attempt(() => post("/api/sessions/new", { rootPath }));
+	/**
+	 * Start a chat in a new session. A running chat keeps working in the background. Without a workspace the chat
+	 * follows the one on screen; `unbound` starts a chat that belongs to no workspace.
+	 */
+	async newSession(rootPath, { unbound = false } = {}) {
+		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound }));
 		if (result?.slot) await showSlot(result.slot);
 		return result;
 	},
@@ -202,7 +205,7 @@ export const actions = {
 	},
 
 	async removeWorkspace(id, name) {
-		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Files and chat history on disk are not deleted.", { name }), confirmLabel: t("Remove") });
+		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove") });
 		if (!ok) return;
 		await attempt(() => post("/api/workspaces/remove", { id }));
 		await loadWorkspaces();

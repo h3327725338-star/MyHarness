@@ -350,10 +350,10 @@ function Standalone({ item }) {
 }
 
 function Welcome({ snap, models }) {
-	const ws = snap?.workspace?.name || t("this workspace");
+	const ws = snap?.workspace?.name;
 	const model = snap?.model;
 	return html`<div class="welcome">
-		<h1>${tNodes("What should we work on in {workspace}?", { workspace: html`<span class="ws">${ws}</span>` })}</h1>
+		<h1>${ws ? tNodes("What should we work on in {workspace}?", { workspace: html`<span class="ws">${ws}</span>` }) : t("What should we work on?")}</h1>
 		<div class="welcome-meta dim mono truncate">${snap?.cwd || ""}</div>
 		<div class="welcome-tips dim">
 			<span><span class="kbd">/</span> ${t("commands & skills")}</span>

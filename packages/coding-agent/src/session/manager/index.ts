@@ -21,9 +21,10 @@ import {
 	getSessionMetadataPath,
 	getWorkspaceSessionsDir,
 	parseSessionDataPath,
+	UNBOUND_WORKSPACE_ID,
 } from "../../config/paths/index.ts";
-import { getAgentDir as getDefaultAgentDir } from "../../config.ts";
-import { resolveWorkspaceDataContext } from "../../data/workspace-store.ts";
+import { getDataDir, getAgentDir as getDefaultAgentDir } from "../../config.ts";
+import { resolveWorkspaceDataContext, WorkspaceStore } from "../../data/workspace-store.ts";
 import { getCwdRelativePath, normalizePath, resolvePath } from "../../utils/paths.ts";
 import { migrateToCurrentVersion } from "../migrations/index.ts";
 import { buildContextEntries, buildSessionContext, walkSessionPath } from "../projection/index.ts";
@@ -34,6 +35,7 @@ import {
 	getSessionHeaderWorkspaceId,
 	listAllSessions,
 	listSessionsForCwd,
+	listUnboundSessions,
 	loadEntriesFromFile,
 	persistSessionEntry,
 	readSessionHeader,
@@ -515,6 +517,17 @@ export class SessionManager {
 
 	getWorkspaceId(): string | undefined {
 		return this.workspaceId;
+	}
+
+	/**
+	 * True when this Session is stored in the default layout but belongs to no registered Workspace: it was created
+	 * without one, or its Workspace was removed from the list. Such a Session keeps its data where it is.
+	 */
+	isUnbound(): boolean {
+		if (!this.defaultStorage || !this.workspaceId) return false;
+		if (this.workspaceId === UNBOUND_WORKSPACE_ID) return true;
+		if (!this.dataRoot) return false;
+		return WorkspaceStore.create(getDefaultAgentDir(), this.dataRoot).getById(this.workspaceId) === undefined;
 	}
 
 	getDataRoot(): string | undefined {
@@ -1297,6 +1310,41 @@ export class SessionManager {
 	}
 
 	/**
+	 * Create a Session that belongs to no Workspace. It is stored in the reserved container and never registers
+	 * `cwd` as a Workspace.
+	 */
+	static createUnbound(
+		cwd: string,
+		options?: NewSessionOptions,
+		storageOptions?: SessionManagerStorageOptions,
+	): SessionManager {
+		const dataRoot = resolvePath(storageOptions?.dataRoot ?? getDataDir());
+		return new SessionManager(
+			cwd,
+			getWorkspaceSessionsDir(dataRoot, UNBOUND_WORKSPACE_ID),
+			undefined,
+			true,
+			options,
+			undefined,
+			true,
+			{ dataRoot, workspaceId: UNBOUND_WORKSPACE_ID, defaultStorage: true },
+		);
+	}
+
+	/**
+	 * Create the next Session after `current`, keeping how `current` is stored: a custom Session directory is reused,
+	 * an unbound Session stays unbound (it must not register its folder as a Workspace), everything else resolves the
+	 * Workspace that contains `cwd`.
+	 */
+	static createLike(current: SessionManager, cwd: string, options?: NewSessionOptions): SessionManager {
+		if (!current.usesDefaultSessionDir()) return SessionManager.create(cwd, current.getSessionDir(), options);
+		if (current.isUnbound()) {
+			return SessionManager.createUnbound(cwd, options, { dataRoot: current.getDataRoot() });
+		}
+		return SessionManager.create(cwd, undefined, options);
+	}
+
+	/**
 	 * Open a specific session file.
 	 * @param path Path to session file
 	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
@@ -1574,6 +1622,14 @@ export class SessionManager {
 		storageOptions?: SessionManagerStorageOptions,
 	): Promise<SessionInfo[]> {
 		return listSessionsForCwd(cwd, sessionDir, onProgress, storageOptions);
+	}
+
+	/** List the Sessions that belong to no registered Workspace. */
+	static async listUnbound(
+		onProgress?: SessionListProgress,
+		storageOptions?: SessionManagerStorageOptions,
+	): Promise<SessionInfo[]> {
+		return listUnboundSessions(storageOptions, onProgress);
 	}
 
 	/**

@@ -17,6 +17,19 @@ import {
 import { openBrowser } from "../../utils/open-browser.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import type { WebHostHub } from "./hub.ts";
+
+/**
+ * A key written into models.json (literal or shell command) counts as a credential "Remove credentials" can delete.
+ * The literal "local" means "no authentication" and is not a credential.
+ */
+function hasConfigKey(status: { source?: string }, config: ModelsJsonProvider | undefined): boolean {
+	return (
+		(status.source === "models_json_key" || status.source === "models_json_command") &&
+		typeof config?.apiKey === "string" &&
+		config.apiKey !== "local"
+	);
+}
 
 function asObject(body: unknown): Record<string, unknown> {
 	if (body && typeof body === "object" && !Array.isArray(body)) return body as Record<string, unknown>;
@@ -70,8 +83,9 @@ function restoreSecrets(incoming: ModelsJsonProvider, stored: ModelsJsonProvider
 	return copy;
 }
 
-export function registerProviderRoutes(server: WebHttpServer, host: WebHost): void {
+export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub?: WebHostHub): void {
 	const runtime = () => host.session.modelRuntime;
+	const manager = () => new CustomProviderManager(runtime().getModelsConfigPath());
 	const providerSettings = new ProviderSettingsUseCase({
 		getSession: () => host.session,
 		getSettingsManager: () => host.session.settingsManager,
@@ -142,6 +156,13 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 	server.route("GET", "/api/providers", async () => {
 		const rt = runtime();
 		const disabled = new Set(host.session.settingsManager.getDisabledProviders());
+		const configEntries = new Map(
+			(
+				await manager()
+					.list()
+					.catch(() => [])
+			).map((entry) => [entry.id, entry.config] as const),
+		);
 		const providers = [];
 		for (const provider of rt.getProviders()) {
 			const overview = await rt.getProviderCredentialOverview(provider.id).catch(() => undefined);
@@ -167,6 +188,12 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 							})),
 							hasOAuth: overview.hasOAuth,
 							runtimeOverride: overview.runtimeOverride === true,
+							/** Something "Remove credentials" can really delete: saved keys or logins, or a key in models.json. */
+							removable:
+								overview.apiKeys.length > 0 ||
+								overview.hasOAuth ||
+								overview.runtimeOverride === true ||
+								hasConfigKey(status, configEntries.get(provider.id)),
 						}
 					: null,
 			});
@@ -269,16 +296,41 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 		return { ok: true };
 	});
 
+	/**
+	 * Removes every credential MyHarness holds for the provider: saved API keys and logins, and a key written into its
+	 * models.json entry. A failure restores models.json. If the provider is still configured afterwards (for example
+	 * through an environment variable) the request fails with the reason instead of pretending it worked.
+	 */
 	server.route("POST", "/api/providers/logout", async ({ body }) => {
 		const id = str(asObject(body).id, "id");
-		await runtime().deleteProviderCredentials(id);
+		const custom = manager();
+		const snapshot = await custom.snapshot().catch(() => undefined);
+		try {
+			const entry = await custom.get(id).catch(() => undefined);
+			if (hasConfigKey(runtime().getProviderAuthStatus(id), entry)) await custom.removeApiKey(id);
+			await runtime().deleteProviderCredentials(id);
+			await runtime().reloadConfig();
+			const configError = runtime().getError();
+			if (configError) throw new Error(configError);
+		} catch (error) {
+			if (snapshot) await custom.restore(snapshot).catch(() => {});
+			await runtime()
+				.reloadConfig()
+				.catch(() => {});
+			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
 		await afterCredentialChange();
+		const after = runtime().getProviderAuthStatus(id);
+		if (after.configured) {
+			throw new HttpError(
+				409,
+				`Saved credentials were removed, but the provider is still signed in through ${after.label ?? after.source ?? "another source"}. Remove it there.`,
+			);
+		}
 		return { ok: true };
 	});
 
 	// ---- User-defined providers (models.json) --------------------------------------------
-	const manager = () => new CustomProviderManager(runtime().getModelsConfigPath());
-
 	server.route("GET", "/api/providers/custom", async () => {
 		const entries = await manager().list();
 		return {
@@ -290,26 +342,47 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 	});
 
 	/**
-	 * Reads the model catalog of an endpoint so the form can offer its models and the capabilities the catalog states.
-	 * A failed lookup is an answer, not an error: the form keeps working with manually entered models.
+	 * Reads the model catalog of an endpoint with exactly what the edit form holds right now, saved or not: API format,
+	 * Base URL, authentication mode and a key that was just typed. Without a typed key the key already stored for the
+	 * provider being edited is used. A failed lookup is an answer, not an error: the response says why, and the form
+	 * keeps working with manually entered models.
 	 */
 	server.route("POST", "/api/providers/custom/detect", async ({ body }) => {
 		const payload = asObject(body);
 		const baseUrl = typeof payload.baseUrl === "string" ? payload.baseUrl.trim() : "";
 		const api = typeof payload.api === "string" ? payload.api : "";
 		const existingId = typeof payload.id === "string" && payload.id ? payload.id : undefined;
+		const authMode = payload.auth === "none" || payload.auth === "config" ? payload.auth : "key";
 		if (!baseUrl) throw new HttpError(400, "Enter the Base URL first.");
 		if (!(CUSTOM_PROVIDER_API_TYPES as readonly string[]).includes(api))
 			throw new HttpError(400, "Choose an API type first.");
 		let apiKey = typeof payload.apiKey === "string" && payload.apiKey.trim() ? payload.apiKey.trim() : undefined;
 		let authType: "api_key" | "oauth" = "api_key";
 		let headers: Record<string, string> | undefined;
-		if (existingId) {
-			const stored = await manager()
-				.get(existingId)
-				.catch(() => undefined);
-			headers = stored?.headers;
-			if (!apiKey) {
+		const stored = existingId
+			? await manager()
+					.get(existingId)
+					.catch(() => undefined)
+			: undefined;
+		// Headers as edited in the form; a placeholder stands for the stored secret.
+		const formHeaders =
+			payload.headers && typeof payload.headers === "object" && !Array.isArray(payload.headers)
+				? (payload.headers as Record<string, unknown>)
+				: stored?.headers;
+		if (formHeaders) {
+			headers = {};
+			for (const [name, value] of Object.entries(formHeaders)) {
+				const resolved = value === HIDDEN ? stored?.headers?.[name] : value;
+				if (typeof resolved === "string") headers[name] = resolved;
+			}
+		}
+		if (authMode === "none") {
+			apiKey = undefined;
+		} else if (!apiKey) {
+			if (authMode === "config" && typeof payload.configApiKey === "string" && payload.configApiKey !== HIDDEN) {
+				apiKey = payload.configApiKey.trim() || undefined;
+			}
+			if (!apiKey && existingId) {
 				const auth = await runtime()
 					.getAuth(existingId)
 					.catch(() => undefined);
@@ -330,8 +403,16 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 			});
 			return { ok: true, models };
 		} catch (error) {
-			if (error instanceof ProviderModelDiscoveryError)
-				return { ok: false, code: error.code, message: error.message };
+			if (error instanceof ProviderModelDiscoveryError) {
+				return {
+					ok: false,
+					code: error.code,
+					message: error.message,
+					status: error.status ?? null,
+					detail: error.detail ?? null,
+					url: error.requestUrl ?? null,
+				};
+			}
 			return { ok: false, code: "connection", message: error instanceof Error ? error.message : String(error) };
 		} finally {
 			clearTimeout(timer);
@@ -376,12 +457,49 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 		return { ok: true };
 	});
 
+	/** Chats that are working right now on a model of this provider: deleting it would cut them off. */
+	const runningOn = (providerId: string) =>
+		(hub?.all() ?? [host])
+			.filter((candidate) => {
+				const model = candidate.session.model;
+				return model?.provider === providerId && (!candidate.session.isIdle || candidate.completionActive);
+			})
+			.map((candidate) => {
+				const status = candidate.status;
+				return { slot: candidate.slotId, name: status.name, firstMessage: status.firstMessage, cwd: status.cwd };
+			});
+
+	server.route("GET", "/api/providers/custom/usage", ({ url }) => {
+		const id = str(url.searchParams.get("id") ?? undefined, "id");
+		return { running: runningOn(id) };
+	});
+
 	/**
 	 * Removes the provider for good: its models.json entry, every stored API key / login, and the settings that point at
-	 * it. If a step fails the models.json change is rolled back, so the provider is not left half deleted.
+	 * it. If a step fails the models.json change is rolled back, so the provider is not left half deleted. Deleting
+	 * works for the last provider too (MyHarness is then simply left without a model).
+	 *
+	 * When chats are running on the provider nothing is deleted until the caller confirms with `stopRunning: true`;
+	 * those chats are then stopped first. Without that flag the answer lists the running chats.
 	 */
 	server.route("POST", "/api/providers/custom/delete", async ({ body }) => {
-		const id = str(asObject(body).id, "id");
+		const payload = asObject(body);
+		const id = str(payload.id, "id");
+		const running = runningOn(id);
+		if (running.length > 0 && payload.stopRunning !== true) return { ok: false, running };
+		if (
+			!(await manager()
+				.get(id)
+				.catch(() => undefined))
+		)
+			throw new HttpError(404, "No such provider in models.json");
+		for (const candidate of hub?.all() ?? [host]) {
+			if (candidate.session.model?.provider !== id) continue;
+			if (candidate.session.isCompacting) candidate.session.abortCompaction();
+			if (candidate.session.isRetrying) candidate.session.abortRetry();
+			await candidate.session.abort();
+			await candidate.waitForCompletion().catch(() => {});
+		}
 		const custom = manager();
 		const snapshot = await custom.snapshot();
 		try {

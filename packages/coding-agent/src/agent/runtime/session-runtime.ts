@@ -615,11 +615,8 @@ export class AgentSessionRuntime {
 		this.assertCanReplaceRuntime();
 
 		const previousSessionFile = this.session.sessionFile;
-		const sessionDir = this.session.sessionManager.usesDefaultSessionDir()
-			? undefined
-			: this.session.sessionManager.getSessionDir();
 		const sessionManager = this.session.sessionManager.isPersisted()
-			? SessionManager.create(this.cwd, sessionDir)
+			? SessionManager.createLike(this.session.sessionManager, this.cwd)
 			: SessionManager.inMemory(this.cwd);
 		if (options?.parentSession) {
 			sessionManager.newSession({ parentSession: options.parentSession });
@@ -684,7 +681,7 @@ export class AgentSessionRuntime {
 				? undefined
 				: this.session.sessionManager.getSessionDir();
 			if (!targetLeafId) {
-				const sessionManager = SessionManager.create(this.cwd, sessionDir);
+				const sessionManager = SessionManager.createLike(this.session.sessionManager, this.cwd);
 				sessionManager.newSession({ parentSession: currentSessionFile });
 				await this.replaceRuntime(
 					"fork",

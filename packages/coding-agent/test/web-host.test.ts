@@ -3,7 +3,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@myharness/ai/compat";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -125,7 +125,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
-		registerProviderRoutes(server, host);
+		registerProviderRoutes(server, host, hub);
 		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());
@@ -464,6 +464,294 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.post("/api/providers/custom/delete", { id: "form-provider" })).rejects.toThrow(
 			/No such provider/,
 		);
+	});
+
+	/** A local HTTP server standing in for a provider endpoint. */
+	async function startEndpoint(
+		handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,
+	): Promise<{ baseUrl: string; requests: Array<{ url: string; authorization?: string }> }> {
+		const requests: Array<{ url: string; authorization?: string }> = [];
+		const endpoint = createServer((req, res) => {
+			requests.push({ url: req.url ?? "", authorization: req.headers.authorization });
+			handler(req, res);
+		});
+		await new Promise<void>((resolve) => endpoint.listen(0, "127.0.0.1", resolve));
+		cleanups.push(() => {
+			endpoint.closeAllConnections();
+			return new Promise<void>((resolve) => endpoint.close(() => resolve()));
+		});
+		const address = endpoint.address();
+		if (!address || typeof address === "string") throw new Error("endpoint has no port");
+		return { baseUrl: `http://127.0.0.1:${address.port}/v1`, requests };
+	}
+
+	it("detects models with the unsaved form state and reports why a detection failed", async () => {
+		const fx = await start();
+		const endpoint = await startEndpoint((req, res) => {
+			res.setHeader("content-type", "application/json");
+			if (req.url?.startsWith("/v1/models")) {
+				if (req.headers.authorization === "Bearer typed-key") {
+					res.end(JSON.stringify({ data: [{ id: "one" }] }));
+				} else if (req.headers.authorization === "Bearer bad") {
+					res.statusCode = 401;
+					res.end("{}");
+				} else if (req.headers.authorization === "Bearer broken") {
+					res.statusCode = 503;
+					res.end("{}");
+				} else {
+					res.end(JSON.stringify({ data: [{ id: "open-model" }] }));
+				}
+				return;
+			}
+			res.statusCode = 404;
+			res.end("{}");
+		});
+		const body = { baseUrl: endpoint.baseUrl, api: "openai-completions" };
+
+		// Credentials typed into the form are used as they are; "no authentication" sends none, even if a key is typed.
+		expect((await fx.post("/api/providers/custom/detect", { ...body, apiKey: "typed-key" })).models).toEqual([
+			{ id: "one", name: "one" },
+		]);
+		const open = await fx.post("/api/providers/custom/detect", { ...body, auth: "none", apiKey: "typed-key" });
+		expect(open.models).toEqual([{ id: "open-model", name: "open-model" }]);
+		expect(endpoint.requests.at(-1)?.authorization).toBeUndefined();
+
+		// Each failure says what really happened.
+		expect(await fx.post("/api/providers/custom/detect", { ...body, apiKey: "bad" })).toMatchObject({
+			ok: false,
+			code: "authentication",
+			status: 401,
+		});
+		expect(await fx.post("/api/providers/custom/detect", { ...body, apiKey: "broken" })).toMatchObject({
+			ok: false,
+			code: "connection",
+			status: 503,
+		});
+		const wrongPath = await fx.post("/api/providers/custom/detect", {
+			...body,
+			baseUrl: endpoint.baseUrl.replace("/v1", "/nope"),
+			apiKey: "typed-key",
+		});
+		expect(wrongPath).toMatchObject({ ok: false, code: "unsupported", status: 404 });
+		expect(wrongPath.url).toMatch(/\/nope\/models$/);
+		const refused = await fx.post("/api/providers/custom/detect", { ...body, baseUrl: "http://127.0.0.1:9/v1" });
+		expect(refused).toMatchObject({ ok: false, code: "connection" });
+		expect(refused.detail).toBeTruthy();
+		expect(await fx.post("/api/providers/custom/detect", { ...body, baseUrl: "not a url" })).toMatchObject({
+			ok: false,
+			code: "invalid_base_url",
+		});
+	});
+
+	it("removes credentials for real, including a key written into models.json", async () => {
+		const fx = await start();
+		const agentDir = process.env.MYHARNESS_CODING_AGENT_DIR as string;
+		const modelsPath = join(agentDir, "models.json");
+		writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					literal: {
+						name: "Literal",
+						baseUrl: "http://127.0.0.1:9/v1",
+						api: "openai-completions",
+						apiKey: "literal-secret",
+						models: [{ id: "lit" }],
+					},
+					local: {
+						name: "Local",
+						baseUrl: "http://127.0.0.1:9/v1",
+						api: "openai-completions",
+						apiKey: "local",
+						models: [{ id: "loc" }],
+					},
+				},
+			}),
+		);
+		await fx.post("/api/providers/custom/save", {
+			id: "literal",
+			previousId: "literal",
+			config: {
+				name: "Literal",
+				baseUrl: "http://127.0.0.1:9/v1",
+				api: "openai-completions",
+				apiKey: "__hidden__",
+				models: [{ id: "lit" }],
+			},
+		});
+		let providers = (await fx.get("/api/providers")).providers;
+		expect(providers.find((p: any) => p.id === "literal")).toMatchObject({
+			configured: true,
+			credentials: { removable: true },
+		});
+		// "local" means "no authentication": there is no credential to remove.
+		expect(providers.find((p: any) => p.id === "local").credentials.removable).toBe(false);
+
+		await fx.post("/api/providers/logout", { id: "literal" });
+		providers = (await fx.get("/api/providers")).providers;
+		expect(providers.find((p: any) => p.id === "literal")).toMatchObject({
+			configured: false,
+			credentials: { removable: false },
+		});
+		expect(readFileSync(modelsPath, "utf8")).not.toContain("literal-secret");
+		if (existsSync(`${modelsPath}.bak`))
+			expect(readFileSync(`${modelsPath}.bak`, "utf8")).not.toContain("literal-secret");
+		// The rest of the provider is untouched.
+		const config = (await fx.get("/api/providers/custom")).providers.find((p: any) => p.id === "literal").config;
+		expect(config).toMatchObject({ name: "Literal", models: [{ id: "lit" }] });
+
+		// Saved keys are removed too.
+		await fx.post("/api/providers/api-key/add", { id: "literal", key: "stored-key", label: "k" });
+		expect(
+			(await fx.get("/api/providers")).providers.find((p: any) => p.id === "literal").credentials.removable,
+		).toBe(true);
+		await fx.post("/api/providers/logout", { id: "literal" });
+		expect((await fx.get("/api/providers")).providers.find((p: any) => p.id === "literal")).toMatchObject({
+			configured: false,
+			credentials: { apiKeys: [], removable: false },
+		});
+	});
+
+	it("asks before deleting a provider that running tasks use, and stops them when told to", async () => {
+		const fx = await start();
+		// A chat completion that never answers keeps the task running until it is aborted.
+		const endpoint = await startEndpoint(() => {});
+		await fx.post("/api/providers/custom/save", {
+			id: "slow",
+			config: {
+				name: "Slow",
+				baseUrl: endpoint.baseUrl,
+				api: "openai-completions",
+				models: [{ id: "slow-1", contextWindow: 10_000_000, maxTokens: 1000 }],
+			},
+			apiKey: "key",
+		});
+		await fx.post("/api/model", { provider: "slow", id: "slow-1" });
+		expect((await fx.get("/api/providers/custom/usage?id=slow")).running).toEqual([]);
+
+		await fx.post("/api/prompt", { text: "work for a long time" });
+		await fx.waitFor("agent_start");
+		const usage = await fx.get("/api/providers/custom/usage?id=slow");
+		expect(usage.running).toHaveLength(1);
+
+		// Without the explicit choice nothing is deleted and nothing is stopped.
+		const refused = await fx.post("/api/providers/custom/delete", { id: "slow" });
+		expect(refused).toMatchObject({ ok: false });
+		expect(refused.running).toHaveLength(1);
+		expect((await fx.get("/api/providers/custom")).providers.map((p: any) => p.id)).toEqual(["slow"]);
+		expect((await fx.get("/api/state")).active).toBe(true);
+
+		// "Delete now" stops the task, then deletes the provider, its key and every reference to it.
+		expect(await fx.post("/api/providers/custom/delete", { id: "slow", stopRunning: true })).toEqual({ ok: true });
+		const state = await fx.get("/api/state");
+		expect(state.active).toBe(false);
+		expect((await fx.get("/api/providers/custom")).providers).toEqual([]);
+		expect((await fx.get("/api/providers")).providers.some((p: any) => p.id === "slow")).toBe(false);
+		expect(state.model?.provider).not.toBe("slow");
+	});
+
+	it("removes the current (last) workspace without touching the folder or the chats, which stay usable", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("first answer")])]);
+		await fx.post("/api/prompt", { text: "remember this" });
+		await fx.waitFor("run_finished");
+		writeFileSync(join(fx.project, "keep.txt"), "project file");
+		const before = await fx.get("/api/state");
+		// The data root is shared by the tests of this file: drop the workspaces of earlier tests so this one is the last.
+		const listed = (await fx.get("/api/workspaces")).workspaces;
+		for (const other of listed.filter((w: any) => !w.current))
+			await fx.post("/api/workspaces/remove", { id: other.id });
+		const workspace = (await fx.get("/api/workspaces")).workspaces;
+		expect(workspace).toHaveLength(1);
+		expect(workspace[0].current).toBe(true);
+
+		await fx.post("/api/workspaces/remove", { id: workspace[0].id });
+		expect((await fx.get("/api/workspaces")).workspaces).toEqual([]);
+		// The folder and the chat file stay exactly where they were.
+		expect(readFileSync(join(fx.project, "keep.txt"), "utf8")).toBe("project file");
+		expect(existsSync(before.session.file)).toBe(true);
+		// The open chat is now workspace-less but keeps running; the UI sees it as such.
+		const after = await fx.get("/api/state");
+		expect(after.workspace).toBeNull();
+		expect(after.session.file).toBe(before.session.file);
+		const unbound = await fx.get("/api/sessions/unbound");
+		expect(unbound.sessions.map((s: any) => s.path)).toContain(before.session.file);
+		expect(unbound.sessions.find((s: any) => s.path === before.session.file).firstMessage).toBe("remember this");
+		// Nothing lists it under a workspace any more.
+		expect((await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`)).sessions).toEqual([]);
+
+		// The chat continues after the workspace is gone, in its own folder.
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("second answer")])]);
+		await fx.post("/api/prompt", { text: "and again" });
+		await vi.waitFor(
+			async () => {
+				expect((await fx.get("/api/state")).active).toBe(false);
+				const transcript = await fx.get("/api/transcript");
+				expect(transcript.items.filter((item: any) => item.kind === "user")).toHaveLength(2);
+				expect(transcript.items.filter((item: any) => item.kind === "assistant")).toHaveLength(2);
+			},
+			{ timeout: 15_000 },
+		);
+
+		// The chat can be closed and opened again from the workspace-less list.
+		const other = await fx.post("/api/sessions/new", { unbound: true });
+		expect(other.created).toBe(true);
+		const reopened = await fx.post("/api/sessions/open", { path: before.session.file }, other.slot);
+		expect(reopened.slot).toBe(before.slot);
+
+		// Adding the same folder again reattaches the chats that stayed behind.
+		await fx.post("/api/workspaces/add", { path: fx.project });
+		const restored = await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`);
+		expect(restored.sessions.map((s: any) => s.path)).toContain(before.session.file);
+		expect((await fx.get("/api/sessions/unbound")).sessions.map((s: any) => s.path)).not.toContain(
+			before.session.file,
+		);
+	});
+
+	it("creates and runs chats that belong to no workspace in MyHarness's default working directory", async () => {
+		const fx = await start();
+		const agentDir = process.env.MYHARNESS_CODING_AGENT_DIR as string;
+		// No workspace at all, yet a new chat can still be started.
+		const { workspaces } = await fx.get("/api/workspaces");
+		for (const workspace of workspaces) await fx.post("/api/workspaces/remove", { id: workspace.id });
+		const created = await fx.post("/api/sessions/new", { unbound: true });
+		expect(created.created).toBe(true);
+		const state = await fx.get("/api/state", created.slot);
+		expect(state.workspace).toBeNull();
+		expect(state.cwd).toBe(join(agentDir, "default-workspace"));
+		expect(existsSync(state.cwd)).toBe(true);
+		expect((await fx.get("/api/workspaces")).workspaces).toEqual([]);
+
+		// Tools and the shell work there.
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "scratch.txt", content: "hello" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxText("written")]),
+		]);
+		await fx.post("/api/prompt", { text: "write a scratch file" }, created.slot);
+		await vi.waitFor(
+			async () => {
+				expect(existsSync(join(state.cwd, "scratch.txt"))).toBe(true);
+				expect((await fx.get("/api/state", created.slot)).active).toBe(false);
+			},
+			{ timeout: 15_000 },
+		);
+		expect(readFileSync(join(state.cwd, "scratch.txt"), "utf8")).toBe("hello");
+		const started = await fx.post("/api/bash", { command: "echo unbound-shell" }, created.slot);
+		const end = await fx.waitFor("bash_end", (data) => data.id === started.id);
+		expect(end.output).toContain("unbound-shell");
+
+		// The chat is listed among the workspace-less chats and never registered a workspace.
+		const unbound = (await fx.get("/api/sessions/unbound")).sessions;
+		expect(unbound.map((s: any) => s.path)).toContain(state.session.file);
+		expect((await fx.get("/api/workspaces")).workspaces).toEqual([]);
+
+		// "New chat" from a workspace-less chat stays workspace-less and does not fall back to the old folder.
+		const next = await fx.post("/api/sessions/new", {}, created.slot);
+		const nextState = await fx.get("/api/state", next.slot);
+		expect(nextState.workspace).toBeNull();
+		expect(nextState.cwd).toBe(state.cwd);
 	});
 
 	it("runs direct shell commands and streams their output", async () => {

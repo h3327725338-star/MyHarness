@@ -144,7 +144,7 @@ export async function runWebMode(
 	registerFolderBrowser(server, host);
 	registerGitRoutes(server, host);
 	registerSettingsRoutes(server, host);
-	registerProviderRoutes(server, host);
+	registerProviderRoutes(server, host, hub);
 
 	const shutdown = async (code: number) => {
 		if (shuttingDown) return;

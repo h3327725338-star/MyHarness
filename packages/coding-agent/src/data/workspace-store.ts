@@ -3,10 +3,12 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, r
 import { basename, dirname, join, parse } from "node:path";
 import {
 	getDataDir,
+	getDefaultWorkingDir,
 	getWorkspaceMetadataPath,
 	getWorkspaceRegistryPath,
 	getWorkspacesDir,
 	getWorkspaceUnresolvedPath,
+	UNBOUND_WORKSPACE_ID,
 } from "../config/paths/index.ts";
 import { getAgentDir } from "../config.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
@@ -383,6 +385,40 @@ export class WorkspaceStore {
 		}
 	}
 
+	/**
+	 * Workspace data directories that no registered Workspace owns: the reserved container for Sessions created without
+	 * a Workspace, and Workspaces that were removed from the list (their Session data stays where it was). Migration
+	 * quarantine entries are not included.
+	 */
+	listDetachedWorkspaceIds(): string[] {
+		if (!this.dataRoot) return [];
+		const registered = new Set(this.workspaces.map((workspace) => workspace.workspaceId));
+		const archived = readArchivedWorkspaceIds(this.dataRoot);
+		const ids = new Set<string>();
+		try {
+			for (const entry of requireDirectoryEntries(getWorkspacesDir(this.dataRoot))) {
+				if (!entry.isDirectory() || !isSafeWorkspaceId(entry.name)) continue;
+				if (registered.has(entry.name) || archived.has(entry.name)) continue;
+				ids.add(entry.name);
+			}
+		} catch {
+			// No workspaces directory yet: nothing is detached.
+		}
+		ids.delete(UNBOUND_WORKSPACE_ID);
+		return [UNBOUND_WORKSPACE_ID, ...ids];
+	}
+
+	/** A removed Workspace for the same folder keeps its Session data; adding the folder again reattaches it. */
+	private findDetachedWorkspace(rootPath: string): Workspace | undefined {
+		if (!this.dataRoot) return undefined;
+		for (const id of this.listDetachedWorkspaceIds()) {
+			if (id === UNBOUND_WORKSPACE_ID) continue;
+			const metadata = readWorkspaceMetadata(getWorkspaceMetadataPath(this.dataRoot, id));
+			if (metadata && metadata.workspaceId === id && pathsEqual(metadata.rootPath, rootPath)) return metadata;
+		}
+		return undefined;
+	}
+
 	getById(id: string): Workspace | undefined {
 		const workspace = this.workspaces.find((candidate) => candidate.workspaceId === id || candidate.id === id);
 		return workspace ? { ...workspace } : undefined;
@@ -441,13 +477,14 @@ export class WorkspaceStore {
 			return { ok: false, error: `Workspace 已添加：${rootPath}` };
 		}
 
-		const workspaceId = this.dataRoot ? createWorkspaceId() : rootPath;
+		const detached = this.findDetachedWorkspace(rootPath);
+		const workspaceId = detached?.workspaceId ?? (this.dataRoot ? createWorkspaceId() : rootPath);
 		const workspace: Workspace = {
 			workspaceId,
 			id: workspaceId,
-			name: defaultWorkspaceName(rootPath),
+			name: detached?.name ?? defaultWorkspaceName(rootPath),
 			rootPath,
-			createdAt: new Date().toISOString(),
+			createdAt: detached?.createdAt ?? new Date().toISOString(),
 		};
 		this.workspaces.push(workspace);
 		if (persist) {
@@ -607,4 +644,11 @@ export function findWorkspaceDataContext(
 	const store = WorkspaceStore.create(options.agentDir ?? getAgentDir(), dataRoot);
 	const workspace = store.getByPath(rootPath);
 	return workspace ? { dataRoot, workspace } : undefined;
+}
+
+/** Create (if needed) and return the internal working directory used by Sessions that have no Workspace. */
+export function ensureDefaultWorkingDir(agentDir: string = getAgentDir()): string {
+	const directory = getDefaultWorkingDir(agentDir);
+	mkdirSync(directory, { recursive: true });
+	return directory;
 }

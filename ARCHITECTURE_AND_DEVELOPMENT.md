@@ -517,7 +517,7 @@ src/agent/、src/session/、src/providers/ 等目录中的具体文件仍是内�
 
 ### Workspace / Session 数据边界
 
-`WorkspaceStore` 以规范化的真实 Workspace 根目录作为身份键，`registry.json` 只保存 Workspace 记录；Session 创建、resume、fork 和 import 通过同一 Workspace resolver 获取 `workspace-id`，再由 `config/paths/` 生成 `sessions/<session-id>/` 下的路径。Session 列表和旧 Session 打开路径不会为了显示或读取而注册 Workspace。`data/sessions/` 只作为显式迁移的兼容来源；正常启动、Session 列表和新 Session 创建不会再读取或写入它，迁移成功且确认只剩空目录后会移除该已退役目录。
+`WorkspaceStore` 以规范化的真实 Workspace 根目录作为身份键，`registry.json` 只保存 Workspace 记录；Session 创建、resume、fork 和 import 通过同一 Workspace resolver 获取 `workspace-id`，再由 `config/paths/` 生成 `sessions/<session-id>/` 下的路径。Session 列表和旧 Session 打开路径不会为了显示或读取而注册 Workspace。不属于任何已登记 Workspace 的 Session（Web UI 里不选 Workspace 新建的 Chat，以及被“从列表移除”的 Workspace 留下的 Chat）是“未绑定”Session：前者存放在保留容器 `workspaces/unbound/`（不进 registry，运行在 `<agent dir>/default-workspace/` 这个 MyHarness 内部默认工作目录），后者的数据留在原 `workspaces/<workspace-id>/` 不动；移除 Workspace 只删 registry 记录，同一文件夹再次添加时沿用原 ID。判断与列出见 `SessionManager.isUnbound()` / `listUnbound()`，后续新建沿用同类归属见 `SessionManager.createLike()`。`data/sessions/` 只作为显式迁移的兼容来源；正常启动、Session 列表和新 Session 创建不会再读取或写入它，迁移成功且确认只剩空目录后会移除该已退役目录。
 
 ### 写入安全
 

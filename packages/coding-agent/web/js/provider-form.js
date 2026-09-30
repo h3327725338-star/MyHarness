@@ -1,5 +1,5 @@
 // Add / edit a custom provider with a structured form. The JSON view is an optional advanced editor over the same data.
-import { html, useMemo, useRef, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
+import { html, useRef, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
 import { post } from "./store.js";
 import { effortName } from "./util.js";
 import { N_, t } from "./i18n.js";
@@ -20,13 +20,31 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const DETECT_ERRORS = {
 	authentication: N_("The endpoint rejected the API key."),
 	permission: N_("The API key is not allowed to list models."),
-	unsupported: N_("This endpoint does not offer a model list."),
+	unsupported: N_("The endpoint has no model list at this address. It may not offer one, or the Base URL is wrong (many services need a /v1 suffix)."),
 	connection: N_("Could not reach the endpoint."),
 	timeout: N_("The model list request timed out."),
 	rate_limited: N_("The endpoint is rate limiting requests; try again later."),
+	upstream_error: N_("The endpoint reported an error of its own."),
 	invalid_response: N_("The endpoint returned a model list in an unknown format."),
+	pagination: N_("The endpoint's model list could not be read to the end."),
 	invalid_base_url: N_("The Base URL is not valid."),
 };
+
+/** Why detection failed, as specific as the answer allows: who failed (the endpoint or MyHarness) and with what. */
+function detectMessage(result) {
+	// A "connection" failure that carries an HTTP status means the endpoint was reached and answered with an error.
+	const kind = result.code === "connection" && result.status ? "upstream_error" : result.code;
+	const base = DETECT_ERRORS[kind] ? t(DETECT_ERRORS[kind]) : t("Could not read the model list.");
+	const extra = [result.status ? `HTTP ${result.status}` : "", result.detail || "", result.url || ""].filter(Boolean);
+	return extra.length ? `${base} (${extra.join(" · ")})` : base;
+}
+
+/** The request never produced an answer from the endpoint: MyHarness itself failed to run it. */
+function detectFailure(error) {
+	if (error.status === 404) return t("This MyHarness server has no model-detection interface; it is older than this page. Restart MyHarness and try again.");
+	if (error.status) return t("MyHarness could not run the detection: {message}", { message: error.message });
+	return error.message;
+}
 
 let uidCounter = 0;
 const uid = () => `m${++uidCounter}`;
@@ -175,30 +193,145 @@ function ModelCard({ model, onChange, onRemove }) {
 	</div>`;
 }
 
-function DetectPanel({ result, existingIds, onAdd, onAddAll, onClose }) {
+const CHANGE_LABELS = {
+	name: N_("Display name"),
+	reasoning: N_("Supports reasoning"),
+	image: N_("Accepts images"),
+	contextWindow: N_("Context window (tokens)"),
+	maxTokens: N_("Max output (tokens)"),
+};
+
+const yesNo = (value) => (value ? t("Yes") : t("No"));
+const show = (field, value) => (field === "reasoning" || field === "image" ? yesNo(value) : field === "name" && !value ? "—" : String(value));
+
+/**
+ * Sorts a detection result against the models the form holds (matched by model ID): unknown IDs are new, known IDs
+ * whose reliably detected fields differ from the current ones are conflicts, known IDs that already match are left alone.
+ * Only fields the endpoint actually stated are ever compared or overwritten.
+ */
+function planDetection(found, current) {
+	const byId = new Map(current.map((m) => [m.id.trim(), m]));
+	const fresh = [];
+	const conflicts = [];
+	let same = 0;
+	for (const detected of found) {
+		const existing = byId.get(detected.id);
+		if (!existing) {
+			fresh.push(detected);
+			continue;
+		}
+		const changes = [];
+		const name = detected.name && detected.name !== detected.id ? detected.name : undefined;
+		if (name !== undefined && name !== (existing.name.trim() || existing.id.trim())) changes.push({ field: "name", from: existing.name.trim(), to: name });
+		if (detected.reasoning !== undefined && detected.reasoning !== existing.reasoning) changes.push({ field: "reasoning", from: existing.reasoning, to: detected.reasoning });
+		if (detected.input !== undefined) {
+			const image = detected.input.includes("image");
+			if (image !== existing.image) changes.push({ field: "image", from: existing.image, to: image });
+		}
+		for (const field of ["contextWindow", "maxTokens"]) {
+			if (detected[field] !== undefined && String(detected[field]) !== existing[field].trim()) changes.push({ field, from: existing[field].trim(), to: detected[field] });
+		}
+		if (changes.length) conflicts.push({ id: detected.id, changes });
+		else same++;
+	}
+	return { fresh, conflicts, same };
+}
+
+function seedFromDetected(m) {
+	const seed = { id: m.id };
+	if (m.name && m.name !== m.id) seed.name = m.name;
+	if (m.reasoning !== undefined) seed.reasoning = m.reasoning;
+	if (m.input) seed.input = m.input;
+	if (m.contextWindow) seed.contextWindow = m.contextWindow;
+	if (m.maxTokens) seed.maxTokens = m.maxTokens;
+	const detected = {};
+	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (m[key] !== undefined) detected[key] = true;
+	return modelDraft(seed, detected);
+}
+
+/**
+ * Applies a reviewed detection to the form's models in one step: adds the chosen new models and overwrites only the
+ * detected, differing fields of the conflicts the user chose to overwrite. Models the detection did not list stay.
+ */
+function applyDetection(models, plan, { skipNew, choices }, found) {
+	const detectedById = new Map(found.map((m) => [m.id, m]));
+	const conflictById = new Map(plan.conflicts.map((c) => [c.id, c]));
+	const updated = models.map((model) => {
+		const id = model.id.trim();
+		if (choices[id] !== "overwrite" || !conflictById.has(id)) return model;
+		const detected = detectedById.get(id);
+		const next = { ...model, detected: { ...model.detected } };
+		for (const { field } of conflictById.get(id).changes) {
+			if (field === "name") next.name = detected.name;
+			else if (field === "reasoning") {
+				next.reasoning = detected.reasoning;
+				next.detected.reasoning = true;
+			} else if (field === "image") {
+				next.image = detected.input.includes("image");
+				next.detected.input = true;
+			} else {
+				next[field] = String(detected[field]);
+				next.detected[field] = true;
+			}
+		}
+		return next;
+	});
+	const added = plan.fresh.filter((m) => !skipNew.has(m.id)).map(seedFromDetected);
+	// A blank placeholder row from a fresh form is replaced by the first real model.
+	const kept = updated.length === 1 && !updated[0].id.trim() && added.length ? [] : updated;
+	return { models: [...kept, ...added], added: added.length, updated: updated.filter((m, i) => m !== models[i]).length };
+}
+
+function DetectReview({ found, plan, skipNew, setSkipNew, choices, setChoices }) {
 	const [filter, setFilter] = useState("");
 	const q = filter.trim().toLowerCase();
-	const shown = result.filter((model) => !q || model.id.toLowerCase().includes(q) || model.name.toLowerCase().includes(q));
-	const addable = shown.filter((model) => !existingIds.has(model.id));
-	return html`<div class="pf-detect">
-		<div class="row"><strong class="grow">${t("{n} models found", { n: result.length })}</strong>
-			<input class="field" style="width:180px" placeholder=${t("Filter…")} aria-label=${t("Filter models")} value=${filter} onInput=${(e) => setFilter(e.target.value)} />
-			<button class="btn sm" disabled=${!addable.length} onClick=${() => onAddAll(addable)}>${t("Add {n} shown", { n: addable.length })}</button>
-			<button class="btn sm ghost" onClick=${onClose}>${t("Hide")}</button></div>
-		<div class="pf-detect-list">
-			${shown.slice(0, 150).map((model) => {
-				const added = existingIds.has(model.id);
-				return html`<div class="pf-detect-row" key=${model.id}>
-					<span class="truncate grow" title=${model.id}>${model.name !== model.id ? html`${model.name} <span class="dim mono">${model.id}</span>` : html`<span class="mono">${model.id}</span>`}</span>
-					${model.reasoning ? html`<span class="badge">${t("reasoning")}</span>` : null}
-					${model.input?.includes("image") ? html`<span class="badge">${t("images")}</span>` : null}
-					${model.contextWindow ? html`<span class="dim">${Math.round(model.contextWindow / 1000)}k</span>` : null}
-					<button class="btn sm" disabled=${added} onClick=${() => onAdd(model)}>${added ? t("Added") : t("Add")}</button>
-				</div>`;
-			})}
-			${shown.length > 150 ? html`<div class="dim pf-hint">${t("Showing the first 150; filter to narrow the list.")}</div>` : null}
-			${!shown.length ? html`<div class="dim pf-hint">${t("No model matches the filter.")}</div>` : null}
+	const shownNew = plan.fresh.filter((m) => !q || m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
+	const toggle = (id, on) =>
+		setSkipNew((current) => {
+			const next = new Set(current);
+			if (on) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	const setAll = (value) => setChoices(Object.fromEntries(plan.conflicts.map((c) => [c.id, value])));
+	const unresolved = plan.conflicts.filter((c) => !choices[c.id]).length;
+	return html`<div class="col pf-review" style="gap:14px">
+		<div class="dim pf-hint">${t("Models found: {n}. Nothing has changed yet: choose what to take over, then apply. Changes are saved with the provider when you click Save.", { n: found.length })}</div>
+		${plan.conflicts.length
+			? html`<div class="col pf-review-block" style="gap:8px">
+				<div class="row"><strong class="grow">${t("Already in the form, with different values: {n}", { n: plan.conflicts.length })}</strong>
+					<button class="btn sm" onClick=${() => setAll("keep")}>${t("Keep all current")}</button>
+					<button class="btn sm" onClick=${() => setAll("overwrite")}>${t("Overwrite all with detected")}</button></div>
+				<div class="dim pf-hint">${t("Overwriting only replaces the values the endpoint stated; everything else in the model stays as you set it.")}</div>
+				${plan.conflicts.map((c) => html`<div class="pf-conflict" key=${c.id}>
+					<div class="row"><span class="mono truncate grow" title=${c.id}>${c.id}</span>
+						<${Segmented} size="sm" value=${choices[c.id] || ""} onChange=${(v) => setChoices({ ...choices, [c.id]: v })} options=${[{ value: "keep", label: t("Keep current") }, { value: "overwrite", label: t("Use detected") }]} /></div>
+					<div class="pf-changes">${c.changes.map((ch) => html`<span key=${ch.field}>${t(CHANGE_LABELS[ch.field])}: <span class="dim">${show(ch.field, ch.from)}</span> → <strong>${show(ch.field, ch.to)}</strong></span>`)}</div>
+				</div>`)}
+			</div>`
+			: null}
+		<div class="col pf-review-block" style="gap:8px">
+			<div class="row"><strong class="grow">${t("New models: {n}", { n: plan.fresh.length })}</strong>
+				${plan.fresh.length
+					? html`<input class="field" style="width:180px" placeholder=${t("Filter…")} aria-label=${t("Filter models")} value=${filter} onInput=${(e) => setFilter(e.target.value)} />
+						<button class="btn sm" onClick=${() => setSkipNew(new Set())}>${t("Select all")}</button>
+						<button class="btn sm" onClick=${() => setSkipNew(new Set(plan.fresh.map((m) => m.id)))}>${t("Select none")}</button>`
+					: null}</div>
+			${!plan.fresh.length ? html`<div class="dim pf-hint">${t("The endpoint lists no model that is not in the form yet.")}</div>` : null}
+			<div class="pf-detect-list">
+				${shownNew.slice(0, 200).map((m) => html`<label class="pf-detect-row" key=${m.id}>
+					<input type="checkbox" checked=${!skipNew.has(m.id)} onChange=${(e) => toggle(m.id, e.target.checked)} />
+					<span class="truncate grow" title=${m.id}>${m.name !== m.id ? html`${m.name} <span class="dim mono">${m.id}</span>` : html`<span class="mono">${m.id}</span>`}</span>
+					${m.reasoning ? html`<span class="badge">${t("reasoning")}</span>` : null}
+					${m.input?.includes("image") ? html`<span class="badge">${t("images")}</span>` : null}
+					${m.contextWindow ? html`<span class="dim">${Math.round(m.contextWindow / 1000)}k</span>` : null}
+				</label>`)}
+				${shownNew.length > 200 ? html`<div class="dim pf-hint">${t("Showing the first 200; filter to narrow the list.")}</div>` : null}
+				${plan.fresh.length && !shownNew.length ? html`<div class="dim pf-hint">${t("No model matches the filter.")}</div>` : null}
+			</div>
 		</div>
+		${plan.same ? html`<div class="dim pf-hint">${t("Detected models that already match the form and need no change: {n}", { n: plan.same })}</div>` : null}
+		${unresolved ? html`<div class="notice warn" role="status">${t("Choose “Keep current” or “Use detected” for the models that still need a decision: {n}", { n: unresolved })}</div>` : null}
 	</div>`;
 }
 
@@ -216,10 +349,12 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 	const [busy, setBusy] = useState(false);
 	const [detecting, setDetecting] = useState(false);
 	const [detectNote, setDetectNote] = useState("");
-	const [found, setFound] = useState(null);
+	// A finished detection waits here, apart from the form, until the user applies or discards it.
+	const [review, setReview] = useState(null);
+	const [skipNew, setSkipNew] = useState(() => new Set());
+	const [choices, setChoices] = useState({});
 	const bodyRef = useRef(null);
 	const hasStoredKey = !!storedKeys?.apiKeys?.length;
-	const existingIds = useMemo(() => new Set(draft.models.map((m) => m.id.trim())), [draft.models]);
 	const patch = (next) => setDraft((current) => ({ ...current, ...next }));
 	const types = apiTypes?.length ? apiTypes : Object.keys(API_LABELS);
 
@@ -248,44 +383,39 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 		if (!draft.baseUrl.trim()) return setDetectNote(t("Enter the Base URL first."));
 		setDetecting(true);
 		try {
-			const result = await post("/api/providers/custom/detect", { baseUrl: draft.baseUrl.trim(), api: draft.api, apiKey: draft.auth === "key" ? draft.apiKey : "", id: isNew ? "" : draft.id });
+			// Exactly what the form holds now, saved or not.
+			const result = await post("/api/providers/custom/detect", {
+				baseUrl: draft.baseUrl.trim(),
+				api: draft.api,
+				auth: draft.auth,
+				apiKey: draft.auth === "key" ? draft.apiKey : "",
+				configApiKey: draft.auth === "config" ? draft.raw.apiKey : undefined,
+				headers: draft.raw.headers,
+				id: isNew ? "" : draft.id,
+			});
 			if (result.ok && result.models.length) {
-				setFound(result.models);
-				setDetectNote("");
+				const plan = planDetection(result.models, draft.models);
+				setSkipNew(new Set());
+				setChoices({});
+				setReview({ found: result.models, plan });
 			} else if (result.ok) {
-				setFound(null);
 				setDetectNote(t("The endpoint returned an empty model list. Add the models manually."));
 			} else {
-				setFound(null);
-				setDetectNote(`${DETECT_ERRORS[result.code] ? t(DETECT_ERRORS[result.code]) : t("Could not read the model list.")} ${t("You can still add models manually.")}`);
+				setDetectNote(`${detectMessage(result)} ${t("You can still add models manually.")}`);
 			}
 		} catch (e) {
-			setFound(null);
-			setDetectNote(`${e.message} ${t("You can still add models manually.")}`);
+			setDetectNote(`${detectFailure(e)} ${t("You can still add models manually.")}`);
 		}
 		setDetecting(false);
 	};
 
-	const addDetected = (models) =>
-		setDraft((current) => {
-			const have = new Set(current.models.map((m) => m.id.trim()));
-			const fresh = models
-				.filter((m) => !have.has(m.id))
-				.map((m) => {
-					const seed = { id: m.id };
-					if (m.name && m.name !== m.id) seed.name = m.name;
-					if (m.reasoning !== undefined) seed.reasoning = m.reasoning;
-					if (m.input) seed.input = m.input;
-					if (m.contextWindow) seed.contextWindow = m.contextWindow;
-					if (m.maxTokens) seed.maxTokens = m.maxTokens;
-					const detected = {};
-					for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (m[key] !== undefined) detected[key] = true;
-					return modelDraft(seed, detected);
-				});
-			// A blank placeholder row from a fresh form is replaced by the first real model.
-			const kept = current.models.length === 1 && !current.models[0].id.trim() ? [] : current.models;
-			return { ...current, models: [...kept, ...fresh] };
-		});
+	const reviewReady = !!review && review.plan.conflicts.every((c) => choices[c.id]);
+	const applyReview = () => {
+		const outcome = applyDetection(draft.models, review.plan, { skipNew, choices }, review.found);
+		patch({ models: outcome.models });
+		setReview(null);
+		setDetectNote(outcome.added || outcome.updated ? t("Applied to the form: {added} added, {updated} updated. Click Save to keep them.", { added: outcome.added, updated: outcome.updated }) : t("Nothing was changed."));
+	};
 
 	const updateModel = (uidValue, next) => patch({ models: draft.models.map((m) => (m.uid === uidValue ? next : m)) });
 
@@ -318,12 +448,16 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 	};
 
 	const authOptions = [{ value: "key", label: t("API key") }, { value: "none", label: t("No authentication") }, ...(draft.auth === "config" ? [{ value: "config", label: t("Set in models.json") }] : [])];
-	const footer = html`<button class="btn" onClick=${onClose}>${t("Cancel")}</button><button class="btn primary" disabled=${busy} onClick=${save}>${busy ? t("Saving…") : isNew ? t("Add provider") : t("Save")}</button>`;
-	return html`<${Modal} title=${isNew ? t("Add custom provider") : t("Edit {previousId}", { previousId: initial.id })} subtitle=${t("Connect any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")} onClose=${onClose} width=${760} footer=${footer} closeOnScrim=${false}>
+	const footer = review
+		? html`<button class="btn" onClick=${() => setReview(null)}>${t("Discard detection")}</button><button class="btn primary" disabled=${!reviewReady} onClick=${applyReview}>${t("Apply to form")}</button>`
+		: html`<button class="btn" onClick=${onClose}>${t("Cancel")}</button><button class="btn primary" disabled=${busy} onClick=${save}>${busy ? t("Saving…") : isNew ? t("Add provider") : t("Save")}</button>`;
+	return html`<${Modal} title=${isNew ? t("Add custom provider") : t("Edit {previousId}", { previousId: initial.id })} subtitle=${t("Connect any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")} onClose=${onClose} width=${760} footer=${footer} closeOnScrim=${false} class="pf-modal">
 		<div ref=${bodyRef} class="col" style="gap:12px">
 			<${Segmented} value=${view} onChange=${switchView} options=${[{ value: "form", label: t("Form") }, { value: "json", label: t("Advanced (JSON)") }]} />
 			${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
-			${view === "json"
+			${review
+				? html`<${DetectReview} found=${review.found} plan=${review.plan} skipNew=${skipNew} setSkipNew=${setSkipNew} choices=${choices} setChoices=${setChoices} />`
+				: view === "json"
 				? html`<div class="col" style="gap:8px">
 					<div class="dim pf-hint">${t("The full models.json entry for this provider. Secrets already in the file show as a placeholder and are kept when you leave them unchanged. Keys you type in the form are stored in the credential store, not in this JSON.")}</div>
 					<textarea class="field mono" rows="18" spellcheck="false" aria-label=${t("Configuration (JSON)")} value=${json} onInput=${(e) => setJson(e.target.value)} />
@@ -352,7 +486,6 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 					<button class="btn sm" onClick=${() => patch({ models: [...draft.models, modelDraft()] })}><${Icon} name="plus" size=${13} />${t("Add manually")}</button></div>
 				<div class="dim pf-hint">${t("Detection reads the endpoint's model list and fills in what it states (reasoning, image input, token limits). Anything it does not state is left for you to set.")}</div>
 				${detectNote ? html`<div class="notice warn" role="status">${detectNote}</div>` : null}
-				${found ? html`<${DetectPanel} result=${found} existingIds=${existingIds} onAdd=${(m) => addDetected([m])} onAddAll=${addDetected} onClose=${() => setFound(null)} />` : null}
 				${draft.models.map((model) => html`<${ModelCard} key=${model.uid} model=${model} onChange=${(next) => updateModel(model.uid, next)} onRemove=${() => patch({ models: draft.models.filter((m) => m.uid !== model.uid) })} />`)}
 			</div>`}
 		</div>

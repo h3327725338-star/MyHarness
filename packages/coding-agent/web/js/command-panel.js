@@ -410,7 +410,7 @@ function providerScreen(ctx, id) {
 	if (!provider) return { title: t("Providers"), loading: true, rows: [] };
 	const act = async (fn, ok) => {
 		const result = await attempt(fn, { success: ok });
-		if (result) await loadProviders();
+		await loadProviders();
 		return result;
 	};
 	const c = provider.credentials;
@@ -455,7 +455,7 @@ function providerScreen(ctx, id) {
 		});
 	}
 	if (provider.supportsOAuth) rows.push({ key: "oauth", label: t("Sign in with OAuth"), icon: "key", desc: login?.type === "auth_url" ? t("Waiting for the browser sign-in…") : login?.type === "device_code" ? `${login.verificationUri} · ${login.userCode}` : undefined, onEnter: () => act(() => post("/api/providers/oauth/login", { id }), t("Signed in")) });
-	if (provider.configured && provider.authSource !== "environment") {
+	if (c?.removable) {
 		rows.push({
 			key: "logout",
 			label: t("Remove credentials"),
@@ -465,11 +465,11 @@ function providerScreen(ctx, id) {
 				cc.push(() =>
 					confirmScreen({
 						title: t("Remove {name} credentials?", { name: provider.name }),
-						message: t("All stored API keys and OAuth logins for this provider are deleted from this computer."),
+						message: t("All API keys and OAuth logins saved for this provider, including a key written in models.json, are deleted from this computer."),
 						confirmLabel: t("Remove"),
 						danger: true,
 						onConfirm: async (c2) => {
-							if (await act(() => post("/api/providers/logout", { id }))) c2.pop();
+							if (await act(() => post("/api/providers/logout", { id }), t("Credentials removed"))) c2.pop();
 						},
 					}),
 				),

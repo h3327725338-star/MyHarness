@@ -683,6 +683,26 @@ export async function listSessionsForCwd(
 	return sessions;
 }
 
+/**
+ * Sessions that belong to no registered Workspace: chats created without one, and chats of a Workspace that was
+ * removed from the list. Their data never moves; only the registry entry is gone.
+ */
+export async function listUnboundSessions(
+	storageOptions: { agentDir?: string; dataRoot?: string } = {},
+	onProgress?: SessionListProgress,
+): Promise<SessionInfo[]> {
+	const dataRoot = resolvePath(storageOptions.dataRoot ?? getDataDir());
+	const store = WorkspaceStore.create(storageOptions.agentDir ?? getAgentDir(), dataRoot);
+	const sessions: SessionInfo[] = [];
+	for (const workspaceId of store.listDetachedWorkspaceIds()) {
+		sessions.push(
+			...(await listSessionFilesFromWorkspaceDir(getWorkspaceSessionsDir(dataRoot, workspaceId), onProgress)),
+		);
+	}
+	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return sessions;
+}
+
 export async function listAllSessions(
 	sessionDirOrOnProgress?: string | SessionListProgress,
 	onProgress?: SessionListProgress,
@@ -700,8 +720,12 @@ export async function listAllSessions(
 	try {
 		const allFiles: string[] = [];
 		const workspaceStore = WorkspaceStore.create(getAgentDir(), sessionsDir);
-		for (const workspace of workspaceStore.list()) {
-			const workspaceSessionsDir = getWorkspaceSessionsDir(sessionsDir, workspace.workspaceId);
+		const workspaceIds = [
+			...workspaceStore.list().map((workspace) => workspace.workspaceId),
+			...workspaceStore.listDetachedWorkspaceIds(),
+		];
+		for (const workspaceId of workspaceIds) {
+			const workspaceSessionsDir = getWorkspaceSessionsDir(sessionsDir, workspaceId);
 			for (const sessionEntry of await readdir(workspaceSessionsDir, { withFileTypes: true }).catch(() => [])) {
 				if (!sessionEntry.isDirectory()) continue;
 				const conversationDir = join(workspaceSessionsDir, sessionEntry.name, "conversation");

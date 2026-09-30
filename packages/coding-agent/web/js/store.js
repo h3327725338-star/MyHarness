@@ -68,7 +68,7 @@ export const state = {
 	slots: [],
 	activeSlot: null,
 	toasts: [],
-	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, loading: false },
+	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, loading: false },
 	models: null,
 	settings: null,
 	providers: null,
@@ -313,7 +313,25 @@ export async function loadWorkspaces() {
 	const current = data.workspaces.find((w) => w.current);
 	const targets = new Set(Object.keys(state.view.expanded).filter((key) => state.view.expanded[key]));
 	if (current) targets.add(current.rootPath);
-	await Promise.all([...targets].map((root) => loadSessions(root)));
+	await Promise.all([...targets.values()].map((root) => loadSessions(root)), loadUnbound());
+}
+
+/** Chats that belong to no workspace (created without one, or left behind by a removed workspace). */
+export async function loadUnbound() {
+	try {
+		const data = await api("/api/sessions/unbound", { slot: "" });
+		state.workspaces = { ...state.workspaces, unbound: data.sessions };
+		emit();
+	} catch {
+		// The list is refreshed by the next load.
+	}
+}
+
+/** Reload the chat list the active chat belongs to: its workspace's, or the workspace-less one. */
+function reloadActiveChats() {
+	const root = state.snap?.workspace?.rootPath;
+	if (root) loadSessions(root);
+	else loadUnbound();
 }
 
 // Listing a workspace's chats reads every saved session file on the server, so requests for the same workspace are
@@ -399,8 +417,10 @@ export async function activateSlot(slot) {
 	if (bag.gitStatus === undefined) loadGitStatus();
 	// The sidebar already knows every workspace and chat; only fetch what it has never loaded.
 	const root = state.snap?.workspace?.rootPath;
-	if (root && !state.workspaces.list.some((w) => w.rootPath === root)) loadWorkspaces().catch(() => {});
-	else if (root && state.workspaces.sessions[root] === undefined) loadSessions(root);
+	if (!root) {
+		if (state.workspaces.unbound === undefined) loadUnbound();
+	} else if (!state.workspaces.list.some((w) => w.rootPath === root)) loadWorkspaces().catch(() => {});
+	else if (state.workspaces.sessions[root] === undefined) loadSessions(root);
 }
 
 /** The session on screen is gone from the server (released or deleted elsewhere): reopen it, or start a fresh chat. */
@@ -635,6 +655,10 @@ function connectEvents() {
 		if (state.providers) loadProviders();
 	});
 	on("settings_changed", (d, slot) => attempt(() => loadSnapshot(slot), { quiet: true }));
+	on("workspaces_changed", async (d, slot) => {
+		await attempt(() => loadSnapshot(slot), { quiet: true });
+		await attempt(() => loadWorkspaces(), { quiet: true });
+	});
 	on("login_event", (d) => set({ loginEvent: d.type === "done" ? null : d }));
 
 	on("bash_start", (d) => {
@@ -698,8 +722,7 @@ function refreshSoon(slot = activeSlot) {
 		setTimeout(() => {
 			attempt(() => loadSnapshot(slot), { quiet: true });
 			if (slot !== activeSlot) return;
-			const root = state.snap?.workspace?.rootPath;
-			if (root) loadSessions(root);
+			reloadActiveChats();
 			if (state.view.panelOpen && state.view.panelTab === "changes") emit();
 			loadGitStatus();
 		}, 250),
@@ -708,10 +731,7 @@ function refreshSoon(slot = activeSlot) {
 let sessionsTimer;
 function refreshSessionsSoon() {
 	clearTimeout(sessionsTimer);
-	sessionsTimer = setTimeout(() => {
-		const root = state.snap?.workspace?.rootPath;
-		if (root) loadSessions(root);
-	}, 400);
+	sessionsTimer = setTimeout(reloadActiveChats, 400);
 }
 
 function notifyFinished(run, snap) {

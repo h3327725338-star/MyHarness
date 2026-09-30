@@ -102,7 +102,9 @@ function ProviderCard({ provider }) {
 		setBusy(true);
 		const result = await attempt(fn, { success: ok });
 		setBusy(false);
-		if (result) await loadProviders();
+		// Reload even after a failure: a request can change part of the state (for example saved keys removed while the
+		// provider stays signed in through the environment) before it reports the problem.
+		await loadProviders();
 		return result;
 	};
 	return html`<div class="provider-card">
@@ -123,7 +125,7 @@ function ProviderCard({ provider }) {
 		<div class="row" style="flex-wrap:wrap;gap:8px">
 			${provider.supportsApiKeyLogin ? (adding ? html`<div class="row grow" style="gap:6px"><input class="field" style="width:120px" placeholder=${t("Label")} value=${keyLabel} onInput=${(e) => setKeyLabel(e.target.value)} /><input class="field grow" type="password" autocomplete="off" placeholder=${t("API key")} value=${keyValue} onInput=${(e) => setKeyValue(e.target.value)} /><button class="btn sm primary" disabled=${busy || !keyValue.trim()} onClick=${async () => { const ok = await act(() => post("/api/providers/api-key/add", { id: provider.id, label: keyLabel, key: keyValue }), "API key saved"); if (ok) { setKeyValue(""); setKeyLabel(""); setAdding(false); } }}>${t("Save")}</button><button class="btn sm ghost" onClick=${() => (setAdding(false), setKeyValue(""))}>${t("Cancel")}</button></div>` : html`<button class="btn sm" onClick=${() => setAdding(true)}><${Icon} name="plus" size=${13} />${t("Add API key")}</button>`) : null}
 			${provider.supportsOAuth ? html`<button class="btn sm" disabled=${busy} onClick=${() => act(() => post("/api/providers/oauth/login", { id: provider.id }), "Signed in")}>${busy && login ? t("Waiting for sign-in…") : t("Sign in with OAuth")}</button>` : null}
-			${provider.configured && provider.authSource !== "environment" ? html`<button class="btn sm ghost danger" disabled=${busy} onClick=${async () => { if (await confirmDialog({ title: t("Remove {name} credentials?", { name: provider.name }), message: t("All stored API keys and OAuth logins for this provider are deleted from this computer."), confirmLabel: t("Remove"), danger: true })) act(() => post("/api/providers/logout", { id: provider.id })); }}>${t("Remove credentials")}</button>` : null}
+			${c?.removable ? html`<button class="btn sm ghost danger" disabled=${busy} onClick=${async () => { if (await confirmDialog({ title: t("Remove {name} credentials?", { name: provider.name }), message: t("All API keys and OAuth logins saved for this provider, including a key written in models.json, are deleted from this computer."), confirmLabel: t("Remove"), danger: true })) act(() => post("/api/providers/logout", { id: provider.id }), t("Credentials removed")); }}>${t("Remove credentials")}</button>` : null}
 		</div>
 		${login && login.type === "device_code" ? html`<div class="notice">${tNodes("Open {url} and enter the code {code}.", { url: html`<a href=${login.verificationUri} target="_blank" rel="noopener noreferrer">${login.verificationUri}</a>`, code: html`<strong class="mono">${login.userCode}</strong>` })}</div>` : null}
 		${login && login.type === "auth_url" ? html`<div class="notice">${t("Waiting for the browser sign-in…")} <a href=${login.url} target="_blank" rel="noopener noreferrer">${t("Open the sign-in page")}</a>${login.instructions ? html` — ${login.instructions}` : null}</div>` : null}
@@ -147,21 +149,41 @@ function CustomProviders() {
 	useEffect(() => {
 		load();
 	}, []);
+	/** Chats working on this provider right now: deleting it stops them, so the user decides first. */
+	const confirmStop = (name, running) =>
+		confirmDialog({
+			title: t("Delete {id} while tasks are running?", { id: name }),
+			message: t("“{name}” is being used by tasks that are running right now (listed below). Deleting now stops them immediately, then removes the provider, its models and every API key or login saved for it. This cannot be undone.", { name }),
+			detail: running.map((r) => `• ${r.name || clip(r.firstMessage || "", 70) || r.cwd}`).join("\n"),
+			confirmLabel: t("Delete now"),
+			cancelLabel: t("Don't delete"),
+			danger: true,
+		});
 	const remove = async (p) => {
 		const name = p.config.name || p.id;
-		const ok = await confirmDialog({
+		const usage = await attempt(() => api(`/api/providers/custom/usage?id=${encodeURIComponent(p.id)}`), { quiet: true });
+		let stopRunning = false;
+		if (usage?.running?.length) {
+			if (!(await confirmStop(name, usage.running))) return;
+			stopRunning = true;
+		} else if (!(await confirmDialog({
 			title: t("Delete {id}?", { id: name }),
 			message: t("“{name}” is removed from models.json, together with its models and every API key or login saved for it on this computer. This cannot be undone.", { name }),
 			confirmLabel: t("Delete"),
 			danger: true,
-		});
-		if (!ok) return;
+		}))) return;
 		setDeleting(p.id);
-		const result = await attempt(() => post("/api/providers/custom/delete", { id: p.id }), { success: t("Provider deleted") });
+		let result = await attempt(() => post("/api/providers/custom/delete", { id: p.id, stopRunning }));
+		// A task started on the provider after the check: ask again instead of deleting behind its back.
+		if (result?.ok === false && result.running?.length) {
+			result = (await confirmStop(name, result.running)) ? await attempt(() => post("/api/providers/custom/delete", { id: p.id, stopRunning: true })) : undefined;
+		}
 		setDeleting(null);
-		if (result) {
+		if (result?.ok) {
+			toast(t("Provider deleted"), "info", 3500);
 			await load();
 			await loadProviders();
+			await loadModels();
 		}
 	};
 	return html`<div class="col" style="gap:8px">

@@ -54,12 +54,31 @@ export type ProviderModelDiscoveryErrorCode =
 
 export class ProviderModelDiscoveryError extends Error {
 	readonly code: ProviderModelDiscoveryErrorCode;
+	/** HTTP status the endpoint answered with, when it answered. */
+	status?: number;
+	/** What went wrong at the network level (for example ECONNREFUSED), when that is known. */
+	detail?: string;
+	/** The model-list address that was requested, without query parameters (they can carry a key). */
+	requestUrl?: string;
 
 	constructor(code: ProviderModelDiscoveryErrorCode, message: string, options?: ErrorOptions) {
 		super(message, options);
 		this.name = "ProviderModelDiscoveryError";
 		this.code = code;
 	}
+}
+
+function describeNetworkError(error: unknown): string | undefined {
+	const cause = error instanceof Error ? (error.cause ?? error) : error;
+	if (cause instanceof Error) {
+		const code = (cause as NodeJS.ErrnoException).code;
+		return code ? `${code}${cause.message && cause.message !== code ? `: ${cause.message}` : ""}` : cause.message;
+	}
+	return undefined;
+}
+
+function publicUrl(url: URL): string {
+	return `${url.origin}${url.pathname}`;
 }
 
 export interface DiscoveredModelsSyncResult {
@@ -105,8 +124,15 @@ function modelListUrl(baseUrl: string, api: string): URL {
 
 	const path = url.pathname.replace(/\/+$/u, "");
 	const hasVersionPath = /\/v\d+(?:beta)?$/u.test(path);
-	const suffix =
-		(api === "anthropic-messages" || api === "mistral-conversations") && !hasVersionPath ? "/v1/models" : "/models";
+	// Anthropic and Mistral serve the list at /v1/models, Gemini at /v1beta/models; OpenAI-style services take the
+	// version from the Base URL (for example https://host/v1).
+	const suffix = hasVersionPath
+		? "/models"
+		: api === "anthropic-messages" || api === "mistral-conversations"
+			? "/v1/models"
+			: api === "google-generative-ai"
+				? "/v1beta/models"
+				: "/models";
 	url.pathname = `${path}${suffix}`;
 	return url;
 }
@@ -304,17 +330,22 @@ function discoveryHeaders(options: {
 	return headers;
 }
 
-function responseError(status: number): ProviderModelDiscoveryError {
-	if (status === 401) return new ProviderModelDiscoveryError("authentication", "Provider 拒绝了当前认证信息。");
-	if (status === 403) return new ProviderModelDiscoveryError("permission", "当前认证信息没有读取模型目录的权限。");
-	if (status === 404 || status === 405 || status === 501) {
-		return new ProviderModelDiscoveryError("unsupported", "该 Provider 不支持模型发现接口。");
-	}
-	if (status === 408) return new ProviderModelDiscoveryError("timeout", "Provider 模型目录请求超时。");
-	if (status === 429) return new ProviderModelDiscoveryError("rate_limited", "Provider 请求过于频繁，请稍后重试。");
-	if (status >= 500)
-		return new ProviderModelDiscoveryError("connection", `Provider 服务暂时不可用（HTTP ${status}）。`);
-	return new ProviderModelDiscoveryError("invalid_response", `模型发现请求被拒绝（HTTP ${status}）。`);
+function createResponseError(status: number): ProviderModelDiscoveryError {
+	const error = ((): ProviderModelDiscoveryError => {
+		if (status === 401) return new ProviderModelDiscoveryError("authentication", "Provider 拒绝了当前认证信息。");
+		if (status === 403) return new ProviderModelDiscoveryError("permission", "当前认证信息没有读取模型目录的权限。");
+		if (status === 404 || status === 405 || status === 501) {
+			return new ProviderModelDiscoveryError("unsupported", "该 Provider 不支持模型发现接口。");
+		}
+		if (status === 408) return new ProviderModelDiscoveryError("timeout", "Provider 模型目录请求超时。");
+		if (status === 429) return new ProviderModelDiscoveryError("rate_limited", "Provider 请求过于频繁，请稍后重试。");
+		if (status >= 500) {
+			return new ProviderModelDiscoveryError("connection", `Provider 服务暂时不可用（HTTP ${status}）。`);
+		}
+		return new ProviderModelDiscoveryError("invalid_response", `模型发现请求被拒绝（HTTP ${status}）。`);
+	})();
+	error.status = status;
+	return error;
 }
 
 export async function discoverProviderModels(options: {
@@ -358,15 +389,20 @@ export async function discoverProviderModels(options: {
 		try {
 			response = await fetch(url, { method: "GET", headers, signal: options.signal });
 		} catch (error) {
-			if (
+			const failure =
 				options.signal?.aborted ||
 				(error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
-			) {
-				throw new ProviderModelDiscoveryError("timeout", "模型发现请求超时或已取消。", { cause: error });
-			}
-			throw new ProviderModelDiscoveryError("connection", "无法连接到 Provider 模型发现接口。", { cause: error });
+					? new ProviderModelDiscoveryError("timeout", "模型发现请求超时或已取消。", { cause: error })
+					: new ProviderModelDiscoveryError("connection", "无法连接到 Provider 模型发现接口。", { cause: error });
+			failure.detail = describeNetworkError(error);
+			failure.requestUrl = publicUrl(url);
+			throw failure;
 		}
-		if (!response.ok) throw responseError(response.status);
+		if (!response.ok) {
+			const failure = createResponseError(response.status);
+			failure.requestUrl = publicUrl(url);
+			throw failure;
+		}
 
 		let body: unknown;
 		try {
@@ -524,21 +560,48 @@ export class CustomProviderManager {
 		if (!Object.hasOwn(document.providers, providerId)) return false;
 		delete document.providers[providerId];
 		await this.writeDocument(document);
-		await this.removeFromBackup(providerId);
+		await this.scrubBackup((backup) => {
+			if (!Object.hasOwn(backup.providers, providerId)) return false;
+			delete backup.providers[providerId];
+			return true;
+		});
 		return true;
 	}
 
 	/**
-	 * writeDocument keeps the previous file as models.json.bak, which still holds the provider that was just
-	 * deleted (including any literal API key or header). Drop that entry so a deleted provider leaves no secrets behind.
+	 * Delete the API key written into a provider's models.json entry (the rest of the entry stays). Returns false when
+	 * the entry has no such key.
 	 */
-	private async removeFromBackup(providerId: string): Promise<void> {
+	async removeApiKey(providerId: string): Promise<boolean> {
+		const document = await this.readDocument();
+		const provider = document.providers[providerId];
+		if (!provider || provider.apiKey === undefined) return false;
+		delete provider.apiKey;
+		await this.writeDocument(document);
+		await this.scrubBackup((backup) => {
+			const previous = backup.providers[providerId];
+			if (!previous || previous.apiKey === undefined) return false;
+			delete previous.apiKey;
+			return true;
+		});
+		return true;
+	}
+
+	/**
+	 * writeDocument keeps the previous file as models.json.bak, which still holds what was just deleted (including any
+	 * literal API key or header). Let `scrub` drop it there too so a deletion leaves no secrets behind.
+	 */
+	private async scrubBackup(scrub: (backup: ModelsJsonDocument) => boolean): Promise<void> {
 		const backupPath = `${this.requirePath()}.bak`;
 		try {
 			const backup = parseDocument(await readFile(backupPath, "utf8"), backupPath);
-			if (!Object.hasOwn(backup.providers, providerId)) return;
-			delete backup.providers[providerId];
-			await writeFile(backupPath, `${JSON.stringify(backup, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+			if (!scrub(backup)) return;
+			await writeFile(
+				backupPath,
+				`${JSON.stringify(backup, null, 2)}
+`,
+				{ encoding: "utf8", mode: 0o600 },
+			);
 		} catch {
 			// The backup is a convenience copy; a missing or unreadable one is not a reason to fail the deletion.
 		}

@@ -12,7 +12,7 @@ import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-s
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
-import type { SessionEntry, SessionTreeNode } from "../../session/types.ts";
+import type { SessionEntry, SessionInfo, SessionTreeNode } from "../../session/types.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -142,7 +142,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 
 	server.route("GET", "/api/workspaces", () => {
 		const cwd = host.session.sessionManager.getCwd();
-		const current = host.workspaceStore.getByPath(cwd);
+		const current = host.workspace;
 		return {
 			currentPath: cwd,
 			currentSessionFile: host.session.sessionFile ?? null,
@@ -155,26 +155,32 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
+	const sessionSummary = (info: SessionInfo) => {
+		const currentFile = host.session.sessionFile;
+		return {
+			path: info.path,
+			id: info.id,
+			name: info.name ?? null,
+			firstMessage: info.firstMessage,
+			created: info.created.getTime(),
+			modified: info.modified.getTime(),
+			messageCount: info.messageCount,
+			parentSessionPath: info.parentSessionPath ?? null,
+			current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
+		};
+	};
+
 	server.route("GET", "/api/workspaces/sessions", async ({ url }) => {
 		const rootPath = url.searchParams.get("path");
 		if (!rootPath) throw new HttpError(400, "Missing path");
 		const sessions = await useCase.listSessions(rootPath);
-		const currentFile = host.session.sessionFile;
-		return {
-			sessions: sessions
-				.sort((a, b) => b.modified.getTime() - a.modified.getTime())
-				.map((info) => ({
-					path: info.path,
-					id: info.id,
-					name: info.name ?? null,
-					firstMessage: info.firstMessage,
-					created: info.created.getTime(),
-					modified: info.modified.getTime(),
-					messageCount: info.messageCount,
-					parentSessionPath: info.parentSessionPath ?? null,
-					current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
-				})),
-		};
+		return { sessions: sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime()).map(sessionSummary) };
+	});
+
+	/** Chats that belong to no registered Workspace: created without one, or left behind by a removed Workspace. */
+	server.route("GET", "/api/sessions/unbound", async () => {
+		const sessions = await SessionManager.listUnbound();
+		return { sessions: sessions.map(sessionSummary) };
 	});
 
 	server.route("POST", "/api/workspaces/add", ({ body }) => {
@@ -190,22 +196,24 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
+	/**
+	 * Only un-registers the Workspace. The folder, its project files and every chat stay exactly where they are; the
+	 * chats simply belong to no Workspace afterwards (see `SessionManager.isUnbound`). Open chats keep running.
+	 */
 	server.route("POST", "/api/workspaces/remove", ({ body }) => {
 		const id = asString(asObject(body).id, "id");
 		const workspace = host.workspaceStore.getById(id);
 		if (!workspace) throw new HttpError(404, "Unknown workspace");
-		if (host.workspaceStore.getByPath(host.session.sessionManager.getCwd())?.workspaceId === id) {
-			throw new HttpError(409, "The current workspace cannot be removed.");
-		}
-		host.workspaceStore.remove(id);
+		if (!host.workspaceStore.remove(id)) throw new HttpError(500, "Could not save the workspace list.");
+		host.broadcast("workspaces_changed", {});
 		return { ok: true };
 	});
 
 	// Neither route touches the session the request came from: it keeps running in its own slot.
 	server.route("POST", "/api/sessions/new", async ({ body }) => {
-		const rootPath =
-			typeof asObject(body ?? {}).rootPath === "string" ? (asObject(body).rootPath as string) : undefined;
-		return hub.newSession(host, rootPath);
+		const payload = asObject(body ?? {});
+		const rootPath = typeof payload.rootPath === "string" && payload.rootPath ? payload.rootPath : undefined;
+		return hub.newSession(host, rootPath, payload.unbound === true);
 	});
 
 	server.route("POST", "/api/sessions/open", async ({ body }) => {
