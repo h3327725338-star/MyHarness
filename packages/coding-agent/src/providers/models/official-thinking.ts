@@ -12,7 +12,12 @@
 
 import type { ThinkingLevelMap } from "@myharness/ai";
 
-export type ThinkingSource = "catalog" | "official" | "unconfirmed";
+/**
+ * Where a model's thinking levels come from, in priority order: the endpoint's own model metadata (`catalog`), the
+ * provider's documented rules for its own API host (`official`), a real minimal request (`probe`, see
+ * `thinking-probe.ts`), or nothing (`unconfirmed`: every level is undecided and stays selectable).
+ */
+export type ThinkingSource = "catalog" | "official" | "probe" | "unconfirmed";
 
 export interface OfficialThinking {
 	reasoning: true;
@@ -38,9 +43,6 @@ function levels(supported: readonly string[], options: { noOff?: boolean } = {})
 	if (options.noOff) map.off = null;
 	return map;
 }
-
-/** Map for a model whose reasoning is reported as present but whose efforts nobody stated: no level is offered. */
-export const UNCONFIRMED_THINKING_LEVEL_MAP: ThinkingLevelMap = { minimal: null, low: null, medium: null, high: null };
 
 interface Documented {
 	efforts: string[];
@@ -166,7 +168,7 @@ export interface ThinkingCapability {
 /**
  * The thinking capability to record for a discovered model, in order of trust: what the endpoint's catalog lists, what
  * the provider's documentation lists, and otherwise nothing. A model that reasons but has no confirmed efforts gets no
- * effort levels (`unconfirmed`); nothing is guessed.
+ * map (`unconfirmed`): no level is hidden and none is claimed to work. A real probe can settle it afterwards.
  */
 export function resolveThinkingCapability(input: ThinkingCapabilityInput): ThinkingCapability {
 	if (input.thinkingLevelMap) {
@@ -176,7 +178,7 @@ export function resolveThinkingCapability(input: ThinkingCapabilityInput): Think
 	const official = input.reasoning === false ? undefined : resolveOfficialThinking(input);
 	if (official) return { reasoning: true, thinkingLevelMap: official.thinkingLevelMap, source: "official" };
 	if (input.reasoning === true) {
-		return { reasoning: true, thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP, source: "unconfirmed" };
+		return { reasoning: true, source: "unconfirmed" };
 	}
 	return input.reasoning === undefined ? {} : { reasoning: input.reasoning };
 }

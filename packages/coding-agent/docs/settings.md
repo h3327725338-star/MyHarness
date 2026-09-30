@@ -45,11 +45,11 @@ Interactive mode 可以在任务完成、失败或中断后显示桌面提醒，
 - **Providers** 会把 services 分为**已启用**和**已保存但未启用**。两组可以包含 `models.json`、extension/native registration 和 custom Providers。
 - 打开某个 Provider 可以管理它的 enabled state、models 和 Provider-level API keys。禁用 Provider 会保留其 configuration 和 credentials，但会将它的 models 从普通选择列表中移除。
 - 当前选中的 API Key 会被该 Provider 下的所有 models 使用，包括 main model、Auto Memory、Sub Agent、Workflow 和 Vision Assistant。
-- **添加 Provider** 可以登录内置的 **OpenAI ChatGPT**，输入已知 Provider ID 配置密钥，也可以为兼容的 third-party service **创建自定义 Provider**。当前 MyHarness 没有由 `packages/ai/src/providers/all.ts` 提供的默认 Provider 列表；OpenAI ChatGPT 由 Coding Agent 产品入口单独注册。
+- **添加 Provider** 可以输入已知 Provider ID 配置密钥，也可以为兼容的 third-party service **创建自定义 Provider**。当前 MyHarness 没有由 `packages/ai/src/providers/all.ts` 提供的默认 Provider 列表，也没有内置 Provider。
 - **Default Model** 用于选择 main model，然后只列出该 model 实际支持的 thinking levels。选择结果会成为当前 model，并保存为后续 sessions 使用的 global default。
 - **Vision Assistant** 只会选择来自 enabled Provider 且已确认支持 image input 的 model。
 
-每个支持 API Key 的 Provider credential screen 都会列出已保存的 keys 和**添加新的 API Key**；OAuth-only Provider（例如 OpenAI ChatGPT）显示其官方登录入口，不要求输入 API Key。
+每个支持 API Key 的 Provider credential screen 都会列出已保存的 keys 和**添加新的 API Key**；OAuth-only Provider（由 Extension 注册）显示其官方登录入口，不要求输入 API Key。
 
 Provider credentials 保存在 `~/.myharness/agent/auth.json` 中。文件以 plain text 保存 key values，依赖本地 filesystem permissions 保护，并不是 encrypted vault。输入 key 时会隐藏内容，Settings UI 只显示用户定义的 label，以及可用时的末四位字符。
 

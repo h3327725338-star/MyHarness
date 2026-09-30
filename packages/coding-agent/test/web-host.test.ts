@@ -392,6 +392,12 @@ describe("Web host (real runtime with a faux provider)", () => {
 	it("adds a custom provider with detected models, keeps its key in the credential store and deletes both for good", async () => {
 		const fx = await start();
 		const catalog = createServer((req, res) => {
+			if (req.method === "POST") {
+				// Probe of the reasoning model's thinking levels: a rate limit leaves them undecided.
+				res.statusCode = 429;
+				res.end("{}");
+				return;
+			}
 			expect(req.headers.authorization).toBe("Bearer sk-form-key");
 			res.setHeader("content-type", "application/json");
 			res.end(
@@ -428,7 +434,6 @@ describe("Web host (real runtime with a faux provider)", () => {
 				reasoning: true,
 				input: ["text", "image"],
 				contextWindow: 32000,
-				thinkingLevelMap: { minimal: null, low: null, medium: null, high: null },
 				thinkingSource: "unconfirmed",
 			},
 		]);

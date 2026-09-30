@@ -167,7 +167,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
-- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个深色无边框的小启动窗口（阶段文字来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
+- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 每次启动都先让端口上已在运行的旧实例退出（`POST /api/shutdown`，超时后仅结束确认是 MyHarness 的监听进程；端口被其他程序占用则报错而不启动），保证运行的是当前源码，再以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个深色无边框的小启动窗口（阶段文字来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - scripts/dev-fast-loader.mjs：仅供 dev.ps1 使用的 Node `--import` 加载器，按根 tsconfig.json 的 `@myharness/*` paths 解析 workspace 源码；源码是 erasable-only TypeScript，所以不需要 tsx 转换。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
@@ -258,7 +258,7 @@ src/application/bootstrap/
 | Git commit / checkpoint / worktree | Git 对应子目录 | git/repository/、checkpoints/、worktrees/；跨领域流程再加 application/use-cases/ | Interactive component 内直接实现 Git 规则 |
 | Provider runtime | providers/runtime/ | Model resolver、Recovery、attribution、Settings | TUI 或 main.ts 内增加 Provider 状态 |
 | Credential / OAuth | providers/credentials/ | auth-storage.ts、manager、runtime、account connections | Settings JSON 或普通 utils/ |
-| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、official-thinking（Provider 官方文档记载的 Thinking Effort，仅第一方 API 主机）、store | 直接修改 TUI model selector |
+| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、official-thinking（Provider 官方文档记载的 Thinking Effort，仅第一方 API 主机）、thinking-probe（真实最小请求探测 Thinking Effort，按 API 协议区分）、store | 直接修改 TUI model selector |
 | 低层 Provider API adapter | packages/ai/src/api/ | packages/ai/src/models.ts、auth helpers、Provider API 类型 | coding-agent 的 InteractiveMode |
 | 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
 | TUI 页面/产品 UI | modes/interactive/ | interactive-mode.ts、components/、theme | Provider、Session 或 Git 目录 |
@@ -357,7 +357,6 @@ AgentSession
   → Provider SDK / HTTP endpoint
 ~~~
 
-OpenAI ChatGPT 是产品层的一个独立 Provider 变体：它在 `packages/coding-agent/src/providers/openai-chatgpt/` 中通过受版本固定、由 MyHarness 管理的官方 Codex App Server `stdio` transport 连接 ChatGPT OAuth。App Server thread、独立 `CODEX_HOME`、sandbox 和最小 runtime state 只属于 Provider 实现细节；MyHarness 的 Session、Context、Compact、Prompt、Tool Registry、Tool 执行和正式 persistence 仍沿用上面的产品链路。dynamic tool 请求从 App Server 回到 Agent Core 的 host-owned tool bridge，不把 App Server 变成第二套 Agent。
 
 ### Session persistence 链
 

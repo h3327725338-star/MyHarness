@@ -5,6 +5,16 @@ import { stripJsonComments } from "../../utils/json.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 import { ModelConfig } from "./config.ts";
 import { resolveThinkingCapability, type ThinkingSource } from "./official-thinking.ts";
+import {
+	applyStatusesToMap,
+	isProbeApi,
+	mergeLevelStatuses,
+	PROBE_LEVELS,
+	probeThinkingLevels,
+	type ThinkingLevelStatus,
+	type ThinkingLevelStatuses,
+	unresolvedLevels,
+} from "./thinking-probe.ts";
 
 export const CUSTOM_PROVIDER_API_TYPES = [
 	"openai-completions",
@@ -41,10 +51,25 @@ export interface DiscoveredProviderModel {
 	/** Thinking levels the catalog says the model accepts (`null` = unsupported); absent when the catalog lists none. */
 	thinkingLevelMap?: ThinkingLevelMap;
 	/**
-	 * Where the thinking capability comes from: the endpoint's catalog, the provider's official documentation, or
-	 * `unconfirmed` (the model reasons but no source names its efforts, so no effort level is offered).
+	 * Where the thinking capability comes from, in priority order: the endpoint's catalog, the provider's official
+	 * documentation, a real probe request, or `unconfirmed` (nothing settled: no level is hidden or claimed).
 	 */
 	thinkingSource?: ThinkingSource;
+	/** Per-level result of a real probe (`thinkingSource: "probe"`); levels missing here are undecided. */
+	thinkingLevelStatus?: ThinkingLevelStatuses;
+}
+
+/** Real-request probing of thinking levels for models the catalog and documentation leave undecided. */
+export interface ThinkingProbeOptions {
+	/** At most this many models are probed per call (default 6). */
+	maxModels?: number;
+	/** Total time for all probes (default 30 s); levels not finished by then stay undecided. */
+	budgetMs?: number;
+	/** Models known to reason although the catalog does not say (declared in models.json). */
+	reasoningModelIds?: ReadonlySet<string>;
+	/** Statuses recorded by an earlier probe; only levels still undecided are probed again. */
+	knownStatuses?: ReadonlyMap<string, ThinkingLevelStatuses>;
+	fetchImpl?: typeof fetch;
 }
 
 export type ProviderModelDiscoveryErrorCode =
@@ -202,13 +227,13 @@ const STANDARD_EFFORTS = ["minimal", "low", "medium", "high"] as const;
  * marked unsupported, `xhigh` / `max` are enabled only when listed (the runtime requires an entry for them), and
  * "off" is removed only when the catalog says reasoning cannot be disabled.
  */
-function levelMapFromEfforts(efforts: ReadonlySet<string>, mandatory?: boolean): ThinkingLevelMap | undefined {
+function levelMapFromEfforts(efforts: ReadonlySet<string>, mandatory?: boolean): ThinkingLevelMap {
 	const map: ThinkingLevelMap = {};
 	for (const level of STANDARD_EFFORTS) if (!efforts.has(level)) map[level] = null;
 	if (efforts.has("xhigh")) map.xhigh = "xhigh";
 	if (efforts.has("max")) map.max = "max";
 	if (mandatory === true) map.off = null;
-	return Object.keys(map).length > 0 ? map : undefined;
+	return map;
 }
 
 /**
@@ -250,21 +275,17 @@ function detectModelCapabilities(candidate: unknown): Partial<DiscoveredProvider
 	const anthropicEffort = capabilities && isRecord(capabilities.effort) ? capabilities.effort : undefined;
 	if (efforts && efforts.length > 0) {
 		result.reasoning = true;
-		const map = levelMapFromEfforts(
+		result.thinkingLevelMap = levelMapFromEfforts(
 			new Set(efforts),
 			typeof reasoningInfo?.mandatory === "boolean" ? reasoningInfo.mandatory : undefined,
 		);
-		if (map) result.thinkingLevelMap = map;
 	} else if (anthropicEffort && anthropicEffort.supported === true) {
 		result.reasoning = true;
 		const accepted = ["low", "medium", "high", "xhigh", "max"].filter((level) => {
 			const entry = anthropicEffort[level];
 			return isRecord(entry) && entry.supported === true;
 		});
-		if (accepted.length > 0) {
-			const map = levelMapFromEfforts(new Set(accepted));
-			if (map) result.thinkingLevelMap = map;
-		}
+		if (accepted.length > 0) result.thinkingLevelMap = levelMapFromEfforts(new Set(accepted));
 	} else if (supportedParameters) {
 		result.reasoning = supportedParameters.includes("reasoning") || supportedParameters.includes("include_reasoning");
 	} else if (thinking && typeof thinking.supported === "boolean") {
@@ -331,6 +352,79 @@ function mergeThinkingLevelMap(current: ThinkingLevelMap | undefined, discovered
 		if (typeof value === "string" && typeof existing === "string") merged[level] = existing;
 	}
 	return merged;
+}
+
+/**
+ * The all-`null` map older versions wrote for a model that reasons but whose efforts nobody stated. It hid every
+ * level, so it is treated as "nothing known" rather than as a decision.
+ */
+export function isLegacyUnconfirmedMap(map: ThinkingLevelMap | undefined): boolean {
+	return (
+		!!map &&
+		Object.keys(map).length === 4 &&
+		(["minimal", "low", "medium", "high"] as const).every((level) => map[level] === null)
+	);
+}
+
+const confirmedOnly = (statuses: ThinkingLevelStatuses): ThinkingLevelStatuses => {
+	const result: ThinkingLevelStatuses = {};
+	for (const level of PROBE_LEVELS) {
+		const status: ThinkingLevelStatus | undefined = statuses[level];
+		if (status === "supported" || status === "unsupported") result[level] = status;
+	}
+	return result;
+};
+
+/**
+ * Third-priority detection: real minimal requests for the models the catalog and the documentation left undecided.
+ * Runs after the model list is read, with its own time budget, and never fails discovery; a probe that cannot be
+ * evaluated only leaves its levels undecided.
+ */
+async function probeUnresolvedThinking(
+	models: DiscoveredProviderModel[],
+	options: { api: string; baseUrl: string; apiKey?: string; signal?: AbortSignal },
+	headers: Headers,
+	probe: ThinkingProbeOptions,
+): Promise<void> {
+	if (!isProbeApi(options.api) || options.signal?.aborted) return;
+	const api = options.api;
+	const targets = models
+		.filter(
+			(model) =>
+				model.reasoning !== false &&
+				(model.reasoning === true || probe.reasoningModelIds?.has(model.id)) &&
+				(model.thinkingSource === undefined || model.thinkingSource === "unconfirmed"),
+		)
+		.map((model) => ({ model, levels: unresolvedLevels(probe.knownStatuses?.get(model.id)) }))
+		.filter((target) => target.levels.length > 0)
+		.slice(0, probe.maxModels ?? 6);
+	if (targets.length === 0) return;
+
+	const budget = AbortSignal.timeout(probe.budgetMs ?? 30_000);
+	const googleKey =
+		api === "google-generative-ai" && options.apiKey && options.apiKey !== "local" ? options.apiKey : undefined;
+	const queue = [...targets];
+	const worker = async (): Promise<void> => {
+		for (let target = queue.shift(); target; target = queue.shift()) {
+			const found = await probeThinkingLevels({
+				api,
+				baseUrl: options.baseUrl,
+				modelId: target.model.id,
+				headers,
+				googleApiKey: googleKey,
+				levels: target.levels,
+				signal: budget,
+				fetchImpl: probe.fetchImpl,
+			});
+			const statuses = mergeLevelStatuses(probe.knownStatuses?.get(target.model.id), found);
+			if (!PROBE_LEVELS.some((level) => found[level] && found[level] !== "unknown")) continue;
+			target.model.thinkingSource = "probe";
+			target.model.thinkingLevelStatus = statuses;
+			const map = applyStatusesToMap(undefined, statuses, { enableUnconfirmedExtras: true });
+			if (map) target.model.thinkingLevelMap = map;
+		}
+	};
+	await Promise.all([worker(), worker()]);
 }
 
 function sameJson(a: unknown, b: unknown): boolean {
@@ -436,6 +530,8 @@ export async function discoverProviderModels(options: {
 	authType?: "api_key" | "oauth";
 	headers?: Record<string, string | null>;
 	signal?: AbortSignal;
+	/** Also probe the thinking levels the catalog and the documentation leave undecided (costs a few tiny requests). */
+	probeThinking?: ThinkingProbeOptions;
 }): Promise<DiscoveredProviderModel[]> {
 	if (
 		options.api !== "openai-completions" &&
@@ -496,7 +592,11 @@ export async function discoverProviderModels(options: {
 			const previous = unique.get(model.id);
 			if (!previous || previous.name === previous.id) unique.set(model.id, model);
 		}
-		if (!parsed.next) return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+		if (!parsed.next) {
+			const discovered = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+			if (options.probeThinking) await probeUnresolvedThinking(discovered, options, headers, options.probeThinking);
+			return discovered;
+		}
 		if (cursors.has(parsed.next)) {
 			throw new ProviderModelDiscoveryError("pagination", "Provider 返回了重复的分页游标。");
 		}
@@ -570,12 +670,39 @@ export class CustomProviderManager {
 		const discoveredById = new Map(models.map((model) => [model.id.trim(), model]));
 		let updated = 0;
 
-		// A refresh also brings existing models' thinking capability up to date, but only from a source that names
-		// the efforts (catalog or official documentation); an unconfirmed capability never overwrites anything.
+		// A refresh also brings existing models' thinking capability up to date, but only from a source that settles
+		// levels (catalog, official documentation, or a probe's confirmed results); an unconfirmed capability never
+		// overwrites anything, and a level that is merely unverified or unknown leaves the stored entry alone.
 		const updatedModels = existingModels.map((existing) => {
 			const found = discoveredById.get(existing.id);
-			if (!found?.thinkingLevelMap || found.thinkingSource === "unconfirmed") return existing;
-			const thinkingLevelMap = mergeThinkingLevelMap(existing.thinkingLevelMap, found.thinkingLevelMap);
+			if (!found) return existing;
+			if (found.thinkingSource === "probe" && found.thinkingLevelStatus) {
+				const confirmed = confirmedOnly(found.thinkingLevelStatus);
+				const current = isLegacyUnconfirmedMap(existing.thinkingLevelMap) ? undefined : existing.thinkingLevelMap;
+				const thinkingLevelMap = applyStatusesToMap(current, confirmed);
+				const thinkingLevelStatus = mergeLevelStatuses(existing.thinkingLevelStatus, found.thinkingLevelStatus);
+				if (
+					sameJson(existing.thinkingLevelMap, thinkingLevelMap) &&
+					sameJson(existing.thinkingLevelStatus, thinkingLevelStatus)
+				) {
+					return existing;
+				}
+				updated++;
+				return {
+					...existing,
+					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+					thinkingLevelStatus,
+				};
+			}
+			if (!found.thinkingLevelMap || found.thinkingSource === "unconfirmed") {
+				if (!isLegacyUnconfirmedMap(existing.thinkingLevelMap)) return existing;
+				// Nothing settles the levels, so the stale all-hidden marker goes and every level is offered again.
+				updated++;
+				const { thinkingLevelMap: _legacy, ...rest } = existing;
+				return rest;
+			}
+			const current = isLegacyUnconfirmedMap(existing.thinkingLevelMap) ? undefined : existing.thinkingLevelMap;
+			const thinkingLevelMap = mergeThinkingLevelMap(current, found.thinkingLevelMap);
 			if (existing.reasoning === true && sameJson(existing.thinkingLevelMap, thinkingLevelMap)) return existing;
 			updated++;
 			return { ...existing, reasoning: true, thinkingLevelMap };
@@ -591,6 +718,9 @@ export class CustomProviderManager {
 				api,
 				...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
 				...(model.reasoning === true && model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+				...(model.reasoning === true && model.thinkingLevelStatus
+					? { thinkingLevelStatus: model.thinkingLevelStatus }
+					: {}),
 			});
 		}
 

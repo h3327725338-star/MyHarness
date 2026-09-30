@@ -2,7 +2,7 @@
 #
 # 目标：从快捷方式启动 Web 模式后，不留下可见的 CMD / PowerShell 控制台窗口。
 #   * 服务进程（dev.ps1 --web -> tsx -> node）以“无窗口”方式在后台运行，输出写入日志文件。
-#   * 本脚本只负责：已有实例则直接打开浏览器；否则启动服务、等待它就绪，失败时弹出错误对话框。
+#   * 本脚本只负责：每次都先让已在运行的旧实例退出（保证运行的是当前源码），再启动服务、等待它就绪，失败时弹出错误对话框。
 #   * 服务由页面里的“退出 MyHarness”或 POST /api/shutdown 正常结束；结束时整棵进程树随之退出。
 #   * 需要看控制台输出时，用 `dev-web.cmd --console`（保留原来的可见窗口方式）。
 #   * 启动超过约 1 秒仍未就绪时，显示一个小的进度窗口；进度来自 dev.ps1 / 服务端日志里真实出现的阶段，
@@ -223,9 +223,46 @@ function Test-ExistingInstance([int]$Port) {
 	}
 }
 
-if ($port -ne 0 -and (Test-ExistingInstance $port)) {
-	if (-not $noOpen) { Start-Process "http://127.0.0.1:$port/" }
-	exit 0
+# 每次启动都必须运行当前源码，所以不复用已在运行的实例：先让它正常退出，再启动新的。
+# （复用会让浏览器连上按旧代码启动的后端，看不到最新改动。）
+function Get-PortListener([int]$Port) {
+	Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+
+function Wait-PortFree([int]$Port, [int]$Seconds) {
+	$until = (Get-Date).AddSeconds($Seconds)
+	while ((Get-Date) -lt $until) {
+		if (-not (Get-PortListener $Port)) { return $true }
+		Start-Sleep -Milliseconds 200
+	}
+	return -not (Get-PortListener $Port)
+}
+
+function Stop-ExistingInstance([int]$Port) {
+	# 与页面里“退出 MyHarness”相同的请求；服务会先结束会话再退出。
+	try {
+		Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/shutdown" -Method Post -Headers @{ "x-myharness-web" = "1" } -UseBasicParsing -TimeoutSec 5 | Out-Null
+	} catch { }
+	if (Wait-PortFree $Port 15) { return $true }
+	# 正常退出没有成功：只结束确认是 MyHarness 的监听进程（连同子进程），绝不动其他程序。
+	$listener = Get-PortListener $Port
+	$owner = if ($listener) { Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
+	if ($owner -and $owner.CommandLine -match "myharness|coding-agent") {
+		& taskkill.exe /PID $owner.ProcessId /T /F | Out-Null
+		return (Wait-PortFree $Port 10)
+	}
+	return $false
+}
+
+if ($port -ne 0 -and (Get-PortListener $port)) {
+	if (-not (Test-ExistingInstance $port)) {
+		Show-Error "端口 $port 已被其他程序占用，MyHarness 无法启动。请关闭该程序，或用 --port 指定其他端口。"
+		exit 1
+	}
+	if (-not (Stop-ExistingInstance $port)) {
+		Show-Error "无法结束端口 $port 上正在运行的旧 MyHarness，已取消启动，避免打开旧版本。"
+		exit 1
+	}
 }
 
 try {

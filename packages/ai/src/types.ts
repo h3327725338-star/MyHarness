@@ -1,7 +1,6 @@
 import type { AnthropicOptions } from "./api/anthropic-messages.ts";
 import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 import type { BedrockOptions } from "./api/bedrock-converse-stream.ts";
-import type { CommandCodeOptions } from "./api/command-code.ts";
 import type { GoogleOptions } from "./api/google-generative-ai.ts";
 import type { GoogleVertexOptions } from "./api/google-vertex.ts";
 import type { MistralOptions } from "./api/mistral-conversations.ts";
@@ -20,7 +19,6 @@ export type KnownApi =
 	| "azure-openai-responses"
 	| "anthropic-messages"
 	| "bedrock-converse-stream"
-	| "command-code"
 	| "google-generative-ai"
 	| "google-vertex"
 	| "myharness-messages";
@@ -287,7 +285,6 @@ export interface ApiOptionsMap {
 	"google-vertex": GoogleVertexOptions;
 	"mistral-conversations": MistralOptions;
 	"bedrock-converse-stream": BedrockOptions;
-	"command-code": CommandCodeOptions;
 	"myharness-messages": MyHarnessMessagesOptions;
 }
 

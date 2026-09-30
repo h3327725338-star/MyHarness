@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	resolveOfficialThinking,
-	resolveThinkingCapability,
-	UNCONFIRMED_THINKING_LEVEL_MAP,
-} from "../src/providers/models/official-thinking.ts";
+import { resolveOfficialThinking, resolveThinkingCapability } from "../src/providers/models/official-thinking.ts";
 
 const enabled = (map: Record<string, unknown>) => Object.keys(map).filter((key) => map[key] !== null);
 
@@ -53,10 +49,8 @@ describe("official thinking efforts", () => {
 		});
 		expect(unconfirmed).toEqual({
 			reasoning: true,
-			thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
 			source: "unconfirmed",
 		});
-		expect(enabled(unconfirmed.thinkingLevelMap ?? {})).toEqual([]);
 
 		expect(resolveThinkingCapability({ baseUrl: "https://relay.example.com/v1", modelId: "x" })).toEqual({});
 	});

@@ -48,6 +48,7 @@ import { ModelConfig } from "../models/config.ts";
 import {
 	CustomProviderManager,
 	discoverProviderModels,
+	isLegacyUnconfirmedMap,
 	type ModelsJsonSnapshot,
 	ProviderModelDiscoveryError,
 } from "../models/custom-provider-manager.ts";
@@ -499,6 +500,8 @@ export class ModelRuntime implements Models {
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 		try {
+			const localModels = this.models.getModels(providerId);
+			const configured = this.config.getProvider(providerId)?.models ?? [];
 			const discovered = await discoverProviderModels({
 				providerId,
 				baseUrl,
@@ -507,12 +510,28 @@ export class ModelRuntime implements Models {
 				authType: this.snapshot.auth.get(providerId)?.type,
 				headers: auth.auth.headers,
 				signal: controller.signal,
+				// Levels neither the catalog nor the documentation settle are tested with real minimal requests.
+				probeThinking: {
+					reasoningModelIds: new Set(localModels.filter((model) => model.reasoning).map((model) => model.id)),
+					knownStatuses: new Map(
+						configured.flatMap((model) =>
+							model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus]] : [],
+						),
+					),
+				},
 			});
-			const localIds = new Set(this.models.getModels(providerId).map((model) => model.id));
+			const localIds = new Set(localModels.map((model) => model.id));
+			const staleMarkers = new Set(
+				localModels.filter((model) => isLegacyUnconfirmedMap(model.thinkingLevelMap)).map((model) => model.id),
+			);
 			const hasNewModels = discovered.some((model) => !localIds.has(model.id));
-			// Existing models are only touched when a source names their thinking efforts (the merge checks for changes).
+			// Existing models are only touched when a source settles their thinking levels (the merge checks for changes).
 			const hasCapabilities = discovered.some(
-				(model) => localIds.has(model.id) && model.thinkingLevelMap && model.thinkingSource !== "unconfirmed",
+				(model) =>
+					localIds.has(model.id) &&
+					((model.thinkingLevelMap && model.thinkingSource !== "unconfirmed") ||
+						model.thinkingLevelStatus ||
+						staleMarkers.has(model.id)),
 			);
 			if (!hasNewModels && !hasCapabilities) {
 				return {

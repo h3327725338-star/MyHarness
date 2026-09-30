@@ -14,7 +14,7 @@ npm.cmd run build
 .\dev.cmd
 ```
 
-Sign in to the built-in OpenAI ChatGPT Provider, or configure another Provider and model in `models.json`, Settings, or an extension before starting a model-backed session. The library-level `ModelRuntime.create()` catalog remains empty until a product entrypoint or extension registers a Provider. See [Quickstart](quickstart.md) for the first-session flow.
+Configure a Provider and model in `models.json`, Settings, or an extension before starting a model-backed session. The library-level `ModelRuntime.create()` catalog remains empty until a product entrypoint or extension registers a Provider. See [Quickstart](quickstart.md) for the first-session flow.
 
 ## Start here
 

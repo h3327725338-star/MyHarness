@@ -8,16 +8,6 @@ export { Type } from "typebox";
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./api/bedrock-converse-stream.ts";
-export type {
-	CommandCodeOptions,
-	CommandCodeRequestConfig,
-	CommandCodeStreamEvent,
-	CommandCodeWireMessage,
-	CommandCodeWirePart,
-	CommandCodeWireUsage,
-} from "./api/command-code.ts";
-/** @deprecated Historical private route, no longer used by the adapter. */
-export { COMMAND_CODE_GENERATE_ROUTE } from "./api/command-code-constants.ts";
 export type { GoogleOptions } from "./api/google-generative-ai.ts";
 export type { GoogleThinkingLevel } from "./api/google-shared.ts";
 export type { GoogleVertexOptions } from "./api/google-vertex.ts";

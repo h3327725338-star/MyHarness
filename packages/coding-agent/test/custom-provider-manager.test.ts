@@ -9,7 +9,6 @@ import {
 	discoverProviderModels,
 	ProviderModelDiscoveryError,
 } from "../src/providers/models/custom-provider-manager.ts";
-import { UNCONFIRMED_THINKING_LEVEL_MAP } from "../src/providers/models/official-thinking.ts";
 import { FileModelsStore } from "../src/providers/models/store.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 
@@ -68,7 +67,6 @@ describe("CustomProviderManager", () => {
 					id: "unlisted",
 					name: "unlisted",
 					reasoning: true,
-					thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
 					thinkingSource: "unconfirmed",
 				},
 				{ id: "plain", name: "plain" },
@@ -367,7 +365,6 @@ describe("CustomProviderManager", () => {
 				maxTokens: 64000,
 				reasoning: true,
 				// The endpoint says the model reasons but not which efforts it takes: none is assumed.
-				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
 				thinkingSource: "unconfirmed",
 				input: ["text", "image"],
 			},
@@ -377,7 +374,6 @@ describe("CustomProviderManager", () => {
 				contextWindow: 200000,
 				maxTokens: 16000,
 				reasoning: true,
-				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
 				thinkingSource: "unconfirmed",
 				input: ["text", "image"],
 			},
@@ -392,7 +388,6 @@ describe("CustomProviderManager", () => {
 				contextWindow: 1048576,
 				maxTokens: 8192,
 				reasoning: true,
-				thinkingLevelMap: UNCONFIRMED_THINKING_LEVEL_MAP,
 				thinkingSource: "unconfirmed",
 			},
 		]);
@@ -457,15 +452,15 @@ describe("CustomProviderManager", () => {
 			thinkingLevelMap: { minimal: null, medium: null, max: "max", off: null },
 		});
 		expect(byId.get("router-all")?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
-		// A model that only says "reasoning" gets no invented efforts: every level is marked unsupported until confirmed.
+		// A model that only says "reasoning" gets no invented efforts and no level is hidden.
 		expect(byId.get("router-no-list")).toMatchObject({ reasoning: true, thinkingSource: "unconfirmed" });
-		expect(byId.get("router-no-list")?.thinkingLevelMap).toEqual(UNCONFIRMED_THINKING_LEVEL_MAP);
+		expect(byId.get("router-no-list")?.thinkingLevelMap).toBeUndefined();
 
 		const anthropic = await discoverProviderModels({ baseUrl: `${baseUrl}/anthropic/v1`, api: "anthropic-messages" });
 		const claude = new Map(anthropic.map((model) => [model.id, model]));
 		expect(claude.get("claude-effort")?.thinkingLevelMap).toEqual({ minimal: null, xhigh: "xhigh" });
 		expect(claude.get("claude-effort")?.reasoning).toBe(true);
-		expect(claude.get("claude-budget")?.thinkingLevelMap).toEqual(UNCONFIRMED_THINKING_LEVEL_MAP);
+		expect(claude.get("claude-budget")?.thinkingLevelMap).toBeUndefined();
 		expect(claude.get("claude-budget")?.reasoning).toBe(true);
 	});
 
@@ -693,6 +688,13 @@ describe("CustomProviderManager", () => {
 		let status = 200;
 		let empty = false;
 		const server = createServer((request, response) => {
+			if (request.method === "POST") {
+				// The declared reasoning model's thinking levels are probed; a rate limit leaves them undecided.
+				expect(request.url).toBe("/v1/chat/completions");
+				response.statusCode = 429;
+				response.end("{}");
+				return;
+			}
 			requests += 1;
 			expect(request.url).toBe("/v1/models");
 			expect(request.headers.authorization).toBe("Bearer secret-key");

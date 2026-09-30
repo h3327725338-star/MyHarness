@@ -44,14 +44,14 @@ Windows 的开发入口会从脚本位置定位仓库，并用 `node --import sc
 
 ## Provider 配置与启动约定
 
-MyHarness 的 library 层采用手动 Provider 模式：`ModelRuntime.create()` 不自动加载上游 Provider 或模型目录，普通 Provider 和 model 来源是用户配置目录中的 `models.json`（Windows 默认是 `%USERPROFILE%\.myharness\agent\models.json`）。Coding Agent 产品入口另外注册受控的 OpenAI ChatGPT Provider，因此开发启动器启动产品时可在 Settings 中进入官方 ChatGPT 登录流程；其他 Provider 仍按下列规则处理：
+MyHarness 的 library 层采用手动 Provider 模式：`ModelRuntime.create()` 不自动加载上游 Provider 或模型目录，普通 Provider 和 model 来源是用户配置目录中的 `models.json`（Windows 默认是 `%USERPROFILE%\.myharness\agent\models.json`）。Coding Agent 产品入口同样不内置任何 Provider，Provider 按下列规则处理：
 
 - 不读取、同步或校验上游 Provider model catalog；
 - 不执行任何上游模型目录生成或 hydrate；
 - 不把上游 Provider 当作启动前置条件；
 - 只使用 `models.json` 中的 Provider，以及明确注册的 extension Provider。
 
-直接运行 `myharness-test.ps1` 会走 Coding Agent 产品入口并注册 OpenAI ChatGPT；其他 Provider 仍必须来自 `models.json` 或 extension。不要把本机生成的模型目录或用户配置复制回仓库。
+直接运行 `myharness-test.ps1` 会走 Coding Agent 产品入口；Provider 必须来自 `models.json` 或 extension。不要把本机生成的模型目录或用户配置复制回仓库。
 
 ## 推送前检查
 

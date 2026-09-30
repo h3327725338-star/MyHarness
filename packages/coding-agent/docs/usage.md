@@ -282,7 +282,7 @@ myharness -p @demo.mp4 "Describe the visible workflow"
 
 ### 示例
 
-下面的 model ID 只是示例；可以先登录内置的 OpenAI ChatGPT Provider，或在 `models.json`、Settings、extension 中配置对应 Provider/model。
+下面的 model ID 只是示例；可以在 `models.json`、Settings、extension 中配置对应 Provider/model。
 
 ```bash
 # 带初始 prompt 的 Interactive mode

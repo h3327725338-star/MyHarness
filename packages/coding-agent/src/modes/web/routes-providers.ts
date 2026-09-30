@@ -400,6 +400,8 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				authType,
 				headers,
 				signal: controller.signal,
+				// Levels the catalog and the documentation leave undecided are tested with real minimal requests.
+				probeThinking: { budgetMs: 20_000 },
 			});
 			return { ok: true, models };
 		} catch (error) {

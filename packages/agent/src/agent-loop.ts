@@ -335,7 +335,7 @@ async function runLoop(
 				};
 			}
 
-			// Providers such as the OpenAI ChatGPT App Server can ask the host to
+			// Providers that run their own inference loop can ask the host to
 			// execute a tool while their response is still in flight. Route those
 			// calls through the same execution path as ordinary assistant tool calls
 			// so permissions, hooks, events, and persistence remain host-owned.

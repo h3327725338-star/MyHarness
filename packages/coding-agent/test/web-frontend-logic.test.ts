@@ -237,6 +237,35 @@ describe("Web UI: provider model catalog", () => {
 		});
 	});
 
+	it("seeds a probed model with its confirmed levels and remembers the per-level statuses", () => {
+		const seeded = models.seedFromDetected({
+			id: "probed",
+			reasoning: true,
+			thinkingSource: "probe",
+			thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
+			thinkingLevelStatus: { minimal: "unsupported", low: "supported", high: "unverified", xhigh: "unknown" },
+		});
+		expect(seeded.detected).toMatchObject({ levels: true, levelsSource: "probe" });
+		expect(models.levelStatus(seeded, "high")).toBe("unverified");
+		expect(seeded.levels).toMatchObject({ minimal: false, low: true, high: true, xhigh: true });
+		expect(models.buildModel(seeded).thinkingLevelStatus).toEqual({
+			minimal: "unsupported",
+			low: "supported",
+			high: "unverified",
+			xhigh: "unknown",
+		});
+		// A probe never proposes to overwrite the levels of a model that is already in the form.
+		const current = models.modelDraft({ id: "probed", reasoning: true });
+		expect(
+			models.detectedChanges(current, {
+				id: "probed",
+				reasoning: true,
+				thinkingSource: "probe",
+				thinkingLevelMap: { low: null },
+			}),
+		).toEqual([]);
+	});
+
 	it("does not invent a level map for a model whose catalog lists none", () => {
 		const built = models.buildModel(models.seedFromDetected({ id: "m", reasoning: true }));
 		expect(built.reasoning).toBe(true);
@@ -301,13 +330,14 @@ describe("Web UI: shared slash-command registry", () => {
 		expect(findBuiltinSlashCommand("setting")?.name).toBe("settings");
 	});
 
-	it("starts a model without declared reasoning with no effort levels assumed, only off", () => {
+	it("keeps every standard effort level selectable for a model whose levels nobody confirmed", () => {
 		const unknown = models.modelDraft({ id: "new-model" });
+		// Only a level confirmed unsupported is hidden; xhigh / max are opt-in in the runtime and stay off until stated.
 		expect(
 			Object.entries(unknown.levels)
 				.filter(([, on]) => on)
 				.map(([level]) => level),
-		).toEqual(["off"]);
+		).toEqual(["off", "minimal", "low", "medium", "high"]);
 		const declared = models.modelDraft({ id: "m", reasoning: true, thinkingLevelMap: { minimal: null, low: null } });
 		expect(declared.levels.minimal).toBe(false);
 		expect(declared.levels.medium).toBe(true);

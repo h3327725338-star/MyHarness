@@ -18,10 +18,13 @@ export function levelsFromMap(map) {
 }
 
 /**
- * No level offered but "off": nothing states which levels a model accepts, so none is assumed. Used for models that do not
- * declare reasoning (a new model, or reasoning switched on by hand) until the user ticks what they know it accepts.
+ * Levels of a model whose accepted efforts nobody has confirmed: only a level that is confirmed unsupported is hidden,
+ * so every standard level stays selectable. "xhigh" / "max" are opt-in in the runtime and stay off until stated.
  */
-const unknownLevels = () => Object.fromEntries([...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => [level, level === "off"]));
+const unknownLevels = () => Object.fromEntries([...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => [level, !EXTRA_LEVELS.includes(level)]));
+
+/** The probe status of a level ("supported" | "unsupported" | "unverified" | "unknown"), when a test request recorded one. */
+export const levelStatus = (model, level) => model.raw?.thinkingLevelStatus?.[level];
 
 export function positive(text) {
 	const value = Number(String(text).trim());
@@ -86,11 +89,12 @@ export function seedFromDetected(found) {
 	if (found.contextWindow) seed.contextWindow = found.contextWindow;
 	if (found.maxTokens) seed.maxTokens = found.maxTokens;
 	if (found.thinkingLevelMap) seed.thinkingLevelMap = found.thinkingLevelMap;
+	if (found.thinkingLevelStatus) seed.thinkingLevelStatus = found.thinkingLevelStatus;
 	const detected = {};
 	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (found[key] !== undefined) detected[key] = true;
-	// Levels are marked "auto" only when the catalog or the provider's documentation names them; an unconfirmed map
-	// (reasoning without any listed efforts) offers no level and says so.
-	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed") detected.levels = true;
+	// Levels are marked "auto" only when the catalog, the provider's documentation or a test request settled them; a model
+	// whose efforts nobody confirmed keeps every level selectable.
+	if ((found.thinkingLevelMap || found.thinkingLevelStatus) && found.thinkingSource !== "unconfirmed") detected.levels = true;
 	if (found.thinkingSource) detected.levelsSource = found.thinkingSource;
 	return modelDraft(seed, detected);
 }
@@ -113,7 +117,8 @@ export function detectedChanges(model, found) {
 	for (const field of ["contextWindow", "maxTokens"]) {
 		if (found[field] !== undefined && String(found[field]) !== String(model[field]).trim()) changes.push({ field, from: String(model[field]).trim(), to: found[field] });
 	}
-	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed" && (found.reasoning ?? model.reasoning)) {
+	// A test request only seeds new models; it never proposes to overwrite the levels of a model already in the form.
+	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed" && found.thinkingSource !== "probe" && (found.reasoning ?? model.reasoning)) {
 		const levels = levelsFromMap(found.thinkingLevelMap);
 		if (!sameLevels(levels, model.levels)) changes.push({ field: "levels", from: model.levels, to: levels });
 	}

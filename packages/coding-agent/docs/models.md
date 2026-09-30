@@ -223,6 +223,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `api` | No | provider's `api` | Override provider's API for this model |
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps MyHarness thinking levels to provider values and marks unsupported levels (see below) |
+| `thinkingLevelStatus` | No | omitted | Written by model refresh: per-level probe result (`supported`, `unsupported`, `unverified`, `unknown`); informational, the runtime only reads `thinkingLevelMap` |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
@@ -296,14 +297,16 @@ Example for a model where thinking cannot be disabled:
 }
 ```
 
-Where the Web UI and TUI get the levels of a model, in order of trust:
+Where the Web UI and TUI get the levels of a model, in strict order of priority. A later step runs only for levels the earlier steps could not settle, and a later step never overrides a level an earlier step confirmed:
 
-1. the map you wrote in `models.json`;
-2. what the provider's model catalog lists when models are discovered (for example OpenRouter `supported_efforts`, Anthropic `capabilities.effort`);
-3. the levels the provider's own documentation names for that model, kept in `src/providers/models/official-thinking.ts` and matched only by the first-party API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`) plus the model ID. A relay serving the same model ID is not matched. A model declared with `"reasoning": true` but without its own map takes this documented map when one exists at load time;
-4. otherwise nothing is assumed. Model discovery records such a model as `reasoning: true` with every level from `minimal` to `high` set to `null`, so only `off` remains and the effort selector is hidden. A hand-written `"reasoning": true` model without a map keeps the runtime default described in the table above.
+0. the map you wrote in `models.json` (used as written);
+1. **API / catalog metadata**: what the provider's model list states when models are discovered (for example OpenRouter `supported_efforts`, Anthropic `capabilities.effort`);
+2. **The provider's own rules**: the levels the provider's documentation names for that model, kept in `src/providers/models/official-thinking.ts` and matched only by the first-party API host (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`) plus the model ID. A relay serving the same model ID is not matched. A model declared with `"reasoning": true` but without its own map takes this documented map when one exists at load time;
+3. **A real minimal probe** (`src/providers/models/thinking-probe.ts`), run by Refresh models and by the Web UI catalog lookup for models declared or reported as reasoning whose levels are still undecided (at most 6 models per run, 16 output tokens per request). It uses the effort parameter of the model's own API (`reasoning_effort` for `openai-completions`, `reasoning.effort` for `openai-responses`, `output_config.effort` for `anthropic-messages`, `thinkingConfig.thinkingLevel` for `google-generative-ai`; other APIs are not probed). It first sends one request with an invalid effort value: a server that rejects it validates the parameter, so a later accepted level is `supported`; a server that accepts it silently ignores the parameter, so accepted levels are only `unverified`. Only an HTTP 400/422 that names the effort parameter counts as `unsupported`; 429, quota, auth, 404, 5xx, timeouts and network errors are `unknown`.
 
-Refreshing a provider's models also brings the map of models already in `models.json` up to date from source 2 or 3 (values you customised for levels that stay supported are kept); it never overwrites a map with source 4.
+Each level therefore has one of four states: `supported`, `unsupported`, `unverified` (accepted but not shown to be applied) or `unknown` (could not be checked). Only `unsupported` levels are hidden (`null` in `thinkingLevelMap`); the other three stay selectable. `xhigh` and `max` remain opt-in in the runtime: they are enabled once a source confirms them, or, after a probe, unless confirmed unsupported. Probe results are stored per model as `thinkingLevelStatus` (only levels that are not decided by source 1 or 2), so a refresh probes only levels still `unknown`; a newer weaker result never replaces a confirmed one. A model that reasons but has no settled level is recorded as `reasoning: true` without a map, so every standard level is offered. Older versions wrote an all-`null` map (`minimal`–`high`) for such models; refresh removes that marker.
+
+Refreshing a provider's models also brings the map of models already in `models.json` up to date from source 1 or 2 (values you customised for levels that stay supported are kept) and from confirmed probe results (`supported` / `unsupported`); `unverified` and `unknown` results never change an existing entry.
 
 Migration: older configs that used `compat.reasoningEffortMap` should move that mapping to model-level `thinkingLevelMap`. Use `null` for levels that should not appear in the UI.
 

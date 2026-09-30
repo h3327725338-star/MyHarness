@@ -7,6 +7,7 @@ import { N_, t } from "./i18n.js";
 import {
 	BASE_LEVELS,
 	EXTRA_LEVELS,
+	levelStatus,
 	applyDetected,
 	buildModel,
 	connectionReady,
@@ -184,9 +185,9 @@ function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 					<label class="col field-label">${t("Max output (tokens)")}${d.maxTokens ? html` <${Detected} />` : null}<input class="field mono" inputmode="numeric" value=${model.maxTokens} onInput=${(e) => set({ maxTokens: e.target.value })} /></label>
 				</div>
 				${model.reasoning
-					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "official" ? t("From the provider's official documentation") : t("Read from the endpoint's model list")} />` : null}</span>
-						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} onClick=${() => set({ levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "official" ? t("These are the levels the provider's official documentation lists for this model.") : t("These are the levels the endpoint lists for this model.")) : t("Neither the endpoint nor the provider's documentation lists the levels of this model, so none is assumed. Tick only the ones you know it accepts.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
+					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "official" ? t("From the provider's official documentation") : d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
+						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unverified" ? t("The service accepted this level, but it could not be confirmed that it is applied.") : levelStatus(model, level) === "unknown" ? t("Could not be checked; it stays selectable.") : undefined} onClick=${() => set({ levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "official" ? t("These are the levels the provider's official documentation lists for this model.") : d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Untick the ones you know it rejects.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
 					: null}
 				${changes.length
 					? html`<div class="pf-conflict">

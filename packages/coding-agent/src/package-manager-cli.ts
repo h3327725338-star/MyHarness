@@ -9,11 +9,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/t
 import { APP_NAME, CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { DefaultPackageManager } from "./extensions/packages/package-manager.ts";
-import {
-	ModelRuntime,
-	registerBuiltInCommandCodeProvider,
-	registerBuiltInOpenAIChatGPTProvider,
-} from "./providers/runtime/index.ts";
+import { ModelRuntime } from "./providers/runtime/index.ts";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
@@ -334,8 +330,6 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 		modelsPath: join(agentDir, "models.json"),
 		allowModelNetwork: false,
 	});
-	await registerBuiltInOpenAIChatGPTProvider(modelRuntime, agentDir);
-	await registerBuiltInCommandCodeProvider(modelRuntime);
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 15_000);
 	try {

@@ -62,6 +62,22 @@ const ThinkingLevelMapSchema = Type.Object({
 	max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
+const ThinkingLevelStatusValueSchema = Type.Union([
+	Type.Literal("supported"),
+	Type.Literal("unsupported"),
+	Type.Literal("unverified"),
+	Type.Literal("unknown"),
+]);
+/** Result of the real-request probe per effort level; written by model refresh, informational for the runtime. */
+const ThinkingLevelStatusSchema = Type.Object({
+	minimal: Type.Optional(ThinkingLevelStatusValueSchema),
+	low: Type.Optional(ThinkingLevelStatusValueSchema),
+	medium: Type.Optional(ThinkingLevelStatusValueSchema),
+	high: Type.Optional(ThinkingLevelStatusValueSchema),
+	xhigh: Type.Optional(ThinkingLevelStatusValueSchema),
+	max: Type.Optional(ThinkingLevelStatusValueSchema),
+});
+
 const ChatTemplateKwargScalarSchema = Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]);
 const ChatTemplateKwargVariableSchema = Type.Object({
 	$var: Type.Union([Type.Literal("thinking.enabled"), Type.Literal("thinking.effort")]),
@@ -152,6 +168,7 @@ const ModelDefinitionSchema = Type.Object({
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
 	reasoning: Type.Optional(Type.Boolean()),
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
+	thinkingLevelStatus: Type.Optional(ThinkingLevelStatusSchema),
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
 	cost: Type.Optional(ModelCostSchema),
 	contextWindow: Type.Optional(Type.Number()),

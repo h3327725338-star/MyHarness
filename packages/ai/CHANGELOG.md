@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Removed the deprecated `api: "command-code"` compatibility adapter (`CommandCodeOptions` and related types, `COMMAND_CODE_GENERATE_ROUTE`, `commandCodeApi`) together with the Command Code Provider.
 - Updated the AI package identity and internal imports to the MyHarness namespace while retaining Provider and OAuth compatibility behavior.
 - Kept the offline build path explicit so generated model data is not refreshed during offline builds.
 
