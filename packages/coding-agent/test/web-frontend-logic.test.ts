@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const webDir = new URL("../web/js/", import.meta.url);
 const { parsePatch } = await import(new URL("diff-parse.js", webDir).href);
 const { buildTurns, describeAction, groupSteps, turnOutcome } = await import(new URL("turns.js", webDir).href);
+const models = await import(new URL("provider-models.js", webDir).href);
 const { ansiSegments, fmtDuration, relTime, shellOutcome, shortPath, stripAnsi } = await import(
 	new URL("util.js", webDir).href
 );
@@ -189,5 +190,100 @@ describe("Web UI: diff parsing and utilities", () => {
 		const segments = ansiSegments("a\u001b[1;31mb\u001b[0mc");
 		expect(segments.map((s: any) => s.text)).toEqual(["a", "b", "c"]);
 		expect(segments[1].style.color).toBeTruthy();
+	});
+});
+
+describe("Web UI: provider model catalog", () => {
+	const draft = (patch: Record<string, unknown> = {}) => ({
+		baseUrl: "https://api.example.com/v1",
+		api: "openai-completions",
+		auth: "key",
+		apiKey: "",
+		...patch,
+	});
+
+	it("turns a catalog model into a form model with only the stated fields and its listed thinking levels", () => {
+		const seeded = models.seedFromDetected({
+			id: "reason-b",
+			name: "Reason B",
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 200000,
+			thinkingLevelMap: { minimal: null, medium: null, xhigh: "xhigh" },
+		});
+		expect(seeded).toMatchObject({
+			id: "reason-b",
+			name: "Reason B",
+			reasoning: true,
+			image: true,
+			contextWindow: "200000",
+		});
+		// Not stated by the catalog: keeps the usual default and is not marked as detected.
+		expect(seeded.maxTokens).toBe(String(models.DEFAULT_MAX_TOKENS));
+		expect(seeded.detected).toEqual({ reasoning: true, input: true, contextWindow: true, levels: true });
+		expect(seeded.levels).toMatchObject({
+			off: true,
+			minimal: false,
+			low: true,
+			medium: false,
+			high: true,
+			xhigh: true,
+			max: false,
+		});
+		expect(models.buildModel(seeded)).toMatchObject({
+			id: "reason-b",
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, medium: null, xhigh: "xhigh" },
+		});
+	});
+
+	it("does not invent a level map for a model whose catalog lists none", () => {
+		const built = models.buildModel(models.seedFromDetected({ id: "m", reasoning: true }));
+		expect(built.reasoning).toBe(true);
+		expect(built.thinkingLevelMap).toBeUndefined();
+	});
+
+	it("ticks and unticks catalog models without touching models the catalog does not list", () => {
+		const own = models.modelDraft({ id: "own", contextWindow: 1000 });
+		const found = { id: "a", name: "a" };
+		const ticked = models.toggleCatalogModel([own], found, true);
+		expect(ticked.map((m: any) => m.id)).toEqual(["own", "a"]);
+		expect(models.toggleCatalogModel(ticked, found, true)).toBe(ticked);
+		const unticked = models.toggleCatalogModel(ticked, found, false);
+		expect(unticked.map((m: any) => m.id)).toEqual(["own"]);
+		expect(unticked[0].contextWindow).toBe("1000");
+		// A blank placeholder card is dropped when the first real model arrives.
+		expect(models.toggleCatalogModel([models.modelDraft()], found, true).map((m: any) => m.id)).toEqual(["a"]);
+	});
+
+	it("proposes only what the catalog states and applies exactly that", () => {
+		const current = models.modelDraft({
+			id: "m",
+			name: "Mine",
+			contextWindow: 1000,
+			maxTokens: 500,
+			reasoning: true,
+		});
+		expect(models.detectedChanges(current, { id: "m", name: "m" })).toEqual([]);
+		const found = { id: "m", name: "m", contextWindow: 2000, thinkingLevelMap: { low: null } };
+		expect(models.detectedChanges(current, found).map((c: any) => c.field)).toEqual(["contextWindow", "levels"]);
+		const next = models.applyDetected(current, found);
+		expect(next).toMatchObject({ name: "Mine", contextWindow: "2000", maxTokens: "500", reasoning: true });
+		expect(next.levels.low).toBe(false);
+		expect(models.detectedChanges(next, found)).toEqual([]);
+	});
+
+	it("asks the endpoint on its own only when the connection is complete", () => {
+		expect(models.connectionReady(draft(), { hasStoredKey: false })).toBe(false);
+		expect(models.connectionReady(draft({ apiKey: "sk-x" }), { hasStoredKey: false })).toBe(true);
+		expect(models.connectionReady(draft(), { hasStoredKey: true })).toBe(true);
+		expect(models.connectionReady(draft({ auth: "none" }), { hasStoredKey: false })).toBe(true);
+		expect(models.connectionReady(draft({ baseUrl: "api.example.com", auth: "none" }), { hasStoredKey: false })).toBe(
+			false,
+		);
+		expect(models.connectionReady(draft({ baseUrl: "ftp://x", auth: "none" }), { hasStoredKey: false })).toBe(false);
+		expect(models.connectionSignature(draft({ apiKey: "a" }))).not.toBe(
+			models.connectionSignature(draft({ apiKey: "b" })),
+		);
 	});
 });

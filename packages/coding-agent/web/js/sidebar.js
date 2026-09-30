@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
 import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner } from "./ui.js";
-import { loadSessions, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t } from "./i18n.js";
@@ -64,7 +64,11 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	</div>`;
 });
 
-function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
+/**
+ * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
+ * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
+ */
+function Workspace({ workspace, general = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
@@ -79,25 +83,27 @@ function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, 
 	}, [sessions, filter]);
 	if (filter && !list.length) return null;
 	const shown = showAll || filter ? list : list.slice(0, 12);
+	const reload = () => (general ? loadUnbound() : loadSessions(workspace.rootPath));
+	const create = () => (general ? actions.newSession(undefined, { unbound: true }) : actions.newSession(workspace.rootPath));
 	const toggle = () => {
 		setView({ expanded: { ...state.view.expanded, [workspace.rootPath]: !open } });
-		if (!open && sessions === undefined) loadSessions(workspace.rootPath);
+		if (!open && sessions === undefined) reload();
 	};
 	return html`<div class="ws">
-		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
+		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${general ? t("Chats that belong to no workspace") : workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
-			<${Icon} name=${showing ? "folderOpen" : "folder"} size=${15} />
+			<${Icon} name=${general ? "chat" : showing ? "folderOpen" : "folder"} size=${15} />
 			<span class="name truncate">${workspace.name}</span>
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
-				<button class="icon-btn sm" title=${t("New chat in this workspace")} aria-label=${t("New chat in this workspace")} onClick=${() => actions.newSession(workspace.rootPath)}><${Icon} name="plus" size=${15} /></button>
+				<button class="icon-btn sm" title=${general ? t("New chat without a workspace") : t("New chat in this workspace")} aria-label=${general ? t("New chat without a workspace") : t("New chat in this workspace")} onClick=${create}><${Icon} name="plus" size=${15} /></button>
 				<${Menu} align="end" trigger=${({ toggle: tg }) => html`<button class="icon-btn sm" aria-label=${t("Workspace actions")} onClick=${tg}><${Icon} name="more" size=${15} /></button>`} width=${200}>
 					${(close) => html`
-						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), actions.newSession(workspace.rootPath))} />
-						<${MenuItem} icon="refresh" label=${t("Reload chats")} onClick=${() => (close(), loadSessions(workspace.rootPath))} />
-						<${MenuSep} />
-						<${MenuItem} icon="x" label=${t("Remove from list")} danger onClick=${() => (close(), actions.removeWorkspace(workspace.id, workspace.name))} />`}
+						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), create())} />
+						<${MenuItem} icon="refresh" label=${t("Reload chats")} onClick=${() => (close(), reload())} />
+						${general ? null : html`<${MenuSep} />
+						<${MenuItem} icon="x" label=${t("Remove from list")} danger onClick=${() => (close(), actions.removeWorkspace(workspace.id, workspace.name))} />`}`}
 				<//>
 			</span>
 		</div>
@@ -105,35 +111,14 @@ function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, 
 			<div class="ws-collapse-inner">
 				${rendered
 					? html`<div class="ws-children">
-						${sessions === undefined ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
-						${sessions && !sessions.length ? html`<div class="dim side-note">${t("No chats yet")}</div>` : null}
+						${sessions === undefined && !error ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
+						${error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>` : null}
+						${sessions && !sessions.length ? html`<div class="dim side-note">${general ? t("No chats without a workspace") : t("No chats yet")}</div>` : null}
 						${shown.map((info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`)}
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
 			</div>
-		</div>
-	</div>`;
-}
-
-/** Chats that belong to no workspace. They are not a workspace: no folder, no mapping, just the chats. */
-function Chats({ sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
-	const [showAll, setShowAll] = useState(false);
-	const list = useMemo(() => {
-		const all = sessions || [];
-		if (!filter) return all;
-		const q = filter.toLowerCase();
-		return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
-	}, [sessions, filter]);
-	if (filter && !list.length) return null;
-	const shown = showAll || filter ? list : list.slice(0, 12);
-	return html`<div class="ws chats">
-		<div class="side-section"><span class="grow">${t("Chats")}</span>${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}<button class="icon-btn sm" title=${t("New chat without a workspace")} aria-label=${t("New chat without a workspace")} onClick=${() => actions.newSession(undefined, { unbound: true })}><${Icon} name="plus" size=${15} /></button></div>
-		<div class="ws-children chats-list">
-			${sessions === undefined ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
-			${sessions && !sessions.length ? html`<div class="dim side-note">${t("No chats without a workspace")}</div>` : null}
-			${shown.map((info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`)}
-			${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 		</div>
 	</div>`;
 }
@@ -150,6 +135,7 @@ export function Sidebar() {
 	const ws = useStore((s) => s.workspaces);
 	const expanded = useStore((s) => s.view.expanded);
 	const currentWorkspace = useStore((s) => s.snap?.workspace?.id);
+	const currentWorkspaceRoot = useStore((s) => s.snap?.workspace?.rootPath);
 	const currentFile = useStore((s) => s.snap?.session?.file);
 	const slots = useStore((s) => s.slots);
 	const connected = useStore((s) => s.connected);
@@ -209,10 +195,10 @@ export function Sidebar() {
 			${ws.list.map((w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} key=${w.id} workspace=${w} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.has(pathKey(w.rootPath)) ? [...unsaved.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
+				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.has(pathKey(w.rootPath)) ? [...unsaved.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
 			})}
 			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
-			<${Chats} sessions=${unboundChats} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("General") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn" style="flex:1" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>

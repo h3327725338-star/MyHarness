@@ -2,7 +2,7 @@
 // (steer / queue / interrupt) map onto the real AgentSession mechanisms.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
 import { api, attempt, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
-import { actions, INTERACTIVE_COMMANDS, openCommand } from "./actions.js";
+import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { ContextMeter } from "./context-usage.js";
 import { clip, debounce, effortHint, effortName, fmtTokens, plural } from "./util.js";
@@ -314,6 +314,19 @@ export function Composer() {
 
 	const history = useMemo(() => items.filter((i) => i.kind === "user" && i.text).map((i) => i.text), [items]);
 
+	/**
+	 * Confirm a highlighted "/" command: run it now. Commands with several levels of choices open their panel; the rest
+	 * are sent like typed text. (Tab only completes the name, see applySuggestion.)
+	 */
+	const runCommand = async (item) => {
+		const value = `/${item.command}`;
+		setText("");
+		setHistoryIndex(-1);
+		const result = await actions.submit(value, { mode: active ? runMode : "auto" });
+		if (!result.handled && !result.ok) setText(value);
+	};
+	const confirmSuggestion = (item) => (item.command ? runCommand(item) : applySuggestion(item));
+
 	const applySuggestion = (item) => {
 		const start = token.start;
 		const next = `${text.slice(0, start)}${item.insert}${text.slice(caret)}`;
@@ -363,9 +376,9 @@ export function Composer() {
 			if (event.key === "ArrowDown") return event.preventDefault(), setSel((sel + 1) % suggestions.length);
 			if (event.key === "ArrowUp") return event.preventDefault(), setSel((sel - 1 + suggestions.length) % suggestions.length);
 			const picked = suggestions[sel];
-			// Commands with several levels of choices open their panel straight away; the others are completed for you to finish.
-			if (event.key === "Enter" && !event.shiftKey && picked.command && INTERACTIVE_COMMANDS.has(picked.command)) return event.preventDefault(), setText(""), openCommand(picked.command);
-			if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) return event.preventDefault(), applySuggestion(picked);
+			// Enter confirms and runs the highlighted command (an "@" file has nothing to run, so it is inserted); Tab only completes.
+			if (event.key === "Tab") return event.preventDefault(), applySuggestion(picked);
+			if (event.key === "Enter" && !event.shiftKey) return event.preventDefault(), confirmSuggestion(picked);
 			if (event.key === "Escape") return event.preventDefault(), setText((t) => t + " ");
 		}
 		if (event.key === "Enter" && !event.shiftKey) {
@@ -410,7 +423,7 @@ export function Composer() {
 			<div class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""}`}
 				onDragOver=${(e) => (e.preventDefault(), setDragOver(true))} onDragLeave=${() => setDragOver(false)}
 				onDrop=${(e) => (e.preventDefault(), setDragOver(false), addFiles(e.dataTransfer.files))}>
-				${menuOpen ? html`<div class="suggest" role="listbox">${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseEnter=${() => setSel(i)} onMouseDown=${(e) => (e.preventDefault(), applySuggestion(item))}>
+				${menuOpen ? html`<div class="suggest" role="listbox">${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseEnter=${() => setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				<textarea ref=${area} class="composer-input" rows="1" value=${text} placeholder=${placeholder} spellcheck="false"

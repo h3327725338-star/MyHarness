@@ -68,7 +68,7 @@ export const state = {
 	slots: [],
 	activeSlot: null,
 	toasts: [],
-	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, loading: false },
+	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false },
 	models: null,
 	settings: null,
 	providers: null,
@@ -316,15 +316,32 @@ export async function loadWorkspaces() {
 	await Promise.all([...targets.values()].map((root) => loadSessions(root)), loadUnbound());
 }
 
+/** Key of the "General" group (chats that belong to no workspace) in the sidebar's expanded / error maps. */
+export const GENERAL_KEY = "<general>";
+
+/** Why a chat list could not be loaded, in words the sidebar can show instead of an endless "Loading…". */
+function listFailure(error) {
+	if (error.status === 404) return t("The running MyHarness server is older than this page. Restart MyHarness.");
+	return error.message || t("Could not load the chats.");
+}
+
+function setListError(key, message) {
+	const errors = { ...state.workspaces.errors };
+	if (message) errors[key] = message;
+	else delete errors[key];
+	state.workspaces = { ...state.workspaces, errors };
+}
+
 /** Chats that belong to no workspace (created without one, or left behind by a removed workspace). */
 export async function loadUnbound() {
 	try {
 		const data = await api("/api/sessions/unbound", { slot: "" });
+		setListError(GENERAL_KEY, "");
 		state.workspaces = { ...state.workspaces, unbound: data.sessions };
-		emit();
-	} catch {
-		// The list is refreshed by the next load.
+	} catch (error) {
+		setListError(GENERAL_KEY, listFailure(error));
 	}
+	emit();
 }
 
 /** Reload the chat list the active chat belongs to: its workspace's, or the workspace-less one. */
@@ -350,10 +367,13 @@ export function loadSessions(rootPath) {
 				load.again = false;
 				try {
 					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}`);
+					setListError(rootPath, "");
 					state.workspaces = { ...state.workspaces, sessions: { ...state.workspaces.sessions, [rootPath]: data.sessions } };
 					emit();
-				} catch {
-					// A workspace whose folder disappeared simply lists no sessions.
+				} catch (error) {
+					// Keep what was listed before; without a list the sidebar shows this reason and a retry.
+					setListError(rootPath, listFailure(error));
+					emit();
 				}
 			} while (load.again);
 		} finally {

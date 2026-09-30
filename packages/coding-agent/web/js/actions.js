@@ -39,7 +39,7 @@ function normalizeFilePath(input) {
 }
 
 /** Commands with several levels of choices open the inline panel above the composer; everything else runs at once. */
-export const INTERACTIVE_COMMANDS = new Set(["settings", "setting", "model", "effort", "git", "commit", "push", "restore", "undo"]);
+export const INTERACTIVE_COMMANDS = new Set(["settings", "setting", "model", "effort", "git", "commit", "push", "restore", "undo", "workspace"]);
 
 export function openCommand(name, arg = "") {
 	setView({ cmd: { name: name === "setting" ? "settings" : name, arg, nonce: Date.now() } });
@@ -84,7 +84,6 @@ export const actions = {
 		const arg = rest.join(" ").trim();
 		const active = state.snap?.active;
 		const builtin = {
-			"/workspace": () => setView({ sidebarOpen: true }),
 			"/new": () => actions.newSession(),
 			"/compact": () => actions.compact(arg || undefined),
 		};

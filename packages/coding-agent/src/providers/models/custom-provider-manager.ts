@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { ThinkingLevelMap } from "@myharness/ai";
 import { stripJsonComments } from "../../utils/json.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 import { ModelConfig } from "./config.ts";
@@ -36,6 +37,8 @@ export interface DiscoveredProviderModel {
 	input?: Array<"text" | "image">;
 	contextWindow?: number;
 	maxTokens?: number;
+	/** Thinking levels the catalog says the model accepts (`null` = unsupported); absent when the catalog lists none. */
+	thinkingLevelMap?: ThinkingLevelMap;
 }
 
 export type ProviderModelDiscoveryErrorCode =
@@ -184,6 +187,22 @@ function stringList(value: unknown): string[] | undefined {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
 }
 
+const STANDARD_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+
+/**
+ * Turns an explicit list of accepted efforts into a thinkingLevelMap: standard levels the model does not accept are
+ * marked unsupported, `xhigh` / `max` are enabled only when listed (the runtime requires an entry for them), and
+ * "off" is removed only when the catalog says reasoning cannot be disabled.
+ */
+function levelMapFromEfforts(efforts: ReadonlySet<string>, mandatory?: boolean): ThinkingLevelMap | undefined {
+	const map: ThinkingLevelMap = {};
+	for (const level of STANDARD_EFFORTS) if (!efforts.has(level)) map[level] = null;
+	if (efforts.has("xhigh")) map.xhigh = "xhigh";
+	if (efforts.has("max")) map.max = "max";
+	if (mandatory === true) map.off = null;
+	return Object.keys(map).length > 0 ? map : undefined;
+}
+
 /**
  * Reads the capabilities a model catalog entry states explicitly. Catalogs differ a lot: OpenAI lists only ids,
  * OpenRouter adds context length, modalities and supported parameters, Anthropic and Gemini add token limits and
@@ -217,7 +236,28 @@ function detectModelCapabilities(candidate: unknown): Partial<DiscoveredProvider
 
 	const supportedParameters = stringList(candidate.supported_parameters);
 	const thinking = capabilities && isRecord(capabilities.thinking) ? capabilities.thinking : undefined;
-	if (supportedParameters) {
+	// OpenRouter: `reasoning.supported_efforts`. Anthropic: `capabilities.effort.{low,medium,high,xhigh,max}.supported`.
+	const reasoningInfo = isRecord(candidate.reasoning) ? candidate.reasoning : undefined;
+	const efforts = stringList(reasoningInfo?.supported_efforts);
+	const anthropicEffort = capabilities && isRecord(capabilities.effort) ? capabilities.effort : undefined;
+	if (efforts && efforts.length > 0) {
+		result.reasoning = true;
+		const map = levelMapFromEfforts(
+			new Set(efforts),
+			typeof reasoningInfo?.mandatory === "boolean" ? reasoningInfo.mandatory : undefined,
+		);
+		if (map) result.thinkingLevelMap = map;
+	} else if (anthropicEffort && anthropicEffort.supported === true) {
+		result.reasoning = true;
+		const accepted = ["low", "medium", "high", "xhigh", "max"].filter((level) => {
+			const entry = anthropicEffort[level];
+			return isRecord(entry) && entry.supported === true;
+		});
+		if (accepted.length > 0) {
+			const map = levelMapFromEfforts(new Set(accepted));
+			if (map) result.thinkingLevelMap = map;
+		}
+	} else if (supportedParameters) {
 		result.reasoning = supportedParameters.includes("reasoning") || supportedParameters.includes("include_reasoning");
 	} else if (thinking && typeof thinking.supported === "boolean") {
 		result.reasoning = thinking.supported;

@@ -2,13 +2,13 @@
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
 import { html, InlineFrame, useEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
-import { api, attempt, loadGitStatus, loadModels, loadProviders, loadSettings, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
+import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { NAV as SETTINGS_NAV, SECTION_OF } from "./overlays-settings.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
-import { clip, effortHint, effortName, fmtDateTime, fmtTokens } from "./util.js";
+import { chatTitle, clip, effortHint, effortName, fmtDateTime, fmtTokens, relTime } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -646,11 +646,114 @@ function repositoriesScreen(ctx) {
 	};
 }
 
+// ---- /workspace ---------------------------------------------------------------------------------------------
+const CHAT_ROWS = 30;
+
+/** The chats of a workspace (or of the General group) as rows that open the chat. */
+function chatRows(sessions, filterCurrent) {
+	return (sessions || []).slice(0, CHAT_ROWS).map((info) => ({
+		key: info.path,
+		label: chatTitle(info),
+		desc: relTime(info.modified),
+		search: `${chatTitle(info)} ${info.firstMessage || ""}`,
+		check: !!filterCurrent && info.path === filterCurrent,
+		onEnter: async (c) => {
+			await actions.openSession(info.path);
+			c.close();
+		},
+	}));
+}
+
+function workspaceScreen(w) {
+	const sessions = useStore((s) => s.workspaces.sessions[w.rootPath]);
+	const error = useStore((s) => s.workspaces.errors[w.rootPath]);
+	const currentFile = useStore((s) => s.snap?.session?.file);
+	useEffect(() => {
+		if (sessions === undefined) loadSessions(w.rootPath);
+	}, []);
+	return {
+		title: w.name,
+		subtitle: w.rootPath,
+		loading: sessions === undefined && !error,
+		error,
+		filterable: true,
+		placeholder: t("Filter chats…"),
+		empty: t("No chats yet"),
+		rows: [
+			{ key: "new", label: t("New chat in this workspace"), icon: "plus", onEnter: async (c) => (await actions.newSession(w.rootPath), c.close()) },
+			{ key: "chats", group: t("Chats") },
+			...chatRows(sessions, currentFile),
+			{
+				key: "remove",
+				label: t("Remove from list"),
+				icon: "x",
+				danger: true,
+				desc: t("Its folder and chats are kept; the chats stay available without a workspace."),
+				onEnter: async (c) => (c.close(), await actions.removeWorkspace(w.id, w.name)),
+			},
+		],
+	};
+}
+
+function generalScreen() {
+	const sessions = useStore((s) => s.workspaces.unbound);
+	const error = useStore((s) => s.workspaces.errors[GENERAL_KEY]);
+	const currentFile = useStore((s) => s.snap?.session?.file);
+	useEffect(() => {
+		if (sessions === undefined) loadUnbound();
+	}, []);
+	return {
+		title: t("General"),
+		subtitle: t("Chats that belong to no workspace"),
+		loading: sessions === undefined && !error,
+		error,
+		filterable: true,
+		placeholder: t("Filter chats…"),
+		empty: t("No chats without a workspace"),
+		rows: [
+			{ key: "new", label: t("New chat without a workspace"), icon: "plus", onEnter: async (c) => (await actions.newSession(undefined, { unbound: true }), c.close()) },
+			{ key: "chats", group: t("Chats") },
+			...chatRows(sessions, currentFile),
+		],
+	};
+}
+
+function workspaceRoot() {
+	const list = useStore((s) => s.workspaces.list);
+	const currentRoot = useStore((s) => s.snap?.workspace?.rootPath);
+	useEffect(() => {
+		loadWorkspaces().catch(() => {});
+	}, []);
+	return {
+		title: t("Workspaces"),
+		empty: t("No workspaces"),
+		rows: [
+			...list.map((w) => ({
+				key: w.id,
+				label: w.name,
+				desc: w.rootPath,
+				badges: currentRoot && w.rootPath === currentRoot ? [t("current")] : [],
+				chevron: true,
+				onEnter: (c) => c.push(() => workspaceScreen(w)),
+			})),
+			{ key: "general", label: t("General"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
+			{
+				key: "add",
+				label: t("Add workspace…"),
+				icon: "plus",
+				chevron: true,
+				onEnter: (c) => c.push(() => inputScreen({ title: t("Add workspace"), label: t("Project folder"), placeholder: "C:\path\to\project", submitLabel: t("Add workspace"), onSubmit: async (path, cc) => { if (path.trim() && (await actions.addWorkspace(path.trim()))) cc.close(); } })),
+			},
+		],
+	};
+}
+
 // ---- Command registry -----------------------------------------------------------------------------------------
 const ROOT = {
 	settings: () => settingsRoot(),
 	model: (ctx, arg) => modelScreen(ctx, arg),
 	effort: () => effortScreen(),
+	workspace: () => workspaceRoot(),
 	git: () => gitRoot(),
 	commit: () => ({ title: t("Commit changes"), custom: (c) => html`<${GitInline} kind="commit" onClose=${c.close} />` }),
 	push: () => ({ title: t("Push to upstream"), custom: (c) => html`<${GitInline} kind="push" onClose=${c.close} />` }),

@@ -328,6 +328,77 @@ describe("CustomProviderManager", () => {
 		]);
 	});
 
+	it("reads the thinking efforts a catalog lists per model and invents none", async () => {
+		const server = createServer((request, response) => {
+			response.setHeader("content-type", "application/json");
+			if (request.url?.startsWith("/anthropic")) {
+				const level = (supported: boolean) => ({ supported });
+				response.end(
+					JSON.stringify({
+						data: [
+							{
+								id: "claude-effort",
+								display_name: "Claude Effort",
+								capabilities: {
+									thinking: { supported: true },
+									effort: {
+										supported: true,
+										low: level(true),
+										medium: level(true),
+										high: level(true),
+										xhigh: level(true),
+										max: level(false),
+									},
+								},
+							},
+							{
+								id: "claude-budget",
+								capabilities: { thinking: { supported: true }, effort: { supported: false } },
+							},
+						],
+					}),
+				);
+				return;
+			}
+			response.end(
+				JSON.stringify({
+					data: [
+						{
+							id: "router-efforts",
+							reasoning: { supported_efforts: ["max", "high", "low"], mandatory: true },
+						},
+						{ id: "router-all", reasoning: { supported_efforts: ["xhigh", "high", "medium", "low", "minimal"] } },
+						{ id: "router-no-list", supported_parameters: ["reasoning"] },
+					],
+				}),
+			);
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Test server did not expose a port.");
+		const baseUrl = `http://127.0.0.1:${address.port}`;
+
+		const router = await discoverProviderModels({ baseUrl: `${baseUrl}/v1`, api: "openai-completions" });
+		const byId = new Map(router.map((model) => [model.id, model]));
+		// Levels the catalog leaves out are unsupported; xhigh / max exist only when listed; "none" is mandatory-off.
+		expect(byId.get("router-efforts")).toMatchObject({
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, medium: null, max: "max", off: null },
+		});
+		expect(byId.get("router-all")?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+		// A model that only says "reasoning" gets no invented level map.
+		expect(byId.get("router-no-list")).toMatchObject({ reasoning: true });
+		expect(byId.get("router-no-list")?.thinkingLevelMap).toBeUndefined();
+
+		const anthropic = await discoverProviderModels({ baseUrl: `${baseUrl}/anthropic/v1`, api: "anthropic-messages" });
+		const claude = new Map(anthropic.map((model) => [model.id, model]));
+		expect(claude.get("claude-effort")?.thinkingLevelMap).toEqual({ minimal: null, xhigh: "xhigh" });
+		expect(claude.get("claude-effort")?.reasoning).toBe(true);
+		expect(claude.get("claude-budget")?.thinkingLevelMap).toBeUndefined();
+		expect(claude.get("claude-budget")?.reasoning).toBe(true);
+	});
+
 	it("reads all model pages, deduplicates IDs, and preserves useful names", async () => {
 		const requests: string[] = [];
 		const server = createServer((request, response) => {

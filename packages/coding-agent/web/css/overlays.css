@@ -97,6 +97,13 @@
 .settings-modal .pf-modal .modal-body, .pf-modal .modal-body { padding: 8px 24px 20px; }
 .pf-conflict { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); }
 .pf-changes { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: var(--fs-sm); color: var(--text-2); }
-.pf-review .pf-detect-list { max-height: 280px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-inset); }
-.pf-review .pf-detect-row { cursor: pointer; }
+.pf-catalog { max-height: 280px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-inset); }
+.pf-catalog .pf-detect-row { cursor: pointer; }
+.pf-section { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-lg); }
+.pf-section-head { min-height: 28px; align-items: center; gap: 8px; }
+.pf-subhead { font-size: var(--fs-sm); }
+.pf-status { margin: 0; align-items: center; }
+.pf-model-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; color: var(--text-1); }
+.pf-model-title { font-weight: 500; }
+.pf-model-badges { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 @media (max-width: 760px) { .pf-two, .pf-model-grid { grid-template-columns: 1fr; } }
