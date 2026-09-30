@@ -113,6 +113,16 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			} finally {
 				clearTimeout(timer);
 			}
+			// Also settle what each configured model really supports (thinking efforts included) from the provider's
+			// catalog or, where it says nothing, with minimal probe requests; no model is added here. This is the same
+			// operation as Providers → Refresh models, restricted to the configured models, and writes to models.json.
+			const disabled = new Set(host.session.settingsManager.getDisabledProviders());
+			const configured = runtime.getProviders().filter((provider) => !disabled.has(provider.id));
+			await Promise.all(
+				configured.map((provider) =>
+					runtime.refreshProviderModels(provider.id, { addNew: false, timeoutMs: 90_000 }).catch(() => undefined),
+				),
+			);
 			// The refresh can change what the current model supports (thinking efforts included).
 			if (!host.session.isStreaming) await host.session.reconcileModelAfterConfigChange().catch(() => {});
 		}
@@ -211,7 +221,17 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			}
 		}
 		const skills = loader.getSkills().skills;
-		return buildContextBreakdown({
+		// Cache use of the whole session so far, summed from what the provider reported for every request (compaction
+		// and branch summaries included). Without any reported cache activity the rate is unknown, not 0%.
+		const totals = session.getSessionStats().tokens;
+		const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
+		const cache = {
+			input: totals.input,
+			read: totals.cacheRead,
+			write: totals.cacheWrite,
+			hitRate: totals.cacheRead + totals.cacheWrite > 0 && prompt > 0 ? totals.cacheRead / prompt : null,
+		};
+		const breakdown = buildContextBreakdown({
 			budget: session.contextBudget,
 			systemPrompt: agent.state.systemPrompt,
 			contextFiles: loader.getAgentsFiles().agentsFiles,
@@ -221,6 +241,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			deferredTools: [...deferred],
 			messages,
 		});
+		return { ...breakdown, cache };
 	});
 
 	server.route("POST", "/api/compact", async ({ body }) => {

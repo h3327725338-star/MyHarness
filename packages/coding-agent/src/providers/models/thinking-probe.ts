@@ -1,8 +1,8 @@
 /**
- * Third-priority thinking-effort detection: real minimal requests to the model.
+ * Second-priority thinking-effort detection: real minimal requests to the model.
  *
- * Order of trust (see `official-thinking.ts` for the first two): the endpoint's own model metadata, then the
- * provider's documented rules for its own API host, and only when neither settles a level, this probe.
+ * Order of trust (see `thinking-capability.ts`): the endpoint's own model metadata, and only when it does not settle a
+ * level, this probe. Nothing is inferred from the model's name.
  *
  * A probe sends one tiny request per level (16 output tokens) with the effort parameter of the model's own API
  * protocol (`reasoning_effort`, `reasoning.effort`, `output_config.effort`, `thinkingConfig.thinkingLevel`). What the
@@ -13,6 +13,11 @@
  * parameter, so a 2xx for a real level means the level is applied (`supported`). A server that accepts the canary
  * ignores the parameter, so a 2xx proves nothing (`unverified`). Only a rejection that names the effort parameter
  * counts as `unsupported`; rate limits, quota, auth, timeouts, 5xx and every other failure are `unknown`.
+ *
+ * Some servers answer a bad value with a generic 400/422 that does not name the parameter. Then a control request
+ * without any effort parameter decides: if it succeeds while the bogus value got a 400/422, the effort value alone
+ * caused the rejection, so the server validates it and the same kind of generic rejection of a real level is
+ * `unsupported`. If the control fails too, the failure has nothing to do with effort and every level stays `unknown`.
  */
 
 import type { ThinkingLevel, ThinkingLevelMap } from "@myharness/ai";
@@ -112,9 +117,13 @@ const PROBE_MAX_TOKENS = 16;
 /** Names of the effort parameter in error messages of the supported protocols. */
 const EFFORT_PARAMETER =
 	/reasoning_effort|reasoning\.effort|reasoning effort|output_config|\beffort\b|thinking_?level|thinking_?config/iu;
+/** A generic rejection of a real level must repeat this many times in a row to count as `unsupported`. */
+const GENERIC_REJECTION_ATTEMPTS = 3;
+const TOKEN_WORDS = /token|length|too small|too low/iu;
 const TOKEN_PARAMETER = /max_completion_tokens|max_tokens|max_output_tokens/iu;
 
-type Outcome = "ok" | "rejected" | "other";
+/** `invalid` is a 400/422 that does not name the effort parameter. */
+type Outcome = "ok" | "rejected" | "invalid" | "other";
 interface Reply {
 	outcome: Outcome;
 	status?: number;
@@ -140,7 +149,7 @@ interface ProbeRequest {
 
 function buildRequest(
 	options: ProbeThinkingOptions,
-	effort: string,
+	effort: string | undefined,
 	tokenField: "max_tokens" | "max_completion_tokens",
 ): ProbeRequest {
 	const base = trimSlash(options.baseUrl);
@@ -152,7 +161,7 @@ function buildRequest(
 					model: options.modelId,
 					messages: [{ role: "user", content: "1" }],
 					[tokenField]: PROBE_MAX_TOKENS,
-					reasoning_effort: effort,
+					...(effort === undefined ? {} : { reasoning_effort: effort }),
 				},
 			};
 		case "openai-responses":
@@ -162,7 +171,7 @@ function buildRequest(
 					model: options.modelId,
 					input: "1",
 					max_output_tokens: PROBE_MAX_TOKENS,
-					reasoning: { effort },
+					...(effort === undefined ? {} : { reasoning: { effort } }),
 					store: false,
 				},
 			};
@@ -173,7 +182,7 @@ function buildRequest(
 					model: options.modelId,
 					max_tokens: PROBE_MAX_TOKENS,
 					messages: [{ role: "user", content: "1" }],
-					output_config: { effort },
+					...(effort === undefined ? {} : { output_config: { effort } }),
 				},
 			};
 		case "google-generative-ai": {
@@ -186,7 +195,7 @@ function buildRequest(
 					contents: [{ role: "user", parts: [{ text: "1" }] }],
 					generationConfig: {
 						maxOutputTokens: PROBE_MAX_TOKENS,
-						thinkingConfig: { thinkingLevel: effort.toUpperCase() },
+						...(effort === undefined ? {} : { thinkingConfig: { thinkingLevel: effort.toUpperCase() } }),
 					},
 				},
 			};
@@ -210,8 +219,8 @@ async function send(options: ProbeThinkingOptions, request: ProbeRequest): Promi
 		if (response.ok) return { outcome: "ok", status: response.status, text };
 		// Only a client-side validation error can be a statement about the parameter; every other status (auth, quota,
 		// rate limit, model not found, server error) says nothing about the effort level.
-		if ((response.status === 400 || response.status === 422) && EFFORT_PARAMETER.test(text)) {
-			return { outcome: "rejected", status: response.status, text };
+		if (response.status === 400 || response.status === 422) {
+			return { outcome: EFFORT_PARAMETER.test(text) ? "rejected" : "invalid", status: response.status, text };
 		}
 		return { outcome: "other", status: response.status, text };
 	} catch {
@@ -222,7 +231,7 @@ async function send(options: ProbeThinkingOptions, request: ProbeRequest): Promi
 /** Runs one request; retries once with the other output-token field when the server rejects the one used. */
 function requestFor(
 	options: ProbeThinkingOptions,
-	effort: string,
+	effort: string | undefined,
 	state: { tokenField: "max_tokens" | "max_completion_tokens" },
 ): Promise<Reply> {
 	const run = async (): Promise<Reply> => send(options, buildRequest(options, effort, state.tokenField));
@@ -269,13 +278,41 @@ export async function probeThinkingLevels(options: ProbeThinkingOptions): Promis
 		return result;
 	}
 	// Only a server that turns a bogus value down validates the parameter and so can confirm a real one.
-	const validates = canary.outcome === "rejected";
+	let validates = canary.outcome === "rejected";
+	// A generic rejection names no parameter: it counts only if the same request without any effort succeeds.
+	let genericRejection = false;
+	if (canary.outcome === "invalid") {
+		const control = await requestFor(options, undefined, state);
+		if (control.outcome !== "ok" || options.signal?.aborted) {
+			for (const level of levels) result[level] = "unknown";
+			return result;
+		}
+		validates = true;
+		genericRejection = true;
+	}
+	// A server that accepted a bogus value accepts every value without checking it: one request already says all a
+	// request per level would, so no further requests are sent.
+	if (canary.outcome === "ok") {
+		for (const level of levels) result[level] = "unverified";
+		return result;
+	}
 
 	await Promise.all(
 		levels.map(async (level) => {
 			const value = options.levelValues?.[level];
-			const reply = await requestFor(options, typeof value === "string" ? value : level, state);
-			if (reply.outcome === "rejected") result[level] = "unsupported";
+			const effort = typeof value === "string" ? value : level;
+			let reply = await requestFor(options, effort, state);
+			// A generic rejection blames the level only if it does not complain about the token limit (reasoning may
+			// need more room than 16 tokens) and repeats: load-balanced services can refuse a level on one backend only.
+			const genericNo = (r: Reply) => genericRejection && r.outcome === "invalid" && !TOKEN_WORDS.test(r.text);
+			for (let repeat = 1; genericNo(reply) && repeat < GENERIC_REJECTION_ATTEMPTS; repeat++) {
+				const again = await requestFor(options, effort, state);
+				if (!genericNo(again)) {
+					reply = again.outcome === "ok" ? { outcome: "other", text: "" } : again;
+					break;
+				}
+			}
+			if (reply.outcome === "rejected" || genericNo(reply)) result[level] = "unsupported";
 			else if (reply.outcome === "ok") result[level] = validates ? "supported" : "unverified";
 			else result[level] = "unknown";
 		}),

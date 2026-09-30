@@ -2,13 +2,13 @@
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
 import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
-import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, setView, state, toast, useStore } from "./store.js";
+import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
-import { NAV as SETTINGS_NAV, SECTION_OF } from "./overlays-settings.js";
+import { deleteCustomProvider, refreshProviderModels } from "./overlays-settings.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
-import { chatTitle, clip, effortHint, effortName, refEffortModel, fmtDateTime, fmtTokens, relTime } from "./util.js";
+import { chatTitle, clip, effortHint, effortName, refEffortModel, fmtDateTime, fmtTokens, pointerMoved, relTime } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -108,29 +108,193 @@ function modelScreen(ctx, arg) {
 
 // ---- /settings ----------------------------------------------------------------------------------------------
 
+/** A settings item by id, as the server lists it (GET /api/settings). */
+const settingItem = (id) => state.settings?.items.find((item) => item.id === id);
+
+/** A root row for one setting: the terminal's English name, and a description in the interface language. */
+function settingRow(id, label, desc) {
+	const item = settingItem(id);
+	if (!item) return null;
+	return { ...itemRow(item), key: id, label, desc: t(desc), search: `${id} ${item.label} ${item.description || ""}` };
+}
+
+/** A screen with a few related settings (Web Search, Context Window, Warnings …). */
+function groupScreen(title, ids, subtitle) {
+	return () => {
+		const rows = ids.map((id) => settingItem(id)).filter(Boolean).map((item) => itemRow(item));
+		return { title, subtitle, rows, loading: !state.settings };
+	};
+}
+
+const onOff = (value) => (value ? t("On") : t("Off"));
+
+/**
+ * The same list, order and names as the terminal's /settings; every row edits the same settings.json / models.json /
+ * credentials through the same server calls. A few Web-only settings follow under "More".
+ */
 function settingsRoot() {
 	const settings = useStore((s) => s.settings);
+	const snap = useStore((s) => s.snap);
 	useEffect(() => {
 		if (!state.settings) loadSettings();
 	}, []);
-	const sectionLabel = (item) => t(SETTINGS_NAV.find((n) => n.id === SECTION_OF[item.section])?.label ?? item.section);
+	const model = snap?.model;
+	const value = (id) => settingItem(id)?.value;
+	const nav = (key, label, desc, icon, build, extra = {}) => ({ key, label, desc: t(desc), icon, chevron: true, onEnter: (ctx) => ctx.push(build), ...extra });
+	const web = value("webSearch.enabled");
+	const contextSummary = [value("contextWindowMain") || t("model"), value("contextWindowSubAgent") || t("model")].join(" · ");
+	const rows = [
+		nav("providers", "Providers", "Manage model services and keys", "key", (c) => providersScreen(c)),
+		nav("github", "GitHub Connect", "Connect GitHub", "gitBranch", (c) => githubScreen(c)),
+		nav("default-model", "Default Model", "Choose the main model", "cpu", (c) => modelScreen(c, ""), { value: model ? `${model.provider}/${model.id} · ${snap?.thinking?.level ?? "off"}` : t("Not selected") }),
+		settingRow("autoMemory", "Auto Memory", "Remember preferences and project facts"),
+		settingRow("subAgent", "Sub Agent", "Investigate complex tasks in parallel"),
+		nav("web-search", "Web Search", "Search the web", "globe", groupScreen("Web Search", ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback"]), { value: web === undefined ? "" : onOff(web) }),
+		settingRow("codeIntelligence.enabled", "Code Intelligence", "Optional semantic code modules"),
+		nav("context-window", "Context Window", "Context limits", "layers", groupScreen("Context Window", ["contextWindowMain", "contextWindowSubAgent"], t("Empty uses the model's own window.")), { value: contextSummary }),
+		settingRow("visionAssistant", "Vision Assistant", "Use a dedicated model to look at images"),
+		nav("git", "Git", "Keep local versions of the code", "gitBranch", () => gitRoot(), { value: snap?.git ? onOff(snap.git.enabled) : "" }),
+		settingRow("compactionModel", "Compact Model", "Model and thinking effort used for compaction"),
+		settingRow("autoCompact", "Auto-compact", "Compact long conversations automatically"),
+		settingRow("steeringMode", "Steering mode", "How messages sent during a reply are delivered"),
+		settingRow("followUpMode", "Follow-up mode", "How messages for after the task are delivered"),
+		settingRow("transport", "Transport", "How to connect to the model"),
+		settingRow("httpIdleTimeoutMs", "HTTP idle timeout", "How long an idle connection may stay open"),
+		settingRow("hideThinkingBlock", "Collapse transcript", "Terminal UI: collapse thinking and tool output"),
+		settingRow("showCacheMissNotices", "Cache miss notices", "Notice when prompt-cache reuse fails"),
+		settingRow("collapseChangelog", "Collapse changelog", "Terminal UI: condensed changelog after updates"),
+		settingRow("quietStartup", "Quiet startup", "Terminal UI: hide startup details"),
+		settingRow("enableInstallTelemetry", "Install telemetry", "Send anonymous version statistics"),
+		settingRow("defaultProjectTrust", "Default project trust", "Default trust for new projects"),
+		nav("project-trust", "Project trust", "Trust decision for this project", "shield", (c) => projectTrustScreen(c), { value: snap?.trust?.requiresTrust ? (snap.trust.trusted ? t("Trusted") : t("Not trusted")) : "" }),
+		settingRow("doubleEscapeAction", "Double-escape action", "Compatibility setting, currently has no effect"),
+		nav("warnings", "Warnings", "Manage billing-related warnings", "alertTriangle", groupScreen("Warnings", ["warnings.anthropicExtraUsage"])),
+		nav("thinking", "Thinking level", "Model thinking effort", "brain", () => effortScreen(), { value: snap?.thinking?.supported ? effortName(snap.thinking.level) : "" }),
+		nav("appearance", "Appearance", "Theme, language and layout of the Web UI (the terminal keeps its own theme)", "eye", () => appearanceScreen()),
+		settingRow("showImages", "Show images", "Terminal UI: show images inline"),
+		settingRow("imageWidthCells", "Image width", "Terminal UI: width of inline images"),
+		settingRow("autoResizeImages", "Auto-resize images", "Shrink oversized images automatically"),
+		settingRow("blockImages", "Block images", "Never send images to the model"),
+		settingRow("enableSkillCommands", "Skill commands", "Add skills as slash commands"),
+		settingRow("showHardwareCursor", "Show hardware cursor", "Terminal UI: show the terminal's input cursor"),
+		settingRow("editorPaddingX", "Editor padding", "Terminal UI: padding of the input box"),
+		settingRow("outputPad", "Output padding", "Terminal UI: padding of messages"),
+		settingRow("autocompleteMaxVisible", "Autocomplete max items", "Terminal UI: number of completion candidates"),
+		settingRow("clearOnShrink", "Clear on shrink", "Terminal UI: clear leftover text"),
+		settingRow("showTerminalProgress", "Terminal progress", "Terminal UI: show the running state"),
+		settingRow("popupNotifications", "Popup notifications", "Desktop popup when a task ends"),
+		{ key: "more", group: t("More") },
+		settingRow("autoRetry", "Auto-retry", "Retry transient provider errors"),
+		settingRow("enabledModels", "Model cycling scope", "Models used when cycling models"),
+		settingRow("webShutdownGraceSeconds", "Web UI exit delay", "Seconds the server waits after the last page closes"),
+		settingRow("shellPath", "Shell path", "Shell used by the bash tool"),
+		settingRow("shellCommandPrefix", "Command prefix", "Prepended to every bash command"),
+		settingRow("enableAnalytics", "Analytics", "Analytics data sharing"),
+		nav("about", "About", "Version, shortcuts and quitting", "info", () => aboutScreen()),
+	].filter(Boolean);
+	return { title: t("Settings"), placeholder: t("Search settings…"), loading: !settings, rows };
+}
+
+/** Project Trust of the current project (the terminal asks for it when a project is opened). */
+function projectTrustScreen() {
+	const { data: trust, reload } = useLoaded(() => api("/api/trust"));
+	if (!trust) return { title: t("Project trust"), loading: true, rows: [] };
 	return {
-		title: t("Settings"),
-		placeholder: t("Search settings…"),
-		rows: [
-			...SETTINGS_NAV.map((section) => ({
-				key: section.id,
-				label: t(section.label),
-				icon: section.icon,
-				chevron: true,
-				onEnter: (ctx) => ctx.push((c) => settingsSection(c, section.id)),
-			})),
-			// Typing searches every individual setting too, wherever it lives; these rows only appear while searching.
-			...(settings?.items || []).map((item) => {
-				const row = itemRow(item);
-				return { ...row, key: `item-${item.id}`, onlyFiltered: true, desc: [sectionLabel(item), row.desc].filter(Boolean).join(" · ") };
-			}),
-		],
+		title: t("Project trust"),
+		subtitle: `${trust.cwd}\n${trust.requiresTrust ? (trust.trusted ? t("Trusted — project settings, skills, prompts and extensions are loaded.") : t("Not trusted — project resources are ignored and project extensions do not run.")) : t("This project has no resources that need trust.")}`,
+		rows: trust.requiresTrust
+			? trust.options.map((o) => ({
+					key: o.id,
+					label: tr(o.label),
+					onEnter: async (c) => {
+						if (await attempt(() => post("/api/trust", { option: o.id }))) {
+							toast(t("Trust decision saved. Reloading resources…"), "info", 3000);
+							await attempt(() => post("/api/resources/reload"));
+							await loadSnapshot();
+							reload();
+							c.pop();
+						}
+					},
+				}))
+			: [],
+		empty: t("This project has no resources that need trust."),
+	};
+}
+
+// ---- GitHub Connect (same account connection as the terminal) ----------------------------------------------------
+function githubScreen() {
+	const { data, error, reload } = useLoaded(() => api("/api/github"));
+	const event = useStore((s) => s.githubEvent);
+	const [prompt, setPrompt] = useState(null);
+	const [waiting, setWaiting] = useState(false);
+	useEffect(() => {
+		if (!event) return;
+		if (event.type === "prompt") return setPrompt(event.prompt);
+		setWaiting(false);
+		setPrompt(null);
+		if (event.type === "done") toast(event.verified ? t("The connection is valid; GitHub confirmed the account.") : t("GitHub connected; the credentials are saved."), "info", 5000);
+		if (event.type === "error") toast(serverText(event.message), "error", 9000);
+		reload();
+	}, [event?.nonce]);
+	if (!data) return { title: "GitHub Connect", loading: !error, error, rows: [] };
+	const account = data.account;
+	const pendingPrompt = prompt ?? data.pending?.prompt ?? null;
+	const busy = waiting || !!data.pending;
+	const start = async (verify) => {
+		setWaiting(true);
+		if (!(await attempt(() => post("/api/github/connect", { verify })))) setWaiting(false);
+	};
+	const clientIdScreen = () =>
+		inputScreen({
+			title: "GitHub Client ID",
+			label: t("Paste the Client ID of your GitHub OAuth app (no Client Secret needed). Create one with Homepage and callback URL http://localhost and “Enable Device Flow” ticked."),
+			placeholder: "Client ID",
+			onSubmit: async (value, c) => {
+				if (!value.trim()) return;
+				if (await attempt(() => post("/api/github/client-id", { clientId: value }), { success: t("Saved.") })) {
+					reload();
+					c.pop();
+				}
+			},
+		});
+	const rows = [];
+	if (busy) {
+		if (pendingPrompt) rows.push({ key: "code", label: t("Enter the code {code} on GitHub", { code: pendingPrompt.code }), desc: pendingPrompt.url, icon: "externalLink", onEnter: () => window.open(pendingPrompt.url, "_blank", "noopener") });
+		else rows.push({ key: "wait", label: t("Waiting for GitHub…"), disabled: true });
+		rows.push({ key: "cancel", label: t("Cancel"), icon: "x", onEnter: async () => (await attempt(() => post("/api/github/cancel")), setWaiting(false), setPrompt(null), reload()) });
+	} else if (account) {
+		rows.push({
+			key: "disconnect",
+			label: t("Disconnect…"),
+			desc: t("Removes the saved credentials from this computer"),
+			danger: true,
+			chevron: true,
+			onEnter: (c) =>
+				c.push(() => ({
+					title: t("Disconnect GitHub?"),
+					subtitle: t("The saved credentials of @{login} are removed from this computer. The account and repositories are not deleted, and GitHub's own authorization stays until you revoke it there.", { login: account.login }),
+					rows: [
+						{ key: "keep", label: t("Keep the connection"), onEnter: (cc) => cc.pop() },
+						{ key: "remove", label: t("Disconnect"), danger: true, onEnter: async (cc) => { if (await attempt(() => post("/api/github/disconnect"))) { reload(); cc.pop(); } } },
+						{ key: "revoke", label: t("Open GitHub authorization settings"), icon: "externalLink", onEnter: () => window.open("https://github.com/settings/applications", "_blank", "noopener") },
+					],
+				})),
+		});
+		rows.push({ key: "verify", label: t("Verify connection"), desc: t("Check the login, refreshing it when needed"), onEnter: () => start(true) });
+		rows.push({ key: "reconnect", label: t("Reauthorize"), desc: t("For an expired login or missing permissions"), onEnter: () => start(false) });
+	} else {
+		rows.push({ key: "connect", label: t("Connect GitHub"), desc: t("Authorize this device in the browser"), icon: "gitBranch", ...(data.clientIdConfigured ? { onEnter: () => start(false) } : { chevron: true, onEnter: (c) => c.push(clientIdScreen) }) });
+	}
+	rows.push({ key: "client", label: "Client ID", desc: data.clientIdFromEnvironment ? t("Set by MYHARNESS_GITHUB_CLIENT_ID, which takes precedence.") : t("First setup or a different app"), value: data.clientIdConfigured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(clientIdScreen) });
+	rows.push({ key: "new-app", label: t("Create a GitHub app"), icon: "externalLink", onEnter: () => window.open("https://github.com/settings/applications/new", "_blank", "noopener") });
+	return {
+		title: "GitHub Connect",
+		subtitle: [
+			data.error ? serverText(data.error) : "",
+			account ? t("Saved account: @{login}", { login: account.login }) : t("Connect GitHub so MyHarness can work with your GitHub data: private repositories, email addresses, organizations and workflows."),
+			data.needsReauthorization ? t("This older connection lacks permissions; reauthorize to reach private repositories.") : "",
+		].filter(Boolean).join("\n"),
+		rows,
 	};
 }
 
@@ -164,7 +328,8 @@ function shownValue(item) {
 }
 
 function itemRow(item) {
-	const row = { key: item.id, label: tr(item.label), desc: tr(item.description), value: shownValue(item), chevron: true };
+	// Setting names stay in English (as in the terminal); descriptions follow the interface language.
+	const row = { key: item.id, label: item.label, desc: tr(item.description), value: shownValue(item), chevron: true };
 	switch (item.type) {
 		case "boolean":
 			return { ...row, chevron: false, toggle: !!item.value, onEnter: () => applySetting(item.id, !item.value) };
@@ -307,9 +472,9 @@ function appearanceScreen() {
 				key: "readWidth",
 				label: t("Reading width"),
 				desc: t("Width of the conversation column."),
-				value: `${view.readWidth}px`,
+				value: view.readWidth === "auto" ? t("Auto") : `${view.readWidth}px`,
 				chevron: true,
-				onEnter: (ctx) => ctx.push(() => inputScreen({ title: t("Reading width"), label: t("Width of the conversation column."), value: String(state.view.readWidth), type: "number", min: 620, max: 1100, onSubmit: (value, c) => (setView({ readWidth: Math.max(620, Math.min(1100, Number(value) || 780)) }), c.pop()) })),
+				onEnter: (ctx) => ctx.push(() => inputScreen({ title: t("Reading width"), label: t("Width of the conversation column in px (620–1100). Empty: grows with the window."), value: state.view.readWidth === "auto" ? "" : String(state.view.readWidth), type: "number", min: 620, max: 1100, placeholder: t("Auto"), onSubmit: (value, c) => (setView({ readWidth: readWidthValue(value) }), c.pop()) })),
 			},
 			choice("processDefault", "Run steps", "Whether the steps behind a finished answer start expanded.", "processDefault", [{ value: "collapsed", label: "Collapsed" }, { value: "expanded", label: "Expanded" }]),
 			{
@@ -327,58 +492,6 @@ function appearanceScreen() {
 			},
 		],
 	};
-}
-
-function settingsSection(ctx, id) {
-	const settings = useStore((s) => s.settings);
-	const [trust, setTrust] = useState(null);
-	useEffect(() => {
-		loadSettings();
-		if (!state.models) loadModels();
-		if (id === "safety") api("/api/trust").then(setTrust).catch(() => {});
-	}, []);
-	const nav = SETTINGS_NAV.find((n) => n.id === id);
-	if (id === "appearance") return appearanceScreen();
-	if (id === "providers") return providersScreen(ctx);
-	if (id === "about") return aboutScreen();
-	if (!settings) return { title: t(nav.label), loading: true, rows: [] };
-	const rows = [];
-	let lastSection = "";
-	if (id === "safety" && trust) {
-		rows.push({ key: "trust-h", group: t("Project trust") });
-		rows.push({
-			key: "trust",
-			label: trust.cwd,
-			desc: trust.requiresTrust ? (trust.trusted ? t("Trusted — project settings, skills, prompts and extensions are loaded.") : t("Not trusted — project resources are ignored and project extensions do not run.")) : t("This project has no resources that need trust."),
-			chevron: !!trust.requiresTrust,
-			onEnter: trust.requiresTrust
-				? (c) =>
-						c.push(() =>
-							optionsScreen({
-								title: t("Project trust"),
-								options: trust.options.map((o) => ({ value: o.id, label: tr(o.label) })),
-								onPick: async (option, cc) => {
-									if (await attempt(() => post("/api/trust", { option }))) {
-										toast(t("Trust decision saved. Reloading resources…"), "info", 3000);
-										await attempt(() => post("/api/resources/reload"));
-										await loadSnapshot();
-										api("/api/trust").then(setTrust).catch(() => {});
-										cc.pop();
-									}
-								},
-							}),
-						)
-				: undefined,
-		});
-	}
-	for (const item of settings.items.filter((i) => SECTION_OF[i.section] === id)) {
-		if (item.section !== lastSection) {
-			rows.push({ key: `g-${item.section}`, group: tr(item.section) });
-			lastSection = item.section;
-		}
-		rows.push(itemRow(item));
-	}
-	return { title: t(nav.label), rows, placeholder: t("Search settings…") };
 }
 
 function aboutScreen() {
@@ -415,7 +528,7 @@ function providersScreen(ctx) {
 				chevron: true,
 				onEnter: (c) => c.push((cc) => providerScreen(cc, p.id)),
 			})),
-			{ key: "custom", label: t("Edit custom providers (models.json)…"), icon: "externalLink", onEnter: (c) => (c.close(), setView({ settingsOpen: true, settingsSection: "providers" })) },
+			{ key: "add", label: t("Add Provider…"), desc: t("Connect a compatible API service"), icon: "plus", onEnter: (c) => (c.close(), setView({ providerEditor: { id: null } })) },
 		],
 		empty: t("No providers configured yet. Add a custom provider below, or sign in to one."),
 	};
@@ -473,6 +586,8 @@ function providerScreen(ctx, id) {
 		});
 	}
 	if (provider.supportsOAuth) rows.push({ key: "oauth", label: t("Sign in with OAuth"), icon: "key", desc: login?.type === "auth_url" ? t("Waiting for the browser sign-in…") : login?.type === "device_code" ? `${login.verificationUri} · ${login.userCode}` : undefined, onEnter: () => act(() => post("/api/providers/oauth/login", { id }), t("Signed in")) });
+	rows.push({ key: "refresh", label: t("Refresh models"), desc: t("Read the provider's model list and detect what each model supports"), icon: "refresh", disabled: !provider.enabled, onEnter: () => refreshProviderModels(id) });
+	if (provider.custom) rows.push({ key: "config", label: t("Provider config & models…"), desc: t("{n} models · also holds the advanced JSON editor", { n: provider.modelCount }), icon: "edit", onEnter: (cc) => (cc.close(), setView({ providerEditor: { id } })) });
 	if (c?.removable) {
 		rows.push({
 			key: "logout",
@@ -493,6 +608,7 @@ function providerScreen(ctx, id) {
 				),
 		});
 	}
+	if (provider.custom) rows.push({ key: "delete", label: t("Delete provider…"), danger: true, onEnter: async (cc) => { if (await deleteCustomProvider(id, provider.name)) cc.pop(); } });
 	return { title: provider.name, subtitle: `${provider.id}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`, rows };
 }
 
@@ -721,7 +837,7 @@ function generalScreen() {
 		if (sessions === undefined) loadUnbound();
 	}, []);
 	return {
-		title: t("General"),
+		title: t("No Folder"),
 		subtitle: t("Chats that belong to no workspace"),
 		loading: sessions === undefined && !error,
 		error,
@@ -754,7 +870,7 @@ function workspaceRoot() {
 				chevron: true,
 				onEnter: (c) => c.push(() => workspaceScreen(w)),
 			})),
-			{ key: "general", label: t("General"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
+			{ key: "general", label: t("No Folder"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
 			{
 				key: "add",
 				label: t("Add workspace…"),
@@ -782,7 +898,7 @@ const ROOT = {
 // ---- Rendering --------------------------------------------------------------------------------------------------
 function Row({ row, selected, busy, onClick, onHover }) {
 	if (row.group) return html`<div class="cp-group">${row.group}</div>`;
-	return html`<div class=${`cp-row ${selected ? "sel" : ""} ${row.disabled ? "disabled" : ""} ${row.danger ? "danger" : ""}`} role="option" aria-selected=${selected} aria-disabled=${row.disabled ? "true" : undefined} onMouseMove=${onHover} onClick=${onClick}>
+	return html`<div class=${`cp-row ${selected ? "sel" : ""} ${row.disabled ? "disabled" : ""} ${row.danger ? "danger" : ""}`} role="option" aria-selected=${selected} aria-disabled=${row.disabled ? "true" : undefined} onMouseMove=${(e) => pointerMoved(e) && onHover()} onClick=${onClick}>
 		<span class="cp-ico">${row.icon ? html`<${Icon} name=${row.icon} size=${15} />` : row.check ? html`<${Icon} name="check" size=${15} />` : null}</span>
 		<span class="cp-main"><span class="cp-label truncate">${row.label}</span>${row.desc ? html`<span class="cp-desc dim truncate">${row.desc}</span>` : null}</span>
 		${(row.badges || []).map((b) => html`<span class="badge" key=${b}>${b}</span>`)}
@@ -859,7 +975,8 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	// Focus lands in the search box (or on the panel when there is none) as soon as the panel is drawn — before the next
 	// keystroke, so typing right after Enter already searches — and stays there while the list changes.
 	useLayoutEffect(() => focusInput(), [filterable]);
-	useEffect(() => {
+	// Keep the highlighted row in view, including when ↑/↓ wrap around from one end of the list to the other.
+	useLayoutEffect(() => {
 		list.current?.querySelector(".cp-row.sel")?.scrollIntoView({ block: "nearest" });
 	}, [current, rows.length]);
 	useEffect(() => {
@@ -963,13 +1080,27 @@ const entry = (build) => ({ id: ++entryId, build, selKey: undefined, filter: und
 function initialStack(cmd) {
 	const stack = [entry(ROOT[cmd.name] || (() => ({ title: cmd.name, rows: [] })))];
 	// After a language change the app is rebuilt; `path` brings the panel back to the level the user was on.
-	if (cmd.name === "settings") for (const id of cmd.path || []) stack.push(entry((c) => settingsSection(c, id)));
+	if (cmd.name === "settings") for (const id of cmd.path || []) if (id === "appearance") stack.push(entry(() => appearanceScreen()));
 	return stack;
 }
+
+/** Things drawn over the page that belong to what the panel is doing (a confirmation, a form, a menu, a toast). */
+const OVERLAYS = ".scrim, .modal, .popover, .toasts";
 
 function PanelBody({ cmd }) {
 	const [stack, setStack] = useState(() => initialStack(cmd));
 	const [titles, setTitles] = useState({});
+	const panel = useRef(null);
+	// A click anywhere outside the panel closes it (every level at once); the draft in the input box is left alone.
+	useEffect(() => {
+		const onDown = (event) => {
+			const target = event.target;
+			if (!(target instanceof Element) || panel.current?.contains(target) || target.closest(OVERLAYS)) return;
+			closeCommand();
+		};
+		document.addEventListener("mousedown", onDown, true);
+		return () => document.removeEventListener("mousedown", onDown, true);
+	}, []);
 	const ctx = useMemo(
 		() => ({
 			push: (build) => setStack((s) => [...s, entry(build)]),
@@ -985,7 +1116,7 @@ function PanelBody({ cmd }) {
 	);
 	const top = stack[stack.length - 1];
 	const heading = stack.map((e) => titles[e.id]).filter(Boolean);
-	return html`<div class="cp fade-in" role="dialog" aria-label=${heading.join(" › ") || t("Command")}>
+	return html`<div class="cp fade-in" ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")}>
 		<div class="cp-head">
 			${stack.length > 1 ? html`<button class="icon-btn sm" onClick=${ctx.pop} title=${`${t("Back")} (←)`} aria-label=${t("Back")}><${Icon} name="arrowLeft" size=${15} /></button>` : html`<${Icon} name="bolt" size=${15} class="c-dim" />`}
 			<span class="cp-title truncate">${heading.map((part, i) => html`${i ? html`<span class="cp-sep">›</span>` : null}<span class=${i === heading.length - 1 ? "cur" : "dim"}>${part}</span>`)}</span>

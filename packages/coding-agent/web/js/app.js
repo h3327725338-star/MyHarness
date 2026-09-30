@@ -10,7 +10,7 @@ import { FilesPanel } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
 import { ContextPanel } from "./panel-context.js";
 import { GitDialog } from "./overlays-git.js";
-import { SettingsModal } from "./overlays-settings.js";
+import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
@@ -233,6 +233,7 @@ export function App() {
 		</main>
 		${view.panelOpen ? html`<${PanelContainer} />` : null}
 		${view.settingsOpen ? html`<${SettingsModal} />` : null}
+		${view.providerEditor ? html`<${ProviderEditorHost} key=${view.providerEditor.id ?? ""} id=${view.providerEditor.id} />` : null}
 		${view.palette ? html`<${CommandPalette} />` : null}
 		${view.dialog?.type === "git" ? html`<${GitDialog} kind=${view.dialog.kind} />` : null}
 		${view.dialog?.type === "confirm" ? html`<${ConfirmModal} dialog=${view.dialog} />` : null}

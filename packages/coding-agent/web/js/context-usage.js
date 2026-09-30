@@ -1,25 +1,10 @@
-// Context usage details: how full the model's context window is and what fills it. Every number comes from
-// GET /api/context, which measures the real system prompt, tool definitions and messages of the session on screen.
+// Context usage: how full the model's context window is, the session's cache hit rate and the model's output speed.
+// The numbers come from GET /api/context (measured on the session on screen) and the snapshot's `speed`.
 import { html, useEffect, useRef, useState, Popover, Spinner } from "./ui.js";
 import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { t } from "./i18n.js";
 import { getLang } from "./lang.js";
-import { fmtTokens } from "./util.js";
-
-const CATEGORY = {
-	systemPrompt: "System prompt",
-	projectInstructions: "Project instructions",
-	skills: "Skills",
-	memoryPolicy: "Memory policy",
-	builtinTools: "Built-in tools",
-	extensionTools: "Extension tools",
-	userMessages: "Your messages",
-	assistantMessages: "Assistant messages",
-	toolResults: "Tool results",
-	memoryRecall: "Recalled memory",
-	compactionSummary: "Compaction summary",
-};
 
 const num = (n) => Math.round(n).toLocaleString(getLang());
 const pct = (n, of) => (of > 0 ? (n / of) * 100 : 0);
@@ -44,43 +29,51 @@ function useBreakdown(active) {
 	return { data, error };
 }
 
-function Row({ label, value, hint, cls }) {
-	return html`<div class="cu-row"><span class="cu-label">${cls ? html`<i class=${`cu-swatch ${cls}`} />` : null}${label}</span><span class="cu-value">${value}</span>${hint ? html`<span class="cu-hint dim">${hint}</span>` : null}</div>`;
+/** Compact token count for the context display: 12200 → "12.2K", 128000 → "128K" (the exact number is in the tooltip). */
+export function fmtK(n) {
+	if (n == null || !Number.isFinite(n)) return "—";
+	if (n < 1000) return String(Math.round(n));
+	if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/u, "")}K`;
+	return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/u, "")}M`;
 }
 
+/** Output speed of the model: live while it streams, the last reply's average afterwards; "—" when not measurable. */
+export function SpeedValue({ speed }) {
+	const value = speed?.tps;
+	const title = speed?.live
+		? value == null
+			? t("Measured from the output tokens the provider reports while streaming; this provider reports them only at the end, so the speed appears when the reply is complete.")
+			: t("Live: output tokens per second while the model writes (waiting for the first token is not counted).")
+		: value == null
+			? t("Not available: the reply was not streamed or the provider reported no output tokens.")
+			: t("Average of the last reply: {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) });
+	return html`<span class=${`cu-speed ${speed?.live ? "live" : ""}`} title=${title}>${speed?.live ? html`<i class="cu-live" aria-hidden="true" />` : null}${value == null ? "—" : `${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`}</span>`;
+}
+
+/**
+ * The context at a glance: used / window, remaining, percent, the session's cache hit rate and the model's output
+ * speed — small enough for the popover next to the input and the Session panel alike.
+ */
 export function ContextDetails({ onOpenSession, onDone }) {
 	const snap = useStore((s) => s.snap);
 	const { data, error } = useBreakdown(true);
 	if (error) return html`<div class="notice danger">${error}</div>`;
 	if (!data) return html`<div class="empty"><${Spinner} /></div>`;
-	const shown = data.categories.filter((c) => c.tokens > 0 || c.count > 0);
-	const measuredWindow = Math.max(data.window, 1);
-	const source = data.usageSource === "provider-anchor" ? t("reported by the provider, plus an estimate for newer messages") : t("estimated from the request contents");
-	const limited = data.modelWindow > data.window;
+	const window_ = Math.max(data.window, 1);
+	const remaining = Math.max(0, data.window - data.used);
 	const level = data.percent > 90 ? "danger" : data.percent > 70 ? "warn" : "";
+	const cache = data.cache;
 	return html`<div class="cu">
 		<div class="cu-top">
-			<div class=${`cu-big ${level}`}>${fmtPct(data.percent)}<span class="dim"> ${t("used")}</span></div>
-			<div class="cu-sub">${num(data.used)} / ${num(data.window)} ${t("tokens")}</div>
+			<div class="cu-sub" title=${`${num(data.used)} / ${num(data.window)} ${t("tokens")}`}><strong>${fmtK(data.used)}</strong> / ${fmtK(data.window)}</div>
+			<div class=${`cu-pct ${level}`}>${fmtPct(data.percent)}</div>
 		</div>
-		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}>
-			${shown.map((c, i) => html`<i key=${c.id} class=${`seg s${i % 11}`} style=${{ width: `${pct(c.tokens, measuredWindow)}%` }} title=${`${t(CATEGORY[c.id])}: ${num(c.tokens)}`} />`)}
-			${data.reserved > 0 ? html`<i class="seg reserved" style=${{ width: `${Math.min(pct(data.reserved, measuredWindow), 100)}%`, marginLeft: "auto" }} title=${`${t("Reserved for the reply")}: ${num(data.reserved)}`} />` : null}
+		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used, window_))}%` }} /></div>
+		<div class="cu-stats">
+			<div class="cu-stat" title=${num(remaining)}><span class="dim">${t("Remaining")}</span><strong>${fmtK(remaining)}</strong></div>
+			<div class="cu-stat" title=${cache?.hitRate == null ? t("The provider has reported no cache use in this session.") : t("Cache reads {read} of {total} input tokens over the whole session", { read: num(cache.read), total: num(cache.input + cache.read + cache.write) })}><span class="dim">${t("Cache hit")}</span><strong>${cache?.hitRate == null ? "—" : fmtPct(cache.hitRate * 100)}</strong></div>
+			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong><${SpeedValue} speed=${snap?.speed} /></strong></div>
 		</div>
-		<div class="cu-rows">
-			<${Row} label=${t("Used")} value=${num(data.used)} hint=${source} />
-			<${Row} label=${t("Remaining")} value=${num(data.free)} hint=${data.reserved > 0 ? t("after the {n} tokens kept free for the reply", { n: num(data.reserved) }) : ""} />
-			<${Row} label=${t("Context window")} value=${num(data.window)} hint=${limited ? t("the model supports {n}; limited by settings", { n: num(data.modelWindow) }) : ""} />
-			<${Row} label=${t("Auto-compact")} value=${data.autoCompactEnabled ? t("at {n}", { n: num(data.autoCompactThreshold) }) : t("Off")} />
-		</div>
-		<div class="cu-title">${t("What fills the context")}</div>
-		<div class="cu-rows">
-			${shown.map((c, i) => html`<${Row} key=${c.id} cls=${`s${i % 11}`} label=${t(CATEGORY[c.id])} value=${num(c.tokens)} hint=${`${fmtPct(pct(c.tokens, measuredWindow))}${c.count > 1 ? ` · ${c.count}` : ""}`} />`)}
-			${data.reserved > 0 ? html`<${Row} cls="reserved" label=${t("Reserved for the reply")} value=${num(data.reserved)} hint=${fmtPct(pct(data.reserved, measuredWindow))} />` : null}
-		</div>
-		<div class="cu-note dim">${t("These sizes are measured on what the next request contains, with the same estimator as auto-compaction.")}</div>
-		${data.topTools.length ? html`<div class="cu-title">${t("Largest tool definitions")}</div><div class="cu-rows">${data.topTools.slice(0, 5).map((tool) => html`<${Row} key=${tool.name} label=${tool.name} value=${num(tool.tokens)} />`)}</div>` : null}
-		${data.deferredTools.length ? html`<div class="cu-note dim">${t("{n} tools are loaded on demand and are not counted until used.", { n: data.deferredTools.length })}</div>` : null}
 		<div class="cu-actions">
 			<button class="btn sm" disabled=${snap?.active} onClick=${() => (onDone?.(), actions.compact())}>${t("Compact now")}</button>
 			${onOpenSession ? html`<button class="btn sm ghost" onClick=${() => (onDone?.(), onOpenSession())}>${t("Session details")}</button>` : null}
@@ -104,11 +97,11 @@ export function ContextMeter() {
 	const tokens = budget?.activeTokens ?? usage?.tokens;
 	const level = percent > 90 ? "danger" : percent > 70 ? "warn" : "";
 	return html`<span ref=${anchor} class="picker-anchor">
-		<button class=${`meter ${level}`} aria-haspopup="dialog" aria-expanded=${open} title=${`${t("Context")}: ${fmtTokens(tokens)} / ${fmtTokens(window_)} ${t("tokens")} (${percent.toFixed(0)}%)`} onClick=${() => setOpen(!open)}>
+		<button class=${`meter ${level}`} aria-haspopup="dialog" aria-expanded=${open} title=${`${t("Context")}: ${fmtK(tokens)} / ${fmtK(window_)} (${percent.toFixed(0)}%)`} onClick=${() => setOpen(!open)}>
 			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width="2.4" /><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray=${`${Math.min(100, percent) * 0.4712} 100`} transform="rotate(-90 10 10)" /></svg>
 			<span>${percent.toFixed(percent < 10 ? 1 : 0)}%</span>
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${340} maxHeight=${520}>
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${280} maxHeight=${520}>
 			<${ContextDetails} onDone=${() => setOpen(false)} onOpenSession=${() => actions.togglePanel("context")} />
 		<//>
 	</span>`;

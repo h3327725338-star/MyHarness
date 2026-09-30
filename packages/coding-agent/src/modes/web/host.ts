@@ -29,6 +29,7 @@ import {
 import type { SessionEntry } from "../../session/types.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
+import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { entriesToWire, messageToWire, sanitizeDetails, toWireModel, type WireItem } from "./wire.ts";
 
@@ -125,6 +126,9 @@ export class WebHost {
 	private liveAssistantId: string | undefined;
 	private assistantTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingAssistant: AgentMessage | undefined;
+	/** Output tokens per second of the model, from real streamed output (see generation-speed.ts). */
+	private readonly speed = new GenerationSpeedMeter();
+	private speedChanged = false;
 	private readonly toolTimers = new Map<
 		string,
 		{ last: number; timer?: ReturnType<typeof setTimeout>; pending?: unknown }
@@ -431,6 +435,7 @@ export class WebHost {
 			case "message_start": {
 				const message = event.message;
 				if (message.role === "assistant") {
+					this.speed.start();
 					this.liveAssistantId = `live-${++this.liveMessageSeq}`;
 					const item = messageToWire(message);
 					this.broadcast("message_start", { liveId: this.liveAssistantId, item });
@@ -441,12 +446,18 @@ export class WebHost {
 				return;
 			}
 			case "message_update":
-				if (event.message.role === "assistant") this.scheduleAssistantUpdate(event.message);
+				if (event.message.role === "assistant") {
+					if (this.speed.update(event.message, event.assistantMessageEvent?.type)) this.speedChanged = true;
+					this.scheduleAssistantUpdate(event.message);
+				}
 				return;
 			case "message_end": {
 				const message = event.message;
 				if (message.role === "assistant") {
 					this.flushAssistant();
+					this.speed.end(message);
+					this.speedChanged = false;
+					this.broadcast("generation_speed", { speed: this.speed.current });
 					const item = messageToWire(message);
 					this.broadcast("message_end", { liveId: this.liveAssistantId, item });
 					this.liveAssistantId = undefined;
@@ -605,6 +616,10 @@ export class WebHost {
 		if (!message || !this.liveAssistantId) return;
 		const item = messageToWire(message);
 		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
+		if (this.speedChanged) {
+			this.speedChanged = false;
+			this.broadcast("generation_speed", { speed: this.speed.current });
+		}
 	}
 
 	private scheduleToolUpdate(toolCallId: string, toolName: string, partial: unknown): void {
@@ -942,6 +957,7 @@ export class WebHost {
 			queue: { steering: [...session.getSteeringMessages()], followUp: [...session.getFollowUpMessages()] },
 			queueModes: { steering: session.steeringMode, followUp: session.followUpMode },
 			context: { usage: contextUsage, budget: contextBudget },
+			speed: this.speed.current,
 			autoCompaction: session.autoCompactionEnabled,
 			autoRetry: session.autoRetryEnabled,
 			trust: {

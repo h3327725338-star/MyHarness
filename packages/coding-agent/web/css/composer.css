@@ -1,6 +1,7 @@
 .composer-zone { flex: none; padding: 0 20px 12px; }
 /* Narrow main column (detail panel open): drop low-value composer items first, never the send button. */
-.main[data-w="s"] .meter span, .main[data-w="s"] .mode-btn, .main[data-w="s"] .composer-foot { display: none; }
+.main[data-w="s"] .meter span, .main[data-w="s"] .mode-btn, .main[data-w="s"] .env-status { display: none; }
+.main[data-w="s"] .env-chip { max-width: 45%; }
 .main[data-w="s"] .chip { max-width: 150px; }
 .main[data-w="xs"] .chip .chip-text { display: none; }
 .composer-col { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; position: relative; }
@@ -8,7 +9,7 @@
 .composer { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px 12px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-xl); transition: border-color var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
 .composer:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer.drag { border-color: var(--accent); background: var(--accent-soft); }
-.composer-input { width: 100%; min-height: 26px; max-height: 260px; resize: none; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; }
+.composer-input { width: 100%; min-height: 44px; max-height: 260px; resize: none; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; }
 .composer-input::placeholder { color: var(--text-4); }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .composer-bar .icon-btn { width: 30px; height: 30px; }
@@ -38,11 +39,14 @@
 .thumb-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); }
 .thumb-x:hover { color: var(--danger); }
 
-.composer-foot { display: flex; align-items: center; gap: 12px; padding: 0 6px; font-size: var(--fs-xs); min-height: 18px; overflow: hidden; }
-.foot-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); min-width: 0; padding: 1px 4px; border-radius: 4px; font-size: var(--fs-xs); }
-.foot-btn:hover { color: var(--text); background: var(--surface-hover); }
-.foot-btn.warn { color: var(--warn); }
-.foot-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
+/* Where the task runs (folder, branch, worktree, trust): small chips just above the input card. */
+.composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }
+.composer-env:empty { display: none; }
+.env-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; min-width: 0; max-width: 55%; flex: 0 1 auto; border-radius: 11px; border: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); }
+.env-chip:hover { color: var(--text); background: var(--surface-hover); }
+.env-chip > svg { flex: none; }
+.env-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.env-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
 .widget { margin: 0; padding: 6px 10px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */

@@ -1,6 +1,6 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits.
 import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
-import { api, attempt, loadModels, loadProviders, loadSettings, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, loadModels, loadProviders, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog, inputDialog } from "./actions.js";
 import { clip, effortName, refEffortModel } from "./util.js";
 import { N_, serverText, t, tNodes } from "./i18n.js";
@@ -14,9 +14,10 @@ export const NAV = [
 	{ id: "tools", label: N_("Tools & assistants"), icon: "wrench" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
+	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Privacy: "safety", Display: "safety" };
+export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Privacy: "safety", Display: "safety", Terminal: "terminal" };
 
 function Row({ label, description, children, stack }) {
 	return html`<div class=${`set-row ${stack ? "stack" : ""}`}><div class="col grow"><span class="set-label">${label}</span>${description ? html`<span class="dim set-desc">${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
@@ -88,114 +89,150 @@ function Appearance() {
 		<${Row} label=${t("Theme")} description=${t("Dark and light are separate designs; “System” follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
 		<${Row} label=${t("Density")} description=${t("Control height and text size.")}><${Segmented} value=${view.density} onChange=${(v) => set({ density: v })} options=${[{ value: "compact", label: t("Compact") }, { value: "comfortable", label: t("Comfortable") }]} /><//>
 		<${Row} label=${t("Animations")} description=${t("Loading shimmer, expand/collapse and fades. Status is always shown in text too.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
-		<${Row} label=${t("Reading width")} description=${t("Width of the conversation column.")}><input class="field num" type="number" min="620" max="1100" step="20" value=${view.readWidth} onChange=${(e) => set({ readWidth: Math.max(620, Math.min(1100, Number(e.target.value) || 780)) })} /><//>
+		<${Row} label=${t("Reading width")} description=${t("Width of the conversation column in px (620–1100). Empty: grows with the window.")}><input class="field num" type="number" min="620" max="1100" step="20" placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
 		<${Row} label=${t("Run steps")} description=${t("Whether the steps behind a finished answer start expanded.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
 		<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${(v) => (v ? requestNotify() : set({ notify: false }))} /><//>
 	</div>`;
 }
 
+/** The chats working on a provider right now: deleting it stops them, so the user decides first. */
+const confirmStop = (name, running) =>
+	confirmDialog({
+		title: t("Delete {id} while tasks are running?", { id: name }),
+		message: t("“{name}” is being used by tasks that are running right now (listed below). Deleting now stops them immediately, then removes the provider, its models and every API key or login saved for it. This cannot be undone.", { name }),
+		detail: running.map((r) => `• ${r.name || clip(r.firstMessage || "", 70) || r.cwd}`).join("\n"),
+		confirmLabel: t("Delete now"),
+		cancelLabel: t("Don't delete"),
+		danger: true,
+	});
+
+/** Deletes a provider defined in models.json, after the same checks the terminal makes. Resolves true when deleted. */
+export async function deleteCustomProvider(id, name) {
+	const usage = await attempt(() => api(`/api/providers/custom/usage?id=${encodeURIComponent(id)}`), { quiet: true });
+	let stopRunning = false;
+	if (usage?.running?.length) {
+		if (!(await confirmStop(name, usage.running))) return false;
+		stopRunning = true;
+	} else if (!(await confirmDialog({
+		title: t("Delete {id}?", { id: name }),
+		message: t("“{name}” is removed from models.json, together with its models and every API key or login saved for it on this computer. This cannot be undone.", { name }),
+		confirmLabel: t("Delete"),
+		danger: true,
+	}))) return false;
+	let result = await attempt(() => post("/api/providers/custom/delete", { id, stopRunning }));
+	// A task started on the provider after the check: ask again instead of deleting behind its back.
+	if (result?.ok === false && result.running?.length) {
+		result = (await confirmStop(name, result.running)) ? await attempt(() => post("/api/providers/custom/delete", { id, stopRunning: true })) : undefined;
+	}
+	if (!result?.ok) return false;
+	toast(t("Provider deleted"), "info", 3500);
+	await loadProviders();
+	await loadModels();
+	return true;
+}
+
+/**
+ * Same operation as the terminal's Providers → Refresh models: reads the catalog, appends new models and settles the
+ * thinking efforts of every configured model (catalog first, minimal test requests where it says nothing).
+ */
+export async function refreshProviderModels(id) {
+	const result = await attempt(() => post("/api/providers/refresh-models", { id }));
+	if (!result) return undefined;
+	if (!result.ok) {
+		toast(t("Refreshing the models failed: {message}", { message: serverText(result.message) }), "error", 9000);
+		return result;
+	}
+	toast(t("Models refreshed: {discovered} found · {added} added · {updated} updated (thinking effort)", result), "info", 6000);
+	await loadProviders();
+	await loadModels();
+	return result;
+}
+
+/**
+ * The add / edit form of a provider defined in models.json (it also holds the advanced JSON editor), shown over
+ * everything else. Opened with `setView({ providerEditor: { id } })`; `id: null` adds a new provider.
+ */
+export function ProviderEditorHost({ id }) {
+	const [data, setData] = useState(null);
+	const close = () => setView({ providerEditor: null });
+	useEffect(() => {
+		let cancelled = false;
+		api("/api/providers/custom")
+			.then((result) => {
+				if (cancelled) return;
+				if (id && !result.providers.some((p) => p.id === id)) {
+					toast(t("This provider is not defined in models.json."), "warning");
+					return close();
+				}
+				setData(result);
+			})
+			.catch((error) => (toast(error.message, "error"), close()));
+		if (!state.providers) loadProviders();
+		return () => {
+			cancelled = true;
+		};
+	}, [id]);
+	if (!data) return null;
+	const entry = id ? data.providers.find((p) => p.id === id) : null;
+	const storedKeys = id ? state.providers?.providers.find((p) => p.id === id)?.credentials : null;
+	return html`<${ProviderEditor} initial=${entry ? { id: entry.id, config: entry.config } : null} apiTypes=${data.apiTypes} storedKeys=${storedKeys}
+		onClose=${close} onSaved=${() => { close(); toast(t("Provider saved"), "info", 2500); loadProviders(); loadModels(); }} />`;
+}
+
+/** One card per provider: status, enable switch, credentials, and (for providers in models.json) edit / refresh / delete. */
 function ProviderCard({ provider }) {
 	const [keyLabel, setKeyLabel] = useState("");
 	const [keyValue, setKeyValue] = useState("");
 	const [adding, setAdding] = useState(false);
-	const [busy, setBusy] = useState(false);
+	const [busy, setBusy] = useState("");
 	const login = useStore((s) => s.loginEvent);
 	const c = provider.credentials;
 	const act = async (fn, ok) => {
-		setBusy(true);
+		setBusy("act");
 		const result = await attempt(fn, { success: ok });
-		setBusy(false);
+		setBusy("");
 		// Reload even after a failure: a request can change part of the state (for example saved keys removed while the
 		// provider stays signed in through the environment) before it reports the problem.
 		await loadProviders();
 		return result;
 	};
+	const refresh = async () => {
+		setBusy("refresh");
+		await refreshProviderModels(provider.id);
+		setBusy("");
+	};
+	const remove = async () => {
+		setBusy("delete");
+		await deleteCustomProvider(provider.id, provider.name);
+		setBusy("");
+	};
 	return html`<div class="provider-card">
-		<div class="row"><div class="col grow"><strong>${provider.name}</strong><span class="dim mono">${provider.id}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}</span></div>
+		<div class="row"><div class="col grow"><strong>${provider.name}</strong><span class="dim mono truncate">${provider.id}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}</span></div>
 			<span class=${`badge ${provider.configured ? "ok" : "warn"}`}>${provider.configured ? (provider.authSource ? t("signed in · {source}", { source: serverText(provider.authSource) }) : t("signed in")) : t("no credentials")}</span>
 			<span class="dim">${t("{modelCount} models", { modelCount: provider.modelCount })}</span>
-			<${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${busy} onChange=${(v) => act(() => post("/api/providers/enabled", { id: provider.id, enabled: v }))} />
+			<${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${!!busy} onChange=${(v) => act(() => post("/api/providers/enabled", { id: provider.id, enabled: v }))} />
 		</div>
 		${c && (c.apiKeys.length || c.hasOAuth) ? html`<div class="key-list">
 			${c.apiKeys.map((k) => html`<div class="key-row" key=${k.id}>
 				<span class=${`dot ${k.active ? "ok" : ""}`} /><span class="grow">${serverText(k.label)} <span class="dim mono">${k.suffix ? `••••${k.suffix}` : ""}</span></span>
-				${k.active ? html`<span class="badge ok">${t("active")}</span>` : html`<button class="btn sm" disabled=${busy} onClick=${() => act(() => post("/api/providers/api-key/activate", { id: provider.id, keyId: k.id }))}>${t("Use")}</button>`}
-				<button class="btn sm ghost" disabled=${busy} onClick=${async () => { const label = await inputDialog({ title: t("Rename API key"), label: t("Name"), initial: k.label }); if (label) act(() => post("/api/providers/api-key/rename", { id: provider.id, keyId: k.id, label })); }}>${t("Rename")}</button>
-				<button class="btn sm danger" disabled=${busy} onClick=${async () => { const alt = c.apiKeys.filter((o) => o.id !== k.id); let replacement; if (k.active && alt.length) { const choice = await inputDialog({ title: t("Choose the replacement key"), label: t("This key is active. Type the name of the key to use instead ({join}).", { join: alt.map((o) => serverText(o.label)).join(", ") }), initial: alt[0].label, confirmLabel: t("Continue") }); const found = alt.find((o) => o.label === choice); if (!found) return toast(t("No replacement chosen; nothing was deleted."), "warning"); replacement = found.id; } if (await confirmDialog({ title: t("Delete API key?"), message: t("“{label}” is removed from this computer's credentials.", { label: k.label }), confirmLabel: t("Delete"), danger: true })) act(() => post("/api/providers/api-key/delete", { id: provider.id, keyId: k.id, replacementKeyId: replacement })); }}>${t("Delete")}</button>
+				${k.active ? html`<span class="badge ok">${t("active")}</span>` : html`<button class="btn sm" disabled=${!!busy} onClick=${() => act(() => post("/api/providers/api-key/activate", { id: provider.id, keyId: k.id }))}>${t("Use")}</button>`}
+				<button class="btn sm ghost" disabled=${!!busy} onClick=${async () => { const label = await inputDialog({ title: t("Rename API key"), label: t("Name"), initial: k.label }); if (label) act(() => post("/api/providers/api-key/rename", { id: provider.id, keyId: k.id, label })); }}>${t("Rename")}</button>
+				<button class="btn sm danger" disabled=${!!busy} onClick=${async () => { const alt = c.apiKeys.filter((o) => o.id !== k.id); let replacement; if (k.active && alt.length) { const choice = await inputDialog({ title: t("Choose the replacement key"), label: t("This key is active. Type the name of the key to use instead ({join}).", { join: alt.map((o) => serverText(o.label)).join(", ") }), initial: alt[0].label, confirmLabel: t("Continue") }); const found = alt.find((o) => o.label === choice); if (!found) return toast(t("No replacement chosen; nothing was deleted."), "warning"); replacement = found.id; } if (await confirmDialog({ title: t("Delete API key?"), message: t("“{label}” is removed from this computer's credentials.", { label: k.label }), confirmLabel: t("Delete"), danger: true })) act(() => post("/api/providers/api-key/delete", { id: provider.id, keyId: k.id, replacementKeyId: replacement })); }}>${t("Delete")}</button>
 			</div>`)}
-			${c.hasOAuth ? html`<div class="key-row"><span class=${`dot ${c.active?.type === "oauth" ? "ok" : ""}`} /><span class="grow">${t("OAuth login")}</span>${c.active?.type === "oauth" ? html`<span class="badge ok">${t("active")}</span>` : html`<button class="btn sm" disabled=${busy} onClick=${() => act(() => post("/api/providers/oauth/activate", { id: provider.id }))}>${t("Use")}</button>`}</div>` : null}
+			${c.hasOAuth ? html`<div class="key-row"><span class=${`dot ${c.active?.type === "oauth" ? "ok" : ""}`} /><span class="grow">${t("OAuth login")}</span>${c.active?.type === "oauth" ? html`<span class="badge ok">${t("active")}</span>` : html`<button class="btn sm" disabled=${!!busy} onClick=${() => act(() => post("/api/providers/oauth/activate", { id: provider.id }))}>${t("Use")}</button>`}</div>` : null}
 		</div>` : null}
 		<div class="row" style="flex-wrap:wrap;gap:8px">
-			${provider.supportsApiKeyLogin ? (adding ? html`<div class="row grow" style="gap:6px"><input class="field" style="width:120px" placeholder=${t("Label")} value=${keyLabel} onInput=${(e) => setKeyLabel(e.target.value)} /><input class="field grow" type="password" autocomplete="off" placeholder=${t("API key")} value=${keyValue} onInput=${(e) => setKeyValue(e.target.value)} /><button class="btn sm primary" disabled=${busy || !keyValue.trim()} onClick=${async () => { const ok = await act(() => post("/api/providers/api-key/add", { id: provider.id, label: keyLabel, key: keyValue }), "API key saved"); if (ok) { setKeyValue(""); setKeyLabel(""); setAdding(false); } }}>${t("Save")}</button><button class="btn sm ghost" onClick=${() => (setAdding(false), setKeyValue(""))}>${t("Cancel")}</button></div>` : html`<button class="btn sm" onClick=${() => setAdding(true)}><${Icon} name="plus" size=${13} />${t("Add API key")}</button>`) : null}
-			${provider.supportsOAuth ? html`<button class="btn sm" disabled=${busy} onClick=${() => act(() => post("/api/providers/oauth/login", { id: provider.id }), "Signed in")}>${busy && login ? t("Waiting for sign-in…") : t("Sign in with OAuth")}</button>` : null}
-			${c?.removable ? html`<button class="btn sm ghost danger" disabled=${busy} onClick=${async () => { if (await confirmDialog({ title: t("Remove {name} credentials?", { name: provider.name }), message: t("All API keys and OAuth logins saved for this provider, including a key written in models.json, are deleted from this computer."), confirmLabel: t("Remove"), danger: true })) act(() => post("/api/providers/logout", { id: provider.id }), t("Credentials removed")); }}>${t("Remove credentials")}</button>` : null}
+			${provider.custom ? html`<button class="btn sm" disabled=${!!busy} onClick=${() => setView({ providerEditor: { id: provider.id } })}><${Icon} name="edit" size=${13} />${t("Edit…")}</button>` : null}
+			<button class="btn sm" disabled=${!!busy || !provider.enabled} title=${provider.enabled ? t("Read the provider's model list and detect what each model supports") : t("Enable the provider first.")} onClick=${refresh}>${busy === "refresh" ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${13} />`}${t("Refresh models")}</button>
+			${provider.supportsApiKeyLogin ? (adding ? html`<div class="row grow" style="gap:6px"><input class="field" style="width:120px" placeholder=${t("Label")} value=${keyLabel} onInput=${(e) => setKeyLabel(e.target.value)} /><input class="field grow" type="password" autocomplete="off" placeholder=${t("API key")} value=${keyValue} onInput=${(e) => setKeyValue(e.target.value)} /><button class="btn sm primary" disabled=${!!busy || !keyValue.trim()} onClick=${async () => { const ok = await act(() => post("/api/providers/api-key/add", { id: provider.id, label: keyLabel, key: keyValue }), "API key saved"); if (ok) { setKeyValue(""); setKeyLabel(""); setAdding(false); } }}>${t("Save")}</button><button class="btn sm ghost" onClick=${() => (setAdding(false), setKeyValue(""))}>${t("Cancel")}</button></div>` : html`<button class="btn sm" onClick=${() => setAdding(true)}><${Icon} name="plus" size=${13} />${t("Add API key")}</button>`) : null}
+			${provider.supportsOAuth ? html`<button class="btn sm" disabled=${!!busy} onClick=${() => act(() => post("/api/providers/oauth/login", { id: provider.id }), "Signed in")}>${busy && login ? t("Waiting for sign-in…") : t("Sign in with OAuth")}</button>` : null}
+			<span class="grow" />
+			${c?.removable ? html`<button class="btn sm ghost danger" disabled=${!!busy} onClick=${async () => { if (await confirmDialog({ title: t("Remove {name} credentials?", { name: provider.name }), message: t("All API keys and OAuth logins saved for this provider, including a key written in models.json, are deleted from this computer."), confirmLabel: t("Remove"), danger: true })) act(() => post("/api/providers/logout", { id: provider.id }), t("Credentials removed")); }}>${t("Remove credentials")}</button>` : null}
+			${provider.custom ? html`<button class="btn sm danger" disabled=${!!busy} onClick=${remove}>${busy === "delete" ? t("Deleting…") : t("Delete provider")}</button>` : null}
 		</div>
 		${login && login.type === "device_code" ? html`<div class="notice">${tNodes("Open {url} and enter the code {code}.", { url: html`<a href=${login.verificationUri} target="_blank" rel="noopener noreferrer">${login.verificationUri}</a>`, code: html`<strong class="mono">${login.userCode}</strong>` })}</div>` : null}
 		${login && login.type === "auth_url" ? html`<div class="notice">${t("Waiting for the browser sign-in…")} <a href=${login.url} target="_blank" rel="noopener noreferrer">${t("Open the sign-in page")}</a>${login.instructions ? html` — ${login.instructions}` : null}</div>` : null}
 		${login && login.type === "info" ? html`<div class="notice">${login.message}</div>` : null}
-	</div>`;
-}
-
-function CustomProviders() {
-	const providers = useStore((s) => s.providers);
-	const [data, setData] = useState(null);
-	const [edit, setEdit] = useState(null); // { initial: { id, config } | null }
-	const [deleting, setDeleting] = useState(null);
-	const [error, setError] = useState("");
-	const load = async () => {
-		try {
-			setData(await api("/api/providers/custom"));
-		} catch (e) {
-			setError(e.message);
-		}
-	};
-	useEffect(() => {
-		load();
-	}, []);
-	/** Chats working on this provider right now: deleting it stops them, so the user decides first. */
-	const confirmStop = (name, running) =>
-		confirmDialog({
-			title: t("Delete {id} while tasks are running?", { id: name }),
-			message: t("“{name}” is being used by tasks that are running right now (listed below). Deleting now stops them immediately, then removes the provider, its models and every API key or login saved for it. This cannot be undone.", { name }),
-			detail: running.map((r) => `• ${r.name || clip(r.firstMessage || "", 70) || r.cwd}`).join("\n"),
-			confirmLabel: t("Delete now"),
-			cancelLabel: t("Don't delete"),
-			danger: true,
-		});
-	const remove = async (p) => {
-		const name = p.config.name || p.id;
-		const usage = await attempt(() => api(`/api/providers/custom/usage?id=${encodeURIComponent(p.id)}`), { quiet: true });
-		let stopRunning = false;
-		if (usage?.running?.length) {
-			if (!(await confirmStop(name, usage.running))) return;
-			stopRunning = true;
-		} else if (!(await confirmDialog({
-			title: t("Delete {id}?", { id: name }),
-			message: t("“{name}” is removed from models.json, together with its models and every API key or login saved for it on this computer. This cannot be undone.", { name }),
-			confirmLabel: t("Delete"),
-			danger: true,
-		}))) return;
-		setDeleting(p.id);
-		let result = await attempt(() => post("/api/providers/custom/delete", { id: p.id, stopRunning }));
-		// A task started on the provider after the check: ask again instead of deleting behind its back.
-		if (result?.ok === false && result.running?.length) {
-			result = (await confirmStop(name, result.running)) ? await attempt(() => post("/api/providers/custom/delete", { id: p.id, stopRunning: true })) : undefined;
-		}
-		setDeleting(null);
-		if (result?.ok) {
-			toast(t("Provider deleted"), "info", 3500);
-			await load();
-			await loadProviders();
-			await loadModels();
-		}
-	};
-	return html`<div class="col" style="gap:8px">
-		<div class="row"><strong class="grow">${t("Custom providers")}</strong><span class="dim mono truncate">${data?.path || ""}</span><button class="btn sm" onClick=${() => setEdit({ initial: null })}><${Icon} name="plus" size=${13} />${t("Add provider")}</button></div>
-		<div class="dim set-desc">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint. Turning a provider off above only disables it; Delete removes it and its saved keys for good.")}</div>
-		${error ? html`<div class="notice danger">${error}</div>` : null}
-		${!data ? html`<${Spinner} />` : data.providers.map((p) => html`<div class="res-row" key=${p.id}><div class="col grow"><strong>${p.config.name || p.id}</strong><span class="dim mono truncate">${t("{id} · {baseUrl} · {length} models", { id: p.id, baseUrl: p.config.baseUrl || "", length: (p.config.models || []).length })}</span></div><button class="btn sm" disabled=${deleting === p.id} onClick=${() => setEdit({ initial: { id: p.id, config: p.config } })}>${t("Edit")}</button><button class="btn sm danger" disabled=${deleting === p.id} onClick=${() => remove(p)}>${deleting === p.id ? t("Deleting…") : t("Delete")}</button></div>`)}
-		${edit ? html`<${ProviderEditor} initial=${edit.initial} apiTypes=${data?.apiTypes} storedKeys=${edit.initial ? providers?.providers.find((p) => p.id === edit.initial.id)?.credentials : null}
-			onClose=${() => setEdit(null)} onSaved=${() => { setEdit(null); toast(t("Provider saved"), "info", 2500); load(); loadProviders(); }} />` : null}
 	</div>`;
 }
 
@@ -205,9 +242,10 @@ function Providers() {
 		loadProviders();
 	}, []);
 	return html`<div class="col" style="gap:14px">
-		${!providers ? html`<${Spinner} />` : providers.providers.length ? providers.providers.map((p) => html`<${ProviderCard} key=${p.id} provider=${p} />`) : html`<div class="empty">${t("No providers configured yet. Add a custom provider below, or sign in to one.")}</div>`}
+		<div class="row"><span class="dim set-desc grow">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint. Turning a provider off only disables it; Delete provider removes it and its saved keys for good.")}</span><button class="btn sm primary" onClick=${() => setView({ providerEditor: { id: null } })}><${Icon} name="plus" size=${13} />${t("Add provider")}</button></div>
+		${!providers ? html`<${Spinner} />` : providers.providers.length ? providers.providers.map((p) => html`<${ProviderCard} key=${p.id} provider=${p} />`) : html`<div class="empty">${t("No providers configured yet. Add a provider, or sign in to one.")}</div>`}
 		${providers?.error ? html`<div class="notice danger">${t("models.json: {error}", { error: providers.error })}</div>` : null}
-		<${CustomProviders} />
+		${providers?.modelsPath ? html`<div class="dim mono truncate set-desc" title=${providers.modelsPath}>${providers.modelsPath}</div>` : null}
 	</div>`;
 }
 

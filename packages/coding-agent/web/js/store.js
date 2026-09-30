@@ -74,6 +74,8 @@ export const state = {
 	providers: null,
 	editorInsert: null,
 	loginEvent: null,
+	/** Latest GitHub Connect progress from the server (device code, done, error), with a nonce per event. */
+	githubEvent: null,
 	view: {
 		sidebarOpen: prefs.sidebarOpen ?? true,
 		sidebarW: prefs.sidebarW ?? 272,
@@ -83,6 +85,8 @@ export const state = {
 		expanded: prefs.expanded ?? {},
 		settingsOpen: false,
 		settingsSection: "appearance",
+		/** `{ id }` of the models.json provider being edited (`id: null` adds one); shown over everything else. */
+		providerEditor: null,
 		palette: false,
 		dialog: null,
 		changesScope: "run",
@@ -93,7 +97,8 @@ export const state = {
 		density: prefs.density ?? "compact",
 		motion: prefs.motion ?? "system",
 		processDefault: prefs.processDefault ?? "collapsed",
-		readWidth: prefs.readWidth ?? 780,
+		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
+		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
 		notify: prefs.notify ?? false,
 		lang: normalizeLang(prefs.lang),
 		cmd: null,
@@ -143,6 +148,13 @@ export function setView(patch) {
 	emit();
 }
 
+/** Reading width preference: "auto" (grows with the window) or a fixed column width in px between 620 and 1100. */
+export function readWidthValue(value) {
+	const n = Number(value);
+	if (value == null || value === "" || value === "auto" || !Number.isFinite(n) || n <= 0) return "auto";
+	return Math.max(620, Math.min(1100, Math.round(n)));
+}
+
 const PERSISTED = ["sidebarOpen", "sidebarW", "panelOpen", "panelTab", "panelW", "expanded", "theme", "density", "motion", "processDefault", "readWidth", "notify", "lang"];
 function persistView() {
 	const out = {};
@@ -159,7 +171,7 @@ export function applyAppearance() {
 	root.dataset.theme = dark ? "dark" : "light";
 	root.dataset.density = state.view.density;
 	root.dataset.motion = state.view.motion === "system" ? "" : state.view.motion;
-	root.style.setProperty("--read-w", `${state.view.readWidth}px`);
+	root.style.setProperty("--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
 	root.style.setProperty("--sidebar-w", `${state.view.sidebarW}px`);
 	root.style.setProperty("--panel-w", `${state.view.panelW}px`);
 }
@@ -682,6 +694,11 @@ function connectEvents() {
 		await attempt(() => loadWorkspaces(), { quiet: true });
 	});
 	on("login_event", (d) => set({ loginEvent: d.type === "done" ? null : d }));
+	on("github_event", (d) => set({ githubEvent: { ...d, nonce: Date.now() } }));
+	on("generation_speed", (d) => {
+		if (state.snap) state.snap = { ...state.snap, speed: d.speed };
+		emit();
+	});
 
 	on("bash_start", (d) => {
 		state.userBash = { ...state.userBash, [d.id]: { ...d, output: "", status: "running", startedAt: d.ts } };

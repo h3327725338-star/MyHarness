@@ -57,6 +57,9 @@ const TRANSPORTS = [
 	{ value: "websocket", label: "WebSocket" },
 	{ value: "websocket-cached", label: "WebSocket (cached)" },
 ];
+const IMAGE_WIDTHS = ["60", "80", "120"];
+const EDITOR_PADDINGS = ["0", "1", "2", "3"];
+const AUTOCOMPLETE_SIZES = ["3", "5", "7", "10", "15", "20"];
 const QUEUE_MODES = [
 	{ value: "one-at-a-time", label: "One at a time" },
 	{ value: "all", label: "All at once" },
@@ -142,6 +145,14 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				description: "Optional cap for the main session, e.g. 256K. Empty uses the model's window.",
 				type: "text",
 				value: context.main ? formatContextWindow(context.main) : "",
+			},
+			{
+				id: "contextWindowSubAgent",
+				section: "Agent",
+				label: "Sub-agent context window cap",
+				description: "Optional cap for sub-agents, e.g. 128K. Empty uses the model's window.",
+				type: "text",
+				value: context.subagent ? formatContextWindow(context.subagent) : "",
 			},
 			{
 				id: "autoRetry",
@@ -373,6 +384,116 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				type: "boolean",
 				value: s.getShowCacheMissNotices(),
 			},
+			// Terminal UI: the same settings the terminal's /settings edits. They change how the terminal UI looks and
+			// behaves (stored in the shared settings.json); the Web UI has its own Appearance settings.
+			{
+				id: "hideThinkingBlock",
+				section: "Terminal",
+				label: "Collapse transcript",
+				description: "Terminal UI: collapse thinking and tool output.",
+				type: "boolean",
+				value: s.getHideThinkingBlock(),
+			},
+			{
+				id: "collapseChangelog",
+				section: "Terminal",
+				label: "Collapse changelog",
+				description: "Terminal UI: show a condensed changelog after updates.",
+				type: "boolean",
+				value: s.getCollapseChangelog(),
+			},
+			{
+				id: "quietStartup",
+				section: "Terminal",
+				label: "Quiet startup",
+				description: "Terminal UI: hide startup details.",
+				type: "boolean",
+				value: s.getQuietStartup(),
+			},
+			{
+				id: "doubleEscapeAction",
+				section: "Terminal",
+				label: "Double-escape action",
+				description: "Terminal UI: compatibility setting, currently has no effect.",
+				type: "enum",
+				value: s.getDoubleEscapeAction(),
+				options: [
+					{ value: "none", label: "None" },
+					{ value: "tree", label: "Tree" },
+					{ value: "fork", label: "Fork" },
+				],
+			},
+			{
+				id: "showImages",
+				section: "Terminal",
+				label: "Show images",
+				description: "Terminal UI: show images inline in the terminal.",
+				type: "boolean",
+				value: s.getShowImages(),
+			},
+			{
+				id: "imageWidthCells",
+				section: "Terminal",
+				label: "Image width",
+				description: "Terminal UI: width of inline images.",
+				type: "enum",
+				value: String(s.getImageWidthCells()),
+				options: IMAGE_WIDTHS.map((value) => ({ value, label: `${value} columns` })),
+			},
+			{
+				id: "showHardwareCursor",
+				section: "Terminal",
+				label: "Show hardware cursor",
+				description: "Terminal UI: show the terminal's own input cursor.",
+				type: "boolean",
+				value: s.getShowHardwareCursor(),
+			},
+			{
+				id: "editorPaddingX",
+				section: "Terminal",
+				label: "Editor padding",
+				description: "Terminal UI: horizontal padding of the input box.",
+				type: "enum",
+				value: String(s.getEditorPaddingX()),
+				options: EDITOR_PADDINGS.map((value) => ({ value, label: `${value} columns` })),
+			},
+			{
+				id: "outputPad",
+				section: "Terminal",
+				label: "Output padding",
+				description: "Terminal UI: left and right padding of messages.",
+				type: "enum",
+				value: String(s.getOutputPad()),
+				options: [
+					{ value: "0", label: "Compact" },
+					{ value: "1", label: "Comfortable" },
+				],
+			},
+			{
+				id: "autocompleteMaxVisible",
+				section: "Terminal",
+				label: "Autocomplete max items",
+				description: "Terminal UI: number of completion candidates shown.",
+				type: "enum",
+				value: String(s.getAutocompleteMaxVisible()),
+				options: AUTOCOMPLETE_SIZES.map((value) => ({ value, label: value })),
+			},
+			{
+				id: "clearOnShrink",
+				section: "Terminal",
+				label: "Clear on shrink",
+				description: "Terminal UI: clear leftover text when the screen content shrinks.",
+				type: "boolean",
+				value: s.getClearOnShrink(),
+			},
+			{
+				id: "showTerminalProgress",
+				section: "Terminal",
+				label: "Terminal progress",
+				description: "Terminal UI: show the running state in the terminal's progress indicator.",
+				type: "boolean",
+				value: s.getShowTerminalProgress(),
+			},
 		];
 	};
 
@@ -420,16 +541,18 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				});
 				return;
 			}
-			case "contextWindowMain": {
+			case "contextWindowMain":
+			case "contextWindowSubAgent": {
+				const role = id === "contextWindowMain" ? "main" : "subagent";
 				const text = typeof value === "string" ? value.trim() : "";
 				const current = s.getContextWindowSettings();
 				if (!text) {
-					s.setContextWindowSettings({ ...current, main: undefined });
+					s.setContextWindowSettings({ ...current, [role]: undefined });
 					return;
 				}
 				const parsed = parseContextWindowInput(text);
 				if (parsed.error) throw new HttpError(400, parsed.error);
-				s.setContextWindowSettings({ ...current, main: parsed.value });
+				s.setContextWindowSettings({ ...current, [role]: parsed.value });
 				return;
 			}
 			case "autoMemory": {
@@ -542,6 +665,47 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				return;
 			case "showCacheMissNotices":
 				s.setShowCacheMissNotices(boolValue(value, id));
+				return;
+			case "hideThinkingBlock":
+				s.setHideThinkingBlock(boolValue(value, id));
+				return;
+			case "collapseChangelog":
+				s.setCollapseChangelog(boolValue(value, id));
+				return;
+			case "quietStartup":
+				s.setQuietStartup(boolValue(value, id));
+				return;
+			case "doubleEscapeAction":
+				if (value !== "none" && value !== "tree" && value !== "fork") throw new HttpError(400, "Invalid value");
+				s.setDoubleEscapeAction(value);
+				return;
+			case "showImages":
+				s.setShowImages(boolValue(value, id));
+				return;
+			case "imageWidthCells":
+				if (!IMAGE_WIDTHS.includes(String(value))) throw new HttpError(400, "Invalid value");
+				s.setImageWidthCells(Number(value));
+				return;
+			case "showHardwareCursor":
+				s.setShowHardwareCursor(boolValue(value, id));
+				return;
+			case "editorPaddingX":
+				if (!EDITOR_PADDINGS.includes(String(value))) throw new HttpError(400, "Invalid value");
+				s.setEditorPaddingX(Number(value));
+				return;
+			case "outputPad":
+				if (String(value) !== "0" && String(value) !== "1") throw new HttpError(400, "Invalid value");
+				s.setOutputPad(String(value) === "1" ? 1 : 0);
+				return;
+			case "autocompleteMaxVisible":
+				if (!AUTOCOMPLETE_SIZES.includes(String(value))) throw new HttpError(400, "Invalid value");
+				s.setAutocompleteMaxVisible(Number(value));
+				return;
+			case "clearOnShrink":
+				s.setClearOnShrink(boolValue(value, id));
+				return;
+			case "showTerminalProgress":
+				s.setShowTerminalProgress(boolValue(value, id));
 				return;
 			default:
 				throw new HttpError(400, `Unknown setting: ${id}`);

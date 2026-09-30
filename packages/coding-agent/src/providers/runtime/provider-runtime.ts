@@ -89,13 +89,18 @@ export interface ModelRuntimeAuthOverrides {
 export interface ProviderModelRefreshOptions {
 	signal?: AbortSignal;
 	timeoutMs?: number;
+	/**
+	 * `false` only refreshes what is known about the models already configured (thinking efforts included) and adds
+	 * none of the other models the catalog lists. Default `true` (append new models, as the Provider settings do).
+	 */
+	addNew?: boolean;
 }
 
 export interface ProviderModelRefreshResult {
 	providerId: string;
 	discovered: number;
 	added: number;
-	/** Existing models whose thinking capability was updated from the catalog or official documentation. */
+	/** Existing models whose thinking capability was updated from the catalog or a probe. */
 	updated: number;
 	existing: number;
 	removed: number;
@@ -510,9 +515,12 @@ export class ModelRuntime implements Models {
 				authType: this.snapshot.auth.get(providerId)?.type,
 				headers: auth.auth.headers,
 				signal: controller.signal,
-				// Levels neither the catalog nor the documentation settle are tested with real minimal requests.
+				// Levels the catalog does not settle are tested with real minimal requests for every configured model
+				// (declared reasoning models first). Newly listed models are probed when the catalog says they reason, the
+				// others once they are configured (the next refresh).
 				probeThinking: {
 					reasoningModelIds: new Set(localModels.filter((model) => model.reasoning).map((model) => model.id)),
+					candidateModelIds: new Set(configured.map((model) => model.id)),
 					knownStatuses: new Map(
 						configured.flatMap((model) =>
 							model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus]] : [],
@@ -522,9 +530,11 @@ export class ModelRuntime implements Models {
 			});
 			const localIds = new Set(localModels.map((model) => model.id));
 			const staleMarkers = new Set(
-				localModels.filter((model) => isLegacyUnconfirmedMap(model.thinkingLevelMap)).map((model) => model.id),
+				configured
+					.filter((model) => isLegacyUnconfirmedMap(model.thinkingLevelMap, model.thinkingLevelStatus))
+					.map((model) => model.id),
 			);
-			const hasNewModels = discovered.some((model) => !localIds.has(model.id));
+			const hasNewModels = options.addNew !== false && discovered.some((model) => !localIds.has(model.id));
 			// Existing models are only touched when a source settles their thinking levels (the merge checks for changes).
 			const hasCapabilities = discovered.some(
 				(model) =>
@@ -555,7 +565,7 @@ export class ModelRuntime implements Models {
 			}
 
 			try {
-				const sync = await manager.mergeDiscoveredModels(providerId, discovered, api);
+				const sync = await manager.mergeDiscoveredModels(providerId, discovered, api, { addNew: options.addNew });
 				if (sync.added > 0 || sync.updated > 0) await this.reloadProviderConfig(providerId);
 				return {
 					providerId,

@@ -125,6 +125,20 @@ function fuzzyScore(query: string, target: string): number {
 	return score - t.length * 0.05;
 }
 
+/** Maps items with at most `limit` calls running at once, keeping the input order. */
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const index = next++;
+			results[index] = await fn(items[index]);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	return results;
+}
+
 export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	const root = () => path.resolve(host.session.sessionManager.getCwd());
 
@@ -268,15 +282,18 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// ---- Changes / Diff ---------------------------------------------------------
-	server.route("GET", "/api/changes", ({ url }) => {
+	server.route("GET", "/api/changes", async ({ url }) => {
 		const scope = url.searchParams.get("scope") === "worktree" ? "worktree" : "run";
 		const checkpoint = host.session.getGitCheckpoint();
 		if (scope === "worktree") {
-			const listed = host.tracker.listWorktreeChanges();
-			const files = listed.repositoryRoot
-				? listed.changes
-						.slice(0, 300)
-						.map((change) => host.tracker.diffForWorktreeFile(listed.repositoryRoot!, change).summary)
+			const listed = await host.tracker.listWorktreeChanges();
+			const root = listed.repositoryRoot;
+			const files = root
+				? await mapLimited(
+						listed.changes.slice(0, 300),
+						8,
+						async (change) => (await host.tracker.diffForWorktreeFile(root, change)).summary,
+					)
 				: [];
 			return { scope, files, total: listed.changes.length, error: listed.error ?? null };
 		}
@@ -301,12 +318,12 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		};
 	});
 
-	server.route("GET", "/api/changes/diff", ({ url }) => {
+	server.route("GET", "/api/changes/diff", async ({ url }) => {
 		const scope = url.searchParams.get("scope") === "worktree" ? "worktree" : "run";
 		const file = url.searchParams.get("path");
 		if (!file) throw new HttpError(400, "Missing path");
 		if (scope === "worktree") {
-			const listed = host.tracker.listWorktreeChanges();
+			const listed = await host.tracker.listWorktreeChanges();
 			const change = listed.changes.find((candidate) => candidate.path === file);
 			if (!change || !listed.repositoryRoot) throw new HttpError(404, "No such change");
 			return host.tracker.diffForWorktreeFile(listed.repositoryRoot, change);

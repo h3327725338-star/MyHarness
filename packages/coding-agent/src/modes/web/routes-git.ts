@@ -12,7 +12,6 @@ import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { completeGitCheckpoint, restoreGitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
 import { LocalGitRepositoryStore, validateLocalGitDirectory } from "../../git/local-repositories/store.ts";
-import { runGitSync } from "../../git/repository/command.ts";
 import {
 	discardChangesToHead,
 	hasChangesToDiscard,
@@ -22,9 +21,12 @@ import {
 	createInitialGitBaselineAsync,
 	formatGitStatusPreview,
 	getGitStatusPreview,
+	getGitStatusPreviewAsync,
 	initializeGitRepository,
 	inspectGitRepository,
-	readGitIdentity,
+	inspectGitRepositoryAsync,
+	readGitIdentityAsync,
+	runGitAsync,
 	setLocalGitIdentity,
 } from "../../git/repository/integration.ts";
 import type { GitWorktree } from "../../git/worktrees/manager.ts";
@@ -101,20 +103,34 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		return result.ok ? { ok: true } : { ok: false, error: result.error };
 	};
 
-	server.route("GET", "/api/git/status", () => {
-		const state = inspectGitRepository(cwd());
+	// Polled after every run, session switch and checkpoint change: every Git call here is asynchronous (and the
+	// independent ones run in parallel), so the server keeps answering other requests while Git works.
+	server.route("GET", "/api/git/status", async () => {
+		const state = await inspectGitRepositoryAsync(cwd());
 		const settings = host.session.settingsManager;
 		const checkpoint = openCheckpoint();
 		let preview: { lines: string[]; total: number; truncated: boolean } | null = null;
 		let identity: { name?: string; email?: string } | null = null;
 		let head: { sha: string; subject: string } | null = null;
+		let linkedWorktree = false;
 		if (state.isRepository && state.root) {
-			preview = getGitStatusPreview(state.root) ?? null;
-			identity = readGitIdentity(cwd(), state.root);
-			const log = runGitSync(["log", "-1", "--format=%H%n%s"], { cwd: state.root });
+			const root = state.root;
+			const [statusPreview, gitIdentity, log, dirs] = await Promise.all([
+				getGitStatusPreviewAsync(root),
+				readGitIdentityAsync(cwd(), root),
+				runGitAsync(root, ["log", "-1", "--format=%H%n%s"]),
+				runGitAsync(root, ["rev-parse", "--absolute-git-dir", "--git-common-dir"]),
+			]);
+			preview = statusPreview ?? null;
+			identity = gitIdentity;
 			if (log.ok) {
-				const [sha, ...subject] = log.stdout.split("\n");
+				const [sha, ...subject] = log.stdout.trim().split("\n");
 				head = { sha, subject: subject.join("\n") };
+			}
+			// A linked worktree has its own git dir under the main repository's common dir.
+			if (dirs.ok) {
+				const [gitDir, commonDir] = dirs.stdout.trim().split(/\r?\n/u);
+				if (gitDir && commonDir) linkedWorktree = path.resolve(gitDir) !== path.resolve(root, commonDir);
 			}
 		}
 		return {
@@ -123,6 +139,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			preview,
 			identity,
 			head,
+			linkedWorktree,
 			checkpoint: checkpoint
 				? {
 						id: checkpoint.id,
@@ -136,11 +153,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		};
 	});
 
-	server.route("GET", "/api/git/log", ({ url }) => {
-		const state = inspectGitRepository(cwd());
+	server.route("GET", "/api/git/log", async ({ url }) => {
+		const state = await inspectGitRepositoryAsync(cwd());
 		if (!state.isRepository || !state.root) return { commits: [] };
 		const limit = Math.min(Number(url.searchParams.get("limit") ?? 30) || 30, 100);
-		const result = runGitSync(["log", `-${limit}`, "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s"], { cwd: state.root });
+		const result = await runGitAsync(state.root, ["log", `-${limit}`, "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s"]);
 		if (!result.ok) return { commits: [], error: failureText(result) };
 		return {
 			commits: result.stdout

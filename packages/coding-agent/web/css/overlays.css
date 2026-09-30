@@ -107,3 +107,7 @@
 .pf-model-title { font-weight: 500; }
 .pf-model-badges { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 @media (max-width: 760px) { .pf-two, .pf-model-grid { grid-template-columns: 1fr; } }
+/* Token-count inputs in thousands: the fixed "K" unit sits inside the field. */
+.k-field { position: relative; display: flex; }
+.k-field .field { width: 100%; padding-right: 26px; }
+.k-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); font-size: var(--fs-sm); pointer-events: none; }

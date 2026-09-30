@@ -9,12 +9,14 @@ import {
 	EXTRA_LEVELS,
 	levelStatus,
 	applyDetected,
+	applyProbeResult,
 	buildModel,
 	connectionReady,
 	connectionSignature,
 	detectedChanges,
+	fmtK,
+	fromK,
 	modelDraft,
-	positive,
 	setCatalogSelection,
 	toggleCatalogModel,
 } from "./provider-models.js";
@@ -27,8 +29,10 @@ const API_LABELS = {
 	"mistral-conversations": N_("Mistral Conversations"),
 };
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-/** The server gives up on the endpoint after 20 s; this only guards against a server that never answers. */
-const CATALOG_TIMEOUT_MS = 45_000;
+/** The server reads the list for up to 20 s and probes efforts for up to 45 s; this only guards against no answer at all. */
+const CATALOG_TIMEOUT_MS = 90_000;
+/** After models are ticked, their efforts are checked once the selection has settled. */
+const PROBE_DELAY_MS = 1200;
 const AUTO_FETCH_DELAY_MS = 700;
 const CATALOG_ROWS = 200;
 
@@ -120,7 +124,7 @@ function validate(draft, { isNew, hasStoredKey }) {
 		if (!id) return t("Every model needs an ID.");
 		if (seen.has(id)) return t("Model ID “{id}” appears twice.", { id });
 		seen.add(id);
-		if (positive(model.contextWindow) === undefined || positive(model.maxTokens) === undefined) return t("Context window and max output of “{id}” must be positive whole numbers.", { id });
+		if (fromK(model.contextWindow) === undefined || fromK(model.maxTokens) === undefined) return t("Context window and max output of “{id}” must be positive numbers of K tokens (1K = 1000, at most three decimals).", { id });
 	}
 	return "";
 }
@@ -139,8 +143,8 @@ const CHANGE_LABELS = {
 	name: N_("Display name"),
 	reasoning: N_("Supports reasoning"),
 	image: N_("Accepts images"),
-	contextWindow: N_("Context window (tokens)"),
-	maxTokens: N_("Max output (tokens)"),
+	contextWindow: N_("Context window"),
+	maxTokens: N_("Max output"),
 	levels: N_("Thinking effort"),
 };
 
@@ -149,12 +153,24 @@ function showChange(field, value) {
 	if (field === "reasoning" || field === "image") return yesNo(value);
 	if (field === "levels") return [...BASE_LEVELS, ...EXTRA_LEVELS].filter((level) => value[level] && level !== "off").map((level) => effortName(level)).join(", ") || "—";
 	if (field === "name" && !value) return "—";
+	if (field === "contextWindow" || field === "maxTokens") return value ? `${value}K` : "—";
 	return String(value);
+}
+
+/** A token capacity edited in K: the number is typed, the unit is fixed. */
+function KField({ label, detected, value, onInput }) {
+	const tokens = fromK(value);
+	return html`<label class="col field-label">${label}${detected ? html` <${Detected} />` : null}
+		<span class="k-field"><input class="field mono" inputmode="decimal" value=${value} onInput=${(e) => onInput(e.target.value)} /><span class="k-unit" aria-hidden="true">K</span></span>
+		<span class="dim pf-hint">${tokens ? t("{n} tokens", { n: tokens.toLocaleString() }) : t("1K = 1000 tokens")}</span>
+	</label>`;
 }
 
 /** One selected model: a summary row that opens into its settings. `found` is its entry in the endpoint's catalog, if any. */
 function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 	const set = (patch) => onChange({ ...model, ...patch });
+	// A switch the user flips by hand is theirs: a later probe result no longer changes it.
+	const touch = (key, patch) => set({ ...patch, touched: { ...model.touched, [key]: true } });
 	const d = model.detected || {};
 	const changes = found ? detectedChanges(model, found) : [];
 	const title = model.name.trim() || model.id.trim() || t("New model");
@@ -168,7 +184,7 @@ function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 			<span class="pf-model-badges">
 				${model.reasoning ? html`<span class="badge" title=${levelSummary(model)}>${t("thinking")}${levelSummary(model) ? html` · ${levelSummary(model)}` : null}</span>` : null}
 				${model.image ? html`<span class="badge">${t("images")}</span>` : null}
-				${positive(model.contextWindow) ? html`<span class="dim">${Math.round(positive(model.contextWindow) / 1000)}k</span>` : null}
+				${fromK(model.contextWindow) ? html`<span class="dim">${fmtK(fromK(model.contextWindow))}</span>` : null}
 			</span>
 			<button class="icon-btn sm" title=${t("Remove model")} aria-label=${t("Remove model")} onClick=${onRemove}><${Icon} name="trash" size=${14} /></button>
 		</div>
@@ -179,15 +195,15 @@ function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 					<input class="field" placeholder=${t("Display name (optional)")} aria-label=${t("Display name")} value=${model.name} onInput=${(e) => set({ name: e.target.value })} />
 				</div>
 				<div class="pf-model-grid">
-					<div class="row"><${Toggle} checked=${model.reasoning} label=${t("Reasoning")} onChange=${(v) => set({ reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</div>
+					<div class="row"><${Toggle} checked=${model.reasoning} label=${t("Reasoning")} onChange=${(v) => touch("reasoning", { reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</div>
 					<div class="row"><${Toggle} checked=${model.image} label=${t("Image input")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</div>
-					<label class="col field-label">${t("Context window (tokens)")}${d.contextWindow ? html` <${Detected} />` : null}<input class="field mono" inputmode="numeric" value=${model.contextWindow} onInput=${(e) => set({ contextWindow: e.target.value })} /></label>
-					<label class="col field-label">${t("Max output (tokens)")}${d.maxTokens ? html` <${Detected} />` : null}<input class="field mono" inputmode="numeric" value=${model.maxTokens} onInput=${(e) => set({ maxTokens: e.target.value })} /></label>
+					<${KField} label=${t("Context window")} detected=${d.contextWindow} value=${model.contextWindow} onInput=${(v) => set({ contextWindow: v })} />
+					<${KField} label=${t("Max output")} detected=${d.maxTokens} value=${model.maxTokens} onInput=${(v) => set({ maxTokens: v })} />
 				</div>
 				${model.reasoning
-					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "official" ? t("From the provider's official documentation") : d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
-						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unverified" ? t("The service accepted this level, but it could not be confirmed that it is applied.") : levelStatus(model, level) === "unknown" ? t("Could not be checked; it stays selectable.") : undefined} onClick=${() => set({ levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "official" ? t("These are the levels the provider's official documentation lists for this model.") : d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Untick the ones you know it rejects.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
+					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
+						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unverified" ? t("The service accepted this level, but it could not be confirmed that it is applied.") : levelStatus(model, level) === "unknown" ? t("Could not be checked; it stays selectable.") : undefined} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Untick the ones you know it rejects.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
 					: null}
 				${changes.length
 					? html`<div class="pf-conflict">
@@ -220,7 +236,7 @@ function CatalogList({ catalog, models, onToggle, onSetAll }) {
 				<span class="truncate grow" title=${m.id}>${m.name !== m.id ? html`${m.name} <span class="dim mono">${m.id}</span>` : html`<span class="mono">${m.id}</span>`}</span>
 				${m.reasoning ? html`<span class="badge">${t("thinking")}</span>` : null}
 				${m.input?.includes("image") ? html`<span class="badge">${t("images")}</span>` : null}
-				${m.contextWindow ? html`<span class="dim">${Math.round(m.contextWindow / 1000)}k</span>` : null}
+				${m.contextWindow ? html`<span class="dim">${fmtK(m.contextWindow)}</span>` : null}
 			</label>`)}
 			${shown.length > CATALOG_ROWS ? html`<div class="dim pf-hint">${t("Showing the first {n}; filter to narrow the list.", { n: CATALOG_ROWS })}</div>` : null}
 			${!shown.length ? html`<div class="dim pf-hint">${t("No model matches the filter.")}</div>` : null}
@@ -246,6 +262,8 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 	const [openModels, setOpenModels] = useState(() => new Set());
 	const bodyRef = useRef(null);
 	const runRef = useRef(0);
+	/** Model IDs whose efforts were already sent for probing with the current connection. */
+	const probedIds = useRef(new Set());
 	const hasStoredKey = !!storedKeys?.apiKeys?.length;
 	const patch = (next) => setDraft((current) => ({ ...current, ...next }));
 	const types = apiTypes?.length ? apiTypes : Object.keys(API_LABELS);
@@ -266,9 +284,14 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 					configApiKey: current.auth === "config" ? current.raw.apiKey : undefined,
 					headers: current.raw.headers,
 					id: isNew ? "" : current.id,
+					// The models in the form: their efforts are probed when the catalog does not state them.
+					models: current.models
+						.filter((model) => model.id.trim())
+						.map((model) => ({ id: model.id.trim(), reasoning: model.reasoning || undefined, thinkingLevelStatus: model.raw?.thinkingLevelStatus })),
 				}),
 				CATALOG_TIMEOUT_MS,
 			);
+			for (const model of current.models) if (model.id.trim()) probedIds.current.add(model.id.trim());
 			if (result.ok && result.models.length) next = { status: "ok", models: result.models, message: "" };
 			else if (result.ok) next = { status: "empty", models: [], message: t("The endpoint returned an empty model list. Add the models manually.") };
 			else next = { status: "error", models: [], message: detectMessage(result) };
@@ -276,7 +299,13 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 			next = { status: "error", models: [], message: detectFailure(e) };
 		}
 		// A newer request (or closing the form) makes this answer stale.
-		if (run === runRef.current) setCatalog(next);
+		if (run !== runRef.current) return;
+		setCatalog(next);
+		// What the probe settled for models already in the form goes straight into them (unless edited by hand).
+		if (next.status === "ok") {
+			const byId = new Map(next.models.map((m) => [m.id, m]));
+			setDraft((latest) => ({ ...latest, models: latest.models.map((model) => (byId.has(model.id.trim()) ? applyProbeResult(model, byId.get(model.id.trim())) : model)) }));
+		}
 	};
 
 	// Ask the endpoint on its own as soon as the connection is complete, and again whenever it changes.
@@ -288,9 +317,20 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 			setCatalog((previous) => (previous.status === "idle" ? previous : { status: "idle", models: [], message: "" }));
 			return undefined;
 		}
+		probedIds.current = new Set();
 		const timer = setTimeout(() => fetchCatalog(), AUTO_FETCH_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [signature, ready]);
+	// Models ticked after the catalog arrived have not been probed yet: check their efforts once the selection settles.
+	const unprobed = draft.models
+		.map((model) => model.id.trim())
+		.filter((id) => id && !probedIds.current.has(id) && catalogById.get(id)?.thinkingSource !== "catalog")
+		.join("\n");
+	useEffect(() => {
+		if (!ready || !unprobed || catalog.status !== "ok") return undefined;
+		const timer = setTimeout(() => fetchCatalog(), PROBE_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [unprobed, ready, catalog.status]);
 	useEffect(() => () => void (runRef.current = -1), []);
 
 	const switchView = (next) => {

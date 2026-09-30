@@ -1,6 +1,6 @@
 /* Conversation surface: document-like reading, quiet chrome. */
 .transcript-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
-.transcript { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: auto; padding: 8px 20px 24px; }
+.transcript { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: auto; padding: 8px 20px 24px; scrollbar-gutter: stable both-edges; }
 .transcript-inner { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
 .transcript-end { height: 1px; }
 

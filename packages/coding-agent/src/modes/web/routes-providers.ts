@@ -14,6 +14,7 @@ import {
 	discoverProviderModels,
 	ProviderModelDiscoveryError,
 } from "../../providers/models/custom-provider-manager.ts";
+import type { ThinkingLevelStatuses } from "../../providers/models/thinking-probe.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -81,6 +82,23 @@ function restoreSecrets(incoming: ModelsJsonProvider, stored: ModelsJsonProvider
 		}
 	});
 	return copy;
+}
+
+interface FormModel {
+	id: string;
+	reasoning?: boolean;
+	thinkingLevelStatus?: Record<string, unknown>;
+}
+
+function isFormModel(value: unknown): value is FormModel {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const model = value as Record<string, unknown>;
+	return (
+		typeof model.id === "string" &&
+		model.id.trim().length > 0 &&
+		(model.thinkingLevelStatus === undefined ||
+			(typeof model.thinkingLevelStatus === "object" && model.thinkingLevelStatus !== null))
+	);
 }
 
 export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub?: WebHostHub): void {
@@ -176,6 +194,8 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				authSource: status.configured ? (status.source ?? null) : null,
 				supportsApiKeyLogin: typeof provider.auth.apiKey?.login === "function",
 				supportsOAuth: provider.auth.oauth !== undefined,
+				/** Defined in models.json: edited, renamed and deleted from its card. */
+				custom: configEntries.has(provider.id),
 				modelCount: provider.getModels().length,
 				credentials: overview
 					? {
@@ -199,6 +219,30 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 			});
 		}
 		return { providers, modelsPath: rt.getModelsConfigPath() ?? null, error: rt.getError() ?? null };
+	});
+
+	/**
+	 * Same operation as the terminal's Providers → Refresh models: reads the provider's model catalog, appends the models
+	 * it lists (unless `addNew` is false) and settles each configured model's thinking efforts from the catalog or, when
+	 * the catalog does not say, with real minimal requests. The result is written to models.json, shared with the CLI.
+	 */
+	server.route("POST", "/api/providers/refresh-models", async ({ body }) => {
+		const payload = asObject(body);
+		const id = str(payload.id, "id");
+		try {
+			const result = await runtime().refreshProviderModels(id, {
+				addNew: payload.addNew !== false,
+				timeoutMs: 90_000,
+			});
+			if (!host.session.isStreaming) await host.session.reconcileModelAfterConfigChange().catch(() => {});
+			host.broadcast("models_changed", {});
+			return { ok: true, ...result };
+		} catch (error) {
+			if (error instanceof ProviderModelDiscoveryError) {
+				return { ok: false, code: error.code, message: error.message, status: error.status ?? null };
+			}
+			return { ok: false, code: "connection", message: error instanceof Error ? error.message : String(error) };
+		}
 	});
 
 	server.route("POST", "/api/providers/enabled", async ({ body }) => {
@@ -390,6 +434,9 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				if (auth?.source === "OAuth") authType = "oauth";
 			}
 		}
+		// The models the form holds are probed even when the catalog does not say whether they reason; levels an earlier
+		// probe settled (sent back by the form) are not probed again.
+		const formModels = Array.isArray(payload.models) ? payload.models.filter(isFormModel) : [];
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), 20_000);
 		try {
@@ -400,8 +447,19 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				authType,
 				headers,
 				signal: controller.signal,
-				// Levels the catalog and the documentation leave undecided are tested with real minimal requests.
-				probeThinking: { budgetMs: 20_000 },
+				// Levels the catalog leaves undecided are tested with real minimal requests.
+				probeThinking: {
+					budgetMs: 45_000,
+					reasoningModelIds: new Set(
+						formModels.filter((model) => model.reasoning === true).map((model) => model.id),
+					),
+					candidateModelIds: new Set(formModels.map((model) => model.id)),
+					knownStatuses: new Map(
+						formModels.flatMap((model) =>
+							model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus as ThinkingLevelStatuses]] : [],
+						),
+					),
+				},
 			});
 			return { ok: true, models };
 		} catch (error) {

@@ -234,3 +234,13 @@ export function shellOutcome(result) {
 	if (result?.details?.errorCode === "BASH_TIMEOUT" || /Command timed out after \d+ seconds\s*$/.test(text)) return "timeout";
 	return null;
 }
+
+// A list scrolled from the keyboard slides under a resting mouse pointer; that must not move the highlight. Only a
+// pointer that really moved (another screen position than the last event) counts as choosing with the mouse.
+let lastPointer = "";
+export function pointerMoved(event) {
+	const at = `${event.screenX},${event.screenY}`;
+	if (at === lastPointer) return false;
+	lastPointer = at;
+	return true;
+}

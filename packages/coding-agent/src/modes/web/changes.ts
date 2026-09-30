@@ -10,8 +10,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
-import { runGitSync } from "../../git/repository/command.ts";
-import { inspectGitRepository } from "../../git/repository/integration.ts";
+import { runGit, runGitSync } from "../../git/repository/command.ts";
+import { inspectGitRepositoryAsync } from "../../git/repository/integration.ts";
 import type { ReviewChange, ReviewChangeStatus } from "../../git/repository/review-types.ts";
 import type { ChangeDetectionResult, GitTaskChangeSummary } from "../../git/repository/workspace-changes.ts";
 
@@ -120,6 +120,17 @@ export function makePatch(
 
 function gitShow(repositoryRoot: string, spec: string): { text: string | null; binary: boolean } {
 	const result = runGitSync(["show", spec], { cwd: repositoryRoot, timeoutMs: 20_000, preserveOutput: true });
+	if (!result.ok) return { text: null, binary: false };
+	if (result.stdout.includes("\u0000")) return { text: null, binary: true };
+	return { text: result.stdout, binary: false };
+}
+
+async function gitShowAsync(repositoryRoot: string, spec: string): Promise<{ text: string | null; binary: boolean }> {
+	const result = await runGit(["show", spec], {
+		cwd: repositoryRoot,
+		timeoutMs: 20_000,
+		env: { GIT_OPTIONAL_LOCKS: "0" },
+	});
 	if (!result.ok) return { text: null, binary: false };
 	if (result.stdout.includes("\u0000")) return { text: null, binary: true };
 	return { text: result.stdout, binary: false };
@@ -369,18 +380,19 @@ export class ChangeTracker {
 	// Working tree (all uncommitted changes versus HEAD)
 	// ---------------------------------------------------------------------
 
-	listWorktreeChanges(): { repositoryRoot?: string; changes: ReviewChange[]; error?: string } {
-		const state = inspectGitRepository(this.cwd);
+	// The working-tree view runs Git asynchronously: a large or slow repository must not stall the Web server.
+	async listWorktreeChanges(): Promise<{ repositoryRoot?: string; changes: ReviewChange[]; error?: string }> {
+		const state = await inspectGitRepositoryAsync(this.cwd);
 		if (!state.isRepository || !state.root) {
 			return {
 				changes: [],
 				error: state.gitAvailable ? "The workspace is not a Git repository." : "Git is not available.",
 			};
 		}
-		const result = runGitSync(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+		const result = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
 			cwd: state.root,
 			timeoutMs: 30_000,
-			preserveOutput: true,
+			env: { GIT_OPTIONAL_LOCKS: "0" },
 		});
 		if (!result.ok) return { repositoryRoot: state.root, changes: [], error: result.stderr || result.error };
 		const changes: ReviewChange[] = [];
@@ -409,7 +421,10 @@ export class ChangeTracker {
 		return { repositoryRoot: state.root, changes };
 	}
 
-	diffForWorktreeFile(repositoryRoot: string, change: ReviewChange): { summary: FileChangeSummary; patch?: string } {
+	async diffForWorktreeFile(
+		repositoryRoot: string,
+		change: ReviewChange,
+	): Promise<{ summary: FileChangeSummary; patch?: string }> {
 		const summary: FileChangeSummary = {
 			path: change.path,
 			status: change.status,
@@ -422,7 +437,7 @@ export class ChangeTracker {
 		const before =
 			change.status === "added" || !beforePath
 				? { text: null, binary: false }
-				: gitShow(repositoryRoot, `HEAD:${beforePath}`);
+				: await gitShowAsync(repositoryRoot, `HEAD:${beforePath}`);
 		const after =
 			change.status === "deleted"
 				? { text: null, binary: false, tooLarge: false }

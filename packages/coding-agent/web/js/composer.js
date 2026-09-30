@@ -1,11 +1,11 @@
 // Composer: one stable input card. Model and effort are one click away; running-state choices
 // (steer / queue / interrupt) map onto the real AgentSession mechanisms.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
-import { api, attempt, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { ContextMeter } from "./context-usage.js";
-import { clip, debounce, effortHint, effortName, fmtTokens, plural } from "./util.js";
+import { clip, debounce, effortHint, effortName, fmtTokens, plural, pointerMoved } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 
 const drafts = new Map();
@@ -287,8 +287,13 @@ export function Composer() {
 	const editorInsert = useStore((s) => s.editorInsert);
 	const items = useStore((s) => s.items);
 	const gitStatus = useStore((s) => s.gitStatus);
+	const activeSlot = useStore((s) => s.activeSlot);
 	const sessionId = snap?.session?.id;
 	const active = !!snap?.active;
+	// The branch / worktree chips above the input: read when the folder or the chat on screen changes and after each run.
+	useEffect(() => {
+		if (snap?.cwd && !active) loadGitStatus();
+	}, [snap?.cwd, active, activeSlot]);
 	const busyCompact = !!snap?.flags?.compacting;
 	const noModel = !snap?.model;
 	const [text, setText] = useState("");
@@ -353,7 +358,26 @@ export function Composer() {
 
 	const { token, items: suggestions } = useSuggestions(text, caret);
 	useEffect(() => setSel(0), [token?.type, token?.query]);
-	const menuOpen = !!token && suggestions.length > 0;
+	// Closing the list (Esc, a click outside the input card) only hides it for the token being typed; the draft is untouched.
+	const tokenKey = token ? `${token.type}:${token.start}:${token.query}` : "";
+	const [dismissed, setDismissed] = useState("");
+	const menuOpen = !!token && suggestions.length > 0 && dismissed !== tokenKey;
+	const card = useRef(null);
+	const suggestList = useRef(null);
+	useEffect(() => {
+		if (!menuOpen) return undefined;
+		const onDown = (event) => {
+			if (card.current?.contains(event.target)) return;
+			setDismissed(tokenKey);
+		};
+		document.addEventListener("mousedown", onDown, true);
+		return () => document.removeEventListener("mousedown", onDown, true);
+	}, [menuOpen, tokenKey]);
+	// The highlighted row is always visible, also when ↑ on the first row wraps to the last one (and ↓ on the last to the first).
+	useLayoutEffect(() => {
+		if (!menuOpen) return;
+		suggestList.current?.children[sel]?.scrollIntoView({ block: "nearest" });
+	}, [sel, menuOpen, suggestions.length]);
 
 	const history = useMemo(() => items.filter((i) => i.kind === "user" && i.text).map((i) => i.text), [items]);
 
@@ -422,7 +446,7 @@ export function Composer() {
 			// Enter confirms and runs the highlighted command (an "@" file has nothing to run, so it is inserted); Tab only completes.
 			if (event.key === "Tab") return event.preventDefault(), applySuggestion(picked);
 			if (event.key === "Enter" && !event.shiftKey) return event.preventDefault(), confirmSuggestion(picked);
-			if (event.key === "Escape") return event.preventDefault(), setText((t) => t + " ");
+			if (event.key === "Escape") return event.preventDefault(), setDismissed(tokenKey);
 		}
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
@@ -463,10 +487,17 @@ export function Composer() {
 			${dialogs.map((dialog) => html`<${DialogBar} key=${dialog.id} dialog=${dialog} />`)}
 			<${CommandPanel} />
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "aboveEditor").map((w, i) => html`<pre class="widget" key=${`wa${i}`}>${w.lines.join("\n")}</pre>`)}
-			<div class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""}`}
+			<div class="composer-env">
+				${snap?.cwd ? html`<button class="env-chip" onClick=${() => actions.togglePanel("files")} title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></button>` : null}
+				${gitStatus?.isRepository && gitStatus.branch ? html`<button class="env-chip" onClick=${() => actions.openChanges({ git: true })} title=${t("Git branch")}><${Icon} name="gitBranch" size=${12} /><span class="truncate">${gitStatus.branch}</span>${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}</button>` : null}
+				${gitStatus?.isRepository && gitStatus.linkedWorktree ? html`<button class="env-chip" onClick=${() => actions.openChanges({ git: true })} title=${t("This folder is a linked Git worktree")}><${Icon} name="layers" size=${12} />${t("worktree")}</button>` : null}
+				${snap && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
+				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
+			</div>
+			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""}`}
 				onDragOver=${(e) => (e.preventDefault(), setDragOver(true))} onDragLeave=${() => setDragOver(false)}
 				onDrop=${(e) => (e.preventDefault(), setDragOver(false), addFiles(e.dataTransfer.files))}>
-				${menuOpen ? html`<div class="suggest" role="listbox">${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${() => setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
+				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				<textarea ref=${area} class="composer-input" rows="1" value=${text} placeholder=${placeholder} spellcheck="false"
@@ -491,9 +522,9 @@ export function Composer() {
 							<${MenuItem} icon="layers" label=${t("Compact context now")} disabled=${active} onClick=${() => (close(), actions.compact())} />`}
 					<//>
 					<input ref=${fileInput} type="file" accept="image/*" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
+					<span class="grow" />
 					<${ModelPicker} />
 					<${EffortPicker} />
-					<span class="grow" />
 					<${ContextMeter} />
 					${active
 						? html`<button ref=${modeAnchor} class="mode-btn" title=${`${t(RUN_MODES[runMode].long)}: ${t(RUN_MODES[runMode].hint)}`} onClick=${() => setModeOpen(!modeOpen)} aria-haspopup="menu" aria-expanded=${modeOpen}>${t(RUN_MODES[runMode].label)}<${Icon} name="chevronUp" size=${11} /></button>
@@ -506,12 +537,6 @@ export function Composer() {
 				</div>
 			</div>
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "belowEditor").map((w, i) => html`<pre class="widget" key=${`wb${i}`}>${w.lines.join("\n")}</pre>`)}
-			<div class="composer-foot dim">
-				<button class="foot-btn truncate" onClick=${() => actions.togglePanel("files")} title=${t("Workspace folder")}><${Icon} name="folder" size=${12} /><span class="truncate">${snap?.cwd || ""}</span></button>
-				${gitStatus?.isRepository && gitStatus.branch ? html`<button class="foot-btn" onClick=${() => actions.openChanges({ git: true })} title=${t("Git branch")}><${Icon} name="gitBranch" size=${12} />${gitStatus.branch}${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}</button>` : null}
-				${snap && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="foot-btn warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
-				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="foot-status truncate" key=${key}>${value}</span>`)}
-			</div>
 		</div>
 	</div>`;
 }

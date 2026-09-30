@@ -216,10 +216,10 @@ describe("Web UI: provider model catalog", () => {
 			name: "Reason B",
 			reasoning: true,
 			image: true,
-			contextWindow: "200000",
+			contextWindow: "200",
 		});
 		// Not stated by the catalog: keeps the usual default and is not marked as detected.
-		expect(seeded.maxTokens).toBe(String(models.DEFAULT_MAX_TOKENS));
+		expect(seeded.maxTokens).toBe(models.toK(models.DEFAULT_MAX_TOKENS));
 		expect(seeded.detected).toEqual({ reasoning: true, input: true, contextWindow: true, levels: true });
 		expect(seeded.levels).toMatchObject({
 			off: true,
@@ -280,7 +280,7 @@ describe("Web UI: provider model catalog", () => {
 		expect(models.toggleCatalogModel(ticked, found, true)).toBe(ticked);
 		const unticked = models.toggleCatalogModel(ticked, found, false);
 		expect(unticked.map((m: any) => m.id)).toEqual(["own"]);
-		expect(unticked[0].contextWindow).toBe("1000");
+		expect(unticked[0].contextWindow).toBe("1");
 		// A blank placeholder card is dropped when the first real model arrives.
 		expect(models.toggleCatalogModel([models.modelDraft()], found, true).map((m: any) => m.id)).toEqual(["a"]);
 	});
@@ -297,9 +297,46 @@ describe("Web UI: provider model catalog", () => {
 		const found = { id: "m", name: "m", contextWindow: 2000, thinkingLevelMap: { low: null } };
 		expect(models.detectedChanges(current, found).map((c: any) => c.field)).toEqual(["contextWindow", "levels"]);
 		const next = models.applyDetected(current, found);
-		expect(next).toMatchObject({ name: "Mine", contextWindow: "2000", maxTokens: "500", reasoning: true });
+		expect(next).toMatchObject({ name: "Mine", contextWindow: "2", maxTokens: "0.5", reasoning: true });
 		expect(next.levels.low).toBe(false);
 		expect(models.detectedChanges(next, found)).toEqual([]);
+	});
+
+	it("edits token counts in K (1K = 1000) and stores the exact token count", () => {
+		expect(models.toK(128000)).toBe("128");
+		expect(models.toK(131072)).toBe("131.072");
+		expect(models.toK(1500)).toBe("1.5");
+		expect(models.fmtK(128000)).toBe("128K");
+		expect(models.fmtK(131072)).toBe("131.072K");
+		expect(models.fromK("128")).toBe(128000);
+		expect(models.fromK(" 131.072 ")).toBe(131072);
+		expect(models.fromK("0.5")).toBe(500);
+		for (const bad of ["", "0", "1.2345", "-1", "12K", "abc", "1e3"]) expect(models.fromK(bad)).toBeUndefined();
+		const draft = models.modelDraft({ id: "m", contextWindow: 131072, maxTokens: 8192 });
+		expect(draft).toMatchObject({ contextWindow: "131.072", maxTokens: "8.192" });
+		expect(models.buildModel({ ...draft, contextWindow: "200" })).toMatchObject({
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+	});
+
+	it("applies a thinking probe to a form model unless the user set that switch by hand", () => {
+		const probe = {
+			id: "m",
+			reasoning: true,
+			thinkingSource: "probe",
+			thinkingLevelMap: { minimal: null },
+			thinkingLevelStatus: { minimal: "unsupported", low: "supported" },
+		};
+		const applied = models.applyProbeResult(models.modelDraft({ id: "m" }), probe);
+		expect(applied.reasoning).toBe(true);
+		expect(applied.levels).toMatchObject({ minimal: false, low: true });
+		expect(models.buildModel(applied).thinkingLevelStatus).toEqual(probe.thinkingLevelStatus);
+		const own = { ...models.modelDraft({ id: "m" }), touched: { reasoning: true } };
+		expect(models.applyProbeResult(own, probe).reasoning).toBe(false);
+		// Anything but a probe result leaves the model as it is.
+		const plain = models.modelDraft({ id: "m" });
+		expect(models.applyProbeResult(plain, { id: "m", reasoning: true })).toBe(plain);
 	});
 
 	it("asks the endpoint on its own only when the connection is complete", () => {

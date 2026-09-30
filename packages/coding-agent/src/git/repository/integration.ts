@@ -88,6 +88,42 @@ export function inspectGitRepository(cwd: string): GitRepositoryState {
 	};
 }
 
+/** 异步版 inspectGitRepository：结果相同，但不阻塞事件循环（Web 服务在检查期间仍能响应其他请求）。 */
+export async function inspectGitRepositoryAsync(cwd: string): Promise<GitRepositoryState> {
+	const version = await runGitAsync(cwd, ["--version"]);
+	if (!version.ok) {
+		return {
+			gitAvailable: false,
+			isRepository: false,
+			hasBaseline: false,
+			error: version.error || version.stderr.trim() || "找不到 Git 命令",
+		};
+	}
+
+	const rootResult = await runGitAsync(cwd, ["rev-parse", "--show-toplevel"]);
+	const rootOutput = rootResult.stdout.trim();
+	if (!rootResult.ok || !rootOutput) {
+		return {
+			gitAvailable: true,
+			isRepository: false,
+			hasBaseline: false,
+		};
+	}
+
+	const root = resolveGitRepositoryRoot(cwd, rootOutput);
+	const [baselineResult, branchResult] = await Promise.all([
+		runGitAsync(root, ["rev-parse", "--verify", "HEAD"]),
+		runGitAsync(root, ["branch", "--show-current"]),
+	]);
+	return {
+		gitAvailable: true,
+		isRepository: true,
+		root,
+		hasBaseline: baselineResult.ok,
+		branch: branchResult.stdout.trim() || undefined,
+	};
+}
+
 function readConfig(cwd: string, args: string[]): string | undefined {
 	const result = runGit(cwd, args);
 	return result.ok && result.stdout ? result.stdout : undefined;
@@ -104,6 +140,23 @@ export function readGitIdentity(cwd: string, repositoryRoot?: string): GitIdenti
 		name: localName ?? readConfig(cwd, ["config", "--global", "--get", "user.name"]),
 		email: localEmail ?? readConfig(cwd, ["config", "--global", "--get", "user.email"]),
 	};
+}
+
+async function readConfigAsync(cwd: string, args: string[]): Promise<string | undefined> {
+	const result = await runGitAsync(cwd, args);
+	const value = result.stdout.trim();
+	return result.ok && value ? value : undefined;
+}
+
+/** 异步版 readGitIdentity：四个配置项并行读取，本地配置优先。 */
+export async function readGitIdentityAsync(cwd: string, repositoryRoot?: string): Promise<GitIdentity> {
+	const [localName, localEmail, globalName, globalEmail] = await Promise.all([
+		repositoryRoot ? readConfigAsync(repositoryRoot, ["config", "--local", "--get", "user.name"]) : undefined,
+		repositoryRoot ? readConfigAsync(repositoryRoot, ["config", "--local", "--get", "user.email"]) : undefined,
+		readConfigAsync(cwd, ["config", "--global", "--get", "user.name"]),
+		readConfigAsync(cwd, ["config", "--global", "--get", "user.email"]),
+	]);
+	return { name: localName ?? globalName, email: localEmail ?? globalEmail };
 }
 
 export function initializeGitRepository(cwd: string): GitCommandResult {
@@ -124,6 +177,24 @@ export function getGitStatusPreview(repositoryRoot: string, paths: string[] = []
 	const result = runGit(repositoryRoot, args);
 	if (!result.ok) return undefined;
 	const allLines = result.stdout ? result.stdout.split(/\r?\n/).filter(Boolean) : [];
+	return {
+		lines: allLines.slice(0, STATUS_PREVIEW_LIMIT),
+		total: allLines.length,
+		truncated: allLines.length > STATUS_PREVIEW_LIMIT,
+	};
+}
+
+/** 异步版 getGitStatusPreview。 */
+export async function getGitStatusPreviewAsync(
+	repositoryRoot: string,
+	paths: string[] = [],
+): Promise<GitStatusPreview | undefined> {
+	const args = ["status", "--short", "--untracked-files=all"];
+	if (paths.length > 0) args.push("--", ...paths);
+	const result = await runGitAsync(repositoryRoot, args);
+	if (!result.ok) return undefined;
+	const output = result.stdout.replace(/\s+$/u, "");
+	const allLines = output ? output.split(/\r?\n/).filter(Boolean) : [];
 	return {
 		lines: allLines.slice(0, STATUS_PREVIEW_LIMIT),
 		total: allLines.length,

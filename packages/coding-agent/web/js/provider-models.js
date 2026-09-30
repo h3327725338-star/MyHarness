@@ -31,6 +31,29 @@ export function positive(text) {
 	return Number.isFinite(value) && value > 0 && Number.isInteger(value) ? value : undefined;
 }
 
+// Token capacities are edited in K (1K = 1000 tokens) and stored as the real token count. The conversion is exact in
+// both directions: 128000 ⇄ "128", and a value that is not a whole thousand keeps its precision (131072 ⇄ "131.072").
+/** A token count as K text, without rounding. */
+export function toK(tokens) {
+	const value = Math.round(Number(tokens));
+	if (!Number.isFinite(value) || value < 0) return "";
+	const whole = Math.floor(value / 1000);
+	const rest = value - whole * 1000;
+	return rest ? `${whole}.${String(rest).padStart(3, "0").replace(/0+$/u, "")}` : String(whole);
+}
+
+/** K text as a whole, positive token count; undefined when it is not one (more than three decimals, 0, text …). */
+export function fromK(text) {
+	const value = String(text ?? "").trim();
+	const match = /^(\d+)(?:\.(\d{1,3}))?$/u.exec(value);
+	if (!match) return undefined;
+	const tokens = Number(match[1]) * 1000 + Number((match[2] ?? "").padEnd(3, "0"));
+	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}
+
+/** A token count for display, e.g. "128K" or "131.072K". */
+export const fmtK = (tokens) => `${toK(tokens)}K`;
+
 /** `detected` records which fields were read from the endpoint's catalog (shown as "auto"). */
 export function modelDraft(model = {}, detected = {}) {
 	return {
@@ -43,8 +66,9 @@ export function modelDraft(model = {}, detected = {}) {
 		// not declare reasoning has no known levels.
 		levels: model.thinkingLevelMap || model.reasoning === true ? levelsFromMap(model.thinkingLevelMap) : unknownLevels(),
 		image: model.input?.includes("image") === true,
-		contextWindow: String(model.contextWindow ?? DEFAULT_CONTEXT),
-		maxTokens: String(model.maxTokens ?? DEFAULT_MAX_TOKENS),
+		// Edited in K; see toK / fromK.
+		contextWindow: toK(model.contextWindow ?? DEFAULT_CONTEXT),
+		maxTokens: toK(model.maxTokens ?? DEFAULT_MAX_TOKENS),
 		detected,
 	};
 }
@@ -57,8 +81,8 @@ export function buildModel(draft) {
 	else delete model.name;
 	model.reasoning = draft.reasoning;
 	model.input = draft.image ? ["text", "image"] : ["text"];
-	const context = positive(draft.contextWindow);
-	const maxTokens = positive(draft.maxTokens);
+	const context = fromK(draft.contextWindow);
+	const maxTokens = fromK(draft.maxTokens);
 	if (context) model.contextWindow = context;
 	else delete model.contextWindow;
 	if (maxTokens) model.maxTokens = maxTokens;
@@ -92,8 +116,8 @@ export function seedFromDetected(found) {
 	if (found.thinkingLevelStatus) seed.thinkingLevelStatus = found.thinkingLevelStatus;
 	const detected = {};
 	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (found[key] !== undefined) detected[key] = true;
-	// Levels are marked "auto" only when the catalog, the provider's documentation or a test request settled them; a model
-	// whose efforts nobody confirmed keeps every level selectable.
+	// Levels are marked "auto" only when the catalog or a test request settled them; a model whose efforts nobody
+	// confirmed keeps every level selectable.
 	if ((found.thinkingLevelMap || found.thinkingLevelStatus) && found.thinkingSource !== "unconfirmed") detected.levels = true;
 	if (found.thinkingSource) detected.levelsSource = found.thinkingSource;
 	return modelDraft(seed, detected);
@@ -115,7 +139,7 @@ export function detectedChanges(model, found) {
 		if (image !== model.image) changes.push({ field: "image", from: model.image, to: image });
 	}
 	for (const field of ["contextWindow", "maxTokens"]) {
-		if (found[field] !== undefined && String(found[field]) !== String(model[field]).trim()) changes.push({ field, from: String(model[field]).trim(), to: found[field] });
+		if (found[field] !== undefined && found[field] !== fromK(model[field])) changes.push({ field, from: String(model[field]).trim(), to: toK(found[field]) });
 	}
 	// A test request only seeds new models; it never proposes to overwrite the levels of a model already in the form.
 	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed" && found.thinkingSource !== "probe" && (found.reasoning ?? model.reasoning)) {
@@ -143,9 +167,30 @@ export function applyDetected(model, found) {
 			next.detected.levels = true;
 			next.detected.levelsSource = found.thinkingSource;
 		} else {
-			next[field] = String(found[field]);
+			next[field] = toK(found[field]);
 			next.detected[field] = true;
 		}
+	}
+	return next;
+}
+
+/**
+ * Brings the probe result of a refreshed catalog into a model already in the form: the recorded statuses always, the
+ * levels and the reasoning switch only while the user has not changed them by hand.
+ */
+export function applyProbeResult(model, found) {
+	if (found.thinkingSource !== "probe" || !found.thinkingLevelStatus) return model;
+	const next = { ...model, raw: { ...model.raw, thinkingLevelStatus: found.thinkingLevelStatus }, detected: { ...model.detected } };
+	const touched = model.touched || {};
+	if (found.reasoning !== undefined && !touched.reasoning) {
+		next.reasoning = found.reasoning;
+		next.detected.reasoning = true;
+	}
+	if (found.thinkingLevelMap && !touched.levels) {
+		next.levels = levelsFromMap(found.thinkingLevelMap);
+		next.raw.thinkingLevelMap = found.thinkingLevelMap;
+		next.detected.levels = true;
+		next.detected.levelsSource = "probe";
 	}
 	return next;
 }
