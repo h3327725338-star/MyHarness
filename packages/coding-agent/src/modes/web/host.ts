@@ -68,6 +68,8 @@ export interface SlotStatus {
 	waiting: boolean;
 	completion: boolean;
 	lastOutcome: RunOutcome | null;
+	/** A run finished and its result has not been read in the browser yet. */
+	unread: boolean;
 }
 
 /** The parts of the hub that a single WebHost reports back to. */
@@ -135,6 +137,9 @@ export class WebHost {
 	private lastAgentEnd: { succeeded: boolean; willRetry: boolean; messages: AgentMessage[] } | undefined;
 	private completionPromise: Promise<void> | undefined;
 	private runFinished = new Map<number, RunFinishedPayload>();
+	/** Number of finished runs, and how many of them the browser has shown to the user (unread = the difference). */
+	private finishedRuns = 0;
+	private seenRuns = 0;
 	private shutdownRequested = false;
 	onShutdown: (() => void) | undefined;
 	extensionErrors: Array<{ extensionPath: string; event: string; error: string; ts: number }> = [];
@@ -195,7 +200,19 @@ export class WebHost {
 			waiting: this.dialogs.requests.length > 0,
 			completion: this.completionActive,
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
+			unread: this.unread,
 		};
+	}
+
+	get unread(): boolean {
+		return this.finishedRuns > this.seenRuns;
+	}
+
+	/** The user is looking at this session: its finished results count as read. */
+	markResultsSeen(): void {
+		if (!this.unread) return;
+		this.seenRuns = this.finishedRuns;
+		this.broadcast("result_seen", {});
 	}
 
 	// ------------------------------------------------------------------
@@ -325,6 +342,7 @@ export class WebHost {
 		this.pendingStartupCheckpoint = undefined;
 		this.completionPromise = undefined;
 		this.runFinished.clear();
+		this.seenRuns = this.finishedRuns;
 	}
 
 	/** Project Trust questions (asked when switching into another project) are answered in the browser. */
@@ -769,6 +787,7 @@ export class WebHost {
 			);
 			const payload = this.buildRunFinished(runId, record, uncommitted);
 			this.runFinished.set(runId, payload);
+			this.finishedRuns += 1;
 			this.broadcast("run_finished", payload);
 		}
 		if (succeeded && !indeterminateGit && end) {

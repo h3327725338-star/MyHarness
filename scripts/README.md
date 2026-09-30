@@ -25,6 +25,7 @@
 - `profile-coding-agent-node.mjs` 测量 Node/Bun 启动路径，可选择 profile 目录和 CPU profile；性能数值只有在实际运行后才成立。
 - `agent-treeshake-smoke-entry.ts` 和 `browser-smoke-entry.ts` 是针对构建/runtime 边界的入口，不等于普通单元测试。Code Intelligence 的安装状态由 `packages/coding-agent/test/code-intelligence/runtime-manager.test.ts` 覆盖；真实语言服务器 E2E 需要已发布且有完整校验元数据的 Windows 归档。
 - `smoke-cli-local-provider.mjs` 验证本地 Provider smoke；需要明确区分本地 stub、真实外部 Provider 和完整交互启动。
+- `dev-fast-loader.mjs` 是 `dev.ps1` 用 `node --import` 加载的解析器：按根 `tsconfig.json` 的 `@myharness/*` paths 把 workspace 包指向源码，配合 Node 原生类型剥离运行 TypeScript（不经过 tsx）。它只读文件，不用于测试和构建。
 - `test-dev-launcher.ps1`、`repro-5893-wsl-bash.mjs` 等脚本是开发/回归工具，执行前先阅读参数和目标目录。
 
 ## 发布和版本

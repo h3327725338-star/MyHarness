@@ -54,7 +54,7 @@
 .strips { display: flex; flex-direction: column; gap: 6px; }
 .strip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
 .strip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
-.strip > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
 .queue-head .link-btn { margin-left: auto; }

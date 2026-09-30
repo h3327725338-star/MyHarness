@@ -25,10 +25,10 @@
 .ws-row .name { font-weight: 550; color: var(--text); }
 .ws-row .actions { display: flex; gap: 0; opacity: 0; transition: opacity var(--t-fast); }
 .ws-row:hover .actions, .ws-row:focus-within .actions { opacity: 1; }
-.ws-row.current .name::after { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
+.ws-row .ws-unread { margin-left: -2px; }
 
 /* Session rows: fixed slots so status changes never move the title. */
-.chat-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 44px; align-items: center; height: var(--h-row); padding: 0 6px 0 22px; border-radius: var(--r-md); cursor: pointer; color: var(--text-2); position: relative; }
+.chat-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px 16px; align-items: center; height: var(--h-row); padding: 0 4px 0 38px; border-radius: var(--r-md); cursor: pointer; color: var(--text-2); position: relative; }
 .chat-row:hover { background: var(--surface-hover); color: var(--text); }
 .chat-row.current { background: var(--surface-select); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .chat-row .slot-status { display: grid; place-items: center; }
@@ -38,7 +38,7 @@
 .chat-row .row-actions { position: absolute; right: 0; display: flex; opacity: 0; pointer-events: none; transition: opacity var(--t-fast); }
 .chat-row:hover .when, .chat-row:focus-within .when { opacity: 0; }
 .chat-row:hover .row-actions, .chat-row:focus-within .row-actions { opacity: 1; pointer-events: auto; }
-.chat-row .title-edit { grid-column: 2 / 4; }
+.chat-row .title-edit { grid-column: 1 / 3; }
 
 .sidebar-foot { padding: 8px 10px 10px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 4px; }
 

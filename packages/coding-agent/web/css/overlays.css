@@ -78,3 +78,18 @@
 .fp-tools { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
 .fp-hidden { gap: 6px; }
 .fp-target { min-width: 0; font-size: var(--fs-sm); }
+
+/* Provider form */
+.pf-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pf-hint { font-size: var(--fs-xs); white-space: normal; }
+.pf-model { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); }
+.pf-model-head { gap: 8px; }
+.pf-model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; align-items: end; }
+.pf-model-grid > .row { min-height: var(--h-control); }
+.pf-levels { display: flex; flex-wrap: wrap; gap: 6px; }
+.pf-detect { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-inset); }
+.pf-detect-list { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; }
+.pf-detect-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.pf-auto { margin-left: 4px; }
+.field-label .pf-auto { align-self: flex-start; margin-left: 0; }
+@media (max-width: 760px) { .pf-two, .pf-model-grid { grid-template-columns: 1fr; } }

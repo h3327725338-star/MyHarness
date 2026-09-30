@@ -48,7 +48,7 @@ MyHarness 是一个 npm workspace monorepo。它由五个主要 Package 组成�
 - 根目录使用 npm workspaces 和 package-lock.json，没有发现 Bun lockfile。
 - Node 要求在根目录 package.json 中为 >=22.19.0。
 - TypeScript 构建使用 tsgo；测试使用 Vitest 和 Node built-in test runner；静态检查使用 Biome。
-- Windows 开发入口是 dev.cmd/dev.ps1，源码 CLI 由 myharness-test.ps1 通过 tsx.cmd 启动。
+- Windows 开发入口是 dev.cmd/dev.ps1。dev.ps1 默认用 `node --import scripts/dev-fast-loader.mjs` 以 Node 原生类型剥离直接运行源码 CLI（比 tsx 快约 10 秒）；设置 `MYHARNESS_DEV_LOADER=tsx` 或传 `--no-env` 时回到 myharness-test.ps1 通过 tsx.cmd 启动。
 - 构建后的 CLI 是 packages/coding-agent/dist/cli.js，npm bin 名称是 myharness。
 - Bun 主要出现在 binary 构建、Bun 专用入口和部分 profile 路径中；当前没有独立的 Windows Package 或 Bun Package。
 - 当前没有独立的 frontend/、core/、shared/ 或 application/bootstrap/ 源码目录。
@@ -167,8 +167,9 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
-- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志写入 `data/logs/web-launch.*.log`，启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
+- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 已有实例则只打开浏览器，否则以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个小进度窗口（进度来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
+- scripts/dev-fast-loader.mjs：仅供 dev.ps1 使用的 Node `--import` 加载器，按根 tsconfig.json 的 `@myharness/*` paths 解析 workspace 源码；源码是 erasable-only TypeScript，所以不需要 tsx 转换。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
 - test.sh：清理部分 Provider 环境变量后执行 workspace 测试；它会临时移动用户 auth 文件，因此不是严格零写入脚本。
 - .github/workflows/ci.yml：正式 CI baseline；使用 `windows-2022` 与 `windows-2025` matrix 执行安装、构建、检查和测试流程。

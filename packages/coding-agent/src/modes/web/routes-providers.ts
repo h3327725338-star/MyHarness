@@ -7,7 +7,13 @@
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@myharness/ai";
 import { ProviderSettingsUseCase } from "../../application/use-cases/provider-settings.ts";
 import type { ModelsJsonProvider } from "../../providers/models/config.ts";
-import { CUSTOM_PROVIDER_API_TYPES, CustomProviderManager } from "../../providers/models/custom-provider-manager.ts";
+import {
+	CUSTOM_PROVIDER_API_TYPES,
+	type CustomProviderApiType,
+	CustomProviderManager,
+	discoverProviderModels,
+	ProviderModelDiscoveryError,
+} from "../../providers/models/custom-provider-manager.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -283,6 +289,55 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 		};
 	});
 
+	/**
+	 * Reads the model catalog of an endpoint so the form can offer its models and the capabilities the catalog states.
+	 * A failed lookup is an answer, not an error: the form keeps working with manually entered models.
+	 */
+	server.route("POST", "/api/providers/custom/detect", async ({ body }) => {
+		const payload = asObject(body);
+		const baseUrl = typeof payload.baseUrl === "string" ? payload.baseUrl.trim() : "";
+		const api = typeof payload.api === "string" ? payload.api : "";
+		const existingId = typeof payload.id === "string" && payload.id ? payload.id : undefined;
+		if (!baseUrl) throw new HttpError(400, "Enter the Base URL first.");
+		if (!(CUSTOM_PROVIDER_API_TYPES as readonly string[]).includes(api))
+			throw new HttpError(400, "Choose an API type first.");
+		let apiKey = typeof payload.apiKey === "string" && payload.apiKey.trim() ? payload.apiKey.trim() : undefined;
+		let authType: "api_key" | "oauth" = "api_key";
+		let headers: Record<string, string> | undefined;
+		if (existingId) {
+			const stored = await manager()
+				.get(existingId)
+				.catch(() => undefined);
+			headers = stored?.headers;
+			if (!apiKey) {
+				const auth = await runtime()
+					.getAuth(existingId)
+					.catch(() => undefined);
+				apiKey = auth?.auth.apiKey;
+				if (auth?.source === "OAuth") authType = "oauth";
+			}
+		}
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), 20_000);
+		try {
+			const models = await discoverProviderModels({
+				baseUrl,
+				api: api as CustomProviderApiType,
+				apiKey,
+				authType,
+				headers,
+				signal: controller.signal,
+			});
+			return { ok: true, models };
+		} catch (error) {
+			if (error instanceof ProviderModelDiscoveryError)
+				return { ok: false, code: error.code, message: error.message };
+			return { ok: false, code: "connection", message: error instanceof Error ? error.message : String(error) };
+		} finally {
+			clearTimeout(timer);
+		}
+	});
+
 	server.route("POST", "/api/providers/custom/save", async ({ body }) => {
 		const payload = asObject(body);
 		const id = str(payload.id, "id").trim();
@@ -290,16 +345,27 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 		const config = payload.config;
 		if (!config || typeof config !== "object" || Array.isArray(config))
 			throw new HttpError(400, "config must be an object");
+		// An API key typed in the form goes to the credential store (like the TUI does), not into models.json.
+		const newKey = typeof payload.apiKey === "string" && payload.apiKey.trim() ? payload.apiKey.trim() : undefined;
+		const keyLabel =
+			typeof payload.keyLabel === "string" && payload.keyLabel.trim() ? payload.keyLabel.trim() : "Default key";
 		const custom = manager();
 		const snapshot = await custom.snapshot().catch(() => undefined);
+		let savedKeyId: string | undefined;
 		try {
 			const stored = await custom.get(previousId ?? id).catch(() => undefined);
 			await custom.upsert(id, restoreSecrets(config as ModelsJsonProvider, stored), previousId);
 			await runtime().reloadConfig();
 			const configError = runtime().getError();
 			if (configError) throw new Error(configError);
+			if (newKey) savedKeyId = (await runtime().addProviderApiKey(id, keyLabel, createInteraction(newKey))).id;
 			await host.session.reconcileModelAfterConfigChange();
 		} catch (error) {
+			if (savedKeyId) {
+				await runtime()
+					.deleteProviderApiKey(id, savedKeyId)
+					.catch(() => {});
+			}
 			if (snapshot) await custom.restore(snapshot).catch(() => {});
 			await runtime()
 				.reloadConfig()
@@ -310,22 +376,33 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost): vo
 		return { ok: true };
 	});
 
+	/**
+	 * Removes the provider for good: its models.json entry, every stored API key / login, and the settings that point at
+	 * it. If a step fails the models.json change is rolled back, so the provider is not left half deleted.
+	 */
 	server.route("POST", "/api/providers/custom/delete", async ({ body }) => {
 		const id = str(asObject(body).id, "id");
-		if (
-			host.session.model?.provider === id &&
-			(await runtime().getAvailable()).every((model) => model.provider === id)
-		) {
-			throw new HttpError(409, "This provider supplies the only available model; add another provider first.");
+		const custom = manager();
+		const snapshot = await custom.snapshot();
+		try {
+			if (!(await custom.delete(id))) throw new HttpError(404, "No such provider in models.json");
+			await runtime().deleteProviderCredentials(id);
+			host.session.settingsManager.clearModelReferences(id, undefined, true);
+			await host.session.settingsManager.flush();
+			await runtime().reloadConfig();
+			await host.session.reconcileModelAfterConfigChange();
+			await host.session.settingsManager.flush();
+		} catch (error) {
+			await custom.restore(snapshot).catch(() => {});
+			await runtime()
+				.reloadConfig()
+				.catch(() => {});
+			if (error instanceof HttpError) throw error;
+			throw new HttpError(
+				500,
+				`Could not delete the provider: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
-		const removed = await manager().delete(id);
-		if (!removed) throw new HttpError(404, "No such provider in models.json");
-		await runtime()
-			.deleteProviderCredentials(id)
-			.catch(() => {});
-		await runtime().reloadConfig();
-		host.session.settingsManager.clearModelReferences(id, undefined, true);
-		await host.session.reconcileModelAfterConfigChange();
 		host.broadcast("models_changed", {});
 		return { ok: true };
 	});

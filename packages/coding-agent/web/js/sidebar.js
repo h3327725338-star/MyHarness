@@ -8,19 +8,29 @@ import { chatTitle, clip, normPath, relTime } from "./util.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
-/** Fixed-size status marker of a chat: what the agent in that chat is doing right now. */
-function chatStatus(slot) {
+/**
+ * A finished result the user has not read yet. The chat on screen counts as read, so it never shows the marker
+ * (the server clears the flag as soon as the page reports it).
+ */
+function hasUnread(slot, currentFile) {
+	if (!slot?.unread || slot.active || slot.completion) return false;
+	const onScreen = !!currentFile && !!slot.sessionFile && pathKey(slot.sessionFile) === pathKey(currentFile) && document.visibilityState === "visible";
+	return !onScreen;
+}
+
+/**
+ * Fixed-size status marker of a chat, right of the title: a ring while it works, a blue dot for an unread result,
+ * nothing once the result has been read.
+ */
+function chatStatus(slot, currentFile) {
 	if (!slot) return null;
 	if (slot.waiting) return html`<span class="dot warn" title=${t("Waiting for you")} />`;
-	if (slot.active || slot.completion) return html`<${Spinner} />`;
-	if (slot.lastOutcome === "failed" || slot.lastOutcome === "partial") {
-		const failed = slot.lastOutcome === "failed";
-		return html`<span class=${`dot ${failed ? "danger" : "warn"}`} title=${failed ? t("Last task failed") : t("Last task partially completed")} />`;
-	}
+	if (slot.active || slot.completion) return html`<${Spinner} title=${t("Running")} />`;
+	if (hasUnread(slot, currentFile)) return html`<span class="dot accent" title=${t("Unread result")} />`;
 	return null;
 }
 
-const ChatRow = memo(function ChatRow({ info, current, slot }) {
+const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	const title = chatTitle(info);
@@ -36,7 +46,6 @@ const ChatRow = memo(function ChatRow({ info, current, slot }) {
 	};
 	const open = () => !editing && !current && actions.openSession(info.path);
 	return html`<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.key === "Enter" && open()}>
-		<span class="slot-status">${chatStatus(slot)}</span>
 		${editing
 			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
@@ -50,11 +59,12 @@ const ChatRow = memo(function ChatRow({ info, current, slot }) {
 								<${MenuSep} />
 								<${MenuItem} icon="trash" label=${t("Delete")} danger disabled=${busy} onClick=${() => (close(), actions.deleteSession(info.path, title))} />`}
 						<//>
-					</span></span>`}
+					</span></span>
+				<span class="slot-status">${chatStatus(slot, currentFile)}</span>`}
 	</div>`;
 });
 
-function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, slotsByFile }) {
+function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
@@ -77,7 +87,9 @@ function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, 
 		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
 			<${Icon} name=${showing ? "folderOpen" : "folder"} size=${15} />
-			<span class="name truncate grow">${workspace.name}</span>
+			<span class="name truncate">${workspace.name}</span>
+			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
+			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
 				<button class="icon-btn sm" title=${t("New chat in this workspace")} aria-label=${t("New chat in this workspace")} onClick=${() => actions.newSession(workspace.rootPath)}><${Icon} name="plus" size=${15} /></button>
 				<${Menu} align="end" trigger=${({ toggle: tg }) => html`<button class="icon-btn sm" aria-label=${t("Workspace actions")} onClick=${tg}><${Icon} name="more" size=${15} /></button>`} width=${200}>
@@ -95,7 +107,7 @@ function Workspace({ workspace, isCurrent, open, sessions, filter, currentFile, 
 					? html`<div class="ws-children">
 						${sessions === undefined ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
 						${sessions && !sessions.length ? html`<div class="dim side-note">${t("No chats yet")}</div>` : null}
-						${shown.map((info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} />`)}
+						${shown.map((info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`)}
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
@@ -123,6 +135,8 @@ export function Sidebar() {
 	const [adding, setAdding] = useState(false);
 	const searchRef = useRef(null);
 	const slotsByFile = useMemo(() => new Map(slots.filter((s) => s.sessionFile).map((s) => [pathKey(s.sessionFile), s])), [slots]);
+	// Workspaces that hold at least one chat with an unread result (matched by the folder the chat runs in).
+	const unreadRoots = new Set(slots.filter((s) => hasUnread(s, currentFile)).map((s) => pathKey(s.cwd)));
 	// A session that is open (running, or holding a first message) but not saved to disk yet is not in the saved list;
 	// list it from its slot so it can always be switched back to.
 	const unsaved = useMemo(() => {
@@ -164,7 +178,7 @@ export function Sidebar() {
 			${ws.list.map((w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} key=${w.id} workspace=${w} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.has(pathKey(w.rootPath)) ? [...unsaved.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} />`;
+				return html`<${Workspace} key=${w.id} workspace=${w} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.has(pathKey(w.rootPath)) ? [...unsaved.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
 			})}
 			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
 		</div>

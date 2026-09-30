@@ -5,6 +5,7 @@ import { actions, confirmDialog, inputDialog } from "./actions.js";
 import { clip, effortName } from "./util.js";
 import { N_, serverText, t, tNodes } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
+import { ProviderEditor } from "./provider-form.js";
 
 export const NAV = [
 	{ id: "appearance", label: N_("Appearance"), icon: "eye" },
@@ -130,11 +131,11 @@ function ProviderCard({ provider }) {
 	</div>`;
 }
 
-const PROVIDER_TEMPLATE = { name: "My provider", baseUrl: "https://api.example.com/v1", api: "openai-completions", apiKey: "YOUR_PROVIDER_API_KEY", models: [{ id: "model-id", name: "Model name", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 16384 }] };
-
 function CustomProviders() {
+	const providers = useStore((s) => s.providers);
 	const [data, setData] = useState(null);
-	const [edit, setEdit] = useState(null); // {id, previousId, text}
+	const [edit, setEdit] = useState(null); // { initial: { id, config } | null }
+	const [deleting, setDeleting] = useState(null);
 	const [error, setError] = useState("");
 	const load = async () => {
 		try {
@@ -146,33 +147,30 @@ function CustomProviders() {
 	useEffect(() => {
 		load();
 	}, []);
-	const save = async () => {
-		let config;
-		try {
-			config = JSON.parse(edit.text);
-		} catch (e) {
-			return setError(`Invalid JSON: ${e.message}`);
-		}
-		setError("");
-		try {
-			await post("/api/providers/custom/save", { id: edit.id, previousId: edit.previousId, config });
-			setEdit(null);
-			toast(t("Provider saved"), "info", 2500);
-			load();
-			loadProviders();
-		} catch (e) {
-			setError(e.message);
+	const remove = async (p) => {
+		const name = p.config.name || p.id;
+		const ok = await confirmDialog({
+			title: t("Delete {id}?", { id: name }),
+			message: t("“{name}” is removed from models.json, together with its models and every API key or login saved for it on this computer. This cannot be undone.", { name }),
+			confirmLabel: t("Delete"),
+			danger: true,
+		});
+		if (!ok) return;
+		setDeleting(p.id);
+		const result = await attempt(() => post("/api/providers/custom/delete", { id: p.id }), { success: t("Provider deleted") });
+		setDeleting(null);
+		if (result) {
+			await load();
+			await loadProviders();
 		}
 	};
 	return html`<div class="col" style="gap:8px">
-		<div class="row"><strong class="grow">${t("Custom providers")}</strong><span class="dim mono truncate">${data?.path || ""}</span><button class="btn sm" onClick=${() => setEdit({ id: "", previousId: undefined, text: JSON.stringify(PROVIDER_TEMPLATE, null, 2) })}><${Icon} name="plus" size=${13} />${t("Add provider")}</button></div>
-		<div class="dim set-desc">${t("Providers you define in models.json (any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint). Secrets in the file are shown as placeholders here and kept when unchanged. API types: {join}.", { join: (data?.apiTypes || []).join(", ") })}</div>
-		${!data ? html`<${Spinner} />` : data.providers.map((p) => html`<div class="res-row" key=${p.id}><div class="col grow"><strong>${p.config.name || p.id}</strong><span class="dim mono truncate">${t("{id} · {baseUrl} · {length} models", { id: p.id, baseUrl: p.config.baseUrl || "", length: (p.config.models || []).length })}</span></div><button class="btn sm" onClick=${() => setEdit({ id: p.id, previousId: p.id, text: JSON.stringify(p.config, null, 2) })}>${t("Edit")}</button><button class="btn sm danger" onClick=${async () => { if (await confirmDialog({ title: t("Delete {id}?", { id: p.id }), message: t("The provider is removed from models.json and its stored credentials are deleted."), confirmLabel: t("Delete"), danger: true })) { await attempt(() => post("/api/providers/custom/delete", { id: p.id })); load(); loadProviders(); } }}>${t("Delete")}</button></div>`)}
-		${edit ? html`<${Modal} title=${edit.previousId ? t("Edit {previousId}", { previousId: edit.previousId }) : t("Add custom provider")} onClose=${() => (setEdit(null), setError(""))} width=${640} footer=${html`<button class="btn" onClick=${() => (setEdit(null), setError(""))}>${t("Cancel")}</button><button class="btn primary" onClick=${save}>${t("Save")}</button>`}>
-			<label class="col field-label">${t("Provider ID")}<input class="field mono" value=${edit.id} placeholder=${t("lowercase-id")} onInput=${(e) => setEdit({ ...edit, id: e.target.value })} /></label>
-			<label class="col field-label">${t("Configuration (JSON)")}<textarea class="field mono" rows="16" spellcheck="false" value=${edit.text} onInput=${(e) => setEdit({ ...edit, text: e.target.value })} /></label>
-			${error ? html`<div class="notice danger" style="white-space:pre-wrap">${error}</div>` : null}
-		<//>` : null}
+		<div class="row"><strong class="grow">${t("Custom providers")}</strong><span class="dim mono truncate">${data?.path || ""}</span><button class="btn sm" onClick=${() => setEdit({ initial: null })}><${Icon} name="plus" size=${13} />${t("Add provider")}</button></div>
+		<div class="dim set-desc">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint. Turning a provider off above only disables it; Delete removes it and its saved keys for good.")}</div>
+		${error ? html`<div class="notice danger">${error}</div>` : null}
+		${!data ? html`<${Spinner} />` : data.providers.map((p) => html`<div class="res-row" key=${p.id}><div class="col grow"><strong>${p.config.name || p.id}</strong><span class="dim mono truncate">${t("{id} · {baseUrl} · {length} models", { id: p.id, baseUrl: p.config.baseUrl || "", length: (p.config.models || []).length })}</span></div><button class="btn sm" disabled=${deleting === p.id} onClick=${() => setEdit({ initial: { id: p.id, config: p.config } })}>${t("Edit")}</button><button class="btn sm danger" disabled=${deleting === p.id} onClick=${() => remove(p)}>${deleting === p.id ? t("Deleting…") : t("Delete")}</button></div>`)}
+		${edit ? html`<${ProviderEditor} initial=${edit.initial} apiTypes=${data?.apiTypes} storedKeys=${edit.initial ? providers?.providers.find((p) => p.id === edit.initial.id)?.credentials : null}
+			onClose=${() => setEdit(null)} onSaved=${() => { setEdit(null); toast(t("Provider saved"), "info", 2500); load(); loadProviders(); }} />` : null}
 	</div>`;
 }
 

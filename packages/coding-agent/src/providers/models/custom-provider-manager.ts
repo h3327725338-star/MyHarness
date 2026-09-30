@@ -31,6 +31,11 @@ export interface ModelsJsonSnapshot {
 export interface DiscoveredProviderModel {
 	id: string;
 	name: string;
+	/** Capabilities the model catalog states explicitly; a missing field means the catalog did not say. */
+	reasoning?: boolean;
+	input?: Array<"text" | "image">;
+	contextWindow?: number;
+	maxTokens?: number;
 }
 
 export type ProviderModelDiscoveryErrorCode =
@@ -142,6 +147,79 @@ function nextCursor(body: Record<string, unknown>, api: string): string | undefi
 	return undefined;
 }
 
+function positiveInteger(...values: unknown[]): number | undefined {
+	for (const value of values) {
+		if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+	}
+	return undefined;
+}
+
+function stringList(value: unknown): string[] | undefined {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+}
+
+/**
+ * Reads the capabilities a model catalog entry states explicitly. Catalogs differ a lot: OpenAI lists only ids,
+ * OpenRouter adds context length, modalities and supported parameters, Anthropic and Gemini add token limits and
+ * thinking/image support. Only facts that are actually present are returned; nothing is guessed from the model id.
+ */
+function detectModelCapabilities(candidate: unknown): Partial<DiscoveredProviderModel> {
+	if (!isRecord(candidate)) return {};
+	const result: Partial<DiscoveredProviderModel> = {};
+	const topProvider = isRecord(candidate.top_provider) ? candidate.top_provider : undefined;
+	const capabilities = isRecord(candidate.capabilities) ? candidate.capabilities : undefined;
+
+	const contextWindow = positiveInteger(
+		candidate.context_length,
+		candidate.context_window,
+		candidate.contextWindow,
+		candidate.max_context_length,
+		candidate.max_input_tokens,
+		candidate.inputTokenLimit,
+		topProvider?.context_length,
+	);
+	if (contextWindow !== undefined) result.contextWindow = contextWindow;
+	const maxTokens = positiveInteger(
+		candidate.max_completion_tokens,
+		candidate.max_output_tokens,
+		candidate.maxOutputTokens,
+		candidate.outputTokenLimit,
+		candidate.max_tokens,
+		topProvider?.max_completion_tokens,
+	);
+	if (maxTokens !== undefined) result.maxTokens = maxTokens;
+
+	const supportedParameters = stringList(candidate.supported_parameters);
+	const thinking = capabilities && isRecord(capabilities.thinking) ? capabilities.thinking : undefined;
+	if (supportedParameters) {
+		result.reasoning = supportedParameters.includes("reasoning") || supportedParameters.includes("include_reasoning");
+	} else if (thinking && typeof thinking.supported === "boolean") {
+		result.reasoning = thinking.supported;
+	} else if (typeof candidate.thinking === "boolean") {
+		result.reasoning = candidate.thinking;
+	} else if (capabilities && typeof capabilities.reasoning === "boolean") {
+		result.reasoning = capabilities.reasoning;
+	}
+
+	const architecture = isRecord(candidate.architecture) ? candidate.architecture : undefined;
+	const modalities = isRecord(candidate.modalities) ? candidate.modalities : undefined;
+	const inputModalities = stringList(architecture?.input_modalities) ?? stringList(modalities?.input);
+	const imageInput = capabilities && isRecord(capabilities.image_input) ? capabilities.image_input : undefined;
+	if (inputModalities) {
+		result.input = inputModalities.includes("image") ? ["text", "image"] : ["text"];
+	} else if (imageInput && typeof imageInput.supported === "boolean") {
+		result.input = imageInput.supported ? ["text", "image"] : ["text"];
+	}
+	return result;
+}
+
+/** Gemini lists embedding and other non-chat models too; keep only the ones that can generate content. */
+function isGenerativeModel(candidate: unknown): boolean {
+	if (!isRecord(candidate)) return true;
+	const methods = stringList(candidate.supportedGenerationMethods);
+	return !methods || methods.includes("generateContent") || methods.includes("streamGenerateContent");
+}
+
 function isCopilotModelSelectable(value: Record<string, unknown>): boolean {
 	const policy = isRecord(value.policy) ? value.policy : undefined;
 	const capabilities = isRecord(value.capabilities) ? value.capabilities : undefined;
@@ -173,6 +251,7 @@ function parseModelPage(
 	const models: DiscoveredProviderModel[] = [];
 	for (const candidate of candidates) {
 		if (providerId === "github-copilot" && isRecord(candidate) && !isCopilotModelSelectable(candidate)) continue;
+		if (!isGenerativeModel(candidate)) continue;
 		const id = modelIdFromUnknown(candidate);
 		if (!id) continue;
 		const displayName =
@@ -183,7 +262,7 @@ function parseModelPage(
 					: isRecord(candidate) && typeof candidate.name === "string"
 						? candidate.name.replace(/^models\//u, "").trim()
 						: id;
-		models.push({ id, name: displayName || id });
+		models.push({ id, name: displayName || id, ...detectModelCapabilities(candidate) });
 	}
 	if (candidates.length > 0 && models.length === 0 && providerId !== "github-copilot") {
 		throw new ProviderModelDiscoveryError("invalid_response", "模型目录中的模型记录缺少有效 ID。");
@@ -445,7 +524,24 @@ export class CustomProviderManager {
 		if (!Object.hasOwn(document.providers, providerId)) return false;
 		delete document.providers[providerId];
 		await this.writeDocument(document);
+		await this.removeFromBackup(providerId);
 		return true;
+	}
+
+	/**
+	 * writeDocument keeps the previous file as models.json.bak, which still holds the provider that was just
+	 * deleted (including any literal API key or header). Drop that entry so a deleted provider leaves no secrets behind.
+	 */
+	private async removeFromBackup(providerId: string): Promise<void> {
+		const backupPath = `${this.requirePath()}.bak`;
+		try {
+			const backup = parseDocument(await readFile(backupPath, "utf8"), backupPath);
+			if (!Object.hasOwn(backup.providers, providerId)) return;
+			delete backup.providers[providerId];
+			await writeFile(backupPath, `${JSON.stringify(backup, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		} catch {
+			// The backup is a convenience copy; a missing or unreadable one is not a reason to fail the deletion.
+		}
 	}
 
 	private validateProviderId(providerId: string): void {

@@ -142,6 +142,32 @@ describe("CustomProviderManager", () => {
 		expect(await manager.delete("openai")).toBe(false);
 	});
 
+	it("leaves no deleted provider (or its literal API key) behind in the models.json backup", async () => {
+		const path = await createTemporaryModelsPath();
+		await writeFile(
+			path,
+			JSON.stringify({
+				providers: {
+					gone: {
+						baseUrl: "https://gone.example/v1",
+						api: "openai-completions",
+						apiKey: "literal-secret",
+						models: [{ id: "m" }],
+					},
+					kept: { baseUrl: "https://kept.example/v1", api: "openai-completions", models: [{ id: "m" }] },
+				},
+			}),
+			"utf8",
+		);
+		const manager = new CustomProviderManager(path);
+
+		expect(await manager.delete("gone")).toBe(true);
+
+		const backup = await readFile(`${path}.bak`, "utf8");
+		expect(backup).not.toContain("literal-secret");
+		expect(JSON.parse(backup).providers.kept).toBeDefined();
+	});
+
 	it("restores the exact previous source or removes a newly created file", async () => {
 		const path = await createTemporaryModelsPath();
 		const manager = new CustomProviderManager(path);
@@ -189,6 +215,83 @@ describe("CustomProviderManager", () => {
 		expect(models).toEqual([
 			{ id: "model-a", name: "model-a" },
 			{ id: "model-b", name: "model-b" },
+		]);
+	});
+
+	it("reports only the capabilities the model catalog states and skips non-chat Gemini models", async () => {
+		const server = createServer((request, response) => {
+			response.setHeader("content-type", "application/json");
+			if (request.url?.startsWith("/gemini")) {
+				response.end(
+					JSON.stringify({
+						models: [
+							{
+								name: "models/gem-chat",
+								displayName: "Gem Chat",
+								inputTokenLimit: 1048576,
+								outputTokenLimit: 8192,
+								thinking: true,
+								supportedGenerationMethods: ["generateContent"],
+							},
+							{ name: "models/gem-embed", supportedGenerationMethods: ["embedContent"] },
+						],
+					}),
+				);
+				return;
+			}
+			response.end(
+				JSON.stringify({
+					data: [
+						{
+							id: "router-a",
+							context_length: 200000,
+							top_provider: { max_completion_tokens: 16000 },
+							architecture: { input_modalities: ["text", "image"] },
+							supported_parameters: ["tools", "reasoning"],
+						},
+						{ id: "router-b", architecture: { input_modalities: ["text"] }, supported_parameters: ["tools"] },
+						{
+							id: "claude-like",
+							max_input_tokens: 200000,
+							max_tokens: 64000,
+							capabilities: { image_input: { supported: true }, thinking: { supported: true } },
+						},
+						{ id: "bare" },
+					],
+				}),
+			);
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Test server did not expose a port.");
+		const baseUrl = `http://127.0.0.1:${address.port}`;
+
+		const models = await discoverProviderModels({ baseUrl: `${baseUrl}/v1`, api: "openai-completions" });
+		expect(models).toEqual([
+			{ id: "bare", name: "bare" },
+			{
+				id: "claude-like",
+				name: "claude-like",
+				contextWindow: 200000,
+				maxTokens: 64000,
+				reasoning: true,
+				input: ["text", "image"],
+			},
+			{
+				id: "router-a",
+				name: "router-a",
+				contextWindow: 200000,
+				maxTokens: 16000,
+				reasoning: true,
+				input: ["text", "image"],
+			},
+			{ id: "router-b", name: "router-b", reasoning: false, input: ["text"] },
+		]);
+
+		const gemini = await discoverProviderModels({ baseUrl: `${baseUrl}/gemini/v1beta`, api: "google-generative-ai" });
+		expect(gemini).toEqual([
+			{ id: "gem-chat", name: "Gem Chat", contextWindow: 1048576, maxTokens: 8192, reasoning: true },
 		]);
 	});
 

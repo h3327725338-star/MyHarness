@@ -10,7 +10,7 @@ Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 root = fso.GetParentFolderName(WScript.ScriptFullName)
 
-command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\dev-web.ps1"""
+command = "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\dev-web.ps1"""
 For i = 0 To WScript.Arguments.Count - 1
 	command = command & " """ & Replace(WScript.Arguments(i), """", "\""") & """"
 Next

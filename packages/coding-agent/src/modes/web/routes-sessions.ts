@@ -134,6 +134,12 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 
 	server.route("GET", "/api/slots", () => ({ slots: hub.statuses() }));
 
+	// The browser shows this session's latest result to the user: clears its "unread" marker.
+	server.route("POST", "/api/seen", () => {
+		host.markResultsSeen();
+		return { ok: true };
+	});
+
 	server.route("GET", "/api/workspaces", () => {
 		const cwd = host.session.sessionManager.getCwd();
 		const current = host.workspaceStore.getByPath(cwd);

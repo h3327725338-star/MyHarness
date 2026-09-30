@@ -206,8 +206,8 @@ if ($npmCommand -like "*.ps1") {
 		Write-Note "npm.ps1 shim 与脚本化调用不兼容，改用 $npmCommand"
 	}
 }
-$npmVersionText = Get-ExternalOutput -Command $npmCommand -Arguments @("--version")
-Write-Ok "npm $npmVersionText  ->  $npmCommand"
+# 不再执行 npm --version：npm.cmd 每次启动 node 约 0.5 秒，而版本号只是信息展示。
+Write-Ok "npm  ->  $npmCommand"
 
 # ---------------------------------------------------------------------------
 # 4. 检查 / 安装项目依赖
@@ -320,15 +320,27 @@ if (-not (Test-Path -LiteralPath $entryScript)) {
 	Write-Fail "找不到 $entryScript（项目自带的开发入口）。"
 }
 
-Write-Note "入口：tsx packages\coding-agent\src\cli.ts（复用项目自带 myharness-test.ps1）"
-Write-Note "修改配置或核心源码后，请重启进程以加载改动。"
-Write-Host ""
+# 默认用 Node 原生类型剥离 + scripts\dev-fast-loader.mjs 直接运行源码：tsx 会让约 1600 个模块
+# 逐个经过转换 hook，启动到 Web UI 监听前要 10 秒以上，原生方式约 2 秒。
+# 设置 MYHARNESS_DEV_LOADER=tsx（或使用 --no-env）可回到原来的 tsx 入口 myharness-test.ps1。
+$fastLoader = Join-Path $Root "scripts\dev-fast-loader.mjs"
+$useTsx = ($env:MYHARNESS_DEV_LOADER -eq "tsx") -or ($args -contains "--no-env") -or (-not (Test-Path -LiteralPath $fastLoader))
 
 $runExit = 0
 $previous = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
-	& $entryScript @args
+	if ($useTsx) {
+		Write-Note "入口：tsx packages\coding-agent\src\cli.ts（复用项目自带 myharness-test.ps1）"
+		Write-Note "修改配置或核心源码后，请重启进程以加载改动。"
+		Write-Host ""
+		& $entryScript @args
+	} else {
+		Write-Note "入口：node --import scripts\dev-fast-loader.mjs packages\coding-agent\src\cli.ts"
+		Write-Note "修改配置或核心源码后，请重启进程以加载改动。"
+		Write-Host ""
+		& node --import "./scripts/dev-fast-loader.mjs" "./packages/coding-agent/src/cli.ts" @args
+	}
 	if ($null -ne $LASTEXITCODE) { $runExit = [int]$LASTEXITCODE }
 } finally {
 	$ErrorActionPreference = $previous

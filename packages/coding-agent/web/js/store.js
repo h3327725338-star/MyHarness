@@ -282,10 +282,25 @@ export async function refreshSlot(slot = activeSlot) {
 	bagOf(slot).loaded = true;
 }
 
+// A finished session shows a blue "unread" marker in the sidebar until the user looks at it. Looking at it means: it is
+// the session on screen and this page is visible. The server owns the flag; this only tells it when the result was seen.
+const seenPosting = new Set();
+export function markActiveSeen() {
+	const slot = activeSlot;
+	if (!slot || seenPosting.has(slot) || document.visibilityState !== "visible") return;
+	const info = state.slots.find((s) => s.slot === slot);
+	if (!info?.unread || info.active || info.completion) return;
+	seenPosting.add(slot);
+	post("/api/seen", {}, slot)
+		.catch(() => {})
+		.finally(() => seenPosting.delete(slot));
+}
+
 export async function loadSlots() {
 	try {
 		const data = await api("/api/slots", { slot: "" });
 		set({ slots: data.slots });
+		markActiveSeen();
 	} catch {
 		// The list is refreshed by the next slots event.
 	}
@@ -378,6 +393,7 @@ export async function activateSlot(slot) {
 	state.activeSlot = slot;
 	state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
 	emit();
+	markActiveSeen();
 	const bag = bagOf(slot);
 	if (!bag.resources) loadResources();
 	if (bag.gitStatus === undefined) loadGitStatus();
@@ -423,6 +439,7 @@ async function initialLoad() {
 export async function boot() {
 	applyAppearance();
 	matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyAppearance);
+	document.addEventListener("visibilitychange", markActiveSeen);
 	const poll = async () => {
 		try {
 			const boot = await api("/api/boot", { slot: "" });
@@ -477,7 +494,10 @@ function connectEvents() {
 	on("editor_text", (d, slot) => slot === activeSlot && set({ editorInsert: { text: d.text, nonce: Date.now() } }));
 	on("notice", (d) => toast(d.message, d.type === "error" ? "error" : d.type === "warning" ? "warning" : "info", d.type === "error" ? 10000 : 6000));
 	on("shutdown", () => set({ shutdown: true }));
-	on("slots", (d) => set({ slots: d.slots }));
+	on("slots", (d) => {
+		set({ slots: d.slots });
+		markActiveSeen();
+	});
 	on("slot_closed", (d) => recoverLostSlot(d.slot));
 
 	on("agent_start", (d) => {

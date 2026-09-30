@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@myharness/ai/compat";
@@ -365,6 +365,105 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(await texts(other.slot)).toEqual(["fast answer"]);
 		const slots = (await fx.get("/api/slots")).slots;
 		expect(slots.map((s: any) => s.slot).sort()).toEqual([first.slot, other.slot].sort());
+	});
+
+	it("keeps a finished session unread per session until the browser reports it seen", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("one")]), fauxAssistantMessage([fauxText("two")])]);
+		await fx.post("/api/prompt", { text: "task one" }, first.slot);
+		await fx.waitFor("run_finished", (data) => data.slot === first.slot);
+		const other = await fx.post("/api/sessions/new", {}, first.slot);
+		expect(other.slot).not.toBe(first.slot);
+		const slotOf = async (id: string) => (await fx.get("/api/slots")).slots.find((s: any) => s.slot === id);
+		expect((await slotOf(first.slot)).unread).toBe(true);
+		// Another session finishing or being read never changes this one.
+		expect((await slotOf(other.slot)).unread).toBe(false);
+		await fx.post("/api/prompt", { text: "task two" }, other.slot);
+		await fx.waitFor("run_finished", (data) => data.slot === other.slot);
+		await fx.post("/api/seen", {}, other.slot);
+		expect((await slotOf(other.slot)).unread).toBe(false);
+		expect((await slotOf(first.slot)).unread).toBe(true);
+		await fx.post("/api/seen", {}, first.slot);
+		expect((await slotOf(first.slot)).unread).toBe(false);
+		await fx.waitFor("result_seen", (data) => data.slot === first.slot);
+	});
+
+	it("adds a custom provider with detected models, keeps its key in the credential store and deletes both for good", async () => {
+		const fx = await start();
+		const catalog = createServer((req, res) => {
+			expect(req.headers.authorization).toBe("Bearer sk-form-key");
+			res.setHeader("content-type", "application/json");
+			res.end(
+				JSON.stringify({
+					data: [
+						{
+							id: "thinker",
+							context_length: 32000,
+							supported_parameters: ["reasoning"],
+							architecture: { input_modalities: ["text", "image"] },
+						},
+						{ id: "plain" },
+					],
+				}),
+			);
+		});
+		await new Promise<void>((resolve) => catalog.listen(0, "127.0.0.1", resolve));
+		cleanups.push(() => new Promise<void>((resolve) => catalog.close(() => resolve())));
+		const address = catalog.address();
+		if (!address || typeof address === "string") throw new Error("catalog server has no port");
+		const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+
+		const detected = await fx.post("/api/providers/custom/detect", {
+			baseUrl,
+			api: "openai-completions",
+			apiKey: "sk-form-key",
+		});
+		expect(detected.ok).toBe(true);
+		expect(detected.models).toEqual([
+			{ id: "plain", name: "plain" },
+			{ id: "thinker", name: "thinker", reasoning: true, input: ["text", "image"], contextWindow: 32000 },
+		]);
+		// A failed lookup is reported, not thrown, so the form can fall back to manual entry.
+		const unreachable = await fx.post("/api/providers/custom/detect", {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+		});
+		expect(unreachable.ok).toBe(false);
+
+		await fx.post("/api/providers/custom/save", {
+			id: "form-provider",
+			config: {
+				name: "Form provider",
+				baseUrl,
+				api: "openai-completions",
+				models: [
+					{
+						id: "thinker",
+						reasoning: true,
+						thinkingLevelMap: { minimal: null },
+						input: ["text"],
+						contextWindow: 32000,
+						maxTokens: 4096,
+					},
+				],
+			},
+			apiKey: "sk-form-key",
+		});
+		const custom = await fx.get("/api/providers/custom");
+		expect(custom.providers.map((p: any) => p.id)).toEqual(["form-provider"]);
+		expect(JSON.stringify(custom)).not.toContain("sk-form-key");
+		const listed = (await fx.get("/api/providers")).providers.find((p: any) => p.id === "form-provider");
+		expect(listed.credentials.apiKeys).toHaveLength(1);
+		expect(listed.modelCount).toBe(1);
+
+		// The last custom provider can be deleted, and nothing of it is left afterwards.
+		await fx.post("/api/providers/custom/delete", { id: "form-provider" });
+		expect((await fx.get("/api/providers/custom")).providers).toEqual([]);
+		expect((await fx.get("/api/providers")).providers.some((p: any) => p.id === "form-provider")).toBe(false);
+		await expect(fx.post("/api/providers/custom/delete", { id: "form-provider" })).rejects.toThrow(
+			/No such provider/,
+		);
 	});
 
 	it("runs direct shell commands and streams their output", async () => {

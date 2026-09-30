@@ -73,7 +73,7 @@ function StatusStrips({ snap }) {
 		strips.push(html`<div class="strip warn" key="r"><${Spinner} /> <span>${t("Provider error — retrying ({attempt}/{maxAttempts}) in {remaining}s: {clip}", { attempt: retry.attempt, maxAttempts: retry.maxAttempts, remaining, clip: clip(retry.errorMessage, 120) })}</span><button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button></div>`);
 	}
 	if (recovery) strips.push(html`<div class="strip warn" key="v"><${Spinner} /> <span>${recovery.kind === "new-conversation" ? t("Recovering by rebuilding the conversation (#{conversation})", { conversation: recovery.conversation }) : t("Recovering from a provider problem ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })}: ${clip(recovery.errorMessage, 100)}</span></div>`);
-	if (gitTask) strips.push(html`<div class="strip" key="g"><${Spinner} /> <span>${t("Git {kind}: {activity}", { kind: gitTask.kind, activity: gitTask.activity })}</span><button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button></div>`);
+	if (gitTask) strips.push(html`<div class="strip" key="g"><${Spinner} /> <span>${serverText(gitTask.activity, t("Working…"))}</span><button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button></div>`);
 	if (completion && !snap?.active) strips.push(html`<div class="strip" key="f"><${Spinner} /> <span>${t("Finalizing the task (checking changes, memory)…")}</span></div>`);
 	void tick;
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;

@@ -18,7 +18,9 @@ myharness --web
 | `--port <n>` | 端口，默认 `7878`；被占用时依次尝试后面的 10 个端口；`0` 表示由系统分配。 |
 | `--no-open` | 不自动打开默认浏览器（终端会打印 `MyHarness Web UI: http://127.0.0.1:<port>/`）。 |
 
-**无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 在已有实例（默认端口 7878 或 `--port`）时只打开浏览器，否则以隐藏方式运行 `dev.ps1 --web`，输出写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径）。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。CLI 的 `dev.cmd` 与 `myharness` 不受影响。
+**无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 在已有实例（默认端口 7878 或 `--port`）时只打开浏览器，否则以隐藏方式运行 `dev.ps1 --web`，输出（UTF-8）写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动超过约 1 秒仍未就绪时会显示一个小进度窗口，进度对应 `dev.ps1` 打印的真实阶段（读取项目要求、Node.js、npm、依赖、bash、ffmpeg、加载并启动服务）和最后的服务监听，就绪后自动关闭；快速启动时不出现任何窗口。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径；日志必须按 UTF-8 读取，否则中文会乱码）。
+
+**启动耗时**：`dev.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。CLI 的 `dev.cmd` 与 `myharness` 不受影响。
 
 其余参数照常生效：`--session`、`--continue`、`--model`、`--thinking`、`--no-extensions`、`--approve/--no-approve` 等；命令行里的初始 message / `@file` 会在启动后作为第一条消息发送。终端里按 `Ctrl+C`（或界面里的 **Quit MyHarness**）会停止服务并结束当前任务。
 
@@ -34,7 +36,7 @@ myharness --web
 └────────────┴─────────────────────────────────────┴──────────────────────────┘
 ```
 
-* **侧栏**：真实的 Workspace / Chat 结构（`WorkspaceStore` + `SessionManager.list`）。新建 Chat、切换 Chat、重命名（手动或 AI 生成标题）、删除、添加/移除 Workspace。Workspace 可展开/收起（带高度动画，不影响其中正在运行的 Chat）。行内状态槽位固定，运行中/等待/失败不会挤动标题；还没写入磁盘的进行中 Chat 也会列出，随时可切回。
+* **侧栏**：真实的 Workspace / Chat 结构（`WorkspaceStore` + `SessionManager.list`）。新建 Chat、切换 Chat、重命名（手动或 AI 生成标题）、删除、添加/移除 Workspace。Workspace 可展开/收起（带高度动画，不影响其中正在运行的 Chat）。状态标记固定在 Chat 行右侧，不会挤动标题：运行中是小的空心旋转圆环，等待你回答是琥珀色圆点，**已完成但你还没看过的结果**是蓝色实心圆点，看过之后消失（已读且空闲的 Chat 没有任何标记）。Workspace 名称右侧的蓝点表示其中有未读结果。“看过”＝该 Chat 正显示在页面上且页面可见；未读标记由服务端按 Chat 保存（`SlotStatus.unread`，页面通过 `POST /api/seen` 上报），多个 Chat 并发时互不影响，未读的后台 Chat 不会被回收。还没写入磁盘的进行中 Chat 也会列出，随时可切回。
 * **文件夹选择器**（添加 Workspace）：类似资源管理器——后退/前进/上一级、可编辑并可点击的路径（面包屑）、快速访问（主目录/桌面/文档/下载）、盘符、已有 Workspace、筛选、新建文件夹、显示隐藏文件夹；只列目录，选中后显示完整路径再确认。
 * **对话**：用户消息、运行摘要、最终回复。默认不展开 Thinking、读文件、搜索、命令和编辑，只显示一行摘要，例如 `Worked for 32s · 9 actions · 4 files changed`。
   * 第一层：摘要行（`Worked for …` / `Failed after …` / `Partially completed` / `Cancelled after …` / 运行中显示当前动作）。
@@ -47,7 +49,7 @@ myharness --web
   * **Files**：只读的工作区文件树（带 Git 状态与“本轮改动”标记）、文件名搜索、文件查看（语法高亮、图片预览、跳转到行）、`@` 提及到 prompt。
   * **Terminal**：本 Session 的每一条 shell 命令（Agent 的 `bash`/`pwsh` 工具和你自己的 `!` 命令）：命令、cwd、状态、耗时、exit code、真实输出（保留 ANSI 颜色）、截断与完整输出路径；底部可直接运行新的命令。
   * **Session**：上下文用量与压缩、Session 统计、Git checkpoint、分支树（导航 / fork）、Tools（可开关）、Skills、Prompt templates、Extensions、项目上下文文件、Reload resources。
-* **设置**（`Ctrl+,`）：外观（界面语言/主题/密度/动画/阅读宽度/浏览器通知，保存在浏览器）；Agent、Assistants（Auto Memory / Sub-agent / Vision）、Tools（Web search、Code Intelligence）、Network、Shell、Safety（Project Trust、默认信任策略）；Providers（启停、API Key 多密钥管理、OAuth 登录、`models.json` 自定义 Provider）。
+* **设置**（`Ctrl+,`）：外观（界面语言/主题/密度/动画/阅读宽度/浏览器通知，保存在浏览器）；Agent、Assistants（Auto Memory / Sub-agent / Vision）、Tools（Web search、Code Intelligence）、Network、Shell、Safety（Project Trust、默认信任策略）；Providers（启停、API Key 多密钥管理、OAuth 登录、自定义 Provider）。**添加/编辑自定义 Provider** 是结构化表单：名称、ID、API 格式、Base URL、认证（API Key 存入凭据库而不是 `models.json`；或“无需认证”供本地服务）、模型（ID、显示名、是否支持推理、可用思考强度、图片输入、上下文窗口、最大输出）。“检测模型”读取端点的模型列表（`POST /api/providers/custom/detect`）并只填入目录明确给出的能力（例如 OpenRouter 的上下文长度/模态/`reasoning` 参数、Anthropic/Gemini 的 Token 上限与思考支持），检测失败或没给的内容可手填，不影响添加。“高级（JSON）”是可选的底层编辑入口，与表单共用同一份数据。**删除**与启停不同：确认后移除 `models.json` 条目、该 Provider 的全部 API Key/登录、指向它的设置（默认模型等）以及备份文件里的对应条目；任何一步失败会回滚 `models.json`。
 * **命令面板**（`Ctrl+K`）：动作、Chat、文件的统一搜索。
 * **行内命令面板**：在 Composer 输入 `/settings`、`/model`、`/effort`、`/git`、`/commit`、`/push`、`/restore`、`/undo` 并回车，会在输入框上方展开一个类似 CLI 菜单的多级面板（不是设置页）：↑/↓/PgUp/PgDn/Home/End 移动，Enter 或 → 进入/确认，Space 切换开关，←/Backspace/Esc 返回上一级（有筛选时先清筛选），可键入筛选；鼠标可选。`/settings` 覆盖全部设置分类、Provider 与 API Key 管理；`/git` 覆盖 Worktree、历史、仓库登记。一次性命令（如 `/new`、`/compact`）仍直接执行，候选列表与搜索保留。
 
@@ -123,7 +125,7 @@ packages/coding-agent/
     ├── index.html  css/  vendor/  Preact + htm；marked / highlight.js 复用 HTML 导出的 vendor 文件
     └── js/                        store.js（状态+SSE，按 slot 分状态）、turns.js（对话模型）、transcript.js、composer.js、
                                    command-panel.js（行内命令面板）、context-usage.js（上下文用量）、folder-picker.js、
-                                   i18n.js / lang.js / locales/（界面语言）、panel-*.js、overlays-*.js、sidebar.js、app.js …
+                                   i18n.js / lang.js / locales/（界面语言）、panel-*.js、overlays-*.js、provider-form.js（自定义 Provider 表单）、sidebar.js、app.js …
 ```
 
 数据流：浏览器 → `POST /api/...`（命令）；服务端 → `GET /api/events`（SSE：`message_*`、`tool_*`、`run_state`、`run_finished`、`queue_update`、`dialogs`、`session_replaced` 等）。客户端 `store.js` 用 `/api/state` 与 `/api/transcript` 做快照，断线重连后重新拉取。静态资源目录由 `getWebUiDir()`（`config.ts`）解析，源码、dist、Bun binary 三种布局都指向包根/可执行文件旁的 `web/`。

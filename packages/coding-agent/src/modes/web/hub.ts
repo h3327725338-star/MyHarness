@@ -31,6 +31,7 @@ const STATUS_EVENTS = new Set([
 	"run_state",
 	"run_finished",
 	"completion",
+	"result_seen",
 	"dialogs",
 	"session_info",
 	"session_replaced",
@@ -133,7 +134,15 @@ export class WebHostHub implements WebHostHubLink {
 		if (event === "settings_changed" || event === "models_changed") {
 			// Other runtimes keep their own in-memory settings; pick up what this one just saved.
 			for (const other of this.slots.values()) {
-				if (other !== host && other.session.isIdle) void other.session.settingsManager.reload().catch(() => {});
+				if (other === host || !other.session.isIdle) continue;
+				void (async () => {
+					await other.session.settingsManager.reload();
+					// Providers added, edited or deleted here must reach the other runtimes too (each has its own ModelRuntime).
+					if (event === "models_changed") {
+						await other.session.modelRuntime.reloadConfig();
+						await other.session.reconcileModelAfterConfigChange();
+					}
+				})().catch(() => {});
 			}
 		}
 	}
@@ -242,7 +251,8 @@ export class WebHostHub implements WebHostHubLink {
 	}
 
 	private isBusy(host: WebHost): boolean {
-		return !host.session.isIdle || host.completionActive || host.dialogs.requests.length > 0;
+		// A finished session whose result is still unread keeps its slot, so its sidebar marker cannot vanish unseen.
+		return !host.session.isIdle || host.completionActive || host.dialogs.requests.length > 0 || host.unread;
 	}
 
 	/** Keep only the most recently used idle background slots; running or waiting ones are never touched. */

@@ -40,7 +40,7 @@ npm.cmd run build
 # 或双击/执行：.\dev.cmd
 ```
 
-Windows 的开发入口会从脚本位置定位仓库，并复用 `myharness-test.ps1` 以 `tsx` 直接运行 `packages/coding-agent/src/cli.ts`；修改源码后不要求先 build。Linux/macOS 使用 `./myharness-test.sh`。这些脚本会保留调用者当前的项目工作目录。
+Windows 的开发入口会从脚本位置定位仓库，并用 `node --import scripts/dev-fast-loader.mjs` 直接运行 `packages/coding-agent/src/cli.ts`（Node 原生类型剥离，启动比 `tsx` 快约 10 秒）；设置环境变量 `MYHARNESS_DEV_LOADER=tsx`（或给 `dev.cmd` 传 `--no-env`）会回到 `myharness-test.ps1` 的 `tsx` 路径。修改源码后不要求先 build。Linux/macOS 使用 `./myharness-test.sh`。这些脚本会保留调用者当前的项目工作目录。
 
 ## Provider 配置与启动约定
 

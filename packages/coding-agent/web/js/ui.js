@@ -166,8 +166,8 @@ export function Toggle({ checked, onChange, disabled, label }) {
 	return html`<button class="toggle" role="switch" aria-checked=${checked ? "true" : "false"} aria-label=${label} disabled=${disabled} onClick=${() => onChange(!checked)} />`;
 }
 
-export function Spinner() {
-	return html`<span class="spinner" aria-hidden="true" />`;
+export function Spinner({ title } = {}) {
+	return html`<span class="spinner" aria-hidden=${title ? undefined : "true"} title=${title} />`;
 }
 
 export function Segmented({ value, options, onChange, size }) {
