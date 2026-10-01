@@ -11,7 +11,7 @@ import {
 	CUSTOM_PROVIDER_API_TYPES,
 	type CustomProviderApiType,
 	CustomProviderManager,
-	discoverProviderModels,
+	detectSpecifiedModels,
 	ProviderModelDiscoveryError,
 } from "../../providers/models/custom-provider-manager.ts";
 import type { ThinkingLevelStatuses } from "../../providers/models/thinking-probe.ts";
@@ -221,30 +221,6 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		return { providers, modelsPath: rt.getModelsConfigPath() ?? null, error: rt.getError() ?? null };
 	});
 
-	/**
-	 * Same operation as the terminal's Providers → Refresh models: reads the provider's model catalog, appends the models
-	 * it lists (unless `addNew` is false) and settles each configured model's thinking efforts from the catalog or, when
-	 * the catalog does not say, with real minimal requests. The result is written to models.json, shared with the CLI.
-	 */
-	server.route("POST", "/api/providers/refresh-models", async ({ body }) => {
-		const payload = asObject(body);
-		const id = str(payload.id, "id");
-		try {
-			const result = await runtime().refreshProviderModels(id, {
-				addNew: payload.addNew !== false,
-				timeoutMs: 90_000,
-			});
-			if (!host.session.isStreaming) await host.session.reconcileModelAfterConfigChange().catch(() => {});
-			host.broadcast("models_changed", {});
-			return { ok: true, ...result };
-		} catch (error) {
-			if (error instanceof ProviderModelDiscoveryError) {
-				return { ok: false, code: error.code, message: error.message, status: error.status ?? null };
-			}
-			return { ok: false, code: "connection", message: error instanceof Error ? error.message : String(error) };
-		}
-	});
-
 	server.route("POST", "/api/providers/enabled", async ({ body }) => {
 		const payload = asObject(body);
 		const id = str(payload.id, "id");
@@ -386,10 +362,11 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 	});
 
 	/**
-	 * Reads the model catalog of an endpoint with exactly what the edit form holds right now, saved or not: API format,
-	 * Base URL, authentication mode and a key that was just typed. Without a typed key the key already stored for the
-	 * provider being edited is used. A failed lookup is an answer, not an error: the response says why, and the form
-	 * keeps working with manually entered models.
+	 * Checks the models the user named (`modelIds`) and nothing else, with exactly what the edit form holds right now,
+	 * saved or not: API format, Base URL, authentication mode and a key that was just typed. Without a typed key the key
+	 * already stored for the provider being edited is used. It only runs when the user asks for it: the model list is a
+	 * free GET, but efforts the list leaves open are tested with minimal real requests for these models. Nothing is
+	 * written; the form applies the answer. A model list that cannot be read is reported next to the result.
 	 */
 	server.route("POST", "/api/providers/custom/detect", async ({ body }) => {
 		const payload = asObject(body);
@@ -434,34 +411,46 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				if (auth?.source === "OAuth") authType = "oauth";
 			}
 		}
-		// The models the form holds are probed even when the catalog does not say whether they reason; levels an earlier
-		// probe settled (sent back by the form) are not probed again.
+		const modelIds = Array.isArray(payload.modelIds)
+			? [...new Set(payload.modelIds.filter((id): id is string => typeof id === "string").map((id) => id.trim()))]
+			: [];
+		if (!modelIds.some(Boolean)) throw new HttpError(400, "Enter at least one Model ID to detect.");
+		// What the form already knows about these models: declared reasoning, and levels an earlier probe confirmed.
 		const formModels = Array.isArray(payload.models) ? payload.models.filter(isFormModel) : [];
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), 20_000);
+		const timer = setTimeout(() => controller.abort(), 60_000);
 		try {
-			const models = await discoverProviderModels({
+			const result = await detectSpecifiedModels({
 				baseUrl,
 				api: api as CustomProviderApiType,
 				apiKey,
 				authType,
 				headers,
 				signal: controller.signal,
-				// Levels the catalog leaves undecided are tested with real minimal requests.
-				probeThinking: {
-					budgetMs: 45_000,
-					reasoningModelIds: new Set(
-						formModels.filter((model) => model.reasoning === true).map((model) => model.id),
+				modelIds,
+				probeBudgetMs: 45_000,
+				reasoningModelIds: new Set(formModels.filter((model) => model.reasoning === true).map((model) => model.id)),
+				knownStatuses: new Map(
+					formModels.flatMap((model) =>
+						model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus as ThinkingLevelStatuses]] : [],
 					),
-					candidateModelIds: new Set(formModels.map((model) => model.id)),
-					knownStatuses: new Map(
-						formModels.flatMap((model) =>
-							model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus as ThinkingLevelStatuses]] : [],
-						),
-					),
-				},
+				),
 			});
-			return { ok: true, models };
+			const listError = result.catalogError;
+			return {
+				ok: true,
+				models: result.models,
+				unlisted: result.unlisted ?? null,
+				listError: listError
+					? {
+							code: listError.code,
+							message: listError.message,
+							status: listError.status ?? null,
+							detail: listError.detail ?? null,
+							url: listError.requestUrl ?? null,
+						}
+					: null,
+			};
 		} catch (error) {
 			if (error instanceof ProviderModelDiscoveryError) {
 				return {

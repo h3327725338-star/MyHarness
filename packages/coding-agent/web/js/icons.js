@@ -34,6 +34,8 @@ const ICONS = {
 	home: [P("m4 11 8-7 8 7"), P("M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5")],
 	desktop: [R(3, 4, 18, 12, 2.5), P("M9 20h6M12 16v4")],
 	drive: [R(3, 13, 18, 7, 2.5), P("M3 13l3-8h12l3 8"), P("M7 16.5h.01M11 16.5h.01")],
+	// A folder crossed out: "no workspace" (the No Folder group), not a chat.
+	folderOff: [P("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"), P("M9.5 15.5l5-5")],
 	folderPlus: [P("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"), P("M12 10.5v5M9.5 13h5")],
 	arrowRight: [P("M5 12h14M13 6l6 6-6 6")],
 	refresh: [P("M20 11a8 8 0 0 0-14.5-4M4 4v4h4"), P("M4 13a8 8 0 0 0 14.5 4M20 20v-4h-4")],

@@ -630,6 +630,74 @@ export async function discoverProviderModels(options: {
 	throw new ProviderModelDiscoveryError("pagination", "模型目录分页超过安全上限。");
 }
 
+export interface SpecifiedModelDetection {
+	/** Only these models are looked up and probed; nothing else in the catalog is returned or tested. */
+	models: DiscoveredProviderModel[];
+	/** Specified IDs the endpoint's model list does not name (absent when the list could not be read). */
+	unlisted?: string[];
+	/** Why the model list could not be read; the thinking probe still ran for the specified models. */
+	catalogError?: ProviderModelDiscoveryError;
+}
+
+/**
+ * Checks exactly the models the user named. The endpoint's model list (a free GET) supplies what it states about these
+ * IDs; thinking efforts it leaves open are then tested with minimal real requests for these IDs only. Levels confirmed
+ * by an earlier probe are not tested again. A model list that cannot be read does not stop the probe.
+ */
+export async function detectSpecifiedModels(options: {
+	providerId?: string;
+	baseUrl: string;
+	api: string;
+	apiKey?: string;
+	authType?: "api_key" | "oauth";
+	headers?: Record<string, string | null>;
+	signal?: AbortSignal;
+	modelIds: readonly string[];
+	/** Models declared (in the form or models.json) to reason. */
+	reasoningModelIds?: ReadonlySet<string>;
+	knownStatuses?: ReadonlyMap<string, ThinkingLevelStatuses>;
+	probeBudgetMs?: number;
+	fetchImpl?: typeof fetch;
+}): Promise<SpecifiedModelDetection> {
+	const ids = [...new Set(options.modelIds.map((id) => id.trim()).filter(Boolean))];
+	if (ids.length === 0) return { models: [] };
+	let catalog: DiscoveredProviderModel[] | undefined;
+	let catalogError: ProviderModelDiscoveryError | undefined;
+	try {
+		catalog = await discoverProviderModels({ ...options, probeThinking: undefined });
+	} catch (error) {
+		if (options.signal?.aborted) throw error;
+		catalogError =
+			error instanceof ProviderModelDiscoveryError
+				? error
+				: new ProviderModelDiscoveryError("connection", error instanceof Error ? error.message : String(error));
+	}
+	const byId = new Map((catalog ?? []).map((model) => [model.id, model]));
+	const models = ids.map((id) => {
+		const found = byId.get(id);
+		if (found) return { ...found };
+		const model: DiscoveredProviderModel = { id, name: id };
+		applyThinkingCapability(model);
+		return model;
+	});
+	const confirmed = new Map<string, ThinkingLevelStatuses>();
+	for (const [id, statuses] of options.knownStatuses ?? []) confirmed.set(id, confirmedOnly(statuses));
+	const headers = discoveryHeaders(options);
+	await probeUnresolvedThinking(models, options, headers, {
+		maxModels: ids.length,
+		budgetMs: options.probeBudgetMs,
+		reasoningModelIds: options.reasoningModelIds,
+		candidateModelIds: new Set(ids),
+		knownStatuses: confirmed,
+		fetchImpl: options.fetchImpl,
+	});
+	return {
+		models,
+		...(catalog ? { unlisted: ids.filter((id) => !byId.has(id)) } : {}),
+		...(catalogError ? { catalogError } : {}),
+	};
+}
+
 /**
  * Safely updates user-defined providers in models.json.
  *

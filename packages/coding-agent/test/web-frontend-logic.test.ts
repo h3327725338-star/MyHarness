@@ -6,9 +6,8 @@ const webDir = new URL("../web/js/", import.meta.url);
 const { parsePatch } = await import(new URL("diff-parse.js", webDir).href);
 const { buildTurns, describeAction, groupSteps, turnOutcome } = await import(new URL("turns.js", webDir).href);
 const models = await import(new URL("provider-models.js", webDir).href);
-const { ansiSegments, fmtDuration, relTime, shellOutcome, shortPath, stripAnsi } = await import(
-	new URL("util.js", webDir).href
-);
+const { ansiSegments, filterModelGroups, fmtDuration, modelEfforts, relTime, shellOutcome, shortPath, stripAnsi } =
+	await import(new URL("util.js", webDir).href);
 
 const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	kind: "assistant",
@@ -193,6 +192,38 @@ describe("Web UI: diff parsing and utilities", () => {
 	});
 });
 
+describe("Web UI: model picker", () => {
+	const providers = [
+		{
+			id: "openrouter",
+			name: "OpenRouter",
+			models: [
+				{ id: "anthropic/claude-x", name: "Claude X" },
+				{ id: "qwen/qwen3-coder", name: "Qwen3 Coder" },
+			],
+		},
+		{ id: "local", name: "Local", models: [{ id: "llama-3.1-8b", name: "" }] },
+	];
+	const ids = (groups: any[]) => groups.flatMap((g) => g.models.map((m: any) => `${g.id}/${m.id}`));
+
+	it("matches any part of the provider ID or model ID, not only what is shown", () => {
+		expect(ids(filterModelGroups(providers, "coder"))).toEqual(["openrouter/qwen/qwen3-coder"]);
+		expect(ids(filterModelGroups(providers, "3.1"))).toEqual(["local/llama-3.1-8b"]);
+		expect(ids(filterModelGroups(providers, "OPENROUTER"))).toHaveLength(2);
+		expect(ids(filterModelGroups(providers, "open claude"))).toEqual(["openrouter/anthropic/claude-x"]);
+		expect(ids(filterModelGroups(providers, "local/llama"))).toEqual(["local/llama-3.1-8b"]);
+		expect(filterModelGroups(providers, "nothing-like-this")).toEqual([]);
+		expect(filterModelGroups(providers, "  ")).toBe(providers);
+	});
+
+	it("offers an effort menu only for a model with efforts to choose between", () => {
+		expect(modelEfforts({ reasoning: true, thinkingLevels: ["off", "low", "high"] })).toEqual(["off", "low", "high"]);
+		expect(modelEfforts({ reasoning: true, thinkingLevels: ["off"] })).toEqual([]);
+		expect(modelEfforts({ reasoning: false, thinkingLevels: ["off", "low"] })).toEqual([]);
+		expect(modelEfforts(undefined)).toEqual([]);
+	});
+});
+
 describe("Web UI: provider model catalog", () => {
 	const draft = (patch: Record<string, unknown> = {}) => ({
 		baseUrl: "https://api.example.com/v1",
@@ -254,16 +285,6 @@ describe("Web UI: provider model catalog", () => {
 			high: "unverified",
 			xhigh: "unknown",
 		});
-		// A probe never proposes to overwrite the levels of a model that is already in the form.
-		const current = models.modelDraft({ id: "probed", reasoning: true });
-		expect(
-			models.detectedChanges(current, {
-				id: "probed",
-				reasoning: true,
-				thinkingSource: "probe",
-				thinkingLevelMap: { low: null },
-			}),
-		).toEqual([]);
 	});
 
 	it("does not invent a level map for a model whose catalog lists none", () => {
@@ -272,34 +293,76 @@ describe("Web UI: provider model catalog", () => {
 		expect(built.thinkingLevelMap).toBeUndefined();
 	});
 
-	it("ticks and unticks catalog models without touching models the catalog does not list", () => {
-		const own = models.modelDraft({ id: "own", contextWindow: 1000 });
-		const found = { id: "a", name: "a" };
-		const ticked = models.toggleCatalogModel([own], found, true);
-		expect(ticked.map((m: any) => m.id)).toEqual(["own", "a"]);
-		expect(models.toggleCatalogModel(ticked, found, true)).toBe(ticked);
-		const unticked = models.toggleCatalogModel(ticked, found, false);
-		expect(unticked.map((m: any) => m.id)).toEqual(["own"]);
-		expect(unticked[0].contextWindow).toBe("1");
-		// A blank placeholder card is dropped when the first real model arrives.
-		expect(models.toggleCatalogModel([models.modelDraft()], found, true).map((m: any) => m.id)).toEqual(["a"]);
+	it("reads the Model IDs to detect from free text", () => {
+		expect(models.parseModelIds(" gpt-5, deepseek-chat\nqwen3 ，gpt-5;; ")).toEqual([
+			"gpt-5",
+			"deepseek-chat",
+			"qwen3",
+		]);
+		expect(models.parseModelIds("   ")).toEqual([]);
 	});
 
-	it("proposes only what the catalog states and applies exactly that", () => {
+	it("adds a detected new ID and updates only what the detection settled, leaving other models alone", () => {
+		const own = models.modelDraft({ id: "own", contextWindow: 1000 });
 		const current = models.modelDraft({
 			id: "m",
 			name: "Mine",
 			contextWindow: 1000,
 			maxTokens: 500,
 			reasoning: true,
+			input: ["text"],
 		});
-		expect(models.detectedChanges(current, { id: "m", name: "m" })).toEqual([]);
-		const found = { id: "m", name: "m", contextWindow: 2000, thinkingLevelMap: { low: null } };
-		expect(models.detectedChanges(current, found).map((c: any) => c.field)).toEqual(["contextWindow", "levels"]);
-		const next = models.applyDetected(current, found);
-		expect(next).toMatchObject({ name: "Mine", contextWindow: "2", maxTokens: "0.5", reasoning: true });
-		expect(next.levels.low).toBe(false);
-		expect(models.detectedChanges(next, found)).toEqual([]);
+		const result = models.applyDetection(
+			[own, current],
+			[
+				{
+					id: "m",
+					name: "catalog name",
+					contextWindow: 2000,
+					thinkingLevelMap: { low: null },
+					thinkingSource: "catalog",
+				},
+				{ id: "new", name: "new" },
+			],
+		);
+		expect(result.models.map((m: any) => m.id)).toEqual(["own", "m", "new"]);
+		expect(result.added.map((m: any) => m.id)).toEqual(["new"]);
+		expect(result.updated).toEqual(["m"]);
+		// Not specified: the very same object.
+		expect(result.models[0]).toBe(own);
+		const updated = result.models[1];
+		// The display name is not a capability; max output and images were not stated, so they stay.
+		expect(updated).toMatchObject({
+			name: "Mine",
+			contextWindow: "2",
+			maxTokens: "0.5",
+			image: false,
+			reasoning: true,
+		});
+		expect(updated.levels.low).toBe(false);
+		expect(updated.detected).toMatchObject({ contextWindow: true, levels: true });
+		expect(updated.detected.maxTokens).toBeUndefined();
+	});
+
+	it("takes only confirmed probe levels and keeps the others as they were", () => {
+		const current = models.modelDraft({ id: "m", reasoning: true, thinkingLevelMap: { minimal: null } });
+		const next = models.updateFromDetection(current, {
+			id: "m",
+			reasoning: true,
+			thinkingSource: "probe",
+			thinkingLevelStatus: { minimal: "supported", low: "unsupported", high: "unverified", xhigh: "unknown" },
+		});
+		expect(next.levels).toMatchObject({ minimal: true, low: false, medium: true, high: true, xhigh: false });
+		expect(models.buildModel(next).thinkingLevelStatus).toEqual({
+			minimal: "supported",
+			low: "unsupported",
+			high: "unverified",
+			xhigh: "unknown",
+		});
+		// A detection that settled nothing changes nothing.
+		const plain = models.modelDraft({ id: "p", contextWindow: 4000 });
+		const same = models.updateFromDetection(plain, { id: "p", name: "p" });
+		expect(same).toMatchObject({ contextWindow: "4", reasoning: false, image: false, levels: plain.levels });
 	});
 
 	it("edits token counts in K (1K = 1000) and stores the exact token count", () => {
@@ -320,26 +383,7 @@ describe("Web UI: provider model catalog", () => {
 		});
 	});
 
-	it("applies a thinking probe to a form model unless the user set that switch by hand", () => {
-		const probe = {
-			id: "m",
-			reasoning: true,
-			thinkingSource: "probe",
-			thinkingLevelMap: { minimal: null },
-			thinkingLevelStatus: { minimal: "unsupported", low: "supported" },
-		};
-		const applied = models.applyProbeResult(models.modelDraft({ id: "m" }), probe);
-		expect(applied.reasoning).toBe(true);
-		expect(applied.levels).toMatchObject({ minimal: false, low: true });
-		expect(models.buildModel(applied).thinkingLevelStatus).toEqual(probe.thinkingLevelStatus);
-		const own = { ...models.modelDraft({ id: "m" }), touched: { reasoning: true } };
-		expect(models.applyProbeResult(own, probe).reasoning).toBe(false);
-		// Anything but a probe result leaves the model as it is.
-		const plain = models.modelDraft({ id: "m" });
-		expect(models.applyProbeResult(plain, { id: "m", reasoning: true })).toBe(plain);
-	});
-
-	it("asks the endpoint on its own only when the connection is complete", () => {
+	it("detects only once the connection is complete", () => {
 		expect(models.connectionReady(draft(), { hasStoredKey: false })).toBe(false);
 		expect(models.connectionReady(draft({ apiKey: "sk-x" }), { hasStoredKey: false })).toBe(true);
 		expect(models.connectionReady(draft(), { hasStoredKey: true })).toBe(true);
@@ -348,9 +392,6 @@ describe("Web UI: provider model catalog", () => {
 			false,
 		);
 		expect(models.connectionReady(draft({ baseUrl: "ftp://x", auth: "none" }), { hasStoredKey: false })).toBe(false);
-		expect(models.connectionSignature(draft({ apiKey: "a" }))).not.toBe(
-			models.connectionSignature(draft({ apiKey: "b" })),
-		);
 	});
 });
 

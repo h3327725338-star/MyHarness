@@ -4,14 +4,33 @@ import { getLang } from "./lang.js";
 
 /** Reasoning-effort levels: the level name (translated) and a one-line hint. */
 const EFFORT_NAME = { off: N_("off"), minimal: N_("minimal"), low: N_("low"), medium: N_("medium"), high: N_("high"), xhigh: N_("xhigh"), max: N_("max") };
-const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal"), low: N_("Light"), medium: N_("Balanced"), high: N_("Deep"), xhigh: N_("Very deep"), max: N_("Maximum") };
+// Hints have their own wording (not "Light" …): the same English word is also a theme name, with another meaning.
+const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal thinking"), low: N_("Light thinking"), medium: N_("Balanced thinking"), high: N_("Deep thinking"), xhigh: N_("Very deep thinking"), max: N_("Maximum thinking") };
 export const effortName = (level) => (EFFORT_NAME[level] ? t(EFFORT_NAME[level]) : level);
 export const effortHint = (level) => (EFFORT_HINT[level] ? t(EFFORT_HINT[level]) : "");
 
-/** Efforts for a model reference of a setting (provider + model), or the current main model when none is chosen. */
-export function refEffortModel(models, mainModel, ref) {
-	if (ref?.provider && ref?.model) return models?.providers?.find((g) => g.id === ref.provider)?.models.find((m) => m.id === ref.model);
-	return mainModel;
+/** The efforts a model offers in a model picker's flyout; none (no flyout) when there is nothing to choose between. */
+export function modelEfforts(model) {
+	const levels = model?.reasoning ? model.thinkingLevels || [] : [];
+	return levels.length > 1 ? levels : [];
+}
+
+/**
+ * Provider groups (as GET /api/models lists them) narrowed to the models matching a search: every word of the query must
+ * occur somewhere in the provider ID or name, the model ID or name, or "provider/model" — any part, not only the start.
+ */
+export function filterModelGroups(providers, query) {
+	const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return providers || [];
+	return (providers || [])
+		.map((p) => ({
+			...p,
+			models: p.models.filter((m) => {
+				const text = `${p.id} ${p.name || ""} ${m.id} ${m.name || ""} ${p.id}/${m.id}`.toLowerCase();
+				return words.every((word) => text.includes(word));
+			}),
+		}))
+		.filter((p) => p.models.length);
 }
 
 /** Title of a saved chat: its name, else the first message. The storage layer's "(no messages)" placeholder counts as no message. */

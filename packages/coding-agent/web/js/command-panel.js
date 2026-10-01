@@ -5,10 +5,11 @@ import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
-import { deleteCustomProvider, refreshProviderModels } from "./overlays-settings.js";
+import { deleteCustomProvider } from "./overlays-settings.js";
+import { modelRefLabel } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
-import { chatTitle, clip, effortHint, effortName, refEffortModel, fmtDateTime, fmtTokens, pointerMoved, relTime } from "./util.js";
+import { chatTitle, clip, effortHint, effortName, fmtDateTime, fmtTokens, modelEfforts, pointerMoved, relTime } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -63,43 +64,61 @@ function effortScreen() {
 }
 
 // ---- /model -------------------------------------------------------------------------------------------------
+/** The efforts of one model, opened from its row (Model → its efforts). `withDefault` adds "Default" (no effort sent). */
+function effortsScreen({ title, levels, value, withDefault, onPick }) {
+	return optionsScreen({
+		title,
+		subtitle: t("Thinking effort"),
+		options: [...(withDefault ? [{ value: "", label: t("Default"), desc: t("No effort sent") }] : []), ...levels.map((level) => ({ value: level, label: effortName(level), desc: effortHint(level) }))],
+		value: value ?? "",
+		onPick: (level, c) => onPick(level || undefined, c),
+	});
+}
+
 function modelScreen(ctx, arg) {
 	const models = useStore((s) => s.models);
 	const snap = useStore((s) => s.snap);
 	const current = snap?.model;
 	useEffect(() => {
-		loadModels(false);
+		loadModels();
 	}, []);
 	const running = !!snap?.active;
+	const choose = async (m, thinkingLevel, c) => {
+		if (await attempt(() => post("/api/model", { provider: m.provider, id: m.id, ...(thinkingLevel ? { thinkingLevel } : {}) }))) {
+			await attempt(loadSnapshot, { quiet: true });
+			c.close();
+		}
+	};
 	const rows = [];
 	for (const provider of models?.providers || []) {
 		rows.push({ key: `g-${provider.id}`, group: provider.name });
 		for (const m of provider.models) {
+			const isCurrent = !!current && current.provider === m.provider && current.id === m.id;
+			const levels = modelEfforts(m);
 			rows.push({
 				key: `${m.provider}/${m.id}`,
 				label: m.name || m.id,
-				search: `${provider.name} ${m.id} ${m.name}`,
-				badges: [m.reasoning ? t("reasoning") : "", m.input.includes("image") ? t("image") : ""].filter(Boolean),
-				value: fmtTokens(m.contextWindow),
-				check: !!current && current.provider === m.provider && current.id === m.id,
+				search: `${provider.id} ${provider.name} ${m.id} ${m.name} ${provider.id}/${m.id}`,
+				badges: [m.input.includes("image") ? t("image") : ""].filter(Boolean),
+				value: isCurrent && levels.length ? effortName(snap.thinking.level) : fmtTokens(m.contextWindow),
+				check: isCurrent,
+				chevron: levels.length > 0,
 				disabled: running,
-				onEnter: async (c) => {
-					if (await attempt(() => post("/api/model", { provider: m.provider, id: m.id }))) {
-						await attempt(loadSnapshot, { quiet: true });
-						c.close();
-					}
-				},
+				// A model with efforts opens them first; the others are chosen at once.
+				onEnter: (c) =>
+					levels.length
+						? c.push(() => effortsScreen({ title: m.name || m.id, levels, value: isCurrent ? snap.thinking.level : undefined, onPick: (level, cc) => choose(m, level, cc) }))
+						: choose(m, undefined, c),
 			});
 		}
 	}
-	rows.push({ key: "refresh", label: t("Refresh catalog"), icon: "refresh", onEnter: () => loadModels(true) });
 	rows.push({ key: "providers", label: t("Manage providers…"), icon: "key", chevron: true, onEnter: (c) => c.push((cc) => providersScreen(cc)) });
 	return {
 		title: t("Choose a model"),
 		subtitle: running ? t("Models can be switched when the agent is idle") : undefined,
 		filterable: true,
 		initialFilter: arg,
-		placeholder: t("Search models…"),
+		placeholder: t("Search by provider or model ID…"),
 		loading: !models,
 		rows,
 		empty: models && !models.providers.length ? t("No model is available. Add a provider in Settings.") : t("No models match."),
@@ -317,8 +336,7 @@ function shownValue(item) {
 			return (item.value || []).map((v) => tr(item.options.find((o) => o.value === v)?.label ?? v)).join(", ");
 		case "modelRef": {
 			const v = item.value || {};
-			const model = v.model ? `${v.provider ? `${v.provider}/` : ""}${v.model}` : t("Use the main model");
-			return item.note === "enabled" && !v.enabled ? t("Off") : model;
+			return item.note === "enabled" && !v.enabled ? t("Off") : modelRefLabel(state.models, v);
 		}
 		case "text":
 			return item.value ? clip(String(item.value), 28) : "—";
@@ -399,40 +417,38 @@ function modelRefScreen(ctx, id) {
 	rows.push({
 		key: "model",
 		label: t("Model"),
-		value: v.model ? `${v.provider ? `${v.provider}/` : ""}${v.model}` : t("Use the main model"),
+		value: modelRefLabel(models, v),
 		chevron: true,
 		onEnter: (c) =>
 			c.push(() => ({
 				title: tr(item.label),
 				filterable: true,
-				placeholder: t("Search models…"),
+				placeholder: t("Search by provider or model ID…"),
 				loading: !models,
 				rows: [
-					{ key: "main", label: t("Use the main model"), check: !v.model, onEnter: async (cc) => (await commit({ provider: undefined, model: undefined }), cc.pop()) },
+					// The main model comes with its effort: nothing of its own is kept.
+					{ key: "main", label: t("Use the main model"), desc: t("Same model and thinking effort as the main chat"), check: !v.model, onEnter: async (cc) => (await commit({ provider: undefined, model: undefined, thinkingLevel: undefined }), cc.pop()) },
 					...(models?.providers || []).flatMap((g) =>
-						g.models.map((m) => ({ key: `${g.id}/${m.id}`, label: m.name || m.id, search: `${g.name} ${m.id} ${m.name}`, desc: g.name, check: v.provider === g.id && v.model === m.id, onEnter: async (cc) => (await commit({ provider: g.id, model: m.id }), cc.pop()) })),
+						g.models.map((m) => {
+							const levels = modelEfforts(m);
+							const isCurrent = v.provider === g.id && v.model === m.id;
+							return {
+								key: `${g.id}/${m.id}`,
+								label: m.name || m.id,
+								search: `${g.id} ${g.name} ${m.id} ${m.name} ${g.id}/${m.id}`,
+								desc: g.name,
+								value: isCurrent && levels.length ? (v.thinkingLevel ? effortName(v.thinkingLevel) : t("Default")) : undefined,
+								check: isCurrent,
+								chevron: levels.length > 0,
+								onEnter: (cc) =>
+									levels.length
+										? cc.push(() => effortsScreen({ title: m.name || m.id, levels, withDefault: true, value: isCurrent ? v.thinkingLevel : undefined, onPick: async (level, c3) => (await commit({ provider: g.id, model: m.id, thinkingLevel: level }), c3.pop(), c3.pop()) }))
+										: commit({ provider: g.id, model: m.id, thinkingLevel: undefined }).then(() => cc.pop()),
+							};
+						}),
 					),
 				],
 			})),
-	});
-	// Only the efforts of the chosen model (or the main model when none is chosen); no effort to pick means no row.
-	const refModel = refEffortModel(models, state.snap?.model, v);
-	const refLevels = refModel?.reasoning ? refModel.thinkingLevels || [] : [];
-	if (refLevels.length > 1)
-	rows.push({
-		key: "thinking",
-		label: t("Reasoning"),
-		value: v.thinkingLevel || t("Default reasoning"),
-		chevron: true,
-		onEnter: (c) =>
-			c.push(() =>
-				optionsScreen({
-					title: t("Reasoning effort"),
-					options: [{ value: "", label: t("Default reasoning") }, ...refLevels.map((l) => ({ value: l, label: effortName(l) }))],
-					value: v.thinkingLevel || "",
-					onPick: async (level, cc) => (await commit({ thinkingLevel: level || undefined }), cc.pop()),
-				}),
-			),
 	});
 	return { title: tr(item.label), subtitle: tr(item.description), rows };
 }
@@ -586,28 +602,7 @@ function providerScreen(ctx, id) {
 		});
 	}
 	if (provider.supportsOAuth) rows.push({ key: "oauth", label: t("Sign in with OAuth"), icon: "key", desc: login?.type === "auth_url" ? t("Waiting for the browser sign-in…") : login?.type === "device_code" ? `${login.verificationUri} · ${login.userCode}` : undefined, onEnter: () => act(() => post("/api/providers/oauth/login", { id }), t("Signed in")) });
-	rows.push({ key: "refresh", label: t("Refresh models"), desc: t("Read the provider's model list and detect what each model supports"), icon: "refresh", disabled: !provider.enabled, onEnter: () => refreshProviderModels(id) });
-	if (provider.custom) rows.push({ key: "config", label: t("Provider config & models…"), desc: t("{n} models · also holds the advanced JSON editor", { n: provider.modelCount }), icon: "edit", onEnter: (cc) => (cc.close(), setView({ providerEditor: { id } })) });
-	if (c?.removable) {
-		rows.push({
-			key: "logout",
-			label: t("Remove credentials"),
-			danger: true,
-			chevron: true,
-			onEnter: (cc) =>
-				cc.push(() =>
-					confirmScreen({
-						title: t("Remove {name} credentials?", { name: provider.name }),
-						message: t("All API keys and OAuth logins saved for this provider, including a key written in models.json, are deleted from this computer."),
-						confirmLabel: t("Remove"),
-						danger: true,
-						onConfirm: async (c2) => {
-							if (await act(() => post("/api/providers/logout", { id }), t("Credentials removed"))) c2.pop();
-						},
-					}),
-				),
-		});
-	}
+	if (provider.custom) rows.push({ key: "config", label: t("Provider settings & models…"), desc: t("{n} models · detect models by ID · advanced JSON", { n: provider.modelCount }), icon: "edit", onEnter: (cc) => (cc.close(), setView({ providerEditor: { id } })) });
 	if (provider.custom) rows.push({ key: "delete", label: t("Delete provider…"), danger: true, onEnter: async (cc) => { if (await deleteCustomProvider(id, provider.name)) cc.pop(); } });
 	return { title: provider.name, subtitle: `${provider.id}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`, rows };
 }
@@ -633,7 +628,7 @@ function keyScreen(ctx, providerId, keyId) {
 	const alternatives = provider.credentials.apiKeys.filter((o) => o.id !== keyId);
 	rows.push({
 		key: "delete",
-		label: t("Delete"),
+		label: t("Delete this API key"),
 		danger: true,
 		chevron: true,
 		onEnter: (c) => {

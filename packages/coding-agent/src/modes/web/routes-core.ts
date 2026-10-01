@@ -101,31 +101,10 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// ---- Models -----------------------------------------------------------------
-	server.route("GET", "/api/models", async ({ url }) => {
+	server.route("GET", "/api/models", async () => {
 		const runtime = host.session.modelRuntime;
-		if (url.searchParams.get("refresh") === "1" && process.env.MYHARNESS_OFFLINE !== "1") {
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), 15_000);
-			try {
-				await runtime.refresh({ signal: controller.signal });
-			} catch {
-				// A failed catalog refresh keeps the last known catalog.
-			} finally {
-				clearTimeout(timer);
-			}
-			// Also settle what each configured model really supports (thinking efforts included) from the provider's
-			// catalog or, where it says nothing, with minimal probe requests; no model is added here. This is the same
-			// operation as Providers → Refresh models, restricted to the configured models, and writes to models.json.
-			const disabled = new Set(host.session.settingsManager.getDisabledProviders());
-			const configured = runtime.getProviders().filter((provider) => !disabled.has(provider.id));
-			await Promise.all(
-				configured.map((provider) =>
-					runtime.refreshProviderModels(provider.id, { addNew: false, timeoutMs: 90_000 }).catch(() => undefined),
-				),
-			);
-			// The refresh can change what the current model supports (thinking efforts included).
-			if (!host.session.isStreaming) await host.session.reconcileModelAfterConfigChange().catch(() => {});
-		}
+		// Only what is already known (models.json and earlier detections): opening a model list never contacts a
+		// provider. Models are checked only from Providers → Detect, for the Model IDs the user names.
 		const available = await runtime.getAvailable();
 		const current = host.session.model;
 		const settings = host.session.settingsManager;
@@ -168,7 +147,12 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		const model = host.session.modelRuntime.getModel(provider, id);
 		if (!model) throw new HttpError(404, `Unknown model ${provider}/${id}`);
 		if (host.session.isStreaming) throw new HttpError(409, "Cannot switch models while the agent is running.");
+		// The effort chosen next to the model in the model menu; without one the session keeps (and clamps) its own.
+		const level = payload.thinkingLevel;
+		if (level !== undefined && (typeof level !== "string" || !VALID_THINKING.has(level)))
+			throw new HttpError(400, `Invalid thinking level: ${String(level)}`);
 		await host.session.setModel(model);
+		if (typeof level === "string") host.session.setThinkingLevel(level as ThinkingLevel);
 		return { ok: true };
 	});
 

@@ -57,6 +57,14 @@ const TRANSPORTS = [
 	{ value: "websocket", label: "WebSocket" },
 	{ value: "websocket-cached", label: "WebSocket (cached)" },
 ];
+/** Search engines with their product names; the values are what settings.json stores. */
+const SEARCH_ENGINES = [
+	{ value: "google", label: "Google" },
+	{ value: "bing", label: "Bing" },
+	{ value: "duckduckgo", label: "DuckDuckGo" },
+	{ value: "brave", label: "Brave" },
+	{ value: "brave_api", label: "Brave Search API" },
+];
 const IMAGE_WIDTHS = ["60", "80", "120"];
 const EDITOR_PADDINGS = ["0", "1", "2", "3"];
 const AUTOCOMPLETE_SIZES = ["3", "5", "7", "10", "15", "20"];
@@ -134,7 +142,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "compactionModel",
 				section: "Agent",
 				label: "Compaction model",
-				description: "Model used to summarize context. Empty uses the main model.",
+				description:
+					"Model used to summarize context. “Use the main model” follows the main chat's model and effort.",
 				type: "modelRef",
 				value: { provider: compaction.provider, model: compaction.model, thinkingLevel: compaction.thinkingLevel },
 			},
@@ -183,7 +192,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "autoMemory",
 				section: "Assistants",
 				label: "Auto Memory",
-				description: "Consolidate long-term memory after each task. Needs a model.",
+				description: "Consolidate long-term memory after each task.",
 				type: "modelRef",
 				value: { ...modelRef(autoMemory), enabled: autoMemory.enabled },
 				note: "enabled",
@@ -221,7 +230,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Search engines",
 				type: "multi",
 				value: web.engines,
-				options: ["google", "bing", "duckduckgo", "brave", "brave_api"].map((value) => ({ value, label: value })),
+				options: SEARCH_ENGINES,
 			},
 			{
 				id: "webSearch.pagesPerSearch",

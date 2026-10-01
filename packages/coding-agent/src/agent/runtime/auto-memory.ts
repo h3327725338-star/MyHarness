@@ -11,6 +11,7 @@ import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
+import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import type { CustomMessage } from "./messages.ts";
 
 export type MemoryScope = "global" | "project";
@@ -59,6 +60,8 @@ interface AutoMemoryManagerOptions {
 	sessionId: string;
 	settingsManager: SettingsManager;
 	modelRuntime?: ModelRuntime;
+	/** The main session model, inherited when Auto Memory has no model of its own. */
+	getMainModel?: () => MainModelRef | undefined;
 	persisted: boolean;
 	agentDir?: string;
 	onError?: (operation: "recall" | "extract" | "consolidate", error: Error) => void;
@@ -426,13 +429,9 @@ export class AutoMemoryManager {
 		| undefined {
 		if (!this.options.persisted) return undefined;
 		const settings = this.options.settingsManager.getAutoMemorySettings();
-		if (!settings.enabled || !settings.provider || !settings.model || !settings.thinkingLevel) return undefined;
-		return {
-			enabled: true,
-			provider: settings.provider,
-			model: settings.model,
-			thinkingLevel: settings.thinkingLevel,
-		};
+		if (!settings.enabled) return undefined;
+		const resolved = resolveAssistantModel(settings, this.options.getMainModel?.());
+		return resolved ? { enabled: true, ...resolved } : undefined;
 	}
 
 	private reportError(operation: "recall" | "extract" | "consolidate", error: unknown): void {

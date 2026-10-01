@@ -148,6 +148,7 @@ import {
 	type VisionAssistantMessageDetails,
 	type VisionAssistantProgress,
 } from "../vision/assistant.ts";
+import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager } from "./auto-memory.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
@@ -627,6 +628,7 @@ export class AgentSession {
 			sessionId: config.sessionManager.getSessionId(),
 			settingsManager: config.settingsManager,
 			modelRuntime: config.modelRuntime,
+			getMainModel: () => this._mainModelRef(),
 			persisted: config.sessionManager.isPersisted(),
 			onError: (operation, error) => {
 				if (!this._ownsRuntimeGeneration(ownerGeneration)) return;
@@ -640,6 +642,7 @@ export class AgentSession {
 		this._visionAssistant = new VisionAssistantManager({
 			settingsManager: config.settingsManager,
 			modelRuntime: config.modelRuntime,
+			getMainModel: () => this._mainModelRef(),
 			checkpointDirectory: join(
 				config.sessionManager.getSessionDir(),
 				".vision-checkpoints",
@@ -1889,8 +1892,32 @@ export class AgentSession {
 	}
 
 	private _getCompactThinkingLevel(model: Model<any>): ThinkingLevel {
-		const configured = this.settingsManager.getCompactionModelSettings().thinkingLevel;
-		return clampThinkingLevel(model, configured ?? this.thinkingLevel) as ThinkingLevel;
+		const configured = this.settingsManager.getCompactionModelSettings();
+		// A compaction model of its own without an effort sends none; the main model brings the main effort along.
+		const level =
+			configured.provider && configured.model
+				? (configured.thinkingLevel ?? "off")
+				: (configured.thinkingLevel ?? this.thinkingLevel);
+		return clampThinkingLevel(model, level) as ThinkingLevel;
+	}
+
+	/** The main model and effort, which helper models (Auto Memory, Sub-agent, Vision) inherit when none is set. */
+	private _mainModelRef(): MainModelRef | undefined {
+		const model = this.model;
+		return model ? { provider: model.provider, id: model.id, thinkingLevel: this.thinkingLevel } : undefined;
+	}
+
+	/** Sub-agent settings with the model it really runs on ("use the main model" resolved to the current one). */
+	private _subAgentSettings() {
+		const settings = this.settingsManager.getSubAgentSettings();
+		const resolved = resolveAssistantModel(settings, this._mainModelRef());
+		return {
+			...settings,
+			provider: resolved?.provider,
+			model: resolved?.model,
+			thinkingLevel: resolved?.thinkingLevel,
+			contextWindow: this.settingsManager.getConfiguredContextWindow("subagent"),
+		};
 	}
 
 	/** The single runtime context budget state used by UI, diagnostics and lifecycle checks. */
@@ -3882,10 +3909,7 @@ export class AgentSession {
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
 					symbols: { agentDir: this._agentDir, codeIntelligence: this._codeIntelligence },
 					agent: {
-						getSettings: () => ({
-							...this.settingsManager.getSubAgentSettings(),
-							contextWindow: this.settingsManager.getConfiguredContextWindow("subagent"),
-						}),
+						getSettings: () => this._subAgentSettings(),
 						trace: this._traceCoordinator.writer,
 						getTraceParentScope: () => this._traceCoordinator.activeScope,
 						onBackgroundStarted: (task) => this._trackBackgroundExploreTask(task),
@@ -3893,20 +3917,14 @@ export class AgentSession {
 						onBackgroundComplete: (notification) => this._handleBackgroundExploreComplete(notification),
 					},
 					workflow: {
-						getSettings: () => ({
-							...this.settingsManager.getSubAgentSettings(),
-							contextWindow: this.settingsManager.getConfiguredContextWindow("subagent"),
-						}),
+						getSettings: () => this._subAgentSettings(),
 						trace: this._traceCoordinator.writer,
 						getTraceParentScope: () => this._traceCoordinator.activeScope,
 						onControlsReady: (toolCallId, controls) => this._workflowControls.set(toolCallId, controls),
 						onControlsRelease: (toolCallId) => this._workflowControls.delete(toolCallId),
 					},
 					ultracode: {
-						getSettings: () => ({
-							...this.settingsManager.getSubAgentSettings(),
-							contextWindow: this.settingsManager.getConfiguredContextWindow("subagent"),
-						}),
+						getSettings: () => this._subAgentSettings(),
 						trace: this._traceCoordinator.writer,
 						getTraceParentScope: () => this._traceCoordinator.activeScope,
 						onControlsReady: (toolCallId, controls) => this._workflowControls.set(toolCallId, controls),

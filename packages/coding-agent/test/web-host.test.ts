@@ -391,11 +391,20 @@ describe("Web host (real runtime with a faux provider)", () => {
 
 	it("adds a custom provider with detected models, keeps its key in the credential store and deletes both for good", async () => {
 		const fx = await start();
+		// Every model a probe request was sent for: only the Model IDs the user named may appear here.
+		const probed: string[] = [];
 		const catalog = createServer((req, res) => {
 			if (req.method === "POST") {
-				// Probe of the reasoning model's thinking levels: a rate limit leaves them undecided.
-				res.statusCode = 429;
-				res.end("{}");
+				// Probe of a named model's thinking levels: a rate limit leaves them undecided.
+				let body = "";
+				req.on("data", (chunk) => {
+					body += chunk;
+				});
+				req.on("end", () => {
+					probed.push(JSON.parse(body).model);
+					res.statusCode = 429;
+					res.end("{}");
+				});
 				return;
 			}
 			expect(req.headers.authorization).toBe("Bearer sk-form-key");
@@ -420,14 +429,21 @@ describe("Web host (real runtime with a faux provider)", () => {
 		if (!address || typeof address === "string") throw new Error("catalog server has no port");
 		const baseUrl = `http://127.0.0.1:${address.port}/v1`;
 
+		// Nothing is detected without Model IDs.
+		await expect(
+			fx.post("/api/providers/custom/detect", { baseUrl, api: "openai-completions", apiKey: "sk-form-key" }),
+		).rejects.toThrow(/Model ID/);
+		expect(probed).toEqual([]);
+
+		// Only the named model comes back and only it is probed, although the list holds another one.
 		const detected = await fx.post("/api/providers/custom/detect", {
 			baseUrl,
 			api: "openai-completions",
 			apiKey: "sk-form-key",
+			modelIds: ["thinker"],
 		});
-		expect(detected.ok).toBe(true);
+		expect(detected).toMatchObject({ ok: true, unlisted: [], listError: null });
 		expect(detected.models).toEqual([
-			{ id: "plain", name: "plain" },
 			{
 				id: "thinker",
 				name: "thinker",
@@ -437,12 +453,29 @@ describe("Web host (real runtime with a faux provider)", () => {
 				thinkingSource: "unconfirmed",
 			},
 		]);
-		// A failed lookup is reported, not thrown, so the form can fall back to manual entry.
+		expect(probed.length).toBeGreaterThan(0);
+		expect(new Set(probed)).toEqual(new Set(["thinker"]));
+
+		// An ID the list does not name is still checked, and reported as not listed.
+		probed.length = 0;
+		const ghost = await fx.post("/api/providers/custom/detect", {
+			baseUrl,
+			api: "openai-completions",
+			apiKey: "sk-form-key",
+			modelIds: ["ghost"],
+		});
+		expect(ghost).toMatchObject({ ok: true, unlisted: ["ghost"], models: [{ id: "ghost", name: "ghost" }] });
+		expect(new Set(probed)).toEqual(new Set(["ghost"]));
+
+		// A model list that cannot be read is reported next to the (still attempted) check of the named model.
 		const unreachable = await fx.post("/api/providers/custom/detect", {
 			baseUrl: "http://127.0.0.1:9/v1",
 			api: "openai-completions",
+			modelIds: ["x"],
 		});
-		expect(unreachable.ok).toBe(false);
+		expect(unreachable.ok).toBe(true);
+		expect(unreachable.listError).toMatchObject({ code: "connection" });
+		expect(unreachable.models).toEqual([{ id: "x", name: "x" }]);
 
 		await fx.post("/api/providers/custom/save", {
 			id: "form-provider",
@@ -519,24 +552,21 @@ describe("Web host (real runtime with a faux provider)", () => {
 			res.statusCode = 404;
 			res.end("{}");
 		});
-		const body = { baseUrl: endpoint.baseUrl, api: "openai-completions" };
+		const body = { baseUrl: endpoint.baseUrl, api: "openai-completions", modelIds: ["one"] };
 
 		// Credentials typed into the form are used as they are; "no authentication" sends none, even if a key is typed.
-		expect((await fx.post("/api/providers/custom/detect", { ...body, apiKey: "typed-key" })).models).toEqual([
-			{ id: "one", name: "one" },
-		]);
+		const typed = await fx.post("/api/providers/custom/detect", { ...body, apiKey: "typed-key" });
+		expect(typed).toMatchObject({ ok: true, unlisted: [], listError: null, models: [{ id: "one", name: "one" }] });
 		const open = await fx.post("/api/providers/custom/detect", { ...body, auth: "none", apiKey: "typed-key" });
-		expect(open.models).toEqual([{ id: "open-model", name: "open-model" }]);
+		expect(open).toMatchObject({ ok: true, unlisted: ["one"] });
 		expect(endpoint.requests.at(-1)?.authorization).toBeUndefined();
 
-		// Each failure says what really happened.
-		expect(await fx.post("/api/providers/custom/detect", { ...body, apiKey: "bad" })).toMatchObject({
-			ok: false,
+		// Each failure to read the list says what really happened.
+		expect((await fx.post("/api/providers/custom/detect", { ...body, apiKey: "bad" })).listError).toMatchObject({
 			code: "authentication",
 			status: 401,
 		});
-		expect(await fx.post("/api/providers/custom/detect", { ...body, apiKey: "broken" })).toMatchObject({
-			ok: false,
+		expect((await fx.post("/api/providers/custom/detect", { ...body, apiKey: "broken" })).listError).toMatchObject({
 			code: "connection",
 			status: 503,
 		});
@@ -545,13 +575,14 @@ describe("Web host (real runtime with a faux provider)", () => {
 			baseUrl: endpoint.baseUrl.replace("/v1", "/nope"),
 			apiKey: "typed-key",
 		});
-		expect(wrongPath).toMatchObject({ ok: false, code: "unsupported", status: 404 });
-		expect(wrongPath.url).toMatch(/\/nope\/models$/);
+		expect(wrongPath.listError).toMatchObject({ code: "unsupported", status: 404 });
+		expect(wrongPath.listError.url).toMatch(/\/nope\/models$/);
 		const refused = await fx.post("/api/providers/custom/detect", { ...body, baseUrl: "http://127.0.0.1:9/v1" });
-		expect(refused).toMatchObject({ ok: false, code: "connection" });
-		expect(refused.detail).toBeTruthy();
-		expect(await fx.post("/api/providers/custom/detect", { ...body, baseUrl: "not a url" })).toMatchObject({
-			ok: false,
+		expect(refused.listError).toMatchObject({ code: "connection" });
+		expect(refused.listError.detail).toBeTruthy();
+		expect(
+			(await fx.post("/api/providers/custom/detect", { ...body, baseUrl: "not a url" })).listError,
+		).toMatchObject({
 			code: "invalid_base_url",
 		});
 	});

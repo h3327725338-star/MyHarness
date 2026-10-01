@@ -103,9 +103,6 @@
 .tree-node.on-path { color: var(--text); } .tree-node.leaf { background: var(--surface-select); }
 .tree-node .kind { font-size: 10px; font-weight: 700; width: 22px; text-align: center; color: var(--text-3); flex: none; }
 .tree-node .kind-user { color: var(--accent); }
-.provider-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-raised); }
-.key-list { display: flex; flex-direction: column; gap: 4px; }
-.key-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 
 /* Context usage (meter popover and Session panel) */
 .cu { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 8px; font-size: var(--fs-sm); }

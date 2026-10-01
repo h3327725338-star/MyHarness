@@ -1,5 +1,6 @@
-// Pure logic of the custom-provider form: how a model of models.json is edited as a draft, how a model found in an
-// endpoint's catalog becomes one, and which fields a catalog may fill in. No DOM here, so it can be tested directly.
+// Pure logic of the custom-provider form: how a model of models.json is edited as a draft, and how a detection of the
+// Model IDs the user named becomes new models or updates exactly the fields it settled. No DOM here, so it can be
+// tested directly.
 
 export const BASE_LEVELS = ["off", "minimal", "low", "medium", "high"];
 export const EXTRA_LEVELS = ["xhigh", "max"];
@@ -123,93 +124,90 @@ export function seedFromDetected(found) {
 	return modelDraft(seed, detected);
 }
 
-const sameLevels = (a, b) => [...BASE_LEVELS, ...EXTRA_LEVELS].every((level) => a[level] === b[level]);
-
-/**
- * The fields where a model already in the form differs from what the catalog says. Only fields the catalog actually
- * stated are compared, so a catalog that says little never proposes to change anything.
- */
-export function detectedChanges(model, found) {
-	const changes = [];
-	const name = found.name && found.name !== found.id ? found.name : undefined;
-	if (name !== undefined && name !== (model.name.trim() || model.id.trim())) changes.push({ field: "name", from: model.name.trim(), to: name });
-	if (found.reasoning !== undefined && found.reasoning !== model.reasoning) changes.push({ field: "reasoning", from: model.reasoning, to: found.reasoning });
-	if (found.input !== undefined) {
-		const image = found.input.includes("image");
-		if (image !== model.image) changes.push({ field: "image", from: model.image, to: image });
-	}
-	for (const field of ["contextWindow", "maxTokens"]) {
-		if (found[field] !== undefined && found[field] !== fromK(model[field])) changes.push({ field, from: String(model[field]).trim(), to: toK(found[field]) });
-	}
-	// A test request only seeds new models; it never proposes to overwrite the levels of a model already in the form.
-	if (found.thinkingLevelMap && found.thinkingSource !== "unconfirmed" && found.thinkingSource !== "probe" && (found.reasoning ?? model.reasoning)) {
-		const levels = levelsFromMap(found.thinkingLevelMap);
-		if (!sameLevels(levels, model.levels)) changes.push({ field: "levels", from: model.levels, to: levels });
-	}
-	return changes;
+/** Model IDs typed by the user: separated by commas, spaces or new lines; duplicates removed, order kept. */
+export function parseModelIds(text) {
+	return [...new Set(String(text || "").split(/[\s,;\uFF0C\uFF1B]+/u).map((id) => id.trim()).filter(Boolean))];
 }
 
-/** Overwrites exactly the fields the catalog stated (the ones `detectedChanges` lists); everything else stays. */
-export function applyDetected(model, found) {
-	const next = { ...model, detected: { ...model.detected } };
-	for (const { field } of detectedChanges(model, found)) {
-		if (field === "name") next.name = found.name;
-		else if (field === "reasoning") {
-			next.reasoning = found.reasoning;
-			next.detected.reasoning = true;
-		} else if (field === "image") {
-			next.image = found.input.includes("image");
-			next.detected.input = true;
-		} else if (field === "levels") {
-			next.levels = levelsFromMap(found.thinkingLevelMap);
-			// Forget the old mapping values so the catalog's levels are what gets written.
-			next.raw = { ...model.raw, thinkingLevelMap: found.thinkingLevelMap };
-			next.detected.levels = true;
-			next.detected.levelsSource = found.thinkingSource;
-		} else {
+/**
+ * Brings what one detection settled into a model already in the form. Only fields the answer really states change:
+ * image input, context window and max output when the model list names them; thinking levels from the list, or per
+ * level from a probe (confirmed supported / unsupported only). Everything the detection could not settle keeps its value.
+ */
+export function updateFromDetection(model, found) {
+	const next = { ...model, raw: { ...model.raw }, detected: { ...model.detected } };
+	if (found.input !== undefined) {
+		next.image = found.input.includes("image");
+		next.detected.input = true;
+	}
+	for (const field of ["contextWindow", "maxTokens"]) {
+		if (found[field]) {
 			next[field] = toK(found[field]);
 			next.detected[field] = true;
 		}
 	}
-	return next;
-}
-
-/**
- * Brings the probe result of a refreshed catalog into a model already in the form: the recorded statuses always, the
- * levels and the reasoning switch only while the user has not changed them by hand.
- */
-export function applyProbeResult(model, found) {
-	if (found.thinkingSource !== "probe" || !found.thinkingLevelStatus) return model;
-	const next = { ...model, raw: { ...model.raw, thinkingLevelStatus: found.thinkingLevelStatus }, detected: { ...model.detected } };
-	const touched = model.touched || {};
-	if (found.reasoning !== undefined && !touched.reasoning) {
+	if (found.thinkingSource === "probe" && found.thinkingLevelStatus) {
+		const statuses = found.thinkingLevelStatus;
+		next.raw.thinkingLevelStatus = statuses;
+		if (found.reasoning !== undefined) {
+			next.reasoning = found.reasoning;
+			next.detected.reasoning = true;
+		}
+		const levels = { ...model.levels };
+		let changed = false;
+		for (const level of [...BASE_LEVELS, ...EXTRA_LEVELS]) {
+			if (statuses[level] === "supported" || statuses[level] === "unsupported") {
+				levels[level] = statuses[level] === "supported";
+				changed = true;
+			}
+		}
+		if (changed) {
+			next.levels = levels;
+			next.detected.levels = true;
+			next.detected.levelsSource = "probe";
+		}
+	} else if (found.thinkingLevelMap && found.thinkingSource && found.thinkingSource !== "unconfirmed") {
+		next.reasoning = true;
+		next.detected.reasoning = true;
+		next.levels = levelsFromMap(found.thinkingLevelMap);
+		// A provider-side name the user wrote for a level stays when the level is still supported.
+		const map = { ...found.thinkingLevelMap };
+		for (const [level, value] of Object.entries(model.raw?.thinkingLevelMap || {})) if (typeof value === "string" && typeof map[level] === "string") map[level] = value;
+		next.raw.thinkingLevelMap = map;
+		next.detected.levels = true;
+		next.detected.levelsSource = found.thinkingSource;
+	} else if (found.reasoning !== undefined) {
 		next.reasoning = found.reasoning;
 		next.detected.reasoning = true;
 	}
-	if (found.thinkingLevelMap && !touched.levels) {
-		next.levels = levelsFromMap(found.thinkingLevelMap);
-		next.raw.thinkingLevelMap = found.thinkingLevelMap;
-		next.detected.levels = true;
-		next.detected.levelsSource = "probe";
-	}
 	return next;
 }
 
-/** Ticks a catalog model: adds it to the form. Unticking removes it. Models the catalog does not list are never touched. */
-export function toggleCatalogModel(models, found, selected) {
-	const has = models.some((model) => model.id.trim() === found.id);
-	if (selected) return has ? models : [...models.filter((model) => model.id.trim() || model.name.trim()), seedFromDetected(found)];
-	return models.filter((model) => model.id.trim() !== found.id);
-}
-
-/** Ticks or unticks a whole set of catalog models at once. */
-export function setCatalogSelection(models, foundList, selected) {
-	return foundList.reduce((current, found) => toggleCatalogModel(current, found, selected), models);
+/**
+ * Applies a detection answer (only the specified models) to the form's models: a detected model already in the form is
+ * updated in place, a new ID is added. Models that were not specified are returned untouched.
+ */
+export function applyDetection(models, foundList) {
+	let next = models;
+	const added = [];
+	const updated = [];
+	for (const found of foundList) {
+		const index = next.findIndex((model) => model.id.trim() === found.id);
+		if (index < 0) {
+			const model = seedFromDetected(found);
+			next = [...next.filter((m) => m.id.trim() || m.name.trim()), model];
+			added.push(model);
+		} else {
+			next = next.map((model, i) => (i === index ? updateFromDetection(model, found) : model));
+			updated.push(found.id);
+		}
+	}
+	return { models: next, added, updated };
 }
 
 /**
- * Whether the connection fields are complete enough to ask the endpoint for its models on its own: a valid http(s)
- * Base URL, an API format, and credentials (typed key, a key already stored, a key in models.json, or none needed).
+ * Whether the connection fields are complete enough to detect models: a valid http(s) Base URL, an API format, and
+ * credentials (typed key, a key already stored, a key in models.json, or none needed).
  */
 export function connectionReady(draft, { hasStoredKey }) {
 	let url;
@@ -222,9 +220,4 @@ export function connectionReady(draft, { hasStoredKey }) {
 	if (!draft.api) return false;
 	if (draft.auth === "key") return !!draft.apiKey.trim() || hasStoredKey;
 	return true;
-}
-
-/** Changes whenever a field that decides where and how the catalog is read changes. */
-export function connectionSignature(draft) {
-	return JSON.stringify([draft.baseUrl.trim(), draft.api, draft.auth, draft.apiKey.trim()]);
 }

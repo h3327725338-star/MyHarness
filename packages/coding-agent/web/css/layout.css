@@ -1,9 +1,14 @@
-.app { display: grid; grid-template-columns: var(--sidebar-current, var(--sidebar-w)) minmax(0, 1fr) auto; height: 100%; }
+/* The sidebar column animates open and closed; the main area is the next grid track, so it follows in the same frame. */
+.app { display: grid; grid-template-columns: var(--sidebar-current, var(--sidebar-w)) minmax(0, 1fr) auto; height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
 .app.sidebar-collapsed { --sidebar-current: 0px; }
+/* Dragging the sidebar edge follows the pointer directly. */
+.app:has(.sidebar .resizer.dragging) { transition: none; }
 
 /* Sidebar */
-.sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--bg-app); position: relative; }
-.app.sidebar-collapsed .sidebar { visibility: hidden; }
+.sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--bg-app); position: relative; transition: opacity var(--t-slow) var(--ease), visibility 0s linear 0s; }
+/* The content keeps its width while the column narrows, so it slides out instead of re-wrapping. */
+.sidebar > :not(.resizer) { min-width: var(--sidebar-w); }
+.app.sidebar-collapsed .sidebar { visibility: hidden; opacity: 0; transition: opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
 .sidebar-top { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 4px; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 2px 6px 8px; font-weight: 650; letter-spacing: 0.01em; font-size: 14px; }
 .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--bg-raised); border: 1px solid var(--border-strong); display: grid; place-items: center; color: var(--accent); }
@@ -49,7 +54,7 @@
 .sidebar .resizer { right: -4px; }
 
 /* Main panel: lifted surface */
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin-left var(--t-slow) var(--ease); }
 .app.sidebar-collapsed .main { margin-left: 6px; }
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 

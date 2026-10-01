@@ -71,7 +71,7 @@ describe("Web UI: interface language", () => {
 	it("places elements inside translated sentences in each language's own word order", () => {
 		lang.setLang("zh-CN");
 		const nodes = i18n.tNodes("What should we work on in {workspace}?", { workspace: "<b>ws</b>" });
-		expect(nodes.join("")).toBe("我们在 <b>ws</b> 中做点什么？");
+		expect(nodes.join("")).toBe("想在 <b>ws</b> 中做点什么？");
 		lang.setLang("en");
 		expect(i18n.tNodes("What should we work on in {workspace}?", { workspace: "ws" }).join("")).toBe(
 			"What should we work on in ws?",

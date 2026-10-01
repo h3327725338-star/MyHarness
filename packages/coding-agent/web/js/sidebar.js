@@ -92,7 +92,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 	return html`<div class="ws">
 		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${general ? t("Chats that belong to no workspace") : workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
-			<${Icon} name=${general ? "chat" : showing ? "folderOpen" : "folder"} size=${15} />
+			<${Icon} name=${general ? "folderOff" : showing ? "folderOpen" : "folder"} size=${15} />
 			<span class="name truncate">${workspace.name}</span>
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />

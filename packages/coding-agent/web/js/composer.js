@@ -5,7 +5,8 @@ import { api, attempt, loadGitStatus, loadModels, loadResources, loadSnapshot, p
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { ContextMeter } from "./context-usage.js";
-import { clip, debounce, effortHint, effortName, fmtTokens, plural, pointerMoved } from "./util.js";
+import { ModelMenu } from "./model-menu.js";
+import { clip, debounce, effortName, plural, pointerMoved } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 
 const drafts = new Map();
@@ -153,26 +154,23 @@ function ChangesPill() {
 	</button>`;
 }
 
-// ---- Model & effort pickers ------------------------------------------------------------------------
+// ---- Model picker: the effort belongs to the model and is chosen in the menu beside it -----------------------------------
 function ModelPicker() {
 	const snap = useStore((s) => s.snap);
 	const models = useStore((s) => s.models);
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
-	const [query, setQuery] = useState("");
 	const [busy, setBusy] = useState(false);
 	useEffect(() => {
-		if (open) loadModels(false);
+		if (open) loadModels();
 	}, [open]);
 	const model = snap?.model;
 	const running = !!snap?.active;
-	const q = query.trim().toLowerCase();
-	const groups = (models?.providers || [])
-		.map((provider) => ({ ...provider, models: provider.models.filter((m) => !q || `${provider.name} ${m.id} ${m.name}`.toLowerCase().includes(q)) }))
-		.filter((provider) => provider.models.length);
-	const choose = async (m) => {
+	const thinking = snap?.thinking;
+	const showsEffort = thinking?.supported && thinking.levels.length > 1;
+	const choose = async ({ provider, model: id, thinkingLevel }) => {
 		setBusy(true);
-		const ok = await attempt(() => post("/api/model", { provider: m.provider, id: m.id }));
+		const ok = await attempt(() => post("/api/model", { provider, id, ...(thinkingLevel ? { thinkingLevel } : {}) }));
 		setBusy(false);
 		if (ok) {
 			setOpen(false);
@@ -180,51 +178,14 @@ function ModelPicker() {
 		}
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
-		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Switch model")} aria-haspopup="menu" aria-expanded=${open}>
-			<${Icon} name="cpu" size=${14} /><span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Icon} name="chevronDown" size=${12} />
+		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model and thinking effort")} aria-haspopup="menu" aria-expanded=${open}>
+			<${Icon} name="cpu" size=${14} /><span class="truncate chip-text">${model ? model.name || model.id : t("No model")}${showsEffort ? html`<span class="chip-effort"> · ${effortName(thinking.level)}</span>` : null}</span><${Icon} name="chevronDown" size=${12} />
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" width=${380} maxHeight=${460}>
-			<div class="pop-search"><${Icon} name="search" size=${14} /><input autofocus placeholder=${t("Search models…")} value=${query} onInput=${(e) => setQuery(e.target.value)} /></div>
-			<div class="pop-scroll">
-				${!models ? html`<div class="empty"><${Spinner} /></div>` : null}
-				${groups.map((provider) => html`<div key=${provider.id}>
-					<div class="pop-group">${provider.name}</div>
-					${provider.models.map((m) => html`<button class=${`pop-item ${model && model.provider === m.provider && model.id === m.id ? "active" : ""}`} key=${m.id} disabled=${busy || running} onClick=${() => choose(m)}>
-						<span class="truncate grow">${m.name || m.id}</span>
-						${m.reasoning ? html`<span class="badge" title=${t("Supports reasoning")}>${t("reasoning")}</span>` : null}
-						${m.input.includes("image") ? html`<span class="badge" title=${t("Accepts images")}>${t("image")}</span>` : null}
-						<span class="dim pop-meta">${fmtTokens(m.contextWindow)}</span>
-						${model && model.provider === m.provider && model.id === m.id ? html`<${Icon} name="check" size=${14} />` : null}
-					</button>`)}
-				</div>`)}
-				${models && !groups.length ? html`<div class="empty">${models.providers.length ? t("No models match.") : t("No model is available. Add a provider in Settings.")}</div>` : null}
-			</div>
-			<div class="pop-foot">
-				<button class="link-btn" onClick=${() => loadModels(true)}>${t("Refresh catalog")}</button>
-				<button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers…")}</button>
-			</div>
-		<//>
-	</span>`;
-}
-
-function EffortPicker() {
-	const snap = useStore((s) => s.snap);
-	const anchor = useRef(null);
-	const [open, setOpen] = useState(false);
-	const thinking = snap?.thinking;
-	// A model with nothing to choose beyond "off" has no selector at all.
-	if (!thinking || !thinking.supported || thinking.levels.length < 2) return null;
-	const choose = async (level) => {
-		setOpen(false);
-		await attempt(() => post("/api/thinking", { level }));
-	};
-	return html`<span ref=${anchor} class="picker-anchor">
-		<button class="chip" onClick=${() => setOpen(!open)} title=${t("Reasoning effort")} aria-haspopup="menu" aria-expanded=${open}>
-			<${Icon} name="brain" size=${14} /><span class="chip-text">${effortName(thinking.level)}</span><${Icon} name="chevronDown" size=${12} />
-		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" width=${240}>
-			<div class="pop-group">${t("Reasoning effort")}</div>
-			${thinking.levels.map((level) => html`<button class=${`pop-item ${thinking.level === level ? "active" : ""}`} key=${level} onClick=${() => choose(level)}><span class="grow">${effortName(level)}</span><span class="dim">${effortHint(level)}</span>${thinking.level === level ? html`<${Icon} name="check" size=${14} />` : null}</button>`)}
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" width=${380} maxHeight=${460} class="model-pop">
+			<${ModelMenu} models=${models} disabled=${busy || running}
+				selected=${model ? { provider: model.provider, model: model.id, thinkingLevel: showsEffort ? thinking.level : undefined } : null}
+				onPick=${choose}
+				footer=${html`<div class="pop-foot"><span class="dim pop-meta">${running ? t("Models can be switched when the agent is idle") : t("→ thinking effort · Enter to choose")}</span><button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers…")}</button></div>`} />
 		<//>
 	</span>`;
 }
@@ -524,7 +485,6 @@ export function Composer() {
 					<input ref=${fileInput} type="file" accept="image/*" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 					<span class="grow" />
 					<${ModelPicker} />
-					<${EffortPicker} />
 					<${ContextMeter} />
 					${active
 						? html`<button ref=${modeAnchor} class="mode-btn" title=${`${t(RUN_MODES[runMode].long)}: ${t(RUN_MODES[runMode].hint)}`} onClick=${() => setModeOpen(!modeOpen)} aria-haspopup="menu" aria-expanded=${modeOpen}>${t(RUN_MODES[runMode].label)}<${Icon} name="chevronUp" size=${11} /></button>

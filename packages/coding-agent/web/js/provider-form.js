@@ -1,25 +1,12 @@
-// Add / edit a custom provider. Two areas: the connection (how to reach the endpoint) and the model catalog (what the
-// endpoint offers, of which the user picks what to add). The JSON view is an optional advanced editor over the same data.
-import { html, useEffect, useMemo, useRef, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
+// The editor of one provider defined in models.json, shown in the right pane of Settings → Providers: the connection
+// (API format, Base URL, API key) and the models. Models are checked only on request, for the Model IDs the user types;
+// opening, switching or saving a provider never contacts the endpoint. The JSON view is an optional advanced editor over
+// the same data.
+import { html, useEffect, useRef, useState, Icon, Segmented, Spinner, Toggle } from "./ui.js";
 import { post } from "./store.js";
 import { effortName } from "./util.js";
 import { N_, t } from "./i18n.js";
-import {
-	BASE_LEVELS,
-	EXTRA_LEVELS,
-	levelStatus,
-	applyDetected,
-	applyProbeResult,
-	buildModel,
-	connectionReady,
-	connectionSignature,
-	detectedChanges,
-	fmtK,
-	fromK,
-	modelDraft,
-	setCatalogSelection,
-	toggleCatalogModel,
-} from "./provider-models.js";
+import { BASE_LEVELS, EXTRA_LEVELS, applyDetection, buildModel, connectionReady, fmtK, fromK, levelStatus, modelDraft, parseModelIds } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -30,11 +17,7 @@ const API_LABELS = {
 };
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 /** The server reads the list for up to 20 s and probes efforts for up to 45 s; this only guards against no answer at all. */
-const CATALOG_TIMEOUT_MS = 90_000;
-/** After models are ticked, their efforts are checked once the selection has settled. */
-const PROBE_DELAY_MS = 1200;
-const AUTO_FETCH_DELAY_MS = 700;
-const CATALOG_ROWS = 200;
+const DETECT_TIMEOUT_MS = 90_000;
 
 const DETECT_ERRORS = {
 	authentication: N_("The endpoint rejected the API key."),
@@ -49,7 +32,7 @@ const DETECT_ERRORS = {
 	invalid_base_url: N_("The Base URL is not valid."),
 };
 
-/** Why detection failed, as specific as the answer allows: who failed (the endpoint or MyHarness) and with what. */
+/** Why reading the model list failed, as specific as the answer allows. */
 function detectMessage(result) {
 	// A "connection" failure that carries an HTTP status means the endpoint was reached and answered with an error.
 	const kind = result.code === "connection" && result.status ? "upstream_error" : result.code;
@@ -67,7 +50,7 @@ function detectFailure(error) {
 
 const withTimeout = (promise, ms) =>
 	new Promise((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error(t("The model list request timed out."))), ms);
+		const timer = setTimeout(() => reject(new Error(t("The detection timed out."))), ms);
 		promise.then(
 			(value) => (clearTimeout(timer), resolve(value)),
 			(error) => (clearTimeout(timer), reject(error)),
@@ -117,7 +100,7 @@ function validate(draft, { isNew, hasStoredKey }) {
 		return t("The Base URL must be a full http:// or https:// address.");
 	}
 	if (draft.auth === "key" && !draft.apiKey.trim() && (isNew || !hasStoredKey)) return t("Enter an API key, or choose “No authentication” for a local service.");
-	if (!draft.models.length) return t("Choose at least one model from the catalog, or add one manually.");
+	if (!draft.models.length) return t("Add at least one model: type its Model ID and detect it, or add it manually.");
 	const seen = new Set();
 	for (const model of draft.models) {
 		const id = model.id.trim();
@@ -129,52 +112,33 @@ function validate(draft, { isNew, hasStoredKey }) {
 	return "";
 }
 
-function Field({ label, children, hint }) {
-	return html`<label class="col field-label">${label}${children}${hint ? html`<span class="dim pf-hint">${hint}</span>` : null}</label>`;
+export function Field({ label, children, hint, class: cls }) {
+	return html`<label class=${`col field-label ${cls || ""}`}><span class="field-name">${label}</span>${children}${hint ? html`<span class="dim pf-hint">${hint}</span>` : null}</label>`;
 }
 
 function Detected({ title }) {
-	return html`<span class="badge accent pf-auto" title=${title || t("Read from the endpoint's model list")}>${t("auto")}</span>`;
+	return html`<span class="badge accent pf-auto" title=${title || t("Set by the last detection")}>${t("detected")}</span>`;
 }
 
 const levelSummary = (model) => [...BASE_LEVELS, ...EXTRA_LEVELS].filter((level) => model.levels[level] && level !== "off").map((level) => effortName(level)).join(" · ");
 
-const CHANGE_LABELS = {
-	name: N_("Display name"),
-	reasoning: N_("Supports reasoning"),
-	image: N_("Accepts images"),
-	contextWindow: N_("Context window"),
-	maxTokens: N_("Max output"),
-	levels: N_("Thinking effort"),
-};
-
-const yesNo = (value) => (value ? t("Yes") : t("No"));
-function showChange(field, value) {
-	if (field === "reasoning" || field === "image") return yesNo(value);
-	if (field === "levels") return [...BASE_LEVELS, ...EXTRA_LEVELS].filter((level) => value[level] && level !== "off").map((level) => effortName(level)).join(", ") || "—";
-	if (field === "name" && !value) return "—";
-	if (field === "contextWindow" || field === "maxTokens") return value ? `${value}K` : "—";
-	return String(value);
-}
-
 /** A token capacity edited in K: the number is typed, the unit is fixed. */
 function KField({ label, detected, value, onInput }) {
 	const tokens = fromK(value);
-	return html`<label class="col field-label">${label}${detected ? html` <${Detected} />` : null}
+	return html`<label class="col field-label"><span class="field-name">${label}${detected ? html` <${Detected} />` : null}</span>
 		<span class="k-field"><input class="field mono" inputmode="decimal" value=${value} onInput=${(e) => onInput(e.target.value)} /><span class="k-unit" aria-hidden="true">K</span></span>
 		<span class="dim pf-hint">${tokens ? t("{n} tokens", { n: tokens.toLocaleString() }) : t("1K = 1000 tokens")}</span>
 	</label>`;
 }
 
-/** One selected model: a summary row that opens into its settings. `found` is its entry in the endpoint's catalog, if any. */
-function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
+/** One model of the provider: a summary row that opens into its settings. */
+function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 	const set = (patch) => onChange({ ...model, ...patch });
-	// A switch the user flips by hand is theirs: a later probe result no longer changes it.
+	// A switch the user flips by hand is theirs.
 	const touch = (key, patch) => set({ ...patch, touched: { ...model.touched, [key]: true } });
 	const d = model.detected || {};
-	const changes = found ? detectedChanges(model, found) : [];
 	const title = model.name.trim() || model.id.trim() || t("New model");
-	return html`<div class="pf-model">
+	return html`<div class=${`pf-model ${open ? "open" : ""}`}>
 		<div class="row pf-model-head">
 			<button type="button" class="pf-model-toggle grow" aria-expanded=${open} onClick=${onToggle}>
 				<${Icon} name=${open ? "chevronDown" : "chevronRight"} size=${13} />
@@ -182,156 +146,71 @@ function ModelCard({ model, found, open, onToggle, onChange, onRemove }) {
 				${model.id.trim() && title !== model.id.trim() ? html`<span class="dim mono truncate">${model.id.trim()}</span>` : null}
 			</button>
 			<span class="pf-model-badges">
-				${model.reasoning ? html`<span class="badge" title=${levelSummary(model)}>${t("thinking")}${levelSummary(model) ? html` · ${levelSummary(model)}` : null}</span>` : null}
+				${model.reasoning ? html`<span class="badge" title=${levelSummary(model)}>${t("thinking")}</span>` : null}
 				${model.image ? html`<span class="badge">${t("images")}</span>` : null}
 				${fromK(model.contextWindow) ? html`<span class="dim">${fmtK(fromK(model.contextWindow))}</span>` : null}
 			</span>
 			<button class="icon-btn sm" title=${t("Remove model")} aria-label=${t("Remove model")} onClick=${onRemove}><${Icon} name="trash" size=${14} /></button>
 		</div>
 		${open
-			? html`<div class="col" style="gap:10px">
+			? html`<div class="col pf-model-body">
 				<div class="pf-two">
-					<input class="field mono" placeholder=${t("Model ID")} aria-label=${t("Model ID")} value=${model.id} autofocus=${!model.id} onInput=${(e) => set({ id: e.target.value })} />
-					<input class="field" placeholder=${t("Display name (optional)")} aria-label=${t("Display name")} value=${model.name} onInput=${(e) => set({ name: e.target.value })} />
+					<${Field} label=${t("Model ID")}><input class="field mono" value=${model.id} autofocus=${!model.id} onInput=${(e) => set({ id: e.target.value })} /><//>
+					<${Field} label=${t("Display name")}><input class="field" placeholder=${t("Optional")} value=${model.name} onInput=${(e) => set({ name: e.target.value })} /><//>
 				</div>
-				<div class="pf-model-grid">
-					<div class="row"><${Toggle} checked=${model.reasoning} label=${t("Reasoning")} onChange=${(v) => touch("reasoning", { reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</div>
-					<div class="row"><${Toggle} checked=${model.image} label=${t("Image input")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</div>
+				<div class="pf-two">
 					<${KField} label=${t("Context window")} detected=${d.contextWindow} value=${model.contextWindow} onInput=${(v) => set({ contextWindow: v })} />
 					<${KField} label=${t("Max output")} detected=${d.maxTokens} value=${model.maxTokens} onInput=${(v) => set({ maxTokens: v })} />
 				</div>
+				<div class="pf-switches">
+					<label class="row pf-switch"><${Toggle} checked=${model.reasoning} label=${t("Supports reasoning")} onChange=${(v) => touch("reasoning", { reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</label>
+					<label class="row pf-switch"><${Toggle} checked=${model.image} label=${t("Accepts images")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</label>
+				</div>
 				${model.reasoning
-					? html`<div class="col field-label"><span>${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
+					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
 						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unverified" ? t("The service accepted this level, but it could not be confirmed that it is applied.") : levelStatus(model, level) === "unknown" ? t("Could not be checked; it stays selectable.") : undefined} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Untick the ones you know it rejects.")} ${t("“xhigh” and “max” are sent to the service under the same name; use the JSON view to map them to something else.")}</span></div>`
-					: null}
-				${changes.length
-					? html`<div class="pf-conflict">
-						<div class="row"><span class="grow dim pf-hint">${t("The catalog states other values than the ones set here:")}</span><button class="btn sm" onClick=${() => onChange(applyDetected(model, found))}>${t("Use catalog values")}</button></div>
-						<div class="pf-changes">${changes.map((ch) => html`<span key=${ch.field}>${t(CHANGE_LABELS[ch.field])}: <span class="dim">${showChange(ch.field, ch.from)}</span> → <strong>${showChange(ch.field, ch.to)}</strong></span>`)}</div>
-					</div>`
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span></div>`
 					: null}
 			</div>`
 			: null}
 	</div>`;
 }
 
-/** The endpoint's own model list, with a tick for every model that is part of this provider. */
-function CatalogList({ catalog, models, onToggle, onSetAll }) {
-	const [filter, setFilter] = useState("");
-	const q = filter.trim().toLowerCase();
-	const selected = useMemo(() => new Set(models.map((model) => model.id.trim())), [models]);
-	const shown = catalog.models.filter((m) => !q || m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
-	const chosen = catalog.models.filter((m) => selected.has(m.id)).length;
-	return html`<div class="col" style="gap:8px">
-		<div class="row">
-			<span class="grow dim">${t("{n} models in the catalog · {chosen} added", { n: catalog.models.length, chosen })}</span>
-			<input class="field" style="width:180px" placeholder=${t("Filter…")} aria-label=${t("Filter models")} value=${filter} onInput=${(e) => setFilter(e.target.value)} />
-			<button class="btn sm" disabled=${!shown.length} onClick=${() => onSetAll(shown.slice(0, CATALOG_ROWS), true)}>${t("Add all shown")}</button>
-			<button class="btn sm" disabled=${!shown.length} onClick=${() => onSetAll(shown.slice(0, CATALOG_ROWS), false)}>${t("Remove all shown")}</button>
-		</div>
-		<div class="pf-detect-list pf-catalog">
-			${shown.slice(0, CATALOG_ROWS).map((m) => html`<label class="pf-detect-row" key=${m.id}>
-				<input type="checkbox" checked=${selected.has(m.id)} onChange=${(e) => onToggle(m, e.target.checked)} />
-				<span class="truncate grow" title=${m.id}>${m.name !== m.id ? html`${m.name} <span class="dim mono">${m.id}</span>` : html`<span class="mono">${m.id}</span>`}</span>
-				${m.reasoning ? html`<span class="badge">${t("thinking")}</span>` : null}
-				${m.input?.includes("image") ? html`<span class="badge">${t("images")}</span>` : null}
-				${m.contextWindow ? html`<span class="dim">${fmtK(m.contextWindow)}</span>` : null}
-			</label>`)}
-			${shown.length > CATALOG_ROWS ? html`<div class="dim pf-hint">${t("Showing the first {n}; filter to narrow the list.", { n: CATALOG_ROWS })}</div>` : null}
-			${!shown.length ? html`<div class="dim pf-hint">${t("No model matches the filter.")}</div>` : null}
-		</div>
-	</div>`;
-}
-
 /**
- * props: initial = { id, config } to edit, or null to add (secrets in config arrive as the server's placeholder).
- * storedKeys = credential info of the provider being edited (from GET /api/providers), if any.
+ * props:
+ * - initial = { id, config } to edit (secrets in config arrive as the server's placeholder), or null to add a provider
+ * - apiTypes: API formats the server accepts
+ * - keyArea: the provider's API key summary (rendered by the page; it has the "Manage API keys" entry)
+ * - hasStoredKey: a key is already saved for this provider
+ * - onSaved(id), onDirty(bool), footerStart: extra actions at the start of the footer (Delete provider)
  */
-export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved }) {
+export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved, onDirty, footerStart }) {
 	const isNew = !initial;
-	const [draft, setDraft] = useState(() => (initial ? draftFromConfig(initial.id, initial.config) : draftFromConfig("", { api: "openai-completions", models: [] })));
+	const makeDraft = () => (initial ? draftFromConfig(initial.id, initial.config) : draftFromConfig("", { api: "openai-completions", models: [] }));
+	const [draft, setDraft] = useState(makeDraft);
+	const [dirty, setDirty] = useState(false);
 	const [idTouched, setIdTouched] = useState(!isNew);
 	const [view, setView] = useState("form");
 	const [json, setJson] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
-	// The catalog the endpoint offers: idle until asked, then loading / ok / empty / error. It never edits the form by itself.
-	const [catalog, setCatalog] = useState({ status: "idle", models: [], message: "" });
+	const [idsText, setIdsText] = useState("");
+	const [detect, setDetect] = useState({ status: "idle", message: "", notes: [] });
 	// Models whose settings are open. A model added by hand opens at once.
 	const [openModels, setOpenModels] = useState(() => new Set());
-	const bodyRef = useRef(null);
-	const runRef = useRef(0);
-	/** Model IDs whose efforts were already sent for probing with the current connection. */
-	const probedIds = useRef(new Set());
-	const hasStoredKey = !!storedKeys?.apiKeys?.length;
-	const patch = (next) => setDraft((current) => ({ ...current, ...next }));
-	const types = apiTypes?.length ? apiTypes : Object.keys(API_LABELS);
-	const catalogById = useMemo(() => new Map(catalog.models.map((m) => [m.id, m])), [catalog.models]);
-
-	const fetchCatalog = async (current = draft) => {
-		const run = ++runRef.current;
-		setCatalog((previous) => ({ status: "loading", models: previous.models, message: "" }));
-		let next;
-		try {
-			// Exactly what the form holds now, saved or not.
-			const result = await withTimeout(
-				post("/api/providers/custom/detect", {
-					baseUrl: current.baseUrl.trim(),
-					api: current.api,
-					auth: current.auth,
-					apiKey: current.auth === "key" ? current.apiKey : "",
-					configApiKey: current.auth === "config" ? current.raw.apiKey : undefined,
-					headers: current.raw.headers,
-					id: isNew ? "" : current.id,
-					// The models in the form: their efforts are probed when the catalog does not state them.
-					models: current.models
-						.filter((model) => model.id.trim())
-						.map((model) => ({ id: model.id.trim(), reasoning: model.reasoning || undefined, thinkingLevelStatus: model.raw?.thinkingLevelStatus })),
-				}),
-				CATALOG_TIMEOUT_MS,
-			);
-			for (const model of current.models) if (model.id.trim()) probedIds.current.add(model.id.trim());
-			if (result.ok && result.models.length) next = { status: "ok", models: result.models, message: "" };
-			else if (result.ok) next = { status: "empty", models: [], message: t("The endpoint returned an empty model list. Add the models manually.") };
-			else next = { status: "error", models: [], message: detectMessage(result) };
-		} catch (e) {
-			next = { status: "error", models: [], message: detectFailure(e) };
-		}
-		// A newer request (or closing the form) makes this answer stale.
-		if (run !== runRef.current) return;
-		setCatalog(next);
-		// What the probe settled for models already in the form goes straight into them (unless edited by hand).
-		if (next.status === "ok") {
-			const byId = new Map(next.models.map((m) => [m.id, m]));
-			setDraft((latest) => ({ ...latest, models: latest.models.map((model) => (byId.has(model.id.trim()) ? applyProbeResult(model, byId.get(model.id.trim())) : model)) }));
-		}
+	const rootRef = useRef(null);
+	const alive = useRef(true);
+	// The detection answer arrives after an await: it is applied to the form as it is then, not as it was when asked.
+	const draftRef = useRef(draft);
+	draftRef.current = draft;
+	useEffect(() => () => void (alive.current = false), []);
+	useEffect(() => onDirty?.(dirty), [dirty]);
+	const patch = (next) => {
+		setDraft((current) => ({ ...current, ...next }));
+		setDirty(true);
 	};
-
-	// Ask the endpoint on its own as soon as the connection is complete, and again whenever it changes.
-	const signature = connectionSignature(draft);
-	const ready = view === "form" && connectionReady(draft, { hasStoredKey });
-	useEffect(() => {
-		if (!ready) {
-			runRef.current++;
-			setCatalog((previous) => (previous.status === "idle" ? previous : { status: "idle", models: [], message: "" }));
-			return undefined;
-		}
-		probedIds.current = new Set();
-		const timer = setTimeout(() => fetchCatalog(), AUTO_FETCH_DELAY_MS);
-		return () => clearTimeout(timer);
-	}, [signature, ready]);
-	// Models ticked after the catalog arrived have not been probed yet: check their efforts once the selection settles.
-	const unprobed = draft.models
-		.map((model) => model.id.trim())
-		.filter((id) => id && !probedIds.current.has(id) && catalogById.get(id)?.thinkingSource !== "catalog")
-		.join("\n");
-	useEffect(() => {
-		if (!ready || !unprobed || catalog.status !== "ok") return undefined;
-		const timer = setTimeout(() => fetchCatalog(), PROBE_DELAY_MS);
-		return () => clearTimeout(timer);
-	}, [unprobed, ready, catalog.status]);
-	useEffect(() => () => void (runRef.current = -1), []);
+	const types = apiTypes?.length ? apiTypes : Object.keys(API_LABELS);
+	const ready = connectionReady(draft, { hasStoredKey });
 
 	const switchView = (next) => {
 		if (next === view) return;
@@ -353,12 +232,60 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 		setView("form");
 	};
 
-	const updateModel = (uidValue, next) => patch({ models: draft.models.map((m) => (m.uid === uidValue ? next : m)) });
-	const toggleOpen = (uidValue) =>
+	/** Checks exactly the Model IDs typed in the box; nothing else is looked up or changed. */
+	const runDetect = async () => {
+		const ids = parseModelIds(idsText);
+		if (!ids.length) return setDetect({ status: "error", message: t("Type one or more Model IDs to detect."), notes: [] });
+		if (!ready) return setDetect({ status: "error", message: t("Complete the connection first (Base URL and API key)."), notes: [] });
+		setDetect({ status: "loading", message: "", notes: [] });
+		let result;
+		try {
+			result = await withTimeout(
+				post("/api/providers/custom/detect", {
+					baseUrl: draft.baseUrl.trim(),
+					api: draft.api,
+					auth: draft.auth,
+					apiKey: draft.auth === "key" ? draft.apiKey : "",
+					configApiKey: draft.auth === "config" ? draft.raw.apiKey : undefined,
+					headers: draft.raw.headers,
+					id: isNew ? "" : draft.id,
+					modelIds: ids,
+					// What the form already knows about these models: declared reasoning and earlier probe results.
+					models: draft.models
+						.filter((model) => ids.includes(model.id.trim()))
+						.map((model) => ({ id: model.id.trim(), reasoning: model.reasoning || undefined, thinkingLevelStatus: model.raw?.thinkingLevelStatus })),
+				}),
+				DETECT_TIMEOUT_MS,
+			);
+		} catch (e) {
+			if (alive.current) setDetect({ status: "error", message: detectFailure(e), notes: [] });
+			return;
+		}
+		if (!alive.current) return;
+		if (!result.ok) return setDetect({ status: "error", message: detectMessage(result), notes: [] });
+		const summary = applyDetection(draftRef.current.models, result.models);
+		setDraft({ ...draftRef.current, models: summary.models });
+		setDirty(true);
+		const notes = [];
+		if (result.listError) notes.push(t("The model list could not be read ({reason}); only the thinking effort was tested.", { reason: detectMessage(result.listError) }));
+		if (result.unlisted?.length) notes.push(t("Not in the endpoint's model list: {ids}. Check the spelling; they were added with default values.", { ids: result.unlisted.join(", ") }));
+		const unsettled = result.models.filter((m) => !m.thinkingSource || m.thinkingSource === "unconfirmed").map((m) => m.id);
+		if (unsettled.length) notes.push(t("Thinking effort could not be settled for: {ids}. Their current setting is kept.", { ids: unsettled.join(", ") }));
+		setDetect({
+			status: "ok",
+			message: t("Detected {n}: {added} added, {updated} updated. Save to keep the result.", { n: result.models.length, added: summary.added.length, updated: summary.updated.length }),
+			notes,
+		});
+		if (summary.added.length) setOpenModels((current) => new Set([...current, ...summary.added.map((m) => m.uid)]));
+		setIdsText("");
+	};
+
+	const updateModel = (uid, next) => patch({ models: draft.models.map((m) => (m.uid === uid ? next : m)) });
+	const toggleOpen = (uid) =>
 		setOpenModels((current) => {
 			const next = new Set(current);
-			if (next.has(uidValue)) next.delete(uidValue);
-			else next.add(uidValue);
+			if (next.has(uid)) next.delete(uid);
+			else next.add(uid);
 			return next;
 		});
 	const addManually = () => {
@@ -382,67 +309,89 @@ export function ProviderEditor({ initial, apiTypes, storedKeys, onClose, onSaved
 			problem = validate(draft, { isNew, hasStoredKey });
 			config = buildConfig(draft);
 		}
-		if (problem) return setError(problem);
+		if (problem) {
+			setError(problem);
+			return rootRef.current?.closest(".settings-body")?.scrollTo?.({ top: 0, behavior: "smooth" });
+		}
 		setError("");
 		setBusy(true);
 		try {
 			await post("/api/providers/custom/save", { id: draft.id.trim(), previousId: initial?.id, config, apiKey: draft.auth === "key" ? draft.apiKey : "" });
-			onSaved();
+			if (!alive.current) return;
+			setDirty(false);
+			onSaved(draft.id.trim());
 		} catch (e) {
-			setError(e.message);
-			bodyRef.current?.scrollTo?.({ top: 0 });
+			if (alive.current) {
+				setError(e.message);
+				rootRef.current?.closest(".settings-body")?.scrollTo?.({ top: 0, behavior: "smooth" });
+			}
 		}
-		setBusy(false);
+		if (alive.current) setBusy(false);
+	};
+	const discard = () => {
+		setDraft(makeDraft());
+		setView("form");
+		setError("");
+		setDetect({ status: "idle", message: "", notes: [] });
+		setDirty(false);
 	};
 
 	const authOptions = [{ value: "key", label: t("API key") }, { value: "none", label: t("No authentication") }, ...(draft.auth === "config" ? [{ value: "config", label: t("Set in models.json") }] : [])];
-	const footer = html`<button class="btn" onClick=${onClose}>${t("Cancel")}</button><button class="btn primary" disabled=${busy} onClick=${save}>${busy ? t("Saving…") : isNew ? t("Add provider") : t("Save")}</button>`;
-	const loading = catalog.status === "loading";
-	const card = (model) => html`<${ModelCard} key=${model.uid} model=${model} found=${catalogById.get(model.id.trim())} open=${openModels.has(model.uid)} onToggle=${() => toggleOpen(model.uid)} onChange=${(next) => updateModel(model.uid, next)} onRemove=${() => patch({ models: draft.models.filter((m) => m.uid !== model.uid) })} />`;
-	return html`<${Modal} title=${isNew ? t("Add custom provider") : t("Edit {previousId}", { previousId: initial.id })} subtitle=${t("Connect any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")} onClose=${onClose} width=${760} footer=${footer} closeOnScrim=${false} class="pf-modal">
-		<div ref=${bodyRef} class="col" style="gap:12px">
-			<${Segmented} value=${view} onChange=${switchView} options=${[{ value: "form", label: t("Form") }, { value: "json", label: t("Advanced (JSON)") }]} />
-			${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
-			${view === "json"
-				? html`<div class="col" style="gap:8px">
+	const detecting = detect.status === "loading";
+	return html`<div ref=${rootRef} class="pf">
+		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
+		${view === "json"
+			? html`<section class="set-card">
+				<div class="set-card-head"><strong class="grow">${t("Advanced (JSON)")}</strong><button class="btn sm" onClick=${() => switchView("form")}>${t("Back to the form")}</button></div>
+				<div class="set-card-body col" style="gap:8px">
 					<div class="dim pf-hint">${t("The full models.json entry for this provider. Secrets already in the file show as a placeholder and are kept when you leave them unchanged. Keys you type in the form are stored in the credential store, not in this JSON.")}</div>
-					<textarea class="field mono" rows="18" spellcheck="false" aria-label=${t("Configuration (JSON)")} value=${json} onInput=${(e) => setJson(e.target.value)} />
-				</div>`
-				: html`
-			<section class="pf-section">
-				<div class="pf-section-head"><strong>${t("1 · Connection")}</strong></div>
-				<div class="pf-two">
-					<${Field} label=${t("Provider name")}><input class="field" autofocus placeholder=${t("e.g. My Gateway")} value=${draft.name} onInput=${(e) => patch({ name: e.target.value, ...(idTouched ? {} : { id: slugify(e.target.value) }) })} /><//>
-					<${Field} label=${t("Provider ID")} hint=${isNew ? t("Unique lowercase name used in settings.") : t("The ID cannot change after creation.")}><input class="field mono" disabled=${!isNew} placeholder="my-gateway" value=${draft.id} onInput=${(e) => (setIdTouched(true), patch({ id: e.target.value }))} /><//>
+					<textarea class="field mono" rows="18" spellcheck="false" aria-label=${t("Configuration (JSON)")} value=${json} onInput=${(e) => (setJson(e.target.value), setDirty(true))} />
 				</div>
-				<div class="pf-two">
+			</section>`
+			: html`
+			<section class="set-card">
+				<div class="set-card-head"><strong>${t("Connection")}</strong></div>
+				<div class="set-card-body pf-fields">
+					<div class="pf-two">
+						<${Field} label=${t("Name")}><input class="field" autofocus=${isNew} placeholder=${t("e.g. My Gateway")} value=${draft.name} onInput=${(e) => patch({ name: e.target.value, ...(idTouched ? {} : { id: slugify(e.target.value) }) })} /><//>
+						<${Field} label=${t("Provider ID")} hint=${isNew ? t("Unique lowercase name used in settings.") : t("The ID cannot change after creation.")}><input class="field mono" disabled=${!isNew} placeholder="my-gateway" value=${draft.id} onInput=${(e) => (setIdTouched(true), patch({ id: e.target.value }))} /><//>
+					</div>
 					<${Field} label=${t("API format")}><select class="select" value=${draft.api} onChange=${(e) => patch({ api: e.target.value })}>${types.map((type) => html`<option key=${type} value=${type} selected=${draft.api === type}>${API_LABELS[type] ? t(API_LABELS[type]) : type}</option>`)}</select><//>
 					<${Field} label=${t("Base URL")}><input class="field mono" placeholder="https://api.example.com/v1" value=${draft.baseUrl} onInput=${(e) => patch({ baseUrl: e.target.value })} /><//>
-				</div>
-				<div class="col field-label"><span>${t("Authentication")}</span>
-					<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} size="sm" /></div>
+					<div class="col field-label"><span class="field-name">${t("Authentication")}</span>
+						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} size="sm" /></div>
+					</div>
 					${draft.auth === "key"
-						? html`<input class="field mono" type="password" autocomplete="off" placeholder=${isNew || !hasStoredKey ? t("API key") : t("Saved key in use — type to add a new one")} value=${draft.apiKey} onInput=${(e) => patch({ apiKey: e.target.value })} />
-							<span class="dim pf-hint">${hasStoredKey ? t("A saved key exists ({suffix}). Leave this empty to keep it; manage keys on the provider card.", { suffix: `••••${storedKeys.apiKeys.find((k) => k.active)?.suffix ?? ""}` }) : t("Stored on this computer only, never in models.json.")}</span>`
+						? hasStoredKey && keyArea
+							? keyArea
+							: html`<${Field} label=${t("API key")} hint=${t("Stored on this computer only, never in models.json.")}><input class="field mono" type="password" autocomplete="off" placeholder=${t("Paste the API key")} value=${draft.apiKey} onInput=${(e) => patch({ apiKey: e.target.value })} /><//>`
 						: draft.auth === "none"
 							? html`<span class="dim pf-hint">${t("For local services that do not check a key.")}</span>`
 							: html`<span class="dim pf-hint">${t("The key is set in models.json (shown hidden). Use the JSON view to change it.")}</span>`}
 				</div>
 			</section>
-			<section class="pf-section">
-				<div class="pf-section-head row"><strong class="grow">${t("2 · Models")}</strong>
-					<button class="btn sm" disabled=${loading || !ready} title=${ready ? "" : t("Complete the connection first.")} onClick=${() => fetchCatalog()}>${loading ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${13} />`}${catalog.status === "idle" || catalog.status === "loading" ? t("Get models") : t("Refresh models")}</button>
-					<button class="btn sm" onClick=${addManually}><${Icon} name="plus" size=${13} />${t("Add model manually")}</button></div>
-				${catalog.status === "idle" ? html`<div class="dim pf-hint">${ready ? "" : t("Fill in the connection above; MyHarness then asks the endpoint which models it offers and lets you choose which to add.")}</div>` : null}
-				${loading ? html`<div class="row dim pf-status"><${Spinner} /><span>${t("Getting the model list from the endpoint…")}</span></div>` : null}
-				${catalog.status === "error" || catalog.status === "empty" ? html`<div class="notice warn pf-status" role="status">${catalog.message} ${t("You can still add models manually.")}</div>` : null}
-				${catalog.models.length ? html`<${CatalogList} catalog=${catalog} models=${draft.models} onToggle=${(found, on) => patch({ models: toggleCatalogModel(draft.models, found, on) })} onSetAll=${(list, on) => patch({ models: setCatalogSelection(draft.models, list, on) })} />` : null}
-				<div class="col" style="gap:8px">
-					<strong class="pf-subhead">${t("Models in this provider")} <span class="dim">${draft.models.length}</span></strong>
-					${!draft.models.length ? html`<div class="dim pf-hint">${t("No model added yet. Tick models in the catalog above, or add one manually.")}</div>` : null}
-					${draft.models.map(card)}
+			<section class="set-card">
+				<div class="set-card-head"><strong class="grow">${t("Models")} <span class="dim">${draft.models.length}</span></strong>
+					<button class="btn sm ghost" onClick=${addManually}><${Icon} name="plus" size=${13} />${t("Add manually")}</button></div>
+				<div class="set-card-body col" style="gap:10px">
+					<div class="pf-detect">
+						<div class="row pf-detect-bar">
+							<input class="field mono grow" placeholder=${t("Model IDs to detect, e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />
+							<button class="btn" disabled=${detecting || !idsText.trim()} onClick=${runDetect}>${detecting ? html`<${Spinner} />` : html`<${Icon} name="search" size=${13} />`}${detecting ? t("Detecting…") : t("Detect")}</button>
+						</div>
+						<span class="dim pf-hint">${t("Only the Model IDs typed here are checked (separate several with commas or spaces). A new ID is added; for an existing model only what the detection settles is updated. Reading the model list is free; thinking efforts it does not state are tested with a few tiny requests to these models, which the service may bill.")}</span>
+						${detect.message ? html`<div class=${`notice ${detect.status === "error" ? "warn" : ""}`} role="status">${detect.message}${detect.notes.map((note, i) => html`<div class="dim pf-hint" key=${i}>${note}</div>`)}</div>` : null}
+					</div>
+					${!draft.models.length ? html`<div class="dim pf-hint">${t("No model yet. Type its Model ID above and detect it, or add it manually.")}</div>` : null}
+					${draft.models.map((model) => html`<${ModelCard} key=${model.uid} model=${model} open=${openModels.has(model.uid)} onToggle=${() => toggleOpen(model.uid)} onChange=${(next) => updateModel(model.uid, next)} onRemove=${() => patch({ models: draft.models.filter((m) => m.uid !== model.uid) })} />`)}
 				</div>
-			</section>`}
+			</section>
+			<div class="pf-advanced"><button class="link-btn" onClick=${() => switchView("json")}><${Icon} name="edit" size=${12} /> ${t("Edit as JSON (advanced)")}</button></div>`}
+		<div class="pf-foot">
+			${footerStart || null}
+			<span class="grow" />
+			${dirty ? html`<span class="dim pf-hint">${t("Unsaved changes")}</span><button class="btn" disabled=${busy} onClick=${discard}>${t("Discard")}</button>` : null}
+			<button class="btn primary" disabled=${busy || (!dirty && !isNew)} onClick=${save}>${busy ? t("Saving…") : isNew ? t("Add provider") : t("Save")}</button>
 		</div>
-	<//>`;
+	</div>`;
 }

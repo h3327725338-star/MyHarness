@@ -85,8 +85,10 @@ export const state = {
 		expanded: prefs.expanded ?? {},
 		settingsOpen: false,
 		settingsSection: "appearance",
-		/** `{ id }` of the models.json provider being edited (`id: null` adds one); shown over everything else. */
+		/** `{ id }` of a provider to show in Settings → Providers (`id: null` adds one); turned into `providerSel` on arrival. */
 		providerEditor: null,
+		// A provider Settings → Providers should show (set when it is opened from elsewhere).
+		providerSel: null,
 		palette: false,
 		dialog: null,
 		changesScope: "run",
@@ -396,12 +398,11 @@ export function loadSessions(rootPath) {
 	return load.promise;
 }
 
-export async function loadModels(refresh = false) {
+/** The models already known (models.json and earlier detections); listing them never contacts a provider. */
+export async function loadModels() {
 	try {
-		state.models = await api(`/api/models${refresh ? "?refresh=1" : ""}`);
+		state.models = await api("/api/models");
 		emit();
-		// A refreshed catalog can change what the current model supports (thinking efforts included).
-		if (refresh) await loadSnapshot().catch(() => {});
 	} catch (error) {
 		toast(error.message, "error");
 	}

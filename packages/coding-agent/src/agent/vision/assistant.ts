@@ -7,6 +7,7 @@ import type { ImageContent, Model, TextContent } from "@myharness/ai/compat";
 import type { SettingsManager, VisionAssistantSettings } from "../../config/settings/index.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
+import { type MainModelRef, resolveAssistantModel } from "../runtime/assistant-model.ts";
 import type { CustomMessage } from "../runtime/messages.ts";
 import { getVisionCapabilityStatus, supportsVision, withVisionInput } from "./capability.ts";
 import {
@@ -107,6 +108,8 @@ interface VisionAssistantCandidate {
 export interface VisionAssistantManagerOptions {
 	settingsManager: SettingsManager;
 	modelRuntime: ModelRuntime;
+	/** The main session model, inherited when the Vision assistant has no model of its own. */
+	getMainModel?: () => MainModelRef | undefined;
 	onStart?: (progress: VisionAssistantProgress) => void;
 	onEnd?: (progress: VisionAssistantProgress, details: VisionAssistantMessageDetails) => void;
 	onPersist?: (message: CustomMessage<VisionAssistantMessageDetails>) => void;
@@ -397,10 +400,11 @@ export class VisionAssistantManager {
 
 		const configured = this.options.settingsManager.getVisionAssistantSettings();
 		if (!configured.enabled) return messages;
+		const resolved = resolveAssistantModel(configured, this.options.getMainModel?.());
 		const configurationReady =
-			Boolean(configured.provider && configured.model && configured.thinkingLevel) &&
-			Boolean(configured.provider && this.options.modelRuntime.isProviderEnabled(configured.provider)) &&
-			Boolean(configured.provider && this.options.modelRuntime.hasVisionConfiguredAuth(configured.provider));
+			Boolean(resolved) &&
+			Boolean(resolved && this.options.modelRuntime.isProviderEnabled(resolved.provider)) &&
+			Boolean(resolved && this.options.modelRuntime.hasVisionConfiguredAuth(resolved.provider));
 		if (!configurationReady) {
 			// Disable future attempts, but continue this pass so all raw images are
 			// removed and the user receives a concrete failure report.
@@ -413,14 +417,7 @@ export class VisionAssistantManager {
 				break;
 			}
 		}
-		const completeSettings =
-			configurationReady && configured.provider && configured.model && configured.thinkingLevel
-				? {
-						provider: configured.provider,
-						model: configured.model,
-						thinkingLevel: configured.thinkingLevel,
-					}
-				: undefined;
+		const completeSettings = configurationReady ? resolved : undefined;
 		const occurrenceKeys = getOccurrenceKeys(messages);
 		const candidates: VisionAssistantCandidate[] = [];
 

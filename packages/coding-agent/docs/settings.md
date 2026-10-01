@@ -118,6 +118,12 @@ Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
 
+Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
+
+- 没有设置 `provider` / `model`（Web UI 里的“使用主模型”）：运行时使用当前 main model，并且连同它当前的 Thinking Effort 一起继承；main model 变了就跟着变。如果另外写了 `thinkingLevel`，只覆盖 Effort。
+- 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）。
+- 只写了 `provider` 或 `model` 其中一个，视为没有配置。
+
 #### thinkingBudgets
 
 ```json
@@ -367,7 +373,7 @@ Project `.myharness/settings.json`:
 | `compaction.enabled` | boolean | `true` | 启用 auto-compaction |
 | `compaction.provider` | string | Current chat provider | 独立选择的 Compact Model 使用的 Provider |
 | `compaction.model` | string | Current chat model | Compact Model ID；通过 `/settings` 与 `provider` 一起配置 |
-| `compaction.thinkingLevel` | string | Current chat effort | 独立的 Compact Thinking Effort，会限制在所选 model 支持的 levels 内；对于 non-reasoning models 不会发送 |
+| `compaction.thinkingLevel` | string | 未选 Compact Model 时为 current chat effort；选了 model 时不发送 | 独立的 Compact Thinking Effort，会限制在所选 model 支持的 levels 内；对于 non-reasoning models 不会发送 |
 | `compaction.reserveTokens` | number | `16384` | 为 LLM response 预留的 tokens |
 | `compaction.keepRecentTokens` | number | `20000` | summarization-overflow fallback 保留的 token budget；正常 compaction 使用最小的有效 tail |
 

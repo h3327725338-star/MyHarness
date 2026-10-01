@@ -14,9 +14,10 @@
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .composer-bar .icon-btn { width: 30px; height: 30px; }
 
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 230px; transition: background var(--t-fast), color var(--t-fast); }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
 .chip:hover { background: var(--surface-hover); color: var(--text); }
 .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-effort { color: var(--text-3); }
 .picker-anchor { display: inline-flex; }
 .mode-btn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 9px; border-radius: var(--r-md); color: var(--accent); background: var(--accent-soft); font-size: var(--fs-sm); font-weight: 600; }
 .mode-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -90,6 +91,27 @@
 .pop-item .dim { font-size: var(--fs-sm); }
 .pop-meta { font-size: var(--fs-xs) !important; }
 .pop-foot { display: flex; justify-content: space-between; padding: 6px 10px; border-top: 1px solid var(--border); margin-top: 4px; }
+
+/* Model menu: the model list, and the chosen/highlighted model's efforts in a second menu beside it. */
+.popover.model-pop { animation-name: fade-only; }
+@keyframes fade-only { from { opacity: 0; } to { opacity: 1; } }
+.model-menu .pop-scroll { max-height: 330px; }
+.model-menu .pop-group { display: flex; align-items: baseline; gap: 8px; }
+.pop-group-id { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-4); }
+.model-row { min-height: 34px; }
+.model-row.hi { background: var(--surface-hover); color: var(--text); }
+.model-row.active { background: var(--surface-select); color: var(--text); }
+.model-row-sub { font-size: var(--fs-xs) !important; line-height: 1.3; }
+.model-row-level { font-size: var(--fs-xs); color: var(--accent); white-space: nowrap; }
+.model-row-chev { color: var(--text-4); }
+.model-row.hi .model-row-chev { color: var(--text-2); }
+.model-fly { padding: 4px; }
+.model-fly .pop-item.hi { background: var(--surface-hover); color: var(--text); }
+.model-fly .pop-item.active { background: var(--surface-select); color: var(--text); }
+.model-ref { display: flex; min-width: 0; }
+.model-ref-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--text); cursor: pointer; }
+.model-ref-btn > svg { color: var(--text-3); }
+.model-ref-btn:disabled { opacity: 0.5; cursor: default; }
 .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: 3px 10px; border-radius: var(--r-sm); text-align: left; color: var(--text-2); font-size: 13px; }
 .menu-item:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .menu-item.danger { color: var(--danger); }
