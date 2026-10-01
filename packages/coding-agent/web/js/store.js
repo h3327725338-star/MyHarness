@@ -262,9 +262,22 @@ export async function attempt(fn, { success, quiet } = {}) {
 }
 
 // ---- Loading ---------------------------------------------------------------------------------
+// Snapshots are requested from many places and their answers can arrive out of order: an older answer never replaces
+// a newer one.
+const snapshotSent = new Map();
+const snapshotShown = new Map();
+
 export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
-	const snap = await api("/api/state", { slot: slot ?? "" });
+	const key = slot ?? "";
+	const seq = (snapshotSent.get(key) || 0) + 1;
+	snapshotSent.set(key, seq);
+	let snap = await api("/api/state", { slot: key });
 	const id = slot ?? snap.slot;
+	if ((snapshotShown.get(key) || 0) > seq) return snap;
+	snapshotShown.set(key, seq);
+	// An effort the user just chose stays on screen until the server has answered that choice (see chooseThinkingLevel).
+	const chosen = thinkingChoice.get(id);
+	if (chosen && snap.thinking) snap = { ...snap, thinking: { ...snap.thinking, level: chosen.level } };
 	runFor(id, () => {
 		state.snap = snap;
 		state.queue = snap.queue;
@@ -274,6 +287,49 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 		emit();
 	});
 	return snap;
+}
+
+// The thinking effort being changed, per session: `level` is the last one the user chose.
+const thinkingChoice = new Map();
+
+function showThinkingLevel(level) {
+	if (!state.snap?.thinking || state.snap.thinking.level === level) return;
+	state.snap = { ...state.snap, thinking: { ...state.snap.thinking, level } };
+	emit();
+}
+
+/**
+ * Change the thinking effort of the session on screen. The chosen level is shown at once and stays until the server
+ * has answered: one request runs at a time, a choice made meanwhile is sent next, and only the answer to the last
+ * choice (the level really in effect) is applied. Snapshots and events that arrive in between cannot put an older
+ * level back.
+ */
+export async function chooseThinkingLevel(level) {
+	const slot = activeSlot;
+	runFor(slot, () => showThinkingLevel(level));
+	const running = thinkingChoice.get(slot);
+	if (running) {
+		running.level = level;
+		return running.done;
+	}
+	const choice = { level, done: null };
+	thinkingChoice.set(slot, choice);
+	choice.done = (async () => {
+		try {
+			let answer;
+			for (let sent; sent !== choice.level; ) {
+				sent = choice.level;
+				answer = await post("/api/thinking", { level: sent }, slot);
+			}
+			thinkingChoice.delete(slot);
+			runFor(slot, () => showThinkingLevel(answer.level));
+		} catch (error) {
+			thinkingChoice.delete(slot);
+			toast(serverText(error.message || String(error), t("The operation failed.")), "error", 9000);
+			await attempt(() => loadSnapshot(slot), { quiet: true });
+		}
+	})();
+	return choice.done;
 }
 
 export async function loadTranscript(slot = targetSlot ?? activeSlot) {
@@ -636,9 +692,9 @@ function connectEvents() {
 		emit();
 		refreshSessionsSoon();
 	});
-	on("thinking_level", (d) => {
-		if (state.snap) state.snap = { ...state.snap, thinking: { ...state.snap.thinking, level: d.level } };
-		emit();
+	on("thinking_level", (d, slot) => {
+		// While the user's own choice is on its way, the answer to it decides; this event may describe an earlier one.
+		if (!thinkingChoice.has(slot)) showThinkingLevel(d.level);
 	});
 	on("compaction_start", (d) => set({ compaction: { reason: d.reason, startedAt: Date.now() } }));
 	on("compaction_end", async (d, slot) => {

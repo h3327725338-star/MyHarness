@@ -10,7 +10,7 @@
 .modal-body .notice { margin: 4px 0; }
 
 .segmented { display: inline-flex; padding: 2px; gap: 2px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); }
-.segmented button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 6px; color: var(--text-2); font-size: var(--fs-sm); }
+.segmented button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px; border-radius: 6px; color: var(--text-2); font-size: var(--fs-sm); }
 .segmented button:hover { color: var(--text); }
 .segmented button.on { background: var(--surface-active); color: var(--text); font-weight: 600; }
 .select.sm { height: 26px; font-size: var(--fs-sm); max-width: 220px; }

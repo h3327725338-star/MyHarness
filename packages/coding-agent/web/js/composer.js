@@ -1,7 +1,7 @@
 // Composer: one stable input card. Model and effort are one click away; running-state choices
 // (steer / queue / interrupt) map onto the real AgentSession mechanisms.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
-import { api, attempt, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { ContextMeter } from "./context-usage.js";
@@ -129,33 +129,7 @@ function QueueChips({ queue }) {
 	</div>`;
 }
 
-function ChangesPill() {
-	const lastRun = useStore((s) => s.snap?.lastRun);
-	const active = useStore((s) => s.snap?.active);
-	const [stats, setStats] = useState(null);
-	useEffect(() => {
-		let cancelled = false;
-		setStats(null);
-		if (!lastRun || !lastRun.changeCount) return undefined;
-		api(`/api/changes?scope=run&runId=${lastRun.runId}`)
-			.then((data) => {
-				if (cancelled) return;
-				setStats({ files: data.total, add: data.files.reduce((n, f) => n + f.additions, 0), del: data.files.reduce((n, f) => n + f.deletions, 0) });
-			})
-			.catch(() => {});
-		return () => {
-			cancelled = true;
-		};
-	}, [lastRun?.runId, lastRun?.changeCount]);
-	if (active || !lastRun || !lastRun.changeCount) return null;
-	return html`<button class="changes-pill fade-in" onClick=${() => actions.openChanges({ runId: lastRun.runId })} title=${t("Review what the last task changed")}>
-		<${Icon} name="fileDiff" size=${14} /><span>${t("{plural} changed", { plural: plural(stats?.files ?? lastRun.changeCount, "file") })}</span>
-		${stats ? html`<span class="add">+${stats.add}</span><span class="del">−${stats.del}</span>` : null}
-		${lastRun.uncommitted ? html`<span class="badge warn">${t("uncommitted")}</span>` : null}
-	</button>`;
-}
-
-// ---- Model and thinking effort: two separate chips, each opening its own small popover above itself -----------
+// ---- Model and thinking effort: two separate text chips, each opening its own small popover above itself ------
 function ModelPicker() {
 	const snap = useStore((s) => s.snap);
 	const models = useStore((s) => s.models);
@@ -179,13 +153,13 @@ function ModelPicker() {
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model")} aria-haspopup="listbox" aria-expanded=${open}>
-			<${Icon} name="cpu" size=${14} /><span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Icon} name="chevronDown" size=${12} />
+			<span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Icon} name="chevronDown" size=${12} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${300} maxHeight=${380} class="model-pop">
 			<${ModelMenu} models=${models} disabled=${busy || running}
 				selected=${model ? { provider: model.provider, model: model.id } : null}
 				onPick=${choose}
-				footer=${html`<div class="pop-foot">${running ? html`<span class="dim pop-meta grow">${t("Models can be switched when the agent is idle")}</span>` : html`<span class="grow" />`}<button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers…")}</button></div>`} />
+				footer=${html`<div class="pop-foot">${running ? html`<span class="dim pop-meta grow">${t("Models can be switched when the agent is idle")}</span>` : html`<span class="grow" />`}<button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers")}</button></div>`} />
 		<//>
 	</span>`;
 }
@@ -194,13 +168,16 @@ function ModelPicker() {
 function MainEffortPicker() {
 	const thinking = useStore((s) => s.snap?.thinking);
 	if (!thinking?.supported) return null;
-	const choose = async (level) => {
-		if (await attempt(() => post("/api/thinking", { level }))) await attempt(loadSnapshot, { quiet: true });
-	};
-	return html`<${EffortPicker} levels=${thinking.levels} value=${thinking.level} onChange=${choose} />`;
+	return html`<${EffortPicker} levels=${thinking.levels} value=${thinking.level} onChange=${chooseThinkingLevel} />`;
 }
 
 // ---- Suggestion popovers (/ commands and @ files) --------------------------------------------------------
+/**
+ * A Chinese input method types a full-width slash (U+FF0F) or an enumeration comma (U+3001) for the "/" key: as the
+ * first character of a message that is still one word, it is the command slash.
+ */
+const slashStart = (value) => (/^[\uFF0F\u3001]/u.test(value) && !/\s/u.test(value) ? `/${value.slice(1)}` : value);
+
 function useSuggestions(text, caret) {
 	const resources = useStore((s) => s.resources);
 	const [files, setFiles] = useState([]);
@@ -335,6 +312,10 @@ export function Composer() {
 	// Closing the list (Esc, a click outside the input card) only hides it for the token being typed; the draft is untouched.
 	const tokenKey = token ? `${token.type}:${token.start}:${token.query}` : "";
 	const [dismissed, setDismissed] = useState("");
+	// A closed list stays closed only for that token: once the token is gone, typing "/" (or "@") opens the list again.
+	useEffect(() => {
+		if (dismissed && dismissed !== tokenKey) setDismissed("");
+	}, [tokenKey]);
 	const menuOpen = !!token && suggestions.length > 0 && dismissed !== tokenKey;
 	const card = useRef(null);
 	const suggestList = useRef(null);
@@ -455,7 +436,6 @@ export function Composer() {
 
 	return html`<div class="composer-zone">
 		<div class="composer-col">
-			<${ChangesPill} />
 			<${StatusStrips} snap=${snap} />
 			<${QueueChips} queue=${queue} />
 			${dialogs.map((dialog) => html`<${DialogBar} key=${dialog.id} dialog=${dialog} />`)}
@@ -475,7 +455,7 @@ export function Composer() {
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				<textarea ref=${area} class="composer-input" rows="1" value=${text} placeholder=${placeholder} spellcheck="false"
-					onInput=${(e) => (setText(e.target.value), setCaret(e.target.selectionStart))}
+					onInput=${(e) => (setText(slashStart(e.target.value)), setCaret(e.target.selectionStart))}
 					onKeyUp=${(e) => setCaret(e.target.selectionStart)} onClick=${(e) => setCaret(e.target.selectionStart)}
 					onKeyDown=${onKeyDown}
 					onPaste=${(e) => {
@@ -488,7 +468,7 @@ export function Composer() {
 				<div class="composer-bar">
 					<${Menu} placement="top" trigger=${({ toggle }) => html`<button class="icon-btn" title=${t("Attach or insert")} aria-label=${t("Attach or insert")} onClick=${toggle}><${Icon} name="plus" size=${17} /></button>`}>
 						${(close) => html`
-							<${MenuItem} icon="image" label=${t("Attach image…")} onClick=${() => (close(), fileInput.current?.click())} />
+							<${MenuItem} icon="image" label=${t("Attach image")} onClick=${() => (close(), fileInput.current?.click())} />
 							<${MenuItem} icon="file" label=${t("Mention a file")} hint="@" onClick=${() => (close(), setText((t) => `${t}${t && !t.endsWith(" ") ? " " : ""}@`), setTimeout(() => area.current?.focus(), 0))} />
 							<${MenuItem} icon="terminal" label=${t("Run a shell command")} hint="!" onClick=${() => (close(), setText("!"), setTimeout(() => area.current?.focus(), 0))} />
 							<${MenuItem} icon="bolt" label=${t("Slash commands & skills")} hint="/" onClick=${() => (close(), setText("/"), setTimeout(() => area.current?.focus(), 0))} />

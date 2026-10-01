@@ -71,12 +71,26 @@ svg { display: block; flex: none; }
 	transition: border-color var(--t-fast);
 }
 .field:focus, .select:focus { border-color: var(--border-focus); outline: none; }
+/* Number fields read from the left like every other field; the step buttons keep their own space at the right edge. */
+.field[type="number"] { padding-right: 4px; font-variant-numeric: tabular-nums; }
+.field[type="number"]::-webkit-inner-spin-button { height: 20px; margin-left: 8px; cursor: pointer; }
 .field::placeholder { color: var(--text-4); }
 /* An example of what to type, not a value: lighter still, so it cannot be taken for one. */
 .field.example-placeholder::placeholder { color: var(--text-4); opacity: 0.55; font-style: italic; }
 textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; }
-.select { padding-right: 24px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 13px) 12px, calc(100% - 9px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
+.select { padding-right: 28px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 15px) calc(50% + 1px), calc(100% - 11px) calc(50% + 1px); background-size: 4px 4px; background-repeat: no-repeat; }
 .select option { background: var(--bg-raised); color: var(--text); }
+
+/* Icon + text on one line: one rule for every such control instead of per-place offsets. The control is a flex row
+   that centres its icon and its text on the same line (align-items: center, a fixed gap, icons never shrink, see
+   `svg` above), and its line box is a whole number of pixels, so neither the icon nor the text is rounded half a
+   pixel off the centre line. */
+.btn, .chip, .meter, .mode-btn, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
+/* Numbers beside an icon (context use, added / removed lines): their box is cut to the digits themselves, so the
+   digits' own middle (not the taller line box around them) sits on the icon's centre line. */
+@supports (text-box: trim-both cap alphabetic) {
+	.meter > span, .counts > span { text-box: trim-both cap alphabetic; }
+}
 
 .kbd { font: 500 10.5px/1 var(--font-ui); padding: 2px 5px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-3); background: var(--bg-inset); }
 
@@ -103,6 +117,8 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 
 .fade-in { animation: fade-in var(--t-base) var(--ease) both; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+/* For elements that are placed with a transform or must not move while they appear. */
+@keyframes fade-only { from { opacity: 0; } to { opacity: 1; } }
 
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 :root[data-motion="off"] .spinner { animation: none; border-top-color: var(--accent); border-right-color: var(--accent); }

@@ -88,7 +88,7 @@ export function ChangesPanel() {
 	useEffect(() => {
 		if (!selected || !data) return;
 		setOpenMap((m) => ({ ...m, [selected.path]: true }));
-	}, [selected?.path, data]);
+	}, [selected?.path, selected?.at, data]);
 
 	const files = data?.files || [];
 	const effectiveRunId = data?.run?.runId ?? runId;
@@ -118,7 +118,7 @@ export function ChangesPanel() {
 			${loading && !data ? html`<div class="empty"><${Spinner} /></div>` : null}
 			${data && !files.length && !data.error ? html`<div class="empty"><div style="display:flex;justify-content:center;margin-bottom:8px;color:var(--text-4)"><${Icon} name="fileDiff" size=${22} /></div>${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")}</div>` : null}
 			${files.length ? html`<div class="changes-summary dim">${plural(data.total ?? files.length, "file")} · <span class="add">+${total.add}</span> <span class="del">−${total.del}</span>${data.total > files.length ? ` · ${t("showing {n}", { n: files.length })}` : ""}</div>` : null}
-			${files.map((file) => html`<${FileDiff} key=${file.path} file=${file} scope=${scope} runId=${effectiveRunId} open=${!!openMap[file.path]} onToggle=${() => setOpenMap((m) => ({ ...m, [file.path]: !m[file.path] }))} mode=${mode} nonce=${nonce} focused=${selected?.path === file.path} />`)}
+			${files.map((file) => html`<${FileDiff} key=${file.path} file=${file} scope=${scope} runId=${effectiveRunId} open=${!!openMap[file.path]} onToggle=${() => setOpenMap((m) => ({ ...m, [file.path]: !m[file.path] }))} mode=${mode} nonce=${nonce} focused=${selected?.path === file.path ? selected.at || 1 : 0} />`)}
 		</div>
 	</div>`;
 }
@@ -129,7 +129,7 @@ function GitBar({ gitStatus, active }) {
 	if (!gitStatus) return null;
 	if (!gitStatus.gitAvailable) return html`<div class="gitbar dim"><${Icon} name="gitBranch" size=${14} />${t("Git is not available on this computer.")}</div>`;
 	if (!gitStatus.isRepository) {
-		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitDialog("enable")}>${t("Set up Git…")}</button></div>`;
+		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitDialog("enable")}>${t("Set up Git")}</button></div>`;
 	}
 	const dirty = gitStatus.preview?.total || 0;
 	return html`<div class="gitbar">
@@ -138,9 +138,9 @@ function GitBar({ gitStatus, active }) {
 			${gitStatus.integrationEnabled ? null : html`<span class="badge" title=${t("MyHarness does not create task checkpoints while Git integration is off")}>${t("integration off")}</span>`}
 		</span>
 		<span class="grow" />
-		${checkpoint ? html`<button class="btn sm" disabled=${active} onClick=${() => actions.openGitDialog("undo")} title=${t("Keep or undo this task's changes")}>${t("Undo task…")}</button>` : null}
-		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("commit")} title=${t("Commit the task's changes locally")}>${t("Commit…")}</button>
-		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("push")} title=${t("Push commits to the upstream and verify CI")}>${t("Push…")}</button>
+		${checkpoint ? html`<button class="btn sm" disabled=${active} onClick=${() => actions.openGitDialog("undo")} title=${t("Keep or undo this task's changes")}>${t("Undo task")}</button>` : null}
+		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("commit")} title=${t("Commit the task's changes locally")}>${t("Commit")}</button>
+		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("push")} title=${t("Push commits to the upstream and verify CI")}>${t("Push")}</button>
 		<button class="icon-btn sm" title=${t("More Git actions")} aria-label=${t("More Git actions")} onClick=${() => actions.openGitDialog("more")}><${Icon} name="more" size=${15} /></button>
 	</div>`;
 }

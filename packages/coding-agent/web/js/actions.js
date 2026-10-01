@@ -2,7 +2,7 @@
 import { activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { normPath, shortPath } from "./util.js";
-import { t } from "./i18n.js";
+import { serverText, t } from "./i18n.js";
 
 let dialogResolver = null;
 
@@ -74,8 +74,9 @@ export function closeCommand() {
 }
 
 export const actions = {
-	openChanges({ runId, path, git } = {}) {
-		setView({ panelOpen: true, panelTab: "changes", selectedChange: path ? { path, runId } : null, changesScope: state.view.changesScope, gitFocus: !!git });
+	/** Open the Changes panel; `path` opens and scrolls to that file's diff, `scope` picks "run" (this task) or "worktree". */
+	openChanges({ runId, path, git, scope } = {}) {
+		setView({ panelOpen: true, panelTab: "changes", selectedChange: path ? { path, runId, at: Date.now() } : null, changesScope: scope || state.view.changesScope, gitFocus: !!git });
 		if (runId !== undefined) setView({ changesRunId: runId });
 	},
 	openFile(input) {
@@ -226,6 +227,25 @@ export const actions = {
 		const result = await attempt(() => post("/api/workspaces/add", { path }));
 		if (result) await loadWorkspaces();
 		return result;
+	},
+
+	/**
+	 * Add a workspace by choosing its folder in the system's own folder window (Explorer on Windows), which the local
+	 * server opens in front of the browser. Cancelling adds nothing. `unsupported` is set where the server has no such
+	 * window, so the caller can show the built-in folder list instead.
+	 */
+	async addWorkspaceFromDialog() {
+		let picked;
+		try {
+			picked = await post("/api/fs/pick-folder", { title: t("Add workspace") }, "");
+		} catch (error) {
+			if (error.status === 501 || error.status === 404) return { unsupported: true };
+			// 409: the window is already open (a second click); it is the one to answer.
+			if (error.status !== 409) toast(serverText(error.message, t("The operation failed.")), "error", 9000);
+			return {};
+		}
+		if (!picked?.path) return {};
+		return { added: await actions.addWorkspace(picked.path) };
 	},
 
 	async removeWorkspace(id, name) {

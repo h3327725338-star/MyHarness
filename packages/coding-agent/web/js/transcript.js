@@ -1,11 +1,11 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton } from "./ui.js";
-import { useStore, state, setView } from "./store.js";
+import { api, useStore, state, setView } from "./store.js";
 import { Markdown } from "./markdown.js";
 import { buildTurns, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
 import { actions } from "./actions.js";
-import { basename, clip, fmtBytes, fmtDuration, fmtShortDuration, plural, formatData, ansiSegments } from "./util.js";
+import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
 
 const KIND_ICON = { read: "file", list: "folder", find: "search", search: "search", run: "terminal", edit: "edit", write: "fileDiff", web: "globe", fetch: "globe", agent: "layers", tool: "wrench" };
@@ -250,7 +250,6 @@ function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapR
 			${stats.failedActions && !live ? html`<span class="badge danger">${plural(stats.failedActions, "failed action")}</span>` : null}
 			<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${14} class="c-dim" />
 		</button>
-		${!live && changeCount ? html`<button class="link-btn summary-changes" onClick=${() => actions.openChanges({ runId: run?.runId })}>${t("Review changes")}</button>` : null}
 		${open ? html`<div class="summary-body fade-in"><${StepList} turn=${turn} onOpenFile=${onOpenFile} /></div>` : null}
 	</div>`;
 }
@@ -278,7 +277,7 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 		<div class="banner-actions">
 			${changeCount ? html`<button class="btn sm" onClick=${() => actions.openChanges({ runId: run?.runId })}>${t("View changes")}</button>` : null}
 			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry(turn.user)}>${t("Retry")}</button>` : null}
-			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => actions.openChanges({ runId: run?.runId, git: true })}>${t("Undo or commit…")}</button>` : null}
+			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => actions.openChanges({ runId: run?.runId, git: true })}>${t("Undo or commit")}</button>` : null}
 		</div>
 	</div>`;
 }
@@ -299,6 +298,8 @@ function UserMessage({ item, turn }) {
 	</div>`;
 }
 
+const fmtCount = (n) => Math.round(n).toLocaleString(getLang());
+
 function FinalMessage({ final, onOpenFile }) {
 	const message = final.message;
 	const usage = message.usage;
@@ -307,8 +308,46 @@ function FinalMessage({ final, onOpenFile }) {
 		${final.partial ? html`<div class="dim partial-note">${t("The response was cut off.")}</div>` : null}
 		${!final.streaming ? html`<div class="msg-actions final-actions">
 			<${CopyButton} text=${final.text} label=${t("Copy answer")} />
-			<span class="dim msg-meta truncate">${message.model}${usage ? ` · ${[usage.input + usage.cacheRead > 0 ? t("{n} in", { n: usage.input + usage.cacheRead }) : "", usage.output ? t("{n} out", { n: usage.output }) : ""].filter(Boolean).join(" / ")}` : ""}</span>
+			<span class="dim msg-meta truncate">${message.model}${usage ? ` · ${[usage.input + usage.cacheRead > 0 ? t("{n} tokens in", { n: fmtCount(usage.input + usage.cacheRead) }) : "", usage.output ? t("{n} tokens out", { n: fmtCount(usage.output) }) : ""].filter(Boolean).join(" / ")}` : ""}</span>
 		</div>` : null}
+	</div>`;
+}
+
+/** Added / removed lines of one file, or nothing when the diff could not be counted (binary, too large, no baseline). */
+const lineCounts = (file) => (file.binary || file.unavailable ? null : html`<span class="counts"><span class="add">+${file.additions}</span><span class="del">−${file.deletions}</span></span>`);
+
+/**
+ * What a finished task changed, at the end of its turn: the files it really changed with their added and removed
+ * lines, from the task's own diff (GET /api/changes, the same data as Changes → This task). A row opens that file's
+ * diff in the Changes panel. Nothing is shown for a task the server no longer has a record of.
+ */
+function ChangeCard({ run }) {
+	const [files, setFiles] = useState(null);
+	useEffect(() => {
+		let cancelled = false;
+		api(`/api/changes?scope=run&runId=${run.runId}`)
+			.then((data) => !cancelled && setFiles(data.run ? data.files : []))
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [run.runId, run.changeCount]);
+	if (!files?.length) return null;
+	const counted = files.every((file) => !file.binary && !file.unavailable);
+	const open = (path) => actions.openChanges({ runId: run.runId, path, scope: "run" });
+	return html`<div class="change-card fade-in">
+		<button class="change-head" onClick=${() => open()} title=${t("Review what this task changed")}>
+			<span class="grow truncate">${t("Edited {files}", { files: plural(files.length, "file") })}</span>
+			${counted ? lineCounts({ additions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0) }) : null}
+		</button>
+		${files.map((file) => {
+			const dir = dirname(file.path);
+			return html`<button class="change-file" key=${file.path} onClick=${() => open(file.path)} title=${t("Open the diff of {path}", { path: file.path })}>
+				<span class="change-path truncate">${dir ? html`<span class="dim">${dir}/</span>` : null}${basename(file.path)}</span>
+				${lineCounts(file)}
+				<${Icon} name="chevronRight" size=${13} class="c-dim" />
+			</button>`;
+		})}
 	</div>`;
 }
 
@@ -321,6 +360,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} onOpenFile=${onOpenFile} key=${`sum-${turn.key}-${live}`} />
 		${turn.final ? html`<${FinalMessage} final=${turn.final} onOpenFile=${onOpenFile} />` : null}
+		${run?.changeCount ? html`<${ChangeCard} run=${run} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
 	</section>`;
 });
@@ -418,13 +458,13 @@ export function Transcript() {
 	const noteInteraction = () => {
 		lastInteract.current = Date.now();
 	};
-	const toBottom = () => {
+	const toBottom = (smooth = false) => {
 		const el = scroller.current;
-		if (el) {
-			programmatic.current = true;
-			el.scrollTop = el.scrollHeight;
-			lastTop.current = el.scrollTop;
-		}
+		if (!el) return;
+		programmatic.current = true;
+		if (smooth) return el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+		el.scrollTop = el.scrollHeight;
+		lastTop.current = el.scrollTop;
 	};
 	useLayoutEffect(() => {
 		if (stick.current && Date.now() - lastInteract.current > 500) toBottom();
@@ -480,6 +520,6 @@ export function Transcript() {
 				<div class="transcript-end" />
 			</div>
 		</div>
-		${away ? html`<button class="jump-btn fade-in" onClick=${() => { stick.current = true; toBottom(); setAway(false); }}><${Icon} name="arrowDown" size=${14} />${active ? t("Follow live output") : t("Jump to latest")}</button>` : null}
+		${away ? html`<button class="jump-btn" onClick=${() => { stick.current = true; toBottom(true); }} title=${active ? t("Follow live output") : t("Jump to latest")} aria-label=${active ? t("Follow live output") : t("Jump to latest")}><${Icon} name="arrowDown" size=${16} /></button>` : null}
 	</div>`;
 }

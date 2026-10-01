@@ -3,12 +3,9 @@ import { N_, count, t } from "./i18n.js";
 import { getLang } from "./lang.js";
 import { rankSearch } from "./search.js";
 
-/** Reasoning-effort levels: the level name (translated) and a one-line hint. */
+/** Reasoning-effort levels: the level name (translated). */
 const EFFORT_NAME = { off: N_("off"), minimal: N_("minimal"), low: N_("low"), medium: N_("medium"), high: N_("high"), xhigh: N_("xhigh"), max: N_("max") };
-// Hints have their own wording (not "Light" …): the same English word is also a theme name, with another meaning.
-const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal thinking"), low: N_("Light thinking"), medium: N_("Balanced thinking"), high: N_("Deep thinking"), xhigh: N_("Very deep thinking"), max: N_("Maximum thinking") };
 export const effortName = (level) => (EFFORT_NAME[level] ? t(EFFORT_NAME[level]) : level);
-export const effortHint = (level) => (EFFORT_HINT[level] ? t(EFFORT_HINT[level]) : "");
 
 /** The efforts a model offers on the effort slider; none (no slider) when there is nothing to choose between. */
 export function modelEfforts(model) {

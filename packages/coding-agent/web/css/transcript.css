@@ -4,8 +4,10 @@
 .transcript-inner { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
 .transcript-end { height: 1px; }
 
-.jump-btn { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); color: var(--text); font-size: var(--fs-sm); z-index: 4; }
-.jump-btn:hover { background: var(--surface-hover); }
+/* Jump to the latest message: a round arrow button on the centre line of the conversation and the input card, just
+   above the input. Centred with auto margins (no transform), so an entrance animation cannot move it off centre. */
+.jump-btn { position: absolute; left: 0; right: 0; bottom: 12px; margin: 0 auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); color: var(--text-2); z-index: 4; animation: fade-only var(--t-base) var(--ease); transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.jump-btn:hover { background: var(--surface-hover); color: var(--text); }
 
 .turn { display: flex; flex-direction: column; gap: 10px; }
 
@@ -27,7 +29,6 @@
 .summary.live .summary-text { color: var(--text-2); }
 .summary-meta { font-size: var(--fs-sm); flex: none; }
 .summary-ico { display: inline-flex; width: 16px; justify-content: center; flex: none; }
-.summary-changes { align-self: flex-start; margin-left: 28px; }
 .summary-body { margin: 2px 0 4px 8px; padding-left: 14px; border-left: 1px solid var(--border); }
 .c-completed { color: var(--ok); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-waiting { color: var(--warn); }
 .c-dim { color: var(--text-3); } .c-danger { color: var(--danger); } .c-warn { color: var(--warn); } .c-folder { color: var(--accent); opacity: 0.85; }
@@ -77,6 +78,15 @@
 .partial-note { font-size: var(--fs-sm); margin-top: 4px; }
 .final.streaming .md > :last-child::after { content: "▍"; color: var(--text-3); margin-left: 2px; animation: caret 1s steps(2) infinite; }
 @keyframes caret { 50% { opacity: 0; } }
+
+/* What a finished task changed: a total on top, then one row per file with its added / removed lines. */
+.change-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); overflow: hidden; }
+.change-head, .change-file { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0 12px 0 14px; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.change-head { height: 36px; padding-right: 35px; color: var(--text); font-size: var(--fs-md); font-weight: 600; }
+.change-file { height: 30px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; }
+.change-head:hover, .change-file:hover { background: var(--surface-hover); color: var(--text); }
+.change-path { flex: 1 1 auto; }
+.change-card .counts { font-weight: 400; }
 
 /* Markdown */
 .md { overflow-wrap: anywhere; }

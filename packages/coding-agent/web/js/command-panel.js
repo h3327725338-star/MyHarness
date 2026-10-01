@@ -2,7 +2,7 @@
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
 import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
-import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
+import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
@@ -63,9 +63,7 @@ function effortScreen() {
 		title: t("Reasoning effort"),
 		levels: thinking.levels,
 		value: thinking.level,
-		onChange: async (level) => {
-			if (await attempt(() => post("/api/thinking", { level }))) await attempt(loadSnapshot, { quiet: true });
-		},
+		onChange: chooseThinkingLevel,
 	});
 }
 
@@ -113,7 +111,7 @@ function modelScreen(ctx, arg) {
 					}
 				},
 			}),
-			{ key: "providers", label: t("Manage providers…"), icon: "key", chevron: true, onEnter: (c) => c.push((cc) => providersScreen(cc)) },
+			{ key: "providers", label: t("Manage providers"), icon: "key", chevron: true, onEnter: (c) => c.push((cc) => providersScreen(cc)) },
 		],
 		empty: models && !models.providers.length ? t("No model is available. Add a provider in Settings.") : t("No models match."),
 	};
@@ -269,7 +267,7 @@ function githubScreen() {
 	} else if (account) {
 		rows.push({
 			key: "disconnect",
-			label: t("Disconnect…"),
+			label: t("Disconnect"),
 			desc: t("Removes the saved credentials from this computer"),
 			danger: true,
 			chevron: true,
@@ -533,7 +531,7 @@ function providersScreen(ctx) {
 				chevron: true,
 				onEnter: (c) => c.push((cc) => providerScreen(cc, p.id)),
 			})),
-			{ key: "add", label: t("Add Provider…"), desc: t("Connect a compatible API service"), icon: "plus", onEnter: (c) => (c.close(), setView({ providerEditor: { id: null } })) },
+			{ key: "add", label: t("Add Provider"), desc: t("Connect a compatible API service"), icon: "plus", onEnter: (c) => (c.close(), setView({ providerEditor: { id: null } })) },
 		],
 		empty: t("No providers configured yet. Add a custom provider below, or sign in to one."),
 	};
@@ -562,7 +560,7 @@ function providerScreen(ctx, id) {
 	if (provider.supportsApiKeyLogin) {
 		rows.push({
 			key: "add-key",
-			label: t("Add API key…"),
+			label: t("Add API key"),
 			icon: "plus",
 			chevron: true,
 			onEnter: (cc) =>
@@ -593,8 +591,8 @@ function providerScreen(ctx, id) {
 		});
 	}
 	if (provider.supportsOAuth) rows.push({ key: "oauth", label: t("Sign in with OAuth"), icon: "key", desc: login?.type === "auth_url" ? t("Waiting for the browser sign-in…") : login?.type === "device_code" ? `${login.verificationUri} · ${login.userCode}` : undefined, onEnter: () => act(() => post("/api/providers/oauth/login", { id }), t("Signed in")) });
-	if (provider.custom) rows.push({ key: "config", label: t("Provider settings & models…"), desc: t("{n} models · detect models by ID · advanced JSON", { n: provider.modelCount }), icon: "edit", onEnter: (cc) => (cc.close(), setView({ providerEditor: { id } })) });
-	if (provider.custom) rows.push({ key: "delete", label: t("Delete provider…"), danger: true, onEnter: async (cc) => { if (await deleteCustomProvider(id, provider.name)) cc.pop(); } });
+	if (provider.custom) rows.push({ key: "config", label: t("Provider settings & models"), desc: t("{n} models · detect models by ID · advanced JSON", { n: provider.modelCount }), icon: "edit", onEnter: (cc) => (cc.close(), setView({ providerEditor: { id } })) });
+	if (provider.custom) rows.push({ key: "delete", label: t("Delete provider"), danger: true, onEnter: async (cc) => { if (await deleteCustomProvider(id, provider.name)) cc.pop(); } });
 	return { title: provider.name, subtitle: `${provider.id}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`, rows };
 }
 
@@ -656,16 +654,16 @@ function gitRoot() {
 		subtitle: gitStatus?.isRepository ? `${gitStatus.branch || t("detached HEAD")} · ${dirty ? t("{n} uncommitted", { n: dirty }) : t("clean")}` : gitStatus ? t("This workspace is not a Git repository.") : undefined,
 		rows: [
 			{ key: "changes", label: t("Review changes"), icon: "fileDiff", onEnter: (c) => (c.close(), actions.openChanges({ git: true })) },
-			{ key: "commit", label: t("Commit…"), desc: t("Creates one local commit for the task's changes. Nothing is pushed."), chevron: true, onEnter: inline("commit", t("Commit changes")) },
-			{ key: "push", label: t("Push…"), desc: t("Publishes commits that already exist on this branch, then waits for the CI result."), chevron: true, onEnter: inline("push", t("Push to upstream")) },
-			...(checkpoint?.status === "created" ? [{ key: "undo", label: t("Undo task…"), desc: t("Keep or undo this task's changes"), chevron: true, onEnter: inline("undo", t("This task's uncommitted changes")) }] : []),
-			{ key: "restore", label: t("Restore to last commit…"), desc: t("Permanently discards every uncommitted change."), chevron: true, danger: true, onEnter: inline("restore", t("Restore to the latest commit")) },
+			{ key: "commit", label: t("Commit"), desc: t("Creates one local commit for the task's changes. Nothing is pushed."), chevron: true, onEnter: inline("commit", t("Commit changes")) },
+			{ key: "push", label: t("Push"), desc: t("Publishes commits that already exist on this branch, then waits for the CI result."), chevron: true, onEnter: inline("push", t("Push to upstream")) },
+			...(checkpoint?.status === "created" ? [{ key: "undo", label: t("Undo task"), desc: t("Keep or undo this task's changes"), chevron: true, onEnter: inline("undo", t("This task's uncommitted changes")) }] : []),
+			{ key: "restore", label: t("Restore to last commit"), desc: t("Permanently discards every uncommitted change."), chevron: true, danger: true, onEnter: inline("restore", t("Restore to the latest commit")) },
 			{ key: "worktrees", label: t("Worktrees"), chevron: true, onEnter: (c) => c.push((cc) => worktreesScreen(cc)) },
 			{ key: "history", label: t("History"), chevron: true, onEnter: (c) => c.push(() => historyScreen()) },
 			{ key: "repos", label: t("Repositories"), chevron: true, onEnter: (c) => c.push((cc) => repositoriesScreen(cc)) },
 			gitStatus?.integrationEnabled
 				? { key: "integration", label: t("Turn off Git integration"), onEnter: async () => (await attempt(() => post("/api/git/enable", { enabled: false })), loadGitStatus(), toast(t("Git integration turned off (history is kept)."), "info", 3000)) }
-				: { key: "integration", label: t("Turn on Git integration…"), chevron: true, onEnter: inline("enable", t("Set up Git for this project")) },
+				: { key: "integration", label: t("Turn on Git integration"), chevron: true, onEnter: inline("enable", t("Set up Git for this project")) },
 		],
 	};
 }
@@ -711,7 +709,7 @@ function worktreesScreen(ctx) {
 			})),
 			{
 				key: "create",
-				label: t("Create worktree…"),
+				label: t("Create worktree"),
 				icon: "plus",
 				chevron: true,
 				onEnter: (c) => c.push(() => inputScreen({ title: t("Create worktree"), label: t("Branch name"), placeholder: t("branch name"), submitLabel: t("Create"), onSubmit: async (branch, cc) => { if (branch.trim() && (await attempt(() => post("/api/git/worktrees/create", { branch, newBranch: true }), { success: t("Worktree created") }))) { reload(); cc.pop(); } } })),
@@ -757,7 +755,7 @@ function repositoriesScreen(ctx) {
 			})),
 			{
 				key: "register",
-				label: t("Register repository…"),
+				label: t("Register repository"),
 				icon: "plus",
 				chevron: true,
 				onEnter: (c) => c.push(() => inputScreen({ title: t("Register repository"), label: t("Folder of the repository"), placeholder: "C:\\path\\to\\repository", submitLabel: t("Register"), onSubmit: async (path, cc) => { if (path.trim() && (await attempt(() => post("/api/git/repositories/add", { path }), { success: t("Repository registered") }))) { reload(); cc.pop(); } } })),
@@ -860,10 +858,14 @@ function workspaceRoot() {
 			{ key: "general", label: t("No Folder"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
 			{
 				key: "add",
-				label: t("Add workspace…"),
+				label: t("Add workspace"),
 				icon: "plus",
-				chevron: true,
-				onEnter: (c) => c.push(() => inputScreen({ title: t("Add workspace"), label: t("Project folder"), placeholder: "C:\path\to\project", submitLabel: t("Add workspace"), onSubmit: async (path, cc) => { if (path.trim() && (await actions.addWorkspace(path.trim()))) cc.close(); } })),
+				// The folder is chosen in the system's folder window; typing a path is only the fallback without one.
+				onEnter: async (c) => {
+					const result = await actions.addWorkspaceFromDialog();
+					if (result.added) c.close();
+					else if (result.unsupported) c.push(() => inputScreen({ title: t("Add workspace"), label: t("Project folder"), placeholder: "C:\path\to\project", submitLabel: t("Add workspace"), onSubmit: async (path, cc) => { if (path.trim() && (await actions.addWorkspace(path.trim()))) cc.close(); } }));
+				},
 			},
 		],
 	};
@@ -899,18 +901,10 @@ function Row({ row, selected, busy, onClick, onHover }) {
 /** A panel level that is the effort slider: ←/→ move it, Enter / Esc / Backspace go back. */
 function SliderView({ spec, ctx }) {
 	const { levels, value, withDefault, onChange } = spec.slider;
-	const [busy, setBusy] = useState(false);
-	const change = async (level) => {
-		setBusy(true);
-		try {
-			await onChange(level);
-		} finally {
-			setBusy(false);
-		}
-	};
+	// The slider keeps the chosen level on screen while it is stored, so it is never dimmed or locked in between.
 	return html`<div class="cp-effort" onKeyDown=${(e) => (e.key === "Enter" || e.key === "Backspace") && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
-		<${EffortSlider} levels=${levels} value=${value} disabled=${busy} onChange=${change} />
-		${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} disabled=${busy} onClick=${() => value && change(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
+		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} />
+		${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
 	</div>`;
 }
 

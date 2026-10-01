@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
+import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
@@ -471,6 +472,22 @@ export function registerFolderBrowser(server: WebHttpServer, host: WebHost): voi
 			};
 		}
 		return browse(requested, host);
+	});
+
+	/**
+	 * Choose a folder in the operating system's own folder window (shown on this computer, in front of the browser).
+	 * Answers `{ path }`, or `{ cancelled: true }` when the user closed the window. 501 where there is no such window:
+	 * the page then falls back to its built-in folder list.
+	 */
+	server.route("POST", "/api/fs/pick-folder", async ({ body }) => {
+		if (!nativeFolderDialogAvailable()) throw new HttpError(501, "No system folder window on this platform.");
+		if (folderDialogOpen()) throw new HttpError(409, "A folder window is already open.");
+		const title = (body as { title?: unknown } | null)?.title;
+		try {
+			return await pickFolderWithSystemDialog(typeof title === "string" ? title.slice(0, 120) : "");
+		} catch (error) {
+			throw new HttpError(500, error instanceof Error ? error.message : "The folder window could not be opened.");
+		}
 	});
 
 	server.route("POST", "/api/fs/mkdir", ({ body }) => {

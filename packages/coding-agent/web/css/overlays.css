@@ -44,18 +44,18 @@
 .set-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; max-width: 520px; line-height: 1.45; }
 .set-control { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 .set-row.stack .set-control { justify-content: flex-start; }
-/* One width for every text-like control, a narrower one for numbers; switches line up on the right edge. */
+/* One width for every text-like control, a narrower one for numbers; switches line up on the right edge. Every
+   control (field, select, model button, segmented, multi-select) is one height: --h-control. */
 .set-control > .select, .set-control > .field.wide { width: 240px; }
 .set-control > .model-ref { width: 320px; }
-.set-control > .select, .set-control > .field { height: 26px; }
-.set-control > .field.num { width: 96px; text-align: right; }
+.set-control > .field.num { width: 96px; }
 .field.num { width: 96px; } .field.wide { width: 260px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip-toggle { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--border-strong); color: var(--text-2); font-size: var(--fs-sm); }
 .chip-toggle.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 /* Multi-select: one joined control, each option with its own check box. */
 .multi { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); overflow: hidden; }
-.multi-opt { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 10px; color: var(--text-3); font-size: var(--fs-sm); border-left: 1px solid var(--border); transition: background var(--t-fast), color var(--t-fast); }
+.multi-opt { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px 0 10px; color: var(--text-3); font-size: var(--fs-sm); border-left: 1px solid var(--border); transition: background var(--t-fast), color var(--t-fast); }
 .multi-opt:first-child { border-left: 0; }
 .multi-opt:hover { background: var(--surface-hover); color: var(--text); }
 .multi-opt.on { background: var(--accent-soft); color: var(--text); }

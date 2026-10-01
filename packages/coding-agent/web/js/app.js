@@ -53,7 +53,8 @@ function Header() {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	const firstUser = items.find((i) => i.kind === "user" && i.text);
-	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : t("New chat"));
+	// A chat that has no name and no message yet has no title to show: the header then starts with the workspace.
+	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : "");
 	const commit = async () => {
 		setEditing(false);
 		const next = value.trim();
@@ -65,7 +66,7 @@ function Header() {
 		${!sidebarOpen ? html`<button class="icon-btn" title=${t("Show sidebar (Ctrl+B)")} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
-			: html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>`}
+			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
 		${snap?.workspace ? html`<button class="header-chip truncate" title=${snap.cwd} onClick=${() => actions.togglePanel("files")}><${Icon} name="folder" size=${13} /><span class="truncate">${snap.workspace.name}</span></button>` : null}
 		<span class="grow" />
 		<${StatusPill} />
@@ -80,7 +81,7 @@ function Header() {
 				<${MenuItem} icon="layers" label=${t("Compact context")} disabled=${snap?.active} onClick=${() => (close(), actions.compact())} />
 				<${MenuItem} icon="download" label=${t("Export chat as HTML")} onClick=${() => (close(), actions.exportSession())} />
 				<${MenuSep} />
-				<${MenuItem} icon="gitBranch" label=${t("Git tools…")} onClick=${() => (close(), actions.openGitDialog("more"))} />
+				<${MenuItem} icon="gitBranch" label=${t("Git tools")} onClick=${() => (close(), actions.openGitDialog("more"))} />
 				<${MenuItem} icon="gear" label=${t("Settings")} hint="Ctrl+," onClick=${() => (close(), setView({ settingsOpen: true }))} />`}
 		<//>
 	</header>`;

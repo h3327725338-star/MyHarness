@@ -140,7 +140,12 @@ export function Sidebar() {
 	const slots = useStore((s) => s.slots);
 	const connected = useStore((s) => s.connected);
 	const [filter, setFilter] = useState("");
+	// "Add workspace" opens the system's folder window; the built-in folder list is only the fallback without one.
 	const [adding, setAdding] = useState(false);
+	const addWorkspace = async () => {
+		const result = await actions.addWorkspaceFromDialog();
+		if (result.unsupported) setAdding(true);
+	};
 	const searchRef = useRef(null);
 	const slotsByFile = useMemo(() => new Map(slots.filter((s) => s.sessionFile).map((s) => [pathKey(s.sessionFile), s])), [slots]);
 	// Workspaces that hold at least one chat with an unread result (matched by the folder the chat runs in).
@@ -191,7 +196,7 @@ export function Sidebar() {
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field" placeholder=${t("Filter chats…")} value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll">
-			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${() => setAdding(true)}><${Icon} name="plus" size=${15} /></button></div>
+			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
 			${ws.list.map((w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];

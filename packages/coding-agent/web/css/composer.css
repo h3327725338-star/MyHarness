@@ -14,8 +14,11 @@
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .composer-bar .icon-btn { width: 30px; height: 30px; }
 
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
-.chip:hover { background: var(--surface-hover); color: var(--text); }
+/* Model and thinking effort: plain text with a small chevron, no decoration in front. */
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
+.chip > svg { color: var(--text-4); }
+.chip:hover, .chip[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
+.chip:hover > svg, .chip[aria-expanded="true"] > svg { color: var(--text-3); }
 .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-effort { color: var(--text-3); }
 .picker-anchor { display: inline-flex; }
@@ -30,7 +33,7 @@
 .send.stop { background: var(--text); color: var(--bg-panel); }
 .send.stop:hover { background: var(--text-2); }
 
-.meter { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px; border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.meter { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 .meter:hover { background: var(--surface-hover); color: var(--text); }
 .meter.warn { color: var(--warn); } .meter.danger { color: var(--danger); }
 
@@ -76,8 +79,6 @@
 .dialog-actions, .dialog-options { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .dialog-input { display: flex; gap: 6px; }
 .dialog-editor { display: flex; flex-direction: column; gap: 6px; }
-.changes-pill { align-self: center; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border-radius: 15px; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); font-size: var(--fs-sm); box-shadow: 0 1px 0 rgba(0,0,0,.15); }
-.changes-pill:hover { background: var(--surface-hover); color: var(--text); }
 
 /* Popovers & menus (shared) */
 .popover { position: fixed; z-index: 500; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; overflow: auto; overscroll-behavior: contain; animation: fade-in var(--t-fast) var(--ease); }
@@ -108,30 +109,28 @@
 .model-row-check { color: var(--accent); flex: none; }
 .model-ref { display: flex; gap: 6px; min-width: 0; }
 .model-ref-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--text); cursor: pointer; }
-.model-ref-btn > svg { color: var(--text-3); }
 .model-ref-btn:disabled { opacity: 0.5; cursor: default; }
-.model-ref-effort { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 112px; color: var(--text); cursor: pointer; }
-.model-ref-effort > svg:first-child { color: var(--text-3); flex: none; }
-.model-ref-effort > svg:last-child { display: none; }
+.model-ref-effort { display: inline-flex; align-items: center; flex: none; max-width: 112px; color: var(--text); cursor: pointer; }
+.model-ref-effort > svg { display: none; }
 
-/* Thinking effort: a horizontal slider with one stop per supported level. Left is faster, right is stronger. */
-.popover.effort-pop { padding: 10px 12px 8px; animation-name: fade-only; }
-.effort { display: flex; flex-direction: column; gap: 4px; }
+/* Thinking effort. Top line: the name and the level in use. Second line: what the two ends mean. Then the slider: a
+   thin rail with one small mark per level the model supports and a single thumb on the level in use. The rail is inset
+   by the thumb's radius, so the thumb at either end lines up with the edges of the two text lines above it. */
+.popover.effort-pop { padding: 12px 14px; animation-name: fade-only; overflow: visible; }
+.effort { display: flex; flex-direction: column; }
 .effort.disabled { opacity: 0.55; }
-.effort-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--fs-sm); }
-.effort-title { color: var(--text-3); }
-.effort-value { color: var(--text); font-weight: 600; }
-.effort-track { padding: 9px 7px; border-radius: var(--r-sm); cursor: pointer; outline: none; touch-action: none; }
+.effort-head, .effort-ends { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; line-height: 18px; }
+.effort-head { font-size: var(--fs-md); }
+.effort-title { color: var(--text); font-weight: 600; }
+.effort-value { color: var(--text-2); }
+.effort-ends { margin-top: 8px; font-size: var(--fs-sm); color: var(--text-3); }
+.effort-track { margin-top: 2px; padding: 9px 8px; border-radius: var(--r-sm); cursor: pointer; outline: none; touch-action: none; }
 .effort.disabled .effort-track { cursor: default; }
-.effort-rail { position: relative; height: 4px; border-radius: 2px; background: var(--border-strong); }
-.effort-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); }
-.effort-stop { position: absolute; top: 50%; width: 6px; height: 6px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--bg-raised); border: 1px solid var(--text-3); }
-.effort-stop.on { background: var(--accent); border-color: var(--accent); }
-.effort-thumb { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--accent); border: 2px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--accent); transition: left var(--t-fast) var(--ease); }
-.effort-track:focus-visible .effort-thumb { box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-soft); }
-.effort-ends { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-xs); color: var(--text-3); }
-.effort-hint { flex: 1 1 0; text-align: center; color: var(--text-4); }
-.effort-default { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; margin-top: 6px; padding: 2px 6px; border-radius: var(--r-xs); text-align: left; font-size: var(--fs-sm); color: var(--text-2); }
+.effort-rail { position: relative; height: 4px; border-radius: 2px; background: var(--surface-active); }
+.effort-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-4); }
+.effort-thumb { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); border: 3px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--border-strong); transition: left var(--t-base) var(--ease); }
+.effort-track:focus-visible .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
+.effort-default { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); min-height: 28px; margin: 8px -6px -4px; padding: 2px 6px; border-radius: var(--r-xs); text-align: left; font-size: var(--fs-sm); color: var(--text-2); }
 .effort-default:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .effort-default.on { color: var(--text); }
 .effort-default .dim { font-size: var(--fs-xs); }
@@ -175,7 +174,7 @@
 .cp-row .badge { height: 16px; padding: 0 5px; }
 .cp-value { flex: none; color: var(--text-3); font-size: var(--fs-xs); max-width: 42%; text-align: right; }
 .cp-tail { width: 14px; flex: none; display: grid; place-items: center; }
-.cp-effort { padding: 12px 14px 10px; max-width: 340px; outline: none; }
+.cp-effort { padding: 12px 14px; max-width: 320px; outline: none; }
 .cp-switch { width: 28px; height: 16px; border-radius: 8px; background: var(--border-strong); position: relative; flex: none; transition: background var(--t-fast) var(--ease); }
 .cp-switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-raised); transition: transform var(--t-fast) var(--ease); }
 .cp-switch.on { background: var(--accent); }

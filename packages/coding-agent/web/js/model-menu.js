@@ -4,7 +4,7 @@
 // compaction).
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Popover, Spinner } from "./ui.js";
 import { t } from "./i18n.js";
-import { effortHint, effortName, modelEfforts, pointerMoved, searchModels } from "./util.js";
+import { effortName, modelEfforts, pointerMoved, searchModels } from "./util.js";
 
 const keyOf = (providerId, modelId) => `${providerId}\u0000${modelId}`;
 
@@ -104,13 +104,15 @@ export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, di
 
 /**
  * The thinking effort as a horizontal slider with one stop per level: left is less reasoning (faster), right is more
- * (stronger). ←/→ (or Home/End) step through the stops; a click or a drag lands on the nearest one.
+ * (smarter). The name and the current level sit on top, the two ends are named under them, and the rail shows a small
+ * mark per level and one thumb. ←/→ (or Home/End) step through the stops; a click or a drag lands on the nearest one.
  *
  * props: levels (only the levels the model supports), value (a level, or undefined when none is chosen),
- * onChange(level), disabled
+ * onChange(level) (may return a promise that settles once the choice is stored), disabled
  */
 export function EffortSlider({ levels, value, onChange, disabled }) {
-	const track = useRef(null);
+	// The rail is what the stops are measured on: a pointer position maps to the stop nearest to it.
+	const rail = useRef(null);
 	const [drag, setDragState] = useState(null);
 	// The level under the pointer is also kept outside the render, so a release right after a press still lands on it.
 	const dragging = useRef(null);
@@ -118,27 +120,43 @@ export function EffortSlider({ levels, value, onChange, disabled }) {
 		dragging.current = level;
 		setDragState(level);
 	};
-	const at = levels.indexOf(drag ?? value);
+	// A chosen level stays on screen until its owner has stored it, so the thumb never falls back to the old level in
+	// between. Only the latest choice may release it.
+	const [picked, setPicked] = useState(null);
+	const pickSeq = useRef(0);
+	const current = picked ?? value;
+	const shown = drag ?? current;
+	const at = levels.indexOf(shown);
 	const last = Math.max(1, levels.length - 1);
-	const shown = drag ?? value;
 	const indexAt = (clientX) => {
-		const box = track.current.getBoundingClientRect();
+		const box = rail.current.getBoundingClientRect();
 		return Math.max(0, Math.min(levels.length - 1, Math.round(((clientX - box.left) / Math.max(1, box.width)) * last)));
 	};
-	const commit = (level) => !disabled && level !== undefined && level !== value && onChange(level);
+	const commit = (level) => {
+		if (disabled || level === undefined || level === current) return;
+		const seq = ++pickSeq.current;
+		setPicked(level);
+		Promise.resolve(onChange(level))
+			.catch(() => {})
+			.then(() => seq === pickSeq.current && setPicked(null));
+	};
 	const onPointerDown = (e) => {
 		if (disabled || e.button > 0) return;
 		e.preventDefault();
-		track.current.focus();
-		track.current.setPointerCapture?.(e.pointerId);
+		e.currentTarget.focus();
+		e.currentTarget.setPointerCapture?.(e.pointerId);
 		setDrag(levels[indexAt(e.clientX)]);
 	};
-	const onPointerMove = (e) => dragging.current !== null && setDrag(levels[indexAt(e.clientX)]);
+	const onPointerMove = (e) => {
+		if (dragging.current === null) return;
+		const level = levels[indexAt(e.clientX)];
+		if (level !== dragging.current) setDrag(level);
+	};
 	const onPointerUp = () => {
 		if (dragging.current === null) return;
 		const level = dragging.current;
-		setDrag(null);
 		commit(level);
+		setDrag(null);
 	};
 	const onKeyDown = (e) => {
 		const step = e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 0;
@@ -149,23 +167,23 @@ export function EffortSlider({ levels, value, onChange, disabled }) {
 		commit(levels[next]);
 	};
 	const left = (index) => `${(index / last) * 100}%`;
+	const name = shown ? effortName(shown) : t("Default");
 	return html`<div class=${`effort ${disabled ? "disabled" : ""}`}>
-		<div class="effort-head"><span class="effort-title">${t("Thinking effort")}</span><span class="effort-value">${shown ? effortName(shown) : t("Default")}</span></div>
-		<div class="effort-track" ref=${track} role="slider" tabindex=${disabled ? -1 : 0} aria-label=${t("Thinking effort")} aria-orientation="horizontal" aria-disabled=${disabled ? "true" : undefined}
-			aria-valuemin="0" aria-valuemax=${levels.length - 1} aria-valuenow=${at < 0 ? undefined : at} aria-valuetext=${shown ? effortName(shown) : t("Default")}
+		<div class="effort-head"><span class="effort-title">${t("Thinking effort")}</span><span class="effort-value">${name}</span></div>
+		<div class="effort-ends"><span>${t("Faster")}</span><span>${t("Smarter")}</span></div>
+		<div class="effort-track" role="slider" tabindex=${disabled ? -1 : 0} aria-label=${t("Thinking effort")} aria-orientation="horizontal" aria-disabled=${disabled ? "true" : undefined}
+			aria-valuemin="0" aria-valuemax=${levels.length - 1} aria-valuenow=${at < 0 ? undefined : at} aria-valuetext=${name}
 			onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${() => setDrag(null)} onKeyDown=${onKeyDown}>
-			<div class="effort-rail">
-				${at > 0 ? html`<span class="effort-fill" style=${{ width: left(at) }} />` : null}
-				${levels.map((level, index) => html`<span key=${level} class=${`effort-stop ${at >= 0 && index <= at ? "on" : ""}`} style=${{ left: left(index) }} title=${effortName(level)} />`)}
+			<div class="effort-rail" ref=${rail}>
+				${levels.map((level, index) => html`<span key=${level} class="effort-stop" style=${{ left: left(index) }} title=${effortName(level)} />`)}
 				${at >= 0 ? html`<span class="effort-thumb" style=${{ left: left(at) }} />` : null}
 			</div>
 		</div>
-		<div class="effort-ends"><span>${t("Faster")}</span><span class="effort-hint truncate">${shown ? effortHint(shown) : t("No effort sent")}</span><span>${t("Smarter")}</span></div>
 	</div>`;
 }
 
 /**
- * A button that opens the effort slider above (or below) it.
+ * A text button that opens the effort slider above (or below) it.
  *
  * props: levels, value, onChange(level | undefined), disabled, placement, withDefault (offer "Default": no effort is
  * sent, the provider decides), class, label
@@ -177,9 +195,9 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
 	const text = value ? effortName(value) : t("Default");
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
-			<${Icon} name="brain" size=${14} /><span class="truncate chip-text">${text}</span><${Icon} name="chevronDown" size=${12} />
+			<span class="truncate chip-text">${text}</span><${Icon} name="chevronDown" size=${12} />
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${252} class="effort-pop">
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${264} class="effort-pop">
 			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} />
 			${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} disabled=${disabled} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
 		<//>
@@ -199,7 +217,7 @@ export function ModelRefPicker({ models, value, onChange, disabled, label }) {
 	return html`<span class="model-ref">
 		<span ref=${anchor} class="picker-anchor grow">
 			<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="listbox" aria-expanded=${open} aria-label=${label} title=${text} onClick=${() => setOpen(!open)}>
-				<${Icon} name="cpu" size=${14} /><span class="truncate grow">${text}</span>
+				<span class="truncate grow">${text}</span>
 			</button>
 			<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${300} maxHeight=${360} class="model-pop">
 				<${ModelMenu} models=${models} selected=${v} mainOption
