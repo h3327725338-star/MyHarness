@@ -1,17 +1,20 @@
 // Inline command panel: slash commands with several levels of choices (/settings, /model, /effort, /git …) open here, above the
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
-import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner } from "./ui.js";
+import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, UnitField, useDelayedBusy, usePresence } from "./ui.js";
 import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
+import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoTaskChanges } from "./git-flow.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
 import { rankSearch } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
-import { chatTitle, clip, effortName, fmtDateTime, modelEfforts, pointerMoved, relTime } from "./util.js";
+import { RUN_MODES } from "./run-modes.js";
+import { saveSetting } from "./settings-apply.js";
+import { chatTitle, clip, effortName, fmtDateTime, modelEfforts, plural, pointerMoved, relTime, tokensToUnit, unitToTokens } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -45,22 +48,26 @@ function confirmScreen({ title, message, confirmLabel, danger, onConfirm }) {
 	};
 }
 
-function inputScreen({ title, label, value = "", type = "text", placeholder, submitLabel, onSubmit, min, max }) {
-	return { title, input: { label, value, type, placeholder, submitLabel: submitLabel || t("Save"), onSubmit, min, max } };
+/**
+ * A one-field screen. With `unit` the field is a number with a fixed, non-editable unit after it; `valid(text)` then says
+ * whether what is typed can be saved.
+ */
+function inputScreen({ title, label, value = "", type = "text", placeholder, submitLabel, onSubmit, min, max, unit, valid }) {
+	return { title, input: { label, value, type, placeholder, submitLabel: submitLabel || t("Save"), onSubmit, min, max, unit, valid } };
 }
 
 // ---- /effort ------------------------------------------------------------------------------------------------
 /** The effort slider as a panel level: one stop per level; `withDefault` adds "Default" (no effort sent). */
 function effortSliderScreen({ title, levels, value, withDefault, onChange }) {
-	return { title, slider: { levels, value, withDefault, onChange } };
+	return { title, subtitle: t("Higher effort thinks longer before it answers: slower, but better on hard problems."), slider: { levels, value, withDefault, onChange } };
 }
 
 function effortScreen() {
 	const thinking = state.snap?.thinking;
-	if (!thinking?.supported) return { title: t("Reasoning effort"), empty: t("The current model does not support reasoning effort."), rows: [] };
-	if (thinking.levels.length < 2) return { title: t("Reasoning effort"), empty: t("The current model has no reasoning effort options to choose from."), rows: [] };
+	if (!thinking?.supported) return { title: t("Thinking effort"), size: "md", empty: t("The current model does not support reasoning effort."), rows: [] };
+	if (thinking.levels.length < 2) return { title: t("Thinking effort"), size: "md", empty: t("The current model has no reasoning effort options to choose from."), rows: [] };
 	return effortSliderScreen({
-		title: t("Reasoning effort"),
+		title: t("Thinking effort"),
 		levels: thinking.levels,
 		value: thinking.level,
 		onChange: chooseThinkingLevel,
@@ -151,7 +158,7 @@ const MENU_PAGES = {
 	"context-window": {
 		open: () => groupScreen("Context Window", CONTEXT_WINDOW_SETTINGS, t("Empty uses the model's own window."))(),
 		settings: CONTEXT_WINDOW_SETTINGS,
-		value: () => CONTEXT_WINDOW_SETTINGS.map((id) => settingItem(id)?.value || t("model")).join(" · "),
+		value: () => CONTEXT_WINDOW_SETTINGS.map((id) => capValue(settingItem(id))).join(" · "),
 	},
 	"git-integration": { open: () => gitRoot(), value: (snap) => (snap?.git ? onOff(snap.git.enabled) : "") },
 	warnings: { open: groupScreen("Warnings", WARNING_SETTINGS), settings: WARNING_SETTINGS },
@@ -300,14 +307,10 @@ function githubScreen() {
 	};
 }
 
-async function applySetting(id, value) {
-	const result = await attempt(() => post("/api/settings", { id, value }));
-	await loadSettings();
-	await loadSnapshot();
-	if (id === "webSearch.enabled" || id.startsWith("subAgent")) loadModels();
-	if (result?.errors?.length) toast(result.errors.map((e) => e.message).join("\n"), "error");
-	return result;
-}
+const applySetting = saveSetting;
+
+/** A token cap as "256 K" (the exact count is kept underneath); empty means the model's own limit. */
+const capValue = (item) => (item?.value ? `${tokensToUnit(item.value, item.unitSize || 1024)} ${item.unit}` : t("Model limit"));
 
 function shownValue(item) {
 	switch (item.type) {
@@ -323,6 +326,10 @@ function shownValue(item) {
 		}
 		case "text":
 			return item.value ? clip(String(item.value), 28) : "—";
+		case "tokens":
+			return capValue(item);
+		case "number":
+			return item.value === undefined || item.value === null ? "—" : item.unit ? `${item.value} ${t(item.unit)}` : String(item.value);
 		default:
 			return item.value === undefined || item.value === null ? "—" : String(item.value);
 	}
@@ -353,7 +360,9 @@ function itemRow(item) {
 					}),
 			};
 		case "number":
-			return { ...row, onEnter: (ctx) => ctx.push(() => inputScreen({ title: tr(item.label), label: tr(item.description), value: String(item.value ?? ""), type: "number", min: item.min, max: item.max, onSubmit: async (value, c) => { if (value === "") return; await applySetting(item.id, Number(value)); c.pop(); } })) };
+			return { ...row, onEnter: (ctx) => ctx.push(() => numberScreen(item)) };
+		case "tokens":
+			return { ...row, onEnter: (ctx) => ctx.push(() => tokensScreen(item)) };
 		case "text":
 			return { ...row, onEnter: (ctx) => ctx.push(() => inputScreen({ title: tr(item.label), label: tr(item.description), value: String(item.value ?? ""), onSubmit: async (value, c) => { await applySetting(item.id, value); c.pop(); } })) };
 		case "multi":
@@ -363,6 +372,48 @@ function itemRow(item) {
 		default:
 			return { ...row, chevron: false };
 	}
+}
+
+/** A whole-number setting; with a unit ("10 seconds") only the number is typed and the unit stays after the field. */
+function numberScreen(item) {
+	const inRange = (text) => {
+		const value = Number(text);
+		return text.trim() !== "" && Number.isFinite(value) && value >= (item.min ?? -Infinity) && value <= (item.max ?? Infinity);
+	};
+	return inputScreen({
+		title: tr(item.label),
+		label: tr(item.description),
+		value: String(item.value ?? ""),
+		type: "number",
+		min: item.min,
+		max: item.max,
+		unit: item.unit ? t(item.unit) : undefined,
+		valid: inRange,
+		onSubmit: async (value, c) => {
+			if (!inRange(value)) return;
+			await applySetting(item.id, Number(value));
+			c.pop();
+		},
+	});
+}
+
+/** A token cap typed in a unit ("256 | K tokens"): the exact token count is what is saved; an empty field clears the cap. */
+function tokensScreen(item) {
+	const unitSize = item.unitSize || 1024;
+	const acceptable = (text) => text.trim() === "" || unitToTokens(text, unitSize) !== undefined;
+	return inputScreen({
+		title: tr(item.label),
+		label: tr(item.description),
+		value: tokensToUnit(item.value, unitSize),
+		placeholder: t("Model limit"),
+		unit: t("{unit} tokens", { unit: item.unit }),
+		valid: acceptable,
+		onSubmit: async (text, c) => {
+			if (!acceptable(text)) return;
+			await applySetting(item.id, text.trim() === "" ? null : unitToTokens(text, unitSize));
+			c.pop();
+		},
+	});
 }
 
 function multiScreen(item) {
@@ -446,14 +497,14 @@ function appearanceScreen() {
 		key: id,
 		label: t(label),
 		desc: t(desc),
-		value: t(options.find((o) => o.value === view[key])?.label ?? String(view[key])),
+		value: t((options.find((o) => o.value === view[key]) ?? (key === "runMode" ? options[0] : undefined))?.label ?? String(view[key])),
 		chevron: true,
 		onEnter: (ctx) =>
 			ctx.push(() =>
 				optionsScreen({
 					title: t(label),
 					subtitle: t(desc),
-					options: options.map((o) => ({ value: o.value, label: key === "lang" ? o.label : t(o.label) })),
+					options: options.map((o) => ({ value: o.value, label: key === "lang" ? o.label : t(o.label), desc: o.desc ? t(o.desc) : undefined })),
 					value: state.view[key],
 					onPick: (value, c) => {
 						// The whole interface is rebuilt in the new language; reopen this panel where the user was.
@@ -469,8 +520,8 @@ function appearanceScreen() {
 		rows: [
 			choice("lang", "UI language", "Language of the MyHarness interface. Chat content is never translated.", "lang", LANGUAGES),
 			choice("theme", "Theme", "Dark and light are separate designs; “System” follows Windows.", "theme", [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]),
-			choice("density", "Density", "Control height and text size.", "density", [{ value: "compact", label: "Compact" }, { value: "comfortable", label: "Comfortable" }]),
 			choice("motion", "Animations", "Loading shimmer, expand/collapse and fades. Status is always shown in text too.", "motion", [{ value: "system", label: "System" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]),
+			choice("runMode", "While a task is running", "What Enter does with a message sent while the agent is working.", "runMode", Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: mode.label, desc: mode.hint }))),
 			{
 				key: "readWidth",
 				label: t("Reading width"),
@@ -648,22 +699,90 @@ function gitRoot() {
 		loadGitStatus();
 	}, []);
 	const dirty = gitStatus?.preview?.total || 0;
-	const inline = (kind, title) => (ctx) => ctx.push(() => ({ title, custom: (c) => html`<${GitInline} kind=${kind} onClose=${c.pop} />` }));
+	const enable = (ctx) => ctx.push(() => ({ title: t("Set up Git for this project"), custom: (c) => html`<${GitInline} onClose=${c.pop} />` }));
 	return {
 		title: t("Git"),
 		subtitle: gitStatus?.isRepository ? `${gitStatus.branch || t("detached HEAD")} · ${dirty ? t("{n} uncommitted", { n: dirty }) : t("clean")}` : gitStatus ? t("This workspace is not a Git repository.") : undefined,
 		rows: [
-			{ key: "changes", label: t("Review changes"), icon: "fileDiff", onEnter: (c) => (c.close(), actions.openChanges({ git: true })) },
-			{ key: "commit", label: t("Commit"), desc: t("Creates one local commit for the task's changes. Nothing is pushed."), chevron: true, onEnter: inline("commit", t("Commit changes")) },
-			{ key: "push", label: t("Push"), desc: t("Publishes commits that already exist on this branch, then waits for the CI result."), chevron: true, onEnter: inline("push", t("Push to upstream")) },
-			...(checkpoint?.status === "created" ? [{ key: "undo", label: t("Undo task"), desc: t("Keep or undo this task's changes"), chevron: true, onEnter: inline("undo", t("This task's uncommitted changes")) }] : []),
-			{ key: "restore", label: t("Restore to last commit"), desc: t("Permanently discards every uncommitted change."), chevron: true, danger: true, onEnter: inline("restore", t("Restore to the latest commit")) },
+			{ key: "commit", label: t("Commit"), desc: t("Creates one local commit for the task's changes. Nothing is pushed."), onEnter: (c) => (c.close(), commitChanges()) },
+			{ key: "push", label: t("Push"), desc: t("Publishes commits that already exist on this branch, then waits for the CI result."), onEnter: (c) => (c.close(), pushChanges()) },
+			...(checkpoint?.status === "created" ? [{ key: "undo", label: t("Undo task"), desc: t("Keep or undo this task's changes"), chevron: true, onEnter: (c) => c.push(() => undoScreen()) }] : []),
+			{ key: "restore", label: t("Restore to last commit"), desc: t("Permanently discards every uncommitted change."), chevron: true, danger: true, onEnter: (c) => c.push(() => restoreScreen()) },
 			{ key: "worktrees", label: t("Worktrees"), chevron: true, onEnter: (c) => c.push((cc) => worktreesScreen(cc)) },
 			{ key: "history", label: t("History"), chevron: true, onEnter: (c) => c.push(() => historyScreen()) },
 			{ key: "repos", label: t("Repositories"), chevron: true, onEnter: (c) => c.push((cc) => repositoriesScreen(cc)) },
 			gitStatus?.integrationEnabled
 				? { key: "integration", label: t("Turn off Git integration"), onEnter: async () => (await attempt(() => post("/api/git/enable", { enabled: false })), loadGitStatus(), toast(t("Git integration turned off (history is kept)."), "info", 3000)) }
-				: { key: "integration", label: t("Turn on Git integration"), chevron: true, onEnter: inline("enable", t("Set up Git for this project")) },
+				: { key: "integration", label: t("Turn on Git integration"), chevron: true, onEnter: enable },
+		],
+	};
+}
+
+/** Changed paths as a block of lines (the working tree right now). */
+function pathLines(total, lines) {
+	return html`<div class="cp-body"><div class="dim">${t("{plural} in the working tree right now", { plural: plural(total, "changed path") })}</div><pre class="git-lines">${lines.slice(0, 40).join("\n")}</pre></div>`;
+}
+
+/** /undo: keep or undo what the latest task changed. Keeping, the safe choice, is the first row; undoing asks once more. */
+function undoScreen() {
+	const checkpoint = useStore((s) => s.snap?.checkpoint);
+	const gitStatus = useStore((s) => s.gitStatus);
+	useEffect(() => {
+		loadGitStatus();
+	}, []);
+	const title = t("Undo task changes");
+	if (checkpoint?.status !== "created") return { title, size: "md", empty: t("There is no open task checkpoint. Use “Restore to last commit” (in Git tools) to discard everything since the latest commit."), rows: [] };
+	const preview = gitStatus?.preview;
+	return {
+		title,
+		size: preview?.total > 8 ? "lg" : "md",
+		subtitle: t("The agent's latest task left changes that are not committed yet. Keep them as they are, or roll the workspace back to how it was when the task started."),
+		body: preview?.total ? pathLines(preview.total, preview.lines) : undefined,
+		rows: [
+			{ key: "keep", label: t("Keep changes"), desc: t("The files stay as they are; the checkpoint is closed."), onEnter: (c) => (c.close(), keepTaskChanges()) },
+			{
+				key: "undo",
+				label: t("Undo task changes"),
+				desc: t("Roll the workspace back to how it was when the task started."),
+				danger: true,
+				chevron: true,
+				onEnter: (c) =>
+					c.push(() =>
+						confirmScreen({
+							title: t("Undo this task's changes?"),
+							message: checkpoint.hadBash
+								? t("Undo restores the workspace to the checkpoint state — that can include changes from later messages in the same session. It does not touch remote repositories or anything a shell command did outside the workspace (shell commands ran during this task).")
+								: t("Undo restores the workspace to the checkpoint state — that can include changes from later messages in the same session. It does not touch remote repositories or anything a shell command did outside the workspace."),
+							confirmLabel: t("Undo task changes"),
+							danger: true,
+							onConfirm: (cc) => (cc.close(), undoTaskChanges()),
+						}),
+					),
+			},
+		],
+	};
+}
+
+/** /restore: back to the latest commit. It shows exactly what is lost; Cancel, the safe choice, is the first row. */
+function restoreScreen() {
+	const { data, error } = useLoaded(restorePreview);
+	const title = t("Restore to the latest commit");
+	if (!data) return { title, size: "md", loading: !error, error, rows: [] };
+	if (!data.hasChanges) return { title, size: "md", empty: t("The working tree already matches the latest commit."), rows: [] };
+	const p = data.preview;
+	return {
+		title,
+		size: p.trackedChanges.length + p.untrackedPaths.length > 8 ? "lg" : "md",
+		subtitle: t("The repository goes back to {label}. This cannot be undone.", { label: p.headLabel }),
+		body: html`<div class="cp-body">
+			${p.trackedChanges.length ? html`<div class="dim">${t("Modified tracked files ({length})", { length: p.trackedChanges.length })}</div><pre class="git-lines">${p.trackedChanges.slice(0, 40).join("\n")}</pre>` : null}
+			${p.untrackedPaths.length ? html`<div class="dim">${t("Untracked files/folders that will be deleted ({length})", { length: p.untrackedPaths.length })}</div><pre class="git-lines">${p.untrackedPaths.slice(0, 40).join("\n")}</pre>` : null}
+			${p.keptNestedRepositories.length ? html`<div class="dim">${t("Nested repositories kept: {join}", { join: p.keptNestedRepositories.join(", ") })}</div>` : null}
+			<div class="dim">${t("Files ignored by .gitignore are not affected.")}</div>
+		</div>`,
+		rows: [
+			{ key: "cancel", label: t("Cancel"), onEnter: (c) => c.close() },
+			{ key: "restore", label: t("Discard and restore"), desc: t("Permanently discards every uncommitted change."), danger: true, onEnter: (c) => (c.close(), restoreToLatestCommit()) },
 		],
 	};
 }
@@ -878,10 +997,8 @@ const ROOT = {
 	effort: () => effortScreen(),
 	workspace: () => workspaceRoot(),
 	git: () => gitRoot(),
-	commit: () => ({ title: t("Commit changes"), custom: (c) => html`<${GitInline} kind="commit" onClose=${c.close} />` }),
-	push: () => ({ title: t("Push to upstream"), custom: (c) => html`<${GitInline} kind="push" onClose=${c.close} />` }),
-	restore: () => ({ title: t("Restore to the latest commit"), custom: (c) => html`<${GitInline} kind="restore" onClose=${c.close} />` }),
-	undo: () => ({ title: t("This task's uncommitted changes"), custom: (c) => html`<${GitInline} kind="undo" onClose=${c.close} />` }),
+	restore: () => restoreScreen(),
+	undo: () => undoScreen(),
 };
 
 // ---- Rendering --------------------------------------------------------------------------------------------------
@@ -902,8 +1019,9 @@ function Row({ row, selected, busy, onClick, onHover }) {
 function SliderView({ spec, ctx }) {
 	const { levels, value, withDefault, onChange } = spec.slider;
 	// The slider keeps the chosen level on screen while it is stored, so it is never dimmed or locked in between.
-	return html`<div class="cp-effort" onKeyDown=${(e) => (e.key === "Enter" || e.key === "Backspace") && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
-		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} />
+	return html`<div class="cp-effort" onKeyDown=${(e) => e.key === "Backspace" && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
+		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} onDone=${ctx.pop} titled=${false} />
+		${spec.subtitle ? html`<div class="cp-note dim">${spec.subtitle}</div>` : null}
 		${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
 	</div>`;
 }
@@ -914,11 +1032,20 @@ function InputView({ spec, ctx }) {
 	const [busy, setBusy] = useState(false);
 	const ref = useRef(null);
 	useEffect(() => {
-		ref.current?.focus();
-		ref.current?.select?.();
+		const field = ref.current?.querySelector("input");
+		field?.focus();
+		field?.select?.();
 	}, []);
+	const invalid = input.unit !== undefined && !!input.valid && !input.valid(value);
+	const keys = (e) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			ctx.pop();
+		} else e.stopPropagation();
+	};
 	const submit = async () => {
-		if (busy) return;
+		if (busy || invalid) return;
 		setBusy(true);
 		try {
 			await input.onSubmit(value, ctx);
@@ -926,19 +1053,37 @@ function InputView({ spec, ctx }) {
 			setBusy(false);
 		}
 	};
-	return html`<form class="cp-input" onSubmit=${(e) => (e.preventDefault(), submit())}>
+	return html`<form class="cp-input" ref=${ref} onSubmit=${(e) => (e.preventDefault(), submit())}>
 		<label class="col field-label">${input.label}
-			<input ref=${ref} class="field" type=${input.type || "text"} min=${input.min} max=${input.max} autocomplete="off" value=${value} placeholder=${input.placeholder || ""} onInput=${(e) => setValue(e.target.value)}
-				onKeyDown=${(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ctx.pop(); } else e.stopPropagation(); }} />
+			${input.unit !== undefined
+				? html`<${UnitField} value=${value} onInput=${setValue} unit=${input.unit} label=${input.label} placeholder=${input.placeholder} invalid=${invalid} width=${230} onKeyDown=${keys} />`
+				: html`<input class="field" type=${input.type || "text"} min=${input.min} max=${input.max} autocomplete="off" value=${value} placeholder=${input.placeholder || ""} onInput=${(e) => setValue(e.target.value)} onKeyDown=${keys} />`}
 		</label>
-		<div class="row" style="gap:8px"><button class="btn sm ghost" type="button" onClick=${ctx.pop}>${t("Cancel")}</button><button class="btn sm primary" type="submit" disabled=${busy}>${input.submitLabel}</button></div>
+		<div class="row" style="gap:8px"><button class="btn sm ghost" type="button" onClick=${ctx.pop}>${t("Cancel")}</button><button class="btn sm primary" type="submit" disabled=${busy || invalid}>${input.submitLabel}</button></div>
 	</form>`;
 }
 
 // A list with this many choices or more is searchable: typing goes straight into the filter, nothing needs a click first.
 const FILTER_MIN_ROWS = 5;
 
-function Screen({ build, ctx, entry, onTitle, arg }) {
+/** The size of a panel level: a slider or a short pick is a small card in the middle, a long list or a lot of detail uses the whole width. */
+function sizeOf(spec, kind, rowCount) {
+	if (spec.size) return spec.size;
+	if (kind === "slider") return "sm";
+	if (kind === "input") return "md";
+	if (kind === "custom") return "lg";
+	return rowCount > 6 ? "lg" : "md";
+}
+
+/** The keys of a panel level, as a line of hints. */
+function keysOf(kind) {
+	if (kind === "slider") return `←/→ ${t("change")} · ↵ ${t("done")} · Esc ${t("close")}`;
+	if (kind === "input") return `↵ ${t("save")} · Esc ${t("back")}`;
+	if (kind === "custom") return `Esc ${t("back")}`;
+	return `↑↓ ${t("select")} · ↵ ${t("open")} · ← ${t("back")} · Esc ${t("close")}`;
+}
+
+function Screen({ build, ctx, entry, onMeta, arg }) {
 	// Screens read live state (settings, models, providers …); any change re-runs the builder so the rows stay current.
 	useStore((s) => s.settings);
 	useStore((s) => s.snap);
@@ -954,6 +1099,10 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	const [filter, setFilter] = useState(entry.filter ?? spec.initialFilter ?? "");
 	const [selKey, setSelKey] = useState(entry.selKey ?? allRows.find((row) => row.check && !row.group)?.key);
 	const [busyKey, setBusyKey] = useState(null);
+	// A row shows "working" only when what it does really takes a while: an instant change shows nothing but its result.
+	const slow = useDelayedBusy(busyKey !== null);
+	const lastBusyKey = useRef(null);
+	if (busyKey !== null) lastBusyKey.current = busyKey;
 	const root = useRef(null);
 	const filterRef = useRef(null);
 	const list = useRef(null);
@@ -991,7 +1140,10 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	useEffect(() => {
 		entry.filter = filter;
 	}, [filter]);
-	useEffect(() => onTitle?.(spec.title), [spec.title]);
+	const kind = spec.input ? "input" : spec.slider ? "slider" : spec.custom ? "custom" : "list";
+	const size = sizeOf(spec, kind, allRows.filter((row) => !row.group).length);
+	const keys = keysOf(kind);
+	useLayoutEffect(() => onMeta?.({ title: spec.title, size, keys }), [spec.title, size, keys]);
 
 	const selectRow = (index) => setSelKey(rows[index]?.key);
 	const stepTo = (delta) => {
@@ -1068,11 +1220,12 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 				? html`<${InlineFrame.Provider} value=${{ onClose: ctx.pop }}>${spec.custom(ctx)}<//>`
 				: html`
 			${spec.subtitle ? html`<div class="cp-sub dim">${spec.subtitle}</div>` : null}
+			${spec.body || null}
 			${filterable ? html`<div class="cp-filter"><${Icon} name="search" size=${13} /><input ref=${filterRef} value=${filter} placeholder=${spec.placeholder || t("Search…")} onInput=${(e) => { setFilter(e.target.value); setSelKey(undefined); }} aria-label=${spec.placeholder || t("Search…")} autocomplete="off" spellcheck="false" /></div>` : null}
 			${spec.error ? html`<div class="notice danger">${spec.error}</div>` : null}
 			<div class="cp-list" role="listbox" ref=${list} onMouseDown=${(e) => filterable && e.preventDefault()}>
 				${spec.loading ? html`<div class="empty"><${Spinner} /></div>` : null}
-				${rows.map((row, i) => html`<${Row} key=${row.key} row=${row} selected=${i === current} busy=${busyKey === row.key} onHover=${() => !row.group && !row.disabled && i !== current && selectRow(i)} onClick=${() => (selectRow(i), activate(row))} />`)}
+				${rows.map((row, i) => html`<${Row} key=${row.key} row=${row} selected=${i === current} busy=${slow && (busyKey ?? lastBusyKey.current) === row.key} onHover=${() => !row.group && !row.disabled && i !== current && selectRow(i)} onClick=${() => (selectRow(i), activate(row))} />`)}
 				${!spec.loading && !rows.filter((r) => !r.group).length ? html`<div class="empty">${spec.empty || t("Nothing to show.")}</div>` : null}
 			</div>`}
 	</div>`;
@@ -1080,7 +1233,12 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 
 export function CommandPanel() {
 	const cmd = useStore((s) => s.view.cmd);
-	return cmd ? html`<${PanelBody} key=${cmd.nonce} cmd=${cmd} />` : null;
+	// A closed panel stays on screen (inert) for the length of its fade, so it leaves the way it came.
+	const last = useRef(cmd);
+	if (cmd) last.current = cmd;
+	const { mounted } = usePresence(!!cmd, 160);
+	const shown = cmd || (mounted ? last.current : null);
+	return shown ? html`<${PanelBody} key=${shown.nonce} cmd=${shown} leaving=${!cmd} />` : null;
 }
 
 let entryId = 0;
@@ -1096,9 +1254,21 @@ function initialStack(cmd) {
 /** Things drawn over the page that belong to what the panel is doing (a confirmation, a form, a menu, a toast). */
 const OVERLAYS = ".scrim, .modal, .popover, .toasts";
 
-function PanelBody({ cmd }) {
+function PanelBody({ cmd, leaving }) {
 	const [stack, setStack] = useState(() => initialStack(cmd));
-	const [titles, setTitles] = useState({});
+	const [metas, setMetas] = useState({});
+	// The card changes its width with the level (a slider is narrow, a list is wide): that is animated, but not when it first appears.
+	const [ready, setReady] = useState(false);
+	useEffect(() => {
+		let second = 0;
+		const first = requestAnimationFrame(() => {
+			second = requestAnimationFrame(() => setReady(true));
+		});
+		return () => {
+			cancelAnimationFrame(first);
+			cancelAnimationFrame(second);
+		};
+	}, []);
 	const panel = useRef(null);
 	// A click anywhere outside the panel closes it (every level at once); the draft in the input box is left alone.
 	useEffect(() => {
@@ -1124,15 +1294,17 @@ function PanelBody({ cmd }) {
 		[],
 	);
 	const top = stack[stack.length - 1];
-	const heading = stack.map((e) => titles[e.id]).filter(Boolean);
-	return html`<div class="cp fade-in" ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")}>
+	const heading = stack.map((e) => metas[e.id]?.title).filter(Boolean);
+	const meta = metas[top.id] || {};
+	return html`<div class=${`cp fade-in ${ready ? "ready" : ""} ${leaving ? "leaving" : ""}`} data-size=${meta.size || "lg"} ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")} inert=${!!leaving}>
 		<div class="cp-head">
 			${stack.length > 1 ? html`<button class="icon-btn sm" onClick=${ctx.pop} title=${`${t("Back")} (←)`} aria-label=${t("Back")}><${Icon} name="arrowLeft" size=${14} /></button>` : html`<${Icon} name="bolt" size=${13} class="c-dim" />`}
 			<span class="cp-title truncate">${heading.map((part, i) => html`${i ? html`<span class="cp-sep">›</span>` : null}<span class=${i === heading.length - 1 ? "cur" : "dim"}>${part}</span>`)}</span>
 			<span class="grow" />
-			<span class="cp-keys dim">↑↓ ${t("select")} · ↵ ${t("open")} · ← ${t("back")} · Esc ${t("close")}</span>
+			${meta.size === "lg" && meta.keys ? html`<span class="cp-keys dim">${meta.keys}</span>` : null}
 			<button class="icon-btn sm" onClick=${closeCommand} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${14} /></button>
 		</div>
-		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} entry=${top} onTitle=${(title) => setTitles((previous) => (previous[top.id] === title ? previous : { ...previous, [top.id]: title }))} />
+		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} entry=${top} onMeta=${(next) => setMetas((previous) => (previous[top.id]?.title === next.title && previous[top.id]?.size === next.size && previous[top.id]?.keys === next.keys ? previous : { ...previous, [top.id]: next }))} />
+		${meta.size !== "lg" && meta.keys ? html`<div class="cp-foot dim">${meta.keys}</div>` : null}
 	</div>`;
 }

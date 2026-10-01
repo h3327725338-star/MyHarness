@@ -228,6 +228,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps MyHarness thinking levels to provider values and marks unsupported levels (see below) |
 | `thinkingLevelStatus` | No | omitted | Written by model refresh: per-level probe result (`supported`, `unsupported`, `unknown`; `unverified` only in files written by older versions, read as `unknown`); informational, the runtime only reads `thinkingLevelMap` |
+| `thinkingLevelAliases` | No | omitted | Written by model refresh / Detect when the provider's documentation says an effort name is accepted but runs as another level (`{ "medium": "high" }`); informational, never offered as a level of its own (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
@@ -272,7 +273,7 @@ Values are tristate:
 | string | Level is supported and this value is sent to the provider |
 | `null` | Level is unsupported and hidden/skipped/clamped away |
 
-Example for a model that only supports off, high, and max reasoning:
+Example for a model that only supports off, low, high, and max reasoning (the levels DeepSeek's documentation says `deepseek-v4-pro` really runs; the other effort names it accepts only run as one of these, see `thinkingLevelAliases` below):
 
 ```json
 {
@@ -280,11 +281,14 @@ Example for a model that only supports off, high, and max reasoning:
   "reasoning": true,
   "thinkingLevelMap": {
     "minimal": null,
-    "low": null,
     "medium": null,
-    "high": "high",
-    "xhigh": null,
     "max": "max"
+  },
+  "thinkingLevelAliases": {
+    "minimal": "low",
+    "medium": "high",
+    "xhigh": "high",
+    "ultra": "max"
   }
 }
 ```
@@ -304,8 +308,9 @@ Example for a model where thinking cannot be disabled:
 Where the Web UI and TUI get the levels of a model, in strict order of priority. A later step runs only for levels the earlier steps could not settle, and a later step never overrides a level an earlier step confirmed:
 
 0. the map you wrote in `models.json` (used as written);
-1. **API / catalog metadata**: what the provider's model list states when models are discovered (for example OpenRouter `supported_efforts`, Anthropic `capabilities.effort`);
-2. **A real minimal probe** (`src/providers/models/thinking-probe.ts`), run by Refresh models in the terminal `/settings`, and in the Web UI only by **Detect** on the provider page, which checks just the Model IDs typed there (opening, switching or saving a provider and opening a model list never send a request). It asks the concrete Model ID itself: nothing is inferred from the model ID or from a built-in model table, a Model ID the model list does not name is probed all the same, and so is one whose model list could not be read at all. Without a Model ID nothing is probed. It uses the effort parameter of the model's own API (`reasoning_effort` for `openai-completions`, `reasoning.effort` for `openai-responses`, `output_config.effort` for `anthropic-messages`, `thinkingConfig.thinkingLevel` for `google-generative-ai`; other APIs are not probed).
+1. **The provider's own documentation** (`src/providers/models/official-effort.ts`), for the provider's first-party API host and the models whose documentation spells the mapping out. An API can accept more effort names (the *requested* efforts) than the model has reasoning levels (its *actual* efforts): DeepSeek accepts `minimal` … `ultra` but runs only `low`, `high` and `max`. A model list or a test request can only show that a name is accepted, not that it is a level of its own, so a documented mapping wins over steps 2 and 3: only the distinct actual levels are offered (the other names are hidden with `null`), and the names that merely run as another level are recorded as `thinkingLevelAliases` (`{ "medium": "high" }`; information only, never offered as levels of their own). Currently documented: `deepseek-flash`, `deepseek-v4-flash` and `deepseek-v4-pro` on `api.deepseek.com`, and `grok-4.5` on `api.x.ai`. The same model IDs behind a relay are not matched (the documentation describes the vendor's own API, not what a relay forwards), and a model list that says the model does not reason outranks the documentation. Such a model is never probed. Each entry cites the page it was read from; when a provider changes the documented values, update the entry from it;
+2. **API / catalog metadata**: what the provider's model list states when models are discovered (for example OpenRouter `supported_efforts`, Anthropic `capabilities.effort`);
+3. **A real minimal probe** (`src/providers/models/thinking-probe.ts`), run by Refresh models in the terminal `/settings`, and in the Web UI only by **Detect** on the provider page, which checks just the Model IDs typed there (opening, switching or saving a provider and opening a model list never send a request). It asks the concrete Model ID itself: nothing is inferred from the model ID or from a built-in model table, a Model ID the model list does not name is probed all the same, and so is one whose model list could not be read at all. Without a Model ID nothing is probed. It uses the effort parameter of the model's own API (`reasoning_effort` for `openai-completions`, `reasoning.effort` for `openai-responses`, `output_config.effort` for `anthropic-messages`, `thinkingConfig.thinkingLevel` for `google-generative-ai`; other APIs are not probed).
 
    Every level is tested on its own with one minimal real request (16 output tokens; raised once to 1024 when the service says that leaves no room for reasoning), two levels at a time, and judged only by its own answer:
 
@@ -317,7 +322,7 @@ Where the Web UI and TUI get the levels of a model, in strict order of priority.
 
 Each level therefore has one of three states: `supported`, `unsupported` or `unknown` (could not be checked). Only `unsupported` levels are hidden (`null` in `thinkingLevelMap`); `unknown` never hides a level and never clears what is already configured. `xhigh` and `max` remain opt-in in the runtime: they are enabled once a source confirms them, or, after a probe, unless confirmed unsupported. Probe results are stored per model as `thinkingLevelStatus`; a later run asks again every level that is not yet `supported`, and an `unknown` result never replaces a confirmed one. A model that reasons but has no settled level is recorded as `reasoning: true` without a map, so every standard level is offered. Older versions wrote an all-`null` map (`minimal`–`high`) for such models; refresh removes that marker.
 
-Refreshing a provider's models (or detecting a Model ID that is already in the Web UI form) also brings the map of models already in `models.json` up to date from source 1 (values you customised for levels that stay supported are kept) and from confirmed probe results (`supported` / `unsupported`); `unknown` results never change an existing entry, so a manual configuration stays as it is when a run settles nothing.
+Refreshing a provider's models (or detecting a Model ID that is already in the Web UI form) also brings the map of models already in `models.json` up to date from sources 1 and 2 (values you customised for levels that stay supported are kept; for a documented model the documented levels replace the map, and earlier test results for levels it does not offer are dropped) and from confirmed probe results (`supported` / `unsupported`); `unknown` results never change an existing entry, so a manual configuration stays as it is when a run settles nothing.
 
 Migration: older configs that used `compat.reasoningEffortMap` should move that mapping to model-level `thinkingLevelMap`. Use `null` for levels that should not appear in the UI.
 

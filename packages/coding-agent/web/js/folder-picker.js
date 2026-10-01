@@ -178,7 +178,7 @@ export function FolderPicker({ onClose, onPick, title, subtitle, confirmLabel, i
 					${(places?.places || []).map((place) => html`<${PlaceButton} key=${place.id} icon=${place.id === "home" ? "home" : place.id === "desktop" ? "desktop" : place.id === "downloads" ? "download" : "folder"} label=${place.id === "home" ? place.name : t(place.name)} path=${place.path} current=${samePath(place.path, pathNow)} onGo=${load} />`)}
 					<div class="fp-group">${t("This PC")}</div>
 					${(places?.drives || []).map((drive) => html`<${PlaceButton} key=${drive.id} icon="drive" label=${drive.name} path=${drive.path} current=${samePath(drive.path, pathNow)} onGo=${load} />`)}
-					${workspaces.length ? html`<div class="fp-group">${t("Workspaces")}</div>${workspaces.map((w) => html`<${PlaceButton} key=${w.id} icon="folderOpen" label=${w.name} path=${w.rootPath} current=${samePath(w.rootPath, pathNow)} onGo=${load} />`)}` : null}
+					${workspaces.length ? html`<div class="fp-group">${t("Workspaces")}</div>${workspaces.map((w) => html`<${PlaceButton} key=${w.id} icon="folder" label=${w.name} path=${w.rootPath} current=${samePath(w.rootPath, pathNow)} onGo=${load} />`)}` : null}
 				</nav>
 				<div class="fp-listwrap">
 					${error ? html`<div class="notice danger">${error}</div>` : null}

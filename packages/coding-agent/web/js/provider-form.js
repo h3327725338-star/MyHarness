@@ -2,11 +2,11 @@
 // (API format, Base URL, API key) and the models. Models are checked only on request, for the Model IDs the user types;
 // opening, switching or saving a provider never contacts the endpoint. The JSON view is an optional advanced editor over
 // the same data.
-import { html, useEffect, useRef, useState, Icon, Segmented, Spinner, Toggle } from "./ui.js";
+import { html, useEffect, useRef, useState, Collapse, Icon, Segmented, Spinner, Toggle } from "./ui.js";
 import { post } from "./store.js";
 import { effortName } from "./util.js";
 import { N_, t } from "./i18n.js";
-import { BASE_LEVELS, BASE_URL_EXAMPLE, EXTRA_LEVELS, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, fmtK, fromK, levelStatus, modelDraft, parseModelIds } from "./provider-models.js";
+import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, fmtK, fromK, levelStatus, levelUnconfirmed, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -118,7 +118,20 @@ function Detected({ title }) {
 	return html`<span class="badge accent pf-auto" title=${title || t("Set by the last detection")}>${t("detected")}</span>`;
 }
 
-const levelSummary = (model) => [...BASE_LEVELS, ...EXTRA_LEVELS].filter((level) => model.levels[level] && level !== "off").map((level) => effortName(level)).join(" · ");
+const levelSummary = (model) => offeredLevels(model).filter((level) => model.levels[level] && level !== "off").map((level) => effortName(level)).join(" · ");
+
+/** Where the levels of a detected model come from. */
+const levelSourceTitle = (source) => (source === "probe" ? t("Checked with test requests to the service") : source === "official" ? t("Taken from the provider's documentation") : t("Read from the endpoint's model list"));
+
+/** What a level chip says when it is hovered or focused. */
+function levelTitle(model, level, detected) {
+	if (levelUnconfirmed(model, level)) return t("The API accepts this name, but whether the model has a separate reasoning level for it is not confirmed. It stays as you set it.");
+	const status = levelStatus(model, level);
+	if (status === "unsupported") return t("The service said it does not support this level.");
+	if (model.levels[level] && detected.levelsSource === "official") return t("Stated in the provider's documentation.");
+	if (status === "supported") return t("Confirmed by a test request.");
+	return undefined;
+}
 
 /** A token capacity edited in K: the number is typed, the unit is fixed. */
 function KField({ label, detected, value, onInput }) {
@@ -139,7 +152,7 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 	return html`<div class=${`pf-model ${open ? "open" : ""}`}>
 		<div class="row pf-model-head">
 			<button type="button" class="pf-model-toggle grow" aria-expanded=${open} onClick=${onToggle}>
-				<${Icon} name=${open ? "chevronDown" : "chevronRight"} size=${13} />
+				<${Icon} name="chevronRight" size=${13} class="disclose" />
 				<span class="truncate pf-model-title">${title}</span>
 				${model.id.trim() && title !== model.id.trim() ? html`<span class="dim mono truncate">${model.id.trim()}</span>` : null}
 			</button>
@@ -150,8 +163,8 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 			</span>
 			<button class="icon-btn sm" title=${t("Remove model")} aria-label=${t("Remove model")} onClick=${onRemove}><${Icon} name="trash" size=${14} /></button>
 		</div>
-		${open
-			? html`<div class="col pf-model-body">
+		<${Collapse} open=${open}>
+			<div class="col pf-model-body">
 				<div class="pf-two">
 					<${Field} label=${t("Model ID")}><input class="field mono" value=${model.id} autofocus=${!model.id} onInput=${(e) => set({ id: e.target.value })} /><//>
 					<${Field} label=${t("Display name")}><input class="field" placeholder=${t("Optional")} value=${model.name} onInput=${(e) => set({ name: e.target.value })} /><//>
@@ -165,12 +178,13 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 					<label class="row pf-switch"><${Toggle} checked=${model.image} label=${t("Accepts images")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</label>
 				</div>
 				${model.reasoning
-					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
-						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unknown" || levelStatus(model, level) === "unverified" ? t("Could not be checked; it stays as you set it.") : levelStatus(model, level) === "supported" ? t("Confirmed by a test request.") : levelStatus(model, level) === "unsupported" ? t("The service said it does not support this level.") : undefined} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unknown" || levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels the service said it does not support are unticked; a “?” marks a level that could not be checked and keeps its setting.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span></div>`
+					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${levelSourceTitle(d.levelsSource)} />` : null}</span>
+						<div class="pf-levels">${offeredLevels(model).map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelTitle(model, level, d)} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelUnconfirmed(model, level) ? html`<span class="badge unconfirmed">${t("Unconfirmed")}</span>` : null}</button>`)}</div>
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels the service said it does not support are unticked; a level marked “Unconfirmed” could not be checked and keeps its setting.") : d.levelsSource === "official" ? t("These are the levels the provider's documentation lists for this model.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span>
+						${aliasPairs(model).length ? html`<span class="dim pf-hint">${t("Accepted by the API, but not separate levels (provider documentation): {pairs}", { pairs: aliasPairs(model).map(([name, level]) => `${effortName(name)} → ${effortName(level)}`).join(" · ") })}</span>` : null}</div>`
 					: null}
-			</div>`
-			: null}
+			</div>
+		<//>
 	</div>`;
 }
 

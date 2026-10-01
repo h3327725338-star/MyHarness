@@ -1,6 +1,6 @@
 // Files panel: read-only workspace tree and viewer, decorated with real Git / task change status.
 import { html, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton } from "./ui.js";
-import { api, setView, useStore } from "./store.js";
+import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
@@ -28,7 +28,6 @@ function TreeNode({ entry, depth, expanded, onToggle, children, statusMap, taskM
 }
 
 export function FilesPanel() {
-	const selectedFile = useStore((s) => s.view.selectedFile);
 	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
 	const sessionId = useStore((s) => s.snap?.session?.id);
 	const [tree, setTree] = useState({}); // dir -> entries
@@ -72,20 +71,6 @@ export function FilesPanel() {
 		loadStatus();
 		Object.keys(expanded).filter((d) => expanded[d]).forEach((d) => loadDir(d));
 	}, [lastRunId]);
-	useEffect(() => {
-		if (!selectedFile) return;
-		open(selectedFile.path, selectedFile.line);
-		// Reveal the file's folders in the tree.
-		const parts = selectedFile.path.split("/").slice(0, -1);
-		let acc = "";
-		const next = { ...expanded };
-		for (const part of parts) {
-			acc = acc ? `${acc}/${part}` : part;
-			next[acc] = true;
-			if (!tree[acc]) loadDir(acc);
-		}
-		setExpanded(next);
-	}, [selectedFile?.at]);
 	useEffect(() => {
 		if (!query.trim()) {
 			setResults(null);
@@ -142,11 +127,11 @@ export function FilesPanel() {
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
 			</div>
 		</div>
-		${viewing ? html`<${FileViewer} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null), setView({ selectedFile: null }))} hasDiff=${!!taskMap[viewing.path] || !!statusMap[viewing.path]} />` : null}
+		${viewing ? html`<${FileViewer} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null))} />` : null}
 	</div>`;
 }
 
-function FileViewer({ viewing, file, error, onBack, hasDiff }) {
+function FileViewer({ viewing, file, error, onBack }) {
 	const path = viewing.path;
 	const lang = file?.language || languageFor(path);
 	const lines = useMemo(() => {
@@ -167,7 +152,6 @@ function FileViewer({ viewing, file, error, onBack, hasDiff }) {
 			${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
 			<${CopyButton} text=${path} label=${t("Copy path")} />
 			<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
-			${hasDiff ? html`<button class="btn sm" onClick=${() => actions.openChanges({ path })}>${t("View diff")}</button>` : null}
 		</div>
 		<div class="panel-scroll code-view">
 			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</div>` : file.kind === "large" ? html`<div class="empty">${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</div>` : html`

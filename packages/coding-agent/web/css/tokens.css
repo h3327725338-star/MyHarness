@@ -6,8 +6,8 @@
 
 	--fs-xs: 11px;
 	--fs-sm: 12px;
-	--fs-md: 13px;
-	--fs-read: 14.5px;
+	--fs-md: 13.5px;
+	--fs-read: 15.5px;
 	--lh-read: 1.72;
 	--fs-code: 12.5px;
 
@@ -17,8 +17,8 @@
 	--r-lg: 12px;
 	--r-xl: 16px;
 
-	--h-control: 28px;
-	--h-row: 30px;
+	--h-control: 32px;
+	--h-row: 34px;
 	--sidebar-w: 272px;
 	--panel-w: 560px;
 	--read-w: 780px;
@@ -58,6 +58,10 @@
 	--accent-soft: rgba(121, 168, 245, 0.14);
 	--accent-line: rgba(121, 168, 245, 0.45);
 	--on-accent: #0f1622;
+	/* Selected text: a clearly visible blue tint that keeps the text's own colours readable. */
+	--selection-bg: rgba(121, 168, 245, 0.38);
+	/* The one dropdown chevron (the same 12px stroke chevron as the Chevron component), for native selects. */
+	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a8080' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
 	--ok: var(--green);
 	--warn: var(--orange);
@@ -116,6 +120,8 @@
 	--accent-soft: rgba(44, 102, 214, 0.1);
 	--accent-line: rgba(44, 102, 214, 0.4);
 	--on-accent: #ffffff;
+	--selection-bg: rgba(44, 102, 214, 0.26);
+	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23808686' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
 	--ok: #2c8a5c;
 	--warn: #b06f12;
@@ -148,11 +154,4 @@
 	--hl-title: #2860b8;
 	--hl-attr: #9a6a00;
 	--hl-type: #12796a;
-}
-
-:root[data-density="comfortable"] {
-	--h-control: 32px;
-	--h-row: 34px;
-	--fs-md: 13.5px;
-	--fs-read: 15.5px;
 }

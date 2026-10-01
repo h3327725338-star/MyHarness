@@ -1,6 +1,6 @@
 .composer-zone { flex: none; padding: 0 20px 12px; }
 /* Narrow main column (detail panel open): drop low-value composer items first, never the send button. */
-.main[data-w="s"] .meter span, .main[data-w="s"] .mode-btn, .main[data-w="s"] .env-status { display: none; }
+.main[data-w="s"] .meter span, .main[data-w="s"] .env-status { display: none; }
 .main[data-w="s"] .env-chip { max-width: 45%; }
 .main[data-w="s"] .chip { max-width: 150px; }
 .main[data-w="xs"] .chip .chip-text { display: none; }
@@ -16,14 +16,11 @@
 
 /* Model and thinking effort: plain text with a small chevron, no decoration in front. */
 .chip { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
-.chip > svg { color: var(--text-4); }
 .chip:hover, .chip[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
-.chip:hover > svg, .chip[aria-expanded="true"] > svg { color: var(--text-3); }
+.chip:hover .chev, .chip[aria-expanded="true"] .chev { color: var(--text-2); }
 .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-effort { color: var(--text-3); }
 .picker-anchor { display: inline-flex; }
-.mode-btn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 9px; border-radius: var(--r-md); color: var(--accent); background: var(--accent-soft); font-size: var(--fs-sm); font-weight: 600; }
-.mode-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 
 .send { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-active); color: var(--text-3); transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast); }
 .send.ready { background: var(--accent); color: var(--on-accent); }
@@ -47,7 +44,7 @@
 .composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }
 .composer-env:empty { display: none; }
 .env-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; min-width: 0; max-width: 55%; flex: 0 1 auto; border-radius: 11px; border: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); }
-.env-chip:hover { color: var(--text); background: var(--surface-hover); }
+button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .env-chip > svg { flex: none; }
 .env-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .env-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
@@ -64,6 +61,20 @@
 .strips { display: flex; flex-direction: column; gap: 6px; }
 .strip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
 .strip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+/* The outcome of a Git operation: one line (what happened, the real hash or reason), the real output folded under it. */
+.strip.git-result { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+.strip-line { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; }
+.strip-line > svg { flex: none; }
+.strip-title { font-weight: 600; flex: none; }
+.strip-hash { flex: none; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--fs-xs); }
+.strip-detail { min-width: 0; color: var(--text-2); }
+.strip-lines { margin: 0 12px 8px; padding: 8px 10px; max-height: 180px; overflow: auto; background: var(--code-bg); border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.strip.git-result.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.strip.git-result.error { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.strip.git-result.warn { color: var(--warn); }
+.strip.git-result.info { color: var(--text); }
+.strip.git-result .link-btn { flex: none; white-space: nowrap; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.strip.git-result .icon-btn { color: inherit; opacity: 0.8; }
 .strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
@@ -91,7 +102,6 @@
 .pop-item:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .pop-item.active { color: var(--text); background: var(--surface-select); }
 .pop-item:disabled { opacity: 0.5; }
-.pop-item.two-line { align-items: flex-start; padding: 4px 8px; }
 .pop-item .dim { font-size: var(--fs-xs); }
 .pop-meta { font-size: var(--fs-xs) !important; }
 .pop-foot { display: flex; justify-content: space-between; padding: 4px 8px 2px; border-top: 1px solid var(--border); margin-top: 3px; font-size: var(--fs-xs); }
@@ -111,7 +121,6 @@
 .model-ref-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--text); cursor: pointer; }
 .model-ref-btn:disabled { opacity: 0.5; cursor: default; }
 .model-ref-effort { display: inline-flex; align-items: center; flex: none; max-width: 112px; color: var(--text); cursor: pointer; }
-.model-ref-effort > svg { display: none; }
 
 /* Thinking effort. Top line: the name and the level in use. Second line: what the two ends mean. Then the slider: a
    thin rail with one small mark per level the model supports and a single thumb on the level in use. The rail is inset
@@ -121,6 +130,8 @@
 .effort.disabled { opacity: 0.55; }
 .effort-head, .effort-ends { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; line-height: 18px; }
 .effort-head { font-size: var(--fs-md); }
+.effort-head.alone { justify-content: center; font-size: 18px; line-height: 26px; }
+.effort-head.alone .effort-value { color: var(--text); font-weight: 600; }
 .effort-title { color: var(--text); font-weight: 600; }
 .effort-value { color: var(--text-2); }
 .effort-ends { margin-top: 8px; font-size: var(--fs-sm); color: var(--text-3); }
@@ -129,7 +140,7 @@
 .effort-rail { position: relative; height: 4px; border-radius: 2px; background: var(--surface-active); }
 .effort-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-4); }
 .effort-thumb { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); border: 3px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--border-strong); transition: left var(--t-base) var(--ease); }
-.effort-track:focus-visible .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
+.effort-track:focus .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
 .effort-default { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); min-height: 28px; margin: 8px -6px -4px; padding: 2px 6px; border-radius: var(--r-xs); text-align: left; font-size: var(--fs-sm); color: var(--text-2); }
 .effort-default:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .effort-default.on { color: var(--text); }
@@ -147,8 +158,14 @@
 .menu-wrap { position: relative; }
 
 /* Inline command panel: /settings, /model, /git … open here, above the input, and are driven from the keyboard. */
-.cp { display: flex; flex-direction: column; max-height: min(460px, 52vh); background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); overflow: hidden; }
+.cp { display: flex; flex-direction: column; width: 100%; margin-inline: auto; max-height: min(460px, 52vh); background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); overflow: hidden; }
 .cp-head { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px 2px 10px; border-bottom: 1px solid var(--border); flex: none; }
+.cp.ready { transition: max-width var(--t-slow) var(--ease); }
+/* A closed panel fades out (and cannot be used) for the length of the animation, then is removed. */
+.cp.leaving { animation: fade-out var(--t-base) var(--ease) both; pointer-events: none; }
+.cp[data-size="sm"] { max-width: 400px; }
+.cp[data-size="md"] { max-width: 540px; }
+.cp[data-size="lg"] { max-width: 100%; }
 .cp-title { font-weight: 600; font-size: 12.5px; min-width: 0; }
 .cp-title .cur { color: var(--text); }
 .cp-sep { margin: 0 5px; color: var(--text-4); }
@@ -174,7 +191,12 @@
 .cp-row .badge { height: 16px; padding: 0 5px; }
 .cp-value { flex: none; color: var(--text-3); font-size: var(--fs-xs); max-width: 42%; text-align: right; }
 .cp-tail { width: 14px; flex: none; display: grid; place-items: center; }
-.cp-effort { padding: 12px 14px; max-width: 320px; outline: none; }
+.cp-effort { padding: 14px 20px 6px; outline: none; }
+.cp-note { margin-top: 4px; padding-bottom: 6px; text-align: center; font-size: var(--fs-sm); }
+.cp-effort .effort-default { margin: 4px 0 6px; width: 100%; }
+.cp-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 4px; font-size: var(--fs-xs); }
+.cp-body .git-lines { max-height: 150px; }
+.cp-foot { flex: none; padding: 7px 12px 8px; border-top: 1px solid var(--border); text-align: center; font-size: var(--fs-xs); }
 .cp-switch { width: 28px; height: 16px; border-radius: 8px; background: var(--border-strong); position: relative; flex: none; transition: background var(--t-fast) var(--ease); }
 .cp-switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-raised); transition: transform var(--t-fast) var(--ease); }
 .cp-switch.on { background: var(--accent); }

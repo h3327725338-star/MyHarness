@@ -365,6 +365,23 @@ export function applyEditsToNormalizedContent(
 	return { baseContent, newContent };
 }
 
+/**
+ * Lines added and removed going from `oldContent` to `newContent` (what `git diff --numstat` reports). A file that
+ * did not exist (`undefined`) is all additions.
+ */
+export function countLineChanges(
+	oldContent: string | undefined,
+	newContent: string,
+): { additions: number; deletions: number } {
+	let additions = 0;
+	let deletions = 0;
+	for (const part of Diff.diffLines(oldContent ?? "", newContent)) {
+		if (part.added) additions += part.count ?? 0;
+		else if (part.removed) deletions += part.count ?? 0;
+	}
+	return { additions, deletions };
+}
+
 /** Generate a standard unified patch. */
 export function generateUnifiedPatch(path: string, oldContent: string, newContent: string, contextLines = 4): string {
 	return Diff.createTwoFilesPatch(path, path, oldContent, newContent, undefined, undefined, {

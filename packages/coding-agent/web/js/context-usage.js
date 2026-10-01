@@ -37,24 +37,60 @@ export function fmtK(n) {
 	return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/u, "")}M`;
 }
 
-/** Output speed of the model: live while it streams, the last reply's average afterwards; "—" when not measurable. */
+/**
+ * One per-request number (speed, cache hit) in the same four states: "Detecting…" from the start of the model request
+ * until the first reliable number, the live number while it is updated, the request's final number, or "—" when none
+ * could be measured.
+ */
+function MeterValue({ state, text, title }) {
+	const detecting = state === "detecting";
+	return html`<span class=${`cu-speed ${state === "live" || detecting ? "live" : ""} ${detecting ? "detecting" : ""}`} title=${title}>${state === "live" || detecting ? html`<i class="cu-live" aria-hidden="true" />` : null}${detecting ? t("Detecting…") : text ?? "—"}</span>`;
+}
+
+/** Output speed of the model: detecting from the start of the request, live while it streams, the request's average at its end; "—" when not measurable. */
 export function SpeedValue({ speed }) {
+	const state = speed?.state;
 	const value = speed?.tps;
-	const title = speed?.live
-		? value == null
-			? t("Measured from the output tokens the provider reports while streaming; this provider reports them only at the end, so the speed appears when the reply is complete.")
-			: t("Live: output tokens per second while the model writes (waiting for the first token is not counted).")
-		: value == null
-			? t("Not available: the reply was not streamed or the provider reported no output tokens.")
-			: t("Average of the last reply: {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) });
-	return html`<span class=${`cu-speed ${speed?.live ? "live" : ""}`} title=${title}>${speed?.live ? html`<i class="cu-live" aria-hidden="true" />` : null}${value == null ? "—" : `${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`}</span>`;
+	const title =
+		state === "detecting"
+			? t("Waiting for the first reliable measurement of this request. Some providers report the output tokens only at the end of the reply.")
+			: state === "live"
+				? t("Live: output tokens per second while the model writes (waiting for the first token is not counted).")
+				: state === "final"
+					? speed.tokens != null
+						? t("Average of this request: {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
+						: t("Last measured speed of the request that was stopped.")
+					: state === "unavailable"
+						? t("Not available: the reply was not streamed or the provider reported no output tokens.")
+						: t("Measured with the first model request.");
+	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
+}
+
+/** Cache hit of the model request: detecting from its start, then the share of its input tokens the provider served from its cache. */
+export function CacheValue({ cache, session }) {
+	const state = cache?.state;
+	const sessionRate = session?.hitRate;
+	const sessionLine = sessionRate == null ? "" : ` ${t("Whole session: {rate}.", { rate: fmtPct(sessionRate * 100) })}`;
+	const title =
+		state === "detecting"
+			? t("Waiting for the provider to report this request's cache use. Some providers report it only at the end of the reply.")
+			: state === "live" || state === "final"
+				? `${t("This request: {read} of {total} input tokens came from the cache.", { read: num(cache.read ?? 0), total: num(cache.input ?? 0) })}${sessionLine}`
+				: state === "unavailable"
+					? t("The provider has reported no cache use for this request.")
+					: sessionRate == null
+						? t("The provider has reported no cache use in this session.")
+						: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
+	// Before the first request of this run the whole session's figure (from the history) stands in.
+	const rate = state ? cache?.hitRate : sessionRate;
+	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : fmtPct(rate * 100)} />`;
 }
 
 /**
  * The context at a glance: used / window, remaining, percent, the session's cache hit rate and the model's output
  * speed — small enough for the popover next to the input and the Session panel alike.
  */
-export function ContextDetails({ onOpenSession, onDone }) {
+export function ContextDetails({ onDone }) {
 	const snap = useStore((s) => s.snap);
 	const { data, error } = useBreakdown(true);
 	if (error) return html`<div class="notice danger">${error}</div>`;
@@ -71,12 +107,11 @@ export function ContextDetails({ onOpenSession, onDone }) {
 		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used, window_))}%` }} /></div>
 		<div class="cu-stats">
 			<div class="cu-stat" title=${num(remaining)}><span class="dim">${t("Remaining")}</span><strong>${fmtK(remaining)}</strong></div>
-			<div class="cu-stat" title=${cache?.hitRate == null ? t("The provider has reported no cache use in this session.") : t("Cache reads {read} of {total} input tokens over the whole session", { read: num(cache.read), total: num(cache.input + cache.read + cache.write) })}><span class="dim">${t("Cache hit")}</span><strong>${cache?.hitRate == null ? "—" : fmtPct(cache.hitRate * 100)}</strong></div>
+			<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} cache=${snap?.cache} session=${cache} /></strong></div>
 			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong><${SpeedValue} speed=${snap?.speed} /></strong></div>
 		</div>
 		<div class="cu-actions">
 			<button class="btn sm" disabled=${snap?.active} onClick=${() => (onDone?.(), actions.compact())}>${t("Compact now")}</button>
-			${onOpenSession ? html`<button class="btn sm ghost" onClick=${() => (onDone?.(), onOpenSession())}>${t("Session details")}</button>` : null}
 		</div>
 	</div>`;
 }
@@ -102,7 +137,7 @@ export function ContextMeter() {
 			<span>${percent.toFixed(percent < 10 ? 1 : 0)}%</span>
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${280} maxHeight=${520}>
-			<${ContextDetails} onDone=${() => setOpen(false)} onOpenSession=${() => actions.togglePanel("context")} />
+			<${ContextDetails} onDone=${() => setOpen(false)} />
 		<//>
 	</span>`;
 }

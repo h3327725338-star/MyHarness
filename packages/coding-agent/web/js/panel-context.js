@@ -1,5 +1,5 @@
 // Session panel: context budget, session stats, active tools, loaded resources and the branch tree.
-import { html, useEffect, useState, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
+import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
 import { api, attempt, loadResources, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { ContextDetails } from "./context-usage.js";
@@ -8,11 +8,12 @@ import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.
 
 function Section({ title, count, children, defaultOpen = true, action }) {
 	const [open, setOpen] = useState(defaultOpen);
+	const toggle = () => setOpen(!open);
 	return html`<section class="ctx-section">
-		<div class="ctx-head" onClick=${() => setOpen(!open)} role="button" tabindex="0" onKeyDown=${(e) => e.key === "Enter" && setOpen(!open)}>
-			<${Icon} name=${open ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" /><span class="grow">${title}${count != null ? html` <span class="dim">${count}</span>` : null}</span>${action ? html`<span onClick=${(e) => e.stopPropagation()}>${action}</span>` : null}
+		<div class="ctx-head" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
+			<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="grow">${title}${count != null ? html` <span class="dim">${count}</span>` : null}</span>${action ? html`<span onClick=${(e) => e.stopPropagation()}>${action}</span>` : null}
 		</div>
-		${open ? html`<div class="ctx-body">${children}</div>` : null}
+		<${Collapse} open=${open}><div class="ctx-body">${children}</div><//>
 	</section>`;
 }
 

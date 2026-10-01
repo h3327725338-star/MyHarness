@@ -1,21 +1,18 @@
-// Composer: one stable input card. Model and effort are one click away; running-state choices
-// (steer / queue / interrupt) map onto the real AgentSession mechanisms.
-import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
+// Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
+// default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
+import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
 import { api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
+import { dismissGitResult } from "./git-flow.js";
 import { ContextMeter } from "./context-usage.js";
 import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
 import { clip, debounce, plural, pointerMoved } from "./util.js";
-import { N_, serverText, t } from "./i18n.js";
+import { serverText, t } from "./i18n.js";
+import { RUN_MODES, runModeOf } from "./run-modes.js";
 
 const drafts = new Map();
-const RUN_MODES = {
-	steer: { label: N_("Steer"), long: N_("Steer the current run"), hint: N_("Delivered before the agent's next model step, after its current tool calls.") },
-	followUp: { label: N_("Queue"), long: N_("Queue for after this run"), hint: N_("Waits until the agent has finished all of its work.") },
-	interrupt: { label: N_("Interrupt"), long: N_("Interrupt and send"), hint: N_("Stops the current run right away, then sends this message.") },
-};
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -94,11 +91,42 @@ function DialogBar({ dialog }) {
 	</div>`;
 }
 
+/**
+ * The outcome of a Git operation (see git-flow.js), where its progress was shown: what happened with the real hash or reason,
+ * and the real output one click away. A success fades after a few seconds (not while it is being read); a problem stays until
+ * it is dismissed.
+ */
+function GitResultStrip({ result }) {
+	const [open, setOpen] = useState(false);
+	const [hover, setHover] = useState(false);
+	const fades = result.tone === "ok" || result.tone === "info";
+	useEffect(() => {
+		if (!fades || hover || open) return undefined;
+		const timer = setTimeout(dismissGitResult, 9000);
+		return () => clearTimeout(timer);
+	}, [result.id, fades, hover, open]);
+	const hasDetails = !!result.lines && result.lines !== result.detail;
+	return html`<div class=${`strip git-result ${result.tone} fade-in`} role=${result.tone === "error" ? "alert" : "status"} onMouseEnter=${() => setHover(true)} onMouseLeave=${() => setHover(false)}>
+		<div class="strip-line">
+			<${Icon} name=${{ ok: "checkCircle", info: "info", warn: "alertTriangle", error: "alertCircle" }[result.tone]} size=${14} />
+			<strong class="strip-title">${result.title}</strong>
+			${result.hash ? html`<code class="strip-hash">${result.hash}</code>` : null}
+			${result.detail ? html`<span class="strip-detail truncate" title=${result.detail}>${result.detail}</span>` : null}
+			<span class="grow" />
+			${result.fix ? html`<button class="link-btn" onClick=${() => (dismissGitResult(), actions.send(result.fix.prompt))}>${result.fix.label}</button>` : null}
+			${hasDetails ? html`<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide details") : t("Details")}</button>` : null}
+			<button class="icon-btn sm" aria-label=${t("Dismiss")} title=${t("Dismiss")} onClick=${dismissGitResult}><${Icon} name="x" size=${13} /></button>
+		</div>
+		<${Collapse} open=${open}><pre class="strip-lines">${result.lines}</pre><//>
+	</div>`;
+}
+
 function StatusStrips({ snap }) {
 	const compaction = useStore((s) => s.compaction);
 	const retry = useStore((s) => s.retry);
 	const recovery = useStore((s) => s.recovery);
 	const gitTask = useStore((s) => s.gitTask);
+	const gitResult = useStore((s) => s.gitResult);
 	const completion = useStore((s) => s.completion);
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
@@ -114,6 +142,7 @@ function StatusStrips({ snap }) {
 	}
 	if (recovery) strips.push(html`<div class="strip warn" key="v"><${Spinner} /> <span>${recovery.kind === "new-conversation" ? t("Recovering by rebuilding the conversation (#{conversation})", { conversation: recovery.conversation }) : t("Recovering from a provider problem ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })}: ${clip(recovery.errorMessage, 100)}</span></div>`);
 	if (gitTask) strips.push(html`<div class="strip" key="g"><${Spinner} /> <span>${serverText(gitTask.activity, t("Working…"))}</span><button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button></div>`);
+	if (gitResult && !gitTask) strips.push(html`<${GitResultStrip} key=${`gr-${gitResult.id}`} result=${gitResult} />`);
 	if (completion && !snap?.active) strips.push(html`<div class="strip" key="f"><${Spinner} /> <span>${t("Finalizing the task (checking changes, memory)…")}</span></div>`);
 	void tick;
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;
@@ -153,7 +182,7 @@ function ModelPicker() {
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model")} aria-haspopup="listbox" aria-expanded=${open}>
-			<span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Icon} name="chevronDown" size=${12} />
+			<span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${300} maxHeight=${380} class="model-pop">
 			<${ModelMenu} models=${models} disabled=${busy || running}
@@ -250,7 +279,8 @@ export function Composer() {
 	const [text, setText] = useState("");
 	const [caret, setCaret] = useState(0);
 	const [images, setImages] = useState([]);
-	const [runMode, setRunMode] = useState("steer");
+	// What Enter does while the agent runs: the default chosen in Settings.
+	const runMode = runModeOf(useStore((s) => s.view.runMode));
 	const [sending, setSending] = useState(false);
 	const [dragOver, setDragOver] = useState(false);
 	const [sel, setSel] = useState(0);
@@ -258,8 +288,6 @@ export function Composer() {
 	const area = useRef(null);
 	const fileInput = useRef(null);
 	const lastSession = useRef(null);
-	const modeAnchor = useRef(null);
-	const [modeOpen, setModeOpen] = useState(false);
 	// The command registry (names, aliases) is needed the moment a command is typed; load it up front.
 	useEffect(() => {
 		if (!state.resources) loadResources().catch(() => {});
@@ -432,7 +460,7 @@ export function Composer() {
 
 	const canSend = (text.trim() || images.length) && !sending && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0;
-	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: steer, Alt+Enter: queue)") : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
+	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 
 	return html`<div class="composer-zone">
 		<div class="composer-col">
@@ -442,9 +470,9 @@ export function Composer() {
 			<${CommandPanel} />
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "aboveEditor").map((w, i) => html`<pre class="widget" key=${`wa${i}`}>${w.lines.join("\n")}</pre>`)}
 			<div class="composer-env">
-				${snap?.cwd ? html`<button class="env-chip" onClick=${() => actions.togglePanel("files")} title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></button>` : null}
-				${gitStatus?.isRepository && gitStatus.branch ? html`<button class="env-chip" onClick=${() => actions.openChanges({ git: true })} title=${t("Git branch")}><${Icon} name="gitBranch" size=${12} /><span class="truncate">${gitStatus.branch}</span>${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}</button>` : null}
-				${gitStatus?.isRepository && gitStatus.linkedWorktree ? html`<button class="env-chip" onClick=${() => actions.openChanges({ git: true })} title=${t("This folder is a linked Git worktree")}><${Icon} name="layers" size=${12} />${t("worktree")}</button>` : null}
+				${snap?.cwd ? html`<span class="env-chip" title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></span>` : null}
+				${gitStatus?.isRepository && gitStatus.branch ? html`<span class="env-chip" title=${t("Git branch")}><${Icon} name="gitBranch" size=${12} /><span class="truncate">${gitStatus.branch}</span>${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}</span>` : null}
+				${gitStatus?.isRepository && gitStatus.linkedWorktree ? html`<span class="env-chip" title=${t("This folder is a linked Git worktree")}><${Icon} name="layers" size=${12} />${t("worktree")}</span>` : null}
 				${snap && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
 				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
 			</div>
@@ -480,11 +508,6 @@ export function Composer() {
 					<${ModelPicker} />
 					<${MainEffortPicker} />
 					<${ContextMeter} />
-					${active
-						? html`<button ref=${modeAnchor} class="mode-btn" title=${`${t(RUN_MODES[runMode].long)}: ${t(RUN_MODES[runMode].hint)}`} onClick=${() => setModeOpen(!modeOpen)} aria-haspopup="menu" aria-expanded=${modeOpen}>${t(RUN_MODES[runMode].label)}<${Icon} name="chevronUp" size=${11} /></button>
-						<${Popover} anchor=${modeAnchor} open=${modeOpen} onClose=${() => setModeOpen(false)} placement="top" align="end" width=${320}>
-							${Object.entries(RUN_MODES).map(([key, info]) => html`<button class=${`pop-item two-line ${runMode === key ? "active" : ""}`} key=${key} onClick=${() => (setRunMode(key), setModeOpen(false))}><span class="col grow"><span>${t(info.long)}</span><span class="dim">${t(info.hint)}</span></span>${runMode === key ? html`<${Icon} name="check" size=${14} />` : null}</button>`)}
-						<//>` : null}
 					${showStop
 						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} style="fill:currentColor" /></button>`
 						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => send()} title=${active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}

@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ThinkingLevelMap } from "@myharness/ai";
+import type { ThinkingLevel, ThinkingLevelMap } from "@myharness/ai";
 import { stripJsonComments } from "../../utils/json.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 import { ModelConfig } from "./config.ts";
@@ -51,8 +51,13 @@ export interface DiscoveredProviderModel {
 	/** Thinking levels the catalog says the model accepts (`null` = unsupported); absent when the catalog lists none. */
 	thinkingLevelMap?: ThinkingLevelMap;
 	/**
-	 * Where the thinking capability comes from: the endpoint's catalog, a real probe request, or `unconfirmed` (nothing
-	 * settled: no level is hidden or claimed).
+	 * Effort names the API accepts but runs as another level, as the provider's documentation states (`{ medium: "high" }`,
+	 * only with `thinkingSource: "official"`). Informational: the levels the model offers are `thinkingLevelMap`.
+	 */
+	thinkingLevelAliases?: Record<string, string>;
+	/**
+	 * Where the thinking capability comes from: the provider's documentation (`official`), the endpoint's catalog, a real
+	 * probe request, or `unconfirmed` (nothing settled: no level is hidden or claimed).
 	 */
 	thinkingSource?: ThinkingSource;
 	/** Per-level result of a real probe (`thinkingSource: "probe"`); levels missing here are undecided. */
@@ -338,14 +343,20 @@ function isCopilotModelSelectable(value: Record<string, unknown>): boolean {
 	);
 }
 
-/** Fills the thinking capability from the catalog, else records that it is unknown (a probe may settle it later). */
-function applyThinkingCapability(model: DiscoveredProviderModel): void {
+/**
+ * Fills the thinking capability from the provider's documentation, else from the catalog, else records that it is unknown
+ * (a probe may settle it later).
+ */
+function applyThinkingCapability(model: DiscoveredProviderModel, baseUrl: string): void {
 	const capability = resolveThinkingCapability({
+		baseUrl,
+		modelId: model.id,
 		reasoning: model.reasoning,
 		thinkingLevelMap: model.thinkingLevelMap,
 	});
 	if (capability.reasoning !== undefined) model.reasoning = capability.reasoning;
 	if (capability.thinkingLevelMap) model.thinkingLevelMap = capability.thinkingLevelMap;
+	if (capability.thinkingLevelAliases) model.thinkingLevelAliases = capability.thinkingLevelAliases;
 	if (capability.source) model.thinkingSource = capability.source;
 }
 
@@ -362,6 +373,49 @@ function mergeThinkingLevelMap(current: ThinkingLevelMap | undefined, discovered
 		if (typeof value === "string" && typeof existing === "string") merged[level] = existing;
 	}
 	return merged;
+}
+
+/** Whether a level is offered by this map: the runtime offers `xhigh` / `max` only with an entry, the others unless `null`. */
+const offersLevel = (map: ThinkingLevelMap, level: ThinkingLevel): boolean =>
+	level === "xhigh" || level === "max" ? typeof map[level] === "string" : map[level] !== null;
+
+/**
+ * Brings an existing model in line with what the provider's documentation states (see `official-effort.ts`): its level
+ * map follows the documented levels, the names that only run as another level are recorded as aliases, and an earlier
+ * probe's results for levels the model does not offer are dropped (a test request cannot overrule the documentation).
+ * Returns the same object when nothing changes.
+ */
+function mergeOfficialEffort(
+	existing: ModelsJsonModel,
+	documented: ThinkingLevelMap,
+	aliases: Record<string, string> | undefined,
+): ModelsJsonModel {
+	const current = isLegacyUnconfirmedMap(existing.thinkingLevelMap, existing.thinkingLevelStatus)
+		? undefined
+		: existing.thinkingLevelMap;
+	const thinkingLevelMap = mergeThinkingLevelMap(current, documented);
+	const statuses = Object.fromEntries(
+		Object.entries(existing.thinkingLevelStatus ?? {}).filter(([level]) =>
+			offersLevel(thinkingLevelMap, level as ThinkingLevel),
+		),
+	) as ThinkingLevelStatuses;
+	const hasStatuses = Object.keys(statuses).length > 0;
+	if (
+		existing.reasoning === true &&
+		sameJson(existing.thinkingLevelMap, thinkingLevelMap) &&
+		sameJson(existing.thinkingLevelAliases, aliases) &&
+		sameJson(existing.thinkingLevelStatus, hasStatuses ? statuses : undefined)
+	) {
+		return existing;
+	}
+	const { thinkingLevelAliases: _aliases, thinkingLevelStatus: _statuses, ...rest } = existing;
+	return {
+		...rest,
+		reasoning: true,
+		thinkingLevelMap,
+		...(aliases ? { thinkingLevelAliases: aliases } : {}),
+		...(hasStatuses ? { thinkingLevelStatus: statuses } : {}),
+	};
 }
 
 /**
@@ -407,6 +461,8 @@ async function probeUnresolvedThinking(
 		.filter(
 			(model) =>
 				model.reasoning !== false &&
+				// What the provider's documentation states is not tested: a request cannot tell an accepted name from a level.
+				model.thinkingSource !== "official" &&
 				(declared(model) || probe.candidateModelIds?.has(model.id)) &&
 				(probe.probeSettled === true ||
 					model.thinkingSource === undefined ||
@@ -631,7 +687,7 @@ export async function discoverProviderModels(options: {
 		}
 		const parsed = parseModelPage(body, options.api, options.providerId);
 		for (const model of parsed.models) {
-			applyThinkingCapability(model);
+			applyThinkingCapability(model, options.baseUrl);
 			const previous = unique.get(model.id);
 			if (!previous || previous.name === previous.id) unique.set(model.id, model);
 		}
@@ -699,7 +755,7 @@ export async function detectSpecifiedModels(options: {
 		const found = byId.get(id);
 		if (found) return { ...found };
 		const model: DiscoveredProviderModel = { id, name: id };
-		applyThinkingCapability(model);
+		applyThinkingCapability(model, options.baseUrl);
 		return model;
 	});
 	const confirmed = new Map<string, ThinkingLevelStatuses>();
@@ -793,6 +849,12 @@ export class CustomProviderManager {
 		const updatedModels = existingModels.map((existing) => {
 			const found = discoveredById.get(existing.id);
 			if (!found) return existing;
+			if (found.thinkingSource === "official" && found.thinkingLevelMap) {
+				const merged = mergeOfficialEffort(existing, found.thinkingLevelMap, found.thinkingLevelAliases);
+				if (merged === existing) return existing;
+				updated++;
+				return merged;
+			}
 			if (found.thinkingSource === "probe" && found.thinkingLevelStatus) {
 				const confirmed = confirmedOnly(found.thinkingLevelStatus);
 				const current = isLegacyUnconfirmedMap(existing.thinkingLevelMap, existing.thinkingLevelStatus)
@@ -849,6 +911,7 @@ export class CustomProviderManager {
 				api,
 				...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
 				...(model.reasoning === true && model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+				...(model.thinkingLevelAliases ? { thinkingLevelAliases: model.thinkingLevelAliases } : {}),
 				...(model.thinkingLevelStatus ? { thinkingLevelStatus: model.thinkingLevelStatus } : {}),
 			});
 		}

@@ -29,25 +29,33 @@
 .summary.live .summary-text { color: var(--text-2); }
 .summary-meta { font-size: var(--fs-sm); flex: none; }
 .summary-ico { display: inline-flex; width: 16px; justify-content: center; flex: none; }
-.summary-body { margin: 2px 0 4px 8px; padding-left: 14px; border-left: 1px solid var(--border); }
+.summary-body { margin: 2px 0 4px; }
 .c-completed { color: var(--ok); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-waiting { color: var(--warn); }
 .c-dim { color: var(--text-3); } .c-danger { color: var(--danger); } .c-warn { color: var(--warn); } .c-folder { color: var(--accent); opacity: 0.85; }
 .summary.o-failed .summary-text { color: var(--danger); }
 .summary.o-partial .summary-text { color: var(--warn); }
 
 .steps { display: flex; flex-direction: column; gap: 2px; }
-.steps-empty { padding: 6px 0; font-size: var(--fs-sm); }
+.steps-empty { padding: 4px 4px 6px; font-size: var(--fs-sm); }
+/* A thin line joins the glyph of a step to the glyph of the next one, so it exists only between steps that really are
+   there and is as tall as the steps are (an opened step is taller). The glyph column is 16px wide at a 4px inset; a 14px
+   glyph sits 6px below the top of its 26px row, so the line starts 2px under it and ends 2px above the next one. */
+.step { position: relative; }
+.step.linked::after { content: ""; position: absolute; left: 11.5px; top: 23px; bottom: -6px; width: 1px; background: var(--border-strong); transform-origin: top; animation: step-line var(--t-slow) var(--ease) both; }
+@keyframes step-line { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 .note { color: var(--text-2); font-size: 13.5px; padding: 4px 0 6px; }
 .note .md p { margin: 0 0 6px; }
 .group-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 1px 4px; border-radius: var(--r-sm); color: var(--text-2); text-align: left; }
 .group-head:hover:not(:disabled) { background: var(--surface-hover); }
 .group-head:disabled { cursor: default; }
 .group-label { font-size: 13px; }
-.group-body { margin-left: 10px; padding-left: 10px; border-left: 1px dashed var(--border); }
+.group-body { margin-left: 18px; }
 .thinking-text { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); color: var(--text-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
 .action { border-radius: var(--r-sm); }
 .action-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 1px 4px; border-radius: var(--r-sm); cursor: pointer; color: var(--text-2); font-size: 13px; }
 .action-row:hover { background: var(--surface-hover); }
+.action-row.static { cursor: default; }
+.action-row.static:hover { background: none; }
 .action-ico { display: inline-flex; width: 16px; justify-content: center; flex: none; }
 .action-text { flex: 1 1 auto; min-width: 0; }
 .action-text .verb { color: var(--text-2); }
@@ -55,6 +63,7 @@
 .action.err .verb { color: var(--danger); }
 .action-tail { display: flex; align-items: center; gap: 8px; flex: none; font-size: var(--fs-sm); }
 .add { color: var(--diff-add-text); font-variant-numeric: tabular-nums; } .del { color: var(--diff-del-text); font-variant-numeric: tabular-nums; }
+.action-text .counts { display: inline-flex; vertical-align: baseline; margin-left: 2px; font-size: 12px; }
 .err-text { color: var(--danger); font-size: var(--fs-sm); }
 .link-btn { color: var(--accent); font-size: var(--fs-sm); padding: 0 2px; border-radius: 3px; }
 .link-btn:hover:not(:disabled) { text-decoration: underline; }
@@ -81,10 +90,9 @@
 
 /* What a finished task changed: a total on top, then one row per file with its added / removed lines. */
 .change-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); overflow: hidden; }
-.change-head, .change-file { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0 12px 0 14px; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
-.change-head { height: 36px; padding-right: 35px; color: var(--text); font-size: var(--fs-md); font-weight: 600; }
+.change-head, .change-file { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0 14px; }
+.change-head { height: 36px; color: var(--text); font-size: var(--fs-md); font-weight: 600; }
 .change-file { height: 30px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; }
-.change-head:hover, .change-file:hover { background: var(--surface-hover); color: var(--text); }
 .change-path { flex: 1 1 auto; }
 .change-card .counts { font-weight: 400; }
 
@@ -99,8 +107,6 @@
 .md blockquote { margin: 0 0 0.85em; padding: 0.1em 0 0.1em 1em; border-left: 3px solid var(--border-strong); color: var(--text-2); }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
 .md code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: 5px; font-size: 0.88em; }
-.md a.file-ref { text-decoration: none; } .md a.file-ref code { color: var(--accent); }
-.md a.file-ref:hover code { background: var(--accent-soft); }
 .code-block { margin: 0 0 0.95em; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
 .code-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; font-size: var(--fs-xs); color: var(--text-3); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--code-bg) 60%, var(--bg-raised)); }
 .code-copy { color: var(--text-3); font-size: var(--fs-xs); padding: 1px 6px; border-radius: 4px; } .code-copy:hover { background: var(--surface-hover); color: var(--text); }
@@ -131,11 +137,28 @@
 .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 
 /* Standalone items */
-.bash-card { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-inset); padding: 8px 10px; }
-.bash-head { display: flex; align-items: center; gap: 8px; }
-.bash-cmd { flex: 1 1 auto; font-size: var(--fs-code); }
-.bash-out { margin: 6px 0 0; padding: 8px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; overscroll-behavior: contain; }
-.bash-note { font-size: var(--fs-sm); margin-top: 4px; }
+.bash-entry .bash-out { margin: 4px 0 4px 24px; padding: 8px 10px; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; overscroll-behavior: contain; }
+.bash-entry > .btn { margin-left: 24px; }
+.bash-note { font-size: var(--fs-sm); margin: 2px 0 2px 24px; }
+
+/* A web search or page read, opened: what it searched for or read, the results it returned, the pages it opened. */
+.web-steps { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
+.web-step { border-radius: var(--r-sm); }
+.web-step .action-tail { font-size: var(--fs-xs); }
+.web-progress { margin: 0 0 2px 24px; font-size: var(--fs-xs); }
+.web-body { margin: 2px 0 4px 24px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.web-block { align-self: stretch; }
+.web-label { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.web-count { font-weight: 400; font-variant-numeric: tabular-nums; }
+.web-list, .web-problems { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.web-item { display: flex; align-items: baseline; gap: 8px; min-height: 22px; font-size: 12.5px; }
+.web-link { flex: 0 1 auto; min-width: 0; color: var(--text); }
+a.web-link:hover { color: var(--accent); text-decoration: underline; }
+.web-host { flex: 0 1 auto; min-width: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.web-note { flex: none; margin-left: auto; color: var(--text-4); font-size: var(--fs-xs); }
+.web-problems li { color: var(--warn); font-size: 12.5px; overflow-wrap: anywhere; }
+.web-more { align-self: flex-start; padding-left: 0; }
+.web-body > .collapse { align-self: stretch; }
 .marker { display: flex; flex-direction: column; align-items: stretch; }
 .marker-head { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--text-3); }
 .marker-line { flex: 1; height: 1px; background: var(--border); }

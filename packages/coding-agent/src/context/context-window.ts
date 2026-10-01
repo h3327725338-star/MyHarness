@@ -17,6 +17,9 @@ export const CONTEXT_WINDOW_PRESETS = [32 * 1024, 64 * 1024, 128 * 1024, 256 * 1
 /** Normal compaction is deliberately independent from provider output safety. */
 export const AUTO_COMPACT_THRESHOLD_RATIO = 0.9;
 
+/** Tokens in one "K" of a context window (binary: 256K is 262144 tokens). */
+export const CONTEXT_WINDOW_UNIT_TOKENS = 1024;
+
 /** Reject accidental values that would make a configuration unusably large. */
 export const MAX_CONTEXT_WINDOW_TOKENS = 16 * 1024 * 1024;
 
@@ -47,7 +50,8 @@ export function parseContextWindowInput(input: unknown): ContextWindowParseResul
 
 	const numericPart = Number(match[1]);
 	const unit = match[2]?.toUpperCase();
-	const multiplier = unit === "K" ? 1024 : unit === "M" ? 1024 * 1024 : unit === "G" ? 1024 ** 3 : 1;
+	const multiplier =
+		unit === "K" ? CONTEXT_WINDOW_UNIT_TOKENS : unit === "M" ? 1024 * 1024 : unit === "G" ? 1024 ** 3 : 1;
 	return validateContextWindowNumber(numericPart * multiplier);
 }
 

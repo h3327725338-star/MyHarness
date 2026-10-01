@@ -4,10 +4,22 @@ import { describe, expect, it } from "vitest";
 // They are loaded through a computed URL because they are browser modules, not TypeScript.
 const webDir = new URL("../web/js/", import.meta.url);
 const { parsePatch } = await import(new URL("diff-parse.js", webDir).href);
-const { buildTurns, describeAction, groupSteps, turnOutcome } = await import(new URL("turns.js", webDir).href);
+const { buildTurns, changeTotals, describeAction, groupLabel, groupSteps, turnOutcome, webStats } = await import(
+	new URL("turns.js", webDir).href
+);
 const models = await import(new URL("provider-models.js", webDir).href);
-const { ansiSegments, fmtDuration, modelEfforts, relTime, searchModels, shellOutcome, shortPath, stripAnsi } =
-	await import(new URL("util.js", webDir).href);
+const {
+	ansiSegments,
+	fmtDuration,
+	modelEfforts,
+	relTime,
+	searchModels,
+	shellOutcome,
+	shortPath,
+	stripAnsi,
+	tokensToUnit,
+	unitToTokens,
+} = await import(new URL("util.js", webDir).href);
 const { byUsage, rankSearch, searchTier } = await import(new URL("search.js", webDir).href);
 
 const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
@@ -509,7 +521,7 @@ describe("Web UI: shared slash-command registry", () => {
 		const web = builtinSlashCommandsFor("web").map((command) => command.name);
 		expect([...web].sort()).toEqual(Object.keys(BUILTIN_COMMAND_KINDS).sort());
 		expect(new Set(Object.values(BUILTIN_COMMAND_KINDS))).toEqual(new Set(["panel", "action", "prompt"]));
-		// Everything the terminal UI offers is also there for the Web (the Web adds panels of its own on top).
+		// Everything the terminal UI offers is also there for the Web.
 		for (const command of builtinSlashCommandsFor("cli")) expect(web).toContain(command.name);
 		// An alias resolves to its command.
 		expect(findBuiltinSlashCommand("setting")?.name).toBe("settings");
@@ -526,5 +538,140 @@ describe("Web UI: shared slash-command registry", () => {
 		const declared = models.modelDraft({ id: "m", reasoning: true, thinkingLevelMap: { minimal: null, low: null } });
 		expect(declared.levels.minimal).toBe(false);
 		expect(declared.levels.medium).toBe(true);
+	});
+});
+
+describe("Web UI: effort names an API accepts versus the levels a model runs", () => {
+	const deepseek = { raw: { thinkingLevelAliases: { ultra: "max", medium: "high", minimal: "low", xhigh: "high" } } };
+
+	it("offers every level except the names the documentation says only run as another level", () => {
+		expect(models.offeredLevels({ raw: {} })).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(models.offeredLevels(deepseek)).toEqual(["off", "low", "high", "max"]);
+		// The aliases are listed in the order of the levels, not in the order they were stored.
+		expect(models.aliasPairs(deepseek)).toEqual([
+			["minimal", "low"],
+			["medium", "high"],
+			["xhigh", "high"],
+			["ultra", "max"],
+		]);
+		expect(models.aliasPairs({ raw: {} })).toEqual([]);
+	});
+
+	it("marks only a level no check could settle as unconfirmed", () => {
+		const probed = {
+			raw: {
+				thinkingLevelStatus: { minimal: "unknown", low: "supported", medium: "unverified", high: "unsupported" },
+			},
+		};
+		expect(models.levelUnconfirmed(probed, "minimal")).toBe(true);
+		expect(models.levelUnconfirmed(probed, "medium")).toBe(true);
+		expect(models.levelUnconfirmed(probed, "low")).toBe(false);
+		expect(models.levelUnconfirmed(probed, "high")).toBe(false);
+		// No test result at all is not "unconfirmed": nothing was tried.
+		expect(models.levelUnconfirmed({ raw: {} }, "minimal")).toBe(false);
+	});
+});
+
+describe("Web UI: counts typed in a unit", () => {
+	it("shows an exact token count as the number in front of its unit and reads it back unchanged", () => {
+		expect(tokensToUnit(262144, 1024)).toBe("256");
+		expect(tokensToUnit(200000, 1024)).toBe("195.3125");
+		expect(tokensToUnit(131072, 1000)).toBe("131.072");
+		expect(tokensToUnit(undefined, 1024)).toBe("");
+		expect(tokensToUnit(0, 1024)).toBe("");
+		expect(unitToTokens("256", 1024)).toBe(262144);
+		expect(unitToTokens("195.3125", 1024)).toBe(200000);
+		expect(unitToTokens(" 1.5 ", 1000)).toBe(1500);
+	});
+
+	it("accepts nothing but a positive number that makes a whole number of tokens", () => {
+		for (const text of ["", " ", "0", "-3", "12abc", "1e3", "abc", "0.0001", "1,5"]) {
+			expect(unitToTokens(text, 1024), JSON.stringify(text)).toBeUndefined();
+		}
+	});
+});
+
+describe("Web UI: what the agent really did on the web and in files", () => {
+	const searchCall = (id: string, results: number, pages: number) =>
+		describeAction(
+			{ id, name: "web_search", args: { query: `q${id}` } },
+			{
+				isError: false,
+				details: {
+					results: Array.from({ length: results }, (_, i) => ({ url: `https://example.test/${i}` })),
+					pages: Array.from({ length: pages }, (_, i) => ({ url: `https://example.test/p${i}` })),
+				},
+			},
+			undefined,
+			"",
+		);
+	const fetchCall = (id: string, pages: number) =>
+		describeAction(
+			{ id, name: "web_fetch", args: { url: "https://example.test/" } },
+			{
+				isError: false,
+				details: { pages: Array.from({ length: pages }, (_, i) => ({ url: `https://example.test/p${i}` })) },
+			},
+			undefined,
+			"",
+		);
+	const step = (action: { kind: string }, name: string, key: string) => ({
+		type: "action",
+		key,
+		call: { name },
+		...action,
+	});
+
+	it("sums searching rounds, returned results and opened pages from the results of the calls", () => {
+		const calls = [
+			step(searchCall("1", 10, 1), "web_search", "a"),
+			step(searchCall("2", 8, 2), "web_search", "b"),
+			step(fetchCall("3", 0), "web_fetch", "c"),
+		];
+		expect(webStats(calls)).toEqual({ rounds: 2, returned: 18, opened: 3 });
+		// Reading a page is part of the same web aggregate, whichever tool did it.
+		const groups = groupSteps(calls);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]).toMatchObject({ type: "group", kind: "web" });
+		expect(groupLabel("web", groups[0].actions)).toBe("2 search rounds · 18 results returned · 3 pages opened");
+		// Without a search only the pages that were opened are named.
+		expect(groupLabel("web", [step(fetchCall("4", 3), "web_fetch", "d")])).toBe("Opened 3 web pages");
+	});
+
+	it("counts nothing for a call that has no result yet", () => {
+		const running = describeAction(
+			{ id: "9", name: "web_search", args: { query: "z" } },
+			undefined,
+			{ status: "running" },
+			"",
+		);
+		// Nothing is made up for it: the row shows the plain "searching" state until the tool's own numbers arrive.
+		expect(running).toMatchObject({ status: "running", verb: "Searching the web" });
+		expect(running.web).toBeUndefined();
+	});
+
+	it("shows the lines a write really added and removed, and sums a group only when every row has a real count", () => {
+		const created = describeAction(
+			{ id: "w1", name: "write", args: { path: "a.txt", content: "x\ny\n" } },
+			{ isError: false, details: { created: true, additions: 2, deletions: 0 } },
+			undefined,
+			"",
+		);
+		const overwritten = describeAction(
+			{ id: "w2", name: "write", args: { path: "b.txt", content: "x" } },
+			{ isError: false, details: { additions: 3, deletions: 1 } },
+			undefined,
+			"",
+		);
+		const uncounted = describeAction(
+			{ id: "w3", name: "write", args: { path: "c.bin", content: "x" } },
+			{ isError: false },
+			undefined,
+			"",
+		);
+		expect(created.extra).toEqual({ additions: 2, deletions: 0 });
+		expect(uncounted.extra).toBeUndefined();
+		expect(changeTotals([created, overwritten])).toEqual({ additions: 5, deletions: 1 });
+		expect(changeTotals([created, uncounted])).toBeUndefined();
 	});
 });

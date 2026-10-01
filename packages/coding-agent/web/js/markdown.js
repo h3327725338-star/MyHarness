@@ -6,7 +6,6 @@ import { t } from "./i18n.js";
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
 
-const FILE_REF = /^(?:[A-Za-z]:)?[\w@./\\~+-]*[\w-]\.[A-Za-z][A-Za-z0-9]{0,9}(?::\d+(?::\d+)?)?$/;
 const SAFE_LINK = /^(https?:|mailto:|#|\/(?!\/)|\.{0,2}\/)/i;
 
 let engine;
@@ -25,10 +24,6 @@ function getEngine() {
 				return `<div class="code-block"><div class="code-head"><span class="code-lang">${esc(language || "text")}</span><button class="code-copy" type="button">${esc(t("Copy"))}</button></div><pre><code class="hljs">${highlight(text, language)}</code></pre></div>`;
 			},
 			codespan({ text }) {
-				const raw = text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-				if (FILE_REF.test(raw) && !/^\d+(\.\d+)+$/.test(raw)) {
-					return `<a class="file-ref" data-path="${esc(raw)}" href="#"><code>${text}</code></a>`;
-				}
 				return `<code>${text}</code>`;
 			},
 			link({ href, title, tokens }) {
@@ -78,7 +73,7 @@ export function renderMarkdown(text) {
 	return out;
 }
 
-/** Markdown block. Delegated clicks handle code copy buttons and file references. */
+/** Markdown block. A delegated click handles the code copy buttons; nothing in the text opens a panel. */
 export class Markdown extends Component {
 	shouldComponentUpdate(next) {
 		return next.text !== this.props.text || next.class !== this.props.class;
@@ -91,12 +86,6 @@ export class Markdown extends Component {
 				copy.textContent = t("Copied");
 				setTimeout(() => (copy.textContent = t("Copy")), 1200);
 			});
-			return;
-		}
-		const ref = event.target.closest?.("a.file-ref");
-		if (ref) {
-			event.preventDefault();
-			this.props.onOpenFile?.(ref.dataset.path);
 		}
 	};
 	render({ text, class: cls }) {

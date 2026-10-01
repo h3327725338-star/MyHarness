@@ -120,11 +120,10 @@ describe("Web UI: interface language", () => {
 		const zh = zhCN as Record<string, string>;
 		// Labels that name one of these things are the English term itself, with normal spacing around it in a sentence.
 		expect(i18n.t("Terminal")).toBe("Terminal");
-		expect(i18n.t("Diff")).toBe("Diff");
+		expect(i18n.t("Commit")).toBe("Commit");
 		expect(i18n.t("Push")).toBe("Push");
-		expect(i18n.t("Session details")).toBe("Session 详情");
-		expect(i18n.t("Open in Terminal")).toBe("在 Terminal 中打开");
-		expect(i18n.t("Reasoning effort")).toBe("Thinking Effort");
+		expect(i18n.t("Session file")).toBe("Session 文件");
+		expect(i18n.t("Thinking effort")).toBe("Thinking Effort");
 		// The mechanical Chinese renderings are gone from the UI dictionary.
 		for (const value of Object.values(zh)) {
 			for (const word of ["提供商", "会话", "思考强度", "工作树", "终端面板"]) expect(value).not.toContain(word);

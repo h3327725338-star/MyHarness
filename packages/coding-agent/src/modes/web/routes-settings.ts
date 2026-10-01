@@ -16,14 +16,14 @@ import {
 	hasTrustRequiringProjectResources,
 	ProjectTrustStore,
 } from "../../config/trust/index.ts";
-import { formatContextWindow, parseContextWindowInput } from "../../context/context-window.ts";
+import { CONTEXT_WINDOW_UNIT_TOKENS, parseContextWindowInput } from "../../context/context-window.ts";
 import { configureHttpDispatcher, HTTP_IDLE_TIMEOUT_CHOICES } from "../../platform/process/http-dispatcher.ts";
 import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
-type SettingType = "boolean" | "enum" | "number" | "text" | "modelRef" | "multi";
+type SettingType = "boolean" | "enum" | "number" | "text" | "modelRef" | "multi" | "tokens";
 
 interface SettingDef {
 	id: string;
@@ -35,7 +35,12 @@ interface SettingDef {
 	options?: Array<{ value: string; label: string }>;
 	min?: number;
 	max?: number;
+	/**
+	 * Unit a number is shown and typed in (`tokens`: "K", with `unitSize` tokens each). The value itself always stays the
+	 * exact stored number; the unit only changes how the Web UI shows and takes it.
+	 */
 	unit?: string;
+	unitSize?: number;
 	/** Setting applies only to the next session/turn, or needs a restart. */
 	note?: string;
 	/** The setting is stored in the project instead of the global settings file. */
@@ -196,17 +201,21 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "contextWindowMain",
 				section: "Agent",
 				label: "Main context window cap",
-				description: "Optional cap for the main session, e.g. 256K. Empty uses the model's window.",
-				type: "text",
-				value: context.main ? formatContextWindow(context.main) : "",
+				description: "Optional cap for the main session. Empty uses the model's window.",
+				type: "tokens",
+				value: context.main ?? null,
+				unit: "K",
+				unitSize: CONTEXT_WINDOW_UNIT_TOKENS,
 			},
 			{
 				id: "contextWindowSubAgent",
 				section: "Agent",
 				label: "Sub-agent context window cap",
-				description: "Optional cap for sub-agents, e.g. 128K. Empty uses the model's window.",
-				type: "text",
-				value: context.subagent ? formatContextWindow(context.subagent) : "",
+				description: "Optional cap for sub-agents. Empty uses the model's window.",
+				type: "tokens",
+				value: context.subagent ?? null,
+				unit: "K",
+				unitSize: CONTEXT_WINDOW_UNIT_TOKENS,
 			},
 			{
 				id: "autoRetry",
@@ -359,7 +368,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "webShutdownGraceSeconds",
 				section: "Network",
-				label: "Web UI exit delay (seconds)",
+				label: "Web UI exit delay",
 				description:
 					"After the last browser page of this Web UI closes, MyHarness waits this long before it stops the local server. Reloading or reopening the page within that time keeps it running. Applies the next time the last page closes.",
 				type: "number",
@@ -625,9 +634,10 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			case "contextWindowMain":
 			case "contextWindowSubAgent": {
 				const role = id === "contextWindowMain" ? "main" : "subagent";
-				const text = typeof value === "string" ? value.trim() : "";
+				// The exact token count (or null / empty to clear); a text such as "256K" is still understood.
+				const text = typeof value === "string" ? value.trim() : value;
 				const current = s.getContextWindowSettings();
-				if (!text) {
+				if (text === null || text === undefined || text === "") {
 					s.setContextWindowSettings({ ...current, [role]: undefined });
 					return;
 				}

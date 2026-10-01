@@ -1,7 +1,12 @@
-// Changes panel: "what did the agent change?" with real per-file diffs, plus the Git actions around them.
-import { html, useCallback, useEffect, useMemo, useRef, useState, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
-import { api, loadGitStatus, setView, state, useStore } from "./store.js";
-import { actions } from "./actions.js";
+// Changes panel: review what the agent changed, or what is uncommitted in the working tree, with real per-file diffs and the
+// Git actions around them. The changed files are listed once, the file being read fills the rest of the panel (line
+// numbers, context lines, green additions and red deletions), and ↑/↓ or the arrows in the list switch files without leaving
+// the panel. The panel is opened, closed and switched only by its own buttons in the header: nothing in here opens another
+// panel.
+import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { api, loadGitStatus, setView, useStore } from "./store.js";
+import { actions, openCommand } from "./actions.js";
+import { commitChanges, pushChanges } from "./git-flow.js";
 import { DiffView, languageFor } from "./diff.js";
 import { basename, dirname, fmtDateTime, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
@@ -9,49 +14,46 @@ import { t, N_, serverText } from "./i18n.js";
 const STATUS_LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 const STATUS_TITLE = { added: N_("Added"), modified: N_("Modified"), deleted: N_("Deleted"), renamed: N_("Renamed") };
 
-function FileDiff({ file, scope, runId, open, onToggle, mode, nonce, focused }) {
-	const [data, setData] = useState(null);
-	const [error, setError] = useState("");
-	const ref = useRef(null);
-	useEffect(() => {
-		if (!open || data) return undefined;
-		let cancelled = false;
-		const url = `/api/changes/diff?scope=${scope}${scope === "run" && runId != null ? `&runId=${runId}` : ""}&path=${encodeURIComponent(file.path)}`;
-		api(url)
-			.then((d) => !cancelled && setData(d))
-			.catch((e) => !cancelled && setError(e.message));
-		return () => {
-			cancelled = true;
-		};
-	}, [open, nonce]);
-	useEffect(() => {
-		setData(null);
-		setError("");
-	}, [nonce, scope, runId]);
-	useEffect(() => {
-		if (focused && ref.current) ref.current.scrollIntoView({ block: "start", behavior: "smooth" });
-	}, [focused]);
+const fileCounts = (file) => (file.binary || file.unavailable ? null : html`<${Counts} additions=${file.additions} deletions=${file.deletions} />`);
+
+/** The path of a file as the panel writes it everywhere: the folder weaker, the name stronger, the old name of a rename after it. */
+function FilePath({ file }) {
 	const dir = dirname(file.path);
-	return html`<div class=${`file-diff ${open ? "open" : ""}`} ref=${ref}>
-		<div class="file-head" onClick=${onToggle} role="button" tabindex="0" onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onToggle())}>
-			<${Icon} name=${open ? "chevronDown" : "chevronRight"} size=${14} class="c-dim" />
+	return html`<span class="file-path truncate" title=${file.path}>${dir ? html`<span class="dim">${dir}/</span>` : null}<strong>${basename(file.path)}</strong>${file.oldPath ? html` <span class="dim">← ${file.oldPath}</span>` : null}</span>`;
+}
+
+/** One file's diff, in the part of the panel under the file list. */
+function DiffPane({ file, mode, entry }) {
+	const ref = useRef(null);
+	// Another file starts at its top.
+	useEffect(() => {
+		if (ref.current) ref.current.scrollTop = 0;
+	}, [file.path]);
+	const data = entry?.data;
+	const body = entry?.error
+		? html`<div class="c-danger pad">${entry.error}</div>`
+		: !data
+			? html`<div class="pad"><${Spinner} /></div>`
+			: data.summary.binary
+				? html`<div class="pad dim">${t("Binary file — no text diff.")}</div>`
+				: data.summary.unavailable
+					? html`<div class="pad dim">${serverText(data.summary.unavailable)}</div>`
+					: data.patch
+						? html`<${DiffView} patch=${data.patch} mode=${mode} language=${languageFor(file.path)} />`
+						: html`<div class="pad dim">${t("No content changes.")}</div>`;
+	return html`<div class="cdiff" ref=${ref} tabindex="0" role="region" aria-label=${t("Diff of {path}", { path: file.path })}>
+		<div class="cdiff-head">
 			<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
-			<span class="file-path truncate" title=${file.path}>${dir ? html`<span class="dim">${dir}/</span>` : null}<strong>${basename(file.path)}</strong>${file.oldPath ? html` <span class="dim">← ${file.oldPath}</span>` : null}</span>
-			<span class="counts"><span class="add">+${file.additions}</span><span class="del">−${file.deletions}</span></span>
-			<span class="file-actions" onClick=${(e) => e.stopPropagation()}>
-				<${CopyButton} text=${file.path} label=${t("Copy path")} />
-				${file.status !== "deleted" ? html`<button class="icon-btn sm" title=${t("Open file")} aria-label=${t("Open file")} onClick=${() => actions.openFile(file.path)}><${Icon} name="file" size=${14} /></button>` : null}
-			</span>
+			<${FilePath} file=${file} />
+			${fileCounts(file)}
+			<${CopyButton} text=${file.path} label=${t("Copy path")} />
 		</div>
-		${open ? html`<div class="file-body">
-			${error ? html`<div class="c-danger pad">${error}</div>` : !data ? html`<div class="pad"><${Spinner} /></div>` : data.summary.binary ? html`<div class="pad dim">${t("Binary file — no text diff.")}</div>` : data.summary.unavailable ? html`<div class="pad dim">${data.summary.unavailable}</div>` : data.patch ? html`<${DiffView} patch=${data.patch} mode=${mode} language=${languageFor(file.path)} />` : html`<div class="pad dim">${t("No content changes.")}</div>`}
-		</div>` : null}
+		${body}
 	</div>`;
 }
 
 export function ChangesPanel() {
 	const scope = useStore((s) => s.view.changesScope);
-	const selected = useStore((s) => s.view.selectedChange);
 	const pinnedRun = useStore((s) => s.view.changesRunId);
 	const snap = useStore((s) => s.snap);
 	const gitStatus = useStore((s) => s.gitStatus);
@@ -61,8 +63,11 @@ export function ChangesPanel() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
 	const [mode, setMode] = useState(() => localStorage.getItem("myharness.diffmode") || "unified");
-	const [openMap, setOpenMap] = useState({});
+	const [listOpen, setListOpen] = useState(true);
+	const [chosen, setChosen] = useState("");
+	const [diffs, setDiffs] = useState({});
 	const [nonce, setNonce] = useState(0);
+	const listRef = useRef(null);
 	const runId = scope === "run" ? (pinnedRun ?? undefined) : undefined;
 
 	const load = useCallback(async () => {
@@ -85,62 +90,115 @@ export function ChangesPanel() {
 	useEffect(() => {
 		loadGitStatus();
 	}, [lastRunId, active]);
-	useEffect(() => {
-		if (!selected || !data) return;
-		setOpenMap((m) => ({ ...m, [selected.path]: true }));
-	}, [selected?.path, selected?.at, data]);
 
 	const files = data?.files || [];
 	const effectiveRunId = data?.run?.runId ?? runId;
 	const total = files.reduce((acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }), { add: 0, del: 0 });
-	const setScope = (value) => setView({ changesScope: value, selectedChange: null });
-	const allOpen = files.length > 0 && files.every((f) => openMap[f.path]);
-	const toggleAll = () => setOpenMap(allOpen ? {} : Object.fromEntries(files.map((f) => [f.path, true])));
+	const selected = files.find((f) => f.path === chosen) || files[0];
+	const at = selected ? files.indexOf(selected) : -1;
 	const runs = data?.runs || [];
+
+	// The diff of the file being read, fetched when it is chosen and again after the list is refreshed; what is already on
+	// screen stays until the new one arrives, so reading is never interrupted by a spinner.
+	const diffKey = selected ? `${scope}|${scope === "run" ? (effectiveRunId ?? "") : ""}|${selected.path}` : "";
+	useEffect(() => {
+		if (!selected) return undefined;
+		let cancelled = false;
+		const url = `/api/changes/diff?scope=${scope}${scope === "run" && effectiveRunId != null ? `&runId=${effectiveRunId}` : ""}&path=${encodeURIComponent(selected.path)}`;
+		api(url)
+			.then((d) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { data: d } })))
+			.catch((e) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { error: e.message } })));
+		return () => {
+			cancelled = true;
+		};
+	}, [diffKey, nonce]);
+	useEffect(() => {
+		listRef.current?.querySelector(".cfile.sel")?.scrollIntoView({ block: "nearest" });
+	}, [selected?.path, listOpen]);
+
+	const go = (index) => {
+		const file = files[Math.max(0, Math.min(files.length - 1, index))];
+		if (file) setChosen(file.path);
+	};
+	const onListKey = (e) => {
+		const key = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: files.length - 1 }[e.key];
+		if (key === undefined) return;
+		e.preventDefault();
+		go(key);
+	};
+	const setScope = (value) => (setView({ changesScope: value }), setChosen(""));
+	const head = gitStatus?.head?.sha?.slice(0, 7);
 
 	return html`<div class="changes-panel">
 		<div class="panel-toolbar">
 			<${Segmented} size="sm" value=${scope} onChange=${setScope} options=${[{ value: "run", label: t("This task") }, { value: "worktree", label: t("Working tree") }]} />
-			${scope === "run" && runs.length > 1 ? html`<select class="select sm" value=${String(effectiveRunId ?? "")} onChange=${(e) => setView({ changesRunId: Number(e.target.value) })} aria-label=${t("Task")}>${runs.map((r) => html`<option key=${r.runId} value=${r.runId}>${`${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })}${r.endedAt ? ` · ${fmtDateTime(r.endedAt)}` : ""}`}</option>`)}</select>` : null}
+			${scope === "run" && runs.length > 1 ? html`<select class="select sm" value=${String(effectiveRunId ?? "")} onChange=${(e) => (setView({ changesRunId: Number(e.target.value) }), setChosen(""))} aria-label=${t("Task")}>${runs.map((r) => html`<option key=${r.runId} value=${r.runId}>${`${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })}${r.endedAt ? ` · ${fmtDateTime(r.endedAt)}` : ""}`}</option>`)}</select>` : null}
 			<span class="grow" />
 			<${Segmented} size="sm" value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
-			<button class="icon-btn sm" title=${allOpen ? t("Collapse all") : t("Expand all")} onClick=${toggleAll} aria-label=${t("Toggle all files")}><${Icon} name=${allOpen ? "chevronUp" : "chevronsUpDown"} size=${15} /></button>
 			<button class="icon-btn sm" title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${load}><${Icon} name="refresh" size=${15} /></button>
 		</div>
 		<${GitBar} gitStatus=${gitStatus} active=${active} />
-		<div class="panel-scroll">
+		<div class="changes-basis">${scope === "run" ? t("This task's changes, compared with the workspace before the task started.") : head ? t("Uncommitted changes, compared with the latest commit {sha}.", { sha: head }) : t("Uncommitted changes, compared with the latest commit.")}</div>
+		<div class="changes-notes">
 			${scope === "run" && data?.run?.checkpointStatus === "restored" ? html`<div class="notice"><${Icon} name="undo" size=${14} /><span>${t("This task was undone: the workspace was restored to how it was before the task. The list shows what the task had changed.")}</span></div>` : null}
 			${scope === "run" && data?.run && data.run.reliability === "indeterminate" ? html`<div class="notice warn"><${Icon} name="alertTriangle" size=${14} /><span>${data.run.reason ? t("Change detection may be incomplete: {reason}", { reason: serverText(data.run.reason) }) : t("Change detection may be incomplete.")}</span></div>` : null}
 			${scope === "run" && data?.run?.git && (data.run.git.headChanged || data.run.git.localRefChanges?.length) ? html`<div class="notice"><${Icon} name="gitCommit" size=${14} /><span>${data.run.git.taskCreatedHistory ? t("This task also changed Git history (it created commits).") : t("This task also changed Git history.")}</span></div>` : null}
 			${scope === "run" && data?.run?.git?.externalSideEffectsUnknown ? html`<div class="notice warn"><${Icon} name="alertTriangle" size=${14} /><span>${t("Shell commands ran during this task; effects outside the workspace (network, other folders) cannot be verified or undone.")}</span></div>` : null}
 			${error ? html`<div class="notice danger">${error}</div>` : null}
-			${data?.error && scope === "worktree" ? html`<div class="empty">${data.error}</div>` : null}
-			${loading && !data ? html`<div class="empty"><${Spinner} /></div>` : null}
-			${data && !files.length && !data.error ? html`<div class="empty"><div style="display:flex;justify-content:center;margin-bottom:8px;color:var(--text-4)"><${Icon} name="fileDiff" size=${22} /></div>${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")}</div>` : null}
-			${files.length ? html`<div class="changes-summary dim">${plural(data.total ?? files.length, "file")} · <span class="add">+${total.add}</span> <span class="del">−${total.del}</span>${data.total > files.length ? ` · ${t("showing {n}", { n: files.length })}` : ""}</div>` : null}
-			${files.map((file) => html`<${FileDiff} key=${file.path} file=${file} scope=${scope} runId=${effectiveRunId} open=${!!openMap[file.path]} onToggle=${() => setOpenMap((m) => ({ ...m, [file.path]: !m[file.path] }))} mode=${mode} nonce=${nonce} focused=${selected?.path === file.path ? selected.at || 1 : 0} />`)}
 		</div>
+		${data?.error && scope === "worktree" ? html`<div class="empty">${serverText(data.error)}</div>` : null}
+		${loading && !data ? html`<div class="empty"><${Spinner} /></div>` : null}
+		${data && !files.length && !data.error ? html`<div class="empty"><div style="display:flex;justify-content:center;margin-bottom:8px;color:var(--text-4)"><${Icon} name="fileDiff" size=${22} /></div>${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")}</div>` : null}
+		${selected
+			? html`<div class="changes-body">
+				<div class="cfiles">
+					<div class="cfiles-head">
+						<button class="cfiles-toggle" aria-expanded=${listOpen} onClick=${() => setListOpen(!listOpen)} title=${listOpen ? t("Hide the file list") : t("Show the file list")}>
+							<span>${plural(data.total ?? files.length, "file")}</span><${Counts} additions=${total.add} deletions=${total.del} />${data.total > files.length ? html`<span class="dim">${t("showing {n}", { n: files.length })}</span>` : null}<${Fold} />
+						</button>
+						<span class="grow" />
+						<span class="dim cfiles-pos">${at + 1} / ${files.length}</span>
+						<button class="icon-btn sm" disabled=${at <= 0} onClick=${() => go(at - 1)} title=${t("Previous file")} aria-label=${t("Previous file")}><${Icon} name="chevronUp" size=${15} /></button>
+						<button class="icon-btn sm" disabled=${at >= files.length - 1} onClick=${() => go(at + 1)} title=${t("Next file")} aria-label=${t("Next file")}><${Icon} name="chevronDown" size=${15} /></button>
+					</div>
+					<${Collapse} open=${listOpen}>
+						<div class="cfiles-list" ref=${listRef} role="listbox" tabindex="0" aria-label=${t("Changed files")} onKeyDown=${onListKey}>
+							${files.map((file) => html`<div class=${`cfile ${file === selected ? "sel" : ""}`} key=${file.path} role="option" aria-selected=${file === selected} title=${file.path} onClick=${() => setChosen(file.path)}>
+								<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
+								<${FilePath} file=${file} />
+								${fileCounts(file)}
+							</div>`)}
+						</div>
+					<//>
+				</div>
+				<${DiffPane} file=${selected} mode=${mode} entry=${diffs[diffKey]} />
+			</div>`
+			: null}
 	</div>`;
 }
 
 function GitBar({ gitStatus, active }) {
 	const snap = useStore((s) => s.snap);
+	const gitTask = useStore((s) => s.gitTask);
 	const checkpoint = snap?.checkpoint && snap.checkpoint.status === "created" ? snap.checkpoint : null;
 	if (!gitStatus) return null;
 	if (!gitStatus.gitAvailable) return html`<div class="gitbar dim"><${Icon} name="gitBranch" size=${14} />${t("Git is not available on this computer.")}</div>`;
 	if (!gitStatus.isRepository) {
-		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitDialog("enable")}>${t("Set up Git")}</button></div>`;
+		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitSetup()}>${t("Set up Git")}</button></div>`;
 	}
 	const dirty = gitStatus.preview?.total || 0;
+	const busy = active || !!gitStatus.task || !!gitTask;
 	return html`<div class="gitbar">
-		<span class="row" style="gap:6px"><${Icon} name="gitBranch" size=${14} /><strong>${gitStatus.branch || t("detached HEAD")}</strong>
+		<span class="row gitbar-ctx"><${Icon} name="gitBranch" size=${14} /><strong class="truncate">${gitStatus.branch || t("detached HEAD")}</strong>
+			${gitStatus.head ? html`<span class="mono dim" title=${gitStatus.head.subject}>${gitStatus.head.sha.slice(0, 7)}</span>` : null}
+			${gitStatus.linkedWorktree ? html`<span class="badge" title=${t("This folder is a linked Git worktree")}>${t("worktree")}</span>` : null}
 			${dirty ? html`<span class="badge warn">${t("{dirty} uncommitted", { dirty })}</span>` : html`<span class="badge ok">${t("clean")}</span>`}
 			${gitStatus.integrationEnabled ? null : html`<span class="badge" title=${t("MyHarness does not create task checkpoints while Git integration is off")}>${t("integration off")}</span>`}
 		</span>
 		<span class="grow" />
-		${checkpoint ? html`<button class="btn sm" disabled=${active} onClick=${() => actions.openGitDialog("undo")} title=${t("Keep or undo this task's changes")}>${t("Undo task")}</button>` : null}
-		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("commit")} title=${t("Commit the task's changes locally")}>${t("Commit")}</button>
-		<button class="btn sm" disabled=${active || !!gitStatus.task} onClick=${() => actions.openGitDialog("push")} title=${t("Push commits to the upstream and verify CI")}>${t("Push")}</button>
-		<button class="icon-btn sm" title=${t("More Git actions")} aria-label=${t("More Git actions")} onClick=${() => actions.openGitDialog("more")}><${Icon} name="more" size=${15} /></button>
+		${checkpoint ? html`<button class="btn sm" disabled=${busy} onClick=${() => openCommand("undo")} title=${t("Keep or undo this task's changes")}>${t("Undo task")}</button>` : null}
+		<button class="btn sm" disabled=${busy} onClick=${commitChanges} title=${t("Commit the task's changes locally")}>${t("Commit")}</button>
+		<button class="btn sm" disabled=${busy} onClick=${pushChanges} title=${t("Push commits to the upstream and verify CI")}>${t("Push")}</button>
+		<button class="icon-btn sm" title=${t("More Git actions")} aria-label=${t("More Git actions")} onClick=${() => openCommand("git")}><${Icon} name="more" size=${15} /></button>
 	</div>`;
 }

@@ -9,7 +9,6 @@
 .field-label { gap: 4px; font-size: var(--fs-sm); color: var(--text-2); }
 .git-lines { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-md); font-size: var(--fs-code); line-height: 1.5; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .git-lines.err { color: var(--danger); }
-.git-fail { padding: 6px 0; font-size: 13px; }
 .folder-list { border: 1px solid var(--border); border-radius: var(--r-md); max-height: 260px; overflow: auto; background: var(--bg-inset); }
 .folder-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 10px; text-align: left; color: var(--text-2); }
 .folder-item:hover { background: var(--surface-hover); color: var(--text); }
@@ -44,15 +43,22 @@
 .set-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; max-width: 520px; line-height: 1.45; }
 .set-control { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 .set-row.stack .set-control { justify-content: flex-start; }
-/* One width for every text-like control, a narrower one for numbers; switches line up on the right edge. Every
-   control (field, select, model button, segmented, multi-select) is one height: --h-control. */
-.set-control > .select, .set-control > .field.wide { width: 240px; }
-.set-control > .model-ref { width: 320px; }
-.set-control > .field.num { width: 96px; }
+/* A control is as wide as what it holds, within bounds: a short choice is a compact control, a typed text gets a fixed
+   comfortable width, and everything ends on the same right edge. Every control is one height: --h-control. */
+.set-control > .select { width: auto; min-width: 112px; max-width: 280px; }
+.set-control > .field.wide { width: 240px; }
+.set-control > .model-ref { width: fit-content; min-width: 176px; max-width: 340px; }
 .field.num { width: 96px; } .field.wide { width: 260px; }
+.tokens-field { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.tokens-exact { font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Room kept for "saving": it only fills for a save that really takes long, so nothing shifts when it appears. */
+.saving { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip-toggle { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--border-strong); color: var(--text-2); font-size: var(--fs-sm); }
 .chip-toggle.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+/* "Unconfirmed": small and outlined, so a chip keeps its height and the group keeps its rhythm. */
+.chip-toggle .badge.unconfirmed { height: 16px; padding: 0 5px; margin-right: -4px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-3); font-size: 10.5px; line-height: 1; }
+.chip-toggle.on .badge.unconfirmed { border-color: var(--accent-line); color: var(--accent); }
 /* Multi-select: one joined control, each option with its own check box. */
 .multi { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); overflow: hidden; }
 .multi-opt { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px 0 10px; color: var(--text-3); font-size: var(--fs-sm); border-left: 1px solid var(--border); transition: background var(--t-fast), color var(--t-fast); }

@@ -92,7 +92,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 	return html`<div class="ws">
 		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${general ? t("Chats that belong to no workspace") : workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
-			<${Icon} name=${general ? "folderOff" : showing ? "folderOpen" : "folder"} size=${15} />
+			<${Icon} name="folder" size=${15} class=${general ? "ws-folder none" : "ws-folder"} />
 			<span class="name truncate">${workspace.name}</span>
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
@@ -107,8 +107,8 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 				<//>
 			</span>
 		</div>
-		<div class=${`ws-collapse ${showing ? "open" : ""}`} inert=${showing ? undefined : ""}>
-			<div class="ws-collapse-inner">
+		<div class=${`collapse ${showing ? "open" : ""}`} inert=${showing ? undefined : ""}>
+			<div class="collapse-inner">
 				${rendered
 					? html`<div class="ws-children">
 						${sessions === undefined && !error ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}

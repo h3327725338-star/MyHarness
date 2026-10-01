@@ -68,6 +68,12 @@ const ThinkingLevelStatusValueSchema = Type.Union([
 	Type.Literal("unverified"),
 	Type.Literal("unknown"),
 ]);
+/**
+ * Effort names an API accepts but runs as another level, as the provider's documentation states (`{ "medium": "high" }`).
+ * Informational: the levels a model offers are `thinkingLevelMap`; these names are never shown as levels of their own.
+ */
+const ThinkingLevelAliasesSchema = Type.Record(Type.String(), Type.String());
+
 /** Result of the real-request probe per effort level; written by model refresh, informational for the runtime. */
 const ThinkingLevelStatusSchema = Type.Object({
 	minimal: Type.Optional(ThinkingLevelStatusValueSchema),
@@ -169,6 +175,7 @@ const ModelDefinitionSchema = Type.Object({
 	reasoning: Type.Optional(Type.Boolean()),
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 	thinkingLevelStatus: Type.Optional(ThinkingLevelStatusSchema),
+	thinkingLevelAliases: Type.Optional(ThinkingLevelAliasesSchema),
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
 	cost: Type.Optional(ModelCostSchema),
 	contextWindow: Type.Optional(Type.Number()),

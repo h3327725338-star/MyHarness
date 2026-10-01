@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
 import { loadPrefs, savePrefs, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
+import { runModeOf } from "./run-modes.js";
 
 const listeners = new Set();
 const prefs = loadPrefs();
@@ -23,6 +24,8 @@ const SLOT_DEFAULTS = () => ({
 	userBash: {},
 	userBashOrder: [],
 	gitTask: null,
+	// How the last Git operation (commit, push, undo, restore) ended; shown in the status strip (see git-flow.js).
+	gitResult: null,
 	compaction: null,
 	retry: null,
 	recovery: null,
@@ -58,6 +61,8 @@ function runFor(slot, fn) {
 	}
 }
 
+export { runFor as inSlot };
+
 export const activeSlotId = () => activeSlot;
 
 export const state = {
@@ -79,7 +84,7 @@ export const state = {
 	view: {
 		sidebarOpen: prefs.sidebarOpen ?? true,
 		sidebarW: prefs.sidebarW ?? 272,
-		panelOpen: prefs.panelOpen ?? false,
+		panelOpen: false,
 		panelTab: prefs.panelTab ?? "changes",
 		panelW: prefs.panelW ?? 560,
 		expanded: prefs.expanded ?? {},
@@ -92,13 +97,11 @@ export const state = {
 		palette: false,
 		dialog: null,
 		changesScope: "run",
-		selectedChange: null,
-		selectedFile: null,
 		selectedTerminal: null,
 		theme: prefs.theme ?? "system",
-		density: prefs.density ?? "compact",
 		motion: prefs.motion ?? "system",
 		processDefault: prefs.processDefault ?? "collapsed",
+		runMode: runModeOf(prefs.runMode),
 		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
 		notify: prefs.notify ?? false,
@@ -157,7 +160,8 @@ export function readWidthValue(value) {
 	return Math.max(620, Math.min(1100, Math.round(n)));
 }
 
-const PERSISTED = ["sidebarOpen", "sidebarW", "panelOpen", "panelTab", "panelW", "expanded", "theme", "density", "motion", "processDefault", "readWidth", "notify", "lang"];
+// The right panel is not remembered: it always starts closed, and only its own buttons open it.
+const PERSISTED = ["sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -171,7 +175,6 @@ export function applyAppearance() {
 	const mode = state.view.theme;
 	const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 	root.dataset.theme = dark ? "dark" : "light";
-	root.dataset.density = state.view.density;
 	root.dataset.motion = state.view.motion === "system" ? "" : state.view.motion;
 	root.style.setProperty("--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
 	root.style.setProperty("--sidebar-w", `${state.view.sidebarW}px`);
@@ -500,7 +503,7 @@ export async function activateSlot(slot) {
 	if (!bagOf(slot).loaded) await refreshSlot(slot);
 	activeSlot = slot;
 	state.activeSlot = slot;
-	state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
+	state.view = { ...state.view, selectedTerminal: null };
 	emit();
 	markActiveSeen();
 	const bag = bagOf(slot);
@@ -729,7 +732,7 @@ function connectEvents() {
 		state.retry = null;
 		state.resources = null;
 		state.gitStatus = undefined;
-		if (slot === activeSlot) state.view = { ...state.view, selectedChange: null, selectedFile: null, selectedTerminal: null };
+		if (slot === activeSlot) state.view = { ...state.view, selectedTerminal: null };
 		await attempt(async () => {
 			await refreshSlot(slot);
 			if (slot === activeSlot) await loadWorkspaces();
@@ -754,6 +757,10 @@ function connectEvents() {
 	on("github_event", (d) => set({ githubEvent: { ...d, nonce: Date.now() } }));
 	on("generation_speed", (d) => {
 		if (state.snap) state.snap = { ...state.snap, speed: d.speed };
+		emit();
+	});
+	on("cache_hit", (d) => {
+		if (state.snap) state.snap = { ...state.snap, cache: d.cache };
 		emit();
 	});
 

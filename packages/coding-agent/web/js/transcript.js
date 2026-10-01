@@ -1,14 +1,14 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton } from "./ui.js";
-import { api, useStore, state, setView } from "./store.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton } from "./ui.js";
+import { api, useStore, setView } from "./store.js";
 import { Markdown } from "./markdown.js";
-import { buildTurns, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
-import { actions } from "./actions.js";
+import { buildTurns, changeTotals, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
+import { actions, openCommand } from "./actions.js";
+import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
 
-const KIND_ICON = { read: "file", list: "folder", find: "search", search: "search", run: "terminal", edit: "edit", write: "fileDiff", web: "globe", fetch: "globe", agent: "layers", tool: "wrench" };
 const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertCircle" };
 
 // ---- Small pieces ----------------------------------------------------------------------------
@@ -30,7 +30,7 @@ const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
 function MarkdownOutput({ text, max = 60_000 }) {
 	const [all, setAll] = useState(false);
 	const shown = !all && text.length > max ? text.slice(0, max) : text;
-	return html`<div class="raw-block raw-md"><${Markdown} text=${shown} onOpenFile=${actions.openFile} />
+	return html`<div class="raw-block raw-md"><${Markdown} text=${shown} />
 		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
@@ -59,21 +59,22 @@ const TASK_DOT = { running: "accent", completed: "ok", partial: "warn", failed: 
 
 function TaskResult({ task }) {
 	const [open, setOpen] = useState(false);
+	const toggle = () => setOpen(!open);
 	return html`<div class="sub-task">
-		<div class="action-row" onClick=${() => setOpen(!open)} role="button" tabindex="0" onKeyDown=${(e) => e.key === "Enter" && setOpen(!open)}>
+		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<span class="action-ico">${task.status === "running" ? html`<${Spinner} />` : html`<span class=${`dot ${TASK_DOT[task.status] ?? ""}`} />`}</span>
 			<span class="action-text truncate">${task.description || clip(task.prompt || "", 80)}</span>
-			<span class="action-tail dim">${task.toolUseCount ? plural(task.toolUseCount, "tool call") : ""}${task.durationMs ? ` · ${fmtDuration(task.durationMs)}` : ""}<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${13} class="c-dim" /></span>
+			<span class="action-tail dim">${task.toolUseCount ? plural(task.toolUseCount, "tool call") : ""}${task.durationMs ? ` · ${fmtDuration(task.durationMs)}` : ""}<${Fold} /></span>
 		</div>
 		${task.status === "running" && task.lastToolInfo ? html`<div class="dim sub-last truncate">${task.lastToolInfo}</div>` : null}
-		${open
-			? html`<div class="sub-detail">
-			${task.error ? html`<div class="c-danger">${task.error}</div>` : null}
-			${task.output ? html`<${Markdown} text=${task.output} onOpenFile=${actions.openFile} />` : html`<div class="dim">${t("No report yet.")}</div>`}
-			${task.findings?.length ? html`<div class="raw-label">${t("Findings")}</div><ul class="sub-list">${task.findings.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
-			${task.unresolved?.length ? html`<div class="raw-label">${t("Unresolved")}</div><ul class="sub-list">${task.unresolved.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
-		</div>`
-			: null}
+		<${Collapse} open=${open}>
+			<div class="sub-detail">
+				${task.error ? html`<div class="c-danger">${task.error}</div>` : null}
+				${task.output ? html`<${Markdown} text=${task.output} />` : html`<div class="dim">${t("No report yet.")}</div>`}
+				${task.findings?.length ? html`<div class="raw-label">${t("Findings")}</div><ul class="sub-list">${task.findings.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
+				${task.unresolved?.length ? html`<div class="raw-label">${t("Unresolved")}</div><ul class="sub-list">${task.unresolved.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
+			</div>
+		<//>
 	</div>`;
 }
 
@@ -97,52 +98,58 @@ function AgentDetails({ details }) {
 	return null;
 }
 
+/** One tool call. Every kind of call has the same row: its glyph, what it did, a real count of lines when it changed a file, how long it took, and the fold arrow. */
 const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 	const [open, setOpen] = useState(!!defaultOpen);
 	const subAgents = useStore((st) => st.subAgents);
 	const resultDetails = step.result?.details;
 	const liveDetails = step.kind === "agent" ? (resultDetails?.batchId && subAgents[resultDetails.batchId]) || resultDetails || step.run?.partialDetails : undefined;
-	const statusIcon = step.status === "running" || step.status === "pending" ? html`<${Spinner} />` : step.isError ? html`<${Icon} name="alertCircle" size=${14} class="c-danger" />` : step.status === "cancelled" ? html`<${Icon} name="stopCircle" size=${14} class="c-dim" />` : html`<${Icon} name=${KIND_ICON[step.kind] || "wrench"} size=${14} class="c-dim" />`;
 	const took = step.startedAt && step.endedAt && step.endedAt - step.startedAt >= 1000 ? fmtDuration(step.endedAt - step.startedAt) : "";
 	const exit = step.result?.details?.exitCode;
+	const toggle = () => setOpen(!open);
 	return html`<div class=${`action ${step.isError ? "err" : ""} ${step.status}`}>
-		<div class="action-row" onClick=${() => setOpen(!open)} role="button" tabindex="0" onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}>
-			<span class="action-ico">${statusIcon}</span>
+		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
+			<span class="action-ico"><${StatusGlyph} step=${step} /></span>
 			<span class="action-text truncate">
 				<span class=${step.status === "running" ? "shimmer-text" : "verb"}>${step.verb}</span>
 				${step.target ? html` <span class=${step.kind === "run" ? "mono target" : "target"}>${step.target}</span>` : null}
 				${step.detail ? html` <span class="dim">${step.detail}</span>` : null}
-				${step.extra ? html` <span class="add">+${step.extra.additions}</span> <span class="del">−${step.extra.deletions}</span>` : null}
+				${step.extra ? html` <${Counts} ...${step.extra} />` : null}
 				${exit ? html` <span class="err-text">${t("exit {exit}", { exit })}</span>` : null}
 				${step.status === "cancelled" ? html` <span class="dim">${t("not finished")}</span>` : null}
 			</span>
 			<span class="action-tail">
 				${took ? html`<span class="dim">${took}</span>` : null}
-				${step.kind === "run" ? html`<button class="link-btn" title=${t("Open in Terminal")} onClick=${(e) => (e.stopPropagation(), actions.openTerminal(step.call.id))}>${t("Terminal")}</button>` : null}
-				${(step.kind === "edit" || step.kind === "write") && step.path && !step.isError ? html`<button class="link-btn" title=${t("Open in Changes")} onClick=${(e) => (e.stopPropagation(), actions.openChanges({ path: step.path }))}>${t("Diff")}</button>` : null}
-				${step.kind === "read" && step.path ? html`<button class="link-btn" title=${t("Open file")} onClick=${(e) => (e.stopPropagation(), actions.openFile(step.path))}>${t("Open")}</button>` : null}
-				<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${13} class="c-dim" />
+				<${Fold} />
 			</span>
 		</div>
 		${step.kind === "agent" ? html`<${AgentDetails} details=${liveDetails} />` : null}
-		${open ? html`<${RawDetails} step=${step} />` : null}
+		<${Collapse} open=${open}><${RawDetails} step=${step} /><//>
 	</div>`;
 });
 
+/** Consecutive calls of one kind. The web (searching and reading pages) is always one aggregate line, even for a single call. */
 function Group({ group, forceOpen }) {
 	const [open, setOpen] = useState(!!forceOpen);
 	const list = group.actions;
-	if (list.length === 1) return html`<${ActionRow} step=${list[0]} />`;
+	if (list.length === 1 && group.kind !== "web") return html`<${ActionRow} step=${list[0]} />`;
 	const failed = list.filter((a) => a.isError).length;
 	const running = list.some((a) => a.status === "running" || a.status === "pending");
+	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(list) : undefined;
 	return html`<div class="group">
 		<button class="group-head" onClick=${() => setOpen(!open)} aria-expanded=${open}>
-			<span class="action-ico"><${Icon} name=${KIND_ICON[group.kind] || "wrench"} size=${14} class="c-dim" /></span>
+			<span class="action-ico">${running ? html`<${Spinner} />` : html`<${Icon} name=${KIND_ICON[group.kind] || "wrench"} size=${14} class="c-dim" />`}</span>
 			<span class=${`group-label truncate ${running ? "shimmer-text" : ""}`}>${groupLabel(group.kind, list)}</span>
+			${totals ? html`<${Counts} ...${totals} />` : null}
 			${failed ? html`<span class="badge danger">${t("{failed} failed", { failed })}</span>` : null}
-			<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${13} class="c-dim" />
+			<span class="grow" />
+			<${Fold} />
 		</button>
-		${open ? html`<div class="group-body">${list.map((step) => html`<${ActionRow} key=${step.key} step=${step} />`)}</div>` : null}
+		<${Collapse} open=${open}>
+			<div class="group-body">
+				${group.kind === "web" ? html`<${WebSteps} actions=${list} rawFor=${(step) => html`<${RawDetails} step=${step} />`} />` : list.map((step) => html`<${ActionRow} key=${step.key} step=${step} />`)}
+			</div>
+		<//>
 	</div>`;
 }
 
@@ -163,13 +170,14 @@ function Thinking({ step }) {
 		<button class="group-head" onClick=${() => body && setOpen(!open)} disabled=${!body} aria-expanded=${open}>
 			<span class="action-ico"><${Icon} name="brain" size=${14} class="c-dim" /></span>
 			<span class=${`group-label truncate ${step.live ? "shimmer-text" : ""}`}>${label}</span>
-			${body ? html`<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${13} class="c-dim" />` : null}
+			<span class="grow" />
+			${body ? html`<${Fold} />` : null}
 		</button>
-		${open && body ? html`<div class="thinking-text"><${Markdown} text=${body} onOpenFile=${actions.openFile} /></div>` : null}
+		<${Collapse} open=${open && !!body}><div class="thinking-text"><${Markdown} text=${body} /></div><//>
 	</div>`;
 }
 
-function CustomStep({ step, onOpenFile }) {
+function CustomStep({ step }) {
 	const item = step.item;
 	const [open, setOpen] = useState(false);
 	const label = item.customType.replace(/[-_]/g, " ");
@@ -177,21 +185,33 @@ function CustomStep({ step, onOpenFile }) {
 		<button class="group-head" onClick=${() => setOpen(!open)} aria-expanded=${open}>
 			<span class="action-ico"><${Icon} name="info" size=${14} class="c-dim" /></span>
 			<span class="group-label truncate">${label}</span>
-			<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${13} class="c-dim" />
+			<span class="grow" />
+			<${Fold} />
 		</button>
-		${open ? html`<div class="thinking-text"><${Markdown} text=${item.text} onOpenFile=${onOpenFile} /></div>` : null}
+		<${Collapse} open=${open}><div class="thinking-text"><${Markdown} text=${item.text} /></div><//>
 	</div>`;
 }
 
-function StepList({ turn, onOpenFile }) {
+/**
+ * The steps behind an answer. A thin line joins a step to the next one when both have a glyph (a written note between
+ * two steps breaks it), so the line is only ever drawn between steps that really exist and follows how tall they are.
+ */
+function StepList({ turn }) {
 	const groups = useMemo(() => groupSteps(turn.steps), [turn.steps]);
 	if (!groups.length) return html`<div class="dim steps-empty">${t("No intermediate steps.")}</div>`;
 	return html`<div class="steps">
-		${groups.map((entry) => {
-			if (entry.type === "note") return html`<div class="note" key=${entry.key}><${Markdown} text=${entry.text} onOpenFile=${onOpenFile} /></div>`;
-			if (entry.type === "thinking") return html`<${Thinking} key=${entry.key} step=${entry} />`;
-			if (entry.type === "custom") return html`<${CustomStep} key=${entry.key} step=${entry} onOpenFile=${onOpenFile} />`;
-			return html`<${Group} key=${entry.key} group=${entry} />`;
+		${groups.map((entry, index) => {
+			const next = groups[index + 1];
+			const linked = entry.type !== "note" && !!next && next.type !== "note";
+			const body =
+				entry.type === "note"
+					? html`<div class="note"><${Markdown} text=${entry.text} /></div>`
+					: entry.type === "thinking"
+						? html`<${Thinking} step=${entry} />`
+						: entry.type === "custom"
+							? html`<${CustomStep} step=${entry} />`
+							: html`<${Group} group=${entry} />`;
+			return html`<div class=${`step ${linked ? "linked" : ""}`} key=${entry.key}>${body}</div>`;
 		})}
 	</div>`;
 }
@@ -229,7 +249,7 @@ function summaryText({ outcome, duration, stats, changeCount, live }) {
 	}
 }
 
-function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapRun, defaultOpen, onOpenFile }) {
+function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapRun, defaultOpen }) {
 	const [open, setOpen] = useState(defaultOpen);
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
@@ -248,9 +268,10 @@ function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapR
 			<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
 			${live ? html`<span class="summary-meta dim">${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}</span>` : null}
 			${stats.failedActions && !live ? html`<span class="badge danger">${plural(stats.failedActions, "failed action")}</span>` : null}
-			<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${14} class="c-dim" />
+			<span class="grow" />
+			<${Fold} />
 		</button>
-		${open ? html`<div class="summary-body fade-in"><${StepList} turn=${turn} onOpenFile=${onOpenFile} /></div>` : null}
+		<${Collapse} open=${open}><div class="summary-body"><${StepList} turn=${turn} /></div><//>
 	</div>`;
 }
 
@@ -275,9 +296,8 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 		${error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
 		<div class="banner-actions">
-			${changeCount ? html`<button class="btn sm" onClick=${() => actions.openChanges({ runId: run?.runId })}>${t("View changes")}</button>` : null}
 			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry(turn.user)}>${t("Retry")}</button>` : null}
-			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => actions.openChanges({ runId: run?.runId, git: true })}>${t("Undo or commit")}</button>` : null}
+			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => openCommand("git")}>${t("Undo or commit")}</button>` : null}
 		</div>
 	</div>`;
 }
@@ -300,11 +320,11 @@ function UserMessage({ item, turn }) {
 
 const fmtCount = (n) => Math.round(n).toLocaleString(getLang());
 
-function FinalMessage({ final, onOpenFile }) {
+function FinalMessage({ final }) {
 	const message = final.message;
 	const usage = message.usage;
 	return html`<div class=${`final ${final.streaming ? "streaming" : ""}`}>
-		<${Markdown} text=${final.text} onOpenFile=${onOpenFile} />
+		<${Markdown} text=${final.text} />
 		${final.partial ? html`<div class="dim partial-note">${t("The response was cut off.")}</div>` : null}
 		${!final.streaming ? html`<div class="msg-actions final-actions">
 			<${CopyButton} text=${final.text} label=${t("Copy answer")} />
@@ -314,12 +334,13 @@ function FinalMessage({ final, onOpenFile }) {
 }
 
 /** Added / removed lines of one file, or nothing when the diff could not be counted (binary, too large, no baseline). */
-const lineCounts = (file) => (file.binary || file.unavailable ? null : html`<span class="counts"><span class="add">+${file.additions}</span><span class="del">−${file.deletions}</span></span>`);
+const lineCounts = (file) => (file.binary || file.unavailable ? null : html`<${Counts} additions=${file.additions} deletions=${file.deletions} />`);
 
 /**
  * What a finished task changed, at the end of its turn: the files it really changed with their added and removed
- * lines, from the task's own diff (GET /api/changes, the same data as Changes → This task). A row opens that file's
- * diff in the Changes panel. Nothing is shown for a task the server no longer has a record of.
+ * lines, from the task's own diff (GET /api/changes, the same data as Changes → This task). It only informs: the
+ * Changes panel opens from its own button in the header, never from here. Nothing is shown for a task the server no
+ * longer has a record of.
  */
 function ChangeCard({ run }) {
 	const [files, setFiles] = useState(null);
@@ -334,19 +355,17 @@ function ChangeCard({ run }) {
 	}, [run.runId, run.changeCount]);
 	if (!files?.length) return null;
 	const counted = files.every((file) => !file.binary && !file.unavailable);
-	const open = (path) => actions.openChanges({ runId: run.runId, path, scope: "run" });
 	return html`<div class="change-card fade-in">
-		<button class="change-head" onClick=${() => open()} title=${t("Review what this task changed")}>
+		<div class="change-head">
 			<span class="grow truncate">${t("Edited {files}", { files: plural(files.length, "file") })}</span>
-			${counted ? lineCounts({ additions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0) }) : null}
-		</button>
+			${counted ? html`<${Counts} additions=${files.reduce((n, f) => n + f.additions, 0)} deletions=${files.reduce((n, f) => n + f.deletions, 0)} />` : null}
+		</div>
 		${files.map((file) => {
 			const dir = dirname(file.path);
-			return html`<button class="change-file" key=${file.path} onClick=${() => open(file.path)} title=${t("Open the diff of {path}", { path: file.path })}>
+			return html`<div class="change-file" key=${file.path} title=${file.path}>
 				<span class="change-path truncate">${dir ? html`<span class="dim">${dir}/</span>` : null}${basename(file.path)}</span>
 				${lineCounts(file)}
-				<${Icon} name="chevronRight" size=${13} class="c-dim" />
-			</button>`;
+			</div>`;
 		})}
 	</div>`;
 }
@@ -355,16 +374,16 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	const outcome = turnOutcome(turn, { run, live, waiting });
 	const changeCount = run ? run.changeCount : turn.stats.files;
 	const duration = turnDuration(turn, run);
-	const onOpenFile = actions.openFile;
 	return html`<section class=${`turn ${live ? "live" : ""}`}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
-		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} onOpenFile=${onOpenFile} key=${`sum-${turn.key}-${live}`} />
-		${turn.final ? html`<${FinalMessage} final=${turn.final} onOpenFile=${onOpenFile} />` : null}
+		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}-${live}`} />
+		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${run?.changeCount ? html`<${ChangeCard} run=${run} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
 	</section>`;
 });
 
+/** A command the user ran with "!": the same row as a command the agent runs (glyph, what it did, the command), then its output. */
 function BashCard({ item }) {
 	const [open, setOpen] = useState(false);
 	const status = item.status || (item.cancelled ? "cancelled" : item.timedOut ? "timeout" : item.exitCode ? "failed" : item.exitCode === undefined && item.status === "running" ? "running" : "done");
@@ -372,12 +391,13 @@ function BashCard({ item }) {
 	const lines = output.split("\n");
 	const preview = lines.slice(-8).join("\n");
 	const label = { running: t("Running"), done: t("Ran"), failed: t("Exited {code}", { code: item.exitCode }), cancelled: t("Cancelled"), timeout: t("Timed out"), error: t("Failed to start") }[status] || t("Ran");
-	return html`<div class=${`bash-card s-${status}`}>
-		<div class="bash-head">
-			<span class="mono bash-cmd truncate"><span class="dim">$</span> ${item.command}</span>
-			${item.excludeFromContext ? html`<span class="badge">${t("not in context")}</span>` : null}
-			<span class=${`badge ${status === "done" ? "ok" : status === "running" ? "accent" : "danger"}`}>${status === "running" ? html`<${Spinner} />` : null}${label}</span>
-			<button class="icon-btn sm" title=${t("Open in Terminal")} onClick=${() => actions.openTerminal(item.id || item.command)}><${Icon} name="terminal" size=${14} /></button>
+	const failed = status === "failed" || status === "timeout" || status === "error";
+	const step = { status: status === "running" ? "running" : status === "cancelled" ? "cancelled" : "done", isError: failed, kind: "run" };
+	return html`<div class=${`action bash-entry s-${status} ${failed ? "err" : ""}`}>
+		<div class="action-row static">
+			<span class="action-ico"><${StatusGlyph} step=${step} /></span>
+			<span class="action-text truncate"><span class=${status === "running" ? "shimmer-text" : "verb"}>${label}</span> <span class="mono target">${item.command}</span></span>
+			${item.excludeFromContext ? html`<span class="action-tail"><span class="badge">${t("not in context")}</span></span>` : null}
 		</div>
 		${output ? html`<pre class="bash-out"><${Ansi} text=${open ? output : preview} /></pre>${lines.length > 8 ? html`<button class="btn sm ghost" onClick=${() => setOpen(!open)}>${open ? t("Show less") : t("Show all {length} lines", { length: lines.length })}</button>` : null}` : null}
 		${item.truncated && item.fullOutputPath ? html`<div class="dim bash-note">${t("Output truncated. Full output saved at {fullOutputPath}", { fullOutputPath: item.fullOutputPath })}</div>` : null}
@@ -389,12 +409,12 @@ function Standalone({ item }) {
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
 		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{k}k tokens)", { k: Math.round(item.tokensBefore / 1000) }) : t("Context compacted")) : t("Returned from another branch");
-		return html`<div class="marker"><button class="marker-head" onClick=${() => setOpen(!open)}><span class="marker-line" /><span class="marker-text"><${Icon} name=${item.kind === "compaction" ? "layers" : "gitBranch"} size=${13} /> ${title}<${Icon} name=${open ? "chevronUp" : "chevronDown"} size=${12} /></span><span class="marker-line" /></button>
-			${open ? html`<div class="marker-body"><${Markdown} text=${item.summary} onOpenFile=${actions.openFile} /></div>` : null}</div>`;
+		return html`<div class="marker"><button class="marker-head" onClick=${() => setOpen(!open)} aria-expanded=${open}><span class="marker-line" /><span class="marker-text"><${Icon} name=${item.kind === "compaction" ? "layers" : "gitBranch"} size=${13} /> ${title}<${Fold} /></span><span class="marker-line" /></button>
+			<${Collapse} open=${open}><div class="marker-body"><${Markdown} text=${item.summary} /></div><//></div>`;
 	}
 	if (item.kind === "reload") return html`<div class="marker"><span class="marker-text">${item.ok ? t("Configuration reloaded") : t("Reload failed: {error}", { error: item.error })}</span></div>`;
 	if (item.kind === "custom") {
-		return html`<div class="custom-card"><div class="dim custom-type">${item.customType.replace(/[-_]/g, " ")}</div><${Markdown} text=${item.text} onOpenFile=${actions.openFile} /></div>`;
+		return html`<div class="custom-card"><div class="dim custom-type">${item.customType.replace(/[-_]/g, " ")}</div><${Markdown} text=${item.text} /></div>`;
 	}
 	return null;
 }

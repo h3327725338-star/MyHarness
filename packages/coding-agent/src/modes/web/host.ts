@@ -31,6 +31,7 @@ import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
+import { RequestCacheMeter } from "./request-cache.ts";
 import { entriesToWire, messageToWire, sanitizeDetails, toWireModel, type WireItem } from "./wire.ts";
 
 const ASSISTANT_UPDATE_INTERVAL_MS = 50;
@@ -127,8 +128,11 @@ export class WebHost {
 	private assistantTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingAssistant: AgentMessage | undefined;
 	/** Output tokens per second of the model, from real streamed output (see generation-speed.ts). */
-	private readonly speed = new GenerationSpeedMeter();
+	private speed = new GenerationSpeedMeter();
 	private speedChanged = false;
+	/** Prompt-cache hit rate of the current model request, from the usage the provider reports (see request-cache.ts). */
+	private cache = new RequestCacheMeter();
+	private cacheChanged = false;
 	private readonly toolTimers = new Map<
 		string,
 		{ last: number; timer?: ReturnType<typeof setTimeout>; pending?: unknown }
@@ -360,6 +364,11 @@ export class WebHost {
 		this.assistantTimer = undefined;
 		this.pendingAssistant = undefined;
 		this.liveAssistantId = undefined;
+		// What the meters showed belonged to the chat that was on screen; the next request measures from scratch.
+		this.speed = new GenerationSpeedMeter();
+		this.speedChanged = false;
+		this.cache = new RequestCacheMeter();
+		this.cacheChanged = false;
 		for (const entry of this.toolTimers.values()) if (entry.timer) clearTimeout(entry.timer);
 		this.toolTimers.clear();
 		this.currentRunId = undefined;
@@ -423,6 +432,9 @@ export class WebHost {
 			case "agent_end":
 				this.lastAgentEnd = this.summariseAgentEnd(event.messages, event.willRetry);
 				this.flushAssistant();
+				// A request that was stopped before it finished never gets a final number: settle the meters now.
+				if (this.speed.settle()) this.broadcast("generation_speed", { speed: this.speed.current });
+				if (this.cache.settle()) this.broadcast("cache_hit", { cache: this.cache.current });
 				this.broadcast("agent_end", { willRetry: event.willRetry });
 				return;
 			case "agent_settled":
@@ -430,12 +442,15 @@ export class WebHost {
 				this.startCompletion();
 				return;
 			case "turn_start":
+				// The model request starts now: speed and cache hit are `detecting` until the first reliable number.
+				this.beginRequestMeters();
+				return;
 			case "turn_end":
 				return;
 			case "message_start": {
 				const message = event.message;
 				if (message.role === "assistant") {
-					this.speed.start();
+					this.beginRequestMeters();
 					this.liveAssistantId = `live-${++this.liveMessageSeq}`;
 					const item = messageToWire(message);
 					this.broadcast("message_start", { liveId: this.liveAssistantId, item });
@@ -448,6 +463,7 @@ export class WebHost {
 			case "message_update":
 				if (event.message.role === "assistant") {
 					if (this.speed.update(event.message, event.assistantMessageEvent?.type)) this.speedChanged = true;
+					if (this.cache.update(event.message)) this.cacheChanged = true;
 					this.scheduleAssistantUpdate(event.message);
 				}
 				return;
@@ -458,6 +474,9 @@ export class WebHost {
 					this.speed.end(message);
 					this.speedChanged = false;
 					this.broadcast("generation_speed", { speed: this.speed.current });
+					this.cache.end(message);
+					this.cacheChanged = false;
+					this.broadcast("cache_hit", { cache: this.cache.current });
 					const item = messageToWire(message);
 					this.broadcast("message_end", { liveId: this.liveAssistantId, item });
 					this.liveAssistantId = undefined;
@@ -619,6 +638,19 @@ export class WebHost {
 		if (this.speedChanged) {
 			this.speedChanged = false;
 			this.broadcast("generation_speed", { speed: this.speed.current });
+		}
+		if (this.cacheChanged) {
+			this.cacheChanged = false;
+			this.broadcast("cache_hit", { cache: this.cache.current });
+		}
+	}
+
+	/** A model request starts (a new turn, or the assistant message that answers it): both per-request numbers restart. */
+	private beginRequestMeters(): void {
+		const totals = this.session.getSessionStats().tokens;
+		if (this.speed.start()) this.broadcast("generation_speed", { speed: this.speed.current });
+		if (this.cache.start(totals.cacheRead + totals.cacheWrite > 0)) {
+			this.broadcast("cache_hit", { cache: this.cache.current });
 		}
 	}
 
@@ -958,6 +990,7 @@ export class WebHost {
 			queueModes: { steering: session.steeringMode, followUp: session.followUpMode },
 			context: { usage: contextUsage, budget: contextBudget },
 			speed: this.speed.current,
+			cache: this.cache.current,
 			autoCompaction: session.autoCompactionEnabled,
 			autoRetry: session.autoRetryEnabled,
 			trust: {

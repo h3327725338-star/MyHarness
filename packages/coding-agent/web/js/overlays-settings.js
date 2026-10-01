@@ -1,14 +1,16 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
-import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
+import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle, UnitField, useDelayedBusy } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
-import { clip } from "./util.js";
+import { clip, tokensToUnit, unitToTokens } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { ModelRefPicker } from "./model-menu.js";
 import { ProvidersPage } from "./providers-page.js";
+import { RUN_MODES, runModeOf } from "./run-modes.js";
+import { saveSetting } from "./settings-apply.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -63,6 +65,53 @@ function MultiSelect({ options, value, onChange, label }) {
 	})}</div>`;
 }
 
+/**
+ * A token count typed in a unit ("256 | K tokens"): only the number is edited, the unit is a fixed suffix. What is saved is
+ * the exact token count (256 K = 262,144 tokens), shown next to the field so the number behind the unit is never hidden;
+ * an empty field clears the cap.
+ */
+function TokensField({ item, onApply }) {
+	const unitSize = item.unitSize || 1024;
+	const shown = tokensToUnit(item.value, unitSize);
+	const [draft, setDraft] = useState(shown);
+	useEffect(() => setDraft(shown), [shown]);
+	const invalid = draft.trim() !== "" && unitToTokens(draft, unitSize) === undefined;
+	const commit = (text) => {
+		const typed = text.trim();
+		if (typed === "") {
+			if (item.value != null) onApply(item.id, null);
+			return;
+		}
+		const tokens = unitToTokens(typed, unitSize);
+		if (tokens === undefined) {
+			setDraft(shown);
+			toast(t("Enter a positive number of {unit}.", { unit: item.unit }), "warning", 4000);
+		} else if (tokens !== item.value) onApply(item.id, tokens);
+	};
+	return html`<span class="tokens-field">
+		${item.value != null ? html`<span class="tokens-exact dim" title=${t("The exact number of tokens that is saved.")}>${t("{n} tokens", { n: Number(item.value).toLocaleString(getLang()) })}</span>` : null}
+		<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t("{unit} tokens", { unit: item.unit })} label=${serverText(item.label)} placeholder=${t("Model limit")} invalid=${invalid} width=${190} />
+	</span>`;
+}
+
+/** A whole number with a fixed unit after it ("10 | seconds"); the range comes from the setting. */
+function UnitNumberField({ item, onApply }) {
+	const shown = String(item.value ?? "");
+	const [draft, setDraft] = useState(shown);
+	useEffect(() => setDraft(shown), [shown]);
+	const inRange = (text) => {
+		const value = Number(text);
+		return text.trim() !== "" && Number.isFinite(value) && value >= (item.min ?? -Infinity) && value <= (item.max ?? Infinity);
+	};
+	const commit = (text) => {
+		if (!inRange(text)) {
+			setDraft(shown);
+			toast(t("Enter a number from {min} to {max}.", { min: item.min, max: item.max }), "warning", 4000);
+		} else if (Number(text) !== item.value) onApply(item.id, Number(text));
+	};
+	return html`<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t(item.unit)} label=${serverText(item.label)} invalid=${!inRange(draft)} width=${120} />`;
+}
+
 function SettingControl({ item, models, onApply }) {
 	const [draft, setDraft] = useState(item.value);
 	useEffect(() => setDraft(item.value), [JSON.stringify(item.value)]);
@@ -72,7 +121,10 @@ function SettingControl({ item, models, onApply }) {
 		case "enum":
 			return html`<select class="select" aria-label=${serverText(item.label)} value=${String(item.value)} onChange=${(e) => onApply(item.id, e.target.value)}>${item.options.map((o) => html`<option key=${o.value} value=${o.value}>${serverText(o.label)}</option>`)}</select>`;
 		case "number":
+			if (item.unit) return html`<${UnitNumberField} item=${item} onApply=${onApply} />`;
 			return html`<input class="field num" type="number" aria-label=${serverText(item.label)} min=${item.min} max=${item.max} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => String(draft) !== String(item.value) && onApply(item.id, Number(draft))} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
+		case "tokens":
+			return html`<${TokensField} item=${item} onApply=${onApply} />`;
 		case "text":
 			return html`<input class="field wide" aria-label=${serverText(item.label)} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => draft !== item.value && onApply(item.id, draft)} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
 		case "multi":
@@ -88,18 +140,27 @@ function SettingControl({ item, models, onApply }) {
 	}
 }
 
-function useApply() {
-	const [busyId, setBusyId] = useState(null);
-	const apply = async (id, value) => {
-		setBusyId(id);
-		const result = await attempt(() => post("/api/settings", { id, value }));
-		setBusyId(null);
-		await loadSettings();
-		await loadSnapshot();
-		if (id === "webSearch.enabled" || id.startsWith("subAgent")) loadModels();
-		if (result?.errors?.length) toast(result.errors.map((e) => e.message).join("\n"), "error");
+/**
+ * Wraps a save so "saving" is shown only for a save that is really slow (useDelayedBusy): a quick, local save shows
+ * nothing but the new value. Returns [shown, save].
+ */
+function useSaving() {
+	const [saving, setSaving] = useState(false);
+	const shown = useDelayedBusy(saving);
+	const save = async (id, value) => {
+		setSaving(true);
+		try {
+			return await saveSetting(id, value);
+		} finally {
+			setSaving(false);
+		}
 	};
-	return [busyId, apply];
+	return [shown, save];
+}
+
+/** The place next to a control where "saving" appears; it is always there, so the control never moves. */
+function Saving({ shown }) {
+	return html`<span class="saving" role="status" aria-label=${shown ? t("Saving…") : undefined}>${shown ? html`<${Spinner} />` : null}</span>`;
 }
 
 /** On the Terminal UI page every description would start with "Terminal UI:"; the page says it once instead. */
@@ -108,15 +169,21 @@ const describe = (item) => {
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
 };
 
-function SettingRow({ item, models, onApply, busy, off }) {
+function SettingRow({ item, models, off }) {
+	const [saving, save] = useSaving();
 	return html`<${Row} label=${serverText(item.label)} description=${describe(item)} stack=${item.type === "multi"} off=${off}>
-		${busy ? html`<${Spinner} />` : null}<${SettingControl} item=${item} models=${models} onApply=${onApply} />
+		<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
+}
+
+/** The switch in the header of a group card (web search). */
+function GroupSwitch({ item }) {
+	const [saving, save] = useSaving();
+	return html`<span class="row"><${Saving} shown=${saving} /><${Toggle} checked=${!!item.value} label=${serverText(item.label)} onChange=${(v) => save(item.id, v)} /></span>`;
 }
 
 /** The settings of one page, one card per server section; a group with its own switch (web search) gets its own card. */
 function SettingsList({ items, models }) {
-	const [busyId, apply] = useApply();
 	const cards = useMemo(() => {
 		const list = [];
 		for (const item of items) {
@@ -133,19 +200,20 @@ function SettingsList({ items, models }) {
 			const head = card.items.find((i) => i.id === GROUPS[card.prefix]);
 			const rest = card.items.filter((i) => i !== head);
 			return html`<${Card} key=${card.key} title=${serverText(head?.label)} description=${serverText(head?.description)}
-				action=${head ? html`<span class="row">${busyId === head.id ? html`<${Spinner} />` : null}<${Toggle} checked=${!!head.value} label=${serverText(head.label)} onChange=${(v) => apply(head.id, v)} /></span>` : null}>
-				${rest.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} onApply=${apply} busy=${busyId === item.id} off=${head && !head.value} />`)}
+				action=${head ? html`<${GroupSwitch} item=${head} />` : null}>
+				${rest.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} off=${head && !head.value} />`)}
 			<//>`;
 		}
 		// A page with a single group needs no group title: the page title says it.
 		return html`<${Card} key=${card.key} title=${cards.length > 1 ? serverText(card.section) : undefined}>
-			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} onApply=${apply} busy=${busyId === item.id} />`)}
+			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
 		<//>`;
 	})}</div>`;
 }
 
 function Appearance() {
 	const view = useStore((s) => s.view);
+	const runMode = runModeOf(view.runMode);
 	const set = (patch) => setView(patch);
 	const requestNotify = async () => {
 		if (typeof Notification === "undefined") return toast(t("This browser does not support notifications."), "warning");
@@ -157,10 +225,10 @@ function Appearance() {
 		<${Card} title=${t("Interface")}>
 			<${Row} label=${t("UI language")} description=${t("Language of the MyHarness interface. Chat content is never translated.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
 			<${Row} label=${t("Theme")} description=${t("Dark and light are separate designs; “System” follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
-			<${Row} label=${t("Density")} description=${t("Control height and text size.")}><${Segmented} value=${view.density} onChange=${(v) => set({ density: v })} options=${[{ value: "compact", label: t("Compact") }, { value: "comfortable", label: t("Comfortable") }]} /><//>
 			<${Row} label=${t("Animations")} description=${t("Loading shimmer, expand/collapse and fades. Status is always shown in text too.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 		<//>
 		<${Card} title=${t("Conversation")}>
+			<${Row} label=${t("While a task is running")} description=${t(RUN_MODES[runMode].hint)}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Reading width")} description=${t("Width of the conversation column in px (620–1100). Empty: grows with the window.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Whether the steps behind a finished answer start expanded.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
 			<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${(v) => (v ? requestNotify() : set({ notify: false }))} /><//>
@@ -170,7 +238,6 @@ function Appearance() {
 
 function Safety({ items, models }) {
 	const [info, setInfo] = useState(null);
-	const [busyId, apply] = useApply();
 	const load = () => api("/api/trust").then(setInfo).catch(() => {});
 	useEffect(() => {
 		load();
@@ -184,7 +251,7 @@ function Safety({ items, models }) {
 			load();
 		}
 	};
-	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} onApply=${apply} busy=${busyId === item.id} />`;
+	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`;
 	const bySection = (name) => items.filter((item) => item.section === name && item.id !== "defaultProjectTrust");
 	const defaultTrust = items.find((item) => item.id === "defaultProjectTrust");
 	const trust = !info ? null : !info.requiresTrust ? { cls: "", text: t("Nothing to trust") } : info.trusted ? { cls: "ok", text: t("Trusted") } : { cls: "warn", text: t("Not trusted") };
@@ -208,6 +275,7 @@ function Safety({ items, models }) {
 
 function About() {
 	const snap = useStore((s) => s.snap);
+	const runMode = runModeOf(useStore((s) => s.view.runMode));
 	return html`<div>
 		<${Card} title=${t("MyHarness")}>
 			<div class="kv about-kv"><span>${t("Version")}</span><span>${snap?.app.version}</span><span>${t("Platform")}</span><span>${snap?.app.platform}</span><span>${t("Server started")}</span><span>${snap ? new Date(snap.app.startedAt).toLocaleString(getLang()) : ""}</span><span>${t("Workspace")}</span><span class="mono truncate">${snap?.cwd}</span></div>
@@ -216,7 +284,7 @@ function About() {
 		<${Card} title=${t("Keyboard shortcuts")}>
 			<div class="kv shortcuts about-kv">
 				${[
-					["Enter", t("Send (while running: steer the current run)")],
+					["Enter", t("Send (while running: {action})", { action: t(RUN_MODES[runMode].label) })],
 					["Shift+Enter", t("New line")],
 					["Alt+Enter", t("While running: queue the message for after the run")],
 					["Esc", t("Stop the running task (input box empty)")],
@@ -225,8 +293,6 @@ function About() {
 					["Ctrl+K", t("Command palette")],
 					["Ctrl+N", t("New chat")],
 					["Ctrl+B", t("Show or hide the sidebar")],
-					["Ctrl+Shift+D / E", t("Changes / Files panel")],
-					["Ctrl+J", t("Terminal panel")],
 					["Ctrl+L", t("Focus the input box")],
 					["Ctrl+,", t("Settings")],
 				].map(([key, what]) => html`<span class="mono" key=${key}>${key}</span><span>${what}</span>`)}

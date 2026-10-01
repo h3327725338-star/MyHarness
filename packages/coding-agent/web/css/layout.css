@@ -1,8 +1,10 @@
-/* The sidebar column animates open and closed; the main area is the next grid track, so it follows in the same frame. */
-.app { display: grid; grid-template-columns: var(--sidebar-current, var(--sidebar-w)) minmax(0, 1fr) auto; height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
+/* The sidebar and the right-hand panel are grid tracks that animate open and closed; the main area is the track between them,
+   so the conversation reflows in the same frames. */
+.app { --panel-width: min(var(--panel-w), max(340px, calc(100vw - var(--sidebar-current, var(--sidebar-w)) - 520px))); display: grid; grid-template-columns: var(--sidebar-current, var(--sidebar-w)) minmax(0, 1fr) var(--panel-current, 0px); height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
 .app.sidebar-collapsed { --sidebar-current: 0px; }
-/* Dragging the sidebar edge follows the pointer directly. */
-.app:has(.sidebar .resizer.dragging) { transition: none; }
+.app.panel-open { --panel-current: calc(var(--panel-width) + 6px); }
+/* Dragging an edge follows the pointer directly. */
+.app:has(.resizer.dragging) { transition: none; }
 
 /* Sidebar */
 .sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--bg-app); position: relative; transition: opacity var(--t-slow) var(--ease), visibility 0s linear 0s; }
@@ -28,6 +30,10 @@
 .ws-row .chev { transition: transform var(--t-base) var(--ease); color: var(--text-4); }
 .ws-row.open .chev { transform: rotate(90deg); }
 .ws-row .name { font-weight: 550; color: var(--text); }
+/* Every workspace row has the same folder icon; the group of chats without a workspace says "no folder" in words and
+   with a quieter icon, not with a different drawing. */
+.ws-row .ws-folder { flex: none; color: var(--text-3); }
+.ws-row .ws-folder.none { color: var(--text-4); }
 .ws-row .actions { display: flex; gap: 0; opacity: 0; transition: opacity var(--t-fast); }
 .ws-row:hover .actions, .ws-row:focus-within .actions { opacity: 1; }
 .ws-row .ws-unread { margin-left: -2px; }
@@ -54,7 +60,7 @@
 .sidebar .resizer { right: -4px; }
 
 /* Main panel: lifted surface */
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin-left var(--t-slow) var(--ease); }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease); }
 .app.sidebar-collapsed .main { margin-left: 6px; }
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 
@@ -65,8 +71,11 @@
 .header-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 12px; font-size: var(--fs-sm); color: var(--text-2); background: var(--bg-inset); border: 1px solid var(--border); max-width: 300px; }
 .header-chip:hover { color: var(--text); border-color: var(--border-strong); }
 
-/* Right inspector panel */
-.panel { display: flex; flex-direction: column; min-width: 0; width: min(var(--panel-w), max(340px, calc(100vw - var(--sidebar-current, var(--sidebar-w)) - 520px))); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; box-shadow: var(--shadow-panel); }
+/* Right inspector panel. It keeps its own width while its track grows or shrinks, and slides and fades in the same time, so it
+   neither re-wraps nor jumps. Only its header buttons open, close and switch it. */
+.panel-slot { display: flex; min-width: 0; }
+.panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; box-shadow: var(--shadow-panel); opacity: 0; transform: translateX(28px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
+.app.panel-open .panel { opacity: 1; transform: none; }
 .panel-tabs { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 10px; flex: none; border-bottom: 1px solid var(--border); }
 .tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); font-weight: 500; position: relative; transition: background var(--t-fast), color var(--t-fast); }
 .tab:hover { background: var(--surface-hover); color: var(--text); }
@@ -88,7 +97,3 @@
 .panel[data-w="xs"] .tab-label, .panel[data-w="s"] .tab-label { display: none; }
 .panel[data-w="xs"] .tab, .panel[data-w="s"] .tab { padding: 0 9px; }
 
-/* Workspace children: height animates 0 -> auto with a grid row so folding never jumps. */
-.ws-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
-.ws-collapse.open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
-.ws-collapse-inner { min-height: 0; overflow: hidden; }

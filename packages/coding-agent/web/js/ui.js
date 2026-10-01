@@ -96,6 +96,14 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		return () => observer.disconnect();
 	}, [open, children]);
 	useClickOutside([ref, anchor], () => onClose?.(), open);
+	// Closing hands the keyboard back to the button that opened the popover (unless the focus already moved somewhere).
+	useEffect(() => {
+		if (!open) return undefined;
+		return () => {
+			const active = document.activeElement;
+			if (!active || active === document.body) anchor.current?.querySelector("button")?.focus({ preventScroll: true });
+		};
+	}, [open]);
 	useEffect(() => {
 		if (!open) return undefined;
 		const onKey = (event) => {
@@ -180,8 +188,117 @@ export function Toggle({ checked, onChange, disabled, label }) {
 	return html`<button class="toggle" role="switch" aria-checked=${checked ? "true" : "false"} aria-label=${label} disabled=${disabled} onClick=${() => onChange(!checked)} />`;
 }
 
-export function Spinner({ title } = {}) {
-	return html`<span class="spinner" aria-hidden=${title ? undefined : "true"} title=${title} />`;
+/**
+ * The fold arrow of every foldable row. One glyph that turns half a turn (CSS, `.fold-chev`), driven by the
+ * `aria-expanded` of the element it sits in, so the arrow and the content move with the same motion.
+ */
+export function Fold() {
+	return html`<${Icon} name="chevronDown" size=${13} class="fold-chev" />`;
+}
+
+/** Added / removed lines the way the Diff view writes them: green +N and red −N (a part that is zero is left out). */
+export function Counts({ additions, deletions, class: cls }) {
+	if (!additions && !deletions) return null;
+	return html`<span class=${`counts ${cls || ""}`}>${additions ? html`<span class="add">+${additions}</span>` : null}${deletions ? html`<span class="del">−${deletions}</span>` : null}</span>`;
+}
+
+/** The dropdown chevron of every chip and select-like button (native selects draw the same shape in CSS: --chev-img). */
+export function Chevron() {
+	return html`<${Icon} name="chevronDown" size=${12} class="chev" />`;
+}
+
+/**
+ * The one "working" glyph: a rounded three-quarter arc on a faint ring, drawn on the same 24-unit grid and with the same
+ * round stroke as the line icons, so it sits next to them at the same size, weight and baseline.
+ */
+export function Spinner({ title, size = 14 } = {}) {
+	return html`<svg class="spinner" width=${size} height=${size} viewBox="0 0 24 24" fill="none" aria-hidden=${title ? undefined : "true"} role=${title ? "img" : undefined}>
+		${title ? html`<title>${title}</title>` : null}
+		<circle class="spinner-ring" cx="12" cy="12" r="8.5" />
+		<path class="spinner-arc" d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" />
+	</svg>`;
+}
+
+/**
+ * Keeps something mounted while it animates out. `shown` is what the CSS transition follows: it turns true one painted
+ * frame after the element is mounted (so it can transition in) and false as soon as `open` ends; `mounted` stays true
+ * for `exitMs` longer (so it can transition out). A thing that is already open when it first appears does not animate.
+ */
+export function usePresence(open, exitMs = 300) {
+	const [mounted, setMounted] = useState(open);
+	const [shown, setShown] = useState(open);
+	useLayoutEffect(() => {
+		if (open) {
+			setMounted(true);
+			let second = 0;
+			const first = requestAnimationFrame(() => {
+				second = requestAnimationFrame(() => setShown(true));
+			});
+			return () => {
+				cancelAnimationFrame(first);
+				cancelAnimationFrame(second);
+			};
+		}
+		setShown(false);
+		const timer = setTimeout(() => setMounted(false), exitMs);
+		return () => clearTimeout(timer);
+	}, [open]);
+	return { mounted: mounted || open, shown: shown && open };
+}
+
+/** Time the shared expand/collapse motion takes (matches --t-slow in tokens.css). */
+export const COLLAPSE_MS = 260;
+
+/**
+ * Expands and folds its content with the one motion every foldable area uses: the height follows `open` (a grid row
+ * going 0fr <-> 1fr, so no measuring and no jump), the content fades. Folded content is not mounted.
+ */
+export function Collapse({ open, children, class: cls }) {
+	const { mounted, shown } = usePresence(open, COLLAPSE_MS + 40);
+	if (!mounted) return null;
+	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`}><div class="collapse-inner">${children}</div></div>`;
+}
+
+/**
+ * A busy flag for saving something: it only turns visible after `delay` ms (an instant local save never shows it) and,
+ * once visible, stays for at least `hold` ms, so it never flashes.
+ */
+export function useDelayedBusy(busy, delay = 400, hold = 500) {
+	const [shown, setShown] = useState(false);
+	const shownAt = useRef(0);
+	useEffect(() => {
+		if (busy && !shown) {
+			const timer = setTimeout(() => {
+				shownAt.current = Date.now();
+				setShown(true);
+			}, delay);
+			return () => clearTimeout(timer);
+		}
+		if (!busy && shown) {
+			const timer = setTimeout(() => setShown(false), Math.max(0, hold - (Date.now() - shownAt.current)));
+			return () => clearTimeout(timer);
+		}
+		return undefined;
+	}, [busy, shown]);
+	return shown;
+}
+
+/**
+ * A number typed by the user with a fixed, non-editable unit after it ("256 | K tokens"). The unit is part of the field's
+ * look (one border, the unit inside at the right) but never part of what is typed. `onCommit` gets the typed text when
+ * the field is left or Enter is pressed.
+ */
+export function UnitField({ value, onInput, onCommit, onKeyDown, unit, label, placeholder, invalid, disabled, width }) {
+	const input = useRef(null);
+	return html`<span class=${`unit-field ${invalid ? "invalid" : ""} ${disabled ? "disabled" : ""}`} style=${width ? { width } : undefined} onMouseDown=${(event) => { if (event.target !== input.current) { event.preventDefault(); input.current?.focus(); } }}>
+		<input ref=${input} class="unit-input mono" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label=${label} aria-invalid=${invalid ? "true" : undefined} placeholder=${placeholder} disabled=${disabled}
+			value=${value} onInput=${(event) => onInput?.(event.target.value)} onBlur=${(event) => onCommit?.(event.target.value)}
+			onKeyDown=${(event) => {
+				onKeyDown?.(event);
+				if (event.key === "Enter" && onCommit) (event.preventDefault(), onCommit(event.target.value));
+			}} />
+		<span class="unit-suffix" aria-hidden="true">${unit}</span>
+	</span>`;
 }
 
 export function Segmented({ value, options, onChange, size }) {

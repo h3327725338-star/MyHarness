@@ -1,7 +1,7 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Resizer, Spinner } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Resizer, Spinner, usePresence } from "./ui.js";
 import { attempt, dismissToast, post, setView, state, useStore } from "./store.js";
-import { actions, confirmDialog, resolveConfirm } from "./actions.js";
+import { actions, confirmDialog, openCommand, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
@@ -9,7 +9,7 @@ import { ChangesPanel } from "./panel-changes.js";
 import { FilesPanel } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
 import { ContextPanel } from "./panel-context.js";
-import { GitDialog } from "./overlays-git.js";
+import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
 import { clip, plural } from "./util.js";
@@ -38,7 +38,7 @@ function StatusPill() {
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {
 		const ui = OUTCOME_UI[last.outcome];
-		return html`<button class=${`status-pill ${ui.cls}`} role="status" onClick=${() => last.changeCount && actions.openChanges({ runId: last.runId })} title=${last.error || (last.changeCount ? t("Review the changes") : t(ui.label))}><${Icon} name=${ui.icon} size=${13} />${t(ui.label)}</button>`;
+		return html`<span class=${`status-pill ${ui.cls}`} role="status" title=${last.error || t(ui.label)}><${Icon} name=${ui.icon} size=${13} />${t(ui.label)}</span>`;
 	}
 	return null;
 }
@@ -67,7 +67,7 @@ function Header() {
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
-		${snap?.workspace ? html`<button class="header-chip truncate" title=${snap.cwd} onClick=${() => actions.togglePanel("files")}><${Icon} name="folder" size=${13} /><span class="truncate">${snap.workspace.name}</span></button>` : null}
+		${snap?.workspace ? html`<span class="header-chip truncate" title=${snap.cwd}><${Icon} name="folder" size=${13} /><span class="truncate">${snap.workspace.name}</span></span>` : null}
 		<span class="grow" />
 		<${StatusPill} />
 		${tabBtn("changes", "fileDiff", t("Changes"), changeCount ? String(changeCount) : "")}
@@ -81,7 +81,7 @@ function Header() {
 				<${MenuItem} icon="layers" label=${t("Compact context")} disabled=${snap?.active} onClick=${() => (close(), actions.compact())} />
 				<${MenuItem} icon="download" label=${t("Export chat as HTML")} onClick=${() => (close(), actions.exportSession())} />
 				<${MenuSep} />
-				<${MenuItem} icon="gitBranch" label=${t("Git tools")} onClick=${() => (close(), actions.openGitDialog("more"))} />
+				<${MenuItem} icon="gitBranch" label=${t("Git tools")} onClick=${() => (close(), openCommand("git"))} />
 				<${MenuItem} icon="gear" label=${t("Settings")} hint="Ctrl+," onClick=${() => (close(), setView({ settingsOpen: true }))} />`}
 		<//>
 	</header>`;
@@ -171,15 +171,6 @@ function useShortcuts() {
 			} else if (key === ",") {
 				e.preventDefault();
 				setView({ settingsOpen: true });
-			} else if (key === "j") {
-				e.preventDefault();
-				actions.togglePanel("terminal");
-			} else if (e.shiftKey && key === "d") {
-				e.preventDefault();
-				actions.togglePanel("changes");
-			} else if (e.shiftKey && key === "e") {
-				e.preventDefault();
-				actions.togglePanel("files");
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -210,6 +201,8 @@ export function App() {
 	const everConnected = useStore((s) => s.everConnected);
 	const shutdown = useStore((s) => s.shutdown);
 	useShortcuts();
+	// The panel stays mounted while it slides out, and only turns "open" a frame after it is mounted, so both directions animate.
+	const panel = usePresence(view.panelOpen, 320);
 	const mainRef = useRef(null);
 	useWidthClass(mainRef, [snap != null, view.panelOpen, view.sidebarOpen]);
 	useEffect(() => {
@@ -222,7 +215,7 @@ export function App() {
 			${boot.phase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${boot.detail}</div>` : html`<${Spinner} /><div>${boot.phase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
 		</div>${boot.dialogs?.length ? html`<${BootDialogs} dialogs=${boot.dialogs} />` : null}</div>`;
 	}
-	const layoutClass = `app ${view.sidebarOpen ? "" : "sidebar-collapsed"} ${view.panelOpen ? "panel-open" : ""}`;
+	const layoutClass = `app ${view.sidebarOpen ? "" : "sidebar-collapsed"} ${panel.shown ? "panel-open" : ""}`;
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
@@ -232,11 +225,11 @@ export function App() {
 			<${Composer} />
 			<${Toasts} />
 		</main>
-		${view.panelOpen ? html`<${PanelContainer} />` : null}
+		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}
 		${view.settingsOpen ? html`<${SettingsModal} />` : null}
 		${view.providerEditor ? html`<${ProviderEditorHost} key=${view.providerEditor.id ?? ""} id=${view.providerEditor.id} />` : null}
 		${view.palette ? html`<${CommandPalette} />` : null}
-		${view.dialog?.type === "git" ? html`<${GitDialog} kind=${view.dialog.kind} />` : null}
+		${view.dialog?.type === "git-setup" ? html`<${GitSetupDialog} />` : null}
 		${view.dialog?.type === "confirm" ? html`<${ConfirmModal} dialog=${view.dialog} />` : null}
 		${view.dialog?.type === "input" ? html`<${InputModal} dialog=${view.dialog} />` : null}
 	</div>`;

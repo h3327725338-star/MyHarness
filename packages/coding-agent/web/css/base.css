@@ -18,7 +18,7 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 svg { display: block; flex: none; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; border-radius: var(--r-xs); }
-::selection { background: var(--accent-soft); }
+::selection { background: var(--selection-bg); }
 
 /* Scrollbars: thin, quiet */
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
@@ -78,14 +78,18 @@ svg { display: block; flex: none; }
 /* An example of what to type, not a value: lighter still, so it cannot be taken for one. */
 .field.example-placeholder::placeholder { color: var(--text-4); opacity: 0.55; font-style: italic; }
 textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; }
-.select { padding-right: 28px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 15px) calc(50% + 1px), calc(100% - 11px) calc(50% + 1px); background-size: 4px 4px; background-repeat: no-repeat; }
+/* Every dropdown (native select, button that opens a list) draws the same chevron: one 12px stroke image, vertically
+   centred, 10px from the right edge, with room reserved for it so text never runs under it. The chips of the composer
+   draw the identical shape with the Chevron component. */
+.select { padding-right: 30px; appearance: none; background-image: var(--chev-img); background-repeat: no-repeat; background-position: right 10px center; background-size: 12px 12px; }
 .select option { background: var(--bg-raised); color: var(--text); }
+.chev { color: var(--text-3); flex: none; }
 
 /* Icon + text on one line: one rule for every such control instead of per-place offsets. The control is a flex row
    that centres its icon and its text on the same line (align-items: center, a fixed gap, icons never shrink, see
    `svg` above), and its line box is a whole number of pixels, so neither the icon nor the text is rounded half a
    pixel off the centre line. */
-.btn, .chip, .meter, .mode-btn, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
+.btn, .chip, .meter, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
 /* Numbers beside an icon (context use, added / removed lines): their box is cut to the digits themselves, so the
    digits' own middle (not the taller line box around them) sits on the icon's centre line. */
 @supports (text-box: trim-both cap alphabetic) {
@@ -106,8 +110,11 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 .toggle[aria-checked="true"]::after { transform: translateX(12px); }
 .toggle:disabled { opacity: 0.5; }
 
-/* Status glyphs. State is always carried by text/shape; motion is only decoration. */
-.spinner { width: 12px; height: 12px; border-radius: 50%; border: 1.6px solid var(--border-strong); border-top-color: var(--accent); animation: spin 0.9s linear infinite; flex: none; }
+/* Status glyphs. State is always carried by text/shape; motion is only decoration. The spinner is an SVG on the icons'
+   24-unit grid (see Spinner in ui.js): a faint ring and a rounded arc, in the icons' stroke weight. */
+.spinner { color: var(--accent); animation: spin 0.8s linear infinite; flex: none; }
+.spinner-ring { stroke: var(--border-strong); stroke-width: 2.2; }
+.spinner-arc { stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.accent { background: var(--accent); }
@@ -117,15 +124,38 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 
 .fade-in { animation: fade-in var(--t-base) var(--ease) both; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+@keyframes fade-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(2px); } }
 /* For elements that are placed with a transform or must not move while they appear. */
 @keyframes fade-only { from { opacity: 0; } to { opacity: 1; } }
 
+/* The one expand/collapse motion (Collapse in ui.js, the Workspace rows and every other foldable area): the height
+   follows a grid row going 0fr <-> 1fr, the content fades, and a folded area is not hit-testable. */
+.collapse { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
+.collapse.open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.collapse-inner { min-height: 0; overflow: clip; overflow-clip-margin: 3px; }
+/* The fold arrow (Fold in ui.js): one glyph that turns half a turn with the element it sits in, so every foldable row
+   shows its state with the same motion as its content. */
+.fold-chev { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
+[aria-expanded="true"] .fold-chev { transform: rotate(180deg); }
+/* The same for a head that has its arrow at the start (session sections, model cards): a quarter turn, right to down. */
+.disclose { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
+[aria-expanded="true"] .disclose { transform: rotate(90deg); }
+
+/* A number with a fixed unit after it: one field look, the unit is inside at the right and cannot be edited. */
+.unit-field { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--bg-inset); cursor: text; min-width: 0; transition: border-color var(--t-fast); }
+.unit-field:focus-within { border-color: var(--border-focus); }
+.unit-field.invalid { border-color: var(--danger); }
+.unit-field.disabled { opacity: 0.55; cursor: default; }
+.unit-input { flex: 1 1 auto; min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); outline: none; font-size: var(--fs-md); font-variant-numeric: tabular-nums; text-align: right; }
+.unit-input::placeholder { color: var(--text-4); }
+.unit-suffix { flex: none; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; user-select: none; }
+
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
-:root[data-motion="off"] .spinner { animation: none; border-top-color: var(--accent); border-right-color: var(--accent); }
+:root[data-motion="off"] .spinner { animation: none; }
 :root[data-motion="off"] .shimmer-text { animation: none; background: none; color: var(--text-2); -webkit-text-fill-color: currentColor; }
 @media (prefers-reduced-motion: reduce) {
 	:root:not([data-motion="on"]) *, :root:not([data-motion="on"]) *::before, :root:not([data-motion="on"]) *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
-	:root:not([data-motion="on"]) .spinner { animation: none; border-top-color: var(--accent); border-right-color: var(--accent); }
+	:root:not([data-motion="on"]) .spinner { animation: none; }
 	:root:not([data-motion="on"]) .shimmer-text { animation: none; background: none; color: var(--text-2); -webkit-text-fill-color: currentColor; }
 }
 

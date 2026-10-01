@@ -13,6 +13,7 @@ const TENSES = {
 	write: [N_("Writing"), N_("Wrote"), N_("write")],
 	web: [N_("Searching the web"), N_("Searched the web"), N_("search the web")],
 	fetch: [N_("Reading page"), N_("Read page"), N_("read the page")],
+	github: [N_("Querying GitHub"), N_("Queried GitHub"), N_("query GitHub")],
 	agent: [N_("Delegating"), N_("Delegated"), N_("delegate")],
 	tool: [N_("Using"), N_("Used"), N_("use")],
 };
@@ -42,6 +43,7 @@ export function describeAction(call, result, run, cwd) {
 	let detail = "";
 	let path;
 	let extra;
+	let web;
 	switch (name) {
 		case "read": {
 			kind = "read";
@@ -91,17 +93,21 @@ export function describeAction(call, result, run, cwd) {
 			kind = "write";
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
-			const lines = str(args.content).split("\n").length;
-			detail = count(lines, "line");
+			// The lines this write really added and removed (the tool counts them against the file as it was just before).
+			// While it runs, or for a result that carries no count, the row shows the plain status.
+			const d = result?.details;
+			if (Number.isFinite(d?.additions) && Number.isFinite(d?.deletions)) extra = { additions: d.additions, deletions: d.deletions };
 			break;
 		}
 		case "web_search":
 			kind = "web";
 			target = Array.isArray(args.queries) ? args.queries.join(" · ") : str(args.query || args.q);
+			web = webCounts(name, result?.details);
 			break;
 		case "web_fetch":
 			kind = "fetch";
 			target = Array.isArray(args.urls) ? args.urls.join(" · ") : str(args.url);
+			web = webCounts(name, result?.details);
 			break;
 		case "agent":
 			kind = "agent";
@@ -114,9 +120,8 @@ export function describeAction(call, result, run, cwd) {
 			detail = name;
 			break;
 		case "github":
-			kind = "web";
+			kind = "github";
 			target = `${str(args.method || "GET")} ${str(args.path || args.url || args.query || "")}`.trim();
-			detail = "GitHub";
 			break;
 		default: {
 			kind = "tool";
@@ -130,7 +135,40 @@ export function describeAction(call, result, run, cwd) {
 	const status = shell === "cancelled" ? "cancelled" : result ? (result.isError ? "error" : "done") : run?.status === "running" ? "running" : run?.status || "pending";
 	const [ing, past, base] = (TENSES[kind] || TENSES.tool).map((word) => t(word));
 	const verb = status === "running" || status === "pending" ? ing : shell === "cancelled" ? t("Stopped") : shell === "timeout" ? t("Timed out: {action}", { action: base }) : isError ? t("Failed to {action}", { action: base }) : past;
-	return { kind, verb, target, detail, path, extra, status, isError: !!isError };
+	return { kind, verb, target, detail, path, extra, web, status, isError: !!isError };
+}
+
+/**
+ * What one finished web_search / web_fetch call really did, read from its result: whether it was a round of searching, how
+ * many results the search returned (after merging the engines) and how many pages it opened. Nothing while it still runs.
+ */
+function webCounts(name, details) {
+	if (!details) return undefined;
+	return {
+		search: name === "web_search",
+		returned: name === "web_search" ? (details.results?.length ?? 0) : 0,
+		opened: details.pages?.length ?? 0,
+	};
+}
+
+/** The three numbers behind a group of web steps: rounds of searching, results returned, pages opened (finished calls only). */
+export function webStats(actions) {
+	let rounds = 0;
+	let returned = 0;
+	let opened = 0;
+	for (const action of actions) {
+		if (action.call.name === "web_search") rounds++;
+		if (!action.web) continue;
+		returned += action.web.returned;
+		opened += action.web.opened;
+	}
+	return { rounds, returned, opened };
+}
+
+/** Added / removed lines of a group of edits, or undefined when one of them has no real count. */
+export function changeTotals(actions) {
+	if (!actions.every((action) => action.extra)) return undefined;
+	return actions.reduce((sum, action) => ({ additions: sum.additions + action.extra.additions, deletions: sum.deletions + action.extra.deletions }), { additions: 0, deletions: 0 });
 }
 
 /** Group phrase for several actions of the same kind. */
@@ -154,10 +192,15 @@ export function groupLabel(kind, actions) {
 			return pick(N_("Editing {files}"), N_("Edited {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "write":
 			return pick(N_("Writing {files}"), N_("Wrote {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
-		case "web":
-			return pick(N_("Searching the web {times}"), N_("Searched the web {times}"), { times: count(n, "time") });
-		case "fetch":
-			return pick(N_("Reading {pages}"), N_("Read {pages}"), { pages: count(n, "web page") });
+		case "web": {
+			// One line for everything the agent did on the web: rounds of searching, results returned, pages opened.
+			if (running) return t("Searching the web");
+			const { rounds, returned, opened } = webStats(actions);
+			if (!rounds) return t("Opened {pages}", { pages: count(opened, "web page") });
+			return [count(rounds, "search round"), t("{count} returned", { count: count(returned, "result") }), t("{count} opened", { count: count(opened, "page") })].join(" · ");
+		}
+		case "github":
+			return pick(N_("Querying GitHub {times}"), N_("Queried GitHub {times}"), { times: count(n, "time") });
 		case "agent":
 			return pick(N_("Delegating {tasks}"), N_("Delegated {tasks}"), { tasks: count(n, "task") });
 		default:
@@ -318,17 +361,21 @@ function sameTurn(a, b) {
 	return true;
 }
 
+/** Kinds that are shown as one: reading a page is part of searching the web. */
+const GROUP_KIND = { fetch: "web" };
+
 /** Aggregate consecutive actions of one kind into groups (thinking/notes stay separate). */
 export function groupSteps(steps) {
 	const out = [];
 	for (const step of steps) {
 		if (step.type === "action") {
+			const kind = GROUP_KIND[step.kind] || step.kind;
 			const last = out[out.length - 1];
-			if (last && last.type === "group" && last.kind === step.kind) {
+			if (last && last.type === "group" && last.kind === kind) {
 				last.actions.push(step);
 				continue;
 			}
-			out.push({ type: "group", kind: step.kind, actions: [step], key: `g-${step.key}` });
+			out.push({ type: "group", kind, actions: [step], key: `g-${step.key}` });
 		} else {
 			out.push(step);
 		}

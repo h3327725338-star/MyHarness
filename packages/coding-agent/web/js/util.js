@@ -256,3 +256,21 @@ export function pointerMoved(event) {
 	lastPointer = at;
 	return true;
 }
+
+// ---- Counts typed in a unit ----------------------------------------------------------------
+// A token count that is shown and typed in K (a number, with the unit fixed next to it) is stored as the exact count.
+// The conversion is exact in both directions: a count that is not a whole K keeps its precision (200000 ⇄ "195.3125" in
+// 1024-token units), and text that would not make a whole number of tokens is not accepted (undefined), never rounded.
+/** A token count as the number shown in the field ("" when there is none). */
+export function tokensToUnit(tokens, unitSize) {
+	const value = Number(tokens);
+	return Number.isFinite(value) && value > 0 ? String(value / unitSize) : "";
+}
+
+/** The number typed in the field as an exact token count; undefined when it is not a positive whole number of tokens. */
+export function unitToTokens(text, unitSize) {
+	const value = String(text ?? "").trim();
+	if (!/^\d+(?:\.\d+)?$/u.test(value)) return undefined;
+	const tokens = Number(value) * unitSize;
+	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}

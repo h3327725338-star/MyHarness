@@ -293,6 +293,35 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 			expect(getTextOutput(result)).toContain(testFile);
+			// A file that did not exist: every line is an addition.
+			expect(result.details).toEqual({ created: true, additions: 1, deletions: 0 });
+		});
+
+		it("should report the lines an overwrite really added and removed", async () => {
+			const testFile = join(testDir, "write-overwrite.txt");
+			writeFileSync(testFile, "one\ntwo\nthree\nfour\n");
+
+			const result = await writeTool.execute("test-call-3b", {
+				path: testFile,
+				content: "one\n2\nthree\nfour\nfive\nsix\n",
+			});
+
+			expect(result.details).toEqual({ additions: 3, deletions: 1 });
+			// The same content again changes nothing.
+			const same = await writeTool.execute("test-call-3c", {
+				path: testFile,
+				content: "one\n2\nthree\nfour\nfive\nsix\n",
+			});
+			expect(same.details).toEqual({ additions: 0, deletions: 0 });
+		});
+
+		it("should give no line count for a file that cannot be read as text", async () => {
+			const testFile = join(testDir, "write-binary.bin");
+			writeFileSync(testFile, Buffer.from([0, 1, 2, 3]));
+
+			const result = await writeTool.execute("test-call-3d", { path: testFile, content: "text now" });
+
+			expect(getTextOutput(result)).toContain("Successfully wrote");
 			expect(result.details).toBeUndefined();
 		});
 

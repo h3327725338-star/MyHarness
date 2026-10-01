@@ -24,7 +24,7 @@ myharness --web
 
 其余参数照常生效：`--session`、`--continue`、`--model`、`--thinking`、`--no-extensions`、`--approve/--no-approve` 等；命令行里的初始 message / `@file` 会在启动后作为第一条消息发送。终端里按 `Ctrl+C`（或界面里的 **Quit MyHarness**）会停止服务并结束当前任务。
 
-**服务的生命周期**：只要还有至少一个浏览器页面连着（以真实的 SSE 连接为准，所以浏览器崩溃、被强制关闭也会被发现），服务就一直运行。最后一个页面断开后，服务等待一段宽限时间再退出；在这段时间内刷新（F5）或重新打开页面会取消退出。宽限时间是设置项 **Web UI exit delay (seconds)**（`webShutdownGraceSeconds`，设置 → Network，默认 10 秒，最小 3 秒），每次开始倒计时时重新读取，修改后对下一次生效。从未有页面连接过的服务（例如 `--no-open` 刚启动）不会倒计时。只管理这一个 Web UI 服务自己，不会结束任何 CLI 进程，也不会按名字批量结束进程。倒计时结束时服务的退出方式与 **Quit MyHarness** 相同，正在运行的任务会被停止。
+**服务的生命周期**：只要还有至少一个浏览器页面连着（以真实的 SSE 连接为准，所以浏览器崩溃、被强制关闭也会被发现），服务就一直运行。最后一个页面断开后，服务等待一段宽限时间再退出；在这段时间内刷新（F5）或重新打开页面会取消退出。宽限时间是设置项 **Web UI exit delay**（`webShutdownGraceSeconds`，设置 → Network，默认 10 秒，最小 3 秒），每次开始倒计时时重新读取，修改后对下一次生效。从未有页面连接过的服务（例如 `--no-open` 刚启动）不会倒计时。只管理这一个 Web UI 服务自己，不会结束任何 CLI 进程，也不会按名字批量结束进程。倒计时结束时服务的退出方式与 **Quit MyHarness** 相同，正在运行的任务会被停止。
 
 服务只监听 `127.0.0.1`，面向 Windows 桌面浏览器，单用户使用。不提供手机/平板适配、局域网访问或多人协作。
 
@@ -42,19 +42,23 @@ myharness --web
 * **添加 Workspace**：侧栏的 `+` 和 `/workspace` 里的 “Add workspace” 直接打开 Windows 自带的文件夹选择窗口（与资源管理器相同，只能选文件夹），选中后把该文件夹登记为 Workspace，取消则什么都不做。窗口由本机服务打开（`POST /api/fs/pick-folder`，`folder-dialog.ts` 通过 Windows PowerShell 调用系统的 `IFileOpenDialog`，在独立进程里运行，不阻塞服务），显示在浏览器窗口前面；同一时间只开一个。登记仍走原来的 `POST /api/workspaces/add`。没有系统窗口的平台（接口返回 501）才退回页面内置的文件夹选择器：类似资源管理器——后退/前进/上一级、可编辑并可点击的路径（面包屑）、快速访问（主目录/桌面/文档/下载）、盘符、已有 Workspace、筛选、新建文件夹、显示隐藏文件夹；只列目录，选中后显示完整路径再确认。
 * **对话**：用户消息、运行摘要、最终回复。默认不展开 Thinking、读文件、搜索、命令和编辑，只显示一行摘要，例如 `Worked for 32s · 9 actions · 4 files changed`。回复下方的小字显示模型和这次回复的 Token 数（`11,711 tokens in / 194 tokens out`，带千位分隔）。还没有名称也没有消息的新 Chat，顶部栏不显示标题，只显示 Workspace。不在最新位置时，对话区底部正中出现一个只有向下箭头的圆形按钮，点击后平滑滚到最新消息。
   * 第一层：摘要行（`Worked for …` / `Failed after …` / `Partially completed` / `Cancelled after …` / 运行中显示当前动作）。
-  * 第二层：点开后是可读步骤。读文件、搜索、命令、编辑等用自然语言描述，连续同类动作聚合（“Read 8 files”），可继续展开单项；Thinking 有内容时可展开；sub-agent / workflow 显示阶段与任务进度。
+  * 第二层：点开后是可读步骤。读文件、搜索、命令、编辑等用自然语言描述，连续同类动作聚合（“Read 8 files”），可继续展开单项；同一种工具永远是同一种样子（图标、字重、右侧的数字、展开方式），与它走哪条调用路径无关（`web/js/tool-rows.js`）。步骤之间只有确实存在下一步时才画一条很细的竖线，从上一步的状态图标连到下一步的；空状态和只有一步时没有线。进行中的步骤（包括摘要行里的当前动作，如“正在请求模型”）左边是一个小的旋转环；完成的步骤显示该类工具自己的图标，失败是红色的感叹号圆圈，被中止的是停止圆圈。编辑/写入的行右侧是真实的 `+N −M`：`write` 返回新增/删除行数（新文件的 `+N` 是它的行数），`edit` 返回 patch，行数从 patch 数出来；没有真实数字的行不显示。网页搜索与网页读取聚合成一行，例如 `2 search rounds · 18 results returned · 3 pages opened`（简体中文：`2 轮搜索 · 返回 18 个网页 · 打开 3 个网页`）：数字来自各次 `web_search` / `web_fetch` 返回的 details（搜索次数、各次返回的网页数之和、各次真正打开的网页数之和），展开后逐次列出搜索词、返回的网页、打开的网页和失败原因，没有记录的数字不显示。Thinking 有内容时可展开；sub-agent / workflow 显示阶段与任务进度。
   * 第三层：单项的 Raw details——真实 tool name、arguments、stdout/stderr、exit code、耗时、result details。读取的文件是 Markdown（`.md` / `.markdown` / `.mdx`）时，展开后的结果按 Markdown 渲染（复用对话里同一个渲染器）；其他文件（`.cpp`、`.ts`、`.json`、日志、shell 输出等）保持原样的等宽文本，不会被当作 Markdown 解析。tool 名称、参数、耗时等元数据始终是普通界面。
-  * **文件变更摘要卡片**：任务确实改了文件时，这一轮的末尾（最终回复之后）出现一张卡片：标题 `Edited 2 files` 和总计 `+4 −2`，下面每个文件一行，右侧是它自己的新增（绿）/删除（红）行数和一个箭头。数字来自 `GET /api/changes?scope=run&runId=…`，也就是 Changes → This task 的同一份数据，只包含这次任务造成的改动；二进制、过大或缺少基线的文件只显示文件名，不显示行数（此时也不显示总计）。点击文件打开右侧 Changes 面板并定位到它的 Diff，聊天里没有第二套 Diff。服务端没有记录的旧任务（重启前的，或 12 轮之前的）不显示卡片。
-  * 需要用户处理的状态永远不折叠：等待回答/审批、失败、部分完成、取消都有独立的横幅，横幅会说明失败原因、改了几个文件、跑了几条命令，并提供 View changes / Retry。
-* **Composer**：输入卡上方是一行小标签，显示任务在哪里运行：Workspace 路径（点击打开 Files）、Git 分支和未提交文件数（点击打开 Changes）、当前文件夹是关联 Git Worktree 时的 `worktree` 标签、项目未受信任时的提示，以及 Extension 的状态文字。输入区只放文字和附件。底部工具栏左侧是 `+`（附图片、提及文件、运行 shell、斜杠命令、立即压缩），右侧依次是两个各自独立的入口：**模型**和 **Thinking Effort**（都是纯文字加一个小箭头，前面没有装饰图标），各自在自己的按钮上方弹出一个紧凑浮层，不再有横向展开的二级菜单。模型列表是一个不按 Provider 分组的扁平列表（有多个 Provider 时行尾用弱化文字标出 Provider）；搜索框按模型名、Model ID、`provider/model` 和 Provider 名称匹配，结果按相关性排序（完全匹配 > 前缀 > 名称包含 > Provider 匹配），多个词都要出现；打开列表只读本地已保存的模型，不会联系任何 Provider。Thinking Effort 是一条横向分段滑杆：第一行是名称和当前档位，第二行是两端的含义（更快 / 更强），下面是滑杆——当前模型真实支持几个档位就有几个小节点，当前档位是唯一的滑块；可以点击、拖动，或用 ←/→、Home/End 调整。选中的档位立即显示并保持：同一时间只发一个请求，期间再选的档位排在后面发送，只有最后一次选择的服务端结果（真正生效的档位）会写回界面，中途到达的旧快照和事件不会把它改回去（`store.js` 的 `chooseThinkingLevel`）。模型只有一个或没有可选档位时不显示这个入口，切换模型后档位随之更新。每个模型的档位来自各自的 `thinkingLevelMap`；只有被明确确认不支持的档位才会隐藏，无法检测（`unknown`）的档位仍可选择，Provider 页里用“?”标出）、上下文用量环和发送/停止。MyHarness 没有 Plan / Sandbox / 权限模式这类功能，所以工具栏里也没有这些入口。点击用量环弹出一个小面板：`已用 / 窗口`（K 为单位，例如 `12.2K / 128K`）、百分比、剩余（例如 `115.8K`）、**缓存命中率**（整个 Session 累计：Provider 报告的 cache read ÷（普通输入 + cache read + cache write）；Provider 从没报告缓存时显示 `—`）和**生成速度**（`t/s`，见下），以及 “Compact now” 和 “Session details”。数据来自 `GET /api/context`（返回里的 `cache` 字段）和快照里的 `speed`。输入框还支持粘贴/拖放图片、`/` 命令与 skills、`@` 文件提及、`!cmd` / `!!cmd` 直接运行 shell、历史消息（↑/↓）。发送与停止在同一个位置切换。
-* **生成速度（t/s）**：只算模型真正输出的时间——从第一个流式输出（文字、thinking 或工具调用）开始计时，等待首个 Token、输入阶段和工具执行都不算。输出进行中，只有 Provider 在流式过程中持续报告输出 Token 数时才显示实时值（带闪烁圆点）；只在结束时报告的 Provider 在输出中显示 `—`，结束后显示这次回复的平均值（输出 Token ÷ 首个输出到结束的时间；隐藏的推理 Token 不计入，因为它们在计时开始前就产生了）。平均值一直保留到下一次输出开始。回复不是流式的、时间太短（< 0.25 秒）或 Provider 没报告输出 Token 时显示 `—`，不做估算。服务端 `generation-speed.ts` 计算，SSE `generation_speed` 推送。
+  * **文件变更摘要卡片**：任务确实改了文件时，这一轮的末尾（最终回复之后）出现一张卡片：标题 `Edited 2 files` 和总计 `+4 −2`，下面每个文件一行，右侧是它自己的新增（绿）/删除（红）行数。数字来自 `GET /api/changes?scope=run&runId=…`，也就是 Changes → This task 的同一份数据，只包含这次任务造成的改动；二进制、过大或缺少基线的文件只显示文件名，不显示行数（此时也不显示总计）。卡片只提供信息：不可点击，也不会打开右侧面板（面板只由顶栏的按钮打开，见下面的“详情面板”）；聊天里没有第二套 Diff。服务端没有记录的旧任务（重启前的，或 12 轮之前的）不显示卡片。
+  * 需要用户处理的状态永远不折叠：等待回答/审批、失败、部分完成、取消都有独立的横幅，横幅会说明失败原因、改了几个文件、跑了几条命令，并提供 Retry；任务留下了未提交的改动时还有 Undo or commit（打开行内的 `/git` 面板）。
+* **Composer**：输入卡上方是一行小标签，显示任务在哪里运行：Workspace 路径、Git 分支和未提交文件数、当前文件夹是关联 Git Worktree 时的 `worktree` 标签、项目未受信任时的提示（点击打开设置的安全页），以及 Extension 的状态文字；除了未受信任提示，这些标签只显示信息，不可点击，也不会打开右侧面板。输入区只放文字和附件。底部工具栏左侧是 `+`（附图片、提及文件、运行 shell、斜杠命令、立即压缩），右侧依次是两个各自独立的入口：**模型**和 **Thinking Effort**（都是纯文字加一个小箭头，前面没有装饰图标），各自在自己的按钮上方弹出一个紧凑浮层，不再有横向展开的二级菜单。模型列表是一个不按 Provider 分组的扁平列表（有多个 Provider 时行尾用弱化文字标出 Provider）；搜索框按模型名、Model ID、`provider/model` 和 Provider 名称匹配，结果按相关性排序（完全匹配 > 前缀 > 名称包含 > Provider 匹配），多个词都要出现；打开列表只读本地已保存的模型，不会联系任何 Provider。Thinking Effort 是一条横向分段滑杆：第一行是名称和当前档位，第二行是两端的含义（更快 / 更强），下面是滑杆——当前模型真实支持几个档位就有几个小节点，当前档位是唯一的滑块；可以点击、拖动，或用 ←/→、Home/End 调整；浮层一打开，键盘焦点就在滑杆上，←/→ 只在当前模型真正可选的档位之间移动，键盘和鼠标走同一条保存路径；Enter 或 Esc 关闭浮层并把焦点还给入口按钮。选中的档位立即显示并保持：同一时间只发一个请求，期间再选的档位排在后面发送，只有最后一次选择的服务端结果（真正生效的档位）会写回界面，中途到达的旧快照和事件不会把它改回去（`store.js` 的 `chooseThinkingLevel`）。模型只有一个或没有可选档位时不显示这个入口，切换模型后档位随之更新。每个模型的档位来自各自的 `thinkingLevelMap`（来源与优先级见 [models.md](models.md)：你自己写的 > Provider 官方文档对它自己 API 的明确说明 > 模型目录 > 真实请求检测）；只有被明确确认不支持的档位才会隐藏，没能检测出结果（`unknown`）的档位仍可选择，Provider 页的模型卡片里用一个小的 “Unconfirmed” 标记标出。官方文档说明某些名称只是按另一档运行时（例如 DeepSeek 的 `medium` 实际按 `high` 运行），只显示实际存在的档位，被合并的名称在模型卡片里作为说明列出。再往右是上下文用量环和发送/停止。MyHarness 没有 Plan / Sandbox / 权限模式这类功能，所以工具栏里也没有这些入口。点击用量环弹出一个小面板：`已用 / 窗口`（K 为单位，例如 `12.2K / 128K`）、百分比、剩余（例如 `115.8K`）、**缓存命中**和**生成速度**（`t/s`）（两者都是当前这次请求的数字，见下），以及 “Compact now”；小面板不会打开右侧面板。数据来自 `GET /api/context`（返回里的 `cache` 字段是整个 Session 的累计：Provider 报告的 cache read ÷（普通输入 + cache read + cache write），悬停缓存命中时显示）和快照里的 `speed`、`cache`。输入框还支持粘贴/拖放图片、`/` 命令与 skills、`@` 文件提及、`!cmd` / `!!cmd` 直接运行 shell、历史消息（↑/↓）。发送与停止在同一个位置切换。Agent 正在运行时，发送按钮和 Enter 按设置里的“任务运行中”选择处理新消息，Composer 上没有发送方式菜单（见下面的“运行控制”）。
+* **生成速度（t/s）与缓存命中**：两个数字都按“每一次模型请求”计算，并经过同样的四种状态：请求一开始就是 `Detecting…`（上一次请求的数字不会留在这一次上），之后是实时值（带闪烁圆点）、请求结束后的最终值，或者 `—`（没能可靠测量）。
+  * 速度只算模型真正输出的时间——从第一个流式输出（文字、thinking 或工具调用）开始计时，等待首个 Token、输入阶段和工具执行都不算。只有 Provider 在流式过程中持续报告输出 Token 数时才有实时值；只在结束时报告的 Provider 在输出中一直是 `Detecting…`，结束后显示这次回复的平均值（输出 Token ÷ 首个输出到结束的时间；隐藏的推理 Token 不计入，因为它们在计时开始前就产生了）。平均值保留到下一次请求开始。回复不是流式的、时间太短（< 0.25 秒）或 Provider 没报告输出 Token 时结束为 `—`，不做估算；任务被停止或失败时，已有的实时值保留为最后一个可靠值，没有数字则是 `—`。服务端 `generation-speed.ts` 计算，SSE `generation_speed` 推送。
+  * 缓存命中只用 Provider 在这次请求里报告的 Token：命中率 = cache read ÷（普通输入 + cache read + cache write），Provider 报告了这次请求的用量后显示实时值，请求结束后是最终值。没有缓存 Token 的请求，只有在这个 Session 里 Provider 之前报告过缓存用量时才算真正的 `0%`，否则是 `—`，不会编出一个 0%。悬停数值可以看到这次请求命中的 Token 数和整个 Session 的累计命中率；这个页面还没发过请求（例如刚打开的历史 Chat）时，数值用整个 Session 的累计命中率代替。服务端 `request-cache.ts` 计算，SSE `cache_hit` 推送，快照字段 `cache`。
 * **对话布局**：对话栏和输入卡使用同一个宽度并居中对齐。宽度默认随窗口变化（主区域的 82%，限制在 720–1060px 之间；窄屏时占满可用宽度），设置 → 外观 → 阅读宽度可以填固定像素（620–1100），留空恢复自动。以前保存的默认值 780 视为自动。
-* **详情面板**：
-  * **Changes**：这一轮到底改了什么。文件列表 + 真实的 unified / side-by-side diff；`This task` 与 `Working tree`（Git 未提交改动）两个范围；Git 操作条（Commit / Push / Undo task / 更多）。按钮名称不带 `…`：点击后还有下一步不是加省略号的理由，只有进行中的状态（“Working…”）和输入框提示保留。
+* **详情面板**：每次打开页面都是关闭的，也没有任何东西会替你打开它：只有顶栏右上角的按钮（Changes / Files / Terminal / Session）能打开、关闭或切换它；聊天里的卡片、Composer 的标签、斜杠命令都不会打开它。面板从右侧平滑滑入/滑出，对话区同时随之重排宽度；面板自己顶部的标签条和关闭按钮仍然可用。
+  * **Changes**：这一轮到底改了什么，按代码审阅的方式阅读。顶部是范围（`This task`，或 `Working tree`＝Git 未提交改动）、unified / side-by-side 切换和刷新，下面是 Git 操作条（Commit / Push / Undo task / 更多）和一句说明比较基线的话（“相对任务开始前的工作区”或“相对最新提交 `abc1234`”）。已改文件在一个可折叠的列表里：M / A / D / R 标记、目录弱化而文件名加粗、各自的真实 `+N −M`（二进制、过大或缺少基线的文件不显示数字），↑/↓/Home/End 或“上一个/下一个”按钮切换文件（显示 `3 / 12`）；选中的文件的 diff 占满面板其余部分（行号、上下文行、绿色新增和红色删除、语法高亮），切换文件时已显示的内容保持到新的 diff 到达，不闪烁。按钮名称不带 `…`：点击后还有下一步不是加省略号的理由，只有进行中的状态（“Working…”）和输入框提示保留。
   * **Files**：只读的工作区文件树（带 Git 状态与“本轮改动”标记）、文件名搜索、文件查看（语法高亮、图片预览、跳转到行）、`@` 提及到 prompt。
   * **Terminal**：本 Session 的每一条 shell 命令（Agent 的 `bash`/`pwsh` 工具和你自己的 `!` 命令）：命令、cwd、状态、耗时、exit code、真实输出（保留 ANSI 颜色）、截断与完整输出路径；底部可直接运行新的命令。
   * **Session**：上下文用量与压缩、Session 统计、Git checkpoint、分支树（导航 / fork）、Tools（可开关）、Skills、Prompt templates、Extensions、项目上下文文件、Reload resources。
-* **设置**（`Ctrl+,`）：外观（界面语言/主题/密度/动画/阅读宽度/浏览器通知，保存在浏览器）；Agent、工具与助手（Auto Memory / Sub-agent / Vision、Web search、Code Intelligence、图片）、Network 与 Shell、安全与隐私（Project Trust 与默认信任策略、提醒、通知、隐私、提示）、终端界面（只影响终端界面的设置，与终端 `/settings` 同一份）；Providers。各页用同一种卡片 + 行布局：每个设置项是一行紧凑的单行，左侧是名称，说明以较弱的颜色紧跟在名称右侧（放不下时用省略号截断，悬停显示全文），控件右对齐，行高一致；输入框、数字框、下拉和模型按钮同一高度（`--h-control`）、同样的左内边距，数字靠左显示，增减按钮在右侧留有间距；Web search 的搜索引擎是紧凑多选，关闭 Web search 时该卡片的其余行变暗。
+* **设置**（`Ctrl+,`）：外观（界面语言/主题/动画；对话：任务运行中的发送方式/阅读宽度/运行步骤默认展开/浏览器通知，保存在浏览器）；Agent、工具与助手（Auto Memory / Sub-agent / Vision、Web search、Code Intelligence、图片）、Network 与 Shell、安全与隐私（Project Trust 与默认信任策略、提醒、通知、隐私、提示）、终端界面（只影响终端界面的设置，与终端 `/settings` 同一份）；Providers。各页用同一种卡片 + 行布局：每个设置项是一行紧凑的单行，左侧是名称，说明以较弱的颜色紧跟在名称右侧（放不下时用省略号截断，悬停显示全文），控件右对齐，行高一致；输入框、数字框、下拉和模型按钮同一高度（`--h-control`），宽度按内容决定（下拉、模型按钮、数字框各有合适的宽度，不会一律拉满）；Web search 的搜索引擎是紧凑多选，关闭 Web search 时该卡片的其余行变暗。
+
+  **保存反馈**（设置页和行内 `/settings` 面板一样，`web/js/settings-apply.js`）：开关、选项和输入框的新值立即显示；本地保存很快，所以什么额外的东西都不出现，只有真的慢（超过约 0.4 秒）的保存才在控件旁显示小的加载圈，显示后至少保持约 0.5 秒，不会闪一下；保存完成后重新读取真实设置，保存失败时值恢复原样并弹出失败原因。**数字类设置只输入数字，单位是固定在输入框里、不可编辑的后缀**：上下文窗口上限显示为 `256 | K tokens`（1K = 1024 Token，右侧小字显示换算后的准确 Token 数，保存的仍是准确的 Token 数，留空表示不限制，服务端设置项的 `type` 是 `tokens`）；`Web UI exit delay` 显示为 `10 | seconds`。输入的值不合法时框变红，离开输入框时恢复原值并给出提示。
 
   **模型设置项**（Compact Model、Auto Memory、Sub-agent、Vision Assistant）使用与 Composer 相同的两个控件：模型按钮打开同一个扁平模型列表，第一项“使用主模型”会清空该项的 Provider、Model 和 Effort，运行时连同主模型当前的 Thinking Effort 一起继承；选了具体模型且它有多个档位时，旁边出现 Effort 按钮，打开同一种滑杆，下面多一个“默认”，表示不覆盖、不发送 Effort（规则见 [settings.md](settings.md)）。
 
@@ -69,8 +73,12 @@ myharness --web
   **删除 Provider**与启停不同：确认后移除 `models.json` 条目、该 Provider 的全部 API Key/登录、指向它的设置（默认模型等）以及备份文件里的对应条目；任何一步失败会回滚 `models.json`。最后一个 Provider 也可以删除，之后 MyHarness 进入“暂无可用模型”的空状态。如果有 Chat 正在用这个 Provider 的模型运行，先弹出选择：“不删除”什么都不改；“立即删除”会立刻停止这些任务再删除（`GET /api/providers/custom/usage` 查询，`POST /api/providers/custom/delete` 需带 `stopRunning: true`，否则只返回运行中的任务列表）。
 * **命令面板**（`Ctrl+K`）：动作、斜杠命令、Chat、文件的统一搜索；↑/↓ 选择，Enter 执行，Esc 关闭。
 * **搜索排序**：命令、设置项、Workspace、Chat 和模型的候选都用同一条规则（`web/js/search.js` 的 `rankSearch`，与终端 `packages/tui/src/fuzzy.ts` 的 `rankedFilter` 一致），不区分大小写：先按相关性（名称完全匹配 > 名称前缀 > 名称包含 > 说明/关键词匹配 > 字母顺序模糊匹配），同一相关性内再按使用次数，最后保持原有顺序。例如搜索 `git`，`Git` 排在 `GitHub Connect` 前面。搜索框为空时保持原来的按使用次数排序。斜杠命令和 `/settings` 行的使用次数与终端共用（`usageRanking`，由 `POST /api/commands/usage`、`POST /api/settings/usage` 记录）；模型搜索只按相关性。
-* **行内命令面板**：在 Composer 输入 `/settings`、`/model`、`/effort`、`/git`、`/commit`、`/push`、`/restore`、`/undo`、`/workspace` 并回车，会在输入框上方展开一个类似 CLI 菜单的多级面板（不是设置页）：↑/↓/PgUp/PgDn/Home/End 移动，Enter 或 → 进入/确认，Space 切换开关，←/Backspace/Esc 返回上一级（有筛选时先清筛选），可键入筛选；鼠标可选。`/settings` 的行、名称、说明、固定选项和顺序只在 `src/cli/settings-menu.ts` 的 `SETTINGS_MENU` 里定义一次：终端的 `/settings` 由它构建，Web 通过 `GET /api/settings` 的 `menu` 拿到同一份（已按与终端共用的使用次数排序），所以增删、改名、调整顺序或选项只改这一处，两边一起变。只属于一个界面的行用 `surfaces` 标出（终端独有：Theme；Web 独有：Appearance、Project trust、Auto-retry、Model cycling scope、Web UI exit delay、Shell path、Command prefix、Analytics、About）。Web 端只声明每一行怎么打开：编辑单个设置的行由 `routes-settings.ts` 的 `SETTINGS_MENU_SETTING` 对应到设置项，自带页面的行由 `web/js/settings-menu.js` 的 `SETTINGS_MENU_PAGES` 列出，`test/web-frontend-logic.test.ts` 检查两者合起来与注册表一一对应。名称保持与终端相同的英文，说明随界面语言显示；编辑的是同一份 `settings.json` / `models.json` / 凭据。面板里每一行都是单行：图标和名称在左，说明以较弱的颜色跟在名称右侧（过长截断），当前值、开关或箭头在最右。Thinking level 和各模型设置项里的 Effort 用与 Composer 相同的横向滑杆（←/→ 调整，Enter 返回）。点击面板以外的任何地方会关闭整个面板（包括多级子页面），面板内的点击和它打开的确认框/菜单不会关闭它；关闭不会清空输入框里的草稿。`/git` 覆盖 Worktree、历史、仓库登记。一次性命令（如 `/new`、`/compact`）仍直接执行，候选列表与搜索保留。`/workspace` 同样是多级面板：Workspace 与 No Folder → 其中的 Chat（打开）/新建 Chat/从列表移除，以及添加 Workspace。
-* **斜杠命令的来源**：内置命令只在 `src/cli/slash-commands.ts` 的注册表里定义一次（名称、别名、说明、`surfaces`：`cli` / `web`，未写表示两边都有），终端 UI 的候选与派发、Web 的 `/api/resources`（`resources.commands`，含 `aliases`）都读它，Web 前端不再有自己的一份命令表。Web 额外提供 `/diff`、`/terminal`、`/files`（打开对应面板）；`/setting` 是 `/settings` 的别名。`web/js/builtin-commands.js` 只声明每个命令在浏览器里怎么执行（`panel` 打开行内面板、`action` 立即执行、`prompt` 作为消息发给 Agent），`test/web-frontend-logic.test.ts` 检查它与注册表一一对应。
+* **行内命令面板**：在 Composer 输入 `/settings`、`/model`、`/effort`、`/git`、`/restore`、`/undo`、`/workspace` 并回车，会在输入框上方展开一个类似 CLI 菜单的多级面板（不是设置页）。面板是居中的紧凑卡片，宽度按内容决定：滑杆和只有几项的短选择用小卡片（`sm`/`md`），选项很多（超过 6 项）、带详情（待丢弃的文件列表等）或自定义内容的层级才加宽（`lg`），同一个面板里往返不同层级时尺寸平滑过渡；关闭时淡出。操作：↑/↓/PgUp/PgDn/Home/End 移动，Enter 或 → 进入/确认，Space 切换开关，←/Backspace/Esc 返回上一级（有筛选时先清筛选），可键入筛选；鼠标可选。`/settings` 的行、名称、说明、固定选项和顺序只在 `src/cli/settings-menu.ts` 的 `SETTINGS_MENU` 里定义一次：终端的 `/settings` 由它构建，Web 通过 `GET /api/settings` 的 `menu` 拿到同一份（已按与终端共用的使用次数排序），所以增删、改名、调整顺序或选项只改这一处，两边一起变。只属于一个界面的行用 `surfaces` 标出（终端独有：Theme；Web 独有：Appearance、Project trust、Auto-retry、Model cycling scope、Web UI exit delay、Shell path、Command prefix、Analytics、About）。Web 端只声明每一行怎么打开：编辑单个设置的行由 `routes-settings.ts` 的 `SETTINGS_MENU_SETTING` 对应到设置项，自带页面的行由 `web/js/settings-menu.js` 的 `SETTINGS_MENU_PAGES` 列出，`test/web-frontend-logic.test.ts` 检查两者合起来与注册表一一对应。名称保持与终端相同的英文，说明随界面语言显示；编辑的是同一份 `settings.json` / `models.json` / 凭据。面板里每一行都是单行：图标和名称在左，说明以较弱的颜色跟在名称右侧（过长截断），当前值、开关或箭头在最右。Thinking level 和各模型设置项里的 Effort 用与 Composer 相同的横向滑杆（←/→ 调整，Enter 返回）。点击面板以外的任何地方会关闭整个面板（包括多级子页面），面板内的点击和它打开的确认框/菜单不会关闭它；关闭不会清空输入框里的草稿。`/git` 覆盖 Commit、Push、撤销任务、恢复到最新提交、Worktree、历史、仓库登记。一次性命令（如 `/new`、`/compact`）仍直接执行，候选列表与搜索保留。
+
+  **`/commit` 和 `/push` 与终端一致：不需要选择，回车就直接运行**（`/git` 面板里的 Commit / Push 行和 Changes 面板的 Commit / Push 按钮走同一条路径，`web/js/git-flow.js`，服务端用例不变）。运行中，输入框上方的任务状态条显示一行紧凑的进度（旋转环、服务端报告的阶段文字、Cancel）；结束后同一条状态条显示真实结果：成功是 `Commit succeeded` / `Push succeeded`（简体中文：`Commit 成功` / `Push 成功`）加真实的短 hash 和一句说明，失败是失败标题加 Git 给出的真实原因（跳过 `warning:` / `hint:` 这类只是提示的行），`Details` 展开完整输出，“Ask the agent to fix it”（Push 的 CI 失败是 “Ask the agent to fix CI”）把原因交给 Agent。成功和“无需操作”的提示约 9 秒后自行淡出（鼠标停在上面或展开了 Details 时不淡出），失败和警告一直保留到你关闭。
+
+  需要选择的命令用键盘可操作的行内面板，默认项是安全的：`/undo` 的第一项是 “Keep changes”，撤销要再确认一次；`/restore` 先列出将被丢弃的文件，第一项是 Cancel，之后才是 “Discard and restore”；它们的结果同样显示在状态条里。`/undo` 需要存在任务检查点，而检查点只在开启 Git integration 时创建；没有检查点时面板说明原因，并指向 “Restore to last commit”。`/workspace` 同样是多级面板：Workspace 与 No Folder → 其中的 Chat（打开）/新建 Chat/从列表移除，以及添加 Workspace。
+* **斜杠命令的来源**：内置命令只在 `src/cli/slash-commands.ts` 的注册表里定义一次（名称、别名、说明、`surfaces`：`cli` / `web`，未写表示两边都有），终端 UI 的候选与派发、Web 的 `/api/resources`（`resources.commands`，含 `aliases`）都读它，Web 前端不再有自己的一份命令表。目前所有内置命令两边都有，Web 不再有只属于 Web 的命令（`/diff`、`/terminal`、`/files` 已移除：右侧面板只由顶栏按钮打开）；`/setting` 是 `/settings` 的别名。`web/js/builtin-commands.js` 只声明每个命令在浏览器里怎么执行（`panel` 打开行内面板、`action` 立即执行、`prompt` 作为消息发给 Agent），`test/web-frontend-logic.test.ts` 检查它与注册表一一对应。
 * **键盘操作**：行内命令面板的列表超过 4 行时默认带筛选框（设置根层也会搜索每一个具体设置项，例如输入 `exit delay`），进入子层时焦点和选中项稳定，返回上一层时恢复筛选文字与选中项；`Tab`/`Shift+Tab` 循环，`Space` 只在筛选框为空时切换开关，不劫持输入框。命令面板（`Ctrl+K`）和 Composer 的候选用键盘选择时，鼠标停在原位不会抢走选中项（只有鼠标真的移动才会）。需要审批/选择的对话可以直接用键盘回答：←/→/↑/↓/Tab 选择，Enter 确认，Esc 拒绝或取消，选项对话可按 1–9，`Alt+A` 把键盘焦点拉回该对话。
 * **斜杠命令候选**：只有 `/` 是消息的第一个字符时才出现（正文、路径或 URL 中间的 `/` 不触发），输入 `/` 立即展开，继续输入实时筛选；中文输入法下 `/` 键打出的全角 `／` 或 `、` 作为第一个字符时按 `/` 处理。输入 `/c` 等内容时候选列表高亮一个命令：`Enter` 直接确认并执行它（多级命令如 `/settings`、`/workspace` 立即打开对应面板，`/compact` 等立即执行），`Tab` 只把命令名补进输入框以便继续写参数，`↑/↓` 换选（从第一项按 ↑ 跳到最后一项、从最后一项按 ↓ 跳回第一项，列表会跟着滚动，选中项始终可见；行内命令面板同样如此），鼠标点选等同 `Enter`。`Esc` 或点击输入卡以外的地方只关闭候选列表，不改动草稿；继续输入会重新出现，删掉后再输入 `/` 也会重新出现。`@` 文件候选没有“执行”，`Enter`/`Tab` 都是插入。
 
@@ -88,14 +96,14 @@ myharness --web
 
 ### 运行控制
 
-Agent 正在运行时，Composer 上有明确的三种选择，直接映射 MyHarness 真实的机制：
+Agent 正在运行时发送消息有三种行为，直接映射 MyHarness 真实的机制。Composer 上没有发送方式菜单：Enter 和发送按钮用哪一种，在设置 → 外观 → 对话 → **While a task is running**（或行内 `/settings` 的 Appearance）里选，保存在浏览器，默认 Steer；输入框的占位文字、发送按钮的提示和 About 里的快捷键说明都会写出当前选择的行为。`Alt+Enter` 始终是 Queue。
 
-| 选择 | 行为 | 底层 |
-| --- | --- | --- |
-| **Steer**（Enter） | 在当前运行的下一个模型步骤前送达，不会打断正在执行的工具 | `AgentSession.prompt(..., { streamingBehavior: "steer" })` |
-| **Queue**（Alt+Enter） | 等当前运行完全结束后再送达 | `streamingBehavior: "followUp"` |
-| **Interrupt** | 立即中止当前运行，然后发送新消息 | `AgentSession.abort()` → `waitForIdle()` → `prompt()` |
-| **Stop**（按钮 / 输入框为空时 Esc） | 中止当前运行 | `AgentSession.abort()` |
+| 行为 | 怎么触发 | 效果 | 底层 |
+| --- | --- | --- | --- |
+| **Steer** | 设置里选它（默认）后按 Enter / 发送 | 在当前运行的下一个模型步骤前送达，不会打断正在执行的工具 | `AgentSession.prompt(..., { streamingBehavior: "steer" })` |
+| **Queue** | `Alt+Enter`，或设置里选它后按 Enter / 发送 | 等当前运行完全结束后再送达 | `streamingBehavior: "followUp"` |
+| **Interrupt** | 设置里选它后按 Enter / 发送 | 立即中止当前运行，然后发送新消息 | `AgentSession.abort()` → `waitForIdle()` → `prompt()` |
+| **Stop** | 停止按钮，或输入框为空时按 Esc | 中止当前运行 | `AgentSession.abort()` |
 
 排队中的消息显示在 Composer 上方，可一键放回输入框。
 
@@ -116,7 +124,7 @@ MyHarness 核心没有内置的工具权限系统；审批来自 Extension 通�
 
 与 TUI 的已知差异（有意为之，见 [维护](#维护)）：
 
-* `/commit` 失败时不会自动进入 Agent 修复循环，而是显示 Git 输出并提供 “Ask the agent to fix it”；`/push` 的 CI 失败同理，提供 “Ask the agent to fix CI”。
+* `/commit` 失败时不会自动进入 Agent 修复循环，而是在输入框上方的状态条里显示失败原因（`Details` 里是完整的 Git 输出）并提供 “Ask the agent to fix it”；`/push` 的 CI 失败同理，提供 “Ask the agent to fix CI”。
 * 最终回复不会因 Auto Memory 整理而被延迟显示。
 * TUI 专用的 Extension 能力（`custom()` 组件、自定义 editor/footer/header）在 Web 中无效；`setStatus`、`setWidget`（字符串数组）、`setWorkingMessage`、`setTitle`、`notify` 与对话方法有效。
 * MyHarness 没有持久 PTY，所以 Terminal 面板是命令历史与直接命令，不是交互式终端。
@@ -142,13 +150,15 @@ packages/coding-agent/
 │   ├── dialogs.ts                 Extension UI 对话桥（ExtensionUIContext 的 Web 实现）
 │   ├── changes.ts                 ChangeTracker：edit/write 快照 + checkpoint → 逐文件 diff
 │   ├── folder-dialog.ts           系统文件夹选择窗口（添加 Workspace）
-│   ├── generation-speed.ts        模型输出速度（t/s）：只用 Provider 报告的输出 Token 和真实到达时间
+│   ├── generation-speed.ts        模型输出速度（t/s）：只用 Provider 报告的输出 Token 和真实到达时间；每次请求从 detecting 开始
+│   ├── request-cache.ts           每次模型请求的缓存命中率：只用 Provider 报告的 cache read / write，状态与速度相同
 │   ├── wire.ts                    AgentMessage / SessionEntry → JSON wire items
 │   └── routes-*.ts                core / sessions / files / git / settings / providers / accounts（GitHub Connect）
 └── web/                           前端（原生 ES modules，无构建步骤）
     ├── index.html  css/  vendor/  Preact + htm；marked / highlight.js 复用 HTML 导出的 vendor 文件
-    └── js/                        store.js（状态+SSE，按 slot 分状态）、turns.js（对话模型）、transcript.js、composer.js、
-                                   command-panel.js（行内命令面板）、context-usage.js（上下文用量）、folder-picker.js、
+    └── js/                        store.js（状态+SSE，按 slot 分状态）、turns.js（对话模型）、transcript.js、tool-rows.js（工具行共用的状态图标与网页搜索明细）、composer.js、
+                                   command-panel.js（行内命令面板）、git-flow.js（/commit /push /undo /restore 的运行与结果）、run-modes.js（任务运行中的发送方式）、
+                                   settings-apply.js（保存设置的统一反馈）、context-usage.js（上下文用量、速度、缓存命中）、folder-picker.js、
                                    i18n.js / lang.js / locales/（界面语言）、panel-*.js、overlays-*.js、providers-page.js（Providers 页：列表、详情、API Key 管理）、provider-form.js（自定义 Provider 表单）、provider-models.js（表单的纯逻辑：Model ID 解析、检测结果写回）、model-menu.js（扁平可搜索的模型列表与 Effort 滑杆）、search.js（统一的搜索排序）、settings-menu.js（`/settings` 各行在 Web 里的打开方式和图标）、builtin-commands.js（内置斜杠命令在浏览器里的执行方式）、sidebar.js、app.js …
 ```
 
@@ -158,15 +168,18 @@ packages/coding-agent/
 
 * 前端没有构建步骤；改 `web/` 下的文件后刷新页面即可。
 * 图标 + 文字的对齐只有一条规则（`css/base.css`）：这类控件都是 `align-items: center` 的 flex 行、固定 `gap`、整数像素行高；图标旁的数字（上下文占用、`+/-` 行数）用 `text-box` 裁到数字本身的高度。新增同类控件沿用这条规则，不要逐个位置写偏移量。新增第三方前端库必须放进 `web/vendor/` 并更新 `THIRD_PARTY_NOTICES.md`。
+* 展开/折叠只有一种动效：区域高度用 `ui.js` 的 `Collapse`（grid 0fr→1fr，内容淡入淡出），箭头用 `.disclose`（指向右，展开时转四分之一圈）或 `Fold`（指向下，展开时翻转）；设置里的动画选 Off（或系统要求减少动效）时都不会动。新增可折叠区域沿用它们，不要各写一套。所有下拉（原生 `select` 和打开列表的按钮）画同一个箭头：按钮用 `ui.js` 的 `Chevron`，原生 `select` 用 CSS 变量 `--chev-img`，同样的 12px 描边、垂直居中、右侧留 10px。
+* 右侧详情面板只能由 `app.js` 顶栏的按钮和快捷键通过 `actions.togglePanel` 打开、关闭或切换（面板自己的标签条和关闭按钮除外）；聊天、卡片、状态、命令和 Agent 事件都不要调用它，也不要自己 `setView({ panelOpen: true })`。
+* 设置项的保存统一走 `settings-apply.js` 的 `saveSetting`（立即显示新值、慢保存才出现加载圈、失败时恢复并提示）；带单位的数字用 `ui.js` 的 `UnitField`（单位是固定后缀），不要给数字框再加一个可编辑的单位。
 * 新增 API：在对应 `routes-*.ts` 里注册，调用现有领域模块；不要在路由里复制业务规则。路由里不要调用同步的 Git / 子进程（`runGitSync`、`execFileSync` 等）：Node 服务只有一个事件循环，一次同步 `git` 会让同时进来的所有请求（打开面板、切换 Session、设置）一起等待。常用接口（`/api/git/status`、`/api/git/log`、`/api/changes` 的 Working tree / diff）已改为 `runGitAsync` 并行执行。新增 SSE 事件：在 `host.ts` 转发，在 `web/js/store.js` 消费。
 * wire 格式（`wire.ts`）只投影现有数据，不发明字段；前端不要伪造后端没有返回的状态。
-* 对话模型的纯逻辑（`turns.js`、`diff-parse.js`、`util.js`）、界面语言（`test/web-i18n.test.ts`）和上下文构成（`test/web-context-breakdown.test.ts`）有单元测试；`ExtensionMode` 现在包含 `"web"`，新增基于 mode 的 Extension 分支时要一并考虑。
+* 对话模型的纯逻辑（`turns.js`、`diff-parse.js`、`util.js`、`provider-models.js`）、界面语言（`test/web-i18n.test.ts`）和上下文构成（`test/web-context-breakdown.test.ts`）有单元测试；`ExtensionMode` 现在包含 `"web"`，新增基于 mode 的 Extension 分支时要一并考虑。
 * Web 偏好（主题、宽度、面板状态）存在浏览器 `localStorage`（按 origin，即端口区分）；它们不进入 `settings.json`。
 
 ## 验证
 
 ```powershell
-npm.cmd --workspace @myharness/coding-agent test -- test/web-http-server.test.ts test/web-wire-changes-dialogs.test.ts test/web-frontend-logic.test.ts test/web-host.test.ts test/web-i18n.test.ts test/web-context-breakdown.test.ts test/web-lifecycle.test.ts test/web-folder-dialog.test.ts test/web-generation-speed.test.ts test/thinking-probe.test.ts test/custom-provider-manager.test.ts
+npm.cmd --workspace @myharness/coding-agent test -- test/web-http-server.test.ts test/web-wire-changes-dialogs.test.ts test/web-frontend-logic.test.ts test/web-host.test.ts test/web-i18n.test.ts test/web-context-breakdown.test.ts test/web-lifecycle.test.ts test/web-folder-dialog.test.ts test/web-generation-speed.test.ts test/thinking-probe.test.ts test/official-effort.test.ts test/custom-provider-manager.test.ts test/tools.test.ts
 ```
 
-`thinking-probe.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 探测和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 的计算。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff → Files → Settings → Sessions → 直接 shell。真实 Provider、浏览器渲染和 Windows 桌面行为需要单独运行验证。
+`thinking-probe.test.ts`、`official-effort.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 的官方文档规则、探测和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 和每次请求缓存命中的计算，`tools.test.ts` 覆盖 `write` / `edit` 返回的 `+N −M`。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff → Files → Settings → Sessions → 直接 shell。真实 Provider、浏览器渲染和 Windows 桌面行为需要单独运行验证。

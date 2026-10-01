@@ -258,7 +258,7 @@ src/application/bootstrap/
 | Git commit / checkpoint / worktree | Git 对应子目录 | git/repository/、checkpoints/、worktrees/；跨领域流程再加 application/use-cases/ | Interactive component 内直接实现 Git 规则 |
 | Provider runtime | providers/runtime/ | Model resolver、Recovery、attribution、Settings | TUI 或 main.ts 内增加 Provider 状态 |
 | Credential / OAuth | providers/credentials/ | auth-storage.ts、manager、runtime、account connections | Settings JSON 或普通 utils/ |
-| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、thinking-capability（从已存储的 map 判断 Thinking Effort 来源，不按模型名推断）、thinking-probe（真实最小请求探测 Thinking Effort，按 API 协议区分）、store | 直接修改 TUI model selector |
+| Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、thinking-capability（判断 Thinking Effort 来源，优先级：官方文档 > 模型目录 > 探测，不按模型名猜测）、official-effort（Provider 官方文档明确写出的“请求档位 → 实际档位”，只匹配第一方 API host 上有文档依据的模型）、thinking-probe（真实最小请求探测 Thinking Effort，按 API 协议区分）、store | 直接修改 TUI model selector |
 | 低层 Provider API adapter | packages/ai/src/api/ | packages/ai/src/models.ts、auth helpers、Provider API 类型 | coding-agent 的 InteractiveMode |
 | 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
 | TUI 页面/产品 UI | modes/interactive/ | interactive-mode.ts、components/、theme | Provider、Session 或 Git 目录 |

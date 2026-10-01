@@ -1,7 +1,8 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
 import { activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
-import { normPath, shortPath } from "./util.js";
+import { commitChanges, pushChanges } from "./git-flow.js";
+import { normPath } from "./util.js";
 import { serverText, t } from "./i18n.js";
 
 let dialogResolver = null;
@@ -27,25 +28,13 @@ export function resolveConfirm(value) {
 	resolver?.(value);
 }
 
-function normalizeFilePath(input) {
-	let path = String(input || "").trim();
-	let line;
-	const m = /^(.*?)(?::(\d+)(?::\d+)?)?$/.exec(path);
-	if (m && m[2] && !/^[A-Za-z]$/.test(m[1])) {
-		path = m[1];
-		line = Number(m[2]);
-	}
-	const cwd = state.snap?.cwd || "";
-	return { path: shortPath(path, cwd), line };
-}
-
 /** What each "action" built-in command does (BUILTIN_COMMAND_KINDS says which commands are actions). */
 const COMMAND_ACTIONS = {
 	new: () => actions.newSession(),
 	compact: (arg) => actions.compact(arg || undefined),
-	diff: () => actions.openChanges(),
-	terminal: () => actions.openTerminal(),
-	files: () => setView({ panelOpen: true, panelTab: "files" }),
+	// Like the terminal's /commit and /push: nothing has to be chosen, so they start at once (progress and result show above the input).
+	commit: () => commitChanges(),
+	push: () => pushChanges(),
 };
 
 /** The registry entry for a typed command name (or alias), reading the shared registry delivered by /api/resources. */
@@ -74,18 +63,10 @@ export function closeCommand() {
 }
 
 export const actions = {
-	/** Open the Changes panel; `path` opens and scrolls to that file's diff, `scope` picks "run" (this task) or "worktree". */
-	openChanges({ runId, path, git, scope } = {}) {
-		setView({ panelOpen: true, panelTab: "changes", selectedChange: path ? { path, runId, at: Date.now() } : null, changesScope: scope || state.view.changesScope, gitFocus: !!git });
-		if (runId !== undefined) setView({ changesRunId: runId });
-	},
-	openFile(input) {
-		const { path, line } = normalizeFilePath(input);
-		setView({ panelOpen: true, panelTab: "files", selectedFile: { path, line, at: Date.now() } });
-	},
-	openTerminal(id) {
-		setView({ panelOpen: true, panelTab: "terminal", selectedTerminal: id });
-	},
+	/**
+	 * The right-hand panel opens, closes and switches only from its own buttons in the header (and their keyboard
+	 * shortcuts): nothing in the conversation, no event of a running task and no command opens it.
+	 */
 	togglePanel(tab) {
 		if (state.view.panelOpen && state.view.panelTab === tab) setView({ panelOpen: false });
 		else setView({ panelOpen: true, panelTab: tab });
@@ -134,11 +115,7 @@ export const actions = {
 	},
 
 	async runShell(command, excludeFromContext = false) {
-		actions.openTerminalPanelForShell();
 		return attempt(() => post("/api/bash", { command, excludeFromContext }));
-	},
-	openTerminalPanelForShell() {
-		setView({ panelOpen: true, panelTab: "terminal" });
 	},
 	abortShell() {
 		return attempt(() => post("/api/bash/abort"));
@@ -255,8 +232,9 @@ export const actions = {
 		await loadWorkspaces();
 	},
 
-	openGitDialog(kind) {
-		setView({ dialog: { type: "git", kind } });
+	/** The dialog that turns Git integration on for the workspace (identity, repository, first version). */
+	openGitSetup() {
+		setView({ dialog: { type: "git-setup" } });
 	},
 
 	async exportSession() {
