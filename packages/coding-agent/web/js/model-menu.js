@@ -1,16 +1,22 @@
-// Choosing a model where the thinking effort belongs to the model: a searchable list of models grouped by provider, and
-// for the model under the pointer (or the keyboard) a second menu to its right with the efforts that model really
-// supports. Used by the Composer (main model) and by every helper-model setting (Auto Memory, Sub-agent, Vision, compaction).
+// Choosing a model and its thinking effort: two separate, compact controls. The model list is one flat, searchable list
+// (no provider groups, no side menus); the effort is a horizontal slider with one stop per level the model really
+// supports. Used by the Composer (main model) and by every helper-model setting (Auto Memory, Sub-agent, Vision,
+// compaction).
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Popover, Spinner } from "./ui.js";
 import { t } from "./i18n.js";
-import { effortHint, effortName, filterModelGroups, fmtTokens, modelEfforts } from "./util.js";
+import { effortHint, effortName, modelEfforts, pointerMoved, searchModels } from "./util.js";
 
-const FLY_W = 212;
 const keyOf = (providerId, modelId) => `${providerId}\u0000${modelId}`;
 
 /** The wire model a reference points at, if it is available. */
 export function findModel(models, provider, model) {
 	return models?.providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
+}
+
+/** Name of a helper-model setting's model: "Use the main model", or the model's name. */
+export function modelRefName(models, ref) {
+	if (!ref?.provider || !ref?.model) return t("Use the main model");
+	return findModel(models, ref.provider, ref.model)?.name || ref.model;
 }
 
 /**
@@ -19,165 +25,189 @@ export function findModel(models, provider, model) {
  */
 export function modelRefLabel(models, ref) {
 	if (!ref?.provider || !ref?.model) return t("Use the main model");
-	const found = findModel(models, ref.provider, ref.model);
-	const name = found?.name || ref.model;
-	const efforts = modelEfforts(found);
+	const name = modelRefName(models, ref);
 	if (ref.thinkingLevel) return `${name} · ${effortName(ref.thinkingLevel)}`;
-	return efforts.length ? `${name} · ${t("Default")}` : name;
+	return modelEfforts(findModel(models, ref.provider, ref.model)).length ? `${name} · ${t("Default")}` : name;
 }
 
 /**
+ * The flat model list.
+ *
  * props:
  * - models: the GET /api/models answer (null while loading)
- * - selected: { provider, model, thinkingLevel } of the current choice (provider/model empty = the main model)
- * - mainOption: offer "Use the main model" first (it carries the main model's effort along; no effort of its own)
- * - defaultEffort: the efforts start with "Default" (no effort sent by MyHarness)
- * - onPick({ provider, model, thinkingLevel }): a model row alone gives `thinkingLevel: undefined`
- * - onPickMain(): "Use the main model"
+ * - selected: { provider, model } of the current choice (empty = the main model)
+ * - mainOption: offer "Use the main model" first
+ * - onPick({ provider, model }), onPickMain()
  * - disabled: rows can be looked at but not chosen
  */
-export function ModelMenu({ models, selected, mainOption, defaultEffort, onPick, onPickMain, disabled, footer }) {
+export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, disabled, footer }) {
 	const [query, setQuery] = useState("");
-	const groups = useMemo(() => filterModelGroups(models?.providers, query), [models, query]);
 	const rows = useMemo(() => {
-		const list = [];
-		if (mainOption && !query.trim()) list.push({ key: "main", type: "main" });
-		for (const p of groups) {
-			list.push({ key: `g-${p.id}`, type: "group", provider: p });
-			for (const m of p.models) list.push({ key: keyOf(p.id, m.id), type: "model", provider: p, model: m, efforts: modelEfforts(m) });
-		}
-		return list;
-	}, [groups, mainOption, query]);
-	const choosable = rows.filter((row) => row.type !== "group");
+		const list = searchModels(models?.providers, query).map(({ provider, model }) => ({ key: keyOf(provider.id, model.id), provider, model }));
+		return mainOption && !query.trim() ? [{ key: "main", main: true }, ...list] : list;
+	}, [models, mainOption, query]);
 	const isMain = !selected?.provider || !selected?.model;
 	const selectedKey = isMain ? (mainOption ? "main" : "") : keyOf(selected.provider, selected.model);
 	const [hi, setHi] = useState(selectedKey);
-	const [fly, setFly] = useState({ focus: false, index: 0 });
-	const rootRef = useRef(null);
-	const rowRefs = useRef(new Map());
-	const flyRef = useRef(null);
-	const [flyStyle, setFlyStyle] = useState(null);
-	const hiRow = choosable.find((row) => row.key === hi) || choosable[0];
-	const efforts = hiRow?.type === "model" ? hiRow.efforts : [];
-	const effortOptions = efforts.length ? [...(defaultEffort ? [undefined] : []), ...efforts] : [];
-
-	// Keep the highlight on a visible row while the search narrows the list.
+	const list = useRef(null);
+	// The highlight follows the search: the best match is ready for Enter.
+	const hiRow = rows.find((row) => row.key === hi) || rows[0];
 	useEffect(() => {
-		if (hiRow && hiRow.key !== hi) setHi(hiRow.key);
-	}, [hiRow?.key]);
-	// The efforts open next to the highlighted model, on the side with room.
-	const place = () => {
-		const row = hiRow && rowRefs.current.get(hiRow.key);
-		const root = rootRef.current?.closest(".popover");
-		if (!row || !root || !effortOptions.length) return setFlyStyle(null);
-		const r = row.getBoundingClientRect();
-		const pop = root.getBoundingClientRect();
-		const scroller = rootRef.current.querySelector(".pop-scroll")?.getBoundingClientRect();
-		if (scroller && (r.bottom < scroller.top || r.top > scroller.bottom)) return setFlyStyle(null);
-		const height = flyRef.current?.offsetHeight || 0;
-		let left = pop.right + 4;
-		if (left + FLY_W > window.innerWidth - 8) left = pop.left - FLY_W - 4;
-		const top = Math.max(8, Math.min(r.top - 5, window.innerHeight - height - 8));
-		setFlyStyle({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${FLY_W}px` });
-	};
-	useLayoutEffect(place, [hiRow?.key, effortOptions.length, query, flyStyle === null]);
-
-	const effortIndexOf = (level) => Math.max(0, effortOptions.indexOf(level));
-	const currentLevelOf = (row) => (row.key === selectedKey ? selected?.thinkingLevel : undefined);
-	const move = (delta) => {
-		if (!choosable.length) return;
-		const at = Math.max(0, choosable.findIndex((row) => row.key === hiRow?.key));
-		const next = choosable[(at + delta + choosable.length) % choosable.length];
-		setHi(next.key);
-		setFly({ focus: false, index: 0 });
-		rowRefs.current.get(next.key)?.scrollIntoView({ block: "nearest" });
-	};
+		if (query.trim()) setHi(rows[0]?.key);
+	}, [query]);
+	useLayoutEffect(() => {
+		list.current?.querySelector(".hi")?.scrollIntoView({ block: "nearest" });
+	}, [hiRow?.key, rows.length]);
+	// Several providers can offer a model of the same name: then the provider is part of what tells the rows apart.
+	const multiProvider = (models?.providers?.length || 0) > 1;
 	const pickRow = (row) => {
 		if (disabled || !row) return;
-		if (row.type === "main") onPickMain?.();
-		else onPick({ provider: row.provider.id, model: row.model.id, thinkingLevel: undefined });
+		if (row.main) onPickMain?.();
+		else onPick({ provider: row.provider.id, model: row.model.id });
 	};
-	const pickEffort = (row, level) => !disabled && onPick({ provider: row.provider.id, model: row.model.id, thinkingLevel: level });
+	const move = (delta) => {
+		if (!rows.length) return;
+		const at = Math.max(0, rows.findIndex((row) => row.key === hiRow?.key));
+		setHi(rows[(at + delta + rows.length) % rows.length].key);
+	};
 	const onKeyDown = (e) => {
-		if (fly.focus && effortOptions.length) {
-			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-				e.preventDefault();
-				const n = effortOptions.length;
-				setFly({ focus: true, index: (fly.index + (e.key === "ArrowDown" ? 1 : -1) + n) % n });
-				return;
-			}
-			if (e.key === "ArrowLeft") return e.preventDefault(), setFly({ focus: false, index: 0 });
-			if (e.key === "Enter") return e.preventDefault(), pickEffort(hiRow, effortOptions[fly.index]);
-		}
 		if (e.key === "ArrowDown") return e.preventDefault(), move(1);
 		if (e.key === "ArrowUp") return e.preventDefault(), move(-1);
-		if (e.key === "ArrowRight" && effortOptions.length && e.target.selectionStart === e.target.value.length) {
-			e.preventDefault();
-			setFly({ focus: true, index: effortIndexOf(currentLevelOf(hiRow)) });
-			return;
-		}
 		if (e.key === "Enter") return e.preventDefault(), pickRow(hiRow);
 	};
-
-	return html`<div ref=${rootRef} class="model-menu" onKeyDown=${onKeyDown}>
-		<div class="pop-search"><${Icon} name="search" size=${14} /><input autofocus placeholder=${t("Search by provider or model ID…")} aria-label=${t("Search models")} value=${query} onInput=${(e) => setQuery(e.target.value)} /></div>
-		<div class="pop-scroll" onScroll=${place}>
+	return html`<div class="model-menu" onKeyDown=${onKeyDown}>
+		<div class="pop-search"><${Icon} name="search" size=${13} /><input autofocus placeholder=${t("Search models…")} aria-label=${t("Search models")} value=${query} onInput=${(e) => setQuery(e.target.value)} autocomplete="off" spellcheck="false" /></div>
+		<div class="pop-scroll" ref=${list} role="listbox">
 			${!models ? html`<div class="empty"><${Spinner} /></div>` : null}
 			${rows.map((row) => {
-				if (row.type === "group") return html`<div class="pop-group" key=${row.key}><span class="truncate">${row.provider.name}</span>${row.provider.name !== row.provider.id ? html`<span class="pop-group-id">${row.provider.id}</span>` : null}</div>`;
 				const on = row.key === selectedKey;
 				const cls = `pop-item model-row ${row.key === hiRow?.key ? "hi" : ""} ${on ? "active" : ""}`;
-				if (row.type === "main") {
-					return html`<button key="main" ref=${(el) => (el ? rowRefs.current.set("main", el) : rowRefs.current.delete("main"))} class=${cls} disabled=${disabled} onMouseMove=${() => row.key !== hi && setHi(row.key)} onClick=${() => pickRow(row)}>
-						<span class="grow col"><span class="truncate">${t("Use the main model")}</span><span class="dim model-row-sub">${t("Same model and thinking effort as the main chat")}</span></span>
-						${on ? html`<${Icon} name="check" size=${14} />` : null}
+				const hover = (e) => row.key !== hiRow?.key && pointerMoved(e) && setHi(row.key);
+				if (row.main) {
+					return html`<button key="main" role="option" aria-selected=${on} class=${cls} disabled=${disabled} onMouseMove=${hover} onClick=${() => pickRow(row)} title=${t("Same model and thinking effort as the main chat")}>
+						<span class="truncate grow">${t("Use the main model")}</span>
+						${on ? html`<${Icon} name="check" size=${13} class="model-row-check" />` : null}
 					</button>`;
 				}
 				const m = row.model;
-				return html`<button key=${row.key} ref=${(el) => (el ? rowRefs.current.set(row.key, el) : rowRefs.current.delete(row.key))} class=${cls} disabled=${disabled} aria-haspopup=${row.efforts.length ? "menu" : undefined} onMouseMove=${() => row.key !== hi && (setHi(row.key), setFly({ focus: false, index: 0 }))} onClick=${() => pickRow(row)} title=${`${row.provider.id}/${m.id}`}>
-					<span class="grow col"><span class="truncate">${m.name || m.id}</span>${m.name && m.name !== m.id ? html`<span class="dim mono model-row-sub truncate">${m.id}</span>` : null}</span>
-					${m.input?.includes("image") ? html`<span class="badge" title=${t("Accepts images")}>${t("image")}</span>` : null}
-					<span class="dim pop-meta">${fmtTokens(m.contextWindow)}</span>
-					${on && !row.efforts.length ? html`<${Icon} name="check" size=${14} />` : on ? html`<span class="model-row-level">${selected.thinkingLevel ? effortName(selected.thinkingLevel) : defaultEffort ? t("Default") : ""}</span>` : null}
-					${row.efforts.length ? html`<${Icon} name="chevronRight" size=${13} class="model-row-chev" />` : null}
+				return html`<button key=${row.key} role="option" aria-selected=${on} class=${cls} disabled=${disabled} onMouseMove=${hover} onClick=${() => pickRow(row)} title=${`${row.provider.id}/${m.id}`}>
+					<span class="truncate model-row-name">${m.name || m.id}</span>
+					${multiProvider ? html`<span class="truncate grow model-row-sub">${row.provider.name || row.provider.id}</span>` : html`<span class="grow" />`}
+					${on ? html`<${Icon} name="check" size=${13} class="model-row-check" />` : null}
 				</button>`;
 			})}
-			${models && !choosable.length ? html`<div class="empty">${models.providers.length ? t("No models match.") : t("No model is available. Add a provider in Settings.")}</div>` : null}
+			${models && !rows.length ? html`<div class="empty">${models.providers.length ? t("No models match.") : t("No model is available. Add a provider in Settings.")}</div>` : null}
 		</div>
 		${footer || null}
-		${effortOptions.length && hiRow
-			? html`<div ref=${flyRef} class="popover model-fly" role="menu" aria-label=${t("Thinking effort of {name}", { name: hiRow.model.name || hiRow.model.id })} style=${flyStyle || { visibility: "hidden", left: "0px", top: "0px", width: `${FLY_W}px` }}>
-				<div class="pop-group">${t("Thinking effort")}</div>
-				${effortOptions.map((level, i) => {
-					const on = hiRow.key === selectedKey && selected?.thinkingLevel === level;
-					return html`<button key=${level ?? "default"} class=${`pop-item ${on ? "active" : ""} ${fly.focus && fly.index === i ? "hi" : ""}`} disabled=${disabled} onMouseMove=${() => (fly.focus && fly.index === i) || setFly({ focus: true, index: i })} onClick=${() => pickEffort(hiRow, level)}>
-						<span class="grow">${level ? effortName(level) : t("Default")}</span>
-						<span class="dim">${level ? effortHint(level) : t("No effort sent")}</span>
-						${on ? html`<${Icon} name="check" size=${14} />` : null}
-					</button>`;
-				})}
-			</div>`
-			: null}
 	</div>`;
 }
 
 /**
- * A button that opens the model menu for a helper-model setting. `value` is { provider, model, thinkingLevel }; choosing
- * "Use the main model" clears all three, so the model and its effort are both inherited.
+ * The thinking effort as a horizontal slider with one stop per level: left is less reasoning (faster), right is more
+ * (stronger). ←/→ (or Home/End) step through the stops; a click or a drag lands on the nearest one.
+ *
+ * props: levels (only the levels the model supports), value (a level, or undefined when none is chosen),
+ * onChange(level), disabled
+ */
+export function EffortSlider({ levels, value, onChange, disabled }) {
+	const track = useRef(null);
+	const [drag, setDragState] = useState(null);
+	// The level under the pointer is also kept outside the render, so a release right after a press still lands on it.
+	const dragging = useRef(null);
+	const setDrag = (level) => {
+		dragging.current = level;
+		setDragState(level);
+	};
+	const at = levels.indexOf(drag ?? value);
+	const last = Math.max(1, levels.length - 1);
+	const shown = drag ?? value;
+	const indexAt = (clientX) => {
+		const box = track.current.getBoundingClientRect();
+		return Math.max(0, Math.min(levels.length - 1, Math.round(((clientX - box.left) / Math.max(1, box.width)) * last)));
+	};
+	const commit = (level) => !disabled && level !== undefined && level !== value && onChange(level);
+	const onPointerDown = (e) => {
+		if (disabled || e.button > 0) return;
+		e.preventDefault();
+		track.current.focus();
+		track.current.setPointerCapture?.(e.pointerId);
+		setDrag(levels[indexAt(e.clientX)]);
+	};
+	const onPointerMove = (e) => dragging.current !== null && setDrag(levels[indexAt(e.clientX)]);
+	const onPointerUp = () => {
+		if (dragging.current === null) return;
+		const level = dragging.current;
+		setDrag(null);
+		commit(level);
+	};
+	const onKeyDown = (e) => {
+		const step = e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 0;
+		const next = e.key === "Home" ? 0 : e.key === "End" ? levels.length - 1 : step ? Math.max(0, Math.min(levels.length - 1, (at < 0 ? (step > 0 ? -1 : levels.length) : at) + step)) : -1;
+		if (next < 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		commit(levels[next]);
+	};
+	const left = (index) => `${(index / last) * 100}%`;
+	return html`<div class=${`effort ${disabled ? "disabled" : ""}`}>
+		<div class="effort-head"><span class="effort-title">${t("Thinking effort")}</span><span class="effort-value">${shown ? effortName(shown) : t("Default")}</span></div>
+		<div class="effort-track" ref=${track} role="slider" tabindex=${disabled ? -1 : 0} aria-label=${t("Thinking effort")} aria-orientation="horizontal" aria-disabled=${disabled ? "true" : undefined}
+			aria-valuemin="0" aria-valuemax=${levels.length - 1} aria-valuenow=${at < 0 ? undefined : at} aria-valuetext=${shown ? effortName(shown) : t("Default")}
+			onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${() => setDrag(null)} onKeyDown=${onKeyDown}>
+			<div class="effort-rail">
+				${at > 0 ? html`<span class="effort-fill" style=${{ width: left(at) }} />` : null}
+				${levels.map((level, index) => html`<span key=${level} class=${`effort-stop ${at >= 0 && index <= at ? "on" : ""}`} style=${{ left: left(index) }} title=${effortName(level)} />`)}
+				${at >= 0 ? html`<span class="effort-thumb" style=${{ left: left(at) }} />` : null}
+			</div>
+		</div>
+		<div class="effort-ends"><span>${t("Faster")}</span><span class="effort-hint truncate">${shown ? effortHint(shown) : t("No effort sent")}</span><span>${t("Smarter")}</span></div>
+	</div>`;
+}
+
+/**
+ * A button that opens the effort slider above (or below) it.
+ *
+ * props: levels, value, onChange(level | undefined), disabled, placement, withDefault (offer "Default": no effort is
+ * sent, the provider decides), class, label
+ */
+export function EffortPicker({ levels, value, onChange, disabled, placement = "top", align = "end", withDefault, class: cls = "chip", label, title }) {
+	const anchor = useRef(null);
+	const [open, setOpen] = useState(false);
+	if (levels.length < 2) return null;
+	const text = value ? effortName(value) : t("Default");
+	return html`<span ref=${anchor} class="picker-anchor">
+		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
+			<${Icon} name="brain" size=${14} /><span class="truncate chip-text">${text}</span><${Icon} name="chevronDown" size=${12} />
+		</button>
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${252} class="effort-pop">
+			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} />
+			${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} disabled=${disabled} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
+		<//>
+	</span>`;
+}
+
+/**
+ * The model of a helper-model setting, with its effort next to it. `value` is { provider, model, thinkingLevel };
+ * choosing "Use the main model" clears all three, so the model and its effort are both inherited.
  */
 export function ModelRefPicker({ models, value, onChange, disabled, label }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const v = value || {};
-	const text = modelRefLabel(models, v);
-	return html`<span ref=${anchor} class="picker-anchor model-ref">
-		<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="menu" aria-expanded=${open} aria-label=${label} title=${text} onClick=${() => setOpen(!open)}>
-			<${Icon} name="cpu" size=${14} /><span class="truncate grow">${text}</span>
-		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${360} maxHeight=${440} class="model-pop">
-			<${ModelMenu} models=${models} selected=${v} mainOption defaultEffort
-				onPickMain=${() => (setOpen(false), onChange({ provider: undefined, model: undefined, thinkingLevel: undefined }))}
-				onPick=${(ref) => (setOpen(false), onChange(ref))} />
-		<//>
+	const text = modelRefName(models, v);
+	const levels = modelEfforts(findModel(models, v.provider, v.model));
+	return html`<span class="model-ref">
+		<span ref=${anchor} class="picker-anchor grow">
+			<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="listbox" aria-expanded=${open} aria-label=${label} title=${text} onClick=${() => setOpen(!open)}>
+				<${Icon} name="cpu" size=${14} /><span class="truncate grow">${text}</span>
+			</button>
+			<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${300} maxHeight=${360} class="model-pop">
+				<${ModelMenu} models=${models} selected=${v} mainOption
+					onPickMain=${() => (setOpen(false), onChange({ provider: undefined, model: undefined, thinkingLevel: undefined }))}
+					onPick=${(ref) => (setOpen(false), onChange({ ...ref, thinkingLevel: undefined }))} />
+			<//>
+		</span>
+		<${EffortPicker} levels=${levels} value=${v.thinkingLevel} disabled=${disabled} withDefault placement="bottom" class="select model-ref-effort"
+			onChange=${(level) => onChange({ provider: v.provider, model: v.model, thinkingLevel: level })} />
 	</span>`;
 }

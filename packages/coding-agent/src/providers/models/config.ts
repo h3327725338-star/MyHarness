@@ -201,6 +201,11 @@ const ProviderConfigSchema = Type.Object({
 	name: Type.Optional(Type.String({ minLength: 1 })),
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
 	apiKey: Type.Optional(Type.String({ minLength: 1 })),
+	/**
+	 * Which API key the provider uses when both exist: `apiKey` = the key saved in the credential store, `config` = the
+	 * `apiKey` written in this entry. Omitted keeps the older rule (a saved key first, else the one written here).
+	 */
+	authMode: Type.Optional(Type.Union([Type.Literal("apiKey"), Type.Literal("config")])),
 	api: Type.Optional(Type.String({ minLength: 1 })),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),

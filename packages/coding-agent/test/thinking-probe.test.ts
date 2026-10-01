@@ -3,7 +3,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CustomProviderManager, discoverProviderModels } from "../src/providers/models/custom-provider-manager.ts";
+import {
+	CustomProviderManager,
+	detectSpecifiedModels,
+	discoverProviderModels,
+} from "../src/providers/models/custom-provider-manager.ts";
 import {
 	applyStatusesToMap,
 	mergeLevelStatuses,
@@ -63,8 +67,10 @@ const rejectEffort = (response: ServerResponse) =>
 
 const headers = new Headers({ Authorization: "Bearer test-key" });
 
+const fast = { retryDelaysMs: [0, 0, 0] } as const;
+
 describe("thinking level probe", () => {
-	it("confirms accepted levels only when the server also rejects an invalid value", async () => {
+	it("asks about every level on its own: success is supported, an explicit rejection is unsupported", async () => {
 		const accepted = new Set(["low", "medium", "high"]);
 		const { baseUrl, seen } = await serve((_request, response, body) =>
 			accepted.has(body.reasoning_effort) ? json(response, 200, { choices: [] }) : rejectEffort(response),
@@ -72,7 +78,7 @@ describe("thinking level probe", () => {
 		const result = await probeThinkingLevels({
 			api: "openai-completions",
 			baseUrl: `${baseUrl}/v1`,
-			modelId: "m",
+			modelId: "never-seen-model",
 			headers,
 		});
 		expect(result).toEqual({
@@ -83,53 +89,100 @@ describe("thinking level probe", () => {
 			xhigh: "unsupported",
 			max: "unsupported",
 		});
-		expect(seen[0]).toMatchObject({ url: "/v1/chat/completions", body: { model: "m", max_tokens: 16 } });
-		// The first request is the canary with a bogus effort.
-		expect(seen[0]?.body.reasoning_effort).toBe("myharness_probe_invalid");
+		expect(seen[0]).toMatchObject({
+			url: "/v1/chat/completions",
+			body: { model: "never-seen-model", max_tokens: 16 },
+		});
+		// One request per level, each with a real level: nothing else is sent.
+		expect(seen.map((entry) => entry.body.reasoning_effort).sort()).toEqual(
+			["high", "low", "max", "medium", "minimal", "xhigh"].sort(),
+		);
 	});
 
-	it("does not call a level supported when the server silently accepts any value", async () => {
-		const { baseUrl } = await serve((_request, response) => json(response, 200, { choices: [] }));
+	it("does not derive a level from its neighbours", async () => {
+		const { baseUrl } = await serve((_request, response, body) =>
+			body.reasoning_effort === "xhigh" ? rejectEffort(response) : json(response, 200, { choices: [] }),
+		);
 		const result = await probeThinkingLevels({
 			api: "openai-completions",
 			baseUrl: `${baseUrl}/v1`,
 			modelId: "m",
 			headers,
-			levels: ["low", "max"],
+			levels: ["high", "xhigh", "max"],
 		});
-		expect(result).toEqual({ low: "unverified", max: "unverified" });
+		expect(result).toEqual({ high: "supported", xhigh: "unsupported", max: "supported" });
 	});
 
-	it("sends only the canary when the server accepts any value", async () => {
-		const { baseUrl, seen } = await serve((_request, response) => json(response, 200, { choices: [] }));
-		const result = await probeThinkingLevels({
-			api: "openai-completions",
-			baseUrl: `${baseUrl}/v1`,
-			modelId: "m",
-			headers,
-		});
-		expect(seen).toHaveLength(1);
-		expect(Object.values(result).every((status) => status === "unverified")).toBe(true);
-	});
-
-	it("keeps every level unknown on rate limits, quota, auth and server errors, without spending more requests", async () => {
-		for (const status of [429, 402, 401, 403, 404, 500, 503]) {
+	it("tries an undecided level up to three more times and never calls it unsupported", async () => {
+		for (const status of [429, 500, 502, 503, 404, 408]) {
 			const { baseUrl, seen } = await serve((_request, response) => json(response, status, { error: "no" }));
 			const result = await probeThinkingLevels({
 				api: "openai-completions",
 				baseUrl: `${baseUrl}/v1`,
 				modelId: "m",
 				headers,
+				levels: ["max"],
+				...fast,
 			});
-			expect(Object.values(result), `HTTP ${status}`).toEqual(Array(6).fill("unknown"));
-			expect(seen).toHaveLength(1);
+			expect(result, `HTTP ${status}`).toEqual({ max: "unknown" });
+			expect(seen, `HTTP ${status}`).toHaveLength(4);
 		}
 	});
 
-	it("keeps a level unknown when the rejection does not name the effort parameter", async () => {
+	it("stops retrying at the first success", async () => {
+		let calls = 0;
+		const { baseUrl, seen } = await serve((_request, response) =>
+			++calls < 3 ? json(response, 503, { error: { message: "upstream overloaded" } }) : json(response, 200, {}),
+		);
+		const result = await probeThinkingLevels({
+			api: "openai-completions",
+			baseUrl: `${baseUrl}/v1`,
+			modelId: "m",
+			headers,
+			levels: ["max"],
+			...fast,
+		});
+		expect(result).toEqual({ max: "supported" });
+		expect(seen).toHaveLength(3);
+	});
+
+	it("does not retry after an explicit rejection, or when the credentials are refused", async () => {
+		const rejected = await serve((_request, response) => rejectEffort(response));
+		expect(
+			await probeThinkingLevels({
+				api: "openai-completions",
+				baseUrl: `${rejected.baseUrl}/v1`,
+				modelId: "m",
+				headers,
+				levels: ["max"],
+				...fast,
+			}),
+		).toEqual({ max: "unsupported" });
+		expect(rejected.seen).toHaveLength(1);
+		for (const status of [401, 403]) {
+			const denied = await serve((_request, response) =>
+				json(response, status, { error: { message: "Invalid API key for reasoning_effort requests" } }),
+			);
+			expect(
+				await probeThinkingLevels({
+					api: "openai-completions",
+					baseUrl: `${denied.baseUrl}/v1`,
+					modelId: "m",
+					headers,
+					levels: ["low", "max"],
+					...fast,
+				}),
+			).toEqual({ low: "unknown", max: "unknown" });
+			expect(denied.seen).toHaveLength(2);
+		}
+	});
+
+	it("keeps a level unknown when the rejection does not name the effort", async () => {
 		const { baseUrl } = await serve((_request, response, body) =>
 			body.reasoning_effort === "high"
-				? json(response, 400, { error: { message: "max_tokens is too small for a reasoning model" } })
+				? json(response, 400, {
+						error: { message: "The request parameters are invalid.", type: "invalid_request_error" },
+					})
 				: rejectEffort(response),
 		);
 		const result = await probeThinkingLevels({
@@ -138,74 +191,80 @@ describe("thinking level probe", () => {
 			modelId: "m",
 			headers,
 			levels: ["high", "max"],
+			...fast,
 		});
 		expect(result).toEqual({ high: "unknown", max: "unsupported" });
 	});
 
-	it("confirms levels through a control request when the server only answers a generic 400", async () => {
-		const accepted = new Set(["low", "high"]);
+	it("reads a rejection that names only the value", async () => {
+		const { baseUrl } = await serve((_request, response, body) =>
+			body.reasoning_effort === "max"
+				? json(response, 400, {
+						error: { message: "Unsupported value: 'max'. Supported values are: 'low', 'high'." },
+					})
+				: json(response, 200, {}),
+		);
+		const result = await probeThinkingLevels({
+			api: "openai-completions",
+			baseUrl: `${baseUrl}/v1`,
+			modelId: "max-model",
+			headers,
+			levels: ["high", "max"],
+			...fast,
+		});
+		expect(result).toEqual({ high: "supported", max: "unsupported" });
+	});
+
+	it("treats an answer it cannot read as unknown, and an error inside a 200 like any other error", async () => {
+		const html = await serve((_request, response) => {
+			response.statusCode = 200;
+			response.end("<html>gateway</html>");
+		});
+		expect(
+			await probeThinkingLevels({
+				api: "openai-completions",
+				baseUrl: `${html.baseUrl}/v1`,
+				modelId: "m",
+				headers,
+				levels: ["max"],
+				...fast,
+			}),
+		).toEqual({ max: "unknown" });
+		const wrapped = await serve((_request, response, body) =>
+			json(response, 200, {
+				error: {
+					message: body.reasoning_effort === "max" ? "reasoning_effort 'max' is not supported" : "channel busy",
+				},
+			}),
+		);
+		expect(
+			await probeThinkingLevels({
+				api: "openai-completions",
+				baseUrl: `${wrapped.baseUrl}/v1`,
+				modelId: "m",
+				headers,
+				levels: ["high", "max"],
+				...fast,
+			}),
+		).toEqual({ high: "unknown", max: "unsupported" });
+	});
+
+	it("gives reasoning more room when the service says 16 tokens are too few", async () => {
 		const { baseUrl, seen } = await serve((_request, response, body) =>
-			body.reasoning_effort === undefined || accepted.has(body.reasoning_effort)
-				? json(response, 200, { choices: [] })
-				: json(response, 400, { error: { message: "The request parameters are invalid." } }),
+			body.max_tokens < 100
+				? json(response, 400, { error: { message: "max_tokens is too small for a reasoning model" } })
+				: json(response, 200, {}),
 		);
 		const result = await probeThinkingLevels({
 			api: "openai-completions",
 			baseUrl: `${baseUrl}/v1`,
 			modelId: "m",
 			headers,
-			levels: ["low", "high", "max"],
+			levels: ["high"],
+			...fast,
 		});
-		expect(result).toEqual({ low: "supported", high: "supported", max: "unsupported" });
-		expect(seen.some((entry) => entry.body.reasoning_effort === undefined)).toBe(true);
-	});
-
-	it("keeps every level unknown when a generic 400 also hits the request without effort", async () => {
-		const { baseUrl } = await serve((_request, response) =>
-			json(response, 400, { error: { message: "The request parameters are invalid." } }),
-		);
-		const result = await probeThinkingLevels({
-			api: "openai-completions",
-			baseUrl: `${baseUrl}/v1`,
-			modelId: "m",
-			headers,
-			levels: ["low", "max"],
-		});
-		expect(result).toEqual({ low: "unknown", max: "unknown" });
-	});
-
-	it("does not blame the level for a generic 400 that complains about tokens", async () => {
-		const { baseUrl } = await serve((_request, response, body) => {
-			if (body.reasoning_effort === undefined || body.reasoning_effort === "low") return json(response, 200, {});
-			return json(response, 400, {
-				error: { message: body.reasoning_effort === "high" ? "max_tokens too small" : "Bad request" },
-			});
-		});
-		const result = await probeThinkingLevels({
-			api: "openai-completions",
-			baseUrl: `${baseUrl}/v1`,
-			modelId: "m",
-			headers,
-			levels: ["low", "high", "max"],
-		});
-		expect(result).toEqual({ low: "supported", high: "unknown", max: "unsupported" });
-	});
-
-	it("keeps a level unknown when a generic rejection does not repeat", async () => {
-		let minimalCalls = 0;
-		const { baseUrl } = await serve((_request, response, body) => {
-			if (body.reasoning_effort === undefined || body.reasoning_effort === "low") return json(response, 200, {});
-			if (body.reasoning_effort === "minimal" && ++minimalCalls === 2) return json(response, 200, {});
-			return json(response, 400, { error: { message: "unsupported parameter" } });
-		});
-		const result = await probeThinkingLevels({
-			api: "openai-completions",
-			baseUrl: `${baseUrl}/v1`,
-			modelId: "m",
-			headers,
-			levels: ["minimal", "low", "max"],
-		});
-		expect(result).toEqual({ minimal: "unknown", low: "supported", max: "unsupported" });
+		expect(result).toEqual({ high: "supported" });
+		expect(seen.map((entry) => entry.body.max_tokens)).toEqual([16, 1024]);
 	});
 
 	it("does not mark a level unsupported when the network fails", async () => {
@@ -216,6 +275,7 @@ describe("thinking level probe", () => {
 			headers,
 			levels: ["low"],
 			timeoutMs: 2000,
+			...fast,
 		});
 		expect(result).toEqual({ low: "unknown" });
 	});
@@ -235,6 +295,7 @@ describe("thinking level probe", () => {
 			modelId: "m",
 			headers,
 			levels: ["low", "high"],
+			...fast,
 		});
 		expect(result).toEqual({ low: "supported", high: "unsupported" });
 		expect(seen.some((entry) => entry.body.max_completion_tokens === 16)).toBe(true);
@@ -304,9 +365,11 @@ describe("status bookkeeping", () => {
 				{ low: "unknown", medium: "supported", high: "unverified", xhigh: "unverified" },
 			),
 		).toEqual({ low: "supported", medium: "supported", high: "unsupported", xhigh: "unverified" });
-		expect(unresolvedLevels({ low: "supported", medium: "unknown", high: "unverified" })).toEqual([
+		// Everything a real request has not confirmed as supported is asked again.
+		expect(unresolvedLevels({ low: "supported", medium: "unknown", high: "unsupported" })).toEqual([
 			"minimal",
 			"medium",
+			"high",
 			"xhigh",
 			"max",
 		]);
@@ -326,6 +389,11 @@ describe("status bookkeeping", () => {
 			{ enableUnconfirmedExtras: true },
 		);
 		expect(map).toEqual({ minimal: null, xhigh: "xhigh" });
+		// A level nobody could check is not hidden on a model without a map, and changes nothing on a configured one.
+		expect(applyStatusesToMap(undefined, { max: "unknown" }, { enableUnconfirmedExtras: true })).toEqual({
+			max: "max",
+		});
+		expect(applyStatusesToMap({ high: null }, { high: "unknown", max: "unknown" })).toEqual({ high: null });
 		// Existing entries are only changed by confirmed results.
 		expect(applyStatusesToMap({ high: null, low: "my-low" }, { high: "unverified", low: "supported" })).toEqual({
 			high: null,
@@ -538,5 +606,89 @@ describe("thinking detection priority", () => {
 		const saved = JSON.parse(await readFile(path, "utf8")).providers.relay.models[0];
 		expect(saved.thinkingLevelMap).toBeUndefined();
 		expect(saved.reasoning).toBe(true);
+	});
+});
+
+describe("detecting the Model IDs the user named", () => {
+	it("tests a model the endpoint does not list, even when the model list cannot be read", async () => {
+		const { baseUrl } = await serve((request, response, body) => {
+			if (request.method !== "POST") return json(response, 404, { error: "no model list here" });
+			return body.reasoning_effort === "minimal" ? rejectEffort(response) : json(response, 200, { choices: [] });
+		});
+		const result = await detectSpecifiedModels({
+			baseUrl: `${baseUrl}/v1`,
+			api: "openai-completions",
+			apiKey: "k",
+			modelIds: ["brand-new-model"],
+			retryDelaysMs: [0, 0, 0],
+		});
+		expect(result.catalogError?.code).toBe("unsupported");
+		expect(result.models).toHaveLength(1);
+		expect(result.models[0]).toMatchObject({
+			id: "brand-new-model",
+			reasoning: true,
+			thinkingSource: "probe",
+			thinkingLevelStatus: { minimal: "unsupported", high: "supported", xhigh: "supported", max: "supported" },
+			thinkingLevelMap: { minimal: null, xhigh: "xhigh", max: "max" },
+		});
+	});
+
+	it("does not hide max when the service only fails temporarily, and keeps what is configured", async () => {
+		const { baseUrl } = await serve((request, response, body) => {
+			if (request.method !== "POST") return json(response, 200, { data: [{ id: "relay-model" }] });
+			if (body.reasoning_effort === "max")
+				return json(response, 503, { error: { message: "no available channel" } });
+			return json(response, 200, { choices: [] });
+		});
+		const result = await detectSpecifiedModels({
+			baseUrl: `${baseUrl}/v1`,
+			api: "openai-completions",
+			apiKey: "k",
+			modelIds: ["relay-model"],
+			retryDelaysMs: [0, 0, 0],
+		});
+		const model = result.models[0];
+		expect(model?.thinkingLevelStatus?.max).toBe("unknown");
+		expect(model?.thinkingLevelStatus?.xhigh).toBe("supported");
+		// Unknown is not unsupported: the level stays available.
+		expect(model?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+
+		// A model already configured keeps what it has for a level the detection could not settle.
+		const directory = await mkdtemp(join(tmpdir(), "myharness-probe-"));
+		directories.push(directory);
+		const path = join(directory, "models.json");
+		await writeFile(
+			path,
+			JSON.stringify({
+				providers: {
+					relay: {
+						baseUrl: `${baseUrl}/v1`,
+						api: "openai-completions",
+						models: [{ id: "relay-model", reasoning: true, thinkingLevelMap: { minimal: null, max: "max" } }],
+					},
+				},
+			}),
+			"utf8",
+		);
+		if (!model) throw new Error("model was not detected");
+		await new CustomProviderManager(path).mergeDiscoveredModels("relay", [model], "openai-completions");
+		const saved = JSON.parse(await readFile(path, "utf8")).providers.relay.models[0];
+		expect(saved.thinkingLevelMap).toEqual({ max: "max", xhigh: "xhigh" });
+		expect(saved.thinkingLevelStatus.max).toBe("unknown");
+	});
+
+	it("leaves everything as it is when nothing could be checked", async () => {
+		const { baseUrl } = await serve((_request, response) => json(response, 500, { error: "down" }));
+		const result = await detectSpecifiedModels({
+			baseUrl: `${baseUrl}/v1`,
+			api: "openai-completions",
+			apiKey: "k",
+			modelIds: ["m"],
+			retryDelaysMs: [0, 0, 0],
+		});
+		const model = result.models[0];
+		expect(model?.reasoning).toBeUndefined();
+		expect(model?.thinkingSource).toBeUndefined();
+		expect(Object.values(model?.thinkingLevelStatus ?? {})).toEqual(Array(6).fill("unknown"));
 	});
 });

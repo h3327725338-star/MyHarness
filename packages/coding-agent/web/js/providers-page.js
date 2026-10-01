@@ -57,7 +57,7 @@ export function ProviderEditorHost({ id }) {
 	return null;
 }
 
-const statusOf = (p) => (!p.enabled ? { cls: "", text: t("Off") } : p.configured ? { cls: "ok", text: t("Ready") } : { cls: "warn", text: t("No API key") });
+const statusOf = (p) => (p.missingBaseUrl ? { cls: "warn", text: t("No Base URL") } : !p.enabled ? { cls: "", text: t("Off") } : p.configured ? { cls: "ok", text: t("Ready") } : { cls: "warn", text: t("No API key") });
 
 /** The key in use, with the entry to manage all keys of the provider. */
 function KeySummary({ provider, onManage, busy }) {
@@ -182,8 +182,9 @@ function ProviderDetail({ provider, entry, apiTypes, onSaved, onDirty, onDeleted
 		<div class="prov-head">
 			<div class="col grow"><div class="prov-title truncate">${provider.name}</div><div class="dim mono truncate">${provider.id}</div></div>
 			<span class=${`badge ${status.cls}`}>${status.text}</span>
-			<label class="row prov-enable"><span class="dim">${t("Enabled")}</span><${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${!!busy} onChange=${setEnabled} /></label>
+			<label class="row prov-enable" title=${provider.missingBaseUrl ? t("Fill in the Base URL and save to turn this provider on.") : undefined}><span class="dim">${t("Enabled")}</span><${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${!!busy || provider.missingBaseUrl} onChange=${setEnabled} /></label>
 		</div>
+		${provider.missingBaseUrl ? html`<div class="notice warn" role="status">${t("The Base URL is not filled in, so this provider is off. Enter the Base URL and save to use it.")}</div>` : null}
 		<${LoginNotice} />
 		${entry
 			? html`<${ProviderForm} key=${provider.id} initial=${{ id: entry.id, config: entry.config }} apiTypes=${apiTypes} keyArea=${keyArea} hasStoredKey=${hasStoredKey} onSaved=${onSaved} onDirty=${onDirty}
@@ -228,9 +229,10 @@ export function ProvidersPage() {
 		dirty.current = false;
 		setSel(id);
 	};
-	const saved = async (id) => {
+	const saved = async (id, { missingBaseUrl } = {}) => {
 		dirty.current = false;
-		toast(t("Provider saved"), "info", 2500);
+		if (missingBaseUrl) toast(t("Saved. The Base URL is not filled in, so the provider is off."), "warning", 6000);
+		else toast(t("Provider saved"), "info", 2500);
 		await Promise.all([loadProviders(), loadCustom()]);
 		loadModels();
 		setSel(id);

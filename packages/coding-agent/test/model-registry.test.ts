@@ -257,7 +257,7 @@ describe("ModelRegistry", () => {
 			expect(model?.baseUrl).toBe("https://openrouter.ai/api/v1");
 		});
 
-		test("non-built-in provider custom models still require baseUrl", async () => {
+		test("a non-built-in provider without a baseUrl is kept but offers no models", async () => {
 			writeRawModelsJson({
 				"my-custom-provider": {
 					apiKey: "test-key",
@@ -272,14 +272,16 @@ describe("ModelRegistry", () => {
 				},
 			});
 
+			// Not an error: the entry is unfinished (its Base URL is not filled in yet), so nothing of it can be used.
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
-			expect(registry.getError()).toContain("baseUrl");
+			expect(registry.getError()).toBeUndefined();
+			expect(registry.find("my-custom-provider", "my-model")).toBeUndefined();
 		});
 
 		test("reports every provider composition error", async () => {
 			writeRawModelsJson({
-				"broken-one": { api: "openai-completions", models: [{ id: "one" }] },
-				"broken-two": { api: "openai-completions", models: [{ id: "two" }] },
+				"broken-one": { baseUrl: "https://one.test/v1", models: [{ id: "one" }] },
+				"broken-two": { baseUrl: "https://two.test/v1", models: [{ id: "two" }] },
 			});
 
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);

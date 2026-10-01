@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { fuzzyFilter, fuzzyMatch } from "../src/fuzzy.ts";
+import { fuzzyFilter, fuzzyMatch, rankedFilter, searchTier } from "../src/fuzzy.ts";
 
 describe("fuzzyMatch", () => {
 	it("empty query matches everything with score 0", () => {
@@ -108,5 +108,48 @@ describe("fuzzyFilter", () => {
 		const result = fuzzyFilter([item], "openai/gpt-5.5", (model) => `${model.id} ${model.provider}`);
 
 		assert.deepStrictEqual(result, [item]);
+	});
+});
+
+describe("rankedFilter", () => {
+	const commands = [
+		{ name: "GitHub Connect", description: "Connect GitHub", uses: 40 },
+		{ name: "Git", description: "Keep local versions of the code", uses: 1 },
+		{ name: "Legit mode", description: "", uses: 99 },
+		{ name: "Worktrees", description: "Linked git checkouts", uses: 500 },
+	];
+	const rank = (query: string) =>
+		rankedFilter(commands, query, (item) => item.name, {
+			getKeywords: (item) => item.description,
+			getUsage: (item) => item.uses,
+		}).map((item) => item.name);
+
+	it("puts relevance before usage: exact > prefix > contains > description", () => {
+		assert.deepStrictEqual(rank("git"), ["Git", "GitHub Connect", "Legit mode", "Worktrees"]);
+		assert.deepStrictEqual(rank("GIT"), ["Git", "GitHub Connect", "Legit mode", "Worktrees"]);
+	});
+
+	it("orders candidates of the same relevance by usage, then by the given order", () => {
+		const items = [
+			{ name: "compact", uses: 2 },
+			{ name: "commit", uses: 7 },
+			{ name: "computer", uses: 2 },
+		];
+		const ranked = rankedFilter(items, "com", (item) => item.name, { getUsage: (item) => item.uses });
+		assert.deepStrictEqual(
+			ranked.map((item) => item.name),
+			["commit", "compact", "computer"],
+		);
+	});
+
+	it("keeps the given order for an empty query and drops what does not match", () => {
+		assert.deepStrictEqual(rank(""), ["GitHub Connect", "Git", "Legit mode", "Worktrees"]);
+		assert.deepStrictEqual(rank("zzz"), []);
+	});
+
+	it("still finds a fuzzy match, after every literal one", () => {
+		assert.strictEqual(searchTier("gthb", "GitHub Connect"), 4);
+		assert.strictEqual(searchTier("connect", ["GitHub Connect"]), 2);
+		assert.strictEqual(searchTier("local versions", "Git", "Keep local versions of the code"), 3);
 	});
 });

@@ -6,6 +6,7 @@
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@myharness/ai";
 import { ProviderSettingsUseCase } from "../../application/use-cases/provider-settings.ts";
+import { modelsJsonProviderLacksBaseUrl } from "../../providers/models/composer.ts";
 import type { ModelsJsonProvider } from "../../providers/models/config.ts";
 import {
 	CUSTOM_PROVIDER_API_TYPES,
@@ -101,7 +102,17 @@ function isFormModel(value: unknown): value is FormModel {
 	);
 }
 
-export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub?: WebHostHub): void {
+export interface ProviderRouteOptions {
+	/** Waits between the attempts of one undecided thinking-effort test (default: the probe's own). */
+	probeRetryDelaysMs?: readonly number[];
+}
+
+export function registerProviderRoutes(
+	server: WebHttpServer,
+	host: WebHost,
+	hub?: WebHostHub,
+	options: ProviderRouteOptions = {},
+): void {
 	const runtime = () => host.session.modelRuntime;
 	const manager = () => new CustomProviderManager(runtime().getModelsConfigPath());
 	const providerSettings = new ProviderSettingsUseCase({
@@ -185,11 +196,14 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		for (const provider of rt.getProviders()) {
 			const overview = await rt.getProviderCredentialOverview(provider.id).catch(() => undefined);
 			const status = rt.getProviderAuthStatus(provider.id);
+			// A models.json provider saved without a Base URL is unfinished: it is off until the address is filled in.
+			const missingBaseUrl = modelsJsonProviderLacksBaseUrl(configEntries.get(provider.id));
 			providers.push({
 				id: provider.id,
 				name: provider.name,
 				baseUrl: provider.baseUrl ?? null,
-				enabled: !disabled.has(provider.id),
+				enabled: !disabled.has(provider.id) && !missingBaseUrl,
+				missingBaseUrl,
 				configured: status.configured,
 				authSource: status.configured ? (status.source ?? null) : null,
 				supportsApiKeyLogin: typeof provider.auth.apiKey?.login === "function",
@@ -225,6 +239,16 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		const payload = asObject(body);
 		const id = str(payload.id, "id");
 		if (typeof payload.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
+		if (
+			payload.enabled &&
+			modelsJsonProviderLacksBaseUrl(
+				await manager()
+					.get(id)
+					.catch(() => undefined),
+			)
+		) {
+			throw new HttpError(409, "The Base URL is not filled in. Enter it and save before enabling this provider.");
+		}
 		try {
 			await providerSettings.setProviderEnabled(id, payload.enabled);
 		} catch (error) {
@@ -365,15 +389,16 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 	 * Checks the models the user named (`modelIds`) and nothing else, with exactly what the edit form holds right now,
 	 * saved or not: API format, Base URL, authentication mode and a key that was just typed. Without a typed key the key
 	 * already stored for the provider being edited is used. It only runs when the user asks for it: the model list is a
-	 * free GET, but efforts the list leaves open are tested with minimal real requests for these models. Nothing is
-	 * written; the form applies the answer. A model list that cannot be read is reported next to the result.
+	 * free GET, and every thinking effort is tested with minimal real requests for these models (each level on its own,
+	 * an undecided answer is tried up to three more times). Nothing is written; the form applies the answer. A model list
+	 * that cannot be read is reported next to the result and does not stop the test.
 	 */
 	server.route("POST", "/api/providers/custom/detect", async ({ body }) => {
 		const payload = asObject(body);
 		const baseUrl = typeof payload.baseUrl === "string" ? payload.baseUrl.trim() : "";
 		const api = typeof payload.api === "string" ? payload.api : "";
 		const existingId = typeof payload.id === "string" && payload.id ? payload.id : undefined;
-		const authMode = payload.auth === "none" || payload.auth === "config" ? payload.auth : "key";
+		const authMode = payload.auth === "config" ? "config" : "key";
 		if (!baseUrl) throw new HttpError(400, "Enter the Base URL first.");
 		if (!(CUSTOM_PROVIDER_API_TYPES as readonly string[]).includes(api))
 			throw new HttpError(400, "Choose an API type first.");
@@ -397,9 +422,7 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				if (typeof resolved === "string") headers[name] = resolved;
 			}
 		}
-		if (authMode === "none") {
-			apiKey = undefined;
-		} else if (!apiKey) {
+		if (!apiKey) {
 			if (authMode === "config" && typeof payload.configApiKey === "string" && payload.configApiKey !== HIDDEN) {
 				apiKey = payload.configApiKey.trim() || undefined;
 			}
@@ -418,7 +441,7 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		// What the form already knows about these models: declared reasoning, and levels an earlier probe confirmed.
 		const formModels = Array.isArray(payload.models) ? payload.models.filter(isFormModel) : [];
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), 60_000);
+		const timer = setTimeout(() => controller.abort(), 150_000);
 		try {
 			const result = await detectSpecifiedModels({
 				baseUrl,
@@ -428,7 +451,8 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				headers,
 				signal: controller.signal,
 				modelIds,
-				probeBudgetMs: 45_000,
+				probeBudgetMs: 120_000,
+				retryDelaysMs: options.probeRetryDelaysMs,
 				reasoningModelIds: new Set(formModels.filter((model) => model.reasoning === true).map((model) => model.id)),
 				knownStatuses: new Map(
 					formModels.flatMap((model) =>
@@ -482,9 +506,14 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		const custom = manager();
 		const snapshot = await custom.snapshot().catch(() => undefined);
 		let savedKeyId: string | undefined;
+		// An empty Base URL is saved as "not filled in yet", never as an address.
+		const incoming = { ...(config as ModelsJsonProvider) };
+		if (typeof incoming.baseUrl !== "string" || !incoming.baseUrl.trim()) delete incoming.baseUrl;
+		else incoming.baseUrl = incoming.baseUrl.trim();
+		const missingBaseUrl = modelsJsonProviderLacksBaseUrl(incoming);
 		try {
 			const stored = await custom.get(previousId ?? id).catch(() => undefined);
-			await custom.upsert(id, restoreSecrets(config as ModelsJsonProvider, stored), previousId);
+			await custom.upsert(id, restoreSecrets(incoming, stored), previousId);
 			await runtime().reloadConfig();
 			const configError = runtime().getError();
 			if (configError) throw new Error(configError);
@@ -503,7 +532,8 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 			throw new HttpError(400, error instanceof Error ? error.message : String(error));
 		}
 		host.broadcast("models_changed", {});
-		return { ok: true };
+		// Without a Base URL the provider is saved but off: it offers no models until the address is filled in.
+		return { ok: true, missingBaseUrl };
 	});
 
 	/** Chats that are working right now on a model of this provider: deleting it would cut them off. */

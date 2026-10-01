@@ -8,6 +8,7 @@
  */
 
 import type { ThinkingLevel } from "@myharness/agent-core";
+import { settingsMenuFor } from "../../cli/settings-menu.ts";
 import { builtinSlashCommandsFor } from "../../cli/slash-commands.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import {
@@ -18,6 +19,7 @@ import {
 import { formatContextWindow, parseContextWindowInput } from "../../context/context-window.ts";
 import { configureHttpDispatcher, HTTP_IDLE_TIMEOUT_CHOICES } from "../../platform/process/http-dispatcher.ts";
 import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
+import { rankByUsage } from "../../providers/models/usage-ranking.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
@@ -70,8 +72,51 @@ const EDITOR_PADDINGS = ["0", "1", "2", "3"];
 const AUTOCOMPLETE_SIZES = ["3", "5", "7", "10", "15", "20"];
 const QUEUE_MODES = [
 	{ value: "one-at-a-time", label: "One at a time" },
-	{ value: "all", label: "All at once" },
+	{ value: "all", label: "All" },
 ];
+
+/**
+ * Which setting of this API a row of the shared `/settings` menu (src/cli/settings-menu.ts) edits in the browser. A row
+ * without an entry opens a page of its own there (Providers, Git, Web Search …). The menu itself (rows, order, names,
+ * descriptions, choices) is never repeated here.
+ */
+export const SETTINGS_MENU_SETTING: Readonly<Record<string, string>> = {
+	"show-images": "showImages",
+	"image-width-cells": "imageWidthCells",
+	"auto-resize-images": "autoResizeImages",
+	"block-images": "blockImages",
+	"skill-commands": "enableSkillCommands",
+	"show-hardware-cursor": "showHardwareCursor",
+	"editor-padding": "editorPaddingX",
+	"output-padding": "outputPad",
+	"autocomplete-max-visible": "autocompleteMaxVisible",
+	"clear-on-shrink": "clearOnShrink",
+	"terminal-progress": "showTerminalProgress",
+	"popup-notifications": "popupNotifications",
+	"auto-memory": "autoMemory",
+	"sub-agent": "subAgent",
+	"code-intelligence": "codeIntelligence.enabled",
+	"vision-assistant": "visionAssistant",
+	"compact-model": "compactionModel",
+	autocompact: "autoCompact",
+	"steering-mode": "steeringMode",
+	"follow-up-mode": "followUpMode",
+	transport: "transport",
+	"http-idle-timeout": "httpIdleTimeoutMs",
+	"hide-thinking": "hideThinkingBlock",
+	"cache-miss-notices": "showCacheMissNotices",
+	"collapse-changelog": "collapseChangelog",
+	"quiet-startup": "quietStartup",
+	"install-telemetry": "enableInstallTelemetry",
+	"default-project-trust": "defaultProjectTrust",
+	"double-escape-action": "doubleEscapeAction",
+	"auto-retry": "autoRetry",
+	"model-cycling-scope": "enabledModels",
+	"web-exit-delay": "webShutdownGraceSeconds",
+	"shell-path": "shellPath",
+	"shell-command-prefix": "shellCommandPrefix",
+	analytics: "enableAnalytics",
+};
 
 function boolValue(value: unknown, name: string): boolean {
 	if (typeof value !== "boolean") throw new HttpError(400, `"${name}" must be a boolean`);
@@ -506,6 +551,33 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		];
 	};
 
+	/** The settings list, with the fixed choices of a `select` row taken from the shared menu definition. */
+	const buildSettingsWithMenuChoices = (): SettingDef[] => {
+		const items = buildSettings();
+		for (const row of settingsMenuFor("web")) {
+			const target = row.choices && items.find((item) => item.id === SETTINGS_MENU_SETTING[row.id]);
+			if (target && row.choices) target.options = row.choices.map((choice) => ({ ...choice }));
+		}
+		return items;
+	};
+
+	/**
+	 * The `/settings` menu as the terminal shows it: the same rows and the same order by how often each row was used
+	 * (the counts are shared with the terminal through settings.json).
+	 */
+	const buildSettingsMenu = () => {
+		const counts = settings().getSettingsItemUsageCounts();
+		return rankByUsage(settingsMenuFor("web"), (row) => row.id, counts).map((row) => ({
+			id: row.id,
+			label: row.label,
+			description: row.description,
+			kind: row.kind,
+			choiceDescription: row.choiceDescription ?? null,
+			setting: SETTINGS_MENU_SETTING[row.id] ?? null,
+			uses: counts[row.id] ?? 0,
+		}));
+	};
+
 	function modelRef(value: { provider?: string; model?: string; thinkingLevel?: string }): ModelRefValue {
 		return { provider: value.provider, model: value.model, thinkingLevel: value.thinkingLevel };
 	}
@@ -724,7 +796,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 	server.route("GET", "/api/settings", () => {
 		const s = settings();
 		return {
-			items: buildSettings(),
+			items: buildSettingsWithMenuChoices(),
+			menu: buildSettingsMenu(),
 			errors: s.getErrors().map((entry) => ({ scope: entry.scope, message: entry.error.message })),
 			trusted: s.isProjectTrusted(),
 			braveApiKey: { configured: new WebSearchApiKeys().hasStored("brave_api") },
@@ -740,6 +813,22 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const errors = settings().getErrors();
 		host.broadcast("settings_changed", { id });
 		return { ok: true, errors: errors.map((entry) => ({ scope: entry.scope, message: entry.error.message })) };
+	});
+
+	/** A row of the `/settings` menu was opened or changed: counted like the terminal does, for the menu's order. */
+	server.route("POST", "/api/settings/usage", ({ body }) => {
+		const id = typeof asObject(body).id === "string" ? (asObject(body).id as string) : "";
+		if (!settingsMenuFor("web").some((row) => row.id === id)) throw new HttpError(400, `Unknown menu item: ${id}`);
+		settings().recordSettingsItemUsage(id);
+		return { ok: true };
+	});
+
+	/** A slash command was run: counted like the terminal does, for the order of the command list. */
+	server.route("POST", "/api/commands/usage", ({ body }) => {
+		const name = typeof asObject(body).name === "string" ? (asObject(body).name as string).trim() : "";
+		if (!listCommands().some((command) => command.name === name)) throw new HttpError(400, "Unknown command");
+		settings().recordSlashCommandUsage(name);
+		return { ok: true };
 	});
 
 	server.route("POST", "/api/settings/brave-key", async ({ body }) => {
@@ -785,10 +874,53 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 	});
 
 	// ---- Resources ---------------------------------------------------------------------
-	server.route("GET", "/api/resources", () => {
+	/**
+	 * Every slash command the session offers: the built-in registry (shared with the terminal), extension commands,
+	 * prompt templates and skills, in the terminal's order — most used first, then registry order.
+	 */
+	const listCommands = () => {
 		const session = host.session;
 		const loader = session.resourceLoader;
 		const runner = session.extensionRunner;
+		const counts = settings().getSlashCommandUsageCounts();
+		const commands = [
+			...builtinSlashCommandsFor("web").map((command) => ({
+				name: command.name,
+				description: command.description,
+				argumentHint: command.argumentHint ?? null,
+				aliases: [...(command.aliases ?? [])],
+				source: "builtin" as const,
+			})),
+			...runner.getRegisteredCommands().map((command) => ({
+				name: command.invocationName,
+				description: command.description ?? "",
+				argumentHint: null,
+				source: "extension" as const,
+			})),
+			...session.promptTemplates.map((template) => ({
+				name: template.name,
+				description: template.description,
+				argumentHint: template.argumentHint ?? null,
+				source: "prompt" as const,
+			})),
+			...(settings().getEnableSkillCommands()
+				? loader.getSkills().skills.map((skill) => ({
+						name: `skill:${skill.name}`,
+						description: skill.description,
+						argumentHint: null,
+						source: "skill" as const,
+					}))
+				: []),
+		];
+		return rankByUsage(commands, (command) => command.name, counts).map((command) => ({
+			...command,
+			uses: counts[command.name] ?? 0,
+		}));
+	};
+
+	server.route("GET", "/api/resources", () => {
+		const session = host.session;
+		const loader = session.resourceLoader;
 		const activeTools = new Set(session.getActiveToolNames());
 		const extensionTools = new Set<string>();
 		for (const extension of loader.getExtensions().extensions)
@@ -829,35 +961,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			contextFiles: loader
 				.getAgentsFiles()
 				.agentsFiles.map((file) => ({ path: file.path, chars: file.content.length })),
-			commands: [
-				...builtinSlashCommandsFor("web").map((command) => ({
-					name: command.name,
-					description: command.description,
-					argumentHint: command.argumentHint ?? null,
-					aliases: [...(command.aliases ?? [])],
-					source: "builtin" as const,
-				})),
-				...runner.getRegisteredCommands().map((command) => ({
-					name: command.invocationName,
-					description: command.description ?? "",
-					argumentHint: null,
-					source: "extension" as const,
-				})),
-				...session.promptTemplates.map((template) => ({
-					name: template.name,
-					description: template.description,
-					argumentHint: template.argumentHint ?? null,
-					source: "prompt" as const,
-				})),
-				...(settings().getEnableSkillCommands()
-					? loader.getSkills().skills.map((skill) => ({
-							name: `skill:${skill.name}`,
-							description: skill.description,
-							argumentHint: null,
-							source: "skill" as const,
-						}))
-					: []),
-			],
+			commands: listCommands(),
 			diagnostics: [...loader.getSkills().diagnostics, ...loader.getThemes().diagnostics].map((entry) => ({
 				type: entry.type,
 				message: entry.message,

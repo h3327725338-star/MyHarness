@@ -1,6 +1,6 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
-// the same pieces: cards for groups, one row per setting with the text on the left and the control in a fixed column on
-// the right.
+// the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
+// on the left and the control on the right.
 import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
@@ -38,7 +38,7 @@ const PAGE_NOTE = {
 const GROUPS = { "webSearch.": "webSearch.enabled" };
 
 function Row({ label, description, children, stack, off }) {
-	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""}`}><div class="col set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc">${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
+	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
 }
 
 function Card({ title, description, action, children }) {

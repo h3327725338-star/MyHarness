@@ -135,3 +135,76 @@ export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => 
 	results.sort((a, b) => a.totalScore - b.totalScore);
 	return results.map((r) => r.item);
 }
+
+/** How well a candidate matches a search, best first. A candidate that does not match at all has no tier. */
+export type SearchTier = 0 | 1 | 2 | 3 | 4;
+
+function rateCandidate(
+	query: string,
+	names: string | readonly string[],
+	keywords: string,
+): { tier: SearchTier; score: number } | undefined {
+	const q = query.trim().toLowerCase();
+	if (!q) return { tier: 0, score: 0 };
+	const list = (typeof names === "string" ? [names] : names).map((name) => name.toLowerCase());
+	if (list.some((name) => name === q)) return { tier: 0, score: 0 };
+	if (list.some((name) => name.startsWith(q))) return { tier: 1, score: 0 };
+	const words = q.split(/\s+/).filter(Boolean);
+	if (list.some((name) => words.every((word) => name.includes(word)))) return { tier: 2, score: 0 };
+	const all = `${list.join(" ")} ${keywords.toLowerCase()}`;
+	if (words.every((word) => all.includes(word))) return { tier: 3, score: 0 };
+	// Last resort: the characters of every word appear in order in one name. The best fuzzy score orders these.
+	const tokens = q.split(/[\s/]+/).filter(Boolean);
+	let best: number | undefined;
+	for (const name of list) {
+		let total = 0;
+		let matched = true;
+		for (const token of tokens) {
+			const match = fuzzyMatch(token, name);
+			if (!match.matches) {
+				matched = false;
+				break;
+			}
+			total += match.score;
+		}
+		if (matched && (best === undefined || total < best)) best = total;
+	}
+	return best === undefined ? undefined : { tier: 4, score: best };
+}
+
+/**
+ * Relevance of one candidate, ignoring case: 0 = a name equals the query, 1 = a name starts with it, 2 = a name
+ * contains it (every word of it), 3 = the description / keywords contain it, 4 = only a fuzzy match of a name
+ * (characters in order). `undefined` = no match.
+ */
+export function searchTier(query: string, names: string | readonly string[], keywords = ""): SearchTier | undefined {
+	return rateCandidate(query, names, keywords)?.tier;
+}
+
+export interface RankedFilterOptions<T> {
+	/** Description or keywords: matched only after every name match. */
+	getKeywords?: (item: T) => string;
+	/** How often the item was used; orders items of the same relevance. */
+	getUsage?: (item: T) => number;
+}
+
+/**
+ * Search with relevance first and usage second: exact name > name prefix > name contains > description / keywords >
+ * fuzzy. Usage only orders candidates of the same relevance; after that the given order is kept, so results do not
+ * jump around. An empty query returns the items as given (their usual order, typically by usage).
+ */
+export function rankedFilter<T>(
+	items: readonly T[],
+	query: string,
+	getNames: (item: T) => string | readonly string[],
+	options: RankedFilterOptions<T> = {},
+): T[] {
+	if (!query.trim()) return [...items];
+	const ranked: { item: T; tier: SearchTier; score: number; usage: number; index: number }[] = [];
+	items.forEach((item, index) => {
+		const rating = rateCandidate(query, getNames(item), options.getKeywords?.(item) ?? "");
+		if (rating) ranked.push({ item, ...rating, usage: options.getUsage?.(item) ?? 0, index });
+	});
+	ranked.sort((a, b) => a.tier - b.tier || b.usage - a.usage || a.score - b.score || a.index - b.index);
+	return ranked.map((entry) => entry.item);
+}

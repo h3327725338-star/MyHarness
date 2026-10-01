@@ -119,7 +119,7 @@ export function seedFromDetected(found) {
 	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (found[key] !== undefined) detected[key] = true;
 	// Levels are marked "auto" only when the catalog or a test request settled them; a model whose efforts nobody
 	// confirmed keeps every level selectable.
-	if ((found.thinkingLevelMap || found.thinkingLevelStatus) && found.thinkingSource !== "unconfirmed") detected.levels = true;
+	if ((found.thinkingLevelMap || found.thinkingLevelStatus) && (found.thinkingSource === "catalog" || found.thinkingSource === "probe")) detected.levels = true;
 	if (found.thinkingSource) detected.levelsSource = found.thinkingSource;
 	return modelDraft(seed, detected);
 }
@@ -205,18 +205,42 @@ export function applyDetection(models, foundList) {
 	return { models: next, added, updated };
 }
 
+/** The address shown in the empty Base URL field. It is only an example: it is never saved and never used. */
+export const BASE_URL_EXAMPLE = "https://api.example.com/v1";
+
 /**
- * Whether the connection fields are complete enough to detect models: a valid http(s) Base URL, an API format, and
- * credentials (typed key, a key already stored, a key in models.json, or none needed).
+ * What is wrong with a Base URL as typed: "" (fine), "missing" (nothing typed: the provider can be saved but stays
+ * off), "example" (the example address, which is not a real one) or "invalid" (not an http(s) address).
+ */
+export function baseUrlProblem(text) {
+	const value = String(text ?? "").trim();
+	if (!value) return "missing";
+	if (value.replace(/\/+$/u, "").toLowerCase() === BASE_URL_EXAMPLE) return "example";
+	try {
+		const url = new URL(value);
+		return url.protocol === "http:" || url.protocol === "https:" ? "" : "invalid";
+	} catch {
+		return "invalid";
+	}
+}
+
+/**
+ * The way a provider authenticates, as the form shows it: "key" (an API key in the credential store) or "config" (the
+ * key written in models.json). The saved choice (`authMode`) decides; an entry from before the choice was saved uses
+ * models.json exactly when it holds a key.
+ */
+export function authModeOf(config) {
+	if (config?.authMode === "config") return "config";
+	if (config?.authMode === "apiKey") return "key";
+	return config?.apiKey ? "config" : "key";
+}
+
+/**
+ * Whether the connection fields are complete enough to detect models: a real http(s) Base URL, an API format, and
+ * credentials (a typed key, a key already stored, or the key in models.json).
  */
 export function connectionReady(draft, { hasStoredKey }) {
-	let url;
-	try {
-		url = new URL(draft.baseUrl.trim());
-	} catch {
-		return false;
-	}
-	if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+	if (baseUrlProblem(draft.baseUrl)) return false;
 	if (!draft.api) return false;
 	if (draft.auth === "key") return !!draft.apiKey.trim() || hasStoredKey;
 	return true;

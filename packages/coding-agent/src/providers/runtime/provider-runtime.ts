@@ -894,11 +894,13 @@ export class ModelRuntime implements Models {
 
 	getProviderAuthStatus(providerId: string): AuthStatus {
 		if (this.credentials.hasRuntimeApiKey(providerId)) return { configured: true, source: "runtime" };
-		if (this.snapshot.storedProviders.has(providerId)) return { configured: true, source: "stored" };
 		const configured = configuredRequestAuthStatus(
 			this.config.getProvider(providerId),
 			this.extensionProviders.get(providerId),
 		);
+		// `authMode: "config"` uses the key written in models.json even when a key is saved as well.
+		if (configured?.configured && this.config.getProvider(providerId)?.authMode === "config") return configured;
+		if (this.snapshot.storedProviders.has(providerId)) return { configured: true, source: "stored" };
 		if (configured) return configured;
 		const check = this.snapshot.auth.get(providerId);
 		return check ? { configured: true, source: "environment", label: check.source } : { configured: false };

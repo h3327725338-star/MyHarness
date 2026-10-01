@@ -1,6 +1,7 @@
 // Formatting helpers and small pure utilities.
 import { N_, count, t } from "./i18n.js";
 import { getLang } from "./lang.js";
+import { rankSearch } from "./search.js";
 
 /** Reasoning-effort levels: the level name (translated) and a one-line hint. */
 const EFFORT_NAME = { off: N_("off"), minimal: N_("minimal"), low: N_("low"), medium: N_("medium"), high: N_("high"), xhigh: N_("xhigh"), max: N_("max") };
@@ -9,28 +10,23 @@ const EFFORT_HINT = { off: N_("No extra reasoning"), minimal: N_("Minimal thinki
 export const effortName = (level) => (EFFORT_NAME[level] ? t(EFFORT_NAME[level]) : level);
 export const effortHint = (level) => (EFFORT_HINT[level] ? t(EFFORT_HINT[level]) : "");
 
-/** The efforts a model offers in a model picker's flyout; none (no flyout) when there is nothing to choose between. */
+/** The efforts a model offers on the effort slider; none (no slider) when there is nothing to choose between. */
 export function modelEfforts(model) {
 	const levels = model?.reasoning ? model.thinkingLevels || [] : [];
 	return levels.length > 1 ? levels : [];
 }
 
 /**
- * Provider groups (as GET /api/models lists them) narrowed to the models matching a search: every word of the query must
- * occur somewhere in the provider ID or name, the model ID or name, or "provider/model" — any part, not only the start.
+ * The models of GET /api/models as one flat list of { provider, model }, narrowed to a search. Relevance decides the
+ * order (usage plays no part for models): a model whose name or ID equals the query, then one that starts with it, then
+ * one that contains every word of it, then a match through the provider ID or name ("provider model" works too).
  */
-export function filterModelGroups(providers, query) {
-	const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
-	if (!words.length) return providers || [];
-	return (providers || [])
-		.map((p) => ({
-			...p,
-			models: p.models.filter((m) => {
-				const text = `${p.id} ${p.name || ""} ${m.id} ${m.name || ""} ${p.id}/${m.id}`.toLowerCase();
-				return words.every((word) => text.includes(word));
-			}),
-		}))
-		.filter((p) => p.models.length);
+export function searchModels(providers, query) {
+	const flat = (providers || []).flatMap((provider) => provider.models.map((model) => ({ provider, model })));
+	return rankSearch(flat, query, {
+		names: ({ provider, model }) => [model.name, model.id, `${provider.id}/${model.id}`],
+		keywords: ({ provider }) => `${provider.id} ${provider.name || ""}`,
+	});
 }
 
 /** Title of a saved chat: its name, else the first message. The storage layer's "(no messages)" placeholder counts as no message. */

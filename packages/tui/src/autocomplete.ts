@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
-import { fuzzyFilter } from "./fuzzy.ts";
+import { rankedFilter } from "./fuzzy.ts";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
 
@@ -322,7 +322,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					};
 				});
 
-				const filtered = fuzzyFilter(commandItems, prefix, (item) => item.name).map((item) => ({
+				// Relevance first (exact > prefix > contains > description); the given order (by usage) decides ties.
+				const filtered = rankedFilter(commandItems, prefix, (item) => item.name, {
+					getKeywords: (item) => item.description ?? "",
+				}).map((item) => ({
 					value: item.name,
 					label: item.label,
 					...(item.description && { description: item.description }),

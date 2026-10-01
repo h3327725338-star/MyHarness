@@ -1,37 +1,40 @@
 /**
- * Second-priority thinking-effort detection: real minimal requests to the model.
+ * Thinking-effort detection by real minimal requests to one model.
  *
- * Order of trust (see `thinking-capability.ts`): the endpoint's own model metadata, and only when it does not settle a
- * level, this probe. Nothing is inferred from the model's name.
+ * The probe is given a concrete Model ID and asks the service itself: one tiny request per effort level (16 output
+ * tokens) with the effort parameter of the model's own API protocol (`reasoning_effort`, `reasoning.effort`,
+ * `output_config.effort`, `thinkingConfig.thinkingLevel`). Nothing is inferred from the model's name, from a table of
+ * known models or from the result of another level; a model MyHarness has never seen is probed like any other.
  *
- * A probe sends one tiny request per level (16 output tokens) with the effort parameter of the model's own API
- * protocol (`reasoning_effort`, `reasoning.effort`, `output_config.effort`, `thinkingConfig.thinkingLevel`). What the
- * server answers is the only evidence used; the quality or amount of reasoning is never looked at.
+ * Every level is decided on its own:
+ * - the request succeeds                                   -> `supported`
+ * - the service says the effort parameter or this value is not supported -> `unsupported`
+ * - anything else (timeout, 429, 5xx, network failure, broken connection, an answer that cannot be read, a rejection
+ *   that does not name the effort)                         -> `unknown`
  *
- * A 2xx answer alone does not prove a level works: many compatible servers silently drop parameters they do not know.
- * So every probe first sends a canary with an invalid effort value. A server that rejects the canary validates the
- * parameter, so a 2xx for a real level means the level is applied (`supported`). A server that accepts the canary
- * ignores the parameter, so a 2xx proves nothing (`unverified`). Only a rejection that names the effort parameter
- * counts as `unsupported`; rate limits, quota, auth, timeouts, 5xx and every other failure are `unknown`.
- *
- * Some servers answer a bad value with a generic 400/422 that does not name the parameter. Then a control request
- * without any effort parameter decides: if it succeeds while the bogus value got a 400/422, the effort value alone
- * caused the rejection, so the server validates it and the same kind of generic rejection of a real level is
- * `unsupported`. If the control fails too, the failure has nothing to do with effort and every level stays `unknown`.
+ * An `unknown` answer is tried again, up to three more times (four attempts per level). The first success settles the
+ * level as `supported`, an explicit rejection settles it as `unsupported`; a level still undecided after the last
+ * attempt stays `unknown`. `unknown` never hides a level and never replaces what is already configured.
  */
 
 import type { ThinkingLevel, ThinkingLevelMap } from "@myharness/ai";
 
-/** `supported` and `unsupported` are confirmed; `unverified` = accepted but not shown to be applied; `unknown` = undecided. */
+/**
+ * `supported` and `unsupported` are confirmed, `unknown` is undecided. `unverified` is no longer produced; it is only
+ * read from models.json written by earlier versions and treated as undecided.
+ */
 export type ThinkingLevelStatus = "supported" | "unsupported" | "unverified" | "unknown";
 export type ThinkingLevelStatuses = Partial<Record<ThinkingLevel, ThinkingLevelStatus>>;
 
 export const PROBE_LEVELS: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 const EXTRA_LEVELS = new Set<ThinkingLevel>(["xhigh", "max"]);
 
-/** Statuses a probe can be run for: every level that has no status yet or is still `unknown`. */
+/**
+ * Levels worth probing: everything a real successful request has not confirmed yet. A stored `unsupported` is asked
+ * again too (the service may have changed, and an explicit rejection costs nothing).
+ */
 export function unresolvedLevels(statuses: ThinkingLevelStatuses | undefined): ThinkingLevel[] {
-	return PROBE_LEVELS.filter((level) => !statuses?.[level] || statuses[level] === "unknown");
+	return PROBE_LEVELS.filter((level) => statuses?.[level] !== "supported");
 }
 
 const isConfirmed = (status: ThinkingLevelStatus | undefined): boolean =>
@@ -48,7 +51,11 @@ export function mergeLevelStatuses(
 	const merged: ThinkingLevelStatuses = { ...previous };
 	for (const level of PROBE_LEVELS) {
 		const status = next?.[level];
-		if (!status || status === "unknown") continue;
+		if (!status) continue;
+		if (status === "unknown") {
+			if (!merged[level]) merged[level] = status;
+			continue;
+		}
 		if (isConfirmed(status) || !isConfirmed(merged[level])) merged[level] = status;
 	}
 	return merged;
@@ -57,8 +64,8 @@ export function mergeLevelStatuses(
 /**
  * Applies probe statuses to a thinkingLevelMap. Only confirmed results change existing entries; `unsupported` marks a
  * standard level `null` (xhigh / max are simply not enabled), `supported` re-enables it. For a model with no map yet,
- * `xhigh` / `max` that are not confirmed unsupported are enabled too, because the runtime hides them without an entry
- * and an unconfirmed level must stay selectable.
+ * `enableUnconfirmedExtras` also enables `xhigh` / `max` that are not confirmed unsupported: the runtime hides them
+ * without an entry, and a level nobody could check must stay selectable.
  */
 export function applyStatusesToMap(
 	current: ThinkingLevelMap | undefined,
@@ -73,7 +80,7 @@ export function applyStatusesToMap(
 		if (status === "unsupported") {
 			if (extra) delete map[level];
 			else map[level] = null;
-		} else if (status === "supported" || (options.enableUnconfirmedExtras && extra && status !== "unknown")) {
+		} else if (status === "supported" || (options.enableUnconfirmedExtras && extra)) {
 			if (typeof map[level] !== "string") {
 				if (extra) map[level] = level;
 				else delete map[level];
@@ -109,25 +116,44 @@ export interface ProbeThinkingOptions {
 	signal?: AbortSignal;
 	/** Per-request timeout. */
 	timeoutMs?: number;
+	/** Waits before the 2nd, 3rd and 4th attempt of a level that is still undecided. */
+	retryDelaysMs?: readonly number[];
+	/** Levels probed at the same time (default 2; relays rate-limit bursts). */
+	concurrency?: number;
 	fetchImpl?: typeof fetch;
 }
 
-const INVALID_EFFORT = "myharness_probe_invalid";
+/** Extra attempts for a level whose answer could not be evaluated: four attempts in total. */
+export const PROBE_EXTRA_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAYS_MS = [500, 1500, 3000] as const;
 const PROBE_MAX_TOKENS = 16;
+/** Used once a service says 16 output tokens leave no room for reasoning. */
+const PROBE_ROOMY_MAX_TOKENS = 1024;
 /** Names of the effort parameter in error messages of the supported protocols. */
 const EFFORT_PARAMETER =
 	/reasoning_effort|reasoning\.effort|reasoning effort|output_config|\beffort\b|thinking_?level|thinking_?config/iu;
-/** A generic rejection of a real level must repeat this many times in a row to count as `unsupported`. */
-const GENERIC_REJECTION_ATTEMPTS = 3;
-const TOKEN_WORDS = /token|length|too small|too low/iu;
-const TOKEN_PARAMETER = /max_completion_tokens|max_tokens|max_output_tokens/iu;
+/** Words by which a service turns a parameter or a value down. */
+const REJECTION_WORDS =
+	/invalid|unsupported|not supported|n[o']t support|unknown|unrecognized|unexpected|not allowed|not permitted|not a valid|must be|should be|expected|one of|不支持|无效|不合法/iu;
+const TOKEN_WORDS = /token|length|too small|too low|budget/iu;
+const TOKEN_PARAMETER = /max_completion_tokens|max_tokens|max_output_tokens|maxOutputTokens/iu;
 
-/** `invalid` is a 400/422 that does not name the effort parameter. */
-type Outcome = "ok" | "rejected" | "invalid" | "other";
+type TokenField = "max_tokens" | "max_completion_tokens";
+interface ProbeState {
+	tokenField: TokenField;
+	maxTokens: number;
+}
+
+/** `rejected` = the service turned the effort down explicitly; `unknown` = nothing can be concluded. */
+type Outcome = "ok" | "rejected" | "unknown";
 interface Reply {
 	outcome: Outcome;
 	status?: number;
-	text: string;
+	/** The service's own error wording (message, parameter name), without envelope fields such as the error type. */
+	message: string;
+	/** Retrying cannot change the answer (the credentials were refused). */
+	permanent?: boolean;
+	retryAfterMs?: number;
 }
 
 function trimSlash(value: string): string {
@@ -147,11 +173,7 @@ interface ProbeRequest {
 	body: Record<string, unknown>;
 }
 
-function buildRequest(
-	options: ProbeThinkingOptions,
-	effort: string | undefined,
-	tokenField: "max_tokens" | "max_completion_tokens",
-): ProbeRequest {
+function buildRequest(options: ProbeThinkingOptions, effort: string, state: ProbeState): ProbeRequest {
 	const base = trimSlash(options.baseUrl);
 	switch (options.api) {
 		case "openai-completions":
@@ -160,8 +182,8 @@ function buildRequest(
 				body: {
 					model: options.modelId,
 					messages: [{ role: "user", content: "1" }],
-					[tokenField]: PROBE_MAX_TOKENS,
-					...(effort === undefined ? {} : { reasoning_effort: effort }),
+					[state.tokenField]: state.maxTokens,
+					reasoning_effort: effort,
 				},
 			};
 		case "openai-responses":
@@ -170,8 +192,8 @@ function buildRequest(
 				body: {
 					model: options.modelId,
 					input: "1",
-					max_output_tokens: PROBE_MAX_TOKENS,
-					...(effort === undefined ? {} : { reasoning: { effort } }),
+					max_output_tokens: state.maxTokens,
+					reasoning: { effort },
 					store: false,
 				},
 			};
@@ -180,9 +202,9 @@ function buildRequest(
 				url: `${base}${hasVersionSegment(options.baseUrl) ? "" : "/v1"}/messages`,
 				body: {
 					model: options.modelId,
-					max_tokens: PROBE_MAX_TOKENS,
+					max_tokens: state.maxTokens,
 					messages: [{ role: "user", content: "1" }],
-					...(effort === undefined ? {} : { output_config: { effort } }),
+					output_config: { effort },
 				},
 			};
 		case "google-generative-ai": {
@@ -194,8 +216,8 @@ function buildRequest(
 				body: {
 					contents: [{ role: "user", parts: [{ text: "1" }] }],
 					generationConfig: {
-						maxOutputTokens: PROBE_MAX_TOKENS,
-						...(effort === undefined ? {} : { thinkingConfig: { thinkingLevel: effort.toUpperCase() } }),
+						maxOutputTokens: state.maxTokens,
+						thinkingConfig: { thinkingLevel: effort.toUpperCase() },
 					},
 				},
 			};
@@ -203,119 +225,176 @@ function buildRequest(
 	}
 }
 
-async function send(options: ProbeThinkingOptions, request: ProbeRequest): Promise<Reply> {
-	const timeout = AbortSignal.timeout(options.timeoutMs ?? 15_000);
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What the service wrote about the failure: message texts and the parameter it names. Envelope fields such as
+ * `type: "invalid_request_error"` are left out, because they would make every error look like a rejection.
+ */
+function errorWording(parsed: unknown, raw: string): string {
+	if (!isRecord(parsed)) return raw;
+	const parts: string[] = [];
+	const collect = (value: unknown, depth: number): void => {
+		if (typeof value === "string") parts.push(value);
+		else if (isRecord(value) && depth < 3) {
+			for (const key of ["message", "msg", "detail", "details", "param", "error", "error_description", "reason"]) {
+				collect(value[key], depth + 1);
+			}
+		} else if (Array.isArray(value) && depth < 3) {
+			for (const entry of value) collect(entry, depth + 1);
+		}
+	};
+	collect(parsed, 0);
+	return parts.length > 0 ? parts.join("\n") : raw;
+}
+
+/** The service says, in its own words, that the effort parameter or this effort value is not supported. */
+function rejectsEffort(message: string, effort: string): boolean {
+	if (!REJECTION_WORDS.test(message)) return false;
+	if (EFFORT_PARAMETER.test(message)) return true;
+	// A complaint about the output-token limit is not about the effort, whatever values it quotes.
+	if (TOKEN_PARAMETER.test(message)) return false;
+	const quoted = new RegExp(`["'\`]${effort.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}["'\`]`, "iu");
+	return quoted.test(message);
+}
+
+async function send(options: ProbeThinkingOptions, request: ProbeRequest, effort: string): Promise<Reply> {
+	const timeout = AbortSignal.timeout(options.timeoutMs ?? 20_000);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const headers = new Headers(options.headers);
 	headers.set("Content-Type", "application/json");
+	let response: Response;
+	let text: string;
 	try {
-		const response = await (options.fetchImpl ?? fetch)(request.url, {
+		response = await (options.fetchImpl ?? fetch)(request.url, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(request.body),
 			signal,
 		});
-		const text = await response.text().catch(() => "");
-		if (response.ok) return { outcome: "ok", status: response.status, text };
-		// Only a client-side validation error can be a statement about the parameter; every other status (auth, quota,
-		// rate limit, model not found, server error) says nothing about the effort level.
-		if (response.status === 400 || response.status === 422) {
-			return { outcome: EFFORT_PARAMETER.test(text) ? "rejected" : "invalid", status: response.status, text };
-		}
-		return { outcome: "other", status: response.status, text };
+		// A connection that breaks while the answer is read is as undecided as one that never opened.
+		text = await response.text();
 	} catch {
-		return { outcome: "other", text: "" };
+		return { outcome: "unknown", message: "" };
 	}
-}
-
-/** Runs one request; retries once with the other output-token field when the server rejects the one used. */
-function requestFor(
-	options: ProbeThinkingOptions,
-	effort: string | undefined,
-	state: { tokenField: "max_tokens" | "max_completion_tokens" },
-): Promise<Reply> {
-	const run = async (): Promise<Reply> => send(options, buildRequest(options, effort, state.tokenField));
-	return run().then(async (reply) => {
-		if (options.api !== "openai-completions" || reply.outcome === "ok") return reply;
-		// The token field is not the effort parameter: a message about it (and not about effort) means the field name.
-		if (reply.status === 400 && TOKEN_PARAMETER.test(reply.text) && !EFFORT_PARAMETER.test(reply.text)) {
-			state.tokenField = state.tokenField === "max_tokens" ? "max_completion_tokens" : "max_tokens";
-			return run();
-		}
-		return reply;
-	});
-}
-
-/** Answers that say nothing about the parameter and make further requests pointless (or costly). */
-function isBlocking(reply: Reply): boolean {
-	return (
-		reply.outcome === "other" &&
-		(reply.status === undefined || reply.status >= 500 || ![400, 422].includes(reply.status))
-	);
+	let parsed: unknown;
+	try {
+		parsed = text ? JSON.parse(text) : undefined;
+	} catch {
+		parsed = undefined;
+	}
+	const failed = !response.ok || (isRecord(parsed) && Boolean(parsed.error));
+	if (!failed) {
+		// A success is an answer of the API itself; a gateway page or an empty reply proves nothing.
+		return { outcome: isRecord(parsed) ? "ok" : "unknown", status: response.status, message: "" };
+	}
+	const message = errorWording(parsed, text);
+	const status = response.status;
+	const retryAfter = Number(response.headers.get("retry-after"));
+	const reply: Reply = {
+		outcome: "unknown",
+		status,
+		message,
+		permanent: status === 401 || status === 403,
+		...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: Math.min(retryAfter * 1000, 10_000) } : {}),
+	};
+	// Authentication, permission and rate-limit answers say nothing about the effort, whatever their text mentions.
+	if (status === 401 || status === 403 || status === 429) return reply;
+	if (rejectsEffort(message, effort)) reply.outcome = "rejected";
+	return reply;
 }
 
 /**
- * Probes the given levels of one model. Returns a status for every requested level; never throws. A request that
- * cannot be evaluated leaves its level `unknown`, so callers must not treat `unknown` as "not supported".
+ * One attempt for one level. A complaint about the output-token field or about too little room for reasoning is not an
+ * answer about the effort: the request is adjusted and sent again within the same attempt.
+ */
+async function attempt(options: ProbeThinkingOptions, effort: string, state: ProbeState): Promise<Reply> {
+	let sentField = state.tokenField;
+	let sentTokens = state.maxTokens;
+	let reply = await send(options, buildRequest(options, effort, state), effort);
+	for (let adjusted = 0; adjusted < 2 && reply.outcome === "unknown" && reply.status === 400; adjusted++) {
+		if (options.signal?.aborted) break;
+		const wrongField =
+			options.api === "openai-completions" &&
+			TOKEN_PARAMETER.test(reply.message) &&
+			/unsupported|not supported|unknown|unrecognized|instead|use /iu.test(reply.message);
+		if (wrongField) {
+			// Another level may have switched the field already; only switch away from the one this request used.
+			if (state.tokenField === sentField) {
+				state.tokenField = sentField === "max_tokens" ? "max_completion_tokens" : "max_tokens";
+			}
+		} else if (TOKEN_WORDS.test(reply.message) && sentTokens < PROBE_ROOMY_MAX_TOKENS) {
+			state.maxTokens = PROBE_ROOMY_MAX_TOKENS;
+		} else break;
+		sentField = state.tokenField;
+		sentTokens = state.maxTokens;
+		reply = await send(options, buildRequest(options, effort, state), effort);
+	}
+	return reply;
+}
+
+function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	if (ms <= 0 || signal?.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		const done = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
+		signal?.addEventListener("abort", done, { once: true });
+	});
+}
+
+async function probeLevel(
+	options: ProbeThinkingOptions,
+	level: ThinkingLevel,
+	state: ProbeState,
+): Promise<ThinkingLevelStatus> {
+	const value = options.levelValues?.[level];
+	const effort = typeof value === "string" ? value : level;
+	const delays = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+	for (let tries = 0; tries <= PROBE_EXTRA_ATTEMPTS; tries++) {
+		if (options.signal?.aborted) return "unknown";
+		const reply = await attempt(options, effort, state);
+		if (reply.outcome === "ok") return "supported";
+		if (reply.outcome === "rejected") return "unsupported";
+		if (reply.permanent || tries === PROBE_EXTRA_ATTEMPTS) return "unknown";
+		await wait(reply.retryAfterMs ?? delays[Math.min(tries, delays.length - 1)] ?? 0, options.signal);
+	}
+	return "unknown";
+}
+
+/**
+ * Probes the given levels of one model, each on its own. Returns a status for every requested level; never throws. A
+ * level that cannot be evaluated stays `unknown`, so callers must not treat `unknown` as "not supported".
  */
 export async function probeThinkingLevels(options: ProbeThinkingOptions): Promise<ThinkingLevelStatuses> {
-	const levels = options.levels ?? PROBE_LEVELS;
+	const levels = [...(options.levels ?? PROBE_LEVELS)];
 	const result: ThinkingLevelStatuses = {};
 	if (levels.length === 0) return result;
 	let host = "";
 	try {
 		host = new URL(options.baseUrl).hostname.toLowerCase();
 	} catch {
-		// The request URLs cannot be built either; every level stays unknown below.
-	}
-	const state: { tokenField: "max_tokens" | "max_completion_tokens" } = {
-		tokenField: host === "api.openai.com" ? "max_completion_tokens" : "max_tokens",
-	};
-
-	const canary = await requestFor(options, INVALID_EFFORT, state);
-	if (isBlocking(canary) || options.signal?.aborted) {
+		// The request URLs cannot be built either: there is nothing to ask, every level stays unknown.
 		for (const level of levels) result[level] = "unknown";
 		return result;
 	}
-	// Only a server that turns a bogus value down validates the parameter and so can confirm a real one.
-	let validates = canary.outcome === "rejected";
-	// A generic rejection names no parameter: it counts only if the same request without any effort succeeds.
-	let genericRejection = false;
-	if (canary.outcome === "invalid") {
-		const control = await requestFor(options, undefined, state);
-		if (control.outcome !== "ok" || options.signal?.aborted) {
-			for (const level of levels) result[level] = "unknown";
-			return result;
+	const state: ProbeState = {
+		tokenField: host === "api.openai.com" ? "max_completion_tokens" : "max_tokens",
+		maxTokens: PROBE_MAX_TOKENS,
+	};
+	const queue = [...levels];
+	const worker = async (): Promise<void> => {
+		for (let level = queue.shift(); level; level = queue.shift()) {
+			result[level] = await probeLevel(options, level, state);
 		}
-		validates = true;
-		genericRejection = true;
-	}
-	// A server that accepted a bogus value accepts every value without checking it: one request already says all a
-	// request per level would, so no further requests are sent.
-	if (canary.outcome === "ok") {
-		for (const level of levels) result[level] = "unverified";
-		return result;
-	}
-
-	await Promise.all(
-		levels.map(async (level) => {
-			const value = options.levelValues?.[level];
-			const effort = typeof value === "string" ? value : level;
-			let reply = await requestFor(options, effort, state);
-			// A generic rejection blames the level only if it does not complain about the token limit (reasoning may
-			// need more room than 16 tokens) and repeats: load-balanced services can refuse a level on one backend only.
-			const genericNo = (r: Reply) => genericRejection && r.outcome === "invalid" && !TOKEN_WORDS.test(r.text);
-			for (let repeat = 1; genericNo(reply) && repeat < GENERIC_REJECTION_ATTEMPTS; repeat++) {
-				const again = await requestFor(options, effort, state);
-				if (!genericNo(again)) {
-					reply = again.outcome === "ok" ? { outcome: "other", text: "" } : again;
-					break;
-				}
-			}
-			if (reply.outcome === "rejected" || genericNo(reply)) result[level] = "unsupported";
-			else if (reply.outcome === "ok") result[level] = validates ? "supported" : "unverified";
-			else result[level] = "unknown";
-		}),
-	);
-	return result;
+	};
+	const workers = Math.max(1, Math.min(options.concurrency ?? 2, levels.length));
+	await Promise.all(Array.from({ length: workers }, () => worker()));
+	// Keep the answer in level order, whatever order the requests finished in.
+	return Object.fromEntries(levels.map((level) => [level, result[level] ?? "unknown"]));
 }

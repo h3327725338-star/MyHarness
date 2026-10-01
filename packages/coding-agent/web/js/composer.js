@@ -5,8 +5,9 @@ import { api, attempt, loadGitStatus, loadModels, loadResources, loadSnapshot, p
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { ContextMeter } from "./context-usage.js";
-import { ModelMenu } from "./model-menu.js";
-import { clip, debounce, effortName, plural, pointerMoved } from "./util.js";
+import { EffortPicker, ModelMenu } from "./model-menu.js";
+import { rankSearch } from "./search.js";
+import { clip, debounce, plural, pointerMoved } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 
 const drafts = new Map();
@@ -154,7 +155,7 @@ function ChangesPill() {
 	</button>`;
 }
 
-// ---- Model picker: the effort belongs to the model and is chosen in the menu beside it -----------------------------------
+// ---- Model and thinking effort: two separate chips, each opening its own small popover above itself -----------
 function ModelPicker() {
 	const snap = useStore((s) => s.snap);
 	const models = useStore((s) => s.models);
@@ -166,28 +167,37 @@ function ModelPicker() {
 	}, [open]);
 	const model = snap?.model;
 	const running = !!snap?.active;
-	const thinking = snap?.thinking;
-	const showsEffort = thinking?.supported && thinking.levels.length > 1;
-	const choose = async ({ provider, model: id, thinkingLevel }) => {
+	const choose = async ({ provider, model: id }) => {
 		setBusy(true);
-		const ok = await attempt(() => post("/api/model", { provider, id, ...(thinkingLevel ? { thinkingLevel } : {}) }));
+		const ok = await attempt(() => post("/api/model", { provider, id }));
 		setBusy(false);
 		if (ok) {
 			setOpen(false);
+			// The new model's efforts and the effort in use come with the snapshot: the effort chip follows the model.
 			await attempt(loadSnapshot, { quiet: true });
 		}
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
-		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model and thinking effort")} aria-haspopup="menu" aria-expanded=${open}>
-			<${Icon} name="cpu" size=${14} /><span class="truncate chip-text">${model ? model.name || model.id : t("No model")}${showsEffort ? html`<span class="chip-effort"> · ${effortName(thinking.level)}</span>` : null}</span><${Icon} name="chevronDown" size=${12} />
+		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model")} aria-haspopup="listbox" aria-expanded=${open}>
+			<${Icon} name="cpu" size=${14} /><span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Icon} name="chevronDown" size=${12} />
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" width=${380} maxHeight=${460} class="model-pop">
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${300} maxHeight=${380} class="model-pop">
 			<${ModelMenu} models=${models} disabled=${busy || running}
-				selected=${model ? { provider: model.provider, model: model.id, thinkingLevel: showsEffort ? thinking.level : undefined } : null}
+				selected=${model ? { provider: model.provider, model: model.id } : null}
 				onPick=${choose}
-				footer=${html`<div class="pop-foot"><span class="dim pop-meta">${running ? t("Models can be switched when the agent is idle") : t("→ thinking effort · Enter to choose")}</span><button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers…")}</button></div>`} />
+				footer=${html`<div class="pop-foot">${running ? html`<span class="dim pop-meta grow">${t("Models can be switched when the agent is idle")}</span>` : html`<span class="grow" />`}<button class="link-btn" onClick=${() => (setOpen(false), setView({ settingsOpen: true, settingsSection: "providers" }))}>${t("Manage providers…")}</button></div>`} />
 		<//>
 	</span>`;
+}
+
+/** The effort of the model in use: one slider stop per level this model supports; hidden when there is nothing to choose. */
+function MainEffortPicker() {
+	const thinking = useStore((s) => s.snap?.thinking);
+	if (!thinking?.supported) return null;
+	const choose = async (level) => {
+		if (await attempt(() => post("/api/thinking", { level }))) await attempt(loadSnapshot, { quiet: true });
+	};
+	return html`<${EffortPicker} levels=${thinking.levels} value=${thinking.level} onChange=${choose} />`;
 }
 
 // ---- Suggestion popovers (/ commands and @ files) --------------------------------------------------------
@@ -227,10 +237,13 @@ function useSuggestions(text, caret) {
 	const items = useMemo(() => {
 		if (!token) return [];
 		if (token.type === "slash") {
-			const q = token.query.toLowerCase();
-			return (resources?.commands || [])
-				.filter((c) => [c.name, ...(c.aliases || [])].some((name) => name.toLowerCase().includes(q)))
-				.sort((a, b) => Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)))
+			// The list arrives most-used first (the terminal's order). A search puts relevance before usage: an exact
+			// name, then a prefix, then a part of the name, then the description.
+			return rankSearch(resources?.commands || [], token.query, {
+				names: (c) => [c.name, ...(c.aliases || [])],
+				keywords: (c) => (c.source === "builtin" ? serverText(c.description) : c.description) || "",
+				usage: (c) => c.uses,
+			})
 				.slice(0, 12)
 				.map((c) => ({ command: c.name, key: `/${c.name}`, label: `/${c.name}`, hint: c.source === "builtin" ? serverText(c.description) : c.description, tag: t(c.source), insert: `/${c.name} ` }));
 		}
@@ -485,6 +498,7 @@ export function Composer() {
 					<input ref=${fileInput} type="file" accept="image/*" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 					<span class="grow" />
 					<${ModelPicker} />
+					<${MainEffortPicker} />
 					<${ContextMeter} />
 					${active
 						? html`<button ref=${modeAnchor} class="mode-btn" title=${`${t(RUN_MODES[runMode].long)}: ${t(RUN_MODES[runMode].hint)}`} onClick=${() => setModeOpen(!modeOpen)} aria-haspopup="menu" aria-expanded=${modeOpen}>${t(RUN_MODES[runMode].label)}<${Icon} name="chevronUp" size=${11} /></button>

@@ -689,9 +689,10 @@ describe("CustomProviderManager", () => {
 		let empty = false;
 		const server = createServer((request, response) => {
 			if (request.method === "POST") {
-				// The declared reasoning model's thinking levels are probed; a rate limit leaves them undecided.
+				// The declared reasoning model's thinking levels are probed; refused credentials leave them undecided
+				// (and, unlike a rate limit, are not tried again).
 				expect(request.url).toBe("/v1/chat/completions");
-				response.statusCode = 429;
+				response.statusCode = 403;
 				response.end("{}");
 				return;
 			}

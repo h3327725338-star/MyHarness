@@ -71,6 +71,9 @@ svg { display: block; flex: none; }
 	transition: border-color var(--t-fast);
 }
 .field:focus, .select:focus { border-color: var(--border-focus); outline: none; }
+.field::placeholder { color: var(--text-4); }
+/* An example of what to type, not a value: lighter still, so it cannot be taken for one. */
+.field.example-placeholder::placeholder { color: var(--text-4); opacity: 0.55; font-style: italic; }
 textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; }
 .select { padding-right: 24px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 13px) 12px, calc(100% - 9px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
 .select option { background: var(--bg-raised); color: var(--text); }

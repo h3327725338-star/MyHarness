@@ -31,7 +31,15 @@ export { TUI_SPACING, TUI_SYMBOLS } from "./design-tokens.ts";
 // Editor component interface (for custom editors)
 export type { EditorComponent } from "./editor-component.ts";
 // Fuzzy matching
-export { type FuzzyMatch, fuzzyFilter, fuzzyMatch } from "./fuzzy.ts";
+export {
+	type FuzzyMatch,
+	fuzzyFilter,
+	fuzzyMatch,
+	type RankedFilterOptions,
+	rankedFilter,
+	type SearchTier,
+	searchTier,
+} from "./fuzzy.ts";
 // Keybindings
 export {
 	getKeybindings,

@@ -1,4 +1,4 @@
-import { fuzzyMatch } from "@myharness/tui";
+import { fuzzyMatch, searchTier } from "@myharness/tui";
 import type { SessionInfo } from "../../../session/types.ts";
 
 export type SortMode = "threaded" | "recent" | "relevance";
@@ -177,15 +177,19 @@ export function filterAndSortSessions(
 		return filtered;
 	}
 
-	// Relevance mode: sort by score, tie-break by modified desc.
-	const scored: { session: SessionInfo; score: number }[] = [];
+	// Relevance mode: how well the chat's name matches comes first (exact > prefix > contains), then the score over
+	// the whole text, tie-break by modified desc.
+	const nameQuery = parsed.mode === "tokens" ? trimmed.replace(/"/g, "") : "";
+	const scored: { session: SessionInfo; tier: number; score: number }[] = [];
 	for (const s of nameFiltered) {
 		const res = matchSession(s, parsed);
 		if (!res.matches) continue;
-		scored.push({ session: s, score: res.score });
+		const tier = nameQuery && s.name ? searchTier(nameQuery, s.name) : undefined;
+		scored.push({ session: s, tier: tier === undefined || tier > 2 ? 3 : tier, score: res.score });
 	}
 
 	scored.sort((a, b) => {
+		if (a.tier !== b.tier) return a.tier - b.tier;
 		if (a.score !== b.score) return a.score - b.score;
 		return b.session.modified.getTime() - a.session.modified.getTime();
 	});

@@ -23,10 +23,10 @@ import {
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
-	fuzzyFilter,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
+	rankedFilter,
 	type SelectItem,
 	SelectList,
 	Spacer,
@@ -204,7 +204,7 @@ import { isVisionAssistantMessage, VisionAssistantMessageComponent } from "./com
 import { WorkspaceSidebarComponent } from "./components/workspace-sidebar.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "./footer-data-provider.ts";
 import { type AppKeybinding, KeybindingsManager } from "./keybindings.ts";
-import { getModelSearchText } from "./model-search.ts";
+import { getModelSearchNames } from "./model-search.ts";
 import { deriveTaskLifecyclePhase, isTaskLifecycleBusy, type TaskLifecyclePhase } from "./task-lifecycle.ts";
 import {
 	createThemeFromResource,
@@ -399,13 +399,14 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 	return args.join(" ");
 }
 
-function createFuzzyAutocompleteItems<T>(
+function createRankedAutocompleteItems<T>(
 	items: T[],
 	prefix: string,
-	getSearchText: (item: T) => string,
+	getNames: (item: T) => string[],
+	getKeywords: (item: T) => string,
 	toAutocompleteItem: (item: T) => AutocompleteItem,
 ): AutocompleteItem[] | null {
-	const filtered = fuzzyFilter(items, prefix, getSearchText);
+	const filtered = rankedFilter(items, prefix, getNames, { getKeywords });
 	if (filtered.length === 0) return null;
 	return filtered.map(toAutocompleteItem);
 }
@@ -796,11 +797,17 @@ export class InteractiveMode {
 					label: `${m.provider}/${m.id}`,
 				}));
 
-				return createFuzzyAutocompleteItems(items, prefix, getModelSearchText, (item) => ({
-					value: item.label,
-					label: item.id,
-					description: item.provider,
-				}));
+				return createRankedAutocompleteItems(
+					items,
+					prefix,
+					getModelSearchNames,
+					(item) => item.provider,
+					(item) => ({
+						value: item.label,
+						label: item.id,
+						description: item.provider,
+					}),
+				);
 			};
 		}
 

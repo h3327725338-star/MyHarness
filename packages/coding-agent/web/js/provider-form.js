@@ -6,7 +6,7 @@ import { html, useEffect, useRef, useState, Icon, Segmented, Spinner, Toggle } f
 import { post } from "./store.js";
 import { effortName } from "./util.js";
 import { N_, t } from "./i18n.js";
-import { BASE_LEVELS, EXTRA_LEVELS, applyDetection, buildModel, connectionReady, fmtK, fromK, levelStatus, modelDraft, parseModelIds } from "./provider-models.js";
+import { BASE_LEVELS, BASE_URL_EXAMPLE, EXTRA_LEVELS, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, fmtK, fromK, levelStatus, modelDraft, parseModelIds } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -16,8 +16,8 @@ const API_LABELS = {
 	"mistral-conversations": N_("Mistral Conversations"),
 };
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-/** The server reads the list for up to 20 s and probes efforts for up to 45 s; this only guards against no answer at all. */
-const DETECT_TIMEOUT_MS = 90_000;
+/** The server tests the efforts for up to 120 s (undecided levels are retried); this only guards against no answer at all. */
+const DETECT_TIMEOUT_MS = 180_000;
 
 const DETECT_ERRORS = {
 	authentication: N_("The endpoint rejected the API key."),
@@ -64,7 +64,7 @@ const slugify = (name) =>
 		.replace(/^[^a-z0-9]+|-+$/g, "");
 
 function draftFromConfig(id, config, previous) {
-	const authMode = config.apiKey === "local" ? "none" : config.apiKey ? "config" : "key";
+	const authMode = authModeOf(config);
 	return {
 		id,
 		raw: config,
@@ -82,25 +82,23 @@ function buildConfig(draft) {
 	const name = draft.name.trim();
 	if (name) config.name = name;
 	else delete config.name;
-	config.baseUrl = draft.baseUrl.trim();
+	// An empty Base URL is "not filled in yet": nothing is written for it, least of all the example address.
+	if (draft.baseUrl.trim()) config.baseUrl = draft.baseUrl.trim();
+	else delete config.baseUrl;
 	config.api = draft.api;
-	if (draft.auth === "none") config.apiKey = "local";
-	else if (draft.auth === "key" && config.apiKey === "local") delete config.apiKey;
+	// The chosen way to authenticate is saved with the provider. Whatever models.json already holds for the other way
+	// stays where it is, so switching back loses nothing.
+	config.authMode = draft.auth === "config" ? "config" : "apiKey";
 	config.models = draft.models.map(buildModel);
 	return config;
 }
 
-function validate(draft, { isNew, hasStoredKey }) {
+function validate(draft) {
 	if (!ID_PATTERN.test(draft.id.trim())) return t("Provider ID may only use lowercase letters, digits, dots, underscores and hyphens.");
-	if (!draft.baseUrl.trim()) return t("Enter the Base URL.");
-	try {
-		const url = new URL(draft.baseUrl.trim());
-		if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("protocol");
-	} catch {
-		return t("The Base URL must be a full http:// or https:// address.");
-	}
-	if (draft.auth === "key" && !draft.apiKey.trim() && (isNew || !hasStoredKey)) return t("Enter an API key, or choose “No authentication” for a local service.");
-	if (!draft.models.length) return t("Add at least one model: type its Model ID and detect it, or add it manually.");
+	// A provider may be saved before its Base URL is known (it stays off until then); a wrong address is still refused.
+	const urlProblem = baseUrlProblem(draft.baseUrl);
+	if (urlProblem === "example") return t("{url} is only the example. Enter the address of your service, or leave the field empty for now.", { url: BASE_URL_EXAMPLE });
+	if (urlProblem === "invalid") return t("The Base URL must be a full http:// or https:// address.");
 	const seen = new Set();
 	for (const model of draft.models) {
 		const id = model.id.trim();
@@ -168,8 +166,8 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 				</div>
 				${model.reasoning
 					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${d.levelsSource === "probe" ? t("Checked with test requests to the service") : t("Read from the endpoint's model list")} />` : null}</span>
-						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unverified" ? t("The service accepted this level, but it could not be confirmed that it is applied.") : levelStatus(model, level) === "unknown" ? t("Could not be checked; it stays selectable.") : undefined} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels confirmed unsupported by the service are unticked; a “?” marks a level the service accepted but that could not be confirmed as applied.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span></div>`
+						<div class="pf-levels">${[...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelStatus(model, level) === "unknown" || levelStatus(model, level) === "unverified" ? t("Could not be checked; it stays as you set it.") : levelStatus(model, level) === "supported" ? t("Confirmed by a test request.") : levelStatus(model, level) === "unsupported" ? t("The service said it does not support this level.") : undefined} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelStatus(model, level) === "unknown" || levelStatus(model, level) === "unverified" ? html`<span class="dim">?</span>` : null}</button>`)}</div>
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels the service said it does not support are unticked; a “?” marks a level that could not be checked and keeps its setting.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span></div>`
 					: null}
 			</div>`
 			: null}
@@ -237,6 +235,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 		const ids = parseModelIds(idsText);
 		if (!ids.length) return setDetect({ status: "error", message: t("Type one or more Model IDs to detect."), notes: [] });
 		if (!ready) return setDetect({ status: "error", message: t("Complete the connection first (Base URL and API key)."), notes: [] });
+		// Each named Model ID is asked directly, level by level; it does not have to be in the endpoint's model list.
 		setDetect({ status: "loading", message: "", notes: [] });
 		let result;
 		try {
@@ -306,7 +305,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 			}
 			if (!ID_PATTERN.test(draft.id.trim())) problem = t("Provider ID may only use lowercase letters, digits, dots, underscores and hyphens.");
 		} else {
-			problem = validate(draft, { isNew, hasStoredKey });
+			problem = validate(draft);
 			config = buildConfig(draft);
 		}
 		if (problem) {
@@ -316,10 +315,10 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 		setError("");
 		setBusy(true);
 		try {
-			await post("/api/providers/custom/save", { id: draft.id.trim(), previousId: initial?.id, config, apiKey: draft.auth === "key" ? draft.apiKey : "" });
+			const result = await post("/api/providers/custom/save", { id: draft.id.trim(), previousId: initial?.id, config, apiKey: draft.auth === "key" ? draft.apiKey : "" });
 			if (!alive.current) return;
 			setDirty(false);
-			onSaved(draft.id.trim());
+			onSaved(draft.id.trim(), { missingBaseUrl: !!result?.missingBaseUrl });
 		} catch (e) {
 			if (alive.current) {
 				setError(e.message);
@@ -336,7 +335,9 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 		setDirty(false);
 	};
 
-	const authOptions = [{ value: "key", label: t("API key") }, { value: "none", label: t("No authentication") }, ...(draft.auth === "config" ? [{ value: "config", label: t("Set in models.json") }] : [])];
+	// Both ways are always offered, whichever one is chosen.
+	const authOptions = [{ value: "key", label: t("API key") }, { value: "config", label: t("Set in models.json") }];
+	const configHasKey = !!draft.raw.apiKey;
 	const detecting = detect.status === "loading";
 	return html`<div ref=${rootRef} class="pf">
 		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
@@ -357,7 +358,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 						<${Field} label=${t("Provider ID")} hint=${isNew ? t("Unique lowercase name used in settings.") : t("The ID cannot change after creation.")}><input class="field mono" disabled=${!isNew} placeholder="my-gateway" value=${draft.id} onInput=${(e) => (setIdTouched(true), patch({ id: e.target.value }))} /><//>
 					</div>
 					<${Field} label=${t("API format")}><select class="select" value=${draft.api} onChange=${(e) => patch({ api: e.target.value })}>${types.map((type) => html`<option key=${type} value=${type} selected=${draft.api === type}>${API_LABELS[type] ? t(API_LABELS[type]) : type}</option>`)}</select><//>
-					<${Field} label=${t("Base URL")}><input class="field mono" placeholder="https://api.example.com/v1" value=${draft.baseUrl} onInput=${(e) => patch({ baseUrl: e.target.value })} /><//>
+					<${Field} label=${t("Base URL")} hint=${draft.baseUrl.trim() ? undefined : t("Not filled in yet. The provider can be saved, but stays off until it has a Base URL.")}><input class="field mono example-placeholder" placeholder=${BASE_URL_EXAMPLE} aria-label=${t("Base URL")} value=${draft.baseUrl} onInput=${(e) => patch({ baseUrl: e.target.value })} /><//>
 					<div class="col field-label"><span class="field-name">${t("Authentication")}</span>
 						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} size="sm" /></div>
 					</div>
@@ -365,9 +366,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 						? hasStoredKey && keyArea
 							? keyArea
 							: html`<${Field} label=${t("API key")} hint=${t("Stored on this computer only, never in models.json.")}><input class="field mono" type="password" autocomplete="off" placeholder=${t("Paste the API key")} value=${draft.apiKey} onInput=${(e) => patch({ apiKey: e.target.value })} /><//>`
-						: draft.auth === "none"
-							? html`<span class="dim pf-hint">${t("For local services that do not check a key.")}</span>`
-							: html`<span class="dim pf-hint">${t("The key is set in models.json (shown hidden). Use the JSON view to change it.")}</span>`}
+						: html`<span class="dim pf-hint">${configHasKey ? t("The key is set in models.json (shown hidden). Use the JSON view to change it.") : (hasStoredKey ? t("models.json has no key for this provider yet. Add “apiKey” in the JSON view; until then the saved API key is used.") : t("models.json has no key for this provider yet. Add “apiKey” in the JSON view."))}</span>`}
 				</div>
 			</section>
 			<section class="set-card">
@@ -379,7 +378,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 							<input class="field mono grow" placeholder=${t("Model IDs to detect, e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />
 							<button class="btn" disabled=${detecting || !idsText.trim()} onClick=${runDetect}>${detecting ? html`<${Spinner} />` : html`<${Icon} name="search" size=${13} />`}${detecting ? t("Detecting…") : t("Detect")}</button>
 						</div>
-						<span class="dim pf-hint">${t("Only the Model IDs typed here are checked (separate several with commas or spaces). A new ID is added; for an existing model only what the detection settles is updated. Reading the model list is free; thinking efforts it does not state are tested with a few tiny requests to these models, which the service may bill.")}</span>
+						<span class="dim pf-hint">${t("Only the Model IDs typed here are checked (separate several with commas or spaces). A new ID is added; for an existing model only what the detection settles is updated. Each thinking effort is tested with a tiny real request to the model, which the service may bill; a level that cannot be checked keeps its current setting.")}</span>
 						${detect.message ? html`<div class=${`notice ${detect.status === "error" ? "warn" : ""}`} role="status">${detect.message}${detect.notes.map((note, i) => html`<div class="dim pf-hint" key=${i}>${note}</div>`)}</div>` : null}
 					</div>
 					${!draft.models.length ? html`<div class="dim pf-hint">${t("No model yet. Type its Model ID above and detect it, or add it manually.")}</div>` : null}

@@ -266,6 +266,7 @@ src/application/bootstrap/
 | 可复用 TUI 基础组件 | packages/tui/src/ | TUI component、terminal、focus/input 基础能力 | coding-agent 的业务模块 |
 | Extension API | extensions/contracts/、api-entry.ts | loader、runtime、Runner、compat、examples | 直接把内部实现暴露给 Extension |
 | 内置 Slash Command | cli/slash-commands.ts（唯一注册表，含别名与 `surfaces`：cli / web；TUI 与 Web `/api/resources` 共用） | AgentSession prompt expansion、Interactive dispatch、Web 的 web/js/builtin-commands.js 执行方式表 或 Extension registration | TUI component 中硬编码完整业务流程 |
+| `/settings` 菜单 | cli/settings-menu.ts（唯一定义：行、顺序、名称、说明、固定选项与 `surfaces`；TUI 与 Web `GET /api/settings` 的 `menu` 共用） | TUI 的 settings-selector.ts（如何绘制和打开）、Web 的 routes-settings.ts `SETTINGS_MENU_SETTING` 与 web/js/settings-menu.js（如何打开） | 在 TUI 或 Web 里另写一份菜单行、名称或选项 |
 | System Prompt 内容 | 根目录 system-prompts/ | 对应 role/tool/task/provider Markdown | src/system-prompts/ 中写大段实际 prompt 文本 |
 | System Prompt 加载/组装 | system-prompts/ | packages/ai loader、coding-agent loader/composer | TUI 或 Provider adapter |
 | Settings | config/settings/ | types、defaults、manager、storage、migration、paths | 任意业务模块中直接读写 JSON |

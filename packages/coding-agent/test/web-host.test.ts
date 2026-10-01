@@ -125,7 +125,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
-		registerProviderRoutes(server, host, hub);
+		// An undecided thinking-effort test is tried again; the tests do not wait between the attempts.
+		registerProviderRoutes(server, host, hub, { probeRetryDelaysMs: [0, 0, 0] });
 		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());
@@ -395,7 +396,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const probed: string[] = [];
 		const catalog = createServer((req, res) => {
 			if (req.method === "POST") {
-				// Probe of a named model's thinking levels: a rate limit leaves them undecided.
+				// Probe of a named model's thinking levels: a rate limit leaves them undecided, however often it is tried.
 				let body = "";
 				req.on("data", (chunk) => {
 					body += chunk;
@@ -450,10 +451,21 @@ describe("Web host (real runtime with a faux provider)", () => {
 				reasoning: true,
 				input: ["text", "image"],
 				contextWindow: 32000,
+				// Undecided is not "unsupported": no level is hidden, and the opt-in levels stay selectable.
+				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+				thinkingLevelStatus: {
+					minimal: "unknown",
+					low: "unknown",
+					medium: "unknown",
+					high: "unknown",
+					xhigh: "unknown",
+					max: "unknown",
+				},
 				thinkingSource: "unconfirmed",
 			},
 		]);
-		expect(probed.length).toBeGreaterThan(0);
+		// Each level is asked on its own: once, then up to three more times while the answer is undecided.
+		expect(probed).toHaveLength(6 * 4);
 		expect(new Set(probed)).toEqual(new Set(["thinker"]));
 
 		// An ID the list does not name is still checked, and reported as not listed.
@@ -475,7 +487,10 @@ describe("Web host (real runtime with a faux provider)", () => {
 		});
 		expect(unreachable.ok).toBe(true);
 		expect(unreachable.listError).toMatchObject({ code: "connection" });
-		expect(unreachable.models).toEqual([{ id: "x", name: "x" }]);
+		// Nothing could be asked, so nothing is settled: every level is undecided, none is reported as unsupported.
+		expect(unreachable.models).toMatchObject([{ id: "x", name: "x" }]);
+		expect(new Set(Object.values(unreachable.models[0].thinkingLevelStatus))).toEqual(new Set(["unknown"]));
+		expect(unreachable.models[0].reasoning).toBeUndefined();
 
 		await fx.post("/api/providers/custom/save", {
 			id: "form-provider",
@@ -554,12 +569,12 @@ describe("Web host (real runtime with a faux provider)", () => {
 		});
 		const body = { baseUrl: endpoint.baseUrl, api: "openai-completions", modelIds: ["one"] };
 
-		// Credentials typed into the form are used as they are; "no authentication" sends none, even if a key is typed.
+		// Credentials typed into the form are used as they are.
 		const typed = await fx.post("/api/providers/custom/detect", { ...body, apiKey: "typed-key" });
 		expect(typed).toMatchObject({ ok: true, unlisted: [], listError: null, models: [{ id: "one", name: "one" }] });
-		const open = await fx.post("/api/providers/custom/detect", { ...body, auth: "none", apiKey: "typed-key" });
-		expect(open).toMatchObject({ ok: true, unlisted: ["one"] });
-		expect(endpoint.requests.at(-1)?.authorization).toBeUndefined();
+		// A key written in models.json (not saved yet) is used when that is the chosen way to authenticate.
+		await fx.post("/api/providers/custom/detect", { ...body, auth: "config", configApiKey: "from-config" });
+		expect(endpoint.requests.at(-1)?.authorization).toBe("Bearer from-config");
 
 		// Each failure to read the list says what really happened.
 		expect((await fx.post("/api/providers/custom/detect", { ...body, apiKey: "bad" })).listError).toMatchObject({
@@ -654,6 +669,52 @@ describe("Web host (real runtime with a faux provider)", () => {
 			configured: false,
 			credentials: { apiKeys: [], removable: false },
 		});
+	});
+
+	it("saves a provider without a Base URL but keeps it off until one is filled in, and remembers how it authenticates", async () => {
+		const fx = await start();
+		const modelsPath = join(process.env.MYHARNESS_CODING_AGENT_DIR as string, "models.json");
+		const find = async () => (await fx.get("/api/providers")).providers.find((p: any) => p.id === "relay");
+		const offered = async () => (await fx.get("/api/models")).providers.map((p: any) => p.id);
+		const config = { name: "Relay", api: "openai-completions", models: [{ id: "m1" }] };
+
+		// No Base URL yet: saved as it is (no example address is written), but not usable.
+		const saved = await fx.post("/api/providers/custom/save", {
+			id: "relay",
+			config: { ...config, authMode: "apiKey" },
+			apiKey: "sk-relay",
+		});
+		expect(saved).toMatchObject({ ok: true, missingBaseUrl: true });
+		expect(JSON.parse(readFileSync(modelsPath, "utf8")).providers.relay.baseUrl).toBeUndefined();
+		expect(await find()).toMatchObject({ missingBaseUrl: true, enabled: false });
+		expect(await offered()).not.toContain("relay");
+		await expect(fx.post("/api/providers/enabled", { id: "relay", enabled: true })).rejects.toThrow(/^409/);
+
+		// Filling it in is all it takes; the key written in models.json is the chosen way to authenticate.
+		const filled = await fx.post("/api/providers/custom/save", {
+			id: "relay",
+			previousId: "relay",
+			config: { ...config, baseUrl: "http://127.0.0.1:9/v1", authMode: "config", apiKey: "cfg-key" },
+		});
+		expect(filled).toMatchObject({ ok: true, missingBaseUrl: false });
+		expect(await find()).toMatchObject({ missingBaseUrl: false, enabled: true, configured: true, modelCount: 1 });
+		expect(await offered()).toContain("relay");
+		const custom = (await fx.get("/api/providers/custom")).providers.find((p: any) => p.id === "relay");
+		expect(custom.config.authMode).toBe("config");
+		expect(JSON.stringify(custom)).not.toContain("cfg-key");
+
+		// Clearing the Base URL of a provider in use is allowed: it is saved and the provider goes off.
+		const cleared = await fx.post("/api/providers/custom/save", {
+			id: "relay",
+			previousId: "relay",
+			config: { ...config, baseUrl: "", authMode: "config", apiKey: "__hidden__" },
+		});
+		expect(cleared).toMatchObject({ ok: true, missingBaseUrl: true });
+		expect(await find()).toMatchObject({ missingBaseUrl: true, enabled: false });
+		expect(await offered()).not.toContain("relay");
+		const kept = JSON.parse(readFileSync(modelsPath, "utf8")).providers.relay;
+		expect(kept).toMatchObject({ authMode: "config", apiKey: "cfg-key" });
+		expect(kept.baseUrl).toBeUndefined();
 	});
 
 	it("asks before deleting a provider that running tasks use, and stops them when told to", async () => {

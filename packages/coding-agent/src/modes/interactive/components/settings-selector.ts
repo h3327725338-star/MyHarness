@@ -22,6 +22,12 @@ import {
 	supportsVision,
 	type VisionCapabilityStatus,
 } from "../../../agent/vision/capability.ts";
+import {
+	settingsChoiceLabel,
+	settingsChoiceValue,
+	settingsMenuFor,
+	settingsMenuItem,
+} from "../../../cli/settings-menu.ts";
 import type {
 	AutoMemorySettings,
 	CodeIntelligenceSettings,
@@ -43,7 +49,7 @@ import {
 	formatContextWindowSettings,
 	parseContextWindowInput,
 } from "../../../context/context-window.ts";
-import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../platform/process/http-dispatcher.ts";
+import { formatHttpIdleTimeoutMs } from "../../../platform/process/http-dispatcher.ts";
 import { AccountConnections, type ConnectedAccount } from "../../../providers/credentials/account-connections.ts";
 import type {
 	ProviderCredentialOverview,
@@ -86,49 +92,6 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	xhigh: "超高强度思考（约 32k tokens）",
 	max: "最大思考强度",
 };
-
-const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
-	ask: "Ask",
-	always: "Always trust",
-	never: "Never trust",
-};
-
-const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
-	Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value as DefaultProjectTrust]),
-);
-
-const STEERING_MODE_LABELS: Record<SettingsConfig["steeringMode"], string> = {
-	"one-at-a-time": "One at a time",
-	all: "All",
-};
-
-const STEERING_MODE_BY_LABEL = new Map(
-	Object.entries(STEERING_MODE_LABELS).map(([value, label]) => [label, value as SettingsConfig["steeringMode"]]),
-);
-
-const TRANSPORT_LABELS: Record<Transport, string> = {
-	auto: "Auto",
-	sse: "SSE",
-	websocket: "WebSocket",
-	"websocket-cached": "WebSocket (cached)",
-};
-
-const TRANSPORT_BY_LABEL = new Map(
-	Object.entries(TRANSPORT_LABELS).map(([value, label]) => [label, value as Transport]),
-);
-
-const DOUBLE_ESCAPE_ACTION_LABELS: Record<SettingsConfig["doubleEscapeAction"], string> = {
-	none: "None",
-	tree: "Tree",
-	fork: "Fork",
-};
-
-const DOUBLE_ESCAPE_ACTION_BY_LABEL = new Map(
-	Object.entries(DOUBLE_ESCAPE_ACTION_LABELS).map(([value, label]) => [
-		label,
-		value as SettingsConfig["doubleEscapeAction"],
-	]),
-);
 
 export interface SettingsConfig {
 	autoMemory: AutoMemorySettings & { enabled: boolean };
@@ -3269,34 +3232,45 @@ export class SettingsSelectorComponent extends Container {
 			...config.codeIntelligence,
 			enabled: config.codeIntelligence?.enabled ?? true,
 		};
+		// The rows, their names, descriptions, fixed choices and order come from the one menu definition shared with
+		// the Web UI (src/cli/settings-menu.ts); only how a row is drawn and opened in the terminal is decided here.
+		const entry = (id: string): Pick<SettingItem, "id" | "label" | "description"> => {
+			const item = settingsMenuItem(id);
+			return { id: item.id, label: item.label, description: item.description };
+		};
+		/** A `select` row's choices. The terminal menu reports the chosen label; see settingsChoiceValue below. */
+		const choiceSubmenu =
+			(id: string): NonNullable<SettingItem["submenu"]> =>
+			(currentValue, done) => {
+				const item = settingsMenuItem(id);
+				return createSettingsChoiceSubmenu(
+					item.label,
+					item.choiceDescription ?? item.description,
+					(item.choices ?? []).map((choice) => ({ value: choice.label, label: choice.label })),
+					currentValue,
+					done,
+				);
+			};
 		const items: SettingItem[] = [
 			{
-				id: "providers",
-				label: "Providers",
-				description: "管理模型服务和密钥",
+				...entry("providers"),
 				currentValue: "管理",
 				submenu: (_currentValue, done) => new ProvidersSubmenu(config, callbacks, dependencies, done),
 			},
 			{
-				id: "github-connect",
-				label: "GitHub Connect",
-				description: "连接 GitHub",
+				...entry("github-connect"),
 				currentValue: "管理",
 				submenu: (_currentValue, done) => new GitHubConnectSubmenu(dependencies, done),
 			},
 			{
-				id: "default-model",
-				label: "Default Model",
-				description: "选择主用模型",
+				...entry("default-model"),
 				currentValue: config.currentModel
 					? `${config.currentModel.provider}/${config.currentModel.id} · ${config.thinkingLevel}`
 					: "未选择",
 				submenu: (_currentValue, done) => new DefaultModelSubmenu(config, callbacks, dependencies, done),
 			},
 			{
-				id: "auto-memory",
-				label: "Auto Memory",
-				description: "记忆偏好和项目事实",
+				...entry("auto-memory"),
 				currentValue:
 					config.autoMemory.enabled && config.autoMemory.provider && config.autoMemory.model
 						? `On · ${config.autoMemory.provider}/${config.autoMemory.model} · ${config.autoMemory.thinkingLevel ?? "off"}`
@@ -3305,17 +3279,13 @@ export class SettingsSelectorComponent extends Container {
 					new AutoMemorySubmenu(config.autoMemory, autoMemoryCallbacks, dependencies, done),
 			},
 			{
-				id: "sub-agent",
-				label: "Sub Agent",
-				description: "并行调查复杂任务",
+				...entry("sub-agent"),
 				currentValue: formatSubAgentSummary(config.subAgent),
 				submenu: (_currentValue, done) =>
 					new SubAgentSubmenu(config.subAgent, subAgentCallbacks, dependencies, () => done()),
 			},
 			{
-				id: "web-search",
-				label: "Web Search",
-				description: "联网搜索",
+				...entry("web-search"),
 				currentValue: getWebSearchConfig().enabled ? "On" : "Off",
 				submenu: (_currentValue, done) =>
 					new WebSearchSettingsSubmenu(
@@ -3329,9 +3299,7 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
-				id: "code-intelligence",
-				label: "Code Intelligence",
-				description: "管理可选语义模块",
+				...entry("code-intelligence"),
 				currentValue: codeIntelligence.enabled ? "On" : "Off",
 				submenu: (_currentValue, done) =>
 					new CodeIntelligenceSubmenu(
@@ -3353,9 +3321,7 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
-				id: "context-window",
-				label: "Context Window",
-				description: "上下文上限",
+				...entry("context-window"),
 				currentValue: formatContextWindowSettings(config.contextWindow ?? {}),
 				submenu: (_currentValue, done) => {
 					const submenu = new ContextWindowSubmenu(
@@ -3370,9 +3336,7 @@ export class SettingsSelectorComponent extends Container {
 				},
 			},
 			{
-				id: "vision-assistant",
-				label: "Vision Assistant",
-				description: "使用专门模型看图",
+				...entry("vision-assistant"),
 				currentValue:
 					config.visionAssistant.enabled && config.visionAssistant.provider && config.visionAssistant.model
 						? `On · ${config.visionAssistant.provider}/${config.visionAssistant.model} · ${config.visionAssistant.thinkingLevel ?? "off"}`
@@ -3381,17 +3345,13 @@ export class SettingsSelectorComponent extends Container {
 					new VisionAssistantSubmenu(config.visionAssistant, visionAssistantCallbacks, dependencies, done),
 			},
 			{
-				id: "git-integration",
-				label: "Git",
-				description: "本地保存代码版本",
+				...entry("git-integration"),
 				currentValue: config.gitIntegration.enabled ? "On" : "Off",
 				submenu: (_currentValue, done) =>
 					new GitIntegrationSubmenu(config.gitIntegration.enabled, callbacks.onGitIntegrationChange, done),
 			},
 			{
-				id: "compact-model",
-				label: "Compact Model",
-				description: "压缩模型和思考强度",
+				...entry("compact-model"),
 				currentValue:
 					config.compaction?.provider && config.compaction.model
 						? `${config.compaction.provider}/${config.compaction.model}`
@@ -3479,153 +3439,79 @@ export class SettingsSelectorComponent extends Container {
 				},
 			},
 			{
-				id: "autocompact",
-				label: "Auto-compact",
-				description: "自动压缩过长对话",
+				...entry("autocompact"),
 				interaction: "toggle",
 				currentValue: config.autoCompact ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "steering-mode",
-				label: "Steering mode",
-				description: "回复中消息发送方式",
-				currentValue: STEERING_MODE_LABELS[config.steeringMode],
+				...entry("steering-mode"),
+				currentValue: settingsChoiceLabel("steering-mode", config.steeringMode),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Steering mode",
-						"选择回复进行中收到新消息时的处理方式。",
-						[
-							{ value: "One at a time", label: "One at a time" },
-							{ value: "All", label: "All" },
-						],
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("steering-mode"),
 			},
 			{
-				id: "follow-up-mode",
-				label: "Follow-up mode",
-				description: "任务后消息发送方式",
-				currentValue: STEERING_MODE_LABELS[config.followUpMode],
+				...entry("follow-up-mode"),
+				currentValue: settingsChoiceLabel("follow-up-mode", config.followUpMode),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Follow-up mode",
-						"选择任务完成后排队消息的处理方式。",
-						[
-							{ value: "One at a time", label: "One at a time" },
-							{ value: "All", label: "All" },
-						],
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("follow-up-mode"),
 			},
 			{
-				id: "transport",
-				label: "Transport",
-				description: "选择模型连接方式",
-				currentValue: TRANSPORT_LABELS[config.transport],
+				...entry("transport"),
+				currentValue: settingsChoiceLabel("transport", config.transport),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Transport",
-						"选择模型请求的连接方式。",
-						[...Object.entries(TRANSPORT_LABELS).map(([_value, label]) => ({ value: label, label }))],
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("transport"),
 			},
 			{
-				id: "http-idle-timeout",
-				label: "HTTP idle timeout",
-				description: "设置连接空闲时限",
+				...entry("http-idle-timeout"),
 				currentValue: formatHttpIdleTimeoutMs(config.httpIdleTimeoutMs),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"HTTP idle timeout",
-						"连接在指定时间内没有数据时自动断开。",
-						HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => ({ value: choice.label, label: choice.label })),
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("http-idle-timeout"),
 			},
 			{
-				id: "hide-thinking",
-				label: "Collapse transcript",
-				description: "折叠思考和工具输出",
+				...entry("hide-thinking"),
 				interaction: "toggle",
 				currentValue: config.hideThinkingBlock ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "cache-miss-notices",
-				label: "Cache miss notices",
-				description: "提示缓存复用失败",
+				...entry("cache-miss-notices"),
 				interaction: "toggle",
 				currentValue: config.showCacheMissNotices ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "collapse-changelog",
-				label: "Collapse changelog",
-				description: "精简更新日志",
+				...entry("collapse-changelog"),
 				interaction: "toggle",
 				currentValue: config.collapseChangelog ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "quiet-startup",
-				label: "Quiet startup",
-				description: "隐藏启动详情",
+				...entry("quiet-startup"),
 				interaction: "toggle",
 				currentValue: config.quietStartup ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "install-telemetry",
-				label: "Install telemetry",
-				description: "发送匿名版本统计",
+				...entry("install-telemetry"),
 				interaction: "toggle",
 				currentValue: config.enableInstallTelemetry ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			{
-				id: "default-project-trust",
-				label: "Default project trust",
-				description: "设置新项目默认信任",
-				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
+				...entry("default-project-trust"),
+				currentValue: settingsChoiceLabel("default-project-trust", config.defaultProjectTrust),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Default project trust",
-						"选择新项目未明确授权时的默认处理方式。",
-						Object.values(DEFAULT_PROJECT_TRUST_LABELS).map((label) => ({ value: label, label })),
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("default-project-trust"),
 			},
 			{
-				id: "double-escape-action",
-				label: "Double-escape action",
-				description: "兼容设置，当前无效",
-				currentValue: DOUBLE_ESCAPE_ACTION_LABELS[config.doubleEscapeAction],
+				...entry("double-escape-action"),
+				currentValue: settingsChoiceLabel("double-escape-action", config.doubleEscapeAction),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Double-escape action",
-						"该兼容设置当前不会触发操作。",
-						[...Object.entries(DOUBLE_ESCAPE_ACTION_LABELS).map(([_value, label]) => ({ value: label, label }))],
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("double-escape-action"),
 			},
 			{
-				id: "warnings",
-				label: "Warnings",
-				description: "管理费用相关警告",
+				...entry("warnings"),
 				currentValue: "Configure",
 				submenu: (_currentValue, done) =>
 					new WarningSettingsSubmenu(
@@ -3638,9 +3524,7 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
-				id: "thinking",
-				label: "Thinking level",
-				description: "调整模型思考强度",
+				...entry("thinking"),
 				currentValue: config.thinkingLevel,
 				submenu: (currentValue, done) =>
 					new SelectSubmenu(
@@ -3660,9 +3544,7 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
-				id: "theme",
-				label: "Theme",
-				description: "更换界面配色",
+				...entry("theme"),
 				currentValue: config.currentTheme,
 				submenu: (currentValue, done) =>
 					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
@@ -3672,166 +3554,107 @@ export class SettingsSelectorComponent extends Container {
 		// Only show image toggle if terminal supports it
 		if (supportsImages) {
 			// Insert after autocompact
-			items.splice(1, 0, {
-				id: "show-images",
-				label: "Show images",
-				description: "在终端显示图片",
+			items.push({
+				...entry("show-images"),
 				interaction: "toggle",
 				currentValue: config.showImages ? "On" : "Off",
 				values: ["Off", "On"],
 			});
-			items.splice(2, 0, {
-				id: "image-width-cells",
-				label: "Image width",
-				description: "调整图片显示宽度",
-				currentValue: String(config.imageWidthCells),
+			items.push({
+				...entry("image-width-cells"),
+				currentValue: settingsChoiceLabel("image-width-cells", String(config.imageWidthCells)),
 				interaction: "select",
-				submenu: (currentValue, done) =>
-					createSettingsChoiceSubmenu(
-						"Image width",
-						"选择终端内联图片占用的最大列数。",
-						["60", "80", "120"].map((value) => ({ value, label: `${value} columns` })),
-						currentValue,
-						done,
-					),
+				submenu: choiceSubmenu("image-width-cells"),
 			});
 		}
 
 		// Image auto-resize toggle (always available, affects both attached and read images)
-		items.splice(supportsImages ? 3 : 1, 0, {
-			id: "auto-resize-images",
-			label: "Auto-resize images",
-			description: "自动缩小过大图片",
+		items.push({
+			...entry("auto-resize-images"),
 			interaction: "toggle",
 			currentValue: config.autoResizeImages ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Block images toggle (always available, insert after auto-resize-images)
-		const autoResizeIndex = items.findIndex((item) => item.id === "auto-resize-images");
-		items.splice(autoResizeIndex + 1, 0, {
-			id: "block-images",
-			label: "Block images",
-			description: "禁止向模型发送图片",
+		items.push({
+			...entry("block-images"),
 			interaction: "toggle",
 			currentValue: config.blockImages ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Skill commands toggle (insert after block-images)
-		const blockImagesIndex = items.findIndex((item) => item.id === "block-images");
-		items.splice(blockImagesIndex + 1, 0, {
-			id: "skill-commands",
-			label: "Skill commands",
-			description: "把技能加入斜杠命令",
+		items.push({
+			...entry("skill-commands"),
 			interaction: "toggle",
 			currentValue: config.enableSkillCommands ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Hardware cursor toggle (insert after skill-commands)
-		const skillCommandsIndex = items.findIndex((item) => item.id === "skill-commands");
-		items.splice(skillCommandsIndex + 1, 0, {
-			id: "show-hardware-cursor",
-			label: "Show hardware cursor",
-			description: "显示终端输入光标",
+		items.push({
+			...entry("show-hardware-cursor"),
 			interaction: "toggle",
 			currentValue: config.showHardwareCursor ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Editor padding toggle (insert after show-hardware-cursor)
-		const hardwareCursorIndex = items.findIndex((item) => item.id === "show-hardware-cursor");
-		items.splice(hardwareCursorIndex + 1, 0, {
-			id: "editor-padding",
-			label: "Editor padding",
-			description: "调整输入框留白",
-			currentValue: String(config.editorPaddingX),
+		items.push({
+			...entry("editor-padding"),
+			currentValue: settingsChoiceLabel("editor-padding", String(config.editorPaddingX)),
 			interaction: "select",
-			submenu: (currentValue, done) =>
-				createSettingsChoiceSubmenu(
-					"Editor padding",
-					"选择输入框左右留白的列数。",
-					["0", "1", "2", "3"].map((value) => ({ value, label: `${value} columns` })),
-					currentValue,
-					done,
-				),
+			submenu: choiceSubmenu("editor-padding"),
 		});
 
 		// Output padding toggle (insert after editor-padding)
-		const editorPaddingIndex = items.findIndex((item) => item.id === "editor-padding");
-		items.splice(editorPaddingIndex + 1, 0, {
-			id: "output-padding",
-			label: "Output padding",
-			description: "调整消息左右留白",
-			currentValue: String(config.outputPad),
+		items.push({
+			...entry("output-padding"),
+			currentValue: settingsChoiceLabel("output-padding", String(config.outputPad)),
 			interaction: "select",
-			submenu: (currentValue, done) =>
-				createSettingsChoiceSubmenu(
-					"Output padding",
-					"选择消息输出的左右留白级别。",
-					[
-						{ value: "0", label: "Compact" },
-						{ value: "1", label: "Comfortable" },
-					],
-					currentValue,
-					done,
-				),
+			submenu: choiceSubmenu("output-padding"),
 		});
 
 		// Autocomplete max visible toggle (insert after output-padding)
-		const outputPaddingIndex = items.findIndex((item) => item.id === "output-padding");
-		items.splice(outputPaddingIndex + 1, 0, {
-			id: "autocomplete-max-visible",
-			label: "Autocomplete max items",
-			description: "设置候选显示数量",
+		items.push({
+			...entry("autocomplete-max-visible"),
 			currentValue: String(config.autocompleteMaxVisible),
 			interaction: "select",
-			submenu: (currentValue, done) =>
-				createSettingsChoiceSubmenu(
-					"Autocomplete max items",
-					"选择输入时最多显示多少个候选。",
-					["3", "5", "7", "10", "15", "20"].map((value) => ({ value, label: value })),
-					currentValue,
-					done,
-				),
+			submenu: choiceSubmenu("autocomplete-max-visible"),
 		});
 
 		// Clear on shrink toggle (insert after autocomplete-max-visible)
-		const autocompleteIndex = items.findIndex((item) => item.id === "autocomplete-max-visible");
-		items.splice(autocompleteIndex + 1, 0, {
-			id: "clear-on-shrink",
-			label: "Clear on shrink",
-			description: "清除终端残留文字",
+		items.push({
+			...entry("clear-on-shrink"),
 			interaction: "toggle",
 			currentValue: config.clearOnShrink ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Terminal progress toggle (insert after clear-on-shrink)
-		const clearOnShrinkIndex = items.findIndex((item) => item.id === "clear-on-shrink");
-		items.splice(clearOnShrinkIndex + 1, 0, {
-			id: "terminal-progress",
-			label: "Terminal progress",
-			description: "显示任务运行状态",
+		items.push({
+			...entry("terminal-progress"),
 			interaction: "toggle",
 			currentValue: config.showTerminalProgress ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
 		// Popup notifications toggle (insert after terminal-progress)
-		const terminalProgressIndex = items.findIndex((item) => item.id === "terminal-progress");
-		items.splice(terminalProgressIndex + 1, 0, {
-			id: "popup-notifications",
-			label: "Popup notifications",
-			description: "任务结束弹窗提醒",
+		items.push({
+			...entry("popup-notifications"),
 			interaction: "toggle",
 			currentValue: config.popupNotifications ? "On" : "Off",
 			values: ["Off", "On"],
 		});
 
+		// Menu order is the definition's order; a row the definition marks for image-capable terminals is simply absent
+		// when it was not built.
+		const builtItems = new Map(items.map((item) => [item.id, item]));
+		const orderedItems = settingsMenuFor("cli").flatMap((definition) => builtItems.get(definition.id) ?? []);
+
 		const submenuIds = new Set<string>();
-		for (const item of items) {
+		for (const item of orderedItems) {
 			if (!item.submenu) continue;
 			submenuIds.add(item.id);
 			const openSubmenu = item.submenu;
@@ -3842,7 +3665,7 @@ export class SettingsSelectorComponent extends Container {
 			};
 		}
 		const rankedItems = rankByUsage(
-			items,
+			orderedItems,
 			(item) => item.id,
 			dependencies.settingsManager.getSettingsItemUsageCounts(),
 		);
@@ -3864,7 +3687,7 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onShowImagesChange(newValue === "On");
 						break;
 					case "image-width-cells":
-						callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
+						callbacks.onImageWidthCellsChange(parseInt(settingsChoiceValue(id, newValue) ?? newValue, 10));
 						break;
 					case "auto-resize-images":
 						callbacks.onAutoResizeImagesChange(newValue === "On");
@@ -3876,18 +3699,26 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onEnableSkillCommandsChange(newValue === "On");
 						break;
 					case "steering-mode":
-						callbacks.onSteeringModeChange(STEERING_MODE_BY_LABEL.get(newValue) ?? config.steeringMode);
+						callbacks.onSteeringModeChange(
+							(settingsChoiceValue(id, newValue) as SettingsConfig["steeringMode"] | undefined) ??
+								config.steeringMode,
+						);
 						break;
 					case "follow-up-mode":
-						callbacks.onFollowUpModeChange(STEERING_MODE_BY_LABEL.get(newValue) ?? config.followUpMode);
+						callbacks.onFollowUpModeChange(
+							(settingsChoiceValue(id, newValue) as SettingsConfig["followUpMode"] | undefined) ??
+								config.followUpMode,
+						);
 						break;
 					case "transport":
-						callbacks.onTransportChange(TRANSPORT_BY_LABEL.get(newValue) ?? config.transport);
+						callbacks.onTransportChange(
+							(settingsChoiceValue(id, newValue) as Transport | undefined) ?? config.transport,
+						);
 						break;
 					case "http-idle-timeout": {
-						const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
-						if (choice) {
-							callbacks.onHttpIdleTimeoutMsChange(choice.timeoutMs);
+						const timeoutMs = settingsChoiceValue(id, newValue);
+						if (timeoutMs !== undefined) {
+							callbacks.onHttpIdleTimeoutMsChange(Number(timeoutMs));
 						}
 						break;
 					}
@@ -3907,7 +3738,7 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onEnableInstallTelemetryChange(newValue === "On");
 						break;
 					case "default-project-trust": {
-						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
+						const defaultProjectTrust = settingsChoiceValue(id, newValue) as DefaultProjectTrust | undefined;
 						if (defaultProjectTrust) {
 							callbacks.onDefaultProjectTrustChange(defaultProjectTrust);
 						}
@@ -3915,17 +3746,18 @@ export class SettingsSelectorComponent extends Container {
 					}
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(
-							DOUBLE_ESCAPE_ACTION_BY_LABEL.get(newValue) ?? config.doubleEscapeAction,
+							(settingsChoiceValue(id, newValue) as SettingsConfig["doubleEscapeAction"] | undefined) ??
+								config.doubleEscapeAction,
 						);
 						break;
 					case "show-hardware-cursor":
 						callbacks.onShowHardwareCursorChange(newValue === "On");
 						break;
 					case "editor-padding":
-						callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
+						callbacks.onEditorPaddingXChange(parseInt(settingsChoiceValue(id, newValue) ?? newValue, 10));
 						break;
 					case "output-padding":
-						callbacks.onOutputPadChange(newValue === "0" ? 0 : 1);
+						callbacks.onOutputPadChange(settingsChoiceValue(id, newValue) === "0" ? 0 : 1);
 						break;
 					case "autocomplete-max-visible":
 						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));

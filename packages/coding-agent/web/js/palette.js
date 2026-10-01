@@ -3,22 +3,8 @@ import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { api, loadResources, setView, state, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
 import { chatTitle, debounce, relTime } from "./util.js";
+import { rankSearch } from "./search.js";
 import { serverText, t } from "./i18n.js";
-
-function score(query, text) {
-	const q = query.toLowerCase();
-	const t = text.toLowerCase();
-	if (!q) return 1;
-	const i = t.indexOf(q);
-	if (i >= 0) return 100 - i;
-	let pos = 0;
-	for (const ch of q) {
-		const f = t.indexOf(ch, pos);
-		if (f < 0) return 0;
-		pos = f + 1;
-	}
-	return 10;
-}
 
 export function CommandPalette() {
 	const ws = useStore((s) => s.workspaces);
@@ -82,33 +68,26 @@ export function CommandPalette() {
 			{ label: t("Language: English"), icon: "globe", run: run(() => setView({ lang: "en" })) },
 			{ label: t("Language: 简体中文"), icon: "globe", run: run(() => setView({ lang: "zh-CN" })) },
 		];
-		for (const c of cmds) {
-			const s = score(query, c.label);
-			if (s) list.push({ ...c, group: t("Actions"), s });
-		}
-		// Slash commands come from the same registry as the composer's "/" menu (and the terminal UI); running one here is
-		// exactly typing it.
-		for (const c of resources?.commands || []) {
-			if (!query && c.source !== "builtin") continue;
-			const description = c.source === "builtin" ? serverText(c.description) : c.description;
-			const s = score(query, `/${c.name} ${(c.aliases || []).join(" ")} ${description || ""}`);
-			if (!s) continue;
+		// Every group is searched by the same rule: relevance first (exact name > prefix > part of the name >
+		// description), then usage, then the list's own order.
+		for (const c of rankSearch(cmds, query, { names: (c) => c.label })) list.push({ ...c, group: t("Actions") });
+		// Slash commands come from the same registry as the composer's "/" menu (and the terminal UI), most used first;
+		// running one here is exactly typing it.
+		const describe = (c) => (c.source === "builtin" ? serverText(c.description) : c.description) || "";
+		const commands = (resources?.commands || []).filter((c) => query || c.source === "builtin");
+		for (const c of rankSearch(commands, query.replace(/^\//, ""), { names: (c) => [c.name, ...(c.aliases || [])], keywords: describe, usage: (c) => c.uses })) {
 			const run = () => (close(), c.source === "builtin" ? actions.submit(`/${c.name}`) : actions.insertIntoComposer(`/${c.name} `, { replace: true }));
-			list.push({ label: `/${c.name}`, sub: description, icon: "bolt", group: t("Commands"), s, run });
+			list.push({ label: `/${c.name}`, sub: describe(c), icon: "bolt", group: t("Commands"), run });
 		}
-		for (const [root, sessions] of Object.entries(ws.sessions)) {
+		const chats = Object.entries(ws.sessions).flatMap(([root, sessions]) => {
 			const w = ws.list.find((x) => x.rootPath === root);
-			for (const info of sessions) {
-				const title = chatTitle(info);
-				const s = query ? score(query, `${title} ${w?.name || ""}`) : 0;
-				if (!query && !info.current) continue;
-				if (query && !s) continue;
-				list.push({ label: title.slice(0, 90), sub: `${w?.name || ""} · ${relTime(info.modified)}`, icon: "chat", group: t("Chats"), s: s + 1, run: () => (close(), actions.openSession(info.path)) });
-			}
+			return sessions.filter((info) => query || info.current).map((info) => ({ info, title: chatTitle(info), workspace: w?.name || "" }));
+		});
+		for (const chat of rankSearch(chats, query, { names: (c) => c.title, keywords: (c) => c.workspace })) {
+			list.push({ label: chat.title.slice(0, 90), sub: `${chat.workspace} · ${relTime(chat.info.modified)}`, icon: "chat", group: t("Chats"), run: () => (close(), actions.openSession(chat.info.path)) });
 		}
-		for (const file of files) list.push({ label: file, icon: "file", group: t("Files"), s: 5, run: () => (close(), actions.openFile(file)) });
-		const order = { [t("Actions")]: 0, [t("Commands")]: 1, [t("Chats")]: 2, [t("Files")]: 3 };
-		return list.sort((a, b) => order[a.group] - order[b.group] || b.s - a.s).slice(0, 40);
+		for (const file of files) list.push({ label: file, icon: "file", group: t("Files"), run: () => (close(), actions.openFile(file)) });
+		return list.slice(0, 40);
 	}, [query, ws, files, snap?.active, resources]);
 
 	useEffect(() => setSel(0), [query]);

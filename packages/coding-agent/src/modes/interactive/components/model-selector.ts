@@ -2,9 +2,9 @@ import { type Model, modelsAreEqual } from "@myharness/ai";
 import {
 	Container,
 	type Focusable,
-	fuzzyFilter,
 	getKeybindings,
 	Input,
+	rankedFilter,
 	Spacer,
 	Text,
 	type TUI,
@@ -12,7 +12,7 @@ import {
 } from "@myharness/tui";
 import type { SettingsManager } from "../../../config/settings/index.ts";
 import type { ModelRuntime } from "../../../providers/runtime/index.ts";
-import { getModelSelectorSearchText } from "../model-search.ts";
+import { getModelSearchNames } from "../model-search.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
@@ -280,8 +280,14 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private filterModels(query: string): void {
 		this.filteredModels = query
-			? fuzzyFilter(this.activeModels, query, ({ id, provider, model }) =>
-					getModelSelectorSearchText({ id, provider, name: model.name }),
+			? // Relevance first: an exact model ID or name, then a prefix, then a part of it, then the provider.
+				rankedFilter(
+					this.activeModels,
+					query,
+					({ id, provider, model }) => getModelSearchNames({ id, provider, name: model.name }),
+					{
+						getKeywords: ({ provider }) => provider,
+					},
 				)
 			: this.activeModels;
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));

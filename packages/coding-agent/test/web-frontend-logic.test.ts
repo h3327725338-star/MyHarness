@@ -6,8 +6,9 @@ const webDir = new URL("../web/js/", import.meta.url);
 const { parsePatch } = await import(new URL("diff-parse.js", webDir).href);
 const { buildTurns, describeAction, groupSteps, turnOutcome } = await import(new URL("turns.js", webDir).href);
 const models = await import(new URL("provider-models.js", webDir).href);
-const { ansiSegments, filterModelGroups, fmtDuration, modelEfforts, relTime, shellOutcome, shortPath, stripAnsi } =
+const { ansiSegments, fmtDuration, modelEfforts, relTime, searchModels, shellOutcome, shortPath, stripAnsi } =
 	await import(new URL("util.js", webDir).href);
+const { byUsage, rankSearch, searchTier } = await import(new URL("search.js", webDir).href);
 
 const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	kind: "assistant",
@@ -204,16 +205,32 @@ describe("Web UI: model picker", () => {
 		},
 		{ id: "local", name: "Local", models: [{ id: "llama-3.1-8b", name: "" }] },
 	];
-	const ids = (groups: any[]) => groups.flatMap((g) => g.models.map((m: any) => `${g.id}/${m.id}`));
+	const ids = (rows: any[]) => rows.map((row) => `${row.provider.id}/${row.model.id}`);
 
-	it("matches any part of the provider ID or model ID, not only what is shown", () => {
-		expect(ids(filterModelGroups(providers, "coder"))).toEqual(["openrouter/qwen/qwen3-coder"]);
-		expect(ids(filterModelGroups(providers, "3.1"))).toEqual(["local/llama-3.1-8b"]);
-		expect(ids(filterModelGroups(providers, "OPENROUTER"))).toHaveLength(2);
-		expect(ids(filterModelGroups(providers, "open claude"))).toEqual(["openrouter/anthropic/claude-x"]);
-		expect(ids(filterModelGroups(providers, "local/llama"))).toEqual(["local/llama-3.1-8b"]);
-		expect(filterModelGroups(providers, "nothing-like-this")).toEqual([]);
-		expect(filterModelGroups(providers, "  ")).toBe(providers);
+	it("lists every model in one flat list and matches any part of the provider ID or model ID", () => {
+		expect(ids(searchModels(providers, "coder"))).toEqual(["openrouter/qwen/qwen3-coder"]);
+		expect(ids(searchModels(providers, "3.1"))).toEqual(["local/llama-3.1-8b"]);
+		expect(ids(searchModels(providers, "OPENROUTER"))).toHaveLength(2);
+		expect(ids(searchModels(providers, "open claude"))).toEqual(["openrouter/anthropic/claude-x"]);
+		expect(ids(searchModels(providers, "local/llama"))).toEqual(["local/llama-3.1-8b"]);
+		expect(searchModels(providers, "nothing-like-this")).toEqual([]);
+		// No provider groups: an empty search is every model, in the given order.
+		expect(ids(searchModels(providers, "  "))).toEqual([
+			"openrouter/anthropic/claude-x",
+			"openrouter/qwen/qwen3-coder",
+			"local/llama-3.1-8b",
+		]);
+	});
+
+	it("ranks models by relevance: an exact name, then a prefix, then a part of the name", () => {
+		const list = [
+			{
+				id: "p",
+				name: "P",
+				models: [{ id: "x-gpt-5-mini" }, { id: "gpt-5-mini" }, { id: "gpt-5" }, { id: "other" }],
+			},
+		];
+		expect(ids(searchModels(list, "GPT-5"))).toEqual(["p/gpt-5", "p/gpt-5-mini", "p/x-gpt-5-mini"]);
 	});
 
 	it("offers an effort menu only for a model with efforts to choose between", () => {
@@ -226,7 +243,7 @@ describe("Web UI: model picker", () => {
 
 describe("Web UI: provider model catalog", () => {
 	const draft = (patch: Record<string, unknown> = {}) => ({
-		baseUrl: "https://api.example.com/v1",
+		baseUrl: "https://relay.test/v1",
 		api: "openai-completions",
 		auth: "key",
 		apiKey: "",
@@ -241,6 +258,7 @@ describe("Web UI: provider model catalog", () => {
 			input: ["text", "image"],
 			contextWindow: 200000,
 			thinkingLevelMap: { minimal: null, medium: null, xhigh: "xhigh" },
+			thinkingSource: "catalog",
 		});
 		expect(seeded).toMatchObject({
 			id: "reason-b",
@@ -251,7 +269,13 @@ describe("Web UI: provider model catalog", () => {
 		});
 		// Not stated by the catalog: keeps the usual default and is not marked as detected.
 		expect(seeded.maxTokens).toBe(models.toK(models.DEFAULT_MAX_TOKENS));
-		expect(seeded.detected).toEqual({ reasoning: true, input: true, contextWindow: true, levels: true });
+		expect(seeded.detected).toEqual({
+			reasoning: true,
+			input: true,
+			contextWindow: true,
+			levels: true,
+			levelsSource: "catalog",
+		});
 		expect(seeded.levels).toMatchObject({
 			off: true,
 			minimal: false,
@@ -387,11 +411,94 @@ describe("Web UI: provider model catalog", () => {
 		expect(models.connectionReady(draft(), { hasStoredKey: false })).toBe(false);
 		expect(models.connectionReady(draft({ apiKey: "sk-x" }), { hasStoredKey: false })).toBe(true);
 		expect(models.connectionReady(draft(), { hasStoredKey: true })).toBe(true);
-		expect(models.connectionReady(draft({ auth: "none" }), { hasStoredKey: false })).toBe(true);
-		expect(models.connectionReady(draft({ baseUrl: "api.example.com", auth: "none" }), { hasStoredKey: false })).toBe(
+		expect(models.connectionReady(draft({ auth: "config" }), { hasStoredKey: false })).toBe(true);
+		expect(
+			models.connectionReady(draft({ baseUrl: "api.example.com", auth: "config" }), { hasStoredKey: false }),
+		).toBe(false);
+		expect(models.connectionReady(draft({ baseUrl: "ftp://x", auth: "config" }), { hasStoredKey: false })).toBe(
 			false,
 		);
-		expect(models.connectionReady(draft({ baseUrl: "ftp://x", auth: "none" }), { hasStoredKey: false })).toBe(false);
+		// Nothing typed, or the example address shown in the empty field: not a connection.
+		expect(models.connectionReady(draft({ baseUrl: "", auth: "config" }), { hasStoredKey: true })).toBe(false);
+		expect(
+			models.connectionReady(draft({ baseUrl: models.BASE_URL_EXAMPLE, auth: "config" }), { hasStoredKey: true }),
+		).toBe(false);
+	});
+
+	it("never takes the example Base URL for a real one", () => {
+		expect(models.baseUrlProblem("")).toBe("missing");
+		expect(models.baseUrlProblem("   ")).toBe("missing");
+		expect(models.baseUrlProblem("https://api.example.com/v1")).toBe("example");
+		expect(models.baseUrlProblem(" HTTPS://API.example.com/v1/ ")).toBe("example");
+		expect(models.baseUrlProblem("api.myhost.com")).toBe("invalid");
+		expect(models.baseUrlProblem("https://relay.myhost.com/v1")).toBe("");
+		expect(models.baseUrlProblem("http://127.0.0.1:11434/v1")).toBe("");
+	});
+
+	it("restores the saved way to authenticate, and keeps models.json for entries from before it was saved", () => {
+		expect(models.authModeOf({ authMode: "config", apiKey: "x" })).toBe("config");
+		expect(models.authModeOf({ authMode: "config" })).toBe("config");
+		expect(models.authModeOf({ authMode: "apiKey", apiKey: "test left in the file" })).toBe("key");
+		expect(models.authModeOf({ apiKey: "MY_ENV_VAR" })).toBe("config");
+		expect(models.authModeOf({ apiKey: "local" })).toBe("config");
+		expect(models.authModeOf({})).toBe("key");
+	});
+});
+
+describe("Web UI: search ranking", () => {
+	const commands = [
+		{ name: "GitHub Connect", description: "connect", uses: 9 },
+		{ name: "Git", description: "local versions", uses: 0 },
+		{ name: "Settings", description: "git and other options", uses: 50 },
+		{ name: "Legit", description: "", uses: 99 },
+	];
+	const search = (query: string) =>
+		rankSearch(commands, query, {
+			names: (c: any) => c.name,
+			keywords: (c: any) => c.description,
+			usage: (c: any) => c.uses,
+		}).map((c: any) => c.name);
+
+	it("puts relevance before usage: exact name, name prefix, part of the name, then the description", () => {
+		expect(search("git")).toEqual(["Git", "GitHub Connect", "Legit", "Settings"]);
+		expect(search("GIT")).toEqual(search("git"));
+		expect(search("nothing-like-this")).toEqual([]);
+		expect(searchTier("git", "Git")).toBe(0);
+		expect(searchTier("git", "GitHub Connect")).toBe(1);
+		expect(searchTier("git", "Legit")).toBe(2);
+		expect(searchTier("git", "Settings", "git and other options")).toBe(3);
+	});
+
+	it("uses the usage count only between equally relevant candidates, then keeps the given order", () => {
+		const items = [
+			{ name: "model-a", uses: 1 },
+			{ name: "model-b", uses: 7 },
+			{ name: "model-c", uses: 1 },
+			{ name: "model", uses: 0 },
+		];
+		const names = (list: any[]) => list.map((item) => item.name);
+		const options = { names: (item: any) => item.name, usage: (item: any) => item.uses };
+		expect(names(rankSearch(items, "model", options))).toEqual(["model", "model-b", "model-a", "model-c"]);
+		// An empty search keeps the list as given (it arrives ordered by usage).
+		expect(names(rankSearch(items, "", options))).toEqual(["model-a", "model-b", "model-c", "model"]);
+		expect(names(byUsage(items, (item: any) => item.uses))).toEqual(["model-b", "model-a", "model-c", "model"]);
+	});
+});
+
+describe("Web UI: shared /settings menu", () => {
+	it("can open every row the menu offers to the Web, and defines no row of its own", async () => {
+		const { SETTINGS_MENU_PAGES } = await import(new URL("settings-menu.js", webDir).href);
+		const { settingsMenuFor } = await import("../src/cli/settings-menu.ts");
+		const { SETTINGS_MENU_SETTING } = await import("../src/modes/web/routes-settings.ts");
+		const web = settingsMenuFor("web").map((item) => item.id);
+		const openable = [...Object.keys(SETTINGS_MENU_SETTING), ...Object.keys(SETTINGS_MENU_PAGES)];
+		expect(new Set(openable).size).toBe(openable.length);
+		expect([...openable].sort()).toEqual([...web].sort());
+		// Everything in the terminal's menu is in the Web's, except what only a terminal has.
+		const terminalOnly = ["theme"];
+		for (const item of settingsMenuFor("cli")) {
+			if (!terminalOnly.includes(item.id)) expect(web).toContain(item.id);
+		}
 	});
 });
 

@@ -1,5 +1,5 @@
 import { TUI_SPACING, TUI_SYMBOLS } from "../design-tokens.ts";
-import { fuzzyFilter } from "../fuzzy.ts";
+import { rankedFilter } from "../fuzzy.ts";
 import { getKeybindings } from "../keybindings.ts";
 import type { Component, Focusable } from "../tui.ts";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
@@ -355,7 +355,10 @@ export class SettingsList implements Component, Focusable {
 	}
 
 	private applyFilter(query: string): void {
-		this.filteredItems = fuzzyFilter(this.items, query, (item) => item.label);
+		// Relevance first (exact > prefix > contains > description); the given order (by usage) decides ties.
+		this.filteredItems = rankedFilter(this.items, query, (item) => item.label, {
+			getKeywords: (item) => item.description ?? "",
+		});
 		this.selectedIndex = 0;
 	}
 

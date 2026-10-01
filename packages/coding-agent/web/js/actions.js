@@ -54,6 +54,15 @@ async function builtinCommand(name) {
 	return (state.resources?.commands || []).find((c) => c.source === "builtin" && (c.name === name || c.aliases?.includes(name)));
 }
 
+/** A slash command was run: counted on the server like the terminal does, so both order their command lists alike. */
+function noteCommandUse(typed) {
+	const command = (state.resources?.commands || []).find((c) => c.name === typed || c.aliases?.includes(typed));
+	if (!command) return;
+	post("/api/commands/usage", { name: command.name })
+		.then(() => loadResources())
+		.catch(() => {});
+}
+
 export function openCommand(name, arg = "") {
 	setView({ cmd: { name, arg, nonce: Date.now() } });
 }
@@ -101,6 +110,7 @@ export const actions = {
 			const typed = head.slice(1);
 			const name = BUILTIN_COMMAND_KINDS[typed] ? typed : (await builtinCommand(typed))?.name;
 			const kind = name && BUILTIN_COMMAND_KINDS[name];
+			noteCommandUse(name || typed);
 			if (kind === "panel") {
 				openCommand(name, arg);
 				return { handled: true };

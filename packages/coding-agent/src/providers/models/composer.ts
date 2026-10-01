@@ -149,6 +149,7 @@ function modelFromJson(
 		);
 	}
 	const baseUrl = definition.baseUrl ?? providerConfig.baseUrl ?? defaults?.baseUrl;
+	// Callers skip definitions without an address (see applyModelsJson); this only guards direct use.
 	if (!baseUrl) throw new Error(`Provider ${providerId}: "baseUrl" is required when defining custom models.`);
 	if (definition.contextWindow !== undefined && definition.contextWindow <= 0) {
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid contextWindow`);
@@ -191,7 +192,10 @@ function applyModelsJson(
 		!config.compat &&
 		!hasOverrides &&
 		!config.apiKey &&
-		config.authHeader === undefined
+		config.authHeader === undefined &&
+		// An entry saved before its Base URL was filled in is kept as an unfinished provider (no models, not usable).
+		!config.name &&
+		!config.api
 	) {
 		throw new Error(
 			`Provider ${providerId}: must specify "baseUrl", "headers", "compat", "modelOverrides", or "models".`,
@@ -206,6 +210,8 @@ function applyModelsJson(
 	for (const definition of config.models ?? []) {
 		const existingIndex = models.findIndex((model) => model.id === definition.id);
 		const defaults = existingIndex >= 0 ? models[existingIndex] : models[0];
+		// Without an address there is nothing to send a request to: the model stays in models.json but is not offered.
+		if (!(definition.baseUrl ?? config.baseUrl ?? defaults?.baseUrl)) continue;
 		const model = modelFromJson(providerId, definition, config, defaults);
 		if (existingIndex >= 0) models[existingIndex] = model;
 		else models.push(model);
@@ -280,7 +286,22 @@ function configuredApiKey(
 	config: ModelsJsonProvider | undefined,
 	extension: ProviderConfigInput | undefined,
 ): string | undefined {
-	return extension?.apiKey ?? config?.apiKey;
+	// `authMode: "apiKey"` uses the saved key only: a key that is also written in models.json is left unused.
+	return extension?.apiKey ?? (config?.authMode === "apiKey" ? undefined : config?.apiKey);
+}
+
+/** `authMode: "config"`: the key written in models.json is used even when a key is saved in the credential store. */
+function prefersConfiguredKey(config: ModelsJsonProvider | undefined, rawKey: string | undefined): boolean {
+	return config?.authMode === "config" && rawKey !== undefined;
+}
+
+/**
+ * Whether a models.json provider has an address for its models. A provider saved without a Base URL is kept as an
+ * unfinished entry: it offers no models and cannot be enabled until the Base URL is filled in.
+ */
+export function modelsJsonProviderLacksBaseUrl(config: ModelsJsonProvider | undefined): boolean {
+	if (!config || config.baseUrl) return false;
+	return !(config.models ?? []).some((model) => model.baseUrl);
 }
 
 function configuredHeaders(
@@ -327,7 +348,7 @@ function composeApiKeyAuth(
 				key: await interaction.prompt({ type: "secret", message: "Enter API key" }),
 			})),
 		check: async (input) => {
-			if (input.credential) {
+			if (input.credential && !prefersConfiguredKey(config, rawKey)) {
 				if (inherited?.check) return inherited.check(input);
 				if (input.credential.key) return { type: "api_key", source: "stored credential" };
 				const resolved = await inherited?.resolve(input);
@@ -347,7 +368,7 @@ function composeApiKeyAuth(
 		},
 		resolve: async (input) => {
 			let result: AuthResult | undefined;
-			if (input.credential) {
+			if (input.credential && !prefersConfiguredKey(config, rawKey)) {
 				result = inherited
 					? await inherited.resolve(input)
 					: input.credential.key

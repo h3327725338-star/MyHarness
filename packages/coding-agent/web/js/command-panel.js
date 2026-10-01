@@ -6,10 +6,12 @@ import { GENERAL_KEY, api, attempt, loadGitStatus, loadModels, loadProviders, lo
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
-import { modelRefLabel } from "./model-menu.js";
+import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
-import { chatTitle, clip, effortHint, effortName, fmtDateTime, fmtTokens, modelEfforts, pointerMoved, relTime } from "./util.js";
+import { rankSearch } from "./search.js";
+import { settingsMenuIcon } from "./settings-menu.js";
+import { chatTitle, clip, effortName, fmtDateTime, modelEfforts, pointerMoved, relTime } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -48,31 +50,40 @@ function inputScreen({ title, label, value = "", type = "text", placeholder, sub
 }
 
 // ---- /effort ------------------------------------------------------------------------------------------------
+/** The effort slider as a panel level: one stop per level; `withDefault` adds "Default" (no effort sent). */
+function effortSliderScreen({ title, levels, value, withDefault, onChange }) {
+	return { title, slider: { levels, value, withDefault, onChange } };
+}
 
 function effortScreen() {
 	const thinking = state.snap?.thinking;
 	if (!thinking?.supported) return { title: t("Reasoning effort"), empty: t("The current model does not support reasoning effort."), rows: [] };
 	if (thinking.levels.length < 2) return { title: t("Reasoning effort"), empty: t("The current model has no reasoning effort options to choose from."), rows: [] };
-	return optionsScreen({
+	return effortSliderScreen({
 		title: t("Reasoning effort"),
-		options: thinking.levels.map((level) => ({ value: level, label: effortName(level), desc: effortHint(level) })),
+		levels: thinking.levels,
 		value: thinking.level,
-		onPick: async (level, ctx) => {
-			if (await attempt(() => post("/api/thinking", { level }))) ctx.close();
+		onChange: async (level) => {
+			if (await attempt(() => post("/api/thinking", { level }))) await attempt(loadSnapshot, { quiet: true });
 		},
 	});
 }
 
 // ---- /model -------------------------------------------------------------------------------------------------
-/** The efforts of one model, opened from its row (Model → its efforts). `withDefault` adds "Default" (no effort sent). */
-function effortsScreen({ title, levels, value, withDefault, onPick }) {
-	return optionsScreen({
-		title,
-		subtitle: t("Thinking effort"),
-		options: [...(withDefault ? [{ value: "", label: t("Default"), desc: t("No effort sent") }] : []), ...levels.map((level) => ({ value: level, label: effortName(level), desc: effortHint(level) }))],
-		value: value ?? "",
-		onPick: (level, c) => onPick(level || undefined, c),
-	});
+/** One flat, searchable row per model; the provider is the weaker text beside the name. */
+function modelRows(models, { isCurrent, onPick, disabled }) {
+	return (models?.providers || []).flatMap((provider) =>
+		provider.models.map((m) => ({
+			key: `${provider.id}/${m.id}`,
+			label: m.name || m.id,
+			names: [m.id, `${provider.id}/${m.id}`],
+			desc: provider.name || provider.id,
+			search: provider.id,
+			check: isCurrent(provider, m),
+			disabled,
+			onEnter: (c) => onPick(provider, m, c),
+		})),
+	);
 }
 
 function modelScreen(ctx, arg) {
@@ -83,44 +94,27 @@ function modelScreen(ctx, arg) {
 		loadModels();
 	}, []);
 	const running = !!snap?.active;
-	const choose = async (m, thinkingLevel, c) => {
-		if (await attempt(() => post("/api/model", { provider: m.provider, id: m.id, ...(thinkingLevel ? { thinkingLevel } : {}) }))) {
-			await attempt(loadSnapshot, { quiet: true });
-			c.close();
-		}
-	};
-	const rows = [];
-	for (const provider of models?.providers || []) {
-		rows.push({ key: `g-${provider.id}`, group: provider.name });
-		for (const m of provider.models) {
-			const isCurrent = !!current && current.provider === m.provider && current.id === m.id;
-			const levels = modelEfforts(m);
-			rows.push({
-				key: `${m.provider}/${m.id}`,
-				label: m.name || m.id,
-				search: `${provider.id} ${provider.name} ${m.id} ${m.name} ${provider.id}/${m.id}`,
-				badges: [m.input.includes("image") ? t("image") : ""].filter(Boolean),
-				value: isCurrent && levels.length ? effortName(snap.thinking.level) : fmtTokens(m.contextWindow),
-				check: isCurrent,
-				chevron: levels.length > 0,
-				disabled: running,
-				// A model with efforts opens them first; the others are chosen at once.
-				onEnter: (c) =>
-					levels.length
-						? c.push(() => effortsScreen({ title: m.name || m.id, levels, value: isCurrent ? snap.thinking.level : undefined, onPick: (level, cc) => choose(m, level, cc) }))
-						: choose(m, undefined, c),
-			});
-		}
-	}
-	rows.push({ key: "providers", label: t("Manage providers…"), icon: "key", chevron: true, onEnter: (c) => c.push((cc) => providersScreen(cc)) });
 	return {
 		title: t("Choose a model"),
 		subtitle: running ? t("Models can be switched when the agent is idle") : undefined,
 		filterable: true,
 		initialFilter: arg,
-		placeholder: t("Search by provider or model ID…"),
+		placeholder: t("Search models…"),
 		loading: !models,
-		rows,
+		rows: [
+			...modelRows(models, {
+				disabled: running,
+				isCurrent: (provider, m) => !!current && current.provider === provider.id && current.id === m.id,
+				// The model is chosen at once; its effort has its own control (/effort, the effort chip).
+				onPick: async (provider, m, c) => {
+					if (await attempt(() => post("/api/model", { provider: provider.id, id: m.id }))) {
+						await attempt(loadSnapshot, { quiet: true });
+						c.close();
+					}
+				},
+			}),
+			{ key: "providers", label: t("Manage providers…"), icon: "key", chevron: true, onEnter: (c) => c.push((cc) => providersScreen(cc)) },
+		],
 		empty: models && !models.providers.length ? t("No model is available. Add a provider in Settings.") : t("No models match."),
 	};
 }
@@ -129,13 +123,6 @@ function modelScreen(ctx, arg) {
 
 /** A settings item by id, as the server lists it (GET /api/settings). */
 const settingItem = (id) => state.settings?.items.find((item) => item.id === id);
-
-/** A root row for one setting: the terminal's English name, and a description in the interface language. */
-function settingRow(id, label, desc) {
-	const item = settingItem(id);
-	if (!item) return null;
-	return { ...itemRow(item), key: id, label, desc: t(desc), search: `${id} ${item.label} ${item.description || ""}` };
-}
 
 /** A screen with a few related settings (Web Search, Context Window, Warnings …). */
 function groupScreen(title, ids, subtitle) {
@@ -147,71 +134,69 @@ function groupScreen(title, ids, subtitle) {
 
 const onOff = (value) => (value ? t("On") : t("Off"));
 
+const WEB_SEARCH_SETTINGS = ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback"];
+const CONTEXT_WINDOW_SETTINGS = ["contextWindowMain", "contextWindowSubAgent"];
+const WARNING_SETTINGS = ["warnings.anthropicExtraUsage"];
+
 /**
- * The same list, order and names as the terminal's /settings; every row edits the same settings.json / models.json /
- * credentials through the same server calls. A few Web-only settings follow under "More".
+ * The pages behind the rows of the /settings menu that are not a single setting (SETTINGS_MENU_PAGES names them):
+ * `open` builds the page, `value` is what the row shows, `settings` are the settings found by a search on the row.
+ */
+const MENU_PAGES = {
+	providers: { open: (c) => providersScreen(c) },
+	"github-connect": { open: (c) => githubScreen(c) },
+	"default-model": {
+		open: (c) => modelScreen(c, ""),
+		value: (snap) => (snap?.model ? `${snap.model.provider}/${snap.model.id}${snap.thinking?.supported ? ` · ${effortName(snap.thinking.level)}` : ""}` : t("Not selected")),
+	},
+	"web-search": { open: groupScreen("Web Search", WEB_SEARCH_SETTINGS), settings: WEB_SEARCH_SETTINGS, value: () => (settingItem("webSearch.enabled") ? onOff(settingItem("webSearch.enabled").value) : "") },
+	"context-window": {
+		open: () => groupScreen("Context Window", CONTEXT_WINDOW_SETTINGS, t("Empty uses the model's own window."))(),
+		settings: CONTEXT_WINDOW_SETTINGS,
+		value: () => CONTEXT_WINDOW_SETTINGS.map((id) => settingItem(id)?.value || t("model")).join(" · "),
+	},
+	"git-integration": { open: () => gitRoot(), value: (snap) => (snap?.git ? onOff(snap.git.enabled) : "") },
+	warnings: { open: groupScreen("Warnings", WARNING_SETTINGS), settings: WARNING_SETTINGS },
+	thinking: { open: () => effortScreen(), value: (snap) => (snap?.thinking?.supported ? effortName(snap.thinking.level) : "") },
+	appearance: { open: () => appearanceScreen() },
+	"project-trust": { open: (c) => projectTrustScreen(c), value: (snap) => (snap?.trust?.requiresTrust ? (snap.trust.trusted ? t("Trusted") : t("Not trusted")) : "") },
+	about: { open: () => aboutScreen() },
+};
+
+/**
+ * /settings: the terminal's menu. Rows, order (most used first), names, descriptions and choices come from the one
+ * definition shared with the terminal (GET /api/settings `menu`); every row edits the same settings.json / models.json
+ * / credentials through the same server calls. Nothing about the menu is listed here.
  */
 function settingsRoot() {
 	const settings = useStore((s) => s.settings);
 	const snap = useStore((s) => s.snap);
 	useEffect(() => {
-		if (!state.settings) loadSettings();
+		loadSettings();
 	}, []);
-	const model = snap?.model;
-	const value = (id) => settingItem(id)?.value;
-	const nav = (key, label, desc, icon, build, extra = {}) => ({ key, label, desc: t(desc), icon, chevron: true, onEnter: (ctx) => ctx.push(build), ...extra });
-	const web = value("webSearch.enabled");
-	const contextSummary = [value("contextWindowMain") || t("model"), value("contextWindowSubAgent") || t("model")].join(" · ");
-	const rows = [
-		nav("providers", "Providers", "Manage model services and keys", "key", (c) => providersScreen(c)),
-		nav("github", "GitHub Connect", "Connect GitHub", "gitBranch", (c) => githubScreen(c)),
-		nav("default-model", "Default Model", "Choose the main model", "cpu", (c) => modelScreen(c, ""), { value: model ? `${model.provider}/${model.id} · ${snap?.thinking?.level ?? "off"}` : t("Not selected") }),
-		settingRow("autoMemory", "Auto Memory", "Remember preferences and project facts"),
-		settingRow("subAgent", "Sub Agent", "Investigate complex tasks in parallel"),
-		nav("web-search", "Web Search", "Search the web", "globe", groupScreen("Web Search", ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback"]), { value: web === undefined ? "" : onOff(web) }),
-		settingRow("codeIntelligence.enabled", "Code Intelligence", "Optional semantic code modules"),
-		nav("context-window", "Context Window", "Context limits", "layers", groupScreen("Context Window", ["contextWindowMain", "contextWindowSubAgent"], t("Empty uses the model's own window.")), { value: contextSummary }),
-		settingRow("visionAssistant", "Vision Assistant", "Use a dedicated model to look at images"),
-		nav("git", "Git", "Keep local versions of the code", "gitBranch", () => gitRoot(), { value: snap?.git ? onOff(snap.git.enabled) : "" }),
-		settingRow("compactionModel", "Compact Model", "Model and thinking effort used for compaction"),
-		settingRow("autoCompact", "Auto-compact", "Compact long conversations automatically"),
-		settingRow("steeringMode", "Steering mode", "How messages sent during a reply are delivered"),
-		settingRow("followUpMode", "Follow-up mode", "How messages for after the task are delivered"),
-		settingRow("transport", "Transport", "How to connect to the model"),
-		settingRow("httpIdleTimeoutMs", "HTTP idle timeout", "How long an idle connection may stay open"),
-		settingRow("hideThinkingBlock", "Collapse transcript", "Terminal UI: collapse thinking and tool output"),
-		settingRow("showCacheMissNotices", "Cache miss notices", "Notice when prompt-cache reuse fails"),
-		settingRow("collapseChangelog", "Collapse changelog", "Terminal UI: condensed changelog after updates"),
-		settingRow("quietStartup", "Quiet startup", "Terminal UI: hide startup details"),
-		settingRow("enableInstallTelemetry", "Install telemetry", "Send anonymous version statistics"),
-		settingRow("defaultProjectTrust", "Default project trust", "Default trust for new projects"),
-		nav("project-trust", "Project trust", "Trust decision for this project", "shield", (c) => projectTrustScreen(c), { value: snap?.trust?.requiresTrust ? (snap.trust.trusted ? t("Trusted") : t("Not trusted")) : "" }),
-		settingRow("doubleEscapeAction", "Double-escape action", "Compatibility setting, currently has no effect"),
-		nav("warnings", "Warnings", "Manage billing-related warnings", "alertTriangle", groupScreen("Warnings", ["warnings.anthropicExtraUsage"])),
-		nav("thinking", "Thinking level", "Model thinking effort", "brain", () => effortScreen(), { value: snap?.thinking?.supported ? effortName(snap.thinking.level) : "" }),
-		nav("appearance", "Appearance", "Theme, language and layout of the Web UI (the terminal keeps its own theme)", "eye", () => appearanceScreen()),
-		settingRow("showImages", "Show images", "Terminal UI: show images inline"),
-		settingRow("imageWidthCells", "Image width", "Terminal UI: width of inline images"),
-		settingRow("autoResizeImages", "Auto-resize images", "Shrink oversized images automatically"),
-		settingRow("blockImages", "Block images", "Never send images to the model"),
-		settingRow("enableSkillCommands", "Skill commands", "Add skills as slash commands"),
-		settingRow("showHardwareCursor", "Show hardware cursor", "Terminal UI: show the terminal's input cursor"),
-		settingRow("editorPaddingX", "Editor padding", "Terminal UI: padding of the input box"),
-		settingRow("outputPad", "Output padding", "Terminal UI: padding of messages"),
-		settingRow("autocompleteMaxVisible", "Autocomplete max items", "Terminal UI: number of completion candidates"),
-		settingRow("clearOnShrink", "Clear on shrink", "Terminal UI: clear leftover text"),
-		settingRow("showTerminalProgress", "Terminal progress", "Terminal UI: show the running state"),
-		settingRow("popupNotifications", "Popup notifications", "Desktop popup when a task ends"),
-		{ key: "more", group: t("More") },
-		settingRow("autoRetry", "Auto-retry", "Retry transient provider errors"),
-		settingRow("enabledModels", "Model cycling scope", "Models used when cycling models"),
-		settingRow("webShutdownGraceSeconds", "Web UI exit delay", "Seconds the server waits after the last page closes"),
-		settingRow("shellPath", "Shell path", "Shell used by the bash tool"),
-		settingRow("shellCommandPrefix", "Command prefix", "Prepended to every bash command"),
-		settingRow("enableAnalytics", "Analytics", "Analytics data sharing"),
-		nav("about", "About", "Version, shortcuts and quitting", "info", () => aboutScreen()),
-	].filter(Boolean);
-	return { title: t("Settings"), placeholder: t("Search settings…"), loading: !settings, rows };
+	// The order is taken when the panel opens: using a row must not make the list jump while it is open.
+	const order = useRef(null);
+	if (!order.current && settings?.menu) order.current = settings.menu.map((entry) => entry.id);
+	const entries = (order.current || []).map((id) => settings?.menu?.find((entry) => entry.id === id)).filter(Boolean);
+	const rows = entries
+		.map((entry) => {
+			const item = entry.setting ? settingItem(entry.setting) : null;
+			const page = MENU_PAGES[entry.id];
+			const words = [entry.id, item?.label, item?.description, ...(page?.settings || []).flatMap((id) => [settingItem(id)?.label, settingItem(id)?.description])];
+			const base = {
+				key: entry.id,
+				// Setting names stay as the terminal shows them; descriptions follow the interface language.
+				label: entry.label,
+				desc: serverText(entry.description),
+				search: words.filter(Boolean).map((word) => serverText(word, word)).join(" "),
+				uses: entry.uses,
+				onUse: () => post("/api/settings/usage", { id: entry.id }).catch(() => {}),
+			};
+			if (page) return { ...base, icon: settingsMenuIcon(entry.id), chevron: true, value: page.value?.(snap), onEnter: (ctx) => ctx.push(page.open) };
+			return item ? { ...itemRow(item), ...base, icon: settingsMenuIcon(entry.id) } : null;
+		})
+		.filter(Boolean);
+	return { title: t("Settings"), placeholder: t("Search settings…"), filterable: true, loading: !settings, rows };
 }
 
 /** Project Trust of the current project (the terminal asks for it when a project is opened). */
@@ -408,48 +393,52 @@ function modelRefScreen(ctx, id) {
 	useEffect(() => {
 		if (!state.models) loadModels();
 	}, []);
-	const item = state.settings?.items.find((i) => i.id === id);
+	const live = () => state.settings?.items.find((i) => i.id === id);
+	const item = live();
 	if (!item) return { title: t("Settings"), loading: true, rows: [] };
 	const v = item.value || {};
-	const commit = (next) => applySetting(id, { ...v, ...next });
+	const commit = (next) => applySetting(id, { ...(live()?.value || {}), ...next });
+	const levels = modelEfforts(findModel(models, v.provider, v.model));
 	const rows = [];
 	if (item.note === "enabled") rows.push({ key: "enabled", label: t("Enabled"), toggle: !!v.enabled, onEnter: () => commit({ enabled: !v.enabled }) });
 	rows.push({
 		key: "model",
 		label: t("Model"),
-		value: modelRefLabel(models, v),
+		value: modelRefName(models, v),
 		chevron: true,
 		onEnter: (c) =>
-			c.push(() => ({
-				title: tr(item.label),
-				filterable: true,
-				placeholder: t("Search by provider or model ID…"),
-				loading: !models,
-				rows: [
-					// The main model comes with its effort: nothing of its own is kept.
-					{ key: "main", label: t("Use the main model"), desc: t("Same model and thinking effort as the main chat"), check: !v.model, onEnter: async (cc) => (await commit({ provider: undefined, model: undefined, thinkingLevel: undefined }), cc.pop()) },
-					...(models?.providers || []).flatMap((g) =>
-						g.models.map((m) => {
-							const levels = modelEfforts(m);
-							const isCurrent = v.provider === g.id && v.model === m.id;
-							return {
-								key: `${g.id}/${m.id}`,
-								label: m.name || m.id,
-								search: `${g.id} ${g.name} ${m.id} ${m.name} ${g.id}/${m.id}`,
-								desc: g.name,
-								value: isCurrent && levels.length ? (v.thinkingLevel ? effortName(v.thinkingLevel) : t("Default")) : undefined,
-								check: isCurrent,
-								chevron: levels.length > 0,
-								onEnter: (cc) =>
-									levels.length
-										? cc.push(() => effortsScreen({ title: m.name || m.id, levels, withDefault: true, value: isCurrent ? v.thinkingLevel : undefined, onPick: async (level, c3) => (await commit({ provider: g.id, model: m.id, thinkingLevel: level }), c3.pop(), c3.pop()) }))
-										: commit({ provider: g.id, model: m.id, thinkingLevel: undefined }).then(() => cc.pop()),
-							};
+			c.push(() => {
+				const now = live()?.value || {};
+				return {
+					title: tr(item.label),
+					filterable: true,
+					placeholder: t("Search models…"),
+					loading: !state.models,
+					rows: [
+						// The main model comes with its effort: nothing of its own is kept.
+						{ key: "main", label: t("Use the main model"), desc: t("Same model and thinking effort as the main chat"), check: !now.model, onEnter: async (cc) => (await commit({ provider: undefined, model: undefined, thinkingLevel: undefined }), cc.pop()) },
+						...modelRows(state.models, {
+							isCurrent: (provider, m) => now.provider === provider.id && now.model === m.id,
+							onPick: async (provider, m, cc) => (await commit({ provider: provider.id, model: m.id, thinkingLevel: undefined }), cc.pop()),
 						}),
-					),
-				],
-			})),
+					],
+				};
+			}),
 	});
+	// The effort of the chosen model: its own row, opening the slider (with "Default": no effort is sent).
+	if (levels.length) {
+		rows.push({
+			key: "effort",
+			label: t("Thinking effort"),
+			value: v.thinkingLevel ? effortName(v.thinkingLevel) : t("Default"),
+			chevron: true,
+			onEnter: (c) =>
+				c.push(() => {
+					const now = live()?.value || {};
+					return effortSliderScreen({ title: t("Thinking effort"), levels: modelEfforts(findModel(state.models, now.provider, now.model)), value: now.thinkingLevel, withDefault: true, onChange: (level) => commit({ thinkingLevel: level }) });
+				}),
+		});
+	}
 	return { title: tr(item.label), subtitle: tr(item.description), rows };
 }
 
@@ -540,7 +529,7 @@ function providersScreen(ctx) {
 				label: p.name,
 				desc: p.id,
 				value: p.configured ? t("signed in") : t("no credentials"),
-				badges: p.enabled ? [] : [t("disabled")],
+				badges: p.missingBaseUrl ? [t("No Base URL")] : p.enabled ? [] : [t("disabled")],
 				chevron: true,
 				onEnter: (c) => c.push((cc) => providerScreen(cc, p.id)),
 			})),
@@ -562,7 +551,9 @@ function providerScreen(ctx, id) {
 	};
 	const c = provider.credentials;
 	const rows = [
-		{ key: "enabled", label: t("Enabled"), toggle: provider.enabled, onEnter: () => act(() => post("/api/providers/enabled", { id, enabled: !provider.enabled })) },
+		provider.missingBaseUrl
+			? { key: "enabled", label: t("Enabled"), desc: t("Fill in the Base URL and save to turn this provider on."), toggle: false, onEnter: (c) => (c.close(), setView({ providerEditor: { id } })) }
+			: { key: "enabled", label: t("Enabled"), toggle: provider.enabled, onEnter: () => act(() => post("/api/providers/enabled", { id, enabled: !provider.enabled })) },
 	];
 	for (const k of c?.apiKeys || []) {
 		rows.push({ key: `k-${k.id}`, label: `${serverText(k.label)} ${k.suffix ? `••••${k.suffix}` : ""}`.trim(), value: k.active ? t("active") : "", chevron: true, onEnter: (cc) => cc.push((c2) => keyScreen(c2, id, k.id)) });
@@ -783,8 +774,8 @@ function chatRows(sessions, filterCurrent) {
 	return (sessions || []).slice(0, CHAT_ROWS).map((info) => ({
 		key: info.path,
 		label: chatTitle(info),
-		desc: relTime(info.modified),
-		search: `${chatTitle(info)} ${info.firstMessage || ""}`,
+		value: relTime(info.modified),
+		search: info.firstMessage || "",
 		check: !!filterCurrent && info.path === filterCurrent,
 		onEnter: async (c) => {
 			await actions.openSession(info.path);
@@ -861,6 +852,7 @@ function workspaceRoot() {
 				key: w.id,
 				label: w.name,
 				desc: w.rootPath,
+				search: w.rootPath,
 				badges: currentRoot && w.rootPath === currentRoot ? [t("current")] : [],
 				chevron: true,
 				onEnter: (c) => c.push(() => workspaceScreen(w)),
@@ -893,13 +885,32 @@ const ROOT = {
 // ---- Rendering --------------------------------------------------------------------------------------------------
 function Row({ row, selected, busy, onClick, onHover }) {
 	if (row.group) return html`<div class="cp-group">${row.group}</div>`;
-	return html`<div class=${`cp-row ${selected ? "sel" : ""} ${row.disabled ? "disabled" : ""} ${row.danger ? "danger" : ""}`} role="option" aria-selected=${selected} aria-disabled=${row.disabled ? "true" : undefined} onMouseMove=${(e) => pointerMoved(e) && onHover()} onClick=${onClick}>
-		<span class="cp-ico">${row.icon ? html`<${Icon} name=${row.icon} size=${15} />` : row.check ? html`<${Icon} name="check" size=${15} />` : null}</span>
-		<span class="cp-main"><span class="cp-label truncate">${row.label}</span>${row.desc ? html`<span class="cp-desc dim truncate">${row.desc}</span>` : null}</span>
+	// One line per choice: the name, its description in a weaker colour beside it, the value or switch at the end.
+	return html`<div class=${`cp-row ${selected ? "sel" : ""} ${row.disabled ? "disabled" : ""} ${row.danger ? "danger" : ""}`} role="option" aria-selected=${selected} aria-disabled=${row.disabled ? "true" : undefined} title=${row.desc || undefined} onMouseMove=${(e) => pointerMoved(e) && onHover()} onClick=${onClick}>
+		<span class="cp-ico">${row.icon ? html`<${Icon} name=${row.icon} size=${14} />` : row.check ? html`<${Icon} name="check" size=${14} />` : null}</span>
+		<span class="cp-main"><span class="cp-label truncate">${row.label}</span>${row.desc ? html`<span class="cp-desc truncate">${row.desc}</span>` : null}</span>
 		${(row.badges || []).map((b) => html`<span class="badge" key=${b}>${b}</span>`)}
-		${row.value !== undefined && row.value !== "" ? html`<span class="cp-value truncate">${row.value}</span>` : null}
+		${row.toggle === undefined && row.value !== undefined && row.value !== "" ? html`<span class="cp-value truncate">${row.value}</span>` : null}
 		${row.toggle !== undefined ? html`<span class=${`cp-switch ${row.toggle ? "on" : ""}`} aria-hidden="true"><i /></span>` : null}
-		<span class="cp-tail">${busy ? html`<${Spinner} />` : row.chevron ? html`<${Icon} name="chevronRight" size=${14} class="c-dim" />` : null}</span>
+		<span class="cp-tail">${busy ? html`<${Spinner} />` : row.chevron ? html`<${Icon} name="chevronRight" size=${13} class="c-dim" />` : null}</span>
+	</div>`;
+}
+
+/** A panel level that is the effort slider: ←/→ move it, Enter / Esc / Backspace go back. */
+function SliderView({ spec, ctx }) {
+	const { levels, value, withDefault, onChange } = spec.slider;
+	const [busy, setBusy] = useState(false);
+	const change = async (level) => {
+		setBusy(true);
+		try {
+			await onChange(level);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return html`<div class="cp-effort" onKeyDown=${(e) => (e.key === "Enter" || e.key === "Backspace") && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
+		<${EffortSlider} levels=${levels} value=${value} disabled=${busy} onChange=${change} />
+		${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} disabled=${busy} onClick=${() => value && change(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
 	</div>`;
 }
 
@@ -943,7 +954,8 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	useStore((s) => s.view);
 	const spec = build(ctx, arg);
 	const allRows = spec.rows || [];
-	const filterable = !spec.input && !spec.custom && (spec.filterable ?? allRows.filter((row) => !row.group).length >= FILTER_MIN_ROWS);
+	const plain = !spec.input && !spec.custom && !spec.slider;
+	const filterable = plain && (spec.filterable ?? allRows.filter((row) => !row.group).length >= FILTER_MIN_ROWS);
 	// Filter text and selected row are remembered per level, so coming back from a deeper level lands where the user was.
 	const [filter, setFilter] = useState(entry.filter ?? spec.initialFilter ?? "");
 	const [selKey, setSelKey] = useState(entry.selKey ?? allRows.find((row) => row.check && !row.group)?.key);
@@ -953,14 +965,19 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	const list = useRef(null);
 	const alive = useRef(true);
 	const rows = useMemo(() => {
-		const q = filter.trim().toLowerCase();
-		if (!q || !filterable) return allRows.filter((row) => !row.onlyFiltered);
-		return allRows.filter((row) => !row.group && `${row.search || ""} ${row.label || ""} ${row.desc || ""}`.toLowerCase().includes(q));
+		if (!filter.trim() || !filterable) return allRows.filter((row) => !row.onlyFiltered);
+		// Relevance first (exact name > prefix > part of the name > description / keywords), usage second, then the
+		// order of the list: the same rule in every panel.
+		return rankSearch(allRows.filter((row) => !row.group), filter, {
+			names: (row) => [row.label, ...(row.names || [])],
+			keywords: (row) => `${row.desc || ""} ${row.search || ""}`,
+			usage: (row) => row.uses,
+		});
 	}, [spec.rows, filter, filterable]);
 	const selectable = rows.map((row, i) => (row.group || row.disabled ? -1 : i)).filter((i) => i >= 0);
 	const found = rows.findIndex((row) => row.key === selKey);
 	const current = selectable.includes(found) ? found : (selectable[0] ?? -1);
-	const focusInput = () => (filterable ? filterRef.current : root.current)?.focus();
+	const focusInput = () => (filterable ? filterRef.current : root.current?.querySelector(".effort-track") || root.current)?.focus();
 	useEffect(() => {
 		alive.current = true;
 		return () => {
@@ -991,6 +1008,7 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	const activate = async (row) => {
 		if (!row || row.disabled || !row.onEnter) return;
 		setBusyKey(row.key);
+		row.onUse?.();
 		try {
 			await row.onEnter(ctx);
 		} finally {
@@ -1009,7 +1027,7 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 			if (filterable && filter) return setFilter("");
 			return ctx.pop();
 		}
-		if (spec.input || spec.custom) return;
+		if (!plain) return;
 		const row = rows[current];
 		switch (e.key) {
 			case "ArrowDown":
@@ -1050,11 +1068,13 @@ function Screen({ build, ctx, entry, onTitle, arg }) {
 	return html`<div class="cp-screen" ref=${root} tabindex="-1" onKeyDown=${onKeyDown}>
 		${spec.input
 			? html`<${InputView} spec=${spec} ctx=${ctx} />`
-			: spec.custom
+			: spec.slider
+				? html`<${SliderView} spec=${spec} ctx=${ctx} />`
+				: spec.custom
 				? html`<${InlineFrame.Provider} value=${{ onClose: ctx.pop }}>${spec.custom(ctx)}<//>`
 				: html`
 			${spec.subtitle ? html`<div class="cp-sub dim">${spec.subtitle}</div>` : null}
-			${filterable ? html`<div class="cp-filter"><${Icon} name="search" size=${14} /><input ref=${filterRef} value=${filter} placeholder=${spec.placeholder || t("Search…")} onInput=${(e) => { setFilter(e.target.value); setSelKey(undefined); }} aria-label=${spec.placeholder || t("Search…")} autocomplete="off" spellcheck="false" /></div>` : null}
+			${filterable ? html`<div class="cp-filter"><${Icon} name="search" size=${13} /><input ref=${filterRef} value=${filter} placeholder=${spec.placeholder || t("Search…")} onInput=${(e) => { setFilter(e.target.value); setSelKey(undefined); }} aria-label=${spec.placeholder || t("Search…")} autocomplete="off" spellcheck="false" /></div>` : null}
 			${spec.error ? html`<div class="notice danger">${spec.error}</div>` : null}
 			<div class="cp-list" role="listbox" ref=${list} onMouseDown=${(e) => filterable && e.preventDefault()}>
 				${spec.loading ? html`<div class="empty"><${Spinner} /></div>` : null}
@@ -1113,11 +1133,11 @@ function PanelBody({ cmd }) {
 	const heading = stack.map((e) => titles[e.id]).filter(Boolean);
 	return html`<div class="cp fade-in" ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")}>
 		<div class="cp-head">
-			${stack.length > 1 ? html`<button class="icon-btn sm" onClick=${ctx.pop} title=${`${t("Back")} (←)`} aria-label=${t("Back")}><${Icon} name="arrowLeft" size=${15} /></button>` : html`<${Icon} name="bolt" size=${15} class="c-dim" />`}
+			${stack.length > 1 ? html`<button class="icon-btn sm" onClick=${ctx.pop} title=${`${t("Back")} (←)`} aria-label=${t("Back")}><${Icon} name="arrowLeft" size=${14} /></button>` : html`<${Icon} name="bolt" size=${13} class="c-dim" />`}
 			<span class="cp-title truncate">${heading.map((part, i) => html`${i ? html`<span class="cp-sep">›</span>` : null}<span class=${i === heading.length - 1 ? "cur" : "dim"}>${part}</span>`)}</span>
 			<span class="grow" />
 			<span class="cp-keys dim">↑↓ ${t("select")} · ↵ ${t("open")} · ← ${t("back")} · Esc ${t("close")}</span>
-			<button class="icon-btn sm" onClick=${closeCommand} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>
+			<button class="icon-btn sm" onClick=${closeCommand} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${14} /></button>
 		</div>
 		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} entry=${top} onTitle=${(title) => setTitles((previous) => (previous[top.id] === title ? previous : { ...previous, [top.id]: title }))} />
 	</div>`;
