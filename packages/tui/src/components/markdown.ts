@@ -5,7 +5,21 @@ import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
+// CommonMark leaves `**` next to punctuation as plain text when a letter is on its other side (这是**“重点”**内容,
+// **标题：**后面), which Chinese text hits all the time. A `**…**` pair whose content starts or ends with punctuation
+// (and not with a space) is taken as bold; everything else follows the standard rules.
+const LOOSE_STRONG_REGEX = /^\*\*(?![\s*])((?:\\[\s\S]|`[^`\n]*`|[^*\\\n]|\*(?!\*))+?)(?<![\s*])\*\*(?!\*)/u;
+const PUNCTUATION_EDGE_REGEX = /^[\p{P}\p{S}]|[\p{P}\p{S}]$/u;
+
 class StrictStrikethroughTokenizer extends Tokenizer {
+	override emStrong(src: string, maskedSrc: string, prevChar?: string): Tokens.Em | Tokens.Strong | undefined {
+		const match = prevChar === "*" ? null : LOOSE_STRONG_REGEX.exec(src);
+		if (match && PUNCTUATION_EDGE_REGEX.test(match[1])) {
+			return { type: "strong", raw: match[0], text: match[1], tokens: this.lexer.inlineTokens(match[1]) };
+		}
+		return super.emStrong(src, maskedSrc, prevChar);
+	}
+
 	override del(src: string): Tokens.Del | undefined {
 		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
 		if (!match) {

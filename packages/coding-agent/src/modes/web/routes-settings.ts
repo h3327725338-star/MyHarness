@@ -10,7 +10,7 @@
 import type { ThinkingLevel } from "@myharness/agent-core";
 import { settingsMenuFor } from "../../cli/settings-menu.ts";
 import { builtinSlashCommandsFor } from "../../cli/slash-commands.ts";
-import type { SettingsManager } from "../../config/settings/index.ts";
+import { type SettingsManager, WEB_SEARCH_BROWSER_IDS } from "../../config/settings/index.ts";
 import {
 	getProjectTrustOptions,
 	hasTrustRequiringProjectResources,
@@ -71,6 +71,13 @@ const SEARCH_ENGINES = [
 	{ value: "duckduckgo", label: "DuckDuckGo" },
 	{ value: "brave", label: "Brave" },
 	{ value: "brave_api", label: "Brave Search API" },
+];
+/** The browsers the fallback can use; "auto" is the first installed one. */
+const SEARCH_BROWSERS = [
+	{ value: "auto", label: "Auto" },
+	{ value: "firefox", label: "Firefox" },
+	{ value: "chrome", label: "Chrome" },
+	{ value: "edge", label: "Edge" },
 ];
 const IMAGE_WIDTHS = ["60", "80", "120"];
 const EDITOR_PADDINGS = ["0", "1", "2", "3"];
@@ -316,10 +323,29 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "webSearch.browserFallback",
 				section: "Tools",
-				label: "Firefox fallback",
-				description: "Fall back to a dedicated Firefox profile when a search engine blocks lightweight requests.",
+				label: "Browser fallback",
+				description:
+					"Open the page in a browser installed on this computer (with a profile of its own) when a search engine or a web page blocks plain requests. A window opens when a site needs you to pass a check or log in.",
 				type: "boolean",
 				value: web.browserFallback,
+			},
+			{
+				id: "webSearch.browser",
+				section: "Tools",
+				label: "Fallback browser",
+				description: "Auto uses the first installed one of Firefox, Chrome and Edge.",
+				type: "enum",
+				value: web.browser,
+				options: SEARCH_BROWSERS,
+			},
+			{
+				id: "webSearch.useBrowserCookies",
+				section: "Tools",
+				label: "Use my browser's cookies",
+				description:
+					"Copy the cookies of the same browser you use every day into the fallback profile (cookies only, once when switched on), so sites you are logged in to open without asking again. A running browser may keep its cookies locked; close it first.",
+				type: "boolean",
+				value: web.useBrowserCookies,
 			},
 			{
 				id: "codeIntelligence.enabled",
@@ -687,7 +713,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			case "webSearch.pagesPerSearch":
 			case "webSearch.maxUrlsPerFetch":
 			case "webSearch.fetchConcurrency":
-			case "webSearch.browserFallback": {
+			case "webSearch.browserFallback":
+			case "webSearch.browser":
+			case "webSearch.useBrowserCookies": {
 				const current = s.getWebSearchSettings();
 				const next = { ...current };
 				if (id === "webSearch.enabled") next.enabled = boolValue(value, id);
@@ -700,6 +728,11 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				} else if (id === "webSearch.pagesPerSearch") next.pagesPerSearch = numberValue(value, id, 0, 10);
 				else if (id === "webSearch.maxUrlsPerFetch") next.maxUrlsPerFetch = numberValue(value, id, 1, 30);
 				else if (id === "webSearch.fetchConcurrency") next.fetchConcurrency = numberValue(value, id, 1, 10);
+				else if (id === "webSearch.browser") {
+					const browser = WEB_SEARCH_BROWSER_IDS.find((choice) => choice === value);
+					if (!browser) throw new HttpError(400, "Unknown browser.");
+					next.browser = browser;
+				} else if (id === "webSearch.useBrowserCookies") next.useBrowserCookies = boolValue(value, id);
 				else next.browserFallback = boolValue(value, id);
 				s.setWebSearchSettings(next);
 				session.refreshToolsAfterSettingsChange();

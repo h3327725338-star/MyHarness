@@ -2,7 +2,7 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { chatTitle, clip, fmtDuration, loadPrefs, savePrefs, uid } from "./util.js";
+import { chatTitle, clip, fmtDuration, loadPrefs, plural, savePrefs, taskWorkLine, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
@@ -878,7 +878,14 @@ function chatLabel(slot) {
 function notifyFinished(run, slot) {
 	if (!state.view.notify || document.visibilityState === "visible" || announced.has(slot)) return;
 	const titles = { completed: N_("Task completed"), partial: N_("Task partially completed"), failed: N_("Task failed"), cancelled: N_("Task cancelled") };
-	showNotification({ title: `MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, body: chatLabel(slot), tag: taskTag(slot), onClick: () => activateSlot(slot) });
+	// What the run record knows: how long it took, how many files it changed and how many commands it ran.
+	const facts = [
+		run.startedAt && run.endedAt - run.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(run.endedAt - run.startedAt) }) : "",
+		run.changeCount ? t("{files} changed", { files: plural(run.changeCount, "file") }) : "",
+		run.bashRuns ? t("ran {count}", { count: plural(run.bashRuns, "command") }) : "",
+	].filter(Boolean).join(" · ");
+	const error = run.outcome === "failed" && run.error ? clip(serverText(run.error, run.error), 240) : "";
+	showNotification({ title: `MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, body: [chatLabel(slot), error, facts].filter(Boolean).join("\n"), tag: taskTag(slot), onClick: () => activateSlot(slot) });
 }
 
 const TASK_END_TITLE ={ completed: N_("Task completed"), failed: N_("Task failed"), blocked: N_("Task failed"), timed_out: N_("Task timed out"), cancelled: N_("Task cancelled"), interrupted: N_("Task interrupted") };
@@ -893,9 +900,13 @@ function notifyTaskEnd(d, slot) {
 	announced.add(slot);
 	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 240) : "";
 	const took = d.startedAt && d.endedAt - d.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(d.endedAt - d.startedAt) }) : "";
+	// What the task did, from the server's summary of the run: the start of its reply, then what it changed and ran.
+	const facts = [took, taskWorkLine(d.work)].filter(Boolean).join(" · ");
+	const chat = chatLabel(slot);
+	const where = d.project && d.project !== chat ? [d.project, chat].filter(Boolean).join(" · ") : chat;
 	const shown = showNotification({
 		title: `MyHarness · ${t(TASK_END_TITLE[d.state] || N_("Task finished"))}`,
-		body: [chatLabel(slot), error, took].filter(Boolean).join("\n"),
+		body: [where, d.work?.conclusion ? clip(d.work.conclusion, 160) : "", error, facts].filter(Boolean).join("\n"),
 		tag: taskTag(slot),
 		onClick: () => activateSlot(slot),
 	});

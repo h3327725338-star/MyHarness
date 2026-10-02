@@ -1,4 +1,6 @@
 import type { Socket } from "node:net";
+import { basename } from "node:path";
+import type { AgentMessage } from "@myharness/agent-core";
 import type { RunState, RunStateSnapshot } from "../agent/runtime/run-state.ts";
 import { RUN_STATE_LABELS } from "../agent/runtime/run-state.ts";
 import { spawnProcess } from "./child-process.ts";
@@ -73,6 +75,136 @@ export function describeTerminalRunState(state: RunStateSnapshot): string {
 	if (duration) {
 		lines.push(duration);
 	}
+	return lines.join("\n");
+}
+
+/** What a finished task actually did, taken from the messages of its run. */
+export interface RunWorkSummary {
+	/** Files the task wrote or edited (as the tools were given them), in the order they were first changed. */
+	edited: string[];
+	/** Files read, shell commands run, web searches made and web pages opened. */
+	read: number;
+	commands: number;
+	searches: number;
+	webPages: number;
+	/** Calls of any other tool (sub-agents, GitHub, extension tools, ...). */
+	otherTools: number;
+	/** The start of the final reply, as one line of plain text. */
+	conclusion?: string;
+}
+
+const CONCLUSION_LENGTH = 140;
+
+/** One line of plain text from the start of a Markdown reply: the first lines that say something, without the markup. */
+function plainLead(markdown: string): string {
+	const lines: string[] = [];
+	let length = 0;
+	for (const raw of markdown.replace(/```[\s\S]*?(?:```|$)/gu, " ").split("\n")) {
+		const line = raw
+			.replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)+/u, "")
+			.replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+			.replace(/[*_`~]+/gu, "")
+			.replace(/\s+/gu, " ")
+			.trim();
+		if (!line || /^[-=|:\s]+$/u.test(line)) continue;
+		lines.push(line);
+		length += line.length;
+		if (length >= CONCLUSION_LENGTH) break;
+	}
+	const text = lines.join(" ");
+	return text.length > CONCLUSION_LENGTH ? `${text.slice(0, CONCLUSION_LENGTH)}…` : text;
+}
+
+/**
+ * Summarise the run that just ended: the tool calls and the final reply since the last user message. Only what the
+ * messages record is counted; a run without tool calls or reply text yields an empty summary.
+ */
+export function summarizeRunWork(messages: readonly AgentMessage[]): RunWorkSummary {
+	let start = 0;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i]!.role === "user") {
+			start = i + 1;
+			break;
+		}
+	}
+	const work: RunWorkSummary = { edited: [], read: 0, commands: 0, searches: 0, webPages: 0, otherTools: 0 };
+	const edited = new Set<string>();
+	for (const message of messages.slice(start)) {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		let text = "";
+		for (const block of message.content) {
+			if (block.type === "text") text += block.text;
+			if (block.type !== "toolCall") continue;
+			const args = (block.arguments ?? {}) as Record<string, unknown>;
+			switch (block.name) {
+				case "edit":
+				case "write":
+					if (typeof args.path === "string" && args.path) edited.add(args.path);
+					break;
+				case "read":
+					work.read += 1;
+					break;
+				case "bash":
+				case "pwsh":
+					work.commands += 1;
+					break;
+				case "web_search":
+					work.searches += Array.isArray(args.queries) ? Math.max(1, args.queries.length) : 1;
+					break;
+				case "web_fetch":
+					work.webPages += Array.isArray(args.urls) ? Math.max(1, args.urls.length) : 1;
+					break;
+				case "grep":
+				case "find":
+				case "ls":
+					break;
+				default:
+					work.otherTools += 1;
+			}
+		}
+		// The last message with text is the reply the task ended on.
+		if (text.trim() && message.stopReason !== "error" && message.stopReason !== "aborted") {
+			work.conclusion = plainLead(text) || undefined;
+		}
+	}
+	work.edited = [...edited];
+	return work;
+}
+
+/** At most this many file names are written out; the rest is a count. */
+const MAX_NAMED_FILES = 3;
+
+/** "修改 2 个文件（a.ts、b.ts） · 运行 3 条命令": what the run did, or undefined when it used no tools worth naming. */
+export function describeRunWork(work: RunWorkSummary): string | undefined {
+	const parts: string[] = [];
+	if (work.edited.length > 0) {
+		const names = work.edited.slice(0, MAX_NAMED_FILES).map((path) => basename(path.replaceAll("\\", "/")));
+		const more = work.edited.length > names.length ? " 等" : "";
+		parts.push(`修改 ${work.edited.length} 个文件（${names.join("、")}${more}）`);
+	}
+	if (work.commands > 0) parts.push(`运行 ${work.commands} 条命令`);
+	if (work.read > 0) parts.push(`读取 ${work.read} 个文件`);
+	if (work.searches > 0) parts.push(`搜索 ${work.searches} 次`);
+	if (work.webPages > 0) parts.push(`打开 ${work.webPages} 个网页`);
+	if (work.otherTools > 0) parts.push(`其他工具 ${work.otherTools} 次`);
+	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/**
+ * Popup body for a task that ended, with what the task did: the outcome and how long it took on the first line, then
+ * the start of the final reply, what was changed and run, and the error if there is one. Without anything to add it is
+ * the plain describeTerminalRunState text.
+ */
+export function describeTaskEnd(state: RunStateSnapshot, work: RunWorkSummary | undefined): string {
+	const did = work ? describeRunWork(work) : undefined;
+	if (!work?.conclusion && !did) return describeTerminalRunState(state);
+	const activity = state.activity?.trim() || RUN_STATE_LABELS[state.state];
+	const duration = formatRunDuration(state.startedAt, state.lastActivityAt);
+	const lines = [duration ? `${activity} · ${duration}` : activity];
+	if (work?.conclusion) lines.push(truncateLine(work.conclusion));
+	if (did) lines.push(did);
+	const error = state.error?.trim();
+	if (error && !activity.includes(error)) lines.push(truncateLine(error));
 	return lines.join("\n");
 }
 

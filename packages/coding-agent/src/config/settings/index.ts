@@ -2,6 +2,7 @@ export {
 	mergeSettings,
 	parseTimeoutSetting,
 	SETTINGS_DEFAULTS,
+	WEB_SEARCH_BROWSER_IDS,
 	WEB_SEARCH_ENGINE_IDS,
 	WEB_SEARCH_SETTING_RANGES,
 } from "./defaults.ts";

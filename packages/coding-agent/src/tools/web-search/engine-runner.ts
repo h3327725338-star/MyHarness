@@ -2,21 +2,21 @@ import type { WebSearchEngineId } from "../../config/settings/types.ts";
 import { WEB_SEARCH_ENGINES } from "./engines/index.ts";
 import type { BrowserSearch, EngineContext, EngineQuery, EngineResult, SearchEngine } from "./engines/types.ts";
 import { abortError, isAccessBlock, WebSearchError } from "./errors.ts";
-import type { BrowserTransport, HttpTransport, TransportPage } from "./transport.ts";
+import { type BrowserTransport, browserLabel, type HttpTransport, type TransportPage } from "./transport.ts";
 import type { WebSearchKeySource } from "./types.ts";
 
 export const ENGINE_RUNNER_LIMITS = {
 	/**
 	 * Lightweight blocks are often per request (Google answers some requests with
 	 * a CAPTCHA and the next one normally), so a single block only moves that one
-	 * query to Firefox. After this many blocks in a row the lightweight path is
+	 * query to the browser. After this many blocks in a row the lightweight path is
 	 * skipped for `lightweightSkipMs`.
 	 */
 	lightweightBlocksBeforeSkip: 2,
 	lightweightSkipMs: 3 * 60_000,
 	/** An engine that refused us on every usable path is not asked again for this long. */
 	engineCooldownMs: 2 * 60_000,
-	/** Minimum gap between two Firefox loads for the same engine, so bursts do not look like a bot. */
+	/** Minimum gap between two browser loads for the same engine, so bursts do not look like a bot. */
 	browserSpacingMs: 1_500,
 } as const;
 
@@ -24,6 +24,8 @@ export const ENGINE_RUNNER_LIMITS = {
 export interface EngineRun {
 	results: EngineResult[];
 	via: "http" | "browser";
+	/** The browser that was used ("Firefox", "Chrome", "Edge"), when one was. */
+	browser?: string;
 	/** Why the browser was used, when it was. */
 	note?: string;
 }
@@ -40,9 +42,9 @@ export interface EngineRunnerOptions {
 	browser?: BrowserTransport;
 	keys?: WebSearchKeySource;
 	now: () => number;
-	/** The user's "Firefox Fallback" setting. */
+	/** The user's "Browser Fallback" setting. */
 	browserFallbackEnabled: () => boolean;
-	/** True when a person is at the terminal and may be asked to pass a CAPTCHA in Firefox. */
+	/** True when a person is present and may be asked to pass a CAPTCHA in a browser window. */
 	interactiveChallenges: () => boolean;
 	/** Overrides ENGINE_RUNNER_LIMITS.browserSpacingMs (tests). */
 	browserSpacingMs?: number;
@@ -95,7 +97,7 @@ export class EngineRunner {
 	private browserPath(engine: SearchEngine): { search: BrowserSearch } | { reason: string } {
 		if (!engine.browser) return { reason: `${engine.label} 没有浏览器通道。` };
 		if (!this.options.browserFallbackEnabled()) {
-			return { reason: "Firefox Fallback 已在 /settings → Web Search 中关闭。" };
+			return { reason: "Browser Fallback 已在 /settings → Web Search 中关闭。" };
 		}
 		if (!this.options.browser) return { reason: "当前运行环境没有浏览器通道。" };
 		const state = this.options.browser.state();
@@ -133,7 +135,7 @@ export class EngineRunner {
 					// Nothing else to try: stop asking this engine for a while.
 					const reported = new WebSearchError(
 						error.code,
-						engine.browser ? `${error.message} 无法改用 Firefox：${browser.reason}` : error.message,
+						engine.browser ? `${error.message} 无法改用浏览器：${browser.reason}` : error.message,
 						{ cause: error },
 					);
 					this.startCooldown(engineId, reported);
@@ -146,19 +148,21 @@ export class EngineRunner {
 			}
 		}
 
+		const label = browserLabel(this.options.browser);
 		try {
 			const results = await this.searchInBrowser(engine, state, browser.search, engineQuery, context, onProgress);
 			return {
 				results,
 				via: "browser",
+				browser: label,
 				note: lightweightBlock
-					? `轻量请求被拦截（${lightweightBlock.message}），已改用 Firefox。`
-					: "轻量请求连续被拦截，暂时直接使用 Firefox。",
+					? `轻量请求被拦截（${lightweightBlock.message}），已改用 ${label}。`
+					: `轻量请求连续被拦截，暂时直接使用 ${label}。`,
 			};
 		} catch (error) {
 			const reported =
 				lightweightBlock && error instanceof WebSearchError && error.code !== "aborted"
-					? new WebSearchError(error.code, `轻量请求：${lightweightBlock.message} Firefox：${error.message}`, {
+					? new WebSearchError(error.code, `轻量请求：${lightweightBlock.message} ${label}：${error.message}`, {
 							cause: error,
 						})
 					: error;
@@ -173,7 +177,7 @@ export class EngineRunner {
 		}
 	}
 
-	/** Wait until this engine may use Firefox again (see browserSpacingMs). */
+	/** Wait until this engine may use the browser again (see browserSpacingMs). */
 	private async paceBrowser(state: EngineState, signal: AbortSignal | undefined): Promise<void> {
 		const now = this.options.now();
 		const startAt = Math.max(now, state.nextBrowserLoadAt);
@@ -203,6 +207,7 @@ export class EngineRunner {
 		onProgress: ((message: string) => void) | undefined,
 	): Promise<EngineResult[]> {
 		const browser = this.options.browser!;
+		const label = browserLabel(browser);
 		const request = search.request(query);
 		await this.paceBrowser(state, context.signal);
 		let page = await browser.load(request, context.signal);
@@ -214,12 +219,12 @@ export class EngineRunner {
 			if (!this.options.interactiveChallenges()) {
 				throw new WebSearchError(
 					"challenge_required",
-					`${engine.label} 在 Firefox 中也要求人机验证，需要人工完成一次。在 MyHarness 交互界面中再次搜索时会打开 Firefox 窗口让你完成，之后的搜索会复用这次验证。`,
+					`${engine.label} 在 ${label} 中也要求人机验证，需要人工完成一次。在 MyHarness 交互界面中再次搜索时会打开 ${label} 窗口让你完成，之后的搜索会复用这次验证。`,
 					{ cause: error },
 				);
 			}
 			onProgress?.(
-				`${engine.label} 要求人机验证：已打开 Firefox 窗口，请在窗口中完成验证（最长等待 3 分钟，Esc 取消）。`,
+				`${engine.label} 要求人机验证：已打开 ${label} 窗口，请在窗口中完成验证（最长等待 3 分钟，Esc 取消）。`,
 			);
 			page = await browser.solveChallenge(
 				{

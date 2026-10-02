@@ -48,20 +48,22 @@
 .st-added, .st-A { background: var(--ok-soft); color: var(--ok); } .st-modified, .st-M { background: var(--warn-soft); color: var(--warn); } .st-deleted, .st-D { background: var(--danger-soft); color: var(--danger); } .st-renamed, .st-R { background: var(--accent-soft); color: var(--accent); }
 
 /* Diff */
-.diff { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; min-width: max-content; }
+/* Long lines wrap inside the panel (the line number stays on the first visual line), so nothing is cut off or scrolled
+   sideways at any panel width. Rows that are off screen are not laid out: a long diff or file costs what a screenful
+   costs, also while the panel is dragged wider or narrower. */
+.diff { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; min-width: 0; }
 .hunk-head { display: flex; gap: 12px; padding: 3px var(--pad-panel); color: var(--diff-hunk); background: var(--bg-inset); font-size: var(--fs-xs); position: sticky; left: 0; }
 .dl { display: grid; grid-template-columns: 44px 44px 16px minmax(0, 1fr); }
+.dl, .ds-row, .cl { content-visibility: auto; contain-intrinsic-block-size: auto 1.55em; }
 .dl-no { text-align: right; padding: 0 8px 0 4px; color: var(--text-4); user-select: none; font-variant-numeric: tabular-nums; }
 .dl-sign { text-align: center; color: var(--text-3); user-select: none; }
-.dl-text { white-space: pre; padding-right: 12px; }
+.dl-text { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 12px; }
 .dl.add { background: var(--diff-add-bg); } .dl.add .dl-no { background: var(--diff-add-gutter); color: var(--diff-add-text); } .dl.add .dl-sign { color: var(--diff-add-text); }
 .dl.del { background: var(--diff-del-bg); } .dl.del .dl-no { background: var(--diff-del-gutter); color: var(--diff-del-text); } .dl.del .dl-sign { color: var(--diff-del-text); }
 .ds-row { display: grid; grid-template-columns: 1fr 1fr; }
 .ds-cell { display: grid; grid-template-columns: 40px 14px minmax(0, 1fr); border-right: 1px solid var(--border); min-width: 0; }
 .ds-cell:last-child { border-right: 0; }
 .ds-cell.add { background: var(--diff-add-bg); } .ds-cell.del { background: var(--diff-del-bg); } .ds-cell.empty { background: var(--bg-inset); }
-.ds-cell .dl-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.diff.split { min-width: 0; }
 .diff-more { margin: 8px var(--pad-panel); } .diff-empty { padding: var(--pad-panel); }
 
 /* Files */
@@ -76,10 +78,10 @@
 .tree-gap { width: 13px; flex: none; }
 .file-viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .code-view { background: var(--code-bg); }
-.code-lines { font-size: var(--fs-code); line-height: 1.55; min-width: max-content; padding: 6px 0; }
+.code-lines { font-size: var(--fs-code); line-height: 1.55; min-width: 0; padding: 6px 0; }
 .cl { display: grid; grid-template-columns: 52px minmax(0, 1fr); }
 .cl-no { text-align: right; padding-right: 12px; color: var(--text-4); user-select: none; font-variant-numeric: tabular-nums; }
-.cl-text { white-space: pre; padding-right: 16px; }
+.cl-text { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 16px; }
 .cl.target { background: var(--accent-soft); }
 .image-view { padding: 16px; display: grid; place-items: center; } .image-view img { max-width: 100%; max-height: 70vh; border: 1px solid var(--border); background: repeating-conic-gradient(var(--bg-inset) 0 25%, var(--bg-panel) 0 50%) 0 0 / 16px 16px; }
 

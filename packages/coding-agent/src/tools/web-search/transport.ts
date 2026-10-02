@@ -2,8 +2,8 @@ import { WebSearchError } from "./errors.ts";
 import { decodeBody, type FetchLike, requestBytes } from "./http.ts";
 
 /**
- * A search results page as a transport delivered it. Engines only see this
- * shape, whether the page came from a plain HTTP request or from Firefox.
+ * A page as a transport delivered it. Engines only see this shape, whether the
+ * page came from a plain HTTP request or from a real browser.
  */
 export interface TransportPage {
 	status: number;
@@ -77,9 +77,12 @@ export class HttpTransport {
 /** What the real-browser transport should load and when the page counts as loaded. */
 export interface BrowserPageRequest {
 	url: string;
-	/** CSS selector that exists once the results are on the page. */
+	/**
+	 * CSS selector that exists once the results are on the page. Empty for a page without a known marker (an article):
+	 * the page then counts as loaded once it has finished loading and stayed on one address for a moment.
+	 */
 	readySelector: string;
-	/** Engine name for messages, e.g. "Google". */
+	/** Engine or site name for messages, e.g. "Google" or "example.com". */
 	label: string;
 }
 
@@ -88,9 +91,24 @@ export interface BrowserChallengeRequest extends BrowserPageRequest {
 	isSolved: (page: TransportPage) => boolean;
 }
 
-export type BrowserState = { available: true; executable: string } | { available: false; reason: string };
+export type BrowserState =
+	| {
+			available: true;
+			executable: string;
+			/** "Firefox", "Chrome" or "Edge". */
+			label?: string;
+			/** Something the user should know about this browser, e.g. why its daily cookies could not be imported. */
+			note?: string;
+	  }
+	| { available: false; reason: string };
 
-/** Real-browser transport. Implemented by FirefoxBrowser; tests use fakes. */
+/** How messages name the browser behind a transport ("Firefox" when the transport does not say). */
+export function browserLabel(browser: BrowserTransport | undefined): string {
+	const state = browser?.state();
+	return (state?.available && state.label) || "Firefox";
+}
+
+/** Real-browser transport. Implemented by LocalBrowser (Firefox, Chrome, Edge); tests use fakes. */
 export interface BrowserTransport {
 	/** Whether a browser can be used at all (installed, not disabled). Cheap; no launch. */
 	state(): BrowserState;
@@ -98,7 +116,7 @@ export interface BrowserTransport {
 	load(request: BrowserPageRequest, signal?: AbortSignal): Promise<TransportPage>;
 	/**
 	 * Show the page in a visible browser window so the user can pass a
-	 * CAPTCHA/consent step; resolves with the page once `isSolved` holds.
+	 * CAPTCHA/consent/login step; resolves with the page once `isSolved` holds.
 	 */
 	solveChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage>;
 }

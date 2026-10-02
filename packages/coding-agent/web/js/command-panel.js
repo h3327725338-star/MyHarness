@@ -140,7 +140,7 @@ function groupScreen(title, ids, subtitle) {
 
 const onOff = (value) => (value ? t("On") : t("Off"));
 
-const WEB_SEARCH_SETTINGS = ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback"];
+const WEB_SEARCH_SETTINGS = ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback", "webSearch.browser", "webSearch.useBrowserCookies"];
 const CONTEXT_WINDOW_SETTINGS = ["contextWindowMain", "contextWindowSubAgent"];
 const WARNING_SETTINGS = ["warnings.anthropicExtraUsage"];
 

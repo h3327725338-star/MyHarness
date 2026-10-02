@@ -158,9 +158,10 @@ import { collectInputImageAttachments } from "../../utils/input-image-attachment
 import { getMyHarnessUserAgent } from "../../utils/myharness-user-agent.ts";
 import { getCwdRelativePath, pathIdentityKey } from "../../utils/paths.ts";
 import {
-	describeTerminalRunState,
+	describeTaskEnd,
 	popupKindForRunState,
 	showPopupNotification,
+	summarizeRunWork,
 } from "../../utils/popup-notification.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { findRecentlyModifiedSourceFiles } from "../../utils/source-changes.ts";
@@ -3743,7 +3744,7 @@ export class InteractiveMode {
 		showPopupNotification(settings.style, {
 			kind,
 			title: this.popupTitle(),
-			message: describeTerminalRunState(state),
+			message: describeTaskEnd(state, summarizeRunWork(this.session?.messages ?? [])),
 		});
 	}
 

@@ -30,9 +30,10 @@ import {
 } from "../../git/repository/workspace-changes.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import {
-	describeTerminalRunState,
+	describeTaskEnd,
 	popupKindForRunState,
 	showPopupNotification,
+	summarizeRunWork,
 } from "../../utils/popup-notification.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
@@ -512,11 +513,13 @@ export class WebHost {
 		if (this.lastTaskNoticeKey === key) return;
 		this.lastTaskNoticeKey = key;
 		const folder = basename(this.cwd);
+		// What the task did (files, commands, the start of its reply), so the notification says more than "finished".
+		const work = summarizeRunWork(this.session.messages);
 		const popup = () => {
 			showPopupNotification(settings.style, {
 				kind,
 				title: folder ? `MyHarness · ${folder}` : "MyHarness",
-				message: describeTerminalRunState(state),
+				message: describeTaskEnd(state, work),
 			});
 		};
 		if (this.server.clientCount === 0) {
@@ -534,6 +537,8 @@ export class WebHost {
 			error: state.error,
 			startedAt: state.startedAt,
 			endedAt: state.lastActivityAt,
+			project: folder,
+			work,
 		});
 	}
 

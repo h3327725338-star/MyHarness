@@ -1228,6 +1228,36 @@ bar`,
 		});
 	});
 
+	describe("Bold next to punctuation", () => {
+		const render = (text: string) => {
+			const lines = new Markdown(text, 0, 0, defaultMarkdownTheme).render(80);
+			return { output: lines.join("\n"), plain: lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join(" ") };
+		};
+
+		it("should render bold whose content starts or ends with punctuation inside Chinese text", () => {
+			for (const text of [
+				"这是**“重点”**内容。",
+				"**标题：**后面的文字",
+				"结论**（重要）**如下",
+				'英文**"quoted"**text',
+				"- **列表项：**说明",
+				"**标题：**内容 **另一个**结尾",
+			]) {
+				const { output, plain } = render(text);
+				assert.ok(output.includes("\x1b[1m"), `Should apply bold styling: ${text}`);
+				assert.ok(!plain.includes("**"), `Should not show the delimiters: ${plain}`);
+			}
+		});
+
+		it("should leave what is not bold alone", () => {
+			for (const text of ["a ** b ** c", "**未闭合的文字", "`**标题：**` 是代码"]) {
+				assert.ok(render(text).plain.includes("**"), `Delimiters should stay visible: ${text}`);
+			}
+			const nested = render("**包含 *斜体* 的：**文字");
+			assert.ok(!nested.plain.includes("*"), `Nested emphasis should be parsed: ${nested.plain}`);
+		});
+	});
+
 	describe("Strikethrough syntax", () => {
 		it("should render ~~text~~ as strikethrough", () => {
 			const markdown = new Markdown("Use ~~strikethrough~~ here", 0, 0, defaultMarkdownTheme);

@@ -61,13 +61,15 @@ describe("Web Search settings page", () => {
 	beforeEach(() => initTheme("dark"));
 	afterEach(() => vi.unstubAllGlobals());
 
-	it("shows the switch, the engines, Firefox Fallback and the three numbers with their ranges", () => {
+	it("shows the switch, the engines, the browser rows and the three numbers with their ranges", () => {
 		const { text } = createSubmenu();
 		const page = text();
 		for (const label of [
 			"Web Search",
 			"Search Engines",
-			"Firefox Fallback",
+			"Browser Fallback",
+			"Browser",
+			"Use My Browser's Cookies",
 			"Pages to Read per Search",
 			"Max URLs per Fetch",
 			"Concurrent Downloads",
@@ -93,9 +95,9 @@ describe("Web Search settings page", () => {
 		expect(onDone).toHaveBeenCalledWith("On · Google, Bing");
 	});
 
-	it("turns Firefox Fallback off and on and says whether Firefox was found", () => {
+	it("turns Browser Fallback off and on and says whether a browser was found", () => {
 		const { submenu, text, moveTo, settingsManager } = createSubmenu();
-		moveTo("Firefox Fallback");
+		moveTo("Browser Fallback");
 		expect(selectedLine(text())).toContain("On");
 		submenu.handleInput(enter);
 		expect(settingsManager.getWebSearchSettings().browserFallback).toBe(false);
@@ -108,8 +110,28 @@ describe("Web Search settings page", () => {
 				state: () => ({ available: false, reason: "没有找到 Firefox。" }),
 			},
 		);
-		missing.moveTo("Firefox Fallback");
+		missing.moveTo("Browser Fallback");
 		expect(missing.text()).toContain("没有找到 Firefox");
+	});
+
+	it("chooses the fallback browser and whether the daily browser's cookies are used", () => {
+		const { submenu, text, moveTo, settingsManager } = createSubmenu();
+		expect(settingsManager.getWebSearchSettings()).toMatchObject({ browser: "auto", useBrowserCookies: false });
+		moveTo("Browser  ");
+		expect(selectedLine(text())).toContain("Auto");
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().browser).toBe("firefox");
+		submenu.handleInput(enter);
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().browser).toBe("edge");
+		expect(selectedLine(text())).toContain("Edge");
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().browser).toBe("auto");
+		moveTo("Use My Browser's Cookies");
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().useBrowserCookies).toBe(true);
+		submenu.handleInput(enter);
+		expect(settingsManager.getWebSearchSettings().useBrowserCookies).toBe(false);
 	});
 
 	it("toggles engines, persists the choice and returns to the same row", () => {
@@ -287,7 +309,7 @@ describe("/settings root → Web Search", () => {
 		const done = vi.fn();
 		const page = row.submenu!(row.currentValue, done);
 		page.handleInput?.(enter); // Web Search: Off → On
-		for (let i = 0; i < 5; i++) page.handleInput?.(down); // → Concurrent Downloads
+		for (let i = 0; i < 7; i++) page.handleInput?.(down); // → Concurrent Downloads
 		page.handleInput?.(enter);
 		page.handleInput?.(up); // 4 → 3
 		page.handleInput?.(enter);

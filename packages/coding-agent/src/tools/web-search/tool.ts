@@ -93,6 +93,8 @@ const disabledSettings = {
 		maxUrlsPerFetch: SETTINGS_DEFAULTS.webSearch.maxUrlsPerFetch,
 		fetchConcurrency: SETTINGS_DEFAULTS.webSearch.fetchConcurrency,
 		browserFallback: SETTINGS_DEFAULTS.webSearch.browserFallback,
+		browser: SETTINGS_DEFAULTS.webSearch.browser,
+		useBrowserCookies: SETTINGS_DEFAULTS.webSearch.useBrowserCookies,
 	}),
 };
 
@@ -145,10 +147,14 @@ function pageHeader(page: WebFetchedPage, label: string): string {
 function formatEngines(response: WebSearchResponse): string {
 	return response.engines
 		.map((engine) => {
-			const vias = new Set(response.routes.filter((route) => route.engine === engine).map((route) => route.via));
+			const vias = new Set(
+				response.routes
+					.filter((route) => route.engine === engine)
+					.map((route) => (route.via === "browser" ? (route.browser ?? "Firefox") : "HTTP")),
+			);
 			const label = WEB_SEARCH_ENGINES[engine].label;
 			if (vias.size === 0) return label;
-			return `${label} (${[...vias].map((via) => (via === "browser" ? "Firefox" : "HTTP")).join("+")})`;
+			return `${label} (${[...vias].join("+")})`;
 		})
 		.join(", ");
 }
@@ -282,8 +288,19 @@ export function createWebFetchToolDefinition(
 		promptSnippet: loadSystemPrompt("tools/web-fetch/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/web-fetch/guidelines.md"),
 		parameters: webFetchSchema,
-		async execute(_toolCallId, params: WebFetchToolInput, signal) {
-			const response = await service.fetch(params, signal);
+		async execute(_toolCallId, params: WebFetchToolInput, signal, onUpdate) {
+			const response = await service.fetch(
+				{
+					...params,
+					// Shown while a page waits for the person in a browser window (a check to pass, a login).
+					onProgress: (message) =>
+						onUpdate?.({
+							content: [{ type: "text", text: message }],
+							details: { pages: [], failures: [], cacheHit: false },
+						}),
+				},
+				signal,
+			);
 			const formatted = formatFetchResponse(response);
 			const details: WebFetchToolDetails = {
 				pages: response.pages.map(summarizePage),

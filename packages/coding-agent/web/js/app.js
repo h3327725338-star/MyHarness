@@ -53,7 +53,7 @@ function Header() {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	const firstUser = items.find((i) => i.kind === "user" && i.text);
-	// A chat that has no name and no message yet has no title to show: the header then starts with the workspace.
+	// A chat that has no name and no message yet has no title to show. The workspace is shown above the input, not here.
 	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : "");
 	const commit = async () => {
 		setEditing(false);
@@ -67,7 +67,6 @@ function Header() {
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
-		${snap?.workspace ? html`<span class="header-chip truncate" title=${snap.cwd}><${Icon} name="folder" size=${13} /><span class="truncate">${snap.workspace.name}</span></span>` : null}
 		<span class="grow" />
 		<${StatusPill} />
 		${tabBtn("changes", "fileDiff", t("Changes"), changeCount ? String(changeCount) : "")}

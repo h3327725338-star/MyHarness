@@ -103,6 +103,62 @@ export function htmlToMarkdown(
 	return { title, markdown, publishedAt };
 }
 
+/** Something between the reader and the page's content: a check for robots, a login, a consent page or a refusal. */
+export interface AccessWall {
+	kind: "captcha" | "login" | "consent" | "blocked";
+	/** What the site asks for, as a phrase that follows the site's name: "要求人机验证". */
+	reason: string;
+}
+
+/** HTTP statuses that mean "not for this client" rather than "this page does not exist". */
+const REFUSAL_STATUSES = new Set([401, 403, 407, 429, 451, 503]);
+const CHALLENGE_TITLE =
+	/just a moment|attention required|access denied|are you (?:a )?(?:human|robot)|verif(?:y|ying) (?:that )?you(?: are|'re) (?:a )?human|security check|bot verification|人机验证|安全验证|请完成验证|输入验证码|访问受限|访问被拒绝/iu;
+const CHALLENGE_MARKUP =
+	/cf-challenge|challenge-platform|cf-turnstile|g-recaptcha|h-captcha|hcaptcha\.com|px-captcha|captcha-delivery|datadome|awswaf|geetest|tcaptcha/iu;
+/** A page with less readable text than this that shows a challenge or a password field is the wall, not an article that mentions one. */
+const WALL_TEXT_LIMIT = 1_500;
+
+/**
+ * Whether what came back is a wall instead of the page: a robot check (Cloudflare and similar, CAPTCHA widgets), a
+ * login form, a cookie-consent page, or a status that refuses this client. Heuristic by design; a page with real text
+ * is never called a wall for mentioning one.
+ */
+export function detectAccessWall(html: string, status: number, url: string): AccessWall | undefined {
+	const root = parse(html, { comment: false });
+	const title = root.querySelector("title")?.text.trim() ?? "";
+	const hasPassword = root.querySelector('input[type="password"]') !== null;
+	for (const element of root.querySelectorAll("script,style,noscript,template")) element.remove();
+	const length = textLength(root.querySelector("body") ?? root);
+	const short = length < WALL_TEXT_LIMIT;
+	let host = "";
+	try {
+		host = new URL(url).hostname;
+	} catch {}
+	// A CAPTCHA widget alone proves little (short contact pages carry one too): without a telling title the page must be nearly empty.
+	if ((short && CHALLENGE_TITLE.test(title)) || (length < WALL_TEXT_LIMIT / 3 && CHALLENGE_MARKUP.test(html))) {
+		return { kind: "captcha", reason: "要求人机验证" };
+	}
+	if (short && /^consent\./iu.test(host)) return { kind: "consent", reason: "要求先确认 Cookie 选项" };
+	if (short && hasPassword) return { kind: "login", reason: "要求登录" };
+	if (status === 429) return { kind: "blocked", reason: "限制了访问频率（HTTP 429）" };
+	if (REFUSAL_STATUSES.has(status) && short) return { kind: "blocked", reason: `拒绝了访问（HTTP ${status}）` };
+	return undefined;
+}
+
+/** The failure a wall is reported as; these codes are the ones that may move a page to the real browser. */
+export function wallError(wall: AccessWall, hostname: string, how: string): WebSearchError {
+	const code =
+		wall.kind === "captcha"
+			? "captcha"
+			: wall.kind === "consent"
+				? "consent"
+				: /429/u.test(wall.reason)
+					? "rate_limited"
+					: "forbidden";
+	return new WebSearchError(code, `${hostname} ${wall.reason}${how}。`);
+}
+
 function isHtml(contentType: string): boolean {
 	return /\b(?:text\/html|application\/xhtml\+xml)\b/iu.test(contentType);
 }
@@ -155,9 +211,14 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 			}
 			continue;
 		}
-		if (response.status >= 400) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}。`);
 		const contentType = response.headers.get("content-type") ?? "text/html";
 		const text = decodeBody(response.bytes, contentType);
+		// A refusal or a challenge is reported as such (not as a plain HTTP error), so the caller can try a real browser.
+		if (REFUSAL_STATUSES.has(response.status) || (response.status < 400 && isHtml(contentType))) {
+			const wall = detectAccessWall(text, response.status, validation.url);
+			if (wall) throw wallError(wall, validation.hostname, "，直接请求没有读到正文");
+		}
+		if (response.status >= 400) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}。`);
 		let page: { title?: string; markdown: string; publishedAt?: string };
 		if (isHtml(contentType) || (!isPlainText(contentType) && /^\s*<(?:!doctype|html)/iu.test(text))) {
 			page = htmlToMarkdown(text, validation.url);

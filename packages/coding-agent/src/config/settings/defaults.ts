@@ -68,8 +68,13 @@ export const SETTINGS_DEFAULTS = {
 		maxUrlsPerFetch: 10,
 		fetchConcurrency: 4,
 		browserFallback: true,
+		browser: "auto",
+		useBrowserCookies: false,
 	},
 } as const;
+
+/** Every choice of the Web Search browser setting, in the order the settings page lists them. */
+export const WEB_SEARCH_BROWSER_IDS = ["auto", "firefox", "chrome", "edge"] as const;
 
 /** Every Web Search engine id, in the order the settings page lists them. */
 export const WEB_SEARCH_ENGINE_IDS = ["google", "bing", "duckduckgo", "brave", "brave_api"] as const;

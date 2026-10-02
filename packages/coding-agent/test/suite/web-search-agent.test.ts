@@ -11,28 +11,28 @@ vi.mock("../../src/tools/web-search/http.ts", async (importOriginal) => ({
 	plainHttpFetch: (input: string | URL, init?: RequestInit) => globalThis.fetch(input, init),
 }));
 
-/** Stand-in for the shared Firefox transport; tests decide whether it exists and what it shows. */
+/** Stand-in for the browser the settings choose; tests decide whether it exists and what it shows. */
 const firefox = vi.hoisted(() => ({
 	available: true,
 	loads: [] as string[],
 	page: (url: string) => ({ url, html: "" }),
 }));
-vi.mock("../../src/tools/web-search/browser/firefox.ts", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../src/tools/web-search/browser/firefox.ts")>()),
-	getSharedFirefoxBrowser: () => ({
-		state: () =>
-			firefox.available
-				? { available: true, executable: "firefox.exe" }
-				: { available: false, reason: "没有找到 Firefox。" },
-		load: async (request: { url: string }) => {
+vi.mock("../../src/tools/web-search/browser/select.ts", () => ({
+	SelectedBrowser: class {
+		state() {
+			return firefox.available
+				? { available: true, executable: "firefox.exe", label: "Firefox" }
+				: { available: false, reason: "没有找到 Firefox。" };
+		}
+		async load(request: { url: string }) {
 			firefox.loads.push(request.url);
 			const shown = firefox.page(request.url);
 			return { status: 200, url: shown.url, text: shown.html, headers: new Headers(), via: "browser", ready: true };
-		},
-		solveChallenge: async () => {
+		}
+		async solveChallenge() {
 			throw new Error("no person in tests");
-		},
-	}),
+		}
+	},
 }));
 
 type FetchHandler = (url: URL, init?: RequestInit) => Promise<Response>;

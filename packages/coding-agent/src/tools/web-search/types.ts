@@ -70,6 +70,8 @@ export interface WebSearchRoute {
 	engine: WebSearchEngineId;
 	query: string;
 	via: "http" | "browser";
+	/** The browser that was used ("Firefox", "Chrome", "Edge"), when one was. */
+	browser?: string;
 	/** Why the browser was used, when it was. */
 	note?: string;
 	resultCount: number;

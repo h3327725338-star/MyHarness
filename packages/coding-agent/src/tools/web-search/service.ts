@@ -2,14 +2,15 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ResolvedWebSearchSettings, WebSearchEngineId } from "../../config/settings/types.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
-import { getSharedFirefoxBrowser } from "./browser/firefox.ts";
+import { SelectedBrowser } from "./browser/select.ts";
 import { WebSearchCache } from "./cache.ts";
 import { EngineRunner } from "./engine-runner.ts";
 import { type EngineResult, type SearchTimeRange, WEB_SEARCH_ENGINES } from "./engines/index.ts";
-import { abortError, failureFromError, WebSearchError } from "./errors.ts";
+import { abortError, failureFromError, isAccessBlock, WebSearchError } from "./errors.ts";
 import { type FetchLike, plainHttpFetch } from "./http.ts";
-import { readPage } from "./page.ts";
-import { type BrowserTransport, HttpTransport } from "./transport.ts";
+import { type ReadPageResult, readPage } from "./page.ts";
+import { BrowserPageReader } from "./page-browser.ts";
+import { type BrowserTransport, browserLabel, HttpTransport } from "./transport.ts";
 import type {
 	WebFetchedPage,
 	WebFetchResponse,
@@ -51,11 +52,12 @@ export interface WebSearchServiceOptions {
 	now?: () => number;
 	cache?: WebSearchCache;
 	/**
-	 * Real-browser transport for blocked engines. Defaults to the shared Firefox
-	 * transport; `null` disables the browser path entirely (tests, embedders).
+	 * Real-browser transport for blocked engines and blocked pages. Defaults to the
+	 * installed browser the settings choose (Firefox, Chrome or Edge); `null`
+	 * disables the browser path entirely (tests, embedders).
 	 */
 	browser?: BrowserTransport | null;
-	/** True when a person can be asked to pass a CAPTCHA in a visible Firefox window. */
+	/** True when a person can be asked to pass a CAPTCHA or log in in a visible browser window. */
 	interactiveChallenges?: () => boolean;
 }
 
@@ -66,13 +68,15 @@ export interface SearchRequest {
 	/** Top results to read after searching; capped by the `pagesPerSearch` setting. */
 	readPages?: number;
 	fresh?: boolean;
-	/** Short status lines while the search runs (e.g. "waiting for you in Firefox"). */
+	/** Short status lines while the search runs (e.g. "waiting for you in the browser window"). */
 	onProgress?: (message: string) => void;
 }
 
 export interface FetchRequest {
 	urls: string[];
 	fresh?: boolean;
+	/** Short status lines while pages are read (e.g. "waiting for you in the browser window"). */
+	onProgress?: (message: string) => void;
 }
 
 export interface EngineTestResult {
@@ -178,6 +182,8 @@ export class WebSearchService {
 	private readonly now: () => number;
 	private readonly cache: WebSearchCache;
 	private readonly runner: EngineRunner;
+	private readonly browser: BrowserTransport | undefined;
+	private readonly pageReader: BrowserPageReader | undefined;
 	readonly downloads: DownloadSlots;
 
 	constructor(options: WebSearchServiceOptions) {
@@ -194,13 +200,30 @@ export class WebSearchService {
 				this.now,
 			);
 		this.downloads = new DownloadSlots(() => this.settings().fetchConcurrency);
+		this.browser =
+			options.browser === null
+				? undefined
+				: (options.browser ??
+					new SelectedBrowser(
+						() => this.settings().browser,
+						() => this.settings().useBrowserCookies,
+					));
+		const interactiveChallenges = options.interactiveChallenges ?? (() => false);
+		this.pageReader = this.browser
+			? new BrowserPageReader({
+					browser: this.browser,
+					lookup: this.lookup,
+					now: this.now,
+					interactive: interactiveChallenges,
+				})
+			: undefined;
 		this.runner = new EngineRunner({
 			http: new HttpTransport(this.fetchImpl),
-			browser: options.browser === null ? undefined : (options.browser ?? getSharedFirefoxBrowser()),
+			browser: this.browser,
 			keys: options.keys,
 			now: this.now,
 			browserFallbackEnabled: () => this.settings().browserFallback,
-			interactiveChallenges: options.interactiveChallenges ?? (() => false),
+			interactiveChallenges,
 		});
 	}
 
@@ -229,7 +252,14 @@ export class WebSearchService {
 		const run = await this.runner.run(engine, { query, timeRange }, signal, onProgress);
 		return {
 			results: run.results.map((result) => ({ ...result, engine, query })),
-			route: { engine, query, via: run.via, note: run.note, resultCount: run.results.length },
+			route: {
+				engine,
+				query,
+				via: run.via,
+				browser: run.browser,
+				note: run.note,
+				resultCount: run.results.length,
+			},
 		};
 	}
 
@@ -420,6 +450,7 @@ export class WebSearchService {
 			results.slice(0, pageCount).map((result) => result.url),
 			fresh,
 			signal,
+			request.onProgress,
 		);
 		failures.push(...read.failures);
 		return {
@@ -454,8 +485,50 @@ export class WebSearchService {
 				message: `设置只允许单次读取 ${settings.maxUrlsPerFetch} 个 URL（Max URLs per Fetch），以下 ${urls.length - selected.length} 个未读取：${urls.slice(selected.length).join(", ")}`,
 			});
 		}
-		const read = await this.readPages(selected, request.fresh === true, signal);
+		const read = await this.readPages(selected, request.fresh === true, signal, request.onProgress);
 		return { pages: read.pages, failures: [...failures, ...read.failures], cacheHit: read.cacheHit };
+	}
+
+	/**
+	 * One page: the plain request first; when the site refuses it (403, robot check, login, a page that only exists
+	 * after JavaScript ran), the same page in the real browser, which may ask the person for help (see BrowserPageReader).
+	 * A single HTTP error never ends the read while the browser can still be tried.
+	 */
+	private async readOnePage(
+		url: string,
+		signal: AbortSignal | undefined,
+		onProgress: ((message: string) => void) | undefined,
+	): Promise<ReadPageResult> {
+		try {
+			return await readPage(url, { fetchImpl: this.fetchImpl, lookup: this.lookup, signal });
+		} catch (error) {
+			const refused = isAccessBlock(error) || (error instanceof WebSearchError && error.code === "empty_content");
+			if (!refused || signal?.aborted) throw error;
+			const direct = error as WebSearchError;
+			const unavailable = !this.pageReader
+				? "当前运行环境没有浏览器通道。"
+				: !this.settings().browserFallback
+					? "Browser Fallback 已在 /settings → Web Search 中关闭。"
+					: undefined;
+			const state = unavailable ? undefined : this.browser!.state();
+			const reason = unavailable ?? (state && !state.available ? state.reason : undefined);
+			if (reason) {
+				// A page that is merely empty stays what it was; a refusal says why the browser could not help.
+				if (direct.code === "empty_content") throw direct;
+				throw new WebSearchError(direct.code, `${direct.message} 无法改用浏览器：${reason}`, { cause: direct });
+			}
+			const label = browserLabel(this.browser);
+			try {
+				return await this.pageReader!.read(url, signal, onProgress);
+			} catch (browserError) {
+				if (!(browserError instanceof WebSearchError) || browserError.code === "aborted") throw browserError;
+				throw new WebSearchError(
+					browserError.code,
+					`直接请求：${direct.message} ${label}：${browserError.message}`,
+					{ cause: browserError },
+				);
+			}
+		}
 	}
 
 	/** Read already-validated URLs through the cache and the shared download slots. */
@@ -463,6 +536,7 @@ export class WebSearchService {
 		urls: string[],
 		fresh: boolean,
 		signal: AbortSignal | undefined,
+		onProgress?: (message: string) => void,
 	): Promise<{ pages: WebFetchedPage[]; failures: WebSearchFailure[]; cacheHit: boolean }> {
 		const failures: Array<WebSearchFailure | undefined> = urls.map(() => undefined);
 		const pages = await Promise.all(
@@ -477,7 +551,7 @@ export class WebSearchService {
 				if (cached?.finalUrl && validatePublicHttpUrl(cached.finalUrl).ok) return { ...cached, cacheHit: true };
 				const release = await this.downloads.acquire(signal);
 				try {
-					const page = await readPage(url, { fetchImpl: this.fetchImpl, lookup: this.lookup, signal });
+					const page = await this.readOnePage(url, signal, onProgress);
 					const result: WebFetchedPage = { url, ...page, cacheHit: false };
 					await this.cache.set("fetch", cacheKey, result);
 					return result;
@@ -506,7 +580,7 @@ export class WebSearchService {
 				const label = WEB_SEARCH_ENGINES[engine].label;
 				try {
 					const { results, route } = await this.runEngine(engine, WEB_SEARCH_TEST_QUERY, undefined, signal);
-					const how = route.via === "browser" ? "（通过 Firefox）" : "（轻量请求）";
+					const how = route.via === "browser" ? `（通过 ${route.browser ?? "浏览器"}）` : "（轻量请求）";
 					return {
 						engine,
 						label,

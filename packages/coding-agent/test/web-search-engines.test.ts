@@ -462,7 +462,7 @@ describe("engine runner: lightweight first, Firefox only for access blocks", () 
 
 		const disabled = runner({ respond: sorry, browser: fakeBrowser({}).browser, fallback: false });
 		await expect(disabled.engineRunner.run("google", { query: "x" })).rejects.toMatchObject({
-			message: expect.stringContaining("Firefox Fallback 已"),
+			message: expect.stringContaining("Browser Fallback 已"),
 		});
 		const none = runner({ respond: sorry });
 		await expect(none.engineRunner.run("google", { query: "x" })).rejects.toMatchObject({ code: "captcha" });

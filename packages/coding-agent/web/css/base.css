@@ -104,7 +104,7 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
    that centres its icon and its text on the same line (align-items: center, a fixed gap, icons never shrink, see
    `svg` above), and its line box is a whole number of pixels, so neither the icon nor the text is rounded half a
    pixel off the centre line. */
-.btn, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
+.btn, .env-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
 /* The rows of the file tree, the file list and the chat list hold single lines of text in a fixed-height row: an 18px line
    box (not 16px) leaves the descenders room, the row height itself does not change. */
 .tree-row, .ws-row, .chat-row, .cfile, .tree-node, .term-item, .fp-row { line-height: 18px; }

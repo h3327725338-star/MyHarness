@@ -14,12 +14,15 @@ import {
 import {
 	type ResolvedWebSearchSettings,
 	type SettingsManager,
+	WEB_SEARCH_BROWSER_IDS,
 	WEB_SEARCH_ENGINE_IDS,
 	WEB_SEARCH_SETTING_RANGES,
+	type WebSearchBrowserId,
 	type WebSearchEngineId,
 } from "../../../config/settings/index.ts";
 import { WebSearchApiKeys } from "../../../providers/credentials/web-search-keys.ts";
-import { getSharedFirefoxBrowser } from "../../../tools/web-search/browser/firefox.ts";
+import { BROWSER_LABELS, detectInstalledBrowsers } from "../../../tools/web-search/browser/firefox.ts";
+import { SelectedBrowser } from "../../../tools/web-search/browser/select.ts";
 import { WEB_SEARCH_ENGINES } from "../../../tools/web-search/engines/index.ts";
 import { type EngineTestResult, WEB_SEARCH_TEST_QUERY, WebSearchService } from "../../../tools/web-search/service.ts";
 import type { BrowserTransport } from "../../../tools/web-search/transport.ts";
@@ -33,7 +36,7 @@ interface WebSearchSettingsDependencies {
 	settingsManager: SettingsManager;
 	/** Injectable for tests; defaults to the owner-only key file in the agent directory. */
 	webSearchKeys?: WebSearchApiKeys;
-	/** Injectable for tests; defaults to the shared Firefox transport. `null` = no browser. */
+	/** Injectable for tests; defaults to the installed browser the settings choose. `null` = no browser. */
 	webSearchBrowser?: BrowserTransport | null;
 }
 
@@ -263,10 +266,18 @@ function formatEngines(settings: ResolvedWebSearchSettings): string {
 }
 
 function browserDescription(browser: BrowserTransport | undefined): string {
-	const what = "搜索引擎拦截轻量请求时，用本机 Firefox 的 MyHarness 专用配置打开真实搜索页";
+	const what =
+		"搜索引擎或网页拦截轻量请求时，用本机浏览器的 MyHarness 专用配置打开真实页面；需要验证或登录时弹出窗口等你完成";
 	if (!browser) return `当前环境不可用 · ${what}`;
 	const state = browser.state();
-	return state.available ? `已找到 Firefox · ${what}` : `${state.reason} · ${what}`;
+	return state.available ? `已找到 ${state.label ?? "Firefox"} · ${what}` : `${state.reason} · ${what}`;
+}
+
+const BROWSER_CHOICE_LABELS: Record<WebSearchBrowserId, string> = { auto: "Auto", ...BROWSER_LABELS };
+
+function browserChoiceDescription(): string {
+	const installed = detectInstalledBrowsers().map((browser) => browser.label);
+	return `浏览器兜底用哪个浏览器；Auto = 按 Firefox、Chrome、Edge 的顺序用第一个已安装的 · 本机已安装：${installed.length ? installed.join("、") : "无"}`;
 }
 
 function formatSummary(settings: ResolvedWebSearchSettings): string {
@@ -433,8 +444,12 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 		this.browser =
 			dependencies.webSearchBrowser === null
 				? undefined
-				: (dependencies.webSearchBrowser ?? getSharedFirefoxBrowser());
-		// A person is on this page, so a test may open Firefox for a CAPTCHA.
+				: (dependencies.webSearchBrowser ??
+					new SelectedBrowser(
+						() => this.state.browser,
+						() => this.state.useBrowserCookies,
+					));
+		// A person is on this page, so a test may open a browser window for a CAPTCHA.
 		this.service = new WebSearchService({
 			settings: dependencies.settingsManager,
 			keys: this.keys,
@@ -448,6 +463,11 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 			(id, value) => {
 				if (id === "enabled") this.commit({ ...this.state, enabled: value === "On" });
 				if (id === "browser-fallback") this.commit({ ...this.state, browserFallback: value === "On" });
+				if (id === "browser") {
+					const browser = WEB_SEARCH_BROWSER_IDS.find((choice) => BROWSER_CHOICE_LABELS[choice] === value);
+					if (browser) this.commit({ ...this.state, browser });
+				}
+				if (id === "browser-cookies") this.commit({ ...this.state, useBrowserCookies: value === "On" });
 			},
 			() => onDone(formatSummary(this.state)),
 			{ inlineDescriptions: true },
@@ -474,6 +494,8 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 		this.list.updateValue("enabled", this.state.enabled ? "On" : "Off");
 		this.list.updateValue("engines", formatEngines(this.state));
 		this.list.updateValue("browser-fallback", this.state.browserFallback ? "On" : "Off");
+		this.list.updateValue("browser", BROWSER_CHOICE_LABELS[this.state.browser]);
+		this.list.updateValue("browser-cookies", this.state.useBrowserCookies ? "On" : "Off");
 		for (const key of NUMBER_SETTING_KEYS) {
 			this.list.updateValue(NUMBER_SETTINGS[key].id, formatNumber(this.state, key));
 		}
@@ -524,10 +546,26 @@ export class WebSearchSettingsSubmenu extends Container implements Focusable {
 			},
 			{
 				id: "browser-fallback",
-				label: "Firefox Fallback",
+				label: "Browser Fallback",
 				description: browserDescription(this.browser),
 				interaction: "toggle",
 				currentValue: this.state.browserFallback ? "On" : "Off",
+				values: ["Off", "On"],
+			},
+			{
+				id: "browser",
+				label: "Browser",
+				description: browserChoiceDescription(),
+				currentValue: BROWSER_CHOICE_LABELS[this.state.browser],
+				values: WEB_SEARCH_BROWSER_IDS.map((choice) => BROWSER_CHOICE_LABELS[choice]),
+			},
+			{
+				id: "browser-cookies",
+				label: "Use My Browser's Cookies",
+				description:
+					"把你日常使用的同一款浏览器里的 Cookie 复制一份到 MyHarness 专用配置（只复制 Cookie，开启后导入一次），已登录的网站不用再登录；该浏览器正在运行时可能读不到，需要先关闭它",
+				interaction: "toggle",
+				currentValue: this.state.useBrowserCookies ? "On" : "Off",
 				values: ["Off", "On"],
 			},
 			...numberItems,

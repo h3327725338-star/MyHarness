@@ -363,12 +363,19 @@ export function VirtualRows({ items, rowHeight, renderRow, overscan = 8, thresho
 	return html`<div ref=${box} class="virtual-rows" style=${{ height: `${items.length * rowHeight}px` }}><div class="virtual-window" style=${{ top: `${first * rowHeight}px` }}>${items.slice(first, last).map((item, index) => renderRow(item, first + index))}</div></div>`;
 }
 
-/** Drag-to-resize handle. `getValue()` is read once at drag start; `onChange(v)` gets base ± delta (invert flips the sign). */
+/**
+ * Drag-to-resize handle. `getValue()` is read once at drag start; `onChange(v)` gets base ± delta (invert flips the sign).
+ * The handle captures the pointer for the drag: every move comes to it wherever the pointer is, and nothing it passes
+ * over (rows, buttons, the terminal) reacts to it, so a drag costs one layout per frame and no hover restyling.
+ */
 export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max = 10000 }) {
 	const [dragging, setDragging] = useState(false);
 	const start = useCallback(
 		(event) => {
+			if (event.button !== 0) return;
 			event.preventDefault();
+			const handle = event.currentTarget;
+			const pointer = event.pointerId;
 			const startX = event.clientX;
 			const base = getValue();
 			setDragging(true);
@@ -387,24 +394,37 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 				pending = Math.max(min, Math.min(max, base + (invert ? -1 : 1) * (e.clientX - startX)));
 				if (!frame) frame = requestAnimationFrame(flush);
 			};
+			let ended = false;
 			const up = () => {
+				// Releasing the button also ends the capture: both report the end, once is enough.
+				if (ended) return;
+				ended = true;
 				cancelAnimationFrame(frame);
 				flush();
-				window.removeEventListener("mousemove", move);
-				window.removeEventListener("mouseup", up);
+				handle.removeEventListener("pointermove", move);
+				handle.removeEventListener("pointerup", up);
+				handle.removeEventListener("pointercancel", up);
+				handle.removeEventListener("lostpointercapture", up);
 				document.body.style.cursor = "";
 				document.body.style.userSelect = "";
 				setDragging(false);
 				onEnd?.();
 			};
+			try {
+				handle.setPointerCapture(pointer);
+			} catch {
+				// The pointer is already gone: the drag ends with the first event that says so.
+			}
 			document.body.style.cursor = "col-resize";
 			document.body.style.userSelect = "none";
-			window.addEventListener("mousemove", move);
-			window.addEventListener("mouseup", up);
+			handle.addEventListener("pointermove", move, { passive: true });
+			handle.addEventListener("pointerup", up);
+			handle.addEventListener("pointercancel", up);
+			handle.addEventListener("lostpointercapture", up);
 		},
 		[getValue, onChange, onEnd, invert, min, max],
 	);
-	return html`<div class=${`resizer ${side || ""} ${dragging ? "dragging" : ""}`} onMouseDown=${start} role="separator" aria-orientation="vertical" />`;
+	return html`<div class=${`resizer ${side || ""} ${dragging ? "dragging" : ""}`} onPointerDown=${start} role="separator" aria-orientation="vertical" />`;
 }
 
 export function CopyButton({ text, label = t("Copy"), size = 14, class: cls }) {

@@ -11,12 +11,14 @@ const models = await import(new URL("provider-models.js", webDir).href);
 const {
 	ansiSegments,
 	fmtDuration,
+	looseStrong,
 	modelEfforts,
 	relTime,
 	searchModels,
 	shellOutcome,
 	shortPath,
 	stripAnsi,
+	taskWorkLine,
 	tokensToUnit,
 	unitToTokens,
 } = await import(new URL("util.js", webDir).href);
@@ -178,6 +180,49 @@ describe("Web UI: diff parsing and utilities", () => {
 			"add:-:4",
 			"ctx:5:5",
 		]);
+	});
+
+	it("takes ** next to punctuation as bold where the standard Markdown rules leave it as text", () => {
+		// Each: the text from the opening **, the character before it, and the bold content expected (null = standard rules).
+		const cases: Array<[string, string, string | null]> = [
+			["**\u201c\u91cd\u70b9\u201d**\u5185\u5bb9", "\u662f", "\u201c\u91cd\u70b9\u201d"],
+			["**\u6807\u9898\uff1a**\u540e\u9762", "", "\u6807\u9898\uff1a"],
+			["**\uff08\u91cd\u8981\uff09**\u5982\u4e0b", "\u8bba", "\uff08\u91cd\u8981\uff09"],
+			['**"quoted"**text', "a", '"quoted"'],
+			["**`code`**after", "a", "`code`"],
+			["**a *b* c:**d", "", "a *b* c:"],
+			["**first:**x **second**", "", "first:"],
+			["**plain** text", "", null],
+			["** spaced **", "", null],
+			["**unclosed: text", "", null],
+			["**x:**", "*", null],
+			["***both:***", "", null],
+			["*one:*", "", null],
+		];
+		for (const [src, before, expected] of cases) {
+			expect(looseStrong(src, before)?.text ?? null, src).toBe(expected);
+		}
+		expect(looseStrong("**\u6807\u9898\uff1a**\u540e\u9762", "")?.raw).toBe("**\u6807\u9898\uff1a**");
+	});
+
+	it("writes what a finished task did for its notification", () => {
+		expect(taskWorkLine(undefined)).toBe("");
+		expect(taskWorkLine({ edited: [], read: 0, commands: 0, searches: 0, webPages: 0, otherTools: 0 })).toBe("");
+		expect(
+			taskWorkLine({
+				edited: ["src/a.ts", "C:\\proj\\b.ts"],
+				read: 5,
+				commands: 1,
+				searches: 2,
+				webPages: 3,
+				otherTools: 1,
+			}),
+		).toBe(
+			"Edited 2 files (a.ts, b.ts) \u00b7 ran 1 command \u00b7 read 5 files \u00b7 2 web searches \u00b7 3 pages opened \u00b7 1 tool call",
+		);
+		expect(taskWorkLine({ edited: ["a", "b", "c", "d"], read: 0, commands: 0 })).toBe(
+			"Edited 4 files (a, b, c, \u2026)",
+		);
 	});
 
 	it("tells a user-stopped or timed-out shell command from an ordinary failure", () => {

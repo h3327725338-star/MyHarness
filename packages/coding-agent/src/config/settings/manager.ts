@@ -13,6 +13,7 @@ import {
 	PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES,
 	parseTimeoutSetting,
 	SETTINGS_DEFAULTS,
+	WEB_SEARCH_BROWSER_IDS,
 	WEB_SEARCH_ENGINE_IDS,
 	WEB_SEARCH_SETTING_RANGES,
 } from "./defaults.ts";
@@ -130,6 +131,15 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 			defaults.fetchConcurrency,
 		),
 		browserFallback: typeof source.browserFallback === "boolean" ? source.browserFallback : defaults.browserFallback,
+		browser:
+			WEB_SEARCH_BROWSER_IDS.find(
+				(id) =>
+					id ===
+					String(source.browser ?? "")
+						.trim()
+						.toLowerCase(),
+			) ?? defaults.browser,
+		useBrowserCookies: source.useBrowserCookies === true,
 	};
 }
 

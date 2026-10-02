@@ -58,7 +58,7 @@
 .conn { display: grid; place-items: center; width: var(--h-icon-sm); height: var(--h-icon-sm); margin-right: 4px; flex: none; }
 
 /* Resizers */
-.resizer { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; }
+.resizer { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
 .resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background var(--t-fast); }
 .resizer:hover::after, .resizer.dragging::after { background: var(--accent-line); }
 .sidebar .resizer { right: -4px; }
@@ -72,8 +72,6 @@
 .main-header.scrolled { border-bottom-color: var(--border); }
 .title-btn { max-width: 46%; padding: 0 6px; height: var(--h-control-sm); border-radius: var(--r-md); font-weight: 600; font-size: 14px; text-align: left; }
 .title-btn:hover { background: var(--surface-hover); }
-.header-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-sm); color: var(--text-2); background: var(--bg-inset); border: 1px solid var(--border); max-width: 300px; }
-.header-chip:hover { color: var(--text); border-color: var(--border-strong); }
 
 /* Right inspector panel. It keeps its own width while its track grows or shrinks, and slides and fades in the same time, so it
    neither re-wraps nor jumps. Only its header buttons open, close and switch it. */

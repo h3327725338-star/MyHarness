@@ -2,7 +2,9 @@
 
 MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI、Docker 或任何其他服务。默认关闭；打开后 Agent 会获得 `web_search` 和 `web_fetch` 两个工具。
 
-Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求搜索；只有当搜索引擎明确拦截了这种请求（验证码、限流、403、需要 JavaScript、降级结果）时，才用本机已安装的 Firefox 打开真实的搜索页读取结果。Firefox 是可选的：没装 Firefox 时 MyHarness 照常启动，轻量请求照常工作，只是被拦截时没有兜底，工具结果会写明原因。
+Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求搜索；只有当搜索引擎明确拦截了这种请求（验证码、限流、403、需要 JavaScript、降级结果）时，才用本机已安装的浏览器（Firefox、Chrome 或 Edge）打开真实的搜索页读取结果。读网页正文也一样：直接请求被网站拒绝（403、人机验证、要求登录等）时改用这个浏览器打开。浏览器是可选的：一个都没装时 MyHarness 照常启动，轻量请求照常工作，只是被拦截时没有兜底，工具结果会写明原因。
+
+下文的"Firefox 方式""改用 Firefox"指的都是这个兜底浏览器；选了 Chrome 或 Edge 时规则相同。
 
 ## 设置
 
@@ -12,7 +14,9 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 | --- | --- | --- | --- |
 | **Web Search** | 总开关。关闭时两个工具不会出现在 Agent 的工具列表和系统提示中；已有 Session 和工具结果不会被删除 | On / Off | Off |
 | **Search Engines** | 允许使用哪些搜索引擎，可以同时开多个 | 见下表 | Google、Bing |
-| **Firefox Fallback** | 轻量请求被拦截时，是否允许用本机 Firefox 打开真实搜索页。这一行同时显示是否找到了 Firefox | On / Off | On |
+| **Browser Fallback** | 轻量请求被拦截时，是否允许用本机浏览器打开真实的搜索页或网页。这一行同时显示实际会用哪个浏览器，或为什么不可用 | On / Off | On |
+| **Browser** | 兜底用哪个浏览器。Auto = 按 Firefox、Chrome、Edge 的顺序用第一个已安装的 | Auto / Firefox / Chrome / Edge | Auto |
+| **Use My Browser's Cookies** | 打开后，把你日常使用的同一种浏览器里的 Cookie 复制一份到 MyHarness 专用的浏览器配置里，这样你已经登录的网站可以直接读取。见下方"复用日常浏览器的 Cookie" | On / Off | Off |
 | **Pages to Read per Search** | 每次 `web_search` 搜完后，自动按排名读取前几个结果的网页正文；0 = 只返回结果列表 | 0–10 | 3 |
 | **Max URLs per Fetch** | 一次 `web_fetch` 最多读取几个网址；超出的网址不读取，并在结果里列出来告诉 Agent | 1–20 | 10 |
 | **Concurrent Downloads** | 同一时间最多下载几个网页。这是整个进程的共享上限：Agent 并行调用多个联网工具时也不会超过它 | 1–8 | 4 |
@@ -49,6 +53,8 @@ Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引�
     "enabled": true,
     "engines": ["google", "bing"],
     "browserFallback": true,
+    "browser": "auto",
+    "useBrowserCookies": false,
     "pagesPerSearch": 3,
     "maxUrlsPerFetch": 10,
     "fetchConcurrency": 4
@@ -59,7 +65,7 @@ Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引�
 ### 旧配置迁移
 
 - 上一版本的默认引擎列表 `["duckduckgo", "brave"]`，如果是由没有 `browserFallback` 字段的旧版本保存的，视为"从未改过的默认值"，迁移为新的默认 `["google", "bing"]`。其他旧列表（例如只选了 `brave`）是用户自己的选择，保持不变；以新格式保存过的 `["duckduckgo", "brave"]` 也保持不变。
-- 没有 `browserFallback` 字段时按 On 处理。
+- 没有 `browserFallback` 字段时按 On 处理；没有 `browser` 时按 `auto`，没有 `useBrowserCookies` 时按 Off。
 - 基于 SearXNG/Crawl4AI 的旧字段不再使用，读取时按下面方式处理，下一次在设置页修改 Web Search 时从文件中删除：`enabled` 保留；`parallelPages` 为手动数值时迁移为 `maxUrlsPerFetch`；旧 `engines` 中与内置引擎同名的（现在包括 `google`、`bing`）保留，一个都不匹配时使用默认引擎；`searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`searchRounds`、`searchCacheTtlMs`、`fetchCacheTtlMs` 被忽略。需要限定网站时可以在搜索词中使用 `site:example.com`。
 
 ## 结构
@@ -71,8 +77,16 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
           → Search Engine（engines/*.ts）：拼请求、判断页面是不是被拦截、解析结果
               → Transport（transport.ts）
                   ├─ HttpTransport：普通 HTTP（undici，走 HTTP(S)_PROXY），可指定 IPv4
-                  └─ BrowserTransport：FirefoxBrowser（browser/*.ts）
+                  └─ BrowserTransport：SelectedBrowser（browser/select.ts）按设置选一个 LocalBrowser
+                        ├─ Firefox：扩展 + 远程调试协议（browser/firefox.ts、extension.ts、bridge.ts、rdp.ts）
+                        └─ Chrome / Edge：DevTools 协议，走管道（browser/chromium.ts）
       → readPage（page.ts）：web_fetch 和搜索后读网页，与搜索引擎无关
+          └─ 被网站拒绝时 → BrowserPageReader（page-browser.ts）：用同一个浏览器读正文
+```
+
+`browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）和 `import-cookies.ts`（复制日常浏览器的 Cookie）。
+
+```text
 ```
 
 搜索引擎只负责"搜什么、结果在哪、这是不是拦截页"；怎么把请求发出去由 Transport 负责。两种 Transport 都返回同样的 `TransportPage`（状态码、最终网址、HTML），同一个引擎的解析器不关心页面来自 HTTP 还是 Firefox。
@@ -105,14 +119,25 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
 - **使用真实 Firefox，不用 WebDriver。** MyHarness 用 MyHarness 自己的 Firefox 配置文件（`<agent 目录>/web-search/firefox/profile`，不碰你自己的 Firefox 配置）启动 Firefox，通过 Firefox 自带的远程调试协议把一个小扩展作为"临时附加组件"装进去（和 `web-ext run` 相同的方式；正式版 Firefox 只允许这样加载未签名扩展）。页面里没有 `navigator.webdriver`，也不用 Marionette/Playwright/Selenium。
 - **扩展和 MyHarness 的通信**：扩展的后台脚本长轮询 `http://127.0.0.1:<随机端口>/<随机令牌>/poll` 取命令，把结果 POST 回来。只监听本机回环地址，令牌每次启动重新生成。命令只有：打开网页并等结果出现、读取当前页面、关闭标签页。
 - **结果**：扩展等到结果区域出现（每个引擎有自己的选择器），把最终页面的 HTML、最终网址和 HTTP 状态交回，由引擎的解析器解析。Agent 不直接操作浏览器。
-- **会话复用**：Cookie、同意选择和通过的验证都保存在这个专用配置文件里，MyHarness 重启后继续使用。不同网站的 Cookie 由 Firefox 按网站分开保存。
+- **会话复用**：Cookie、同意选择和通过的验证都保存在这个专用配置文件里，MyHarness 重启后继续使用。不同网站的 Cookie 由 Firefox 按网站分开保存。关闭时先让浏览器自己正常退出（最多等 5 秒，之后才结束进程），刚拿到的 Cookie 才来得及写入磁盘。
 - **平时无界面**：普通兜底用无界面（headless）Firefox，首次启动约 1–2 秒，之后每次读取约 0.5–1 秒。空闲 3 分钟后自动关闭；MyHarness 退出时一并关闭。
 - **需要人工验证时**：如果在 Firefox 里也遇到验证码或同意页，并且当前是交互界面（TUI），MyHarness 会打开一个可见的 Firefox 窗口，工具进度里提示你去完成验证；最长等待 3 分钟，Esc 取消。验证通过后搜索自动继续，之后的搜索复用这次验证，窗口关闭，后续恢复无界面。在 print/json/rpc 等无人值守模式下不会弹窗，工具结果返回 `challenge_required` 并说明需要在交互界面里完成一次。
+- **Chrome / Edge**：不用扩展。MyHarness 用 `--remote-debugging-pipe` 启动浏览器，通过只属于这一对进程的管道发 DevTools 命令（不开任何网络端口），关闭"自动化控制"标记，无界面时把 UA 改回普通浏览器的 UA。配置目录是 `<agent 目录>/web-search/chrome/profile` 或 `.../edge/profile`，同样与你自己的浏览器隔离；其余行为（会话复用、无界面、人工验证、空闲关闭）与 Firefox 相同。
 - **可靠性**：Firefox 未安装、被关闭、崩溃、扩展没连上、页面加载失败或超时，都会以明确的错误返回（`browser_unavailable` / `unavailable` / `timeout`），下一次需要时重新启动 Firefox。上次 MyHarness 异常退出留下的 Firefox（按专用配置文件路径确认，不会误关你自己的 Firefox）会在下次启动前关闭。同一时间只有一个 MyHarness 进程能使用这个配置文件，另一个进程会得到明确提示。
 
-找 Firefox 的顺序：环境变量 `MYHARNESS_FIREFOX_PATH` → `Program Files`/`Program Files (x86)`/`%LOCALAPPDATA%` 下的 `Mozilla Firefox\firefox.exe` → `PATH`。
+找浏览器的顺序：环境变量（`MYHARNESS_FIREFOX_PATH`、`MYHARNESS_CHROME_PATH`、`MYHARNESS_EDGE_PATH`）→ `Program Files`/`Program Files (x86)`/`%LOCALAPPDATA%` 下的默认安装位置（`Mozilla Firefox\firefox.exe`、`Google\Chrome\Application\chrome.exe`、`Microsoft\Edge\Application\msedge.exe`）→ `PATH`。
 
-安全说明：Firefox 运行期间，远程调试端口监听在 `127.0.0.1` 的随机端口上（安装扩展要用）。本机其他程序理论上可以连上它控制这个专用配置文件里的浏览器；它不含你的个人 Firefox 数据，并且会在空闲时随 Firefox 一起关闭。不想接受这一点时，把 Firefox Fallback 关掉即可。
+### 复用日常浏览器的 Cookie
+
+**Use My Browser's Cookies** 默认关闭。打开后，兜底浏览器下一次启动时会把你日常使用的同一种浏览器（Firefox 用 Firefox 的，Chrome 用 Chrome 的，Edge 用 Edge 的）的 Cookie 文件复制到 MyHarness 的专用配置里：
+
+- 只复制 Cookie（Chrome/Edge 另外只取解密 Cookie 所需的密钥字段），不复制历史、密码、书签和扩展；你自己的浏览器配置只被读取，不会被修改。
+- 每次打开这个开关只复制一次；之后专用配置继续积累自己的 Cookie。关掉再打开会重新复制。
+- 复制不了时（找不到日常配置、文件被正在运行的浏览器占用等）兜底浏览器照常工作，原因会附在"需要登录/验证"的提示里。
+- 限制：较新的 Chrome/Edge 会把 Cookie 的密钥绑定到浏览器程序本身，这种情况下复制过来的 Cookie 可能无法解密，表现为网站仍然要求登录；这时在弹出的窗口里登录一次即可，登录状态会留在专用配置里。这一项目前只在测试用的配置之间验证过，没有在真实的日常配置上验证。
+- 打开后，专用配置里会有你的登录 Cookie，Agent 读网页时会以你的身份访问这些网站。不需要时保持关闭。
+
+安全说明：Firefox 运行期间，远程调试端口监听在 `127.0.0.1` 的随机端口上（安装扩展要用；Chrome/Edge 走管道，不开端口）。本机其他程序理论上可以连上它控制这个专用配置文件里的浏览器；它不含你的个人 Firefox 数据，并且会在空闲时随 Firefox 一起关闭。不想接受这一点时，把 Browser Fallback 关掉，或把 Browser 改成 Chrome / Edge 即可。
 
 ## Agent 工具
 
@@ -137,14 +162,22 @@ Agent 调用 web_search
 
 ## 网页读取
 
-`web_fetch` 和 `web_search` 的读网页部分使用同一个读取器，与搜索引擎、Firefox 都无关：
+`web_fetch` 和 `web_search` 的读网页部分使用同一个读取器，与搜索引擎无关。先直接请求：
 
 - 只允许 `http`/`https`；拒绝带用户名密码的 URL、`localhost`、本机地址和私有/保留 IP；
 - 域名先做 DNS 解析，解析到本机或私有地址时拒绝（防止借公网域名访问内网）；
 - 跳转不自动跟随，每一跳都重新做以上检查，最多 5 次；
 - 单个网页请求 20 秒超时，最多下载 5 MB，Markdown 最多保留 300,000 字符，超出时在结果里注明；
 - 支持 gzip/br/deflate；按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF 等其他类型返回"不支持"的明确错误；
-- 不执行 JavaScript，也不管理登录、Cookie、表单或验证码。
+- 直接请求不执行 JavaScript，也不带登录状态。
+
+直接请求被网站拒绝时（HTTP 401/403/407/429/451/503，或返回的是人机验证、登录、Cookie 同意页，或页面没有可读正文），并且 Browser Fallback 打开、找到了浏览器，就改用兜底浏览器打开同一个网址：
+
+- 先无界面打开，沿用专用配置里已有的 Cookie 和登录状态；页面正常就直接转成 Markdown 返回。
+- 在浏览器里仍然是验证码、登录或同意页时：交互界面（TUI、Web UI）下打开可见窗口，工具进度提示你去完成，最长等 3 分钟，Esc 取消；完成后自动读取正文并继续，不需要重新发起任务。无人值守模式不弹窗，返回 `challenge_required`。
+- 没有完成（超时或关掉窗口）时，同一个网站 2 分钟内不再弹窗。
+- 浏览器自己跟随跳转，中间每一跳不再逐个检查；只对最终落地的网址做公网地址和 DNS 检查，落在本机或内网地址时拒绝返回内容。
+- 失败原因写明网站要求了什么、两种方式各自的结果（例如"直接请求：…要求人机验证。Chrome：…没有完成"），或为什么没能改用浏览器，而不是只给一个 403。
 
 一个 URL 失败不会影响同一批其他 URL。工具可见结果是有长度上限的预览，完整 Markdown 通过现有 Tool Result persistence 保存到 Session 目录，Agent 可以按返回的路径读取。
 
@@ -178,5 +211,6 @@ npm.cmd run test:web-search:e2e
 
 - 真实 Google/Bing CAPTCHA 的人工完成流程受外部网络和搜索引擎策略影响，仓库中的人工验证集成测试主要使用本地 challenge 页面模拟；不能把模拟通过理解成所有线上 CAPTCHA 都能稳定复现或完成。
 - Bing 的降级结果识别是基于查询词和结果文本的启发式判断；搜索引擎 HTML DOM 或反自动化策略变化时，解析器和判断规则仍需维护。
+- 用浏览器读网页只是让请求看起来和真人浏览一样，不保证能通过所有网站的反爬；需要付费或账号权限的内容在登录前仍然读不到。
 - Firefox Transport 依赖 localhost Remote Debugging / IPC、已安装的 Firefox 和专用 profile；Firefox 未安装、扩展接入失败、profile 被其他 MyHarness 进程占用或浏览器崩溃时会返回明确失败，不会把错误伪装成搜索结果。
 - 高频搜索仍可能触发搜索引擎 CAPTCHA 或限流；Google 轻量路径固定使用 IPv4，因为当前 IPv6 网络表现不可靠。

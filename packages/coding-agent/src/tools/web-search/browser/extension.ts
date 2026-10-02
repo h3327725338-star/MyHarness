@@ -135,6 +135,14 @@ async function run(command) {
     await browser.tabs.remove(command.tabId).catch(function () {});
     return {};
   }
+  if (command.type === "quit") {
+    // Closing the last window makes Firefox quit by itself, which writes its cookies to disk first.
+    var windows = await browser.windows.getAll();
+    setTimeout(function () {
+      windows.forEach(function (win) { browser.windows.remove(win.id).catch(function () {}); });
+    }, 0);
+    return {};
+  }
   throw new Error("unknown command " + command.type);
 }
 

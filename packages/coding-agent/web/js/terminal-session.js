@@ -219,12 +219,17 @@ export function openTerminalView(mount, { shell, onState }) {
 
 			if (typeof ResizeObserver !== "undefined") {
 				let frame = 0;
+				let settle = 0;
 				const observer = new ResizeObserver(() => {
 					cancelAnimationFrame(frame);
-					frame = requestAnimationFrame(fitNow);
+					clearTimeout(settle);
+					// Fitting re-flows the whole screen buffer and resizes the shell. While an edge is being dragged the
+					// terminal keeps its size (clipped by its box) and is fitted once, when the width has come to rest.
+					if (document.querySelector(".resizer.dragging")) settle = setTimeout(fitNow, 140);
+					else frame = requestAnimationFrame(fitNow);
 				});
 				observer.observe(mount);
-				cleanups.push(() => (observer.disconnect(), cancelAnimationFrame(frame)));
+				cleanups.push(() => (observer.disconnect(), cancelAnimationFrame(frame), clearTimeout(settle)));
 			}
 			// The page's theme can change while the terminal is open.
 			let themeShown = document.documentElement.dataset.theme;

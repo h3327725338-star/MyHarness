@@ -92,6 +92,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
 				browserFallback: false,
+				browser: "auto",
+				useBrowserCookies: false,
 			});
 			await manager.flush();
 
@@ -102,6 +104,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
 				browserFallback: false,
+				browser: "auto",
+				useBrowserCookies: false,
 			};
 			expect(manager.getWebSearchSettings()).toEqual(expected);
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
@@ -117,6 +121,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 10,
 				fetchConcurrency: 4,
 				browserFallback: true,
+				browser: "auto",
+				useBrowserCookies: false,
 			});
 			const manager = SettingsManager.inMemory({
 				webSearch: { enabled: true, pagesPerSearch: 99, maxUrlsPerFetch: 0, fetchConcurrency: 1000 },
@@ -170,6 +176,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
 				browserFallback: true,
+				browser: "auto",
+				useBrowserCookies: false,
 			});
 
 			manager.setWebSearchSettings(manager.getWebSearchSettings());
@@ -183,6 +191,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
 				browserFallback: true,
+				browser: "auto",
+				useBrowserCookies: false,
 			});
 		});
 
@@ -217,6 +227,8 @@ describe("SettingsManager", () => {
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 8,
 				browserFallback: true,
+				browser: "auto",
+				useBrowserCookies: false,
 			});
 			// Saved once in the new format, the same list is a deliberate choice and stays.
 			manager.setWebSearchSettings({ ...manager.getWebSearchSettings(), engines: ["duckduckgo", "brave"] });

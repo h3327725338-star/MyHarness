@@ -106,6 +106,9 @@ export interface VisionCapabilityTestRecord {
 /** Search sources built into MyHarness. `brave_api` additionally needs a user API key. */
 export type WebSearchEngineId = "google" | "bing" | "duckduckgo" | "brave" | "brave_api";
 
+/** The browser the web tools fall back to: a named one, or "auto" for the first installed of Firefox, Chrome, Edge. */
+export type WebSearchBrowserId = "auto" | "firefox" | "chrome" | "edge";
+
 /**
  * Pre-built-in-search fields. They are read once for migration and dropped the
  * next time Web Search settings are saved; nothing in the runtime uses them.
@@ -133,8 +136,12 @@ export interface WebSearchSettings extends LegacyWebSearchSettings {
 	maxUrlsPerFetch?: number;
 	/** Most page downloads running at the same time, across all web tool calls. */
 	fetchConcurrency?: number;
-	/** Let engines fall back to a real Firefox when their lightweight request is blocked. */
+	/** Let blocked searches and blocked pages fall back to a real browser installed on this computer. */
 	browserFallback?: boolean;
+	/** Which installed browser the fallback uses; unknown names count as "auto". */
+	browser?: string;
+	/** Copy the cookies of the user's daily profile of that browser into MyHarness' profile, so logins carry over. */
+	useBrowserCookies?: boolean;
 }
 
 export interface ResolvedWebSearchSettings {
@@ -144,6 +151,8 @@ export interface ResolvedWebSearchSettings {
 	maxUrlsPerFetch: number;
 	fetchConcurrency: number;
 	browserFallback: boolean;
+	browser: WebSearchBrowserId;
+	useBrowserCookies: boolean;
 }
 
 export interface GitIntegrationSettings {

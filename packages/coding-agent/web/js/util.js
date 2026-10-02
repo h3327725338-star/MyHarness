@@ -121,6 +121,26 @@ export function clip(text, n) {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
+/**
+ * What a finished task did, as the server summarised it from the run's tool calls (the `work` of a task notification):
+ * "Edited 2 files (a.ts, b.ts) · ran 3 commands · read 5 files". Empty when the task used no tools worth naming.
+ */
+export function taskWorkLine(work) {
+	if (!work) return "";
+	const parts = [];
+	const edited = work.edited || [];
+	if (edited.length) {
+		const names = edited.slice(0, 3).map(basename).join(", ");
+		parts.push(t("Edited {files} ({names})", { files: count(edited.length, "file"), names: edited.length > 3 ? `${names}, …` : names }));
+	}
+	if (work.commands) parts.push(t("ran {count}", { count: count(work.commands, "command") }));
+	if (work.read) parts.push(t("read {count}", { count: count(work.read, "file") }));
+	if (work.searches) parts.push(count(work.searches, "web search", "web searches"));
+	if (work.webPages) parts.push(t("{count} opened", { count: count(work.webPages, "page") }));
+	if (work.otherTools) parts.push(count(work.otherTools, "tool call"));
+	return parts.join(" · ");
+}
+
 export function firstLine(text) {
 	return String(text ?? "").trim().split(/\r?\n/)[0];
 }
@@ -273,4 +293,19 @@ export function unitToTokens(text, unitSize) {
 	if (!/^\d+(?:\.\d+)?$/u.test(value)) return undefined;
 	const tokens = Number(value) * unitSize;
 	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}
+
+// ---- Markdown: bold next to punctuation ------------------------------------------------------
+// CommonMark only opens or closes `**` where the text around it "flanks" the right way, so `**` next to punctuation
+// with a letter on its other side is left as plain text: a quoted or bracketed phrase in bold inside a sentence, or a
+// bold label that ends with a colon and is followed by text. Chinese text has no spaces to rescue it. A `**…**` pair whose content starts or ends with punctuation is therefore taken as bold when
+// the content does not start or end with a space; everything else is left to the standard rules.
+const LOOSE_STRONG = /^\*\*(?![\s*])((?:\\[\s\S]|`[^`\n]*`|[^*\\\n]|\*(?!\*))+?)(?<![\s*])\*\*(?!\*)/u;
+const PUNCT_EDGE = /^[\p{P}\p{S}]|[\p{P}\p{S}]$/u;
+
+/** The bold span `src` starts with under the rule above ({ raw, text }), or undefined when the standard rules apply. */
+export function looseStrong(src, prevChar) {
+	if (prevChar === "*" || !src.startsWith("**")) return undefined;
+	const match = LOOSE_STRONG.exec(src);
+	return match && PUNCT_EDGE.test(match[1]) ? { raw: match[0], text: match[1] } : undefined;
 }

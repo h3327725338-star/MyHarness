@@ -2,6 +2,7 @@
 import { h } from "/vendor/preact.js";
 import { Component } from "/vendor/preact.js";
 import { t } from "./i18n.js";
+import { looseStrong } from "./util.js";
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
@@ -43,6 +44,15 @@ function getEngine() {
 			},
 		},
 	});
+	// Bold next to punctuation (see looseStrong): tried before the standard emphasis rules.
+	class Tokenizer extends marked.Tokenizer {
+		emStrong(src, maskedSrc, prevChar) {
+			const strong = looseStrong(src, prevChar);
+			if (strong) return { type: "strong", raw: strong.raw, text: strong.text, tokens: this.lexer.inlineTokens(strong.text) };
+			return super.emStrong(src, maskedSrc, prevChar);
+		}
+	}
+	engine.setOptions({ tokenizer: new Tokenizer() });
 	return engine;
 }
 

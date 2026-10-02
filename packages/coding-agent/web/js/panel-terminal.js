@@ -98,7 +98,7 @@ function CommandLog({ entries }) {
 	const selectedId = useStore((s) => s.view.selectedTerminal);
 	const [input, setInput] = useState("");
 	const [inContext, setInContext] = useState(true);
-	const [wrap, setWrap] = useState(false);
+	const [wrap, setWrap] = useState(true);
 	const [now, setNow] = useState(Date.now());
 	const [full, setFull] = useState({});
 	const selected = entries.find((e) => e.id === selectedId) || entries[entries.length - 1];

@@ -3,10 +3,13 @@ import type { RunState, RunStateSnapshot } from "../src/agent/runtime/run-state.
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import {
 	buildPopupCommand,
+	describeRunWork,
+	describeTaskEnd,
 	describeTerminalRunState,
 	type PopupNotificationContent,
 	popupKindForRunState,
 	showPopupNotification,
+	summarizeRunWork,
 } from "../src/utils/popup-notification.ts";
 
 vi.mock("../src/utils/popup-notification.ts", async (importOriginal) => {
@@ -83,6 +86,107 @@ describe("describeTerminalRunState", () => {
 			lastActivityAt: Date.now(),
 		});
 		expect(message).toBe("任务已取消");
+	});
+});
+
+describe("what a finished task did", () => {
+	const call = (name: string, args: Record<string, unknown>) => ({
+		type: "toolCall",
+		id: name,
+		name,
+		arguments: args,
+	});
+	const assistant = (content: unknown[], stopReason = "stop") => ({ role: "assistant", content, stopReason }) as never;
+	const user = (text: string) => ({ role: "user", content: text }) as never;
+
+	it("counts the tool calls of the last run and takes the start of its final reply", () => {
+		const work = summarizeRunWork([
+			user("earlier task"),
+			assistant([call("write", { path: "old.ts" }), { type: "text", text: "Earlier reply." }]),
+			user("fix the header"),
+			assistant([
+				{ type: "thinking", thinking: "..." },
+				call("read", { path: "web/js/app.js" }),
+				call("grep", { pattern: "header" }),
+				call("edit", { path: "web/js/app.js" }),
+			]),
+			{ role: "toolResult", content: [] } as never,
+			assistant([
+				call("edit", { path: "web/js/app.js" }),
+				call("write", { path: "C:\\proj\\web\\css\\layout.css" }),
+				call("bash", { command: "npm test" }),
+				call("web_search", { queries: ["a", "b"] }),
+				call("web_fetch", { urls: ["https://x.example/"] }),
+				call("agent", {}),
+			]),
+			assistant([
+				{ type: "text", text: "## Done\n\n**Removed** the `workspace` chip from the header.\n\n- tests pass" },
+			]),
+		]);
+		expect(work).toEqual({
+			edited: ["web/js/app.js", "C:\\proj\\web\\css\\layout.css"],
+			read: 1,
+			commands: 1,
+			searches: 2,
+			webPages: 1,
+			otherTools: 1,
+			conclusion: "Done Removed the workspace chip from the header. tests pass",
+		});
+		expect(describeRunWork(work)).toBe(
+			"修改 2 个文件（app.js、layout.css） · 运行 1 条命令 · 读取 1 个文件 · 搜索 2 次 · 打开 1 个网页 · 其他工具 1 次",
+		);
+	});
+
+	it("cuts a long reply, skips code blocks and ignores a reply that ended in an error", () => {
+		const long = summarizeRunWork([
+			user("q"),
+			assistant([{ type: "text", text: `\`\`\`ts\nconst hidden = 1;\n\`\`\`\n${"word ".repeat(80)}` }]),
+		]);
+		expect(long.conclusion).not.toContain("hidden");
+		expect(long.conclusion!.length).toBeLessThanOrEqual(141);
+		expect(long.conclusion!.endsWith("…")).toBe(true);
+		expect(
+			summarizeRunWork([user("q"), assistant([{ type: "text", text: "partial" }], "error")]).conclusion,
+		).toBeUndefined();
+		expect(summarizeRunWork([])).toEqual({
+			edited: [],
+			read: 0,
+			commands: 0,
+			searches: 0,
+			webPages: 0,
+			otherTools: 0,
+		});
+	});
+
+	it("puts the outcome and duration first, then the reply, the work and the error", () => {
+		const startedAt = 1_000_000;
+		const state = {
+			state: "completed" as const,
+			activity: "任务完成",
+			startedAt,
+			lastActivityAt: startedAt + 192_000,
+		};
+		expect(
+			describeTaskEnd(state, {
+				edited: ["a.ts", "b.ts", "c.ts", "d.ts"],
+				read: 0,
+				commands: 2,
+				searches: 0,
+				webPages: 0,
+				otherTools: 0,
+				conclusion: "Header chip removed.",
+			}),
+		).toBe("任务完成 · 用时 3 分 12 秒\nHeader chip removed.\n修改 4 个文件（a.ts、b.ts、c.ts 等） · 运行 2 条命令");
+		// Nothing to add: the plain text as before.
+		const nothing = { edited: [], read: 0, commands: 0, searches: 0, webPages: 0, otherTools: 0 };
+		expect(describeTaskEnd(state, nothing)).toBe("任务完成\n用时 3 分 12 秒");
+		expect(describeTaskEnd(state, undefined)).toBe("任务完成\n用时 3 分 12 秒");
+		expect(
+			describeTaskEnd(
+				{ state: "failed", activity: "任务失败", error: "模型请求失败", lastActivityAt: startedAt },
+				{ ...nothing, commands: 1 },
+			),
+		).toBe("任务失败\n运行 1 条命令\n模型请求失败");
 	});
 });
 
