@@ -10,7 +10,7 @@ import {
 	type GitCommandResult,
 } from "../../git/repository/integration.ts";
 
-const AUTO_REPAIR_MAX_ATTEMPTS = 3;
+const AUTO_REPAIR_MAX_ATTEMPTS = 1;
 const GIT_COMMIT_RETRY_TIMEOUT_MS = 300_000;
 
 const UNRECOVERABLE_GIT_FAILURE_PATTERNS = [
@@ -70,6 +70,8 @@ export type GitCommitSubmissionResult =
 
 export interface GitCommitUseCaseHost {
 	updatePhase: (phase: GitCommitTaskPhase, activity: string) => void;
+	/** A hidden Agent turn; resolves only after repair and completion have settled. */
+	repairCode?: (failure: GitCommandResult) => Promise<boolean>;
 }
 
 export function normalizeGitCommitTarget(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): GitCommitTarget {
@@ -173,15 +175,23 @@ export class GitCommitUseCase {
 		if (await this.confirmNoChanges(target, firstResult)) return { status: "no-changes" };
 
 		let failure = firstResult;
-		for (
-			let attempt = 1;
-			attempt <= AUTO_REPAIR_MAX_ATTEMPTS && classifyGitCommitFailure(failure) === "transient";
-			attempt += 1
-		) {
+		for (let attempt = 1; attempt <= AUTO_REPAIR_MAX_ATTEMPTS; attempt += 1) {
 			this.host.updatePhase("analyzing", "正在分析失败原因");
-			const timeoutMs = this.planRepair(target.repositoryRoot, failure);
-			if (timeoutMs === undefined) break;
-			this.host.updatePhase("fixing", `正在修复并重新提交（${attempt}/${AUTO_REPAIR_MAX_ATTEMPTS}）`);
+			const classification = classifyGitCommitFailure(failure);
+			let timeoutMs: number | undefined;
+			if (classification === "code-quality" && this.host.repairCode) {
+				this.host.updatePhase("fixing", `正在修复并重新提交（${attempt}/${AUTO_REPAIR_MAX_ATTEMPTS}）`);
+				if (!(await this.host.repairCode(failure))) break;
+				const pending = await this.readPendingPaths(target);
+				if (pending.error || !pending.paths) break;
+				if (!pending.paths.length) return { status: "no-changes" };
+				paths.splice(0, paths.length, ...pending.paths);
+			} else {
+				if (classification !== "transient") break;
+				timeoutMs = this.planRepair(target.repositoryRoot, failure);
+				if (timeoutMs === undefined) break;
+				this.host.updatePhase("fixing", `正在修复并重新提交（${attempt}/${AUTO_REPAIR_MAX_ATTEMPTS}）`);
+			}
 			const retryResult = await createGitCommitForPathsAsync(target.repositoryRoot, paths, message.full, timeoutMs);
 			if (retryResult.ok) return { status: "committed", commitHash: retryResult.commitHash };
 			if (await this.confirmNoChanges(target, retryResult)) return { status: "no-changes" };

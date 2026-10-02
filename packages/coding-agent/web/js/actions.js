@@ -235,6 +235,12 @@ export const actions = {
 		return { added: await actions.addWorkspace(picked.path) };
 	},
 
+	async renameWorkspace(id, name) {
+		const result = await attempt(() => post("/api/workspaces/rename", { id, name }));
+		if (result) await loadWorkspaces();
+		return result;
+	},
+
 	async removeWorkspace(id, name) {
 		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove") });
 		if (!ok) return;

@@ -23,6 +23,21 @@ describe("WorkspaceStore", () => {
 		return dir;
 	}
 
+	it("persists a display alias without changing identity or any directory", () => {
+		const agentDir = createTempDir("myharness-alias-agent");
+		const dataRoot = createTempDir("myharness-alias-data");
+		const projectDir = createTempDir("myharness-alias-project");
+		const store = WorkspaceStore.create(agentDir, dataRoot);
+		const original = store.add(projectDir).workspace!;
+		expect(store.rename(original.workspaceId, "  Friendly project  ")).toBe(true);
+		const reloaded = WorkspaceStore.create(agentDir, dataRoot).getById(original.workspaceId)!;
+		expect(reloaded).toEqual({ ...original, name: "Friendly project" });
+		expect(existsSync(projectDir)).toBe(true);
+		expect(store.rename(original.workspaceId, "  ")).toBe(false);
+		expect(store.rename("missing", "Name")).toBe(false);
+		expect(store.getById(original.workspaceId)!.name).toBe("Friendly project");
+	});
+
 	describe("add", () => {
 		it("adds a workspace and persists it", () => {
 			const agentDir = createTempDir("myharness-workspace-store");

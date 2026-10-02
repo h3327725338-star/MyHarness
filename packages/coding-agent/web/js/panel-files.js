@@ -1,5 +1,5 @@
 // Files panel: workspace tree and viewer, with rendered editing for Markdown only.
-import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, VirtualRows } from "./ui.js";
+import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, Collapse, VirtualRows } from "./ui.js";
 import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
@@ -10,14 +10,11 @@ import { t } from "./i18n.js";
 
 const ST = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 
-/** Height of a tree row (.tree-row in panels.css): the tree is a flat list of rows, of which only the visible ones are in the DOM. */
-const TREE_ROW_HEIGHT = 26;
-
 const TreeRow = memo(function TreeRow({ entry, depth, expanded, onToggle, status, task, onOpen, isCurrent }) {
 	const isDir = entry.type === "dir";
 	return html`<div class=${`tree-row ${isCurrent ? "current" : ""} ${entry.ignored ? "ignored" : ""}`} style=${{ paddingLeft: `${8 + depth * 14}px` }} role="treeitem" aria-level=${depth + 1} aria-expanded=${isDir ? !!expanded : undefined}
 		onClick=${() => (isDir ? onToggle(entry.path) : onOpen(entry.path))} tabindex="0" onKeyDown=${(e) => e.key === "Enter" && (isDir ? onToggle(entry.path) : onOpen(entry.path))}>
-		${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span class="tree-gap" />`}
+		${isDir ? html`<${Icon} name="chevronRight" size=${13} class=${`c-dim fold-chevron ${expanded ? "open" : ""}`} />` : html`<span class="tree-gap" />`}
 		<${Icon} name=${isDir ? (expanded ? "folderOpen" : "folder") : "file"} size=${14} class=${isDir ? "c-folder" : "c-dim"} />
 		<span class="truncate grow">${entry.name}</span>
 		${task ? html`<span class="dot accent" title=${t("Changed by the last task")} />` : null}
@@ -103,26 +100,27 @@ export function FilesPanel() {
 		setExpanded((e) => ({ ...e, [dir]: !e[dir] }));
 		if (!tree[dir]) loadDir(dir);
 	};
-	// The visible part of the tree as one flat list (a folder's rows follow it while it is open).
-	const rows = useMemo(() => {
-		const out = [];
-		const walk = (dir, depth) => {
-			for (const entry of tree[dir] || []) {
-				if (entry.ignored && !showIgnored) continue;
-				out.push({ entry, depth });
-				if (entry.type === "dir" && expanded[entry.path]) {
-					if (tree[entry.path]) walk(entry.path, depth + 1);
-					else out.push({ loading: true, depth: depth + 1, key: `loading:${entry.path}` });
-				}
-			}
+	// Keep the folder boundary mounted during exit so its actual height can fold smoothly.
+	const renderEntry = (entry, depth) => html`<${TreeRow} key=${entry.path} entry=${entry} depth=${depth} expanded=${!!expanded[entry.path]} onToggle=${toggle} onOpen=${open} status=${statusMap[entry.path]} task=${taskMap[entry.path]} isCurrent=${viewing?.path === entry.path} />`;
+	const renderDir = (dir, depth) => {
+		const groups = [];
+		let files = [];
+		const flush = () => {
+			if (!files.length) return;
+			groups.push(html`<${VirtualRows} key=${files[0].path} items=${files} rowHeight=${26} renderRow=${(entry) => renderEntry(entry, depth)} threshold=${80} />`);
+			files = [];
 		};
-		walk("", 0);
-		return out;
-	}, [tree, expanded, showIgnored]);
-	const renderRow = (row) =>
-		row.loading
-			? html`<div class="tree-row dim" key=${row.key} style=${{ paddingLeft: `${22 + row.depth * 14}px` }}><${Spinner} /></div>`
-			: html`<${TreeRow} key=${row.entry.path} entry=${row.entry} depth=${row.depth} expanded=${!!expanded[row.entry.path]} onToggle=${toggle} onOpen=${open} status=${statusMap[row.entry.path]} task=${taskMap[row.entry.path]} isCurrent=${viewing?.path === row.entry.path} />`;
+		for (const entry of tree[dir] || []) {
+			if (entry.ignored && !showIgnored) continue;
+			if (entry.type !== "dir") { files.push(entry); continue; }
+			flush();
+			groups.push(html`<div key=${entry.path}>${renderEntry(entry, depth)}
+				<${Collapse} open=${!!expanded[entry.path]}><div role="group">${tree[entry.path] ? renderDir(entry.path, depth + 1) : html`<div class="tree-row dim" style=${{ paddingLeft: `${22 + depth * 14}px` }}><${Spinner} /></div>`}</div><//>
+			</div>`);
+		}
+		flush();
+		return groups;
+	};
 
 	return html`<div class="files-panel">
 		<div class=${`files-tree ${viewing ? "hidden" : ""}`}>
@@ -136,7 +134,7 @@ export function FilesPanel() {
 					? results.length
 						? results.map((p) => html`<div class="tree-row" key=${p} onClick=${() => open(p)} role="treeitem" tabindex="0" onKeyDown=${(e) => e.key === "Enter" && open(p)}><${Icon} name="file" size=${14} class="c-dim" /><span class="truncate"><strong>${basename(p)}</strong> <span class="dim">${dirname(p)}</span></span></div>`)
 						: html`<div class="empty">${t("No matching files")}</div>`
-					: html`<${VirtualRows} items=${rows} rowHeight=${TREE_ROW_HEIGHT} renderRow=${renderRow} threshold=${80} />`}
+					: renderDir("", 0)}
 				${!results && !tree[""] && !error ? html`<div class="empty"><${Spinner} /></div>` : null}
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
 			</div>

@@ -146,12 +146,12 @@ function KField({ label, detected, value, onInput }) {
 	</label>`;
 }
 
-const PRICE_FIELDS = [["input", N_("Input tokens")], ["output", N_("Output tokens")], ["cacheRead", N_("Cache read")], ["cacheWrite", N_("Cache write")]];
+const PRICE_FIELDS = [["input", N_("Input price")], ["output", N_("Output price")], ["cacheRead", N_("Cache read")], ["cacheWrite", N_("Cache write")]];
 const emptyRates = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
 function Pricing({ value, onChange }) {
 	const update = (patch) => onChange({ ...value, ...patch });
-	const row = (rates, change) => html`<div class="pf-two">${PRICE_FIELDS.map(([key, label]) => html`<${Field} key=${key} label=${t(label)}><input class="field mono" type="number" min="0" step="any" value=${rates[key]} onInput=${(e) => change({ ...rates, [key]: e.target.value })} /><//>`)}</div>`;
+	const row = (rates, change) => html`<div class="pf-two">${PRICE_FIELDS.map(([key, label]) => html`<${Field} key=${key} label=${`${t(label)} (${value.currency === "CNY" ? "¥" : "$"}/1M)`}><input class="field mono" type="number" min="0" step="any" value=${rates[key]} onInput=${(e) => change({ ...rates, [key]: e.target.value })} /><//>`)}</div>`;
 	return html`<div class="col pf-pricing">
 		<div class="row"><strong class="grow">${t("Custom pricing")}</strong><${Toggle} checked=${!!value} label=${t("Custom pricing")} onChange=${(enabled) => onChange(enabled ? { ...emptyRates(), currency: "USD", tiers: [] } : null)} /></div>
 		${value ? html`<${Field} label=${t("Currency")} hint=${t("Prices per 1M tokens. Currency changes do not convert rates.")}><select class="select" value=${value.currency || "USD"} onChange=${(e) => update({ currency: e.target.value })}><option value="USD">USD ($)</option><option value="CNY">CNY (¥)</option></select><//>
@@ -161,7 +161,7 @@ function Pricing({ value, onChange }) {
 				<${Field} label=${t("Input token threshold")} hint=${t("Applies to the full request when input plus cached tokens exceeds this threshold.")}><input class="field mono" type="number" min="1" step="1" value=${tier.inputTokensAbove} onInput=${(e) => update({ tiers: value.tiers.map((item, i) => i === index ? { ...item, inputTokensAbove: e.target.value } : item) })} /><//>
 				${row(tier, (next) => update({ tiers: value.tiers.map((item, i) => i === index ? next : item) }))}
 			</div>`)}
-			<button class="btn sm ghost" onClick=${() => update({ tiers: [...(value.tiers || []), { ...emptyRates(), inputTokensAbove: 200000 }] })}>${t("Add pricing tier")}</button>` : null}
+			<button class="btn sm" onClick=${() => update({ tiers: [...(value.tiers || []), { ...emptyRates(), inputTokensAbove: 200000 }] })}><${Icon} name="plus" size=${14} />${t("Add pricing tier")}</button>` : null}
 	</div>`;
 }
 

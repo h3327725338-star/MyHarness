@@ -208,6 +208,18 @@ describe("Web host (real runtime with a faux provider)", () => {
 		};
 	}
 
+	it("renames a workspace alias through the API and broadcasts the change without moving its folder", async () => {
+		const fx = await start();
+		const snapshot = await fx.get("/api/state");
+		const workspace = snapshot.workspace;
+		expect(workspace).toBeTruthy();
+		await fx.post("/api/workspaces/rename", { id: workspace.id, name: "Friendly alias" });
+		const renamed = (await fx.get("/api/state")).workspace;
+		expect(renamed).toEqual({ ...workspace, name: "Friendly alias" });
+		expect(existsSync(fx.project)).toBe(true);
+		expect(fx.events.some((event) => event.event === "workspaces_changed")).toBe(true);
+	});
+
 	it("saves multiple Git outcomes and restores them through the transcript API", async () => {
 		const fx = await start();
 		const records = [

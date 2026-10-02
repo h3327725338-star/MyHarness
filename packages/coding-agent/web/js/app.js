@@ -60,7 +60,7 @@ function Header() {
 		const next = value.trim();
 		if (next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
 	};
-	const changeCount = snap?.lastRun?.changeCount || 0;
+	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	return html`<header class="main-header">
 		${!sidebarOpen ? html`<button class="icon-btn" title=${t("Show sidebar (Ctrl+B)")} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}

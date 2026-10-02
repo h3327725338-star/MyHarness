@@ -60,15 +60,13 @@ export function commitChanges() {
 		}
 		if (result.status === "no-changes") return show(slot, { tone: "info", title: t("Nothing to commit"), detail: t("There are no local changes to commit.") });
 		if (result.status === "failed") {
+			toast(t("Commit failed. Automatic recovery stopped; no further retries will run."), "error", 9000);
 			return show(slot, {
 				tone: "error",
 				title: t("Commit failed"),
 				detail: reasonLine(result.failure),
 				lines: result.failure,
-				fix: {
-					label: t("Ask the agent to fix it"),
-					prompt: `The local git commit failed with this output. Fix the underlying cause in the code (do not bypass hooks or checks), then tell me when it is ready to commit again.\n\n${result.failure}`,
-				},
+
 			});
 		}
 		return show(slot, {

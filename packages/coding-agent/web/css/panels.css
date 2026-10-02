@@ -132,8 +132,8 @@
 .ctx-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .ctx-foot { display: flex; align-items: center; gap: 8px; padding: 10px var(--pad-panel) 0; }
 .kv-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
-.kv > span:nth-child(odd) { color: var(--text-3); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
+.kv > span:nth-child(odd) { color: var(--text-3); white-space: nowrap; }
 .res-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; min-height: 32px; }
 .res-desc { font-size: var(--fs-sm); white-space: normal; }
 .tree { display: flex; flex-direction: column; }

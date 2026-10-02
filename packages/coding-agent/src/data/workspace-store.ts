@@ -504,6 +504,21 @@ export class WorkspaceStore {
 		this.save();
 	}
 
+	/** Change only the display alias; identity, storage and physical paths stay unchanged. */
+	rename(id: string, name: string): boolean {
+		const workspace = this.workspaces.find((entry) => entry.workspaceId === id || entry.id === id);
+		if (!workspace || !name.trim()) return false;
+		const previous = workspace.name;
+		workspace.name = name.trim();
+		try {
+			this.save();
+			return true;
+		} catch {
+			workspace.name = previous;
+			return false;
+		}
+	}
+
 	remove(id: string): boolean {
 		const index = this.workspaces.findIndex(
 			(workspace) => workspace.workspaceId === id || workspace.id === id || pathsEqual(workspace.rootPath, id),

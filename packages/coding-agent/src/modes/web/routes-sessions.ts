@@ -200,6 +200,17 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	 * Only un-registers the Workspace. The folder, its project files and every chat stay exactly where they are; the
 	 * chats simply belong to no Workspace afterwards (see `SessionManager.isUnbound`). Open chats keep running.
 	 */
+	server.route("POST", "/api/workspaces/rename", ({ body }) => {
+		const input = asObject(body);
+		const id = asString(input.id, "id");
+		const name = asString(input.name, "name").trim();
+		if (!name) throw new HttpError(400, "Missing name");
+		if (!host.workspaceStore.getById(id)) throw new HttpError(404, "Unknown workspace");
+		if (!host.workspaceStore.rename(id, name)) throw new HttpError(500, "Could not save the workspace list.");
+		host.broadcast("workspaces_changed", {});
+		return { ok: true };
+	});
+
 	server.route("POST", "/api/workspaces/remove", ({ body }) => {
 		const id = asString(asObject(body).id, "id");
 		const workspace = host.workspaceStore.getById(id);

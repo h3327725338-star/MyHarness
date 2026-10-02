@@ -1,5 +1,5 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows } from "./ui.js";
+import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows, Collapse } from "./ui.js";
 import { GENERAL_KEY, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -78,6 +78,13 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
+	const [editing, setEditing] = useState(false);
+	const [alias, setAlias] = useState("");
+	const startRename = () => { setAlias(workspace.name); setEditing(true); };
+	const saveAlias = async () => {
+		if (!alias.trim()) return;
+		if (await actions.renameWorkspace(workspace.id, alias.trim())) setEditing(false);
+	};
 	useEffect(() => {
 		if (showing) setRendered(true);
 	}, [showing]);
@@ -99,7 +106,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${general ? t("Chats that belong to no workspace") : workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
 			<${Icon} name="folder" size=${15} class=${general ? "ws-folder none" : "ws-folder"} />
-			<span class="name truncate">${workspace.name}</span>
+			${editing ? html`<input class="field title-edit" autofocus aria-label=${t("Rename")} value=${alias} onInput=${(e) => setAlias(e.target.value)} onClick=${(e) => e.stopPropagation()} onKeyDown=${(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); saveAlias(); } else if (e.key === "Escape") setEditing(false); }} />` : html`<span class="name truncate">${workspace.name}</span>`}
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
@@ -108,7 +115,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 					${(close) => html`
 						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), create())} />
 						<${MenuItem} icon="refresh" label=${t("Reload chats")} onClick=${() => (close(), reload())} />
-						${general ? null : html`<${MenuSep} />
+						${general ? null : html`<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startRename())} /><${MenuSep} />
 						<${MenuItem} icon="x" label=${t("Remove from list")} danger onClick=${() => (close(), actions.removeWorkspace(workspace.id, workspace.name))} />`}`}
 				<//>
 			</span>
@@ -120,13 +127,36 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 						${sessions === undefined && !error ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
 						${error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>` : null}
 						${sessions && !sessions.length ? html`<div class="dim side-note">${general ? t("No chats without a workspace") : t("No chats yet")}</div>` : null}
-						<${VirtualRows} items=${shown} rowHeight=${chatRowHeight()} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
+						<${ChatRows} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
 			</div>
 		</div>
 	</div>`;
+}
+
+// Only empty draft chats need entry/exit presence; saved chats keep the virtualized list.
+function DraftChat({ info, present, renderRow }) {
+	const [open, setOpen] = useState(false);
+	useEffect(() => {
+		const frame = requestAnimationFrame(() => setOpen(present));
+		return () => cancelAnimationFrame(frame);
+	}, [present]);
+	return html`<${Collapse} open=${open}>${renderRow(info)}<//>`;
+}
+
+function ChatRows({ items, renderRow }) {
+	const drafts = items.filter((info) => info.empty);
+	const [retained, setRetained] = useState(drafts);
+	useEffect(() => {
+		setRetained((old) => [...drafts, ...old.filter((info) => !drafts.some((item) => item.path === info.path) && !items.some((item) => item.path === info.path))]);
+		const timer = setTimeout(() => setRetained(drafts), 320);
+		return () => clearTimeout(timer);
+	}, [items]);
+	const visible = [...drafts, ...retained.filter((info) => !items.some((item) => item.path === info.path))];
+	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${drafts.some((item) => item.path === info.path)} renderRow=${renderRow} />`)}
+		<${VirtualRows} items=${items.filter((info) => !info.empty)} rowHeight=${chatRowHeight()} renderRow=${renderRow} />`;
 }
 
 function AddWorkspaceDialog({ onClose }) {

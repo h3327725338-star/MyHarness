@@ -1063,7 +1063,7 @@ describe("InteractiveMode completion gate", () => {
 
 			expect(fakeThis.session.sendCustomMessage).toHaveBeenCalledOnce();
 			expect(fakeThis.session.sendCustomMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ customType: "git-commit-failure" }),
+				expect.objectContaining({ customType: "git-commit-failure", display: false }),
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 			expect(fakeThis.session.completeGitCheckpointAfterVerification).not.toHaveBeenCalled();
@@ -1120,7 +1120,7 @@ describe("InteractiveMode completion gate", () => {
 			const fakeThis = createCommitThis();
 			fakeThis.gitCommitAgentRetry = {
 				checkpoint: commitCheckpoint,
-				agentRepairCount: 2,
+				agentRepairCount: 1,
 				lastFailureSignature: "different-signature",
 			};
 

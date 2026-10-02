@@ -166,6 +166,8 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .collapse-inner { min-width: 0; min-height: 0; overflow: clip; overflow-clip-margin: 3px; }
 /* The fold arrow (Fold in ui.js): one glyph that turns half a turn with the element it sits in, so every foldable row
    shows its state with the same motion as its content. */
+.fold-chevron { flex: none; transition: transform var(--t-slow) var(--ease); }
+.fold-chevron.open { transform: rotate(90deg); }
 .fold-chev { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
 [aria-expanded="true"] .fold-chev { transform: rotate(180deg); }
 /* The same for a head that has its arrow at the start (session sections, model cards): a quarter turn, right to down. */
