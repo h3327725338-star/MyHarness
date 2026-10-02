@@ -1,7 +1,7 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
-import { html, useEffect, useMemo, useState, Icon, Modal, Segmented, Spinner, Toggle, UnitField, useDelayedBusy } from "./ui.js";
+import { html, useEffect, useMemo, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitField, useDelayedBusy } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { clip, tokensToUnit, unitToTokens } from "./util.js";
@@ -17,18 +17,28 @@ export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
 export const NAV = [
 	{ id: "appearance", label: N_("Appearance"), icon: "eye" },
+	{ id: "conversation", label: N_("Conversation & scheduling"), icon: "clock" },
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
-	{ id: "tools", label: N_("Tools & assistants"), icon: "wrench" },
+	{ id: "search", label: N_("Web search"), icon: "globe" },
+	{ id: "tools", label: N_("Tool calls"), icon: "wrench" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "conversation", Display: "safety", Terminal: "terminal" };
+
+export function sectionOf(item) {
+	if (item.id.startsWith("webSearch.")) return "search";
+	if (["steeringMode", "followUpMode"].includes(item.id)) return "conversation";
+	return SECTION_OF[item.section];
+}
 
 /** One line under a page title, saying what the page is for. */
 const PAGE_NOTE = {
+	conversation: N_("Message delivery, run steps and notifications."),
+	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
 	tools: N_("Helper models and the tools the agent may use."),
@@ -44,10 +54,12 @@ function Row({ label, description, children, stack, off }) {
 	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
 }
 
-function Card({ title, description, action, children }) {
+function Card({ title, description, action, children, collapsible = false }) {
+	const [open, setOpen] = useState(false);
+	const body = html`<div class="set-card-body">${children}</div>`;
 	return html`<section class="set-card">
-		${title ? html`<div class="set-card-head"><div class="col grow"><strong>${title}</strong>${description ? html`<span class="set-card-desc">${description}</span>` : null}</div>${action || null}</div>` : null}
-		<div class="set-card-body">${children}</div>
+		${title ? html`<div class="set-card-head">${collapsible ? html`<button class="set-card-toggle grow" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" /><strong>${title}</strong></button>` : html`<div class="col grow"><strong>${title}</strong>${description ? html`<span class="set-card-desc">${description}</span>` : null}</div>`}${action || null}</div>` : null}
+		${collapsible ? html`<${Collapse} open=${open}>${body}<//>` : body}
 	</section>`;
 }
 
@@ -165,7 +177,31 @@ function Saving({ shown }) {
 }
 
 /** On the Terminal UI page every description would start with "Terminal UI:"; the page says it once instead. */
+const SHORT_DESCRIPTION = {
+	steeringMode: N_("Delivery order during a run."),
+	followUpMode: N_("Delivery order after a run."),
+	autoCompact: N_("Compact near the context limit."),
+	compactionModel: N_("Main model also inherits effort."),
+	contextWindowMain: N_("Empty: model limit."),
+	contextWindowSubAgent: N_("Empty: model limit."),
+	enabledModels: N_("Comma-separated patterns; next session. Empty: all."),
+	autoMemory: N_("Save memory after each task."),
+	subAgent: N_("Delegate read-only investigation."),
+	visionAssistant: N_("Use a model for image analysis."),
+	"webSearch.enabled": N_("Enable search and page reads."),
+	"webSearch.browserFallback": N_("Use a browser when blocked; checks may open a window."),
+	"webSearch.browser": N_("Auto: first installed browser."),
+	"webSearch.useBrowserCookies": N_("Copy login cookies once; close the source browser first."),
+	"codeIntelligence.enabled": N_("Off: lightweight index only."),
+	webShutdownGraceSeconds: N_("Last tab closes: exit after delay; reopen cancels. Next close."),
+	shellPath: N_("Executable for bash."),
+	shellCommandPrefix: N_("Prefix for every bash command."),
+	defaultProjectTrust: N_("For projects with no saved decision."),
+	popupNotifications: N_("Notify on completion, failure or stop."),
+	showCacheMissNotices: N_("Warn about costly cache misses."),
+};
 const describe = (item) => {
+	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
 	const text = item.section === "Terminal" ? String(item.description || "").replace(/^Terminal UI: /, "") : item.description;
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
 };
@@ -173,8 +209,8 @@ const describe = (item) => {
 /** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
-	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} stack=${item.type === "multi"} off=${off}>
-		${before || null}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
+	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off}>
+		${before || (item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
 
@@ -185,14 +221,15 @@ function GroupSwitch({ item }) {
 }
 
 /** The settings of one page, one card per server section; a group with its own switch (web search) gets its own card. */
-function SettingsList({ items, models }) {
+function SettingsList({ items, models, tools = false }) {
 	const cards = useMemo(() => {
 		const list = [];
 		for (const item of items) {
 			const prefix = Object.keys(GROUPS).find((p) => item.id.startsWith(p));
-			const key = prefix ? `group:${prefix}` : `section:${item.section}`;
+			const toolKey = item.section === "Images" ? "Images" : item.id.startsWith("codeIntelligence.") ? "Code Intelligence" : item.id;
+			const key = tools ? `tool:${toolKey}` : prefix ? `group:${prefix}` : `section:${item.section}`;
 			let card = list.find((c) => c.key === key);
-			if (!card) list.push((card = { key, section: item.section, prefix, items: [] }));
+			if (!card) list.push((card = { key, section: item.section, prefix, title: item.section === "Images" ? "Images" : item.label, items: [] }));
 			card.items.push(item);
 		}
 		return list;
@@ -201,19 +238,19 @@ function SettingsList({ items, models }) {
 		if (card.prefix) {
 			const head = card.items.find((i) => i.id === GROUPS[card.prefix]);
 			const rest = card.items.filter((i) => i !== head);
-			return html`<${Card} key=${card.key} title=${serverText(head?.label)} description=${serverText(head?.description)}
+			return html`<${Card} key=${card.key} title=${serverText(head?.label)} description=${head ? describe(head) : undefined}
 				action=${head ? html`<${GroupSwitch} item=${head} />` : null}>
 				${rest.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} off=${head && !head.value} />`)}
 			<//>`;
 		}
 		// A page with a single group needs no group title: the page title says it.
-		return html`<${Card} key=${card.key} title=${cards.length > 1 ? serverText(card.section) : undefined}>
+		return html`<${Card} key=${card.key} title=${tools ? serverText(card.title) : cards.length > 1 ? serverText(card.section) : undefined} collapsible=${tools}>
 			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
 		<//>`;
 	});
 }
 
-function Appearance() {
+function Appearance({ conversation = false }) {
 	const view = useStore((s) => s.view);
 	const runMode = runModeOf(view.runMode);
 	const set = (patch) => setView(patch);
@@ -223,17 +260,16 @@ function Appearance() {
 		else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
 	};
 	return html`
-		<${Card} title=${t("Interface")}>
-			<${Row} label=${t("UI language")} description=${t("Language of the MyHarness interface. Chat content is never translated.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
-			<${Row} label=${t("Theme")} description=${t("Dark and light are separate designs; “System” follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
-			<${Row} label=${t("Animations")} description=${t("Loading shimmer, expand/collapse and fades. Status is always shown in text too.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
-		<//>
-		<${Card} title=${t("Conversation")}>
-			<${Row} label=${t("While a task is running")} description=${t(RUN_MODES[runMode].hint)}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
-			<${Row} label=${t("Reading width")} description=${t("Width of the conversation column in px (620–1100). Empty: grows with the window.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
-			<${Row} label=${t("Run steps")} description=${t("Whether the steps behind a finished answer start expanded.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
+		${!conversation ? html`<${Card} title=${t("Interface")}>
+			<${Row} label=${t("UI language")} description=${t("Interface only; not messages.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
+			<${Row} label=${t("Theme")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
+			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
+			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
+		<//>` : html`<${Card} title=${t("Conversation")}>
+			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
+			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
 			<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${(v) => (v ? requestNotify() : set({ notify: false }))} /><//>
-		<//>`;
+		<//>`}`;
 }
 
 /**
@@ -330,7 +366,7 @@ export function SettingsModal() {
 		loadSettings();
 		if (!state.models) loadModels();
 	}, []);
-	const items = useMemo(() => (settings?.items || []).filter((item) => SECTION_OF[item.section] === section), [settings, section]);
+	const items = useMemo(() => (settings?.items || []).filter((item) => sectionOf(item) === section), [settings, section]);
 	const close = () => setView({ settingsOpen: false });
 	const current = NAV.find((n) => n.id === section) || NAV[0];
 	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${980} class="settings-modal" focusInput=${false}>
@@ -338,7 +374,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} tools=${section === "tools"} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

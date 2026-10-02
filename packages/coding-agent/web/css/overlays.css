@@ -30,6 +30,7 @@
 .set-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); margin-bottom: 14px; }
 .stack > .set-card { margin-bottom: 0; }
 .set-card-head { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.set-card-toggle { display: flex; align-items: center; gap: 8px; text-align: left; color: var(--text); }
 .set-card-head strong { font-size: 13px; font-weight: 650; }
 .set-card-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; margin-top: 1px; }
 .set-card-body { padding: 0 16px; }
@@ -40,12 +41,12 @@
    content sits exactly where it does in every other row). */
 .set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 16px; min-height: 33px; padding: 2px 0; border-top: 1px solid var(--border); }
 .set-card-body > .set-row:first-child { border-top-color: transparent; }
-.set-row.stack { grid-template-columns: minmax(0, 1fr); row-gap: 2px; padding: 6px 0; }
+.set-row.stack { grid-template-columns: minmax(0, 1fr) auto; }
 .set-row.off .set-text, .set-row.off .set-control { opacity: 0.55; }
-/* One line: the name, then its description in a weaker colour (cut with an ellipsis; the full text is the tooltip). */
+/* Name and concise description stay inline; controls remain in the right-hand column. */
 .set-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .set-label { flex: none; font-size: 13px; color: var(--text); white-space: nowrap; }
-.set-text > .set-desc { flex: 1 1 0; min-width: 0; max-width: none; font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-text > .set-desc { flex: 1 1 0; min-width: 0; max-width: none; font-size: var(--fs-xs); white-space: normal; overflow-wrap: anywhere; }
 .set-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; max-width: 520px; line-height: 1.45; }
 .set-control { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 .set-row.stack .set-control { justify-content: flex-start; }

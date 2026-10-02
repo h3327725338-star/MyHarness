@@ -4,6 +4,14 @@ import { actions } from "./actions.js";
 import { post } from "./store.js";
 import { serverText, t } from "./i18n.js";
 
+/** Preserve the output verbatim, colouring only paired file line counts. */
+export function gitDetailNodes(text) {
+	return String(text || "").split(/(\(\+\d+\/-\d+\))/g).map((part) => {
+		const match = /^\((\+\d+)\/(-\d+)\)$/.exec(part);
+		return match ? html`(<span class="add">${match[1]}</span>/<span class="del">${match[2]}</span>)` : part;
+	});
+}
+
 export function GitRecord({ result, task }) {
 	const [open, setOpen] = useState(false);
 	if (task) return html`<div class="strip git-result fade-in" role="status"><div class="strip-line"><${Spinner} /><span>${serverText(task.activity, t("Working…"))}</span><button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button></div></div>`;
@@ -18,6 +26,6 @@ export function GitRecord({ result, task }) {
 			${result.fix ? html`<button class="link-btn" onClick=${() => actions.send(result.fix.prompt)}>${result.fix.label}</button>` : null}
 			${hasDetails ? html`<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide details") : t("Details")}</button>` : null}
 		</div>
-		<${Collapse} open=${open}><pre class="strip-lines">${result.lines}</pre><//>
+		<${Collapse} open=${open}><pre class="strip-lines">${result.tone === "ok" && result.hash ? gitDetailNodes(result.lines) : result.lines}</pre><//>
 	</div>`;
 }

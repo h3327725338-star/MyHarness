@@ -3,8 +3,25 @@ import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton 
 import { api, attempt, loadResources, loadStats, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { ContextDetails } from "./context-usage.js";
-import { t } from "./i18n.js";
+import { N_, t } from "./i18n.js";
 import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.js";
+
+const TOOL_DESCRIPTIONS = {
+	agent: N_("Delegate tasks to sub-agents."),
+	read: N_("Read text, images and documents."),
+	bash: N_("Run Bash commands."),
+	pwsh: N_("Run PowerShell commands."),
+	edit: N_("Replace exact text in a file."),
+	write: N_("Create or rewrite a file."),
+	grep: N_("Search file contents."),
+	find: N_("Find files by name."),
+	ls: N_("List files and folders."),
+	symbols: N_("Find code symbols and references."),
+	github: N_("Access connected GitHub resources."),
+	web_search: N_("Search the web and read results."),
+	web_fetch: N_("Read web pages and documents."),
+};
+export const toolDescription = (tool) => TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
 
 function Section({ title, count, children, defaultOpen = true, action }) {
 	const [open, setOpen] = useState(defaultOpen);
@@ -46,8 +63,8 @@ function TreeView({ snap }) {
 		<span class=${`kind kind-${row.kind}`}>${row.kind === "user" ? t("You") : row.kind === "assistant" ? "AI" : row.kind === "compaction" ? "⟲" : "⑂"}</span>
 		<span class="truncate grow" title=${row.text}>${clip(row.text.replace(/\s+/g, " "), 70) || t("(no text)")}</span>
 		${row.childCount > 1 ? html`<span class="badge" title=${t("Branch point")}>${row.childCount}⑂</span>` : null}
-		<button class="link-btn" disabled=${snap.active} onClick=${() => navigate(row)}>${row.isLeaf ? t("current") : t("go here")}</button>
-		${row.kind === "user" ? html`<button class="link-btn" disabled=${snap.active} onClick=${() => actions.editAndResend({ id: row.id, text: row.text })}>${t("fork")}</button>` : null}
+		<button class="btn sm tree-action" disabled=${snap.active} onClick=${() => navigate(row)}>${row.isLeaf ? t("current") : t("Go back")}</button>
+		${row.kind === "user" ? html`<button class="btn sm tree-action" disabled=${snap.active} onClick=${() => actions.editAndResend({ id: row.id, text: row.text })}>${t("fork")}</button>` : null}
 	</div>`)}</div>`;
 }
 
@@ -91,7 +108,7 @@ export function ContextPanel() {
 		${snap.checkpoint ? html`<${Section} title=${t("Git checkpoint")}><div class="kv"><span>${t("Status")}</span><span>${t(snap.checkpoint.status)}</span><span>${t("Created")}</span><span>${fmtDateTime(Date.parse(snap.checkpoint.createdAt))}</span><span>${t("Shell used")}</span><span>${snap.checkpoint.hadBash ? t("yes — external effects cannot be undone") : t("no")}</span></div><//>` : null}
 		<${Section} title=${t("Branches")} defaultOpen=${false}><${TreeView} snap=${snap} /><//>
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
-			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => html`<div class="res-row" key=${tool.name}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${clip(tool.description, 110)}</span></div><${Toggle} checked=${tool.active} label=${tool.name} disabled=${snap.active} onChange=${(v) => toggleTool(tool.name, v)} /></div>`)}
+			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => html`<div class="res-row" key=${tool.name}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><${Toggle} checked=${tool.active} label=${tool.name} disabled=${snap.active} onChange=${(v) => toggleTool(tool.name, v)} /></div>`)}
 		<//>
 		<${Section} title=${t("Skills")} count=${resources?.skills.length} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.skills.length ? resources.skills.map((skill) => html`<div class="res-row" key=${skill.name}><div class="col grow"><span class="mono">${skill.name}</span><span class="dim res-desc">${clip(skill.description, 120)}</span></div><button class="link-btn" onClick=${() => actions.insertIntoComposer(`/skill:${skill.name} `)}>${t("Use")}</button></div>`) : html`<div class="dim">${t("No skills loaded.")}</div>`}

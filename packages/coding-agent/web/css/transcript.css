@@ -14,7 +14,7 @@
 /* User message */
 .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .user-bubble { max-width: 88%; background: var(--user-bg); border: 1px solid var(--user-border); border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); padding: 8px 13px; font-size: var(--fs-read); line-height: 1.6; }
-.user-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-text { white-space: normal; overflow-wrap: anywhere; }
 .chip-line { margin-bottom: 4px; }
 .user-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .user-images img { max-width: 220px; max-height: 160px; border-radius: var(--r-md); border: 1px solid var(--border); object-fit: cover; }
