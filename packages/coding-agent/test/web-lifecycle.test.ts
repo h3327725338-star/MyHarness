@@ -85,6 +85,18 @@ describe("Web UI lifecycle", () => {
 		expect(h.expired).toBe(1);
 	});
 
+	it.each([0, 1, 2, 3006])("supports a %i second delay without a minimum clamp", (seconds) => {
+		const h = harness(seconds);
+		h.lifecycle.clientCountChanged(1);
+		h.lifecycle.clientCountChanged(0);
+		if (seconds > 0) {
+			h.advance(seconds * 1000 - 1);
+			expect(h.expired).toBe(0);
+			h.advance(1);
+		} else h.advance(0);
+		expect(h.expired).toBe(1);
+	});
+
 	it("stops counting after dispose", () => {
 		const h = harness(10);
 		h.lifecycle.clientCountChanged(1);

@@ -26,6 +26,12 @@ describe("SettingsManager", () => {
 	});
 
 	describe("web shutdown grace", () => {
+		it.each([0, 1, 2, 3006])("persists and reloads %i seconds", async (seconds) => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setWebShutdownGraceSeconds(seconds);
+			await manager.flush();
+			expect(SettingsManager.create(projectDir, agentDir).getWebShutdownGraceSeconds()).toBe(seconds);
+		});
 		it("defaults to 10 seconds, persists a change globally and rejects invalid values", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getWebShutdownGraceSeconds()).toBe(10);

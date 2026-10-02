@@ -82,9 +82,9 @@ export function describeAction(call, result, run, cwd) {
 			kind = "edit";
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
-			const patch = result?.details?.patch || result?.details?.diff;
+			const patch = result?.details?.patch || result?.details?.diff || run?.partialDetails?.patch || run?.partialDetails?.diff;
 			if (patch) {
-				const c = countPatch(result.details.patch || "");
+				const c = countPatch(patch);
 				extra = { additions: c.add, deletions: c.del };
 			}
 			break;
@@ -95,7 +95,7 @@ export function describeAction(call, result, run, cwd) {
 			target = shortPath(path, cwd);
 			// The lines this write really added and removed (the tool counts them against the file as it was just before).
 			// While it runs, or for a result that carries no count, the row shows the plain status.
-			const d = result?.details;
+			const d = result?.details || run?.partialDetails;
 			if (Number.isFinite(d?.additions) && Number.isFinite(d?.deletions)) extra = { additions: d.additions, deletions: d.deletions };
 			break;
 		}
@@ -165,10 +165,11 @@ export function webStats(actions) {
 	return { rounds, returned, opened };
 }
 
-/** Added / removed lines of a group of edits, or undefined when one of them has no real count. */
+/** Sum only reported counts; pending calls must not hide counts already received. */
 export function changeTotals(actions) {
-	if (!actions.every((action) => action.extra)) return undefined;
-	return actions.reduce((sum, action) => ({ additions: sum.additions + action.extra.additions, deletions: sum.deletions + action.extra.deletions }), { additions: 0, deletions: 0 });
+	const counted = actions.filter((action) => action.extra);
+	if (!counted.length) return undefined;
+	return counted.reduce((sum, action) => ({ additions: sum.additions + action.extra.additions, deletions: sum.deletions + action.extra.deletions }), { additions: 0, deletions: 0 });
 }
 
 /** Group phrase for several actions of the same kind. */

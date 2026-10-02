@@ -34,16 +34,44 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app"></div><img src="/hold" hidden><script src="/markdown/marked.min.js"></script><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/transcript.css"><link rel="stylesheet" href="/css/overlays.css"><div id="checks"></div><div id="app"></div><img src="/hold" hidden><script src="/markdown/marked.min.js"></script><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(
 				join(root, "test.js"),
 				`
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
+import {Collapse,Modal} from '/js/ui.js';
+import {StepCounts} from '/js/step-counts.js';
 import {set,setView} from '/js/store.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
+ document.documentElement.dataset.motion='on';
+ const checks=document.getElementById('checks');
+ render(h(Modal,{title:'Settings',focusInput:false},h('input',{'aria-label':'Reading width'})),checks);
+ await wait(100);
+ if(document.activeElement!==document.querySelector('.modal')) throw Error('settings input focused');
+ const fold=open=>render(h(Collapse,{open},h('div',{style:'height:200px'},'content')),checks);
+ fold(false); await wait(50); fold(true); await wait(100);
+ const mid=document.querySelector('.collapse').getBoundingClientRect().height;
+ if(mid<=0 || mid>=200) throw Error('expand hard cut: '+mid);
+ await wait(300); fold(false); await wait(100);
+ const closing=document.querySelector('.collapse').getBoundingClientRect().height;
+ if(closing<=0 || closing>=200) throw Error('collapse hard cut: '+closing);
+ await wait(300);
+ const counts=(additions,deletions,running)=>render(h(StepCounts,{additions,deletions,running}),checks);
+ counts(undefined,undefined,true); counts(4,2,true); await wait(100);
+ if(document.querySelector('.count-current')) throw Error('counts bypassed period');
+ await wait(2910);
+ const up=document.querySelector('.count-current.roll-up'),down=document.querySelector('.count-current.roll-down');
+ if(!up || !down || !up.getAnimations().length || !down.getAnimations().length) throw Error('counts not animating');
+ if(getComputedStyle(up).transform===getComputedStyle(down).transform) throw Error('count directions identical');
+ await wait(350); const first=up;
+ await wait(3000);
+ if(document.querySelector('.count-current.roll-up')!==first || first.getAnimations().some(a=>a.playState==='running')) throw Error('unchanged replay');
+ counts(7,3,false); await wait(50);
+ if(document.querySelector('.count-current.roll-up')===first || !document.querySelector('.count-current.roll-up').getAnimations().length) throw Error('final counts not animating');
+ render(null,checks);
  const items=[{kind:'user',id:'u1',ts:1,text:'test',images:[]},{kind:'assistant',id:'a1',ts:2,model:'test',blocks:[{type:'toolCall',id:'c1',name:'read',args:{path:'doc.md'}}]},{kind:'toolResult',ts:3,toolCallId:'c1',toolName:'read',text:'# Read result',images:[],isError:false}];
  setView({processDefault:'expanded'});
  set({items,snap:{active:true,cwd:'C:/test',flags:{},session:{id:'test'},run:{startedAt:Date.now()}},dialogs:[],runs:{},toolRuns:{},userBash:{},userBashOrder:[],models:[]});

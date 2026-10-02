@@ -375,6 +375,20 @@ describe("Web host (real runtime with a faux provider)", () => {
 		for (const item of settings.items) {
 			await fx.post("/api/settings", { id: item.id, value: item.value });
 		}
+		for (const value of [0, 1, 2, 3006]) {
+			await fx.post("/api/settings", { id: "webShutdownGraceSeconds", value });
+			expect(
+				(await fx.get("/api/settings")).items.find((item: any) => item.id === "webShutdownGraceSeconds").value,
+			).toBe(value);
+		}
+		for (const [id, min, max] of [
+			["webSearch.pagesPerSearch", 0, 10],
+			["webSearch.maxUrlsPerFetch", 1, 20],
+			["webSearch.fetchConcurrency", 1, 8],
+		] as const) {
+			expect(settings.items.find((item: any) => item.id === id)).toMatchObject({ min, max });
+			await expect(fx.post("/api/settings", { id, value: max + 1 })).rejects.toThrow();
+		}
 		await fx.post("/api/settings", { id: "steeringMode", value: "all" });
 		expect((await fx.get("/api/state")).queueModes.steering).toBe("all");
 		const resources = await fx.get("/api/resources");

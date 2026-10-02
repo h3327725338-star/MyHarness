@@ -121,6 +121,20 @@ describe("Web UI: action descriptions", () => {
 			"",
 		);
 		expect(edit.extra).toEqual({ additions: 2, deletions: 1 });
+		const call = { id: "4", name: "edit", args: { path: "a.ts" } };
+		const diff = "@@ -1 +1,2 @@\n-a\n+b\n+c\n";
+		expect(describeAction(call, { details: { diff } }, undefined, "").extra).toEqual(edit.extra);
+		expect(describeAction(call, undefined, { status: "running", partialDetails: { diff } }, "").extra).toEqual(
+			edit.extra,
+		);
+		expect(
+			describeAction(
+				{ ...call, name: "write" },
+				undefined,
+				{ status: "running", partialDetails: { additions: 3, deletions: 2 } },
+				"",
+			).extra,
+		).toEqual({ additions: 3, deletions: 2 });
 	});
 });
 
@@ -788,6 +802,6 @@ describe("Web UI: what the agent really did on the web and in files", () => {
 		expect(created.extra).toEqual({ additions: 2, deletions: 0 });
 		expect(uncounted.extra).toBeUndefined();
 		expect(changeTotals([created, overwritten])).toEqual({ additions: 5, deletions: 1 });
-		expect(changeTotals([created, uncounted])).toBeUndefined();
+		expect(changeTotals([created, uncounted])).toEqual(created.extra);
 	});
 });

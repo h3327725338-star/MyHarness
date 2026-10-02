@@ -309,7 +309,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				type: "number",
 				value: web.maxUrlsPerFetch,
 				min: 1,
-				max: 30,
+				max: 20,
 			},
 			{
 				id: "webSearch.fetchConcurrency",
@@ -318,7 +318,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				type: "number",
 				value: web.fetchConcurrency,
 				min: 1,
-				max: 10,
+				max: 8,
 			},
 			{
 				id: "webSearch.browserFallback",
@@ -399,8 +399,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					"After the last browser page of this Web UI closes, MyHarness waits this long before it stops the local server. Reloading or reopening the page within that time keeps it running. Applies the next time the last page closes.",
 				type: "number",
 				value: s.getWebShutdownGraceSeconds(),
-				// Below a few seconds a page reload (F5) could outlast the wait and stop the server.
-				min: 3,
+				// Zero stops immediately; a short delay can also expire during a page reload.
+				min: 0,
 				max: 3600,
 				unit: "seconds",
 			},
@@ -726,8 +726,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 						(entry): entry is (typeof current.engines)[number] => typeof entry === "string",
 					);
 				} else if (id === "webSearch.pagesPerSearch") next.pagesPerSearch = numberValue(value, id, 0, 10);
-				else if (id === "webSearch.maxUrlsPerFetch") next.maxUrlsPerFetch = numberValue(value, id, 1, 30);
-				else if (id === "webSearch.fetchConcurrency") next.fetchConcurrency = numberValue(value, id, 1, 10);
+				else if (id === "webSearch.maxUrlsPerFetch") next.maxUrlsPerFetch = numberValue(value, id, 1, 20);
+				else if (id === "webSearch.fetchConcurrency") next.fetchConcurrency = numberValue(value, id, 1, 8);
 				else if (id === "webSearch.browser") {
 					const browser = WEB_SEARCH_BROWSER_IDS.find((choice) => choice === value);
 					if (!browser) throw new HttpError(400, "Unknown browser.");
@@ -763,7 +763,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				return;
 			}
 			case "webShutdownGraceSeconds":
-				s.setWebShutdownGraceSeconds(Math.floor(numberValue(value, id, 3, 3600)));
+				s.setWebShutdownGraceSeconds(Math.floor(numberValue(value, id, 0, 3600)));
 				return;
 			case "shellPath":
 				s.setShellPath(typeof value === "string" && value.trim() ? value.trim() : undefined);

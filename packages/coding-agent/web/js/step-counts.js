@@ -22,7 +22,7 @@ function RollingNumber({ value, previous, direction }) {
 	const changed = previous !== undefined && previous !== value;
 	return html`<span class="count-number" style=${{ minWidth: `${Math.max(String(value).length, String(previous ?? value).length)}ch` }}>
 		${changed ? html`<span key=${`old-${value}`} class=${`count-old roll-${direction}`} aria-hidden="true">${previous}</span>` : null}
-		<span key=${value} class=${changed ? `count-current roll-${direction}` : "count-current"}>${value}</span>
+		<span key=${`${previous ?? "initial"}-${value}`} class=${changed ? `count-current roll-${direction}` : "count-current"}>${value}</span>
 	</span>`;
 }
 

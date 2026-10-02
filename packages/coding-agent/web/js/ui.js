@@ -142,12 +142,12 @@ export function Menu({ trigger, placement = "bottom", align = "start", width, ch
 	</span>`;
 }
 
-export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true }) {
+export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true, focusInput = true }) {
 	const ref = useRef(null);
 	const inline = useContext(InlineFrame);
 	useEffect(() => {
 		if (inline) {
-			ref.current?.querySelector("[autofocus], input, textarea, select")?.focus?.();
+			(focusInput ? ref.current?.querySelector("[autofocus], input, textarea, select") : ref.current)?.focus?.({ preventScroll: true });
 			return undefined;
 		}
 		const onKey = (event) => {
@@ -158,7 +158,7 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		};
 		window.addEventListener("keydown", onKey, true);
 		const previous = document.activeElement;
-		const first = ref.current?.querySelector("[autofocus], input, textarea, select");
+		const first = focusInput ? ref.current?.querySelector("[autofocus], input, textarea, select") : ref.current;
 		first?.focus?.();
 		return () => {
 			window.removeEventListener("keydown", onKey, true);
@@ -166,14 +166,14 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		};
 	}, []);
 	if (inline) {
-		return html`<div class=${`inline-frame ${cls || ""}`} ref=${ref} role="group" aria-label=${title}>
+		return html`<div class=${`inline-frame ${cls || ""}`} ref=${ref} tabindex="-1" role="group" aria-label=${title}>
 			${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}
 			<div class="modal-body">${children}</div>
 			${footer ? html`<div class="modal-foot">${footer}</div>` : null}
 		</div>`;
 	}
 	return html`<div class="scrim" onMouseDown=${(event) => closeOnScrim && event.target === event.currentTarget && onClose?.()}>
-		<div class=${`modal ${cls || ""}`} style=${{ width: `${width}px` }} ref=${ref} role="dialog" aria-modal="true" aria-label=${title}>
+		<div class=${`modal ${cls || ""}`} style=${{ width: `${width}px` }} ref=${ref} tabindex="-1" role="dialog" aria-modal="true" aria-label=${title}>
 			<div class="modal-head">
 				<div class="col grow"><div class="modal-title truncate">${title}</div>${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}</div>
 				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>` : null}
@@ -256,7 +256,7 @@ export const COLLAPSE_MS = 260;
 export function Collapse({ open, children, class: cls, keepMounted = false }) {
 	const { mounted, shown } = usePresence(open, COLLAPSE_MS + 40);
 	if (!mounted && !keepMounted) return null;
-	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`}><div class="collapse-inner">${children}</div></div>`;
+	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`} inert=${open ? undefined : ""}><div class="collapse-inner">${children}</div></div>`;
 }
 
 /**

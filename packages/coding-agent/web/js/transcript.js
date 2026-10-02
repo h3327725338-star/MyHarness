@@ -155,7 +155,7 @@ function Group({ group, forceOpen }) {
 	const [open, setOpen] = useState(!!forceOpen);
 	const nothingRunning = useStore((st) => !st.snap?.active && !st.snap?.flags?.background);
 	const list = group.actions;
-	if (list.length === 1 && group.kind !== "web") return html`<${ActionRow} step=${list[0]} />`;
+	if (list.length === 1 && !["web", "edit", "write"].includes(group.kind)) return html`<${ActionRow} step=${list[0]} />`;
 	const failed = list.filter((a) => a.isError).length;
 	const running = list.some((a) => a.status === "running" || a.status === "pending");
 	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(list) : undefined;

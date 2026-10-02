@@ -348,7 +348,7 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `httpProxy` | string | - | 作为 `HTTP_PROXY` 和 `HTTPS_PROXY` 应用的 HTTP proxy URL。仅适用于 global setting。 |
-| `webShutdownGraceSeconds` | number | `10` | Web UI（`--web`）在最后一个浏览器页面断开后等待多少秒再退出；期间刷新或重新打开页面会取消退出。Web UI 设置里的最小值是 3。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
+| `webShutdownGraceSeconds` | number | `10` | Web UI（`--web`）在最后一个浏览器页面断开后等待多少秒再退出；期间刷新或重新打开页面会取消退出。Web UI 设置范围为 0–3600 秒（包含 0–3006 秒），0 表示断开后立即退出；很短的等待时间也可能在刷新期间退出。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
 
 ```json
 {

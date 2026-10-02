@@ -173,7 +173,7 @@ const describe = (item) => {
 /** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
-	return html`<${Row} label=${serverText(item.label)} description=${describe(item)} stack=${item.type === "multi"} off=${off}>
+	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} stack=${item.type === "multi"} off=${off}>
 		${before || null}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
@@ -333,7 +333,7 @@ export function SettingsModal() {
 	const items = useMemo(() => (settings?.items || []).filter((item) => SECTION_OF[item.section] === section), [settings, section]);
 	const close = () => setView({ settingsOpen: false });
 	const current = NAV.find((n) => n.id === section) || NAV[0];
-	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${980} class="settings-modal">
+	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${980} class="settings-modal" focusInput=${false}>
 		<div class="settings">
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
