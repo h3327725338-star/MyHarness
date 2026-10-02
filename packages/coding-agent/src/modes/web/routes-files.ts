@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
+import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { RUN_CHANGES_ENTRY } from "./wire.ts";
 
 const MAX_TEXT_BYTES = 1.5 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -369,6 +371,32 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const result = host.tracker.diffForRunFile(runId, file, host.session.getGitCheckpoint());
 		if (!result) throw new HttpError(404, "No such change");
 		return result;
+	});
+
+	// One file of a change card in the conversation: the diff kept with the card in the session, so the card of an
+	// earlier task still shows that task's own changes. A diff that was too large to keep (or a card that was only
+	// shown, not saved) falls back to the task's record in this server process.
+	server.route("GET", "/api/changes/card-diff", ({ url }) => {
+		const file = url.searchParams.get("path");
+		if (!file) throw new HttpError(400, "Missing path");
+		const entry = host.session.sessionManager.getEntry(url.searchParams.get("id") ?? "");
+		const card =
+			entry?.type === "custom" && entry.customType === RUN_CHANGES_ENTRY
+				? (entry.data as { runId?: number; files?: RunChangeCardFile[] } | undefined)
+				: undefined;
+		const kept = card?.files?.find((candidate) => candidate?.path === file);
+		if (kept && !kept.patchOmitted) {
+			const { patch, patchOmitted: _omitted, ...summary } = kept;
+			return { summary, ...(patch ? { patch } : {}) };
+		}
+		const runId = Number(card?.runId ?? url.searchParams.get("runId"));
+		const live = Number.isFinite(runId)
+			? host.tracker.diffForRunFile(runId, file, host.session.getGitCheckpoint())
+			: undefined;
+		if (live) return live;
+		if (!kept) throw new HttpError(404, "No such change");
+		const { patch: _patch, patchOmitted: _omitted, ...summary } = kept;
+		return { summary: { ...summary, unavailable: "The diff of this file was too large to keep with the chat." } };
 	});
 }
 

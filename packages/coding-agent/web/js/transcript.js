@@ -1,13 +1,14 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
 import { api, useStore, setView } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
+import { DiffView, languageFor, parsePatch } from "./diff.js";
 import { buildTurns, changeTotals, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
-import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, plural, formatData, ansiSegments } from "./util.js";
+import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
 
 const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertCircle" };
@@ -52,7 +53,12 @@ function RawDetails({ step }) {
 		<pre class="raw-pre">${formatData(call.args)}</pre>
 		${output ? html`<div class="raw-label">${result ? (result.isError ? t("Error output") : t("Result")) : t("Output so far")}</div>${step.kind === "read" && result && !result.isError && MARKDOWN_PATH.test(step.path || "") ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}` : null}
 		${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => html`<img key=${i} src=${`data:${img.mimeType};base64,${img.data}`} alt=${t("tool image")} />`)}</div>` : null}
-		${details && Object.keys(details).length ? html`<button class="btn sm ghost" onClick=${() => setShowDetails(!showDetails)}>${showDetails ? t("Hide result details") : t("Show result details")}</button>${showDetails ? html`<pre class="raw-pre">${formatData(details)}</pre>` : null}` : null}
+		${details && Object.keys(details).length ? html`<div class="raw-extra">
+			<button class="raw-extra-head" aria-expanded=${showDetails} title=${showDetails ? t("Hide result details") : t("Show result details")} onClick=${() => setShowDetails(!showDetails)}>
+				<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="raw-extra-title">${t("Result details")}</span><span class="grow" /><span class="raw-extra-hint">${showDetails ? t("Hide") : t("Show")}</span>
+			</button>
+			<${Collapse} open=${showDetails}><pre class="raw-pre">${formatData(details)}</pre><//>
+		</div>` : null}
 	</div>`;
 }
 
@@ -336,7 +342,8 @@ function UserMessage({ item, turn }) {
 	</div>`;
 }
 
-const fmtCount = (n) => `${(n / 1000).toFixed(1)}k`;
+/** Tokens of one reply: always with a unit and one decimal (0.2k, 12.7k, 1.3m). */
+const fmtCount = (n) => (n < 1000 ? `${(n / 1000).toFixed(1)}k` : fmtTokens(n));
 
 function FinalMessage({ final }) {
 	const message = final.message;
@@ -354,23 +361,78 @@ function FinalMessage({ final }) {
 /** Added / removed lines of one file, or nothing when the diff could not be counted (binary, too large, no baseline). */
 const lineCounts = (file) => (file.binary || file.unavailable ? null : html`<${Counts} additions=${file.additions} deletions=${file.deletions} />`);
 
-/**
- * What a finished task changed, at the end of its turn: the files it really changed with their added and removed
- * lines, from the task's own diff (GET /api/changes, the same data as Changes → This task). It only informs: the
- * Changes panel opens from its own button in the header, never from here. Nothing is shown for a task the server no
- * longer has a record of.
- */
-function ChangeCard({ run }) {
-	const [files, setFiles] = useState(null);
+/** A Markdown file's diff as formatted text: each run of unchanged, removed and added lines is rendered as Markdown. */
+function MarkdownDiff({ patch }) {
+	const blocks = useMemo(() => {
+		const out = [];
+		for (const hunk of parsePatch(patch)) {
+			for (const line of hunk.lines) {
+				if (line.type === "meta") continue;
+				const last = out[out.length - 1];
+				if (last && last.type === line.type && last.hunk === hunk) last.lines.push(line.text);
+				else out.push({ type: line.type, hunk, lines: [line.text] });
+			}
+		}
+		return out;
+	}, [patch]);
+	if (!blocks.length) return html`<div class="diff-empty dim">${t("No textual changes.")}</div>`;
+	return html`<div class="md-diff">${blocks.map((block, i) => html`<div class=${`md-diff-block ${block.type}`} key=${i}>
+		<span class="md-diff-sign" aria-hidden="true">${block.type === "add" ? "+" : block.type === "del" ? "−" : ""}</span>
+		<${Markdown} text=${block.lines.join("\n")} />
+	</div>`)}</div>`;
+}
+
+/** The diff of one file of a change card, loaded the first time the file is opened. */
+function ChangeDiff({ card, file }) {
+	const [entry, setEntry] = useState(null);
+	const markdown = MARKDOWN_PATH.test(file.path);
+	const [mode, setMode] = useState("diff");
 	useEffect(() => {
 		let cancelled = false;
-		api(`/api/changes?scope=run&runId=${run.runId}`)
-			.then((data) => !cancelled && setFiles(data.run ? data.files : []))
-			.catch(() => {});
+		api(`/api/changes/card-diff?id=${encodeURIComponent(card.id)}&runId=${card.runId}&path=${encodeURIComponent(file.path)}`)
+			.then((data) => !cancelled && setEntry({ data }))
+			.catch((e) => !cancelled && setEntry({ error: e.message }));
 		return () => {
 			cancelled = true;
 		};
-	}, [run.runId, run.changeCount]);
+	}, [card.id, file.path]);
+	const data = entry?.data;
+	if (entry?.error) return html`<div class="change-note c-danger">${entry.error}</div>`;
+	if (!data) return html`<div class="change-note"><${Spinner} /></div>`;
+	if (data.summary.binary) return html`<div class="change-note dim">${t("Binary file — no text diff.")}</div>`;
+	if (data.summary.unavailable) return html`<div class="change-note dim">${serverText(data.summary.unavailable)}</div>`;
+	if (!data.patch) return html`<div class="change-note dim">${t("No content changes.")}</div>`;
+	return html`<div class="change-diff">
+		${markdown ? html`<div class="change-diff-bar"><${Segmented} value=${mode} onChange=${setMode} options=${[{ value: "diff", label: "Diff" }, { value: "rendered", label: "Markdown" }]} /></div>` : null}
+		${markdown && mode === "rendered" ? html`<${MarkdownDiff} patch=${data.patch} />` : html`<${DiffView} patch=${data.patch} language=${languageFor(file.path)} />`}
+	</div>`;
+}
+
+/** One file of a change card: a row that opens the file's diff in place. The diff is only mounted once it was opened. */
+function ChangeFile({ card, file }) {
+	const [open, setOpen] = useState(false);
+	const [opened, setOpened] = useState(false);
+	const dir = dirname(file.path);
+	const toggle = () => (setOpened(true), setOpen(!open));
+	return html`<div class="change-item">
+		<button class="change-file" aria-expanded=${open} title=${file.path} onClick=${toggle}>
+			<${Icon} name="chevronRight" size=${13} class="disclose" />
+			<span class="change-path truncate">${dir ? html`<span class="dim">${dir}/</span>` : null}${basename(file.path)}${file.oldPath ? html` <span class="dim">← ${file.oldPath}</span>` : null}</span>
+			${lineCounts(file)}
+		</button>
+		<${Collapse} open=${open}>${opened ? html`<${ChangeDiff} card=${card} file=${file} />` : null}<//>
+	</div>`;
+}
+
+/**
+ * What a finished task changed, at the end of its turn: the files it really changed with their added and removed
+ * lines. The card is an entry of the session (kind "runChanges"), written when the task ended, so it stays in the
+ * conversation when later tasks follow, and each card holds only its own task's changes. A file opens in place to
+ * its line diff (added lines green, removed lines red); a Markdown file can also be read as formatted text. The card
+ * never opens the Changes panel. A task from before cards were saved has none.
+ */
+function ChangeCard({ card }) {
+	const files = card.files;
 	if (!files?.length) return null;
 	const counted = files.every((file) => !file.binary && !file.unavailable);
 	return html`<div class="change-card fade-in">
@@ -378,13 +440,7 @@ function ChangeCard({ run }) {
 			<span class="grow truncate">${t("Edited {files}", { files: plural(files.length, "file") })}</span>
 			${counted ? html`<${Counts} additions=${files.reduce((n, f) => n + f.additions, 0)} deletions=${files.reduce((n, f) => n + f.deletions, 0)} />` : null}
 		</div>
-		${files.map((file) => {
-			const dir = dirname(file.path);
-			return html`<div class="change-file" key=${file.path} title=${file.path}>
-				<span class="change-path truncate">${dir ? html`<span class="dim">${dir}/</span>` : null}${basename(file.path)}</span>
-				${lineCounts(file)}
-			</div>`;
-		})}
+		${files.map((file) => html`<${ChangeFile} key=${file.path} card=${card} file=${file} />`)}
 	</div>`;
 }
 
@@ -396,7 +452,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}-${live}`} />
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
-		${run?.changeCount ? html`<${ChangeCard} run=${run} />` : null}
+		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
 	</section>`;
 });
@@ -425,6 +481,7 @@ function BashCard({ item }) {
 function Standalone({ item }) {
 	const [open, setOpen] = useState(false);
 	if (item.kind === "gitStatus") return html`<${GitRecord} result=${item.result} />`;
+	if (item.kind === "runChanges") return html`<${ChangeCard} card=${item} />`;
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
 		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{k}k tokens)", { k: Math.round(item.tokensBefore / 1000) }) : t("Context compacted")) : t("Returned from another branch");

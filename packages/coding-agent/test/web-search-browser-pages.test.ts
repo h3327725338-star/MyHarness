@@ -132,6 +132,37 @@ describe("what counts as a wall instead of a page", () => {
 		).toBeUndefined();
 		expect(detectAccessWall("<html><body>Not found</body></html>", 404, "https://site.example/")).toBeUndefined();
 	});
+
+	it("does not take an ordinary short page for a wall because of a protection script or a login box in it", () => {
+		// Sites behind Cloudflare, reCAPTCHA v3 or DataDome load these scripts on every page without showing a check.
+		for (const script of [
+			'<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>',
+			'<script src="https://www.google.com/recaptcha/api.js?render=key"></script><script>grecaptcha.ready(function(){document.querySelector(".g-recaptcha")})</script>',
+			'<script>window.ddjskey="x";</script><script src="https://js.datadome.co/tags.js"></script>',
+		]) {
+			expect(
+				detectAccessWall(
+					`<html><head><title>Release notes</title>${script}</head><body><p>Version 2 is out.</p></body></html>`,
+					200,
+					"https://site.example/notes",
+				),
+			).toBeUndefined();
+		}
+		// A short page with a login dialog in its header is still the page; a page that says it is the login is not.
+		const withLoginBox = `<html><head><title>Pricing</title></head><body><form><input type="password"></form><p>${"Plans and prices. ".repeat(40)}</p></body></html>`;
+		expect(detectAccessWall(withLoginBox, 200, "https://site.example/pricing")).toBeUndefined();
+		expect(detectAccessWall(withLoginBox, 200, "https://site.example/account/login")).toMatchObject({
+			kind: "login",
+		});
+		// A check the page really shows is still a check.
+		expect(
+			detectAccessWall(
+				'<html><head><title>site.example</title></head><body><div class="cf-turnstile"></div></body></html>',
+				200,
+				"https://site.example/",
+			),
+		).toMatchObject({ kind: "captcha" });
+	});
 });
 
 describe("reading a page that refuses plain requests", () => {
@@ -264,6 +295,33 @@ describe("reading a page that refuses plain requests", () => {
 		time += 3 * 60_000;
 		await service.fetch({ urls: ["https://members.example/c"] });
 		expect(challenges).toEqual(["https://members.example/a", "https://members.example/c"]);
+	});
+
+	it("reads a page that loaded normally in the browser without opening a window, and reports a plain refusal as one", async () => {
+		const normal = `<html><head><title>Status</title><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></head><body><main><p>All systems are running.</p></main></body></html>`;
+		const { browser, challenges } = fakeBrowser({
+			load: (url) =>
+				url.includes("refused")
+					? browserPage(url, "<html><body>Forbidden</body></html>", 403)
+					: browserPage(url, normal),
+			challenge: (url) => [browserPage(url, article("Never", "shown"))],
+		});
+		const progress: string[] = [];
+		const { service } = createService(
+			{ "status.example": () => html("Forbidden", 403), "refused.example": () => html("Forbidden", 403) },
+			browser,
+			{ interactive: true },
+		);
+		const response = await service.fetch({
+			urls: ["https://status.example/", "https://refused.example/"],
+			onProgress: (message) => progress.push(message),
+		});
+		expect(response.pages.map((page) => page.markdown)).toEqual(["All systems are running."]);
+		expect(response.failures).toHaveLength(1);
+		expect(response.failures[0]).toMatchObject({ code: "forbidden", message: expect.stringContaining("HTTP 403") });
+		// Nobody was asked for anything: no window, no request for help.
+		expect(challenges).toEqual([]);
+		expect(progress).toEqual([]);
 	});
 
 	it("says why the browser could not be used: switched off, or none installed", async () => {

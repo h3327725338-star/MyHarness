@@ -93,11 +93,16 @@ export function fmtDateTime(ts) {
 	return new Date(ts).toLocaleString(getLang(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * A token count in the one compact form used everywhere: thousands as "k", millions as "m", always with exactly one
+ * decimal (187652 → "187.7k", 11643776 → "11.6m"). Below a thousand the number itself.
+ */
 export function fmtTokens(n) {
-	if (n == null) return "–";
-	if (n < 1000) return String(n);
-	if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-	return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n == null || !Number.isFinite(n)) return "—";
+	if (n < 1000) return String(Math.round(n));
+	// 999 950 and up would round to "1000.0k".
+	if (n < 999_950) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1_000_000).toFixed(1)}m`;
 }
 
 export function fmtBytes(n) {
@@ -107,7 +112,8 @@ export function fmtBytes(n) {
 }
 
 export function fmtCost(v) {
-	if (!Number.isFinite(v) || v <= 0) return t("Not detected");
+	// No price rule or no reported cost: the same dash as any other value that is not there.
+	if (!Number.isFinite(v) || v <= 0) return "—";
 	return v < 0.01 ? `<$0.01` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 

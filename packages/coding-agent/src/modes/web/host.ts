@@ -40,12 +40,22 @@ import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { predictCacheHit, RequestCacheMeter } from "./request-cache.ts";
-import { entriesToWire, messageToWire, sanitizeDetails, toWireModel, type WireItem } from "./wire.ts";
+import {
+	entriesToWire,
+	messageToWire,
+	RUN_CHANGES_ENTRY,
+	runChangesToWire,
+	sanitizeDetails,
+	toWireModel,
+	type WireItem,
+} from "./wire.ts";
 
 const ASSISTANT_UPDATE_INTERVAL_MS = 50;
 const TOOL_UPDATE_INTERVAL_MS = 120;
 /** The live speed and cache numbers are pushed at most this often while a reply streams. */
 const METER_BROADCAST_INTERVAL_MS = 150;
+/** Context use and session totals are pushed at most this often while a reply streams (always when a message ends). */
+const USAGE_BROADCAST_INTERVAL_MS = 1000;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
 /** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
 const TASK_NOTICE_ANSWER_MS = 2500;
@@ -148,6 +158,7 @@ export class WebHost {
 	/** Prompt-cache hit rate of the current model request, from the usage the provider reports (see request-cache.ts). */
 	private cache = new RequestCacheMeter();
 	private cacheChanged = false;
+	private lastUsageBroadcastAt = 0;
 	private readonly toolTimers = new Map<
 		string,
 		{ last: number; timer?: ReturnType<typeof setTimeout>; pending?: unknown }
@@ -567,6 +578,7 @@ export class WebHost {
 			case "agent_start":
 				this.onAgentStart();
 				this.broadcast("agent_start", { runId: this.currentRunId });
+				this.broadcastUsage();
 				return;
 			case "agent_end":
 				this.lastAgentEnd = this.summariseAgentEnd(event.messages, event.willRetry);
@@ -575,6 +587,7 @@ export class WebHost {
 				if (this.speed.settle()) this.broadcast("generation_speed", { speed: this.speed.current });
 				if (this.cache.settle()) this.broadcast("cache_hit", { cache: this.cache.current });
 				this.broadcast("agent_end", { willRetry: event.willRetry });
+				this.broadcastUsage();
 				return;
 			case "agent_settled":
 				this.broadcast("agent_settled", {});
@@ -627,6 +640,8 @@ export class WebHost {
 					const item = messageToWire(message);
 					if (item) this.broadcast("message_end", { item });
 				}
+				// Every finished message changes what the context meter and the Session panel show.
+				this.broadcastUsage();
 				return;
 			}
 			case "tool_execution_start":
@@ -655,6 +670,7 @@ export class WebHost {
 					details: sanitizeDetails(event.result?.details),
 					ts: Date.now(),
 				});
+				this.broadcastUsage();
 				return;
 			}
 			case "queue_update":
@@ -671,6 +687,7 @@ export class WebHost {
 				return;
 			case "session_info_changed":
 				this.broadcast("session_info", { name: event.name });
+				this.broadcastUsage();
 				return;
 			case "thinking_level_changed":
 				this.broadcast("thinking_level", { level: event.level });
@@ -687,6 +704,7 @@ export class WebHost {
 					tokensAfter: event.result?.estimatedTokensAfter,
 					budget: sanitizeDetails(event.budget),
 				});
+				this.broadcastUsage();
 				return;
 			case "auto_retry_start":
 				this.broadcast("auto_retry_start", {
@@ -779,6 +797,7 @@ export class WebHost {
 		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
 		// A change that has to wait stays flagged and goes out with the next update (or the final value at the end).
 		const now = Date.now();
+		if (now - this.lastUsageBroadcastAt >= USAGE_BROADCAST_INTERVAL_MS) this.broadcastUsage();
 		if (now - this.lastMeterBroadcastAt >= METER_BROADCAST_INTERVAL_MS) {
 			if (this.speedChanged || this.cacheChanged) this.lastMeterBroadcastAt = now;
 			if (this.speedChanged) {
@@ -845,7 +864,7 @@ export class WebHost {
 		if (
 			entry.type === "message" ||
 			entry.type === "custom_message" ||
-			(entry.type === "custom" && entry.customType === "web-git-status")
+			(entry.type === "custom" && (entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY))
 		) {
 			const items = entriesToWire([entry]);
 			if (items.length > 0) this.broadcast("entry_appended", { id: entry.id, item: items[0] });
@@ -1007,6 +1026,8 @@ export class WebHost {
 				finalDetection ?? detection,
 				session.getGitCheckpoint() ?? checkpoint,
 			);
+			if (record && record.changes.length > 0)
+				this.recordRunChanges(runId, session.getGitCheckpoint() ?? checkpoint);
 			const payload = this.buildRunFinished(runId, record, uncommitted);
 			this.runFinished.set(runId, payload);
 			this.finishedRuns += 1;
@@ -1014,6 +1035,31 @@ export class WebHost {
 		}
 		if (succeeded && !indeterminateGit && end && !session.isMirror) {
 			void session.extensionRunner.emit({ type: "agent_response_ready", messages: end.messages }).catch(() => {});
+		}
+	}
+
+	/**
+	 * Keeps what this run changed as a card in the conversation: the files with their counts and diffs go into the
+	 * session as a custom entry (never part of the model's messages), right after the run's reply. The card of every run
+	 * therefore stays where it is when later runs follow, and holds only that run's own changes. A mirrored session is
+	 * written by the process that owns it, so here its card is only shown, not saved.
+	 */
+	private recordRunChanges(runId: number, checkpoint: GitCheckpoint | undefined): void {
+		try {
+			const data = { runId, files: this.tracker.runChangeCard(runId, checkpoint) };
+			if (data.files.length === 0) return;
+			const id = this.session.isMirror
+				? `run-changes-${runId}`
+				: this.session.sessionManager.appendCustomEntry(RUN_CHANGES_ENTRY, data);
+			const item = runChangesToWire(id, Date.now(), data);
+			if (item) this.broadcast("entry_appended", { id, item });
+		} catch (error) {
+			this.broadcast("notice", {
+				id: `changes-${Date.now()}`,
+				message: `The list of changed files could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+				type: "warning",
+				ts: Date.now(),
+			});
 		}
 	}
 
@@ -1082,6 +1128,52 @@ export class WebHost {
 	// Snapshots
 	// ------------------------------------------------------------------
 
+	/** How full the context window is right now. */
+	private contextState(): { usage: unknown; budget: unknown } {
+		const session = this.session;
+		let usage: unknown;
+		try {
+			usage = sanitizeDetails(session.getContextUsage());
+		} catch {
+			usage = undefined;
+		}
+		let budget: unknown;
+		try {
+			budget = sanitizeDetails(session.contextBudget);
+		} catch {
+			budget = undefined;
+		}
+		return { usage, budget };
+	}
+
+	/**
+	 * Everything that moves while a task runs and that the context meter and the Session panel show: context use, the
+	 * session's message / tool-call counts, token totals and cost, and the session's name and file. Pushed as `usage`
+	 * whenever a message or a tool call ends (and about once a second while a reply streams), so an open panel follows
+	 * the task without being reopened.
+	 */
+	usage() {
+		const session = this.session;
+		return {
+			context: this.contextState(),
+			stats: session.getSessionStats(),
+			session: {
+				file: session.sessionFile ?? null,
+				name: session.sessionName ?? null,
+				persisted: session.sessionManager.isPersisted(),
+			},
+		};
+	}
+
+	private broadcastUsage(): void {
+		this.lastUsageBroadcastAt = Date.now();
+		try {
+			this.broadcast("usage", this.usage());
+		} catch {
+			// The numbers are best effort; the next message pushes them again.
+		}
+	}
+
 	transcript(): { items: WireItem[]; leafId: string | null } {
 		const manager = this.session.sessionManager;
 		return { items: entriesToWire(manager.getBranch()), leafId: manager.getLeafId() };
@@ -1095,18 +1187,6 @@ export class WebHost {
 		const model = session.model;
 		const checkpoint = this.openCheckpoint() ?? session.getGitCheckpoint();
 		const settings = session.settingsManager;
-		let contextUsage: unknown;
-		try {
-			contextUsage = sanitizeDetails(session.getContextUsage());
-		} catch {
-			contextUsage = undefined;
-		}
-		let contextBudget: unknown;
-		try {
-			contextBudget = sanitizeDetails(session.contextBudget);
-		} catch {
-			contextBudget = undefined;
-		}
 		const run = session.getRunStateSnapshot();
 		return {
 			slot: this.slotId,
@@ -1141,7 +1221,7 @@ export class WebHost {
 			},
 			queue: { steering: [...session.getSteeringMessages()], followUp: [...session.getFollowUpMessages()] },
 			queueModes: { steering: session.steeringMode, followUp: session.followUpMode },
-			context: { usage: contextUsage, budget: contextBudget },
+			context: this.contextState(),
 			speed: this.speed.current,
 			cache: this.cache.current,
 			autoCompaction: session.autoCompactionEnabled,

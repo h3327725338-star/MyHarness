@@ -216,6 +216,12 @@ export class EngineRunner {
 		} catch (error) {
 			const needsPerson = error instanceof WebSearchError && (error.code === "captcha" || error.code === "consent");
 			if (!needsPerson) throw error;
+			// The check for a challenge reads the page's markup, which can name a CAPTCHA without showing one. A page whose
+			// results can be read loaded normally: it is used as it is and nobody is asked for anything.
+			const readable = await Promise.resolve()
+				.then(() => search.parse(page, query, context))
+				.catch(() => undefined);
+			if (readable && readable.length > 0) return readable;
 			if (!this.options.interactiveChallenges()) {
 				throw new WebSearchError(
 					"challenge_required",

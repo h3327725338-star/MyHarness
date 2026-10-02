@@ -274,13 +274,57 @@ describe("Web host (real runtime with a faux provider)", () => {
 		}
 
 		const transcript = await fx.get("/api/transcript");
-		expect(transcript.items.map((item: any) => item.kind)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		// The task's change card is an entry of the session, after the reply it belongs to.
+		expect(transcript.items.map((item: any) => item.kind)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"assistant",
+			"runChanges",
+		]);
+		const card = transcript.items.at(-1);
+		expect(card.files).toEqual([
+			{ path: "notes.txt", status: "modified", additions: 1, deletions: 0, binary: false },
+		]);
 
 		const changes = await fx.get("/api/changes?scope=run");
 		expect(changes.files).toHaveLength(1);
 		expect(changes.files[0]).toMatchObject({ path: "notes.txt", status: "modified", additions: 1, deletions: 0 });
 		const diff = await fx.get("/api/changes/diff?scope=run&path=notes.txt");
 		expect(diff.patch).toContain("+beta");
+
+		// While the task ran, the context use and the session's totals were pushed to the page.
+		const usage = fx.events.filter((entry) => entry.event === "usage").at(-1)?.data as any;
+		expect(usage.stats).toMatchObject({ userMessages: 1, assistantMessages: 2, toolCalls: 1 });
+		expect(usage.context.budget.activeTokens).toBeGreaterThan(0);
+
+		// A second task in the same chat: the first card stays and still shows its own diff, the new card holds only
+		// what the second task changed.
+		// The session takes the next prompt once it has closed the run, a moment after `run_finished` is sent.
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		const seen = fx.events.length;
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\ngamma\n" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxText("Done again.")]),
+		]);
+		await fx.post("/api/prompt", { text: "append gamma to notes.txt" });
+		await vi.waitFor(() => expect(fx.events.slice(seen).some((entry) => entry.event === "run_finished")).toBe(true), {
+			timeout: 30_000,
+		});
+		const after = await fx.get("/api/transcript");
+		const cards = after.items.filter((item: any) => item.kind === "runChanges");
+		expect(cards).toHaveLength(2);
+		expect(cards[0].id).toBe(card.id);
+		expect(after.items.at(-1)).toBe(cards[1]);
+		const firstDiff = await fx.get(`/api/changes/card-diff?id=${cards[0].id}&path=notes.txt`);
+		expect(firstDiff.patch).toContain("+beta");
+		expect(firstDiff.patch).not.toContain("gamma");
+		const secondDiff = await fx.get(`/api/changes/card-diff?id=${cards[1].id}&path=notes.txt`);
+		expect(secondDiff.patch).toContain("+gamma");
+		expect(secondDiff.patch).not.toContain("+beta");
+		expect(secondDiff.summary).toMatchObject({ additions: 1, deletions: 0 });
 	});
 
 	it("marks a run whose provider fails as failed and keeps the error", async () => {

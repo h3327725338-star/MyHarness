@@ -15,6 +15,23 @@ import type { SessionEntry } from "../../session/types.ts";
 /** Tool result details larger than this are replaced by a marker to keep payloads bounded. */
 const MAX_DETAILS_JSON_CHARS = 400_000;
 
+/**
+ * Custom entry that keeps a finished task's change card (the files it changed, with their diffs) in the session, so
+ * the card stays in the conversation. Like every custom entry it never enters the model's messages.
+ */
+export const RUN_CHANGES_ENTRY = "web-run-changes";
+
+/** One file of a change card as the browser lists it; the diff itself is fetched when the file is opened. */
+export interface WireChangeFile {
+	path: string;
+	status: string;
+	oldPath?: string;
+	additions: number;
+	deletions: number;
+	binary: boolean;
+	unavailable?: string;
+}
+
 export interface WireImage {
 	mimeType: string;
 	data: string;
@@ -37,6 +54,7 @@ export interface WireUsage {
 
 export type WireItem =
 	| { kind: "gitStatus"; id: string; ts: number; result: Record<string, unknown> }
+	| { kind: "runChanges"; id: string; ts: number; runId: number; files: WireChangeFile[] }
 	| {
 			kind: "user";
 			id?: string;
@@ -284,6 +302,27 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 	}
 }
 
+/** The change card kept in a RUN_CHANGES_ENTRY, without the diffs; undefined when the data is not a card with files. */
+export function runChangesToWire(id: string, ts: number, data: unknown): WireItem | undefined {
+	const card = data as { runId?: unknown; files?: unknown } | null | undefined;
+	if (!card || !Array.isArray(card.files)) return undefined;
+	const files: WireChangeFile[] = [];
+	for (const file of card.files as Array<Record<string, unknown> | null>) {
+		if (!file || typeof file.path !== "string") continue;
+		files.push({
+			path: file.path,
+			status: typeof file.status === "string" ? file.status : "modified",
+			...(typeof file.oldPath === "string" ? { oldPath: file.oldPath } : {}),
+			additions: Number(file.additions) || 0,
+			deletions: Number(file.deletions) || 0,
+			binary: file.binary === true,
+			...(typeof file.unavailable === "string" ? { unavailable: file.unavailable } : {}),
+		});
+	}
+	if (files.length === 0) return undefined;
+	return { kind: "runChanges", id, ts, runId: Number(card.runId) || 0, files };
+}
+
 /** Project a persisted session branch into wire items (compaction entries become markers, not replayed history). */
 export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 	const items: WireItem[] = [];
@@ -303,6 +342,10 @@ export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 						ts,
 						result: sanitizeDetails(entry.data) as Record<string, unknown>,
 					});
+				else if (entry.customType === RUN_CHANGES_ENTRY) {
+					const card = runChangesToWire(entry.id, ts, entry.data);
+					if (card) items.push(card);
+				}
 				break;
 			case "custom_message": {
 				const { text, images } = contentParts(entry.content);

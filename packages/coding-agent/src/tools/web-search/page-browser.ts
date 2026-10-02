@@ -56,7 +56,9 @@ export class BrowserPageReader {
 
 		let page = await browser.load(request, signal);
 		const wall = wallOf(page);
-		if (wall) {
+		// A window is only opened for something a person can get past (a robot check, a login, a consent page). A plain
+		// refusal (403, 429, ...) is reported below as what it is, without asking anybody.
+		if (wall && wall.kind !== "blocked") {
 			if (!this.options.interactive()) {
 				throw new WebSearchError(
 					"challenge_required",

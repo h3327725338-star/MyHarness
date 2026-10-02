@@ -18,6 +18,9 @@ import type { ChangeDetectionResult, GitTaskChangeSummary } from "../../git/repo
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES_PER_RUN = 64 * 1024 * 1024;
 const MAX_FILES_WITH_STATS = 300;
+/** Diffs kept with a task's change card in the session: larger ones (per file, or all together) are left out. */
+const MAX_CARD_PATCH_CHARS = 200_000;
+const MAX_CARD_PATCH_CHARS_PER_RUN = 1_000_000;
 
 export type ChangeScope = "run" | "worktree";
 
@@ -30,6 +33,13 @@ export interface FileChangeSummary {
 	binary: boolean;
 	/** Why the content diff cannot be shown (status is still real). */
 	unavailable?: string;
+}
+
+/** One file of a task's change card: its summary and, while it fits the budget, its diff. */
+export interface RunChangeCardFile extends FileChangeSummary {
+	patch?: string;
+	/** The file has a text diff, but it was too large to keep with the card. */
+	patchOmitted?: boolean;
 }
 
 export interface RunChangeRecord {
@@ -373,6 +383,26 @@ export class ChangeTracker {
 					binary: false,
 				}
 			);
+		});
+	}
+
+	/**
+	 * What a finished run changed, as its change card keeps it: every file with its counts and its diff as it is at this
+	 * moment. Later runs change the same files again, so the diff is taken now and not when the card is opened.
+	 */
+	runChangeCard(runId: number, checkpoint: GitCheckpoint | undefined): RunChangeCardFile[] {
+		const record = this.runs.get(runId);
+		if (!record) return [];
+		let kept = 0;
+		return record.changes.slice(0, MAX_FILES_WITH_STATS).map((change): RunChangeCardFile => {
+			const diff = this.diffForRunFile(runId, change.path, checkpoint);
+			if (!diff) return { path: change.path, status: change.status, additions: 0, deletions: 0, binary: false };
+			if (!diff.patch) return diff.summary;
+			if (diff.patch.length > MAX_CARD_PATCH_CHARS || kept + diff.patch.length > MAX_CARD_PATCH_CHARS_PER_RUN) {
+				return { ...diff.summary, patchOmitted: true };
+			}
+			kept += diff.patch.length;
+			return { ...diff.summary, patch: diff.patch };
 		});
 	}
 

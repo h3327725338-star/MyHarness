@@ -12,6 +12,7 @@ const {
 	ansiSegments,
 	fmtDuration,
 	fmtCost,
+	fmtTokens,
 	looseStrong,
 	modelEfforts,
 	relTime,
@@ -48,8 +49,44 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 		expect(turns.slice(-2).map((turn: { standalone: { id: string } }) => turn.standalone.id)).toEqual(["g1", "g2"]);
 	});
 	it("does not present missing pricing as a zero-dollar charge", () => {
-		for (const value of [undefined, null, 0, Number.NaN]) expect(fmtCost(value)).toBe("Not detected");
+		for (const value of [undefined, null, 0, Number.NaN]) expect(fmtCost(value)).toBe("—");
 		expect(fmtCost(0.5)).toBe("$0.500");
+	});
+	it("writes token counts with k / m and exactly one decimal", () => {
+		expect(fmtTokens(187_652)).toBe("187.7k");
+		expect(fmtTokens(27_100)).toBe("27.1k");
+		expect(fmtTokens(128_000)).toBe("128.0k");
+		expect(fmtTokens(11_643_776)).toBe("11.6m");
+		expect(fmtTokens(999_960)).toBe("1.0m");
+		expect(fmtTokens(950)).toBe("950");
+		expect(fmtTokens(undefined)).toBe("—");
+	});
+	it("keeps the change card of a finished task inside its turn, one card per task", () => {
+		const card = (id: string, path: string) => ({
+			kind: "runChanges",
+			id,
+			ts: 5,
+			runId: 1,
+			files: [{ path, status: "modified", additions: 1, deletions: 0, binary: false }],
+		});
+		const turns = buildTurns([
+			{ kind: "user", ts: 1, text: "first", images: [] },
+			assistant([{ type: "text", text: "done" }]),
+			card("c1", "a.ts"),
+			{ kind: "user", ts: 10, text: "second", images: [] },
+			assistant([{ type: "text", text: "done again" }]),
+			card("c2", "b.ts"),
+		]);
+		expect(turns).toHaveLength(2);
+		expect(
+			turns.map((turn: { changes: { id: string; files: Array<{ path: string }> } }) => [
+				turn.changes.id,
+				turn.changes.files[0].path,
+			]),
+		).toEqual([
+			["c1", "a.ts"],
+			["c2", "b.ts"],
+		]);
 	});
 });
 

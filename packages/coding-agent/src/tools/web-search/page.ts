@@ -119,6 +119,8 @@ const CHALLENGE_MARKUP =
 	/cf-challenge|challenge-platform|cf-turnstile|g-recaptcha|h-captcha|hcaptcha\.com|px-captcha|captcha-delivery|datadome|awswaf|geetest|tcaptcha/iu;
 /** A page with less readable text than this that shows a challenge or a password field is the wall, not an article that mentions one. */
 const WALL_TEXT_LIMIT = 1_500;
+/** A title or address that says the page is a login page. */
+const LOGIN_HINT = /log[\s-]?in|sign[\s-]?in|signin|passport|\bsso\b|\bauth|登录|登入|登陆/iu;
 
 /**
  * Whether what came back is a wall instead of the page: a robot check (Cloudflare and similar, CAPTCHA widgets), a
@@ -133,15 +135,27 @@ export function detectAccessWall(html: string, status: number, url: string): Acc
 	const length = textLength(root.querySelector("body") ?? root);
 	const short = length < WALL_TEXT_LIMIT;
 	let host = "";
+	let pathname = "";
 	try {
-		host = new URL(url).hostname;
+		const parsed = new URL(url);
+		host = parsed.hostname;
+		pathname = parsed.pathname;
 	} catch {}
-	// A CAPTCHA widget alone proves little (short contact pages carry one too): without a telling title the page must be nearly empty.
-	if ((short && CHALLENGE_TITLE.test(title)) || (length < WALL_TEXT_LIMIT / 3 && CHALLENGE_MARKUP.test(html))) {
+	// A CAPTCHA widget alone proves little (short contact pages carry one too): without a telling title the page must be
+	// nearly empty. Only what the page itself shows counts: many ordinary pages load a bot-protection or CAPTCHA script
+	// (Cloudflare, reCAPTCHA v3, DataDome) without ever showing a check, so names inside scripts prove nothing.
+	if (
+		(short && CHALLENGE_TITLE.test(title)) ||
+		(length < WALL_TEXT_LIMIT / 3 && CHALLENGE_MARKUP.test(root.toString()))
+	) {
 		return { kind: "captcha", reason: "要求人机验证" };
 	}
 	if (short && /^consent\./iu.test(host)) return { kind: "consent", reason: "要求先确认 Cookie 选项" };
-	if (short && hasPassword) return { kind: "login", reason: "要求登录" };
+	// A short page with a password field in it (a login box in the header, a hidden dialog) is only a login page when it
+	// has nearly no text of its own, or says so in its title or address.
+	if (short && hasPassword && (length < WALL_TEXT_LIMIT / 3 || LOGIN_HINT.test(`${title} ${pathname}`))) {
+		return { kind: "login", reason: "要求登录" };
+	}
 	if (status === 429) return { kind: "blocked", reason: "限制了访问频率（HTTP 429）" };
 	if (REFUSAL_STATUSES.has(status) && short) return { kind: "blocked", reason: `拒绝了访问（HTTP ${status}）` };
 	return undefined;

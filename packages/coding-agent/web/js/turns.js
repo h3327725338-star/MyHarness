@@ -254,6 +254,14 @@ export function buildTurns(items, ctx, previous) {
 			standalone(item, index);
 			return;
 		}
+		if (item.kind === "runChanges") {
+			// What a finished task changed belongs to the turn it ends: its card stays under that turn's reply.
+			if (turn) {
+				turn.changes = item;
+				turn.items.push(item);
+			} else standalone(item, index);
+			return;
+		}
 		if (item.kind === "custom") {
 			if (!item.display) return;
 			if (turn) {

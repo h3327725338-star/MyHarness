@@ -5,6 +5,7 @@ import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { t } from "./i18n.js";
 import { getLang } from "./lang.js";
+import { fmtTokens } from "./util.js";
 
 const num = (n) => Math.round(n).toLocaleString(getLang());
 const pct = (n, of) => (of > 0 ? (n / of) * 100 : 0);
@@ -29,13 +30,8 @@ function useBreakdown(active) {
 	return { data, error };
 }
 
-/** Compact token count for the context display: 12200 → "12.2K", 128000 → "128K" (the exact number is in the tooltip). */
-export function fmtK(n) {
-	if (n == null || !Number.isFinite(n)) return "—";
-	if (n < 1000) return String(Math.round(n));
-	if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/u, "")}K`;
-	return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/u, "")}M`;
-}
+/** Compact token count for the context display: 12200 → "12.2k", 128000 → "128.0k" (the exact number is in the tooltip). */
+export const fmtK = fmtTokens;
 
 /**
  * One per-request number (speed, cache hit) in the same four states: "Detecting…" from the start of the model request
@@ -137,9 +133,11 @@ export function ContextMeter() {
 	const window_ = budget?.effectiveWindow ?? usage?.contextWindow;
 	const tokens = budget?.activeTokens ?? usage?.tokens;
 	const level = percent > 90 ? "danger" : percent > 70 ? "warn" : "";
+	// How much of the ring is drawn: the share of the window in use, with a visible minimum once anything is in use.
+	const fill = percent > 0 ? Math.max(2, Math.min(100, percent)) : 0;
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class=${`meter ${level}`} aria-haspopup="dialog" aria-expanded=${open} title=${`${t("Context")}: ${fmtK(tokens)} / ${fmtK(window_)} (${percent.toFixed(0)}%)`} onClick=${() => setOpen(!open)}>
-			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width="2.4" /><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray=${`${Math.min(100, percent) * 0.4712} 100`} transform="rotate(-90 10 10)" /></svg>
+			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width="2.4" />${fill > 0 ? html`<circle class="meter-fill" cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" pathLength="100" stroke-dasharray=${`${fill} 100`} transform="rotate(-90 10 10)" />` : null}</svg>
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${280} maxHeight=${520}>
 			<${ContextDetails} onDone=${() => setOpen(false)} />

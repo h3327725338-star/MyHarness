@@ -33,6 +33,8 @@ const SLOT_DEFAULTS = () => ({
 	resources: null,
 	gitStatus: undefined,
 	currentRunId: undefined,
+	// Session totals shown in the Session panel (messages, tool calls, tokens, cost); pushed by the server as they change.
+	stats: null,
 });
 const SLOT_KEYS = Object.keys(SLOT_DEFAULTS());
 const bags = new Map();
@@ -483,6 +485,17 @@ export async function loadResources() {
 	}
 }
 
+/** The session's totals (messages, tool calls, tokens, cost). Afterwards the server's `usage` events keep them current. */
+export async function loadStats() {
+	const slot = targetSlot ?? activeSlot;
+	try {
+		const stats = await api("/api/sessions/stats", { slot });
+		runFor(slot, () => set({ stats }));
+	} catch {
+		// The next usage event brings them.
+	}
+}
+
 export async function loadGitStatus() {
 	const slot = targetSlot ?? activeSlot;
 	let status = null;
@@ -754,6 +767,7 @@ function connectEvents() {
 		state.retry = null;
 		state.resources = null;
 		state.gitStatus = undefined;
+		state.stats = null;
 		if (slot === activeSlot) state.view = { ...state.view, selectedTerminal: null };
 		await attempt(async () => {
 			await refreshSlot(slot);
@@ -783,6 +797,13 @@ function connectEvents() {
 	});
 	on("cache_hit", (d) => {
 		if (state.snap) state.snap = { ...state.snap, cache: d.cache };
+		emit();
+	});
+	// Context use and the session's totals, sent whenever a message or a tool call ends and while a reply streams: the
+	// context meter next to the input and everything in the Session panel follow the task as it runs.
+	on("usage", (d) => {
+		if (state.snap) state.snap = { ...state.snap, context: d.context, session: { ...state.snap.session, ...d.session } };
+		state.stats = d.stats;
 		emit();
 	});
 
@@ -837,7 +858,7 @@ function attachEntryId(d) {
 		}
 	}
 	// Not seen yet (e.g. compaction marker): append it.
-	if (item.kind === "gitStatus" || item.kind === "compaction" || item.kind === "branchSummary") {
+	if (item.kind === "gitStatus" || item.kind === "runChanges" || item.kind === "compaction" || item.kind === "branchSummary") {
 		state.items = [...items, { ...item, id: d.id }];
 		emit();
 	}

@@ -76,6 +76,14 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .raw-label { color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 3px; }
 .raw-pre { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
 .raw-md { padding: 8px 12px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-sm); max-height: 480px; overflow: auto; overscroll-behavior: contain; font-size: 13px; }
+/* Result details: the tool's metadata, set apart from the result above it by a rule and its own bordered card. */
+.raw-extra { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-strong); }
+.raw-extra-head { display: flex; align-items: center; gap: 6px; width: 100%; height: var(--h-control-sm); padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-raised); color: var(--text-2); font-size: var(--fs-sm); text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.raw-extra-head:hover { background: var(--surface-hover); color: var(--text); }
+.raw-extra-head[aria-expanded="true"] { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.raw-extra-title { font-weight: 600; }
+.raw-extra-hint { color: var(--text-3); font-size: var(--fs-xs); }
+.raw-extra .raw-pre { border: 1px solid var(--border-strong); border-top: 0; border-radius: 0 0 var(--r-sm) var(--r-sm); background: var(--bg-raised); padding: 10px 12px; }
 .raw-images img { max-width: 100%; max-height: 240px; border-radius: var(--r-sm); margin-top: 6px; }
 
 /* Final answer */
@@ -91,8 +99,19 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .change-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); overflow: hidden; }
 .change-head, .change-file { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0 14px; }
 .change-head { height: 36px; color: var(--text); font-size: var(--fs-md); font-weight: 600; }
-.change-file { height: 30px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; }
+.change-file { height: 30px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; gap: 8px; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.change-file:hover, .change-file[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
 .change-path { flex: 1 1 auto; }
+/* A file opened in place: its line diff, in its own scroll area so a long diff does not push the conversation away. */
+.change-diff { border-top: 1px solid var(--border); background: var(--bg-panel); max-height: 460px; overflow: auto; overscroll-behavior: contain; }
+.change-diff-bar { display: flex; justify-content: flex-end; padding: 6px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; background: var(--bg-panel); }
+.change-note { border-top: 1px solid var(--border); padding: 10px 14px; font-size: 12.5px; }
+.md-diff { display: flex; flex-direction: column; font-size: 13px; }
+.md-diff-block { display: grid; grid-template-columns: 22px minmax(0, 1fr); padding: 6px 14px 6px 0; }
+.md-diff-block.add { background: var(--diff-add-bg); } .md-diff-block.del { background: var(--diff-del-bg); }
+.md-diff-sign { text-align: center; font-family: var(--font-mono); user-select: none; }
+.md-diff-block.add .md-diff-sign { color: var(--diff-add-text); } .md-diff-block.del .md-diff-sign { color: var(--diff-del-text); }
+.md-diff-block.del .md { opacity: 0.8; }
 .change-card .counts { font-weight: 400; }
 
 /* Markdown */

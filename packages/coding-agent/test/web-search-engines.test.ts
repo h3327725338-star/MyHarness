@@ -496,6 +496,25 @@ describe("engine runner: lightweight first, Firefox only for access blocks", () 
 		expect(progress[0]).toContain("Firefox");
 	});
 
+	it("reads a results page that only names a CAPTCHA in its markup, without asking a person", async () => {
+		// The results are there, but the page does not look the way the challenge check expects and mentions "captcha".
+		const loaded = bingPage(
+			[{ title: "Result", url: "https://r.example/" }],
+			"<script>var captchaUrl = 1;</script>",
+		).replace('id="b_results"', "id=b_results");
+		const person = fakeBrowser({ load: () => browserPage(loaded, "https://www.bing.com/search?q=x") });
+		const progress: string[] = [];
+		const { engineRunner } = runner({
+			respond: () => new Response("", { status: 429 }),
+			browser: person.browser,
+			interactive: true,
+		});
+		const run = await engineRunner.run("bing", { query: "x" }, undefined, (message) => progress.push(message));
+		expect(run).toMatchObject({ via: "browser", results: [expect.objectContaining({ url: "https://r.example/" })] });
+		expect(person.challenges).toHaveLength(0);
+		expect(progress).toEqual([]);
+	});
+
 	it("reports both paths when Firefox is refused too", async () => {
 		const { browser } = fakeBrowser({
 			load: () => ({ ...browserPage("<html>Too many requests</html>"), status: 429 }),

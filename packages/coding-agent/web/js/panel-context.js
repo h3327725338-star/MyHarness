@@ -1,6 +1,6 @@
 // Session panel: context budget, session stats, active tools, loaded resources and the branch tree.
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
-import { api, attempt, loadResources, post, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, loadResources, loadStats, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { ContextDetails } from "./context-usage.js";
 import { t } from "./i18n.js";
@@ -54,13 +54,14 @@ function TreeView({ snap }) {
 export function ContextPanel() {
 	const snap = useStore((s) => s.snap);
 	const resources = useStore((s) => s.resources);
-	const [stats, setStats] = useState(null);
+	// The totals come from the store: loaded once per session here, then kept current by the server's `usage` events.
+	const stats = useStore((s) => s.stats);
 	useEffect(() => {
 		if (!resources) loadResources();
 	}, []);
 	useEffect(() => {
-		api("/api/sessions/stats").then(setStats).catch(() => {});
-	}, [snap?.session?.id, snap?.lastRun?.runId, snap?.active]);
+		loadStats();
+	}, [snap?.session?.id, snap?.lastRun?.runId]);
 	if (!snap) return null;
 	const toggleTool = async (name, on) => {
 		const active = new Set(resources.tools.filter((t) => t.active).map((t) => t.name));
@@ -82,7 +83,7 @@ export function ContextPanel() {
 				<span>${t("Session file")}</span><span class="kv-value"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
-					<span>${t("Tokens")}</span><span>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: stats.tokens.input.toLocaleString(), fmtTokens2: stats.tokens.output.toLocaleString(), fmtTokens3: stats.tokens.cacheRead.toLocaleString() })}</span>
+					<span>${t("Tokens")}</span><span title=${`${stats.tokens.input.toLocaleString()} / ${stats.tokens.output.toLocaleString()} / ${stats.tokens.cacheRead.toLocaleString()}`}>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: fmtTokens(stats.tokens.input), fmtTokens2: fmtTokens(stats.tokens.output), fmtTokens3: fmtTokens(stats.tokens.cacheRead) })}</span>
 					<span>${t("Cost")}</span><span>${fmtCost(stats.cost)}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
