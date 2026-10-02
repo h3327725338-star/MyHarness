@@ -57,4 +57,78 @@ describe("Phase 3 architecture boundaries", () => {
 			expect(source, `${implementationImport} must stay in the Git use case`).not.toContain(implementationImport);
 		}
 	});
+
+	it("keeps the session-scoped domain modules independent from the frontend", () => {
+		const files = [
+			"packages/coding-agent/src/agent/runtime/run-state.ts",
+			"packages/coding-agent/src/agent/delegation/background-work.ts",
+			"packages/coding-agent/src/context/compact/session-compaction.ts",
+			"packages/coding-agent/src/context/compact/tree-navigation.ts",
+			"packages/coding-agent/src/extensions/runtime/agent-events.ts",
+			"packages/coding-agent/src/providers/runtime/request-auth.ts",
+			"packages/coding-agent/src/providers/runtime/session-model.ts",
+			"packages/coding-agent/src/tools/session-tool-registry.ts",
+			"packages/coding-agent/src/tools/shell/session-bash.ts",
+			"packages/coding-agent/src/application/use-cases/git-workspace.ts",
+			"packages/coding-agent/src/application/use-cases/local-git-repository.ts",
+			"packages/coding-agent/src/application/use-cases/conversation-title.ts",
+		];
+
+		for (const file of files) {
+			expect(readRepositoryFile(file), `${file} must not depend on frontend implementations`).not.toMatch(
+				noFrontendDependency,
+			);
+		}
+	});
+
+	it("keeps AgentSession delegating domain work to the modules that own it", () => {
+		const source = readRepositoryFile("packages/coding-agent/src/agent/runtime/agent-session.ts");
+
+		for (const owner of [
+			"RunStateTracker",
+			"SessionBackgroundWork",
+			"SessionToolRegistry",
+			"SessionModelController",
+			"SessionCompactionRunner",
+			"SessionBashRunner",
+			"ExtensionAgentEventForwarder",
+			"navigateSessionTree",
+		]) {
+			expect(source, `AgentSession must use ${owner}`).toContain(owner);
+		}
+		for (const implementationImport of [
+			// tool registry assembly
+			"createAllToolDefinitions",
+			"wrapRegisteredTools",
+			"createWebSearchService",
+			// compaction and branch summaries
+			"prepareCompaction",
+			"generateBranchSummary",
+			// direct Bash execution
+			"executeBashWithOperations",
+			// provider configuration reload
+			"resetApiProviders",
+			"clearApiKeyCache",
+		]) {
+			expect(source, `${implementationImport} must stay in its domain module`).not.toContain(implementationImport);
+		}
+		expect(source).not.toMatch(/private _(?:toolRegistry|toolDefinitions|baseToolDefinitions|scopedModels)\b/);
+		expect(source).not.toMatch(/private _(?:backgroundExploreTasks|workflowControls|pendingBashMessages)\b/);
+	});
+
+	it("keeps InteractiveMode away from Git and Session storage implementations", () => {
+		const source = readRepositoryFile("packages/coding-agent/src/modes/interactive/interactive-mode.ts");
+		expect(source).toContain("application/use-cases/git-workspace.ts");
+		expect(source).toContain("application/use-cases/local-git-repository.ts");
+		expect(source).toContain("application/use-cases/conversation-title.ts");
+
+		// Git reaches InteractiveMode through application use cases. The only direct
+		// import left is the stateless URL parser used to label package sources.
+		const gitImports = [...source.matchAll(/from\s+"(\.\.\/\.\.\/git\/[^"]+)"/g)].map((match) => match[1]);
+		expect(gitImports).toEqual(["../../git/repository/source.ts"]);
+		expect(source, "SessionManager is only used as a type here").toContain(
+			'import type { SessionManager } from "../../session/manager/index.ts";',
+		);
+		expect(source).not.toMatch(/SessionManager\.(?:open|list|create)\(/);
+	});
 });

@@ -38,17 +38,18 @@ import {
 import chalk from "chalk";
 import { spawn } from "child_process";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../agent/runtime/agent-session.ts";
-import {
-	type ConversationBatchRenameProgress,
-	type ConversationTitleResult,
-	generateConversationTitle,
-	normalizeConversationTitle,
-	renameConversationsInBatch,
-	validateConversationTitle,
+import type {
+	ConversationBatchRenameProgress,
+	ConversationTitleResult,
 } from "../../agent/runtime/conversation-title.ts";
 import { createReloadSummaryMessage } from "../../agent/runtime/messages.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
+import {
+	generateTitleForSession,
+	renameWorkspaceConversations,
+	saveConversationTitle,
+} from "../../application/use-cases/conversation-title.ts";
 import {
 	classifyGitCommitFailure,
 	type GitCommitSubmissionResult,
@@ -63,7 +64,41 @@ import {
 	GitPushUseCase,
 	type GitPushWorkflowResult,
 } from "../../application/use-cases/git-push.ts";
+import {
+	type ChangeDetectionResult,
+	captureTaskBaseline,
+	completeTaskCheckpoint,
+	createInitialVersion,
+	type DiscardChangesPreview,
+	detectTaskChanges,
+	discardWorkspaceChanges,
+	formatWorkspaceChanges,
+	type GeneratedCommitMessage,
+	type GitCheckpoint,
+	type GitCommandResult,
+	type GitPushCiFailure,
+	initializeWorkspaceRepository,
+	inspectCheckpointDecisionTarget,
+	inspectCommitTarget,
+	inspectPushTarget,
+	inspectWorkspaceRepository,
+	invalidateTaskCheckpoint,
+	listPendingTaskCheckpoints,
+	previewInitialVersion,
+	previewWorkspaceRestore,
+	readWorkspaceGitIdentity,
+	restoreTaskCheckpoint,
+	saveWorkspaceGitIdentity,
+	taskCheckpointHasChanges,
+	taskCheckpointHasChangesAsync,
+	type WorkspaceBaseline,
+} from "../../application/use-cases/git-workspace.ts";
 import { GitWorktreeUseCase } from "../../application/use-cases/git-worktree.ts";
+import {
+	type LocalGitRepository,
+	LocalGitRepositoryStore,
+	LocalGitRepositoryUseCase,
+} from "../../application/use-cases/local-git-repository.ts";
 import { ProviderSettingsUseCase } from "../../application/use-cases/provider-settings.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { WorkspaceStore } from "../../application/workspace-store.ts";
@@ -89,53 +124,7 @@ import type {
 import type { ResourceDiagnostic } from "../../extensions/contracts/diagnostics.ts";
 import type { SourceInfo } from "../../extensions/contracts/source-info.ts";
 import type { ExtensionRunner } from "../../extensions/runtime/runner.ts";
-import {
-	completeGitCheckpoint,
-	type GitCheckpoint,
-	hasGitCheckpointTaskChanges,
-	hasGitCheckpointTaskChangesAsync,
-	invalidateGitCheckpoint,
-	listGitCheckpoints,
-	restoreGitCheckpoint,
-} from "../../git/checkpoints/checkpoint.ts";
-import type { GitPushCiFailure } from "../../git/ci/types.ts";
-import { type GeneratedCommitMessage, generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
-import {
-	beginRepositoryDirectoryMove,
-	deleteLocalGitRepositoryMetadata,
-	getMovedRepositoryPath,
-	getRenamedRepositoryPath,
-	initializeManagedLocalGitRepository,
-	inspectLocalGitRepositoryPath,
-	type LocalGitRepository,
-	LocalGitRepositoryStore,
-	localGitRepositoryPathsEqual,
-	selectLocalGitRepository,
-	validateRepositoryDirectoryMove,
-} from "../../git/local-repositories/store.ts";
-import {
-	type DiscardChangesPreview,
-	discardChangesToHead,
-	hasChangesToDiscard,
-	previewDiscardChanges,
-} from "../../git/repository/discard-changes.ts";
-import {
-	createInitialGitBaselineAsync,
-	formatGitStatusPreview,
-	type GitCommandResult,
-	getGitStatusPreview,
-	initializeGitRepository,
-	inspectGitRepository,
-	readGitIdentity,
-	setLocalGitIdentity,
-} from "../../git/repository/integration.ts";
 import { parseGitUrl } from "../../git/repository/source.ts";
-import {
-	type ChangeDetectionResult,
-	captureWorkspaceBaseline,
-	collectFinalWorkspaceChanges,
-	type WorkspaceBaseline,
-} from "../../git/repository/workspace-changes.ts";
 import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } from "../../observability/cache-stats.ts";
 import { isInstallTelemetryEnabled } from "../../observability/telemetry.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../platform/process/http-dispatcher.ts";
@@ -147,7 +136,7 @@ import {
 } from "../../providers/runtime/balance-tracker.ts";
 import { findExactModelReferenceMatch } from "../../providers/runtime/model-resolver.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../session/manager/cwd.ts";
-import { SessionManager } from "../../session/manager/index.ts";
+import type { SessionManager } from "../../session/manager/index.ts";
 import { sessionEntryToContextMessages } from "../../session/projection/index.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import type { TruncationResult } from "../../tools/truncate.ts";
@@ -180,10 +169,7 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { GitWorktreeSidebarComponent } from "./components/git-worktree-sidebar.ts";
 import { formatKeyText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
-import {
-	type LocalGitRepositoryActionResult,
-	LocalGitRepositorySidebarComponent,
-} from "./components/local-git-repository-sidebar.ts";
+import { LocalGitRepositorySidebarComponent } from "./components/local-git-repository-sidebar.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { ReloadSummaryMessageComponent } from "./components/reload-summary-message.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -275,19 +261,6 @@ interface GitCommitAgentRetryState {
 	lastFailureSignature: string;
 	/** Direct /commit may create a checkpoint for its repair turn; close it on final failure. */
 	ownsCheckpoint: boolean;
-}
-
-function completeGitCommitCheckpoint(
-	session: AgentSession,
-	checkpoint: GitCheckpoint,
-): { ok: boolean; error?: string } {
-	// Startup recovery may load a checkpoint object that is not the current
-	// AgentSession checkpoint. In that case complete the exact loaded object.
-	if (typeof session.getGitCheckpoint !== "function" || session.getGitCheckpoint() === checkpoint) {
-		return session.completeGitCheckpointAfterVerification();
-	}
-	const result = completeGitCheckpoint(checkpoint);
-	return result.ok ? { ok: true } : { ok: false, error: result.error };
 }
 
 const DISCARD_PREVIEW_LIMIT = 30;
@@ -496,6 +469,7 @@ export class InteractiveMode {
 	private workspaceSidebarHandle: OverlayHandle | undefined;
 	/** Explicitly selected local Git repositories; this list is never auto-discovered. */
 	private localGitRepositoryStore: LocalGitRepositoryStore;
+	private localGitRepositoryUseCase: LocalGitRepositoryUseCase;
 	private localGitRepositorySidebar: LocalGitRepositorySidebarComponent | undefined;
 	private localGitRepositorySidebarHandle: OverlayHandle | undefined;
 	private gitWorktreeSidebar: GitWorktreeSidebarComponent | undefined;
@@ -706,6 +680,22 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.workspaceStore = WorkspaceStore.create(runtimeHost.services.agentDir, getDataDir());
 		this.localGitRepositoryStore = LocalGitRepositoryStore.create(runtimeHost.services.agentDir);
+		this.localGitRepositoryUseCase = new LocalGitRepositoryUseCase(
+			this.localGitRepositoryStore,
+			this.workspaceStore,
+			{
+				getCurrentCwd: () => this.sessionManager.getCwd(),
+				getMutationBlocker: (repositoryRoot) => this.currentRepositoryMutationError(repositoryRoot),
+				refreshGitState: () => this.footerDataProvider.refreshGitState(),
+				pauseGitStateWatching: () => this.footerDataProvider.pauseGitStateWatching(),
+				relocateSessionWorkspace: (cwd, steps) =>
+					this.runtimeHost.relocateWorkspace(cwd, {
+						projectTrustContextFactory: (trustCwd) => this.createProjectTrustContext(trustCwd),
+						...steps,
+					}),
+				notify: (message) => this.showStatus(message),
+			},
+		);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -2124,9 +2114,9 @@ export class InteractiveMode {
 
 	private hasPendingGitCheckpointDecision(): boolean {
 		const checkpoint = this.session.getGitCheckpoint();
-		if (checkpoint?.status === "created") return hasGitCheckpointTaskChanges(checkpoint);
+		if (checkpoint?.status === "created") return taskCheckpointHasChanges(checkpoint);
 		const startupCheckpoint = this.pendingStartupGitCheckpoint;
-		return startupCheckpoint?.status === "created" && hasGitCheckpointTaskChanges(startupCheckpoint);
+		return startupCheckpoint?.status === "created" && taskCheckpointHasChanges(startupCheckpoint);
 	}
 
 	private clearPendingStartupGitCheckpoint(checkpoint: GitCheckpoint): void {
@@ -3793,7 +3783,7 @@ export class InteractiveMode {
 	 */
 	private ensureWorkspaceBaseline(): Promise<WorkspaceBaseline | undefined> {
 		if (!this.workspaceBaselinePromise) {
-			this.workspaceBaselinePromise = captureWorkspaceBaseline(this.sessionManager.getCwd())
+			this.workspaceBaselinePromise = captureTaskBaseline(this.sessionManager.getCwd())
 				.then((baseline) => {
 					if (baseline.truncated) {
 						this.workspaceBaselineFailureReason =
@@ -3841,7 +3831,7 @@ export class InteractiveMode {
 			// 没有任何 bash 造成的修改需要检测。
 			const turnHadBash = this.session.bashExecutionCount > this._bashCountAtRunStart;
 			const gitEnabled = this.settingsManager.getGitIntegrationSettings().enabled;
-			const detection: ChangeDetectionResult = await collectFinalWorkspaceChanges({
+			const detection: ChangeDetectionResult = await detectTaskChanges({
 				cwd: this.sessionManager.getCwd(),
 				checkpoint: this.session.getGitCheckpoint(),
 				baseline: gitEnabled || !turnHadBash ? undefined : await this.ensureWorkspaceBaseline(),
@@ -3860,7 +3850,7 @@ export class InteractiveMode {
 			// 这里只做验证和 checkpoint 生命周期维护，不再因为普通任务完成而启动提交。
 			let finalDetection = detection;
 			if (gitEnabled && this.session.getGitCheckpoint()?.status === "created") {
-				finalDetection = await collectFinalWorkspaceChanges({
+				finalDetection = await detectTaskChanges({
 					cwd: this.sessionManager.getCwd(),
 					checkpoint: this.session.getGitCheckpoint(),
 				});
@@ -3893,7 +3883,7 @@ export class InteractiveMode {
 
 			const decisionCheckpoint = this.session.getGitCheckpoint();
 			const hasCheckpointDelta =
-				decisionCheckpoint?.status === "created" && hasGitCheckpointTaskChanges(decisionCheckpoint);
+				decisionCheckpoint?.status === "created" && taskCheckpointHasChanges(decisionCheckpoint);
 			if (this.gitCommitAgentRetry) {
 				// 这是由用户 /commit 启动的失败恢复，不是普通任务的自动提交。
 				await this.maybeHandleGitSaveAfterCompletion(decisionCheckpoint);
@@ -4361,21 +4351,21 @@ export class InteractiveMode {
 			this.showStatus("Git：本地操作正在进行，请稍候。");
 			return;
 		}
-		const state = inspectGitRepository(this.sessionManager.getCwd());
-		if (!state.isRepository || !state.root) {
-			this.showError(`Git：当前目录不是 Git 仓库，无法执行 /restore。${state.error ? `\n${state.error}` : ""}`);
-			return;
-		}
 		const protectedPaths = [this.runtimeHost.services.agentDir];
-		const { preview, error } = previewDiscardChanges(state.root, { protectedPaths });
-		if (!preview) {
-			this.showError(`Git：无法执行 /restore。\n${error ?? "未知错误"}`);
+		const target = previewWorkspaceRestore(this.sessionManager.getCwd(), protectedPaths);
+		if (target.kind === "not-repository") {
+			this.showError(`Git：当前目录不是 Git 仓库，无法执行 /restore。${target.error ? `\n${target.error}` : ""}`);
 			return;
 		}
-		if (!hasChangesToDiscard(preview)) {
-			this.showStatus(`Git：工作区已经和最新提交 ${preview.headLabel} 一致，没有需要丢弃的内容。`);
+		if (target.kind === "unavailable") {
+			this.showError(`Git：无法执行 /restore。\n${target.error ?? "未知错误"}`);
 			return;
 		}
+		if (target.kind === "clean") {
+			this.showStatus(`Git：工作区已经和最新提交 ${target.headLabel} 一致，没有需要丢弃的内容。`);
+			return;
+		}
+		const { preview } = target;
 		const confirmLabel = "丢弃并退回最新提交";
 		const choice = await this.withTaskDecision(() =>
 			this.showExtensionSelector(formatDiscardPreview(preview), [confirmLabel, "取消"]),
@@ -4384,7 +4374,7 @@ export class InteractiveMode {
 			this.showStatus("Git：已取消 /restore，工作区保持不变。");
 			return;
 		}
-		const result = discardChangesToHead(preview, { protectedPaths });
+		const result = discardWorkspaceChanges(preview, protectedPaths);
 		if (result.error) {
 			this.showError(`Git：没有退回。\n${result.error}`);
 			return;
@@ -5182,10 +5172,7 @@ export class InteractiveMode {
 	 * available for an explicit /undo.
 	 */
 	private async notifyPendingGitCheckpoints(): Promise<void> {
-		const result = listGitCheckpoints({
-			cwd: this.sessionManager.getCwd(),
-			sessionId: this.sessionManager.getSessionId(),
-		});
+		const result = listPendingTaskCheckpoints(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 		if (!result.ok) return;
 		if (result.failed.length > 0) {
 			this.showWarning(`Git：有 ${result.failed.length} 个检查点无法读取，已保留在检查点目录中。`);
@@ -5215,7 +5202,7 @@ export class InteractiveMode {
 			if (this.taskDecisionActive || !checkpoint || checkpoint.status !== "created") return;
 			let hasChanges: boolean;
 			try {
-				hasChanges = await hasGitCheckpointTaskChangesAsync(checkpoint);
+				hasChanges = await taskCheckpointHasChangesAsync(checkpoint);
 			} catch (error) {
 				this.showWarning(
 					`Git：无法检查任务检查点的修改状态，检查点保持不变。${error instanceof Error ? error.message : String(error)}`,
@@ -5247,15 +5234,10 @@ export class InteractiveMode {
 		this.clearGitCommitTask();
 		this.gitCommitAgentRetry = undefined;
 		this.pendingResponseReadyMessages = [];
-		const result =
-			typeof this.session.invalidateGitCheckpointRecovery === "function"
-				? this.session.invalidateGitCheckpointRecovery(checkpoint, reason)
-				: invalidateGitCheckpoint(checkpoint, reason);
+		// Even if metadata cannot be written, the in-memory checkpoint is marked
+		// invalid so this session is not permanently held in recovery.
+		const result = invalidateTaskCheckpoint(this.session, checkpoint, reason);
 		if (!result.ok) {
-			// Even if metadata cannot be written, stop reusing the in-memory
-			// checkpoint so this session is not permanently held in recovery.
-			checkpoint.status = "invalid";
-			checkpoint.failureReason = reason;
 			this.showWarning(
 				`Git：恢复失败且无法持久化检查点状态；本次会话已解除阻塞，但请手动检查工作区。${result.error ?? ""}`,
 			);
@@ -5287,7 +5269,7 @@ export class InteractiveMode {
 			this.showError("Git：当前项目未被信任，不能建立仓库或写入项目设置。");
 			return;
 		}
-		let state = inspectGitRepository(cwd);
+		let state = inspectWorkspaceRepository(cwd);
 		if (!state.gitAvailable) {
 			this.showError(`Git：当前电脑无法使用 Git。${state.error ? `\n${state.error}` : ""}`);
 			return;
@@ -5299,12 +5281,12 @@ export class InteractiveMode {
 				["建立仓库", "取消"],
 			);
 			if (choice !== "建立仓库") return;
-			const initialized = initializeGitRepository(cwd);
+			const initialized = initializeWorkspaceRepository(cwd);
 			if (!initialized.ok) {
-				this.showError(`Git：建立仓库失败。\n${this.formatGitFailure(initialized)}`);
+				this.showError(`Git：建立仓库失败。\n${this.formatGitFailure(initialized.failure)}`);
 				return;
 			}
-			state = inspectGitRepository(cwd);
+			state = initialized.state;
 			if (!state.isRepository || !state.root) {
 				this.showError("Git：命令已返回，但仍无法确认当前目录中的仓库。");
 				return;
@@ -5317,7 +5299,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		const identity = readGitIdentity(cwd, repositoryRoot);
+		const identity = readWorkspaceGitIdentity(cwd, repositoryRoot);
 		const name = await this.showExtensionInput("Git 用户名（只用于当前项目，可直接修改）", undefined, {
 			initialValue: identity.name,
 		});
@@ -5336,7 +5318,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		const identityResult = setLocalGitIdentity(repositoryRoot, {
+		const identityResult = saveWorkspaceGitIdentity(repositoryRoot, {
 			name: name.trim(),
 			email: email.trim(),
 		});
@@ -5354,23 +5336,22 @@ export class InteractiveMode {
 			return;
 		}
 		await this.settingsManager.flush();
-		state = inspectGitRepository(repositoryRoot);
+		state = inspectWorkspaceRepository(repositoryRoot);
 
 		if (!state.hasBaseline) {
-			const preview = getGitStatusPreview(repositoryRoot);
+			const { preview, hasGitignore } = previewInitialVersion(repositoryRoot);
 			if (!preview) {
 				this.showError("Git：无法读取首次保存所包含的文件。Git 已开启，但尚未建立初始版本。");
 				return;
 			}
-			const gitignorePath = path.join(repositoryRoot, ".gitignore");
-			const ignoreMessage = fs.existsSync(gitignorePath)
+			const ignoreMessage = hasGitignore
 				? "已发现 .gitignore；其中忽略的文件不会进入首次保存。"
 				: "未发现 .gitignore。请先确认列表中没有密钥、环境变量或不应保存的大文件。";
 			const choice = await this.showExtensionSelector(
 				[
 					"Git 首次保存",
 					ignoreMessage,
-					formatGitStatusPreview(preview),
+					formatWorkspaceChanges(preview),
 					"",
 					"只有选择“创建初始版本”后才会执行 git add 和 git commit。",
 				].join("\n"),
@@ -5379,8 +5360,7 @@ export class InteractiveMode {
 			if (choice === "创建初始版本") {
 				// 异步执行（spawn 不阻塞事件循环）：选择后输入框已恢复，提交在后台进行。
 				this.showStatus("Git：正在建立初始版本…");
-				const baselineMessage = await generateInitialCommitMessageAsync(repositoryRoot);
-				const baselineResult = await createInitialGitBaselineAsync(repositoryRoot, baselineMessage.full);
+				const baselineResult = await createInitialVersion(repositoryRoot);
 				if (!baselineResult.ok) {
 					this.showGitFailure(baselineResult, "Git：创建初始版本失败。Git 仍保持开启，文件可能已进入暂存区。");
 					return;
@@ -5425,38 +5405,31 @@ export class InteractiveMode {
 			return;
 		}
 
-		const cwd = this.sessionManager.getCwd();
-		const state = inspectGitRepository(cwd);
-		if (!state.gitAvailable) {
-			this.showError(`Git：当前电脑无法使用 Git。${state.error ? `\\n${state.error}` : ""}`);
+		const target = inspectCommitTarget(this.sessionManager.getCwd(), () => [
+			this.session.getGitCheckpoint(),
+			this.pendingStartupGitCheckpoint,
+		]);
+		if (target.kind === "git-unavailable") {
+			this.showError(`Git：当前电脑无法使用 Git。${target.error ? `\\n${target.error}` : ""}`);
 			return;
 		}
-		if (!state.isRepository || !state.root) {
+		if (target.kind === "not-repository") {
 			this.showError("Git：当前 Workspace 不是 Git 仓库。");
 			return;
 		}
-
-		const repositoryRoot = state.root;
-		const preview = getGitStatusPreview(repositoryRoot);
-		if (!preview) {
+		if (target.kind === "status-unreadable") {
 			this.showError("Git：无法读取当前 Workspace 的本地改动。");
 			return;
 		}
-
-		const checkpoints = [this.session.getGitCheckpoint(), this.pendingStartupGitCheckpoint].filter(
-			(checkpoint): checkpoint is GitCheckpoint => checkpoint?.status === "created",
-		);
-		const checkpoint = checkpoints.find(
-			(candidate) => path.resolve(candidate.repositoryRoot) === path.resolve(repositoryRoot),
-		);
-		if (checkpoints.some((candidate) => path.resolve(candidate.repositoryRoot) !== path.resolve(repositoryRoot))) {
+		if (target.kind === "checkpoint-mismatch") {
 			this.showError("Git：当前 Workspace 与待处理 checkpoint 不一致，拒绝提交以避免操作错误仓库。");
 			return;
 		}
 
-		if (preview.total === 0) {
+		const { repositoryRoot, checkpoint } = target;
+		if (!target.hasChanges) {
 			if (checkpoint) {
-				const completed = completeGitCommitCheckpoint(this.session, checkpoint);
+				const completed = completeTaskCheckpoint(this.session, checkpoint);
 				if (!completed.ok) {
 					this.showWarning(`Git：${completed.error ?? "无法完成任务检查点。"}`);
 					return;
@@ -5467,7 +5440,7 @@ export class InteractiveMode {
 			this.showStatus("没有需要提交的本地改动");
 			return;
 		}
-		if (!state.hasBaseline) {
+		if (!target.hasBaseline) {
 			this.showError("Git：仓库还没有可用的初始版本，请先在 /settings 中建立初始版本。");
 			return;
 		}
@@ -5498,16 +5471,16 @@ export class InteractiveMode {
 			this.showError("Git：当前项目未被信任，不能执行 Push。");
 			return;
 		}
-		const state = inspectGitRepository(this.sessionManager.getCwd());
-		if (!state.gitAvailable) {
-			this.showError(`Git：当前电脑无法使用 Git。${state.error ? `\n${state.error}` : ""}`);
+		const target = inspectPushTarget(this.sessionManager.getCwd());
+		if (target.kind === "git-unavailable") {
+			this.showError(`Git：当前电脑无法使用 Git。${target.error ? `\n${target.error}` : ""}`);
 			return;
 		}
-		if (!state.isRepository || !state.root) {
+		if (target.kind === "not-repository") {
 			this.showError("Git：当前 Workspace 不是 Git 仓库。");
 			return;
 		}
-		if (!state.hasBaseline) {
+		if (target.kind === "no-baseline") {
 			this.showError("Git：当前仓库没有可 Push 的初始 commit。");
 			return;
 		}
@@ -5711,7 +5684,7 @@ export class InteractiveMode {
 			});
 			const commitResult = await commitUseCase.execute({ repositoryRoot: checkpoint.repositoryRoot, checkpoint });
 			if (commitResult.status === "committed") {
-				const completed = completeGitCommitCheckpoint(session, checkpoint);
+				const completed = completeTaskCheckpoint(session, checkpoint);
 				if (!completed.ok) {
 					this.showWarning(
 						`Git：follow-up commit 已创建，但无法完成 checkpoint：${completed.error ?? "未知错误"}`,
@@ -5723,7 +5696,7 @@ export class InteractiveMode {
 				return true;
 			}
 			if (commitResult.status === "no-changes") {
-				const completed = completeGitCommitCheckpoint(session, checkpoint);
+				const completed = completeTaskCheckpoint(session, checkpoint);
 				if (completed.ok) this.clearPendingStartupGitCheckpoint?.(checkpoint);
 				this.showWarning("Git：Agent 没有产生可提交的 CI 修复修改。");
 				return false;
@@ -5834,22 +5807,21 @@ export class InteractiveMode {
 		}
 		const checkpoint = checkpointOverride ?? this.session.getGitCheckpoint();
 		if (checkpoint?.status === "created") {
-			const cwd = this.sessionManager.getCwd();
-			const state = inspectGitRepository(cwd);
-			if (!state.isRepository || !state.root || state.root !== checkpoint.repositoryRoot) {
+			const target = inspectCheckpointDecisionTarget(this.sessionManager.getCwd(), checkpoint);
+			if (target.kind === "root-mismatch") {
 				this.showError("Git：无法确认 checkpoint 对应的仓库根目录，拒绝执行任务决策。当前工作区保持不变。");
 				return;
 			}
-			if (!state.hasBaseline) {
+			if (target.kind === "no-baseline") {
 				this.showError("Git：仓库没有可用的初始版本，拒绝执行任务决策。当前工作区保持不变。");
 				return;
 			}
-			const preview = getGitStatusPreview(checkpoint.repositoryRoot);
+			const { preview } = target;
 			const choice = await this.withTaskDecision(() =>
 				this.showExtensionSelector(
 					[
 						"本次任务还有未提交的修改。请执行 /commit 进行本地提交，或选择保留 / 恢复。",
-						...(preview ? [formatGitStatusPreview(preview)] : []),
+						...(preview ? [formatWorkspaceChanges(preview)] : []),
 						`恢复会把工作区退回到检查点 ${checkpoint.id} 创建时的状态（可能包含之后多轮对话的修改），不会推送到远程仓库。`,
 					].join("\n"),
 					["保留未提交的更改", "恢复任务更改"],
@@ -5873,7 +5845,7 @@ export class InteractiveMode {
 			}
 			if (choice === "恢复任务更改") {
 				this.gitCommitAgentRetry = undefined;
-				const restored = await restoreGitCheckpoint(checkpoint);
+				const restored = await restoreTaskCheckpoint(checkpoint);
 				if (!restored.ok) {
 					const reason = restored.error ?? "未知错误";
 					this.showError(
@@ -5974,7 +5946,7 @@ export class InteractiveMode {
 		if (result.status === "no-changes" && !result.message) {
 			this.clearGitCommitTask();
 			if (target.checkpoint) {
-				const completed = completeGitCommitCheckpoint(session, target.checkpoint);
+				const completed = completeTaskCheckpoint(session, target.checkpoint);
 				if (!completed.ok) this.showWarning(`Git：${completed.error ?? "无法完成任务检查点。"}`);
 				this.clearPendingStartupGitCheckpoint?.(target.checkpoint);
 			}
@@ -6269,7 +6241,7 @@ export class InteractiveMode {
 		commitHash?: string,
 	): void {
 		if (target.checkpoint) {
-			const completed = completeGitCommitCheckpoint(session, target.checkpoint);
+			const completed = completeTaskCheckpoint(session, target.checkpoint);
 			if (!completed.ok) this.showWarning(`Git：${completed.error ?? "无法完成任务检查点。"}`);
 			this.clearPendingStartupGitCheckpoint?.(target.checkpoint);
 		}
@@ -6327,7 +6299,7 @@ export class InteractiveMode {
 	}
 
 	private isRepositoryUsedByCurrentSession(repositoryRoot: string): boolean {
-		return getCwdRelativePath(this.sessionManager.getCwd(), repositoryRoot) !== undefined;
+		return this.localGitRepositoryUseCase.isUsedByCurrentSession(repositoryRoot);
 	}
 
 	private currentRepositoryMutationError(repositoryRoot: string): string | undefined {
@@ -6342,227 +6314,17 @@ export class InteractiveMode {
 		return undefined;
 	}
 
-	private async addLocalGitRepository(
-		pathInput: string,
-		initialize: boolean,
-	): Promise<LocalGitRepositoryActionResult> {
-		const result = selectLocalGitRepository(
-			this.localGitRepositoryStore,
-			pathInput,
-			this.sessionManager.getCwd(),
-			initialize,
-		);
-		if (!result.ok) {
-			return {
-				ok: false,
-				error: result.error,
-				requiresInitialization: result.requiresInitialization,
-				rootPath: result.rootPath,
-			};
-		}
-		if (result.repository && this.isRepositoryUsedByCurrentSession(result.repository.rootPath)) {
-			this.footerDataProvider.refreshGitState();
-		}
-		return {
-			ok: true,
-			rootPath: result.repository?.rootPath,
-			message: initialize ? "Git 仓库已初始化并添加。" : "本地 Git 仓库已添加。",
-		};
-	}
-
-	private async initializeLocalGitRepository(repository: LocalGitRepository): Promise<LocalGitRepositoryActionResult> {
-		const blocked = this.currentRepositoryMutationError(repository.rootPath);
-		if (blocked) return { ok: false, error: blocked };
-		const result = initializeManagedLocalGitRepository(repository.rootPath);
-		if (!result.ok) return result;
-		if (this.isRepositoryUsedByCurrentSession(repository.rootPath)) this.footerDataProvider.refreshGitState();
-		return { ok: true, rootPath: repository.rootPath, message: "Git 仓库已初始化。" };
-	}
-
-	private async deleteLocalGitRepository(repository: LocalGitRepository): Promise<LocalGitRepositoryActionResult> {
-		const blocked = this.currentRepositoryMutationError(repository.rootPath);
-		if (blocked) return { ok: false, error: blocked };
-		const current = this.isRepositoryUsedByCurrentSession(repository.rootPath);
-		const deleted = deleteLocalGitRepositoryMetadata(repository.rootPath);
-		if (!deleted.ok) return { ok: false, error: deleted.error };
-		const removed = this.localGitRepositoryStore.remove(repository.id);
-		if (!removed.ok) {
-			return {
-				ok: false,
-				error: deleted.removed
-					? `已删除 .git，但无法更新本地仓库列表：${removed.error ?? "未知错误"}`
-					: removed.error,
-			};
-		}
-		if (current) this.footerDataProvider.refreshGitState();
-		return {
-			ok: true,
-			message: deleted.removed ? "已删除 .git，项目文件和文件夹保持不变。" : "该仓库已不存在，记录已移除。",
-		};
-	}
-
-	private async renameLocalGitRepository(
-		repository: LocalGitRepository,
-		name: string,
-	): Promise<LocalGitRepositoryActionResult> {
-		const destination = getRenamedRepositoryPath(repository.rootPath, name);
-		if (!destination.rootPath) return { ok: false, error: destination.error };
-		return this.relocateLocalGitRepository(repository, destination.rootPath, "renamed");
-	}
-
-	private async moveLocalGitRepository(
-		repository: LocalGitRepository,
-		destinationParent: string,
-	): Promise<LocalGitRepositoryActionResult> {
-		const destination = getMovedRepositoryPath(repository.rootPath, destinationParent, this.sessionManager.getCwd());
-		if (!destination.rootPath) return { ok: false, error: destination.error };
-		return this.relocateLocalGitRepository(repository, destination.rootPath, "moved");
-	}
-
-	private async relocateLocalGitRepository(
-		repository: LocalGitRepository,
-		destinationRoot: string,
-		operation: "renamed" | "moved",
-	): Promise<LocalGitRepositoryActionResult> {
-		const status = inspectLocalGitRepositoryPath(repository.rootPath);
-		if (status.kind === "missing") return { ok: false, error: `仓库目录不存在：${repository.rootPath}` };
-		if (status.kind === "error") return { ok: false, error: status.error };
-		if (status.kind !== "repository" || !localGitRepositoryPathsEqual(status.rootPath, repository.rootPath)) {
-			return { ok: false, error: "所选目录不再是独立的 Git 仓库。" };
-		}
-		const blocked = this.currentRepositoryMutationError(repository.rootPath);
-		if (blocked) return { ok: false, error: blocked };
-
-		const currentCwd = this.sessionManager.getCwd();
-		const currentRelativePath = getCwdRelativePath(currentCwd, repository.rootPath);
-		let moveTransaction: ReturnType<typeof beginRepositoryDirectoryMove> | undefined;
-		let directoryMoveRolledBack = false;
-		const rollbackDirectoryMove = (): void => {
-			if (!moveTransaction || directoryMoveRolledBack) return;
-			moveTransaction.rollback();
-			directoryMoveRolledBack = true;
-		};
-		try {
-			if (currentRelativePath !== undefined) {
-				// Check collisions before closing cwd-bound services. The actual move
-				// happens after their teardown to release Windows file handles.
-				validateRepositoryDirectoryMove(repository.rootPath, destinationRoot);
-			} else {
-				moveTransaction = beginRepositoryDirectoryMove(repository.rootPath, destinationRoot);
-			}
-		} catch (error) {
-			return { ok: false, error: error instanceof Error ? error.message : String(error) };
-		}
-
-		let workspaceMetadataMoved = false;
-		let repositoryMetadataMoved = false;
-		const rollbackMetadata = (): void => {
-			const errors: string[] = [];
-			if (repositoryMetadataMoved) {
-				const repositoryAtDestination = this.localGitRepositoryStore.getByRootPath(destinationRoot);
-				const repositoryRollback = repositoryAtDestination
-					? this.localGitRepositoryStore.updateLocation(repositoryAtDestination.id, repository.rootPath)
-					: { ok: false, error: "找不到移动后的本地仓库记录。" };
-				if (repositoryRollback.ok) repositoryMetadataMoved = false;
-				else errors.push(repositoryRollback.error ?? "本地仓库路径回滚失败。");
-			}
-			if (workspaceMetadataMoved) {
-				const workspaceRollback = this.workspaceStore.relocateUnderRoot(destinationRoot, repository.rootPath);
-				if (workspaceRollback.ok) workspaceMetadataMoved = false;
-				else errors.push(workspaceRollback.error ?? "Workspace 路径回滚失败。");
-			}
-			if (errors.length > 0) throw new Error(errors.join("；"));
-		};
-		const commitMetadata = (): void => {
-			const workspaceResult = this.workspaceStore.relocateUnderRoot(repository.rootPath, destinationRoot);
-			if (!workspaceResult.ok) throw new Error(workspaceResult.error ?? "更新 Workspace 路径失败。");
-			workspaceMetadataMoved = (workspaceResult.workspaces?.length ?? 0) > 0;
-
-			const repositoryResult = this.localGitRepositoryStore.updateLocation(repository.id, destinationRoot);
-			if (repositoryResult.ok) {
-				repositoryMetadataMoved = true;
-				return;
-			}
-
-			try {
-				rollbackMetadata();
-			} catch (rollbackError) {
-				throw new Error(
-					`${repositoryResult.error ?? "更新本地仓库路径失败。"}；元数据回滚失败：${
-						rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-					}`,
-				);
-			}
-			throw new Error(repositoryResult.error ?? "更新本地仓库路径失败。");
-		};
-		const hasMetadataChanges = (): boolean => workspaceMetadataMoved || repositoryMetadataMoved;
-
-		try {
-			const warnings: string[] = [];
-			if (currentRelativePath !== undefined) {
-				const relocatedCwd =
-					currentRelativePath === "." ? destinationRoot : path.resolve(destinationRoot, currentRelativePath);
-				const relocation = await this.runtimeHost.relocateWorkspace(relocatedCwd, {
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-					beforeCommit: commitMetadata,
-					rollbackBeforeCommit: rollbackMetadata,
-					moveDirectory: async () => {
-						this.footerDataProvider.pauseGitStateWatching();
-						await new Promise<void>((resolve) => setImmediate(resolve));
-						moveTransaction = beginRepositoryDirectoryMove(repository.rootPath, destinationRoot);
-					},
-					rollbackDirectoryMove,
-				});
-				if (relocation.cancelled) {
-					return { ok: false, error: "会话切换已取消，仓库目录保持不变。" };
-				}
-				warnings.push(...relocation.warnings);
-			} else {
-				commitMetadata();
-			}
-			if (!moveTransaction) throw new Error("仓库目录移动未启动。");
-			const committedMove = moveTransaction.commit();
-			if (committedMove.warning) warnings.push(committedMove.warning);
-			const verb = operation === "renamed" ? "重命名" : "移动";
-			const message = [`仓库已${verb}：${destinationRoot}`, ...warnings].join("\n");
-			if (currentRelativePath !== undefined) this.showStatus(message);
-			return { ok: true, rootPath: destinationRoot, message, close: currentRelativePath !== undefined };
-		} catch (error) {
-			const rollbackErrors: string[] = [];
-			if (hasMetadataChanges()) {
-				try {
-					rollbackMetadata();
-				} catch (rollbackError) {
-					rollbackErrors.push(
-						`元数据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-					);
-				}
-			}
-			try {
-				rollbackDirectoryMove();
-			} catch (rollbackError) {
-				rollbackErrors.push(
-					`目录回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-				);
-			}
-			return {
-				ok: false,
-				error: [error instanceof Error ? error.message : String(error), ...rollbackErrors].join("\n"),
-			};
-		}
-	}
-
 	private showLocalGitRepositorySidebar(): void {
 		if (this.localGitRepositorySidebar) return;
 		const sidebar = new LocalGitRepositorySidebarComponent({
 			ui: this.ui,
 			currentCwd: this.sessionManager.getCwd(),
-			getRepositories: () => this.localGitRepositoryStore.list(),
-			onAdd: (pathInput, initialize) => this.addLocalGitRepository(pathInput, initialize),
-			onInitialize: (repository) => this.initializeLocalGitRepository(repository),
-			onDelete: (repository) => this.deleteLocalGitRepository(repository),
-			onRename: (repository, name) => this.renameLocalGitRepository(repository, name),
-			onMove: (repository, destinationParent) => this.moveLocalGitRepository(repository, destinationParent),
+			getRepositories: () => this.localGitRepositoryUseCase.list(),
+			onAdd: (pathInput, initialize) => this.localGitRepositoryUseCase.add(pathInput, initialize),
+			onInitialize: (repository) => this.localGitRepositoryUseCase.initialize(repository),
+			onDelete: (repository) => this.localGitRepositoryUseCase.delete(repository),
+			onRename: (repository, name) => this.localGitRepositoryUseCase.rename(repository, name),
+			onMove: (repository, destinationParent) => this.localGitRepositoryUseCase.move(repository, destinationParent),
 			onWorktrees: (repository) => this.showGitWorktreeSidebar(repository),
 			onClose: () => this.closeLocalGitRepositorySidebar(),
 		});
@@ -6611,28 +6373,12 @@ export class InteractiveMode {
 		return this.sessionManager.usesDefaultSessionDir() ? undefined : this.sessionManager.getSessionDir();
 	}
 
-	private isCurrentSessionPath(sessionPath: string): boolean {
-		return (
-			this.session.sessionFile !== undefined &&
-			pathIdentityKey(sessionPath) === pathIdentityKey(this.session.sessionFile)
-		);
-	}
-
 	/**
 	 * Persist every title change through the same stable session-path path.
 	 * Titles are session metadata; they never identify or move the JSONL file.
 	 */
 	private updateConversationTitle(sessionPath: string, rawTitle: string, sessionManager?: SessionManager): string {
-		const title = normalizeConversationTitle(rawTitle);
-		const validationError = validateConversationTitle(title);
-		if (validationError) throw new Error(validationError);
-		if (this.isCurrentSessionPath(sessionPath)) {
-			if (!this.session.isIdle) throw new Error("不能在会话运行时修改标题。");
-			this.session.setSessionName(title);
-		} else {
-			(sessionManager ?? SessionManager.open(sessionPath)).appendSessionInfo(title);
-		}
-		return title;
+		return saveConversationTitle(this.session, sessionPath, rawTitle, sessionManager);
 	}
 
 	private renameSessionWithAi(sessionPath: string, signal?: AbortSignal): Promise<ConversationTitleResult> {
@@ -6653,19 +6399,12 @@ export class InteractiveMode {
 		sessionPath: string,
 		signal?: AbortSignal,
 	): Promise<ConversationTitleResult> {
-		const isCurrent = this.isCurrentSessionPath(sessionPath);
-		if (isCurrent && !this.session.isIdle) {
-			throw new Error("不能在会话运行时生成标题。");
-		}
-
-		const sessionManager = isCurrent ? this.sessionManager : SessionManager.open(sessionPath);
-		const result = await generateConversationTitle({
-			sessionManager,
-			modelRuntime: this.session.modelRuntime,
-			settingsManager: this.settingsManager,
-			fallbackModel: this.session.model,
+		const { result, sessionManager } = await generateTitleForSession(
+			this.session,
+			this.settingsManager,
+			sessionPath,
 			signal,
-		});
+		);
 		if (result.status === "skipped") return result;
 
 		const title = this.updateConversationTitle(sessionPath, result.title, sessionManager);
@@ -6681,11 +6420,11 @@ export class InteractiveMode {
 		signal: AbortSignal,
 		onProgress: (progress: ConversationBatchRenameProgress) => void,
 	) {
-		const sessions = await SessionManager.list(rootPath, this.getWorkspaceSessionDir());
-		return renameConversationsInBatch(
-			sessions,
-			(session, sessionSignal) => this.renameSessionWithAi(session.path, sessionSignal),
-			{ signal, concurrency: 2, onProgress },
+		return renameWorkspaceConversations(
+			rootPath,
+			this.getWorkspaceSessionDir(),
+			(sessionPath, sessionSignal) => this.renameSessionWithAi(sessionPath, sessionSignal),
+			{ signal, onProgress },
 		);
 	}
 

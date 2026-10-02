@@ -9,6 +9,7 @@
 - Agent 编排：`packages/agent/src/agent.ts`。
 - 低层循环：`packages/agent/src/agent-loop.ts`。
 - Harness/session/compaction：`packages/agent/src/harness/`。
+- 按目录的源码说明与维护规则：[src/README.md](../src/README.md)。
 
 ## 现有说明
 

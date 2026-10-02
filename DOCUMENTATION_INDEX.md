@@ -41,7 +41,8 @@
 | --- | --- | --- | --- | --- |
 | 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
 | Coding Agent 产品层 | [产品文档索引](packages/coding-agent/docs/index.md)、[中文索引](packages/coding-agent/docs/index.zh-CN.md)、[Web UI](packages/coding-agent/docs/web-ui.md) | [产品维护手册](packages/coding-agent/docs/maintenance.md) | [产品后续开发](packages/coding-agent/docs/roadmap.md) | CLI、AgentSession、Session、Provider runtime、TUI mode |
-| Coding Agent 源码模块 | [源码模块地图](packages/coding-agent/docs/source-modules.md) | 同左 | 同左 | `packages/coding-agent/src` 的 24 个一级目录和顶层入口 |
+| Coding Agent 源码模块 | [源码模块地图](packages/coding-agent/docs/source-modules.md)；每个一级目录的 `src/<目录>/README.md`（“说明”一节） | 同一份 `README.md` 的“维护”一节 | 同左 | `packages/coding-agent/src` 的 24 个一级目录（含各自子目录）和顶层入口 |
+| 其他包的源码目录 | [agent](packages/agent/src/README.md)、[ai](packages/ai/src/README.md)、[tui](packages/tui/src/README.md)、[sqlite-node](packages/storage/sqlite-node/src/README.md) 的 `src/README.md` | 同一份 `README.md` 的“维护”一节 | 各包 `docs/roadmap.md` | 各包 `src` 下的每个子目录 |
 | Agent Core | [Agent Core 文档索引](packages/agent/docs/index.md)、[README](packages/agent/README.md) | [Agent Core 维护](packages/agent/docs/maintenance.md) | [Agent Core 后续开发](packages/agent/docs/roadmap.md) | Agent、agent loop、harness、session contract |
 | AI/Provider | [AI 文档索引](packages/ai/docs/index.md)、[README](packages/ai/README.md) | [AI 维护](packages/ai/docs/maintenance.md) | [AI 后续开发](packages/ai/docs/roadmap.md) | Models、Provider、API、auth、OAuth contract |
 | TUI | [TUI 文档索引](packages/tui/docs/index.md)、[README](packages/tui/README.md) | [TUI 维护](packages/tui/docs/maintenance.md) | [TUI 后续开发](packages/tui/docs/roadmap.md) | Component、Container、TUI、terminal、differential rendering |
@@ -57,7 +58,7 @@
 - **维护文档**回答维护者“改哪里、哪些 contract 不能破坏、怎样检查、哪些操作会写文件”。
 - **后续开发文档**只记录基于当前源码的候选方向、边界和验收条件，不把推断写成已经承诺的功能或时间表。
 
-并不是每一个私有 helper 都需要一个独立 Markdown 文件；每个可维护的领域都在上表有入口，Coding Agent 的一级源码目录在[源码模块地图](packages/coding-agent/docs/source-modules.md)中逐项覆盖。对单个函数，源码、测试和所属领域维护手册是唯一组合入口。
+并不是每一个私有 helper 都需要一个独立 Markdown 文件；每个可维护的领域都在上表有入口，Coding Agent 的一级源码目录在[源码模块地图](packages/coding-agent/docs/source-modules.md)中逐项覆盖，子目录级别的职责、对外接口、依赖和维护规则写在各目录自己的 `README.md` 里（说明和维护合在一个文件中，分两节）。对单个函数，源码、测试和所属领域维护手册是唯一组合入口。
 
 ## 当前必须记住的事实
 

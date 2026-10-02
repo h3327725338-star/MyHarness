@@ -8,7 +8,7 @@ Outputs all session events as JSON lines to stdout. Useful for integrating MyHar
 
 ## Event Types
 
-Events are defined in [`AgentSessionEvent`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/agent/runtime/agent-session.ts#L198):
+Events are defined in [`AgentSessionEvent`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/agent/runtime/agent-session.ts#L136):
 
 ```typescript
 type AgentSessionEvent =

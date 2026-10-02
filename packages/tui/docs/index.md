@@ -8,6 +8,7 @@
 - 核心运行时：`packages/tui/src/tui.ts`。
 - 组件：`packages/tui/src/components/`。
 - 测试：`packages/tui/test/*.test.ts`。
+- 按目录的源码说明与维护规则：[src/README.md](../src/README.md)。
 
 ## 现有说明
 

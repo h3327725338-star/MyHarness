@@ -20,6 +20,41 @@ export interface BuildSystemPromptOptions {
 	currentModel?: { name: string; provider: string };
 }
 
+/** The loaded resources a system prompt is built from (a subset of ResourceLoader). */
+export interface SystemPromptResources {
+	getSkills(): { skills: Skill[] };
+	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	getAgentRole?(): AgentRole;
+	getSystemPrompt(): string | undefined;
+	getAppendSystemPrompt(): string[];
+}
+
+/** Gather the system prompt inputs of a session from its loaded resources, active tools and model. */
+export function collectSystemPromptOptions(
+	resources: SystemPromptResources,
+	session: {
+		cwd: string;
+		tools: Pick<BuildSystemPromptOptions, "selectedTools" | "toolSnippets" | "promptGuidelines">;
+		currentModel: { id: string; name?: string; provider: string } | undefined;
+	},
+): BuildSystemPromptOptions {
+	const loaderAppendSystemPrompt = resources.getAppendSystemPrompt();
+	const appendSystemPrompt = loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
+	const model = session.currentModel;
+	return {
+		cwd: session.cwd,
+		skills: resources.getSkills().skills,
+		contextFiles: resources.getAgentsFiles().agentsFiles,
+		customPrompt: resources.getSystemPrompt(),
+		appendSystemPrompt,
+		selectedTools: session.tools.selectedTools,
+		toolSnippets: session.tools.toolSnippets,
+		promptGuidelines: session.tools.promptGuidelines,
+		agentRole: resources.getAgentRole?.() ?? "main",
+		currentModel: model ? { name: model.name ?? model.id, provider: model.provider } : undefined,
+	};
+}
+
 export const GLOBAL_CORE_POLICY = loadSystemPrompt("global/core.md");
 export const OUTPUT_LANGUAGE_POLICY = loadSystemPrompt("global/output-language.md");
 

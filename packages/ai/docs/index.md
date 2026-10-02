@@ -11,6 +11,7 @@
 - auth/credential/OAuth contract：`packages/ai/src/auth/`。
 - dynamic model persistence：`packages/ai/src/models-store.ts`。
 - test provider：`packages/ai/src/providers/faux.ts`。
+- 按目录的源码说明与维护规则：[src/README.md](../src/README.md)。
 
 ## 最重要的当前事实
 

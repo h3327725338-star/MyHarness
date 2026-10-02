@@ -32,11 +32,13 @@ const gitAvailable = spawnSync("git", ["--version"], { stdio: "ignore" }).status
 type GitRelocationHost = {
 	localGitRepositoryStore: LocalGitRepositoryStore;
 	workspaceStore: WorkspaceStore;
-	relocateLocalGitRepository(
-		repository: LocalGitRepository,
-		destinationRoot: string,
-		operation: "renamed" | "moved",
-	): Promise<{ ok: boolean; error?: string }>;
+	localGitRepositoryUseCase: {
+		relocate(
+			repository: LocalGitRepository,
+			destinationRoot: string,
+			operation: "renamed" | "moved",
+		): Promise<{ ok: boolean; error?: string }>;
+	};
 };
 
 describe("AgentSessionRuntime.switchWorkspace", () => {
@@ -356,7 +358,7 @@ describe("AgentSessionRuntime.switchWorkspace", () => {
 		const repository = host.localGitRepositoryStore.add(source).repository!;
 		expect(host.workspaceStore.add(source).ok).toBe(true);
 
-		const result = await host.relocateLocalGitRepository(repository, destination, "renamed");
+		const result = await host.localGitRepositoryUseCase.relocate(repository, destination, "renamed");
 
 		expect(result.ok, result.ok ? undefined : result.error).toBe(true);
 		expect(existsSync(source)).toBe(false);
@@ -385,7 +387,7 @@ describe("AgentSessionRuntime.switchWorkspace", () => {
 		const repository = host.localGitRepositoryStore.add(source).repository!;
 		expect(host.workspaceStore.getByRootPath(source)).toBeDefined();
 
-		const result = await host.relocateLocalGitRepository(repository, destination, "renamed");
+		const result = await host.localGitRepositoryUseCase.relocate(repository, destination, "renamed");
 
 		expect(result.ok, result.error).toBe(false);
 		expect(result.error).toContain("目标路径已存在");

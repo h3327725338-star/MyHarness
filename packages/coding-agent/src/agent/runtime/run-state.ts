@@ -14,6 +14,10 @@
  * host UI, not by the session.
  */
 
+import type { AgentEvent } from "@myharness/agent-core";
+import type { AssistantMessage } from "@myharness/ai/compat";
+import type { ContextBudgetBlockedReason } from "../../context/context-budget.ts";
+
 export type RunState =
 	| "idle"
 	| "queued"
@@ -116,4 +120,221 @@ export function createInitialRunSnapshot(): RunStateSnapshot {
 		activity: "",
 		lastActivityAt: Date.now(),
 	};
+}
+
+/** How a run ended: the state hosts see plus the machine-readable reason. */
+export interface RunTerminalOutcome {
+	state: RunState;
+	activity: string;
+	error?: string;
+	reason: RunTerminalReason;
+}
+
+/** Terminal outcome implied by the last assistant message of a run. */
+export function terminalOutcomeFromAssistant(last: AssistantMessage | undefined): RunTerminalOutcome {
+	const stopReason = last?.stopReason;
+	const errorMessage = last?.errorMessage;
+	if (stopReason === "aborted") {
+		return {
+			state: "cancelled",
+			activity: "任务已取消",
+			error: errorMessage ?? "任务已取消",
+			reason: "user-cancelled",
+		};
+	}
+	if (stopReason === "error") {
+		if (isRunTimeoutError(errorMessage)) {
+			return {
+				state: "timed_out",
+				activity: "任务执行超时",
+				error: errorMessage ?? "任务执行超时",
+				reason: "timed-out",
+			};
+		}
+		return {
+			state: "failed",
+			activity: "任务失败",
+			error: errorMessage ?? "模型请求失败",
+			reason: /empty[- ]response|empty[- ]output/i.test(errorMessage ?? "")
+				? "empty-provider-response"
+				: "provider-error",
+		};
+	}
+	return { state: "completed", activity: "任务完成", reason: "completed" };
+}
+
+/** Terminal reason reported when the context budget gate refuses to send a request. */
+export function terminalReasonForContextBlock(reason: ContextBudgetBlockedReason): RunTerminalReason {
+	switch (reason) {
+		case "auto-compact-disabled":
+			return "auto-compact-disabled";
+		case "compaction-failed":
+			return "compaction-failed";
+		case "compaction-cancelled":
+			return "compaction-cancelled";
+		case "compaction-in-progress":
+			return "compaction-in-progress";
+		case "compaction-unchanged":
+			return "compaction-unchanged";
+		case "nothing-to-compact":
+			return "context-no-history-to-compact";
+		case "still-over-budget":
+			return "context-over-budget";
+	}
+	return "context-over-budget";
+}
+
+export interface RunStateTrackerHost {
+	isDisposed(): boolean;
+	/** Publish a snapshot to hosts. */
+	onChange(snapshot: RunStateSnapshot): void;
+}
+
+/**
+ * Owns the host-visible run state of one AgentSession: the current snapshot,
+ * the pending terminal outcome of the active run, and the mapping from agent
+ * events to activity text. AgentSession decides when a run starts and ends.
+ */
+export class RunStateTracker {
+	private _state: RunState = "idle";
+	private _runId = 0;
+	private _startedAt: number | undefined;
+	private _lastActivityAt = Date.now();
+	private _activity = "";
+	private _detail: string | undefined;
+	private _terminalReason: RunTerminalReason | undefined;
+	private _error: string | undefined;
+	private _emitThrottleAt = 0;
+
+	/** Terminal outcome decided so far for the active run; published when the run settles. */
+	terminal: RunTerminalOutcome | undefined;
+
+	private readonly _host: RunStateTrackerHost;
+
+	constructor(host: RunStateTrackerHost) {
+		this._host = host;
+	}
+
+	/** JSON-safe snapshot of the current run state. */
+	snapshot(): RunStateSnapshot {
+		return {
+			state: this._state,
+			activity: this._activity,
+			detail: this._detail,
+			startedAt: this._startedAt,
+			lastActivityAt: this._lastActivityAt,
+			error: this._error,
+			terminalReason: this._terminalReason,
+			runId: this._runId,
+		};
+	}
+
+	/** Start a new run generation and clear the previous run's outcome. */
+	beginRun(): void {
+		this._runId += 1;
+		this._startedAt = Date.now();
+		this._terminalReason = undefined;
+		this.terminal = undefined;
+		this._error = undefined;
+	}
+
+	setError(error: string | undefined): void {
+		this._error = error;
+	}
+
+	setTerminalReason(reason: RunTerminalReason | undefined): void {
+		this._terminalReason = reason;
+	}
+
+	/**
+	 * Transition the run state and always notify hosts immediately.
+	 * State transitions are rare (start/end/recover), so they are never throttled.
+	 */
+	set(
+		state: RunState,
+		activity: string,
+		options?: { detail?: string; error?: string; terminalReason?: RunTerminalReason },
+	): void {
+		if (this._host.isDisposed()) return;
+		this._state = state;
+		this._activity = activity;
+		if (options?.detail !== undefined) this._detail = options.detail;
+		if (options?.error !== undefined) this._error = options.error;
+		if (options?.terminalReason !== undefined) this._terminalReason = options.terminalReason;
+		this._lastActivityAt = Date.now();
+		this._emitThrottleAt = Date.now();
+		this._host.onChange(this.snapshot());
+	}
+
+	/**
+	 * Record a real activity (model token, tool event, retry, recovery...).
+	 * Hosts already receive the underlying events, so this only needs to keep the
+	 * snapshot accurate; notifications are throttled to avoid duplicating the
+	 * per-chunk message_update traffic.
+	 */
+	touch(activity: string, detail?: string): void {
+		if (this._state === "idle") return;
+		this._lastActivityAt = Date.now();
+		this._activity = activity;
+		if (detail !== undefined) this._detail = detail;
+		const now = Date.now();
+		if (now - this._emitThrottleAt >= 1000) {
+			this._emitThrottleAt = now;
+			this._host.onChange(this.snapshot());
+		}
+	}
+
+	/**
+	 * Track the run state from the underlying agent event stream.
+	 * Called once per agent event before it is forwarded to listeners.
+	 */
+	trackAgentEvent(event: AgentEvent, willRetry: boolean, model: { provider: string; id: string } | undefined): void {
+		switch (event.type) {
+			case "agent_start":
+				if (!this._startedAt) this._startedAt = Date.now();
+				this.set("running", "正在请求模型", {
+					detail: model ? `${model.provider}/${model.id}` : undefined,
+				});
+				break;
+			case "turn_start":
+				this.touch("正在请求模型");
+				break;
+			case "message_start":
+				if (event.message.role === "assistant") this.touch("模型开始响应");
+				break;
+			case "message_update":
+				if (event.message.role === "assistant") this.touch("模型正在生成内容");
+				break;
+			case "message_end":
+				this.touch("模型响应完成");
+				break;
+			case "tool_execution_start":
+				this.set("waiting", "等待工具返回", { detail: event.toolName });
+				break;
+			case "tool_execution_update":
+				this.touch("工具输出中", event.toolName);
+				break;
+			case "tool_execution_end":
+				this.set("waiting", "工具已返回，等待模型继续", { detail: event.toolName });
+				break;
+			case "turn_end":
+				this.touch("回合结束，准备下一轮");
+				break;
+			case "agent_end": {
+				if (willRetry) {
+					const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant") as
+						| AssistantMessage
+						| undefined;
+					this.set("recovering", "模型请求失败，正在重试", { error: lastAssistant?.errorMessage });
+				} else {
+					// agent_end closes only the current turn. Post-run compaction,
+					// queued messages and continuation are still part of this task.
+					this.set("waiting", "本轮响应完成，正在收尾");
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
 }

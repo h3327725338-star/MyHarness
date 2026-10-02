@@ -9,6 +9,7 @@
 - migration：`src/sqlite/migrations.ts` 和 `src/sqlite/migrations/001_initial.sql`。
 - repo：`src/sqlite/repo.ts`。
 - storage：`src/sqlite/storage/`。
+- 按目录的源码说明与维护规则：[src/README.md](../src/README.md)。
 - package build：`tsgo` 后由 `scripts/prepare-dist.mjs` 复制 migration SQL。
 
 ## 重要边界

@@ -179,10 +179,12 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 
 ## 4. packages/coding-agent/src 模块地图
 
+每个一级目录下都有一份 `README.md`，按子目录写明职责、对外接口、依赖和维护规则；本节只给出总览。
+
 当前顶级目录如下：
 
 ~~~text
-agent/ application/ bun/ cli/ config/ context/ extensions/ exports/
+agent/ application/ bun/ cli/ config/ context/ data/ extensions/ exports/
 git/ modes/ observability/ platform/ prompts/ providers/ session/
 skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 ~~~
@@ -191,16 +193,18 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 
 | 模块 | 主要职责 | 当前边界 / 不负责 | 主要入口和调用者 | 新代码通常放在哪里 |
 | --- | --- | --- | --- | --- |
-| agent/ | Agent 生命周期、delegation、vision 和 runtime 服务 | 不负责 TUI 绘制；底层循环由 packages/agent 承担 | agent/runtime/agent-session.ts、sdk.ts、services.ts、session-runtime.ts、session-bridge.ts（owner 进程向其他进程开放会话）、mirror-agent-session.ts（附着到别的进程正在运行的会话）；由 main.ts、Interactive/Print mode、SDK 调用 | AgentSession 生命周期、运行状态、服务组装或 Agent 专属协调器 |
-| application/ | ResourceLoader、Project Trust、Workspace Store 和 Git/Provider/Workspace/Session use case | 不是万能 domain 目录；use case 不应承载 TUI component；不是当前独立 bootstrap | application/resource-loader.ts、project-trust.ts、workspace-store.ts、use-cases/；由 main.ts 和 InteractiveMode 调用 | 跨多个底层领域的产品操作流程；单一领域逻辑仍放回对应领域 |
+| agent/ | Agent 生命周期、运行状态（run-state.ts 的 RunStateTracker）、delegation（含后台任务登记 delegation/background-work.ts）、vision 和 runtime 服务 | 不负责 TUI 绘制；底层循环由 packages/agent 承担；工具装配、模型切换、压缩执行、直接 Bash 等规则在各自领域目录 | agent/runtime/agent-session.ts、sdk.ts、services.ts、session-runtime.ts、session-bridge.ts（owner 进程向其他进程开放会话）、mirror-agent-session.ts（附着到别的进程正在运行的会话）；由 main.ts、Interactive/Print mode、SDK 调用 | AgentSession 生命周期、运行状态、服务组装或 Agent 专属协调器 |
+| application/ | ResourceLoader、Project Trust、Workspace Store 和 Git/Provider/Workspace/Session use case（含 git-workspace.ts、local-git-repository.ts、conversation-title.ts） | 不是万能 domain 目录；use case 不应承载 TUI component；不是当前独立 bootstrap | application/resource-loader.ts、project-trust.ts、workspace-store.ts、use-cases/；由 main.ts 和 InteractiveMode 调用 | 跨多个底层领域的产品操作流程；单一领域逻辑仍放回对应领域 |
+| bun/ | Bun 单文件可执行程序的入口和 Bedrock Provider 注册 | 不承载普通 Node CLI 的逻辑 | bun/cli.ts；由 Bun 编译产物启动 | Bun 编译和运行时兼容 |
 | cli/ | 参数解析、帮助、启动选择、Session picker、Slash Command 解析和文件输入 | 不负责模型请求、Session persistence 或 TUI 组件实现 | cli/args.ts、cli/help.ts、cli/slash-commands.ts；由 cli.ts、main.ts、AgentSession 使用 | 新 CLI option、内置 Slash Command 的解析或启动输入处理 |
 | config/ | Settings、路径、Trust store、Settings migration 和持久化协调 | 不负责 Provider credential 细节；不负责 Prompt 内容 | config/settings/、config/paths/、config/trust/；由 main.ts、Provider、ResourceLoader 使用 | 新 Settings 字段、scope、migration、Trust 或配置路径 |
-| context/ | Context item、窗口预算、Policy、项目上下文、文件 diff、Compact 和 branch summary | 不负责 JSONL 文件格式本身；不负责 TUI 展示 | context/coordinator.ts、context/compact/、context/project-context-loader.ts；由 AgentSession 和 Session Projection 使用 | Context 计算、截断、Compact、项目上下文和注入策略 |
+| context/ | Context item、窗口预算、Policy、项目上下文、文件 diff、Compact 和 branch summary | 不负责 JSONL 文件格式本身；不负责 TUI 展示 | context/coordinator.ts、context/compact/（含 session-compaction.ts、tree-navigation.ts）、context/project-context-loader.ts；由 AgentSession 和 Session Projection 使用 | Context 计算、截断、Compact、项目上下文和注入策略 |
+| data/ | Workspace registry 的读写和旧数据迁移 | 不负责 Session 文件；Workspace 身份不由 SessionManager 重写 | data/workspace-store.ts、workspace-registry-migration.ts；经 application/workspace-store.ts 被调用 | Workspace 数据格式和 migration |
 | extensions/ | Extension contracts、发现、加载、API entry、Runner、事件、Tool、Command、UI、Provider 注册 | 不应让 loader 通过公共根 facade 反向依赖自身；不把 Extension API 逻辑塞进 TUI | extensions/contracts/、api-entry.ts、loader/、runtime/；由 ResourceLoader、AgentSession、ModelRuntime 使用 | 新 Extension contract、registration、lifecycle、loader 或 runtime 能力 |
-| exports/ | Session HTML/JSONL 导出、模板和 ANSI/Markdown 转换 | 不是 npm package exports 配置；不负责普通 Public API re-export | exports/html/；由 AgentSession export 方法调用 | 新导出格式、模板或 export renderer |
-| git/ | Git repository、命令、状态、commit、checkpoint、local repository、worktree | 不负责页面交互；业务流程入口可在 Application use case，但 Git 原语仍在此 | git/repository/、checkpoints/、worktrees/、local-repositories/；由 AgentSession、Application、InteractiveMode 使用 | Git 状态/命令、checkpoint、commit 或 worktree 原语 |
-| modes/ | InteractiveMode 的输入/UI 编排，PrintMode 的 text/json 输出，以及 Web mode（`modes/web/`：loopback HTTP/SSE 服务、WebHost、路由、WebLifecycle（最后一个页面断开后按 `webShutdownGraceSeconds` 宽限退出）；浏览器前端静态文件在包根 `web/`） | InteractiveMode 当前仍直接使用部分 Application/Git/Provider/Session 服务；Web mode 只做传输与展示投影，调用现有 use case，不复制 Agent/Session/Git/Provider 逻辑；均不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts、modes/web/web-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui；Web UI 见 packages/coding-agent/docs/web-ui.md |
-| observability/ | Runtime trace、usage totals、cache stats、诊断脱敏、telemetry 和 timing | 不负责业务状态持久化；Trace 不是 Session JSONL | observability/runtime-trace.ts、session-trace.ts、diagnostic-sanitizer.ts；由 AgentSession/Provider 使用 | 新运行诊断、脱敏、usage 或 trace 事件 |
+| exports/ | Session HTML/JSONL 导出、模板和 ANSI/Markdown 转换 | 不是 npm package exports 配置；不负责普通 Public API re-export | exports/html/、exports/jsonl/；由 AgentSession export 方法调用 | 新导出格式、模板或 export renderer |
+| git/ | Git repository、命令、状态、commit、checkpoint、local repository、worktree | 不负责页面交互；业务流程入口可在 Application use case，但 Git 原语仍在此 | git/repository/、checkpoints/、worktrees/、local-repositories/；由 AgentSession（checkpoint 协调器）、Application use cases 和 Web mode 使用；InteractiveMode 经由 Application use cases | Git 状态/命令、checkpoint、commit 或 worktree 原语 |
+| modes/ | InteractiveMode 的输入/UI 编排，PrintMode 的 text/json 输出，以及 Web mode（`modes/web/`：loopback HTTP/SSE 服务、WebHost、路由、WebLifecycle（最后一个页面断开后按 `webShutdownGraceSeconds` 宽限退出）；浏览器前端静态文件在包根 `web/`） | InteractiveMode 通过 Application use case 访问 Git 和 Session 存储（不直接导入 git/ 的操作函数，不直接调用 SessionManager.open/list），仍直接使用少量 Provider 只读辅助函数；Web mode 只做传输与展示投影，调用现有 use case，不复制 Agent/Session/Git/Provider 逻辑；均不应成为核心业务状态机 | modes/interactive/interactive-mode.ts、modes/print-mode.ts、modes/web/web-mode.ts；由 main.ts 创建 | 产品页面、输入事件和输出模式；可复用终端基础组件放 packages/tui；Web UI 见 packages/coding-agent/docs/web-ui.md |
+| observability/ | Runtime trace、usage totals、cache stats、诊断脱敏、telemetry 和 timing | 不负责业务状态持久化；Trace 不是 Session JSONL | observability/runtime-trace.ts、session-trace.ts、session-stats.ts、diagnostic-sanitizer.ts；由 AgentSession/Provider 使用 | 新运行诊断、脱敏、usage 或 trace 事件 |
 | platform/ | HTTP dispatcher、进程执行、输出保护和 OS/命令边界 | 不负责 Provider 选择、Agent 状态或 TUI | platform/process/；由 Shell、Provider 和启动逻辑使用 | Node/Windows/Bash 进程与网络适配 |
 | prompts/ | Prompt Template 的发现和加载 | 不负责 system prompt 的核心组装；不负责 Skills | prompts/loader/；由 ResourceLoader、AgentSession 调用 | Prompt Template loader 或 template 资源接线 |
 | providers/ | 产品层 ModelRuntime、Provider/Model 配置、Credential、Recovery、balance、resolver | 不负责低层 Provider API adapter 的全部实现；不把 Provider 状态放进 TUI | providers/runtime/provider-runtime.ts、credentials/、models/、recovery/；由 Agent Runtime、InteractiveMode、Extensions 使用 | Provider runtime、credential resolution、model config 或 recovery |
@@ -261,7 +265,7 @@ src/application/bootstrap/
 | Credential / OAuth | providers/credentials/ | auth-storage.ts、manager、runtime、account connections | Settings JSON 或普通 utils/ |
 | Model 配置 / Custom Provider | providers/models/ | config、composer、custom-provider-manager、thinking-capability（判断 Thinking Effort 来源，优先级：官方文档 > 模型目录 > 探测，不按模型名猜测）、official-effort（Provider 官方文档明确写出的“请求档位 → 实际档位”，只匹配第一方 API host 上有文档依据的模型）、thinking-probe（真实最小请求探测 Thinking Effort，按 API 协议区分）、store | 直接修改 TUI model selector |
 | 低层 Provider API adapter | packages/ai/src/api/ | packages/ai/src/models.ts、auth helpers、Provider API 类型 | coding-agent 的 InteractiveMode |
-| 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
+| 新 Tool | tools/ | contract、具体 Tool、registry、wrapper、presentation；会话内的装配与启用规则在 session-tool-registry.ts；Extension Tool 则走 extensions/ | AgentSession 中内联 Tool 执行 |
 | TUI 页面/产品 UI | modes/interactive/ | interactive-mode.ts、components/、theme | Provider、Session 或 Git 目录 |
 | Web UI 服务端 / API / 事件 | modes/web/ | routes-*.ts、host.ts、wire.ts；前端在 packages/coding-agent/web/ | 在路由里复制 Session/Git/Provider 规则；把 UI 状态机放进 host.ts |
 | 可复用 TUI 基础组件 | packages/tui/src/ | TUI component、terminal、focus/input 基础能力 | coding-agent 的业务模块 |
@@ -284,9 +288,9 @@ src/application/bootstrap/
 ### 当前已观察到的依赖
 
 - main.ts 和 agent/runtime/services.ts 负责组合大量子系统。
-- AgentSession 是高层产品门面，直接持有 Agent、Session、Settings、ModelRuntime、ResourceLoader、Tool registry、Context、Git checkpoint、Extension、Trace 等对象。
-- InteractiveMode 的主要 Agent 执行委托给 AgentSession，但当前源码仍直接导入 Application use cases、Git、Provider 和 Session 相关服务。
-- Application use cases 当前没有导入 TUI component、Theme 或 InteractiveMode；Phase architecture tests 也检查这一点。
+- AgentSession 是高层产品门面，持有 Agent、Session、Settings、ModelRuntime、ResourceLoader 和 ExtensionRunner，并把各板块的工作委托给领域模块：context（预算协调器、SessionCompactionRunner、navigateSessionTree）、git/checkpoints 协调器、observability（Trace 协调器、会话统计）、providers（Recovery 协调器、SessionModelController、request-auth）、tools（SessionToolRegistry、SessionBashRunner）、extensions/runtime/agent-events.ts、skills/invocation.ts、agent/delegation/background-work.ts、agent/runtime/run-state.ts。它自己只保留任务起止、取消顺序、事件转发和空闲判定。
+- InteractiveMode 的主要 Agent 执行委托给 AgentSession；Git 操作和会话标题/列表经由 Application use cases（git-workspace、git-commit、git-push、git-worktree、local-git-repository、conversation-title、workspace-session）。它仍直接导入 Provider 的余额轮询、模型匹配等只读辅助函数，以及 Session 的类型和只读条目投影。
+- Application use cases 当前没有导入 TUI component、Theme 或 InteractiveMode；test/phase3-architecture.test.ts 检查这一点，并检查 AgentSession 与 InteractiveMode 没有把已抽出的实现重新导入回来。
 - Tool execution 模块与 tools/presentation/ 分开；presentation 负责 renderer/schema/prompt 侧展示接线。
 - src/index.ts 是 coding-agent 的公共 facade；当前内部源码扫描未发现内部模块通过这个根 facade 反向引用自己的实现。
 - workflow/engine.ts、Tool registry、Sub-agent 和 ultracode/profile.ts 之间存在实际交叉引用。
@@ -390,7 +394,7 @@ InteractiveMode
 
 ~~~text
 Agent Core tool call
-  → AgentSession Tool registry
+  → AgentSession 的 SessionToolRegistry（tools/session-tool-registry.ts）
   → ToolDefinition wrapper
   → built-in / custom / extension Tool
   → result persistence
@@ -454,7 +458,7 @@ src/agent/、src/session/、src/providers/ 等目录中的具体文件仍是内�
 - packages/ai/src/compat.ts：旧的全局 AI API、Provider/Model registry 和 lazy API 的兼容入口。
 - packages/coding-agent/src/extensions/compat/：Extension 类型、Tool wrapper 等兼容层。
 - packages/coding-agent/src/providers/models/registry.ts：面向部分 Extension/UI 调用方的 Model registry facade。
-- packages/coding-agent/src/symbols/legacy-adapter/：Symbols 旧适配层。
+- packages/coding-agent/src/symbols/legacy-adapter.ts：Symbols 旧适配层。
 - AgentSession 中标记 deprecated 的 ContextBudgetState alias。
 - 多个当前文件仍直接导入 @myharness/ai/compat。
 
@@ -479,10 +483,10 @@ src/agent/、src/session/、src/providers/ 等目录中的具体文件仍是内�
 | 新增 Worktree 功能 | git/worktrees/manager.ts 和 application/use-cases/git-worktree.ts | manager、use case、Workspace/launcher 接线 | 不要复制 Git worktree 命令 | docs/worktrees.md；phase10/worktree tests |
 | 新增 Session entry | session/types.ts、session/manager/、projection/ | 类型、append、projection、context 语义 | 不要只修改 UI 序列化；不要跳过 migration 影响旧文件 | docs/session-format.md；Session manager/tree/migration tests |
 | 修改 Session persistence | session/storage/jsonl/、migrations/ | parser、writer、migration、relocation | 不要直接删除旧格式支持 | docs/sessions.md、docs/session-format.md；完整相关 Session tests |
-| 修改 Compaction | context/compact/、context/coordinator.ts | cut point、summary、serialization、usage 和 settings | 不要在 TUI 中重新实现 context 保留规则 | docs/compaction.md；compaction/context/AgentSession tests |
+| 修改 Compaction | context/compact/（算法在 compaction.ts，一次压缩的执行在 session-compaction.ts）、context/coordinator.ts | cut point、summary、serialization、usage 和 settings | 不要在 TUI 中重新实现 context 保留规则 | docs/compaction.md；compaction/context/AgentSession tests |
 | 新增 Extension API | extensions/contracts/、api-entry.ts、runtime/ | contract、registration、Runner、compat 和 examples | 不要直接暴露内部实现对象或通过 root facade 反向接入 | docs/extensions.md、examples；extension discovery/runner tests |
 | 修改 System Prompt | 根目录 system-prompts/ 或 loader/composer | 内容改资源文件；加载顺序改 loader/composer | 不要把实际 prompt 文本散落到 TUI/Provider 代码 | system-prompts/README.md；system-prompt tests |
-| 新增 Skill | skills/loader/、ResourceLoader 和资源目录 | discovery、priority、Trust 和 Skill resource | 不要把 Skill 逻辑硬编码进 AgentSession | docs/skills.md；resource/skill tests |
+| 新增 Skill | skills/loader/、skills/invocation.ts（/skill 展开）、ResourceLoader 和资源目录 | discovery、priority、Trust 和 Skill resource | 不要把 Skill 逻辑硬编码进 AgentSession | docs/skills.md；resource/skill tests |
 | 新增 Code Intelligence 能力 | symbols/、tools/symbols-runtime.ts、symbols/runtime/installation.ts | backend、router、LSP、store、按语言安装的 Windows 模块 | 不要假设所有机器都安装同一 LSP | Code Intelligence docs/tests、发布归档 E2E（需要运行时确认） |
 | 修改 TUI 页面/组件 | modes/interactive/ 或 packages/tui/src/ | 产品页面放前者；可复用终端原语放后者 | 不要把业务状态机放入渲染 component | docs/tui.md；TUI 和受影响 coding-agent tests |
 | 新增 Application use case | application/use-cases/ | 跨领域流程和结果类型 | 不要导入具体 TUI 或重写底层领域逻辑 | docs/development.md、架构手册；phase3/use-case tests |
