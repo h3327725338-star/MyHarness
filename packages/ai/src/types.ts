@@ -789,6 +789,8 @@ export interface ModelCostTier extends ModelCostRates {
 }
 
 export interface ModelCost extends ModelCostRates {
+	/** Currency of all rates; legacy rules default to USD. No exchange-rate conversion. */
+	currency?: "USD" | "CNY";
 	/** Request-wide pricing tiers. The highest matching input threshold applies to the full request. */
 	tiers?: ModelCostTier[];
 }

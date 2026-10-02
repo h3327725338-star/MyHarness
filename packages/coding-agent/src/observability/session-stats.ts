@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@myharness/ai/compat";
+import { type Api, type AssistantMessage, calculateCost, type Model } from "@myharness/ai/compat";
 import type { SessionEntry } from "../session/types.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
@@ -16,6 +16,7 @@ export interface SessionUsageStats {
 		total: number;
 	};
 	cost: number;
+	costByCurrency?: Partial<Record<"USD" | "CNY", number>>;
 }
 
 /**
@@ -23,17 +24,27 @@ export interface SessionUsageStats {
  * history that was compacted away), so totals reflect what was actually billed
  * across the session.
  */
-export function collectSessionUsageStats(entries: readonly SessionEntry[]): SessionUsageStats {
+export function collectSessionUsageStats(
+	entries: readonly SessionEntry[],
+	resolveModel?: (provider: string, model: string) => Model<Api> | undefined,
+	liveMessage?: AssistantMessage,
+): SessionUsageStats {
 	let userMessages = 0;
 	let assistantMessages = 0;
 	let toolResults = 0;
 	let totalMessages = 0;
 	let toolCalls = 0;
 	const usageTotals = createUsageTotals();
+	const costByCurrency: Partial<Record<"USD" | "CNY", number>> = {};
+	const addCost = (currency: "USD" | "CNY", cost: number) => {
+		if (Number.isFinite(cost) && cost > 0) costByCurrency[currency] = (costByCurrency[currency] ?? 0) + cost;
+	};
 
-	for (const entry of entries) {
+	const withLive = liveMessage ? [...entries, { type: "message" as const, message: liveMessage }] : entries;
+	for (const entry of withLive) {
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			addUsageToTotals(usageTotals, entry.usage);
+			addCost("USD", entry.usage.cost.total);
 		}
 		if (entry.type !== "message") continue;
 		totalMessages++;
@@ -44,6 +55,7 @@ export function collectSessionUsageStats(entries: readonly SessionEntry[]): Sess
 			toolResults++;
 			if (message.usage) {
 				addUsageToTotals(usageTotals, message.usage);
+				addCost("USD", message.usage.cost.total);
 			}
 		} else if (message.role === "assistant") {
 			assistantMessages++;
@@ -52,6 +64,11 @@ export function collectSessionUsageStats(entries: readonly SessionEntry[]): Sess
 				toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
 			}
 			addUsageToTotals(usageTotals, assistantMsg.usage);
+			const model = resolveModel?.(assistantMsg.provider, assistantMsg.model);
+			const cost = model
+				? calculateCost(model, { ...assistantMsg.usage, cost: { ...assistantMsg.usage.cost } }).total
+				: assistantMsg.usage.cost.total;
+			addCost(model?.cost.currency ?? "USD", cost);
 		}
 	}
 
@@ -69,5 +86,6 @@ export function collectSessionUsageStats(entries: readonly SessionEntry[]): Sess
 			total: usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite,
 		},
 		cost: usageTotals.cost,
+		costByCurrency,
 	};
 }

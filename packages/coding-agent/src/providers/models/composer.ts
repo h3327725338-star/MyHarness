@@ -123,6 +123,7 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 			override.input !== undefined ? !override.input.includes("image") : model.inputCapabilitiesKnown,
 		cost: override.cost
 			? {
+					currency: override.cost.currency ?? model.cost.currency,
 					input: override.cost.input ?? model.cost.input,
 					output: override.cost.output ?? model.cost.output,
 					cacheRead: override.cost.cacheRead ?? model.cost.cacheRead,

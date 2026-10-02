@@ -28,6 +28,7 @@ import {
 	collectFinalWorkspaceChanges,
 	type WorkspaceBaseline,
 } from "../../git/repository/workspace-changes.ts";
+import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import {
 	describeTaskEnd,
@@ -159,6 +160,7 @@ export class WebHost {
 	private cache = new RequestCacheMeter();
 	private cacheChanged = false;
 	private lastUsageBroadcastAt = 0;
+	private liveUsageMessage: AssistantMessage | undefined;
 	private readonly toolTimers = new Map<
 		string,
 		{ last: number; timer?: ReturnType<typeof setTimeout>; pending?: unknown }
@@ -602,6 +604,7 @@ export class WebHost {
 			case "message_start": {
 				const message = event.message;
 				if (message.role === "assistant") {
+					this.liveUsageMessage = message;
 					this.beginRequestMeters();
 					this.liveAssistantId = `live-${++this.liveMessageSeq}`;
 					const item = messageToWire(message);
@@ -618,6 +621,7 @@ export class WebHost {
 					const delta = typeof streamed?.delta === "string" ? streamed.delta : undefined;
 					if (this.speed.update(event.message, streamed?.type, delta)) this.speedChanged = true;
 					if (this.cache.update(event.message)) this.cacheChanged = true;
+					this.liveUsageMessage = event.message;
 					this.scheduleAssistantUpdate(event.message);
 				}
 				return;
@@ -634,6 +638,7 @@ export class WebHost {
 					const item = messageToWire(message);
 					this.broadcast("message_end", { liveId: this.liveAssistantId, item });
 					this.liveAssistantId = undefined;
+					this.liveUsageMessage = undefined;
 				} else if (message.role === "toolResult") {
 					// Tool results are delivered through tool_end with the same data.
 				} else {
@@ -1156,7 +1161,16 @@ export class WebHost {
 		const session = this.session;
 		return {
 			context: this.contextState(),
-			stats: session.getSessionStats(),
+			stats: {
+				...session.getSessionStats(),
+				...(this.liveUsageMessage
+					? collectSessionUsageStats(
+							session.sessionManager.getEntries(),
+							(provider, model) => session.modelRuntime.getModel(provider, model),
+							this.liveUsageMessage,
+						)
+					: {}),
+			},
 			session: {
 				file: session.sessionFile ?? null,
 				name: session.sessionName ?? null,

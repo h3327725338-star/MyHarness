@@ -50,7 +50,7 @@ const isTextField = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "T
  * (`exitCode` is null when the terminal was ended, not the shell's own exit) or "error".
  * Returns `{ restart, end, focus, dispose }`.
  */
-export function openTerminalView(mount, { shell, onState }) {
+export function openTerminalView(mount, { shell, instance, onState }) {
 	let disposed = false;
 	let term = null;
 	let fit = null;
@@ -162,7 +162,7 @@ export function openTerminalView(mount, { shell, onState }) {
 		outbox = "";
 		if (!quiet) setPhase("starting");
 		try {
-			const snapshot = await post("/api/terminal/open", { shell, cols: term.cols, rows: term.rows, restart, attached: quiet ? id : undefined }, activeSlotId());
+			const snapshot = await post("/api/terminal/open", { shell, instance, cols: term.cols, rows: term.rows, restart, attached: !restart ? id : undefined }, activeSlotId());
 			if (disposed || mine !== ticket) return;
 			show(snapshot);
 		} catch (error) {
@@ -211,7 +211,7 @@ export function openTerminalView(mount, { shell, onState }) {
 					outbox += data;
 					flushInput();
 				} else if (phase === "exited" && data.includes("\r")) {
-					attach();
+					attach({ restart: true });
 				}
 			});
 			term.onResize(pushSize);
@@ -255,7 +255,7 @@ export function openTerminalView(mount, { shell, onState }) {
 	return {
 		restart: () => term && attach({ restart: true }),
 		/** Start again after the shell has exited or could not be started. */
-		retry: () => term && attach(),
+		retry: () => term && attach({ restart: true }),
 		end: () => id && phase === "running" && post("/api/terminal/close", { id }, "").catch(() => {}),
 		focus: () => term?.focus(),
 		dispose: () => {

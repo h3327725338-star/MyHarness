@@ -84,7 +84,7 @@ export function ContextPanel() {
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
 					<span>${t("Tokens")}</span><span title=${`${stats.tokens.input.toLocaleString()} / ${stats.tokens.output.toLocaleString()} / ${stats.tokens.cacheRead.toLocaleString()}`}>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: fmtTokens(stats.tokens.input), fmtTokens2: fmtTokens(stats.tokens.output), fmtTokens3: fmtTokens(stats.tokens.cacheRead) })}</span>
-					<span>${t("Cost")}</span><span>${fmtCost(stats.cost)}</span>` : null}
+					<span>${t("Cost")}</span><span>${stats.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, cost]) => fmtCost(cost, currency)).join(" · ") || "—" : fmtCost(stats.cost)}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>

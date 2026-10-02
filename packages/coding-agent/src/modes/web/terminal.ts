@@ -60,6 +60,8 @@ export interface TerminalSnapshot {
 export interface TerminalOpenOptions {
 	/** A shell id from `shells()`; the default shell when missing or unknown. */
 	shell?: string;
+	/** Independent tab identity; omitted for legacy folder/shell reuse. */
+	instance?: string;
 	/** Size of the page's terminal, used when a new shell is started. */
 	cols: number;
 	rows: number;
@@ -318,16 +320,15 @@ export class WebTerminals {
 		const shell = shells.find((candidate) => candidate.id === options.shell) ?? shells[0];
 		if (!shell) throw new HttpError(501, "No shell was found on this computer.");
 		// From here to the new entry nothing waits, so two pages opening the same terminal at once get the same shell.
-		const key = `${pathIdentityKey(cwd)}\n${shell.id}`;
+		const key = `${pathIdentityKey(cwd)}\n${shell.id}\n${options.instance ?? ""}`;
 		const current = this.terminals.get(key);
-		if (current && !options.restart && (current.running || current.id === options.attached))
+		if (current && !options.restart && (current.running || current.id === options.attached || !!options.instance))
 			return current.snapshot();
 		return this.start(key, shell, cwd, options).snapshot();
 	}
 
 	private start(key: string, shell: TerminalShell, cwd: string, options: TerminalOpenOptions): WebTerminal {
-		this.end(key);
-		const running = [...this.terminals.values()].filter((terminal) => terminal.running).length;
+		const running = [...this.terminals.entries()].filter(([id, terminal]) => id !== key && terminal.running).length;
 		if (running >= MAX_RUNNING_TERMINALS) {
 			throw new HttpError(
 				409,
@@ -338,6 +339,7 @@ export class WebTerminals {
 			onData: (data, seq) => this.broadcast("terminal_data", { id: terminal.id, seq, data }),
 			onExit: (exitCode) => this.broadcast("terminal_exit", { id: terminal.id, exitCode }),
 		});
+		this.end(key);
 		this.terminals.set(key, terminal);
 		return terminal;
 	}

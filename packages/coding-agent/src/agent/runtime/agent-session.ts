@@ -3267,7 +3267,9 @@ export class AgentSession {
 		return {
 			sessionFile: this.sessionFile,
 			sessionId: this.sessionId,
-			...collectSessionUsageStats(this.sessionManager.getEntries()),
+			...collectSessionUsageStats(this.sessionManager.getEntries(), (provider, model) =>
+				this.modelRuntime.getModel(provider, model),
+			),
 			contextUsage: this.getContextUsage(),
 		};
 	}

@@ -532,6 +532,7 @@ export function registerProviderRoutes(
 			throw new HttpError(400, error instanceof Error ? error.message : String(error));
 		}
 		host.broadcast("models_changed", {});
+		host.broadcast("usage", host.usage());
 		// Without a Base URL the provider is saved but off: it offers no models until the address is filled in.
 		return { ok: true, missingBaseUrl };
 	});

@@ -78,7 +78,7 @@ export function fromK(text) {
 }
 
 /** A token count for display, e.g. "128K" or "131.072K". */
-export const fmtK = (tokens) => `${toK(tokens)}K`;
+export const fmtK = (tokens) => tokens >= 999950 ? `${(tokens / 1000000).toFixed(1)}M` : `${(tokens / 1000).toFixed(1)}K`;
 
 /** `detected` records which fields were read from the endpoint's catalog (shown as "auto"). */
 export function modelDraft(model = {}, detected = {}) {
@@ -95,6 +95,7 @@ export function modelDraft(model = {}, detected = {}) {
 		// Edited in K; see toK / fromK.
 		contextWindow: toK(model.contextWindow ?? DEFAULT_CONTEXT),
 		maxTokens: toK(model.maxTokens ?? DEFAULT_MAX_TOKENS),
+		pricing: model.cost ? { ...model.cost, tiers: (model.cost.tiers || []).map((tier) => ({ ...tier })) } : null,
 		detected,
 	};
 }
@@ -102,6 +103,10 @@ export function modelDraft(model = {}, detected = {}) {
 /** The models.json entry a draft stands for. */
 export function buildModel(draft) {
 	const model = { ...draft.raw, id: draft.id.trim() };
+	if (draft.pricing) {
+		const rates = (source) => Object.fromEntries(["input", "output", "cacheRead", "cacheWrite"].map((key) => [key, Number(source[key])]));
+		model.cost = { ...rates(draft.pricing), currency: draft.pricing.currency || "USD", tiers: (draft.pricing.tiers || []).map((tier) => ({ ...rates(tier), inputTokensAbove: Number(tier.inputTokensAbove) })) };
+	} else delete model.cost;
 	const name = draft.name.trim();
 	if (name && name !== model.id) model.name = name;
 	else delete model.name;

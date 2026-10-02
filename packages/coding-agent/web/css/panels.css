@@ -88,6 +88,10 @@
 
 /* Terminal */
 .terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.term-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.term-tabs .btn { flex: none; }
+.term-tabs [aria-selected="true"] { background: var(--surface-hover); color: var(--text); }
+.pf-pricing { gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
 /* The real shell. xterm.js sizes itself to the box it is opened in (.term-mount), so the spacing around it is on
    .term-screen; a terminal that is wider than the panel for a moment (while it is being fitted) is clipped, not scrolled. */
 .term-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--code-bg); }

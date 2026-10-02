@@ -1,6 +1,6 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton } from "./ui.js";
 import { api, useStore, setView } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
@@ -271,6 +271,8 @@ function summaryText({ outcome, duration, stats, changeCount, live }) {
 
 function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapRun, defaultOpen }) {
 	const [open, setOpen] = useState(defaultOpen);
+	const interacted = useRef(false);
+	useEffect(() => { if (!interacted.current) setOpen(defaultOpen); }, [defaultOpen]);
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
 		if (!live) return undefined;
@@ -290,12 +292,12 @@ function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapR
 	// happening and the timer (no arrow, and no empty area under it).
 	if (!turn.steps.length) return html`<div class=${`summary live o-${outcome}`}><div class="summary-head" role="status">${head}</div></div>`;
 	return html`<div class=${`summary ${live ? "live" : ""} o-${outcome}`}>
-		<button class="summary-head" onClick=${() => setOpen(!open)} aria-expanded=${open} title=${open ? t("Hide steps") : t("Show what the agent did")}>
+		<button class="summary-head" onClick=${() => { interacted.current = true; setOpen(!open); }} aria-expanded=${open} title=${open ? t("Hide steps") : t("Show what the agent did")}>
 			${head}
 			<span class="grow" />
 			<${Fold} />
 		</button>
-		<${Collapse} open=${open}><div class="summary-body"><${StepList} turn=${turn} /></div><//>
+		<${Collapse} open=${open} keepMounted=${true}><div class="summary-body"><${StepList} turn=${turn} /></div><//>
 	</div>`;
 }
 
@@ -342,8 +344,8 @@ function UserMessage({ item, turn }) {
 	</div>`;
 }
 
-/** Tokens of one reply: always with a unit and one decimal (0.2k, 12.7k, 1.3m). */
-const fmtCount = (n) => (n < 1000 ? `${(n / 1000).toFixed(1)}k` : fmtTokens(n));
+/** Tokens of one reply: always with a unit and one decimal (0.2K, 12.7K, 1.3M). */
+const fmtCount = (n) => (n < 1000 ? `${(n / 1000).toFixed(1)}K` : fmtTokens(n));
 
 function FinalMessage({ final }) {
 	const message = final.message;
@@ -386,7 +388,6 @@ function MarkdownDiff({ patch }) {
 function ChangeDiff({ card, file }) {
 	const [entry, setEntry] = useState(null);
 	const markdown = MARKDOWN_PATH.test(file.path);
-	const [mode, setMode] = useState("diff");
 	useEffect(() => {
 		let cancelled = false;
 		api(`/api/changes/card-diff?id=${encodeURIComponent(card.id)}&runId=${card.runId}&path=${encodeURIComponent(file.path)}`)
@@ -403,8 +404,7 @@ function ChangeDiff({ card, file }) {
 	if (data.summary.unavailable) return html`<div class="change-note dim">${serverText(data.summary.unavailable)}</div>`;
 	if (!data.patch) return html`<div class="change-note dim">${t("No content changes.")}</div>`;
 	return html`<div class="change-diff">
-		${markdown ? html`<div class="change-diff-bar"><${Segmented} value=${mode} onChange=${setMode} options=${[{ value: "diff", label: "Diff" }, { value: "rendered", label: "Markdown" }]} /></div>` : null}
-		${markdown && mode === "rendered" ? html`<${MarkdownDiff} patch=${data.patch} />` : html`<${DiffView} patch=${data.patch} language=${languageFor(file.path)} />`}
+		${markdown ? html`<${MarkdownDiff} patch=${data.patch} />` : html`<${DiffView} patch=${data.patch} language=${languageFor(file.path)} />`}
 	</div>`;
 }
 
@@ -450,7 +450,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	const duration = turnDuration(turn, run);
 	return html`<section class=${`turn ${live ? "live" : ""}`}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
-		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}-${live}`} />
+		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}`} />
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
@@ -484,7 +484,7 @@ function Standalone({ item }) {
 	if (item.kind === "runChanges") return html`<${ChangeCard} card=${item} />`;
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
-		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{k}k tokens)", { k: Math.round(item.tokensBefore / 1000) }) : t("Context compacted")) : t("Returned from another branch");
+		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{tokens} tokens)", { tokens: fmtTokens(item.tokensBefore) }) : t("Context compacted")) : t("Returned from another branch");
 		return html`<div class="marker"><button class="marker-head" onClick=${() => setOpen(!open)} aria-expanded=${open}><span class="marker-line" /><span class="marker-text"><${Icon} name=${item.kind === "compaction" ? "layers" : "gitBranch"} size=${13} /> ${title}<${Fold} /></span><span class="marker-line" /></button>
 			<${Collapse} open=${open}><div class="marker-body"><${Markdown} text=${item.summary} /></div><//></div>`;
 	}

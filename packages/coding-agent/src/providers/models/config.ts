@@ -153,16 +153,17 @@ const ProviderCompatSchema = Type.Union([
 ]);
 
 const ModelCostRatesSchema = {
-	input: Type.Number(),
-	output: Type.Number(),
-	cacheRead: Type.Number(),
-	cacheWrite: Type.Number(),
+	input: Type.Number({ minimum: 0 }),
+	output: Type.Number({ minimum: 0 }),
+	cacheRead: Type.Number({ minimum: 0 }),
+	cacheWrite: Type.Number({ minimum: 0 }),
 };
 const ModelCostTierSchema = Type.Object({
-	inputTokensAbove: Type.Number(),
+	inputTokensAbove: Type.Integer({ minimum: 1 }),
 	...ModelCostRatesSchema,
 });
 const ModelCostSchema = Type.Object({
+	currency: Type.Optional(Type.Union([Type.Literal("USD"), Type.Literal("CNY")])),
 	...ModelCostRatesSchema,
 	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
 });
@@ -191,6 +192,7 @@ const ModelOverrideSchema = Type.Object({
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
 	cost: Type.Optional(
 		Type.Object({
+			currency: Type.Optional(Type.Union([Type.Literal("USD"), Type.Literal("CNY")])),
 			input: Type.Optional(Type.Number()),
 			output: Type.Optional(Type.Number()),
 			cacheRead: Type.Optional(Type.Number()),

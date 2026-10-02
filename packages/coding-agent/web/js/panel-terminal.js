@@ -1,6 +1,6 @@
 // Terminal panel: a real shell in the chat's folder (terminal-session.js), and the list of every shell command of the
 // chat (the agent's bash/pwsh tool and your own !commands) with its real output.
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton } from "./ui.js";
 import { api, setView, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { openTerminalView } from "./terminal-session.js";
@@ -169,7 +169,7 @@ function CommandLog({ entries }) {
  * The real terminal: the shell `shell` in the folder of the chat on screen. `control.current` is the open view
  * (restart, end) for the toolbar; `onPhase` tells it whether there is a running shell to act on.
  */
-function ShellView({ shell, control, onPhase }) {
+function ShellView({ shell, instance, control, onPhase }) {
 	const cwd = useStore((s) => s.snap?.cwd) || "";
 	const mount = useRef(null);
 	const [live, setLive] = useState({ phase: "starting", exitCode: null, error: "" });
@@ -177,13 +177,13 @@ function ShellView({ shell, control, onPhase }) {
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
 		if (!cwd) return undefined;
-		const view = openTerminalView(mount.current, { shell: shell.id, onState: (next) => (setLive(next), onPhase(next.phase)) });
+		const view = openTerminalView(mount.current, { shell: shell.id, instance, onState: (next) => (setLive(next), onPhase(next.phase)) });
 		control.current = view;
 		return () => {
 			control.current = null;
 			view.dispose();
 		};
-	}, [cwd, shell.id, attempt]);
+	}, [cwd, shell.id, instance, attempt]);
 	return html`<div class="term-shell">
 		<div class="term-screen" hidden=${live.phase === "error"}><div class="term-mount" ref=${mount} /></div>
 		${live.phase === "error" ? html`<div class="empty"><div>${t("The terminal could not be started.")}</div><div class="dim term-error">${live.error}</div><button class="btn sm" onClick=${() => setAttempt(attempt + 1)}>${t("Retry")}</button></div>` : null}
@@ -198,15 +198,17 @@ function ShellView({ shell, control, onPhase }) {
 let knownShells = null;
 
 export function TerminalPanel() {
-	const view = useStore((s) => s.view.termView);
+	const [tabsByFolder, setTabsByFolder] = useState(() => {
+		try { return JSON.parse(localStorage.getItem("myharness-terminal-tabs") || "{}"); } catch { return {}; }
+	});
+	const [selected, setSelected] = useState("");
+	const saveTabs = (folder, tabs) => setTabsByFolder((current) => {
+		const next = { ...current, [folder]: tabs };
+		localStorage.setItem("myharness-terminal-tabs", JSON.stringify(next));
+		return next;
+	});
 	const wanted = useStore((s) => s.view.termShell);
-	const items = useStore((s) => s.items);
-	const toolRuns = useStore((s) => s.toolRuns);
-	const userBash = useStore((s) => s.userBash);
-	const order = useStore((s) => s.userBashOrder);
 	const cwd = useStore((s) => s.snap?.cwd) || "";
-	const entries = useMemo(() => terminalEntries(items, toolRuns, userBash, order, cwd), [items, toolRuns, userBash, order, cwd]);
-	const commandRunning = entries.some((entry) => statusOf(entry) === "running");
 	// null while the list is on its way; `failed` is why it could not be read.
 	const [shells, setShells] = useState(knownShells);
 	const [failed, setFailed] = useState("");
@@ -220,21 +222,28 @@ export function TerminalPanel() {
 		);
 	};
 	useEffect(loadShells, []);
-	const shell = shells?.find((candidate) => candidate.id === wanted) || shells?.[0];
-	const live = view === "shell" && !!shell;
+	const tabs = tabsByFolder[cwd] || [];
+	const tab = tabs.find((candidate) => candidate.id === selected) || tabs[0];
+	const shell = shells?.find((candidate) => candidate.id === tab?.shell);
+	const newShell = shells?.find((candidate) => candidate.id === wanted) || shells?.[0];
+	const addTab = () => {
+		if (!newShell || !cwd) return;
+		const next = { id: crypto.randomUUID(), shell: newShell.id };
+		saveTabs(cwd, [...tabs, next]);
+		setSelected(next.id);
+	};
+	const live = !!shell;
 	return html`<div class="terminal-panel">
 		<div class="panel-toolbar">
-			<${Segmented} value=${view} onChange=${(value) => setView({ termView: value })} options=${[
-				{ value: "shell", label: t("Terminal") },
-				{ value: "commands", label: html`${t("Command log")}${commandRunning ? html`<${Spinner} />` : null}`, title: t("Commands the agent and you ran in this chat, with their output") },
-			]} />
-			${live ? html`<select class="select sm" value=${shell.id} aria-label=${t("Shell")} title=${t("Shell")} onChange=${(e) => setView({ termShell: e.target.value })}>${shells.map((option) => html`<option key=${option.id} value=${option.id}>${option.name}</option>`)}</select>` : null}
+			${newShell ? html`<select class="select sm" value=${newShell.id} aria-label=${t("Shell")} title=${t("Shell")} onChange=${(e) => setView({ termShell: e.target.value })}>${shells.map((option) => html`<option key=${option.id} value=${option.id}>${option.name}</option>`)}</select>
+				<button class="icon-btn sm" title=${t("New terminal")} aria-label=${t("New terminal")} onClick=${addTab}><${Icon} name="plus" size=${15} /></button>` : null}
 			<span class="grow" />
 			${live ? html`<button class="icon-btn sm" title=${t("Restart the shell")} aria-label=${t("Restart the shell")} onClick=${() => (control.current?.restart(), control.current?.focus())}><${Icon} name="refresh" size=${15} /></button>
-				<button class="icon-btn sm" title=${t("End the shell")} aria-label=${t("End the shell")} disabled=${phase !== "running"} onClick=${() => control.current?.end()}><${Icon} name="trash" size=${15} /></button>` : null}
+				<button class="icon-btn sm" title=${t("End the shell")} aria-label=${t("End the shell")} onClick=${() => { control.current?.end(); saveTabs(cwd, tabs.filter((candidate) => candidate.id !== tab.id)); }}><${Icon} name="trash" size=${15} /></button>` : null}
 		</div>
-		${view !== "shell" ? html`<${CommandLog} entries=${entries} />`
-			: shell ? html`<${ShellView} key=${shell.id} shell=${shell} control=${control} onPhase=${setPhase} />`
+		<div class="term-tabs" role="tablist" aria-label=${t("Terminal")}>${tabs.map((candidate, index) => html`<button class=${`btn sm ghost ${candidate.id === tab?.id ? "active" : ""}`} role="tab" aria-selected=${candidate.id === tab?.id} key=${candidate.id} onClick=${() => setSelected(candidate.id)}>${shells?.find((option) => option.id === candidate.shell)?.name || candidate.shell} ${index + 1}</button>`)}</div>
+		${shell ? html`<${ShellView} key=${tab.id} instance=${tab.id} shell=${shell} control=${control} onPhase=${setPhase} />`
+			: newShell ? html`<div class="empty"><button class="btn sm" onClick=${addTab}>${t("New terminal")}</button></div>`
 			: shells ? html`<div class="empty"><div>${failed || t("No shell was found on this computer.")}</div>${failed ? html`<button class="btn sm" onClick=${loadShells}>${t("Retry")}</button>` : null}</div>`
 			: html`<div class="empty"><${Spinner} /></div>`}
 	</div>`;

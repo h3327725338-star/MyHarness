@@ -94,15 +94,15 @@ export function fmtDateTime(ts) {
 }
 
 /**
- * A token count in the one compact form used everywhere: thousands as "k", millions as "m", always with exactly one
- * decimal (187652 → "187.7k", 11643776 → "11.6m"). Below a thousand the number itself.
+ * A token count in the one compact form used everywhere: thousands as "K", millions as "M", always with exactly one
+ * decimal (187652 → "187.7K", 11643776 → "11.6M"). Below a thousand the number itself.
  */
 export function fmtTokens(n) {
 	if (n == null || !Number.isFinite(n)) return "—";
 	if (n < 1000) return String(Math.round(n));
-	// 999 950 and up would round to "1000.0k".
-	if (n < 999_950) return `${(n / 1000).toFixed(1)}k`;
-	return `${(n / 1_000_000).toFixed(1)}m`;
+	// 999 950 and up would round to "1000.0K".
+	if (n < 999_950) return `${(n / 1000).toFixed(1)}K`;
+	return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 export function fmtBytes(n) {
@@ -111,10 +111,11 @@ export function fmtBytes(n) {
 	return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function fmtCost(v) {
+export function fmtCost(v, currency = "USD") {
+	const symbol = currency === "CNY" ? "¥" : "$";
 	// No price rule or no reported cost: the same dash as any other value that is not there.
 	if (!Number.isFinite(v) || v <= 0) return "—";
-	return v < 0.01 ? `<$0.01` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
+	return v < 0.01 ? `<${symbol}0.01` : `${symbol}${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
 /** A counted noun: "3 files" in English, with a measure word in Chinese (see i18n.js count). */

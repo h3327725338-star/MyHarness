@@ -179,6 +179,26 @@ describe.skipIf(!runnable)("Web UI terminal (real shells on a pseudo terminal)",
 		await expect(fx.post("/api/terminal/input", { id: opened.id })).rejects.toThrow(/400/);
 	});
 
+	it("keeps independent tabs in one folder, including mixed shells", async () => {
+		const fx = await start();
+		const open = (instance: string, shell = fx.shell, restart = false) =>
+			fx.post("/api/terminal/open", { instance, shell, restart, cols: 80, rows: 24 });
+		const first = await open("one");
+		const second = await open("two");
+		expect(first.id).not.toBe(second.id);
+		await fx.post("/api/terminal/input", { id: first.id, data: fx.sum });
+		await fx.until(() => fx.output(first.id).includes("2468"), "independent output");
+		expect(plain((await open("one")).buffer)).toContain("2468");
+		expect(plain((await open("two")).buffer)).not.toContain("2468");
+		const shells = (await fx.get("/api/terminal/shells")).shells;
+		if (shells.length > 1) {
+			const other = shells.find((candidate: { id: string }) => candidate.id !== fx.shell);
+			expect((await open("mixed", other.id)).shell.id).toBe(other.id);
+		}
+		await open("one", fx.shell, true);
+		expect((await open("two")).id).toBe(second.id);
+	});
+
 	it("ends, restarts and replaces terminals, and reports a shell that exits by itself", async () => {
 		const fx = await start();
 		const open = (extra: Record<string, unknown> = {}) =>

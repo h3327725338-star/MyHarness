@@ -51,13 +51,14 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 	it("does not present missing pricing as a zero-dollar charge", () => {
 		for (const value of [undefined, null, 0, Number.NaN]) expect(fmtCost(value)).toBe("—");
 		expect(fmtCost(0.5)).toBe("$0.500");
+		expect(fmtCost(0.5, "CNY")).toBe("¥0.500");
 	});
-	it("writes token counts with k / m and exactly one decimal", () => {
-		expect(fmtTokens(187_652)).toBe("187.7k");
-		expect(fmtTokens(27_100)).toBe("27.1k");
-		expect(fmtTokens(128_000)).toBe("128.0k");
-		expect(fmtTokens(11_643_776)).toBe("11.6m");
-		expect(fmtTokens(999_960)).toBe("1.0m");
+	it("writes token counts with K / M and exactly one decimal", () => {
+		expect(fmtTokens(187_652)).toBe("187.7K");
+		expect(fmtTokens(27_100)).toBe("27.1K");
+		expect(fmtTokens(128_000)).toBe("128.0K");
+		expect(fmtTokens(11_643_776)).toBe("11.6M");
+		expect(fmtTokens(999_960)).toBe("1.0M");
 		expect(fmtTokens(950)).toBe("950");
 		expect(fmtTokens(undefined)).toBe("—");
 	});
@@ -354,6 +355,21 @@ describe("Web UI: model picker", () => {
 });
 
 describe("Web UI: provider model catalog", () => {
+	it("round-trips pricing currency and tiers without detection overwriting them", () => {
+		const cost = {
+			currency: "CNY",
+			input: 1,
+			output: 2,
+			cacheRead: 0.1,
+			cacheWrite: 0.5,
+			tiers: [{ inputTokensAbove: 200000, input: 3, output: 4, cacheRead: 0.2, cacheWrite: 1 }],
+		};
+		const draft = models.modelDraft({ id: "priced", cost });
+		expect(models.buildModel(draft).cost).toEqual(cost);
+		const detected = models.updateFromDetection(draft, { id: "priced", contextWindow: 256000 });
+		expect(models.buildModel(detected).cost).toEqual(cost);
+		expect(models.buildModel({ ...draft, pricing: null }).cost).toBeUndefined();
+	});
 	const draft = (patch: Record<string, unknown> = {}) => ({
 		baseUrl: "https://relay.test/v1",
 		api: "openai-completions",
@@ -505,8 +521,8 @@ describe("Web UI: provider model catalog", () => {
 		expect(models.toK(128000)).toBe("128");
 		expect(models.toK(131072)).toBe("131.072");
 		expect(models.toK(1500)).toBe("1.5");
-		expect(models.fmtK(128000)).toBe("128K");
-		expect(models.fmtK(131072)).toBe("131.072K");
+		expect(models.fmtK(128000)).toBe("128.0K");
+		expect(models.fmtK(131072)).toBe("131.1K");
 		expect(models.fromK("128")).toBe(128000);
 		expect(models.fromK(" 131.072 ")).toBe(131072);
 		expect(models.fromK("0.5")).toBe(500);

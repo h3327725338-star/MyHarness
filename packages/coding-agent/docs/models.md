@@ -235,6 +235,8 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `cost` | No | all zeros | Per-million-token rates with optional request-wide input pricing tiers |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
+Web UI → Settings → Providers → model cards includes **Custom pricing**. Set input, output, cache read and cache write prices per 1M tokens, choose `USD` or `CNY`, and optionally add long-context tiers. `cost.currency` defaults to `USD` for older configurations. Changing currency changes the unit, not the rates; no exchange-rate conversion is performed. Session displays each currency separately and recalculates assistant usage with the currently saved model prices, including historical requests; stored usage is not overwritten. Live amounts update when the Provider reports token usage (Providers that report usage only at the end cannot supply an exact live charge).
+
 A cost tier supplies a complete alternate rate set and applies to the full request when total input usage (`input + cacheRead + cacheWrite`) exceeds `inputTokensAbove`. When multiple tiers match, the highest threshold wins.
 
 ```json

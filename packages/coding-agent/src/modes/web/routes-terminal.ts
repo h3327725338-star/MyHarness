@@ -32,6 +32,7 @@ export function registerTerminalRoutes(server: WebHttpServer, host: WebHost, ter
 		const payload = asObject(body);
 		return terminals.open(host.cwd, {
 			shell: typeof payload.shell === "string" ? payload.shell : undefined,
+			instance: typeof payload.instance === "string" ? payload.instance : undefined,
 			cols: asSize(payload.cols, "cols"),
 			rows: asSize(payload.rows, "rows"),
 			restart: payload.restart === true,

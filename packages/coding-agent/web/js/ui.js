@@ -253,9 +253,9 @@ export const COLLAPSE_MS = 260;
  * Expands and folds its content with the one motion every foldable area uses: the height follows `open` (a grid row
  * going 0fr <-> 1fr, so no measuring and no jump), the content fades. Folded content is not mounted.
  */
-export function Collapse({ open, children, class: cls }) {
+export function Collapse({ open, children, class: cls, keepMounted = false }) {
 	const { mounted, shown } = usePresence(open, COLLAPSE_MS + 40);
-	if (!mounted) return null;
+	if (!mounted && !keepMounted) return null;
 	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`}><div class="collapse-inner">${children}</div></div>`;
 }
 
