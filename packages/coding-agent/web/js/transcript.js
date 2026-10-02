@@ -8,6 +8,7 @@ import { DiffView, languageFor, parsePatch } from "./diff.js";
 import { buildTurns, changeTotals, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
+import { StepCounts } from "./step-counts.js";
 import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
 
@@ -135,7 +136,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 				<span class=${step.status === "running" ? "shimmer-text" : "verb"}>${step.verb}</span>
 				${step.target ? html` <span class=${step.kind === "run" ? "mono target" : "target"}>${step.target}</span>` : null}
 				${step.detail ? html` <span class="dim">${step.detail}</span>` : null}
-				${step.extra ? html` <${Counts} ...${step.extra} />` : null}
+				${step.kind === "edit" || step.kind === "write" ? html` <${StepCounts} ...${step.extra} running=${!nothingRunning && (step.status === "running" || step.status === "pending")} />` : null}
 				${exit ? html` <span class="err-text">${t("exit {exit}", { exit })}</span>` : null}
 				${step.status === "cancelled" ? html` <span class="dim">${t("not finished")}</span>` : null}
 			</span>
@@ -152,6 +153,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 /** Consecutive calls of one kind. The web (searching and reading pages) is always one aggregate line, even for a single call. */
 function Group({ group, forceOpen }) {
 	const [open, setOpen] = useState(!!forceOpen);
+	const nothingRunning = useStore((st) => !st.snap?.active && !st.snap?.flags?.background);
 	const list = group.actions;
 	if (list.length === 1 && group.kind !== "web") return html`<${ActionRow} step=${list[0]} />`;
 	const failed = list.filter((a) => a.isError).length;
@@ -161,7 +163,7 @@ function Group({ group, forceOpen }) {
 		<button class="group-head" onClick=${() => setOpen(!open)} aria-expanded=${open}>
 			<span class="action-ico">${running ? html`<${Spinner} />` : html`<${Icon} name=${KIND_ICON[group.kind] || "wrench"} size=${14} class="c-dim" />`}</span>
 			<span class=${`group-label truncate ${running ? "shimmer-text" : ""}`}>${groupLabel(group.kind, list)}</span>
-			${totals ? html`<${Counts} ...${totals} />` : null}
+			${group.kind === "edit" || group.kind === "write" ? html`<${StepCounts} ...${totals} running=${running && !nothingRunning} />` : null}
 			${failed ? html`<span class="badge danger">${t("{failed} failed", { failed })}</span>` : null}
 			<span class="grow" />
 			<${Fold} />
