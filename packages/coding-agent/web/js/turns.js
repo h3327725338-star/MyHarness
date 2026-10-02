@@ -168,9 +168,14 @@ export function webStats(actions) {
 
 /** Sum only reported counts; pending calls must not hide counts already received. */
 export function changeTotals(actions) {
-	const counted = actions.filter((action) => action.extra);
-	if (!counted.length) return undefined;
-	return counted.reduce((sum, action) => ({ additions: sum.additions + action.extra.additions, deletions: sum.deletions + action.extra.deletions }), { additions: 0, deletions: 0 });
+	let sum;
+	for (const action of actions) {
+		if (!action.extra) continue;
+		sum ??= { additions: 0, deletions: 0 };
+		sum.additions += action.extra.additions;
+		sum.deletions += action.extra.deletions;
+	}
+	return sum;
 }
 
 /** Group phrase for several actions of the same kind. */
@@ -221,12 +226,13 @@ function textFromBlocks(blocks) {
  * Build turns from wire items.
  * ctx: { cwd, toolRuns, running, lastKey }
  */
-export function buildTurns(items, ctx, previous) {
+export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 	const results = new Map();
 	for (const item of items) if (item.kind === "toolResult") results.set(item.toolCallId, item);
 
 	const turns = [];
 	let turn = null;
+	let repair;
 	const standalone = (item, index) => {
 		turns.push({ key: `s-${item.id || index}-${item.kind}`, standalone: item, entries: [], steps: [] });
 	};
@@ -246,6 +252,27 @@ export function buildTurns(items, ctx, previous) {
 	};
 
 	items.forEach((item, index) => {
+		if (item.kind === "custom" && item.customType === "git-commit-repair" && !item.display) {
+			turn = null;
+			repair = { kind: "gitRepair", id: item.id || item.ts || index, ts: item.ts, items: [] };
+			standalone(repair, index);
+			return;
+		}
+		if (repair) {
+			if (item.kind === "gitStatus" || item.kind === "user") {
+				const record = turns[turns.length - 1];
+				if (item.kind === "gitStatus") {
+					record.standalone = { ...item, repairTurns: buildTurns(repair.items, ctx) };
+					repair = undefined;
+					return;
+				}
+				repair.turns = buildTurns(repair.items, ctx);
+				repair = undefined;
+			} else {
+				repair.items.push(item);
+				return;
+			}
+		}
 		if (item.kind === "user") {
 			startTurn(item, index);
 			turn.items.push(item);
@@ -279,6 +306,8 @@ export function buildTurns(items, ctx, previous) {
 		turn.endedAt = Math.max(turn.endedAt || 0, item.ts || 0);
 		if (item.kind === "assistant") turn.assistants.push(item);
 	});
+
+	if (repair) repair.turns = buildTurns(repair.items, ctx);
 
 	for (const turn of turns) {
 		if (turn.standalone) continue;
@@ -337,14 +366,18 @@ export function buildTurns(items, ctx, previous) {
 			}
 		}
 		turn.lastAssistant = lastAssistant;
-		const actions = turn.steps.filter((s) => s.type === "action");
-		turn.stats = {
-			actions: actions.length,
-			failedActions: actions.filter((a) => a.isError).length,
-			files: new Set(actions.filter((a) => (a.kind === "edit" || a.kind === "write") && !a.isError && a.status === "done" && a.path).map((a) => a.path)).size,
-			commands: actions.filter((a) => a.kind === "run").length,
-			reads: actions.filter((a) => a.kind === "read").length,
-		};
+		const stats = { actions: 0, failedActions: 0, files: 0, commands: 0, reads: 0 };
+		const files = new Set();
+		for (const action of turn.steps) {
+			if (action.type !== "action") continue;
+			stats.actions++;
+			if (action.isError) stats.failedActions++;
+			if ((action.kind === "edit" || action.kind === "write") && !action.isError && action.status === "done" && action.path) files.add(action.path);
+			if (action.kind === "run") stats.commands++;
+			if (action.kind === "read") stats.reads++;
+		}
+		stats.files = files.size;
+		turn.stats = stats;
 	}
 
 	// Reuse previous objects where nothing changed so memoized components can skip rendering.

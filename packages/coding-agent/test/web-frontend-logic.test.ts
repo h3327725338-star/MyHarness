@@ -37,6 +37,50 @@ const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	...extra,
 });
 
+describe("Web UI: Commit repair containment", () => {
+	const marker = { kind: "custom", id: "repair", ts: 2, customType: "git-commit-repair", display: false };
+	const user = { kind: "user", ts: 1, text: "task", images: [] };
+	const reply = assistant([{ type: "text", text: "task done" }]);
+	const repair = assistant([{ type: "toolCall", id: "read-1", name: "read", args: { path: "a.ts" } }], { ts: 3 });
+	const result = { kind: "toolResult", ts: 4, toolCallId: "read-1", toolName: "read", text: "source", isError: false };
+	it("keeps live repair tools out of the original task turn", () => {
+		const turns = buildTurns([user, reply, marker, repair, result], { toolRuns: {} });
+		expect(turns).toHaveLength(2);
+		expect(turns[0].final.text).toBe("task done");
+		expect(turns[0].stats.actions).toBe(0);
+		expect(turns[1].standalone.kind).toBe("gitRepair");
+		expect(turns[1].standalone.turns[0].steps[0].result.text).toBe("source");
+	});
+	it.each(["ok", "error"])("updates the repair card in place on %s and survives replay", (tone) => {
+		const live = buildTurns([user, reply, marker, repair, result], { toolRuns: {} });
+		const turns = buildTurns(
+			[
+				user,
+				reply,
+				marker,
+				repair,
+				result,
+				{ kind: "gitStatus", id: "git", ts: 5, result: { tone } },
+				{ ...user, ts: 6, text: "next" },
+			],
+			{ toolRuns: {} },
+			live,
+		);
+		expect(turns).toHaveLength(3);
+		expect(turns[1].key).toBe(live[1].key);
+		expect(turns[1].standalone.kind).toBe("gitStatus");
+		expect(turns[1].standalone.result.tone).toBe(tone);
+		expect(turns[1].standalone.repairTurns[0].stats.reads).toBe(1);
+		expect(turns[2].user.text).toBe("next");
+	});
+	it("does not absorb a later user task when a repair has no recorded outcome", () => {
+		const turns = buildTurns([marker, repair, result, { ...user, ts: 6 }], { toolRuns: {} });
+		expect(turns).toHaveLength(2);
+		expect(turns[0].standalone.turns[0].stats.actions).toBe(1);
+		expect(turns[1].user).toEqual({ ...user, ts: 6 });
+	});
+});
+
 describe("Web UI: permanent Git records and unknown pricing", () => {
 	it("keeps consecutive Git outcomes as independent transcript entries", () => {
 		const result = { tone: "ok", title: "Commit succeeded", hash: "abc1234" };

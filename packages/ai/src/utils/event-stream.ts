@@ -2,7 +2,8 @@ import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
 
 // Generic event stream class for async iteration
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-	private queue: T[] = [];
+	private queue: (T | undefined)[] = [];
+	private queueHead = 0;
 	private waiting: ((value: IteratorResult<T>) => void)[] = [];
 	private done = false;
 	private finalResultPromise: Promise<R>;
@@ -60,6 +61,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		this.done = true;
 		this.rejectFinalResult(error);
 		this.queue.length = 0;
+		this.queueHead = 0;
 		while (this.waiting.length > 0) {
 			const waiter = this.waiting.shift()!;
 			waiter({ value: undefined as any, done: true });
@@ -68,8 +70,19 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 
 	async *[Symbol.asyncIterator](): AsyncIterator<T> {
 		while (true) {
-			if (this.queue.length > 0) {
-				yield this.queue.shift()!;
+			if (this.queueHead < this.queue.length) {
+				const event = this.queue[this.queueHead] as T;
+				// Release consumed events before suspending at yield. Compact only occasionally,
+				// making a buffered burst linear rather than shifting its tail for every event.
+				this.queue[this.queueHead++] = undefined;
+				if (this.queueHead === this.queue.length) {
+					this.queue.length = 0;
+					this.queueHead = 0;
+				} else if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+					this.queue = this.queue.slice(this.queueHead);
+					this.queueHead = 0;
+				}
+				yield event;
 			} else if (this.done) {
 				return;
 			} else {

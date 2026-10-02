@@ -113,6 +113,21 @@ try {
  if(document.querySelector('.strip-lines').textContent!=='file.ts (+12/-3)\\nplain <tag>') throw Error('Git output changed');
  const add=document.querySelector('.strip-lines .add'),del=document.querySelector('.strip-lines .del');
  if(add?.textContent!=='+12'||del?.textContent!=='-3'||getComputedStyle(add).color===getComputedStyle(del).color) throw Error('Git colours');
+ render(null,app);
+ const repairItems=[{kind:'user',id:'task',ts:1,text:'original task',images:[]},{kind:'assistant',ts:2,blocks:[{type:'text',text:'original answer'}],stopReason:'stop',final:true},{kind:'custom',id:'repair',ts:3,customType:'git-commit-repair',display:false},{kind:'assistant',ts:4,blocks:[{type:'toolCall',id:'r',name:'read',args:{path:'repair.ts'}}],stopReason:'toolUse'}];
+ set({items:repairItems,gitTask:{active:true,kind:'commit',activity:'Repairing and recommitting'},toolRuns:{r:{status:'running'}},snap:{active:true,cwd:'C:/test',flags:{},session:{id:'test'},thinking:{supported:false},run:{startedAt:Date.now()}}});
+ render(h(Transcript,{}),app);await wait(100);
+ let card=document.querySelector('.git-result');
+ if(document.querySelectorAll('.git-result').length!==1) throw Error('duplicate Commit card');
+ if(document.querySelector('.turn:not(.git-result .turn) .summary.live')) throw Error('original task marked as repairing');
+ if(!card.textContent.includes('repair.ts')) throw Error('missing live repair activity');
+ card.querySelector('[aria-expanded]').click();await wait(100);
+ const summary=card.querySelector('.summary-head[aria-expanded]');summary.click();await wait(100);
+ if(!card.querySelector('.action')||document.querySelector('.action')?.closest('.git-result')!==card) throw Error('repair tool escaped Commit');
+ set({items:[...repairItems,{kind:'toolResult',ts:5,toolCallId:'r',toolName:'read',text:'source',isError:false},{kind:'gitStatus',id:'git',ts:6,result:{tone:'ok',title:'Commit succeeded',hash:'abc1234'}}],gitTask:null,snap:{active:false,cwd:'C:/test',flags:{},session:{id:'test'},thinking:{supported:false}}});await wait(100);
+ if(document.querySelector('.git-result')!==card||!card.textContent.includes('Commit succeeded')||!card.querySelector('.action')) throw Error('Commit result did not update in place');
+ set({items:[...repairItems,{kind:'gitStatus',id:'git',ts:6,result:{tone:'error',title:'Commit failed',detail:'hook failed',lines:'hook failed and diagnostic'}}]});await wait(100);
+ if(document.querySelector('.git-result')!==card||card.getAttribute('role')!=='alert'||!card.textContent.includes('hook failed')||document.querySelector('.action')?.closest('.git-result')!==card) throw Error('failed repair escaped Commit');
  render(h(SettingsModal,{}),app); await wait(150);
  if(document.querySelector('.settings-body').textContent.includes('任务运行中')) throw Error('appearance contains scheduling');
  const checkRows=()=>{for(const row of document.querySelectorAll('.set-row')) {

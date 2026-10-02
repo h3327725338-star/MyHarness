@@ -480,9 +480,16 @@ function BashCard({ item }) {
 	</div>`;
 }
 
-function Standalone({ item }) {
+function Standalone({ item, task, snap, runs, processDefault }) {
 	const [open, setOpen] = useState(false);
-	if (item.kind === "gitStatus") return html`<${GitRecord} result=${item.result} />`;
+	if (item.kind === "gitStatus" || item.kind === "gitRepair") {
+		const repairTurns = item.repairTurns || item.turns;
+		const liveTask = item.kind === "gitRepair" ? task : undefined;
+		const latest = repairTurns?.[repairTurns.length - 1];
+		return html`<${GitRecord} result=${item.result} task=${liveTask} activity=${liveTask && latest?.steps ? currentActivity(latest, snap?.run) : undefined}>${repairTurns?.length ? html`${repairTurns.map((turn) => turn.standalone
+			? html`<${Standalone} key=${turn.key} item=${turn.standalone} />`
+			: html`<${TurnView} key=${turn.key} turn=${turn} live=${!!snap?.active && item.kind === "gitRepair"} waiting=${false} run=${runForTurn(turn, runs || {})} processDefault=${processDefault} snapRun=${snap?.run} />`)}` : null}<//>`;
+	}
 	if (item.kind === "runChanges") return html`<${ChangeCard} card=${item} />`;
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
@@ -582,6 +589,7 @@ export function Transcript() {
 		toBottom();
 	}, [session]);
 
+	const repairing = turns.some((turn) => turn.standalone?.kind === "gitRepair");
 	const lastTurnIndex = (() => {
 		for (let i = turns.length - 1; i >= 0; i--) if (!turns[i].standalone) return i;
 		return -1;
@@ -609,14 +617,14 @@ export function Transcript() {
 				${hidden ? html`<button class="btn sm ghost earlier" onClick=${() => { heightBefore.current = scroller.current?.scrollHeight || 0; stick.current = false; setLimit(limit + 60); }}>${t("Show earlier messages ({hidden} hidden)", { hidden })}</button>` : null}
 				${shown.map((turn, i) => {
 					const index = hidden + i;
-					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} />`;
+					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
 					const isLast = index === lastTurnIndex;
-					const live = isLast && active;
+					const live = isLast && active && !repairing;
 					const run = live ? undefined : runForTurn(turn, runs, isLast);
 					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} />`;
 				})}
 				${liveBash.map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
-				${gitTask ? html`<${GitRecord} task=${gitTask} />` : null}
+				${gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}
 				<div class="transcript-end" />
 			</div>
 		</div>
