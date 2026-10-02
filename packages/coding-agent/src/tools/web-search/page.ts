@@ -1,5 +1,6 @@
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { type HTMLElement, parse } from "node-html-parser";
+import { documentToMarkdown, isDocument } from "./document.ts";
 import { WebSearchError } from "./errors.ts";
 import { BROWSER_HEADERS, decodeBody, type FetchLike, requestBytes } from "./http.ts";
 import { checkResolvedHost, type HostLookup, validatePublicHttpUrl } from "./url.ts";
@@ -220,14 +221,18 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 		}
 		if (response.status >= 400) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}。`);
 		let page: { title?: string; markdown: string; publishedAt?: string };
-		if (isHtml(contentType) || (!isPlainText(contentType) && /^\s*<(?:!doctype|html)/iu.test(text))) {
+		if (isDocument(response.bytes, contentType)) {
+			page = response.truncated
+				? { markdown: "文档超过下载大小上限，未解析不完整的文件。请下载后使用 read 读取。" }
+				: await documentToMarkdown(response.bytes, options.signal, contentType);
+		} else if (isHtml(contentType) || (!isPlainText(contentType) && /^\s*<(?:!doctype|html)/iu.test(text))) {
 			page = htmlToMarkdown(text, validation.url);
 		} else if (isPlainText(contentType)) {
 			page = { markdown: text.trim() };
 		} else {
 			throw new WebSearchError(
 				"unsupported_content",
-				`该 URL 返回的是 ${contentType.split(";")[0]}，web_fetch 只读取网页和文本内容。`,
+				`该 URL 返回的是 ${contentType.split(";")[0]}，未检测到可解析的网页、文本或文档内容。`,
 			);
 		}
 		if (!page.markdown) throw new WebSearchError("empty_content", "页面没有可读取的正文。");

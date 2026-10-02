@@ -81,8 +81,8 @@ export function ContextPanel() {
 				<span>${t("Workspace")}</span><span class="truncate mono" title=${snap.cwd}>${snap.cwd}</span>
 				<span>${t("Session file")}</span><span class="kv-value"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
 				${stats ? html`
-					<span>${t("Messages")}</span><span>${t("{userMessages} you · {assistantMessages} assistant · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
-					<span>${t("Tokens")}</span><span>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: fmtTokens(stats.tokens.input), fmtTokens2: fmtTokens(stats.tokens.output), fmtTokens3: fmtTokens(stats.tokens.cacheRead) })}</span>
+					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
+					<span>${t("Tokens")}</span><span>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: stats.tokens.input.toLocaleString(), fmtTokens2: stats.tokens.output.toLocaleString(), fmtTokens3: stats.tokens.cacheRead.toLocaleString() })}</span>
 					<span>${t("Cost")}</span><span>${fmtCost(stats.cost)}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>

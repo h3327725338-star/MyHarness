@@ -36,6 +36,7 @@ export interface WireUsage {
 }
 
 export type WireItem =
+	| { kind: "gitStatus"; id: string; ts: number; result: Record<string, unknown> }
 	| {
 			kind: "user";
 			id?: string;
@@ -294,6 +295,15 @@ export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 				if (wire) items.push(wire);
 				break;
 			}
+			case "custom":
+				if (entry.customType === "web-git-status" && entry.data && typeof entry.data === "object")
+					items.push({
+						kind: "gitStatus",
+						id: entry.id,
+						ts,
+						result: sanitizeDetails(entry.data) as Record<string, unknown>,
+					});
+				break;
 			case "custom_message": {
 				const { text, images } = contentParts(entry.content);
 				items.push({

@@ -8,6 +8,19 @@ import { entriesToWire, messageToWire, sanitizeDetails, toWireModel } from "../s
 import type { SessionEntry } from "../src/session/types.ts";
 
 describe("web wire format", () => {
+	it("restores UI-only Git records from existing Session custom entries", () => {
+		const entries: SessionEntry[] = [
+			{
+				type: "custom",
+				customType: "web-git-status",
+				id: "git1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00Z",
+				data: { tone: "ok", title: "Commit succeeded", hash: "abc1234" },
+			},
+		];
+		expect(entriesToWire(entries)).toMatchObject([{ kind: "gitStatus", id: "git1", result: { hash: "abc1234" } }]);
+	});
 	it("projects assistant messages with thinking, text and tool calls", () => {
 		const item = messageToWire(
 			{

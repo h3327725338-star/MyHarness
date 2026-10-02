@@ -71,6 +71,7 @@ export const BROWSER_HEADERS: Readonly<Record<string, string>> = {
 	"Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
 	"Accept-Encoding": "gzip, deflate, br",
 	"Upgrade-Insecure-Requests": "1",
+	"Cache-Control": "max-age=0",
 	"Sec-Fetch-Dest": "document",
 	"Sec-Fetch-Mode": "navigate",
 	"Sec-Fetch-Site": "none",

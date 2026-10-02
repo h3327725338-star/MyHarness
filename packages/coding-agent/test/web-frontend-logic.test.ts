@@ -11,6 +11,7 @@ const models = await import(new URL("provider-models.js", webDir).href);
 const {
 	ansiSegments,
 	fmtDuration,
+	fmtCost,
 	looseStrong,
 	modelEfforts,
 	relTime,
@@ -33,6 +34,23 @@ const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	model: "m",
 	final: true,
 	...extra,
+});
+
+describe("Web UI: permanent Git records and unknown pricing", () => {
+	it("keeps consecutive Git outcomes as independent transcript entries", () => {
+		const result = { tone: "ok", title: "Commit succeeded", hash: "abc1234" };
+		const turns = buildTurns([
+			{ kind: "user", ts: 1, text: "fix", images: [] },
+			assistant([{ type: "text", text: "done" }]),
+			{ kind: "gitStatus", id: "g1", ts: 2, result },
+			{ kind: "gitStatus", id: "g2", ts: 3, result: { tone: "error", title: "Commit failed" } },
+		]);
+		expect(turns.slice(-2).map((turn: { standalone: { id: string } }) => turn.standalone.id)).toEqual(["g1", "g2"]);
+	});
+	it("does not present missing pricing as a zero-dollar charge", () => {
+		for (const value of [undefined, null, 0, Number.NaN]) expect(fmtCost(value)).toBe("Not detected");
+		expect(fmtCost(0.5)).toBe("$0.500");
+	});
 });
 
 describe("Web UI: action descriptions", () => {

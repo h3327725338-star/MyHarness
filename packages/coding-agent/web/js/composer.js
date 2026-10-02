@@ -4,7 +4,7 @@ import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
-import { dismissGitResult } from "./git-flow.js";
+
 import { ContextMeter } from "./context-usage.js";
 import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
@@ -91,42 +91,10 @@ function DialogBar({ dialog }) {
 	</div>`;
 }
 
-/**
- * The outcome of a Git operation (see git-flow.js), where its progress was shown: what happened with the real hash or reason,
- * and the real output one click away. A success fades after a few seconds (not while it is being read); a problem stays until
- * it is dismissed.
- */
-function GitResultStrip({ result }) {
-	const [open, setOpen] = useState(false);
-	const [hover, setHover] = useState(false);
-	const fades = result.tone === "ok" || result.tone === "info";
-	useEffect(() => {
-		if (!fades || hover || open) return undefined;
-		const timer = setTimeout(dismissGitResult, 9000);
-		return () => clearTimeout(timer);
-	}, [result.id, fades, hover, open]);
-	const hasDetails = !!result.lines && result.lines !== result.detail;
-	return html`<div class=${`strip git-result ${result.tone} fade-in`} role=${result.tone === "error" ? "alert" : "status"} onMouseEnter=${() => setHover(true)} onMouseLeave=${() => setHover(false)}>
-		<div class="strip-line">
-			<${Icon} name=${{ ok: "checkCircle", info: "info", warn: "alertTriangle", error: "alertCircle" }[result.tone]} size=${14} />
-			<strong class="strip-title">${result.title}</strong>
-			${result.hash ? html`<code class="strip-hash">${result.hash}</code>` : null}
-			${result.detail ? html`<span class="strip-detail truncate" title=${result.detail}>${result.detail}</span>` : null}
-			<span class="grow" />
-			${result.fix ? html`<button class="link-btn" onClick=${() => (dismissGitResult(), actions.send(result.fix.prompt))}>${result.fix.label}</button>` : null}
-			${hasDetails ? html`<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide details") : t("Details")}</button>` : null}
-			<button class="icon-btn sm" aria-label=${t("Dismiss")} title=${t("Dismiss")} onClick=${dismissGitResult}><${Icon} name="x" size=${13} /></button>
-		</div>
-		<${Collapse} open=${open}><pre class="strip-lines">${result.lines}</pre><//>
-	</div>`;
-}
-
 function StatusStrips({ snap }) {
 	const compaction = useStore((s) => s.compaction);
 	const retry = useStore((s) => s.retry);
 	const recovery = useStore((s) => s.recovery);
-	const gitTask = useStore((s) => s.gitTask);
-	const gitResult = useStore((s) => s.gitResult);
 	const completion = useStore((s) => s.completion);
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
@@ -141,8 +109,6 @@ function StatusStrips({ snap }) {
 		strips.push(html`<div class="strip warn" key="r"><${Spinner} /> <span>${t("Provider error — retrying ({attempt}/{maxAttempts}) in {remaining}s: {clip}", { attempt: retry.attempt, maxAttempts: retry.maxAttempts, remaining, clip: clip(retry.errorMessage, 120) })}</span><button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button></div>`);
 	}
 	if (recovery) strips.push(html`<div class="strip warn" key="v"><${Spinner} /> <span>${recovery.kind === "new-conversation" ? t("Recovering by rebuilding the conversation (#{conversation})", { conversation: recovery.conversation }) : t("Recovering from a provider problem ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })}: ${clip(recovery.errorMessage, 100)}</span></div>`);
-	if (gitTask) strips.push(html`<div class="strip" key="g"><${Spinner} /> <span>${serverText(gitTask.activity, t("Working…"))}</span><button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button></div>`);
-	if (gitResult && !gitTask) strips.push(html`<${GitResultStrip} key=${`gr-${gitResult.id}`} result=${gitResult} />`);
 	if (completion && !snap?.active) strips.push(html`<div class="strip" key="f"><${Spinner} /> <span>${t("Finalizing the task (checking changes, memory)…")}</span></div>`);
 	void tick;
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;

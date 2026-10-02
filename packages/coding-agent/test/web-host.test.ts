@@ -208,6 +208,27 @@ describe("Web host (real runtime with a faux provider)", () => {
 		};
 	}
 
+	it("saves multiple Git outcomes and restores them through the transcript API", async () => {
+		const fx = await start();
+		const records = [
+			{ tone: "ok", title: "Commit succeeded", hash: "abc1234", detail: "saved" },
+			{ tone: "error", title: "Commit failed", detail: "hook failed" },
+		];
+		for (const record of records) {
+			const saved = await fx.post("/api/git/record", record);
+			expect(saved.id).toBeTruthy();
+		}
+		const transcript = await fx.get("/api/transcript");
+		expect(
+			transcript.items
+				.filter((item: { kind: string }) => item.kind === "gitStatus")
+				.map((item: { result: unknown }) => item.result),
+		).toEqual(records);
+		expect(
+			fx.events.filter((event) => event.event === "entry_appended" && event.data.item?.kind === "gitStatus"),
+		).toHaveLength(2);
+	});
+
 	it("exposes the real session state, models and workspace", async () => {
 		const fx = await start();
 		const state = await fx.get("/api/state");

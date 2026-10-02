@@ -25,8 +25,6 @@ const SLOT_DEFAULTS = () => ({
 	userBash: {},
 	userBashOrder: [],
 	gitTask: null,
-	// How the last Git operation (commit, push, undo, restore) ended; shown in the status strip (see git-flow.js).
-	gitResult: null,
 	compaction: null,
 	retry: null,
 	recovery: null,
@@ -821,6 +819,7 @@ function attachEntryId(d) {
 	const item = d.item;
 	if (!item) return;
 	const items = state.items;
+	if (items.some((entry) => entry.id === d.id)) return;
 	for (let i = items.length - 1; i >= Math.max(0, items.length - 60); i--) {
 		const candidate = items[i];
 		if (candidate.id) continue;
@@ -838,7 +837,7 @@ function attachEntryId(d) {
 		}
 	}
 	// Not seen yet (e.g. compaction marker): append it.
-	if (item.kind === "compaction" || item.kind === "branchSummary") {
+	if (item.kind === "gitStatus" || item.kind === "compaction" || item.kind === "branchSummary") {
 		state.items = [...items, { ...item, id: d.id }];
 		emit();
 	}

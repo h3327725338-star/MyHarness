@@ -181,12 +181,8 @@ describe("reading a page that refuses plain requests", () => {
 		const response = await service.fetch({
 			urls: ["https://missing.example/", "https://broken.example/", "https://pdf.example/", "https://gone.example/"],
 		});
-		expect(response.failures.map((failure) => failure.code)).toEqual([
-			"http",
-			"http",
-			"unsupported_content",
-			"unavailable",
-		]);
+		expect(response.failures.map((failure) => failure.code)).toEqual(["http", "http", "unavailable"]);
+		expect(response.pages[0]?.markdown).toContain("已损坏");
 		expect(loads).toEqual([]);
 	});
 

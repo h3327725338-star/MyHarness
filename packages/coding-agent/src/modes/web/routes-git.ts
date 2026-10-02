@@ -103,6 +103,18 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		return result.ok ? { ok: true } : { ok: false, error: result.error };
 	};
 
+	// UI-only records: custom entries never enter the model's messages or change the Session format.
+	server.route("POST", "/api/git/record", ({ body }) => {
+		const data = asObject(body);
+		if (typeof data.title !== "string" || !["ok", "warn", "error", "info"].includes(String(data.tone)))
+			throw new HttpError(400, "Invalid Git status record");
+		const record = JSON.parse(JSON.stringify(data));
+		if (JSON.stringify(record).length > 100_000) throw new HttpError(400, "Git status record is too large");
+		const id = host.session.sessionManager.appendCustomEntry("web-git-status", record);
+		host.broadcast("entry_appended", { id, item: { kind: "gitStatus", id, ts: Date.now(), result: record } });
+		return { id };
+	});
+
 	// Polled after every run, session switch and checkpoint change: every Git call here is asynchronous (and the
 	// independent ones run in parallel), so the server keeps answering other requests while Git works.
 	server.route("GET", "/api/git/status", async () => {

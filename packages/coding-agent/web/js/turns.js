@@ -249,7 +249,7 @@ export function buildTurns(items, ctx, previous) {
 			turn.items.push(item);
 			return;
 		}
-		if (item.kind === "bash" || item.kind === "compaction" || item.kind === "branchSummary" || item.kind === "reload") {
+		if (item.kind === "gitStatus" || item.kind === "bash" || item.kind === "compaction" || item.kind === "branchSummary" || item.kind === "reload") {
 			turn = null;
 			standalone(item, index);
 			return;

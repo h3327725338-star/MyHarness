@@ -74,7 +74,7 @@ export function SpeedValue({ speed }) {
 export function CacheValue({ cache, session }) {
 	const state = cache?.state;
 	const sessionRate = session?.hitRate;
-	const sessionLine = sessionRate == null ? "" : ` ${t("Whole session: {rate}.", { rate: fmtPct(sessionRate * 100) })}`;
+	const sessionLine = sessionRate == null ? "" : ` ${t("Whole session: {rate}.", { rate: `${(sessionRate * 100).toFixed(2)}%` })}`;
 	const title =
 		state === "detecting"
 			? t("Waiting for the provider to report this request's cache use. Some providers report it only at the end of the reply.")
@@ -89,7 +89,7 @@ export function CacheValue({ cache, session }) {
 							: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
 	// Before the first request of this run the whole session's figure (from the history) stands in.
 	const rate = state ? cache?.hitRate : sessionRate;
-	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${state && cache?.estimated ? "~" : ""}${fmtPct(rate * 100)}`} />`;
+	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${state && cache?.estimated ? "~" : ""}${(rate * 100).toFixed(2)}%`} />`;
 }
 
 /**

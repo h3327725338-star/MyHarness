@@ -86,9 +86,9 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
 
 `browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）、`foreground.ts`（Windows 人工验证窗口的临时置顶与激活）和 `import-cookies.ts`（复制日常浏览器的 Cookie）。
 
-轻量 HTML 请求带导航用途的 Headers 和支持的压缩格式；这不会改变 Node/undici 的 TLS 指纹。被拦截后的浏览器访问使用实际安装的浏览器自身的 TLS、Cookie 与网络栈，Chrome/Edge 优先从自身读取真实 Client Hints，再去掉 headless 品牌标记，避免编造平台版本。没有模拟鼠标或自动解验证码，也不保证通过网站的所有反爬策略。
+轻量 HTML 请求带导航用途的 Headers、Cache-Control 和支持的压缩格式；这不会改变 Node/undici 的 TLS 指纹。被拦截后的浏览器访问使用实际安装的浏览器自身的 TLS、Cookie 与网络栈，Chrome/Edge 优先从自身读取真实 Client Hints，再去掉 headless 品牌标记，避免编造平台版本。Chrome/Edge 在每次导航的网站脚本执行前将 `navigator.webdriver` 设为未定义，其余浏览器原生属性不伪造。没有模拟鼠标或自动解验证码，也不保证通过网站的所有反爬策略。
 
-Windows 上只对专用验证浏览器进程及其子进程的可见窗口设置临时 Topmost，并在窗口出现时恢复、激活与请求焦点；等待结束、取消、超时或窗口关闭后撤销置顶，正常浏览不改变其他窗口层级。系统前台权限或更高权限窗口仍可能限制焦点切换。
+Windows 上只对专用验证浏览器进程及其子进程的可见窗口设置临时 Topmost，并在窗口出现时恢复、BringWindowToTop、激活，并连接窗口输入线程调用 SetFocus 请求焦点；等待结束、取消、超时或窗口关闭后撤销置顶，正常浏览不改变其他窗口层级。系统前台权限或更高权限窗口仍可能限制焦点切换。
 
 ```text
 ```
@@ -172,7 +172,7 @@ Agent 调用 web_search
 - 域名先做 DNS 解析，解析到本机或私有地址时拒绝（防止借公网域名访问内网）；
 - 跳转不自动跟随，每一跳都重新做以上检查，最多 5 次；
 - 单个网页请求 20 秒超时，最多下载 5 MB，Markdown 最多保留 300,000 字符，超出时在结果里注明；
-- 支持 gzip/br/deflate；按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF 等其他类型返回"不支持"的明确错误；
+- 支持 gzip/br/deflate；按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF、DOCX/XLSX/PPTX、ODT/ODS/ODP、RTF 和 EPUB 复用已有 officeparser 从下载字节提取可读正文（也能识别常见文件签名，避免错误 MIME 阻止解析）；扫描 PDF 明确提示没有文字层、需 OCR，密码保护或损坏文档返回原因提示，不因解析失败中断整批 URL。超过下载上限时不解析不完整文档。旧 DOC/XLS/PPT 无法解析时提示转换为现代格式；
 - 直接请求不执行 JavaScript，也不带登录状态。
 
 直接请求被网站拒绝时（HTTP 401/403/407/429/451/503，或返回的是人机验证、登录、Cookie 同意页，或页面没有可读正文），并且 Browser Fallback 打开、找到了浏览器，就改用兜底浏览器打开同一个网址：

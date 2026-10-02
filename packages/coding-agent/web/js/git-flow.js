@@ -1,10 +1,7 @@
 // The Git operations behind /commit, /push, /undo and /restore. They run the same server flows the terminal runs
 // (GitCommitUseCase, GitPushUseCase, the task checkpoint, the restore to HEAD): nothing here decides anything. While one
-// runs, the status strip above the input shows what it is doing (the server's `git_task` events, see composer.js); when
-// it ends, the same strip shows the real outcome: what was committed, or why it failed.
-//
-// An outcome is `{ tone: "ok" | "warn" | "error" | "info", title, hash?, detail?, lines?, fix? }` kept in the session's
-// state (`gitResult`), so it stays with the chat the operation ran in.
+// runs, its progress appears in the transcript. Outcomes keep the strip's design and are saved as UI-only Session
+// custom entries, so earlier results remain visible after later operations and after reloading the chat.
 import { activeSlotId, api, inSlot, loadGitStatus, post, set, state, toast } from "./store.js";
 import { serverText, t } from "./i18n.js";
 import { clip, plural } from "./util.js";
@@ -13,11 +10,16 @@ let sequence = 0;
 
 /** Shows the outcome of an operation in the chat it ran in. */
 function show(slot, result) {
-	inSlot(slot, () => set({ gitResult: { id: ++sequence, ...result } }));
-}
-
-export function dismissGitResult() {
-	set({ gitResult: null });
+	const item = { kind: "gitStatus", id: `git-${++sequence}`, ts: Date.now(), result };
+	inSlot(slot, () => set({ items: [...state.items, item] }));
+	return post("/api/git/record", result, slot).then(({ id }) => {
+		inSlot(slot, () => {
+			const hasPreview = state.items.some((entry) => entry.id === item.id);
+			set({ items: hasPreview
+				? state.items.filter((entry) => entry.id !== id).map((entry) => entry.id === item.id ? { ...item, id } : entry)
+				: state.items.some((entry) => entry.id === id) ? state.items : [...state.items, { ...item, id }] });
+		});
+	}).catch((error) => toast(serverText(error.message), "warning"));
 }
 
 const firstLine = (text) => String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
@@ -34,7 +36,7 @@ async function runGitTask(kind, activity, work) {
 		toast(t("A Git operation is already running."), "warning", 3500);
 		return undefined;
 	}
-	inSlot(slot, () => set({ gitResult: null, gitTask: { active: true, kind, phase: "checking", activity } }));
+	inSlot(slot, () => set({ gitTask: { active: true, kind, phase: "checking", activity } }));
 	try {
 		return await work(slot);
 	} finally {
@@ -119,9 +121,9 @@ function pushOutcome(r) {
 export function pushChanges() {
 	return runGitTask("push", "Checking the repository, branch and upstream", async (slot) => {
 		try {
-			show(slot, pushOutcome(await post("/api/git/push", {}, slot)));
+			await show(slot, pushOutcome(await post("/api/git/push", {}, slot)));
 		} catch (error) {
-			show(slot, failure(t("Push did not complete"), error));
+			await show(slot, failure(t("Push did not complete"), error));
 		}
 	});
 }

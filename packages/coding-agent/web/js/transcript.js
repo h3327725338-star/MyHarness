@@ -2,6 +2,7 @@
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton } from "./ui.js";
 import { api, useStore, setView } from "./store.js";
+import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { buildTurns, changeTotals, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
@@ -335,7 +336,7 @@ function UserMessage({ item, turn }) {
 	</div>`;
 }
 
-const fmtCount = (n) => Math.round(n).toLocaleString(getLang());
+const fmtCount = (n) => `${(n / 1000).toFixed(1)}k`;
 
 function FinalMessage({ final }) {
 	const message = final.message;
@@ -423,6 +424,7 @@ function BashCard({ item }) {
 
 function Standalone({ item }) {
 	const [open, setOpen] = useState(false);
+	if (item.kind === "gitStatus") return html`<${GitRecord} result=${item.result} />`;
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
 		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{k}k tokens)", { k: Math.round(item.tokensBefore / 1000) }) : t("Context compacted")) : t("Returned from another branch");
@@ -455,6 +457,7 @@ function Welcome({ snap, models }) {
 // ---- Transcript container ------------------------------------------------------------------------
 export function Transcript() {
 	const items = useStore((s) => s.items);
+	const gitTask = useStore((s) => s.gitTask);
 	const toolRuns = useStore((s) => s.toolRuns);
 	const runs = useStore((s) => s.runs);
 	const snap = useStore((s) => s.snap);
@@ -554,6 +557,7 @@ export function Transcript() {
 					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} />`;
 				})}
 				${liveBash.map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
+				${gitTask ? html`<${GitRecord} task=${gitTask} />` : null}
 				<div class="transcript-end" />
 			</div>
 		</div>

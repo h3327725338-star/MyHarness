@@ -259,7 +259,7 @@ describe("page reading", () => {
 		]);
 	});
 
-	it("decodes GBK pages, keeps plain text and refuses binary content", async () => {
+	it("decodes GBK pages, keeps plain text and degrades gracefully for damaged PDF", async () => {
 		const gbk = new Uint8Array([0xc4, 0xe3, 0xba, 0xc3]); // "你好" in GBK
 		const { service } = createService(
 			{},
@@ -293,9 +293,9 @@ describe("page reading", () => {
 		expect(response.pages.map((page) => [page.url, page.markdown])).toEqual([
 			["https://cn.example/", "你好"],
 			["https://txt.example/", "plain text body"],
+			["https://pdf.example/", expect.stringContaining("已损坏")],
 		]);
 		expect(response.failures.map((failure) => [failure.url, failure.code])).toEqual([
-			["https://pdf.example/", "unsupported_content"],
 			["https://missing.example/", "http"],
 			["https://empty.example/", "empty_content"],
 		]);

@@ -842,7 +842,11 @@ export class WebHost {
 	}
 
 	private forwardEntryAppended(entry: SessionEntry): void {
-		if (entry.type === "message" || entry.type === "custom_message") {
+		if (
+			entry.type === "message" ||
+			entry.type === "custom_message" ||
+			(entry.type === "custom" && entry.customType === "web-git-status")
+		) {
 			const items = entriesToWire([entry]);
 			if (items.length > 0) this.broadcast("entry_appended", { id: entry.id, item: items[0] });
 		} else if (entry.type === "compaction" || entry.type === "branch_summary") {

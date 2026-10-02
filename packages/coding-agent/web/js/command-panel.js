@@ -1252,7 +1252,7 @@ function initialStack(cmd) {
 /** Things drawn over the page that belong to what the panel is doing (a confirmation, a form, a menu, a toast). */
 const OVERLAYS = ".scrim, .modal, .popover, .toasts";
 
-function PanelBody({ cmd, leaving }) {
+export function PanelBody({ cmd, leaving, onClose = closeCommand }) {
 	const [stack, setStack] = useState(() => initialStack(cmd));
 	const [metas, setMetas] = useState({});
 	// The card changes its width with the level (a slider is narrow, a list is wide): that is animated, but not when it first appears.
@@ -1272,24 +1272,24 @@ function PanelBody({ cmd, leaving }) {
 	useEffect(() => {
 		const onDown = (event) => {
 			const target = event.target;
-			if (!(target instanceof Element) || panel.current?.contains(target) || target.closest(OVERLAYS)) return;
-			closeCommand();
+			if (!(target instanceof Element) || panel.current?.contains(target) || target.closest(OVERLAYS) || (onClose !== closeCommand && target.closest("[data-git-menu-trigger]"))) return;
+			onClose();
 		};
 		document.addEventListener("mousedown", onDown, true);
 		return () => document.removeEventListener("mousedown", onDown, true);
-	}, []);
+	}, [onClose]);
 	const ctx = useMemo(
 		() => ({
 			push: (build) => setStack((s) => [...s, entry(build)]),
 			pop: () =>
 				setStack((s) => {
 					if (s.length > 1) return s.slice(0, -1);
-					queueMicrotask(closeCommand);
+					queueMicrotask(onClose);
 					return s;
 				}),
-			close: closeCommand,
+			close: onClose,
 		}),
-		[],
+		[onClose],
 	);
 	const top = stack[stack.length - 1];
 	const heading = stack.map((e) => metas[e.id]?.title).filter(Boolean);
@@ -1300,7 +1300,7 @@ function PanelBody({ cmd, leaving }) {
 			<span class="cp-title truncate">${heading.map((part, i) => html`${i ? html`<span class="cp-sep">›</span>` : null}<span class=${i === heading.length - 1 ? "cur" : "dim"}>${part}</span>`)}</span>
 			<span class="grow" />
 			${meta.size === "lg" && meta.keys ? html`<span class="cp-keys dim">${meta.keys}</span>` : null}
-			<button class="icon-btn sm" onClick=${closeCommand} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${14} /></button>
+			<button class="icon-btn sm" onClick=${onClose} title=${`${t("Close")} (Esc)`} aria-label=${t("Close")}><${Icon} name="x" size=${14} /></button>
 		</div>
 		<${Screen} key=${top.id} build=${top.build} ctx=${ctx} arg=${cmd.arg} entry=${top} onMeta=${(next) => setMetas((previous) => (previous[top.id]?.title === next.title && previous[top.id]?.size === next.size && previous[top.id]?.keys === next.keys ? previous : { ...previous, [top.id]: next }))} />
 		${meta.size !== "lg" && meta.keys ? html`<div class="cp-foot dim">${meta.keys}</div>` : null}

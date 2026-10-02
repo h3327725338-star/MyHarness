@@ -107,7 +107,7 @@ export function fmtBytes(n) {
 }
 
 export function fmtCost(v) {
-	if (!v) return "$0";
+	if (!Number.isFinite(v) || v <= 0) return t("Not detected");
 	return v < 0.01 ? `<$0.01` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 

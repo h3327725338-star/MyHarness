@@ -18,6 +18,8 @@ public static class ChallengeWindow {
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr h);
  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
  public static void Focus(IntPtr h) {
@@ -25,7 +27,13 @@ public static class ChallengeWindow {
   uint foreground = GetWindowThreadProcessId(GetForegroundWindow(), out unused);
   uint current = GetCurrentThreadId();
   bool attached = foreground != 0 && foreground != current && AttachThreadInput(current, foreground, true);
-  try { SetForegroundWindow(h); } finally { if (attached) AttachThreadInput(current, foreground, false); }
+  uint owner = GetWindowThreadProcessId(h, out unused);
+  bool ownerAttached = owner != 0 && owner != current && owner != foreground && AttachThreadInput(current, owner, true);
+  try { BringWindowToTop(h); SetForegroundWindow(h); SetFocus(h); }
+  finally {
+   if (ownerAttached) AttachThreadInput(current, owner, false);
+   if (attached) AttachThreadInput(current, foreground, false);
+  }
  }
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int height, uint flags);
 }

@@ -22,7 +22,8 @@
 
 /* Changes: the file list on top, the diff of the file being read under it. */
 .changes-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.gitbar { display: flex; align-items: center; gap: 8px; padding: 7px var(--pad-panel); border-bottom: 1px solid var(--border); flex: none; font-size: var(--fs-sm); flex-wrap: wrap; }
+.gitbar-menu { position: absolute; top: 100%; right: var(--pad-panel); left: var(--pad-panel); z-index: 20; }
+.gitbar { position: relative; display: flex; align-items: center; gap: 8px; padding: 7px var(--pad-panel); border-bottom: 1px solid var(--border); flex: none; font-size: var(--fs-sm); flex-wrap: wrap; }
 .gitbar-ctx { gap: 6px; min-width: 0; flex-wrap: wrap; }
 .gitbar-ctx strong { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .changes-basis { flex: none; padding: 6px var(--pad-panel) 2px; color: var(--text-3); font-size: var(--fs-xs); }

@@ -242,6 +242,14 @@ export class CdpBridge implements PageBridge {
 			const tab: Tab = { sessionId, frameId, status: 0 };
 			this.tabs.set(tabId, tab);
 			if (this.userAgent) await this.send("Emulation.setUserAgentOverride", this.userAgent, sessionId);
+			// Run before site scripts, including after redirects; keep native browser values everywhere else.
+			await this.send(
+				"Page.addScriptToEvaluateOnNewDocument",
+				{
+					source: "delete Navigator.prototype.webdriver;",
+				},
+				sessionId,
+			);
 			if (foreground) await this.send("Page.bringToFront", {}, sessionId).catch(() => {});
 			const navigated = await this.send("Page.navigate", { url: String(command.url) }, sessionId);
 			// A download or an aborted navigation reports an error text too; only a failed load without a page counts.
