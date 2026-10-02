@@ -84,7 +84,11 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
           └─ 被网站拒绝时 → BrowserPageReader（page-browser.ts）：用同一个浏览器读正文
 ```
 
-`browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）和 `import-cookies.ts`（复制日常浏览器的 Cookie）。
+`browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）、`foreground.ts`（Windows 人工验证窗口的临时置顶与激活）和 `import-cookies.ts`（复制日常浏览器的 Cookie）。
+
+轻量 HTML 请求带导航用途的 Headers 和支持的压缩格式；这不会改变 Node/undici 的 TLS 指纹。被拦截后的浏览器访问使用实际安装的浏览器自身的 TLS、Cookie 与网络栈，Chrome/Edge 优先从自身读取真实 Client Hints，再去掉 headless 品牌标记，避免编造平台版本。没有模拟鼠标或自动解验证码，也不保证通过网站的所有反爬策略。
+
+Windows 上只对专用验证浏览器进程及其子进程的可见窗口设置临时 Topmost，并在窗口出现时恢复、激活与请求焦点；等待结束、取消、超时或窗口关闭后撤销置顶，正常浏览不改变其他窗口层级。系统前台权限或更高权限窗口仍可能限制焦点切换。
 
 ```text
 ```
@@ -99,7 +103,7 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
 | --- | --- |
 | `captcha` | 验证码 / Google sorry 页 / DuckDuckGo 202 |
 | `rate_limited` | HTTP 429 |
-| `forbidden` | HTTP 403 |
+| `forbidden` | HTTP 403，或带验证/反自动化提示的 HTTP 503（普通服务故障 503 不作为搜索引擎拦截） |
 | `js_required` | 返回了必须执行 JavaScript 的页面 |
 | `consent` | Cookie 同意页 |
 | `degraded` | 返回 200 但结果与问题无关（Bing） |

@@ -17,6 +17,7 @@ import {
 } from "../transport.ts";
 import { launchChromium } from "./chromium.ts";
 import { writeExtension } from "./extension.ts";
+import { keepChallengeForeground } from "./foreground.ts";
 import { type DailyCookies, findDailyCookies, forgetCookieImport, importDailyCookiesOnce } from "./import-cookies.ts";
 import type { BrowserLaunch, PageBridge, PageSnapshot } from "./launch.ts";
 import { installTemporaryAddon } from "./rdp.ts";
@@ -532,68 +533,76 @@ export class LocalBrowser implements BrowserTransport {
 
 	private async runChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage> {
 		const session = await this.ensureSession({ headless: false, signal });
-		const opened = await this.withAbort(
-			session.bridge.command<PageSnapshot>(
-				{
-					type: "open",
-					url: request.url,
-					selector: request.readySelector,
-					timeoutMs: FIREFOX_LIMITS.pageTimeoutMs,
-					settleMs: FIREFOX_LIMITS.settleMs,
-					foreground: true,
-					keepOpen: true,
-				},
-				FIREFOX_LIMITS.pageTimeoutMs + 10_000,
-			),
-			session,
-			signal,
-			request.label,
-		);
-		const deadline = Date.now() + FIREFOX_LIMITS.challengeTimeoutMs;
+		const releaseForeground = keepChallengeForeground(session.child.pid);
 		try {
-			let page = this.toPage(opened);
-			while (!request.isSolved(page)) {
-				if (Date.now() > deadline) {
-					throw new WebSearchError(
-						"challenge_required",
-						`等待你在 ${this.label} 窗口中完成 ${request.label} 的验证超时（${FIREFOX_LIMITS.challengeTimeoutMs / 60_000} 分钟）。`,
-					);
+			const opened = await this.withAbort(
+				session.bridge.command<PageSnapshot>(
+					{
+						type: "open",
+						url: request.url,
+						selector: request.readySelector,
+						timeoutMs: FIREFOX_LIMITS.pageTimeoutMs,
+						settleMs: FIREFOX_LIMITS.settleMs,
+						foreground: true,
+						keepOpen: true,
+					},
+					FIREFOX_LIMITS.pageTimeoutMs + 10_000,
+				),
+				session,
+				signal,
+				request.label,
+			);
+			const deadline = Date.now() + FIREFOX_LIMITS.challengeTimeoutMs;
+			try {
+				let page = this.toPage(opened);
+				while (!request.isSolved(page)) {
+					if (Date.now() > deadline) {
+						throw new WebSearchError(
+							"challenge_required",
+							`等待你在 ${this.label} 窗口中完成 ${request.label} 的验证超时（${FIREFOX_LIMITS.challengeTimeoutMs / 60_000} 分钟）。`,
+						);
+					}
+					await this.sleep(FIREFOX_LIMITS.challengePollMs, signal);
+					let snapshot: PageSnapshot;
+					try {
+						snapshot = await this.withAbort(
+							session.bridge.command<PageSnapshot>(
+								{ type: "read", tabId: opened.tabId, selector: request.readySelector },
+								10_000,
+							),
+							session,
+							signal,
+							request.label,
+						);
+					} catch (error) {
+						if (error instanceof WebSearchError && error.code === "aborted") throw error;
+						throw new WebSearchError(
+							"challenge_required",
+							`${request.label} 验证页面被关闭或无法读取，验证没有完成。`,
+							{ cause: error },
+						);
+					}
+					page = this.toPage(snapshot);
+					// The page that just got through may still be loading: what is returned is read once it has settled.
+					if (request.isSolved(page)) {
+						await this.sleep(FIREFOX_LIMITS.challengeSettleMs, signal);
+						const settled = await session.bridge
+							.command<PageSnapshot>(
+								{ type: "read", tabId: opened.tabId, selector: request.readySelector },
+								10_000,
+							)
+							.catch(() => undefined);
+						if (settled) page = this.toPage(settled);
+					}
 				}
-				await this.sleep(FIREFOX_LIMITS.challengePollMs, signal);
-				let snapshot: PageSnapshot;
-				try {
-					snapshot = await this.withAbort(
-						session.bridge.command<PageSnapshot>(
-							{ type: "read", tabId: opened.tabId, selector: request.readySelector },
-							10_000,
-						),
-						session,
-						signal,
-						request.label,
-					);
-				} catch (error) {
-					if (error instanceof WebSearchError && error.code === "aborted") throw error;
-					throw new WebSearchError(
-						"challenge_required",
-						`${request.label} 验证页面被关闭或无法读取，验证没有完成。`,
-						{ cause: error },
-					);
-				}
-				page = this.toPage(snapshot);
-				// The page that just got through may still be loading: what is returned is read once it has settled.
-				if (request.isSolved(page)) {
-					await this.sleep(FIREFOX_LIMITS.challengeSettleMs, signal);
-					const settled = await session.bridge
-						.command<PageSnapshot>({ type: "read", tabId: opened.tabId, selector: request.readySelector }, 10_000)
-						.catch(() => undefined);
-					if (settled) page = this.toPage(settled);
+				return page;
+			} finally {
+				if (!session.exited) {
+					await session.bridge.command({ type: "close", tabId: opened.tabId }, 5_000).catch(() => {});
 				}
 			}
-			return page;
 		} finally {
-			if (!session.exited) {
-				await session.bridge.command({ type: "close", tabId: opened.tabId }, 5_000).catch(() => {});
-			}
+			releaseForeground();
 		}
 	}
 

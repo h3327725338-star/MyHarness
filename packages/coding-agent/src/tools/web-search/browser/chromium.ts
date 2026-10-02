@@ -117,6 +117,44 @@ export class CdpBridge implements PageBridge {
 		const version = await this.send("Browser.getVersion");
 		const userAgent = typeof version.userAgent === "string" ? version.userAgent : "";
 		if (!headless || !userAgent.includes("Headless")) return;
+		// Read client hints from this installed browser instead of inventing platform/version/brand values.
+		const targets = await this.send("Target.getTargets");
+		const target = (targets.targetInfos as Array<{ targetId: string; type: string }> | undefined)?.find(
+			(item) => item.type === "page",
+		);
+		if (target) {
+			const attached = await this.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+			const sessionId = String(attached.sessionId);
+			try {
+				const hints = await this.send(
+					"Runtime.evaluate",
+					{
+						expression:
+							"navigator.userAgentData && navigator.userAgentData.getHighEntropyValues(['architecture','bitness','model','platformVersion','uaFullVersion','fullVersionList','wow64']).then(v => ({...v,brands:navigator.userAgentData.brands,mobile:navigator.userAgentData.mobile,platform:navigator.userAgentData.platform}))",
+						awaitPromise: true,
+						returnByValue: true,
+					},
+					sessionId,
+				);
+				const metadata = (hints.result as { value?: Record<string, unknown> } | undefined)?.value;
+				if (metadata) {
+					for (const key of ["brands", "fullVersionList"]) {
+						const brands = metadata[key] as Array<{ brand: string; version: string }> | undefined;
+						if (brands)
+							metadata[key] = brands.map((item) => ({
+								...item,
+								brand: item.brand.replace("HeadlessChrome", brand),
+							}));
+					}
+					metadata.fullVersion = metadata.uaFullVersion;
+					delete metadata.uaFullVersion;
+					this.userAgent = { userAgent: userAgent.replace(/Headless/gu, ""), userAgentMetadata: metadata };
+					return;
+				}
+			} finally {
+				await this.send("Target.detachFromTarget", { sessionId }).catch(() => {});
+			}
+		}
 		const fullVersion = /Chrome\/([\d.]+)/u.exec(userAgent)?.[1] ?? "";
 		const major = fullVersion.split(".")[0] ?? "";
 		const platform = process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux";

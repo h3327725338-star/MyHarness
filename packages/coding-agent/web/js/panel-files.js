@@ -1,9 +1,10 @@
-// Files panel: read-only workspace tree and viewer, decorated with real Git / task change status.
+// Files panel: workspace tree and viewer, with rendered editing for Markdown only.
 import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, VirtualRows } from "./ui.js";
 import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
+import { MarkdownEditor } from "./markdown-editor.js";
 import { basename, debounce, dirname, fmtBytes } from "./util.js";
 import { t } from "./i18n.js";
 
@@ -140,12 +141,14 @@ export function FilesPanel() {
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
 			</div>
 		</div>
-		${viewing ? html`<${FileViewer} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null))} />` : null}
+		${viewing ? html`<${FileViewer} key=${viewing.path} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null))} />` : null}
 	</div>`;
 }
 
 function FileViewer({ viewing, file, error, onBack }) {
 	const path = viewing.path;
+	const [dirty, setDirty] = useState(false);
+	const back = () => { if (!dirty || window.confirm(t("Discard unsaved Markdown changes?"))) onBack(); };
 	const lang = file?.language || languageFor(path);
 	const lines = useMemo(() => {
 		if (!file || file.kind !== "text") return [];
@@ -160,14 +163,14 @@ function FileViewer({ viewing, file, error, onBack }) {
 	}, [file, viewing.line]);
 	return html`<div class="file-viewer">
 		<div class="panel-toolbar">
-			<button class="icon-btn sm" onClick=${onBack} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>
+			<button class="icon-btn sm" onClick=${back} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>
 			<span class="truncate grow" title=${path}><span class="dim">${dirname(path)}${dirname(path) ? "/" : ""}</span><strong>${basename(path)}</strong></span>
 			${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
 			<${CopyButton} text=${path} label=${t("Copy path")} />
 			<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
 		</div>
-		<div class="panel-scroll code-view">
-			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</div>` : file.kind === "large" ? html`<div class="empty">${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</div>` : html`
+		<div class=${`panel-scroll ${/\.(md|markdown)$/i.test(path) ? "" : "code-view"}`}>
+			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</div>` : file.kind === "large" ? html`<div class="empty">${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</div>` : /\.(md|markdown)$/i.test(path) ? html`<${MarkdownEditor} file=${file} path=${path} onDirty=${setDirty} />` : html`
 				${file.truncated ? html`<div class="notice warn">${t("Showing the first {fmtBytes} of {fmtBytes2}.", { fmtBytes: fmtBytes(file.content.length), fmtBytes2: fmtBytes(file.size) })}</div>` : null}
 				<div class="code-lines mono">${lines.map((line, i) => html`<div class=${`cl ${viewing.line === i + 1 ? "target" : ""}`} key=${i} ref=${viewing.line === i + 1 ? targetRef : null}><span class="cl-no">${i + 1}</span>${line.html !== null ? html`<span class="cl-text hljs" dangerouslySetInnerHTML=${{ __html: line.html || " " }} />` : html`<span class="cl-text">${line.text || " "}</span>`}</div>`)}</div>`}
 		</div>

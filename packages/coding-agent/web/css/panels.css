@@ -137,6 +137,14 @@
 .tree-node .kind { font-size: 10px; font-weight: 700; width: 22px; text-align: center; color: var(--text-3); flex: none; }
 .tree-node .kind-user { color: var(--accent); }
 
+/* Rendered Markdown editing is isolated from code viewers. */
+.markdown-edit-body { padding: 16px 20px; overflow-wrap: anywhere; }
+.markdown-formatting { flex-wrap: wrap; gap: 4px; }
+.markdown-formatting button { font-size: var(--fs-xs); padding: 3px 6px; }
+.markdown-edit-block[contenteditable="true"] { min-height: 1.6em; outline: none; border-radius: var(--r-sm); }
+.markdown-edit-block[contenteditable="true"]:focus { box-shadow: 0 0 0 1px var(--accent); }
+.markdown-edit-body pre { white-space: pre-wrap; }
+
 /* Context usage (meter popover and Session panel) */
 .cu { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 8px; font-size: var(--fs-sm); }
 .cu-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }

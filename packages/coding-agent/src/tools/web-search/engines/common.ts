@@ -1,9 +1,11 @@
 import { WebSearchError } from "../errors.ts";
+import { BROWSER_HEADERS } from "../http.ts";
 import type { TransportPage } from "../transport.ts";
 import type { EngineResult } from "./types.ts";
 
 /** Current Firefox on Windows; used where an engine expects a normal desktop browser. */
 export const DESKTOP_HEADERS: Readonly<Record<string, string>> = {
+	...BROWSER_HEADERS,
 	"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:143.0) Gecko/20100101 Firefox/143.0",
 	Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 	"Accept-Language": "en-US,en;q=0.9",
@@ -21,6 +23,12 @@ export function isHttpUrl(value: string | undefined | null): value is string {
 export function checkRefusalStatus(label: string, page: TransportPage): void {
 	if (page.status === 429) {
 		throw new WebSearchError("rate_limited", `${label} 暂时限制了请求频率（HTTP 429）。`);
+	}
+	if (
+		page.status === 503 &&
+		/captcha|challenge|verify.{0,30}human|automated|bot detection|cloudflare/iu.test(page.text)
+	) {
+		throw new WebSearchError("forbidden", `${label} 要求浏览器验证（HTTP 503）。`);
 	}
 	if (page.status === 403) {
 		throw new WebSearchError("forbidden", `${label} 拒绝了这次请求（HTTP 403）。`);

@@ -1,9 +1,10 @@
 /** Web API routes for the workspace file browser and for change/diff review. */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
+import { NodeHtmlMarkdown } from "node-html-markdown";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -217,6 +218,39 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			truncated: false,
 			language: LANGUAGES[ext] ?? null,
 		};
+	});
+
+	// Only Markdown gets an editor; compare the complete source before writing so Agent/external edits are not lost.
+	server.route("POST", "/api/files/markdown", ({ body }) => {
+		const payload = (body ?? {}) as { path?: unknown; original?: unknown; blocks?: unknown };
+		if (typeof payload.path !== "string" || typeof payload.original !== "string" || !Array.isArray(payload.blocks))
+			throw new HttpError(400, "Invalid Markdown save request");
+		const absolute = resolveInside(root(), payload.path);
+		if (!/\.(md|markdown)$/iu.test(absolute)) throw new HttpError(400, "Only Markdown files can be edited here");
+		if (!existsSync(absolute) || !statSync(absolute).isFile()) throw new HttpError(404, "File not found");
+		const bytes = readFileSync(absolute);
+		if (bytes.length > MAX_TEXT_BYTES || looksBinary(bytes)) throw new HttpError(400, "File cannot be edited");
+		const original = bytes.toString("utf8");
+		if (!Buffer.from(original, "utf8").equals(bytes)) throw new HttpError(400, "Only UTF-8 Markdown can be edited");
+		if (original !== payload.original) throw new HttpError(409, "File changed on disk. Reopen it before saving.");
+		const converter = new NodeHtmlMarkdown({ codeBlockStyle: "fenced", keepDataImages: false });
+		let raw = "";
+		const blocks = payload.blocks.map((block: unknown) => {
+			const value = block as { raw?: unknown; html?: unknown } | null;
+			if (!value || typeof value.raw !== "string" || (value.html !== undefined && typeof value.html !== "string"))
+				throw new HttpError(400, "Invalid Markdown block");
+			raw += value.raw;
+			return value.html === undefined ? value.raw : `${converter.translate(value.html as string)}\n\n`;
+		});
+		if (raw !== original) throw new HttpError(400, "Markdown baseline does not match");
+		if (original.includes("\r\n")) {
+			for (let index = 0; index < blocks.length; index++)
+				blocks[index] = blocks[index]!.replace(/(?<!\r)\n/gu, "\r\n");
+		}
+		const content = blocks.join("");
+		if (Buffer.byteLength(content, "utf8") > MAX_TEXT_BYTES) throw new HttpError(413, "Markdown is too large");
+		writeFileSync(absolute, content, "utf8");
+		return { content, blocks };
 	});
 
 	server.route("GET", "/api/files/search", ({ url }) => {
