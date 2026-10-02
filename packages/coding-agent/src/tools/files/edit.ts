@@ -130,7 +130,7 @@ export function createEditToolDefinition(
 		promptGuidelines: loadSystemPromptLines("tools/edit/guidelines.md"),
 		parameters: editSchema,
 		prepareArguments: prepareEditArguments,
-		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
+		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, _ctx?) {
 			const { path, edits } = validateEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);
 
@@ -169,10 +169,15 @@ export function createEditToolDefinition(
 				throwIfAborted();
 
 				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-				await ops.writeFile(absolutePath, finalContent);
-
 				const diffResult = generateDiffString(baseContent, newContent);
 				const patch = generateUnifiedPatch(path, baseContent, newContent);
+				// Validated change set, reported while the atomic write is still running.
+				onUpdate?.({
+					content: [],
+					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+				});
+				throwIfAborted();
+				await ops.writeFile(absolutePath, finalContent);
 				const mutation = committedAfterCancel(signal);
 				return {
 					content: [

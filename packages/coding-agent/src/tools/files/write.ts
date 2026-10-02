@@ -89,7 +89,7 @@ export function createWriteToolDefinition(
 			_toolCallId,
 			{ path, content }: { path: string; content: string },
 			signal?: AbortSignal,
-			_onUpdate?,
+			onUpdate?,
 			_ctx?,
 		) {
 			const absolutePath = resolveToCwd(path, cwd);
@@ -112,10 +112,13 @@ export function createWriteToolDefinition(
 				await ops.mkdir(dir);
 				throwIfAborted();
 
-				// Write the file contents.
+				const changes = describeWrite(before, content);
+				if (Object.keys(changes).length) onUpdate?.({ content: [], details: changes });
+				throwIfAborted();
+				// Write the file contents without splitting the atomic mutation for presentation.
 				await ops.writeFile(absolutePath, content);
 
-				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...describeWrite(before, content) };
+				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
 				return {
 					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
 					details: Object.keys(details).length > 0 ? details : undefined,

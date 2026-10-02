@@ -92,6 +92,20 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 });
 
 describe("Web UI: action descriptions", () => {
+	it("reads running file change details and drops previews on failure", () => {
+		for (const name of ["edit", "write"]) {
+			const call = { name, args: { path: "file.txt" } };
+			const run = {
+				status: "running",
+				partialDetails: { patch: "@@ -1 +1 @@\n-old\n+new\n", additions: 1, deletions: 1 },
+			};
+			expect(describeAction(call, undefined, run, "")).toMatchObject({
+				status: "running",
+				extra: { additions: 1, deletions: 1 },
+			});
+			expect(describeAction(call, { isError: true }, run, "").extra).toBeUndefined();
+		}
+	});
 	it("describes tool calls in plain language and keeps the raw facts", () => {
 		const read = describeAction(
 			{ id: "1", name: "read", args: { path: "C:\\proj\\src\\a.ts", offset: 5, limit: 10 } },

@@ -55,7 +55,7 @@ const harness = vi.hoisted(() => {
 	};
 });
 vi.mock("../web/js/ui.js", () => harness.hooks);
-const { StepCounts, createCountBuffer, COUNT_REFRESH_MS } = await import(
+const { StepCounts, createCountBuffer, COUNT_CHANGE_THRESHOLD } = await import(
 	new URL("../web/js/step-counts.js", import.meta.url).href
 );
 const css = readFileSync(new URL("../web/css/transcript.css", import.meta.url), "utf8");
@@ -70,7 +70,7 @@ function cells(tree: { values: any[] }) {
 	return tree.values
 		.filter((value: any) => value?.values)
 		.map((value: any) => {
-			const [component, current, previous] = value.values;
+			const [, component, current, previous] = value.values;
 			const direction = value.strings.join("").includes('direction="up"') ? "up" : "down";
 			return { current, previous, direction, node: component({ value: current, previous, direction }) };
 		});
@@ -97,35 +97,57 @@ describe("Web step line counts", () => {
 		buffer.flush();
 		expect(publish).toHaveBeenCalledTimes(1);
 	});
-	it("checks every three seconds, rolling green up and red down only on actual changes", () => {
-		vi.useFakeTimers();
+	it("rolls each direction independently after three changed lines, without a timer", () => {
+		expect(COUNT_CHANGE_THRESHOLD).toBe(3);
+		render({ running: true });
 		render({ additions: 1, deletions: 2, running: true });
-		render({ additions: 4, deletions: 5, running: true });
-		render({ additions: 9, deletions: 5, running: true });
-		vi.advanceTimersByTime(COUNT_REFRESH_MS - 1);
 		expect(harness.renders()).toBe(0);
-		vi.advanceTimersByTime(1);
+		render({ additions: 3, deletions: 2, running: true });
 		expect(harness.renders()).toBe(1);
-		const props = { additions: 9, deletions: 5, running: true };
-		const tree = render(props);
-		expect(cells(tree).map(({ current, previous, direction }) => ({ current, previous, direction }))).toEqual([
-			{ current: 9, previous: 1, direction: "up" },
-			{ current: 5, previous: 2, direction: "down" },
+		expect(
+			cells(render({ additions: 3, deletions: 2, running: true })).map(({ current, previous, direction }) => ({
+				current,
+				previous,
+				direction,
+			})),
+		).toEqual([
+			{ current: 3, previous: 0, direction: "up" },
+			{ current: 0, previous: 0, direction: "down" },
 		]);
-		vi.advanceTimersByTime(COUNT_REFRESH_MS * 10);
-		expect(harness.renders()).toBe(1);
+		render({ additions: 5, deletions: 3, running: true });
+		expect(cells(render({ additions: 5, deletions: 3, running: true })).map((cell) => cell.current)).toEqual([3, 3]);
+		render({ additions: 6, deletions: 3, running: true });
+		const props = { additions: 6, deletions: 3, running: true };
+		const tree = render(props);
+		const renders = harness.renders();
 		expect(render(props)).toEqual(tree);
+		expect(harness.renders()).toBe(renders);
 	});
 	it("flushes the final result immediately, clears polling, and rolls first available counts from zero", () => {
 		vi.useFakeTimers();
-		expect(render({ running: true })).toBeNull();
+		expect(cells(render({ running: true })).map((cell) => cell.current)).toEqual([0, 0]);
 		render({ additions: 12, deletions: 3, running: false });
 		expect(harness.renders()).toBe(1);
 		expect(vi.getTimerCount()).toBe(0);
 		const tree = render({ additions: 12, deletions: 3, running: false });
 		expect(cells(tree).map((cell) => cell.previous)).toEqual([0, 0]);
-		vi.advanceTimersByTime(COUNT_REFRESH_MS * 2);
+		vi.advanceTimersByTime(6000);
 		expect(harness.renders()).toBe(1);
+	});
+	it("settles a one or two line remainder immediately on completion", () => {
+		render({ additions: 3, deletions: 3, running: true });
+		render({ additions: 4, deletions: 5, running: true });
+		expect(cells(render({ additions: 4, deletions: 5, running: true })).map((cell) => cell.current)).toEqual([3, 3]);
+		render({ additions: 4, deletions: 5, running: false });
+		expect(
+			cells(render({ additions: 4, deletions: 5, running: false })).map(({ current, previous }) => ({
+				current,
+				previous,
+			})),
+		).toEqual([
+			{ current: 4, previous: 3 },
+			{ current: 5, previous: 3 },
+		]);
 	});
 	it("does not animate historical counts or an unchanged half of a label", () => {
 		const historical = render({ additions: 10, deletions: 2, running: false });

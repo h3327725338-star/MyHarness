@@ -27,7 +27,7 @@ export const NAV = [
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "conversation", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "agent", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
 
 export function sectionOf(item) {
 	if (item.id.startsWith("webSearch.")) return "search";
@@ -37,11 +37,11 @@ export function sectionOf(item) {
 
 /** One line under a page title, saying what the page is for. */
 const PAGE_NOTE = {
-	conversation: N_("Message delivery, run steps and notifications."),
+	conversation: N_("Message delivery and run steps."),
 	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
-	tools: N_("Helper models and the tools the agent may use."),
+	tools: N_("Code intelligence and image processing tools."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and what it tells you about."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
@@ -244,7 +244,7 @@ function SettingsList({ items, models, tools = false }) {
 			<//>`;
 		}
 		// A page with a single group needs no group title: the page title says it.
-		return html`<${Card} key=${card.key} title=${tools ? serverText(card.title) : cards.length > 1 ? serverText(card.section) : undefined} collapsible=${tools}>
+		return html`<${Card} key=${card.key} title=${tools ? serverText(card.title) : card.items.some((item) => ["steeringMode", "followUpMode"].includes(item.id)) ? t("Message delivery") : cards.length > 1 ? serverText(card.section) : undefined} collapsible=${tools}>
 			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
 		<//>`;
 	});
@@ -254,11 +254,7 @@ function Appearance({ conversation = false }) {
 	const view = useStore((s) => s.view);
 	const runMode = runModeOf(view.runMode);
 	const set = (patch) => setView(patch);
-	const requestNotify = async () => {
-		const permission = await requestNotificationPermission();
-		if (permission === "granted") set({ notify: true });
-		else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
-	};
+
 	return html`
 		${!conversation ? html`<${Card} title=${t("Interface")}>
 			<${Row} label=${t("UI language")} description=${t("Interface only; not messages.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
@@ -268,7 +264,6 @@ function Appearance({ conversation = false }) {
 		<//>` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
-			<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${(v) => (v ? requestNotify() : set({ notify: false }))} /><//>
 		<//>`}`;
 }
 
@@ -283,6 +278,17 @@ function BrowserNotifications({ on }) {
 	if (!on || permission === "granted") return null;
 	if (permission === "default") return html`<button class="btn sm" onClick=${allowBrowserNotifications} title=${t("Until this browser allows notifications, the system popup is used.")}>${t("Allow in this browser")}</button>`;
 	return html`<span class="badge" title=${permission === "unsupported" ? t("This browser does not support notifications. The system popup is used instead.") : t("This browser does not allow notifications from this page, so the system popup is used instead. To get them in the browser, allow notifications for this page in the browser's site settings.")}>${t("System popup")}</span>`;
+}
+
+function BrowserNotificationSetting() {
+	const view = useStore((s) => s.view);
+	const change = async (on) => {
+		if (!on) return setView({ notify: false });
+		const permission = await requestNotificationPermission();
+		if (permission === "granted") setView({ notify: true });
+		else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
+	};
+	return html`<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${change} /><//>`;
 }
 
 function Safety({ items, models }) {
@@ -321,9 +327,12 @@ function Safety({ items, models }) {
 			</div>
 			${defaultTrust ? row(defaultTrust) : null}
 		<//>
+		<${Card} title=${t("Notifications")}>
+			<${BrowserNotificationSetting} />
+			${bySection("Notifications").map(row)}
+		<//>
 		${[
 			["Safety", t("Warnings")],
-			["Notifications", t("Notifications")],
 			["Display", t("Notices")],
 		].map(([section, title]) => (bySection(section).length ? html`<${Card} key=${section} title=${title}>${bySection(section).map(row)}<//>` : null))}`;
 }

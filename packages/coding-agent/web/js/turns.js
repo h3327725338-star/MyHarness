@@ -82,7 +82,8 @@ export function describeAction(call, result, run, cwd) {
 			kind = "edit";
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
-			const patch = result?.details?.patch || result?.details?.diff || run?.partialDetails?.patch || run?.partialDetails?.diff;
+			const details = result ? result.details : run?.partialDetails;
+			const patch = details?.patch || details?.diff;
 			if (patch) {
 				const c = countPatch(patch);
 				extra = { additions: c.add, deletions: c.del };
@@ -94,8 +95,8 @@ export function describeAction(call, result, run, cwd) {
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
 			// The lines this write really added and removed (the tool counts them against the file as it was just before).
-			// While it runs, or for a result that carries no count, the row shows the plain status.
-			const d = result?.details || run?.partialDetails;
+			// Running counts describe the validated change set; a failed result must not retain that preview.
+			const d = result ? result.details : run?.partialDetails;
 			if (Number.isFinite(d?.additions) && Number.isFinite(d?.deletions)) extra = { additions: d.additions, deletions: d.deletions };
 			break;
 		}

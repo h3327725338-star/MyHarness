@@ -27,6 +27,43 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				summary: {},
 				patch: "--- a/doc.md\n+++ b/doc.md\n@@ -1 +1 @@\n-# Before\n+# After\n",
 			}));
+			server.route("GET", "/api/settings", () => ({
+				items: [
+					{ id: "subAgent", section: "Assistants", label: "Sub-agent (Explore)", type: "boolean", value: false },
+					{
+						id: "visionAssistant",
+						section: "Assistants",
+						label: "Vision Assistant",
+						type: "boolean",
+						value: false,
+					},
+					{ id: "autoMemory", section: "Assistants", label: "Auto Memory", type: "boolean", value: false },
+					{
+						id: "codeIntelligence.enabled",
+						section: "Tools",
+						label: "Code Intelligence",
+						type: "boolean",
+						value: false,
+					},
+					{
+						id: "images.autoResize",
+						section: "Images",
+						label: "Auto-resize images",
+						type: "boolean",
+						value: false,
+					},
+					{ id: "steeringMode", section: "Agent", label: "Steering messages", type: "boolean", value: false },
+					{ id: "followUpMode", section: "Agent", label: "Follow-up messages", type: "boolean", value: false },
+					{
+						id: "popupNotifications",
+						section: "Notifications",
+						label: "Desktop popup when a task ends",
+						type: "boolean",
+						value: false,
+					},
+				],
+			}));
+			server.route("GET", "/api/trust", () => ({ requiresTrust: false }));
 			server.route("GET", "/hold", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 12000));
 				return {};
@@ -43,6 +80,7 @@ import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {Collapse,Modal} from '/js/ui.js';
 import {StepCounts} from '/js/step-counts.js';
+import {SettingsModal,sectionOf} from '/js/overlays-settings.js';
 import {set,setView} from '/js/store.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
@@ -60,17 +98,36 @@ try {
  if(closing<=0 || closing>=200) throw Error('collapse hard cut: '+closing);
  await wait(300);
  const counts=(additions,deletions,running)=>render(h(StepCounts,{additions,deletions,running}),checks);
- counts(undefined,undefined,true); counts(4,2,true); await wait(100);
- if(document.querySelector('.count-current')) throw Error('counts bypassed period');
- await wait(2910);
+ counts(undefined,undefined,true); await wait(50);
+ if(document.querySelectorAll('.count-sign.pop').length!==2 || !document.querySelector('.count-sign').getAnimations().length) throw Error('signs not popping');
+ counts(1,2,true); await wait(50);
+ if([...document.querySelectorAll('.count-current')].some(n=>n.textContent!=='0')) throw Error('counts bypassed threshold');
+ counts(4,3,true); await wait(50);
  const up=document.querySelector('.count-current.roll-up'),down=document.querySelector('.count-current.roll-down');
  if(!up || !down || !up.getAnimations().length || !down.getAnimations().length) throw Error('counts not animating');
  if(getComputedStyle(up).transform===getComputedStyle(down).transform) throw Error('count directions identical');
  await wait(350); const first=up;
  await wait(3000);
  if(document.querySelector('.count-current.roll-up')!==first || first.getAnimations().some(a=>a.playState==='running')) throw Error('unchanged replay');
- counts(7,3,false); await wait(50);
+ counts(5,5,true); await wait(50);
+ if(document.querySelector('.count-current.roll-up')!==first) throw Error('remainder rolled early');
+ counts(5,5,false); await wait(50);
  if(document.querySelector('.count-current.roll-up')===first || !document.querySelector('.count-current.roll-up').getAnimations().length) throw Error('final counts not animating');
+ render(null,checks);
+ set({models:[]}); setView({settingsSection:'conversation'});
+ render(h(SettingsModal,{}),checks); await wait(150);
+ let body=document.querySelector('.settings-body');
+ if(!body.textContent.includes('Message delivery') || body.textContent.includes('notification') || body.textContent.includes('Notifications')) throw Error('conversation grouping');
+ if([...body.querySelectorAll('.set-card-head strong')].some(n=>n.textContent==='Agent')) throw Error('duplicate Agent card');
+ setView({settingsSection:'tools'}); await wait(100);
+ body=document.querySelector('.settings-body');
+ if(!body.textContent.includes('Code Intelligence') || !body.textContent.includes('Images') || body.textContent.includes('Sub-agent') || body.textContent.includes('Vision') || body.textContent.includes('Auto Memory')) throw Error('tools grouping');
+ setView({settingsSection:'agent'}); await wait(100);
+ body=document.querySelector('.settings-body');
+ if(!body.textContent.includes('Sub-agent') || !body.textContent.includes('Vision Assistant') || !body.textContent.includes('Auto Memory')) throw Error('assistants grouping');
+ setView({settingsSection:'safety'}); await wait(100);
+ body=document.querySelector('.settings-body');
+ if(!body.textContent.includes('Desktop popup when a task ends') || !body.textContent.includes('Browser notification when a task ends')) throw Error('notifications grouping');
  render(null,checks);
  const items=[{kind:'user',id:'u1',ts:1,text:'test',images:[]},{kind:'assistant',id:'a1',ts:2,model:'test',blocks:[{type:'toolCall',id:'c1',name:'read',args:{path:'doc.md'}}]},{kind:'toolResult',ts:3,toolCallId:'c1',toolName:'read',text:'# Read result',images:[],isError:false}];
  setView({processDefault:'expanded'});

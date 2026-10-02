@@ -63,7 +63,10 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .action-tail { display: flex; align-items: center; gap: 8px; flex: none; font-size: var(--fs-sm); }
 .add { color: var(--diff-add-text); font-variant-numeric: tabular-nums; } .del { color: var(--diff-del-text); font-variant-numeric: tabular-nums; }
 .action-text .counts { display: inline-flex; vertical-align: baseline; margin-left: 2px; font-size: 12px; }
-/* Only step labels roll: the sign and line height stay fixed, both numbers share one clipped cell. */
+/* Signs pop once on live entry; only numbers roll inside the clipped cell. */
+.count-sign { display: inline-block; }
+.count-sign.pop { animation: count-pop var(--t-slow) var(--ease) both; }
+@keyframes count-pop { 0% { transform: scale(0.65); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 .step-counts > span { display: inline-flex; align-items: center; text-box: normal; }
 .count-number { display: inline-grid; height: 1em; line-height: 1; overflow: hidden; text-align: right; }
 .count-number > span { grid-area: 1 / 1; }
