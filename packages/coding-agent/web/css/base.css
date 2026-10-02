@@ -29,7 +29,13 @@ svg { display: block; flex: none; }
 
 .mono { font-family: var(--font-mono); }
 .dim { color: var(--text-3); }
-.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* overflow: hidden crops whatever leaves the line box, and the descenders of g, j, p, q, y leave a tight one. The clip box is
+   taller than the line by 4px at the bottom (padding), and the negative margin gives the same 4px back to the layout, so
+   the text is whole and nothing around it moves. */
+/* No transform or containment here: a row's popup menu may be positioned against the page, and either would capture it. */
+.virtual-rows { position: relative; }
+.virtual-window { position: absolute; left: 0; right: 0; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; padding-bottom: 4px; margin-bottom: -4px; }
 .grow { flex: 1 1 auto; min-width: 0; }
 .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .col { display: flex; flex-direction: column; min-width: 0; }
@@ -99,6 +105,13 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
    `svg` above), and its line box is a whole number of pixels, so neither the icon nor the text is rounded half a
    pixel off the centre line. */
 .btn, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
+/* The rows of the file tree, the file list and the chat list hold single lines of text in a fixed-height row: an 18px line
+   box (not 16px) leaves the descenders room, the row height itself does not change. */
+.tree-row, .ws-row, .chat-row, .cfile, .tree-node, .term-item, .fp-row { line-height: 18px; }
+/* Rows that unfold or select something on click are not text to select: a quick second click would highlight the name
+   of the folder, file or chat instead of only unfolding it. Fields inside them stay editable. */
+.tree-row, .tree-node, .ws-row, .chat-row, .cfile, .cfiles-toggle, .term-item, .nav-btn, .side-section, .ctx-head, .action-row, .summary-head, .group-head, .change-head, .change-file, .tab, .fp-row, .menu-item, .pop-item, .cp-row, .palette-item, .settings-nav button { user-select: none; -webkit-user-select: none; }
+.chat-row .title-edit, .chat-row input, .tree-row input, .ws-row input { user-select: text; -webkit-user-select: text; }
 /* Added / removed line counts beside an icon or a label: their box is cut to the digits themselves, so the digits'
    own middle (not the taller line box around them) sits on the centre line of what they stand next to. */
 @supports (text-box: trim-both cap alphabetic) {

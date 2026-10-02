@@ -1004,6 +1004,8 @@ export const zhCN = {
 	"This folder is a linked Git worktree": "这个文件夹是一个关联的 Git Worktree",
 	"worktree": "worktree",
 	"Live: output tokens per second while the model writes (waiting for the first token is not counted).": "实时：模型输出时每秒生成的 Token 数（不含等待第一个 Token 的时间）。",
+	"Live: output tokens per second while the model writes, estimated from the streamed text because the provider reports its token count only at the end (waiting for the first token is not counted).": "实时：模型输出时每秒生成的 Token 数。Provider 只在回复结束时才报告 Token 数，所以这里按已输出的文字估算（不含等待第一个 Token 的时间）。",
+	"Average of this request, estimated from the streamed text: about {tokens} output tokens in {seconds}s after the first token.": "这次请求的平均速度（按已输出文字估算）：首个 Token 之后 {seconds} 秒内约输出了 {tokens} 个 Token。",
 	"Not available: the reply was not streamed or the provider reported no output tokens.": "不可用：这次回复不是流式输出，或 Provider 没有报告输出 Token。",
 	"The provider has reported no cache use in this session.": "这个 Session 中 Provider 没有报告任何缓存使用。",
 	"Cache reads {read} of {total} input tokens over the whole session": "整个 Session 中，{total} 个输入 Token 里有 {read} 个来自缓存",
@@ -1201,6 +1203,7 @@ export const zhCN = {
 	"Measured with the first model request.": "第一次请求模型后开始测量。",
 	"Whole session: {rate}.": "整个 Session：{rate}。",
 	"Waiting for the provider to report this request's cache use. Some providers report it only at the end of the reply.": "正在等待 Provider 报告这次请求的缓存使用情况。有些 Provider 只在回复结束时才报告。",
+	"Expected from the previous request: about {read} of {total} input tokens should come from the cache. The provider reports the real number when the reply ends.": "按上一次请求预估：{total} 个输入 Token 中约有 {read} 个会来自缓存。回复结束时 Provider 会给出真实数字。",
 	"This request: {read} of {total} input tokens came from the cache.": "这次请求：{total} 个输入 Token 中有 {read} 个来自缓存。",
 	"The provider has reported no cache use for this request.": "这次请求中 Provider 没有报告缓存使用。",
 

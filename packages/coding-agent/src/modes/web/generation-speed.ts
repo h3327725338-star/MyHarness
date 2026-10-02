@@ -8,9 +8,11 @@
  * Every model request goes through the same states (`RequestMeterState`):
  * - `detecting`: the request has started and no reliable number exists yet. The value of the previous request is gone;
  *   it is never shown as if it belonged to this one.
- * - `live`: the provider reports the output count progressively, so the speed is the growth between two reports
- *   divided by the time between them. Providers that report usage only at the end stay `detecting` instead of getting
- *   an estimate.
+ * - `live`: the speed over the last second or so of streaming, updated with every streamed piece. The token count
+ *   is the one the provider reports progressively; a provider that reports usage only at the end gets a count
+ *   estimated from the streamed text (about 4 characters per token, 0.7 token per CJK character), flagged
+ *   `estimated`, so the number still moves while the reply is written. The final value replaces it with the
+ *   reported one.
  * - `final`: the request ended with a reliable number: the reported output tokens over the time from the first
  *   streamed output to the end. When reasoning happens hidden before the first visible output (usage.reasoning
  *   without streamed thinking), only the visible tokens are counted, because the hidden ones were produced before the
@@ -33,6 +35,8 @@ export interface GenerationSpeed {
 	/** Tokens and milliseconds the final value is based on. */
 	tokens?: number;
 	ms?: number;
+	/** The token count behind the number was estimated from the streamed text, not reported by the provider. */
+	estimated?: boolean;
 }
 
 const OUTPUT_EVENTS = new Set([
@@ -45,6 +49,15 @@ const OUTPUT_EVENTS = new Set([
 ]);
 /** Shorter spans are dominated by delivery jitter. */
 const MIN_SPAN_MS = 250;
+/** The live speed is the throughput of roughly this much recent streaming. */
+const WINDOW_MS = 1500;
+
+/** Rough token count of a streamed piece of text, only used while the provider has reported nothing. */
+export function estimateStreamedTokens(text: string): number {
+	let tokens = 0;
+	for (let i = 0; i < text.length; i++) tokens += text.charCodeAt(i) < 128 ? 0.25 : 0.7;
+	return tokens;
+}
 
 interface Observation {
 	at: number;
@@ -65,6 +78,10 @@ export class GenerationSpeedMeter {
 	private sawThinking = false;
 	private firstObservation: Observation | undefined;
 	private lastObservation: Observation | undefined;
+	/** Streamed output so far, estimated from the text, and the recent history of it. */
+	private estimated = 0;
+	private samples: Observation[] = [];
+	private usingReported = false;
 	private value: GenerationSpeed | null = null;
 	private readonly now: () => number;
 
@@ -79,39 +96,55 @@ export class GenerationSpeedMeter {
 
 	/** A model request starts: whatever was shown belonged to the previous request, so the state goes back to `detecting`. Returns true when the shown value changed. */
 	start(): boolean {
-		this.firstOutputAt = undefined;
-		this.sawThinking = false;
-		this.firstObservation = undefined;
-		this.lastObservation = undefined;
+		this.reset();
 		const changed = this.value?.state !== "detecting";
 		this.value = DETECTING;
 		return changed;
 	}
 
 	/** Returns true when the shown value changed. */
-	update(message: AgentMessage, eventType: string | undefined): boolean {
+	update(message: AgentMessage, eventType: string | undefined, delta?: string): boolean {
 		const at = this.now();
 		if (eventType?.startsWith("thinking")) this.sawThinking = true;
 		let changed = false;
 		if (this.firstOutputAt === undefined && eventType && OUTPUT_EVENTS.has(eventType)) {
 			this.firstOutputAt = at;
+			this.samples = [{ at, output: 0 }];
 			if (this.value?.state !== "detecting") {
 				this.value = DETECTING;
 				changed = true;
 			}
 		}
 		if (this.firstOutputAt === undefined) return changed;
+		if (delta) this.estimated += estimateStreamedTokens(delta);
 		const output = outputTokens(message);
-		if (output > 0 && output !== this.lastObservation?.output) {
+		// Reported counts win as soon as the provider sends any; until then the streamed text stands in.
+		const reported = output > 0;
+		if (reported && output !== this.lastObservation?.output) {
 			const observation = { at, output };
 			if (!this.firstObservation) this.firstObservation = observation;
 			this.lastObservation = observation;
-			const span = observation.at - this.firstObservation.at;
-			const grown = observation.output - this.firstObservation.output;
-			if (span >= MIN_SPAN_MS && grown > 0) {
-				this.value = { state: "live", tps: (grown * 1000) / span, live: true };
-				changed = true;
-			}
+		}
+		if (!reported && !delta) return changed;
+		// The two counts have different scales: restart the window when the provider's counts take over.
+		if (reported && !this.usingReported) {
+			this.usingReported = true;
+			this.samples = [];
+		}
+		this.samples.push({ at, output: reported ? output : this.estimated });
+		const horizon = at - WINDOW_MS;
+		while (this.samples.length > 2 && this.samples[1]!.at <= horizon) this.samples.shift();
+		const first = this.samples[0]!;
+		const span = at - first.at;
+		const grown = (reported ? output : this.estimated) - first.output;
+		if (span >= MIN_SPAN_MS && grown > 0) {
+			this.value = {
+				state: "live",
+				tps: (grown * 1000) / span,
+				live: true,
+				...(reported ? {} : { estimated: true }),
+			};
+			changed = true;
 		}
 		return changed;
 	}
@@ -130,10 +163,22 @@ export class GenerationSpeedMeter {
 		const output = outputTokens(message);
 		const hiddenReasoning = !this.sawThinking ? Math.max(0, message.usage?.reasoning ?? 0) : 0;
 		const tokens = output - hiddenReasoning;
-		this.value =
-			tokens > 0 && span >= MIN_SPAN_MS
-				? { state: "final", tps: (tokens * 1000) / span, live: false, tokens, ms: Math.round(span) }
-				: UNAVAILABLE;
+		if (tokens > 0 && span >= MIN_SPAN_MS) {
+			this.value = { state: "final", tps: (tokens * 1000) / span, live: false, tokens, ms: Math.round(span) };
+		} else if (output === 0 && this.estimated > 0 && span >= MIN_SPAN_MS) {
+			// The provider reported no output count at all: the estimate is all there is.
+			const estimated = Math.round(this.estimated);
+			this.value = {
+				state: "final",
+				tps: (estimated * 1000) / span,
+				live: false,
+				tokens: estimated,
+				ms: Math.round(span),
+				estimated: true,
+			};
+		} else {
+			this.value = UNAVAILABLE;
+		}
 		this.reset();
 		return this.value;
 	}
@@ -158,5 +203,8 @@ export class GenerationSpeedMeter {
 		this.sawThinking = false;
 		this.firstObservation = undefined;
 		this.lastObservation = undefined;
+		this.estimated = 0;
+		this.samples = [];
+		this.usingReported = false;
 	}
 }

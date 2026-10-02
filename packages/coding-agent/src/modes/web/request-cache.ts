@@ -8,9 +8,15 @@
  * cacheRead / (input + cacheRead + cacheWrite) for every protocol. A provider that never reports any cache use cannot be
  * told apart from one that reports zero, so a request without cache tokens only counts as a real 0% once the session
  * has seen cache use before; otherwise it is `unavailable`, never an invented 0%.
+ *
+ * Providers that report their usage only in the last chunk of the reply (the OpenAI-compatible ones) have nothing to
+ * show while the reply streams. For them the rate is predicted from the request itself: providers cache by prefix, and
+ * a request is the previous one plus what came after it, so about the whole previous prompt should be read from the
+ * cache. That number is marked `estimated` and is replaced by the provider's own as soon as it arrives.
  */
 
 import type { AgentMessage } from "@myharness/agent-core";
+import { estimateContextTokens } from "../../context/compact/compaction.ts";
 import type { RequestMeterState } from "./generation-speed.ts";
 
 export interface RequestCacheHit {
@@ -22,6 +28,8 @@ export interface RequestCacheHit {
 	write?: number;
 	/** Input tokens of the request in total (not cached + cache reads + cache writes). */
 	input?: number;
+	/** The number is a prediction from the previous request, not what the provider reported. */
+	estimated?: boolean;
 }
 
 const DETECTING: RequestCacheHit = { state: "detecting", hitRate: null };
@@ -41,6 +49,40 @@ function usageOf(message: AgentMessage): Usage | undefined {
 	return { input: number(usage.input), read: number(usage.cacheRead), write: number(usage.cacheWrite) };
 }
 
+/** Prompts shorter than this are not cached by the providers that have a minimum (1024 tokens). */
+const MIN_CACHEABLE_TOKENS = 1024;
+/** Provider caches live for minutes (5 for Anthropic by default); after a longer pause nothing is predicted. */
+const MAX_CACHE_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * What the next request is expected to read from the provider's cache: the previous request's whole prompt (the new
+ * request starts with it), out of the estimated size of the new prompt. Undefined when no reliable guess exists: no
+ * earlier request with a reported prompt, a prompt too short to be cached, or a pause long enough for the cache to expire.
+ */
+export function predictCacheHit(
+	messages: AgentMessage[],
+	now = Date.now(),
+): { read: number; input: number } | undefined {
+	let last: AgentMessage | undefined;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]!;
+		if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
+		const usage = usageOf(message);
+		if (usage && usage.input + usage.read + usage.write > 0) {
+			last = message;
+			break;
+		}
+	}
+	const usage = last ? usageOf(last) : undefined;
+	if (!last || !usage) return undefined;
+	const previousPrompt = usage.input + usage.read + usage.write;
+	if (previousPrompt < MIN_CACHEABLE_TOKENS) return undefined;
+	if (typeof last.timestamp === "number" && now - last.timestamp > MAX_CACHE_AGE_MS) return undefined;
+	const total = estimateContextTokens(messages).tokens;
+	if (total <= 0) return undefined;
+	return { read: Math.min(previousPrompt, total), input: Math.max(total, previousPrompt) };
+}
+
 export class RequestCacheMeter {
 	private value: RequestCacheHit | null = null;
 	/** Whether the provider has reported any cache use in this session (before this request or during it). */
@@ -51,13 +93,25 @@ export class RequestCacheMeter {
 	}
 
 	/**
-	 * A model request starts. `reportedBefore`: the session's earlier requests already contained cache tokens. Returns
-	 * true when the shown value changed.
+	 * A model request starts. `reportedBefore`: the session's earlier requests already contained cache tokens.
+	 * `predicted`: what the request is expected to read from the cache (see predictCacheHit), shown until the provider
+	 * reports the real usage; only used for a provider that has reported cache use before. Returns true when the shown
+	 * value changed.
 	 */
-	start(reportedBefore: boolean): boolean {
+	start(reportedBefore: boolean, predicted?: { read: number; input: number }): boolean {
 		this.reported = reportedBefore;
-		const changed = this.value?.state !== "detecting";
-		this.value = DETECTING;
+		const next: RequestCacheHit =
+			reportedBefore && predicted && predicted.input > 0
+				? {
+						state: "live",
+						hitRate: Math.min(1, predicted.read / predicted.input),
+						read: predicted.read,
+						input: predicted.input,
+						estimated: true,
+					}
+				: DETECTING;
+		const changed = JSON.stringify(this.value) !== JSON.stringify(next);
+		this.value = next;
 		return changed;
 	}
 
@@ -77,7 +131,12 @@ export class RequestCacheMeter {
 			write: usage.write,
 			input: prompt,
 		};
-		if (this.value?.state === "live" && this.value.hitRate === next.hitRate && this.value.input === next.input)
+		if (
+			this.value?.state === "live" &&
+			!this.value.estimated &&
+			this.value.hitRate === next.hitRate &&
+			this.value.input === next.input
+		)
 			return false;
 		this.value = next;
 		return true;
@@ -102,7 +161,9 @@ export class RequestCacheMeter {
 	/** The run ended while the request was still being measured: a live value stays as the last reliable one. Returns true when the shown value changed. */
 	settle(): boolean {
 		if (!this.value || (this.value.state !== "detecting" && this.value.state !== "live")) return false;
-		this.value = this.value.state === "live" ? { ...this.value, state: "final" } : UNAVAILABLE;
+		// A prediction is not a measurement: a request that ended without the provider's numbers has none.
+		this.value =
+			this.value.state === "live" && !this.value.estimated ? { ...this.value, state: "final" } : UNAVAILABLE;
 		return true;
 	}
 }

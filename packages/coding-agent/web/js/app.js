@@ -179,12 +179,24 @@ function useWidthClass(ref, deps, limits = [430, 620]) {
 		if (!el || typeof ResizeObserver === "undefined") return undefined;
 		const apply = () => {
 			const w = el.clientWidth;
-			el.dataset.w = w < limits[0] ? "xs" : w < limits[1] ? "s" : "m";
+			const next = w < limits[0] ? "xs" : w < limits[1] ? "s" : "m";
+			// Only a real change touches the DOM: a drag resizes every frame but crosses a limit rarely.
+			if (el.dataset.w !== next) el.dataset.w = next;
 		};
 		apply();
-		const ro = new ResizeObserver(apply);
+		let frame = 0;
+		const ro = new ResizeObserver(() => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				apply();
+			});
+		});
 		ro.observe(el);
-		return () => ro.disconnect();
+		return () => {
+			ro.disconnect();
+			cancelAnimationFrame(frame);
+		};
 	}, deps);
 }
 

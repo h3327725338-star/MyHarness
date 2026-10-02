@@ -8,6 +8,7 @@ import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import { getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
+import { setMirrorSessionsAllowed } from "../../session/manager/index.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { WebHttpServer } from "./http-server.ts";
@@ -47,6 +48,8 @@ export interface WebModeOptions {
 
 /** Start the HTTP server before the runtime exists so startup questions (Project Trust) can reach the browser. */
 export async function startWebBootstrap(options: { port?: number; openBrowser: boolean }): Promise<WebBootstrap> {
+	// A session that the terminal UI (or another Web UI process) runs can be opened here and followed live.
+	setMirrorSessionsAllowed(true);
 	const server = new WebHttpServer();
 	const dialogs = new WebDialogBridge();
 	let phase: "starting" | "ready" | "error" = "starting";

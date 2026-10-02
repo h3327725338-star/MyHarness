@@ -676,6 +676,7 @@ export class InteractiveMode {
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			this.watchMirrorSession();
 		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
@@ -1015,10 +1016,11 @@ export class InteractiveMode {
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
+		this.watchMirrorSession();
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
-		await this.notifyPendingGitCheckpoints();
+		if (!this.session.isMirror) await this.notifyPendingGitCheckpoints();
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1952,6 +1954,39 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
+	}
+
+	/**
+	 * A session that another MyHarness process (a Web UI, another terminal) runs is followed live from here: its output
+	 * appears as it is written and what is typed here is carried out by that process. When that process ends, this
+	 * terminal takes the session over.
+	 */
+	private watchMirrorSession(): void {
+		const mirror = this.session;
+		if (!mirror.isMirror) return;
+		this.showStatus("这个会话正在另一个进程里运行：内容实时同步，这里输入的消息会交给那个进程执行。");
+		mirror.onMirrorClosed(() => void this.reclaimMirrorSession(mirror));
+	}
+
+	private async reclaimMirrorSession(mirror: AgentSession): Promise<void> {
+		const path = mirror.sessionFile;
+		if (!path) return;
+		// The owner closes its bridge a moment before it releases the writer lock: try again until it is free.
+		const deadline = Date.now() + 15_000;
+		while (this.session === mirror && !this.shutdownRequested) {
+			try {
+				await this.runtimeHost.switchSession(path);
+				this.showStatus("原来运行这个会话的进程已退出，现在由这个终端接着运行。");
+				return;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!/already active/i.test(message) || Date.now() >= deadline) {
+					this.showError(message);
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 250));
+			}
+		}
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
@@ -3054,6 +3089,11 @@ export class InteractiveMode {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
+					if (this.session.isMirror) {
+						this.showWarning("这个会话正在另一个进程里运行，这里不能执行 ! 命令；请在那个进程里执行。");
+						this.editor.setText(text);
+						return;
+					}
 					if (this.session.isBashRunning) {
 						this.showWarning("A bash command is already running. Press Esc to cancel it first.");
 						this.editor.setText(text);
@@ -3181,8 +3221,9 @@ export class InteractiveMode {
 				this.workspaceBaselinePromise = undefined;
 				this.workspaceBaselineFailureReason = undefined;
 				this._bashCountAtRunStart = this.session.bashExecutionCount;
-				void this.ensureWorkspaceBaseline().catch(() => {});
-				{
+				// A session followed from another process: the owning process does the bookkeeping of its tasks.
+				if (!this.session.isMirror) void this.ensureWorkspaceBaseline().catch(() => {});
+				if (!this.session.isMirror) {
 					const checkpoint = this.session.getGitCheckpoint();
 					if (checkpoint?.status === "created") {
 						this.showStatus(`Git：已创建任务检查点 ${checkpoint.id}。`);
@@ -3515,7 +3556,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_settled":
-				if (!this.shutdownRequested) {
+				if (!this.shutdownRequested && !this.session.isMirror) {
 					if (this.completionWorkflowEligibleForRun ?? true) this.maybeStartCompletionWorkflow();
 					else await this.settleFailedTaskGitCheckpoint();
 				}
@@ -3732,6 +3773,7 @@ export class InteractiveMode {
 	}
 
 	private shouldDelayAssistantOutput(): boolean {
+		if (this.session?.isMirror) return false;
 		if (this.completionWorkflowActive) return true;
 		return this.settingsManager.getAutoMemorySettings().enabled;
 	}

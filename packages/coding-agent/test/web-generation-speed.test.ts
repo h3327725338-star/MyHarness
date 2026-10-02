@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GenerationSpeedMeter } from "../src/modes/web/generation-speed.ts";
-import { RequestCacheMeter } from "../src/modes/web/request-cache.ts";
+import { predictCacheHit, RequestCacheMeter } from "../src/modes/web/request-cache.ts";
 
 function assistant(output: number, reasoning?: number): any {
 	return { role: "assistant", content: [], usage: { input: 0, output, cacheRead: 0, cacheWrite: 0, reasoning } };
@@ -142,5 +142,104 @@ describe("Web UI: cache hit of a request", () => {
 		meter.update(withInput(100, 900));
 		expect(meter.settle()).toBe(true);
 		expect(meter.current?.state).toBe("final");
+	});
+});
+
+describe("Web UI: generation speed estimated while streaming", () => {
+	it("moves with the streamed text when the provider reports no output count, and ends on an estimated average", () => {
+		let now = 0;
+		const meter = new GenerationSpeedMeter(() => now);
+		meter.start();
+		const piece = "x".repeat(40); // about 10 tokens
+		meter.update(assistant(0), "text_delta", piece);
+		now = 500;
+		expect(meter.update(assistant(0), "text_delta", piece)).toBe(true);
+		expect(meter.current?.state).toBe("live");
+		expect(meter.current?.estimated).toBe(true);
+		expect(meter.current?.tps).toBeCloseTo(40, 0);
+		now = 1000;
+		meter.update(assistant(0), "text_delta", piece);
+		expect(meter.current?.tps).toBeGreaterThan(0);
+		now = 2000;
+		const ended = meter.end(assistant(0));
+		expect(ended).toMatchObject({ state: "final", estimated: true, live: false });
+		expect(ended?.tps).toBeCloseTo(15, 0);
+	});
+
+	it("switches to the provider's counts as soon as it reports them, without the estimate leaking into the number", () => {
+		let now = 0;
+		const meter = new GenerationSpeedMeter(() => now);
+		meter.start();
+		meter.update(assistant(0), "text_delta", "x".repeat(4000)); // a big estimate that must not be mixed in
+		now = 1000;
+		meter.update(assistant(100), "text_delta", "x".repeat(4));
+		now = 2000;
+		meter.update(assistant(200), "text_delta", "x".repeat(4));
+		expect(meter.current?.state).toBe("live");
+		expect(meter.current?.estimated).toBeUndefined();
+		expect(meter.current?.tps).toBeCloseTo(100, 0);
+	});
+});
+
+describe("Web UI: cache hit predicted while the reply streams", () => {
+	const NOW = 1_000_000_000_000;
+	function previous(prompt: number, ageMs = 1000): any {
+		return {
+			role: "assistant",
+			content: [{ type: "text", text: "ok" }],
+			stopReason: "stop",
+			timestamp: NOW - ageMs,
+			usage: { input: prompt, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: prompt + 10 },
+		};
+	}
+	const user = (chars: number): any => ({ role: "user", content: "x".repeat(chars), timestamp: NOW });
+
+	it("expects the whole previous prompt to be read from the cache, out of the new prompt's estimated size", () => {
+		// 4000 reported + 10 output + about 1000 new tokens (4000 characters)
+		const predicted = predictCacheHit([user(10), previous(4000), user(4000)], NOW);
+		expect(predicted?.read).toBe(4000);
+		expect(predicted?.input).toBeGreaterThan(4900);
+		expect(predicted?.input).toBeLessThan(5200);
+	});
+
+	it("predicts nothing without an earlier request, for a prompt too short to be cached, or after the cache expired", () => {
+		expect(predictCacheHit([user(100)], NOW)).toBeUndefined();
+		expect(predictCacheHit([user(10), previous(500), user(100)], NOW)).toBeUndefined();
+		expect(predictCacheHit([user(10), previous(4000, 11 * 60 * 1000), user(100)], NOW)).toBeUndefined();
+		const failed = { ...previous(4000), stopReason: "error" };
+		expect(predictCacheHit([user(10), failed, user(100)], NOW)).toBeUndefined();
+	});
+
+	it("shows the prediction as live and estimated, and the provider's own number replaces it", () => {
+		const meter = new RequestCacheMeter();
+		expect(meter.start(true, { read: 4000, input: 5000 })).toBe(true);
+		expect(meter.current).toEqual({ state: "live", hitRate: 0.8, read: 4000, input: 5000, estimated: true });
+		// The provider reports exactly what was predicted: it is still a measurement now, not an estimate.
+		expect(meter.update(withInput(1000, 4000))).toBe(true);
+		expect(meter.current).toEqual({ state: "live", hitRate: 0.8, read: 4000, write: 0, input: 5000 });
+		expect(meter.end(withInput(1000, 4000))?.estimated).toBeUndefined();
+	});
+
+	it("keeps the prediction until the end of the reply when the provider reports usage only then", () => {
+		const meter = new RequestCacheMeter();
+		meter.start(true, { read: 4000, input: 5000 });
+		expect(meter.update(withInput(0, 0))).toBe(false);
+		expect(meter.current?.estimated).toBe(true);
+		expect(meter.end(withInput(2000, 3000))).toEqual({
+			state: "final",
+			hitRate: 0.6,
+			read: 3000,
+			write: 0,
+			input: 5000,
+		});
+	});
+
+	it("does not predict for a provider that has never reported cache use, and a stopped request keeps no prediction", () => {
+		const meter = new RequestCacheMeter();
+		meter.start(false, { read: 4000, input: 5000 });
+		expect(meter.current).toEqual({ state: "detecting", hitRate: null });
+		meter.start(true, { read: 4000, input: 5000 });
+		expect(meter.settle()).toBe(true);
+		expect(meter.current).toEqual({ state: "unavailable", hitRate: null });
 	});
 });

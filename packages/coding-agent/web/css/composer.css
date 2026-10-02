@@ -1,6 +1,6 @@
 .composer-zone { flex: none; padding: 0 20px 12px; }
 /* Narrow main column (detail panel open): drop low-value composer items first, never the send button. */
-.main[data-w="s"] .meter span, .main[data-w="s"] .env-status { display: none; }
+.main[data-w="s"] .env-status { display: none; }
 .main[data-w="s"] .env-chip { max-width: 45%; }
 .main[data-w="s"] .chip { max-width: 150px; }
 .main[data-w="xs"] .chip .chip-text { display: none; }
@@ -32,7 +32,10 @@
 
 /* Context use: one of the bar's text controls. It has the height, type size and line box of the chips beside it, so its
    ring is on the centre line of the other icons and its number on the baseline of the other texts. */
-.meter { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control-sm); padding: 0 8px; border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-md); line-height: 20px; font-variant-numeric: tabular-nums; }
+.meter { display: inline-flex; align-items: center; justify-content: center; width: var(--h-control-sm); height: var(--h-control-sm); padding: 0; border-radius: var(--r-md); color: var(--text-3); line-height: 0; }
+/* Only the ring: a block-level glyph in a square button, on the centre line of the chips and the send button. The ring's
+   optical centre sits a hair above its box (the arc starts at the top), so it is nudged down by one pixel. */
+.meter svg { display: block; flex: none; transform: translateY(1px); }
 .meter:hover { background: var(--surface-hover); color: var(--text); }
 .meter.warn { color: var(--warn); } .meter.danger { color: var(--danger); }
 
@@ -124,30 +127,32 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .model-ref-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .model-ref-effort { display: inline-flex; align-items: center; flex: none; max-width: 112px; color: var(--text); cursor: pointer; }
 
-/* Thinking effort. Top line: the name and the level in use. Second line: what the two ends mean. Then the slider: a
-   thin rail with one small mark per level the model supports and a single thumb on the level in use. The rail is inset
-   by the thumb's radius, so the thumb at either end lines up with the edges of the two text lines above it. */
+/* Thinking effort. Top line: the name and the level in use. Then the slider: a thin rail with one small mark per level the
+   model supports, the name of each level under its mark and a single thumb on the level in use. The rail is inset by the
+   thumb's radius, so the thumb at either end lines up with the edge of the line above it. */
 .popover.effort-pop { padding: 12px 14px; animation-name: fade-only; overflow: visible; }
 .effort { display: flex; flex-direction: column; }
 .effort.disabled { opacity: var(--disabled-opacity); }
-.effort-head, .effort-ends { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; line-height: 18px; }
+.effort-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; line-height: 18px; }
 .effort-head { font-size: var(--fs-md); }
 .effort-head.alone { justify-content: center; font-size: 18px; line-height: 26px; }
 .effort-head.alone .effort-value { color: var(--text); font-weight: 600; }
 .effort-title { color: var(--text); font-weight: 600; }
 .effort-value { color: var(--text-2); }
-.effort-ends { margin-top: 8px; font-size: var(--fs-sm); color: var(--text-3); }
 .effort-track { margin-top: 2px; padding: 9px 8px; border-radius: var(--r-sm); cursor: pointer; outline: none; touch-action: none; }
 .effort.disabled .effort-track { cursor: default; }
 .effort-rail { position: relative; height: 4px; border-radius: var(--r-pill); background: var(--surface-active); }
 .effort-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-4); }
 .effort-thumb { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); border: 3px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--border-strong); transition: left var(--t-base) var(--ease); }
 .effort-track:focus .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
-.effort-default { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); min-height: 28px; margin: 8px -6px -4px; padding: 2px 6px; border-radius: var(--r-xs); text-align: left; font-size: var(--fs-sm); color: var(--text-2); }
-.effort-default:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
-.effort-default.on { color: var(--text); }
-.effort-default .dim { font-size: var(--fs-xs); }
-.effort-default > svg { color: var(--accent); }
+/* The name of every level is written under its stop, so the slider needs no legend. The first and last names lean inward
+   so they stay inside the popover. */
+.effort-labels { position: relative; height: 16px; margin-top: 10px; }
+.effort-label { position: absolute; top: 0; transform: translateX(-50%); font-size: var(--fs-xs); line-height: 14px; color: var(--text-3); white-space: nowrap; transition: color var(--t-fast); }
+.effort-label.first { transform: translateX(-30%); }
+.effort-label.last { transform: translateX(-70%); }
+.effort-label.on { color: var(--text); font-weight: 600; }
+.effort:not(.disabled) .effort-track:hover .effort-label:not(.on) { color: var(--text-2); }
 .menu-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 2px 8px; border-radius: var(--r-xs); text-align: left; color: var(--text-2); font-size: 12.5px; }
 .menu-item:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .menu-item.danger { color: var(--danger); }
@@ -195,7 +200,6 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .cp-tail { width: 14px; flex: none; display: grid; place-items: center; }
 .cp-effort { padding: 14px 20px 6px; outline: none; }
 .cp-note { margin-top: 4px; padding-bottom: 6px; text-align: center; font-size: var(--fs-sm); }
-.cp-effort .effort-default { margin: 4px 0 6px; width: 100%; }
 .cp-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 4px; font-size: var(--fs-xs); }
 .cp-body .git-lines { max-height: 150px; }
 .cp-foot { flex: none; padding: 7px 12px 8px; border-top: 1px solid var(--border); text-align: center; font-size: var(--fs-xs); }

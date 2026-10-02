@@ -78,6 +78,16 @@ function TaskResult({ task }) {
 	</div>`;
 }
 
+/** Sub-agent tasks that were still marked running when nothing is running any more (the main task was cancelled or ended): shown as stopped, without spinner or "running in the background". */
+function settleDetails(details) {
+	const stop = (task) => (task.status === "running" ? { ...task, status: "cancelled", lastToolInfo: undefined } : task);
+	if (details.phases) {
+		return { ...details, status: details.status === "running" ? "cancelled" : details.status, phases: details.phases.map((phase) => ({ ...phase, status: phase.status === "running" ? "cancelled" : phase.status, results: phase.results.map(stop) })) };
+	}
+	if (details.results) return { ...details, background: false, results: details.results.map(stop) };
+	return details;
+}
+
 /** Sub-agent batch or workflow progress, from tool details (live or final). */
 function AgentDetails({ details }) {
 	if (!details) return null;
@@ -102,8 +112,12 @@ function AgentDetails({ details }) {
 const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 	const [open, setOpen] = useState(!!defaultOpen);
 	const subAgents = useStore((st) => st.subAgents);
+	// Background batches legitimately outlive the call that started them, but only while the session still has some.
+	const nothingRunning = useStore((st) => !st.snap?.active && !st.snap?.flags?.background);
 	const resultDetails = step.result?.details;
-	const liveDetails = step.kind === "agent" ? (resultDetails?.batchId && subAgents[resultDetails.batchId]) || resultDetails || step.run?.partialDetails : undefined;
+	const rawDetails = step.kind === "agent" ? (resultDetails?.batchId && subAgents[resultDetails.batchId]) || resultDetails || step.run?.partialDetails : undefined;
+	const stale = rawDetails && step.status !== "running" && (!rawDetails.background || nothingRunning);
+	const liveDetails = stale ? settleDetails(rawDetails) : rawDetails;
 	const took = step.startedAt && step.endedAt && step.endedAt - step.startedAt >= 1000 ? fmtDuration(step.endedAt - step.startedAt) : "";
 	const exit = step.result?.details?.exitCode;
 	const toggle = () => setOpen(!open);

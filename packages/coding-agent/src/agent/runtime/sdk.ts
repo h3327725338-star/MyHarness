@@ -12,6 +12,7 @@ import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribu
 import { formatNoModelsAvailableMessage } from "../../providers/runtime/auth-guidance.ts";
 import { ModelRuntime } from "../../providers/runtime/index.ts";
 import { findInitialModel } from "../../providers/runtime/model-resolver.ts";
+import { readSessionBridgeDescriptor } from "../../session/bridge/descriptor.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import {
 	createBashTool,
@@ -33,7 +34,9 @@ import { resolvePath } from "../../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { convertToLlm } from "./messages.ts";
+import { MirrorAgentSession } from "./mirror-agent-session.ts";
 import { restrictToolNamesForRole } from "./role.ts";
+import { SessionBridgeClient } from "./session-bridge.ts";
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -397,38 +400,70 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
 	});
 
-	// Restore messages if session has existing data
-	if (hasExistingSession) {
-		agent.state.messages = existingSession.messages;
-		if (!hasThinkingEntry) {
-			sessionManager.appendThinkingLevelChange(thinkingLevel);
+	// Take the writer lock here (the session constructor shares it). When another live process owns the session and
+	// this process allows it, the session is followed instead of failing (see MirrorAgentSession).
+	const lockMode = sessionManager.acquireWriterLock();
+	let createdSession: AgentSession;
+	try {
+		if (lockMode === "owner") {
+			// Restore messages if session has existing data
+			if (hasExistingSession) {
+				agent.state.messages = existingSession.messages;
+				if (!hasThinkingEntry) {
+					sessionManager.appendThinkingLevelChange(thinkingLevel);
+				}
+			} else {
+				// Save initial model and thinking level for new sessions so they can be restored on resume
+				if (model) {
+					sessionManager.appendModelChange(model.provider, model.id);
+				}
+				sessionManager.appendThinkingLevelChange(thinkingLevel);
+			}
+		} else {
+			agent.state.messages = existingSession.messages;
 		}
-	} else {
-		// Save initial model and thinking level for new sessions so they can be restored on resume
-		if (model) {
-			sessionManager.appendModelChange(model.provider, model.id);
-		}
-		sessionManager.appendThinkingLevelChange(thinkingLevel);
-	}
 
-	const createdSession = new AgentSession({
-		agent,
-		sessionManager,
-		settingsManager,
-		cwd,
-		agentDir,
-		scopedModels: options.scopedModels,
-		resourceLoader,
-		customTools: options.customTools,
-		codeIntelligence: options.codeIntelligence,
-		modelRuntime,
-		initialActiveToolNames,
-		allowedToolNames,
-		excludedToolNames,
-		extensionRunnerRef,
-		sessionStartEvent: options.sessionStartEvent,
-		contextWindowOverride: options.contextWindowOverride,
-	});
+		const sessionConfig = {
+			agent,
+			sessionManager,
+			settingsManager,
+			cwd,
+			agentDir,
+			scopedModels: options.scopedModels,
+			resourceLoader,
+			customTools: options.customTools,
+			codeIntelligence: options.codeIntelligence,
+			modelRuntime,
+			initialActiveToolNames,
+			allowedToolNames,
+			excludedToolNames,
+			extensionRunnerRef,
+			sessionStartEvent: options.sessionStartEvent,
+			contextWindowOverride: options.contextWindowOverride,
+		};
+		if (lockMode === "owner") {
+			createdSession = new AgentSession(sessionConfig);
+		} else {
+			const mirror = new MirrorAgentSession(sessionConfig);
+			try {
+				const descriptor =
+					sessionManager.getSessionFile() && readSessionBridgeDescriptor(sessionManager.getSessionFile()!);
+				if (!descriptor)
+					throw new Error(
+						`Session is already active in another MyHarness process: ${sessionManager.getSessionFile()}`,
+					);
+				const { client, hello } = await SessionBridgeClient.connect(descriptor);
+				mirror.attachBridge(client, hello);
+			} catch (error) {
+				mirror.dispose();
+				throw error;
+			}
+			createdSession = mirror;
+		}
+	} catch (error) {
+		sessionManager.releaseWriterLock();
+		throw error;
+	}
 	session = createdSession;
 	const extensionsResult = resourceLoader.getExtensions();
 

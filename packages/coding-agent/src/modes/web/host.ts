@@ -11,6 +11,7 @@ import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
+import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
@@ -37,11 +38,13 @@ import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
-import { RequestCacheMeter } from "./request-cache.ts";
+import { predictCacheHit, RequestCacheMeter } from "./request-cache.ts";
 import { entriesToWire, messageToWire, sanitizeDetails, toWireModel, type WireItem } from "./wire.ts";
 
 const ASSISTANT_UPDATE_INTERVAL_MS = 50;
 const TOOL_UPDATE_INTERVAL_MS = 120;
+/** The live speed and cache numbers are pushed at most this often while a reply streams. */
+const METER_BROADCAST_INTERVAL_MS = 150;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
 /** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
 const TASK_NOTICE_ANSWER_MS = 2500;
@@ -88,6 +91,8 @@ export interface SlotStatus {
 /** The parts of the hub that a single WebHost reports back to. */
 export interface WebHostHubLink {
 	hostBroadcast(host: WebHost, event: string): void;
+	/** The process that owned this host's session ended: take the session over in place. */
+	reclaimMirror(host: WebHost): void;
 	requestShutdown(): void;
 }
 
@@ -138,6 +143,7 @@ export class WebHost {
 	/** Output tokens per second of the model, from real streamed output (see generation-speed.ts). */
 	private speed = new GenerationSpeedMeter();
 	private speedChanged = false;
+	private lastMeterBroadcastAt = 0;
 	/** Prompt-cache hit rate of the current model request, from the usage the provider reports (see request-cache.ts). */
 	private cache = new RequestCacheMeter();
 	private cacheChanged = false;
@@ -327,7 +333,9 @@ export class WebHost {
 				});
 			},
 		});
-		void this.recoverStartupCheckpoint(generation);
+		// A checkpoint of a session another process owns belongs to that process.
+		if (!session.isMirror) void this.recoverStartupCheckpoint(generation);
+		else this.watchMirror(session as MirrorAgentSession, generation);
 		this.unsubscribe = session.subscribe((event) => {
 			if (generation !== this.generation) return;
 			try {
@@ -340,6 +348,30 @@ export class WebHost {
 					ts: Date.now(),
 				});
 			}
+		});
+	}
+
+	/**
+	 * The session is run by another MyHarness process (for example the terminal). This host shows it live and sends
+	 * what the user types there; when that process ends, the session is taken over here.
+	 */
+	private watchMirror(session: MirrorAgentSession, generation: number): void {
+		session.onMirrorClosed(() => {
+			if (generation !== this.generation) return;
+			this.broadcast("notice", {
+				id: `mirror-closed-${Date.now()}`,
+				message: "The process that ran this session ended. The session continues here.",
+				type: "info",
+				ts: Date.now(),
+			});
+			this.hub?.reclaimMirror(this);
+		});
+		this.broadcast("notice", {
+			id: `mirror-${Date.now()}`,
+			message:
+				"This session is running in another MyHarness process. Both views stay in sync, and what you send here runs there.",
+			type: "info",
+			ts: Date.now(),
 		});
 	}
 
@@ -467,7 +499,8 @@ export class WebHost {
 	 * shown instead, so the notification never depends on a permission the browser may not have given.
 	 */
 	private announceTaskEnd(state: RunStateSnapshot): void {
-		if (this.shutdownRequested) return;
+		// The process that runs a mirrored session shows its own task-end popup.
+		if (this.shutdownRequested || this.session.isMirror) return;
 		const kind = popupKindForRunState(state.state);
 		if (!kind) return;
 		const settings = this.session.settingsManager.getPopupNotificationSettings();
@@ -563,7 +596,9 @@ export class WebHost {
 			}
 			case "message_update":
 				if (event.message.role === "assistant") {
-					if (this.speed.update(event.message, event.assistantMessageEvent?.type)) this.speedChanged = true;
+					const streamed = event.assistantMessageEvent as { type?: string; delta?: unknown } | undefined;
+					const delta = typeof streamed?.delta === "string" ? streamed.delta : undefined;
+					if (this.speed.update(event.message, streamed?.type, delta)) this.speedChanged = true;
 					if (this.cache.update(event.message)) this.cacheChanged = true;
 					this.scheduleAssistantUpdate(event.message);
 				}
@@ -737,13 +772,18 @@ export class WebHost {
 		if (!message || !this.liveAssistantId) return;
 		const item = messageToWire(message);
 		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
-		if (this.speedChanged) {
-			this.speedChanged = false;
-			this.broadcast("generation_speed", { speed: this.speed.current });
-		}
-		if (this.cacheChanged) {
-			this.cacheChanged = false;
-			this.broadcast("cache_hit", { cache: this.cache.current });
+		// A change that has to wait stays flagged and goes out with the next update (or the final value at the end).
+		const now = Date.now();
+		if (now - this.lastMeterBroadcastAt >= METER_BROADCAST_INTERVAL_MS) {
+			if (this.speedChanged || this.cacheChanged) this.lastMeterBroadcastAt = now;
+			if (this.speedChanged) {
+				this.speedChanged = false;
+				this.broadcast("generation_speed", { speed: this.speed.current });
+			}
+			if (this.cacheChanged) {
+				this.cacheChanged = false;
+				this.broadcast("cache_hit", { cache: this.cache.current });
+			}
 		}
 	}
 
@@ -751,7 +791,7 @@ export class WebHost {
 	private beginRequestMeters(): void {
 		const totals = this.session.getSessionStats().tokens;
 		if (this.speed.start()) this.broadcast("generation_speed", { speed: this.speed.current });
-		if (this.cache.start(totals.cacheRead + totals.cacheWrite > 0)) {
+		if (this.cache.start(totals.cacheRead + totals.cacheWrite > 0, predictCacheHit(this.session.messages))) {
 			this.broadcast("cache_hit", { cache: this.cache.current });
 		}
 	}
@@ -927,7 +967,7 @@ export class WebHost {
 
 		let uncommitted = false;
 		if (succeeded && !indeterminateGit) {
-			if (session.settingsManager.getAutoMemorySettings().enabled) {
+			if (!session.isMirror && session.settingsManager.getAutoMemorySettings().enabled) {
 				this.broadcast("notice", {
 					id: `mem-run-${Date.now()}`,
 					message: "Auto Memory: consolidating this task's long-term memory…",
@@ -963,7 +1003,7 @@ export class WebHost {
 			this.finishedRuns += 1;
 			this.broadcast("run_finished", payload);
 		}
-		if (succeeded && !indeterminateGit && end) {
+		if (succeeded && !indeterminateGit && end && !session.isMirror) {
 			void session.extensionRunner.emit({ type: "agent_response_ready", messages: end.messages }).catch(() => {});
 		}
 	}
@@ -1087,6 +1127,8 @@ export class WebHost {
 				retrying: session.isRetrying,
 				bashRunning: session.isBashRunning,
 				completion: this.completionActive,
+				mirror: session.isMirror,
+				background: session.backgroundTaskCount,
 			},
 			queue: { steering: [...session.getSteeringMessages()], followUp: [...session.getFollowUpMessages()] },
 			queueModes: { steering: session.steeringMode, followUp: session.followUpMode },

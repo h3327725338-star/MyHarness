@@ -1,7 +1,11 @@
 import {
+	closeSync,
 	existsSync,
+	fstatSync,
 	lstatSync,
+	openSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
@@ -26,6 +30,7 @@ import {
 import { getDataDir, getAgentDir as getDefaultAgentDir } from "../../config.ts";
 import { resolveWorkspaceDataContext, WorkspaceStore } from "../../data/workspace-store.ts";
 import { getCwdRelativePath, normalizePath, resolvePath } from "../../utils/paths.ts";
+import { readSessionBridgeDescriptor } from "../bridge/descriptor.ts";
 import { migrateToCurrentVersion } from "../migrations/index.ts";
 import { buildContextEntries, buildSessionContext, walkSessionPath } from "../projection/index.ts";
 import {
@@ -135,6 +140,7 @@ interface LocalWriterLease {
 const WRITER_LOCK_STALE_MS = 10 * 60 * 1000;
 const WRITER_LOCK_UPDATE_MS = 30 * 1000;
 const WRITER_LOCK_OWNER_SUFFIX = ".owner";
+const METADATA_WRITE_INTERVAL_MS = 5 * 1000;
 const WRITER_LOCK_RECOVERY_MARGIN_MS = 5 * 1000;
 
 interface WriterLockOwnerMarker {
@@ -147,6 +153,16 @@ interface WriterLockOwnerMarker {
 // prepares a replacement (and tests use the same pattern). Share the OS lock
 // within this process, while proper-lockfile still excludes other processes.
 const localWriterLeases = new Map<string, LocalWriterLease>();
+
+let mirrorSessionsAllowed = false;
+
+/**
+ * Let sessions opened in this process attach to a session another live MyHarness process owns (the Web UI does).
+ * Without it a locked session is an error, as before.
+ */
+export function setMirrorSessionsAllowed(allowed: boolean): void {
+	mirrorSessionsAllowed = allowed;
+}
 
 function getWriterLockKey(lockPath: string): string {
 	const resolved = resolve(lockPath);
@@ -315,6 +331,11 @@ export class SessionManager {
 	private loadDiagnostics: SessionJsonlDiagnostics | undefined;
 	private metadataDiagnostics: SessionMetadataDiagnostic[] = [];
 	private writerLockRelease?: () => void;
+	private lastMetadataWriteAt = 0;
+	/** Another process owns the writer lock; this manager only follows the Session file (see syncFromDisk). */
+	private mirror = false;
+	/** Bytes of the Session file already read while following it. */
+	private followOffset = 0;
 
 	private constructor(
 		cwd: string,
@@ -494,8 +515,15 @@ export class SessionManager {
 		rewriteSessionFile(this.sessionFile, this.fileEntries);
 	}
 
-	private writeMetadata(): void {
+	/**
+	 * Write the discovery metadata next to the session. `throttle`: called for every appended entry, where only
+	 * `updatedAt` can have changed; it is refreshed at most every few seconds instead of rewriting the file per message.
+	 */
+	private writeMetadata(throttle = false): void {
 		if (!this.persist || !this.defaultStorage || !this.dataRoot || !this.workspaceId || !this.sessionFile) return;
+		const now = Date.now();
+		if (throttle && now - this.lastMetadataWriteAt < METADATA_WRITE_INTERVAL_MS) return;
+		this.lastMetadataWriteAt = now;
 		const header = this.getHeader();
 		if (!header) return;
 		try {
@@ -683,8 +711,9 @@ export class SessionManager {
 	 * proper-lockfile's stale detection and heartbeat provide recovery after a
 	 * crashed process without deleting or rewriting the session JSONL itself.
 	 */
-	acquireWriterLock(): void {
-		if (!this.persist || !this.sessionFile || !this.sessionDir || this.writerLockRelease) return;
+	acquireWriterLock(): "owner" | "mirror" {
+		if (this.mirror) return "mirror";
+		if (!this.persist || !this.sessionFile || !this.sessionDir || this.writerLockRelease) return "owner";
 		ensureSessionDirectory(this.sessionDir);
 		const lockPath = `${this.sessionFile}.lock`;
 		const lockKey = getWriterLockKey(lockPath);
@@ -700,7 +729,7 @@ export class SessionManager {
 					current.release();
 				}
 			};
-			return;
+			return "owner";
 		}
 		let release: (() => void) | undefined;
 		let owner: WriterLockOwnerMarker | undefined;
@@ -753,10 +782,106 @@ export class SessionManager {
 				}
 			}
 			if (getErrorCode(error) === "ELOCKED") {
+				const foreignOwner = readSessionBridgeDescriptor(this.sessionFile!);
+				if (
+					mirrorSessionsAllowed &&
+					foreignOwner &&
+					foreignOwner.pid !== process.pid &&
+					isProcessAlive(foreignOwner.pid)
+				) {
+					this.mirror = true;
+					this.followOffset = this.currentFileSize();
+					return "mirror";
+				}
 				throw new Error(`Session is already active in another MyHarness process: ${this.sessionFile}`);
 			}
 			throw error;
 		}
+		return "owner";
+	}
+
+	/** True while another process owns this Session and this manager only follows its file. */
+	isMirror(): boolean {
+		return this.mirror;
+	}
+
+	private currentFileSize(): number {
+		try {
+			return statSync(this.sessionFile!).size;
+		} catch {
+			return 0;
+		}
+	}
+
+	/**
+	 * Read what the owning process appended to the Session file since the last read and add it to this manager.
+	 * Returns the entries that were new. Only the appended bytes are read; a file that shrank (rewritten by its
+	 * owner) is loaded again in full.
+	 */
+	syncFromDisk(): SessionEntry[] {
+		if (!this.mirror || !this.sessionFile) return [];
+		let size: number;
+		try {
+			size = statSync(this.sessionFile).size;
+		} catch {
+			return [];
+		}
+		if (size === this.followOffset) return [];
+		if (size < this.followOffset) {
+			const before = new Set(this.byId.keys());
+			const loaded = loadEntriesFromFile(this.sessionFile);
+			if (loaded.length === 0) return [];
+			this.fileEntries = loaded;
+			this._buildIndex();
+			this.followOffset = size;
+			return this.fileEntries.filter(
+				(entry): entry is SessionEntry => entry.type !== "session" && !before.has(entry.id),
+			);
+		}
+		const fd = openSync(this.sessionFile, "r");
+		let text: string;
+		try {
+			const length = fstatSync(fd).size - this.followOffset;
+			const buffer = Buffer.allocUnsafe(length);
+			let read = 0;
+			while (read < length) {
+				const got = readSync(fd, buffer, read, length - read, this.followOffset + read);
+				if (got === 0) break;
+				read += got;
+			}
+			text = buffer.subarray(0, read).toString("utf8");
+		} finally {
+			closeSync(fd);
+		}
+		// Only complete lines count; a half-written last line is read again on the next call.
+		const lastNewline = text.lastIndexOf("\n");
+		if (lastNewline < 0) return [];
+		this.followOffset += Buffer.byteLength(text.slice(0, lastNewline + 1), "utf8");
+		const added: SessionEntry[] = [];
+		for (const line of text.slice(0, lastNewline).split("\n")) {
+			if (!line.trim()) continue;
+			let entry: FileEntry;
+			try {
+				entry = JSON.parse(line) as FileEntry;
+			} catch {
+				continue;
+			}
+			if (!entry || typeof entry !== "object" || entry.type === "session" || this.byId.has(entry.id)) continue;
+			this.fileEntries.push(entry);
+			this.byId.set(entry.id, entry);
+			this.leafId = entry.id;
+			if (entry.type === "label") {
+				if (entry.label) {
+					this.labelsById.set(entry.targetId, entry.label);
+					this.labelTimestampsById.set(entry.targetId, entry.timestamp);
+				} else {
+					this.labelsById.delete(entry.targetId);
+					this.labelTimestampsById.delete(entry.targetId);
+				}
+			}
+			added.push(entry);
+		}
+		return added;
 	}
 
 	/** Release the active writer lease. Safe to call repeatedly. */
@@ -767,7 +892,7 @@ export class SessionManager {
 	}
 
 	_persist(entry: SessionEntry, pendingEntries: FileEntry[] = this.fileEntries): void {
-		if (!this.persist || !this.sessionFile) return;
+		if (!this.persist || !this.sessionFile || this.mirror) return;
 		this.flushed = persistSessionEntry(
 			this.sessionFile,
 			entry,
@@ -775,10 +900,13 @@ export class SessionManager {
 			this.flushed,
 			this.loadDiagnostics?.issues.some((issue) => issue.kind === "truncated_tail") ?? false,
 		);
-		if (this.flushed) this.writeMetadata();
+		if (this.flushed) this.writeMetadata(true);
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		if (this.mirror) {
+			throw new Error("This session is running in another MyHarness process; change it there.");
+		}
 		// Persist first so a write failure leaves the in-memory history and active
 		// context unchanged. The pending list is used when the session is flushed
 		// for the first time after an assistant message arrives.

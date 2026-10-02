@@ -46,7 +46,7 @@ import {
 	MissingSessionCwdError,
 	type SessionCwdIssue,
 } from "./session/manager/cwd.ts";
-import { assertValidSessionId, SessionManager } from "./session/manager/index.ts";
+import { assertValidSessionId, SessionManager, setMirrorSessionsAllowed } from "./session/manager/index.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "myharness -ne".';
@@ -563,6 +563,18 @@ export async function main(args: string[], options?: MainOptions) {
 	validateForkFlags(parsed);
 	validateSessionIdFlags(parsed);
 
+	// A session another MyHarness process (the Web UI, another terminal) is running is followed and shared, not refused.
+	// Print/JSON/RPC runs have nobody to hand the session over to, so they keep refusing it.
+	if (appMode === "interactive") setMirrorSessionsAllowed(true);
+
+	// The Web UI server starts before anything slow (storage migrations, session lookup, runtime) so the port is
+	// listening, and launchers see "ready", as early as possible. Startup questions (Project Trust) are answered in
+	// the browser through it, and the page shows the boot phase until the runtime exists.
+	const webBootstrap: WebBootstrap | undefined =
+		appMode === "web"
+			? await startWebBootstrap({ port: parsed.webPort, openBrowser: !parsed.noOpenBrowser })
+			: undefined;
+
 	// Run migrations (pass cwd for project-local migrations)
 	const {
 		migratedAuthProviders: migratedProviders,
@@ -608,11 +620,6 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
-	// The Web UI server starts before the runtime so startup questions (Project Trust) can be answered in the browser.
-	const webBootstrap: WebBootstrap | undefined =
-		appMode === "web"
-			? await startWebBootstrap({ port: parsed.webPort, openBrowser: !parsed.noOpenBrowser })
-			: undefined;
 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {

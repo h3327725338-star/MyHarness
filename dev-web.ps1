@@ -92,13 +92,16 @@ using System;
 using System.Runtime.InteropServices;
 public static class MyHarnessSplashNative {
 	[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+	[DllImport("user32.dll")] public static extern bool ReleaseCapture();
+	[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
 }
 "@
 		}
 		$form = New-Object System.Windows.Forms.Form
 		$form.Text = "MyHarness"
 		$form.FormBorderStyle = "None"
-		$form.ShowInTaskbar = $false
+		# 要出现在任务栏：最小化后只能从任务栏还原。
+		$form.ShowInTaskbar = $true
 		$form.TopMost = $true
 		$form.StartPosition = "CenterScreen"
 		$form.ClientSize = New-Object System.Drawing.Size(360, 116)
@@ -119,7 +122,45 @@ public static class MyHarnessSplashNative {
 			$path.CloseFigure()
 			$form.Region = New-Object System.Drawing.Region($path)
 		}
-		$state = @{ Text = ""; Target = 0.0; Shown = 0.0 }
+		$state = @{ Text = ""; Target = 0.0; Shown = 0.0; Hover = ""; Cancel = $false }
+		# 右上角的标准窗口按钮：最小化、关闭（各 40x30）。无边框窗口没有系统标题栏，所以自己画、自己做点击判断。
+		$form.Add_MouseMove({
+			param($sender, $e)
+			$hit = Get-SplashButton $e.X $e.Y
+			if ($script:Splash -and $script:Splash.State.Hover -ne $hit) {
+				$script:Splash.State.Hover = $hit
+				$sender.Invalidate()
+			}
+		})
+		$form.Add_MouseLeave({
+			param($sender, $e)
+			if ($script:Splash -and $script:Splash.State.Hover -ne "") {
+				$script:Splash.State.Hover = ""
+				$sender.Invalidate()
+			}
+		})
+		$form.Add_MouseDown({
+			param($sender, $e)
+			if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+			$hit = Get-SplashButton $e.X $e.Y
+			if ($hit -eq "min") {
+				$sender.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+			} elseif ($hit -eq "close") {
+				if ($script:Splash) { $script:Splash.State.Cancel = $true }
+			} else {
+				# 其余区域按住拖动窗口（HTCAPTION）。
+				[void][MyHarnessSplashNative]::ReleaseCapture()
+				[void][MyHarnessSplashNative]::SendMessage($sender.Handle, 0xA1, [IntPtr]2, [IntPtr]::Zero)
+			}
+		})
+		# Alt+F4 / 任务栏“关闭窗口”与点击关闭按钮一样：取消启动。
+		$form.Add_FormClosing({
+			param($sender, $e)
+			if ($script:Splash -and -not $script:Splash.State.Closing) {
+				$e.Cancel = $true
+				$script:Splash.State.Cancel = $true
+			}
+		})
 		$form.Add_Paint({
 			param($sender, $e)
 			$g = $e.Graphics
@@ -169,6 +210,20 @@ public static class MyHarnessSplashNative {
 				$bar.Dispose()
 			}
 			$track.Dispose(); $pen.Dispose(); $titleFont.Dispose(); $subFont.Dispose(); $tile.Dispose()
+			# 窗口按钮：悬停时底色高亮（关闭为红色），线条图标。
+			$hover = $script:Splash.State.Hover
+			$glyph = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(168, 173, 173)), 1.2
+			if ($hover -eq "min") { $g.FillRectangle((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(43, 45, 45))), 280, 1, 40, 29) }
+			if ($hover -eq "close") {
+				$g.FillRectangle((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(196, 43, 28))), 320, 1, 39, 29)
+			}
+			$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
+			$g.DrawLine($glyph, 295, 15, 305, 15)
+			$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+			if ($hover -eq "close") { $glyph.Color = [System.Drawing.Color]::White }
+			$g.DrawLine($glyph, 335, 10, 345, 20)
+			$g.DrawLine($glyph, 345, 10, 335, 20)
+			$glyph.Dispose()
 			# 1px 边框
 			$g.DrawRectangle((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(43, 45, 45)), 1), 0, 0, $form.ClientSize.Width - 1, $form.ClientSize.Height - 1)
 		})
@@ -177,6 +232,18 @@ public static class MyHarnessSplashNative {
 	} catch {
 		$script:Splash = $null
 	}
+}
+
+# 窗口按钮的点击区域（客户区坐标）：最小化 x 280-319，关闭 x 320-359，高 30。
+function Get-SplashButton([int]$X, [int]$Y) {
+	if ($Y -lt 0 -or $Y -ge 30) { return "" }
+	if ($X -ge 280 -and $X -lt 320) { return "min" }
+	if ($X -ge 320 -and $X -lt 360) { return "close" }
+	return ""
+}
+
+function Test-SplashCancelled {
+	return ($script:Splash -and $script:Splash.State.Cancel)
 }
 
 function Update-Splash($Progress) {
@@ -198,6 +265,7 @@ function Step-Splash {
 
 function Close-Splash {
 	if ($script:Splash) {
+		$script:Splash.State.Closing = $true
 		try { $script:Splash.Form.Close(); $script:Splash.Form.Dispose() } catch { }
 		$script:Splash = $null
 	}
@@ -214,13 +282,28 @@ for ($i = 0; $i -lt $forward.Count; $i++) {
 }
 $noOpen = $forward -contains "--no-open"
 
-function Test-ExistingInstance([int]$Port) {
+# 服务是否已经能应答：直接问 /api/boot（不走代理，0.4 秒超时），不依赖日志文件。
+function Test-WebReady([int]$Port) {
 	try {
-		$response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
-		return ($response.Content -match "MyHarness")
+		$request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/api/boot")
+		$request.Proxy = $null
+		$request.Timeout = 400
+		$request.ReadWriteTimeout = 400
+		$response = $request.GetResponse()
+		try {
+			$reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+			$text = $reader.ReadToEnd()
+		} finally {
+			$response.Close()
+		}
+		return ($text -match '"phase"' -and $text -match '"version"')
 	} catch {
 		return $false
 	}
+}
+
+function Test-ExistingInstance([int]$Port) {
+	return (Test-WebReady $Port)
 }
 
 # 每次启动都必须运行当前源码，所以不复用已在运行的实例：先让它正常退出，再启动新的。
@@ -284,21 +367,46 @@ $SplashDelayMilliseconds = 1000
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
 $ready = $false
+$cancelled = $false
+$lastProbe = 0
 while ((Get-Date) -lt $deadline) {
 	$errText = Read-Log $ErrLog
 	if ($errText -match "MyHarness Web UI: http") {
 		$ready = $true
 		break
 	}
+	# 日志读不到（被占用、被缓冲）时不能因此一直等下去：服务端口已经能应答就算就绪。
+	if ($port -ne 0 -and ($clock.ElapsedMilliseconds - $lastProbe) -ge 700) {
+		$lastProbe = $clock.ElapsedMilliseconds
+		if (Test-WebReady $port) {
+			$ready = $true
+			break
+		}
+	}
 	if ($process.HasExited) { break }
 	if (-not $script:Splash -and $clock.ElapsedMilliseconds -ge $SplashDelayMilliseconds) { Show-Splash }
 	if ($script:Splash) {
 		# 日志约每 150ms 读一次；其间只推进进度动画，让进度线平滑移动。
 		Update-Splash (Get-StartupProgress (Read-Log $OutLog) $errText)
-		for ($tick = 0; $tick -lt 4; $tick++) { Start-Sleep -Milliseconds 35; Step-Splash }
+		for ($tick = 0; $tick -lt 4; $tick++) {
+			Start-Sleep -Milliseconds 35
+			Step-Splash
+			if (Test-SplashCancelled) { break }
+		}
+		if (Test-SplashCancelled) {
+			$cancelled = $true
+			break
+		}
 	} else {
 		Start-Sleep -Milliseconds 150
 	}
+}
+
+if ($cancelled) {
+	# 点了窗口的关闭按钮：明确退出，并结束启动进程及其子进程（powershell -> node）。
+	Close-Splash
+	& taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+	exit 0
 }
 
 if ($ready) {

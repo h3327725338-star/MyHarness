@@ -1,5 +1,5 @@
 // Files panel: read-only workspace tree and viewer, decorated with real Git / task change status.
-import { html, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton } from "./ui.js";
+import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, VirtualRows } from "./ui.js";
 import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
@@ -9,23 +9,20 @@ import { t } from "./i18n.js";
 
 const ST = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 
-function TreeNode({ entry, depth, expanded, onToggle, children, statusMap, taskMap, onOpen, current, showIgnored }) {
-	if (entry.ignored && !showIgnored) return null;
+/** Height of a tree row (.tree-row in panels.css): the tree is a flat list of rows, of which only the visible ones are in the DOM. */
+const TREE_ROW_HEIGHT = 26;
+
+const TreeRow = memo(function TreeRow({ entry, depth, expanded, onToggle, status, task, onOpen, isCurrent }) {
 	const isDir = entry.type === "dir";
-	const status = statusMap[entry.path];
-	const task = taskMap[entry.path];
-	return html`<div>
-		<div class=${`tree-row ${current === entry.path ? "current" : ""} ${entry.ignored ? "ignored" : ""}`} style=${{ paddingLeft: `${8 + depth * 14}px` }} role="treeitem" aria-expanded=${isDir ? !!expanded : undefined}
-			onClick=${() => (isDir ? onToggle(entry.path) : onOpen(entry.path))} tabindex="0" onKeyDown=${(e) => e.key === "Enter" && (isDir ? onToggle(entry.path) : onOpen(entry.path))}>
-			${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span class="tree-gap" />`}
-			<${Icon} name=${isDir ? (expanded ? "folderOpen" : "folder") : "file"} size=${14} class=${isDir ? "c-folder" : "c-dim"} />
-			<span class="truncate grow">${entry.name}</span>
-			${task ? html`<span class="dot accent" title=${t("Changed by the last task")} />` : null}
-			${status ? html`<span class=${`st st-${status}`} title=${t("Uncommitted: {status}", { status: t(status) })}>${ST[status]}</span>` : null}
-		</div>
-		${isDir && expanded ? children : null}
+	return html`<div class=${`tree-row ${isCurrent ? "current" : ""} ${entry.ignored ? "ignored" : ""}`} style=${{ paddingLeft: `${8 + depth * 14}px` }} role="treeitem" aria-level=${depth + 1} aria-expanded=${isDir ? !!expanded : undefined}
+		onClick=${() => (isDir ? onToggle(entry.path) : onOpen(entry.path))} tabindex="0" onKeyDown=${(e) => e.key === "Enter" && (isDir ? onToggle(entry.path) : onOpen(entry.path))}>
+		${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span class="tree-gap" />`}
+		<${Icon} name=${isDir ? (expanded ? "folderOpen" : "folder") : "file"} size=${14} class=${isDir ? "c-folder" : "c-dim"} />
+		<span class="truncate grow">${entry.name}</span>
+		${task ? html`<span class="dot accent" title=${t("Changed by the last task")} />` : null}
+		${status ? html`<span class=${`st st-${status}`} title=${t("Uncommitted: {status}", { status: t(status) })}>${ST[status]}</span>` : null}
 	</div>`;
-}
+});
 
 export function FilesPanel() {
 	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
@@ -105,10 +102,26 @@ export function FilesPanel() {
 		setExpanded((e) => ({ ...e, [dir]: !e[dir] }));
 		if (!tree[dir]) loadDir(dir);
 	};
-	const renderDir = (dir, depth) =>
-		(tree[dir] || []).map(
-			(entry) => html`<${TreeNode} key=${entry.path} entry=${entry} depth=${depth} expanded=${!!expanded[entry.path]} onToggle=${toggle} onOpen=${(p) => open(p)} statusMap=${statusMap} taskMap=${taskMap} current=${viewing?.path} showIgnored=${showIgnored}>${entry.type === "dir" && expanded[entry.path] ? (tree[entry.path] ? renderDir(entry.path, depth + 1) : html`<div class="tree-row dim" style=${{ paddingLeft: `${22 + (depth + 1) * 14}px` }}><${Spinner} /></div>`) : null}<//>`,
-		);
+	// The visible part of the tree as one flat list (a folder's rows follow it while it is open).
+	const rows = useMemo(() => {
+		const out = [];
+		const walk = (dir, depth) => {
+			for (const entry of tree[dir] || []) {
+				if (entry.ignored && !showIgnored) continue;
+				out.push({ entry, depth });
+				if (entry.type === "dir" && expanded[entry.path]) {
+					if (tree[entry.path]) walk(entry.path, depth + 1);
+					else out.push({ loading: true, depth: depth + 1, key: `loading:${entry.path}` });
+				}
+			}
+		};
+		walk("", 0);
+		return out;
+	}, [tree, expanded, showIgnored]);
+	const renderRow = (row) =>
+		row.loading
+			? html`<div class="tree-row dim" key=${row.key} style=${{ paddingLeft: `${22 + row.depth * 14}px` }}><${Spinner} /></div>`
+			: html`<${TreeRow} key=${row.entry.path} entry=${row.entry} depth=${row.depth} expanded=${!!expanded[row.entry.path]} onToggle=${toggle} onOpen=${open} status=${statusMap[row.entry.path]} task=${taskMap[row.entry.path]} isCurrent=${viewing?.path === row.entry.path} />`;
 
 	return html`<div class="files-panel">
 		<div class=${`files-tree ${viewing ? "hidden" : ""}`}>
@@ -122,7 +135,7 @@ export function FilesPanel() {
 					? results.length
 						? results.map((p) => html`<div class="tree-row" key=${p} onClick=${() => open(p)} role="treeitem" tabindex="0" onKeyDown=${(e) => e.key === "Enter" && open(p)}><${Icon} name="file" size=${14} class="c-dim" /><span class="truncate"><strong>${basename(p)}</strong> <span class="dim">${dirname(p)}</span></span></div>`)
 						: html`<div class="empty">${t("No matching files")}</div>`
-					: renderDir("", 0)}
+					: html`<${VirtualRows} items=${rows} rowHeight=${TREE_ROW_HEIGHT} renderRow=${renderRow} threshold=${80} />`}
 				${!results && !tree[""] && !error ? html`<div class="empty"><${Spinner} /></div>` : null}
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
 			</div>

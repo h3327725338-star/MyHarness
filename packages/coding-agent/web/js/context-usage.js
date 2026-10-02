@@ -55,15 +55,19 @@ export function SpeedValue({ speed }) {
 		state === "detecting"
 			? t("Waiting for the first reliable measurement of this request. Some providers report the output tokens only at the end of the reply.")
 			: state === "live"
-				? t("Live: output tokens per second while the model writes (waiting for the first token is not counted).")
+				? speed.estimated
+					? t("Live: output tokens per second while the model writes, estimated from the streamed text because the provider reports its token count only at the end (waiting for the first token is not counted).")
+					: t("Live: output tokens per second while the model writes (waiting for the first token is not counted).")
 				: state === "final"
-					? speed.tokens != null
+					? speed.tokens != null && speed.estimated
+						? t("Average of this request, estimated from the streamed text: about {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
+						: speed.tokens != null
 						? t("Average of this request: {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
 						: t("Last measured speed of the request that was stopped.")
 					: state === "unavailable"
 						? t("Not available: the reply was not streamed or the provider reported no output tokens.")
 						: t("Measured with the first model request.");
-	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
+	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${speed.estimated ? "~" : ""}${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
 }
 
 /** Cache hit of the model request: detecting from its start, then the share of its input tokens the provider served from its cache. */
@@ -74,16 +78,18 @@ export function CacheValue({ cache, session }) {
 	const title =
 		state === "detecting"
 			? t("Waiting for the provider to report this request's cache use. Some providers report it only at the end of the reply.")
-			: state === "live" || state === "final"
-				? `${t("This request: {read} of {total} input tokens came from the cache.", { read: num(cache.read ?? 0), total: num(cache.input ?? 0) })}${sessionLine}`
-				: state === "unavailable"
-					? t("The provider has reported no cache use for this request.")
-					: sessionRate == null
-						? t("The provider has reported no cache use in this session.")
-						: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
+			: state === "live" && cache.estimated
+				? `${t("Expected from the previous request: about {read} of {total} input tokens should come from the cache. The provider reports the real number when the reply ends.", { read: num(cache.read ?? 0), total: num(cache.input ?? 0) })}${sessionLine}`
+				: state === "live" || state === "final"
+					? `${t("This request: {read} of {total} input tokens came from the cache.", { read: num(cache.read ?? 0), total: num(cache.input ?? 0) })}${sessionLine}`
+					: state === "unavailable"
+						? t("The provider has reported no cache use for this request.")
+						: sessionRate == null
+							? t("The provider has reported no cache use in this session.")
+							: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
 	// Before the first request of this run the whole session's figure (from the history) stands in.
 	const rate = state ? cache?.hitRate : sessionRate;
-	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : fmtPct(rate * 100)} />`;
+	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${state && cache?.estimated ? "~" : ""}${fmtPct(rate * 100)}`} />`;
 }
 
 /**
@@ -134,7 +140,6 @@ export function ContextMeter() {
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class=${`meter ${level}`} aria-haspopup="dialog" aria-expanded=${open} title=${`${t("Context")}: ${fmtK(tokens)} / ${fmtK(window_)} (${percent.toFixed(0)}%)`} onClick=${() => setOpen(!open)}>
 			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width="2.4" /><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray=${`${Math.min(100, percent) * 0.4712} 100`} transform="rotate(-90 10 10)" /></svg>
-			<span>${percent.toFixed(percent < 10 ? 1 : 0)}%</span>
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${280} maxHeight=${520}>
 			<${ContextDetails} onDone=${() => setOpen(false)} />

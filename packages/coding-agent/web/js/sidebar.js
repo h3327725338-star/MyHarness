@@ -1,5 +1,5 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner } from "./ui.js";
+import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows } from "./ui.js";
 import { GENERAL_KEY, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -7,6 +7,9 @@ import { t } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
+
+/** Height of a chat row (the --h-row token): the chat list only keeps the rows on screen in the page once it is long. */
+const chatRowHeight = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--h-row")) || 34;
 
 /**
  * A finished result the user has not read yet. The chat on screen counts as read, so it never shows the marker
@@ -117,7 +120,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 						${sessions === undefined && !error ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
 						${error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>` : null}
 						${sessions && !sessions.length ? html`<div class="dim side-note">${general ? t("No chats without a workspace") : t("No chats yet")}</div>` : null}
-						${shown.map((info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`)}
+						<${VirtualRows} items=${shown} rowHeight=${chatRowHeight()} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
@@ -143,7 +146,14 @@ export function Sidebar() {
 	const slots = useStore((s) => s.slots);
 	const activeSlot = useStore((s) => s.activeSlot);
 	const connected = useStore((s) => s.connected);
+	// The box shows what is typed at once; the lists are filtered a moment after the last key, not on every key.
+	const [filterText, setFilterText] = useState("");
 	const [filter, setFilter] = useState("");
+	useEffect(() => {
+		if (filterText === filter) return undefined;
+		const timer = setTimeout(() => setFilter(filterText), filterText ? 120 : 0);
+		return () => clearTimeout(timer);
+	}, [filterText]);
 	// "Add workspace" opens the system's folder window; the built-in folder list is only the fallback without one.
 	const [adding, setAdding] = useState(false);
 	const addWorkspace = async () => {
@@ -196,7 +206,7 @@ export function Sidebar() {
 			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in No Folder (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">Ctrl+N</span></button>
 			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">Ctrl+K</span></button>
 		</div>
-		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label=${t("Filter chats")} /></div>
+		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll">
 			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
 			${ws.list.map((w) => {

@@ -20,7 +20,6 @@ import {
 } from "fs";
 import { readdir, stat } from "fs/promises";
 import { basename, dirname, join, resolve } from "path";
-import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { getDataDir, getWorkspaceSessionsDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { getAgentDir } from "../../../config.ts";
@@ -511,64 +510,188 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
-async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+/**
+ * What listing a Session needs from its JSONL: the header, the name, the message count, the first user message, all
+ * conversation text (for search) and the time of the last message. It is built by reading the file once; afterwards only
+ * the bytes appended since then are read, because a Session file only grows (see appendSessionEntry).
+ */
+interface SessionScan {
+	header: SessionHeader | null;
+	/** The first line was not a Session header: not a Session file. */
+	invalid: boolean;
+	messageCount: number;
+	firstMessage: string;
+	allMessages: string[];
+	textChars: number;
+	name: string | undefined;
+	lastActivityTime: number | undefined;
+	/** Bytes of the file that are part of this scan (always the end of a complete line). */
+	offset: number;
+	/** File identity at the time of the scan: a rewritten or replaced file is read again from the start. */
+	ino: number;
+	size: number;
+	mtimeMs: number;
+	info: SessionInfo | null;
+}
+
+/** Scans kept for the next listing. The conversation text is what costs memory, so the total is bounded. */
+const MAX_CACHED_SCAN_TEXT_CHARS = 48 * 1024 * 1024;
+const sessionScans = new Map<string, SessionScan>();
+let cachedScanTextChars = 0;
+const sessionScansInFlight = new Map<string, Promise<SessionInfo | null>>();
+
+function rememberSessionScan(filePath: string, scan: SessionScan): void {
+	const previous = sessionScans.get(filePath);
+	if (previous) {
+		cachedScanTextChars -= previous.textChars;
+		sessionScans.delete(filePath);
+	}
+	sessionScans.set(filePath, scan);
+	cachedScanTextChars += scan.textChars;
+	// Oldest scans go first (Map keeps insertion order, and a scan that is refreshed moves to the end).
+	for (const [key, old] of sessionScans) {
+		if (cachedScanTextChars <= MAX_CACHED_SCAN_TEXT_CHARS || key === filePath) break;
+		sessionScans.delete(key);
+		cachedScanTextChars -= old.textChars;
+	}
+}
+
+function applySessionScanLine(scan: SessionScan, line: string): void {
+	if (scan.invalid) return;
+	const entry = parseSessionEntryLine(line);
+	if (!entry) return;
+	if (!scan.header) {
+		if (entry.type !== "session") {
+			scan.invalid = true;
+			return;
+		}
+		scan.header = entry;
+		return;
+	}
+	if (entry.type === "session_info") scan.name = entry.name?.trim() || undefined;
+	if (entry.type !== "message") return;
+	scan.messageCount++;
+	const activityTime = getMessageActivityTime(entry);
+	if (typeof activityTime === "number") scan.lastActivityTime = Math.max(scan.lastActivityTime ?? 0, activityTime);
+	const message = entry.message;
+	if (!isMessageWithContent(message)) return;
+	if (message.role !== "user" && message.role !== "assistant") return;
+	const textContent = extractTextContent(message);
+	if (!textContent) return;
+	scan.allMessages.push(textContent);
+	scan.textChars += textContent.length;
+	if (!scan.firstMessage && message.role === "user") scan.firstMessage = textContent;
+}
+
+/** Read the complete lines of the file from `scan.offset` on and apply them to the scan. */
+async function scanSessionFile(filePath: string, scan: SessionScan, size: number): Promise<void> {
+	await new Promise<void>((resolveScan, rejectScan) => {
+		const stream = createReadStream(filePath, { start: scan.offset, end: Math.max(scan.offset, size - 1) });
+		const decoder = new StringDecoder("utf8");
+		let pending = "";
+		stream.on("data", (chunk) => {
+			pending += decoder.write(chunk as Buffer);
+			let newline = pending.indexOf("\n");
+			while (newline !== -1) {
+				const line = pending.slice(0, newline);
+				applySessionScanLine(scan, line);
+				scan.offset += Buffer.byteLength(line, "utf8") + 1;
+				pending = pending.slice(newline + 1);
+				newline = pending.indexOf("\n");
+			}
+		});
+		stream.on("error", rejectScan);
+		stream.on("end", () => {
+			pending += decoder.end();
+			// A last line without its newline still counts when it is whole (a torn write is ignored).
+			if (pending.trim()) {
+				try {
+					JSON.parse(pending);
+					applySessionScanLine(scan, pending);
+					scan.offset += Buffer.byteLength(pending, "utf8");
+				} catch {
+					// Incomplete: it is read again once the writer has finished it.
+				}
+			}
+			resolveScan();
+		});
+	});
+}
+
+function sessionInfoFromScan(filePath: string, scan: SessionScan, mtime: Date): SessionInfo | null {
+	const header = scan.header;
+	if (!header) return null;
+	const cwd = typeof header.cwd === "string" ? header.cwd : "";
+	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
+	const modified =
+		typeof scan.lastActivityTime === "number" && scan.lastActivityTime > 0
+			? new Date(scan.lastActivityTime)
+			: !Number.isNaN(headerTime)
+				? new Date(headerTime)
+				: mtime;
+	return {
+		path: filePath,
+		id: header.id,
+		workspaceId: getSessionHeaderWorkspaceId(header) ?? parseSessionDataPath(filePath)?.workspaceId,
+		cwd,
+		name: scan.name,
+		parentSessionPath: header.parentSession,
+		created: new Date(header.timestamp),
+		modified,
+		messageCount: scan.messageCount,
+		firstMessage: scan.firstMessage || "(no messages)",
+		allMessagesText: scan.allMessages.join(" "),
+	};
+}
+
+async function buildSessionInfoUncached(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
-		let header: SessionHeader | null = null;
-		let messageCount = 0;
-		let firstMessage = "";
-		const allMessages: string[] = [];
-		let name: string | undefined;
-		let lastActivityTime: number | undefined;
-
-		const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Infinity });
-		for await (const line of rl) {
-			const entry = parseSessionEntryLine(line);
-			if (!entry) continue;
-			if (!header) {
-				if (entry.type !== "session") return null;
-				header = entry;
-				continue;
-			}
-			if (entry.type === "session_info") name = entry.name?.trim() || undefined;
-			if (entry.type !== "message") continue;
-			messageCount++;
-			const activityTime = getMessageActivityTime(entry);
-			if (typeof activityTime === "number") lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			const message = entry.message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") firstMessage = textContent;
+		const cached = sessionScans.get(filePath);
+		if (cached && cached.ino === stats.ino && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
+			// Nothing changed since the last listing.
+			return cached.info ? { ...cached.info } : null;
 		}
-
-		if (!header) return null;
-		const cwd = typeof header.cwd === "string" ? header.cwd : "";
-		const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
-		const modified =
-			typeof lastActivityTime === "number" && lastActivityTime > 0
-				? new Date(lastActivityTime)
-				: !Number.isNaN(headerTime)
-					? new Date(headerTime)
-					: stats.mtime;
-		return {
-			path: filePath,
-			id: header.id,
-			workspaceId: getSessionHeaderWorkspaceId(header) ?? parseSessionDataPath(filePath)?.workspaceId,
-			cwd,
-			name,
-			parentSessionPath: header.parentSession,
-			created: new Date(header.timestamp),
-			modified,
-			messageCount,
-			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.join(" "),
-		};
+		// A file that only grew (same file, more bytes) continues from where the last scan stopped.
+		const scan: SessionScan =
+			cached && cached.ino === stats.ino && stats.size >= cached.offset
+				? cached
+				: {
+						header: null,
+						invalid: false,
+						messageCount: 0,
+						firstMessage: "",
+						allMessages: [],
+						textChars: 0,
+						name: undefined,
+						lastActivityTime: undefined,
+						offset: 0,
+						ino: stats.ino,
+						size: 0,
+						mtimeMs: 0,
+						info: null,
+					};
+		const textBefore = scan.textChars;
+		if (stats.size > scan.offset) await scanSessionFile(filePath, scan, stats.size);
+		scan.size = stats.size;
+		scan.mtimeMs = stats.mtimeMs;
+		scan.info = scan.invalid ? null : sessionInfoFromScan(filePath, scan, stats.mtime);
+		if (scan === cached) cachedScanTextChars += scan.textChars - textBefore;
+		rememberSessionScan(filePath, scan);
+		return scan.info ? { ...scan.info } : null;
 	} catch {
+		sessionScans.delete(filePath);
 		return null;
 	}
+}
+
+function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+	// Two listings at the same moment share one read of each file.
+	const running = sessionScansInFlight.get(filePath);
+	if (running) return running.then((info) => (info ? { ...info } : null));
+	const task = buildSessionInfoUncached(filePath).finally(() => sessionScansInFlight.delete(filePath));
+	sessionScansInFlight.set(filePath, task);
+	return task;
 }
 
 async function buildSessionInfosWithConcurrency(

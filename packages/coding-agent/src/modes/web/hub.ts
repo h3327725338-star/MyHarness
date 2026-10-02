@@ -39,6 +39,8 @@ const STATUS_EVENTS = new Set([
 	"workspaces_changed",
 ]);
 const STATUS_DEBOUNCE_MS = 80;
+const RECLAIM_RETRY_MS = 250;
+const RECLAIM_TIMEOUT_MS = 15_000;
 
 export interface WebHostHubOptions {
 	server: WebHttpServer;
@@ -155,6 +157,33 @@ export class WebHostHub implements WebHostHubLink {
 
 	requestShutdown(): void {
 		this.options.onShutdown();
+	}
+
+	/**
+	 * A session that was only being followed lost its owning process. Replace it in the same slot by the session
+	 * opened normally, which now holds the writer lock (or follows the next owner).
+	 */
+	reclaimMirror(host: WebHost): void {
+		const path = host.session.sessionFile;
+		if (!path || !this.slots.has(host.slotId)) return;
+		void (async () => {
+			// The owner closes its bridge a moment before it releases the writer lock: try again until it is free.
+			const deadline = Date.now() + RECLAIM_TIMEOUT_MS;
+			for (;;) {
+				try {
+					await host.runtimeHost.switchSession(path);
+					return;
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					if (/already active/i.test(message) && Date.now() < deadline && this.slots.has(host.slotId)) {
+						await new Promise((resolve) => setTimeout(resolve, RECLAIM_RETRY_MS));
+						continue;
+					}
+					host.broadcast("notice", { id: `reclaim-${Date.now()}`, message, type: "error", ts: Date.now() });
+					return;
+				}
+			}
+		})();
 	}
 
 	private scheduleStatus(): void {

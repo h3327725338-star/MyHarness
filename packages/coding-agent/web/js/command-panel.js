@@ -1019,9 +1019,8 @@ function SliderView({ spec, ctx }) {
 	const { levels, value, withDefault, onChange } = spec.slider;
 	// The slider keeps the chosen level on screen while it is stored, so it is never dimmed or locked in between.
 	return html`<div class="cp-effort" onKeyDown=${(e) => e.key === "Backspace" && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
-		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} onDone=${ctx.pop} titled=${false} />
+		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} onDone=${ctx.pop} titled=${false} withDefault=${!!withDefault} />
 		${spec.subtitle ? html`<div class="cp-note dim">${spec.subtitle}</div>` : null}
-		${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
 	</div>`;
 }
 

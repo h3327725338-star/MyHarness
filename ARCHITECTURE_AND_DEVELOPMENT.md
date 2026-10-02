@@ -167,7 +167,7 @@ application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协
 - .gitattributes：LF/CRLF 和二进制规则；当前 checkout 不再把大型 Code Intelligence Runtime 作为源码资产跟踪。
 - .gitignore：node_modules、dist、日志、缓存、Session 数据和 Code Intelligence 产物等忽略规则。
 - dev.cmd：Windows CMD 包装器。
-- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 每次启动都先让端口上已在运行的旧实例退出（`POST /api/shutdown`，超时后仅结束确认是 MyHarness 的监听进程；端口被其他程序占用则报错而不启动），保证运行的是当前源码，再以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个深色无边框的小启动窗口（阶段文字来自 dev.ps1 打印的真实阶段与服务监听），就绪后自动关闭；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
+- dev-web.cmd、dev-web.vbs、dev-web.ps1：双击启动 Web UI 且不留下控制台窗口。cmd 只把工作交给 wscript 后立即退出；vbs 以隐藏方式启动 dev-web.ps1；ps1 每次启动都先让端口上已在运行的旧实例退出（`POST /api/shutdown`，超时后仅结束确认是 MyHarness 的监听进程；端口被其他程序占用则报错而不启动），保证运行的是当前源码，再以无窗口方式运行 `dev.ps1 --web`、日志（UTF-8）写入 `data/logs/web-launch.*.log`；启动超过约 1 秒未就绪时显示一个深色无边框的小启动窗口（阶段文字来自 dev.ps1 打印的真实阶段与服务监听；右上角有最小化和关闭按钮，关闭会取消启动并结束启动进程树），就绪后自动关闭（服务打印地址，或 `GET /api/boot` 已能应答，二者任一即可）；启动失败时弹出错误对话框。`dev-web.cmd --console` 保留原来的可见窗口方式（前端文件按磁盘实时读取，刷新页面即生效；src/ 改动需重启）。
 - dev.ps1：Node/npm/tsx/bash/ffmpeg 检查，以及缺依赖时的开发环境准备。
 - scripts/dev-fast-loader.mjs：仅供 dev.ps1 使用的 Node `--import` 加载器，按根 tsconfig.json 的 `@myharness/*` paths 解析 workspace 源码；源码是 erasable-only TypeScript，所以不需要 tsx 转换。
 - myharness-test.ps1、myharness-test.sh：从源码启动 packages/coding-agent/src/cli.ts。
@@ -191,7 +191,7 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 
 | 模块 | 主要职责 | 当前边界 / 不负责 | 主要入口和调用者 | 新代码通常放在哪里 |
 | --- | --- | --- | --- | --- |
-| agent/ | Agent 生命周期、delegation、vision 和 runtime 服务 | 不负责 TUI 绘制；底层循环由 packages/agent 承担 | agent/runtime/agent-session.ts、sdk.ts、services.ts、session-runtime.ts；由 main.ts、Interactive/Print mode、SDK 调用 | AgentSession 生命周期、运行状态、服务组装或 Agent 专属协调器 |
+| agent/ | Agent 生命周期、delegation、vision 和 runtime 服务 | 不负责 TUI 绘制；底层循环由 packages/agent 承担 | agent/runtime/agent-session.ts、sdk.ts、services.ts、session-runtime.ts、session-bridge.ts（owner 进程向其他进程开放会话）、mirror-agent-session.ts（附着到别的进程正在运行的会话）；由 main.ts、Interactive/Print mode、SDK 调用 | AgentSession 生命周期、运行状态、服务组装或 Agent 专属协调器 |
 | application/ | ResourceLoader、Project Trust、Workspace Store 和 Git/Provider/Workspace/Session use case | 不是万能 domain 目录；use case 不应承载 TUI component；不是当前独立 bootstrap | application/resource-loader.ts、project-trust.ts、workspace-store.ts、use-cases/；由 main.ts 和 InteractiveMode 调用 | 跨多个底层领域的产品操作流程；单一领域逻辑仍放回对应领域 |
 | cli/ | 参数解析、帮助、启动选择、Session picker、Slash Command 解析和文件输入 | 不负责模型请求、Session persistence 或 TUI 组件实现 | cli/args.ts、cli/help.ts、cli/slash-commands.ts；由 cli.ts、main.ts、AgentSession 使用 | 新 CLI option、内置 Slash Command 的解析或启动输入处理 |
 | config/ | Settings、路径、Trust store、Settings migration 和持久化协调 | 不负责 Provider credential 细节；不负责 Prompt 内容 | config/settings/、config/paths/、config/trust/；由 main.ts、Provider、ResourceLoader 使用 | 新 Settings 字段、scope、migration、Trust 或配置路径 |
@@ -204,7 +204,7 @@ skills/ symbols/ system-prompts/ themes/ tools/ ultracode/ utils/ workflow/
 | platform/ | HTTP dispatcher、进程执行、输出保护和 OS/命令边界 | 不负责 Provider 选择、Agent 状态或 TUI | platform/process/；由 Shell、Provider 和启动逻辑使用 | Node/Windows/Bash 进程与网络适配 |
 | prompts/ | Prompt Template 的发现和加载 | 不负责 system prompt 的核心组装；不负责 Skills | prompts/loader/；由 ResourceLoader、AgentSession 调用 | Prompt Template loader 或 template 资源接线 |
 | providers/ | 产品层 ModelRuntime、Provider/Model 配置、Credential、Recovery、balance、resolver | 不负责低层 Provider API adapter 的全部实现；不把 Provider 状态放进 TUI | providers/runtime/provider-runtime.ts、credentials/、models/、recovery/；由 Agent Runtime、InteractiveMode、Extensions 使用 | Provider runtime、credential resolution、model config 或 recovery |
-| session/ | Session JSONL v3、SessionManager、Projection、Migration、branch/fork 和文件操作 | 不负责 Agent Loop；不应在 TUI 中直接实现 Session file schema | session/manager/、projection/、migrations/、storage/jsonl/、types/ | Session entry、tree/projection、JSONL storage 或 migration |
+| session/ | Session JSONL v3、SessionManager、Projection、Migration、branch/fork 和文件操作；写入锁与 `<session>.jsonl.bridge`（bridge/descriptor.ts） | 不负责 Agent Loop；不应在 TUI 中直接实现 Session file schema | session/manager/、projection/、migrations/、storage/jsonl/、bridge/、types/ | Session entry、tree/projection、JSONL storage 或 migration |
 | skills/ | Skill 发现和加载 | 不负责 Skill 内容之外的 Agent 执行循环 | skills/loader/；由 ResourceLoader 使用 | Skill loader、来源优先级和资源接线 |
 | symbols/ | lightweight index、semantic LSP、router、server 管理、symbol store 和 runtime 配置 | 不负责普通 Tool UI；不假设当前机器一定有可用 LSP | symbols/runtime/、index/、semantic/、lsp/、store/；由 tools/symbols-runtime.ts 和 Agent services 使用 | Code Intelligence backend、router、协议和索引能力 |
 | system-prompts/ | System Prompt loader/composer 的代码入口 | 实际 Prompt 文本不在此目录；文本资源在仓库根 system-prompts/ | system-prompts/loader/、composer/；由 Agent Runtime 创建系统提示 | loader、composer、role boundary、prompt injection 顺序 |

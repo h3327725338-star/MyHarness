@@ -81,7 +81,10 @@
 .panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; box-shadow: var(--shadow-panel); opacity: 0; transform: translateX(28px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
 .app.panel-open .panel { opacity: 1; transform: none; }
 .panel-tabs { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 var(--pad-panel); flex: none; border-bottom: 1px solid var(--border); }
-.tab { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control-sm); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); font-weight: 500; position: relative; transition: background var(--t-fast), color var(--t-fast); }
+.tab { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control-sm); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); font-weight: 500; position: relative; transition: background var(--t-fast), color var(--t-fast), gap var(--t-slow) var(--ease), padding var(--t-slow) var(--ease); }
+/* The label of a tab folds away into its icon (and unfolds again) as the panel narrows or widens: its width and opacity
+   animate instead of the label appearing and disappearing in one frame. */
+.tab-label { display: inline-block; overflow: hidden; white-space: nowrap; max-width: 7em; opacity: 1; padding-bottom: 4px; margin-bottom: -4px; transition: max-width var(--t-slow) var(--ease), opacity var(--t-base) var(--ease); }
 .tab:hover { background: var(--surface-hover); color: var(--text); }
 .tab[aria-selected="true"] { background: var(--surface-active); color: var(--text); }
 .tab .count { font-size: var(--fs-xs); color: var(--text-3); }
@@ -100,6 +103,10 @@
 .splash-card { width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
 .conn-banner { position: absolute; top: 0; left: 0; right: 0; z-index: 70; padding: 6px 12px; text-align: center; font-size: var(--fs-sm); background: var(--warn-soft); color: var(--warn); border-bottom: 1px solid var(--border); }
 
-.panel[data-w="xs"] .tab-label, .panel[data-w="s"] .tab-label { display: none; }
-.panel[data-w="xs"] .tab, .panel[data-w="s"] .tab { padding: 0 9px; }
+.panel[data-w="xs"] .tab-label, .panel[data-w="s"] .tab-label { max-width: 0; opacity: 0; }
+.panel[data-w="xs"] .tab, .panel[data-w="s"] .tab { padding: 0 9px; gap: 0; }
+/* Whatever a tab shows is as wide as the panel is at this moment, however the panel is dragged: no view keeps a width of its own. */
+.panel-body > .panel-pane, .panel-pane > * { min-width: 0; max-width: 100%; }
+.panel-pane { width: 100%; }
+@media (prefers-reduced-motion: reduce) { .tab, .tab-label { transition: none; } }
 

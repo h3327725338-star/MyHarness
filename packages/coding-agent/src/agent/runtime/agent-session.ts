@@ -154,6 +154,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { type AgentRole, restrictToolNamesForRole } from "./role.ts";
 import { isRunTimeoutError, type RunState, type RunStateSnapshot, type RunTerminalReason } from "./run-state.ts";
+import { attachSessionBridge, detachSessionBridge } from "./session-bridge.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -473,7 +474,18 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
-	private _backgroundExploreTasks = new Map<string, { abort: () => void; promise: Promise<void> }>();
+	private _backgroundExploreTasks = new Map<
+		string,
+		{
+			abort: () => void;
+			promise: Promise<void>;
+			specs: SubAgentBackgroundTask["tasks"];
+			/** The main task ended (cancelled or failed): the batch was stopped and its result must not reach the model. */
+			cancelled?: boolean;
+		}
+	>();
+	/** Latest progress of each background batch, to describe it correctly when it is stopped. */
+	private _backgroundProgress = new Map<string, SubAgentBackgroundProgress["details"]>();
 	/** Runtime controls for in-flight workflow/ultracode runs, keyed by tool call id. */
 	private _workflowControls = new Map<string, WorkflowToolControls>();
 	private _pendingSubAgentProgress = new Map<
@@ -692,8 +704,9 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 		try {
-			this.sessionManager.acquireWriterLock();
+			const lockMode = this.sessionManager.acquireWriterLock();
 			this._releaseSessionWriterLock = () => this.sessionManager.releaseWriterLock();
+			if (lockMode === "owner") attachSessionBridge(this);
 		} catch (error) {
 			// Lock acquisition is the last constructor step, but it can fail when a
 			// different process already owns the session. Tear down the listeners and
@@ -922,7 +935,7 @@ export class AgentSession {
 	// =========================================================================
 
 	/** Emit an event to all listeners */
-	private _emit(event: AgentSessionEvent): void {
+	protected _emit(event: AgentSessionEvent): void {
 		if (this._disposed) return;
 		for (const l of this._eventListeners) {
 			l(event);
@@ -1177,6 +1190,8 @@ export class AgentSession {
 				reason: RunTerminalReason;
 			});
 		this._runTerminalReason = terminal.reason;
+		// Whatever the outcome (completed, cancelled, failed), the task is over and so is everything it started.
+		this._cancelBackgroundWork();
 		this._setRunState(terminal.state, terminal.activity, {
 			error: terminal.error,
 			terminalReason: terminal.reason,
@@ -1576,6 +1591,7 @@ export class AgentSession {
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		detachSessionBridge(this);
 		this._releaseSessionWriterLock?.();
 		this._releaseSessionWriterLock = undefined;
 		if (this.sessionManager.usesDefaultSessionDir()) {
@@ -1660,6 +1676,14 @@ export class AgentSession {
 	get thinkingLevel(): ThinkingLevel {
 		return this.agent.state.thinkingLevel;
 	}
+
+	/** True when another MyHarness process owns and runs this session and this one only follows it. */
+	get isMirror(): boolean {
+		return false;
+	}
+
+	/** Called once when the process that owns a followed session goes away. Never called for an owned session. */
+	onMirrorClosed(_handler: () => void): void {}
 
 	/** Whether the session is currently processing an agent run or post-run continuation. */
 	get isStreaming(): boolean {
@@ -2526,16 +2550,85 @@ export class AgentSession {
 	}
 
 	private _trackBackgroundExploreTask(task: SubAgentBackgroundTask): void {
-		this._backgroundExploreTasks.set(task.batchId, { abort: task.abort, promise: task.promise });
+		this._backgroundExploreTasks.set(task.batchId, {
+			abort: task.abort,
+			promise: task.promise,
+			specs: task.tasks,
+		});
 		const cleanup = () => {
 			const live = this._backgroundExploreTasks.get(task.batchId);
 			if (live?.promise !== task.promise) return;
 			this._backgroundExploreTasks.delete(task.batchId);
+			this._backgroundProgress.delete(task.batchId);
+			this._resolveIdleWaitIfIdle();
 		};
 		void task.promise.then(cleanup, cleanup);
 	}
 
+	/** Number of background Explore batches that are still running. */
+	get backgroundTaskCount(): number {
+		let running = 0;
+		for (const task of this._backgroundExploreTasks.values()) if (!task.cancelled) running += 1;
+		return running;
+	}
+
+	/**
+	 * The main task ended (completed, cancelled, failed, timed out) or the user pressed stop: everything it started
+	 * goes with it. Background Explore batches are aborted, their cards are settled as cancelled right away
+	 * (no spinner, no "running in the background"), and running workflows are killed.
+	 */
+	private _cancelBackgroundWork(): void {
+		for (const [batchId, task] of this._backgroundExploreTasks) {
+			if (task.cancelled) continue;
+			task.cancelled = true;
+			try {
+				task.abort();
+			} catch {
+				// A task that cannot be aborted still must not report back to the model.
+			}
+			this._discardSubAgentProgress(batchId);
+			if (this._disposed) continue;
+			const known = this._backgroundProgress.get(batchId);
+			const base: SubAgentBackgroundProgress["details"] = known ?? {
+				completed: 0,
+				total: task.specs.length,
+				batchId,
+				results: task.specs.map((spec) => ({
+					description: spec.description,
+					prompt: spec.prompt,
+					status: "running",
+					output: "",
+					toolUseCount: 0,
+					tokens: 0,
+					transcript: [],
+				})),
+			};
+			this._emit({
+				type: "sub_agent_progress",
+				progress: {
+					batchId,
+					details: {
+						...base,
+						background: false,
+						results: base.results.map((result) =>
+							result.status === "running" ? { ...result, status: "cancelled", lastToolInfo: "已取消" } : result,
+						),
+					},
+				},
+			});
+		}
+		for (const controls of this._workflowControls.values()) {
+			try {
+				controls.killWorkflow();
+			} catch {
+				// Cancellation must continue even if a workflow hook throws.
+			}
+		}
+	}
+
 	private _handleBackgroundExploreProgress(progress: SubAgentBackgroundProgress): void {
+		if (this._backgroundExploreTasks.get(progress.batchId)?.cancelled) return;
+		this._backgroundProgress.set(progress.batchId, progress.details);
 		const pending = this._pendingSubAgentProgress.get(progress.batchId);
 		if (pending) {
 			pending.progress = progress;
@@ -2568,7 +2661,8 @@ export class AgentSession {
 	}
 
 	private async _handleBackgroundExploreComplete(notification: SubAgentBackgroundNotification): Promise<void> {
-		if (!this._backgroundExploreTasks.has(notification.batchId)) {
+		const known = this._backgroundExploreTasks.get(notification.batchId);
+		if (!known || known.cancelled) {
 			this._discardSubAgentProgress(notification.batchId);
 			return;
 		}
@@ -2744,6 +2838,7 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		if (this._isAgentRunActive) this._abortRequested = true;
+		this._cancelBackgroundWork();
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBash();

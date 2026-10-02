@@ -311,6 +311,58 @@ export function Empty({ icon, title, children }) {
 	return html`<div class="empty">${icon ? html`<${Icon} name=${icon} size=${22} class="empty-icon" />` : null}<div>${title}</div>${children ? html`<div class="empty-hint">${children}</div>` : null}</div>`;
 }
 
+/** The nearest ancestor that scrolls vertically (the list's own scroll area), or the page. */
+function scrollParent(node) {
+	for (let el = node?.parentElement; el; el = el.parentElement) {
+		const overflow = getComputedStyle(el).overflowY;
+		if (overflow === "auto" || overflow === "scroll") return el;
+	}
+	return document.scrollingElement || document.documentElement;
+}
+
+/**
+ * A long list that keeps only the rows on screen (and a margin around them) in the DOM, so thousands of rows cost what a
+ * screenful costs. Every row must be exactly `rowHeight` pixels tall. Short lists (up to `threshold` rows) are rendered
+ * in full, since there is nothing to save. The range is recomputed at most once per frame while scrolling or resizing.
+ *
+ * props: items, rowHeight, renderRow(item, index) (rows need their own key), overscan (rows kept above and below), threshold
+ */
+export function VirtualRows({ items, rowHeight, renderRow, overscan = 8, threshold = 60 }) {
+	const box = useRef(null);
+	const virtual = items.length > threshold;
+	const [range, setRange] = useState([0, 0]);
+	useLayoutEffect(() => {
+		const el = box.current;
+		if (!virtual || !el) return undefined;
+		const scroller = scrollParent(el);
+		let frame = 0;
+		const compute = () => {
+			frame = 0;
+			const viewTop = scroller === document.scrollingElement || scroller === document.documentElement ? 0 : scroller.getBoundingClientRect().top;
+			const above = viewTop - el.getBoundingClientRect().top;
+			const first = Math.max(0, Math.floor(above / rowHeight) - overscan);
+			const last = Math.min(items.length, Math.ceil((above + (scroller.clientHeight || window.innerHeight)) / rowHeight) + overscan);
+			setRange((prev) => (prev[0] === first && prev[1] === last ? prev : [first, last]));
+		};
+		const schedule = () => {
+			if (!frame) frame = requestAnimationFrame(compute);
+		};
+		compute();
+		scroller.addEventListener("scroll", schedule, { passive: true });
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+		observer?.observe(scroller);
+		return () => {
+			scroller.removeEventListener("scroll", schedule);
+			observer?.disconnect();
+			cancelAnimationFrame(frame);
+		};
+	}, [virtual, items.length, rowHeight, overscan]);
+	if (!virtual) return items.map(renderRow);
+	const first = Math.min(range[0], items.length);
+	const last = Math.min(Math.max(range[1], first), items.length);
+	return html`<div ref=${box} class="virtual-rows" style=${{ height: `${items.length * rowHeight}px` }}><div class="virtual-window" style=${{ top: `${first * rowHeight}px` }}>${items.slice(first, last).map((item, index) => renderRow(item, first + index))}</div></div>`;
+}
+
 /** Drag-to-resize handle. `getValue()` is read once at drag start; `onChange(v)` gets base ± delta (invert flips the sign). */
 export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max = 10000 }) {
 	const [dragging, setDragging] = useState(false);
@@ -320,8 +372,24 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 			const startX = event.clientX;
 			const base = getValue();
 			setDragging(true);
-			const move = (e) => onChange(Math.max(min, Math.min(max, base + (invert ? -1 : 1) * (e.clientX - startX))));
+			// The pointer reports faster than frames are drawn: only the latest position of each frame is applied, so the
+			// layout is computed once per frame however busy the machine is.
+			let frame = 0;
+			let pending = null;
+			const flush = () => {
+				frame = 0;
+				if (pending === null) return;
+				const value = pending;
+				pending = null;
+				onChange(value);
+			};
+			const move = (e) => {
+				pending = Math.max(min, Math.min(max, base + (invert ? -1 : 1) * (e.clientX - startX)));
+				if (!frame) frame = requestAnimationFrame(flush);
+			};
 			const up = () => {
+				cancelAnimationFrame(frame);
+				flush();
 				window.removeEventListener("mousemove", move);
 				window.removeEventListener("mouseup", up);
 				document.body.style.cursor = "";

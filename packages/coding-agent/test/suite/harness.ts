@@ -10,7 +10,11 @@ import type { AgentMessage, AgentTool } from "@myharness/agent-core";
 import { Agent } from "@myharness/agent-core";
 import type { FauxModelDefinition, FauxProviderRegistration, FauxResponseStep, Model } from "@myharness/ai/compat";
 import { registerFauxProvider, streamSimple } from "@myharness/ai/compat";
-import { AgentSession, type AgentSessionEvent } from "../../src/agent/runtime/agent-session.ts";
+import {
+	AgentSession,
+	type AgentSessionConfig,
+	type AgentSessionEvent,
+} from "../../src/agent/runtime/agent-session.ts";
 import { convertToLlm } from "../../src/agent/runtime/messages.ts";
 import type { Settings } from "../../src/config/settings/index.ts";
 import { SettingsManager } from "../../src/config/settings/index.ts";
@@ -75,6 +79,10 @@ export interface HarnessOptions {
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
+	/** Use this session manager instead of creating one. */
+	sessionManager?: SessionManager;
+	/** Build the session from the harness's parts (for AgentSession subclasses). */
+	createSession?: (config: AgentSessionConfig) => AgentSession;
 }
 
 export interface Harness {
@@ -113,9 +121,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionCwd = options.sessionCwd === "temp" ? tempDir : options.sessionCwd;
-	const sessionManager = options.persisted
-		? SessionManager.create(sessionCwd ?? tempDir, tempDir)
-		: SessionManager.inMemory(sessionCwd);
+	const sessionManager =
+		options.sessionManager ??
+		(options.persisted ? SessionManager.create(sessionCwd ?? tempDir, tempDir) : SessionManager.inMemory(sessionCwd));
 	const settingsManager = SettingsManager.inMemory(options.settings);
 
 	const authStorage = AuthStorage.inMemory();
@@ -181,7 +189,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const resourceLoader =
 		options.resourceLoader ?? createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
 
-	const session = new AgentSession({
+	const sessionConfig: AgentSessionConfig = {
 		agent,
 		sessionManager,
 		settingsManager,
@@ -194,7 +202,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		allowedToolNames: options.allowedToolNames,
 		excludedToolNames: options.excludedToolNames,
 		extensionRunnerRef,
-	});
+	};
+	const session = options.createSession ? options.createSession(sessionConfig) : new AgentSession(sessionConfig);
 
 	const events: AgentSessionEvent[] = [];
 	session.subscribe((event) => {

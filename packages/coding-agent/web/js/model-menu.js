@@ -112,7 +112,10 @@ export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, di
  * (the slider takes the keyboard as soon as it appears, so ←/→ work right after it opens), onDone (Enter: the choice is
  * made), titled (false: the name above is left to the surface that shows the slider)
  */
-export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onDone, titled = true }) {
+export function EffortSlider({ levels: modelLevels, value, onChange, disabled, autoFocus, onDone, titled = true, withDefault = false }) {
+	// "Default" (no effort is sent) is the first stop of the rail when it is offered, so it is chosen like any level.
+	const levels = withDefault ? ["", ...modelLevels] : modelLevels;
+	const stopName = (level) => (level ? effortName(level) : t("Default"));
 	// The rail is what the stops are measured on: a pointer position maps to the stop nearest to it.
 	const rail = useRef(null);
 	const [drag, setDragState] = useState(null);
@@ -126,7 +129,7 @@ export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onD
 	// between. Only the latest choice may release it.
 	const [picked, setPicked] = useState(null);
 	const pickSeq = useRef(0);
-	const current = picked ?? value;
+	const current = picked ?? (withDefault ? (value ?? "") : value);
 	const shown = drag ?? current;
 	const at = levels.indexOf(shown);
 	const last = Math.max(1, levels.length - 1);
@@ -138,7 +141,7 @@ export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onD
 		if (disabled || level === undefined || level === current) return;
 		const seq = ++pickSeq.current;
 		setPicked(level);
-		Promise.resolve(onChange(level))
+		Promise.resolve(onChange(level === "" ? undefined : level))
 			.catch(() => {})
 			.then(() => seq === pickSeq.current && setPicked(null));
 	};
@@ -170,16 +173,18 @@ export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onD
 		commit(levels[next]);
 	};
 	const left = (index) => `${(index / last) * 100}%`;
-	const name = shown ? effortName(shown) : t("Default");
+	const name = shown !== undefined && shown !== null ? stopName(shown) : t("Default");
 	return html`<div class=${`effort ${disabled ? "disabled" : ""}`}>
 		<div class=${`effort-head ${titled ? "" : "alone"}`}>${titled ? html`<span class="effort-title">${t("Thinking effort")}</span>` : null}<span class="effort-value">${name}</span></div>
-		<div class="effort-ends"><span>${t("Faster")}</span><span>${t("Smarter")}</span></div>
 		<div class="effort-track" role="slider" tabindex=${disabled ? -1 : 0} autofocus=${autoFocus && !disabled ? true : undefined} aria-label=${t("Thinking effort")} aria-orientation="horizontal" aria-disabled=${disabled ? "true" : undefined}
 			aria-valuemin="0" aria-valuemax=${levels.length - 1} aria-valuenow=${at < 0 ? undefined : at} aria-valuetext=${name}
 			onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${() => setDrag(null)} onKeyDown=${onKeyDown}>
 			<div class="effort-rail" ref=${rail}>
-				${levels.map((level, index) => html`<span key=${level} class="effort-stop" style=${{ left: left(index) }} title=${effortName(level)} />`)}
+				${levels.map((level, index) => html`<span key=${level || "default"} class="effort-stop" style=${{ left: left(index) }} title=${stopName(level)} />`)}
 				${at >= 0 ? html`<span class="effort-thumb" style=${{ left: left(at) }} />` : null}
+			</div>
+			<div class="effort-labels" aria-hidden="true">
+				${levels.map((level, index) => html`<span key=${level || "default"} class=${`effort-label ${index === 0 ? "first" : index === levels.length - 1 ? "last" : ""} ${index === at ? "on" : ""}`} style=${{ left: left(index) }}>${stopName(level)}</span>`)}
 			</div>
 		</div>
 	</div>`;
@@ -201,8 +206,7 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
 			<span class="truncate chip-text">${text}</span>${cls.split(" ").includes("select") ? null : html`<${Chevron} />`}
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${264} class="effort-pop">
-			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} autoFocus onDone=${() => setOpen(false)} />
-			${withDefault ? html`<button class=${`effort-default ${value ? "" : "on"}`} disabled=${disabled} onClick=${() => value && onChange(undefined)}><span class="grow">${t("Default")}</span><span class="dim">${t("No effort sent")}</span>${value ? null : html`<${Icon} name="check" size=${13} />`}</button>` : null}
+			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} withDefault=${withDefault} autoFocus onDone=${() => setOpen(false)} />
 		<//>
 	</span>`;
 }
