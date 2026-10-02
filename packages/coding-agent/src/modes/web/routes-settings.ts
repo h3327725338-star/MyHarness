@@ -871,16 +871,23 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		};
 	});
 
-	server.route("POST", "/api/trust", ({ body }) => {
+	/**
+	 * Saves the trust decision for the project and applies it: the chat it was made in loads its settings and resources
+	 * again for the new state before the answer is sent, and the other open chats of the folder follow.
+	 */
+	server.route("POST", "/api/trust", async ({ body }) => {
 		const optionId = String(asObject(body).option ?? "");
 		const cwd = host.session.sessionManager.getCwd();
 		const option = getProjectTrustOptions(cwd, { includeSessionOnly: false }).find(
 			(candidate) => candidate.id === optionId,
 		);
 		if (!option) throw new HttpError(400, "Unknown trust option");
+		if (host.session.isStreaming || host.session.isCompacting) throw new HttpError(409, "The session is busy.");
 		const store = new ProjectTrustStore(host.runtimeHost.services.agentDir);
 		if (option.updates.length > 0) store.setMany(option.updates);
-		return { ok: true, needsReload: true };
+		await host.applySavedTrust();
+		host.broadcast("trust_changed", {});
+		return { ok: true, trusted: host.session.settingsManager.isProjectTrusted() };
 	});
 
 	// ---- Resources ---------------------------------------------------------------------

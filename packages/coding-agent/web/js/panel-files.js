@@ -17,7 +17,7 @@ function TreeNode({ entry, depth, expanded, onToggle, children, statusMap, taskM
 	return html`<div>
 		<div class=${`tree-row ${current === entry.path ? "current" : ""} ${entry.ignored ? "ignored" : ""}`} style=${{ paddingLeft: `${8 + depth * 14}px` }} role="treeitem" aria-expanded=${isDir ? !!expanded : undefined}
 			onClick=${() => (isDir ? onToggle(entry.path) : onOpen(entry.path))} tabindex="0" onKeyDown=${(e) => e.key === "Enter" && (isDir ? onToggle(entry.path) : onOpen(entry.path))}>
-			${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span style="width:13px" />`}
+			${isDir ? html`<${Icon} name=${expanded ? "chevronDown" : "chevronRight"} size=${13} class="c-dim" />` : html`<span class="tree-gap" />`}
 			<${Icon} name=${isDir ? (expanded ? "folderOpen" : "folder") : "file"} size=${14} class=${isDir ? "c-folder" : "c-dim"} />
 			<span class="truncate grow">${entry.name}</span>
 			${task ? html`<span class="dot accent" title=${t("Changed by the last task")} />` : null}

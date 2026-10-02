@@ -10,6 +10,7 @@ import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
+import { requestNotificationPermission } from "./notifications.js";
 import { rankSearch } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
 import { RUN_MODES } from "./run-modes.js";
@@ -216,9 +217,8 @@ function projectTrustScreen() {
 					key: o.id,
 					label: tr(o.label),
 					onEnter: async (c) => {
+						// The server saves the decision and applies it to the open chats of the folder.
 						if (await attempt(() => post("/api/trust", { option: o.id }))) {
-							toast(t("Trust decision saved. Reloading resources…"), "info", 3000);
-							await attempt(() => post("/api/resources/reload"));
 							await loadSnapshot();
 							reload();
 							c.pop();
@@ -538,10 +538,9 @@ function appearanceScreen() {
 				toggle: !!view.notify,
 				onEnter: async () => {
 					if (state.view.notify) return setView({ notify: false });
-					if (typeof Notification === "undefined") return toast(t("This browser does not support notifications."), "warning");
-					const permission = await Notification.requestPermission();
+					const permission = await requestNotificationPermission();
 					if (permission === "granted") setView({ notify: true });
-					else toast(t("Notification permission was not granted."), "warning");
+					else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
 				},
 			},
 		],
@@ -1010,7 +1009,7 @@ function Row({ row, selected, busy, onClick, onHover }) {
 		<span class="cp-main"><span class="cp-label truncate">${row.label}</span>${row.desc ? html`<span class="cp-desc truncate">${row.desc}</span>` : null}</span>
 		${(row.badges || []).map((b) => html`<span class="badge" key=${b}>${b}</span>`)}
 		${row.toggle === undefined && row.value !== undefined && row.value !== "" ? html`<span class="cp-value truncate">${row.value}</span>` : null}
-		${row.toggle !== undefined ? html`<span class=${`cp-switch ${row.toggle ? "on" : ""}`} aria-hidden="true"><i /></span>` : null}
+		${row.toggle !== undefined ? html`<span class=${`toggle ${row.toggle ? "on" : ""}`} aria-hidden="true" />` : null}
 		<span class="cp-tail">${busy ? html`<${Spinner} />` : row.chevron ? html`<${Icon} name="chevronRight" size=${13} class="c-dim" />` : null}</span>
 	</div>`;
 }
@@ -1059,7 +1058,7 @@ function InputView({ spec, ctx }) {
 				? html`<${UnitField} value=${value} onInput=${setValue} unit=${input.unit} label=${input.label} placeholder=${input.placeholder} invalid=${invalid} width=${230} onKeyDown=${keys} />`
 				: html`<input class="field" type=${input.type || "text"} min=${input.min} max=${input.max} autocomplete="off" value=${value} placeholder=${input.placeholder || ""} onInput=${(e) => setValue(e.target.value)} onKeyDown=${keys} />`}
 		</label>
-		<div class="row" style="gap:8px"><button class="btn sm ghost" type="button" onClick=${ctx.pop}>${t("Cancel")}</button><button class="btn sm primary" type="submit" disabled=${busy || invalid}>${input.submitLabel}</button></div>
+		<div class="row"><button class="btn sm ghost" type="button" onClick=${ctx.pop}>${t("Cancel")}</button><button class="btn sm primary" type="submit" disabled=${busy || invalid}>${input.submitLabel}</button></div>
 	</form>`;
 }
 

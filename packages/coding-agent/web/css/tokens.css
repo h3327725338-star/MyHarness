@@ -11,14 +11,27 @@
 	--lh-read: 1.72;
 	--fs-code: 12.5px;
 
+	/* Corners, by what they round: xs marks and rows of a menu, sm rows of a list and icon buttons, md controls,
+	   menus and blocks inside a surface, lg cards and the two window surfaces, xl dialogs and the input card. A pill
+	   (badge, chip, switch) is round whatever its height. */
 	--r-xs: 4px;
 	--r-sm: 6px;
 	--r-md: 8px;
 	--r-lg: 12px;
 	--r-xl: 16px;
+	--r-pill: 999px;
 
+	/* Heights of controls with a frame (button, select, field): regular in dialogs and forms, compact (`.sm`, and the
+	   segmented control, chips and tabs) in toolbars, settings rows and the input bar. An icon-only button is the
+	   regular height, or 24px (`.sm`) inside rows. */
 	--h-control: 32px;
+	--h-control-sm: 28px;
+	--h-icon-sm: 24px;
 	--h-row: 34px;
+	--disabled-opacity: 0.5;
+	/* The inset of everything in the sidebar and in the right-hand panel: rows, bars and text start and end on it. */
+	--pad-side: 8px;
+	--pad-panel: 12px;
 	--sidebar-w: 272px;
 	--panel-w: 560px;
 	--read-w: 780px;

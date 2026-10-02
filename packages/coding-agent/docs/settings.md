@@ -11,7 +11,7 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 ## Popup notifications（任务结束提醒）
 
-Interactive mode 可以在任务完成、失败或中断后显示桌面提醒，默认开启。可以在全局或项目 settings 中配置：
+Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示桌面提醒，默认开启（Web UI 优先用浏览器通知，浏览器不允许或没有页面打开时用同一个系统弹窗，见 [web-ui.md](web-ui.md)）。可以在全局或项目 settings 中配置：
 
 ```json
 {

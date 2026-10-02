@@ -1,7 +1,7 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Resizer, Spinner, usePresence } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Modal, Resizer, Spinner, usePresence } from "./ui.js";
 import { attempt, dismissToast, post, setView, state, useStore } from "./store.js";
-import { actions, confirmDialog, openCommand, resolveConfirm } from "./actions.js";
+import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
@@ -74,16 +74,6 @@ function Header() {
 		${tabBtn("files", "folder", t("Files"))}
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
-		<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn" aria-label=${t("More")} title=${t("More")} onClick=${toggle}><${Icon} name="moreV" size=${17} /></button>`} width=${220}>
-			${(close) => html`
-				<${MenuItem} icon="edit" label=${t("New chat")} hint="Ctrl+N" onClick=${() => (close(), actions.newSession())} />
-				<${MenuItem} icon="search" label=${t("Search & commands")} hint="Ctrl+K" onClick=${() => (close(), setView({ palette: true }))} />
-				<${MenuItem} icon="layers" label=${t("Compact context")} disabled=${snap?.active} onClick=${() => (close(), actions.compact())} />
-				<${MenuItem} icon="download" label=${t("Export chat as HTML")} onClick=${() => (close(), actions.exportSession())} />
-				<${MenuSep} />
-				<${MenuItem} icon="gitBranch" label=${t("Git tools")} onClick=${() => (close(), openCommand("git"))} />
-				<${MenuItem} icon="gear" label=${t("Settings")} hint="Ctrl+," onClick=${() => (close(), setView({ settingsOpen: true }))} />`}
-		<//>
 	</header>`;
 }
 
@@ -91,11 +81,16 @@ function PanelContainer() {
 	const tab = useStore((s) => s.view.panelTab);
 	const snap = useStore((s) => s.snap);
 	const bashRunning = !!snap?.flags?.bashRunning;
-	const onWidth = (w) => {
+	const panelRef = useRef(null);
+	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
+	// from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
+	// in a larger window, or a drag past the cap, leaves no dead stretch to drag back through.
+	const room = () => Math.max(340, window.innerWidth - (state.view.sidebarOpen ? state.view.sidebarW : 0) - 520);
+	const onWidth = (value) => {
+		const w = Math.round(Math.min(value, room()));
 		state.view = { ...state.view, panelW: w };
 		document.documentElement.style.setProperty("--panel-w", `${w}px`);
 	};
-	const panelRef = useRef(null);
 	useWidthClass(panelRef, [], [440, 440]);
 	const tabs = [
 		{ id: "changes", label: t("Changes"), icon: "fileDiff" },
@@ -104,7 +99,7 @@ function PanelContainer() {
 		{ id: "context", label: t("Session"), icon: "layers" },
 	];
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
-		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
+		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
 		<div class="panel-tabs" role="tablist">
 			${tabs.map((tab_) => html`<button key=${tab_.id} role="tab" class="tab" title=${tab_.label} aria-selected=${tab === tab_.id} onClick=${() => setView({ panelTab: tab_.id })}><${Icon} name=${tab_.icon} size=${14} /><span class="tab-label">${tab_.label}</span>${tab_.id === "terminal" && bashRunning ? html`<${Spinner} />` : null}</button>`)}
 			<span class="grow" />
@@ -131,7 +126,7 @@ function Toasts() {
 function ConfirmModal({ dialog }) {
 	return html`<${Modal} title=${dialog.title} onClose=${() => resolveConfirm(false)} width=${480}
 		footer=${html`<button class="btn" onClick=${() => resolveConfirm(false)}>${dialog.cancelLabel || t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus onClick=${() => resolveConfirm(true)}>${dialog.confirmLabel}</button>`}>
-		<div style="white-space:pre-wrap">${dialog.message}</div>${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
+		<div class="pre-wrap">${dialog.message}</div>${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
 	<//>`;
 }
 
@@ -148,8 +143,8 @@ function InputModal({ dialog }) {
 function BootDialogs({ dialogs }) {
 	const answer = (id, value) => attempt(() => post("/api/ui/respond", { id, value }));
 	return html`${dialogs.map((d) => html`<${Modal} key=${d.id} title=${String(d.title).split("\n")[0]} onClose=${null} width=${520} closeOnScrim=${false}>
-		<div style="white-space:pre-wrap">${[String(d.title).split("\n").slice(1).join("\n"), d.message].filter(Boolean).join("\n")}</div>
-		<div class="col" style="gap:8px;margin-top:14px">${d.kind === "select" ? d.options.map((o) => html`<button class="btn" key=${o} onClick=${() => answer(d.id, o)}>${o}</button>`) : d.kind === "confirm" ? html`<div class="row"><button class="btn" onClick=${() => answer(d.id, false)}>${t("No")}</button><button class="btn primary" onClick=${() => answer(d.id, true)}>${t("Yes")}</button></div>` : null}</div>
+		<div class="pre-wrap">${[String(d.title).split("\n").slice(1).join("\n"), d.message].filter(Boolean).join("\n")}</div>
+		<div class="modal-options">${d.kind === "select" ? d.options.map((o) => html`<button class="btn" key=${o} onClick=${() => answer(d.id, o)}>${o}</button>`) : d.kind === "confirm" ? html`<div class="row"><button class="btn" onClick=${() => answer(d.id, false)}>${t("No")}</button><button class="btn primary" onClick=${() => answer(d.id, true)}>${t("Yes")}</button></div>` : null}</div>
 	<//>`)}`;
 }
 
@@ -164,7 +159,7 @@ function useShortcuts() {
 				setView({ palette: !state.view.palette });
 			} else if (key === "n" && !e.shiftKey) {
 				e.preventDefault();
-				actions.newSession();
+				actions.newChat();
 			} else if (key === "b") {
 				e.preventDefault();
 				setView({ sidebarOpen: !state.view.sidebarOpen });

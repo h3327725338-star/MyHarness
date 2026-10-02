@@ -107,7 +107,7 @@ function KeyManager({ provider, onBack }) {
 			setLabel("");
 		}
 	};
-	return html`<div class="col" style="gap:12px">
+	return html`<div class="stack">
 		<div class="row"><button class="btn sm ghost" onClick=${onBack}><${Icon} name="chevronLeft" size=${14} />${provider.name}</button></div>
 		<section class="set-card">
 			<div class="set-card-head"><strong class="grow">${t("API keys")}</strong><span class="dim">${t("The key in use is sent with every request to {name}.", { name: provider.name })}</span></div>
@@ -122,7 +122,7 @@ function KeyManager({ provider, onBack }) {
 				</div>
 				${replacing === k.id ? html`<div class="key-replace row">
 					<span class="dim">${t("This key is in use. Switch to:")}</span>
-					<select class="select" id=${`rep-${k.id}`}>${keys.filter((o) => o.id !== k.id).map((o) => html`<option key=${o.id} value=${o.id}>${serverText(o.label)}${o.suffix ? ` ••••${o.suffix}` : ""}</option>`)}</select>
+					<select class="select sm" id=${`rep-${k.id}`}>${keys.filter((o) => o.id !== k.id).map((o) => html`<option key=${o.id} value=${o.id}>${serverText(o.label)}${o.suffix ? ` ••••${o.suffix}` : ""}</option>`)}</select>
 					<button class="btn sm danger" onClick=${() => remove(k, document.getElementById(`rep-${k.id}`)?.value)}>${t("Delete API key")}</button>
 					<button class="btn sm ghost" onClick=${() => setReplacing(null)}>${t("Cancel")}</button>
 				</div>` : null}`)}
@@ -132,7 +132,7 @@ function KeyManager({ provider, onBack }) {
 		${provider.supportsApiKeyLogin
 			? html`<section class="set-card">
 				<div class="set-card-head"><strong>${t("Add API key")}</strong></div>
-				<div class="set-card-body col" style="gap:10px">
+				<div class="set-card-body col">
 					<div class="key-add">
 						<input class="field" placeholder=${t("Name (optional)")} aria-label=${t("Key name")} value=${label} onInput=${(e) => setLabel(e.target.value)} />
 						<input class="field mono" type="password" autocomplete="off" placeholder=${t("Paste the API key")} aria-label=${t("API key")} value=${value} onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && value.trim() && add()} />
@@ -178,11 +178,11 @@ function ProviderDetail({ provider, entry, apiTypes, onSaved, onDirty, onDeleted
 	const status = statusOf(provider);
 	const keyArea = html`<${KeySummary} provider=${provider} busy=${!!busy} onManage=${() => setSub("keys")} />`;
 	const hasStoredKey = !!provider.credentials?.apiKeys?.length || provider.credentials?.active?.type === "oauth";
-	return html`<div class="col" style="gap:12px">
+	return html`<div class="stack">
 		<div class="prov-head">
 			<div class="col grow"><div class="prov-title truncate">${provider.name}</div><div class="dim mono truncate">${provider.id}</div></div>
 			<span class=${`badge ${status.cls}`}>${status.text}</span>
-			<label class="row prov-enable" title=${provider.missingBaseUrl ? t("Fill in the Base URL and save to turn this provider on.") : undefined}><span class="dim">${t("Enabled")}</span><${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${!!busy || provider.missingBaseUrl} onChange=${setEnabled} /></label>
+			<label class="check-label sm" title=${provider.missingBaseUrl ? t("Fill in the Base URL and save to turn this provider on.") : undefined}><span class="dim">${t("Enabled")}</span><${Toggle} checked=${provider.enabled} label=${t("Enable {name}", { name: provider.name })} disabled=${!!busy || provider.missingBaseUrl} onChange=${setEnabled} /></label>
 		</div>
 		${provider.missingBaseUrl ? html`<div class="notice warn" role="status">${t("The Base URL is not filled in, so this provider is off. Enter the Base URL and save to use it.")}</div>` : null}
 		<${LoginNotice} />
@@ -251,12 +251,12 @@ export function ProvidersPage() {
 			${providers && !list.length ? html`<div class="dim pf-hint prov-empty">${t("No providers yet.")}</div>` : null}
 			<button class=${`prov-item prov-add ${sel === NEW ? "on" : ""}`} onClick=${() => choose(NEW)}><${Icon} name="plus" size=${14} /><span>${t("Add provider")}</span></button>
 		</div>
-		<div class="prov-detail">
+		<div class="prov-detail stack">
 			${providers?.error ? html`<div class="notice danger">${t("models.json: {error}", { error: providers.error })}</div>` : null}
 			${!providers || !custom
 				? html`<${Spinner} />`
 				: sel === NEW || !current
-					? html`<div class="col" style="gap:12px">
+					? html`<div class="stack">
 						<div class="prov-head"><div class="col grow"><div class="prov-title">${t("Add provider")}</div><div class="dim">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")}</div></div></div>
 						<${ProviderForm} key="new" initial=${null} apiTypes=${custom.apiTypes} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} />
 					</div>`

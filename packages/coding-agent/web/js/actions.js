@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
+import { GENERAL_KEY, activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { normPath } from "./util.js";
@@ -168,6 +168,16 @@ export const actions = {
 	async newSession(rootPath, { unbound = false } = {}) {
 		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound }));
 		if (result?.slot) await showSlot(result.slot);
+		return result;
+	},
+
+	/**
+	 * "New chat" (the sidebar button, Ctrl+N, the palette): a chat that belongs to no workspace. It is listed under
+	 * No Folder as the current chat, so that group is opened if it was folded.
+	 */
+	async newChat() {
+		const result = await actions.newSession(undefined, { unbound: true });
+		if (result?.slot && state.view.expanded?.[GENERAL_KEY] === false) setView({ expanded: { ...state.view.expanded, [GENERAL_KEY]: true } });
 		return result;
 	},
 

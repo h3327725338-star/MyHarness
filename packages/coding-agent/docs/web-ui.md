@@ -38,10 +38,10 @@ myharness --web
 └────────────┴─────────────────────────────────────┴──────────────────────────┘
 ```
 
-* **侧栏**：真实的 Workspace / Chat 结构（`WorkspaceStore` + `SessionManager.list`）。新建 Chat、切换 Chat、重命名（手动或 AI 生成标题）、删除、添加/移除 Workspace。**“从列表移除”只取消 Workspace 的登记**（任何时候都可以，包括当前和最后一个 Workspace）：磁盘上的项目目录、项目文件和 Session 数据都不动，原来属于它的 Chat 继续存在，只是变成不属于任何 Workspace 的 Chat，出现在侧栏的 **No Folder** 分组，仍可打开、继续对话；之后再添加同一个文件夹，会接回它原来的 Chat。**No Folder**（旧版本叫 General / 通用，只改了显示名称）只是侧栏里的一个逻辑分组，和普通 Workspace 一样可展开/收起（默认展开），但它不是 Workspace：没有文件夹、不在 Workspace 登记里，其中 Chat 的磁盘位置和归属都不变。它列出所有不属于 Workspace 的 Chat（新建时没有选 Workspace 的，以及被移除的 Workspace 留下的），分组行右侧的 `+` 新建这样的 Chat；列表只在真正请求中才显示“Loading…”，请求失败（例如正在运行的服务比页面旧、没有 `GET /api/sessions/unbound`）会显示原因和“Retry”，Workspace 的 Chat 列表同理；顶部 New chat / `Ctrl+N` 沿用当前 Chat 的归属（当前 Chat 不属于 Workspace 时新建的也不属于）。没有任何 Workspace 时输入框、Provider、Model、Agent 和 New Chat 都照常可用。Workspace 可展开/收起（带高度动画，不影响其中正在运行的 Chat）。状态标记固定在 Chat 行右侧，不会挤动标题：运行中是小的空心旋转圆环，等待你回答是琥珀色圆点，**已完成但你还没看过的结果**是蓝色实心圆点，看过之后消失（已读且空闲的 Chat 没有任何标记）。Workspace 名称右侧的蓝点表示其中有未读结果。“看过”＝该 Chat 正显示在页面上且页面可见；未读标记由服务端按 Chat 保存（`SlotStatus.unread`，页面通过 `POST /api/seen` 上报），多个 Chat 并发时互不影响，未读的后台 Chat 不会被回收。还没写入磁盘的进行中 Chat 也会列出，随时可切回。
+* **侧栏**：真实的 Workspace / Chat 结构（`WorkspaceStore` + `SessionManager.list`）。新建 Chat、切换 Chat、重命名（手动或 AI 生成标题）、删除、添加/移除 Workspace。**“从列表移除”只取消 Workspace 的登记**（任何时候都可以，包括当前和最后一个 Workspace）：磁盘上的项目目录、项目文件和 Session 数据都不动，原来属于它的 Chat 继续存在，只是变成不属于任何 Workspace 的 Chat，出现在侧栏的 **No Folder** 分组，仍可打开、继续对话；之后再添加同一个文件夹，会接回它原来的 Chat。**No Folder**（旧版本叫 General / 通用，只改了显示名称）只是侧栏里的一个逻辑分组，和普通 Workspace 一样可展开/收起（默认展开），但它不是 Workspace：没有文件夹、不在 Workspace 登记里，其中 Chat 的磁盘位置和归属都不变。它列出所有不属于 Workspace 的 Chat（新建时没有选 Workspace 的，以及被移除的 Workspace 留下的），分组行右侧的 `+` 新建这样的 Chat；列表只在真正请求中才显示“Loading…”，请求失败（例如正在运行的服务比页面旧、没有 `GET /api/sessions/unbound`）会显示原因和“Retry”，Workspace 的 Chat 列表同理；侧栏顶部的 New chat、`Ctrl+N` 和命令面板里的 New chat 总是新建一个不属于任何 Workspace 的 Chat（`actions.newChat`）：它立刻作为当前 Chat 列在 No Folder 里（还没有消息时显示为 “New chat”，此时没有重命名/删除菜单），No Folder 处于收起状态时会自动展开；要在某个 Workspace 里新建，用该 Workspace 行右侧的 `+`。斜杠命令 `/new` 不变，仍沿用当前 Chat 的归属。没有任何 Workspace 时输入框、Provider、Model、Agent 和 New Chat 都照常可用。Workspace 可展开/收起（带高度动画，不影响其中正在运行的 Chat）。状态标记固定在 Chat 行右侧，不会挤动标题：运行中是小的空心旋转圆环，等待你回答是琥珀色圆点，**已完成但你还没看过的结果**是蓝色实心圆点，看过之后消失（已读且空闲的 Chat 没有任何标记）。Workspace 名称右侧的蓝点表示其中有未读结果。“看过”＝该 Chat 正显示在页面上且页面可见；未读标记由服务端按 Chat 保存（`SlotStatus.unread`，页面通过 `POST /api/seen` 上报），多个 Chat 并发时互不影响，未读的后台 Chat 不会被回收。还没写入磁盘的进行中 Chat 也会列出，随时可切回。
 * **添加 Workspace**：侧栏的 `+` 和 `/workspace` 里的 “Add workspace” 直接打开 Windows 自带的文件夹选择窗口（与资源管理器相同，只能选文件夹），选中后把该文件夹登记为 Workspace，取消则什么都不做。窗口由本机服务打开（`POST /api/fs/pick-folder`，`folder-dialog.ts` 通过 Windows PowerShell 调用系统的 `IFileOpenDialog`，在独立进程里运行，不阻塞服务），显示在浏览器窗口前面；同一时间只开一个。登记仍走原来的 `POST /api/workspaces/add`。没有系统窗口的平台（接口返回 501）才退回页面内置的文件夹选择器：类似资源管理器——后退/前进/上一级、可编辑并可点击的路径（面包屑）、快速访问（主目录/桌面/文档/下载）、盘符、已有 Workspace、筛选、新建文件夹、显示隐藏文件夹；只列目录，选中后显示完整路径再确认。
 * **对话**：用户消息、运行摘要、最终回复。默认不展开 Thinking、读文件、搜索、命令和编辑，只显示一行摘要，例如 `Worked for 32s · 9 actions · 4 files changed`。回复下方的小字显示模型和这次回复的 Token 数（`11,711 tokens in / 194 tokens out`，带千位分隔）。还没有名称也没有消息的新 Chat，顶部栏不显示标题，只显示 Workspace。不在最新位置时，对话区底部正中出现一个只有向下箭头的圆形按钮，点击后平滑滚到最新消息。
-  * 第一层：摘要行（`Worked for …` / `Failed after …` / `Partially completed` / `Cancelled after …` / 运行中显示当前动作）。
+  * 第一层：摘要行（`Worked for …` / `Failed after …` / `Partially completed` / `Cancelled after …` / 运行中显示当前动作）。请求已发出、模型还没有返回任何步骤时，这一行只有旋转环、当前动作和计时：没有展开箭头，下面也没有空的步骤区和占位文字；出现第一个步骤后才变成可展开的行。
   * 第二层：点开后是可读步骤。读文件、搜索、命令、编辑等用自然语言描述，连续同类动作聚合（“Read 8 files”），可继续展开单项；同一种工具永远是同一种样子（图标、字重、右侧的数字、展开方式），与它走哪条调用路径无关（`web/js/tool-rows.js`）。步骤之间只有确实存在下一步时才画一条很细的竖线，从上一步的状态图标连到下一步的；空状态和只有一步时没有线。进行中的步骤（包括摘要行里的当前动作，如“正在请求模型”）左边是一个小的旋转环；完成的步骤显示该类工具自己的图标，失败是红色的感叹号圆圈，被中止的是停止圆圈。编辑/写入的行右侧是真实的 `+N −M`：`write` 返回新增/删除行数（新文件的 `+N` 是它的行数），`edit` 返回 patch，行数从 patch 数出来；没有真实数字的行不显示。网页搜索与网页读取聚合成一行，例如 `2 search rounds · 18 results returned · 3 pages opened`（简体中文：`2 轮搜索 · 返回 18 个网页 · 打开 3 个网页`）：数字来自各次 `web_search` / `web_fetch` 返回的 details（搜索次数、各次返回的网页数之和、各次真正打开的网页数之和），展开后逐次列出搜索词、返回的网页、打开的网页和失败原因，没有记录的数字不显示。Thinking 有内容时可展开；sub-agent / workflow 显示阶段与任务进度。
   * 第三层：单项的 Raw details——真实 tool name、arguments、stdout/stderr、exit code、耗时、result details。读取的文件是 Markdown（`.md` / `.markdown` / `.mdx`）时，展开后的结果按 Markdown 渲染（复用对话里同一个渲染器）；其他文件（`.cpp`、`.ts`、`.json`、日志、shell 输出等）保持原样的等宽文本，不会被当作 Markdown 解析。tool 名称、参数、耗时等元数据始终是普通界面。
   * **文件变更摘要卡片**：任务确实改了文件时，这一轮的末尾（最终回复之后）出现一张卡片：标题 `Edited 2 files` 和总计 `+4 −2`，下面每个文件一行，右侧是它自己的新增（绿）/删除（红）行数。数字来自 `GET /api/changes?scope=run&runId=…`，也就是 Changes → This task 的同一份数据，只包含这次任务造成的改动；二进制、过大或缺少基线的文件只显示文件名，不显示行数（此时也不显示总计）。卡片只提供信息：不可点击，也不会打开右侧面板（面板只由顶栏的按钮打开，见下面的“详情面板”）；聊天里没有第二套 Diff。服务端没有记录的旧任务（重启前的，或 12 轮之前的）不显示卡片。
@@ -51,12 +51,18 @@ myharness --web
   * 速度只算模型真正输出的时间——从第一个流式输出（文字、thinking 或工具调用）开始计时，等待首个 Token、输入阶段和工具执行都不算。只有 Provider 在流式过程中持续报告输出 Token 数时才有实时值；只在结束时报告的 Provider 在输出中一直是 `Detecting…`，结束后显示这次回复的平均值（输出 Token ÷ 首个输出到结束的时间；隐藏的推理 Token 不计入，因为它们在计时开始前就产生了）。平均值保留到下一次请求开始。回复不是流式的、时间太短（< 0.25 秒）或 Provider 没报告输出 Token 时结束为 `—`，不做估算；任务被停止或失败时，已有的实时值保留为最后一个可靠值，没有数字则是 `—`。服务端 `generation-speed.ts` 计算，SSE `generation_speed` 推送。
   * 缓存命中只用 Provider 在这次请求里报告的 Token：命中率 = cache read ÷（普通输入 + cache read + cache write），Provider 报告了这次请求的用量后显示实时值，请求结束后是最终值。没有缓存 Token 的请求，只有在这个 Session 里 Provider 之前报告过缓存用量时才算真正的 `0%`，否则是 `—`，不会编出一个 0%。悬停数值可以看到这次请求命中的 Token 数和整个 Session 的累计命中率；这个页面还没发过请求（例如刚打开的历史 Chat）时，数值用整个 Session 的累计命中率代替。服务端 `request-cache.ts` 计算，SSE `cache_hit` 推送，快照字段 `cache`。
 * **对话布局**：对话栏和输入卡使用同一个宽度并居中对齐。宽度默认随窗口变化（主区域的 82%，限制在 720–1060px 之间；窄屏时占满可用宽度），设置 → 外观 → 阅读宽度可以填固定像素（620–1100），留空恢复自动。以前保存的默认值 780 视为自动。
-* **详情面板**：每次打开页面都是关闭的，也没有任何东西会替你打开它：只有顶栏右上角的按钮（Changes / Files / Terminal / Session）能打开、关闭或切换它；聊天里的卡片、Composer 的标签、斜杠命令都不会打开它。面板从右侧平滑滑入/滑出，对话区同时随之重排宽度；面板自己顶部的标签条和关闭按钮仍然可用。
+* **详情面板**：每次打开页面都是关闭的，也没有任何东西会替你打开它：只有顶栏右上角的按钮（Changes / Files / Terminal / Session）能打开、关闭或切换它；聊天里的卡片、Composer 的标签、斜杠命令都不会打开它。面板从右侧平滑滑入/滑出，对话区同时随之重排宽度；面板自己顶部的标签条和关闭按钮仍然可用。面板和对话区互不影响：页面只有一行，高度固定等于窗口（`css/layout.css` 的 `.app`），每一栏的内容都在自己那一栏里滚动（面板是 `.panel-body`），所以切换标签、展开/收起面板里的分组或出现很长的列表都不会改变对话区和输入框的位置与高度。面板里的内容不会把面板撑宽：长路径用省略号截断，Diff 和文件内容在各自的容器里横向滚动。拖动面板左边缘调整宽度，宽度不会超过窗口留给它的空间，拖动从屏幕上的实际宽度开始。
   * **Changes**：这一轮到底改了什么，按代码审阅的方式阅读。顶部是范围（`This task`，或 `Working tree`＝Git 未提交改动）、unified / side-by-side 切换和刷新，下面是 Git 操作条（Commit / Push / Undo task / 更多）和一句说明比较基线的话（“相对任务开始前的工作区”或“相对最新提交 `abc1234`”）。已改文件在一个可折叠的列表里：M / A / D / R 标记、目录弱化而文件名加粗、各自的真实 `+N −M`（二进制、过大或缺少基线的文件不显示数字），↑/↓/Home/End 或“上一个/下一个”按钮切换文件（显示 `3 / 12`）；选中的文件的 diff 占满面板其余部分（行号、上下文行、绿色新增和红色删除、语法高亮），切换文件时已显示的内容保持到新的 diff 到达，不闪烁。按钮名称不带 `…`：点击后还有下一步不是加省略号的理由，只有进行中的状态（“Working…”）和输入框提示保留。
   * **Files**：只读的工作区文件树（带 Git 状态与“本轮改动”标记）、文件名搜索、文件查看（语法高亮、图片预览、跳转到行）、`@` 提及到 prompt。
-  * **Terminal**：本 Session 的每一条 shell 命令（Agent 的 `bash`/`pwsh` 工具和你自己的 `!` 命令）：命令、cwd、状态、耗时、exit code、真实输出（保留 ANSI 颜色）、截断与完整输出路径；底部可直接运行新的命令。
+  * **Terminal**：两个视图，用工具栏左侧的分段按钮切换。
+    * **Terminal**（默认）：一个真实的交互式终端，运行在当前 Chat 的文件夹里。服务端用伪终端（Windows 上是 ConPTY）启动真实的 Shell，页面用 xterm.js 显示并把按键发给它，所以交互式程序、颜色、Ctrl+C 中断、方向键历史都和系统终端一样。工具栏的下拉框选择 Shell：Windows 内置的 Windows PowerShell 和 CMD，装了 PowerShell 7、Git Bash 时也会列出（选择保存在浏览器）。每个文件夹的每种 Shell 各有一个终端，属于文件夹而不是某个 Chat：同一文件夹的 Chat 看到的是同一个终端；切换 Shell、切换标签、关闭面板、刷新页面或切换 Chat 都不会结束它，回来时显示它已有的输出。终端在 Shell 自己退出、点击“结束 Shell”/“重启 Shell”或服务退出时结束；退出后面板底部显示退出码和“重新启动”（在终端里按 Enter 也可以）。选中文字时 Ctrl+C 是复制，否则是中断；Ctrl+V 粘贴。终端获得焦点时按键只发给 Shell，不触发页面快捷键（Ctrl+B、Ctrl+N 等）。终端里运行的命令不进入 Agent 的上下文，也不计入 Changes。
+    * **命令记录**：本 Session 的每一条 shell 命令（Agent 的 `bash`/`pwsh` 工具和你自己的 `!` 命令）：命令、cwd、状态、耗时、exit code、真实输出（保留 ANSI 颜色）、截断与完整输出路径；底部可直接运行一条命令并选择是否计入上下文。有命令在运行时分段按钮上显示加载圈。
   * **Session**：上下文用量与压缩、Session 统计、Git checkpoint、分支树（导航 / fork）、Tools（可开关）、Skills、Prompt templates、Extensions、项目上下文文件、Reload resources。
-* **设置**（`Ctrl+,`）：外观（界面语言/主题/动画；对话：任务运行中的发送方式/阅读宽度/运行步骤默认展开/浏览器通知，保存在浏览器）；Agent、工具与助手（Auto Memory / Sub-agent / Vision、Web search、Code Intelligence、图片）、Network 与 Shell、安全与隐私（Project Trust 与默认信任策略、提醒、通知、隐私、提示）、终端界面（只影响终端界面的设置，与终端 `/settings` 同一份）；Providers。各页用同一种卡片 + 行布局：每个设置项是一行紧凑的单行，左侧是名称，说明以较弱的颜色紧跟在名称右侧（放不下时用省略号截断，悬停显示全文），控件右对齐，行高一致；输入框、数字框、下拉和模型按钮同一高度（`--h-control`），宽度按内容决定（下拉、模型按钮、数字框各有合适的宽度，不会一律拉满）；Web search 的搜索引擎是紧凑多选，关闭 Web search 时该卡片的其余行变暗。
+* **设置**（`Ctrl+,`）：外观（界面语言/主题/动画；对话：任务运行中的发送方式/阅读宽度/运行步骤默认展开/浏览器通知，保存在浏览器）；Agent、工具与助手（Auto Memory / Sub-agent / Vision、Web search、Code Intelligence、图片）、Network 与 Shell、安全与隐私（Project Trust 与默认信任策略、提醒、通知、提示）、终端界面（只影响终端界面的设置，与终端 `/settings` 同一份）；Providers。各页用同一种卡片 + 行布局：每个设置项是一行紧凑的单行，左侧是名称，说明以较弱的颜色紧跟在名称右侧（放不下时用省略号截断，悬停显示全文），控件右对齐。所有行同一高度（33px）；行里的输入框、数字框、下拉和模型按钮都是 28px 高（与分段选择、多选控件相同），字号与名称一致；下拉有统一的最小宽度，所以短选项的左边缘也对齐，选项更长时按内容加宽；每一页的控件都结束在同一条右边缘上（滚动条有固定的位置，页面长短不影响它）。Web search 的搜索引擎是紧凑多选，关闭 Web search 时该卡片的其余行变暗。“匿名更新检查”和“共享使用分析数据”不在设置页里（行内 `/settings` 面板仍有这两行，与终端一致）。
+
+  **Project Trust**（安全与隐私页）是一行：项目路径、状态（已信任 / 未信任 / 无需信任）和一个开关。开关打开＝信任这个文件夹，关闭＝不信任；决定保存到 `trust.json` 并立即生效：`POST /api/trust` 保存后先让发起请求的 Chat 按新状态重新加载项目设置和资源，再让同一文件夹里其他空闲的已打开 Chat 跟进（`WebHost.applySavedTrust`、`hub.ts` 的 `trust_changed`）；Chat 正在运行或压缩时返回 409，什么都不保存。项目里没有需要信任的资源时只显示“无需信任”，没有开关。“信任上级文件夹”仍可在行内 `/settings` → Project trust 里选择。
+
+  **任务结束通知**（安全与隐私 → 通知 → Desktop popup when a task ends，与终端共用 `popupNotifications`，默认开启）：任务完成、失败或被中断时都会通知，页面是否在前台都一样。服务端在运行进入终态时按设置决定是否通知（`WebHost.announceTaskEnd`，规则与终端相同），并通过 SSE `task_notification` 先交给打开着的页面：浏览器允许通知时由页面弹出浏览器通知（标题是结果，正文是 Chat 名称、失败原因和用时；点击回到该 Chat），并用 `POST /api/notifications/answer` 告诉服务端已弹出。浏览器没有通知权限、不支持通知、没有任何页面打开，或 2.5 秒内没有页面回答时，服务端改用系统弹窗（与终端相同的 `showPopupNotification`），所以通知不依赖浏览器权限。打开这个开关的那次点击会向浏览器申请通知权限（`Notification.requestPermission`，`settings-apply.js`）；开关已打开而浏览器还没决定时，这一行显示“在此浏览器中允许”按钮，浏览器已拦截或不支持时显示“系统弹窗”标记。外观页的“浏览器通知”是另一个只保存在浏览器里的开关（只在标签页处于后台时通知）；两者都打开时同一个任务只通知一次。
 
   **保存反馈**（设置页和行内 `/settings` 面板一样，`web/js/settings-apply.js`）：开关、选项和输入框的新值立即显示；本地保存很快，所以什么额外的东西都不出现，只有真的慢（超过约 0.4 秒）的保存才在控件旁显示小的加载圈，显示后至少保持约 0.5 秒，不会闪一下；保存完成后重新读取真实设置，保存失败时值恢复原样并弹出失败原因。**数字类设置只输入数字，单位是固定在输入框里、不可编辑的后缀**：上下文窗口上限显示为 `256 | K tokens`（1K = 1024 Token，右侧小字显示换算后的准确 Token 数，保存的仍是准确的 Token 数，留空表示不限制，服务端设置项的 `type` 是 `tokens`）；`Web UI exit delay` 显示为 `10 | seconds`。输入的值不合法时框变红，离开输入框时恢复原值并给出提示。
 
@@ -127,7 +133,7 @@ MyHarness 核心没有内置的工具权限系统；审批来自 Extension 通�
 * `/commit` 失败时不会自动进入 Agent 修复循环，而是在输入框上方的状态条里显示失败原因（`Details` 里是完整的 Git 输出）并提供 “Ask the agent to fix it”；`/push` 的 CI 失败同理，提供 “Ask the agent to fix CI”。
 * 最终回复不会因 Auto Memory 整理而被延迟显示。
 * TUI 专用的 Extension 能力（`custom()` 组件、自定义 editor/footer/header）在 Web 中无效；`setStatus`、`setWidget`（字符串数组）、`setWorkingMessage`、`setTitle`、`notify` 与对话方法有效。
-* MyHarness 没有持久 PTY，所以 Terminal 面板是命令历史与直接命令，不是交互式终端。
+* Terminal 面板的交互式终端只在 Web UI 里有：它是用户自己的 Shell，Agent 的 `bash`/`pwsh` 工具仍然每条命令单独执行，不使用这个终端。
 * “这一轮改了什么”的数据只在本次服务进程里记录（最近 12 轮）；重启后历史 Chat 仍能看到步骤，但 Changes → This task 不含旧任务。`Working tree` 范围永远读取真实的 Git 状态。
 
 ## 安全
@@ -136,6 +142,7 @@ MyHarness 核心没有内置的工具权限系统；审批来自 Extension 通�
 * 文件 API 只读，路径解析后必须落在当前 Workspace 内（含符号链接检查）；文件夹选择器只列子目录名。
 * 模型输出的 Markdown 不渲染原始 HTML，链接协议白名单，远程图片被 CSP 阻止。
 * `models.json` 中的字面量 key / header 在浏览器里显示为占位符，保存时未改动则保留原值。
+* Terminal 面板的终端是一个拥有当前用户权限的真实 Shell（与已有的直接运行命令相同的信任边界）。它的接口和其他写请求一样只接受本机同源页面的请求；工作目录由请求所属 Chat 的文件夹决定，页面不能指定；同时运行的终端最多 16 个。
 
 ## 实现地图
 
@@ -153,25 +160,35 @@ packages/coding-agent/
 │   ├── generation-speed.ts        模型输出速度（t/s）：只用 Provider 报告的输出 Token 和真实到达时间；每次请求从 detecting 开始
 │   ├── request-cache.ts           每次模型请求的缓存命中率：只用 Provider 报告的 cache read / write，状态与速度相同
 │   ├── wire.ts                    AgentMessage / SessionEntry → JSON wire items
-│   └── routes-*.ts                core / sessions / files / git / settings / providers / accounts（GitHub Connect）
+│   ├── terminal.ts                WebTerminals：Terminal 面板的真实 Shell（伪终端，按文件夹 + Shell 保存，输出回放）与可用 Shell 列表
+│   └── routes-*.ts                core / sessions / files / git / settings / providers / accounts（GitHub Connect）/ terminal
 └── web/                           前端（原生 ES modules，无构建步骤）
-    ├── index.html  css/  vendor/  Preact + htm；marked / highlight.js 复用 HTML 导出的 vendor 文件
+    ├── index.html  css/  vendor/  Preact + htm、xterm.js（终端显示）；marked / highlight.js 复用 HTML 导出的 vendor 文件
     └── js/                        store.js（状态+SSE，按 slot 分状态）、turns.js（对话模型）、transcript.js、tool-rows.js（工具行共用的状态图标与网页搜索明细）、composer.js、
                                    command-panel.js（行内命令面板）、git-flow.js（/commit /push /undo /restore 的运行与结果）、run-modes.js（任务运行中的发送方式）、
-                                   settings-apply.js（保存设置的统一反馈）、context-usage.js（上下文用量、速度、缓存命中）、folder-picker.js、
-                                   i18n.js / lang.js / locales/（界面语言）、panel-*.js、overlays-*.js、providers-page.js（Providers 页：列表、详情、API Key 管理）、provider-form.js（自定义 Provider 表单）、provider-models.js（表单的纯逻辑：Model ID 解析、检测结果写回）、model-menu.js（扁平可搜索的模型列表与 Effort 滑杆）、search.js（统一的搜索排序）、settings-menu.js（`/settings` 各行在 Web 里的打开方式和图标）、builtin-commands.js（内置斜杠命令在浏览器里的执行方式）、sidebar.js、app.js …
+                                   settings-apply.js（保存设置的统一反馈）、notifications.js（浏览器通知：权限与弹出）、context-usage.js（上下文用量、速度、缓存命中）、folder-picker.js、
+                                   i18n.js / lang.js / locales/（界面语言）、panel-*.js、terminal-session.js（xterm.js 与服务端终端的连接：回放、输入、尺寸、断线后重新同步）、overlays-*.js、providers-page.js（Providers 页：列表、详情、API Key 管理）、provider-form.js（自定义 Provider 表单）、provider-models.js（表单的纯逻辑：Model ID 解析、检测结果写回）、model-menu.js（扁平可搜索的模型列表与 Effort 滑杆）、search.js（统一的搜索排序）、settings-menu.js（`/settings` 各行在 Web 里的打开方式和图标）、builtin-commands.js（内置斜杠命令在浏览器里的执行方式）、sidebar.js、app.js …
 ```
 
-数据流：浏览器 → `POST /api/...`（命令）；服务端 → `GET /api/events`（SSE：`message_*`、`tool_*`、`run_state`、`run_finished`、`queue_update`、`dialogs`、`session_replaced` 等）。客户端 `store.js` 用 `/api/state` 与 `/api/transcript` 做快照，断线重连后重新拉取。静态资源目录由 `getWebUiDir()`（`config.ts`）解析，源码、dist、Bun binary 三种布局都指向包根/可执行文件旁的 `web/`。
+数据流：浏览器 → `POST /api/...`（命令）；服务端 → `GET /api/events`（SSE：`message_*`、`tool_*`、`run_state`、`run_finished`、`task_notification`、`queue_update`、`dialogs`、`session_replaced`、`terminal_data`、`terminal_exit` 等）。客户端 `store.js` 用 `/api/state` 与 `/api/transcript` 做快照，断线重连后重新拉取。
+
+终端的数据流：`POST /api/terminal/open`（Shell、列数、行数）返回该文件夹里这个 Shell 的终端——已有就返回它，没有就启动一个——连同它保留的输出（最近约 40 万字符）和一个序号；之后的输出通过 SSE `terminal_data`（带递增序号）到达，页面发现序号不连续或 SSE 重连后会重新取一次。`/api/terminal/input`、`/resize`、`/close` 按终端 id 操作，`GET /api/terminal/shells` 列出可用的 Shell。终端属于服务而不是某个 slot，所以这两个事件不带 `slot`，由 `web-mode.ts` 创建的 `WebTerminals` 直接广播，`store.js` 把它们原样交给正在显示的终端（`onTerminalEvent`），不进入状态。静态资源目录由 `getWebUiDir()`（`config.ts`）解析，源码、dist、Bun binary 三种布局都指向包根/可执行文件旁的 `web/`。
 
 ## 维护
 
 * 前端没有构建步骤；改 `web/` 下的文件后刷新页面即可。
-* 图标 + 文字的对齐只有一条规则（`css/base.css`）：这类控件都是 `align-items: center` 的 flex 行、固定 `gap`、整数像素行高；图标旁的数字（上下文占用、`+/-` 行数）用 `text-box` 裁到数字本身的高度。新增同类控件沿用这条规则，不要逐个位置写偏移量。新增第三方前端库必须放进 `web/vendor/` 并更新 `THIRD_PARTY_NOTICES.md`。
+* 图标 + 文字的对齐只有一条规则（`css/base.css`）：这类控件都是 `align-items: center` 的 flex 行、固定 `gap`、整数像素行高；图标旁的 `+/-` 行数用 `text-box` 裁到数字本身的高度。Composer 底部的上下文用量（圆环 + 百分比）是和旁边的模型 / Effort 按钮同一种文字控件：同样的高度、字号和行高，所以圆环与其他图标在同一条中线上，百分比与其他文字在同一条基线上。新增同类控件沿用这条规则，不要逐个位置写偏移量。新增第三方前端库必须放进 `web/vendor/` 并更新 `THIRD_PARTY_NOTICES.md`。
+* 尺寸、圆角和留白只有一套规范，数值都在 `css/tokens.css`，不要在各处另写数字：
+  * 控件高度：带边框的控件（按钮 `.btn`、下拉 `.select`、输入框 `.field`）只有两档——常规 32px（弹窗、表单）和紧凑 28px（加 `.sm`；分段控件、Composer 的模型按钮、面板标签也是这一档），所以放在同一行时高度一致。只有图标的按钮是 32px，放在行内时 24px（`.icon-btn.sm`）。开关只有一种（`ui.js` 的 `Toggle`，`.toggle`）；命令面板的行本身就是可点的控件，行尾用同一个开关的外形（`<span class="toggle on">`）只显示状态。
+  * 交互状态（`css/base.css`）：悬停亮一级（有边框的控件边线加深）、按下再深一级、键盘焦点用 `:focus-visible` 的轮廓（输入框显示在边框上）、禁用统一用 `--disabled-opacity`。新控件沿用这几条，不要各写一套。
+  * 圆角按角色取 `--r-xs` … `--r-xl`（标记和菜单行、列表行、控件和浮层、卡片和两块主面板、弹窗和输入卡片），胶囊形（徽标、标签、开关）用 `--r-pill`。
+  * 留白：侧栏里的行、按钮和搜索框都从 `--pad-side` 开始、到它结束，行尾的图标按钮（收起侧栏、添加工作区、工作区操作）在同一列；工作区下面代替对话列表的文字（提示、“再显示 n 个”）和对话标题左对齐。右侧面板里每一行（标签条、工具栏、Git 栏、文件列表、Diff 标题、各分组）的内容都从 `--pad-panel` 开始、到它结束，行尾的图标按钮向外挂 4px，让图标本身（而不是它看不见的点击区域）落在这条线上。卡片与卡片之间隔 14px：成组的卡片放进 `.stack`。
+  * 不写静态的内联样式：间距、对齐、字号都用样式类（`.row`、`.col`、`.stack`、`.grow`、`.pre-wrap`、`.check-label` 等公共类，或该区域自己的类）；只有由数据算出来的值（进度条宽度、树的缩进、浮层位置、弹窗宽度、终端输出的颜色）才写在 `style` 里。
 * 展开/折叠只有一种动效：区域高度用 `ui.js` 的 `Collapse`（grid 0fr→1fr，内容淡入淡出），箭头用 `.disclose`（指向右，展开时转四分之一圈）或 `Fold`（指向下，展开时翻转）；设置里的动画选 Off（或系统要求减少动效）时都不会动。新增可折叠区域沿用它们，不要各写一套。所有下拉（原生 `select` 和打开列表的按钮）画同一个箭头：按钮用 `ui.js` 的 `Chevron`，原生 `select` 用 CSS 变量 `--chev-img`，同样的 12px 描边、垂直居中、右侧留 10px。
 * 右侧详情面板只能由 `app.js` 顶栏的按钮和快捷键通过 `actions.togglePanel` 打开、关闭或切换（面板自己的标签条和关闭按钮除外）；聊天、卡片、状态、命令和 Agent 事件都不要调用它，也不要自己 `setView({ panelOpen: true })`。
 * 设置项的保存统一走 `settings-apply.js` 的 `saveSetting`（立即显示新值、慢保存才出现加载圈、失败时恢复并提示）；带单位的数字用 `ui.js` 的 `UnitField`（单位是固定后缀），不要给数字框再加一个可编辑的单位。
 * 新增 API：在对应 `routes-*.ts` 里注册，调用现有领域模块；不要在路由里复制业务规则。路由里不要调用同步的 Git / 子进程（`runGitSync`、`execFileSync` 等）：Node 服务只有一个事件循环，一次同步 `git` 会让同时进来的所有请求（打开面板、切换 Session、设置）一起等待。常用接口（`/api/git/status`、`/api/git/log`、`/api/changes` 的 Working tree / diff）已改为 `runGitAsync` 并行执行。新增 SSE 事件：在 `host.ts` 转发，在 `web/js/store.js` 消费。
+* Terminal 面板的伪终端来自可选依赖 `@lydell/node-pty`（预编译二进制，没有安装脚本），第一次打开终端时才加载（与剪贴板模块相同的两处查找位置）；缺少它或没有当前平台的二进制时，只有终端提示不可用，其余功能不受影响。结束 Shell 用项目自己的 `killProcessTree`，不调用 node-pty 的 `kill()`：后者会用当前可执行文件再启动一个辅助进程，只适合普通的 Node 进程。代价是已结束终端的 `conhost.exe` 会保留到服务退出（服务退出时随进程一起结束）。xterm.js 在 `web/vendor/`，第一次显示终端时才加载；终端的配色取自页面主题（`terminal-session.js`），切换主题时跟着变。
 * wire 格式（`wire.ts`）只投影现有数据，不发明字段；前端不要伪造后端没有返回的状态。
 * 对话模型的纯逻辑（`turns.js`、`diff-parse.js`、`util.js`、`provider-models.js`）、界面语言（`test/web-i18n.test.ts`）和上下文构成（`test/web-context-breakdown.test.ts`）有单元测试；`ExtensionMode` 现在包含 `"web"`，新增基于 mode 的 Extension 分支时要一并考虑。
 * Web 偏好（主题、宽度、面板状态）存在浏览器 `localStorage`（按 origin，即端口区分）；它们不进入 `settings.json`。
@@ -179,7 +196,7 @@ packages/coding-agent/
 ## 验证
 
 ```powershell
-npm.cmd --workspace @myharness/coding-agent test -- test/web-http-server.test.ts test/web-wire-changes-dialogs.test.ts test/web-frontend-logic.test.ts test/web-host.test.ts test/web-i18n.test.ts test/web-context-breakdown.test.ts test/web-lifecycle.test.ts test/web-folder-dialog.test.ts test/web-generation-speed.test.ts test/thinking-probe.test.ts test/official-effort.test.ts test/custom-provider-manager.test.ts test/tools.test.ts
+npm.cmd --workspace @myharness/coding-agent test -- test/web-http-server.test.ts test/web-wire-changes-dialogs.test.ts test/web-frontend-logic.test.ts test/web-host.test.ts test/web-i18n.test.ts test/web-context-breakdown.test.ts test/web-lifecycle.test.ts test/web-folder-dialog.test.ts test/web-generation-speed.test.ts test/web-terminal.test.ts test/thinking-probe.test.ts test/official-effort.test.ts test/custom-provider-manager.test.ts test/tools.test.ts
 ```
 
-`thinking-probe.test.ts`、`official-effort.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 的官方文档规则、探测和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 和每次请求缓存命中的计算，`tools.test.ts` 覆盖 `write` / `edit` 返回的 `+N −M`。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff → Files → Settings → Sessions → 直接 shell。真实 Provider、浏览器渲染和 Windows 桌面行为需要单独运行验证。
+`thinking-probe.test.ts`、`official-effort.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 的官方文档规则、探测和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 和每次请求缓存命中的计算，`tools.test.ts` 覆盖 `write` / `edit` 返回的 `+N −M`。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff → Files → Settings → Sessions → 直接 shell，以及任务结束通知（页面回答已弹出 / 不能弹出 / 不回答时系统弹窗的去向；系统弹窗在测试里被替换，不会真的弹出）和 Project Trust 决定的立即生效。`web-terminal.test.ts` 通过 HTTP 接口启动真实的 Shell（Windows 上是 CMD）：输出按序号到达、输入生效、再次打开得到同一个终端及其已有输出、调整尺寸、不同文件夹各有终端、重启 / 结束 / Shell 自己退出时的事件与退出码、同时运行数量的上限；它需要可选依赖 `@lydell/node-pty` 的当前平台二进制（Windows x64 上必须有，其他平台没有时跳过）。真实 Provider、浏览器渲染（包括 xterm.js 的显示与键盘输入）和 Windows 桌面行为需要单独运行验证。

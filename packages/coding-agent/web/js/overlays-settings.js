@@ -8,9 +8,10 @@ import { clip, tokensToUnit, unitToTokens } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { ModelRefPicker } from "./model-menu.js";
+import { notificationPermission, requestNotificationPermission } from "./notifications.js";
 import { ProvidersPage } from "./providers-page.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
-import { saveSetting } from "./settings-apply.js";
+import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -24,7 +25,7 @@ export const NAV = [
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Privacy: "safety", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "tools", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
 
 /** One line under a page title, saying what the page is for. */
 const PAGE_NOTE = {
@@ -32,7 +33,7 @@ const PAGE_NOTE = {
 	providers: N_("The services MyHarness talks to, their API keys and models."),
 	tools: N_("Helper models and the tools the agent may use."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
-	safety: N_("What MyHarness may load and run, and what it shares."),
+	safety: N_("What MyHarness may load and run, and what it tells you about."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
 };
 
@@ -169,10 +170,11 @@ const describe = (item) => {
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
 };
 
-function SettingRow({ item, models, off }) {
+/** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
+function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
 	return html`<${Row} label=${serverText(item.label)} description=${describe(item)} stack=${item.type === "multi"} off=${off}>
-		<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
+		${before || null}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
 
@@ -195,7 +197,7 @@ function SettingsList({ items, models }) {
 		}
 		return list;
 	}, [items]);
-	return html`<div>${cards.map((card) => {
+	return cards.map((card) => {
 		if (card.prefix) {
 			const head = card.items.find((i) => i.id === GROUPS[card.prefix]);
 			const rest = card.items.filter((i) => i !== head);
@@ -208,7 +210,7 @@ function SettingsList({ items, models }) {
 		return html`<${Card} key=${card.key} title=${cards.length > 1 ? serverText(card.section) : undefined}>
 			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
 		<//>`;
-	})}</div>`;
+	});
 }
 
 function Appearance() {
@@ -216,12 +218,11 @@ function Appearance() {
 	const runMode = runModeOf(view.runMode);
 	const set = (patch) => setView(patch);
 	const requestNotify = async () => {
-		if (typeof Notification === "undefined") return toast(t("This browser does not support notifications."), "warning");
-		const permission = await Notification.requestPermission();
+		const permission = await requestNotificationPermission();
 		if (permission === "granted") set({ notify: true });
-		else toast(t("Notification permission was not granted."), "warning");
+		else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
 	};
-	return html`<div>
+	return html`
 		<${Card} title=${t("Interface")}>
 			<${Row} label=${t("UI language")} description=${t("Language of the MyHarness interface. Chat content is never translated.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
 			<${Row} label=${t("Theme")} description=${t("Dark and light are separate designs; “System” follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
@@ -232,51 +233,69 @@ function Appearance() {
 			<${Row} label=${t("Reading width")} description=${t("Width of the conversation column in px (620–1100). Empty: grows with the window.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Whether the steps behind a finished answer start expanded.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
 			<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${(v) => (v ? requestNotify() : set({ notify: false }))} /><//>
-		<//>
-	</div>`;
+		<//>`;
+}
+
+/**
+ * What this browser does with the task-end notification, shown in front of its switch while the setting is on. Nothing
+ * when the browser shows them; a button that asks for the permission while it is undecided; otherwise a note that the
+ * system popup is used (the notification itself never depends on the browser, see WebHost.announceTaskEnd).
+ */
+function BrowserNotifications({ on }) {
+	// Read from the browser every time the store changes: the answer to its prompt arrives outside the store.
+	const permission = useStore(() => notificationPermission());
+	if (!on || permission === "granted") return null;
+	if (permission === "default") return html`<button class="btn sm" onClick=${allowBrowserNotifications} title=${t("Until this browser allows notifications, the system popup is used.")}>${t("Allow in this browser")}</button>`;
+	return html`<span class="badge" title=${permission === "unsupported" ? t("This browser does not support notifications. The system popup is used instead.") : t("This browser does not allow notifications from this page, so the system popup is used instead. To get them in the browser, allow notifications for this page in the browser's site settings.")}>${t("System popup")}</span>`;
 }
 
 function Safety({ items, models }) {
 	const [info, setInfo] = useState(null);
+	const [deciding, setDeciding] = useState(false);
+	const slow = useDelayedBusy(deciding);
 	const load = () => api("/api/trust").then(setInfo).catch(() => {});
 	useEffect(() => {
 		load();
 	}, []);
-	const decide = async (option) => {
-		const r = await attempt(() => post("/api/trust", { option }));
-		if (r) {
-			toast(t("Trust decision saved. Reloading resources…"), "info", 3000);
-			await attempt(() => post("/api/resources/reload"));
-			await loadSnapshot();
-			load();
+	// The server saves the decision and applies it to the open chats of the folder; what is shown is read again after it.
+	const decide = async (trusted) => {
+		setDeciding(true);
+		try {
+			await attempt(() => post("/api/trust", { option: trusted ? "trust" : "do-not-trust" }));
+			await attempt(() => loadSnapshot(), { quiet: true });
+			await load();
+		} finally {
+			setDeciding(false);
 		}
 	};
-	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`;
+	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} before=${item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null} />`;
 	const bySection = (name) => items.filter((item) => item.section === name && item.id !== "defaultProjectTrust");
 	const defaultTrust = items.find((item) => item.id === "defaultProjectTrust");
 	const trust = !info ? null : !info.requiresTrust ? { cls: "", text: t("Nothing to trust") } : info.trusted ? { cls: "ok", text: t("Trusted") } : { cls: "warn", text: t("Not trusted") };
-	return html`<div>
+	// The project in one line: where it is, what its state is, and one switch for the decision (it is saved for this
+	// folder; a project without resources that need trust has nothing to decide).
+	return html`
 		<${Card} title=${t("Project trust")} description=${t("A trusted project may load its own settings, skills, prompts and extensions.")}>
-			<div class="trust-current">
-				<div class="row"><${Icon} name="folder" size=${15} /><span class="mono truncate grow" title=${info?.cwd}>${info?.cwd || "…"}</span>${trust ? html`<span class=${`badge ${trust.cls}`}>${trust.text}</span>` : null}</div>
-				<div class="set-desc">${info ? (info.requiresTrust ? (info.trusted ? t("Trusted — project settings, skills, prompts and extensions are loaded.") : t("Not trusted — project resources are ignored and project extensions do not run.")) : t("This project has no resources that need trust.")) : ""}${info?.saved === true ? ` ${t("(saved: trusted)")}` : info?.saved === false ? ` ${t("(saved: not trusted)")}` : ""}</div>
-				${info?.requiresTrust ? html`<div class="trust-actions">${info.options.map((o) => html`<button class="btn sm" key=${o.id} onClick=${() => decide(o.id)}>${serverText(o.label)}</button>`)}</div>` : null}
+			<div class="set-row">
+				<div class="set-text trust-path"><${Icon} name="folder" size=${14} /><span class="mono truncate" title=${info?.cwd}>${info?.cwd || "…"}</span></div>
+				<div class="set-control">
+					${trust ? html`<span class=${`badge ${trust.cls}`}>${trust.text}</span>` : null}
+					${info?.requiresTrust ? html`<${Saving} shown=${slow} /><${Toggle} checked=${info.trusted} disabled=${deciding} label=${t("Trust this project")} onChange=${decide} />` : null}
+				</div>
 			</div>
 			${defaultTrust ? row(defaultTrust) : null}
 		<//>
 		${[
 			["Safety", t("Warnings")],
 			["Notifications", t("Notifications")],
-			["Privacy", t("Privacy")],
 			["Display", t("Notices")],
-		].map(([section, title]) => (bySection(section).length ? html`<${Card} key=${section} title=${title}>${bySection(section).map(row)}<//>` : null))}
-	</div>`;
+		].map(([section, title]) => (bySection(section).length ? html`<${Card} key=${section} title=${title}>${bySection(section).map(row)}<//>` : null))}`;
 }
 
 function About() {
 	const snap = useStore((s) => s.snap);
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
-	return html`<div>
+	return html`
 		<${Card} title=${t("MyHarness")}>
 			<div class="kv about-kv"><span>${t("Version")}</span><span>${snap?.app.version}</span><span>${t("Platform")}</span><span>${snap?.app.platform}</span><span>${t("Server started")}</span><span>${snap ? new Date(snap.app.startedAt).toLocaleString(getLang()) : ""}</span><span>${t("Workspace")}</span><span class="mono truncate">${snap?.cwd}</span></div>
 			<div class="set-desc about-note">${t("The Web UI is served only on this computer (127.0.0.1). The terminal UI and this UI share the same sessions, settings and providers.")}</div>
@@ -300,8 +319,7 @@ function About() {
 		<//>
 		${snap?.extensionErrors?.length ? html`<${Card} title=${t("Recent extension errors")}>${snap.extensionErrors.map((e, i) => html`<div class="notice danger" key=${i}>${e.extensionPath}: ${clip(e.error, 300)}</div>`)}<//>` : null}
 		${snap?.diagnostics?.length ? html`<${Card} title=${t("Startup diagnostics")}>${snap.diagnostics.map((d, i) => html`<div class=${`notice ${d.type === "error" ? "danger" : ""}`} key=${i}>${d.message}</div>`)}<//>` : null}
-		<div class="row"><button class="btn danger" onClick=${actions.shutdown}><${Icon} name="quit" size=${14} />${t("Quit MyHarness")}</button></div>
-	</div>`;
+		<div class="row"><button class="btn danger" onClick=${actions.shutdown}><${Icon} name="quit" size=${14} />${t("Quit MyHarness")}</button></div>`;
 }
 
 export function SettingsModal() {

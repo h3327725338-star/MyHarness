@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@myharness/ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +22,15 @@ import { registerSettingsRoutes } from "../src/modes/web/routes-settings.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
+import { showPopupNotification } from "../src/utils/popup-notification.ts";
+
+// A task that ends may show the system popup (see WebHost.announceTaskEnd); the tests only record that it would.
+vi.mock("../src/utils/popup-notification.ts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/utils/popup-notification.ts")>();
+	return { ...actual, showPopupNotification: vi.fn(() => true) };
+});
+
+const showPopupMock = vi.mocked(showPopupNotification);
 
 interface Fixture {
 	port: number;
@@ -42,6 +51,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		while (cleanups.length > 0) await cleanups.pop()?.();
 		if (previousAgentDir === undefined) delete process.env.MYHARNESS_CODING_AGENT_DIR;
 		else process.env.MYHARNESS_CODING_AGENT_DIR = previousAgentDir;
+		showPopupMock.mockClear();
 	});
 
 	function tempDir(prefix: string): string {
@@ -388,6 +398,85 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await fx.post("/api/seen", {}, first.slot);
 		expect((await slotOf(first.slot)).unread).toBe(false);
 		await fx.waitFor("result_seen", (data) => data.slot === first.slot);
+	});
+
+	it("announces the end of a task to the open page and shows the system popup when the page cannot", async () => {
+		const fx = await start();
+		const announced = () => fx.events.filter((entry) => entry.event === "task_notification").map((e) => e.data);
+		// The popups of this test's own project: one that an earlier test left unanswered may still follow meanwhile.
+		const popups = () =>
+			showPopupMock.mock.calls.map(([, content]) => content).filter((c) => c.title.endsWith(basename(fx.project)));
+		// Every task runs in a chat of its own, and returns that chat's slot once the run has ended.
+		let slot: string = (await fx.get("/api/state")).slot;
+		const run = async (text: string) => {
+			if (fx.events.some((entry) => entry.event === "run_finished" && entry.data.slot === slot))
+				slot = (await fx.post("/api/sessions/new", {}, slot)).slot;
+			const ran = slot;
+			await fx.post("/api/prompt", { text }, ran);
+			await fx.waitFor("run_finished", (data) => data.slot === ran);
+			await fx.waitFor("run_state", (data) => data.slot === ran && ["completed", "failed"].includes(data.state));
+			return ran;
+		};
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxText("one")]),
+			fauxAssistantMessage([fauxText("two")]),
+			fauxAssistantMessage([fauxText("")], { stopReason: "error", errorMessage: "provider exploded" }),
+			fauxAssistantMessage([fauxText("four")]),
+		]);
+
+		// The page is asked first; nothing is shown by the server while it may still answer.
+		const one = await run("task one");
+		const first = await fx.waitFor("task_notification", (data) => data.slot === one);
+		expect(first).toMatchObject({ kind: "completed", state: "completed" });
+		expect(popups()).toHaveLength(0);
+		// The page's browser will not show notifications: the system popup is shown at once, and only once.
+		await fx.post("/api/notifications/answer", { id: first.id, shown: false }, one);
+		expect(popups()).toHaveLength(1);
+		expect(popups()[0]).toMatchObject({ kind: "completed" });
+		expect(popups()[0].title).toContain("MyHarness");
+		await fx.post("/api/notifications/answer", { id: first.id, shown: false }, one);
+		expect(popups()).toHaveLength(1);
+
+		// The page showed the notification itself: no popup, also not later.
+		const two = await run("task two");
+		const second = await fx.waitFor("task_notification", (data) => data.slot === two);
+		await fx.post("/api/notifications/answer", { id: second.id, shown: true }, two);
+		await fx.post("/api/notifications/answer", { id: second.id, shown: false }, two);
+		expect(popups()).toHaveLength(1);
+
+		// A page that never answers: the popup follows by itself, with the failure it is about.
+		const three = await run("task three");
+		const third = await fx.waitFor("task_notification", (data) => data.slot === three);
+		expect(third).toMatchObject({ kind: "failed", state: "failed", error: "provider exploded" });
+		await vi.waitFor(() => expect(popups()).toHaveLength(2), { timeout: 6000, interval: 100 });
+		expect(popups()[1]).toMatchObject({ kind: "failed" });
+		expect(popups()[1].message).toContain("provider exploded");
+
+		// With the setting off nothing is announced.
+		await fx.post("/api/settings", { id: "popupNotifications", value: false }, three);
+		const four = await run("task four");
+		expect(announced().map((notice) => notice.slot)).toEqual([one, two, three]);
+		expect(four).not.toBe(three);
+		expect(popups()).toHaveLength(2);
+	});
+
+	it("applies a saved project trust decision to the open chat at once", async () => {
+		const fx = await start();
+		mkdirSync(join(fx.project, ".myharness"));
+		writeFileSync(join(fx.project, ".myharness", "settings.json"), JSON.stringify({ quietStartup: true }));
+		const quietStartup = async () =>
+			(await fx.get("/api/settings")).items.find((item: any) => item.id === "quietStartup").value;
+
+		expect(await fx.post("/api/trust", { option: "do-not-trust" })).toMatchObject({ ok: true, trusted: false });
+		expect(await fx.get("/api/trust")).toMatchObject({ requiresTrust: true, trusted: false, saved: false });
+		expect((await fx.get("/api/state")).trust).toEqual({ trusted: false, requiresTrust: true });
+		expect(await quietStartup()).toBe(false);
+
+		// Trusting the project loads its own settings into the chat that is open.
+		expect(await fx.post("/api/trust", { option: "trust" })).toMatchObject({ ok: true, trusted: true });
+		expect(await fx.get("/api/trust")).toMatchObject({ trusted: true, saved: true });
+		expect(await quietStartup()).toBe(true);
+		await expect(fx.post("/api/trust", { option: "nope" })).rejects.toThrow(/Unknown trust option/);
 	});
 
 	it("adds a custom provider with detected models, keeps its key in the credential store and deletes both for good", async () => {

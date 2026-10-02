@@ -79,6 +79,7 @@
 		}
 	},
 	"optionalDependencies": {
+		"@lydell/node-pty": "1.1.0",
 		"@mariozechner/clipboard": "0.3.9"
 	},
 	"devDependencies": {

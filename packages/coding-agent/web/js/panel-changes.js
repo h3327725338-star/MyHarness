@@ -3,7 +3,7 @@
 // numbers, context lines, green additions and red deletions), and ↑/↓ or the arrows in the list switch files without leaving
 // the panel. The panel is opened, closed and switched only by its own buttons in the header: nothing in here opens another
 // panel.
-import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
 import { api, loadGitStatus, setView, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -131,10 +131,10 @@ export function ChangesPanel() {
 
 	return html`<div class="changes-panel">
 		<div class="panel-toolbar">
-			<${Segmented} size="sm" value=${scope} onChange=${setScope} options=${[{ value: "run", label: t("This task") }, { value: "worktree", label: t("Working tree") }]} />
+			<${Segmented} value=${scope} onChange=${setScope} options=${[{ value: "run", label: t("This task") }, { value: "worktree", label: t("Working tree") }]} />
 			${scope === "run" && runs.length > 1 ? html`<select class="select sm" value=${String(effectiveRunId ?? "")} onChange=${(e) => (setView({ changesRunId: Number(e.target.value) }), setChosen(""))} aria-label=${t("Task")}>${runs.map((r) => html`<option key=${r.runId} value=${r.runId}>${`${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })}${r.endedAt ? ` · ${fmtDateTime(r.endedAt)}` : ""}`}</option>`)}</select>` : null}
 			<span class="grow" />
-			<${Segmented} size="sm" value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
+			<${Segmented} value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
 			<button class="icon-btn sm" title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${load}><${Icon} name="refresh" size=${15} /></button>
 		</div>
 		<${GitBar} gitStatus=${gitStatus} active=${active} />
@@ -148,7 +148,7 @@ export function ChangesPanel() {
 		</div>
 		${data?.error && scope === "worktree" ? html`<div class="empty">${serverText(data.error)}</div>` : null}
 		${loading && !data ? html`<div class="empty"><${Spinner} /></div>` : null}
-		${data && !files.length && !data.error ? html`<div class="empty"><div style="display:flex;justify-content:center;margin-bottom:8px;color:var(--text-4)"><${Icon} name="fileDiff" size=${22} /></div>${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")}</div>` : null}
+		${data && !files.length && !data.error ? html`<${Empty} icon="fileDiff" title=${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")} />` : null}
 		${selected
 			? html`<div class="changes-body">
 				<div class="cfiles">

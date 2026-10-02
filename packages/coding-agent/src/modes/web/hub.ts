@@ -133,6 +133,10 @@ export class WebHostHub implements WebHostHubLink {
 
 	hostBroadcast(host: WebHost, event: string): void {
 		if (STATUS_EVENTS.has(event)) this.scheduleStatus();
+		if (event === "trust_changed") {
+			// A trust decision covers a folder: the other open chats in it follow the chat it was made in.
+			for (const other of this.slots.values()) if (other !== host) void other.applySavedTrust().catch(() => {});
+		}
 		if (event === "settings_changed" || event === "models_changed") {
 			// Other runtimes keep their own in-memory settings; pick up what this one just saved.
 			for (const other of this.slots.values()) {

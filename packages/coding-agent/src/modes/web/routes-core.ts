@@ -83,6 +83,13 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		return { ok: true };
 	});
 
+	/** A page says whether it showed a task-end notification itself (see WebHost.announceTaskEnd). */
+	server.route("POST", "/api/notifications/answer", ({ body }) => {
+		const payload = asObject(body);
+		host.answerTaskNotice(asString(payload.id, "id"), payload.shown === true);
+		return { ok: true };
+	});
+
 	server.route("POST", "/api/queue/clear", () => {
 		const cleared = host.session.clearQueue();
 		return { steering: cleared.steering, followUp: cleared.followUp };

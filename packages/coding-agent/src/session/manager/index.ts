@@ -189,6 +189,32 @@ function removeWriterLockOwner(lockPath: string, token: string): void {
 	}
 }
 
+/**
+ * The lock heartbeat keeps advancing the lock's mtime for as long as the session is open. The marker follows it, so
+ * that after a hard kill the two still belong together and the lock of a session that was open for a long time is
+ * recovered as quickly as a fresh one. The rename makes the replacement atomic for a reader in another process.
+ * Returns false once the marker belongs to someone else.
+ */
+function refreshWriterLockOwner(lockPath: string, owner: WriterLockOwnerMarker): boolean {
+	const current = readWriterLockOwner(lockPath);
+	if (current && current.token !== owner.token) return false;
+	try {
+		owner.lockMtimeMs = statSync(lockPath).mtimeMs;
+		const ownerPath = getWriterLockOwnerPath(lockPath);
+		const pendingPath = `${ownerPath}.${owner.token}.tmp`;
+		writeFileSync(pendingPath, `${JSON.stringify(owner)}\n`, "utf8");
+		try {
+			renameSync(pendingPath, ownerPath);
+		} catch {
+			// Another process is reading the marker (Windows); the next heartbeat refreshes it.
+			rmSync(pendingPath, { force: true });
+		}
+	} catch {
+		// The lock is gone or unreadable right now; keep the last marker and try again on the next heartbeat.
+	}
+	return true;
+}
+
 function isProcessAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -698,7 +724,13 @@ export class SessionManager {
 				token: randomUUID(),
 			};
 			writeFileSync(getWriterLockOwnerPath(lockPath), `${JSON.stringify(owner)}\n`, "utf8");
+			const heldOwner = owner;
+			const ownerRefresh = setInterval(() => {
+				if (!refreshWriterLockOwner(lockPath, heldOwner)) clearInterval(ownerRefresh);
+			}, WRITER_LOCK_UPDATE_MS);
+			ownerRefresh.unref();
 			const releaseOwnedLock = () => {
+				clearInterval(ownerRefresh);
 				removeWriterLockOwner(lockPath, owner!.token);
 				release?.();
 			};

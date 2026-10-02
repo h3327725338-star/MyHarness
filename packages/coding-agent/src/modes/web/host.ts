@@ -7,6 +7,7 @@
  * existing runtime functions.
  */
 
+import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
@@ -15,7 +16,7 @@ import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts
 import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
 import { UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
-import { hasTrustRequiringProjectResources } from "../../config/trust/index.ts";
+import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../config/trust/index.ts";
 import { getDataDir } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
@@ -27,6 +28,11 @@ import {
 	type WorkspaceBaseline,
 } from "../../git/repository/workspace-changes.ts";
 import type { SessionEntry } from "../../session/types.ts";
+import {
+	describeTerminalRunState,
+	popupKindForRunState,
+	showPopupNotification,
+} from "../../utils/popup-notification.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
@@ -37,6 +43,8 @@ import { entriesToWire, messageToWire, sanitizeDetails, toWireModel, type WireIt
 const ASSISTANT_UPDATE_INTERVAL_MS = 50;
 const TOOL_UPDATE_INTERVAL_MS = 120;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
+/** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
+const TASK_NOTICE_ANSWER_MS = 2500;
 
 export type RunOutcome = "completed" | "partial" | "failed" | "cancelled";
 
@@ -151,6 +159,12 @@ export class WebHost {
 	/** Number of finished runs, and how many of them the browser has shown to the user (unread = the difference). */
 	private finishedRuns = 0;
 	private seenRuns = 0;
+	/** Task-end notifications the open pages have not answered yet (see announceTaskEnd). */
+	private readonly taskNotices = new Map<
+		string,
+		{ refused: number; timer: ReturnType<typeof setTimeout>; popup: () => void }
+	>();
+	private lastTaskNoticeKey: string | undefined;
 	private shutdownRequested = false;
 	onShutdown: (() => void) | undefined;
 	extensionErrors: Array<{ extensionPath: string; event: string; error: string; ts: number }> = [];
@@ -380,6 +394,10 @@ export class WebHost {
 		this.completionPromise = undefined;
 		this.runFinished.clear();
 		this.seenRuns = this.finishedRuns;
+		// Run numbers start again with the next chat; a notification still waiting for an answer belonged to this one.
+		for (const notice of this.taskNotices.values()) clearTimeout(notice.timer);
+		this.taskNotices.clear();
+		this.lastTaskNoticeKey = undefined;
 	}
 
 	/** Project Trust questions (asked when switching into another project) are answered in the browser. */
@@ -401,6 +419,24 @@ export class WebHost {
 		};
 	}
 
+	/**
+	 * Takes over the trust decision saved for this chat's folder (made in Settings, possibly in another chat of the same
+	 * project): the chat's settings and resources are loaded again for that state, so the decision holds at once and
+	 * not only for chats opened later. A chat that is working keeps its state until it is opened again. Returns
+	 * whether anything changed.
+	 */
+	async applySavedTrust(): Promise<boolean> {
+		const session = this.session;
+		const saved = new ProjectTrustStore(this.runtimeHost.services.agentDir).get(this.cwd);
+		if (saved === null || saved === session.settingsManager.isProjectTrusted()) return false;
+		if (session.isStreaming || session.isCompacting) return false;
+		session.settingsManager.setProjectTrusted(saved);
+		await session.reload();
+		this.broadcast("resources_changed", {});
+		this.broadcast("settings_changed", {});
+		return true;
+	}
+
 	/** Stop forwarding events and release the runtime. Used when the hub closes an idle or deleted slot. */
 	async dispose(): Promise<void> {
 		this.generation += 1;
@@ -417,6 +453,71 @@ export class WebHost {
 		this.shutdownRequested = true;
 		if (this.hub) this.hub.requestShutdown();
 		else this.onShutdown?.();
+	}
+
+	// ------------------------------------------------------------------
+	// Task-end notification
+	// ------------------------------------------------------------------
+
+	/**
+	 * "Desktop popup when a task ends": the setting shared with the terminal UI, with the same switch and the same
+	 * outcomes (completed, failed, interrupted). A page that is open shows it as a browser notification, which can
+	 * bring its own tab forward, and answers that it did. When no page is open, when every open page answers that its
+	 * browser will not show notifications, or when no answer comes in time, the system popup of the terminal UI is
+	 * shown instead, so the notification never depends on a permission the browser may not have given.
+	 */
+	private announceTaskEnd(state: RunStateSnapshot): void {
+		if (this.shutdownRequested) return;
+		const kind = popupKindForRunState(state.state);
+		if (!kind) return;
+		const settings = this.session.settingsManager.getPopupNotificationSettings();
+		if (!settings.enabled) return;
+		if (kind === "completed" && !settings.onCompleted) return;
+		if (kind === "failed" && !settings.onError) return;
+		if (kind === "interrupted" && !settings.onInterrupted) return;
+		const key = `${state.runId ?? ""}:${state.state}`;
+		if (this.lastTaskNoticeKey === key) return;
+		this.lastTaskNoticeKey = key;
+		const folder = basename(this.cwd);
+		const popup = () => {
+			showPopupNotification(settings.style, {
+				kind,
+				title: folder ? `MyHarness · ${folder}` : "MyHarness",
+				message: describeTerminalRunState(state),
+			});
+		};
+		if (this.server.clientCount === 0) {
+			popup();
+			return;
+		}
+		const id = `${this.slotId}:${key}`;
+		const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
+		timer.unref?.();
+		this.taskNotices.set(id, { refused: 0, timer, popup });
+		this.broadcast("task_notification", {
+			id,
+			kind,
+			state: state.state,
+			error: state.error,
+			startedAt: state.startedAt,
+			endedAt: state.lastActivityAt,
+		});
+	}
+
+	/**
+	 * A page's answer to a task-end notification: it showed it (`shown`), or its browser will not. The system popup
+	 * follows once every open page has refused, or when the time to answer is over.
+	 */
+	answerTaskNotice(id: string, shown: boolean, timedOut = false): void {
+		const notice = this.taskNotices.get(id);
+		if (!notice) return;
+		if (!shown && !timedOut) {
+			notice.refused += 1;
+			if (notice.refused < this.server.clientCount) return;
+		}
+		clearTimeout(notice.timer);
+		this.taskNotices.delete(id);
+		if (!shown) notice.popup();
 	}
 
 	// ------------------------------------------------------------------
@@ -523,6 +624,7 @@ export class WebHost {
 				if (isRunStateTerminal(event.state.state)) this.lastTerminalRunState = event.state;
 				else if (isRunStateActive(event.state.state)) this.lastTerminalRunState = undefined;
 				this.broadcast("run_state", event.state);
+				if (isRunStateTerminal(event.state.state)) this.announceTaskEnd(event.state);
 				return;
 			case "entry_appended":
 				this.forwardEntryAppended(event.entry);

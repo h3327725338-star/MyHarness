@@ -136,7 +136,7 @@ export function Menu({ trigger, placement = "bottom", align = "start", width, ch
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const close = useCallback(() => setOpen(false), []);
-	return html`<span class=${`menu-wrap ${cls || ""}`} ref=${anchor} style="display:inline-flex">
+	return html`<span class=${`menu-wrap ${cls || ""}`} ref=${anchor}>
 		${trigger({ open, toggle: () => setOpen((value) => !value) })}
 		<${Popover} anchor=${anchor} open=${open} onClose=${close} placement=${placement} align=${align} width=${width}>${children(close)}<//>
 	</span>`;
@@ -301,14 +301,14 @@ export function UnitField({ value, onInput, onCommit, onKeyDown, unit, label, pl
 	</span>`;
 }
 
-export function Segmented({ value, options, onChange, size }) {
-	return html`<div class=${`segmented ${size || ""}`} role="tablist">${options.map(
+export function Segmented({ value, options, onChange }) {
+	return html`<div class="segmented" role="tablist">${options.map(
 		(option) => html`<button role="tab" aria-selected=${value === option.value} class=${value === option.value ? "on" : ""} onClick=${() => onChange(option.value)} title=${option.title || ""}>${option.icon ? html`<${Icon} name=${option.icon} size=${14} />` : null}${option.label}</button>`,
 	)}</div>`;
 }
 
 export function Empty({ icon, title, children }) {
-	return html`<div class="empty">${icon ? html`<div style="display:flex;justify-content:center;margin-bottom:8px;color:var(--text-4)"><${Icon} name=${icon} size=${22} /></div>` : null}<div>${title}</div>${children ? html`<div class="dim" style="margin-top:4px;font-size:var(--fs-sm)">${children}</div>` : null}</div>`;
+	return html`<div class="empty">${icon ? html`<${Icon} name=${icon} size=${22} class="empty-icon" />` : null}<div>${title}</div>${children ? html`<div class="empty-hint">${children}</div>` : null}</div>`;
 }
 
 /** Drag-to-resize handle. `getValue()` is read once at drag start; `onChange(v)` gets base ± delta (invert flips the sign). */

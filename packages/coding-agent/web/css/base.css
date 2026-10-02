@@ -23,20 +23,24 @@ svg { display: block; flex: none; }
 /* Scrollbars: thin, quiet */
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--r-md); border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-4); background-clip: content-box; border: 2px solid transparent; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .mono { font-family: var(--font-mono); }
 .dim { color: var(--text-3); }
-.dim2 { color: var(--text-2); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .grow { flex: 1 1 auto; min-width: 0; }
 .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .col { display: flex; flex-direction: column; min-width: 0; }
+/* Blocks under each other at the distance cards keep from each other (a page of cards, a form of cards). */
+.stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Text that keeps its own line breaks (a message from the server, a path that must not be cut). */
+.pre-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Icon buttons and generic controls */
+/* Controls. One set of states for all of them: hover is one step lighter (a frame gets a stronger line), pressed is
+   one step further, the keyboard focus is the outline of :focus-visible (a text field shows it on its frame), and a
+   disabled control keeps its look at --disabled-opacity. Two sizes: regular, and compact with `.sm` (see tokens.css). */
 .icon-btn {
 	width: var(--h-control); height: var(--h-control);
 	display: inline-flex; align-items: center; justify-content: center;
@@ -44,9 +48,8 @@ svg { display: block; flex: none; }
 	transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .icon-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
-.icon-btn[aria-pressed="true"], .icon-btn.active { background: var(--surface-active); color: var(--text); }
-.icon-btn:disabled { opacity: 0.4; }
-.icon-btn.sm { width: 24px; height: 24px; border-radius: var(--r-sm); }
+.icon-btn:active:not(:disabled), .icon-btn[aria-pressed="true"], .icon-btn.active { background: var(--surface-active); color: var(--text); }
+.icon-btn.sm { width: var(--h-icon-sm); height: var(--h-icon-sm); border-radius: var(--r-sm); }
 
 .btn {
 	display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -56,21 +59,27 @@ svg { display: block; flex: none; }
 	transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), opacity var(--t-fast);
 }
 .btn:hover:not(:disabled) { background: var(--surface-hover); }
-.btn:disabled { opacity: 0.45; }
+.btn:active:not(:disabled) { background: var(--surface-active); }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-strong); }
+.btn.primary:hover:not(:disabled), .btn.primary:active:not(:disabled) { background: var(--accent-strong); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-strong)); }
 .btn.danger.solid { background: var(--danger); color: #fff; border-color: transparent; }
+.btn.danger.solid:hover:not(:disabled), .btn.danger.solid:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 86%, #000); }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
-.btn.sm { height: 24px; padding: 0 8px; font-size: var(--fs-sm); border-radius: var(--r-sm); }
+.btn.ghost:active:not(:disabled) { background: var(--surface-active); }
+.btn.ghost.danger, .btn.ghost.danger:hover:not(:disabled) { color: var(--danger); }
+.btn.sm { height: var(--h-control-sm); padding: 0 10px; font-size: var(--fs-sm); }
 
 .field, .select {
 	height: var(--h-control); padding: 0 10px; border-radius: var(--r-md);
 	border: 1px solid var(--border-strong); background: var(--bg-inset); color: var(--text); min-width: 0;
 	transition: border-color var(--t-fast);
 }
+.field:hover:not(:focus):not(:disabled), .select:hover:not(:focus):not(:disabled) { border-color: var(--text-4); }
 .field:focus, .select:focus { border-color: var(--border-focus); outline: none; }
+.field.sm, .select.sm { height: var(--h-control-sm); font-size: var(--fs-sm); }
+.btn:disabled, .icon-btn:disabled, .field:disabled, .select:disabled, .toggle:disabled { opacity: var(--disabled-opacity); cursor: default; }
 /* Number fields read from the left like every other field; the step buttons keep their own space at the right edge. */
 .field[type="number"] { padding-right: 4px; font-variant-numeric: tabular-nums; }
 .field[type="number"]::-webkit-inner-spin-button { height: 20px; margin-left: 8px; cursor: pointer; }
@@ -89,26 +98,33 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
    that centres its icon and its text on the same line (align-items: center, a fixed gap, icons never shrink, see
    `svg` above), and its line box is a whole number of pixels, so neither the icon nor the text is rounded half a
    pixel off the centre line. */
-.btn, .chip, .meter, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
-/* Numbers beside an icon (context use, added / removed lines): their box is cut to the digits themselves, so the
-   digits' own middle (not the taller line box around them) sits on the icon's centre line. */
+.btn, .env-chip, .header-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
+/* Added / removed line counts beside an icon or a label: their box is cut to the digits themselves, so the digits'
+   own middle (not the taller line box around them) sits on the centre line of what they stand next to. */
 @supports (text-box: trim-both cap alphabetic) {
-	.meter > span, .counts > span { text-box: trim-both cap alphabetic; }
+	.counts > span { text-box: trim-both cap alphabetic; }
 }
 
-.kbd { font: 500 10.5px/1 var(--font-ui); padding: 2px 5px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-3); background: var(--bg-inset); }
+.kbd { font: 500 10.5px/1 var(--font-ui); padding: 2px 5px; border-radius: var(--r-xs); border: 1px solid var(--border-strong); color: var(--text-3); background: var(--bg-inset); }
 
-.badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 9px; font-size: var(--fs-xs); background: var(--surface-active); color: var(--text-2); white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); background: var(--surface-active); color: var(--text-2); white-space: nowrap; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 
-.toggle { width: 30px; height: 18px; border-radius: 9px; background: var(--border-strong); position: relative; flex: none; transition: background var(--t-base) var(--ease); }
+/* The one switch (Toggle in ui.js). In a row that is itself the control (the command panel) the same shape only shows
+   the state: a span with `.on`, without hover or focus of its own. */
+.toggle { display: inline-block; width: 30px; height: 18px; border-radius: var(--r-pill); background: var(--border-strong); position: relative; flex: none; transition: background var(--t-base) var(--ease); }
 .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform var(--t-base) var(--ease); box-shadow: 0 1px 2px rgba(0,0,0,.35); }
-.toggle[aria-checked="true"] { background: var(--accent); }
-.toggle[aria-checked="true"]::after { transform: translateX(12px); }
-.toggle:disabled { opacity: 0.5; }
+.toggle[aria-checked="true"], .toggle.on { background: var(--accent); }
+.toggle[aria-checked="true"]::after, .toggle.on::after { transform: translateX(12px); }
+button.toggle:hover:not(:disabled) { background: var(--text-4); }
+button.toggle[aria-checked="true"]:hover:not(:disabled) { background: var(--accent-strong); }
+/* A switch or a check box with its text: one line, the whole of it can be clicked. */
+.check-label { display: inline-flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; cursor: pointer; }
+.check-label.sm { gap: 6px; font-size: var(--fs-sm); }
+input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 
 /* Status glyphs. State is always carried by text/shape; motion is only decoration. The spinner is an SVG on the icons'
    24-unit grid (see Spinner in ui.js): a faint ring and a rounded arc, in the icons' stroke weight. */
@@ -129,10 +145,12 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 @keyframes fade-only { from { opacity: 0; } to { opacity: 1; } }
 
 /* The one expand/collapse motion (Collapse in ui.js, the Workspace rows and every other foldable area): the height
-   follows a grid row going 0fr <-> 1fr, the content fades, and a folded area is not hit-testable. */
-.collapse { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
+   follows a grid row going 0fr <-> 1fr, the content fades, and a folded area is not hit-testable. The one column is
+   exactly as wide as the place the area sits in, so a long line inside (a path, a command) is cut or scrolls there
+   instead of making the area wider than its container. */
+.collapse { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
 .collapse.open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
-.collapse-inner { min-height: 0; overflow: clip; overflow-clip-margin: 3px; }
+.collapse-inner { min-width: 0; min-height: 0; overflow: clip; overflow-clip-margin: 3px; }
 /* The fold arrow (Fold in ui.js): one glyph that turns half a turn with the element it sits in, so every foldable row
    shows its state with the same motion as its content. */
 .fold-chev { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
@@ -143,9 +161,10 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 
 /* A number with a fixed unit after it: one field look, the unit is inside at the right and cannot be edited. */
 .unit-field { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--bg-inset); cursor: text; min-width: 0; transition: border-color var(--t-fast); }
+.unit-field:hover:not(:focus-within):not(.invalid):not(.disabled) { border-color: var(--text-4); }
 .unit-field:focus-within { border-color: var(--border-focus); }
 .unit-field.invalid { border-color: var(--danger); }
-.unit-field.disabled { opacity: 0.55; cursor: default; }
+.unit-field.disabled { opacity: var(--disabled-opacity); cursor: default; }
 .unit-input { flex: 1 1 auto; min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); outline: none; font-size: var(--fs-md); font-variant-numeric: tabular-nums; text-align: right; }
 .unit-input::placeholder { color: var(--text-4); }
 .unit-suffix { flex: none; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; user-select: none; }
@@ -161,4 +180,7 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 
 .tooltip { position: fixed; z-index: 1000; max-width: 320px; padding: 5px 8px; border-radius: var(--r-sm); background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); pointer-events: none; }
 
+/* "Nothing here" (Empty in ui.js): an optional icon, one line, an optional weaker line under it. */
 .empty { color: var(--text-3); padding: 24px 16px; text-align: center; font-size: var(--fs-md); }
+.empty-icon { margin: 0 auto 8px; color: var(--text-4); }
+.empty-hint { margin-top: 4px; font-size: var(--fs-sm); }

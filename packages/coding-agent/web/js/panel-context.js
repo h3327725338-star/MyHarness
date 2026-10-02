@@ -18,7 +18,7 @@ function Section({ title, count, children, defaultOpen = true, action }) {
 }
 
 function AutoCompact({ snap }) {
-	return html`<label class="row dim" style="gap:6px;font-size:12px;margin-top:8px"><${Toggle} checked=${snap.autoCompaction} label=${t("Auto-compact")} onChange=${(v) => attempt(async () => { await post("/api/settings", { id: "autoCompact", value: v }); })} />${t("Auto-compact")}</label>`;
+	return html`<label class="check-label sm dim"><${Toggle} checked=${snap.autoCompaction} label=${t("Auto-compact")} onChange=${(v) => attempt(async () => { await post("/api/settings", { id: "autoCompact", value: v }); })} />${t("Auto-compact")}</label>`;
 }
 
 function TreeView({ snap }) {
@@ -46,7 +46,7 @@ function TreeView({ snap }) {
 		<span class=${`kind kind-${row.kind}`}>${row.kind === "user" ? t("You") : row.kind === "assistant" ? "AI" : row.kind === "compaction" ? "⟲" : "⑂"}</span>
 		<span class="truncate grow" title=${row.text}>${clip(row.text.replace(/\s+/g, " "), 70) || t("(no text)")}</span>
 		${row.childCount > 1 ? html`<span class="badge" title=${t("Branch point")}>${row.childCount}⑂</span>` : null}
-		<button class="link-btn" disabled=${snap.active} onClick=${() => navigate(row)}>${row.isLeaf ? "current" : "go here"}</button>
+		<button class="link-btn" disabled=${snap.active} onClick=${() => navigate(row)}>${row.isLeaf ? t("current") : t("go here")}</button>
 		${row.kind === "user" ? html`<button class="link-btn" disabled=${snap.active} onClick=${() => actions.editAndResend({ id: row.id, text: row.text })}>${t("fork")}</button>` : null}
 	</div>`)}</div>`;
 }
@@ -79,13 +79,13 @@ export function ContextPanel() {
 				<span>${t("Model")}</span><span class="truncate">${snap.model ? `${snap.model.provider}/${snap.model.id}` : "—"}</span>
 				<span>${t("Reasoning")}</span><span>${snap.thinking.supported ? snap.thinking.level : t("not supported")}</span>
 				<span>${t("Workspace")}</span><span class="truncate mono" title=${snap.cwd}>${snap.cwd}</span>
-				<span>${t("Session file")}</span><span class="row" style="gap:4px"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
+				<span>${t("Session file")}</span><span class="kv-value"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} you · {assistantMessages} assistant · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
 					<span>${t("Tokens")}</span><span>${t("{fmtTokens} in · {fmtTokens2} out · {fmtTokens3} cached", { fmtTokens: fmtTokens(stats.tokens.input), fmtTokens2: fmtTokens(stats.tokens.output), fmtTokens3: fmtTokens(stats.tokens.cacheRead) })}</span>
 					<span>${t("Cost")}</span><span>${fmtCost(stats.cost)}</span>` : null}
 			</div>
-			<div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
+			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
 		${snap.checkpoint ? html`<${Section} title=${t("Git checkpoint")}><div class="kv"><span>${t("Status")}</span><span>${t(snap.checkpoint.status)}</span><span>${t("Created")}</span><span>${fmtDateTime(Date.parse(snap.checkpoint.createdAt))}</span><span>${t("Shell used")}</span><span>${snap.checkpoint.hadBash ? t("yes — external effects cannot be undone") : t("no")}</span></div><//>` : null}
 		<${Section} title=${t("Branches")} defaultOpen=${false}><${TreeView} snap=${snap} /><//>
@@ -106,6 +106,6 @@ export function ContextPanel() {
 			${resources?.contextFiles.map((f) => html`<div class="res-row" key=${f.path}><span class="truncate grow mono" title=${f.path}>${f.path}</span><span class="dim">${t("{fmtTokens} chars", { fmtTokens: fmtTokens(f.chars) })}</span></div>`)}
 			${resources && !resources.contextFiles.length ? html`<div class="dim">${t("No AGENTS.md / CLAUDE.md files found.")}</div>` : null}
 		<//>
-		<div class="row" style="gap:8px;padding:10px 12px"><button class="btn sm" onClick=${async () => (await attempt(() => post("/api/resources/reload")), loadResources(), toast(t("Resources reloaded"), "info", 2500))} disabled=${snap.active}><${Icon} name="refresh" size=${13} />${t("Reload resources")}</button></div>
+		<div class="ctx-foot"><button class="btn sm" onClick=${async () => (await attempt(() => post("/api/resources/reload")), loadResources(), toast(t("Resources reloaded"), "info", 2500))} disabled=${snap.active}><${Icon} name="refresh" size=${13} />${t("Reload resources")}</button></div>
 	</div>`;
 }

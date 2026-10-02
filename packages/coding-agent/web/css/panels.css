@@ -1,50 +1,55 @@
 .panel-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .panel-pane[hidden] { display: none; }
-.panel-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; flex: none; border-bottom: 1px solid var(--border); min-height: 46px; }
+.panel-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px var(--pad-panel); flex: none; border-bottom: 1px solid var(--border); min-height: 46px; }
+/* Every bar of the panel starts and ends on the panel's inset. An icon button has no frame, so at either end of a bar
+   it hangs into the inset by the space around its glyph: the glyph, not its invisible box, ends on the line. */
+:is(.panel-tabs, .panel-toolbar, .gitbar, .cfiles-head, .cdiff-head) > .icon-btn.sm:last-child { margin-right: -4px; }
+.panel-toolbar > .icon-btn.sm:first-child { margin-left: -4px; }
 .panel-scroll { flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; min-height: 0; }
-.pad { padding: 12px; }
-.notice { display: flex; align-items: flex-start; gap: 8px; margin: 8px 10px; padding: 8px 10px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pad { padding: var(--pad-panel); }
+.notice { display: flex; align-items: flex-start; gap: 8px; margin: 8px var(--pad-panel); padding: 8px 10px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .notice.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
 .notice.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .notice.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .modal-body .notice { margin: 4px 0; }
 
-.segmented { display: inline-flex; padding: 2px; gap: 2px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); }
-.segmented button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px; border-radius: 6px; color: var(--text-2); font-size: var(--fs-sm); }
+/* In a narrow toolbar the select gives way; a segmented control keeps its labels on one line. */
+.segmented { display: inline-flex; flex: none; padding: 2px; gap: 2px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); }
+.segmented button { display: inline-flex; align-items: center; gap: 5px; height: calc(var(--h-control-sm) - 6px); padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
 .segmented button:hover { color: var(--text); }
 .segmented button.on { background: var(--surface-active); color: var(--text); font-weight: 600; }
-.select.sm { height: 26px; font-size: var(--fs-sm); max-width: 220px; }
+.panel-toolbar > .select { flex: 0 1 auto; min-width: 0; max-width: 220px; }
 
 /* Changes: the file list on top, the diff of the file being read under it. */
 .changes-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.gitbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); flex: none; font-size: var(--fs-sm); flex-wrap: wrap; }
+.gitbar { display: flex; align-items: center; gap: 8px; padding: 7px var(--pad-panel); border-bottom: 1px solid var(--border); flex: none; font-size: var(--fs-sm); flex-wrap: wrap; }
 .gitbar-ctx { gap: 6px; min-width: 0; flex-wrap: wrap; }
 .gitbar-ctx strong { max-width: 180px; }
-.changes-basis { flex: none; padding: 6px 12px 2px; color: var(--text-3); font-size: var(--fs-xs); }
+.changes-basis { flex: none; padding: 6px var(--pad-panel) 2px; color: var(--text-3); font-size: var(--fs-xs); }
 .changes-notes { flex: none; }
 .changes-notes:empty { display: none; }
 .changes-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-top: 6px; border-top: 1px solid var(--border); }
 .cfiles { flex: none; border-bottom: 1px solid var(--border); }
-.cfiles-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 3px 6px 3px 8px; }
-.cfiles-toggle { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-sm); }
+.cfiles-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 3px var(--pad-panel); }
+.cfiles-toggle { display: inline-flex; align-items: center; gap: 8px; height: var(--h-control-sm); margin-left: -6px; padding: 0 6px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); }
 .cfiles-toggle:hover { background: var(--surface-hover); color: var(--text); }
 .cfiles-pos { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; margin-right: 2px; }
 .cfiles-list { max-height: min(216px, 28vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 4px; outline: none; }
-.cfile { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: var(--r-xs); cursor: pointer; color: var(--text-2); font-size: 12.5px; }
+.cfile { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: var(--r-sm); cursor: pointer; color: var(--text-2); font-size: 12.5px; }
 .cfile:hover { background: var(--surface-hover); }
 .cfile.sel { background: var(--surface-select); color: var(--text); }
 .cfiles-list:focus-visible .cfile.sel { box-shadow: inset 0 0 0 1px var(--border-focus); }
 .cdiff { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; outline: none; }
 .cdiff:focus-visible { box-shadow: inset 0 0 0 1px var(--border-focus); }
-.cdiff-head { position: sticky; top: 0; left: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 8px 4px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.cdiff-head { position: sticky; top: 0; left: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px var(--pad-panel); background: var(--bg-panel); border-bottom: 1px solid var(--border); }
 .file-path { flex: 1 1 auto; min-width: 0; font-size: 12.5px; }
 .counts { display: inline-flex; gap: 6px; font-size: var(--fs-sm); flex: none; }
-.st { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; font-size: 10.5px; font-weight: 700; flex: none; background: var(--surface-active); color: var(--text-2); }
+.st { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-xs); font-size: 10.5px; font-weight: 700; flex: none; background: var(--surface-active); color: var(--text-2); }
 .st-added, .st-A { background: var(--ok-soft); color: var(--ok); } .st-modified, .st-M { background: var(--warn-soft); color: var(--warn); } .st-deleted, .st-D { background: var(--danger-soft); color: var(--danger); } .st-renamed, .st-R { background: var(--accent-soft); color: var(--accent); }
 
 /* Diff */
 .diff { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; min-width: max-content; }
-.hunk-head { display: flex; gap: 12px; padding: 3px 10px; color: var(--diff-hunk); background: var(--bg-inset); font-size: var(--fs-xs); position: sticky; left: 0; }
+.hunk-head { display: flex; gap: 12px; padding: 3px var(--pad-panel); color: var(--diff-hunk); background: var(--bg-inset); font-size: var(--fs-xs); position: sticky; left: 0; }
 .dl { display: grid; grid-template-columns: 44px 44px 16px minmax(0, 1fr); }
 .dl-no { text-align: right; padding: 0 8px 0 4px; color: var(--text-4); user-select: none; font-variant-numeric: tabular-nums; }
 .dl-sign { text-align: center; color: var(--text-3); user-select: none; }
@@ -57,16 +62,18 @@
 .ds-cell.add { background: var(--diff-add-bg); } .ds-cell.del { background: var(--diff-del-bg); } .ds-cell.empty { background: var(--bg-inset); }
 .ds-cell .dl-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff.split { min-width: 0; }
-.diff-more { margin: 8px 10px; } .diff-empty { padding: 12px; }
+.diff-more { margin: 8px var(--pad-panel); } .diff-empty { padding: var(--pad-panel); }
 
 /* Files */
 .files-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .files-tree { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .files-tree.hidden { display: none; }
-.tree-row { display: flex; align-items: center; gap: 6px; height: 26px; padding-right: 10px; cursor: pointer; color: var(--text-2); font-size: 13px; }
+.tree-row { display: flex; align-items: center; gap: 6px; height: 26px; padding-right: var(--pad-panel); cursor: pointer; color: var(--text-2); font-size: 13px; }
 .tree-row:hover { background: var(--surface-hover); color: var(--text); }
 .tree-row.current { background: var(--surface-select); color: var(--text); }
 .tree-row.ignored { opacity: 0.5; }
+/* A file has no fold arrow; it keeps the arrow's place so names line up. */
+.tree-gap { width: 13px; flex: none; }
 .file-viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .code-view { background: var(--code-bg); }
 .code-lines { font-size: var(--fs-code); line-height: 1.55; min-width: max-content; padding: 6px 0; }
@@ -77,36 +84,47 @@
 .image-view { padding: 16px; display: grid; place-items: center; } .image-view img { max-width: 100%; max-height: 70vh; border: 1px solid var(--border); background: repeating-conic-gradient(var(--bg-inset) 0 25%, var(--bg-panel) 0 50%) 0 0 / 16px 16px; }
 
 /* Terminal */
-.terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+/* The real shell. xterm.js sizes itself to the box it is opened in (.term-mount), so the spacing around it is on
+   .term-screen; a terminal that is wider than the panel for a moment (while it is being fitted) is clipped, not scrolled. */
+.term-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--code-bg); }
+.term-screen { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 8px 2px 6px 12px; }
+.term-screen[hidden] { display: none; }
+.term-mount { width: 100%; height: 100%; overflow: hidden; }
+.term-mount .xterm .xterm-viewport { background-color: transparent; }
+.term-bar { flex: none; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px var(--pad-panel); border-top: 1px solid var(--border); background: var(--bg-panel); color: var(--text-2); font-size: var(--fs-sm); }
+.term-error { margin: 4px 0 10px; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+/* The commands of the chat. */
+.term-log { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .term-list { flex: none; max-height: 30%; overflow-y: auto; border-bottom: 1px solid var(--border); padding: 4px; }
-.term-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; color: var(--text-2); font-size: var(--fs-code); }
+.term-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; color: var(--text-2); font-size: var(--fs-code); }
 .term-item:hover { background: var(--surface-hover); } .term-item.sel { background: var(--surface-select); color: var(--text); }
 .term-ico { width: 14px; display: inline-flex; justify-content: center; }
 .term-src { font-size: var(--fs-xs); }
 .term-detail { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.term-head { flex: none; padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.term-head { flex: none; padding: 8px var(--pad-panel); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .term-cmd { font-size: var(--fs-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
-.term-meta { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); min-width: 0; }
+.term-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: var(--fs-sm); min-width: 0; }
+.term-cwd { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .term-out { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--code-bg); }
-.term-pre { margin: 0; padding: 10px 12px; font-size: var(--fs-code); line-height: 1.5; white-space: pre; min-width: max-content; }
+.term-pre { margin: 0; padding: 10px var(--pad-panel); font-size: var(--fs-code); line-height: 1.5; white-space: pre; min-width: max-content; }
 .term-pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
-.term-input { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
-.term-input input.mono { flex: 1; min-width: 0; height: 28px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); padding: 0 10px; color: var(--text); }
-.term-input input.mono:focus { border-color: var(--border-focus); outline: none; }
-.ctx-check { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); white-space: nowrap; }
-.term-note { padding: 4px 12px 8px; font-size: var(--fs-xs); }
+.term-input { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px var(--pad-panel); border-top: 1px solid var(--border); }
+.term-note { padding: 4px var(--pad-panel) 8px; font-size: var(--fs-xs); }
 
 /* Session/context */
-.context-panel { padding-bottom: 12px; }
+.context-panel { padding-bottom: var(--pad-panel); }
 .ctx-section { border-bottom: 1px solid var(--border); }
-.ctx-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.ctx-head { display: flex; align-items: center; gap: 6px; padding: 10px var(--pad-panel); cursor: pointer; font-weight: 600; font-size: 13px; }
 .ctx-head:hover { background: var(--surface-hover); }
-.ctx-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; }
-.usage-bar { position: relative; height: 8px; border-radius: 4px; background: var(--surface-active); overflow: visible; }
-.usage-fill { height: 100%; border-radius: 4px; background: var(--accent); transition: width var(--t-slow) var(--ease); } .usage-fill.warn { background: var(--warn); } .usage-fill.danger { background: var(--danger); }
-.usage-mark { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--text-3); border-radius: 1px; }
-.usage-legend { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; }
-.usage-note { font-size: var(--fs-sm); margin-top: 4px; }
+.ctx-body { padding: 0 var(--pad-panel) var(--pad-panel); display: flex; flex-direction: column; gap: 6px; }
+/* The context figures bring their own spacing for the popover of the input bar; inside a section the section spaces them. */
+.ctx-body > .cu { padding: 0; }
+.ctx-body > .check-label { margin-top: 4px; align-self: flex-start; }
+/* Buttons under the content of a section, and under the last section. */
+.ctx-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.ctx-foot { display: flex; align-items: center; gap: 8px; padding: 10px var(--pad-panel) 0; }
+.kv-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
 .kv > span:nth-child(odd) { color: var(--text-3); }
 .res-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; min-height: 32px; }
@@ -124,8 +142,8 @@
 .cu-sub strong { color: var(--text); font-size: 15px; font-weight: 650; }
 .cu-pct { font-weight: 650; font-variant-numeric: tabular-nums; }
 .cu-pct.warn { color: var(--warn); } .cu-pct.danger { color: var(--danger); }
-.cu-bar { height: 5px; border-radius: 3px; overflow: hidden; background: var(--bg-inset); }
-.cu-fill { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.cu-bar { height: 5px; border-radius: var(--r-pill); overflow: hidden; background: var(--bg-inset); }
+.cu-fill { display: block; height: 100%; border-radius: var(--r-pill); background: var(--accent); }
 .cu-fill.warn { background: var(--warn); } .cu-fill.danger { background: var(--danger); }
 .cu-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .cu-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: var(--fs-xs); }

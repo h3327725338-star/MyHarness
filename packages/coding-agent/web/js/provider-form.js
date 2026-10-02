@@ -174,8 +174,8 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 					<${KField} label=${t("Max output")} detected=${d.maxTokens} value=${model.maxTokens} onInput=${(v) => set({ maxTokens: v })} />
 				</div>
 				<div class="pf-switches">
-					<label class="row pf-switch"><${Toggle} checked=${model.reasoning} label=${t("Supports reasoning")} onChange=${(v) => touch("reasoning", { reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</label>
-					<label class="row pf-switch"><${Toggle} checked=${model.image} label=${t("Accepts images")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</label>
+					<label class="check-label"><${Toggle} checked=${model.reasoning} label=${t("Supports reasoning")} onChange=${(v) => touch("reasoning", { reasoning: v })} /><span>${t("Supports reasoning")}</span>${d.reasoning ? html`<${Detected} />` : null}</label>
+					<label class="check-label"><${Toggle} checked=${model.image} label=${t("Accepts images")} onChange=${(v) => set({ image: v })} /><span>${t("Accepts images")}</span>${d.input ? html`<${Detected} />` : null}</label>
 				</div>
 				${model.reasoning
 					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${levelSourceTitle(d.levelsSource)} />` : null}</span>
@@ -353,12 +353,12 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 	const authOptions = [{ value: "key", label: t("API key") }, { value: "config", label: t("Set in models.json") }];
 	const configHasKey = !!draft.raw.apiKey;
 	const detecting = detect.status === "loading";
-	return html`<div ref=${rootRef} class="pf">
+	return html`<div ref=${rootRef} class="pf stack">
 		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
 		${view === "json"
 			? html`<section class="set-card">
 				<div class="set-card-head"><strong class="grow">${t("Advanced (JSON)")}</strong><button class="btn sm" onClick=${() => switchView("form")}>${t("Back to the form")}</button></div>
-				<div class="set-card-body col" style="gap:8px">
+				<div class="set-card-body col">
 					<div class="dim pf-hint">${t("The full models.json entry for this provider. Secrets already in the file show as a placeholder and are kept when you leave them unchanged. Keys you type in the form are stored in the credential store, not in this JSON.")}</div>
 					<textarea class="field mono" rows="18" spellcheck="false" aria-label=${t("Configuration (JSON)")} value=${json} onInput=${(e) => (setJson(e.target.value), setDirty(true))} />
 				</div>
@@ -374,7 +374,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 					<${Field} label=${t("API format")}><select class="select" value=${draft.api} onChange=${(e) => patch({ api: e.target.value })}>${types.map((type) => html`<option key=${type} value=${type} selected=${draft.api === type}>${API_LABELS[type] ? t(API_LABELS[type]) : type}</option>`)}</select><//>
 					<${Field} label=${t("Base URL")} hint=${draft.baseUrl.trim() ? undefined : t("Not filled in yet. The provider can be saved, but stays off until it has a Base URL.")}><input class="field mono example-placeholder" placeholder=${BASE_URL_EXAMPLE} aria-label=${t("Base URL")} value=${draft.baseUrl} onInput=${(e) => patch({ baseUrl: e.target.value })} /><//>
 					<div class="col field-label"><span class="field-name">${t("Authentication")}</span>
-						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} size="sm" /></div>
+						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} /></div>
 					</div>
 					${draft.auth === "key"
 						? hasStoredKey && keyArea
@@ -386,7 +386,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 			<section class="set-card">
 				<div class="set-card-head"><strong class="grow">${t("Models")} <span class="dim">${draft.models.length}</span></strong>
 					<button class="btn sm ghost" onClick=${addManually}><${Icon} name="plus" size=${13} />${t("Add manually")}</button></div>
-				<div class="set-card-body col" style="gap:10px">
+				<div class="set-card-body col">
 					<div class="pf-detect">
 						<div class="row pf-detect-bar">
 							<input class="field mono grow" placeholder=${t("Model IDs to detect, e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />

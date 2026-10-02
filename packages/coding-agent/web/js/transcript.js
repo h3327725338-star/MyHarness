@@ -198,7 +198,6 @@ function CustomStep({ step }) {
  */
 function StepList({ turn }) {
 	const groups = useMemo(() => groupSteps(turn.steps), [turn.steps]);
-	if (!groups.length) return html`<div class="dim steps-empty">${t("No intermediate steps.")}</div>`;
 	return html`<div class="steps">
 		${groups.map((entry, index) => {
 			const next = groups[index + 1];
@@ -262,12 +261,16 @@ function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapR
 	const elapsed = live ? now - (snapRun?.startedAt || turn.startedAt || now) : duration;
 	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${OUTCOME_ICON[outcome] || "checkCircle"} size=${14} class=${`c-${outcome}`} />`;
 	const label = live ? currentActivity(turn, snapRun) : summaryText({ outcome, duration, stats, changeCount });
+	const head = html`<span class="summary-ico">${icon}</span>
+		<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
+		${live ? html`<span class="summary-meta dim">${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}</span>` : null}
+		${stats.failedActions && !live ? html`<span class="badge danger">${plural(stats.failedActions, "failed action")}</span>` : null}`;
+	// Waiting for the model's first step: there is nothing to unfold yet, so the row is only the working glyph, what is
+	// happening and the timer (no arrow, and no empty area under it).
+	if (!turn.steps.length) return html`<div class=${`summary live o-${outcome}`}><div class="summary-head" role="status">${head}</div></div>`;
 	return html`<div class=${`summary ${live ? "live" : ""} o-${outcome}`}>
 		<button class="summary-head" onClick=${() => setOpen(!open)} aria-expanded=${open} title=${open ? t("Hide steps") : t("Show what the agent did")}>
-			<span class="summary-ico">${icon}</span>
-			<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
-			${live ? html`<span class="summary-meta dim">${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}</span>` : null}
-			${stats.failedActions && !live ? html`<span class="badge danger">${plural(stats.failedActions, "failed action")}</span>` : null}
+			${head}
 			<span class="grow" />
 			<${Fold} />
 		</button>

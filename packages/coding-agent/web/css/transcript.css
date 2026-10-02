@@ -13,18 +13,18 @@
 
 /* User message */
 .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
-.user-bubble { max-width: 88%; background: var(--user-bg); border: 1px solid var(--user-border); border-radius: 14px 14px 4px 14px; padding: 8px 13px; font-size: var(--fs-read); line-height: 1.6; }
+.user-bubble { max-width: 88%; background: var(--user-bg); border: 1px solid var(--user-border); border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); padding: 8px 13px; font-size: var(--fs-read); line-height: 1.6; }
 .user-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .chip-line { margin-bottom: 4px; }
 .user-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.user-images img { max-width: 220px; max-height: 160px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; }
+.user-images img { max-width: 220px; max-height: 160px; border-radius: var(--r-md); border: 1px solid var(--border); object-fit: cover; }
 .msg-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity var(--t-fast); height: 24px; }
 .user-row:hover .msg-actions, .user-row:focus-within .msg-actions, .final:hover .msg-actions, .final:focus-within .msg-actions { opacity: 1; }
 
 /* Run summary */
 .summary { display: flex; flex-direction: column; gap: 4px; }
 .summary-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 2px 4px; border-radius: var(--r-md); color: var(--text-3); text-align: left; transition: background var(--t-fast), color var(--t-fast); }
-.summary-head:hover { background: var(--surface-hover); color: var(--text-2); }
+button.summary-head:hover { background: var(--surface-hover); color: var(--text-2); }
 .summary-text { color: inherit; font-size: var(--fs-md); }
 .summary.live .summary-text { color: var(--text-2); }
 .summary-meta { font-size: var(--fs-sm); flex: none; }
@@ -36,7 +36,6 @@
 .summary.o-partial .summary-text { color: var(--warn); }
 
 .steps { display: flex; flex-direction: column; gap: 2px; }
-.steps-empty { padding: 4px 4px 6px; font-size: var(--fs-sm); }
 /* A thin line joins the glyph of a step to the glyph of the next one, so it exists only between steps that really are
    there and is as tall as the steps are (an opened step is taller). The glyph column is 16px wide at a 4px inset; a 14px
    glyph sits 6px below the top of its 26px row, so the line starts 2px under it and ends 2px above the next one. */
@@ -65,7 +64,7 @@
 .add { color: var(--diff-add-text); font-variant-numeric: tabular-nums; } .del { color: var(--diff-del-text); font-variant-numeric: tabular-nums; }
 .action-text .counts { display: inline-flex; vertical-align: baseline; margin-left: 2px; font-size: 12px; }
 .err-text { color: var(--danger); font-size: var(--fs-sm); }
-.link-btn { color: var(--accent); font-size: var(--fs-sm); padding: 0 2px; border-radius: 3px; }
+.link-btn { color: var(--accent); font-size: var(--fs-sm); padding: 0 2px; border-radius: var(--r-xs); }
 .link-btn:hover:not(:disabled) { text-decoration: underline; }
 .link-btn:disabled { color: var(--text-4); }
 
@@ -76,8 +75,8 @@
 .raw code { font-size: 12px; } .raw code.err { color: var(--danger); }
 .raw-label { color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 3px; }
 .raw-pre { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
-.raw-md { padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm); max-height: 480px; overflow: auto; overscroll-behavior: contain; font-size: 13px; }
-.raw-images img { max-width: 100%; max-height: 240px; border-radius: 6px; margin-top: 6px; }
+.raw-md { padding: 8px 12px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-sm); max-height: 480px; overflow: auto; overscroll-behavior: contain; font-size: 13px; }
+.raw-images img { max-width: 100%; max-height: 240px; border-radius: var(--r-sm); margin-top: 6px; }
 
 /* Final answer */
 .final { position: relative; }
@@ -106,10 +105,10 @@
 .md li { margin: 0.2em 0; } .md li > p { margin: 0.2em 0; }
 .md blockquote { margin: 0 0 0.85em; padding: 0.1em 0 0.1em 1em; border-left: 3px solid var(--border-strong); color: var(--text-2); }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
-.md code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: 5px; font-size: 0.88em; }
+.md code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: var(--r-xs); font-size: 0.88em; }
 .code-block { margin: 0 0 0.95em; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
 .code-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; font-size: var(--fs-xs); color: var(--text-3); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--code-bg) 60%, var(--bg-raised)); }
-.code-copy { color: var(--text-3); font-size: var(--fs-xs); padding: 1px 6px; border-radius: 4px; } .code-copy:hover { background: var(--surface-hover); color: var(--text); }
+.code-copy { color: var(--text-3); font-size: var(--fs-xs); padding: 1px 6px; border-radius: var(--r-xs); } .code-copy:hover { background: var(--surface-hover); color: var(--text); }
 .code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: var(--fs-code); line-height: 1.55; }
 .md pre code, .code-block code { background: none; padding: 0; font-size: inherit; }
 .table-wrap { overflow-x: auto; margin: 0 0 0.95em; }
@@ -176,14 +175,15 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 .welcome-warn { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 12px; border-radius: var(--r-md); background: var(--warn-soft); color: var(--warn); }
 
 /* Status pill (header) */
-.status-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px; font-size: var(--fs-sm); background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--fs-sm); background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .status-pill.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
 .status-pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
 .status-pill.danger { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
 button.status-pill { cursor: pointer; }
-.tab-badge { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.tab-badge { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
 .icon-btn { position: relative; }
-.title-input { width: min(46%, 420px); font-weight: 600; }
+/* Renaming in place: the field has the box and the type of the title it replaces, so the text does not move. */
+.title-input { width: min(46%, 420px); height: var(--h-control-sm); padding: 0 5px; font-size: 14px; font-weight: 600; }
 
 /* Sub-agent / workflow progress */
 .sub-agent { margin: 2px 0 6px 24px; padding-left: 10px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }

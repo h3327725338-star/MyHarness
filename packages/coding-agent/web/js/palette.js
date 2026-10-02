@@ -47,7 +47,7 @@ export function CommandPalette() {
 			fn();
 		};
 		const cmds = [
-			{ label: t("New chat"), icon: "edit", hint: "Ctrl+N", run: run(() => actions.newSession()) },
+			{ label: t("New chat"), icon: "edit", hint: "Ctrl+N", run: run(() => actions.newChat()) },
 			{ label: t("Toggle sidebar"), icon: "sidebar", hint: "Ctrl+B", run: run(() => setView({ sidebarOpen: !state.view.sidebarOpen })) },
 			{ label: t("Compact context"), icon: "layers", run: run(() => actions.compact()) },
 			{ label: t("Commit changes"), icon: "gitCommit", run: run(() => actions.submit("/commit")) },

@@ -20,6 +20,8 @@ import { registerGitRoutes } from "./routes-git.ts";
 import { registerProviderRoutes } from "./routes-providers.ts";
 import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
+import { registerTerminalRoutes } from "./routes-terminal.ts";
+import { WebTerminals } from "./terminal.ts";
 
 export const DEFAULT_WEB_PORT = 7878;
 const PORT_FALLBACK_ATTEMPTS = 10;
@@ -148,6 +150,9 @@ export async function runWebMode(
 	registerSettingsRoutes(server, host);
 	registerProviderRoutes(server, host, hub);
 	registerAccountRoutes(server);
+	// The Terminal panel's shells belong to the server, not to a chat: they outlive the chats that show them.
+	const terminals = new WebTerminals((event, data) => server.broadcast(event, data));
+	registerTerminalRoutes(server, host, terminals);
 
 	// The server belongs to its browser pages: once the last one is gone for the grace period, it exits.
 	const lifecycle = new WebLifecycle({
@@ -164,6 +169,7 @@ export async function runWebMode(
 		lifecycle.dispose();
 		server.broadcast("shutdown", {});
 		dialogs.dismissAll();
+		terminals.dispose();
 		try {
 			await hub.dispose();
 		} catch (error) {

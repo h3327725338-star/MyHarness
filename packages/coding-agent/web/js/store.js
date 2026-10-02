@@ -2,8 +2,9 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { loadPrefs, savePrefs, uid } from "./util.js";
+import { chatTitle, clip, fmtDuration, loadPrefs, savePrefs, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
+import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 
 const listeners = new Set();
@@ -98,6 +99,10 @@ export const state = {
 		dialog: null,
 		changesScope: "run",
 		selectedTerminal: null,
+		// Terminal panel: the real shell ("shell") or the list of commands run in this chat ("commands").
+		termView: "shell",
+		// The shell the Terminal panel opens ("powershell", "cmd", …); empty means the first one the server offers.
+		termShell: prefs.termShell ?? "",
 		theme: prefs.theme ?? "system",
 		motion: prefs.motion ?? "system",
 		processDefault: prefs.processDefault ?? "collapsed",
@@ -161,7 +166,7 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang"];
+const PERSISTED = ["sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -539,6 +544,22 @@ function recoverLostSlot(slot) {
 	})();
 }
 
+// ---- Terminal stream -------------------------------------------------------------------------
+// What a shell writes is a stream for the terminal that is on screen, not state: it goes straight to whoever listens.
+const terminalListeners = new Set();
+/**
+ * `fn(type, data)` is called for every piece of output ("data": `{ id, seq, data }`) and every exit ("exit":
+ * `{ id, exitCode }`) of the server's terminals, and with "reconnect" when the event stream is back after a break
+ * (pieces may be missing). Returns the function that stops listening.
+ */
+export function onTerminalEvent(fn) {
+	terminalListeners.add(fn);
+	return () => terminalListeners.delete(fn);
+}
+function tellTerminals(type, data) {
+	for (const fn of [...terminalListeners]) fn(type, data);
+}
+
 // ---- Boot + SSE ------------------------------------------------------------------------------
 let source = null;
 let booted = false;
@@ -581,6 +602,7 @@ function connectEvents() {
 	source.onopen = async () => {
 		const reconnect = state.everConnected;
 		set({ connected: true, everConnected: true });
+		if (reconnect) tellTerminals("reconnect");
 		if (reconnect && booted) await attempt(refreshAll, { quiet: true });
 	};
 	source.onerror = () => {
@@ -614,7 +636,8 @@ function connectEvents() {
 	});
 	on("slot_closed", (d) => recoverLostSlot(d.slot));
 
-	on("agent_start", (d) => {
+	on("agent_start", (d, slot) => {
+		announced.delete(slot);
 		state.currentRunId = d.runId;
 		state.retry = null;
 		state.recovery = null;
@@ -633,9 +656,10 @@ function connectEvents() {
 		state.runs = { ...state.runs, [d.runId]: d };
 		state.snap = state.snap ? { ...state.snap, lastRun: d, active: false } : state.snap;
 		emit();
-		notifyFinished(d, state.snap);
+		notifyFinished(d, slot);
 		refreshSoon(slot);
 	});
+	on("task_notification", (d, slot) => notifyTaskEnd(d, slot));
 
 	on("message_start", (d) => {
 		const item = d.liveId ? { ...d.item, liveId: d.liveId } : d.item;
@@ -764,6 +788,9 @@ function connectEvents() {
 		emit();
 	});
 
+	on("terminal_data", (d) => tellTerminals("data", d));
+	on("terminal_exit", (d) => tellTerminals("exit", d));
+
 	on("bash_start", (d) => {
 		state.userBash = { ...state.userBash, [d.id]: { ...d, output: "", status: "running", startedAt: d.ts } };
 		state.userBashOrder = [...state.userBashOrder, d.id];
@@ -837,15 +864,42 @@ function refreshSessionsSoon() {
 	sessionsTimer = setTimeout(reloadActiveChats, 400);
 }
 
-function notifyFinished(run, snap) {
-	if (!state.view.notify || document.visibilityState === "visible") return;
-	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+/** One notification per chat: a later one about the same chat replaces the earlier one, in every open tab. */
+const taskTag = (slot) => `myharness-task-${slot}`;
+/** Chats whose task end the desktop notification (notifyTaskEnd) has already announced, until their next run starts. */
+const announced = new Set();
+/** The chat a notification is about: its name, else its first message, else its workspace. */
+function chatLabel(slot) {
+	const info = state.slots.find((s) => s.slot === slot);
+	return state.snap?.session?.name || (info?.name || info?.firstMessage ? chatTitle(info) : "") || state.snap?.workspace?.name || "";
+}
+
+/** "Browser notification when a task ends" (Appearance): this browser's own, and only while the tab is in the background. */
+function notifyFinished(run, slot) {
+	if (!state.view.notify || document.visibilityState === "visible" || announced.has(slot)) return;
 	const titles = { completed: N_("Task completed"), partial: N_("Task partially completed"), failed: N_("Task failed"), cancelled: N_("Task cancelled") };
-	try {
-		new Notification(`MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, { body: snap?.session?.name || snap?.workspace?.name || "" });
-	} catch {
-		// Notifications are optional.
-	}
+	showNotification({ title: `MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, body: chatLabel(slot), tag: taskTag(slot), onClick: () => activateSlot(slot) });
+}
+
+const TASK_END_TITLE ={ completed: N_("Task completed"), failed: N_("Task failed"), blocked: N_("Task failed"), timed_out: N_("Task timed out"), cancelled: N_("Task cancelled"), interrupted: N_("Task interrupted") };
+
+/**
+ * "Desktop popup when a task ends" (Settings → Safety & privacy, shared with the terminal UI): the server sends this when
+ * a task completed, failed or was interrupted and the setting is on. The page shows a browser notification and tells
+ * the server whether it could: without the browser's permission the server shows the system popup instead (see
+ * WebHost.announceTaskEnd), so the notification appears either way.
+ */
+function notifyTaskEnd(d, slot) {
+	announced.add(slot);
+	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 240) : "";
+	const took = d.startedAt && d.endedAt - d.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(d.endedAt - d.startedAt) }) : "";
+	const shown = showNotification({
+		title: `MyHarness · ${t(TASK_END_TITLE[d.state] || N_("Task finished"))}`,
+		body: [chatLabel(slot), error, took].filter(Boolean).join("\n"),
+		tag: taskTag(slot),
+		onClick: () => activateSlot(slot),
+	});
+	post("/api/notifications/answer", { id: d.id, shown }, slot).catch(() => {});
 }
 
 export async function loadProviders() {

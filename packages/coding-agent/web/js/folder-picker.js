@@ -197,7 +197,7 @@ export function FolderPicker({ onClose, onPick, title, subtitle, confirmLabel, i
 					</div>
 					<div class="fp-tools">
 						<button class="btn sm ghost" disabled=${!pathNow} onClick=${() => setCreating({ name: "" })}><${Icon} name="folderPlus" size=${14} />${t("New folder")}</button>
-						<label class="row dim fp-hidden"><input type="checkbox" checked=${showHidden} onChange=${(e) => setShowHidden(e.target.checked)} />${t("Show hidden folders")}</label>
+						<label class="check-label sm dim"><input type="checkbox" checked=${showHidden} onChange=${(e) => setShowHidden(e.target.checked)} />${t("Show hidden folders")}</label>
 						<span class="grow" />
 						<span class="dim">${t("{n} folders", { n: rows.length })}</span>
 					</div>

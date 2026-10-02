@@ -12,43 +12,45 @@
 .composer-input { width: 100%; min-height: 44px; max-height: 260px; resize: none; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; }
 .composer-input::placeholder { color: var(--text-4); }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
-.composer-bar .icon-btn { width: 30px; height: 30px; }
+.composer-bar .icon-btn { width: var(--h-control-sm); height: var(--h-control-sm); }
 
 /* Model and thinking effort: plain text with a small chevron, no decoration in front. */
-.chip { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-control-sm); padding: 0 6px 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); line-height: 20px; max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
 .chip:hover, .chip[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
 .chip:hover .chev, .chip[aria-expanded="true"] .chev { color: var(--text-2); }
-.chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip-effort { color: var(--text-3); }
+.chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 .picker-anchor { display: inline-flex; }
 
 .send { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-active); color: var(--text-3); transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast); }
 .send.ready { background: var(--accent); color: var(--on-accent); }
 .send.ready:hover { background: var(--accent-strong); }
 .send.ready:active { transform: scale(0.94); }
-.send:disabled { opacity: 0.55; }
+.send:disabled { opacity: var(--disabled-opacity); }
 .send.stop { background: var(--text); color: var(--bg-panel); }
+.send.stop svg { fill: currentColor; }
 .send.stop:hover { background: var(--text-2); }
 
-.meter { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+/* Context use: one of the bar's text controls. It has the height, type size and line box of the chips beside it, so its
+   ring is on the centre line of the other icons and its number on the baseline of the other texts. */
+.meter { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control-sm); padding: 0 8px; border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-md); line-height: 20px; font-variant-numeric: tabular-nums; }
 .meter:hover { background: var(--surface-hover); color: var(--text); }
 .meter.warn { color: var(--warn); } .meter.danger { color: var(--danger); }
 
 .attachments { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0 6px; }
 .thumb { position: relative; width: 56px; height: 56px; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--border-strong); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--r-md); border: 1px solid var(--border-strong); }
 .thumb-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); }
 .thumb-x:hover { color: var(--danger); }
 
 /* Where the task runs (folder, branch, worktree, trust): small chips just above the input card. */
 .composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }
 .composer-env:empty { display: none; }
-.env-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; min-width: 0; max-width: 55%; flex: 0 1 auto; border-radius: 11px; border: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); }
+.env-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; min-width: 0; max-width: 55%; flex: 0 1 auto; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); }
 button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .env-chip > svg { flex: none; }
 .env-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .env-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
-.widget { margin: 0; padding: 6px 10px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
+.widget { margin: 0; padding: 6px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */
 .suggest { position: absolute; left: 6px; right: 6px; bottom: calc(100% + 6px); max-height: 300px; overflow-y: auto; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; z-index: 20; }
@@ -66,7 +68,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip-line { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; }
 .strip-line > svg { flex: none; }
 .strip-title { font-weight: 600; flex: none; }
-.strip-hash { flex: none; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--fs-xs); }
+.strip-hash { flex: none; padding: 0 5px; border-radius: var(--r-xs); background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--fs-xs); }
 .strip-detail { min-width: 0; color: var(--text-2); }
 .strip-lines { margin: 0 12px 8px; padding: 8px 10px; max-height: 180px; overflow: auto; background: var(--code-bg); border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .strip.git-result.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
@@ -76,7 +78,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip.git-result .link-btn { flex: none; white-space: nowrap; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .strip.git-result .icon-btn { color: inherit; opacity: 0.8; }
 .strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
+.queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 12px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
 .queue-head .link-btn { margin-left: auto; }
 .queue-item { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
@@ -101,7 +103,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .pop-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 2px 8px; border-radius: var(--r-xs); text-align: left; color: var(--text-2); font-size: 12.5px; }
 .pop-item:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .pop-item.active { color: var(--text); background: var(--surface-select); }
-.pop-item:disabled { opacity: 0.5; }
+.pop-item:disabled { opacity: var(--disabled-opacity); }
 .pop-item .dim { font-size: var(--fs-xs); }
 .pop-meta { font-size: var(--fs-xs) !important; }
 .pop-foot { display: flex; justify-content: space-between; padding: 4px 8px 2px; border-top: 1px solid var(--border); margin-top: 3px; font-size: var(--fs-xs); }
@@ -119,7 +121,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .model-row-check { color: var(--accent); flex: none; }
 .model-ref { display: flex; gap: 6px; min-width: 0; }
 .model-ref-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--text); cursor: pointer; }
-.model-ref-btn:disabled { opacity: 0.5; cursor: default; }
+.model-ref-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .model-ref-effort { display: inline-flex; align-items: center; flex: none; max-width: 112px; color: var(--text); cursor: pointer; }
 
 /* Thinking effort. Top line: the name and the level in use. Second line: what the two ends mean. Then the slider: a
@@ -127,7 +129,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
    by the thumb's radius, so the thumb at either end lines up with the edges of the two text lines above it. */
 .popover.effort-pop { padding: 12px 14px; animation-name: fade-only; overflow: visible; }
 .effort { display: flex; flex-direction: column; }
-.effort.disabled { opacity: 0.55; }
+.effort.disabled { opacity: var(--disabled-opacity); }
 .effort-head, .effort-ends { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; line-height: 18px; }
 .effort-head { font-size: var(--fs-md); }
 .effort-head.alone { justify-content: center; font-size: 18px; line-height: 26px; }
@@ -137,7 +139,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .effort-ends { margin-top: 8px; font-size: var(--fs-sm); color: var(--text-3); }
 .effort-track { margin-top: 2px; padding: 9px 8px; border-radius: var(--r-sm); cursor: pointer; outline: none; touch-action: none; }
 .effort.disabled .effort-track { cursor: default; }
-.effort-rail { position: relative; height: 4px; border-radius: 2px; background: var(--surface-active); }
+.effort-rail { position: relative; height: 4px; border-radius: var(--r-pill); background: var(--surface-active); }
 .effort-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-4); }
 .effort-thumb { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); border: 3px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--border-strong); transition: left var(--t-base) var(--ease); }
 .effort-track:focus .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
@@ -149,13 +151,13 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .menu-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 2px 8px; border-radius: var(--r-xs); text-align: left; color: var(--text-2); font-size: 12.5px; }
 .menu-item:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .menu-item.danger { color: var(--danger); }
-.menu-item:disabled { opacity: 0.45; }
+.menu-item:disabled { opacity: var(--disabled-opacity); }
 .menu-icon-gap { width: 15px; }
 .menu-label { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .menu-sub { font-size: var(--fs-xs); color: var(--text-3); }
 .menu-hint { font-size: var(--fs-xs); color: var(--text-3); }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
-.menu-wrap { position: relative; }
+.menu-wrap { position: relative; display: inline-flex; }
 
 /* Inline command panel: /settings, /model, /git … open here, above the input, and are driven from the keyboard. */
 .cp { display: flex; flex-direction: column; width: 100%; margin-inline: auto; max-height: min(460px, 52vh); background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); overflow: hidden; }
@@ -182,7 +184,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 /* One line per row: icon and name, the description beside the name in a weaker colour, the value or switch at the end. */
 .cp-row { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: var(--r-xs); color: var(--text-2); font-size: 12.5px; line-height: 1.2; cursor: pointer; }
 .cp-row.sel { background: var(--surface-active); color: var(--text); }
-.cp-row.disabled { opacity: 0.45; cursor: default; }
+.cp-row.disabled { opacity: var(--disabled-opacity); cursor: default; }
 .cp-row.danger { color: var(--danger); }
 .cp-ico { width: 14px; flex: none; display: grid; place-items: center; color: var(--text-3); }
 .cp-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1 1 auto; }
@@ -197,10 +199,6 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .cp-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 4px; font-size: var(--fs-xs); }
 .cp-body .git-lines { max-height: 150px; }
 .cp-foot { flex: none; padding: 7px 12px 8px; border-top: 1px solid var(--border); text-align: center; font-size: var(--fs-xs); }
-.cp-switch { width: 28px; height: 16px; border-radius: 8px; background: var(--border-strong); position: relative; flex: none; transition: background var(--t-fast) var(--ease); }
-.cp-switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-raised); transition: transform var(--t-fast) var(--ease); }
-.cp-switch.on { background: var(--accent); }
-.cp-switch.on i { transform: translateX(12px); }
 .cp-input { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
 .cp-screen > .inline-frame { overflow-y: auto; min-height: 0; padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
 .inline-frame .modal-body { display: flex; flex-direction: column; gap: 10px; }

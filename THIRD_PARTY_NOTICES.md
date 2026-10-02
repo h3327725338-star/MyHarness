@@ -19,7 +19,18 @@ material they cover:
   Miller; `LICENSE.htm`) as unmodified ES module builds, except that the bare
   `preact` import in `preact-hooks.js` is rewritten to a relative path so the
   page needs no import map. The Web UI also loads the `marked` and
-  `highlight.js` files listed above.
+  `highlight.js` files listed above. The same directory contains xterm.js
+  6.0.0 (`xterm.js`, `xterm.css`; MIT, The xterm.js authors, SourceLair
+  Private Company and Christopher Jeffrey; `LICENSE.xterm`) and its fit addon
+  0.11.0 (`xterm-addon-fit.js`; MIT, The xterm.js authors;
+  `LICENSE.xterm-addon-fit`), which draw the Terminal panel. They are the
+  packages' ES module builds and stylesheet, unmodified except that the
+  trailing source-map reference of the two scripts is removed (the maps are
+  not shipped).
+- The Terminal panel's pseudo terminal is the optional npm dependency
+  `@lydell/node-pty` (MIT; Christopher Jeffrey, Daniel Imms and Microsoft
+  Corporation), a repackaging of node-pty with prebuilt binaries. It is
+  installed from the npm registry and not copied into this source tree.
 - `packages/agent/src/harness/compaction/CODEX-NOTICE.md` and
   `CODEX-LICENSE` identify the adapted OpenAI Codex source and its Apache-2.0
   terms.

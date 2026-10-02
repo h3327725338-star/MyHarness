@@ -86,7 +86,7 @@ function DialogBar({ dialog }) {
 			: dialog.kind === "select"
 				? html`<div class="dialog-options">${dialog.options.map((option, i) => html`<button class=${`btn sm ${pick === i ? "kbd-sel" : ""}`} tabindex="-1" key=${option} onClick=${() => answer(option)} onMouseMove=${() => setPick(i)}>${i < 9 ? html`<span class="dim">${i + 1}</span> ` : null}${option}</button>`)}<button class=${`btn sm ghost ${pick === dialog.options.length ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(undefined)} onMouseMove=${() => setPick(dialog.options.length)}>${t("Cancel")}</button></div><div class="dialog-keys dim">${t("↑/↓ choose · Enter answer · 1-9 pick · Esc cancel · Alt+A focus here")}</div>`
 				: dialog.kind === "input"
-					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field grow" autofocus value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
+					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field sm grow" autofocus value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
 					: html`<div class="dialog-editor"><textarea class="field" rows="6" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} /><div class="dialog-actions"><button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" onClick=${() => answer(value)}>${t("Submit")}</button></div></div>`}
 	</div>`;
 }
@@ -509,7 +509,7 @@ export function Composer() {
 					<${MainEffortPicker} />
 					<${ContextMeter} />
 					${showStop
-						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} style="fill:currentColor" /></button>`
+						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
 						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => send()} title=${active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>
