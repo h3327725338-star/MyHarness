@@ -40,7 +40,10 @@ export function collectSessionUsageStats(
 		if (Number.isFinite(cost) && cost > 0) costByCurrency[currency] = (costByCurrency[currency] ?? 0) + cost;
 	};
 
-	const withLive = liveMessage ? [...entries, { type: "message" as const, message: liveMessage }] : entries;
+	const alreadyStored =
+		liveMessage && entries.some((entry) => entry.type === "message" && entry.message === liveMessage);
+	const withLive =
+		liveMessage && !alreadyStored ? [...entries, { type: "message" as const, message: liveMessage }] : entries;
 	for (const entry of withLive) {
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			addUsageToTotals(usageTotals, entry.usage);
@@ -85,7 +88,8 @@ export function collectSessionUsageStats(
 			cacheWrite: usageTotals.cacheWrite,
 			total: usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite,
 		},
-		cost: usageTotals.cost,
+		// The legacy scalar is USD only; never add different currencies or return stale stored prices.
+		cost: costByCurrency.USD ?? 0,
 		costByCurrency,
 	};
 }

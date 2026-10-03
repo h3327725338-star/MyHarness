@@ -156,6 +156,9 @@ export class WebHttpServer {
 
 	async listen(port: number, host = "127.0.0.1"): Promise<AddressInfo> {
 		const server = createServer((req, res) => {
+			// Socket errors during reload are transport failures, not process failures.
+			req.on("error", () => res.destroy());
+			res.on("error", () => res.destroy());
 			void this.handle(req, res).catch((error) => {
 				this.writeError(res, error);
 			});
@@ -228,7 +231,7 @@ export class WebHttpServer {
 		const method = req.method ?? "GET";
 
 		if (method === "GET" && url.pathname === "/api/events") {
-			this.openSse(req, res);
+			this.openSse(res);
 			return;
 		}
 
@@ -257,7 +260,7 @@ export class WebHttpServer {
 		this.serveStatic(url.pathname, res, method === "HEAD");
 	}
 
-	private openSse(req: IncomingMessage, res: ServerResponse): void {
+	private openSse(res: ServerResponse): void {
 		res.writeHead(200, {
 			"content-type": "text/event-stream; charset=utf-8",
 			"cache-control": "no-store",
@@ -268,18 +271,20 @@ export class WebHttpServer {
 		const id = this.nextClientId++;
 		this.sseClients.set(id, res);
 		this.hadClient = true;
-		this.onClientCountChange?.(this.sseClients.size);
 		const client: SseClient = {
 			id,
 			send: (event, data) => {
-				res.write(this.frame(event, data));
+				if (!res.destroyed && !res.writableEnded) res.write(this.frame(event, data));
 			},
 			close: () => res.end(),
 		};
-		req.on("close", () => {
-			if (this.sseClients.delete(id)) this.onClientCountChange?.(this.sseClients.size);
+		// IncomingMessage.close means the GET request completed, not that the SSE response disconnected.
+		res.once("close", () => {
+			if (!this.sseClients.delete(id)) return;
+			this.onClientCountChange?.(this.sseClients.size);
 			this.onSseDisconnect?.(client);
 		});
+		this.onClientCountChange?.(this.sseClients.size);
 		this.onSseConnect?.(client);
 	}
 
@@ -330,10 +335,14 @@ export class WebHttpServer {
 			res.end();
 			return;
 		}
-		createReadStream(file).pipe(res);
+		const stream = createReadStream(file);
+		stream.on("error", (error) => res.destroy(error));
+		res.once("close", () => stream.destroy());
+		stream.pipe(res);
 	}
 
 	private writeJson(res: ServerResponse, status: number, body: unknown): void {
+		if (res.destroyed || res.writableEnded) return;
 		const text = JSON.stringify(body);
 		res.writeHead(status, {
 			"content-type": "application/json; charset=utf-8",
@@ -344,6 +353,7 @@ export class WebHttpServer {
 	}
 
 	private writeError(res: ServerResponse, error: unknown): void {
+		if (res.destroyed || res.writableEnded) return;
 		if (res.headersSent) {
 			try {
 				res.end();

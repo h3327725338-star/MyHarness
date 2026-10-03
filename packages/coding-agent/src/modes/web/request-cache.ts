@@ -6,13 +6,12 @@
  * Only what the provider reports is used. Usage is already normalised per protocol (`input` = tokens that were not
  * served from the cache, `cacheRead` = tokens read from the cache, `cacheWrite` = tokens written to it), so the rate is
  * cacheRead / (input + cacheRead + cacheWrite) for every protocol. A provider that never reports any cache use cannot be
- * told apart from one that reports zero, so a request without cache tokens only counts as a real 0% once the session
- * has seen cache use before; otherwise it is `unavailable`, never an invented 0%.
+ * told apart from one that reports zero in older sessions. New responses preserve explicit cache counters through
+ * `cacheReported`, so a measured zero is valid even on the first request; absent counters remain unavailable.
  *
  * Providers that report their usage only in the last chunk of the reply (the OpenAI-compatible ones) have nothing to
- * show while the reply streams. For them the rate is predicted from the request itself: providers cache by prefix, and
- * a request is the previous one plus what came after it, so about the whole previous prompt should be read from the
- * cache. That number is marked `estimated` and is replaced by the provider's own as soon as it arrives.
+ * show while the reply streams. The Web host now waits for measured usage rather than predicting cache hits.
+ * Prediction helpers remain for compatibility, but are not used for the live Web UI.
  */
 
 import type { AgentMessage } from "@myharness/agent-core";
@@ -39,6 +38,7 @@ interface Usage {
 	input: number;
 	read: number;
 	write: number;
+	reported: boolean;
 }
 
 function usageOf(message: AgentMessage): Usage | undefined {
@@ -46,7 +46,12 @@ function usageOf(message: AgentMessage): Usage | undefined {
 	const usage = message.usage;
 	if (!usage) return undefined;
 	const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
-	return { input: number(usage.input), read: number(usage.cacheRead), write: number(usage.cacheWrite) };
+	return {
+		input: number(usage.input),
+		read: number(usage.cacheRead),
+		write: number(usage.cacheWrite),
+		reported: usage.cacheReported === true,
+	};
 }
 
 /** Prompts shorter than this are not cached by the providers that have a minimum (1024 tokens). */
@@ -121,7 +126,7 @@ export class RequestCacheMeter {
 		if (!usage) return false;
 		const prompt = usage.input + usage.read + usage.write;
 		if (prompt <= 0) return false;
-		if (usage.read + usage.write > 0) this.reported = true;
+		if (usage.reported || usage.read + usage.write > 0) this.reported = true;
 		// Without any reported cache use the number would be a guess: wait for the end of the request to say so.
 		if (!this.reported) return false;
 		const next: RequestCacheHit = {
@@ -151,7 +156,7 @@ export class RequestCacheMeter {
 			this.value = UNAVAILABLE;
 			return this.value;
 		}
-		if (usage.read + usage.write > 0) this.reported = true;
+		if (usage.reported || usage.read + usage.write > 0) this.reported = true;
 		this.value = this.reported
 			? { state: "final", hitRate: usage.read / prompt, read: usage.read, write: usage.write, input: prompt }
 			: UNAVAILABLE;

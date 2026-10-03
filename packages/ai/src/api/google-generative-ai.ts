@@ -218,6 +218,7 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 
 				if (chunk.usageMetadata) {
 					output.usage = {
+						cacheReported: chunk.usageMetadata.cachedContentTokenCount !== undefined,
 						input:
 							(chunk.usageMetadata.promptTokenCount || 0) - (chunk.usageMetadata.cachedContentTokenCount || 0),
 						output:

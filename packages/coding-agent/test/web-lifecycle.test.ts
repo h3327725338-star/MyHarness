@@ -81,20 +81,52 @@ describe("Web UI lifecycle", () => {
 		h.lifecycle.clientCountChanged(1);
 		h.setGrace(3);
 		h.lifecycle.clientCountChanged(0);
-		h.advance(3_000);
+		h.advance(4_999);
+		expect(h.expired).toBe(0);
+		h.advance(1);
 		expect(h.expired).toBe(1);
 	});
 
-	it.each([0, 1, 2, 3006])("supports a %i second delay without a minimum clamp", (seconds) => {
+	it.each([0, 1, 2, 3006])("allows reconnects with a %i second configured delay", (seconds) => {
 		const h = harness(seconds);
 		h.lifecycle.clientCountChanged(1);
 		h.lifecycle.clientCountChanged(0);
-		if (seconds > 0) {
-			h.advance(seconds * 1000 - 1);
-			expect(h.expired).toBe(0);
-			h.advance(1);
-		} else h.advance(0);
+		h.advance(Math.max(5000, seconds * 1000) - 1);
+		expect(h.expired).toBe(0);
+		h.advance(1);
 		expect(h.expired).toBe(1);
+	});
+
+	it("does not extend the deadline for duplicate disconnect notifications", () => {
+		const h = harness(10);
+		h.lifecycle.clientCountChanged(1);
+		h.lifecycle.clientCountChanged(0);
+		h.advance(9000);
+		h.lifecycle.clientCountChanged(0);
+		h.advance(1000);
+		expect(h.expired).toBe(1);
+	});
+
+	it("cancels stale callbacks even if they have already been queued", () => {
+		const callbacks: Array<() => void> = [];
+		let expired = 0;
+		const lifecycle = new WebLifecycle({
+			getGraceSeconds: () => 0,
+			onExpire: () => expired++,
+			setTimer: (run) => {
+				callbacks.push(run);
+				return callbacks.length;
+			},
+			clearTimer: () => {},
+		});
+		lifecycle.clientCountChanged(1);
+		lifecycle.clientCountChanged(0);
+		lifecycle.clientCountChanged(1);
+		lifecycle.clientCountChanged(0);
+		callbacks[0]!();
+		expect(expired).toBe(0);
+		callbacks[1]!();
+		expect(expired).toBe(1);
 	});
 
 	it("stops counting after dispose", () => {

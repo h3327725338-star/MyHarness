@@ -1211,14 +1211,19 @@ function parseChunkUsage(
 		prompt_tokens?: number;
 		completion_tokens?: number;
 		prompt_cache_hit_tokens?: number;
+		prompt_cache_miss_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
 		completion_tokens_details?: { reasoning_tokens?: number };
 	},
 	model: Model<"openai-completions">,
 ): AssistantMessage["usage"] {
-	const promptTokens = rawUsage.prompt_tokens || 0;
-	const cacheReadTokens = rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-	const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
+	const count = (value: unknown): number =>
+		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+	const cacheReadTokens = count(rawUsage.prompt_cache_hit_tokens ?? rawUsage.prompt_tokens_details?.cached_tokens);
+	const cacheWriteTokens = count(rawUsage.prompt_tokens_details?.cache_write_tokens);
+	const promptTokens = count(
+		rawUsage.prompt_tokens ?? count(rawUsage.prompt_cache_miss_tokens) + cacheReadTokens + cacheWriteTokens,
+	);
 
 	// Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
 	// tokens (hits). OpenAI does not document or emit cache_write_tokens, but
@@ -1230,13 +1235,18 @@ function parseChunkUsage(
 	// https://github.com/antirez/ds4/pull/29
 	const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
 	// OpenAI completion_tokens already includes reasoning_tokens.
-	const outputTokens = rawUsage.completion_tokens || 0;
+	const outputTokens = count(rawUsage.completion_tokens);
 	const usage: AssistantMessage["usage"] = {
+		cacheReported:
+			rawUsage.prompt_cache_hit_tokens !== undefined ||
+			rawUsage.prompt_cache_miss_tokens !== undefined ||
+			rawUsage.prompt_tokens_details?.cached_tokens !== undefined ||
+			rawUsage.prompt_tokens_details?.cache_write_tokens !== undefined,
 		input,
 		output: outputTokens,
 		cacheRead: cacheReadTokens,
 		cacheWrite: cacheWriteTokens,
-		reasoning: rawUsage.completion_tokens_details?.reasoning_tokens || 0,
+		reasoning: count(rawUsage.completion_tokens_details?.reasoning_tokens),
 		totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};

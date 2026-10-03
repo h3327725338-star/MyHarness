@@ -171,15 +171,21 @@ export async function runWebMode(
 		shuttingDown = true;
 		lifecycle.dispose();
 		server.broadcast("shutdown", {});
-		dialogs.dismissAll();
-		terminals.dispose();
 		try {
+			dialogs.dismissAll();
+			terminals.dispose();
 			await hub.dispose();
 		} catch (error) {
 			console.error(`Shutdown error: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			try {
+				await server.close();
+			} catch (error) {
+				console.error(`Server close error: ${error instanceof Error ? error.message : String(error)}`);
+				code = 1;
+			}
+			resolveExit(code);
 		}
-		await server.close();
-		resolveExit(code);
 	};
 	server.route("POST", "/api/shutdown", () => {
 		setTimeout(() => void shutdown(0), 50);

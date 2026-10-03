@@ -399,7 +399,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					"After the last browser page of this Web UI closes, MyHarness waits this long before it stops the local server. Reloading or reopening the page within that time keeps it running. Applies the next time the last page closes.",
 				type: "number",
 				value: s.getWebShutdownGraceSeconds(),
-				// Zero stops immediately; a short delay can also expire during a page reload.
+				// Lifecycle keeps a minimum 5s reconnect buffer, even when configured as zero.
 				min: 0,
 				max: 3600,
 				unit: "seconds",

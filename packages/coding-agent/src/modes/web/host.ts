@@ -40,7 +40,7 @@ import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
-import { predictCacheHit, RequestCacheMeter } from "./request-cache.ts";
+import { RequestCacheMeter } from "./request-cache.ts";
 import {
 	entriesToWire,
 	messageToWire,
@@ -820,7 +820,7 @@ export class WebHost {
 	private beginRequestMeters(): void {
 		const totals = this.session.getSessionStats().tokens;
 		if (this.speed.start()) this.broadcast("generation_speed", { speed: this.speed.current });
-		if (this.cache.start(totals.cacheRead + totals.cacheWrite > 0, predictCacheHit(this.session.messages))) {
+		if (this.cache.start(totals.cacheRead + totals.cacheWrite > 0)) {
 			this.broadcast("cache_hit", { cache: this.cache.current });
 		}
 	}

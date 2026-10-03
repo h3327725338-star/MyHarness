@@ -115,6 +115,15 @@ describe("Web UI: cache hit of a request", () => {
 		});
 	});
 
+	it("shows a measured zero on the first request when the API explicitly reports zero cache hits", () => {
+		const meter = new RequestCacheMeter();
+		meter.start(false);
+		const message = withInput(1000, 0);
+		message.usage.cacheReported = true;
+		expect(meter.update(message)).toBe(true);
+		expect(meter.end(message)).toEqual({ state: "final", hitRate: 0, input: 1000, read: 0, write: 0 });
+	});
+
 	it("never invents 0%: a provider that has reported no cache use gives no number", () => {
 		const meter = new RequestCacheMeter();
 		meter.start(false);

@@ -136,6 +136,29 @@ describe("WebHttpServer", () => {
 		expect(missing.status).toBe(404);
 	});
 
+	it("counts the SSE response lifetime rather than completion of the GET request", async () => {
+		const port = await start();
+		const counts: number[] = [];
+		server!.onClientCountChange = (count) => counts.push(count);
+		const req = request({ host: "127.0.0.1", port, path: "/api/events" });
+		req.on("error", () => {});
+		const response = new Promise<void>((resolve) =>
+			req.on("response", (res) => {
+				res.resume();
+				res.once("data", () => resolve());
+			}),
+		);
+		req.end();
+		await response;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(server!.clientCount).toBe(1);
+		expect(counts).toEqual([1]);
+		req.destroy();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(server!.clientCount).toBe(0);
+		expect(counts).toEqual([1, 0]);
+	});
+
 	it("broadcasts Server-Sent Events to connected clients", async () => {
 		const port = await start();
 		const received = await new Promise<string>((resolve, reject) => {

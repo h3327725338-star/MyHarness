@@ -23,6 +23,8 @@ export class WebLifecycle {
 	private timer: unknown;
 	private seenClient = false;
 	private expired = false;
+	private count = 0;
+	private generation = 0;
 
 	private readonly options: WebLifecycleOptions;
 
@@ -39,16 +41,20 @@ export class WebLifecycle {
 	/** Feed the current number of connected pages after every change. */
 	clientCountChanged(count: number): void {
 		if (this.expired) return;
+		this.count = count;
 		if (count > 0) {
 			this.seenClient = true;
 			this.cancel();
 			return;
 		}
-		if (!this.seenClient) return;
-		this.cancel();
-		const delayMs = Math.max(0, this.options.getGraceSeconds()) * 1000;
+		if (!this.seenClient || this.timer !== undefined) return;
+		// EventSource retries after 1.5s; even a zero exit delay must allow a reload to reconnect.
+		const seconds = this.options.getGraceSeconds();
+		const delayMs = Math.max(5_000, (Number.isFinite(seconds) ? Math.max(0, seconds) : 10) * 1000);
+		const generation = ++this.generation;
 		const start = this.options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
 		this.timer = start(() => {
+			if (this.expired || this.count > 0 || generation !== this.generation) return;
 			this.timer = undefined;
 			this.expired = true;
 			this.options.onExpire();
@@ -62,6 +68,7 @@ export class WebLifecycle {
 	}
 
 	private cancel(): void {
+		this.generation++;
 		if (this.timer === undefined) return;
 		(this.options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout)))(this.timer);
 		this.timer = undefined;

@@ -112,6 +112,43 @@ describe("openai-completions responseModel", () => {
 		expect(message.responseModel).toBeUndefined();
 	});
 
+	it.each([
+		{ prompt_tokens: 1000, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 },
+		{ prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 },
+		{ prompt_tokens: 1000, prompt_tokens_details: { cached_tokens: 800 } },
+	])("normalizes reported usage and bills cache hits separately: %j", async (usage) => {
+		mockState.chunks = [
+			{
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				usage: { ...usage, completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 40 } },
+			},
+		];
+		const model = openRouterAuto();
+		model.cost = { input: 2, output: 3, cacheRead: 0.2, cacheWrite: 2.5 };
+		const message = await complete(model, { messages: [] }, { apiKey: "test" });
+		expect(message.usage).toMatchObject({
+			input: 200,
+			cacheRead: 800,
+			output: 100,
+			reasoning: 40,
+			totalTokens: 1100,
+			cacheReported: true,
+		});
+		expect(message.usage.cost.total).toBeCloseTo(0.00086);
+	});
+
+	it("distinguishes explicit zero cache counters from absent counters", async () => {
+		mockState.chunks = [
+			{
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				usage: { prompt_tokens: 100, completion_tokens: 10, prompt_cache_hit_tokens: 0 },
+			},
+		];
+		const message = await complete(openRouterAuto(), { messages: [] }, { apiKey: "test" });
+		expect(message.usage.cacheReported).toBe(true);
+		expect(message.usage.input).toBe(100);
+	});
+
 	it("ignores empty or missing chunk.model", async () => {
 		mockState.chunks = [
 			{ id: "chatcmpl-3", choices: [{ index: 0, delta: { content: "hi" } }] },

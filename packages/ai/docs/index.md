@@ -31,6 +31,12 @@
 - [后续开发](roadmap.md)：Provider/API/auth 的候选方向。
 - [Coding Agent Provider 文档](../../coding-agent/docs/providers.md)：产品层配置和模型运行时。
 
+## Usage 统计约定
+
+`Usage.input` 是不含缓存命中与缓存写入的普通输入；总输入为 `input + cacheRead + cacheWrite`。OpenAI 兼容接口的 `prompt_tokens` 已含缓存，DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 分别表示命中与未命中，不能再把命中加到完整 prompt 上。`output` 已含报告的 reasoning Token，费用不再次加上 reasoning。
+
+可选的 `Usage.cacheReported` 表示接口明确返回了缓存计数（包括零）；缺省仍兼容旧 Session，不能将缺少字段当作实测零。费用按当前模型配置的每百万 Token 单价、每次请求的完整输入阶梯计算，不使用 Session 累计输入判阶梯。
+
 ## 运行时证据
 
 源码和 package manifest 可以证明导出与静态行为；不能单独证明外部 API、OAuth、网络 model refresh 或真实请求成功。此类结论必须附实际运行日志/测试结果，并脱敏。

@@ -567,6 +567,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// This ensures we have input token counts even if the stream is aborted early
 					output.usage.input = event.message.usage.input_tokens || 0;
 					output.usage.output = event.message.usage.output_tokens || 0;
+					output.usage.cacheReported =
+						event.message.usage.cache_read_input_tokens != null ||
+						event.message.usage.cache_creation_input_tokens != null;
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
 					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
 					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;

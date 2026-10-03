@@ -435,6 +435,8 @@ export interface ToolCall {
 }
 
 export interface Usage {
+	/** Whether the response explicitly reported cache counters (including zero). Absent in older sessions. */
+	cacheReported?: boolean;
 	input: number;
 	output: number;
 	cacheRead: number;

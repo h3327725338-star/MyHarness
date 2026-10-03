@@ -52,6 +52,14 @@ describe("custom model pricing in session statistics", () => {
 		expect(stats.costByCurrency).toEqual({ CNY: 0.0087, USD: 0.0087 });
 		expect(stats.tokens.input).toBe(10000);
 	});
+	it("returns recalculated USD cost and does not count a persisted live message twice", () => {
+		const usd = { ...model, cost: { ...model.cost, currency: "USD" as const } };
+		const stored = message(5000);
+		const stats = collectSessionUsageStats(entries(stored), () => usd, stored);
+		expect(stats.assistantMessages).toBe(1);
+		expect(stats.cost).toBeCloseTo(0.0087);
+		expect(stats.tokens.total).toBe(11000);
+	});
 	it("retains legacy reported costs when the model is unavailable", () => {
 		const legacy = message(10);
 		legacy.usage.cost.total = 0.5;
