@@ -6,8 +6,8 @@
  * first token, the input phase and tool execution are never counted.
  *
  * Every model request goes through the same states (`RequestMeterState`):
- * - `detecting`: the request has started and no reliable number exists yet. The value of the previous request is gone;
- *   it is never shown as if it belonged to this one.
+ * - `detecting`: no reliable measurement has been obtained yet. A previous measurement remains final until
+ *   a new request has a replacement; it is never marked live for the new request.
  * - `live`: the speed over the last second or so of streaming, updated with every streamed piece. The token count
  *   is the one the provider reports progressively; a provider that reports usage only at the end gets a count
  *   estimated from the streamed text (about 4 characters per token, 0.7 token per CJK character), flagged
@@ -94,9 +94,14 @@ export class GenerationSpeedMeter {
 		return this.value;
 	}
 
-	/** A model request starts: whatever was shown belonged to the previous request, so the state goes back to `detecting`. Returns true when the shown value changed. */
+	/** Reset timing for a new request; retain the last final value until a replacement is measured. */
 	start(): boolean {
 		this.reset();
+		if (this.value?.tps != null) {
+			const changed = this.value.state !== "final" || this.value.live;
+			this.value = { ...this.value, state: "final", live: false };
+			return changed;
+		}
 		const changed = this.value?.state !== "detecting";
 		this.value = DETECTING;
 		return changed;
@@ -110,7 +115,7 @@ export class GenerationSpeedMeter {
 		if (this.firstOutputAt === undefined && eventType && OUTPUT_EVENTS.has(eventType)) {
 			this.firstOutputAt = at;
 			this.samples = [{ at, output: 0 }];
-			if (this.value?.state !== "detecting") {
+			if (this.value?.tps == null && this.value?.state !== "detecting") {
 				this.value = DETECTING;
 				changed = true;
 			}
@@ -155,7 +160,7 @@ export class GenerationSpeedMeter {
 		if (message.role !== "assistant") return this.value;
 		if (this.firstOutputAt === undefined) {
 			// Nothing was streamed: there is no reliable duration.
-			this.value = UNAVAILABLE;
+			this.value = this.value?.tps != null ? { ...this.value, state: "final", live: false } : UNAVAILABLE;
 			this.reset();
 			return this.value;
 		}
@@ -177,7 +182,7 @@ export class GenerationSpeedMeter {
 				estimated: true,
 			};
 		} else {
-			this.value = UNAVAILABLE;
+			this.value = this.value?.tps != null ? { ...this.value, state: "final", live: false } : UNAVAILABLE;
 		}
 		this.reset();
 		return this.value;

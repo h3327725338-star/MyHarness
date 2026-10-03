@@ -1,10 +1,12 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
 import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows, Collapse } from "./ui.js";
-import { GENERAL_KEY, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
+
+import { shortcutFor } from "./shortcuts.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
@@ -62,6 +64,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 							${(close) => html`
 								<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startEdit())} />
 								<${MenuItem} icon="sparkle" label=${t("Generate title with AI")} disabled=${busy} onClick=${() => (close(), actions.renameSessionWithAi(info.path))} />
+								<${MenuItem} icon="folder" label=${info.archived ? t("Unarchive") : t("Archive")} disabled=${busy} onClick=${() => (close(), actions.archiveSession(info.path, !info.archived))} />
 								<${MenuSep} />
 								<${MenuItem} icon="trash" label=${t("Delete")} danger disabled=${busy} onClick=${() => (close(), actions.deleteSession(info.path, title))} />`}
 						<//>
@@ -74,7 +77,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
  */
-function Workspace({ workspace, general = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
+function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
@@ -96,7 +99,7 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 	}, [sessions, filter]);
 	if (filter && !list.length) return null;
 	const shown = showAll || filter ? list : list.slice(0, 12);
-	const reload = () => (general ? loadUnbound() : loadSessions(workspace.rootPath));
+	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
 	const create = () => (general ? actions.newSession(undefined, { unbound: true }) : actions.newSession(workspace.rootPath));
 	const toggle = () => {
 		setView({ expanded: { ...state.view.expanded, [workspace.rootPath]: !open } });
@@ -110,14 +113,14 @@ function Workspace({ workspace, general = false, error, isCurrent, open, session
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
-				<button class="icon-btn sm" title=${general ? t("New chat without a workspace") : t("New chat in this workspace")} aria-label=${general ? t("New chat without a workspace") : t("New chat in this workspace")} onClick=${create}><${Icon} name="plus" size=${15} /></button>
-				<${Menu} align="end" trigger=${({ toggle: tg }) => html`<button class="icon-btn sm" aria-label=${t("Workspace actions")} onClick=${tg}><${Icon} name="more" size=${15} /></button>`} width=${200}>
+				${!archived ? html`<button class="icon-btn sm" title=${general ? t("New chat without a workspace") : t("New chat in this workspace")} aria-label=${general ? t("New chat without a workspace") : t("New chat in this workspace")} onClick=${create}><${Icon} name="plus" size=${15} /></button>` : null}
+				${!archived ? html`<${Menu} align="end" trigger=${({ toggle: tg }) => html`<button class="icon-btn sm" aria-label=${t("Workspace actions")} onClick=${tg}><${Icon} name="more" size=${15} /></button>`} width=${200}>
 					${(close) => html`
 						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), create())} />
 						<${MenuItem} icon="refresh" label=${t("Reload chats")} onClick=${() => (close(), reload())} />
 						${general ? null : html`<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startRename())} /><${MenuSep} />
 						<${MenuItem} icon="x" label=${t("Remove from list")} danger onClick=${() => (close(), actions.removeWorkspace(workspace.id, workspace.name))} />`}`}
-				<//>
+				<//>` : null}
 			</span>
 		</div>
 		<div class=${`collapse ${showing ? "open" : ""}`} inert=${showing ? undefined : ""}>
@@ -147,7 +150,7 @@ function DraftChat({ info, present, renderRow }) {
 }
 
 function ChatRows({ items, renderRow }) {
-	const drafts = items.filter((info) => info.empty);
+	const drafts = items;
 	const [retained, setRetained] = useState(drafts);
 	useEffect(() => {
 		setRetained((old) => [...drafts, ...old.filter((info) => !drafts.some((item) => item.path === info.path) && !items.some((item) => item.path === info.path))]);
@@ -155,8 +158,7 @@ function ChatRows({ items, renderRow }) {
 		return () => clearTimeout(timer);
 	}, [items]);
 	const visible = [...drafts, ...retained.filter((info) => !items.some((item) => item.path === info.path))];
-	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${drafts.some((item) => item.path === info.path)} renderRow=${renderRow} />`)}
-		<${VirtualRows} items=${items.filter((info) => !info.empty)} rowHeight=${chatRowHeight()} renderRow=${renderRow} />`;
+	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${drafts.some((item) => item.path === info.path)} renderRow=${renderRow} />`)}`;
 }
 
 function AddWorkspaceDialog({ onClose }) {
@@ -169,6 +171,7 @@ function AddWorkspaceDialog({ onClose }) {
 
 export function Sidebar() {
 	const ws = useStore((s) => s.workspaces);
+	const shortcuts = useStore((s) => s.view.shortcuts);
 	const expanded = useStore((s) => s.view.expanded);
 	const currentWorkspace = useStore((s) => s.snap?.workspace?.id);
 	const currentWorkspaceRoot = useStore((s) => s.snap?.workspace?.rootPath);
@@ -199,7 +202,8 @@ export function Sidebar() {
 	// always be switched back to. That is a chat that runs or holds a first message, and also the chat on screen while it
 	// is still empty: a chat that was just created is the current row of the place it belongs to.
 	const unsaved = useMemo(() => {
-		const listable = (slot) => !!slot.sessionFile && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
+		const archivedPaths = new Set((ws.archived || []).map((info) => pathKey(info.path)));
+		const listable = (slot) => !!slot.sessionFile && !archivedPaths.has(pathKey(slot.sessionFile)) && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
 		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();
 		for (const slot of slots) {
@@ -214,17 +218,6 @@ export function Sidebar() {
 		return { byRoot, unbound };
 	}, [slots, ws, activeSlot]);
 	const unboundChats = useMemo(() => (ws.unbound === undefined ? undefined : [...unsaved.unbound, ...ws.unbound]), [unsaved, ws.unbound]);
-	useEffect(() => {
-		const onKey = (e) => {
-			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && e.shiftKey) {
-				e.preventDefault();
-				setView({ sidebarOpen: true });
-				searchRef.current?.focus();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, []);
 	const onWidth = (w) => {
 		state.view = { ...state.view, sidebarW: w };
 		document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
@@ -232,9 +225,9 @@ export function Sidebar() {
 	return html`<aside class="sidebar" aria-label=${t("Workspaces and chats")}>
 		<div class="sidebar-top">
 			<div class="brand"><span class="brand-mark"><${Icon} name="gitCommit" size=${14} sw=${2} /></span><span class="grow">MyHarness</span>
-				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (Ctrl+B)`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
-			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in No Folder (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">Ctrl+N</span></button>
-			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">Ctrl+K</span></button>
+				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
+			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in No Folder (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
+			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll">
@@ -246,6 +239,7 @@ export function Sidebar() {
 			})}
 			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
 			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
+			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${ws.archived?.map((info) => ({ ...info, archived: true }))} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} />
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>

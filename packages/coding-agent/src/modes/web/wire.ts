@@ -124,6 +124,7 @@ export type WireItem =
 	  };
 
 export interface WireModel {
+	cost?: Model<any>["cost"];
 	provider: string;
 	id: string;
 	name: string;
@@ -136,6 +137,7 @@ export interface WireModel {
 
 export function toWireModel(model: Model<any>): WireModel {
 	return {
+		cost: { ...model.cost, tiers: model.cost.tiers?.map((tier) => ({ ...tier })) },
 		provider: model.provider,
 		id: model.id,
 		name: model.name,

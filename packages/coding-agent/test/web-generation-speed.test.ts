@@ -26,7 +26,7 @@ describe("Web UI: generation speed", () => {
 		expect(meter.end(assistant(100))).toEqual({ state: "final", tps: 50, live: false, tokens: 100, ms: 2000 });
 	});
 
-	it("drops the previous request's number as soon as the next request starts", () => {
+	it("keeps the last measurement until the next request has a new value", () => {
 		let now = 0;
 		const meter = new GenerationSpeedMeter(() => now);
 		meter.start();
@@ -34,8 +34,8 @@ describe("Web UI: generation speed", () => {
 		now = 2000;
 		meter.end(assistant(100));
 		expect(meter.current?.tps).toBe(50);
-		expect(meter.start()).toBe(true);
-		expect(meter.current).toEqual({ state: "detecting", tps: null, live: true });
+		expect(meter.start()).toBe(false);
+		expect(meter.current).toEqual({ state: "final", tps: 50, live: false, tokens: 100, ms: 2000 });
 		// Asking again while nothing changed reports no change.
 		expect(meter.start()).toBe(false);
 	});
@@ -138,15 +138,15 @@ describe("Web UI: cache hit of a request", () => {
 		expect(meter.end(withInput(1000, 0))).toEqual({ state: "final", hitRate: 0, read: 0, write: 0, input: 1000 });
 	});
 
-	it("starts over for the next request and settles one that was stopped", () => {
+	it("retains measured cache use through an unmeasured request and interruption", () => {
 		const meter = new RequestCacheMeter();
 		meter.start(true);
 		meter.end(withInput(100, 900));
 		expect(meter.current?.hitRate).toBe(0.9);
 		meter.start(true);
-		expect(meter.current).toEqual({ state: "detecting", hitRate: null });
-		expect(meter.settle()).toBe(true);
-		expect(meter.current).toEqual({ state: "unavailable", hitRate: null });
+		expect(meter.current).toEqual({ state: "final", hitRate: 0.9, read: 900, write: 0, input: 1000 });
+		expect(meter.settle()).toBe(false);
+		expect(meter.end(withInput(0, 0))?.hitRate).toBe(0.9);
 		meter.start(true);
 		meter.update(withInput(100, 900));
 		expect(meter.settle()).toBe(true);

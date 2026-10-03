@@ -30,10 +30,8 @@ function sanitizeStatusText(text: string): string {
  */
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	if (count < 10000000) return `${(count / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
-	return `${Math.round(count / 1000000)}M`;
+	if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
+	return `${(count / 1000000).toFixed(1)}M`;
 }
 
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
@@ -252,13 +250,21 @@ export class FooterComponent implements Component {
 
 			if (availableForRight > 0) {
 				const visibleMainRight = truncateToWidth(rightSide, availableForRight, "");
-				const visibleVisionRight = truncateToWidth(visionRight, availableForRight, "");
+				const visibleVisionRight = truncateToWidth(
+					visionRight,
+					visionLeft
+						? availableForRight
+						: Math.max(availableForRight, Math.min(width, visionSettings.provider.length + 1)),
+					"",
+				);
 				const rightBlockWidth = Math.max(visibleWidth(visibleMainRight), visibleWidth(visibleVisionRight));
 				const rightBlockStart = width - rightBlockWidth;
 
 				const mainPadding = " ".repeat(Math.max(0, rightBlockStart - mainLeftWidth));
 				const visionPadding = " ".repeat(Math.max(0, rightBlockStart - visionLeftWidth));
-				lines[1] = theme.fg("dim", statsLeft) + theme.fg("dim", mainPadding + visibleMainRight);
+				lines[1] =
+					theme.fg("dim", truncateToWidth(statsLeft, rightBlockStart, "")) +
+					theme.fg("dim", mainPadding + visibleMainRight);
 				lines.push(theme.fg("dim", visionLeft) + theme.fg("dim", visionPadding + visibleVisionRight));
 			} else if (visionLeft) {
 				lines.push(theme.fg("dim", truncateToWidth(visionLeft, width, "...")));

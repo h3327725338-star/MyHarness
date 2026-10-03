@@ -15,6 +15,8 @@ import { CommandPalette } from "./palette.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
+import { eventShortcut, SHORTCUTS, shortcutFor } from "./shortcuts.js";
+
 const OUTCOME_UI = {
 	completed: { label: N_("Completed"), cls: "ok", icon: "checkCircle" },
 	partial: { label: N_("Partially completed"), cls: "warn", icon: "alertTriangle" },
@@ -63,7 +65,7 @@ function Header() {
 	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	return html`<header class="main-header">
-		${!sidebarOpen ? html`<button class="icon-btn" title=${t("Show sidebar (Ctrl+B)")} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
+		${!sidebarOpen ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
@@ -150,22 +152,19 @@ function BootDialogs({ dialogs }) {
 function useShortcuts() {
 	useEffect(() => {
 		const onKey = (e) => {
-			const mod = e.ctrlKey || e.metaKey;
-			if (!mod) return;
-			const key = e.key.toLowerCase();
-			if (key === "k") {
-				e.preventDefault();
-				setView({ palette: !state.view.palette });
-			} else if (key === "n" && !e.shiftKey) {
-				e.preventDefault();
-				actions.newChat();
-			} else if (key === "b") {
-				e.preventDefault();
-				setView({ sidebarOpen: !state.view.sidebarOpen });
-			} else if (key === ",") {
-				e.preventDefault();
-				setView({ settingsOpen: true });
-			}
+			if (e.defaultPrevented || e.target.closest?.(".xterm, [data-shortcut-editor]")) return;
+			const key = eventShortcut(e);
+			const item = SHORTCUTS.find((item) => shortcutFor(item.id, state.view.shortcuts) === key);
+			if (!item) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.repeat) return;
+			if (item.id === "palette") setView({ palette: !state.view.palette });
+			else if (item.id === "newChat") actions.newChat();
+			else if (item.id === "sidebar") setView({ sidebarOpen: !state.view.sidebarOpen });
+			else if (item.id === "settings") setView({ settingsOpen: true });
+			else if (item.id === "focus") document.querySelector(".composer-input")?.focus();
+			else if (item.id === "filter") { setView({ sidebarOpen: true }); document.querySelector(".sidebar-search input")?.focus(); }
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);

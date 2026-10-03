@@ -3,7 +3,8 @@
 // on the left and the control on the right.
 import { html, useEffect, useMemo, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitField, useDelayedBusy } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
-import { actions } from "./actions.js";
+import { actions, confirmDialog } from "./actions.js";
+import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
 import { clip, tokensToUnit, unitToTokens } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
@@ -25,6 +26,7 @@ export const NAV = [
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
+	{ id: "shortcuts", label: N_("Keyboard shortcuts"), icon: "gear" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
 export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
@@ -315,6 +317,32 @@ function LanguageModule({ module, progress, busy, open, onOpen, onInstall, onEna
 	</div>`;
 }
 
+function Shortcuts() {
+	const values = useStore((s) => s.view.shortcuts);
+	const [drafts, setDrafts] = useState({});
+	const [error, setError] = useState("");
+	const current = { ...values, ...drafts };
+	return html`<${Card} title=${t("Keyboard shortcuts")} description=${t("Focus a field and press Ctrl+Alt and a character key. Changes apply immediately.")}>
+		${SHORTCUTS.map((item) => {
+			const value = shortcutFor(item.id, current);
+			const conflict = shortcutConflict(item.id, value, current);
+			return html`<${Row} key=${item.id} label=${t(item.label)} description=${conflict}><input data-shortcut-editor class=${`field ${conflict ? "invalid" : ""}`} style=${conflict ? { borderColor: "var(--danger)", color: "var(--danger)" } : {}} readonly aria-invalid=${!!conflict} aria-label=${t(item.label)} value=${value} onKeyDown=${(event) => {
+				event.preventDefault(); event.stopPropagation();
+				const key = eventShortcut(event);
+				if (!key) return;
+				const next = { ...current, [item.id]: key };
+				const warning = shortcutConflict(item.id, key, next);
+				setDrafts((old) => ({ ...old, [item.id]: key }));
+				setError(warning);
+				if (warning) toast(warning, "warning");
+				else { setView({ shortcuts: next }); setDrafts({}); }
+			}} /><//>`;
+		})}
+		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
+		<button class="btn sm" onClick=${() => { setView({ shortcuts: {} }); setDrafts({}); setError(""); }}>${t("Reset to defaults")}</button>
+	<//>`;
+}
+
 function CodeIntelligence({ items }) {
 	const pushed = useStore((s) => s.codeIntelligenceInstallation);
 	const [data, setData] = useState(null);
@@ -329,6 +357,7 @@ function CodeIntelligence({ items }) {
 		api("/api/code-intelligence/modules").then((value) => { if (live) setData(value); }).catch((e) => { if (live) setError(e.message); });
 		return () => { live = false; };
 	}, []);
+	useEffect(() => { refresh(); const timer = setInterval(refresh, 1000); return () => clearInterval(timer); }, [enabled]);
 	useEffect(() => { if (pushed) setData(pushed); }, [pushed]);
 	// A failed download is not shown as the server's English message: the refreshed module says what went wrong.
 	const install = async (id) => {
@@ -345,6 +374,14 @@ function CodeIntelligence({ items }) {
 	};
 	return html`<${Card} title=${t("Engine")}>
 		<${Row} label=${t("Code Intelligence")} description=${t("Engine changes and installed modules apply after restart.")}><${Saving} shown=${saving} /><${Segmented} value=${enabled ? "semantic" : "lightweight"} options=${[{ value: "lightweight", label: "Lightweight" }, { value: "semantic", label: "Semantic" }]} onChange=${(value) => save("codeIntelligence.enabled", value === "semantic")} /><//>
+		<div class="row set-desc">${t("Active engine")}: ${data?.activeMode ?? t("Detecting…")}${data?.runtime?.semanticEnabled && !data?.runtime?.semanticConfigured ? t("Semantic unavailable; using lightweight fallback") : ""}${data?.restartRequired ? html`<span class="c-warn">${t("Configuration changed; restart required")}</span><button class="btn sm" onClick=${async () => {
+			if (!await confirmDialog({ title: t("Restart the local service?"), message: t("Idle sessions will be saved. This page reconnects after the service restarts."), confirmLabel: t("Restart") })) return;
+			const result = await attempt(() => post("/api/restart"));
+			if (result) {
+				const timer = setInterval(async () => { try { const boot = await api("/api/boot"); if (boot.phase === "ready") { clearInterval(timer); location.reload(); } } catch {} }, 1000);
+				setTimeout(() => clearInterval(timer), 60000);
+			}
+		}}>${t("Restart now")}</button>` : null}</div>
 	<//>${error ? html`<div class="notice danger">${error}</div>` : null}
 	${enabled ? html`<${Card} title=${t("Language modules")}>
 		${!data && !error ? html`<${Spinner} />` : data?.modules.map((module) => html`<${LanguageModule} key=${module.id} module=${module}
@@ -447,6 +484,7 @@ function Safety({ items, models }) {
 function About() {
 	const snap = useStore((s) => s.snap);
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
+	const shortcuts = useStore((s) => s.view.shortcuts);
 	return html`
 		<${Card} title=${t("MyHarness")}>
 			<div class="kv about-kv"><span>${t("Version")}</span><span>${snap?.app.version}</span><span>${t("Platform")}</span><span>${snap?.app.platform}</span><span>${t("Server started")}</span><span>${snap ? new Date(snap.app.startedAt).toLocaleString(getLang()) : ""}</span><span>${t("Workspace")}</span><span class="mono truncate">${snap?.cwd}</span></div>
@@ -461,11 +499,7 @@ function About() {
 					["Esc", t("Stop the running task (input box empty)")],
 					["↑ / ↓", t("Message history in the input box")],
 					["/  ·  @  ·  !", t("Commands & skills · mention a file · run a shell command")],
-					["Ctrl+K", t("Command palette")],
-					["Ctrl+N", t("New chat")],
-					["Ctrl+B", t("Show or hide the sidebar")],
-					["Ctrl+L", t("Focus the input box")],
-					["Ctrl+,", t("Settings")],
+					...SHORTCUTS.map((item) => [shortcutFor(item.id, shortcuts), t(item.label)]),
 				].map(([key, what]) => html`<span class="mono" key=${key}>${key}</span><span>${what}</span>`)}
 			</div>
 		<//>
@@ -490,7 +524,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

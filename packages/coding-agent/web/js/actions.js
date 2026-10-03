@@ -22,9 +22,9 @@ export function inputDialog({ title, label, initial = "", confirmLabel = t("Save
 	});
 }
 export function resolveConfirm(value) {
-	setView({ dialog: null });
 	const resolver = dialogResolver;
 	dialogResolver = null;
+	setView({ dialog: null });
 	resolver?.(value);
 }
 
@@ -193,8 +193,14 @@ export const actions = {
 	async deleteSession(path, title) {
 		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true });
 		if (!ok) return;
-		await attempt(() => post("/api/sessions/delete", { path }));
-		await loadWorkspaces();
+		const result = await attempt(() => post("/api/sessions/delete", { path }));
+		if (result) await refreshAll();
+	},
+
+	async archiveSession(path, archived = true) {
+		const result = await attempt(() => post("/api/sessions/archive", { path, archived }));
+		if (result) await refreshAll();
+		return result;
 	},
 
 	async renameSession(path, title) {

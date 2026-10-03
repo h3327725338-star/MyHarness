@@ -163,7 +163,7 @@ describe("Footer context-window display", () => {
 		const footer = new FooterComponent(session, createFooterData(1));
 
 		const line = stripAnsi(footer.render(120)[1]);
-		expect(line).toContain("125k/512K");
+		expect(line).toContain("124.8K/512K");
 		expect(line).toContain("23.8%");
 		expect(line).not.toContain("524k");
 	});

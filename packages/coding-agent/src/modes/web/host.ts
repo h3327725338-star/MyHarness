@@ -1234,6 +1234,8 @@ export class WebHost {
 		const session = this.session;
 		return {
 			context: this.contextState(),
+			speed: this.speed.current,
+			cache: this.cache.current,
 			stats: {
 				...session.getSessionStats(),
 				usageEstimated: !!this.liveUsageMessage && this.liveUsageMessage.usage.output === 0,

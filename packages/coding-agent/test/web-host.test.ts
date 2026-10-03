@@ -281,6 +281,49 @@ describe("Web host (real runtime with a faux provider)", () => {
 		};
 	}
 
+	it("compares code intelligence selection with the live runtime instead of treating a saved setting as active", async () => {
+		const fx = await start();
+		const before = await fx.get("/api/code-intelligence/modules");
+		expect(before.restartRequired).toBe(false);
+		const selected = !before.runtime.semanticEnabled;
+		await fx.post("/api/settings", { id: "codeIntelligence.enabled", value: selected });
+		const pending = await fx.get("/api/code-intelligence/modules");
+		expect(pending.configuredMode).toBe(selected ? "semantic" : "lightweight");
+		expect(pending.activeMode).toBe(before.activeMode);
+		expect(pending.restartRequired).toBe(true);
+		await fx.post("/api/settings", { id: "codeIntelligence.enabled", value: before.runtime.semanticEnabled });
+		expect((await fx.get("/api/code-intelligence/modules")).restartRequired).toBe(false);
+	});
+
+	it("archives and restores a saved chat, then physically deletes it and resets the active view", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("saved answer")])]);
+		await fx.post("/api/prompt", { text: "saved chat" });
+		await fx.waitFor("run_finished");
+		const before = await fx.get("/api/state");
+		const path = before.session.file;
+		expect(existsSync(path)).toBe(true);
+		await fx.post("/api/sessions/archive", { path });
+		expect(existsSync(path)).toBe(true);
+		expect((await fx.get("/api/sessions/archived")).sessions.map((info: any) => info.path)).toContain(path);
+		expect(
+			(await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`)).sessions.map(
+				(info: any) => info.path,
+			),
+		).not.toContain(path);
+		await fx.post("/api/sessions/archive", { path, archived: false });
+		expect(existsSync(`${path}.archived`)).toBe(false);
+		await fx.post("/api/sessions/open", { path });
+		await fx.post("/api/sessions/delete", { path });
+		expect(existsSync(path)).toBe(false);
+		expect((await fx.get("/api/state")).session.file).not.toBe(path);
+		expect(
+			(await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`)).sessions.map(
+				(info: any) => info.path,
+			),
+		).not.toContain(path);
+	});
+
 	it("renames a workspace alias through the API and broadcasts the change without moving its folder", async () => {
 		const fx = await start();
 		const snapshot = await fx.get("/api/state");

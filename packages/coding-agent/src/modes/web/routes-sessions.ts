@@ -1,6 +1,7 @@
 /** Web API routes for Workspaces, Sessions, session tree navigation and export. */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -173,13 +174,13 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	server.route("GET", "/api/workspaces/sessions", async ({ url }) => {
 		const rootPath = url.searchParams.get("path");
 		if (!rootPath) throw new HttpError(400, "Missing path");
-		const sessions = await useCase.listSessions(rootPath);
+		const sessions = (await useCase.listSessions(rootPath)).filter((info) => !existsSync(`${info.path}.archived`));
 		return { sessions: sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime()).map(sessionSummary) };
 	});
 
 	/** Chats that belong to no registered Workspace: created without one, or left behind by a removed Workspace. */
 	server.route("GET", "/api/sessions/unbound", async () => {
-		const sessions = await SessionManager.listUnbound();
+		const sessions = (await SessionManager.listUnbound()).filter((info) => !existsSync(`${info.path}.archived`));
 		return { sessions: sessions.map(sessionSummary) };
 	});
 
@@ -261,11 +262,42 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		}
 	};
 
+	server.route("GET", "/api/sessions/archived", async () => ({
+		sessions: (await SessionManager.listAll(sessionDir()))
+			.filter((info) => existsSync(`${info.path}.archived`))
+			.map(sessionSummary),
+	}));
+	server.route("POST", "/api/sessions/archive", async ({ body }) => {
+		const input = asObject(body);
+		const path = asString(input.path, "path");
+		const known = (await SessionManager.listAll(sessionDir())).some(
+			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
+		);
+		if (!known) throw new HttpError(404, "Unknown session");
+		if (input.archived !== false) {
+			await releaseSessionSlots(path);
+			await writeFile(`${path}.archived`, "archived\n", { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "EEXIST") throw error;
+			});
+		} else {
+			await unlink(`${path}.archived`).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			});
+		}
+		host.broadcast("workspaces_changed", {});
+		return { ok: true };
+	});
+
 	server.route("POST", "/api/sessions/delete", async ({ body }) => {
 		const path = asString(asObject(body).path, "path");
+		const known = (await SessionManager.listAll(sessionDir())).some(
+			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
+		);
+		if (!known) throw new HttpError(404, "Unknown session");
 		await releaseSessionSlots(path);
-		const deleted = await deleteSessionFile(path);
+		const deleted = await deleteSessionFile(path, { permanent: true });
 		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
+		host.broadcast("workspaces_changed", {});
 		return { ok: true };
 	});
 
@@ -274,7 +306,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const sessions = await useCase.listSessions(rootPath);
 		for (const session of sessions) await releaseSessionSlots(session.path);
 		for (const session of sessions) {
-			const deleted = await deleteSessionFile(session.path);
+			const deleted = await deleteSessionFile(session.path, { permanent: true });
 			if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
 		}
 		return { ok: true };

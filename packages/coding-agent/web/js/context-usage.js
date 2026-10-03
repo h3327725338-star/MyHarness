@@ -7,6 +7,13 @@ import { t } from "./i18n.js";
 import { getLang } from "./lang.js";
 import { fmtTokens } from "./util.js";
 
+export function sessionCache(stats) {
+	if (!stats?.tokens) return null;
+	const { input, cacheRead: read, cacheWrite: write } = stats.tokens;
+	const total = input + read + write;
+	return { input, read, write, hitRate: total > 0 ? read / total : null };
+}
+
 const num = (n) => Math.round(n).toLocaleString(getLang());
 const pct = (n, of) => (of > 0 ? (n / of) * 100 : 0);
 const fmtPct = (value) => `${value < 10 && value > 0 ? value.toFixed(1) : Math.round(value)}%`;
@@ -94,13 +101,14 @@ export function CacheValue({ cache, session }) {
  */
 export function ContextDetails({ onDone }) {
 	const snap = useStore((s) => s.snap);
+	const stats = useStore((s) => s.stats);
 	const { data, error } = useBreakdown(true);
 	if (error) return html`<div class="notice danger">${error}</div>`;
 	if (!data) return html`<div class="empty"><${Spinner} /></div>`;
 	const window_ = Math.max(data.window, 1);
 	const remaining = Math.max(0, data.window - data.used);
 	const level = data.percent > 90 ? "danger" : data.percent > 70 ? "warn" : "";
-	const cache = data.cache;
+	const cache = sessionCache(stats) ?? data.cache;
 	return html`<div class="cu">
 		<div class="cu-top">
 			<div class="cu-sub" title=${`${num(data.used)} / ${num(data.window)} ${t("tokens")}`}><strong>${fmtK(data.used)}</strong> / ${fmtK(data.window)}</div>
@@ -109,7 +117,7 @@ export function ContextDetails({ onDone }) {
 		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used, window_))}%` }} /></div>
 		<div class="cu-stats">
 			<div class="cu-stat" title=${num(remaining)}><span class="dim">${t("Remaining")}</span><strong>${fmtK(remaining)}</strong></div>
-			<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} cache=${snap?.cache} session=${cache} /></strong></div>
+			<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
 			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong><${SpeedValue} speed=${snap?.speed} /></strong></div>
 		</div>
 		<div class="cu-actions">

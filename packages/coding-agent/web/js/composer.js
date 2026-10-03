@@ -347,16 +347,6 @@ export function Composer() {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [expanded, closing]);
-	useEffect(() => {
-		const onKey = (event) => {
-			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "l") {
-				event.preventDefault();
-				area.current?.focus();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, []);
 
 	const { token, items: suggestions } = useSuggestions(text, caret);
 	// Another chat starts with the small input.

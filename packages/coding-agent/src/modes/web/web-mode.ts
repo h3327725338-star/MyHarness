@@ -3,6 +3,7 @@
  * TUI uses. The server binds to loopback only and is single-user.
  */
 
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
@@ -142,6 +143,8 @@ export async function runWebMode(
 		resolveExit = resolve;
 	});
 	let shuttingDown = false;
+	let restarting = false;
+	let restartSessionFile: string | undefined;
 	const hub = new WebHostHub({ server, version: VERSION, onShutdown: () => void shutdown(0) });
 	bootstrap.addDialogResponder((id, value) => hub.respondToDialog(id, value));
 	const host = hub.host;
@@ -170,7 +173,7 @@ export async function runWebMode(
 		if (shuttingDown) return;
 		shuttingDown = true;
 		lifecycle.dispose();
-		server.broadcast("shutdown", {});
+		server.broadcast(restarting ? "restarting" : "shutdown", {});
 		try {
 			dialogs.dismissAll();
 			terminals.dispose();
@@ -184,9 +187,41 @@ export async function runWebMode(
 				console.error(`Server close error: ${error instanceof Error ? error.message : String(error)}`);
 				code = 1;
 			}
+			if (restarting && code === 0) {
+				const child = spawn(
+					process.execPath,
+					[
+						...process.execArgv,
+						process.argv[1]!,
+						"--web",
+						"--port",
+						String(bootstrap.port),
+						"--no-open",
+						...(restartSessionFile ? ["--session", restartSessionFile] : []),
+					],
+					{
+						cwd: process.cwd(),
+						detached: true,
+						stdio: "ignore",
+						windowsHide: true,
+					},
+				);
+				child.on("error", (error) => console.error(`Restart failed: ${error.message}`));
+				child.unref();
+			}
 			resolveExit(code);
 		}
 	};
+	server.route("POST", "/api/restart", () => {
+		if (shuttingDown) throw new Error("The service is already stopping.");
+		if (hub.all().some((slot) => !slot.session.isIdle || slot.completionActive || slot.gitTask)) {
+			throw new Error("Stop running tasks before restarting the service.");
+		}
+		restartSessionFile = host.session.sessionManager.isPersisted() ? host.session.sessionFile : undefined;
+		restarting = true;
+		setTimeout(() => void shutdown(0), 100);
+		return { ok: true };
+	});
 	server.route("POST", "/api/shutdown", () => {
 		setTimeout(() => void shutdown(0), 50);
 		return { ok: true };

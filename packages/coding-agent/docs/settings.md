@@ -9,6 +9,12 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 可以直接编辑文件，也可以使用 `/settings` 修改常用选项。
 
+## Web 专属快捷键与代码智能状态
+
+Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式与无新数据时的 HTTP 空闲超时提供说明。
+
+代码智能页把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
+
 ## Popup notifications（任务结束提醒）
 
 Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示桌面提醒，默认开启（Web UI 优先用浏览器通知，浏览器不允许或没有页面打开时用同一个系统弹窗，见 [web-ui.md](web-ui.md)）。可以在全局或项目 settings 中配置：

@@ -114,7 +114,9 @@ export class RequestCacheMeter {
 						input: predicted.input,
 						estimated: true,
 					}
-				: DETECTING;
+				: this.value?.hitRate != null
+					? { ...this.value, state: "final" }
+					: DETECTING;
 		const changed = JSON.stringify(this.value) !== JSON.stringify(next);
 		this.value = next;
 		return changed;
@@ -153,13 +155,15 @@ export class RequestCacheMeter {
 		const usage = usageOf(message);
 		const prompt = usage ? usage.input + usage.read + usage.write : 0;
 		if (!usage || prompt <= 0) {
-			this.value = UNAVAILABLE;
+			this.value = this.value?.hitRate != null ? { ...this.value, state: "final" } : UNAVAILABLE;
 			return this.value;
 		}
 		if (usage.reported || usage.read + usage.write > 0) this.reported = true;
 		this.value = this.reported
 			? { state: "final", hitRate: usage.read / prompt, read: usage.read, write: usage.write, input: prompt }
-			: UNAVAILABLE;
+			: this.value?.hitRate != null
+				? { ...this.value, state: "final" }
+				: UNAVAILABLE;
 		return this.value;
 	}
 

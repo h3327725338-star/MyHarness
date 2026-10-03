@@ -19,10 +19,13 @@ function deleteTarget(sessionPath: string): { path: string; directory: boolean }
 /** Delete a session file, preferring the platform trash command when available. */
 export async function deleteSessionFile(
 	sessionPath: string,
+	options: { permanent?: boolean } = {},
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
 	const target = deleteTarget(sessionPath);
 	const trashArgs = target.path.startsWith("-") ? ["--", target.path] : [target.path];
-	const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+	const trashResult = options.permanent
+		? { status: null, error: undefined, stderr: "" }
+		: spawnSync("trash", trashArgs, { encoding: "utf-8" });
 
 	const getTrashErrorHint = (): string | null => {
 		const parts: string[] = [];
@@ -40,6 +43,9 @@ export async function deleteSessionFile(
 	try {
 		if (target.directory) await rm(target.path, { recursive: true, force: false });
 		else await unlink(target.path);
+		await unlink(`${sessionPath}.archived`).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+		});
 		return { ok: true, method: "unlink" };
 	} catch (err) {
 		const unlinkError = err instanceof Error ? err.message : String(err);

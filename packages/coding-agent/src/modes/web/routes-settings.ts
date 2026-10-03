@@ -166,7 +166,13 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 	const languageKey = (language: string) => language.trim().toLowerCase();
 	const installationState = () => {
 		const disabled = new Set((settings().getCodeIntelligenceSettings().disabledLanguages ?? []).map(languageKey));
+		const runtime = host.runtimeHost.services.codeIntelligence?.getStatus?.();
+		const configured = settings().getCodeIntelligenceSettings().enabled !== false;
 		return {
+			runtime: runtime ?? null,
+			configuredMode: configured ? "semantic" : "lightweight",
+			activeMode: runtime?.semanticConfigured ? "semantic" : "lightweight",
+			restartRequired: runtime !== undefined && configured !== runtime.semanticEnabled,
 			// A module is on while any of its languages is not switched off.
 			modules: installation()
 				.getModuleStatuses()
@@ -452,6 +458,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "transport",
 				section: "Network",
 				label: "Provider transport",
+				description:
+					"Controls the connection to the model provider (SSE streaming or HTTP). Auto adapts to the provider.",
 				type: "enum",
 				value: s.getTransport(),
 				options: TRANSPORTS,
@@ -460,6 +468,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "httpIdleTimeoutMs",
 				section: "Network",
 				label: "HTTP idle timeout",
+				description:
+					"Maximum wait without new data while generating or waiting for the model. Disconnects on timeout to avoid hanging.",
 				type: "enum",
 				value: String(s.getHttpIdleTimeoutMs()),
 				options: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => ({

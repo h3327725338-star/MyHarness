@@ -7,6 +7,8 @@ import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 
+import { validShortcuts } from "./shortcuts.js";
+
 const listeners = new Set();
 const prefs = loadPrefs();
 
@@ -84,6 +86,7 @@ export const state = {
 	/** Latest GitHub Connect progress from the server (device code, done, error), with a nonce per event. */
 	githubEvent: null,
 	view: {
+		shortcuts: validShortcuts(prefs.shortcuts),
 		sidebarOpen: prefs.sidebarOpen ?? true,
 		sidebarW: prefs.sidebarW ?? 272,
 		panelOpen: false,
@@ -167,7 +170,7 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -393,7 +396,15 @@ export async function loadWorkspaces() {
 	const current = data.workspaces.find((w) => w.current);
 	const targets = new Set(Object.keys(state.view.expanded).filter((key) => state.view.expanded[key]));
 	if (current) targets.add(current.rootPath);
-	await Promise.all([...targets.values()].map((root) => loadSessions(root)), loadUnbound());
+	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== "<archived>").map((root) => loadSessions(root)).concat([loadUnbound(), loadArchived()]));
+}
+
+export async function loadArchived() {
+	try {
+		const data = await api("/api/sessions/archived");
+		state.workspaces = { ...state.workspaces, archived: data.sessions };
+	} catch (error) { setListError("<archived>", listFailure(error)); }
+	emit();
 }
 
 /** Key of the "General" group (chats that belong to no workspace) in the sidebar's expanded / error maps. */
@@ -821,7 +832,7 @@ function connectEvents() {
 	// Context use and the session's totals, sent whenever a message or a tool call ends and while a reply streams: the
 	// context meter next to the input and everything in the Session panel follow the task as it runs.
 	on("usage", (d) => {
-		if (state.snap) state.snap = { ...state.snap, context: d.context, session: { ...state.snap.session, ...d.session } };
+		if (state.snap) state.snap = { ...state.snap, context: d.context, ...(d.speed !== undefined ? { speed: d.speed } : {}), ...(d.cache !== undefined ? { cache: d.cache } : {}), session: { ...state.snap.session, ...d.session } };
 		state.stats = d.stats;
 		emit();
 	});
