@@ -1,6 +1,6 @@
 # ADR 0002: Keep Code Intelligence lightweight by default
 
-- Status: accepted, release assets pending
+- Status: accepted, release assets built and awaiting upload
 - Date: 2026-09-20
 
 ## Context
@@ -41,8 +41,11 @@ and lets each language module carry its own license and prerequisite record.
 
 ## Consequences
 
-The current manifest intentionally reports `published: false`, so semantic
-module installation is unavailable until real release assets and their hashes
-are published. Lightweight symbol queries remain the default path. A future
-release must update the manifest only after independently verifying the asset,
-license records, Windows startup and repair/update behavior.
+Semantic module installation is available only when the manifest reports
+`published: true` and every archive carries its exact size and SHA-256. The
+archives are built by `scripts/build-code-intelligence-artifacts.mjs` from the
+upstream releases and must be uploaded to the GitHub Release named by
+`releaseTag`; until they are, a download fails with HTTP 404 rather than
+installing anything. Lightweight symbol queries remain the default path. A
+future release must update the manifest only after independently verifying the
+asset, license records, Windows startup and repair/update behavior.

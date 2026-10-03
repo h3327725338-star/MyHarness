@@ -553,13 +553,14 @@ export function Transcript() {
 	const [away, setAway] = useState(false);
 	const lastTop = useRef(0);
 	const programmatic = useRef(false);
+	const holdPlace = useRef(false);
 	const onScroll = () => {
 		const el = scroller.current;
 		const distance = Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop);
 		const near = distance <= 10;
 		// Size changes and scroll anchoring are not reader intent.
 		if (!programmatic.current && Date.now() - lastInteract.current < 500 && el.scrollTop < lastTop.current - 2 && distance > 72) stick.current = false;
-		if (near) { stick.current = true; programmatic.current = false; }
+		if (near && !holdPlace.current) { stick.current = true; programmatic.current = false; }
 		lastTop.current = el.scrollTop;
 		const show = !stick.current && distance > 72;
 		setAway((prev) => (prev === show ? prev : show));
@@ -567,6 +568,7 @@ export function Transcript() {
 		header?.classList.toggle("scrolled", el.scrollTop > 4);
 	};
 	const noteInteraction = (event) => {
+		if (event.type === "wheel" || event.type === "keydown" || event.target === scroller.current) holdPlace.current = false;
 		const scrollInput = event.type === "wheel" ? event.deltaY < 0
 			: event.type === "keydown" ? ["ArrowUp", "PageUp", "Home"].includes(event.key)
 			: event.target === scroller.current;
@@ -574,6 +576,15 @@ export function Transcript() {
 			lastInteract.current = Date.now();
 			programmatic.current = false;
 		}
+	};
+	// Opening a file's diff makes the page taller below the row that was clicked. Following the bottom would scroll that
+	// row up (and the first pixels of the growth would count as "still at the bottom"), so while a diff is open the page
+	// holds its place: the row stays where it is and the diff grows downwards. Scrolling by hand, or closing the diff, ends it.
+	const holdOnOpen = (event) => {
+		const row = event.target.closest?.(".change-file");
+		if (!row) return;
+		holdPlace.current = row.getAttribute("aria-expanded") !== "true";
+		if (holdPlace.current) stick.current = false;
 	};
 	const toBottom = (smooth = false) => {
 		const el = scroller.current;
@@ -627,7 +638,7 @@ export function Transcript() {
 	const empty = turns.length === 0 && liveBash.length === 0;
 
 	return html`<div class="transcript-wrap">
-		<div class="transcript" ref=${scroller} onScroll=${onScroll} onWheel=${noteInteraction} onMouseDown=${noteInteraction} onKeyDown=${noteInteraction}>
+		<div class="transcript" ref=${scroller} onScroll=${onScroll} onWheel=${noteInteraction} onClickCapture=${holdOnOpen} onMouseDown=${noteInteraction} onKeyDown=${noteInteraction}>
 			<div class="transcript-inner" ref=${content}>
 				${empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
 				${hidden ? html`<button class="btn sm ghost earlier" onClick=${() => { heightBefore.current = scroller.current?.scrollHeight || 0; stick.current = false; setLimit(limit + 60); }}>${t("Show earlier messages ({hidden} hidden)", { hidden })}</button>` : null}

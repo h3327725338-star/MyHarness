@@ -83,7 +83,7 @@ Secret Scanner，未知的个人信息、第三方 attribution 和新类型凭�
 确认：
 
 - 根 `LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md` 和 package metadata 一致；
-- `runtime-manifest.json` 在 `published: false` 时不伪造 hash、size 或 asset；
+- `runtime-manifest.json` 在 `published: false` 时不伪造 hash、size 或 asset；`published: true` 时每个归档的 size 和 SHA-256 必须是真实构建产物的值，且对应文件已上传到 `releaseTag` 的 GitHub Release；
 - public ref 不含 `data/`、`node_modules/`、dist、LFS pointer、submodule 或下载 runtime；
 - fresh checkout 的失败和未验证项被记录，而不是改测试断言来制造全绿；
 - 远端 visibility、push 和对应 GitHub Actions run 必须在实际操作后单独确认；本地

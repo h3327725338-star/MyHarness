@@ -163,11 +163,35 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		if (!manager) throw new HttpError(503, "Code Intelligence installation manager is unavailable.");
 		return manager;
 	};
-	const installationState = () => ({
-		modules: installation().getModuleStatuses(),
-		progress: installation().getDownloadProgress(),
-	});
+	const languageKey = (language: string) => language.trim().toLowerCase();
+	const installationState = () => {
+		const disabled = new Set((settings().getCodeIntelligenceSettings().disabledLanguages ?? []).map(languageKey));
+		return {
+			// A module is on while any of its languages is not switched off.
+			modules: installation()
+				.getModuleStatuses()
+				.map((module) => ({
+					...module,
+					enabled: module.languages.some((language) => !disabled.has(languageKey(language))),
+				})),
+			progress: installation().getDownloadProgress(),
+		};
+	};
 	server.route("GET", "/api/code-intelligence/modules", installationState);
+	server.route("POST", "/api/code-intelligence/language", ({ body }) => {
+		const data = asObject(body);
+		const module = typeof data.id === "string" ? installation().getModule(data.id) : undefined;
+		if (!module) throw new HttpError(400, "Unknown language module.");
+		const enabled = boolValue(data.enabled, "enabled");
+		const current = settings().getCodeIntelligenceSettings();
+		const own = new Set(module.languages.map(languageKey));
+		const rest = (current.disabledLanguages ?? []).filter((language) => !own.has(languageKey(language)));
+		settings().setCodeIntelligenceSettings({
+			...current,
+			disabledLanguages: enabled ? rest : [...rest, ...module.languages],
+		});
+		return installationState();
+	});
 	server.route("POST", "/api/code-intelligence/install", async ({ body }) => {
 		const data = asObject(body);
 		if (typeof data.id !== "string" || !installation().getModule(data.id))

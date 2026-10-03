@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -125,6 +126,80 @@ describe("CodeIntelligenceInstallationManager", () => {
 		expect(manager.getModuleStatus("java").message).toContain("SHA-256 mismatch");
 		await manager.remove("java");
 		expect(manager.getModuleStatus("java").status).toBe("not-installed");
+	});
+
+	it("hands the extractor a .zip archive, which Expand-Archive requires", async () => {
+		const payload = Buffer.from("verified archive");
+		const root = await mkdtemp(path.join(tmpdir(), "myharness-code-intelligence-"));
+		roots.add(root);
+		const archives: string[] = [];
+		const manager = new CodeIntelligenceInstallationManager({
+			storeDir: path.join(root, "store"),
+			manifest: manifest(payload),
+			platform: "win32",
+			downloader: async (_url, destination) => writeFile(destination, payload),
+			extractor: async (archivePath, destination) => {
+				archives.push(archivePath);
+				await mkdir(path.join(destination, "servers"), { recursive: true });
+			},
+			launcherPath: path.join(root, "lsp-launcher.mjs"),
+		});
+
+		await manager.install("java");
+
+		expect(archives.length).toBeGreaterThan(0);
+		expect(archives.every((archive) => archive.endsWith(".zip"))).toBe(true);
+		expect(manager.getModuleStatus("java").status).toBe("installed");
+	});
+
+	it.skipIf(process.platform !== "win32")(
+		"unpacks an archive whose paths are longer than MAX_PATH with the real extractor",
+		async () => {
+			const root = await mkdtemp(path.join(tmpdir(), "myharness-code-intelligence-"));
+			roots.add(root);
+			const source = path.join(root, "source");
+			const deep = path.join("servers", ...Array.from({ length: 6 }, (_, index) => `${"d".repeat(40)}${index}`));
+			await mkdir(path.join(source, deep), { recursive: true });
+			await writeFile(path.join(source, deep, "file.txt"), "deep", "utf8");
+			const archive = path.join(root, "java.zip");
+			execFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), [
+				"-a",
+				"-cf",
+				archive,
+				"-C",
+				source,
+				"servers",
+			]);
+			const payload = await readFile(archive);
+			const manager = new CodeIntelligenceInstallationManager({
+				storeDir: path.join(root, "store"),
+				manifest: manifest(payload),
+				platform: "win32",
+				downloader: async (_url, destination) => writeFile(destination, payload),
+				launcherPath: path.join(root, "lsp-launcher.mjs"),
+			});
+
+			await manager.install("java");
+
+			expect(manager.getModuleStatus("java").status).toBe("installed");
+		},
+	);
+
+	it("says why a module without release metadata cannot be downloaded", async () => {
+		const payload = Buffer.from("verified archive");
+		const unpublished = manifest(payload);
+		const [java] = unpublished.modules;
+		const { manager } = await createManager(payload, {
+			...unpublished,
+			modules: [{ ...java, artifact: { ...java.artifact!, sizeBytes: null, sha256: null } }],
+		});
+
+		expect(manager.getModuleStatus("java")).toMatchObject({
+			status: "unavailable",
+			reason: "release-metadata-missing",
+			serverKey: "jdtls",
+			sharedComponents: ["jre"],
+		});
 	});
 
 	it("refuses a release outside the MyHarness compatibility range", async () => {

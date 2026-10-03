@@ -160,7 +160,11 @@ function specFor(name) {
       const ruby = existingFile(privatePath("ruby", "bin", "ruby.exe"), "private Ruby runtime");
       const script = existingFile(privatePath("ruby", "bin", "solargraph"), "private Solargraph launcher");
       const gemHome = privatePath("ruby", "lib", "ruby", "gems", "3.4.0");
-      return { command: ruby, args: [script, "stdio"], env: { GEM_HOME: gemHome, GEM_PATH: gemHome, RUBYOPT: "" } };
+      // The Solargraph module only holds its own gems; the bundled gems live with the shared Ruby runtime.
+      const gemPath = [serversRoot, ...sharedServersRoots]
+        .map((root) => path.join(root, "ruby", "lib", "ruby", "gems", "3.4.0"))
+        .filter((candidate) => existsSync(candidate));
+      return { command: ruby, args: [script, "stdio"], env: { GEM_HOME: gemHome, GEM_PATH: gemPath.join(path.delimiter), RUBYOPT: "" } };
     }
     case "lemminx":
       return { command: javaPath(), args: ["-jar", existingFile(privatePath("lemminx", "lemminx.jar"), "private LemMinX")], env: { JAVA_HOME: privatePath("jre") } };
@@ -224,7 +228,8 @@ function privateRustEnvironment() {
 }
 
 function privateGoEnvironment() {
-  const goRoot = privatePath("go-1.27.1");
+  // gopls.exe ships in the Go module and bin\go.exe in the shared Go runtime, both under servers\go-1.27.1.
+  const goRoot = path.dirname(path.dirname(privatePath("go-1.27.1", "bin", "go.exe")));
   return existsSync(path.join(goRoot, "bin", "go.exe"))
     ? {
         GOROOT: goRoot,

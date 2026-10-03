@@ -6,7 +6,7 @@
 
 - 检查类：`run-checks-parallel.mjs`、`check-*.mjs`。
 - 构建与资源类：`build-binaries.sh`、`copy-coding-agent-rich-file-assets.mjs`、`sync-versions.js`。
-- 发布类：`publish.mjs`、`release.mjs`、`local-release.mjs`、`release-notes.mjs`。
+- 发布类：`publish.mjs`、`release.mjs`、`local-release.mjs`、`release-notes.mjs`、`build-code-intelligence-artifacts.mjs`。
 - 统计、profile 和 smoke 类：以脚本自身的参数解析和根 `package.json` scripts 为准。
 - Git hook 类：`pre-commit.mjs` 与 `.husky/pre-commit`；它们可能检查、格式化或重新暂存文件，不能当作纯读取操作。
 

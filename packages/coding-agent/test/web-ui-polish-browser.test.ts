@@ -143,8 +143,8 @@ try {
  checkRows();
  for(const section of ['conversation','search','network']) {setView({settingsSection:section});await wait(100);checkRows();}
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
- setView({settingsSection:'tools'});await wait(100);
- if(document.querySelector('.settings-body').textContent.includes('图片')||document.querySelector('.settings-body').textContent.includes('Code Intelligence')) throw Error('tools owns migrated settings');
+ if(document.querySelector('.settings-nav').textContent.includes('工具调用')) throw Error('empty tools page still in the navigation');
+ if([...document.querySelectorAll('.settings-nav button')].filter(b=>b.querySelector('svg')?.innerHTML.startsWith('<path d="M14.7 6.3')).length!==1) throw Error('wrench icon not used exactly once');
  setView({settingsSection:'agent'});await wait(100);
  if(!document.querySelector('.settings-body').textContent.includes('禁止发送图片')||document.querySelector('.set-card-toggle')) throw Error('images not flat in Agent');
  setView({settingsSection:'code'});await wait(150);
@@ -152,6 +152,24 @@ try {
  if(!document.querySelector('.settings-body').textContent.includes('Semantic')||!document.querySelector('.settings-body').textContent.includes('TypeScript')||!document.querySelector('.settings-body').textContent.includes('未下载')) throw Error('missing language manager');
  set({codeIntelligenceInstallation:{modules:[{id:'typescript',label:'TypeScript',languages:['typescript'],status:'installing'}],progress:[{id:'typescript',percent:35,remainingSeconds:12}]}});await wait(100);
  if(document.querySelector('progress')?.value!==35||!document.querySelector('.settings-body').textContent.includes('12 秒')) throw Error('download progress not live');
+ set({codeIntelligenceInstallation:{progress:[],modules:[
+  {id:'java',label:'Java',languages:['java'],serverKey:'jdtls',sharedComponents:['temurin-jre-21'],status:'installed',enabled:true},
+  {id:'python',label:'Python',languages:['python'],serverKey:'pyright',sharedComponents:[],status:'unavailable',reason:'release-metadata-missing',message:'Code Intelligence module "python" has no published artifact size; release metadata is not available yet'},
+  {id:'swift',label:'Swift',languages:['swift'],serverKey:'sourcekit-lsp',sharedComponents:[],status:'unavailable',reason:'external-prerequisites',notes:'Windows SourceKit-LSP needs the official Swift toolchain and its prerequisites; MyHarness does not download it automatically.',message:'x'}]}});await wait(150);
+ {const heads=[...document.querySelectorAll('.lang-head')];
+  if(heads.length!==3||document.querySelector('.lang-body')) throw Error('language modules not folded');
+  if(!heads[0].textContent.includes('启用')||!heads[1].textContent.includes('暂未发布')) throw Error('folded line lacks name or state: '+heads.map(h=>h.textContent).join('|'));
+  heads[0].click();await wait(400);
+  const javaBody=document.querySelector('.lang-body').textContent;
+  if(!javaBody.includes('语义代码智能')||!javaBody.includes('Java 运行环境')||/[A-Za-z]{4,} (the|and|for) /.test(javaBody.replace(/Java|jdtls|Temurin/g,''))) throw Error('java details not Chinese: '+javaBody);
+  if(!document.querySelector('.lang-body .toggle')||document.querySelector('.lang-body .btn')) throw Error('installed module lacks a switch');
+  heads[2].click();await wait(400);
+  if(!document.querySelector('.lang-item:nth-child(3) .lang-body').textContent.includes('官方 Swift 工具链')) throw Error('swift note not Chinese');
+  heads[1].click();await wait(400);
+  const download=document.querySelector('.lang-body .btn');
+  if(!download||download.disabled) throw Error('download button disabled');
+  if(!document.querySelector('.lang-body').textContent.includes('尚未发布')||document.querySelector('.lang-body').textContent.includes('release metadata')) throw Error('metadata note not Chinese');
+ }
  checkRows();
  render(null,app);app.style.width='340px';
  set({resources:{tools:[{name:'read',description:'Long English description',active:true}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});

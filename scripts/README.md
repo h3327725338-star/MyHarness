@@ -35,6 +35,7 @@
 | `sync-versions.js` | 检查 workspace lockstep version，并更新内部依赖版本；会写 package.json |
 | `release.mjs` | 执行版本、构建/检查和 release 流程 |
 | `local-release.mjs` | 本地发布流程 |
+| `build-code-intelligence-artifacts.mjs` | 构建 Code Intelligence 语言模块和共享运行环境的 Windows 发布包：从 npm 和各语言服务器上游下载，输出到 `.artifacts/code-intelligence/`（已被 Git 忽略，下载缓存 `downloads/`、中间目录 `work/`、成品 `release/`）；`--only id,id` 只构建指定项；`--apply` 把成品的真实大小和 SHA-256 写进 `runtime-manifest.json` 并置 `published: true`；Ruby 模块需要环境变量 `MSYS2_PATH` 指向带 gcc 的 MSYS2 / RubyInstaller DevKit；会访问外部网络，不上传任何东西 |
 | `publish.mjs` | 发布或 dry-run 发布 |
 | `release-notes.mjs` | 修复/生成 release notes 相关链接 |
 | `pre-commit.mjs` | 将 Biome 修改过且仍存在的已暂存文件重新加入 index |

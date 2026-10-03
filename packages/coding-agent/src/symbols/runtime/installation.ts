@@ -102,6 +102,11 @@ export interface CodeIntelligenceModuleStatus {
 	readonly installedVersion?: string;
 	readonly message?: string;
 	readonly notes?: string;
+	/** The language server behind the module and the shared runtimes it needs, so a UI can describe them. */
+	readonly serverKey: string;
+	readonly sharedComponents: readonly string[];
+	/** Why an "unavailable" module cannot be downloaded (a CodeIntelligenceInstallationError code). */
+	readonly reason?: string;
 }
 
 export interface CodeIntelligenceDownloadProgress {
@@ -333,6 +338,21 @@ async function defaultExtract(archivePath: string, destination: string, platform
 			`Unsupported Code Intelligence archive: ${archivePath}`,
 		);
 	}
+	// Windows ships bsdtar as System32\tar.exe. Unlike Expand-Archive in Windows PowerShell 5.1 it unpacks paths
+	// beyond MAX_PATH, which the large runtimes reach once nested under the user profile staging directory.
+	const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+	const tar = systemRoot ? path.join(systemRoot, "System32", "tar.exe") : undefined;
+	if (tar && existsSync(tar)) {
+		try {
+			await execFileAsync(tar, ["-xf", archivePath, "-C", destination], {
+				windowsHide: true,
+				maxBuffer: 1024 * 1024,
+			});
+			return;
+		} catch {
+			// Fall back to PowerShell below; its error is the one reported.
+		}
+	}
 	const script = [
 		"$ErrorActionPreference = 'Stop'",
 		`$archive = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(archivePath, "utf8").toString("base64")}'))`,
@@ -508,11 +528,14 @@ export class CodeIntelligenceInstallationManager {
 			languages: Object.freeze([...entry.languages]),
 			version: moduleVersion(entry),
 			notes: entry.notes,
+			serverKey: entry.serverKey,
+			sharedComponents: Object.freeze([...entry.sharedComponents]),
 		};
 		if (!isVersionCompatible(this.myharnessVersion, this.manifest.myharnessVersionRange)) {
 			return Object.freeze({
 				...base,
 				status: "unavailable",
+				reason: "incompatible-version",
 				message: `This Code Intelligence release requires MyHarness ${this.manifest.myharnessVersionRange ?? "a compatible version"}; current version is ${this.myharnessVersion}`,
 			});
 		}
@@ -520,6 +543,7 @@ export class CodeIntelligenceInstallationManager {
 			return Object.freeze({
 				...base,
 				status: "unavailable",
+				reason: "external-prerequisites",
 				message: entry.notes ?? "External prerequisites required",
 			});
 		}
@@ -536,6 +560,7 @@ export class CodeIntelligenceInstallationManager {
 				return Object.freeze({
 					...base,
 					status: "unavailable",
+					reason: error instanceof CodeIntelligenceInstallationError ? error.code : undefined,
 					message: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -565,7 +590,7 @@ export class CodeIntelligenceInstallationManager {
 				const artifact = validArtifact(entry.id, entry.artifact);
 				const url = resolveArtifactUrl(artifact, this.manifest);
 				stagingRoot = await this.createStagingDirectory(entry.id);
-				const archivePath = path.join(stagingRoot, `${artifact.fileName}.download`);
+				const archivePath = path.join(stagingRoot, artifact.fileName);
 				const extractedPath = path.join(stagingRoot, "module");
 				await mkdir(extractedPath, { recursive: true });
 				const started = Date.now();

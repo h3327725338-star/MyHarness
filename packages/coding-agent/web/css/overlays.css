@@ -21,6 +21,19 @@
 .language-progress::-webkit-progress-bar { background: var(--border); }
 .language-progress::-webkit-progress-value { background: var(--accent); }
 .language-progress::-moz-progress-bar { background: var(--accent); }
+/* Language modules (Code Intelligence page): a folded line per language, its details open below it. */
+.lang-item { border-top: 1px solid var(--border); }
+.lang-item:first-child { border-top-color: transparent; }
+.lang-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; text-align: left; color: var(--text); }
+.lang-name { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; }
+.lang-state { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
+.lang-state.on { color: var(--ok); }
+.lang-state.busy { color: var(--accent); }
+.lang-state.bad { color: var(--danger); }
+.lang-body { display: flex; flex-direction: column; gap: 6px; padding: 0 0 12px 21px; }
+.lang-body .set-desc { max-width: none; }
+.lang-progress-line { display: flex; align-items: center; gap: 10px; padding: 0 0 10px 21px; }
+.lang-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
 .settings { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: min(700px, calc(100vh - 120px)); }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); overflow-y: auto; }
 .settings-nav button { display: flex; align-items: center; white-space: nowrap; gap: 8px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); text-align: left; flex: none; }

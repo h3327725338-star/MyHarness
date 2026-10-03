@@ -24,6 +24,10 @@
 - Added root licensing, contribution, security, third-party notice, and Code Intelligence distribution documentation.
 - Added the local browser Web UI (`myharness --web [--port <n>] [--no-open]`): a loopback-only server in `src/modes/web/` plus a no-build front end in `web/`, sharing the CLI's `AgentSessionRuntime` (conversation with quiet run summaries, steer/queue/interrupt, real diffs, files, terminal, Git commit/push/undo/restore/worktrees, Sessions/Workspaces, models/providers/settings, extension approvals). `ExtensionMode` gained `"web"`. See `docs/web-ui.md`.
 
+### Fixed
+
+- Web UI: opening a file's diff in a finished task's change card no longer pushes the page up (the transcript stayed pinned to the bottom while the diff grew); the clicked row stays put and the diff opens below it. Settings no longer has the empty "Tool calls" page or its duplicate wrench icon. Code Intelligence language modules are a folded list with Chinese/English descriptions, their Download button is clickable again, and an installed module shows an on/off switch (`POST /api/code-intelligence/language`). Module downloads are now staged under their `.zip` name, so extraction no longer fails with "Unsupported Code Intelligence archive", and archives are unpacked with the system `tar.exe` first, so large runtimes whose paths exceed 260 characters no longer fail in `Expand-Archive`. The launcher finds the Go runtime and the Ruby gems that live in the shared components instead of only the module's own directory. `scripts/build-code-intelligence-artifacts.mjs` builds the release archives of all language modules and shared components, and `runtime-manifest.json` now carries their exact size and SHA-256 (the archives still have to be uploaded to the `code-intelligence-v0.4.0` GitHub Release before a download can succeed).
+
 > Entries from 0.80.10 and earlier are inherited upstream release history. Their links and package names are retained as historical attribution, not as current MyHarness identifiers.
 
 ## [0.80.10] - 2026-07-16

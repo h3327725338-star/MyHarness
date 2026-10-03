@@ -6,7 +6,7 @@
   "releaseVersion": "0.4.0",
   "releaseTag": "code-intelligence-v0.4.0",
   "myharnessVersionRange": ">=0.80.10 <0.81.0",
-  "published": false,
+  "published": true,
   "releaseManifestUrlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/code-intelligence-manifest.json",
   "description": "Optional Windows language-server modules. The lightweight source index is part of MyHarness and needs no download.",
   "modules": [
@@ -17,7 +17,7 @@
       "serverKey": "typescript-language-server",
       "serverVersion": "5.3.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-javascript-typescript-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-javascript-typescript-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 5007291, "sha256": "10b49c93696158cfb242501990dca1c4e24ae7666aeea5fb28f6771cfeae0226", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "python",
@@ -26,7 +26,7 @@
       "serverKey": "pyright",
       "serverVersion": "1.1.413",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-python-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-python-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 6667492, "sha256": "3c8f65b427ba2b0f05eb773bf1a01fa8faeadcc935d4e40f8da1c071c3370f23", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "json",
@@ -35,7 +35,7 @@
       "serverKey": "vscode-json",
       "serverVersion": "4.10.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-json-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-json-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 15944020, "sha256": "953d4af89fe2597977025dee6941fdfa9c366089e8598bbe351b943b0cde24db", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "scss",
@@ -44,7 +44,7 @@
       "serverKey": "vscode-css",
       "serverVersion": "4.10.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-scss-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-scss-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 15944020, "sha256": "98b41b47c2115e410c4d258c5f422cca2cb1c37bd6a47f3c48a83b0d90d2e49e", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "shell",
@@ -53,7 +53,7 @@
       "serverKey": "bash-language-server",
       "serverVersion": "5.6.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-shell-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-shell-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 4135591, "sha256": "d72bb78e4b8ee1f16717d366afa86344d0188fa5ac3627f943cc0227314da9fd", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "svelte",
@@ -62,7 +62,7 @@
       "serverKey": "svelte-language-server",
       "serverVersion": "0.18.4",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-svelte-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-svelte-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 11247137, "sha256": "06d82851a99a0dae35b630b56dd40778f14e852f5b2d017c5313bf396991c497", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "vue",
@@ -71,7 +71,7 @@
       "serverKey": "vue-language-server",
       "serverVersion": "3.3.11",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-vue-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-vue-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 9816354, "sha256": "da4068b9f534434ddcf9c3bb74aea855005a5fbe25700739d21949e9951d7b1f", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "yaml",
@@ -80,7 +80,7 @@
       "serverKey": "yaml-language-server",
       "serverVersion": "1.24.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-yaml-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-yaml-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 5506884, "sha256": "ee6bc6aaa5cfb8992c6941c2061f87e95630c9a7dfb322982714601f2fff33ff", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "php",
@@ -89,7 +89,7 @@
       "serverKey": "devsense-php-ls",
       "serverVersion": "1.0.19264",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-php-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-php-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 35054521, "sha256": "65d8d2aaa63416c77ecdbd05915d688f3fa4d3cdb2c9493b5b74be8df3eb04de", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "sql",
@@ -98,7 +98,7 @@
       "serverKey": "sqllens-language-server",
       "serverVersion": "0.5.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-sql-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["node_modules"]}
+      "artifact": {"fileName": "code-intelligence-sql-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 8776227, "sha256": "076d284408e8e77986dc9072393b6e59dfabc133bdde69b35eee7cd9a2679a17", "expectedPaths": ["node_modules"]}
     },
     {
       "id": "c-cpp",
@@ -107,7 +107,7 @@
       "serverKey": "clangd",
       "serverVersion": "22.1.0",
       "sharedComponents": [],
-      "artifact": {"fileName": "code-intelligence-c-cpp-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-c-cpp-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 21281709, "sha256": "c825835292391422e3ea43dd3020708ccc4a1c70e9218f47f25510828d675e2b", "expectedPaths": ["servers"]}
     },
     {
       "id": "java",
@@ -116,7 +116,7 @@
       "serverKey": "jdtls",
       "serverVersion": "1.51.0",
       "sharedComponents": ["temurin-jre-21"],
-      "artifact": {"fileName": "code-intelligence-java-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-java-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 49354648, "sha256": "5d5c7588185ab5e76765fd6b295ba8e06e153aaebf12a0bbab3f742975aaa943", "expectedPaths": ["servers"]}
     },
     {
       "id": "rust",
@@ -125,7 +125,7 @@
       "serverKey": "rust-analyzer",
       "serverVersion": "2026-09-07",
       "sharedComponents": ["rust-toolchain"],
-      "artifact": {"fileName": "code-intelligence-rust-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-rust-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 17575787, "sha256": "f1f48c7a205d7a8b062569ece21fec8dafa81dce9a3969eef9642a8a087dc25b", "expectedPaths": ["servers"]}
     },
     {
       "id": "go",
@@ -134,7 +134,7 @@
       "serverKey": "gopls",
       "serverVersion": "v0.23.0",
       "sharedComponents": ["go-runtime"],
-      "artifact": {"fileName": "code-intelligence-go-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-go-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 22331876, "sha256": "11d0cc27018f0ea44181fe7afa1e46a427d0bdb0c0a2f1a1ca1a6408cc8a5ad8", "expectedPaths": ["servers"]}
     },
     {
       "id": "csharp",
@@ -143,7 +143,7 @@
       "serverKey": "csharp-ls",
       "serverVersion": "0.26.0",
       "sharedComponents": ["dotnet-sdk-10"],
-      "artifact": {"fileName": "code-intelligence-csharp-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-csharp-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 69463409, "sha256": "1f2fa8f92f2115da715395bbd4f9931d48f6e40f79fc742d7fb3a7d8922c4a23", "expectedPaths": ["servers"]}
     },
     {
       "id": "kotlin",
@@ -152,7 +152,7 @@
       "serverKey": "kotlin-language-server",
       "serverVersion": "1.3.9",
       "sharedComponents": ["temurin-jre-21"],
-      "artifact": {"fileName": "code-intelligence-kotlin-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-kotlin-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 88224055, "sha256": "859989ebcfa8e2f997b2f2786707cf8d63f65252b692e87123cac9376c8f2a21", "expectedPaths": ["servers"]}
     },
     {
       "id": "ruby",
@@ -161,7 +161,7 @@
       "serverKey": "solargraph",
       "serverVersion": "0.60.3",
       "sharedComponents": ["ruby-runtime-3.4"],
-      "artifact": {"fileName": "code-intelligence-ruby-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-ruby-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 29823719, "sha256": "6a9aca168a6186705e04b7ff890ab99b0fb865c164005fe17e4f73860b3c0125", "expectedPaths": ["servers"]}
     },
     {
       "id": "xml",
@@ -170,7 +170,7 @@
       "serverKey": "lemminx",
       "serverVersion": "0.31.0",
       "sharedComponents": ["temurin-jre-21"],
-      "artifact": {"fileName": "code-intelligence-xml-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers"]}
+      "artifact": {"fileName": "code-intelligence-xml-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 7865291, "sha256": "3de7e6666dbb49b42c8528aead774f5390152ed09aba286e0c571cda7243bb67", "expectedPaths": ["servers"]}
     },
     {
       "id": "swift",
@@ -185,11 +185,11 @@
     }
   ],
   "sharedComponents": [
-    {"id": "temurin-jre-21", "label": "Temurin JRE 21", "version": "21.0.12.1", "artifact": {"fileName": "code-intelligence-temurin-jre-21-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers/jre"]}},
-    {"id": "rust-toolchain", "label": "Rust toolchain", "version": "1.98.1", "artifact": {"fileName": "code-intelligence-rust-toolchain-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers/rust-toolchain"]}},
-    {"id": "go-runtime", "label": "Go runtime", "version": "1.27.1", "artifact": {"fileName": "code-intelligence-go-runtime-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers/go-1.27.1"]}},
-    {"id": "dotnet-sdk-10", "label": ".NET SDK 10", "version": "10.0.401", "artifact": {"fileName": "code-intelligence-dotnet-sdk-10-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers/dotnet-10-sdk"]}},
-    {"id": "ruby-runtime-3.4", "label": "Ruby runtime 3.4", "version": "3.4.10", "artifact": {"fileName": "code-intelligence-ruby-runtime-3.4-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": null, "sha256": null, "expectedPaths": ["servers/ruby"]}}
+    {"id": "temurin-jre-21", "label": "Temurin JRE 21", "version": "21.0.12.1", "artifact": {"fileName": "code-intelligence-temurin-jre-21-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 48862213, "sha256": "485b418181b16b299731b45bd1b74f1d676bc673bac5f1403febdf583f4ded33", "expectedPaths": ["servers/jre"]}},
+    {"id": "rust-toolchain", "label": "Rust toolchain", "version": "1.98.1", "artifact": {"fileName": "code-intelligence-rust-toolchain-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 266369318, "sha256": "63f9d3e0d6b27d7cd666d16217b41094bc0ed629ae5fc33f6a2ceb2913c14cde", "expectedPaths": ["servers/rust-toolchain"]}},
+    {"id": "go-runtime", "label": "Go runtime", "version": "1.27.1", "artifact": {"fileName": "code-intelligence-go-runtime-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 80072043, "sha256": "70e68f90e58182e4a0cbbcae9d9a9e940ada379d5b9be169d24b7e79b0e94818", "expectedPaths": ["servers/go-1.27.1"]}},
+    {"id": "dotnet-sdk-10", "label": ".NET SDK 10", "version": "10.0.401", "artifact": {"fileName": "code-intelligence-dotnet-sdk-10-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 294125834, "sha256": "22c3e4e9376258165ae7e22d9bef43a95c85de491ccfa15271ab2b1a119146bb", "expectedPaths": ["servers/dotnet-10-sdk"]}},
+    {"id": "ruby-runtime-3.4", "label": "Ruby runtime 3.4", "version": "3.4.10", "artifact": {"fileName": "code-intelligence-ruby-runtime-3.4-win32-x64.zip", "urlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/{fileName}", "sizeBytes": 36610598, "sha256": "93634148c157260f12179d2a168f59eb8418dda4797d8b4ff089223f2c0b5122", "expectedPaths": ["servers/ruby"]}}
   ],
   "licenseFiles": [
     "licenses/README.md",
@@ -207,7 +207,7 @@
     "licenses/RUBY-LICENSE.txt",
     "licenses/RUST-ANALYZER-LICENSE-APACHE",
     "licenses/RUST-ANALYZER-LICENSE-MIT",
-    "licenses/SQLLENS-LICENSE.txt",
+    "licenses/SQLLENS-LICENSE",
     "licenses/SVELTE-LANGUAGE-SERVER-LICENSE",
     "licenses/TEMURIN-NOTICE",
     "licenses/TYPESCRIPT-LANGUAGE-SERVER-LICENSE",

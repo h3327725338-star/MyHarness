@@ -13,11 +13,21 @@ MyHarness. It does not download a language server. Windows x64 users can open
 - `licenses/` and `DEPENDENCY-MANIFEST.json` contain redistribution notices for
   the source catalog. They remain separate from user-installed runtime data.
 
-The current repository deliberately has no published module hashes or archive
-assets (`published` is `false` in the manifest). The UI reports these modules
-as unavailable and the installer refuses to download until a release supplies
-exact metadata, so an interrupted or tampered download cannot become an active
-runtime. Runtime files are stored
+The archives are not stored in the repository. Build them with
+`npm run build:code-intelligence` (that is `node scripts/build-code-intelligence-artifacts.mjs`; output in
+`.artifacts/code-intelligence/release/`, git-ignored), upload every `.zip` there
+to the GitHub Release named by `releaseTag`, and run it with `--apply` to write
+each archive's exact size and SHA-256 into `runtime-manifest.json` and mark it
+`published`. The build downloads the language servers from their upstream
+releases or npm; the Ruby module also needs an MSYS2 / RubyInstaller DevKit
+directory in `MSYS2_PATH` to compile two gems. Do not rebuild after uploading:
+the recorded hashes belong to the exact archives that were uploaded.
+
+The installer refuses an archive whose size or SHA-256 differs from the
+manifest, and refuses to download at all while `published` is `false` or the
+metadata is missing, so an interrupted or tampered download cannot become an
+active runtime. Until the archives are uploaded the release URLs answer HTTP 404
+and the download fails without installing anything. Runtime files are stored
 under `%USERPROFILE%\\.myharness\\agent\\code-intelligence\\`; project Session
 data remains under the project `data\\` directory.
 

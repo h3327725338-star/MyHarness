@@ -22,13 +22,12 @@ export const NAV = [
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
-	{ id: "tools", label: N_("Tool calls"), icon: "wrench" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "agent", Tools: "tools", Images: "agent", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
 
 export function sectionOf(item) {
 	if (item.id.startsWith("codeIntelligence.")) return "code";
@@ -43,7 +42,6 @@ const PAGE_NOTE = {
 	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
-	tools: N_("Auxiliary tools and extensions."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and what it tells you about."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
@@ -225,15 +223,14 @@ function GroupSwitch({ item }) {
 }
 
 /** The settings of one page, one card per server section; a group with its own switch (web search) gets its own card. */
-function SettingsList({ items, models, tools = false }) {
+function SettingsList({ items, models }) {
 	const cards = useMemo(() => {
 		const list = [];
 		for (const item of items) {
 			const prefix = Object.keys(GROUPS).find((p) => item.id.startsWith(p));
-			const toolKey = item.section === "Images" ? "Images" : item.id.startsWith("codeIntelligence.") ? "Code Intelligence" : item.id;
-			const key = tools ? `tool:${toolKey}` : prefix ? `group:${prefix}` : `section:${item.section}`;
+			const key = prefix ? `group:${prefix}` : `section:${item.section}`;
 			let card = list.find((c) => c.key === key);
-			if (!card) list.push((card = { key, section: item.section, prefix, title: item.section === "Images" ? "Images" : item.label, items: [] }));
+			if (!card) list.push((card = { key, section: item.section, prefix, items: [] }));
 			card.items.push(item);
 		}
 		return list;
@@ -248,10 +245,74 @@ function SettingsList({ items, models, tools = false }) {
 			<//>`;
 		}
 		// A page with a single group needs no group title: the page title says it.
-		return html`<${Card} key=${card.key} title=${tools ? serverText(card.title) : card.items.some((item) => ["steeringMode", "followUpMode"].includes(item.id)) ? t("Message delivery") : cards.length > 1 ? serverText(card.section) : undefined} collapsible=${tools}>
+		return html`<${Card} key=${card.key} title=${card.items.some((item) => ["steeringMode", "followUpMode"].includes(item.id)) ? t("Message delivery") : cards.length > 1 ? serverText(card.section) : undefined}>
 			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
 		<//>`;
 	});
+}
+
+/** Shared runtimes a language module installs along with its language server (ids from runtime-manifest.json). */
+const COMPONENT_NAMES = {
+	"temurin-jre-21": N_("Java runtime (Temurin JRE 21)"),
+	"rust-toolchain": N_("Rust toolchain"),
+	"go-runtime": N_("Go runtime"),
+	"dotnet-sdk-10": N_(".NET SDK 10"),
+	"ruby-runtime-3.4": N_("Ruby runtime 3.4"),
+};
+
+/** The short state of a module, shown on its folded line. */
+function moduleState(module, busy, progress) {
+	if (busy) return { text: progress?.percent != null ? `${t("Installing…")} ${Math.floor(progress.percent)}%` : t("Installing…"), tone: "busy" };
+	if (module.status === "installed") return module.enabled ? { text: t("Enabled"), tone: "on" } : { text: t("Disabled"), tone: "" };
+	if (module.status === "unavailable") return { text: module.reason === "external-prerequisites" ? t("Needs your own setup") : module.reason === "incompatible-version" ? t("Not compatible") : t("Not published yet"), tone: "" };
+	if (module.status === "error") return { text: t("Download failed"), tone: "bad" };
+	if (module.status === "update-available") return { text: t("Update available"), tone: "" };
+	if (module.status === "repair-needed") return { text: t("Needs repair"), tone: "bad" };
+	return { text: t("Not downloaded"), tone: "" };
+}
+
+/** What a module is, and what it needs on this computer; every sentence is built here so it follows the UI language. */
+function moduleDetails(module) {
+	const description = t("Semantic code intelligence for {languages}: go to definition, find references and search symbols, powered by {server}.", { languages: module.label, server: module.serverKey });
+	let requirement;
+	if (module.reason === "external-prerequisites") requirement = serverText(module.notes) || t("Needs tools installed on your computer first; MyHarness does not download them.");
+	else if (module.sharedComponents?.length) requirement = t("Also downloads: {components}. Nothing else needs to be installed.", { components: module.sharedComponents.map((id) => t(COMPONENT_NAMES[id] || id)).join(", ") });
+	else requirement = t("Nothing else needs to be installed; it is downloaded as one package.");
+	const note = module.reason === "incompatible-version" ? t("This module does not match your MyHarness version.")
+		: module.reason === "release-metadata-missing" ? t("The download package for this module has not been published yet.")
+		: module.status === "error" ? t("Download failed. Check your network connection and try again.")
+		: module.status === "repair-needed" ? t("The installed files are damaged. Download again to repair them.")
+		: module.status === "update-available" ? t("A newer version of this module is available.")
+		: "";
+	return { description, requirement, note };
+}
+
+/** One language module: a folded line with its name and state; the details, the download and the switch are inside. */
+function LanguageModule({ module, progress, busy, open, onOpen, onInstall, onEnable }) {
+	const state = moduleState(module, busy, progress);
+	const details = moduleDetails(module);
+	const installed = module.status === "installed";
+	const downloadable = module.status !== "unavailable" || module.reason === "release-metadata-missing";
+	return html`<div class="lang-item">
+		<button class="lang-head" aria-expanded=${open} onClick=${onOpen}>
+			<${Icon} name="chevronRight" size=${13} class="disclose" />
+			<strong class="lang-name truncate">${module.label}</strong>
+			<span class=${`lang-state ${state.tone}`}>${state.text}</span>
+		</button>
+		${busy ? html`<div class="lang-progress-line"><progress class="language-progress" max="100" value=${progress?.percent ?? undefined} aria-label=${module.label} /><span class="set-desc">${progress?.percent != null ? `${progress.percent.toFixed(1)}%` : t("Detecting…")} · ${progress?.remainingSeconds != null ? t("{seconds}s remaining", { seconds: Math.ceil(progress.remainingSeconds) }) : t("Estimating remaining time…")}</span></div>` : null}
+		<${Collapse} open=${open}>
+			<div class="lang-body">
+				<span class="set-desc">${details.description}</span>
+				<span class="set-desc">${details.requirement}</span>
+				${details.note ? html`<span class=${`set-desc ${module.status === "error" || module.status === "repair-needed" ? "c-danger" : ""}`} title=${module.status === "error" ? module.message : undefined}>${details.note}</span>` : null}
+				<div class="lang-actions">
+					${installed
+						? html`<span class="set-label">${t("Enable semantic code intelligence")}</span><${Toggle} checked=${!!module.enabled} label=${module.label} onChange=${onEnable} />`
+						: html`<button class="btn secondary" disabled=${busy || !downloadable} onClick=${onInstall}>${busy ? html`<${Spinner} />` : t("Download")}</button>`}
+				</div>
+			</div>
+		<//>
+	</div>`;
 }
 
 function CodeIntelligence({ items }) {
@@ -259,34 +320,40 @@ function CodeIntelligence({ items }) {
 	const [data, setData] = useState(null);
 	const [error, setError] = useState("");
 	const [pending, setPending] = useState([]);
+	const [openId, setOpenId] = useState("");
 	const enabled = !!items.find((item) => item.id === "codeIntelligence.enabled")?.value;
 	const [saving, save] = useSaving();
+	const refresh = () => api("/api/code-intelligence/modules").then(setData).catch((e) => setError(e.message));
 	useEffect(() => {
 		let live = true;
 		api("/api/code-intelligence/modules").then((value) => { if (live) setData(value); }).catch((e) => { if (live) setError(e.message); });
 		return () => { live = false; };
 	}, []);
 	useEffect(() => { if (pushed) setData(pushed); }, [pushed]);
+	// A failed download is not shown as the server's English message: the refreshed module says what went wrong.
 	const install = async (id) => {
 		setPending((ids) => [...ids, id]);
 		setError("");
 		try { setData(await post("/api/code-intelligence/install", { id })); }
-		catch (e) { setError(e.message); }
+		catch { await refresh(); }
 		finally { setPending((ids) => ids.filter((value) => value !== id)); }
+	};
+	const enable = async (id, on) => {
+		setData((value) => value && { ...value, modules: value.modules.map((module) => (module.id === id ? { ...module, enabled: on } : module)) });
+		try { setData(await post("/api/code-intelligence/language", { id, enabled: on })); }
+		catch (e) { setError(e.message); await refresh(); }
 	};
 	return html`<${Card} title=${t("Engine")}>
 		<${Row} label=${t("Code Intelligence")} description=${t("Engine changes and installed modules apply after restart.")}><${Saving} shown=${saving} /><${Segmented} value=${enabled ? "semantic" : "lightweight"} options=${[{ value: "lightweight", label: "Lightweight" }, { value: "semantic", label: "Semantic" }]} onChange=${(value) => save("codeIntelligence.enabled", value === "semantic")} /><//>
 	<//>${error ? html`<div class="notice danger">${error}</div>` : null}
 	${enabled ? html`<${Card} title=${t("Language modules")}>
-		${!data && !error ? html`<${Spinner} />` : data?.modules.map((module) => {
-			const progress = data.progress?.find((value) => value.id === module.id);
-			const busy = pending.includes(module.id) || module.status === "installing";
-			const installed = module.status === "installed";
-			return html`<div key=${module.id}><${Row} label=${module.label} description=${module.message || module.languages.join(" · ")}>
-				<span class="dim">${installed ? t("Downloaded") : busy ? t("Installing…") : t("Not downloaded")}</span>
-				${!installed ? html`<button class="btn secondary" disabled=${busy || module.status === "unavailable"} onClick=${() => install(module.id)}>${busy ? html`<${Spinner} />` : t("Download")}</button>` : null}
-			<//>${busy ? html`<div class="set-desc"><progress class="language-progress" max="100" value=${progress?.percent ?? undefined} aria-label=${module.label} /> ${progress?.percent != null ? `${progress.percent.toFixed(1)}%` : t("Detecting…")} · ${progress?.remainingSeconds != null ? t("{seconds}s remaining", { seconds: Math.ceil(progress.remainingSeconds) }) : t("Estimating remaining time…")}</div>` : null}</div>`;
-		})}
+		${!data && !error ? html`<${Spinner} />` : data?.modules.map((module) => html`<${LanguageModule} key=${module.id} module=${module}
+			progress=${data.progress?.find((value) => value.id === module.id)}
+			busy=${pending.includes(module.id) || module.status === "installing"}
+			open=${openId === module.id}
+			onOpen=${() => setOpenId(openId === module.id ? "" : module.id)}
+			onInstall=${() => install(module.id)}
+			onEnable=${(on) => enable(module.id, on)} />`)}
 	<//>` : null}`;
 }
 
@@ -423,7 +490,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} tools=${section === "tools"} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

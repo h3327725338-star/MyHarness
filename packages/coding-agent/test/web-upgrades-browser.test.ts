@@ -23,9 +23,11 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				prefix: "/markdown/",
 				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
 			});
-			server.route("GET", "/api/changes/card-diff", () => ({
+			server.route("GET", "/api/changes/card-diff", ({ url }) => ({
 				summary: {},
-				patch: "--- a/doc.md\n+++ b/doc.md\n@@ -1 +1 @@\n-# Before\n+# After\n",
+				patch: url.searchParams.get("path")?.endsWith(".ts")
+					? `--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,60 @@\n${Array.from({ length: 60 }, (_, i) => `+const v${i} = ${i};`).join("\n")}\n`
+					: "--- a/doc.md\n+++ b/doc.md\n@@ -1 +1 @@\n-# Before\n+# After\n",
 			}));
 			server.route("GET", "/api/settings", () => ({
 				items: [
@@ -119,9 +121,10 @@ try {
  let body=document.querySelector('.settings-body');
  if(!body.textContent.includes('Message delivery') || body.textContent.includes('notification') || body.textContent.includes('Notifications')) throw Error('conversation grouping');
  if([...body.querySelectorAll('.set-card-head strong')].some(n=>n.textContent==='Agent')) throw Error('duplicate Agent card');
- setView({settingsSection:'tools'}); await wait(100);
+ if(document.querySelector('.settings-nav').textContent.includes('Tool calls')) throw Error('empty tools page still in the navigation');
+ setView({settingsSection:'code'}); await wait(100);
  body=document.querySelector('.settings-body');
- if(!body.textContent.includes('Code Intelligence') || !body.textContent.includes('Images') || body.textContent.includes('Sub-agent') || body.textContent.includes('Vision') || body.textContent.includes('Auto Memory')) throw Error('tools grouping');
+ if(!body.textContent.includes('Code Intelligence') || body.textContent.includes('Sub-agent') || body.textContent.includes('Vision') || body.textContent.includes('Auto Memory')) throw Error('code intelligence grouping');
  setView({settingsSection:'agent'}); await wait(100);
  body=document.querySelector('.settings-body');
  if(!body.textContent.includes('Sub-agent') || !body.textContent.includes('Vision Assistant') || !body.textContent.includes('Auto Memory')) throw Error('assistants grouping');
@@ -143,6 +146,17 @@ try {
  document.querySelector('.summary-head').click(); await wait(400);
  setView({processDefault:'collapsed'}); setView({processDefault:'expanded'}); await wait(350);
  if(document.querySelector('.summary-head').getAttribute('aria-expanded')!=='false') throw Error('user fold overwritten');
+ {const app=document.getElementById('app'); app.style.cssText='height:420px;display:flex;flex-direction:column';
+  set({snap:{active:false,cwd:'C:/test',flags:{},session:{id:'scroll'}},items:[{kind:'user',id:'u9',ts:1,text:'t',images:[]},{kind:'assistant',id:'a9',ts:2,model:'test',blocks:[{type:'text',text:'line\\n\\n'.repeat(60)}],stopReason:'stop'},{kind:'runChanges',id:'card9',runId:9,ts:3,files:[{path:'a.ts',additions:60,deletions:0}]}]}); await wait(600);
+  const sc=document.querySelector('.transcript');
+  if(sc.scrollHeight-sc.clientHeight-sc.scrollTop>10) throw Error('not at bottom');
+  const row=document.querySelector('.transcript .change-file'); const top0=row.getBoundingClientRect().top;
+  row.click(); await wait(1200);
+  if(!document.querySelector('.transcript .change-diff')) throw Error('diff missing');
+  if(Math.abs(row.getBoundingClientRect().top-top0)>1) throw Error('file row moved when its diff opened: '+(row.getBoundingClientRect().top-top0));
+  if(sc.scrollHeight-sc.clientHeight-sc.scrollTop<100) throw Error('diff did not grow downwards');
+  app.style.cssText='';
+ }
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

@@ -22,6 +22,7 @@
 		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"build:offline": "cd packages/tui && npm run build && cd ../ai && npm run build:offline && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"check": "biome check --write --error-on-warnings . && node scripts/run-checks-parallel.mjs",
+		"build:code-intelligence": "node scripts/build-code-intelligence-artifacts.mjs",
 		"audit:release": "node scripts/release-audit.mjs --worktree",
 		"audit:staged": "node scripts/release-audit.mjs --staged",
 		"audit:public": "node scripts/release-audit.mjs --ref main",

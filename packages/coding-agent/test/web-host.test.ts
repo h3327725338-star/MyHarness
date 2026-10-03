@@ -441,6 +441,24 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(found.files).toContain("a.ts");
 	});
 
+	it("switches a language module on and off without touching its other settings", async () => {
+		const fx = await start();
+		const python = async () =>
+			(await fx.get("/api/code-intelligence/modules")).modules.find((module: any) => module.id === "python");
+		expect(await python()).toMatchObject({ enabled: true, serverKey: "pyright" });
+		expect(
+			(await fx.post("/api/code-intelligence/language", { id: "python", enabled: false })).modules.find(
+				(module: any) => module.id === "python",
+			).enabled,
+		).toBe(false);
+		expect(await python()).toMatchObject({ enabled: false });
+		await fx.post("/api/code-intelligence/language", { id: "python", enabled: true });
+		expect(await python()).toMatchObject({ enabled: true });
+		await expect(fx.post("/api/code-intelligence/language", { id: "nope", enabled: false })).rejects.toThrow(
+			/Unknown language module/,
+		);
+	});
+
 	it("lists settings, resources and providers and validates setting writes", async () => {
 		const fx = await start();
 		const settings = await fx.get("/api/settings");

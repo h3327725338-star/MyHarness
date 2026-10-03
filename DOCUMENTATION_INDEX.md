@@ -70,7 +70,7 @@
 - 正式 GitHub CI 由 `.github/workflows/ci.yml` 的 `windows-2022` + `windows-2025` matrix 构成；两套 runner 执行相同完整流程且都必须通过，不使用 `windows-latest`。
 - CI baseline 是 GitHub Windows Server 自动化环境，不等同于最终用户平台支持矩阵。MyHarness 面向 Windows 桌面 x64；当前仓库没有据此逐一验证 Windows 10/11 的每个桌面版本。
 - 根 `AGENTS.md` 是本仓库 Agent 开发规则入口；产品运行时的 `system-prompts/` 是另一层、面向所有 MyHarness 项目的静态 System Prompt 资源。二者不能互相替代。
-- `packages/coding-agent/code-intelligence/runtime-manifest.json` 当前是 `published: false`，下载归档的 `sizeBytes` 和 `sha256` 为空；在真实 Release 资产和校验值出现前，语义模块应保持 unavailable。
+- `packages/coding-agent/code-intelligence/runtime-manifest.json` 记录各归档的 `sizeBytes` 和 `sha256`，由 `scripts/build-code-intelligence-artifacts.mjs` 构建后回填；归档必须作为 `releaseTag` 对应 GitHub Release 的资产上传后才能下载，`published` 为 false 或校验值缺失时语义模块保持 unavailable。
 - `system-prompts/session/commit-authorization.md` 当前不存在；`/commit` 的边界由 Coding Agent 源码中的 Git/Session 流程处理，不能把缺失文件当成可加载 Prompt。
 - `packages/coding-agent/docs/architecture-baseline.md`、`phase*-architecture-boundaries.md`、`docs/rpc.md` 等明确标为 historical 的文档只用于理解历史，不作为当前实现说明。
 

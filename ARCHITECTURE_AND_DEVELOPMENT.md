@@ -378,8 +378,10 @@ AgentSession
 Code Intelligence 的存储与产品 Session 分开：轻量索引在源码内运行；可选
 Windows 语言模块由 `symbols/runtime/installation.ts` 安装到
 `%USERPROFILE%\\.myharness\\agent\\code-intelligence\\`，语义 workspace 数据在
-该目录的 hash 子目录中。正常启动不会下载模块；当前 manifest 未发布时，
-语义模块状态为 unavailable。
+该目录的 hash 子目录中。正常启动不会下载模块；manifest 的 `published` 为 false 或
+缺少归档大小/SHA-256 时，语义模块状态为 unavailable。归档由
+`scripts/build-code-intelligence-artifacts.mjs` 构建，需要上传到 manifest 里
+`releaseTag` 对应的 GitHub Release 后才能下载。
 
 ### TUI 链
 
@@ -617,7 +619,7 @@ Code Intelligence 测试位于 packages/coding-agent/test/code-intelligence/，�
 
 Windows 条件测试包括 packages/coding-agent/test/bash-close-hang-windows.test.ts。
 
-Code Intelligence 的默认实现是 source 内轻量索引；Windows 语义模块由 `packages/coding-agent/src/symbols/runtime/installation.ts` 按语言管理，安装状态测试位于 `packages/coding-agent/test/code-intelligence/runtime-manager.test.ts`。真实语言服务器 E2E 需要已发布且有完整校验元数据的 Windows 归档，本次没有把未发布归档当作通过。scripts/smoke-cli-local-provider.mjs 也存在，但是否能在当前机器成功运行需要真实环境验证。
+Code Intelligence 的默认实现是 source 内轻量索引；Windows 语义模块由 `packages/coding-agent/src/symbols/runtime/installation.ts` 按语言管理，安装状态测试位于 `packages/coding-agent/test/code-intelligence/runtime-manager.test.ts`。真实语言服务器 E2E 需要带完整校验元数据的 Windows 归档：用 `scripts/build-code-intelligence-artifacts.mjs` 构建后，可在本地把 manifest 的下载地址换成 `file://` 走完整的安装与启动链路；归档上传到 GitHub Release 之前，线上下载地址不可用，不能把本地结果当作线上下载已通过。scripts/smoke-cli-local-provider.mjs 也存在，但是否能在当前机器成功运行需要真实环境验证。
 
 ### 按修改范围验证
 
