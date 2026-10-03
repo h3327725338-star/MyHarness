@@ -45,6 +45,13 @@ the current Coding Agent default path is still the project `data/workspaces/`
 tree. It must not be described as the active product storage backend without a
 runtime change and corresponding tests.
 
+Web file imports are stored alongside the originating Session JSONL in
+`uploads/<random-id>/attachment-<sanitized-name>`. Each import has a separate
+directory, so matching names do not overwrite one another. These are user-owned
+original file bytes; removing a draft attachment only removes its reference, not
+the stored file. Structured Session deletion removes them with the Session data
+directory; they must not be treated as disposable build cache.
+
 ## Lifecycle and cleanup rules
 
 - `data/`, global Agent data, Session files, credentials, traces, memory and

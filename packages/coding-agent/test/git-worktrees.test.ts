@@ -39,6 +39,16 @@ afterEach(() => {
 });
 
 describe("GitWorktreeManager", () => {
+	it("async listing matches synchronous metadata and yields to the event loop", async () => {
+		const { root, manager } = createRepository();
+		const expected = manager.list(root);
+		let yielded = false;
+		setTimeout(() => {
+			yielded = true;
+		}, 0);
+		expect(await manager.listAsync(root)).toEqual(expected);
+		expect(yielded).toBe(true);
+	});
 	it("creates an isolated new branch Worktree and combines it into main", async () => {
 		const { root, agentDir, manager } = createRepository();
 		const created = manager.createBranch(root, "feature/one");

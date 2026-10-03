@@ -84,6 +84,8 @@
 .attachments { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0 6px; }
 .thumb { position: relative; width: 56px; height: 56px; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--r-md); border: 1px solid var(--border-strong); }
+.thumb:has(.file-attachment) { width: 160px; }
+.file-attachment { height: 100%; display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--r-md); font-size: var(--fs-xs); }
 .thumb-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); }
 .thumb-x:hover { color: var(--danger); }
 
@@ -104,11 +106,10 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-chip[aria-expanded="true"] .chev { transform: rotate(180deg); }
 .branch-chip.wt { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; line-height: 15px; }
-.popover.branch-pop { padding: 3px; animation: branch-in var(--t-base) var(--ease) both; overflow-y: auto; }
-.popover.branch-pop.leaving { animation: branch-out 160ms var(--ease) both; pointer-events: none; }
-@keyframes branch-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
-@keyframes branch-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px) scale(0.98); } }
-.branch-list { max-height: 228px; }
+.popover.branch-pop { padding: 3px; animation: fade-in var(--t-base) var(--ease) both; overflow-y: auto; }
+.popover.branch-pop.leaving { animation: fade-out var(--t-base) var(--ease) both; pointer-events: none; }
+.branch-list { height: 171px; overflow-y: auto; scrollbar-gutter: stable; }
+.branch-copy-region { height: 68px; overflow-y: auto; scrollbar-gutter: stable; }
 .branch-row { cursor: pointer; }
 .branch-row.hi { background: var(--surface-hover); color: var(--text); }
 .branch-row.active { color: var(--text); font-weight: 600; }

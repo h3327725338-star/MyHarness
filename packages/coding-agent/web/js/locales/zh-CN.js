@@ -7,6 +7,13 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Wait for the current file import to finish.": "请等待当前文件导入完成。" ,
+	"Upload files from Explorer": "从 Explorer 上传文件",
+	"Remove attachment": "移除附件",
+	"Loading files…": "正在载入文件…",
+	"Could not read the file.": "无法读取文件。",
+	"Files must be 32 MiB or smaller.": "单个文件不能超过 32 MiB。",
+	"At most 12 attachments per message.": "每条消息最多附加 12 个文件。",
 	"Auxiliary tools and extensions.": "辅助工具与扩展。",
 	"Engine": "引擎模式",
 	"Engine changes and installed modules apply after restart.": "引擎切换和新安装模块在重启后生效。",

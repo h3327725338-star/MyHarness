@@ -37,6 +37,17 @@ const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	...extra,
 });
 
+describe("Web UI: list presence ordering", () => {
+	it("places new rows first immediately while retaining exiting neighbours", async () => {
+		const { reconcileRows } = await import(new URL("list-presence.js", webDir).href);
+		const old = [{ path: "old-draft" }, { path: "history" }, { path: "last" }];
+		const current = [{ path: "new-draft" }, { path: "history", name: "updated" }];
+		expect(reconcileRows(old, current)).toEqual([current[0], old[0], current[1], old[2]]);
+		expect(reconcileRows(current, current)).toEqual(current);
+		expect(reconcileRows(old, [])).toEqual(old);
+	});
+});
+
 describe("Web UI: Commit repair containment", () => {
 	const marker = { kind: "custom", id: "repair", ts: 2, customType: "git-commit-repair", display: false };
 	const user = { kind: "user", ts: 1, text: "task", images: [] };

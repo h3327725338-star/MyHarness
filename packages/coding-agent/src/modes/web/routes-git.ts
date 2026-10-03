@@ -438,9 +438,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		return state.root;
 	};
 
-	server.route("GET", "/api/git/worktrees", () => {
-		const root = repositoryRootOrThrow();
-		const listing = worktreeCase.list(root);
+	server.route("GET", "/api/git/worktrees", async () => {
+		const state = await inspectGitRepositoryAsync(cwd());
+		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
+		const root = state.root;
+		const listing = await worktreeCase.listAsync(root);
 		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
 		const current = path.resolve(cwd());
 		return {

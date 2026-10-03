@@ -260,10 +260,12 @@ export function savePrefs(prefs) {
 
 export function debounce(fn, ms) {
 	let timer;
-	return (...args) => {
+	const run = (...args) => {
 		clearTimeout(timer);
 		timer = setTimeout(() => fn(...args), ms);
 	};
+	run.cancel = () => clearTimeout(timer);
+	return run;
 }
 
 /** Classify a finished shell tool result: "cancelled" (user stopped it), "timeout", or null. */

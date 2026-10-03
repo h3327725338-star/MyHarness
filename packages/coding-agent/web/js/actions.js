@@ -167,7 +167,11 @@ export const actions = {
 	 */
 	async newSession(rootPath, { unbound = false } = {}) {
 		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound }));
-		if (result?.slot) await showSlot(result.slot);
+		if (result?.slot) {
+			const group = unbound ? GENERAL_KEY : rootPath;
+			if (group) setView({ expanded: { ...state.view.expanded, [group]: true } });
+			await showSlot(result.slot);
+		}
 		return result;
 	},
 

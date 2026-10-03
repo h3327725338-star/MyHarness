@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../../utils/paths.ts";
-import { type GitCommandResult, runGitSync } from "../repository/command.ts";
+import { type GitCommandResult, runGit, runGitSync } from "../repository/command.ts";
 
 const WORKTREE_TIMEOUT_MS = 30_000;
 const MERGE_TIMEOUT_MS = 120_000;
@@ -136,8 +136,21 @@ export class GitWorktreeManager {
 			timeoutMs: WORKTREE_TIMEOUT_MS,
 			preserveOutput: true,
 		});
-		if (!result.ok) return { ok: false, error: formatGitFailure(result) };
+		return this.parseListing(result);
+	}
 
+	/** Read-only Web queries must not block the server event loop. */
+	async listAsync(repositoryRoot: string): Promise<GitWorktreeListResult> {
+		const result = await runGit(["worktree", "list", "--porcelain"], {
+			cwd: resolvePath(repositoryRoot),
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+			preserveOutput: true,
+		});
+		return this.parseListing(result);
+	}
+
+	private parseListing(result: GitCommandResult): GitWorktreeListResult {
+		if (!result.ok) return { ok: false, error: formatGitFailure(result) };
 		const parsed = parseWorktreePorcelain(result.stdout);
 		const mainIndex = parsed.findIndex((worktree) => worktree.branch === "main");
 		if (mainIndex < 0) {

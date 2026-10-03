@@ -6,6 +6,7 @@ import { FolderPicker } from "./folder-picker.js";
 import { t } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
+import { reconcileRows } from "./list-presence.js";
 import { shortcutFor } from "./shortcuts.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
@@ -154,14 +155,13 @@ function ChatRows({ items, renderRow }) {
 	const drafts = items;
 	const [retained, setRetained] = useState(drafts);
 	useLayoutEffect(() => {
-		setRetained((old) => [...old.map((info) => drafts.find((item) => item.path === info.path) || info), ...drafts.filter((info) => !old.some((item) => item.path === info.path))]);
+		setRetained((old) => reconcileRows(old, drafts));
 		const timer = setTimeout(() => setRetained(drafts), 320);
 		return () => clearTimeout(timer);
 	}, [items]);
-	// Preserve DOM order during exit: moving the collapsing row behind surviving rows can cancel its transition.
-	const visible = retained.map((info) => drafts.find((item) => item.path === info.path) || info);
-	for (const info of drafts) if (!visible.some((item) => item.path === info.path)) visible.push(info);
-	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${drafts.some((item) => item.path === info.path)} renderRow=${renderRow} />`)}`;
+	const visible = reconcileRows(retained, drafts);
+	const present = new Set(drafts.map((item) => item.path));
+	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} renderRow=${renderRow} />`)}`;
 }
 
 function AddWorkspaceDialog({ onClose }) {
@@ -209,12 +209,16 @@ export function Sidebar() {
 		const listable = (slot) => !!slot.sessionFile && !archivedPaths.has(pathKey(slot.sessionFile)) && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
 		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();
+		const savedByRoot = new Map(ws.list.map((workspace) => [pathKey(workspace.rootPath), new Set((ws.sessions[workspace.rootPath] || []).map((info) => pathKey(info.path)))]));
 		for (const slot of slots) {
 			if (!listable(slot) || slot.unbound) continue;
-			const saved = ws.sessions[ws.list.find((w) => pathKey(w.rootPath) === pathKey(slot.cwd))?.rootPath];
-			if (!saved || saved.some((info) => pathKey(info.path) === pathKey(slot.sessionFile))) continue;
 			const key = pathKey(slot.cwd);
-			byRoot.set(key, [...(byRoot.get(key) || []), row(slot)]);
+			const saved = savedByRoot.get(key);
+			if (!saved || saved.has(pathKey(slot.sessionFile))) continue;
+			const rows = byRoot.get(key) || [];
+			if (slot.slot === activeSlot) rows.unshift(row(slot));
+			else rows.push(row(slot));
+			byRoot.set(key, rows);
 		}
 		const listed = new Set((ws.unbound || []).map((info) => pathKey(info.path)));
 		const unbound = slots.filter((slot) => slot.unbound && listable(slot) && !listed.has(pathKey(slot.sessionFile))).map(row);

@@ -30,6 +30,10 @@ export class GitWorktreeUseCase {
 		return new GitWorktreeManager(this.host.getAgentDir()).list(repositoryRoot);
 	}
 
+	listAsync(repositoryRoot: string): Promise<GitWorktreeListResult> {
+		return new GitWorktreeManager(this.host.getAgentDir()).listAsync(repositoryRoot);
+	}
+
 	createFromBranch(repositoryRoot: string, branchName: string): GitWorktreeUseCaseActionResult {
 		const blocked = this.requireIdle();
 		if (blocked) return blocked;

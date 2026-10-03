@@ -77,14 +77,16 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 	const place = () => {
 		if (!anchor.current || !ref.current) return;
 		const a = anchor.current.getBoundingClientRect();
-		const p = ref.current.getBoundingClientRect();
+		// Layout dimensions exclude the entrance transform; measuring the animated rectangle makes the anchor drift.
+		const p = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };
 		const margin = 6;
 		let top = placement === "top" ? a.top - p.height - margin : a.bottom + margin;
 		if (placement === "top" && top < 8) top = Math.min(a.bottom + margin, window.innerHeight - p.height - 8);
 		if (placement === "bottom" && top + p.height > window.innerHeight - 8) top = Math.max(8, a.top - p.height - margin);
 		let left = align === "end" ? a.right - p.width : a.left;
 		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
-		setStyle({ top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" });
+		const next = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" };
+		setStyle((old) => old.top === next.top && old.left === next.left && old.visibility === next.visibility ? old : next);
 	};
 	useLayoutEffect(() => {
 		if (!open) return undefined;
@@ -93,8 +95,15 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		if (typeof ResizeObserver === "undefined" || !ref.current) return undefined;
 		const observer = new ResizeObserver(place);
 		observer.observe(ref.current);
-		return () => observer.disconnect();
-	}, [open, children]);
+		observer.observe(anchor.current);
+		window.addEventListener("resize", place);
+		window.addEventListener("scroll", place, true);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", place);
+			window.removeEventListener("scroll", place, true);
+		};
+	}, [open, placement, align, width, minWidth, maxHeight]);
 	useClickOutside([ref, anchor], () => onClose?.(), open);
 	// Closing hands the keyboard back to the button that opened the popover (unless the focus already moved somewhere).
 	useEffect(() => {

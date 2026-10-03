@@ -1,6 +1,8 @@
 /** Web API routes for the workspace file browser and for change/diff review. */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
@@ -145,6 +147,30 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
 
 export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	const root = () => path.resolve(host.session.sessionManager.getCwd());
+
+	// Browser uploads retain their original bytes as session-owned context references.
+	server.route("POST", "/api/files/upload", async ({ body }) => {
+		const payload = body as { name?: unknown; data?: unknown } | null;
+		if (typeof payload?.name !== "string" || typeof payload.data !== "string")
+			throw new HttpError(400, "Expected a file name and base64 data.");
+		if (payload.data.length > Math.ceil((32 * 1024 * 1024) / 3) * 4)
+			throw new HttpError(413, "Files must be 32 MiB or smaller.");
+		if (payload.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(payload.data))
+			throw new HttpError(400, "Invalid base64 file data.");
+		const name =
+			path
+				.basename(payload.name.replaceAll("\\", "/"))
+				.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+				.replace(/[. ]+$/g, "") || "file";
+		const sessionFile = host.session.sessionManager.getSessionFile();
+		if (!sessionFile) throw new HttpError(409, "No current session.");
+		const directory = path.join(path.dirname(sessionFile), "uploads", randomUUID());
+		const target = path.join(directory, `attachment-${name}`);
+		await mkdir(directory, { recursive: true });
+		await writeFile(target, Buffer.from(payload.data, "base64"), { flag: "wx" });
+		host.inputTouched = true;
+		return { name, path: target };
+	});
 
 	server.route("GET", "/api/files/list", ({ url }) => {
 		const cwd = root();

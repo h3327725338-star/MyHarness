@@ -212,6 +212,7 @@ function useSuggestions(text, caret) {
 		run();
 		return () => {
 			cancelled = true;
+			run.cancel();
 		};
 	}, [token?.type, token?.query]);
 	const items = useMemo(() => {
@@ -404,24 +405,77 @@ export function Composer() {
 		}, 0);
 	};
 
+	const importing = useRef(false);
+	const [loadingFiles, setLoadingFiles] = useState(false);
 	const addFiles = async (fileList) => {
-		const picked = [...fileList].filter((f) => f.type.startsWith("image/"));
+		const picked = [...fileList];
 		if (!picked.length) return;
-		if (state.snap?.model && !state.snap.model.input.includes("image")) toast(t("The current model does not list image input; the image may be ignored or trigger the vision assistant if enabled."), "warning", 6000);
+		if (importing.current) { toast(t("Wait for the current file import to finish."), "warning"); return; }
+		const targetSession = sessionId;
+		const targetSlot = activeSlot;
+		const initial = latest.current;
+		importing.current = true;
+		setLoadingFiles(true);
+		let count = initial.images.length;
 		try {
-			const converted = await Promise.all(picked.map(fileToImage));
-			setImages((prev) => [...prev, ...converted].slice(0, 12));
-		} catch {
-			toast(t("Could not read the image."), "error");
-		}
+			// Read one file at a time: do not materialize an unbounded batch of base64 strings.
+			for (const file of picked) {
+				if (count >= 12) { toast(t("At most 12 attachments per message."), "warning"); break; }
+				if (file.size > 32 * 1024 * 1024) { toast(t("Files must be 32 MiB or smaller."), "warning"); continue; }
+				try {
+					const converted = await fileToImage(file);
+					let attachment;
+					if (file.type.startsWith("image/")) {
+						attachment = converted;
+						if (state.snap?.model && !state.snap.model.input.includes("image")) toast(t("The current model does not list image input; the image may be ignored or trigger the vision assistant if enabled."), "warning", 6000);
+					} else {
+						const uploaded = await post("/api/files/upload", { name: file.name, data: converted.data }, targetSlot);
+						attachment = { name: uploaded.name, path: uploaded.path };
+					}
+					count++;
+					if (latest.current.sessionId === targetSession) setImages((prev) => [...prev, attachment]);
+					else {
+						const draft = drafts.get(targetSession) || initial;
+						drafts.set(targetSession, { text: draft.text, images: [...draft.images, attachment] });
+					}
+				} catch (error) { toast(serverText(error.message, t("Could not read the file.")), "error"); }
+			}
+		} finally { importing.current = false; setLoadingFiles(false); }
 	};
+	const importFiles = useRef(addFiles);
+	importFiles.current = addFiles;
+	useEffect(() => {
+		const isFileDrag = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+		const over = (event) => {
+			if (!isFileDrag(event)) return;
+			event.preventDefault();
+			event.dataTransfer.dropEffect = "copy";
+			setDragOver(true);
+		};
+		const leave = (event) => { if (!event.relatedTarget) setDragOver(false); };
+		const drop = (event) => {
+			if (!isFileDrag(event)) return;
+			event.preventDefault();
+			setDragOver(false);
+			importFiles.current(event.dataTransfer.files);
+		};
+		window.addEventListener("dragover", over);
+		window.addEventListener("dragleave", leave);
+		window.addEventListener("drop", drop);
+		return () => {
+			window.removeEventListener("dragover", over);
+			window.removeEventListener("dragleave", leave);
+			window.removeEventListener("drop", drop);
+		};
+	}, []);
 
 	const send = async (mode) => {
-		const value = text;
-		if ((!value.trim() && images.length === 0) || sending) return;
+		const references = images.filter((item) => item.path);
+		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${text ? `\n\n${text}` : ""}` : text;
+		if ((!value.trim() && images.length === 0) || sending || importing.current) return;
 		if (!active && !value.trim() && images.length === 0) return;
 		setSending(true);
-		const attached = images.map(({ mimeType, data }) => ({ mimeType, data }));
+		const attached = images.filter((item) => !item.path).map(({ mimeType, data }) => ({ mimeType, data }));
 		const previousText = text;
 		const previousImages = images;
 		setText("");
@@ -475,7 +529,7 @@ export function Composer() {
 		}
 	};
 
-	const canSend = (text.trim() || images.length) && !sending && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
+	const canSend = (text.trim() || images.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0;
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 
@@ -494,9 +548,7 @@ export function Composer() {
 			</div>
 			${expanded ? html`<div class="composer-ghost" style=${{ height: `${ghost.current}px` }} /><div class=${`composer-scrim ${closing ? "leaving" : ""}`} onMouseDown=${collapse} />` : null}
 			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""} ${expanded ? "expanded" : ""} ${closing ? "leaving" : ""} ${tall || expanded ? "has-expand" : ""}`}
-				role=${expanded ? "dialog" : undefined} aria-modal=${expanded ? "true" : undefined} aria-label=${expanded ? t("Message editor") : undefined}
-				onDragOver=${(e) => (e.preventDefault(), setDragOver(true))} onDragLeave=${() => setDragOver(false)}
-				onDrop=${(e) => (e.preventDefault(), setDragOver(false), addFiles(e.dataTransfer.files))}>
+				role=${expanded ? "dialog" : undefined} aria-modal=${expanded ? "true" : undefined} aria-label=${expanded ? t("Message editor") : undefined}>
 				${expanded
 					? html`<button class="icon-btn sm composer-expand" onClick=${collapse} title=${t("Collapse (Esc)")} aria-label=${t("Collapse the editor")}><${Icon} name="minimize" size=${14} /></button>`
 					: tall
@@ -504,7 +556,8 @@ export function Composer() {
 						: null}
 				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
-				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
+				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
+				${loadingFiles ? html`<div class="branch-note dim" role="status"><${Spinner} />${t("Loading files…")}</div>` : null}
 				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}
 					onChange=${(value, at) => (setText(slashStart(value)), setCaret(at))}
 					onSelect=${setCaret}
@@ -519,14 +572,15 @@ export function Composer() {
 				<div class="composer-bar">
 					<${Menu} placement="top" trigger=${({ toggle }) => html`<button class="icon-btn" title=${t("Attach or insert")} aria-label=${t("Attach or insert")} onClick=${toggle}><${Icon} name="plus" size=${17} /></button>`}>
 						${(close) => html`
-							<${MenuItem} icon="image" label=${t("Attach image")} onClick=${() => (close(), fileInput.current?.click())} />
+							<${MenuItem} icon="file" label=${t("Upload files from Explorer")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = ""; fileInput.current.click(); } }}  />
+							<${MenuItem} icon="image" label=${t("Attach image")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = "image/*"; fileInput.current.click(); } }}  />
 							<${MenuItem} icon="file" label=${t("Mention a file")} hint="@" onClick=${() => (close(), setText((t) => `${t}${t && !t.endsWith(" ") ? " " : ""}@`), setTimeout(() => area.current?.focus(), 0))} />
 							<${MenuItem} icon="terminal" label=${t("Run a shell command")} hint="!" onClick=${() => (close(), setText("!"), setTimeout(() => area.current?.focus(), 0))} />
 							<${MenuItem} icon="bolt" label=${t("Slash commands & skills")} hint="/" onClick=${() => (close(), setText("/"), setTimeout(() => area.current?.focus(), 0))} />
 							<${MenuSep} />
 							<${MenuItem} icon="layers" label=${t("Compact context now")} disabled=${active} onClick=${() => (close(), actions.compact())} />`}
 					<//>
-					<input ref=${fileInput} type="file" accept="image/*" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
+					<input ref=${fileInput} type="file" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 					<span class="grow" />
 					<${ModelPicker} />
 					<${MainEffortPicker} />

@@ -19,8 +19,7 @@ const POP_EXIT_MS = 160;
 export function BranchChip({ gitStatus }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
-	// The popover fades out instead of disappearing at once.
-	const { mounted, shown } = usePresence(open, POP_EXIT_MS);
+	const { mounted } = usePresence(open, POP_EXIT_MS);
 	const linked = !!gitStatus.linkedWorktree;
 	const branch = gitStatus.branch || t("detached HEAD");
 	return html`<span ref=${anchor} class="branch-anchor">
@@ -31,7 +30,7 @@ export function BranchChip({ gitStatus }) {
 			${linked ? html`<span class="wt-tag">${t("worktree")}</span>` : null}
 			<${Chevron} />
 		</button>
-		<${Popover} anchor=${anchor} open=${mounted} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${shown ? "" : "leaving"}`}>
+		<${Popover} anchor=${anchor} open=${mounted} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${open ? "" : "leaving"}`}>
 			<${BranchMenu} gitStatus=${gitStatus} close=${() => setOpen(false)} />
 		<//>
 	</span>`;
@@ -229,12 +228,14 @@ function BranchMenu({ gitStatus, close }) {
 				</form>
 				<div class="branch-hint dim">${t("The new branch starts from main.")}</div>
 			<//>
+			<div class="branch-copy-region">
 			${others.length ? html`<div class="branch-copies">${others.map((w) => html`<button key=${w.path} class="pop-item branch-copy" disabled=${disabled} onClick=${() => enterCopy(w.path, w.isMain ? t("Back in the main copy") : t("Opened the copy on {branch}", { branch: w.branch || t("(detached)") }))} title=${w.path}>
 				<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
 				<span class="truncate">${w.isMain ? t("Main copy") : w.branch || t("(detached)")}</span>
 				<span class="dim truncate branch-copy-path">${w.isMain ? w.branch || "" : w.path}</span>
 				${busy === `w:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="arrowRight" size=${13} class="dim" />`}
-			</button>`)}</div>` : null}
+			</button>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
+			</div>
 		</div>
 	</div>`;
 }
