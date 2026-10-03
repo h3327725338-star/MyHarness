@@ -86,7 +86,10 @@ async function createManager(payload: Buffer, customManifest = manifest(payload)
 			storeDir,
 			manifest: customManifest,
 			platform: "win32",
-			downloader: async (_url, destination) => writeFile(destination, payload),
+			downloader: async (_url, destination, _signal, onProgress) => {
+				onProgress?.(payload.byteLength, payload.byteLength);
+				await writeFile(destination, payload);
+			},
 			extractor,
 			launcherPath: path.join(root, "lsp-launcher.mjs"),
 		}),
@@ -94,6 +97,18 @@ async function createManager(payload: Buffer, customManifest = manifest(payload)
 }
 
 describe("CodeIntelligenceInstallationManager", () => {
+	it("streams transfer progress and settles the installed status", async () => {
+		const { manager } = await createManager(Buffer.from("archive"));
+		const events: unknown[] = [];
+		const unsubscribe = manager.subscribe((progress) =>
+			events.push(progress ?? manager.getModuleStatus("java").status),
+		);
+		await manager.install("java");
+		unsubscribe();
+		expect(events).toContainEqual(expect.objectContaining({ id: "java", percent: 100, remainingSeconds: 0 }));
+		expect(events.at(-1)).toBe("installed");
+		expect(manager.getDownloadProgress()).toEqual([]);
+	});
 	it("refuses an unverified release and persists a recoverable error", async () => {
 		const payload = Buffer.from("verified archive");
 		const original = manifest(payload);

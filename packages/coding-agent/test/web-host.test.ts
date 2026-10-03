@@ -33,6 +33,7 @@ vi.mock("../src/utils/popup-notification.ts", async (importOriginal) => {
 const showPopupMock = vi.mocked(showPopupNotification);
 
 interface Fixture {
+	hub: WebHostHub;
 	port: number;
 	project: string;
 	events: Array<{ event: string; data: any }>;
@@ -62,6 +63,58 @@ describe("Web host (real runtime with a faux provider)", () => {
 		});
 		return dir;
 	}
+
+	it("publishes usage in the same batch as text before provider usage arrives", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		const message = fauxAssistantMessage(fauxText("Streaming output without reported usage"));
+		message.usage.output = 0;
+		const internals = owner as any;
+		internals.onSessionEvent({ type: "message_start", message });
+		internals.onSessionEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "text_delta", delta: "Streaming output without reported usage" },
+		});
+		internals.flushAssistant();
+		expect(owner.usage().stats.tokens.output).toBeGreaterThan(0);
+		expect(owner.usage().stats.usageEstimated).toBe(true);
+		message.usage.output = 17;
+		expect(owner.usage().stats.tokens.output).toBe(17);
+		expect(owner.usage().stats.usageEstimated).toBe(false);
+	});
+
+	it("keeps an in-flight Commit slot and restores its progress snapshot", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		owner.broadcast("git_task", {
+			active: true,
+			kind: "commit",
+			phase: "committing",
+			activity: "Committing",
+			startedAt: Date.now(),
+		});
+		const next = await fx.post("/api/sessions/new", {}, initial.slot);
+		expect(next.slot).not.toBe(initial.slot);
+		expect((await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === initial.slot)).toMatchObject({
+			hasContent: true,
+			active: true,
+		});
+		expect((await fx.get("/api/state", initial.slot)).gitTask).toMatchObject({ kind: "commit", phase: "committing" });
+		owner.broadcast("git_task", { active: false });
+		expect(owner.hasOperationContent).toBe(true);
+	});
+
+	it("protects a touched draft from empty-chat reuse", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		await fx.post("/api/sessions/touched", {}, initial.slot);
+		const next = await fx.post("/api/sessions/new", {}, initial.slot);
+		expect(next.slot).not.toBe(initial.slot);
+		expect((await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === initial.slot).hasContent).toBe(true);
+	});
 
 	it("persists a new chat containing only a Commit card and does not reuse it as empty", async () => {
 		const fx = await start();
@@ -203,6 +256,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 			return json;
 		};
 		return {
+			hub,
 			port: address.port,
 			project,
 			events,

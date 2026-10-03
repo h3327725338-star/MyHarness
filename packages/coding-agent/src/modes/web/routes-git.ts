@@ -59,10 +59,12 @@ interface GitTaskState {
 }
 
 export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
-	let task: GitTaskState | undefined;
+	const tasks = new Map<string, GitTaskState>();
 	const cwd = () => host.session.sessionManager.getCwd();
 
 	const publishTask = (state: GitTaskState | undefined, result?: unknown) => {
+		if (state) tasks.set(host.slotId, state);
+		else tasks.delete(host.slotId);
 		host.broadcast(
 			"git_task",
 			state
@@ -91,7 +93,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (host.session.isStreaming || host.session.isCompacting || host.completionActive) {
 			throw new HttpError(409, `Cannot ${what} while a task is running.`);
 		}
-		if (task) throw new HttpError(409, "A Git operation is already in progress.");
+		if (tasks.has(host.slotId)) throw new HttpError(409, "A Git operation is already in progress.");
 	};
 
 	const requireTrusted = () => {
@@ -166,7 +168,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 						hadBash: checkpoint.hadBashExecution === true,
 					}
 				: null,
-			task: task ? { kind: task.kind, phase: task.phase, activity: task.activity, startedAt: task.startedAt } : null,
+			task: host.gitTask,
 			trusted: settings.isProjectTrusted(),
 		};
 	});
@@ -319,7 +321,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			host.broadcast("checkpoint_changed", {});
 			return { status: "no-changes" };
 		}
-		task = {
+		const task: GitTaskState = {
 			kind: "commit",
 			phase: "checking",
 			activity: "Checking changes",
@@ -386,7 +388,6 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 				commitHash: result.commitHash ?? null,
 			};
 		} finally {
-			task = undefined;
 			publishTask(undefined);
 		}
 	});
@@ -400,7 +401,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
 		if (!state.hasBaseline) throw new HttpError(400, "The repository has no commit to push.");
 		const controller = new AbortController();
-		task = {
+		const task: GitTaskState = {
 			kind: "push",
 			phase: "checking",
 			activity: "Checking repository, branch and upstream",
@@ -421,13 +422,12 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			const result = await useCase.execute(cwd(), controller.signal);
 			return JSON.parse(JSON.stringify(result));
 		} finally {
-			task = undefined;
 			publishTask(undefined);
 		}
 	});
 
 	server.route("POST", "/api/git/task/abort", () => {
-		task?.controller.abort();
+		tasks.get(host.slotId)?.controller.abort();
 		return { ok: true };
 	});
 

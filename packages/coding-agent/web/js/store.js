@@ -25,6 +25,7 @@ const SLOT_DEFAULTS = () => ({
 	userBash: {},
 	userBashOrder: [],
 	gitTask: null,
+	codeIntelligenceInstallation: null,
 	compaction: null,
 	retry: null,
 	recovery: null,
@@ -288,6 +289,7 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 	if (chosen && snap.thinking) snap = { ...snap, thinking: { ...snap.thinking, level: chosen.level } };
 	runFor(id, () => {
 		state.snap = snap;
+		state.gitTask = snap.gitTask ?? null;
 		state.queue = snap.queue;
 		state.dialogs = snap.dialogs;
 		state.surface = snap.surface;
@@ -771,6 +773,7 @@ function connectEvents() {
 		if (d.phase === "end") loadSnapshot(slot);
 	});
 	on("git_task", (d) => set({ gitTask: d.active ? d : null }));
+	on("code_intelligence_installation", (d) => set({ codeIntelligenceInstallation: d }));
 	on("checkpoint_changed", (d, slot) => {
 		loadSnapshot(slot);
 		if (slot === activeSlot) loadGitStatus();
@@ -907,7 +910,7 @@ const announced = new Set();
 /** The chat a notification is about: its name, else its first message, else its workspace. */
 function chatLabel(slot) {
 	const info = state.slots.find((s) => s.slot === slot);
-	return state.snap?.session?.name || (info?.name || info?.firstMessage ? chatTitle(info) : "") || state.snap?.workspace?.name || "";
+	return info?.name || (info?.firstMessage ? chatTitle(info) : "") || bags.get(slot)?.snap?.session?.name || bags.get(slot)?.snap?.workspace?.name || t("New chat");
 }
 
 /** "Browser notification when a task ends" (Appearance): this browser's own, and only while the tab is in the background. */
@@ -924,7 +927,7 @@ function notifyFinished(run, slot) {
 	showNotification({ title: `MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, body: [chatLabel(slot), error, facts].filter(Boolean).join("\n"), tag: taskTag(slot), onClick: () => activateSlot(slot) });
 }
 
-const TASK_END_TITLE ={ completed: N_("Task completed"), failed: N_("Task failed"), blocked: N_("Task failed"), timed_out: N_("Task timed out"), cancelled: N_("Task cancelled"), interrupted: N_("Task interrupted") };
+const TASK_END_TITLE ={ waiting: N_("Waiting for your input or confirmation"), completed: N_("Task completed"), failed: N_("Task failed"), blocked: N_("Task failed"), timed_out: N_("Task timed out"), cancelled: N_("Task cancelled"), interrupted: N_("Task interrupted") };
 
 /**
  * "Desktop popup when a task ends" (Settings → Safety & privacy, shared with the terminal UI): the server sends this when
@@ -933,7 +936,7 @@ const TASK_END_TITLE ={ completed: N_("Task completed"), failed: N_("Task failed
  * WebHost.announceTaskEnd), so the notification appears either way.
  */
 function notifyTaskEnd(d, slot) {
-	announced.add(slot);
+	if (d.kind !== "waiting") announced.add(slot);
 	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 240) : "";
 	const took = d.startedAt && d.endedAt - d.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(d.endedAt - d.startedAt) }) : "";
 	// What the task did, from the server's summary of the run: the start of its reply, then what it changed and ran.
@@ -942,7 +945,7 @@ function notifyTaskEnd(d, slot) {
 	const where = d.project && d.project !== chat ? [d.project, chat].filter(Boolean).join(" · ") : chat;
 	const shown = showNotification({
 		title: `MyHarness · ${t(TASK_END_TITLE[d.state] || N_("Task finished"))}`,
-		body: [where, d.work?.conclusion ? clip(d.work.conclusion, 160) : "", error, facts].filter(Boolean).join("\n"),
+		body: d.body || clip([where, error || d.work?.conclusion, facts].filter(Boolean).join("\n"), 320),
 		tag: taskTag(slot),
 		onClick: () => activateSlot(slot),
 	});

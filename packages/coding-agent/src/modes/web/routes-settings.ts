@@ -158,6 +158,31 @@ function modelRefValue(value: unknown): ModelRefValue {
 
 export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): void {
 	const settings = (): SettingsManager => host.session.settingsManager;
+	const installation = () => {
+		const manager = host.runtimeHost.services.codeIntelligence?.installationManager;
+		if (!manager) throw new HttpError(503, "Code Intelligence installation manager is unavailable.");
+		return manager;
+	};
+	const installationState = () => ({
+		modules: installation().getModuleStatuses(),
+		progress: installation().getDownloadProgress(),
+	});
+	server.route("GET", "/api/code-intelligence/modules", installationState);
+	server.route("POST", "/api/code-intelligence/install", async ({ body }) => {
+		const data = asObject(body);
+		if (typeof data.id !== "string" || !installation().getModule(data.id))
+			throw new HttpError(400, "Unknown language module.");
+		const manager = installation();
+		const unsubscribe = manager.subscribe(() =>
+			host.broadcast("code_intelligence_installation", installationState()),
+		);
+		try {
+			await manager.install(data.id);
+			return installationState();
+		} finally {
+			unsubscribe();
+		}
+	});
 
 	const buildSettings = (): SettingDef[] => {
 		const s = settings();

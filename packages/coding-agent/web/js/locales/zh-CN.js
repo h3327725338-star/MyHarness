@@ -7,6 +7,17 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Auxiliary tools and extensions.": "辅助工具与扩展。",
+	"Engine": "引擎模式",
+	"Engine changes and installed modules apply after restart.": "引擎切换和新安装模块在重启后生效。",
+	"Language modules": "语言模块",
+	"Downloaded": "已下载",
+	"Installing…": "正在安装…",
+	"Not downloaded": "未下载",
+	"Download": "下载",
+	"{seconds}s remaining": "预计剩余 {seconds} 秒",
+	"Estimating remaining time…": "正在估算剩余时间…",
+	"Waiting for your input or confirmation": "等待输入或确认",
 	"After tools, before the next model step.": "工具结束后、下一步请求前发送",
 	"After the run finishes.": "任务结束后发送",
 	"Stop now, then send.": "立即中断并发送",

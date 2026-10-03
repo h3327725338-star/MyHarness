@@ -106,7 +106,7 @@ function plainLead(markdown: string): string {
 			.replace(/[*_`~]+/gu, "")
 			.replace(/\s+/gu, " ")
 			.trim();
-		if (!line || /^[-=|:\s]+$/u.test(line)) continue;
+		if (!line || /^[-=|:\s]+$/u.test(line) || /^\s{0,3}#{1,6}\s/u.test(raw)) continue;
 		lines.push(line);
 		length += line.length;
 		if (length >= CONCLUSION_LENGTH) break;
@@ -206,6 +206,17 @@ export function describeTaskEnd(state: RunStateSnapshot, work: RunWorkSummary | 
 	const error = state.error?.trim();
 	if (error && !activity.includes(error)) lines.push(truncateLine(error));
 	return lines.join("\n");
+}
+
+/** Shared compact body for browser and native desktop notifications; errors outrank work counters. */
+export function describeTaskNotification(task: string, state: RunStateSnapshot, work?: RunWorkSummary): string {
+	const concise = (text: string, max: number) => {
+		const chars = Array.from(text.replace(/\s+/gu, " ").trim());
+		return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("");
+	};
+	const conclusion = state.error || work?.conclusion || state.activity || RUN_STATE_LABELS[state.state];
+	const facts = work ? describeRunWork(work) : undefined;
+	return [concise(task, 80), concise(conclusion, 180), facts ? concise(facts, 100) : ""].filter(Boolean).join("\n");
 }
 
 /**

@@ -32,14 +32,14 @@ import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import {
-	describeTaskEnd,
+	describeTaskNotification,
 	popupKindForRunState,
 	showPopupNotification,
 	summarizeRunWork,
 } from "../../utils/popup-notification.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
-import { GenerationSpeedMeter } from "./generation-speed.ts";
+import { estimateStreamedTokens, GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { RequestCacheMeter } from "./request-cache.ts";
 import {
@@ -56,8 +56,6 @@ const ASSISTANT_UPDATE_INTERVAL_MS = 50;
 const TOOL_UPDATE_INTERVAL_MS = 120;
 /** The live speed and cache numbers are pushed at most this often while a reply streams. */
 const METER_BROADCAST_INTERVAL_MS = 150;
-/** Context use and session totals are pushed at most this often while a reply streams (always when a message ends). */
-const USAGE_BROADCAST_INTERVAL_MS = 1000;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
 /** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
 const TASK_NOTICE_ANSWER_MS = 2500;
@@ -145,6 +143,9 @@ export class WebHost {
 	readonly startedAt = Date.now();
 	/** Last time a request addressed this slot; the hub evicts the least recently used idle slots. */
 	touchedAt = Date.now();
+	gitTask: Record<string, unknown> | null = null;
+	private operationStarted = false;
+	inputTouched = false;
 	tracker: ChangeTracker;
 	private readonly hub: WebHostHubLink | undefined;
 
@@ -161,7 +162,6 @@ export class WebHost {
 	/** Prompt-cache hit rate of the current model request, from the usage the provider reports (see request-cache.ts). */
 	private cache = new RequestCacheMeter();
 	private cacheChanged = false;
-	private lastUsageBroadcastAt = 0;
 	private liveUsageMessage: AssistantMessage | undefined;
 	private readonly toolTimers = new Map<
 		string,
@@ -201,7 +201,29 @@ export class WebHost {
 		this.workspaceStore =
 			options.workspaceStore ?? WorkspaceStoreImpl.create(options.runtimeHost.services.agentDir, getDataDir());
 		this.tracker = new ChangeTracker(this.cwd);
-		this.dialogs.onDialogsChanged = () => this.broadcast("dialogs", { requests: this.dialogs.requests });
+		this.dialogs.onDialogsChanged = () => {
+			this.broadcast("dialogs", { requests: this.dialogs.requests });
+			const request = this.dialogs.requests.at(-1);
+			if (request && this.session.settingsManager.getPopupNotificationSettings().enabled) {
+				const task = this.session.sessionName || this.firstUserText() || "New chat";
+				const settings = this.session.settingsManager.getPopupNotificationSettings();
+				const id = `dialog-${request.id}`;
+				const body = `${task}\n${request.title}\n${request.message || ""}`;
+				const popup = () =>
+					showPopupNotification(settings.style, {
+						kind: "interrupted",
+						title: "MyHarness · 等待输入或确认",
+						message: body,
+					});
+				if (this.server.clientCount === 0) popup();
+				else {
+					const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
+					timer.unref?.();
+					this.taskNotices.set(id, { refused: 0, timer, popup });
+					this.broadcast("task_notification", { id, state: "waiting", taskName: task, body, kind: "waiting" });
+				}
+			}
+		};
 		this.dialogs.onSurfaceChanged = () => this.broadcast("surface", this.dialogs.surfaceState);
 		this.dialogs.onEditorText = (text) => this.broadcast("editor_text", { text });
 		this.dialogs.onNotice = (notice) => this.broadcast("notice", notice);
@@ -217,6 +239,11 @@ export class WebHost {
 
 	/** Send an event to every browser tab, tagged with this slot so the client can route it. */
 	broadcast(event: string, data: unknown): void {
+		if (event === "git_task") {
+			const task = data as Record<string, unknown>;
+			this.gitTask = task.active ? task : null;
+			if (task.active) this.operationStarted = true;
+		}
 		const payload = data !== null && typeof data === "object" ? { ...(data as object), slot: this.slotId } : data;
 		this.server.broadcast(event, payload);
 		this.hub?.hostBroadcast(this, event);
@@ -235,14 +262,18 @@ export class WebHost {
 	}
 
 	get hasOperationContent(): boolean {
-		return this.session.sessionManager
-			.getEntries()
-			.some(
-				(entry) =>
-					(entry.type === "custom" &&
-						(entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY)) ||
-					(entry.type === "custom_message" && entry.display),
-			);
+		return (
+			this.inputTouched ||
+			this.operationStarted ||
+			this.session.sessionManager
+				.getEntries()
+				.some(
+					(entry) =>
+						(entry.type === "custom" &&
+							(entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY)) ||
+						(entry.type === "custom_message" && entry.display),
+				)
+		);
 	}
 
 	get status(): SlotStatus {
@@ -255,7 +286,7 @@ export class WebHost {
 			name: this.session.sessionName ?? null,
 			firstMessage: this.firstUserText(),
 			hasContent: this.hasOperationContent || this.session.messages.length > 0,
-			active: isRunStateActive(run.state),
+			active: !!this.gitTask || isRunStateActive(run.state),
 			waiting: this.dialogs.requests.length > 0,
 			completion: this.completionActive,
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
@@ -312,6 +343,9 @@ export class WebHost {
 	}
 
 	private async bindSession(): Promise<void> {
+		this.operationStarted = false;
+		this.inputTouched = false;
+		this.gitTask = null;
 		this.unsubscribe?.();
 		this.generation += 1;
 		this.resetLiveState();
@@ -542,11 +576,14 @@ export class WebHost {
 		const folder = basename(this.cwd);
 		// What the task did (files, commands, the start of its reply), so the notification says more than "finished".
 		const work = summarizeRunWork(this.session.messages);
+		const taskName = this.session.sessionName || this.firstUserText() || "New chat";
+		const body = describeTaskNotification(taskName, state, work);
+		const title = kind === "completed" ? "任务成功完成" : kind === "failed" ? "任务异常中断" : "任务已中断";
 		const popup = () => {
 			showPopupNotification(settings.style, {
 				kind,
-				title: folder ? `MyHarness · ${folder}` : "MyHarness",
-				message: describeTaskEnd(state, work),
+				title: `MyHarness · ${title} · ${folder}`,
+				message: body,
 			});
 		};
 		if (this.server.clientCount === 0) {
@@ -565,6 +602,8 @@ export class WebHost {
 			startedAt: state.startedAt,
 			endedAt: state.lastActivityAt,
 			project: folder,
+			taskName,
+			body,
 			work,
 		});
 	}
@@ -835,8 +874,8 @@ export class WebHost {
 		const item = messageToWire(message);
 		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
 		// A change that has to wait stays flagged and goes out with the next update (or the final value at the end).
+		this.broadcastUsage();
 		const now = Date.now();
-		if (now - this.lastUsageBroadcastAt >= USAGE_BROADCAST_INTERVAL_MS) this.broadcastUsage();
 		if (now - this.lastMeterBroadcastAt >= METER_BROADCAST_INTERVAL_MS) {
 			if (this.speedChanged || this.cacheChanged) this.lastMeterBroadcastAt = now;
 			if (this.speedChanged) {
@@ -1188,7 +1227,7 @@ export class WebHost {
 	/**
 	 * Everything that moves while a task runs and that the context meter and the Session panel show: context use, the
 	 * session's message / tool-call counts, token totals and cost, and the session's name and file. Pushed as `usage`
-	 * whenever a message or a tool call ends (and about once a second while a reply streams), so an open panel follows
+	 * whenever a message or a tool call ends (and in the same batch as streamed reply text), so an open panel follows
 	 * the task without being reopened.
 	 */
 	usage() {
@@ -1197,11 +1236,12 @@ export class WebHost {
 			context: this.contextState(),
 			stats: {
 				...session.getSessionStats(),
+				usageEstimated: !!this.liveUsageMessage && this.liveUsageMessage.usage.output === 0,
 				...(this.liveUsageMessage
 					? collectSessionUsageStats(
 							session.sessionManager.getEntries(),
 							(provider, model) => session.modelRuntime.getModel(provider, model),
-							this.liveUsageMessage,
+							this.streamingUsageMessage(),
 						)
 					: {}),
 			},
@@ -1213,8 +1253,33 @@ export class WebHost {
 		};
 	}
 
+	/** Never persist estimates; the provider's final usage replaces this UI-only preview. */
+	private streamingUsageMessage(): AssistantMessage | undefined {
+		const message = this.liveUsageMessage;
+		if (!message || message.usage.output > 0) return message;
+		const text = message.content
+			.map((part) =>
+				part.type === "text"
+					? part.text
+					: part.type === "thinking"
+						? part.thinking
+						: part.type === "toolCall"
+							? JSON.stringify(part.arguments)
+							: "",
+			)
+			.join("");
+		const output = Math.ceil(estimateStreamedTokens(text));
+		return {
+			...message,
+			usage: {
+				...message.usage,
+				output,
+				totalTokens: message.usage.input + output + message.usage.cacheRead + message.usage.cacheWrite,
+			},
+		};
+	}
+
 	private broadcastUsage(): void {
-		this.lastUsageBroadcastAt = Date.now();
 		try {
 			this.broadcast("usage", this.usage());
 		} catch {
@@ -1238,6 +1303,7 @@ export class WebHost {
 		const run = session.getRunStateSnapshot();
 		return {
 			slot: this.slotId,
+			gitTask: this.gitTask,
 			app: { version: this.version, startedAt: this.startedAt, platform: process.platform },
 			cwd,
 			workspace: workspace

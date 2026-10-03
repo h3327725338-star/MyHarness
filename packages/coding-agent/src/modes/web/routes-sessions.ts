@@ -127,7 +127,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	const activeRenames = new Map<string, Promise<unknown>>();
 
 	const requireIdle = (what: string) => {
-		if (!host.session.isIdle || host.completionActive) {
+		if (!host.session.isIdle || host.completionActive || host.gitTask) {
 			throw new HttpError(409, `Cannot ${what} while a task is running.`);
 		}
 	};
@@ -247,7 +247,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	const releaseSessionSlots = async (path: string): Promise<void> => {
 		const showing = hub.slotsShowing(path);
 		for (const slot of showing) {
-			if (!slot.session.isIdle || slot.completionActive) {
+			if (!slot.session.isIdle || slot.completionActive || slot.gitTask) {
 				throw new HttpError(409, "A running chat cannot be deleted. Stop it first.");
 			}
 		}
@@ -379,5 +379,10 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		}
 	});
 
-	server.route("GET", "/api/sessions/stats", () => host.session.getSessionStats());
+	server.route("GET", "/api/sessions/stats", () => host.usage().stats);
+	server.route("POST", "/api/sessions/touched", () => {
+		host.inputTouched = true;
+		host.broadcast("session_info", { name: host.session.sessionName ?? null });
+		return { ok: true };
+	});
 }

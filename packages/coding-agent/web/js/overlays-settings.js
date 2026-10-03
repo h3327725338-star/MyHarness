@@ -21,15 +21,17 @@ export const NAV = [
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
+	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
 	{ id: "tools", label: N_("Tool calls"), icon: "wrench" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
 	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "agent", Tools: "tools", Images: "tools", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "agent", Tools: "tools", Images: "agent", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
 
 export function sectionOf(item) {
+	if (item.id.startsWith("codeIntelligence.")) return "code";
 	if (item.id.startsWith("webSearch.")) return "search";
 	if (["steeringMode", "followUpMode"].includes(item.id)) return "conversation";
 	return SECTION_OF[item.section];
@@ -41,7 +43,7 @@ const PAGE_NOTE = {
 	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
-	tools: N_("Code intelligence and image processing tools."),
+	tools: N_("Auxiliary tools and extensions."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and what it tells you about."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
@@ -252,6 +254,42 @@ function SettingsList({ items, models, tools = false }) {
 	});
 }
 
+function CodeIntelligence({ items }) {
+	const pushed = useStore((s) => s.codeIntelligenceInstallation);
+	const [data, setData] = useState(null);
+	const [error, setError] = useState("");
+	const [pending, setPending] = useState([]);
+	const enabled = !!items.find((item) => item.id === "codeIntelligence.enabled")?.value;
+	const [saving, save] = useSaving();
+	useEffect(() => {
+		let live = true;
+		api("/api/code-intelligence/modules").then((value) => { if (live) setData(value); }).catch((e) => { if (live) setError(e.message); });
+		return () => { live = false; };
+	}, []);
+	useEffect(() => { if (pushed) setData(pushed); }, [pushed]);
+	const install = async (id) => {
+		setPending((ids) => [...ids, id]);
+		setError("");
+		try { setData(await post("/api/code-intelligence/install", { id })); }
+		catch (e) { setError(e.message); }
+		finally { setPending((ids) => ids.filter((value) => value !== id)); }
+	};
+	return html`<${Card} title=${t("Engine")}>
+		<${Row} label=${t("Code Intelligence")} description=${t("Engine changes and installed modules apply after restart.")}><${Saving} shown=${saving} /><${Segmented} value=${enabled ? "semantic" : "lightweight"} options=${[{ value: "lightweight", label: "Lightweight" }, { value: "semantic", label: "Semantic" }]} onChange=${(value) => save("codeIntelligence.enabled", value === "semantic")} /><//>
+	<//>${error ? html`<div class="notice danger">${error}</div>` : null}
+	${enabled ? html`<${Card} title=${t("Language modules")}>
+		${!data && !error ? html`<${Spinner} />` : data?.modules.map((module) => {
+			const progress = data.progress?.find((value) => value.id === module.id);
+			const busy = pending.includes(module.id) || module.status === "installing";
+			const installed = module.status === "installed";
+			return html`<div key=${module.id}><${Row} label=${module.label} description=${module.message || module.languages.join(" · ")}>
+				<span class="dim">${installed ? t("Downloaded") : busy ? t("Installing…") : t("Not downloaded")}</span>
+				${!installed ? html`<button class="btn secondary" disabled=${busy || module.status === "unavailable"} onClick=${() => install(module.id)}>${busy ? html`<${Spinner} />` : t("Download")}</button>` : null}
+			<//>${busy ? html`<div class="set-desc"><progress class="language-progress" max="100" value=${progress?.percent ?? undefined} aria-label=${module.label} /> ${progress?.percent != null ? `${progress.percent.toFixed(1)}%` : t("Detecting…")} · ${progress?.remainingSeconds != null ? t("{seconds}s remaining", { seconds: Math.ceil(progress.remainingSeconds) }) : t("Estimating remaining time…")}</div>` : null}</div>`;
+		})}
+	<//>` : null}`;
+}
+
 function Appearance({ conversation = false }) {
 	const view = useStore((s) => s.view);
 	const runMode = runModeOf(view.runMode);
@@ -385,7 +423,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} tools=${section === "tools"} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} tools=${section === "tools"} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

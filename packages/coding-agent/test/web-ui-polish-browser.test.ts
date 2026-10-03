@@ -8,7 +8,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"renders inline settings, tool accordions, branch buttons, coloured Git counts and user Markdown",
+	"renders migrated image settings, semantic download progress, branch buttons, Git counts and user Markdown",
 	async () => {
 		const root = mkdtempSync(join(tmpdir(), "myharness-ui-polish-"));
 		const server = new WebHttpServer();
@@ -66,6 +66,10 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
 			});
 			server.route("GET", "/api/settings", () => ({ items }));
+			server.route("GET", "/api/code-intelligence/modules", () => ({
+				modules: [{ id: "typescript", label: "TypeScript", languages: ["typescript"], status: "not-installed" }],
+				progress: [],
+			}));
 			server.route("GET", "/api/stats", () => ({}));
 			server.route("GET", "/api/sessions/tree", () => ({
 				rows: [
@@ -140,9 +144,15 @@ try {
  for(const section of ['conversation','search','network']) {setView({settingsSection:section});await wait(100);checkRows();}
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
  setView({settingsSection:'tools'});await wait(100);
- const accordions=[...document.querySelectorAll('.set-card-toggle')];
- if(accordions.length!==2||accordions.some(b=>b.getAttribute('aria-expanded')!=='false')) throw Error('tool accordions missing');
- for(const button of accordions) button.click();await wait(100);checkRows();
+ if(document.querySelector('.settings-body').textContent.includes('图片')||document.querySelector('.settings-body').textContent.includes('Code Intelligence')) throw Error('tools owns migrated settings');
+ setView({settingsSection:'agent'});await wait(100);
+ if(!document.querySelector('.settings-body').textContent.includes('禁止发送图片')||document.querySelector('.set-card-toggle')) throw Error('images not flat in Agent');
+ setView({settingsSection:'code'});await wait(150);
+ if(!document.querySelector('.settings-nav .on')?.textContent.includes('代码智能')) throw Error('missing code navigation');
+ if(!document.querySelector('.settings-body').textContent.includes('Semantic')||!document.querySelector('.settings-body').textContent.includes('TypeScript')||!document.querySelector('.settings-body').textContent.includes('未下载')) throw Error('missing language manager');
+ set({codeIntelligenceInstallation:{modules:[{id:'typescript',label:'TypeScript',languages:['typescript'],status:'installing'}],progress:[{id:'typescript',percent:35,remainingSeconds:12}]}});await wait(100);
+ if(document.querySelector('progress')?.value!==35||!document.querySelector('.settings-body').textContent.includes('12 秒')) throw Error('download progress not live');
+ checkRows();
  render(null,app);app.style.width='340px';
  set({resources:{tools:[{name:'read',description:'Long English description',active:true}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
  render(h(ContextPanel,{}),app);await wait(150);

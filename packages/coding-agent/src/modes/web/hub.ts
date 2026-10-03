@@ -26,6 +26,7 @@ import { HttpError, type WebHttpServer } from "./http-server.ts";
 /** Idle sessions kept ready in the background (running or waiting sessions are never released). */
 export const MAX_IDLE_BACKGROUND_SLOTS = 5;
 const STATUS_EVENTS = new Set([
+	"git_task",
 	"agent_start",
 	"agent_end",
 	"agent_settled",
@@ -265,6 +266,7 @@ export class WebHostHub implements WebHostHubLink {
 			(host) =>
 				pathIdentityKey(host.cwd) === pathIdentityKey(cwd) &&
 				host.session.isIdle &&
+				!host.gitTask &&
 				!host.completionActive &&
 				(!defaultStorage || host.unbound === wantUnbound) &&
 				host.session.sessionManager.buildSessionContext().messages.length === 0 &&
@@ -304,7 +306,13 @@ export class WebHostHub implements WebHostHubLink {
 
 	private isBusy(host: WebHost): boolean {
 		// A finished session whose result is still unread keeps its slot, so its sidebar marker cannot vanish unseen.
-		return !host.session.isIdle || host.completionActive || host.dialogs.requests.length > 0 || host.unread;
+		return (
+			!!host.gitTask ||
+			!host.session.isIdle ||
+			host.completionActive ||
+			host.dialogs.requests.length > 0 ||
+			host.unread
+		);
 	}
 
 	/** Keep only the most recently used idle background slots; running or waiting ones are never touched. */

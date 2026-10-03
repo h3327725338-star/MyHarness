@@ -130,7 +130,7 @@ describe("what a finished task did", () => {
 			searches: 2,
 			webPages: 1,
 			otherTools: 1,
-			conclusion: "Done Removed the workspace chip from the header. tests pass",
+			conclusion: "Removed the workspace chip from the header. tests pass",
 		});
 		expect(describeRunWork(work)).toBe(
 			"修改 2 个文件（app.js、layout.css） · 运行 1 条命令 · 读取 1 个文件 · 搜索 2 次 · 打开 1 个网页 · 其他工具 1 次",

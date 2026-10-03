@@ -104,6 +104,14 @@ export interface CodeIntelligenceModuleStatus {
 	readonly notes?: string;
 }
 
+export interface CodeIntelligenceDownloadProgress {
+	readonly id: string;
+	readonly receivedBytes: number;
+	readonly totalBytes: number | null;
+	readonly percent: number | null;
+	readonly remainingSeconds: number | null;
+}
+
 export interface CodeIntelligenceInstallationManagerOptions {
 	readonly agentDir?: string;
 	readonly storeDir?: string;
@@ -113,7 +121,12 @@ export interface CodeIntelligenceInstallationManagerOptions {
 	readonly myharnessVersion?: string;
 	readonly platform?: NodeJS.Platform;
 	readonly now?: () => string;
-	readonly downloader?: (url: string, destination: string, signal?: AbortSignal) => Promise<void>;
+	readonly downloader?: (
+		url: string,
+		destination: string,
+		signal?: AbortSignal,
+		onProgress?: (received: number, total: number | null) => void,
+	) => Promise<void>;
 	readonly extractor?: (archivePath: string, destination: string) => Promise<void>;
 }
 
@@ -264,7 +277,12 @@ function resolveArtifactUrl(artifact: CodeIntelligenceArtifact, manifest: CodeIn
 	return url;
 }
 
-async function defaultDownload(url: string, destination: string, signal?: AbortSignal): Promise<void> {
+async function defaultDownload(
+	url: string,
+	destination: string,
+	signal?: AbortSignal,
+	onProgress?: (received: number, total: number | null) => void,
+): Promise<void> {
 	if (url.startsWith("file://")) {
 		await copyFile(fileURLToPath(url), destination);
 		return;
@@ -291,7 +309,15 @@ async function defaultDownload(url: string, destination: string, signal?: AbortS
 			`Code Intelligence download returned HTTP ${response.status} for ${url}`,
 		);
 	}
-	await pipeline(Readable.fromWeb(response.body as ReadableStream<Uint8Array>), createWriteStream(destination));
+	const size = Number(response.headers.get("content-length"));
+	const total = size > 0 ? size : null;
+	let received = 0;
+	const stream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+	stream.on("data", (chunk: Buffer) => {
+		received += chunk.length;
+		onProgress?.(received, total);
+	});
+	await pipeline(stream, createWriteStream(destination));
 }
 
 async function defaultExtract(archivePath: string, destination: string, platform: NodeJS.Platform): Promise<void> {
@@ -418,6 +444,23 @@ export class CodeIntelligenceInstallationManager {
 	private readonly extractor: NonNullable<CodeIntelligenceInstallationManagerOptions["extractor"]>;
 	private readonly operations = new Map<string, Promise<void>>();
 	private state: InstallationState;
+	private readonly listeners = new Set<(progress?: CodeIntelligenceDownloadProgress) => void>();
+	private readonly progress = new Map<string, CodeIntelligenceDownloadProgress>();
+
+	subscribe(listener: (progress?: CodeIntelligenceDownloadProgress) => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	getDownloadProgress(): readonly CodeIntelligenceDownloadProgress[] {
+		return [...this.progress.values()];
+	}
+
+	private notify(progress?: CodeIntelligenceDownloadProgress): void {
+		for (const listener of this.listeners) listener(progress);
+	}
 
 	constructor(options: CodeIntelligenceInstallationManagerOptions = {}) {
 		this.agentDir = path.resolve(
@@ -517,14 +560,37 @@ export class CodeIntelligenceInstallationManager {
 			const oldModule = this.state.modules[entry.id];
 			let stagingRoot: string | undefined;
 			try {
-				for (const componentId of entry.sharedComponents) await this.ensureComponent(componentId, options.signal);
+				for (const componentId of entry.sharedComponents)
+					await this.ensureComponent(componentId, options.signal, entry.id);
 				const artifact = validArtifact(entry.id, entry.artifact);
 				const url = resolveArtifactUrl(artifact, this.manifest);
 				stagingRoot = await this.createStagingDirectory(entry.id);
 				const archivePath = path.join(stagingRoot, `${artifact.fileName}.download`);
 				const extractedPath = path.join(stagingRoot, "module");
 				await mkdir(extractedPath, { recursive: true });
-				await this.downloader(url, archivePath, options.signal);
+				const started = Date.now();
+				let lastSent = 0;
+				await this.downloader(url, archivePath, options.signal, (receivedBytes, reportedTotal) => {
+					const totalBytes = reportedTotal ?? artifact.sizeBytes ?? null;
+					const elapsed = (Date.now() - started) / 1000;
+					const progress = {
+						id: entry.id,
+						receivedBytes,
+						totalBytes,
+						percent: totalBytes ? Math.min(100, (receivedBytes / totalBytes) * 100) : null,
+						remainingSeconds:
+							totalBytes && receivedBytes >= totalBytes
+								? 0
+								: totalBytes && receivedBytes > 0 && elapsed > 0
+									? Math.max(0, ((totalBytes - receivedBytes) * elapsed) / receivedBytes)
+									: null,
+					};
+					this.progress.set(entry.id, progress);
+					if (Date.now() - lastSent >= 100 || receivedBytes === totalBytes) {
+						lastSent = Date.now();
+						this.notify(progress);
+					}
+				});
 				await this.verifyArchive(archivePath, artifact);
 				await this.extractor(archivePath, extractedPath);
 				await this.validateExtracted(extractedPath, artifact);
@@ -705,7 +771,7 @@ export class CodeIntelligenceInstallationManager {
 		return path.join(this.storeDir, "components", normalizeId(id), version.replace(/[^a-z0-9._-]+/giu, "-"));
 	}
 
-	private async ensureComponent(id: string, signal?: AbortSignal): Promise<string> {
+	private async ensureComponent(id: string, signal?: AbortSignal, moduleId?: string): Promise<string> {
 		const entry = this.manifest.sharedComponents.find((candidate) => candidate.id === id);
 		if (!entry)
 			throw new CodeIntelligenceInstallationError(
@@ -721,7 +787,35 @@ export class CodeIntelligenceInstallationManager {
 		const extractedPath = path.join(stagingRoot, "component");
 		try {
 			await mkdir(extractedPath, { recursive: true });
-			await this.downloader(resolveArtifactUrl(artifact, this.manifest), archivePath, signal);
+			const started = Date.now();
+			let lastSent = 0;
+			await this.downloader(
+				resolveArtifactUrl(artifact, this.manifest),
+				archivePath,
+				signal,
+				(receivedBytes, reportedTotal) => {
+					if (!moduleId) return;
+					const totalBytes = reportedTotal ?? artifact.sizeBytes ?? null;
+					const elapsed = (Date.now() - started) / 1000;
+					const progress = {
+						id: moduleId,
+						receivedBytes,
+						totalBytes,
+						percent: totalBytes ? Math.min(100, (receivedBytes / totalBytes) * 100) : null,
+						remainingSeconds:
+							totalBytes && receivedBytes >= totalBytes
+								? 0
+								: totalBytes && receivedBytes > 0 && elapsed > 0
+									? Math.max(0, ((totalBytes - receivedBytes) * elapsed) / receivedBytes)
+									: null,
+					};
+					this.progress.set(moduleId, progress);
+					if (Date.now() - lastSent >= 100 || receivedBytes === totalBytes) {
+						lastSent = Date.now();
+						this.notify(progress);
+					}
+				},
+			);
 			await this.verifyArchive(archivePath, artifact);
 			await this.extractor(archivePath, extractedPath);
 			await this.validateExtracted(extractedPath, artifact);
@@ -896,8 +990,11 @@ export class CodeIntelligenceInstallationManager {
 			})
 			.finally(() => {
 				this.operations.delete(id);
+				this.progress.delete(id);
+				this.notify();
 			});
 		this.operations.set(id, promise);
+		this.notify();
 		return promise;
 	}
 }

@@ -17,6 +17,10 @@
 /* Settings: one design language for every page. A page is a title, a one-line note and cards; a card holds rows with
    the text on the left and the control in a fixed-width column on the right. */
 .settings-modal .modal-body { padding: 0; }
+.language-progress { width: 160px; height: 5px; accent-color: var(--accent); border: 0; border-radius: var(--r-md); overflow: hidden; background: var(--bg-panel); }
+.language-progress::-webkit-progress-bar { background: var(--border); }
+.language-progress::-webkit-progress-value { background: var(--accent); }
+.language-progress::-moz-progress-bar { background: var(--accent); }
 .settings { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: min(700px, calc(100vh - 120px)); }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); overflow-y: auto; }
 .settings-nav button { display: flex; align-items: center; white-space: nowrap; gap: 8px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); text-align: left; flex: none; }

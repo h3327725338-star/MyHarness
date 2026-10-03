@@ -278,6 +278,12 @@ export function Composer() {
 		}
 		lastSession.current = sessionId;
 	}, [sessionId]);
+	const touched = useRef(new Set());
+	useEffect(() => {
+		if (lastSession.current !== sessionId || (!text && !images.length) || touched.current.has(sessionId)) return;
+		touched.current.add(sessionId);
+		post("/api/sessions/touched", {}).catch(() => touched.current.delete(sessionId));
+	}, [text, images, sessionId]);
 	const latest = useRef({ text, images, sessionId });
 	latest.current = { text, images, sessionId };
 	useEffect(
