@@ -366,18 +366,7 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 			}
 		}
 		turn.lastAssistant = lastAssistant;
-		const stats = { actions: 0, failedActions: 0, files: 0, commands: 0, reads: 0 };
-		const files = new Set();
-		for (const action of turn.steps) {
-			if (action.type !== "action") continue;
-			stats.actions++;
-			if (action.isError) stats.failedActions++;
-			if ((action.kind === "edit" || action.kind === "write") && !action.isError && action.status === "done" && action.path) files.add(action.path);
-			if (action.kind === "run") stats.commands++;
-			if (action.kind === "read") stats.reads++;
-		}
-		stats.files = files.size;
-		turn.stats = stats;
+		turn.stats = stepStats(turn.steps);
 	}
 
 	// Reuse previous objects where nothing changed so memoized components can skip rendering.
@@ -389,6 +378,47 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 		});
 	}
 	return turns;
+}
+
+/** What some steps did: actions, failed actions, files changed, commands run and files read. */
+export function stepStats(steps) {
+	const stats = { actions: 0, failedActions: 0, files: 0, commands: 0, reads: 0 };
+	const files = new Set();
+	for (const action of steps) {
+		if (action.type !== "action") continue;
+		stats.actions++;
+		if (action.isError) stats.failedActions++;
+		if ((action.kind === "edit" || action.kind === "write") && !action.isError && action.status === "done" && action.path) files.add(action.path);
+		if (action.kind === "run") stats.commands++;
+		if (action.kind === "read") stats.reads++;
+	}
+	stats.files = files.size;
+	return stats;
+}
+
+/**
+ * A turn in the order it happened: each stretch of reasoning and tool calls is one foldable block, and each text the
+ * model wrote between them stays in place as reading text. When the model writes, then reasons or calls tools again, a
+ * new block starts below that text. Only the presentation is split: the steps, the run and the session are one piece.
+ * The final answer (`turn.final`) is not a segment; it follows the last one.
+ */
+export function turnSegments(turn) {
+	const segments = [];
+	let block = null;
+	for (const step of turn.steps) {
+		if (step.type === "note") {
+			segments.push({ type: "text", key: `x-${step.key}`, step });
+			block = null;
+			continue;
+		}
+		if (!block) {
+			block = { type: "process", key: `p-${step.key}`, steps: [] };
+			segments.push(block);
+		}
+		block.steps.push(step);
+	}
+	for (const segment of segments) if (segment.type === "process") segment.stats = stepStats(segment.steps);
+	return segments;
 }
 
 function sameTurn(a, b) {

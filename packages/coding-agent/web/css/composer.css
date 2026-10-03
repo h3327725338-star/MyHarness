@@ -46,7 +46,7 @@
 .composer.expanded { position: fixed; z-index: 190; left: 50%; top: 50%; width: min(960px, calc(100vw - 48px)); height: min(78vh, calc(100vh - 48px)); translate: -50% -50%; padding: 18px 18px 10px 20px; box-shadow: var(--shadow-pop); animation: composer-open var(--t-slow) var(--ease) both; }
 .composer.expanded.leaving { animation: composer-close 180ms var(--ease) both; }
 .composer.expanded .composer-input { flex: 1 1 auto; min-height: 0; max-height: none; }
-.composer.expanded .suggest { bottom: 52px; }
+.composer.expanded .suggest { max-height: min(300px, calc(11vh - 12px)); }
 @keyframes composer-open { from { opacity: 0; transform: scale(0.94) translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes composer-close { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.96) translateY(10px); } }
 @keyframes fade-only-out { from { opacity: 1; } to { opacity: 0; } }
@@ -138,7 +138,8 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .widget { margin: 0; padding: 6px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */
-.suggest { position: absolute; left: 6px; right: 6px; bottom: calc(100% + 6px); max-height: 300px; overflow-y: auto; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; z-index: 20; }
+.suggest { position: absolute; left: 6px; right: 6px; bottom: calc(100% + 6px); max-height: 300px; overflow-y: auto; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; z-index: 20; animation: suggest-open 180ms var(--ease) both; transform-origin: bottom center; }
+@keyframes suggest-open { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .suggest-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border-radius: var(--r-xs); text-align: left; color: var(--text-2); font-size: 12.5px; }
 .suggest-item > svg { color: var(--text-3); flex: none; }
 .suggest-item .dim { font-size: var(--fs-xs); }
@@ -290,3 +291,5 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .cp-screen > .inline-frame { overflow-y: auto; min-height: 0; padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
 .inline-frame .modal-body { display: flex; flex-direction: column; gap: 10px; }
 .inline-frame .modal-foot { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+/* A popover that was closed fades out where it is and no longer takes clicks (Popover in ui.js keeps it for that time). */
+.popover.closing { animation: fade-only-out var(--t-fast) var(--ease) both; pointer-events: none; }

@@ -6,6 +6,7 @@ import {
 	openSync,
 	readFileSync,
 	readSync,
+	realpathSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
@@ -274,9 +275,9 @@ function recoverDeadWriterLock(lockPath: string): boolean {
 
 	const currentOwner = readWriterLockOwner(lockPath);
 	if (!currentOwner || currentOwner.token !== owner.token) return false;
-	removeWriterLockOwner(lockPath, owner.token);
 	try {
 		rmdirSync(lockPath);
+		removeWriterLockOwner(lockPath, owner.token);
 		return true;
 	} catch {
 		return false;
@@ -716,7 +717,9 @@ export class SessionManager {
 		if (this.mirror) return "mirror";
 		if (!this.persist || !this.sessionFile || !this.sessionDir || this.writerLockRelease) return "owner";
 		ensureSessionDirectory(this.sessionDir);
-		const lockPath = `${this.sessionFile}.lock`;
+		// Resolve junction/symlink aliases even before a new JSONL exists. Otherwise the same OS lock can have
+		// two local lease keys and the second runtime in this process gets an ELOCKED error.
+		const lockPath = join(realpathSync(dirname(this.sessionFile)), `${basename(this.sessionFile)}.lock`);
 		const lockKey = getWriterLockKey(lockPath);
 		const localLease = localWriterLeases.get(lockKey);
 		if (localLease) {
@@ -784,9 +787,11 @@ export class SessionManager {
 			}
 			if (getErrorCode(error) === "ELOCKED") {
 				const foreignOwner = readSessionBridgeDescriptor(this.sessionFile!);
+				const lockOwner = readWriterLockOwner(lockPath);
 				if (
 					mirrorSessionsAllowed &&
 					foreignOwner &&
+					(!lockOwner || lockOwner.pid === foreignOwner.pid) &&
 					foreignOwner.pid !== process.pid &&
 					isProcessAlive(foreignOwner.pid)
 				) {

@@ -305,6 +305,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(existsSync(path)).toBe(true);
 		await fx.post("/api/sessions/archive", { path });
 		expect(existsSync(path)).toBe(true);
+		// Archiving only moves the chat in the sidebar: the chat on screen is not replaced.
+		expect((await fx.get("/api/state")).session.file).toBe(path);
 		expect((await fx.get("/api/sessions/archived")).sessions.map((info: any) => info.path)).toContain(path);
 		expect(
 			(await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`)).sessions.map(
@@ -322,6 +324,32 @@ describe("Web host (real runtime with a faux provider)", () => {
 				(info: any) => info.path,
 			),
 		).not.toContain(path);
+	});
+
+	it("pins a chat with a marker, reports its last activity and drops the marker with the chat", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const slotOf = async () => (await fx.get("/api/slots")).slots.find((s: any) => s.slot === initial.slot);
+		expect((await slotOf()).lastActivityAt).toBeNull();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("pinned answer")])]);
+		const before = Date.now();
+		await fx.post("/api/prompt", { text: "pin me" });
+		await fx.waitFor("run_finished");
+		expect((await slotOf()).lastActivityAt).toBeGreaterThanOrEqual(before);
+		const path = (await fx.get("/api/state")).session.file;
+		const listed = async () =>
+			(await fx.get(`/api/workspaces/sessions?path=${encodeURIComponent(fx.project)}`)).sessions.find(
+				(info: any) => info.path === path,
+			);
+		expect((await listed()).pinned).toBe(false);
+		await fx.post("/api/sessions/pin", { path });
+		expect(existsSync(`${path}.pinned`)).toBe(true);
+		expect((await listed()).pinned).toBe(true);
+		await fx.post("/api/sessions/pin", { path, pinned: false });
+		expect((await listed()).pinned).toBe(false);
+		await fx.post("/api/sessions/pin", { path });
+		await fx.post("/api/sessions/delete", { path });
+		expect(existsSync(`${path}.pinned`)).toBe(false);
 	});
 
 	it("renames a workspace alias through the API and broadcasts the change without moving its folder", async () => {

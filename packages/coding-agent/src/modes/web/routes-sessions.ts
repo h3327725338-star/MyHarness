@@ -167,6 +167,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			modified: info.modified.getTime(),
 			messageCount: info.messageCount,
 			parentSessionPath: info.parentSessionPath ?? null,
+			pinned: existsSync(`${info.path}.pinned`),
 			current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
 		};
 	};
@@ -267,23 +268,53 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			.filter((info) => existsSync(`${info.path}.archived`))
 			.map(sessionSummary),
 	}));
-	server.route("POST", "/api/sessions/archive", async ({ body }) => {
-		const input = asObject(body);
-		const path = asString(input.path, "path");
+	/** Set or clear a marker file next to the session's JSONL (`.archived`, `.pinned`); the session data is not touched. */
+	const setSessionMarker = async (path: string, suffix: string, on: boolean): Promise<void> => {
+		if (on) {
+			await writeFile(`${path}${suffix}`, `${suffix.slice(1)}\n`, { flag: "wx" }).catch(
+				(error: NodeJS.ErrnoException) => {
+					if (error.code !== "EEXIST") throw error;
+				},
+			);
+		} else {
+			await unlink(`${path}${suffix}`).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			});
+		}
+	};
+	const assertKnownSession = async (path: string): Promise<void> => {
 		const known = (await SessionManager.listAll(sessionDir())).some(
 			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
 		);
 		if (!known) throw new HttpError(404, "Unknown session");
+	};
+
+	/**
+	 * Archiving only moves the chat to the sidebar's Archive folder. A chat that is open keeps its runtime and stays on
+	 * screen where it is shown (nothing is reloaded or replaced); a running chat is refused.
+	 */
+	server.route("POST", "/api/sessions/archive", async ({ body }) => {
+		const input = asObject(body);
+		const path = asString(input.path, "path");
+		await assertKnownSession(path);
 		if (input.archived !== false) {
-			await releaseSessionSlots(path);
-			await writeFile(`${path}.archived`, "archived\n", { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "EEXIST") throw error;
-			});
-		} else {
-			await unlink(`${path}.archived`).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOENT") throw error;
-			});
+			for (const slot of hub.slotsShowing(path)) {
+				if (!slot.session.isIdle || slot.completionActive || slot.gitTask) {
+					throw new HttpError(409, "A running chat cannot be archived. Stop it first.");
+				}
+			}
 		}
+		await setSessionMarker(path, ".archived", input.archived !== false);
+		host.broadcast("workspaces_changed", {});
+		return { ok: true };
+	});
+
+	/** Pinned chats stay at the top of their sidebar group. */
+	server.route("POST", "/api/sessions/pin", async ({ body }) => {
+		const input = asObject(body);
+		const path = asString(input.path, "path");
+		await assertKnownSession(path);
+		await setSessionMarker(path, ".pinned", input.pinned !== false);
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
 	});
@@ -297,6 +328,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		await releaseSessionSlots(path);
 		const deleted = await deleteSessionFile(path, { permanent: true });
 		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
+		await setSessionMarker(path, ".pinned", false);
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
 	});

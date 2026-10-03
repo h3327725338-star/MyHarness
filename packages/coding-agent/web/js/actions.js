@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { GENERAL_KEY, activateSlot, api, attempt, loadGitStatus, loadResources, loadSessions, loadSlots, loadWorkspaces, post, refreshAll, set, setView, state, toast } from "./store.js";
+import { GENERAL_KEY, activateSlot, api, attempt, emit, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, toast } from "./store.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { normPath } from "./util.js";
@@ -185,13 +185,24 @@ export const actions = {
 		return result;
 	},
 
-	/** Show a chat. If it is already open (possibly still running) it is shown as it is; otherwise it is loaded. */
+	/**
+	 * Show a chat. If it is already open (possibly still running) it is shown as it is; otherwise it is loaded. The row
+	 * is marked at once; when several chats are clicked quickly the last click wins, and a failure is reported instead
+	 * of leaving the click without effect.
+	 */
 	async openSession(path) {
-		const open = state.slots.find((s) => s.sessionFile && samePath(s.sessionFile, path));
-		if (open) return showSlot(open.slot);
-		const result = await attempt(() => post("/api/sessions/open", { path }));
-		if (result?.slot) await showSlot(result.slot);
-		return result;
+		const seq = nextSwitch();
+		set({ opening: path });
+		try {
+			const open = state.slots.find((s) => s.sessionFile && samePath(s.sessionFile, path));
+			if (open) return await attempt(() => showSlot(open.slot, seq));
+			const result = await attempt(() => post("/api/sessions/open", { path }));
+			if (result?.slot && isLatestSwitch(seq)) await attempt(() => showSlot(result.slot, seq));
+			return result;
+		} finally {
+			// A later click on another chat marks that one instead; a later switch of another kind (a new chat) clears this mark.
+			if (isLatestSwitch(seq) || state.opening === path) set({ opening: null });
+		}
 	},
 
 	async deleteSession(path, title) {
@@ -201,9 +212,29 @@ export const actions = {
 		if (result) await refreshAll();
 	},
 
+	/**
+	 * Archive or restore a chat in place: the row leaves its list at once (with the shared fold motion) and appears in
+	 * the Archive folder or back in its group; nothing else on the page is reloaded. A refusal puts the lists back.
+	 */
 	async archiveSession(path, archived = true) {
+		const lists = state.workspaces;
+		const info = findListed(path);
+		moveListed(path, archived, info);
 		const result = await attempt(() => post("/api/sessions/archive", { path, archived }));
-		if (result) await refreshAll();
+		if (!result) {
+			state.workspaces = { ...state.workspaces, sessions: lists.sessions, unbound: lists.unbound, archived: lists.archived };
+			emit();
+			return result;
+		}
+		await refreshSessionLists();
+		return result;
+	},
+
+	/** Pin a chat to the top of its group, or unpin it. The row moves at once; the saved lists confirm it. */
+	async pinSession(path, pinned = true) {
+		updateListed(path, { pinned });
+		const result = await attempt(() => post("/api/sessions/pin", { path, pinned }));
+		await refreshSessionLists();
 		return result;
 	},
 
@@ -280,17 +311,52 @@ export const actions = {
 	refresh: refreshAll,
 };
 
-async function showSlot(slot) {
+async function showSlot(slot, seq) {
 	if (!state.slots.some((s) => s.slot === slot)) await loadSlots();
-	await activateSlot(slot);
+	await activateSlot(slot, seq);
+}
+
+/** A chat as the sidebar lists it (in a workspace, in No Folder or in the Archive). */
+function findListed(path) {
+	const lists = state.workspaces;
+	for (const list of [...Object.values(lists.sessions), lists.unbound || [], lists.archived || []]) {
+		const info = list.find((item) => samePath(item.path, path));
+		if (info) return info;
+	}
+	return undefined;
+}
+
+/** Change a listed chat everywhere it is listed, without reloading anything. */
+function updateListed(path, patch) {
+	const lists = state.workspaces;
+	const update = (list) => (list && list.some((item) => samePath(item.path, path)) ? list.map((item) => (samePath(item.path, path) ? { ...item, ...patch } : item)) : list);
+	const sessions = Object.fromEntries(Object.entries(lists.sessions).map(([root, list]) => [root, update(list)]));
+	state.workspaces = { ...lists, sessions, unbound: update(lists.unbound), archived: update(lists.archived) };
+	emit();
+}
+
+/**
+ * Move a chat between its group and the Archive at once. Archiving takes it out of its group and puts it first in the
+ * Archive; restoring takes it out of the Archive, and it comes back in its group when the lists are read again.
+ */
+function moveListed(path, archived, info) {
+	const lists = state.workspaces;
+	const without = (list) => (list && list.some((item) => samePath(item.path, path)) ? list.filter((item) => !samePath(item.path, path)) : list);
+	if (archived) {
+		const sessions = Object.fromEntries(Object.entries(lists.sessions).map(([root, list]) => [root, without(list)]));
+		const archivedList = info && lists.archived ? [info, ...without(lists.archived)] : lists.archived;
+		state.workspaces = { ...lists, sessions, unbound: without(lists.unbound), archived: archivedList };
+	} else {
+		state.workspaces = { ...lists, archived: without(lists.archived) };
+	}
+	emit();
 }
 
 const samePath = (a, b) => normPath(a).toLowerCase() === normPath(b).toLowerCase();
 
+/** Read the chat lists the sidebar shows again (each workspace's that was loaded, No Folder and the Archive). */
 async function refreshSessionLists() {
-	const current = state.workspaces.list.find((w) => w.current);
-	await Promise.all(Object.keys(state.workspaces.sessions).map((root) => loadSessions(root)));
-	void current;
+	await Promise.all([...Object.keys(state.workspaces.sessions).map((root) => loadSessions(root)), loadUnbound(), loadArchived()]);
 }
 
 export { api, loadGitStatus };

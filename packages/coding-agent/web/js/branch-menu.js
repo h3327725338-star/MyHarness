@@ -30,7 +30,7 @@ export function BranchChip({ gitStatus }) {
 			${linked ? html`<span class="wt-tag">${t("worktree")}</span>` : null}
 			<${Chevron} />
 		</button>
-		<${Popover} anchor=${anchor} open=${mounted} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${open ? "" : "leaving"}`}>
+		<${Popover} anchor=${anchor} open=${mounted} exitMs=${0} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${open ? "" : "leaving"}`}>
 			<${BranchMenu} gitStatus=${gitStatus} close=${() => setOpen(false)} />
 		<//>
 	</span>`;

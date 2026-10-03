@@ -375,7 +375,14 @@ export function Composer() {
 	// The highlighted row is always visible, also when ↑ on the first row wraps to the last one (and ↓ on the last to the first).
 	useLayoutEffect(() => {
 		if (!menuOpen) return;
-		suggestList.current?.children[sel]?.scrollIntoView({ block: "nearest" });
+		const list = suggestList.current;
+		const row = list?.children[sel];
+		if (!row) return;
+		// Scroll only the candidates, never the editor or its ancestors (scrollIntoView did both).
+		const top = row.offsetTop;
+		const bottom = top + row.offsetHeight;
+		if (top < list.scrollTop) list.scrollTop = top;
+		else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
 	}, [sel, menuOpen, suggestions.length]);
 
 	const history = useMemo(() => items.filter((i) => i.kind === "user" && i.text).map((i) => i.text), [items]);

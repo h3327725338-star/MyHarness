@@ -39,6 +39,8 @@ const STATUS_EVENTS = new Set([
 	"entry_appended",
 	"session_replaced",
 	"workspaces_changed",
+	"bash_start",
+	"bash_end",
 ]);
 const STATUS_DEBOUNCE_MS = 80;
 const RECLAIM_RETRY_MS = 250;

@@ -76,6 +76,8 @@ export const state = {
 	shutdown: false,
 	slots: [],
 	activeSlot: null,
+	/** Session file of a chat that was clicked in the sidebar and is still being opened (marked there at once). */
+	opening: null,
 	toasts: [],
 	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false },
 	models: null,
@@ -437,9 +439,16 @@ export async function loadUnbound() {
 
 /** Reload the chat list the active chat belongs to: its workspace's, or the workspace-less one. */
 function reloadActiveChats() {
-	const root = state.snap?.workspace?.rootPath;
-	if (root) loadSessions(root);
-	else loadUnbound();
+	reloadChatsOf(state.snap, false);
+}
+
+/** Reload the chat list a session belongs to; with `onlyLoaded`, only a list the sidebar has loaded already. */
+function reloadChatsOf(snap, onlyLoaded = true) {
+	if (!snap || snap === true) return;
+	const root = snap.workspace?.rootPath;
+	if (root) {
+		if (!onlyLoaded || state.workspaces.sessions[root] !== undefined) loadSessions(root);
+	} else if (!onlyLoaded || state.workspaces.unbound !== undefined) loadUnbound();
 }
 
 // Listing a workspace's chats reads every saved session file on the server, so requests for the same workspace are
@@ -526,10 +535,20 @@ export async function refreshAll() {
 }
 
 // ---- Switching between sessions ------------------------------------------------------------------
-/** Show another open session. Sessions keep running in the background, so this only changes which bag is on screen. */
-export async function activateSlot(slot) {
+// Every switch gets a number: when the user clicks several chats quickly, only the last one clicked is shown, however
+// the loads finish.
+let switchSeq = 0;
+export const nextSwitch = () => ++switchSeq;
+export const isLatestSwitch = (seq) => seq === switchSeq;
+
+/**
+ * Show another open session. Sessions keep running in the background, so this only changes which bag is on screen.
+ * Nothing on screen (an animation, a list) is waited for: the bag is loaded first if needed, then shown at once.
+ */
+export async function activateSlot(slot, seq = nextSwitch()) {
 	if (!slot || slot === activeSlot) return;
 	if (!bagOf(slot).loaded) await refreshSlot(slot);
+	if (!isLatestSwitch(seq)) return;
 	activeSlot = slot;
 	state.activeSlot = slot;
 	state.view = { ...state.view, selectedTerminal: null };
@@ -900,8 +919,9 @@ function refreshSoon(slot = activeSlot) {
 	refreshTimers.set(
 		slot,
 		setTimeout(() => {
-			attempt(() => loadSnapshot(slot), { quiet: true });
-			if (slot !== activeSlot) return;
+			const loading = attempt(() => loadSnapshot(slot), { quiet: true });
+			// A chat that finished in the background moves in its own list too (its last activity changed).
+			if (slot !== activeSlot) return void loading.then((snap) => reloadChatsOf(snap));
 			reloadActiveChats();
 			if (state.view.panelOpen && state.view.panelTab === "changes") emit();
 			loadGitStatus();

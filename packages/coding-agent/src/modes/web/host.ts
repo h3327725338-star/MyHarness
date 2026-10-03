@@ -98,7 +98,15 @@ export interface SlotStatus {
 	unread: boolean;
 	/** The session belongs to no registered Workspace (created without one, or its Workspace was removed). */
 	unbound: boolean;
+	/**
+	 * Last time something happened in this session while it was open here (a task started or ended, a command ran, a
+	 * Git operation): the sidebar orders chats by it. Null until something happens; merely showing the chat is not activity.
+	 */
+	lastActivityAt: number | null;
 }
+
+/** Events that count as activity of a session for the sidebar order (see SlotStatus.lastActivityAt). */
+const ACTIVITY_EVENTS = new Set(["agent_start", "run_finished", "bash_start", "bash_end", "git_task"]);
 
 /** The parts of the hub that a single WebHost reports back to. */
 export interface WebHostHubLink {
@@ -144,6 +152,7 @@ export class WebHost {
 	/** Last time a request addressed this slot; the hub evicts the least recently used idle slots. */
 	touchedAt = Date.now();
 	gitTask: Record<string, unknown> | null = null;
+	private lastActivityAt: number | null = null;
 	private operationStarted = false;
 	inputTouched = false;
 	tracker: ChangeTracker;
@@ -244,6 +253,7 @@ export class WebHost {
 			this.gitTask = task.active ? task : null;
 			if (task.active) this.operationStarted = true;
 		}
+		if (ACTIVITY_EVENTS.has(event)) this.lastActivityAt = Date.now();
 		const payload = data !== null && typeof data === "object" ? { ...(data as object), slot: this.slotId } : data;
 		this.server.broadcast(event, payload);
 		this.hub?.hostBroadcast(this, event);
@@ -292,6 +302,7 @@ export class WebHost {
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
 			unread: this.unread,
 			unbound: this.unbound,
+			lastActivityAt: this.lastActivityAt,
 		};
 	}
 

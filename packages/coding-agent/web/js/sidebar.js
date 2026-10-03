@@ -1,5 +1,5 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows, Collapse } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, Collapse, COLLAPSE_MS, motionEnabled } from "./ui.js";
 import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -7,12 +7,10 @@ import { t } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
 import { reconcileRows } from "./list-presence.js";
+import { orderChats } from "./chat-order.js";
 import { shortcutFor } from "./shortcuts.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
-
-/** Height of a chat row (the --h-row token): the chat list only keeps the rows on screen in the page once it is long. */
-const chatRowHeight = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--h-row")) || 34;
 
 /**
  * A finished result the user has not read yet. The chat on screen counts as read, so it never shows the marker
@@ -58,13 +56,14 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 		${editing
 			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
-			: html`<span class="title truncate">${title}</span>
+			: html`<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
 				<span class="slot-end">${info.empty ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
 							${(close) => html`
 								<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startEdit())} />
 								<${MenuItem} icon="sparkle" label=${t("Generate title with AI")} disabled=${busy} onClick=${() => (close(), actions.renameSessionWithAi(info.path))} />
+								${info.archived || info.unsaved ? null : html`<${MenuItem} icon="pin" label=${info.pinned ? t("Unpin") : t("Pin to top")} onClick=${() => (close(), actions.pinSession(info.path, !info.pinned))} />`}
 								<${MenuItem} icon="folder" label=${info.archived ? t("Unarchive") : t("Archive")} disabled=${busy} onClick=${() => (close(), actions.archiveSession(info.path, !info.archived))} />
 								<${MenuSep} />
 								<${MenuItem} icon="trash" label=${t("Delete")} danger disabled=${busy} onClick=${() => (close(), actions.deleteSession(info.path, title))} />`}
@@ -92,12 +91,13 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	useEffect(() => {
 		if (showing) setRendered(true);
 	}, [showing]);
+	// Pinned, then running, then most recent activity first (see chat-order.js); an archived chat is never pinned on top.
 	const list = useMemo(() => {
-		const all = sessions || [];
+		const all = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
 		if (!filter) return all;
 		const q = filter.toLowerCase();
 		return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
-	}, [sessions, filter]);
+	}, [sessions, filter, slotsByFile, archived]);
 	if (filter && !list.length) return null;
 	const shown = showAll || filter ? list : list.slice(0, 12);
 	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
@@ -124,7 +124,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 				<//>` : null}
 			</span>
 		</div>
-		<div class=${`collapse ${showing ? "open" : ""}`} inert=${showing ? undefined : ""}>
+		<div class=${`collapse ${showing ? "open" : ""}`} inert=${!showing}>
 			<div class="collapse-inner">
 				${rendered
 					? html`<div class="ws-children">
@@ -140,28 +140,57 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	</div>`;
 }
 
-// Keep removed rows mounted until their shared fade/collapse transition has finished.
-function DraftChat({ info, present, renderRow }) {
-	const [open, setOpen] = useState(false);
+// Keep removed rows mounted until their shared fade/collapse transition has finished. Rows that are there when the list
+// first appears are simply shown; only rows that arrive later grow in.
+function DraftChat({ info, present, initial, renderRow }) {
+	const [open, setOpen] = useState(initial && present);
 	useLayoutEffect(() => {
-		if (!present) { setOpen(false); return undefined; }
-		const frame = requestAnimationFrame(() => setOpen(true));
-		return () => cancelAnimationFrame(frame);
+		setOpen(present);
 	}, [present]);
-	return html`<${Collapse} open=${open}>${renderRow(info)}<//>`;
+	return html`<div class="chat-slot" data-path=${info.path}><${Collapse} open=${open}>${renderRow(info)}<//></div>`;
 }
 
+/**
+ * The rows of one group. A row that leaves (archived, deleted, a blank chat left behind) folds away in place; a row that
+ * arrives grows in; a row that moves (a chat that became active goes to the top) slides from where it was to its new
+ * place. The slide is a transform on that row only: nothing else moves with it, and clicks are never held back.
+ */
 function ChatRows({ items, renderRow }) {
-	const drafts = items;
-	const [retained, setRetained] = useState(drafts);
+	const signature = items.map((item) => item.path).join("\n");
+	const [retained, setRetained] = useState(items);
+	const initial = useRef(null);
+	if (initial.current === null) initial.current = new Set(items.map((item) => item.path));
 	useLayoutEffect(() => {
-		setRetained((old) => reconcileRows(old, drafts));
-		const timer = setTimeout(() => setRetained(drafts), 320);
+		setRetained((old) => reconcileRows(old, items));
+		const timer = setTimeout(() => setRetained(items), COLLAPSE_MS + 60);
 		return () => clearTimeout(timer);
-	}, [items]);
-	const visible = reconcileRows(retained, drafts);
-	const present = new Set(drafts.map((item) => item.path));
-	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} renderRow=${renderRow} />`)}`;
+	}, [signature]);
+	const visible = reconcileRows(retained, items);
+	const present = new Set(items.map((item) => item.path));
+	// A row that left is animated in again if it comes back later.
+	for (const path of initial.current) if (!present.has(path)) initial.current.delete(path);
+	// Only a pure reorder needs a slide. Inserts/exits already move their neighbours through grid collapse;
+	// measuring those intermediate heights and applying FLIP again caused the second downward nudge.
+	// Fixed row indices give the displacement without reading layout or mixing reads with animation writes.
+	const box = useRef(null);
+	const order = useRef(items.map((item) => item.path));
+	useLayoutEffect(() => {
+		const previous = order.current;
+		const next = items.map((item) => item.path);
+		order.current = next;
+		const el = box.current;
+		if (!el) return;
+		for (const node of el.children) for (const animation of node.getAnimations?.() || []) animation.cancel();
+		const indices = new Map(previous.map((path, index) => [path, index]));
+		if (!motionEnabled() || previous.length !== next.length || next.some((path) => !indices.has(path)) || visible.length !== items.length) return;
+		for (const [index, node] of [...el.children].entries()) {
+			const delta = indices.get(node.dataset.path) - index;
+			if (delta && node.animate) node.animate([
+				{ transform: `translateY(calc(${delta} * var(--h-row)))` }, { transform: "none" },
+			], { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+		}
+	}, [signature]);
+	return html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.current.has(info.path)} renderRow=${renderRow} />`)}</div>`;
 }
 
 function AddWorkspaceDialog({ onClose }) {
@@ -179,6 +208,9 @@ export function Sidebar() {
 	const currentWorkspace = useStore((s) => s.snap?.workspace?.id);
 	const currentWorkspaceRoot = useStore((s) => s.snap?.workspace?.rootPath);
 	const currentFile = useStore((s) => s.snap?.session?.file);
+	// A chat that was clicked is marked at once, while it is still being opened.
+	const openingFile = useStore((s) => s.opening);
+	const shownFile = openingFile || currentFile;
 	const slots = useStore((s) => s.slots);
 	const activeSlot = useStore((s) => s.activeSlot);
 	const connected = useStore((s) => s.connected);
@@ -224,6 +256,7 @@ export function Sidebar() {
 		const unbound = slots.filter((slot) => slot.unbound && listable(slot) && !listed.has(pathKey(slot.sessionFile))).map(row);
 		return { byRoot, unbound };
 	}, [slots, ws, activeSlot]);
+	const archivedChats = useMemo(() => ws.archived?.map((info) => ({ ...info, archived: true })), [ws.archived]);
 	const unboundChats = useMemo(() => (ws.unbound === undefined ? undefined : [...unsaved.unbound, ...ws.unbound]), [unsaved, ws.unbound]);
 	const onWidth = (w) => {
 		state.view = { ...state.view, sidebarW: w };
@@ -242,11 +275,11 @@ export function Sidebar() {
 			${ws.list.map((w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
+				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
 			})}
 			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
-			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
-			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${ws.archived?.map((info) => ({ ...info, archived: true }))} filter=${filter} currentFile=${currentFile} slotsByFile=${slotsByFile} />
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
+			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} />
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>

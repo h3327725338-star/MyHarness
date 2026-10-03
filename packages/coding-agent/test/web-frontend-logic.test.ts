@@ -4,9 +4,8 @@ import { describe, expect, it } from "vitest";
 // They are loaded through a computed URL because they are browser modules, not TypeScript.
 const webDir = new URL("../web/js/", import.meta.url);
 const { parsePatch } = await import(new URL("diff-parse.js", webDir).href);
-const { buildTurns, changeTotals, describeAction, groupLabel, groupSteps, turnOutcome, webStats } = await import(
-	new URL("turns.js", webDir).href
-);
+const { buildTurns, changeTotals, describeAction, groupLabel, groupSteps, turnOutcome, turnSegments, webStats } =
+	await import(new URL("turns.js", webDir).href);
 const models = await import(new URL("provider-models.js", webDir).href);
 const {
 	ansiSegments,
@@ -45,6 +44,33 @@ describe("Web UI: list presence ordering", () => {
 		expect(reconcileRows(old, current)).toEqual([current[0], old[0], current[1], old[2]]);
 		expect(reconcileRows(current, current)).toEqual(current);
 		expect(reconcileRows(old, [])).toEqual(old);
+	});
+});
+
+describe("Web UI: chat order in the sidebar", () => {
+	it("keeps a new blank chat first, then pinned, running and most recently active chats", async () => {
+		const { orderChats } = await import(new URL("chat-order.js", webDir).href);
+		const list = [
+			{ path: "old", modified: 100 },
+			{ path: "pinned", modified: 50, pinned: true },
+			{ path: "busy", modified: 10 },
+			{ path: "touched", modified: 20 },
+			{ path: "blank", modified: 0, empty: true },
+		];
+		const slots: Record<string, unknown> = { busy: { active: true }, touched: { lastActivityAt: 500 } };
+		const ordered = orderChats(list, (info: any) => slots[info.path], { now: 1000 });
+		expect(ordered.map((info: any) => info.path)).toEqual(["blank", "pinned", "busy", "touched", "old"]);
+		// The time a row shows follows its last activity; untouched rows keep their object.
+		expect(ordered.find((info: any) => info.path === "touched").modified).toBe(500);
+		expect(ordered.find((info: any) => info.path === "old")).toBe(list[0]);
+		// The archive never lifts pinned chats.
+		expect(orderChats(list, () => undefined, { pins: false, now: 1000 }).map((info: any) => info.path)).toEqual([
+			"blank",
+			"old",
+			"pinned",
+			"touched",
+			"busy",
+		]);
 	});
 });
 
@@ -275,6 +301,53 @@ describe("Web UI: turns", () => {
 		const groups = groupSteps(turn.steps);
 		expect(groups.map((g: any) => `${g.kind}:${g.actions.length}`)).toEqual(["read:2", "run:1"]);
 		expect(turnOutcome(turn, { run: { outcome: "failed" }, live: false, waiting: false })).toBe("failed");
+	});
+});
+
+describe("Web UI: reasoning and answer segments", () => {
+	it("opens a new process block after text the model wrote, and keeps the final answer last", () => {
+		const items = [
+			{ kind: "user", ts: 1, text: "go", images: [] },
+			assistant(
+				[
+					{ type: "thinking", text: "Plan it." },
+					{ type: "text", text: "First I list the folder." },
+					{ type: "toolCall", id: "c1", name: "ls", args: { path: "." } },
+				],
+				{ stopReason: "toolUse", ts: 2 },
+			),
+			{ kind: "toolResult", ts: 3, toolCallId: "c1", toolName: "ls", text: "a", images: [], isError: false },
+			assistant(
+				[
+					{ type: "text", text: "It is almost empty." },
+					{ type: "thinking", text: "Look one level up." },
+					{ type: "toolCall", id: "c2", name: "ls", args: { path: ".." } },
+				],
+				{ stopReason: "toolUse", ts: 4 },
+			),
+			{ kind: "toolResult", ts: 5, toolCallId: "c2", toolName: "ls", text: "b", images: [], isError: false },
+			assistant([{ type: "text", text: "Done." }], { ts: 6 }),
+		];
+		const [turn] = buildTurns(items, { cwd: "", toolRuns: {} });
+		const segments = turnSegments(turn);
+		expect(
+			segments.map((s: any) =>
+				s.type === "text" ? `text:${s.step.text}` : `process:${s.steps.map((x: any) => x.type).join("+")}`,
+			),
+		).toEqual([
+			"process:thinking",
+			"text:First I list the folder.",
+			"process:action",
+			"text:It is almost empty.",
+			"process:thinking+action",
+		]);
+		expect(segments.filter((s: any) => s.type === "process").map((s: any) => s.stats.actions)).toEqual([0, 1, 1]);
+		// The whole turn is still one piece: every step is counted and the answer follows the last block.
+		expect(turn.stats.actions).toBe(2);
+		expect(turn.final.text).toBe("Done.");
+		// Block keys follow their first step, so a block keeps its open or folded state while later output arrives.
+		const [again] = buildTurns(items.slice(0, 4), { cwd: "", toolRuns: {} });
+		expect(turnSegments(again)[2].key).toBe(segments[2].key);
 	});
 });
 

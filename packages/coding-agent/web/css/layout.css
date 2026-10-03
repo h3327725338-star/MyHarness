@@ -23,11 +23,11 @@
 .sidebar-search { padding: 0 var(--pad-side) 6px; }
 .sidebar-search .field { width: 100%; background: transparent; }
 .sidebar-search .field:not(:hover):not(:focus) { border-color: var(--border); }
-.sidebar-scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 var(--pad-side) 8px; }
+.sidebar-scroll { flex: 1 1 auto; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; overscroll-behavior: contain; padding: 0 var(--pad-side) 8px; }
 .side-section { display: flex; align-items: center; gap: 4px; padding: 10px 4px 4px 8px; color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
 .side-section .grow { font-weight: 600; }
 
-.ws-row { display: flex; align-items: center; gap: 6px; height: var(--h-row); padding: 0 4px 0 6px; border-radius: var(--r-md); color: var(--text-2); cursor: pointer; position: relative; }
+.ws-row { display: flex; align-items: center; gap: 6px; height: var(--h-row); padding: 0 4px 0 6px; border-radius: var(--r-md); color: var(--text-2); cursor: pointer; position: relative; transition: background var(--t-fast), color var(--t-fast); }
 .ws-row:hover { background: var(--surface-hover); }
 .ws-row .chev { transition: transform var(--t-base) var(--ease); color: var(--text-4); }
 .ws-row.open .chev { transform: rotate(90deg); }
@@ -41,7 +41,7 @@
 .ws-row .ws-unread { margin-left: -2px; }
 
 /* Session rows: fixed slots so status changes never move the title. */
-.chat-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px 16px; align-items: center; height: var(--h-row); padding: 0 4px 0 38px; border-radius: var(--r-md); cursor: pointer; color: var(--text-2); position: relative; }
+.chat-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px 16px; align-items: center; height: var(--h-row); padding: 0 4px 0 38px; border-radius: var(--r-md); cursor: pointer; color: var(--text-2); position: relative; transition: background var(--t-fast), color var(--t-fast), box-shadow var(--t-fast); }
 .chat-row:hover { background: var(--surface-hover); color: var(--text); }
 .chat-row.current { background: var(--surface-select); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .chat-row .slot-status { display: grid; place-items: center; }
@@ -52,6 +52,9 @@
 .chat-row:hover .when, .chat-row:focus-within .when { opacity: 0; }
 .chat-row:hover .row-actions, .chat-row:focus-within .row-actions { opacity: 1; pointer-events: auto; }
 .chat-row .title-edit { grid-column: 1 / 3; height: var(--h-control-sm); padding: 0 5px; }
+.chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
+/* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
+.chat-rows { position: relative; }
 
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */

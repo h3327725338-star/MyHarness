@@ -71,8 +71,11 @@ export function useKey(handler, deps = []) {
  * Anchored popover with fixed positioning (not clipped by overflow:hidden ancestors).
  * placement: "top" | "bottom"; align: "start" | "end".
  */
-export function Popover({ anchor, open, onClose, placement = "bottom", align = "start", width, minWidth, maxHeight = 420, children, class: cls }) {
+export function Popover({ anchor, open, onClose, placement = "bottom", align = "start", width, minWidth, maxHeight = 420, children, class: cls, exitMs = 120 }) {
 	const ref = useRef(null);
+	// A closed popover fades out where it is (not clickable) instead of vanishing; `exitMs` 0 is for callers that animate it themselves.
+	const presence = usePresence(open, exitMs);
+	const mounted = exitMs ? presence.mounted : open;
 	const [style, setStyle] = useState({ visibility: "hidden" });
 	const place = () => {
 		if (!anchor.current || !ref.current) return;
@@ -124,8 +127,8 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [open]);
-	if (!open) return null;
-	return html`<div ref=${ref} class=${`popover ${cls || ""}`} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
+	if (!mounted) return null;
+	return html`<div ref=${ref} class=${`popover ${cls || ""} ${open ? "" : "closing"}`} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
 }
 
 export function MenuItem({ icon, label, hint, onClick, danger, disabled, active, sub }) {
@@ -229,6 +232,42 @@ export function Spinner({ title, size = 14 } = {}) {
 }
 
 /**
+ * Runs `fn` once the current state has been painted (two animation frames), so a CSS transition starts from it. Frames
+ * stop while the page is hidden or covered; a timer runs it anyway, so nothing ever waits for a frame to show content or
+ * to become clickable. Returns the function that cancels it.
+ */
+export function afterPaint(fn, fallbackMs = 50) {
+	let done = false;
+	let second = 0;
+	const run = () => {
+		if (done) return;
+		done = true;
+		cancelAnimationFrame(first);
+		cancelAnimationFrame(second);
+		clearTimeout(timer);
+		fn();
+	};
+	const first = requestAnimationFrame(() => {
+		second = requestAnimationFrame(run);
+	});
+	const timer = setTimeout(run, fallbackMs);
+	return () => {
+		done = true;
+		cancelAnimationFrame(first);
+		cancelAnimationFrame(second);
+		clearTimeout(timer);
+	};
+}
+
+/** Whether animations are on: the Appearance setting, or the system's "reduce motion" when it is left on System. */
+export function motionEnabled() {
+	const setting = document.documentElement.dataset.motion;
+	if (setting === "off") return false;
+	if (setting === "on") return true;
+	return !matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
  * Keeps something mounted while it animates out. `shown` is what the CSS transition follows: it turns true one painted
  * frame after the element is mounted (so it can transition in) and false as soon as `open` ends; `mounted` stays true
  * for `exitMs` longer (so it can transition out). A thing that is already open when it first appears does not animate.
@@ -239,14 +278,7 @@ export function usePresence(open, exitMs = 300) {
 	useLayoutEffect(() => {
 		if (open) {
 			setMounted(true);
-			let second = 0;
-			const first = requestAnimationFrame(() => {
-				second = requestAnimationFrame(() => setShown(true));
-			});
-			return () => {
-				cancelAnimationFrame(first);
-				cancelAnimationFrame(second);
-			};
+			return afterPaint(() => setShown(true));
 		}
 		setShown(false);
 		const timer = setTimeout(() => setMounted(false), exitMs);
@@ -265,7 +297,7 @@ export const COLLAPSE_MS = 260;
 export function Collapse({ open, children, class: cls, keepMounted = false }) {
 	const { mounted, shown } = usePresence(open, COLLAPSE_MS + 40);
 	if (!mounted && !keepMounted) return null;
-	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`} inert=${open ? undefined : ""}><div class="collapse-inner">${children}</div></div>`;
+	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`} inert=${!open}><div class="collapse-inner">${children}</div></div>`;
 }
 
 /**
