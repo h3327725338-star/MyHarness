@@ -123,6 +123,41 @@ export class SessionModelController {
 		await this._host.ensureContextBudget();
 	}
 
+	/**
+	 * Switch the live model for the current run only (fallback model takeover and switching back afterwards). The
+	 * session records the change, so the transcript and a resumed session show which model answered, but the default
+	 * model and thinking level in settings stay what the person chose.
+	 * @throws Error if the provider is disabled or has no API key
+	 */
+	async switchForRun(model: Model<any>, thinkingLevel: ThinkingLevel, options: { compact: boolean }): Promise<void> {
+		const { agent, sessionManager, modelRuntime } = this._host;
+		if (!modelRuntime.isProviderEnabled(model.provider)) {
+			throw new Error(`Provider ${model.provider} 已停用`);
+		}
+		if (!(await modelRuntime.checkAuth(model.provider))) {
+			throw new Error(`${model.provider} 没有可用的 API Key`);
+		}
+
+		const previousModel = this._model;
+		if (options.compact) await this._host.compactBeforeModelDownshift(model);
+		agent.state.model = model;
+		sessionManager.appendModelChange(model.provider, model.id);
+		this._host.onModelSet();
+
+		const previousLevel = agent.state.thinkingLevel;
+		const levels = getSupportedThinkingLevels(model) as ThinkingLevel[];
+		const level = levels.includes(thinkingLevel)
+			? thinkingLevel
+			: (clampThinkingLevel(model, thinkingLevel) as ThinkingLevel);
+		if (level !== previousLevel) {
+			agent.state.thinkingLevel = level;
+			sessionManager.appendThinkingLevelChange(level);
+			this._host.notifyThinkingLevelChanged(level, previousLevel);
+		}
+
+		await this._notifyModelSelect(model, previousModel, "set");
+	}
+
 	/** Reconcile the live model after a persisted Provider/Model/Key mutation. */
 	async reconcileAfterConfigChange(): Promise<void> {
 		const { agent, settingsManager, modelRuntime } = this._host;

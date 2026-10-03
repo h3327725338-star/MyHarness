@@ -89,7 +89,7 @@ describe("SettingsManager", () => {
 	});
 
 	describe("web search", () => {
-		it("persists engines, the three numbers and Firefox Fallback globally", async () => {
+		it("persists engines, the numbers and Firefox Fallback globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setWebSearchSettings({
 				enabled: true,
@@ -97,6 +97,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
+				maxRedirects: 12,
 				browserFallback: false,
 				browser: "auto",
 				useBrowserCookies: false,
@@ -109,6 +110,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
+				maxRedirects: 12,
 				browserFallback: false,
 				browser: "auto",
 				useBrowserCookies: false,
@@ -126,6 +128,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 10,
 				fetchConcurrency: 4,
+				maxRedirects: 5,
 				browserFallback: true,
 				browser: "auto",
 				useBrowserCookies: false,
@@ -181,6 +184,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
+				maxRedirects: 5,
 				browserFallback: true,
 				browser: "auto",
 				useBrowserCookies: false,
@@ -196,6 +200,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 7,
 				fetchConcurrency: 4,
+				maxRedirects: 5,
 				browserFallback: true,
 				browser: "auto",
 				useBrowserCookies: false,
@@ -232,6 +237,7 @@ describe("SettingsManager", () => {
 				pagesPerSearch: 6,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 8,
+				maxRedirects: 5,
 				browserFallback: true,
 				browser: "auto",
 				useBrowserCookies: false,

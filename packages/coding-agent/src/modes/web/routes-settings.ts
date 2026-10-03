@@ -10,7 +10,11 @@
 import type { ThinkingLevel } from "@myharness/agent-core";
 import { settingsMenuFor } from "../../cli/settings-menu.ts";
 import { builtinSlashCommandsFor } from "../../cli/slash-commands.ts";
-import { type SettingsManager, WEB_SEARCH_BROWSER_IDS } from "../../config/settings/index.ts";
+import {
+	type SettingsManager,
+	WEB_SEARCH_BROWSER_IDS,
+	WEB_SEARCH_SETTING_RANGES,
+} from "../../config/settings/index.ts";
 import {
 	getProjectTrustOptions,
 	hasTrustRequiringProjectResources,
@@ -109,6 +113,7 @@ export const SETTINGS_MENU_SETTING: Readonly<Record<string, string>> = {
 	"sub-agent": "subAgent",
 	"code-intelligence": "codeIntelligence.enabled",
 	"vision-assistant": "visionAssistant",
+	"fallback-model": "fallbackModel",
 	"compact-model": "compactionModel",
 	autocompact: "autoCompact",
 	"steering-mode": "steeringMode",
@@ -160,6 +165,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const autoMemory = s.getAutoMemorySettings();
 		const subAgent = s.getSubAgentSettings();
 		const vision = s.getVisionAssistantSettings();
+		const fallbackModel = s.getFallbackModelSettings();
 		const web = s.getWebSearchSettings();
 		const code = s.getCodeIntelligenceSettings();
 		const popup = s.getPopupNotificationSettings();
@@ -231,6 +237,16 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				description: `Retry transient provider errors (up to ${retry.maxRetries} times).`,
 				type: "boolean",
 				value: session.autoRetryEnabled,
+			},
+			{
+				id: "fallbackModel",
+				section: "Agent",
+				label: "Fallback model",
+				description:
+					"When the main model keeps failing after its automatic retries, continue the task on this model with the same conversation. The next task tries the main model first again. “Use the main model” means no fallback.",
+				type: "modelRef",
+				value: { ...modelRef(fallbackModel), enabled: fallbackModel.enabled },
+				note: "enabled",
 			},
 			{
 				id: "enabledModels",
@@ -319,6 +335,17 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				value: web.fetchConcurrency,
 				min: 1,
 				max: 8,
+			},
+			{
+				id: "webSearch.maxRedirects",
+				section: "Tools",
+				label: "Max redirects",
+				description:
+					"Redirect hops a page read follows before it stops (0 follows none). Hitting the limit usually means a login or auth redirect loop.",
+				type: "number",
+				value: web.maxRedirects,
+				min: WEB_SEARCH_SETTING_RANGES.maxRedirects.min,
+				max: WEB_SEARCH_SETTING_RANGES.maxRedirects.max,
 			},
 			{
 				id: "webSearch.browserFallback",
@@ -697,6 +724,17 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				session.setSubAgentEnabled(enabled);
 				return;
 			}
+			case "fallbackModel": {
+				const ref = modelRefValue(value);
+				const enabled = (value as { enabled?: unknown } | undefined)?.enabled === true;
+				s.setFallbackModelSettings({
+					enabled,
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
 			case "visionAssistant": {
 				const ref = modelRefValue(value);
 				const enabled = (value as { enabled?: unknown } | undefined)?.enabled === true;
@@ -713,6 +751,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			case "webSearch.pagesPerSearch":
 			case "webSearch.maxUrlsPerFetch":
 			case "webSearch.fetchConcurrency":
+			case "webSearch.maxRedirects":
 			case "webSearch.browserFallback":
 			case "webSearch.browser":
 			case "webSearch.useBrowserCookies": {
@@ -728,7 +767,10 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				} else if (id === "webSearch.pagesPerSearch") next.pagesPerSearch = numberValue(value, id, 0, 10);
 				else if (id === "webSearch.maxUrlsPerFetch") next.maxUrlsPerFetch = numberValue(value, id, 1, 20);
 				else if (id === "webSearch.fetchConcurrency") next.fetchConcurrency = numberValue(value, id, 1, 8);
-				else if (id === "webSearch.browser") {
+				else if (id === "webSearch.maxRedirects") {
+					const range = WEB_SEARCH_SETTING_RANGES.maxRedirects;
+					next.maxRedirects = Math.floor(numberValue(value, id, range.min, range.max));
+				} else if (id === "webSearch.browser") {
 					const browser = WEB_SEARCH_BROWSER_IDS.find((choice) => choice === value);
 					if (!browser) throw new HttpError(400, "Unknown browser.");
 					next.browser = browser;

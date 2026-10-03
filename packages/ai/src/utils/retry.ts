@@ -34,6 +34,13 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"503",
 	"504",
 	"524",
+	// Gateway/CDN (Cloudflare-style) origin failures, often surfaced only as
+	// "520 status code (no body)": unknown origin error, origin down, connect
+	// timeout, origin unreachable, SSL handshake failure, Railgun error, overload
+	// (529) and origin DNS error. Bounded so token counts such as "15200" do not match.
+	"\\b(?:520|521|522|523|525|527|529|530)\\b",
+	"bad.?gateway",
+	"gateway.?time.?out",
 	"service.?unavailable",
 	"server.?error",
 	"internal.?error",
@@ -55,6 +62,11 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"reset before headers",
 	"socket hang up",
 	"socket connection was closed",
+	// Node/undici error codes for a reset proxy connection, a connect timeout and
+	// a temporary DNS failure.
+	"ECONNRESET",
+	"ETIMEDOUT",
+	"EAI_AGAIN",
 	"timed? out",
 	"timeout",
 	"terminated",

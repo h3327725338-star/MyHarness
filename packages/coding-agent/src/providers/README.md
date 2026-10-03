@@ -54,6 +54,8 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | --- | --- |
 | `policy.ts` | 哪些失败可恢复、恢复预算、恢复时发给模型的内部消息 |
 | `coordinator.ts` | `ProviderRecoveryCoordinator`：本地任务在 Provider 会话失败后继续或重建会话，次数有上限 |
+| `fallback.ts` | `ModelFallbackCoordinator`：主模型重试和恢复都用完后，把当前任务交给 `fallbackModel` 设置的备用模型继续；备用模型也失败时给出主、备两边的原因；任务结束后切回主模型 |
+| `error-explanation.ts` | 把模型请求的原始错误（如 `520 status code (no body)`）翻译成中文原因和处理建议，供终端、Web UI、print mode 和任务结束状态显示；不影响重试判断 |
 
 ### 对外接口
 

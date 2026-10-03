@@ -92,6 +92,7 @@ const disabledSettings = {
 		pagesPerSearch: SETTINGS_DEFAULTS.webSearch.pagesPerSearch,
 		maxUrlsPerFetch: SETTINGS_DEFAULTS.webSearch.maxUrlsPerFetch,
 		fetchConcurrency: SETTINGS_DEFAULTS.webSearch.fetchConcurrency,
+		maxRedirects: SETTINGS_DEFAULTS.webSearch.maxRedirects,
 		browserFallback: SETTINGS_DEFAULTS.webSearch.browserFallback,
 		browser: SETTINGS_DEFAULTS.webSearch.browser,
 		useBrowserCookies: SETTINGS_DEFAULTS.webSearch.useBrowserCookies,

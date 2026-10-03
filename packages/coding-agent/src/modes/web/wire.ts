@@ -10,6 +10,7 @@ import type { AgentMessage } from "@myharness/agent-core";
 import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { parseExpandedBuiltinPromptCommand } from "../../cli/slash-commands.ts";
+import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 
 /** Tool result details larger than this are replaced by a marker to keep payloads bounded. */
@@ -236,7 +237,12 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 				ts,
 				blocks,
 				stopReason: message.stopReason,
-				...(message.errorMessage ? { error: message.errorMessage } : {}),
+				// A failed request is shown with its cause and next step, not as a bare status code.
+				...(message.stopReason === "error"
+					? { error: explainProviderError(message.errorMessage) }
+					: message.errorMessage
+						? { error: message.errorMessage }
+						: {}),
 				provider: message.provider,
 				model: message.model,
 				...(message.usage ? { usage: wireUsage(message.usage) } : {}),

@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@myharness/ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text, type TUI } from "@myharness/tui";
+import { explainProviderError } from "../../../providers/recovery/error-explanation.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { AnimatedThinkingLabel } from "./animated-thinking-label.ts";
 
@@ -262,9 +263,11 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
 			} else if (message.stopReason === "error") {
-				const errorMsg = message.errorMessage || "Unknown error";
+				// Cause and next step first; the raw provider text follows inside the explanation.
 				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+				this.contentContainer.addChild(
+					new Text(theme.fg("error", explainProviderError(message.errorMessage)), this.outputPad, 0),
+				);
 			}
 		}
 	}

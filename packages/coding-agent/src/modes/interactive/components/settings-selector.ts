@@ -33,6 +33,7 @@ import type {
 	CodeIntelligenceSettings,
 	CompactionSettings,
 	DefaultProjectTrust,
+	FallbackModelSettings,
 	GitIntegrationSettings,
 	ResolvedWebSearchSettings,
 	SettingsManager,
@@ -135,6 +136,8 @@ export interface SettingsConfig {
 	/** Optional for callers that construct the selector directly; runtime settings provide the fallback. */
 	webSearch?: ResolvedWebSearchSettings;
 	codeIntelligence?: CodeIntelligenceSettings & { enabled: boolean };
+	/** Optional for callers that construct the selector directly; runtime settings provide the fallback. */
+	fallbackModel?: FallbackModelSettings & { enabled: boolean };
 }
 export interface SettingsCallbacks {
 	onAutoMemoryChange: (settings: AutoMemorySettings) => void;
@@ -173,6 +176,7 @@ export interface SettingsCallbacks {
 	onPopupNotificationsChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onWebSearchChange?: (settings: ResolvedWebSearchSettings) => void;
+	onFallbackModelChange?: (settings: FallbackModelSettings) => void;
 	onCodeIntelligenceChange: (settings: CodeIntelligenceSettings) => void;
 	onCancel: () => void;
 }
@@ -2238,6 +2242,118 @@ class AutoMemorySubmenu extends Container {
 	}
 }
 
+function formatFallbackModelSummary(settings: FallbackModelSettings & { enabled: boolean }): string {
+	return settings.enabled && settings.provider && settings.model
+		? `On · ${settings.provider}/${settings.model} · ${settings.thinkingLevel ?? "off"}`
+		: "Off";
+}
+
+/** Fallback Model: an On/Off switch, then the model and its thinking effort (same steps as Auto Memory). */
+class FallbackModelSubmenu extends Container {
+	private inputComponent: Component | undefined;
+	private readonly original: FallbackModelSettings & { enabled: boolean };
+	private readonly onChange: (settings: FallbackModelSettings) => void;
+	private readonly dependencies: SettingsSelectorDependencies;
+	private readonly onDone: (selectedValue?: string) => void;
+
+	constructor(
+		config: FallbackModelSettings & { enabled: boolean },
+		onChange: (settings: FallbackModelSettings) => void,
+		dependencies: SettingsSelectorDependencies,
+		onDone: (selectedValue?: string) => void,
+	) {
+		super();
+		this.original = { ...config };
+		this.onChange = onChange;
+		this.dependencies = dependencies;
+		this.onDone = onDone;
+		this.showToggle();
+	}
+
+	handleInput(data: string): void {
+		this.inputComponent?.handleInput?.(data);
+	}
+
+	private setContent(component: Component): void {
+		this.clear();
+		this.addChild(component);
+		this.inputComponent = component;
+	}
+
+	private showToggle(): void {
+		this.setContent(
+			new BooleanToggleSubmenu(
+				"Fallback Model",
+				"开启后，主模型请求失败且自动重试用完时，会自动切换到这里选择的备用模型，带着当前会话的上下文继续任务；任务结束后下一个任务仍先使用主模型。只有备用模型也失败时才会报错，并同时说明主、备模型各自的失败原因。",
+				this.original.enabled,
+				(nextEnabled) => {
+					if (!nextEnabled) {
+						this.onChange({ ...this.original, enabled: false });
+						this.onDone("Off");
+						return;
+					}
+					this.showModelSelector();
+				},
+				() => this.onDone(),
+			),
+		);
+	}
+
+	private showModelSelector(): void {
+		const currentModel =
+			this.original.provider && this.original.model
+				? this.dependencies.modelRuntime.getModel(this.original.provider, this.original.model)
+				: undefined;
+		this.setContent(
+			new ModelSelectorComponent(
+				this.dependencies.tui,
+				currentModel,
+				this.dependencies.settingsManager,
+				this.dependencies.modelRuntime,
+				this.dependencies.scopedModels,
+				(model) => this.showThinkingSelector(model),
+				() => this.showToggle(),
+				undefined,
+				false,
+			),
+		);
+	}
+
+	private showThinkingSelector(model: Model<any>): void {
+		const levels = getSupportedThinkingLevels(model) as ThinkingLevel[];
+		const currentLevel =
+			this.original.provider === model.provider &&
+			this.original.model === model.id &&
+			this.original.thinkingLevel &&
+			levels.includes(this.original.thinkingLevel)
+				? this.original.thinkingLevel
+				: (levels[0] ?? "off");
+		this.setContent(
+			new SelectSubmenu(
+				"Fallback Model 思考强度",
+				`选择 ${model.provider}/${model.id} 实际支持的思考强度。`,
+				levels.map((level) => ({
+					value: level,
+					label: level,
+					description: THINKING_DESCRIPTIONS[level],
+				})),
+				currentLevel,
+				(value) => {
+					const settings: FallbackModelSettings = {
+						enabled: true,
+						provider: model.provider,
+						model: model.id,
+						thinkingLevel: value as ThinkingLevel,
+					};
+					this.onChange(settings);
+					this.onDone(formatFallbackModelSummary({ ...settings, enabled: true }));
+				},
+				() => this.showToggle(),
+			),
+		);
+	}
+}
+
 class VisionAssistantSubmenu extends Container {
 	private inputComponent: Component | undefined;
 	private readonly original: VisionAssistantSettings & { enabled: boolean };
@@ -3200,6 +3316,10 @@ export class SettingsSelectorComponent extends Container {
 			}
 			return config.webSearch;
 		};
+		const getFallbackModelConfig = (): FallbackModelSettings & { enabled: boolean } => {
+			config.fallbackModel ??= dependencies.settingsManager.getFallbackModelSettings?.() ?? { enabled: false };
+			return config.fallbackModel;
+		};
 		let currentWarnings = { ...config.warnings };
 		const autoMemoryCallbacks: SettingsCallbacks = {
 			...callbacks,
@@ -3268,6 +3388,20 @@ export class SettingsSelectorComponent extends Container {
 					? `${config.currentModel.provider}/${config.currentModel.id} · ${config.thinkingLevel}`
 					: "未选择",
 				submenu: (_currentValue, done) => new DefaultModelSubmenu(config, callbacks, dependencies, done),
+			},
+			{
+				...entry("fallback-model"),
+				currentValue: formatFallbackModelSummary(getFallbackModelConfig()),
+				submenu: (_currentValue, done) =>
+					new FallbackModelSubmenu(
+						getFallbackModelConfig(),
+						(settings) => {
+							config.fallbackModel = { ...settings, enabled: settings.enabled ?? false };
+							callbacks.onFallbackModelChange?.(settings);
+						},
+						dependencies,
+						done,
+					),
 			},
 			{
 				...entry("auto-memory"),

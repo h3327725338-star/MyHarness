@@ -574,6 +574,8 @@ function tellTerminals(type, data) {
 // ---- Boot + SSE ------------------------------------------------------------------------------
 let source = null;
 let booted = false;
+/** A failed fallback was just reported; the retry failure that follows it is not reported again. */
+let fallbackFailureShown = false;
 
 async function initialLoad() {
 	const snap = await api("/api/state", { slot: "" });
@@ -747,7 +749,21 @@ function connectEvents() {
 	on("auto_retry_start", (d) => set({ retry: { ...d, at: Date.now() } }));
 	on("auto_retry_end", (d) => {
 		set({ retry: null });
-		if (!d.success && d.finalError) toast(t("Retry failed after {attempt} attempts: {finalError}", { attempt: d.attempt, finalError: serverText(d.finalError, t("unknown error")) }), "error");
+		// A failed fallback was just reported with the cause on each model; its retry failure is not repeated.
+		const reported = fallbackFailureShown;
+		fallbackFailureShown = false;
+		if (!d.success && d.finalError && !reported) toast(t("Retry failed after {attempt} attempts: {finalError}", { attempt: d.attempt, finalError: serverText(d.finalError, t("unknown error")) }), "error");
+	});
+	on("model_fallback_start", (d) => {
+		set({ retry: null });
+		toast(t("The main model {from} kept failing; switched to the fallback model {to} to continue.\n{reason}", { from: d.from, to: d.to, reason: serverText(d.reason) }), "warning", 9000);
+	});
+	on("model_fallback_end", (d) => {
+		if (d.success) toast(t("The fallback model {to} finished this task. The next task uses the main model {from} first.", { from: d.from, to: d.to }), "info", 6000);
+		else if (d.errorMessage) {
+			fallbackFailureShown = true;
+			toast(serverText(d.errorMessage), "error", 15000);
+		}
 	});
 	on("provider_recovery", (d) => set({ recovery: d }));
 	on("git_checkpoint", (d, slot) => {

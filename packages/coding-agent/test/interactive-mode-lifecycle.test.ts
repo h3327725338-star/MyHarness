@@ -313,11 +313,59 @@ describe("InteractiveMode task lifecycle across agent events", () => {
 			attempt: 3,
 			maxAttempts: 3,
 			delayMs: 1000,
-			errorMessage: "boom",
+			errorMessage: "520 status code (no body)",
 		});
-		await handleEvent({ type: "auto_retry_end", success: false, attempt: 3, finalError: "boom" });
+		await handleEvent({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+			finalError: "520 status code (no body)",
+		});
 
-		expect(context.showError).toHaveBeenCalledWith("Retry failed after 3 attempts: boom");
+		expect(context.showError).toHaveBeenCalledTimes(1);
+		const shown = context.showError.mock.calls[0][0] as string;
+		expect(shown).toMatch(/^自动重试 3 次后仍然失败。模型请求失败：/);
+		expect(shown).toContain("网关与后端服务器之间连接异常（HTTP 520）");
+		expect(shown).toContain("没有返回任何错误说明");
 		expect(context.showStatus).not.toHaveBeenCalledWith("已取消自动重试");
+	});
+
+	test("announces a fallback takeover and reports a failed fallback once", async () => {
+		initTheme("dark");
+		const { context, handleEvent, originalEscape } = createLifecycleContext("recovering");
+		context.addSystemNote = vi.fn();
+		context.pendingRecoverableErrorComponent = undefined;
+
+		await handleEvent({
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 1000,
+			errorMessage: "520 status code (no body)",
+		});
+		await handleEvent({
+			type: "model_fallback_start",
+			from: "main/model-a",
+			to: "backup/model-b",
+			retries: 3,
+			reason: "模型请求失败：原因",
+		});
+		expect(context.defaultEditor.onEscape).toBe(originalEscape);
+		expect(context.statusIndicators.has("retry")).toBe(false);
+		expect(context.addSystemNote).toHaveBeenCalledWith(
+			expect.stringContaining("已自动切换到备用模型 backup/model-b"),
+		);
+
+		await handleEvent({
+			type: "model_fallback_end",
+			success: false,
+			from: "main/model-a",
+			to: "backup/model-b",
+			errorMessage: "模型请求失败：主模型和备用模型都失败了",
+		});
+		await handleEvent({ type: "auto_retry_end", success: false, attempt: 3, finalError: "401 Unauthorized" });
+
+		expect(context.showError).toHaveBeenCalledTimes(1);
+		expect(context.showError).toHaveBeenCalledWith("模型请求失败：主模型和备用模型都失败了");
 	});
 });

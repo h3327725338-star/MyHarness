@@ -259,6 +259,51 @@ describe("page reading", () => {
 		]);
 	});
 
+	it("follows as many redirects as the Max Redirects setting allows and explains hitting the limit", async () => {
+		// /hop/N redirects to /hop/N-1; /hop/0 is the page.
+		const routes: Record<string, Route> = {
+			"chain.example": (url) => {
+				const left = Number(url.pathname.split("/").pop());
+				return left > 0
+					? new Response(null, { status: 302, headers: { Location: `/hop/${left - 1}` } })
+					: html("<title>End</title><main><p>Reached the end of the redirect chain.</p></main>");
+			},
+		};
+
+		const defaults = createService({}, routes);
+		const blocked = await defaults.service.fetch({ urls: ["https://chain.example/hop/6"] });
+		expect(blocked.pages).toEqual([]);
+		expect(blocked.failures[0]).toMatchObject({ code: "too_many_redirects" });
+		expect(blocked.failures[0]!.message).toContain("上限（5 次，/settings → Web Search → Max Redirects）");
+		expect(blocked.failures[0]!.message).toContain("死循环");
+		expect(defaults.calls).toHaveLength(6);
+
+		const raised = createService({ maxRedirects: 8 }, routes);
+		const read = await raised.service.fetch({ urls: ["https://chain.example/hop/6"] });
+		expect(read.failures).toEqual([]);
+		expect(read.pages[0]).toMatchObject({ finalUrl: "https://chain.example/hop/0", title: "End" });
+
+		const lowered = createService({ maxRedirects: 2 }, routes);
+		const stopped = await lowered.service.fetch({ urls: ["https://chain.example/hop/3"] });
+		expect(stopped.failures[0]!.message).toContain("上限（2 次");
+		expect(lowered.calls).toHaveLength(3);
+
+		const none = createService({ maxRedirects: 0 }, routes);
+		const direct = await none.service.fetch({ urls: ["https://chain.example/hop/1"] });
+		expect(direct.failures[0]!.message).toContain("跳转上限是 0 次");
+	});
+
+	it("keeps Max Redirects within its range", () => {
+		const read = (value: unknown) =>
+			SettingsManager.inMemory({ webSearch: { maxRedirects: value as number } }).getWebSearchSettings().maxRedirects;
+		expect(read(undefined)).toBe(5);
+		expect(read(12)).toBe(12);
+		expect(read(0)).toBe(0);
+		expect(read(99)).toBe(20);
+		expect(read(-3)).toBe(0);
+		expect(read("7")).toBe(5);
+	});
+
 	it("decodes GBK pages, keeps plain text and degrades gracefully for damaged PDF", async () => {
 		const gbk = new Uint8Array([0xc4, 0xe3, 0xba, 0xc3]); // "你好" in GBK
 		const { service } = createService(

@@ -20,8 +20,9 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 | **Pages to Read per Search** | 每次 `web_search` 搜完后，自动按排名读取前几个结果的网页正文；0 = 只返回结果列表 | 0–10 | 3 |
 | **Max URLs per Fetch** | 一次 `web_fetch` 最多读取几个网址；超出的网址不读取，并在结果里列出来告诉 Agent | 1–20 | 10 |
 | **Concurrent Downloads** | 同一时间最多下载几个网页。这是整个进程的共享上限：Agent 并行调用多个联网工具时也不会超过它 | 1–8 | 4 |
+| **Max Redirects** | 直接读取网页时最多跟随几次跳转（重定向）；0 = 不跟随。达到上限时停止读取，并说明已达到设置的上限、可能是登录/鉴权跳转死循环或网站重定向配置有误 | 0–20 | 5 |
 
-三个数字只能在设置页的列表里选择，列表里就是全部合法值；工具内部用的是同一组上限。手动编辑 `settings.json` 写入超出范围的数字时，会按最近的上下限处理。
+四个数字在终端设置页的列表里选择（Web UI 中直接输入），列表里就是全部合法值，列表里就是全部合法值；工具内部用的是同一组上限。手动编辑 `settings.json` 写入超出范围的数字时，会按最近的上下限处理。
 
 ### 搜索引擎
 
@@ -57,7 +58,8 @@ Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引�
     "useBrowserCookies": false,
     "pagesPerSearch": 3,
     "maxUrlsPerFetch": 10,
-    "fetchConcurrency": 4
+    "fetchConcurrency": 4,
+    "maxRedirects": 5
   }
 }
 ```
@@ -170,7 +172,7 @@ Agent 调用 web_search
 
 - 只允许 `http`/`https`；拒绝带用户名密码的 URL、`localhost`、本机地址和私有/保留 IP；
 - 域名先做 DNS 解析，解析到本机或私有地址时拒绝（防止借公网域名访问内网）；
-- 跳转不自动跟随，每一跳都重新做以上检查，最多 5 次；
+- 跳转不自动跟随，每一跳都重新做以上检查，最多跟随 Max Redirects 次（默认 5 次）；
 - 单个网页请求 20 秒超时，最多下载 5 MB，Markdown 最多保留 300,000 字符，超出时在结果里注明；
 - 支持 gzip/br/deflate；按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF、DOCX/XLSX/PPTX、ODT/ODS/ODP、RTF 和 EPUB 复用已有 officeparser 从下载字节提取可读正文（也能识别常见文件签名，避免错误 MIME 阻止解析）；扫描 PDF 明确提示没有文字层、需 OCR，密码保护或损坏文档返回原因提示，不因解析失败中断整批 URL。超过下载上限时不解析不完整文档。旧 DOC/XLS/PPT 无法解析时提示转换为现代格式；
 - 直接请求不执行 JavaScript，也不带登录状态。

@@ -81,6 +81,8 @@ import { AgentSessionTraceCoordinator } from "../../observability/session-trace.
 import { expandPromptTemplate, type PromptTemplate } from "../../prompts/loader/index.ts";
 import { ModelRegistry } from "../../providers/models/registry.ts";
 import { ProviderRecoveryCoordinator } from "../../providers/recovery/coordinator.ts";
+import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
+import { ModelFallbackCoordinator, type ModelFallbackEvent } from "../../providers/recovery/fallback.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "../../providers/runtime/auth-guidance.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import {
@@ -203,6 +205,7 @@ export type AgentSessionEvent =
 			conversation: number;
 			errorMessage: string;
 	  }
+	| ModelFallbackEvent
 	| { type: "run_state_changed"; state: RunStateSnapshot };
 
 /** Listener function for agent session events */
@@ -405,6 +408,9 @@ export class AgentSession {
 	// Provider recovery is a stateful coordinator owned by this session;
 	// AgentSession only decides when to call it.
 	private readonly _providerRecovery: ProviderRecoveryCoordinator;
+	private readonly _modelFallback: ModelFallbackCoordinator;
+	/** Final explanation when the fallback model could not rescue the run; replaces the raw error in the outcome. */
+	private _fallbackFailure: string | undefined = undefined;
 
 	// Bash execution state
 	private readonly _bash: SessionBashRunner;
@@ -612,6 +618,14 @@ export class AgentSession {
 			setRunState: (state, activity, options) => this._setRunState(state, activity, options),
 			emit: (event) => this._emit(event),
 			continueAfterProviderFailure: (internalText) => this._continueAfterProviderFailure(internalText),
+		});
+		this._modelFallback = new ModelFallbackCoordinator({
+			agent: this.agent,
+			getSettings: () => this.settingsManager.getFallbackModelSettings(),
+			getModel: (provider, modelId) => config.modelRuntime.getModel(provider, modelId),
+			switchModel: (model, thinkingLevel, options) => this._models.switchForRun(model, thinkingLevel, options),
+			setRunState: (state, activity, options) => this._setRunState(state, activity, options),
+			emit: (event) => this._emit(event),
 		});
 		this._autoMemory = new AutoMemoryManager({
 			cwd: config.cwd,
@@ -1599,6 +1613,7 @@ export class AgentSession {
 		this.agent.state.systemPrompt = this._getTurnSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 		messages = inputMessages;
 		this._providerRecovery.resetForRun();
+		this._fallbackFailure = undefined;
 		this._setRunState("starting", "任务启动中");
 		let runError: unknown;
 		let runFailed = false;
@@ -1664,6 +1679,8 @@ export class AgentSession {
 					reason: "tool-result-persistence",
 				};
 			}
+			// A run the fallback model took over hands the session back to the main model for the next task.
+			await this._modelFallback.endRun(!runFailed && this._runStateTracker.terminal?.state === "completed");
 			this._emittingAgentSettled = true;
 			this._endOperation(operationId);
 			try {
@@ -1713,23 +1730,43 @@ export class AgentSession {
 			return true;
 		}
 
+		// Fallback model: retries and provider recovery could not save the current
+		// model, so the run continues on the configured fallback model with the same
+		// transcript (or ends with both models' causes when the fallback failed too).
+		// Context overflow is left to compaction below.
+		if (msg.stopReason === "error" && !isContextOverflow(msg, this.effectiveContextWindow)) {
+			const fallback = await this._modelFallback.handleFailure(msg, this._retryAttempt);
+			if (fallback?.kind === "switched") {
+				// The fallback model gets its own retry and recovery budget.
+				this._retryAttempt = 0;
+				this._providerRecovery.resetForRun();
+				// Remove the failed turn from agent state (it stays in the session for history), as a retry does.
+				const messages = this.agent.state.messages;
+				if (messages.at(-1)?.role === "assistant") this.agent.state.messages = messages.slice(0, -1);
+				return true;
+			}
+			if (fallback?.kind === "failed") this._fallbackFailure = fallback.error;
+		}
+
 		// An empty response already consumed the one permitted checkpoint rebuild.
 		// Do not let compaction or another generic recovery turn the same provider
 		// failure into an unbounded conversation loop.
 		if (msg.stopReason === "error" && this._providerRecovery.hasEmptyResponseRecoveryAttempted) {
-			this._setRunState("failed", "Provider 恢复后仍无有效输出，任务结束", {
-				error: msg.errorMessage ?? "Provider returned no usable output",
-			});
+			const error =
+				this._fallbackFailure ?? explainProviderError(msg.errorMessage ?? "Provider returned no usable output");
+			this._setRunState("failed", "Provider 恢复后仍无有效输出，任务结束", { error });
 			this._runStateTracker.terminal = {
 				...terminalOutcomeFromAssistant(msg),
 				activity: "Provider 恢复后仍无有效输出，任务结束",
-				error: msg.errorMessage ?? "Provider returned no usable output",
+				error,
 			};
 			return false;
 		}
 
 		if (msg.stopReason === "error" && this._retryAttempt > 0) {
-			this._setRunState("failed", "重试失败，任务结束", { error: msg.errorMessage ?? "重试失败" });
+			this._setRunState("failed", "重试失败，任务结束", {
+				error: this._fallbackFailure ?? explainProviderError(msg.errorMessage ?? "重试失败"),
+			});
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
@@ -1749,7 +1786,10 @@ export class AgentSession {
 			return true;
 		}
 
-		this._runStateTracker.terminal = terminalOutcomeFromAssistant(msg);
+		const outcome = terminalOutcomeFromAssistant(msg);
+		// A failed request is reported with its cause and what to do, never as a bare status code.
+		if (msg.stopReason === "error") outcome.error = this._fallbackFailure ?? explainProviderError(msg.errorMessage);
+		this._runStateTracker.terminal = outcome;
 		return false;
 	}
 

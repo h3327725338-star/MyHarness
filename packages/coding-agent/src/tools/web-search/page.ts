@@ -6,7 +6,7 @@ import { BROWSER_HEADERS, decodeBody, type FetchLike, requestBytes } from "./htt
 import { checkResolvedHost, type HostLookup, validatePublicHttpUrl } from "./url.ts";
 
 export const PAGE_LIMITS = {
-	/** Redirect hops followed per page; every hop is validated again. */
+	/** Redirect hops followed per page when the caller sets no limit; every hop is validated again. */
 	maxRedirects: 5,
 	requestTimeoutMs: 20_000,
 	/** Raw bytes downloaded per page before the body is cut. */
@@ -19,6 +19,8 @@ export interface ReadPageOptions {
 	fetchImpl: FetchLike;
 	lookup: HostLookup;
 	signal?: AbortSignal;
+	/** Redirect hops to follow before giving up (Web Search setting `maxRedirects`); defaults to PAGE_LIMITS. */
+	maxRedirects?: number;
 }
 
 export interface ReadPageResult {
@@ -189,6 +191,7 @@ function isPlainText(contentType: string): boolean {
  * hand so every hop goes through the same URL and DNS safety checks.
  */
 export async function readPage(url: string, options: ReadPageOptions): Promise<ReadPageResult> {
+	const maxRedirects = options.maxRedirects ?? PAGE_LIMITS.maxRedirects;
 	let current = url;
 	for (let hop = 0; ; hop += 1) {
 		const validation = validatePublicHttpUrl(current);
@@ -216,8 +219,13 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 		if (response.status >= 300 && response.status < 400) {
 			const location = response.headers.get("location");
 			if (!location) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}，但没有跳转地址。`);
-			if (hop >= PAGE_LIMITS.maxRedirects) {
-				throw new WebSearchError("too_many_redirects", `页面跳转超过 ${PAGE_LIMITS.maxRedirects} 次，已停止。`);
+			if (hop >= maxRedirects) {
+				throw new WebSearchError(
+					"too_many_redirects",
+					maxRedirects === 0
+						? "页面要求跳转到其他地址，但设置的跳转上限是 0 次（/settings → Web Search → Max Redirects），所以没有跟随。需要读取跳转后的页面时，请调高该上限。"
+						: `页面跳转已达到设置的上限（${maxRedirects} 次，/settings → Web Search → Max Redirects），已停止读取。可能是网站的登录/鉴权流程在来回跳转（死循环），或网站的重定向配置有误；如果确认这个地址正常只是跳转较多，可以调高该上限后再试。`,
+				);
 			}
 			try {
 				current = new URL(location, validation.url).toString();

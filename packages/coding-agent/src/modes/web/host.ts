@@ -29,6 +29,7 @@ import {
 	type WorkspaceBaseline,
 } from "../../git/repository/workspace-changes.ts";
 import { collectSessionUsageStats } from "../../observability/session-stats.ts";
+import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import {
 	describeTaskEnd,
@@ -716,14 +717,34 @@ export class WebHost {
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,
 					delayMs: event.delayMs,
-					errorMessage: event.errorMessage,
+					errorMessage: explainProviderError(event.errorMessage),
 				});
 				return;
 			case "auto_retry_end":
 				this.broadcast("auto_retry_end", {
 					success: event.success,
 					attempt: event.attempt,
-					finalError: event.finalError,
+					// A cancelled retry is not a provider failure and keeps its own wording.
+					finalError:
+						event.success || !event.finalError || event.finalError === "Retry cancelled"
+							? event.finalError
+							: explainProviderError(event.finalError),
+				});
+				return;
+			case "model_fallback_start":
+				this.broadcast("model_fallback_start", {
+					from: event.from,
+					to: event.to,
+					retries: event.retries,
+					reason: event.reason,
+				});
+				return;
+			case "model_fallback_end":
+				this.broadcast("model_fallback_end", {
+					success: event.success,
+					from: event.from,
+					to: event.to,
+					errorMessage: event.errorMessage,
 				});
 				return;
 			case "provider_recovery":

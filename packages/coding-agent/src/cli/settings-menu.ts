@@ -101,6 +101,7 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 	{ id: "popup-notifications", label: "Popup notifications", description: "任务结束弹窗提醒", kind: "toggle" },
 	{ id: "github-connect", label: "GitHub Connect", description: "连接 GitHub", kind: "submenu" },
 	{ id: "default-model", label: "Default Model", description: "选择主用模型", kind: "submenu" },
+	{ id: "fallback-model", label: "Fallback Model", description: "主模型故障时自动接管", kind: "submenu" },
 	{ id: "auto-memory", label: "Auto Memory", description: "记忆偏好和项目事实", kind: "submenu" },
 	{ id: "sub-agent", label: "Sub Agent", description: "并行调查复杂任务", kind: "submenu" },
 	{ id: "web-search", label: "Web Search", description: "联网搜索", kind: "submenu" },

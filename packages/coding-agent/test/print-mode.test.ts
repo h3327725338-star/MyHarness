@@ -135,7 +135,7 @@ describe("runPrintMode", () => {
 		});
 
 		expect(exitCode).toBe(1);
-		expect(errorSpy).toHaveBeenCalledWith("provider failure");
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^模型请求失败：.*\n原始信息：provider failure$/s));
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});

@@ -500,7 +500,12 @@ export class WebSearchService {
 		onProgress: ((message: string) => void) | undefined,
 	): Promise<ReadPageResult> {
 		try {
-			return await readPage(url, { fetchImpl: this.fetchImpl, lookup: this.lookup, signal });
+			return await readPage(url, {
+				fetchImpl: this.fetchImpl,
+				lookup: this.lookup,
+				signal,
+				maxRedirects: this.settings().maxRedirects,
+			});
 		} catch (error) {
 			const refused = isAccessBlock(error) || (error instanceof WebSearchError && error.code === "empty_content");
 			if (!refused || signal?.aborted) throw error;

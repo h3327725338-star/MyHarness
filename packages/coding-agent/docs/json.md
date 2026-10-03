@@ -28,8 +28,12 @@ type AgentSessionEvent =
   | { type: "thinking_level_changed"; level: ThinkingLevel }
   | { type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; result: CompactionResult | undefined; aborted: boolean; willRetry: boolean; errorMessage?: string }
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+  | { type: "model_fallback_start"; from: string; to: string; retries: number; reason: string }
+  | { type: "model_fallback_end"; success: boolean; from: string; to: string; errorMessage?: string };
 ```
+
+`model_fallback_start` means the main model (`from`, `provider/model`) failed after `retries` automatic retries and the run continues on the configured fallback model (`to`); `reason` is the plain-language cause. `model_fallback_end` follows when that run ends; on failure `errorMessage` names the cause on each model (it is also sent when the fallback could not be started).
 
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 

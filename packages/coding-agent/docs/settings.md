@@ -113,8 +113,9 @@ Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `subAgent` | object | `{ "enabled": false }` | Global built-in exploration-agent 和 workflow configuration。通过 `/settings` 设置。 |
-| `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和三个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
+| `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
+| `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
 
@@ -202,7 +203,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 
 `Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_search` 和 `web_fetch`；关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
 
-搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户可以选择搜索引擎、浏览器兜底和三个数量：
+搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户可以选择搜索引擎、浏览器兜底和四个数量：
 
 | 字段 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |
@@ -213,6 +214,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 | `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–10 | 3 |
 | `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–20 | 10 |
 | `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–8 | 4 |
+| `maxRedirects` | 直接读取网页时最多跟随的跳转次数；0 = 不跟随。达到上限时返回 `too_many_redirects`，说明已达到设置的上限并提示可能的鉴权死循环或重定向配置问题 | 0–20 | 5 |
 
 ```json
 {
@@ -224,7 +226,8 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
     "useBrowserCookies": false,
     "pagesPerSearch": 3,
     "maxUrlsPerFetch": 10,
-    "fetchConcurrency": 4
+    "fetchConcurrency": 4,
+    "maxRedirects": 5
   }
 }
 ```
@@ -414,6 +417,24 @@ Project `.myharness/settings.json`:
 除非明确需要 provider-level retries，否则建议将 `retry.provider.maxRetries` 保持为 `0`。设置为大于 `0` 的值后，SDK/provider retries 可能会在 MyHarness 感知到之前处理 out-of-usage-limit errors；某些情况下这会让 agent 一直阻塞到 Provider quota reset。
 
 Google Generative AI 和 Vertex adapter 会把 `timeoutMs` 与 `maxRetries` 显式传给 Google SDK，并覆盖 SDK 默认的隐式 retry；`maxRetries` 表示额外重试次数，不是总请求次数。Agent-level retry（`retry.maxRetries`）是另一层独立机制。
+
+Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）、服务端错误（500、502、503、504）、网关/CDN 回源故障（520、521、522、523、524、525、527、530，常见形式是 `520 status code (no body)`）、Bad Gateway / Gateway Timeout，以及连接重置、超时、DNS 临时失败（`ECONNRESET`、`ETIMEDOUT`、`EAI_AGAIN`）等网络中断。额度/余额耗尽不会重试。分类规则在 `packages/ai/src/utils/retry.ts`。
+
+模型请求失败时，界面不会只显示原始状态码：终端、Web UI、print mode 和任务结束状态都会显示一段中文说明，先写原因（例如“模型服务提供商的网关与后端服务器之间连接异常（HTTP 520），并且没有返回任何错误说明”、网络超时、认证失效、额度不足），再写可以怎么处理，最后附上原始错误供排查。说明文案在 `src/providers/recovery/error-explanation.ts`，只影响显示，不影响是否重试。
+
+#### fallbackModel（Fallback Model）
+
+`fallbackModel` 是 global 设置，默认关闭，在 `/settings → Fallback Model`（Web UI 在 Settings 的 Agent 分组）中选择备用模型和思考强度：
+
+```json
+{
+  "fallbackModel": { "enabled": true, "provider": "openrouter", "model": "some-model", "thinkingLevel": "medium" }
+}
+```
+
+- 主模型请求失败，且 auto-retry 次数用完（或错误本身不可重试，例如认证失败、额度不足、模型不存在）、Provider recovery 也无法恢复时，当前任务自动切换到备用模型，带着同一段对话和已执行的工具结果继续；上下文超长不触发切换，仍由压缩处理。
+- 备用模型有自己的一轮 auto-retry 次数。只有备用模型也失败时任务才结束，最终错误会分别写出主模型和备用模型各自的失败原因；备用模型无法启用（Provider 停用、没有 API Key、模型不存在）时也会说明原因。
+- 切换只对当前任务有效：Session 中会记录模型变更，但 `defaultModel` 不变；任务结束后切回主模型，下一个任务仍先用主模型。任务进行中手动换了模型时不会被切回。
 
 ```json
 {

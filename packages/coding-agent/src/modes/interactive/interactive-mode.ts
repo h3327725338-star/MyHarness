@@ -129,6 +129,7 @@ import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } fro
 import { isInstallTelemetryEnabled } from "../../observability/telemetry.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../platform/process/http-dispatcher.ts";
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
+import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import {
 	startBalancePolling,
 	stopBalancePolling,
@@ -549,6 +550,8 @@ export class InteractiveMode {
 
 	// Auto-retry state
 	private retryEscapeHandler?: () => void;
+	/** A fallback-model failure was just shown; the retry failure that follows it is not shown again. */
+	private modelFallbackFailureShown = false;
 	// A user-cancelled retry must not be reported as "Retry failed".
 	private retryCancelledByUser = false;
 
@@ -3698,14 +3701,45 @@ export class InteractiveMode {
 				this.retryCancelledByUser = false;
 				// Show error only on final failure (success shows normal response).
 				// A user-initiated cancel is not a retry failure.
+				// A fallback failure that was just reported already names this cause; do not repeat it.
+				const reportedByFallback = this.modelFallbackFailureShown;
+				this.modelFallbackFailureShown = false;
 				if (!event.success) {
 					if (cancelledByUser) {
 						this.showStatus("已取消自动重试");
-					} else {
-						this.showError(
-							`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`,
-						);
+					} else if (!reportedByFallback) {
+						this.showError(`自动重试 ${event.attempt} 次后仍然失败。${explainProviderError(event.finalError)}`);
 					}
+				}
+				this.ui.requestRender();
+				break;
+			}
+
+			case "model_fallback_start": {
+				// The main model's error block is replaced by what happens next: the fallback model continues the task.
+				if (this.retryEscapeHandler) {
+					this.defaultEditor.onEscape = this.retryEscapeHandler;
+					this.retryEscapeHandler = undefined;
+				}
+				this.clearStatusIndicator("retry");
+				this.retryCancelledByUser = false;
+				const failedComponent = this.pendingRecoverableErrorComponent;
+				this.pendingRecoverableErrorComponent = undefined;
+				if (failedComponent) this.chatContainer.removeChild(failedComponent);
+				const retries = event.retries > 0 ? `自动重试 ${event.retries} 次后` : "";
+				this.addSystemNote(
+					`主模型 ${event.from} ${retries}仍然失败，已自动切换到备用模型 ${event.to}，继续当前任务。\n${event.reason}`,
+				);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "model_fallback_end": {
+				if (event.success) {
+					this.addSystemNote(`备用模型 ${event.to} 已完成本次任务；下一个任务会先使用主模型 ${event.from}。`);
+				} else if (event.errorMessage) {
+					this.modelFallbackFailureShown = true;
+					this.showError(event.errorMessage);
 				}
 				this.ui.requestRender();
 				break;
@@ -6490,6 +6524,7 @@ export class InteractiveMode {
 					autoMemory: this.settingsManager.getAutoMemorySettings(),
 					subAgent: this.settingsManager.getSubAgentSettings(),
 					visionAssistant: this.settingsManager.getVisionAssistantSettings(),
+					fallbackModel: this.settingsManager.getFallbackModelSettings(),
 					disabledProviders: this.settingsManager.getDisabledProviders(),
 					gitIntegration: this.settingsManager.getGitIntegrationSettings(),
 					autoCompact: this.session.autoCompactionEnabled,
@@ -6735,6 +6770,10 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					onFallbackModelChange: (settings) => {
+						// Read when a model request fails, so the change applies to the next failure without a restart.
+						this.settingsManager.setFallbackModelSettings(settings);
 					},
 					onWebSearchChange: (settings) => {
 						const wasEnabled = this.settingsManager.getWebSearchSettings().enabled;

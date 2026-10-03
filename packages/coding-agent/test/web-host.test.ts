@@ -350,7 +350,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(finished.changeCount).toBe(0);
 		const transcript = await fx.get("/api/transcript");
 		const last = transcript.items[transcript.items.length - 1];
-		expect(last).toMatchObject({ kind: "assistant", stopReason: "error", error: "provider exploded" });
+		// The error is explained (cause and next step) and keeps the raw provider text for troubleshooting.
+		expect(last).toMatchObject({ kind: "assistant", stopReason: "error" });
+		expect(last.error).toMatch(/^模型请求失败：.*\n原始信息：provider exploded$/s);
 	});
 
 	it("serves workspace files safely and refuses paths outside the workspace", async () => {
@@ -538,7 +540,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		// A page that never answers: the popup follows by itself, with the failure it is about.
 		const three = await run("task three");
 		const third = await fx.waitFor("task_notification", (data) => data.slot === three);
-		expect(third).toMatchObject({ kind: "failed", state: "failed", error: "provider exploded" });
+		expect(third).toMatchObject({ kind: "failed", state: "failed" });
+		expect(third.error).toMatch(/^模型请求失败：.*原始信息：provider exploded$/s);
 		await vi.waitFor(() => expect(popups()).toHaveLength(2), { timeout: 6000, interval: 100 });
 		expect(popups()[1]).toMatchObject({ kind: "failed" });
 		expect(popups()[1].message).toContain("provider exploded");

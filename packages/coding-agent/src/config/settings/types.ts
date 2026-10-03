@@ -98,6 +98,14 @@ export interface VisionAssistantSettings {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/** Model that takes over a run after the main model failed and its automatic retries are used up. */
+export interface FallbackModelSettings {
+	enabled?: boolean; // default: false
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
 export interface VisionCapabilityTestRecord {
 	status: "supported" | "unsupported";
 	testedAt: number;
@@ -136,6 +144,8 @@ export interface WebSearchSettings extends LegacyWebSearchSettings {
 	maxUrlsPerFetch?: number;
 	/** Most page downloads running at the same time, across all web tool calls. */
 	fetchConcurrency?: number;
+	/** Most redirect hops a plain page read follows before it stops (0 = follow none). */
+	maxRedirects?: number;
 	/** Let blocked searches and blocked pages fall back to a real browser installed on this computer. */
 	browserFallback?: boolean;
 	/** Which installed browser the fallback uses; unknown names count as "auto". */
@@ -150,6 +160,7 @@ export interface ResolvedWebSearchSettings {
 	pagesPerSearch: number;
 	maxUrlsPerFetch: number;
 	fetchConcurrency: number;
+	maxRedirects: number;
 	browserFallback: boolean;
 	browser: WebSearchBrowserId;
 	useBrowserCookies: boolean;
@@ -249,6 +260,7 @@ export interface Settings {
 	subAgent?: SubAgentSettings; // Global-only inspection sub-agent configuration; Bash guard is not a sandbox
 	autoMemory?: AutoMemorySettings; // Global-only long-term memory configuration
 	visionAssistant?: VisionAssistantSettings; // Global-only dedicated image analysis configuration
+	fallbackModel?: FallbackModelSettings; // Global-only model that takes over when the main model keeps failing
 	codeIntelligence?: CodeIntelligenceSettings;
 	visionCapabilityTests?: Record<string, VisionCapabilityTestRecord>; // Global cache for manually probed custom models
 	webSearch?: WebSearchSettings; // Global-only optional built-in web search/fetch configuration

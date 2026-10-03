@@ -24,6 +24,7 @@ import type {
 	CodeIntelligenceSettings,
 	CompactionSettings,
 	DefaultProjectTrust,
+	FallbackModelSettings,
 	GitIntegrationSettings,
 	PackageSource,
 	PopupNotificationSettings,
@@ -51,6 +52,7 @@ export type {
 	CodeIntelligenceSettings,
 	CompactionSettings,
 	DefaultProjectTrust,
+	FallbackModelSettings,
 	GitIntegrationSettings,
 	ImageSettings,
 	LanguageServerConfiguration,
@@ -129,6 +131,11 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 			source.fetchConcurrency,
 			WEB_SEARCH_SETTING_RANGES.fetchConcurrency,
 			defaults.fetchConcurrency,
+		),
+		maxRedirects: clampWebSearchNumber(
+			source.maxRedirects,
+			WEB_SEARCH_SETTING_RANGES.maxRedirects,
+			defaults.maxRedirects,
 		),
 		browserFallback: typeof source.browserFallback === "boolean" ? source.browserFallback : defaults.browserFallback,
 		browser:
@@ -718,6 +725,22 @@ export class SettingsManager {
 	setVisionAssistantSettings(settings: VisionAssistantSettings): void {
 		this.globalSettings.visionAssistant = { ...settings };
 		this.markModified("visionAssistant");
+		this.save();
+	}
+
+	getFallbackModelSettings(): FallbackModelSettings & { enabled: boolean } {
+		const settings = this.globalSettings.fallbackModel;
+		return {
+			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.featureEnabled,
+			provider: settings?.provider,
+			model: settings?.model,
+			thinkingLevel: settings?.thinkingLevel,
+		};
+	}
+
+	setFallbackModelSettings(settings: FallbackModelSettings): void {
+		this.globalSettings.fallbackModel = { ...settings };
+		this.markModified("fallbackModel");
 		this.save();
 	}
 

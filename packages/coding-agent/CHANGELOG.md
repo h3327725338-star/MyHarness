@@ -18,6 +18,9 @@
 
 ### Added
 
+- Fallback Model (`fallbackModel`, `/settings → Fallback Model`, Web UI Settings → Agent): when the main model's request fails and Auto-retry and Provider recovery have nothing left, the task continues on the fallback model with the same conversation and its own retry budget; the main model is restored when the task ends. Only when the fallback fails too does the task end, with the cause on each model. New session events `model_fallback_start` / `model_fallback_end`.
+- Web Search `maxRedirects` (Max Redirects, 0–20, default 5) replaces the fixed limit of 5 redirect hops per page read; hitting it says that the configured limit was reached and that a login/auth redirect loop or a redirect misconfiguration is the likely cause.
+- Auto-retry now also covers gateway/CDN origin failures (HTTP 520–523, 525, 527, 529, 530, "Bad Gateway", "Gateway Timeout") and reset, timed-out or DNS-flaky connections (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`). Failed model requests are shown everywhere (terminal, Web UI, print mode, run outcome) as a Chinese explanation of the cause and what to do, followed by the raw provider text, instead of a bare `520 status code (no body)`.
 - Added root licensing, contribution, security, third-party notice, and Code Intelligence distribution documentation.
 - Added the local browser Web UI (`myharness --web [--port <n>] [--no-open]`): a loopback-only server in `src/modes/web/` plus a no-build front end in `web/`, sharing the CLI's `AgentSessionRuntime` (conversation with quiet run summaries, steer/queue/interrupt, real diffs, files, terminal, Git commit/push/undo/restore/worktrees, Sessions/Workspaces, models/providers/settings, extension approvals). `ExtensionMode` gained `"web"`. See `docs/web-ui.md`.
 

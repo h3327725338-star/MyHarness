@@ -202,9 +202,9 @@ class CancellableTaskPage extends PageHost {
 	}
 }
 
-type NumberSetting = "pagesPerSearch" | "maxUrlsPerFetch" | "fetchConcurrency";
+type NumberSetting = "pagesPerSearch" | "maxUrlsPerFetch" | "fetchConcurrency" | "maxRedirects";
 
-/** Labels and explanations for the three numbers; every range comes from WEB_SEARCH_SETTING_RANGES. */
+/** Labels and explanations for the numbers; every range comes from WEB_SEARCH_SETTING_RANGES. */
 const NUMBER_SETTINGS: Record<NumberSetting, { id: string; label: string; description: string; detail: string }> = {
 	pagesPerSearch: {
 		id: "pages-per-search",
@@ -223,6 +223,13 @@ const NUMBER_SETTINGS: Record<NumberSetting, { id: string; label: string; descri
 		label: "Concurrent Downloads",
 		description: "最多同时下载几个网页",
 		detail: "同一时间最多有几个网页在下载，所有联网工具调用共用这个上限。调低更省网络，调高读取更快。",
+	},
+	maxRedirects: {
+		id: "max-redirects",
+		label: "Max Redirects",
+		description: "读取网页时最多跟随几次跳转",
+		detail:
+			"直接读取网页时最多跟随几次重定向（跳转）。达到上限会停止并说明原因，常见于登录/鉴权跳转死循环。0 表示不跟随任何跳转。",
 	},
 };
 
@@ -246,7 +253,13 @@ function numberPage(key: NumberSetting, current: number, onSelect: (value: numbe
 			value: String(value),
 			label: String(value),
 			description:
-				key === "pagesPerSearch" && value === 0 ? "只返回搜索结果" : value === range.max ? "最大值" : undefined,
+				key === "pagesPerSearch" && value === 0
+					? "只返回搜索结果"
+					: key === "maxRedirects" && value === 0
+						? "不跟随跳转"
+						: value === range.max
+							? "最大值"
+							: undefined,
 		});
 	}
 	return new ChoiceSubmenu(

@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../agent/runtime/session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../platform/process/output-guard.ts";
+import { explainProviderError } from "../providers/recovery/error-explanation.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -133,7 +134,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					console.error(
+						assistantMsg.stopReason === "error"
+							? explainProviderError(assistantMsg.errorMessage)
+							: assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`,
+					);
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {

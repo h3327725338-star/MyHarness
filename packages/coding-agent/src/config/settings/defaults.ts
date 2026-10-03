@@ -67,6 +67,7 @@ export const SETTINGS_DEFAULTS = {
 		pagesPerSearch: 3,
 		maxUrlsPerFetch: 10,
 		fetchConcurrency: 4,
+		maxRedirects: 5,
 		browserFallback: true,
 		browser: "auto",
 		useBrowserCookies: false,
@@ -94,6 +95,7 @@ export const WEB_SEARCH_SETTING_RANGES = {
 	pagesPerSearch: { min: 0, max: 10 },
 	maxUrlsPerFetch: { min: 1, max: 20 },
 	fetchConcurrency: { min: 1, max: 8 },
+	maxRedirects: { min: 0, max: 20 },
 } as const;
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively. */
