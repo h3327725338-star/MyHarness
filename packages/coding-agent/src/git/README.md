@@ -12,6 +12,7 @@
 | --- | --- |
 | `command.ts` | `runGit()` / `runGitSync()` / `runGitChecked()`：统一的 Git 子进程执行、超时、失败分类 |
 | `integration.ts` | 仓库检查、身份（user.name/email）、状态预览、初始化、初始基线提交、按路径提交 |
+| `branches.ts` | 本地分支：列出、切换（`git switch`）、新建并切换（`git switch -c`）、安全删除（`git branch -d`），全部异步 |
 | `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹 |
 | `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行） |
 | `failure-diagnosis.ts` | 把因具体路径导致的 Git 失败翻译成可读原因（如 Windows 保留名） |

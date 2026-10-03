@@ -9,8 +9,47 @@
 .composer { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px 12px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-xl); transition: border-color var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
 .composer:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer.drag { border-color: var(--accent); background: var(--accent-soft); }
-.composer-input { width: 100%; min-height: 44px; max-height: 260px; resize: none; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; }
-.composer-input::placeholder { color: var(--text-4); }
+.composer-input { position: relative; width: 100%; min-height: 44px; max-height: 260px; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.composer-input[data-empty]::before { content: attr(data-placeholder); position: absolute; top: 2px; left: 2px; right: 2px; color: var(--text-4); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The draft drawn as formatted Markdown (draft-editor.js, draft-markdown.js): one block per source line, every character
+   kept. A line's syntax marks (#, **, `, >, the list dash) show, faint, only while the caret is on that line. */
+.draft .dline { min-height: 1.55em; }
+.draft .md-mk { color: var(--text-4); font-weight: 400; font-style: normal; }
+.draft .dline:not(.active) .md-mk { display: none; }
+.draft .dline-h { font-weight: 650; color: var(--text); }
+.draft .dline-h1 { font-size: 1.4em; line-height: 1.4; }
+.draft .dline-h2 { font-size: 1.22em; line-height: 1.45; }
+.draft .dline-h3 { font-size: 1.08em; }
+.draft .dline-quote { border-left: 2px solid var(--border-strong); padding-left: 10px; color: var(--text-2); }
+.draft .md-bullet, .draft .md-num { color: var(--text-3); }
+.draft .dline:not(.active) .md-bullet { position: relative; color: transparent; }
+.draft .dline:not(.active) .md-bullet::after { content: "\2022"; position: absolute; inset: 0; text-align: center; color: var(--text-3); }
+.draft strong { font-weight: 650; }
+.draft del { color: var(--text-3); }
+.draft .md-code { font-family: var(--font-mono); font-size: 0.88em; background: var(--inline-code-bg); border-radius: var(--r-xs); padding: 0.12em 0.32em; }
+.draft .md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.draft .dline-code, .draft .dline-fence { font-family: var(--font-mono); font-size: var(--fs-code); background: var(--code-bg); padding: 0 10px; }
+.draft .dline-fence:not(.dline-fence-end) { border-radius: var(--r-sm) var(--r-sm) 0 0; padding-top: 4px; }
+.draft .dline-fence-end { border-radius: 0 0 var(--r-sm) var(--r-sm); padding-bottom: 4px; }
+.draft .md-lang { color: var(--text-3); font-size: var(--fs-xs); }
+.draft .dline-hr:not(.active) { position: relative; }
+.draft .dline-hr:not(.active)::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--border-strong); }
+
+/* More than three lines: an icon in the card's top-right corner opens the card as a large editor in the middle of the
+   window (same text, same Markdown drawing, same toolbar and Send); the icon there, or Esc, brings it back. */
+.composer.has-expand .composer-input { padding-right: 28px; }
+.composer-expand { position: absolute; top: 8px; right: 8px; z-index: 2; color: var(--text-3); }
+.composer-expand:hover { color: var(--text); }
+.composer-scrim { position: fixed; inset: 0; z-index: 180; background: var(--scrim); animation: fade-only var(--t-base) var(--ease) both; }
+.composer-scrim.leaving { animation: fade-only-out 180ms var(--ease) both; pointer-events: none; }
+.composer.expanded { position: fixed; z-index: 190; left: 50%; top: 50%; width: min(960px, calc(100vw - 48px)); height: min(78vh, calc(100vh - 48px)); translate: -50% -50%; padding: 18px 18px 10px 20px; box-shadow: var(--shadow-pop); animation: composer-open var(--t-slow) var(--ease) both; }
+.composer.expanded.leaving { animation: composer-close 180ms var(--ease) both; }
+.composer.expanded .composer-input { flex: 1 1 auto; min-height: 0; max-height: none; }
+.composer.expanded .suggest { bottom: 52px; }
+@keyframes composer-open { from { opacity: 0; transform: scale(0.94) translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes composer-close { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.96) translateY(10px); } }
+@keyframes fade-only-out { from { opacity: 1; } to { opacity: 0; } }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .composer-bar .icon-btn { width: var(--h-control-sm); height: var(--h-control-sm); }
 
@@ -56,6 +95,45 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .env-chip > svg { flex: none; }
 .env-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .env-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
+
+/* The branch chip opens the branch popover (branch-menu.js). In an isolated copy (a linked worktree) it says so. */
+.branch-anchor { display: inline-flex; min-width: 0; max-width: 55%; flex: 0 1 auto; }
+.branch-chip { max-width: 100%; padding-right: 5px; transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast); }
+.branch-chip[aria-expanded="true"] { color: var(--text); background: var(--surface-hover); border-color: var(--border-strong); }
+.branch-chip .chev { flex: none; transition: transform var(--t-base) var(--ease); }
+.branch-chip[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.branch-chip.wt { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; line-height: 15px; }
+.popover.branch-pop { padding: 3px; animation: branch-in var(--t-base) var(--ease) both; overflow-y: auto; }
+.popover.branch-pop.leaving { animation: branch-out 160ms var(--ease) both; pointer-events: none; }
+@keyframes branch-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes branch-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.branch-list { max-height: 228px; }
+.branch-row { cursor: pointer; }
+.branch-row.hi { background: var(--surface-hover); color: var(--text); }
+.branch-row.active { color: var(--text); font-weight: 600; }
+.branch-row[aria-disabled="true"] { cursor: default; }
+.branch-ico { flex: none; color: var(--text-3); }
+.branch-name { flex: 0 1 auto; }
+.branch-time { flex: none; font-size: var(--fs-xs); }
+.branch-check { flex: none; color: var(--accent); }
+.branch-del { width: 22px; height: 22px; flex: none; margin: -2px -4px -2px 0; color: var(--text-3); opacity: 0; transition: opacity var(--t-fast), color var(--t-fast); }
+.branch-row:hover .branch-del, .branch-row.hi .branch-del, .branch-del:focus-visible { opacity: 1; }
+.branch-del:hover { color: var(--danger); }
+.branch-confirm { flex: none; height: 20px; padding: 0 7px; border-radius: var(--r-pill); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-xs); font-weight: 600; animation: fade-in var(--t-fast) var(--ease) both; }
+.branch-note { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--fs-xs); }
+.branch-foot { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 3px; }
+.branch-new { color: var(--text-2); }
+.branch-new.hi { background: var(--surface-hover); color: var(--text); }
+.branch-form { display: flex; gap: 6px; padding: 4px 6px 2px; }
+.branch-hint { padding: 2px 8px 6px; font-size: var(--fs-xs); }
+.branch-wt { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 2px; }
+.branch-wt-row { display: flex; align-items: center; gap: 10px; padding: 2px 8px 6px; }
+.branch-wt-text { gap: 1px; min-width: 0; font-size: 12.5px; color: var(--text); }
+.branch-wt-text .dim { font-size: var(--fs-xs); line-height: 1.35; }
+.branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
+.branch-copy { color: var(--text-2); }
+.branch-copy-path { flex: 1 1 0; text-align: right; font-size: var(--fs-xs); }
 .widget { margin: 0; padding: 6px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */
@@ -84,6 +162,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip.git-result .link-btn { flex: none; white-space: nowrap; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .strip.git-result .icon-btn { color: inherit; opacity: 0.8; }
 .strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.strip > span.strip-time { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 12px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
 .queue-head .link-btn { margin-left: auto; }

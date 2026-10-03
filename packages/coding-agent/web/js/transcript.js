@@ -271,10 +271,13 @@ function summaryText({ outcome, duration, stats, changeCount, live }) {
 	}
 }
 
-function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapRun, defaultOpen }) {
+function ProcessSummary({ turn, outcome, live: running, compacting, run, changeCount, duration, snapRun, defaultOpen }) {
 	const [open, setOpen] = useState(defaultOpen);
 	const interacted = useRef(false);
 	useEffect(() => { if (!interacted.current) setOpen(defaultOpen); }, [defaultOpen]);
+	// While the context is compacted the strip above the input shows it, with its own timer and Cancel: this row stays
+	// still (no working glyph, activity or timer) and is not drawn at all when the turn has no steps yet.
+	const live = running && !compacting;
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
 		if (!live) return undefined;
@@ -284,7 +287,7 @@ function ProcessSummary({ turn, outcome, live, run, changeCount, duration, snapR
 	if (!turn.steps.length && !live) return null;
 	const stats = turn.stats;
 	const elapsed = live ? now - (snapRun?.startedAt || turn.startedAt || now) : duration;
-	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${OUTCOME_ICON[outcome] || "checkCircle"} size=${14} class=${`c-${outcome}`} />`;
+	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${OUTCOME_ICON[outcome] || (outcome === "running" ? "clock" : "checkCircle")} size=${14} class=${`c-${outcome}`} />`;
 	const label = live ? currentActivity(turn, snapRun) : summaryText({ outcome, duration, stats, changeCount });
 	const head = html`<span class="summary-ico">${icon}</span>
 		<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
@@ -446,13 +449,13 @@ function ChangeCard({ card }) {
 	</div>`;
 }
 
-const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd, processDefault, snapRun }) {
+const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd, processDefault, snapRun, compacting }) {
 	const outcome = turnOutcome(turn, { run, live, waiting });
 	const changeCount = run ? run.changeCount : turn.stats.files;
 	const duration = turnDuration(turn, run);
 	return html`<section class=${`turn ${live ? "live" : ""}`}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
-		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}`} />
+		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} compacting=${compacting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}`} />
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
@@ -528,6 +531,7 @@ export function Transcript() {
 	const runs = useStore((s) => s.runs);
 	const snap = useStore((s) => s.snap);
 	const dialogs = useStore((s) => s.dialogs);
+	const compaction = useStore((s) => s.compaction);
 	const userBash = useStore((s) => s.userBash);
 	const order = useStore((s) => s.userBashOrder);
 	const processDefault = useStore((s) => s.view.processDefault);
@@ -607,6 +611,7 @@ export function Transcript() {
 	}, [limit]);
 	useEffect(() => setLimit(60), [session]);
 	const waiting = dialogs.length > 0 && active;
+	const compacting = !!compaction || !!snap?.flags?.compacting;
 	const liveBash = order.map((id) => userBash[id]).filter((entry) => entry && entry.status === "running");
 	const empty = turns.length === 0 && liveBash.length === 0;
 
@@ -619,9 +624,10 @@ export function Transcript() {
 					const index = hidden + i;
 					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
 					const isLast = index === lastTurnIndex;
-					const live = isLast && active && !repairing;
+					// A manual compaction runs after the last turn ended: that turn keeps its finished look.
+					const live = isLast && active && !repairing && compaction?.reason !== "manual";
 					const run = live ? undefined : runForTurn(turn, runs, isLast);
-					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} />`;
+					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} />`;
 				})}
 				${liveBash.map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
 				${gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}

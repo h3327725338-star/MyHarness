@@ -1,6 +1,6 @@
 /**
  * Web API routes for Git: repository status, task checkpoint decisions (keep /
- * undo), /commit, /push, /restore and Worktrees. Every operation calls the same
+ * undo), /commit, /push, /restore, local branches and Worktrees. Every operation calls the same
  * use cases and Git primitives as the TUI commands.
  */
 
@@ -12,6 +12,12 @@ import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { completeGitCheckpoint, restoreGitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
 import { LocalGitRepositoryStore, validateLocalGitDirectory } from "../../git/local-repositories/store.ts";
+import {
+	createBranchAsync,
+	deleteBranchAsync,
+	listLocalBranchesAsync,
+	switchBranchAsync,
+} from "../../git/repository/branches.ts";
 import {
 	discardChangesToHead,
 	hasChangesToDiscard,
@@ -488,6 +494,48 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!branch) throw new HttpError(400, "Branch is required.");
 		const result = worktreeCase.combine(root, branch);
 		return JSON.parse(JSON.stringify(result));
+	});
+
+	// ---- Local branches (the branch chip above the input) ---------------------------------
+	const branchRootOrThrow = async (): Promise<string> => {
+		const state = await inspectGitRepositoryAsync(cwd());
+		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
+		return state.root;
+	};
+	const branchName = (body: unknown): string => {
+		const name = asObject(body).name;
+		if (typeof name !== "string" || !name) throw new HttpError(400, "Branch name is required.");
+		return name;
+	};
+
+	server.route("GET", "/api/git/branches", async () => {
+		const listing = await listLocalBranchesAsync(await branchRootOrThrow());
+		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list branches.");
+		return { current: listing.current ?? null, branches: listing.branches };
+	});
+
+	server.route("POST", "/api/git/branches/switch", async ({ body }) => {
+		requireIdle("switch branches");
+		requireTrusted();
+		const result = await switchBranchAsync(await branchRootOrThrow(), branchName(body));
+		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to switch branches.");
+		return { ok: true };
+	});
+
+	server.route("POST", "/api/git/branches/create", async ({ body }) => {
+		requireIdle("create a branch");
+		requireTrusted();
+		const result = await createBranchAsync(await branchRootOrThrow(), branchName(body));
+		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to create the branch.");
+		return { ok: true };
+	});
+
+	server.route("POST", "/api/git/branches/delete", async ({ body }) => {
+		requireIdle("delete a branch");
+		requireTrusted();
+		const result = await deleteBranchAsync(await branchRootOrThrow(), branchName(body));
+		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the branch.");
+		return { ok: true };
 	});
 
 	// ---- Registered local repositories --------------------------------------------------

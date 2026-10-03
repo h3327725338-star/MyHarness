@@ -156,7 +156,7 @@ export const actions = {
 	},
 
 	async compact(instructions) {
-		toast(t("Compacting context…"), "info", 2500);
+		toast(t("Compacting context"), "info", 2500);
 		const result = await attempt(() => post("/api/compact", { instructions }));
 		if (result?.tokensAfter != null) toast(t("Context compacted to about {tokensAfter} tokens.", { tokensAfter: result.tokensAfter }), "info", 4000);
 	},

@@ -4,11 +4,13 @@ import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
+import { DraftEditor } from "./draft-editor.js";
+import { BranchChip } from "./branch-menu.js";
 
 import { ContextMeter } from "./context-usage.js";
 import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
-import { clip, debounce, plural, pointerMoved } from "./util.js";
+import { clip, debounce, fmtDuration, plural, pointerMoved } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 
@@ -44,7 +46,7 @@ function DialogBar({ dialog }) {
 	useLayoutEffect(() => {
 		// Take the keyboard when a dialog appears, unless the user is in the middle of typing a message.
 		const active = document.activeElement;
-		const typing = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value;
+		const typing = active && (((active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value) || (active.isContentEditable && active.textContent));
 		if (!typing && choices.length) claimFocus();
 	}, [dialog.id]);
 	useEffect(() => {
@@ -96,14 +98,20 @@ function StatusStrips({ snap }) {
 	const retry = useStore((s) => s.retry);
 	const recovery = useStore((s) => s.recovery);
 	const completion = useStore((s) => s.completion);
+	// A page opened during a compaction has no compaction_start event: the snapshot says it runs and since when.
+	const compacting = compaction || (snap?.flags?.compacting ? { reason: null, startedAt: snap.run?.lastActivityAt } : null);
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
-		if (!retry) return undefined;
+		if (!retry && !compacting) return undefined;
 		const timer = setInterval(() => setTick((n) => n + 1), 500);
 		return () => clearInterval(timer);
-	}, [retry]);
+	}, [retry, !!compacting]);
 	const strips = [];
-	if (compaction) strips.push(html`<div class="strip" key="c"><${Spinner} /> <span>${t("Compacting context ({reason})…", { reason: compaction.reason })}</span><button class="link-btn" onClick=${actions.stop}>${t("Cancel")}</button></div>`);
+	// The only place a compaction shows while it runs (the conversation does not repeat it): what runs, for how long, Cancel.
+	if (compacting) {
+		const label = compacting.reason ? t("Compacting context ({reason})", { reason: compacting.reason }) : t("Compacting context");
+		strips.push(html`<div class="strip" key="c" role="status"><${Spinner} /> <span>${label}</span>${compacting.startedAt ? html`<span class="strip-time">${fmtDuration(Date.now() - compacting.startedAt)}</span>` : null}<button class="link-btn" onClick=${actions.stop}>${t("Cancel")}</button></div>`);
+	}
 	if (retry) {
 		const remaining = Math.max(0, Math.ceil((retry.at + retry.delayMs - Date.now()) / 1000));
 		strips.push(html`<div class="strip warn" key="r"><${Spinner} /> <span>${t("Provider error — retrying ({attempt}/{maxAttempts}) in {remaining}s: {clip}", { attempt: retry.attempt, maxAttempts: retry.maxAttempts, remaining, clip: clip(retry.errorMessage, 120) })}</span><button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button></div>`);
@@ -284,12 +292,55 @@ export function Composer() {
 		setText((prev) => (editorInsert.replace || !prev ? editorInsert.text : `${prev}${prev.endsWith("\n") || !prev ? "" : "\n"}${editorInsert.text}`));
 		setTimeout(() => area.current?.focus(), 0);
 	}, [editorInsert?.nonce]);
+	// More than three lines: an icon in the card's corner opens the same card as a large, centred editor.
+	const [tall, setTall] = useState(false);
+	const [expanded, setExpanded] = useState(false);
+	const [closing, setClosing] = useState(false);
+	const ghost = useRef(0);
 	useLayoutEffect(() => {
-		const el = area.current;
-		if (!el) return;
-		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+		const el = area.current?.element;
+		if (!el) return undefined;
+		// Lines as seen on screen: a long line that wraps counts once per row, a heading once.
+		const measure = () => {
+			let lines = 0;
+			for (const line of el.children) {
+				const lineHeight = Number.parseFloat(getComputedStyle(line).lineHeight) || 20;
+				lines += Math.max(1, Math.round(line.offsetHeight / lineHeight));
+			}
+			setTall(lines > 3);
+		};
+		measure();
+		if (typeof ResizeObserver === "undefined") return undefined;
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		return () => observer.disconnect();
 	}, [text]);
+	const expand = () => {
+		ghost.current = card.current?.offsetHeight || 0;
+		setExpanded(true);
+		setTimeout(() => area.current?.focus(), 0);
+	};
+	const collapse = () => {
+		if (closing) return;
+		setClosing(true);
+		setTimeout(() => {
+			setClosing(false);
+			setExpanded(false);
+			area.current?.focus();
+		}, 180);
+	};
+	useEffect(() => {
+		if (!expanded) return undefined;
+		// Esc closes the large editor wherever the keyboard is, unless something on top of it (a menu, the suggestions) used it.
+		const onKey = (event) => {
+			if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing) {
+				event.preventDefault();
+				collapse();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [expanded, closing]);
 	useEffect(() => {
 		const onKey = (event) => {
 			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "l") {
@@ -302,6 +353,8 @@ export function Composer() {
 	}, []);
 
 	const { token, items: suggestions } = useSuggestions(text, caret);
+	// Another chat starts with the small input.
+	useEffect(() => setExpanded(false), [sessionId]);
 	useEffect(() => setSel(0), [token?.type, token?.query]);
 	// Closing the list (Esc, a click outside the input card) only hides it for the token being typed; the draft is untouched.
 	const tokenKey = token ? `${token.type}:${token.start}:${token.query}` : "";
@@ -350,7 +403,7 @@ export function Composer() {
 		const pos = start + item.insert.length;
 		setTimeout(() => {
 			area.current?.focus();
-			area.current?.setSelectionRange(pos, pos);
+			area.current?.setCaret(pos);
 			setCaret(pos);
 		}, 0);
 	};
@@ -402,6 +455,8 @@ export function Composer() {
 			send(event.altKey && active ? "followUp" : undefined);
 			return;
 		}
+		// In the large editor Esc closes it (a window listener does that), never stops the run.
+		if (event.key === "Escape" && expanded) return;
 		if (event.key === "Escape" && active && !text) {
 			event.preventDefault();
 			actions.stop();
@@ -437,20 +492,26 @@ export function Composer() {
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "aboveEditor").map((w, i) => html`<pre class="widget" key=${`wa${i}`}>${w.lines.join("\n")}</pre>`)}
 			<div class="composer-env">
 				${snap?.cwd ? html`<span class="env-chip" title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></span>` : null}
-				${gitStatus?.isRepository && gitStatus.branch ? html`<span class="env-chip" title=${t("Git branch")}><${Icon} name="gitBranch" size=${12} /><span class="truncate">${gitStatus.branch}</span>${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}</span>` : null}
-				${gitStatus?.isRepository && gitStatus.linkedWorktree ? html`<span class="env-chip" title=${t("This folder is a linked Git worktree")}><${Icon} name="layers" size=${12} />${t("worktree")}</span>` : null}
+				${gitStatus?.isRepository ? html`<${BranchChip} gitStatus=${gitStatus} />` : null}
 				${snap && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
 				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
 			</div>
-			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""}`}
+			${expanded ? html`<div class="composer-ghost" style=${{ height: `${ghost.current}px` }} /><div class=${`composer-scrim ${closing ? "leaving" : ""}`} onMouseDown=${collapse} />` : null}
+			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""} ${expanded ? "expanded" : ""} ${closing ? "leaving" : ""} ${tall || expanded ? "has-expand" : ""}`}
+				role=${expanded ? "dialog" : undefined} aria-modal=${expanded ? "true" : undefined} aria-label=${expanded ? t("Message editor") : undefined}
 				onDragOver=${(e) => (e.preventDefault(), setDragOver(true))} onDragLeave=${() => setDragOver(false)}
 				onDrop=${(e) => (e.preventDefault(), setDragOver(false), addFiles(e.dataTransfer.files))}>
+				${expanded
+					? html`<button class="icon-btn sm composer-expand" onClick=${collapse} title=${t("Collapse (Esc)")} aria-label=${t("Collapse the editor")}><${Icon} name="minimize" size=${14} /></button>`
+					: tall
+						? html`<button class="icon-btn sm composer-expand fade-in" onClick=${expand} title=${t("Expand the editor")} aria-label=${t("Expand the editor")}><${Icon} name="maximize" size=${14} /></button>`
+						: null}
 				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}><img src=${img.url} alt=${img.name} /><button class="thumb-x" aria-label=${t("Remove image")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
-				<textarea ref=${area} class="composer-input" rows="1" value=${text} placeholder=${placeholder} spellcheck="false"
-					onInput=${(e) => (setText(slashStart(e.target.value)), setCaret(e.target.selectionStart))}
-					onKeyUp=${(e) => setCaret(e.target.selectionStart)} onClick=${(e) => setCaret(e.target.selectionStart)}
+				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}
+					onChange=${(value, at) => (setText(slashStart(value)), setCaret(at))}
+					onSelect=${setCaret}
 					onKeyDown=${onKeyDown}
 					onPaste=${(e) => {
 						const files = [...(e.clipboardData?.files || [])];

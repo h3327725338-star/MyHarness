@@ -863,3 +863,67 @@ describe("Web UI: what the agent really did on the web and in files", () => {
 		expect(changeTotals([created, uncounted])).toEqual(created.extra);
 	});
 });
+
+describe("Web UI: the composer draft drawn as Markdown", async () => {
+	const { deletionRange, draftLines, lineAt, renderDraft } = await import(new URL("draft-markdown.js", webDir).href);
+	const plainText = (html: string) =>
+		html
+			.replace(/<br>/g, "")
+			.replace(/<[^>]+>/g, "")
+			.replaceAll("&lt;", "<")
+			.replaceAll("&gt;", ">")
+			.replaceAll("&quot;", '"')
+			.replaceAll("&#39;", "'")
+			.replaceAll("&amp;", "&");
+
+	it("keeps every character of the source, in order, one block per line", () => {
+		const source =
+			"# Title **bold**\n\n- item with `code <b>`\n1. first\n> quote _em_\n```ts\nconst a = 1 < 2;\n```\n---\n[link](https://x.y) ~~gone~~ snake_case_name * a & b";
+		const lines = draftLines(source);
+		expect(lines.length).toBe(source.split("\n").length);
+		expect(lines.map((line: { html: string }) => plainText(line.html)).join("\n")).toBe(source);
+		expect(renderDraft(source).match(/<div class="dline/g)?.length).toBe(source.split("\n").length);
+	});
+
+	it("formats headings, lists, bold, inline code and fenced code, and marks the syntax", () => {
+		const [heading, , item, numbered, quote, fence, code, fenceEnd, rule] = draftLines(
+			"## Plan\n\n- **do** `it`\n2. next\n> said\n```\n**not bold**\n```\n***",
+		);
+		expect(heading.cls).toBe("dline-h dline-h2");
+		expect(heading.html).toBe('<span class="md-mk">## </span>Plan');
+		expect(item.cls).toBe("dline-li");
+		expect(item.html).toContain('<strong><span class="md-mk">**</span>do<span class="md-mk">**</span></strong>');
+		expect(item.html).toContain(
+			'<code class="md-code"><span class="md-mk">`</span>it<span class="md-mk">`</span></code>',
+		);
+		expect(numbered.cls).toBe("dline-li dline-ol");
+		expect(quote.cls).toBe("dline-quote");
+		expect(fence.cls).toBe("dline-fence");
+		expect(code).toEqual({ cls: "dline-code", html: "**not bold**" });
+		expect(fenceEnd.cls).toBe("dline-fence dline-fence-end");
+		expect(rule.cls).toBe("dline-hr");
+		// Underscores inside a word are not emphasis; unclosed marks stay plain text.
+		expect(draftLines("snake_case_name **open")[0].html).toBe("snake_case_name **open");
+	});
+
+	it("marks the caret's line as active and finds lines by offset", () => {
+		expect(renderDraft("a\nb", 1)).toBe('<div class="dline">a</div><div class="dline active">b</div>');
+		expect(renderDraft("")).toBe('<div class="dline"><br></div>');
+		expect(lineAt("a\nbc\nd", 0)).toBe(0);
+		expect(lineAt("a\nbc\nd", 2)).toBe(1);
+		expect(lineAt("a\nbc\nd", 6)).toBe(2);
+	});
+
+	it("deletes one character, a word, or to the line edge, and a line break at an edge", () => {
+		const text = "hello world\nnext 👍🏽 x";
+		expect(deletionRange(text, 5, "deleteContentBackward")).toEqual([4, 5]);
+		expect(deletionRange(text, 12, "deleteContentBackward")).toEqual([11, 12]);
+		expect(deletionRange(text, 11, "deleteContentForward")).toEqual([11, 12]);
+		expect(deletionRange(text, 11, "deleteWordBackward")).toEqual([6, 11]);
+		expect(deletionRange(text, 0, "deleteWordForward")).toEqual([0, 5]);
+		expect(deletionRange(text, 8, "deleteSoftLineBackward")).toEqual([0, 8]);
+		const emoji = text.indexOf("👍");
+		expect(deletionRange(text, emoji + 4, "deleteContentBackward")).toEqual([emoji, emoji + 4]);
+		expect(deletionRange(text, 0, "deleteContentBackward")).toEqual([0, 0]);
+	});
+});
