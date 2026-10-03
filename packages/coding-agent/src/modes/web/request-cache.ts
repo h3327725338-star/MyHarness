@@ -45,6 +45,11 @@ function usageOf(message: AgentMessage): Usage | undefined {
 	if (message.role !== "assistant") return undefined;
 	const usage = message.usage;
 	if (!usage) return undefined;
+	if (
+		usage.reported &&
+		["input", "cacheRead", "cacheWrite"].some((key) => !usage.reported?.[key as "input" | "cacheRead" | "cacheWrite"])
+	)
+		return undefined;
 	const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
 	return {
 		input: number(usage.input),

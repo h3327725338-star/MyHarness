@@ -3,7 +3,7 @@
 // numbers, context lines, green additions and red deletions), and ↑/↓ or the arrows in the list switch files without leaving
 // the panel. The panel is opened, closed and switched only by its own buttons in the header: nothing in here opens another
 // panel.
-import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton, Menu, MenuItem } from "./ui.js";
 import { api, loadGitStatus, setView, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
 import { PanelBody } from "./command-panel.js";
@@ -133,7 +133,9 @@ export function ChangesPanel() {
 	return html`<div class="changes-panel">
 		<div class="panel-toolbar">
 			<${Segmented} value=${scope} onChange=${setScope} options=${[{ value: "run", label: t("This task") }, { value: "worktree", label: t("Working tree") }]} />
-			${scope === "run" && runs.length > 1 ? html`<select class="select sm" value=${String(effectiveRunId ?? "")} onChange=${(e) => (setView({ changesRunId: Number(e.target.value) }), setChosen(""))} aria-label=${t("Task")}>${runs.map((r) => html`<option key=${r.runId} value=${r.runId}>${`${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })}${r.endedAt ? ` · ${fmtDateTime(r.endedAt)}` : ""}`}</option>`)}</select>` : null}
+			${scope === "run" && runs.length > 1 ? html`<${Menu} class="task-menu" width=${280} trigger=${({ toggle, open }) => html`<button class="btn sm" aria-label=${t("Task")} aria-expanded=${open} onClick=${toggle}>${t("Task {runId} · {files}", { runId: effectiveRunId ?? "", files: plural(data?.run?.fileCount ?? files.length, "file") })}<${Icon} name="chevronDown" size=${12} /></button>`}>
+				${(close) => runs.map((r) => html`<${MenuItem} key=${r.runId} active=${r.runId === effectiveRunId} label=${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })} sub=${r.endedAt ? fmtDateTime(r.endedAt) : undefined} onClick=${() => { setView({ changesRunId: r.runId }); setChosen(""); close(); }} />`)}
+			<//>` : null}
 			<span class="grow" />
 			<${Segmented} value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
 			<button class="icon-btn sm" title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${load}><${Icon} name="refresh" size=${15} /></button>

@@ -220,7 +220,7 @@ function CustomStep({ step }) {
  * two steps breaks it), so the line is only ever drawn between steps that really exist and follows how tall they are.
  */
 function StepList({ turn }) {
-	const groups = useMemo(() => groupSteps(turn.steps), [turn.steps]);
+	const groups = useMemo(() => groupSteps(turn.steps.filter((step) => step.type !== "note")), [turn.steps]);
 	return html`<div class="steps">
 		${groups.map((entry, index) => {
 			const next = groups[index + 1];
@@ -456,6 +456,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	return html`<section class=${`turn ${live ? "live" : ""}`}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		<${ProcessSummary} turn=${turn} outcome=${outcome} live=${live || waiting} compacting=${compacting} run=${run} changeCount=${changeCount} duration=${duration} snapRun=${snapRun} defaultOpen=${processDefault === "expanded"} key=${`sum-${turn.key}`} />
+		${turn.steps.filter((step) => step.type === "note").map((step) => html`<div class="final" key=${step.key}><${Markdown} text=${step.text} /></div>`)}
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />

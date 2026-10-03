@@ -85,6 +85,17 @@ try {
  await loadWorkspaces(); render(h(Sidebar),app); await wait(400);
  const row=document.querySelector('.chat-row');
  if(!row) throw Error('saved row missing');
+ const base=state.snap;
+ set({activeSlot:'draft',slots:[{slot:'draft',sessionFile:'C:/fixture/draft.jsonl',sessionId:'draft',unbound:true,hasContent:false}],snap:{...base,session:{id:'draft',file:'C:/fixture/draft.jsonl'}}});
+ await wait(450);
+ const draft=[...document.querySelectorAll('.chat-row')].find(r=>r.textContent.includes('新对话'));
+ if(!draft) throw Error('blank draft missing');
+ if(draft.closest('.collapse').getBoundingClientRect().height<33) throw Error('blank draft never opened: '+draft.closest('.collapse').outerHTML);
+ set({activeSlot:'saved',slots:[],snap:base}); await wait(90);
+ const draftHeight=draft.closest('.collapse')?.getBoundingClientRect().height;
+ if(!(draftHeight>0 && draftHeight<34)) throw Error('blank draft exit hard cut: '+draftHeight);
+ await wait(400);
+ if(draft.isConnected) throw Error('blank draft not removed');
  row.querySelector('button').click(); await wait(100);
  const archive=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='归档');
  if(!archive) throw Error('archive menu missing'); archive.click(); await wait(100);

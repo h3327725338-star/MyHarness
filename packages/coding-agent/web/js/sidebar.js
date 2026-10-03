@@ -1,5 +1,5 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows, Collapse } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, VirtualRows, Collapse } from "./ui.js";
 import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -139,11 +139,12 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	</div>`;
 }
 
-// Only empty draft chats need entry/exit presence; saved chats keep the virtualized list.
+// Keep removed rows mounted until their shared fade/collapse transition has finished.
 function DraftChat({ info, present, renderRow }) {
 	const [open, setOpen] = useState(false);
-	useEffect(() => {
-		const frame = requestAnimationFrame(() => setOpen(present));
+	useLayoutEffect(() => {
+		if (!present) { setOpen(false); return undefined; }
+		const frame = requestAnimationFrame(() => setOpen(true));
 		return () => cancelAnimationFrame(frame);
 	}, [present]);
 	return html`<${Collapse} open=${open}>${renderRow(info)}<//>`;
@@ -152,12 +153,14 @@ function DraftChat({ info, present, renderRow }) {
 function ChatRows({ items, renderRow }) {
 	const drafts = items;
 	const [retained, setRetained] = useState(drafts);
-	useEffect(() => {
-		setRetained((old) => [...drafts, ...old.filter((info) => !drafts.some((item) => item.path === info.path) && !items.some((item) => item.path === info.path))]);
+	useLayoutEffect(() => {
+		setRetained((old) => [...old.map((info) => drafts.find((item) => item.path === info.path) || info), ...drafts.filter((info) => !old.some((item) => item.path === info.path))]);
 		const timer = setTimeout(() => setRetained(drafts), 320);
 		return () => clearTimeout(timer);
 	}, [items]);
-	const visible = [...drafts, ...retained.filter((info) => !items.some((item) => item.path === info.path))];
+	// Preserve DOM order during exit: moving the collapsing row behind surviving rows can cancel its transition.
+	const visible = retained.map((info) => drafts.find((item) => item.path === info.path) || info);
+	for (const info of drafts) if (!visible.some((item) => item.path === info.path)) visible.push(info);
 	return html`${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${drafts.some((item) => item.path === info.path)} renderRow=${renderRow} />`)}`;
 }
 

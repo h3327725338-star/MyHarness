@@ -25,23 +25,47 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				branch: "main",
 				preview: { total: 1 },
 			}));
+			server.route("GET", "/api/stats", () => ({
+				userMessages: 1,
+				assistantMessages: 1,
+				toolCalls: 0,
+				tokens: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 },
+				tokenAvailability: { input: true, output: true, cacheRead: true, cacheWrite: false },
+				costIncomplete: true,
+				costByCurrency: { CNY: 0.785 },
+			}));
+			server.route("GET", "/api/sessions/tree", () => ({ rows: [] }));
+			server.route("GET", "/api/changes", () => ({
+				files: [],
+				run: { runId: 2, fileCount: 0 },
+				runs: [
+					{ runId: 1, fileCount: 0 },
+					{ runId: 2, fileCount: 0 },
+				],
+			}));
 			server.route("GET", "/hold", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 12_000));
 				return {};
 			});
+			server.mount({
+				prefix: "/markdown/",
+				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
+			});
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/composer.css"><link rel="stylesheet" href="/css/panels.css"><div id="side" style="position:absolute;right:0;top:20px;width:400px;height:700px"><div id="menu"></div></div><div id="record"></div><div id="cache"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/composer.css"><link rel="stylesheet" href="/css/panels.css"><link rel="stylesheet" href="/css/transcript.css"><script src="/markdown/marked.min.js"></script><div id="side" style="position:absolute;right:0;top:20px;width:400px;height:700px"><div id="menu"></div></div><div id="record"></div><div id="cache"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(
 				join(root, "test.js"),
 				`
 import {h,render} from '/vendor/preact.js';
-import {GitBar} from '/js/panel-changes.js';
+import {GitBar,ChangesPanel} from '/js/panel-changes.js';
+import {ContextPanel} from '/js/panel-context.js';
+import {Transcript} from '/js/transcript.js';
 import {GitRecord} from '/js/git-record.js';
 import {CacheValue} from '/js/context-usage.js';
-import {set} from '/js/store.js';
+import {set,setView} from '/js/store.js';
 const wait = ms => new Promise(r=>setTimeout(r,ms));
 try {
  set({snap:{active:false,checkpoint:null}});
@@ -63,6 +87,29 @@ try {
  if(document.querySelector('.gitbar-menu')) throw Error('menu does not toggle closed');
  await wait(9200);
  if(!document.getElementById('record').textContent.includes('abc1234')) throw Error('record disappeared');
+ const stats={userMessages:1,assistantMessages:1,toolCalls:0,tokens:{input:100,output:10,cacheRead:0,cacheWrite:0},tokenAvailability:{input:true,output:true,cacheRead:true,cacheWrite:false},costIncomplete:true,costByCurrency:{CNY:0.785}};
+ const snap={active:false,session:{id:'fixture',name:'Fixture'},thinking:{supported:false},run:{},flags:{},app:{},tools:[],cwd:'C:/fixture'};
+ set({snap,stats,resources:{tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]}});
+ render(h(ContextPanel),document.getElementById('cache')); await wait(150);
+ const text=document.getElementById('cache').textContent;
+ if(!text.includes('Cache write —')||!text.includes('≈ ¥0.785')) throw Error('missing usage placeholders: '+text);
+ const tokenLabel=[...document.querySelectorAll('.kv>span')].find(s=>s.textContent==='Tokens');
+ const cacheValue=tokenLabel.nextElementSibling.lastElementChild;
+ if(getComputedStyle(cacheValue).marginLeft==='auto') throw Error('cache pushed to edge');
+ const user={kind:'user',id:'u',ts:1,text:'task',images:[]};
+ const reply={kind:'assistant',id:'a',ts:2,blocks:[{type:'text',text:'Core answer'},{type:'toolCall',id:'tool',name:'read',args:{path:'a.ts'}}],final:true,stopReason:'toolUse'};
+ for(const processDefault of ['collapsed','expanded']) {
+  setView({processDefault}); set({snap,items:[user,reply],toolRuns:{},runs:{}});
+  render(h(Transcript),document.getElementById('record')); await wait(200);
+  const answer=[...document.querySelectorAll('.final')].find(n=>n.textContent.includes('Core answer'));
+  if(!answer || answer.closest('.collapse') || answer.getBoundingClientRect().height<=0) throw Error('core answer folded: '+processDefault);
+ }
+ render(h(ChangesPanel),document.getElementById('menu')); await wait(200);
+ const task=document.querySelector('.task-menu button'); if(!task) throw Error('task menu missing'); task.click(); await wait(150);
+ const option=document.querySelector('.task-menu .menu-item'); const before=option.getBoundingClientRect();
+ option.dispatchEvent(new MouseEvent('mouseover',{bubbles:true})); await wait(150);
+ const after=option.getBoundingClientRect();
+ if(before.width!==after.width||before.height!==after.height||before.top!==after.top||!option.isConnected) throw Error('task hover geometry changed');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

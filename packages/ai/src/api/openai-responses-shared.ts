@@ -425,7 +425,14 @@ export async function processResponsesStream<TApi extends Api>(
 				| undefined;
 			const cachedTokens = inputDetails?.cached_tokens || 0;
 			const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
+			const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 			output.usage = {
+				reported: {
+					input: valid(response.usage.input_tokens),
+					output: valid(response.usage.output_tokens),
+					cacheRead: valid(inputDetails?.cached_tokens),
+					cacheWrite: valid(inputDetails?.cache_write_tokens),
+				},
 				cacheReported: inputDetails?.cached_tokens !== undefined || inputDetails?.cache_write_tokens !== undefined,
 				// OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
 				input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),

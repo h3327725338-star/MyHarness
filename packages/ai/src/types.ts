@@ -435,6 +435,8 @@ export interface ToolCall {
 }
 
 export interface Usage {
+	/** Per-dimension reporting, separate from numeric defaults used for arithmetic. */
+	reported?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite", boolean>>;
 	/** Whether the response explicitly reported cache counters (including zero). Absent in older sessions. */
 	cacheReported?: boolean;
 	input: number;

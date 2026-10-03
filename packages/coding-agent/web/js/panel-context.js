@@ -101,12 +101,12 @@ export function ContextPanel() {
 				<span>${t("Session file")}</span><span class="kv-value"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
-					<span>${t("Tokens")}</span><span class="row" style=${{ flexWrap: "wrap" }} title=${Object.entries(stats.tokens).map(([key, value]) => `${key}: ${value.toLocaleString()}`).join(" / ")}>
-						<span>${t("Input")} ${fmtTokens(stats.tokens.input)} · ${t("Cache write")} ${fmtTokens(stats.tokens.cacheWrite)} · ${t("Cache read")} ${fmtTokens(stats.tokens.cacheRead)} · ${t("Output")} ${stats.usageEstimated ? "~" : ""}${fmtTokens(stats.tokens.output)}</span>
-						<span style=${{ marginLeft: "auto" }}><${CacheValue} session=${sessionCache(stats)} /></span>
+					<span>${t("Tokens")}</span><span class="row" style=${{ flexWrap: "wrap" }} title=${Object.entries(stats.tokens).map(([key, value]) => `${key}: ${value?.toLocaleString() ?? "—"}`).join(" / ")}>
+						<span>${t("Input")} ${stats.tokenAvailability?.input === false ? "—" : fmtTokens(stats.tokens.input)} · ${t("Cache write")} ${stats.tokenAvailability?.cacheWrite === false ? "—" : fmtTokens(stats.tokens.cacheWrite)} · ${t("Cache read")} ${stats.tokenAvailability?.cacheRead === false ? "—" : fmtTokens(stats.tokens.cacheRead)} · ${t("Output")} ${stats.usageEstimated ? "~" : ""}${stats.tokenAvailability?.output === false && !stats.usageEstimated ? "—" : fmtTokens(stats.tokens.output)}</span>
+						<span><${CacheValue} session=${sessionCache(stats)} /></span>
 					</span>
 					<span>${t("Speed")}</span><span><${SpeedValue} speed=${snap.speed} /></span>
-					<span>${t("Cost")}</span><span>${stats.usageEstimated ? "~" : ""}${stats.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, cost]) => fmtCost(cost, currency)).join(" · ") || "—" : fmtCost(stats.cost)}</span>` : null}
+					<span>${t("Cost")}</span><span>${stats.usageEstimated || stats.costIncomplete ? "≈ " : ""}${stats.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, cost]) => fmtCost(cost, currency)).join(" · ") || "—" : fmtCost(stats.cost)}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>

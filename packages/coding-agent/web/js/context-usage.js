@@ -11,7 +11,8 @@ export function sessionCache(stats) {
 	if (!stats?.tokens) return null;
 	const { input, cacheRead: read, cacheWrite: write } = stats.tokens;
 	const total = input + read + write;
-	return { input, read, write, hitRate: total > 0 ? read / total : null };
+	const complete = !stats.tokenAvailability || ["input", "cacheRead", "cacheWrite"].every((key) => stats.tokenAvailability[key]);
+	return { input, read, write, hitRate: complete && total > 0 ? read / total : null };
 }
 
 const num = (n) => Math.round(n).toLocaleString(getLang());

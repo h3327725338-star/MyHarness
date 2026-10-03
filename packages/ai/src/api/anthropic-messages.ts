@@ -565,6 +565,13 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
+					const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+					output.usage.reported = {
+						input: valid(event.message.usage.input_tokens),
+						output: valid(event.message.usage.output_tokens),
+						cacheRead: valid(event.message.usage.cache_read_input_tokens),
+						cacheWrite: valid(event.message.usage.cache_creation_input_tokens),
+					};
 					output.usage.input = event.message.usage.input_tokens || 0;
 					output.usage.output = event.message.usage.output_tokens || 0;
 					output.usage.cacheReported =

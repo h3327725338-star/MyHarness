@@ -1236,7 +1236,14 @@ function parseChunkUsage(
 	const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
 	// OpenAI completion_tokens already includes reasoning_tokens.
 	const outputTokens = count(rawUsage.completion_tokens);
+	const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 	const usage: AssistantMessage["usage"] = {
+		reported: {
+			input: valid(rawUsage.prompt_tokens) || valid(rawUsage.prompt_cache_miss_tokens),
+			output: valid(rawUsage.completion_tokens),
+			cacheRead: valid(rawUsage.prompt_cache_hit_tokens ?? rawUsage.prompt_tokens_details?.cached_tokens),
+			cacheWrite: valid(rawUsage.prompt_tokens_details?.cache_write_tokens),
+		},
 		cacheReported:
 			rawUsage.prompt_cache_hit_tokens !== undefined ||
 			rawUsage.prompt_cache_miss_tokens !== undefined ||

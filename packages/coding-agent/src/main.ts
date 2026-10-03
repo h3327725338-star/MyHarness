@@ -22,17 +22,15 @@ import { renderCliHelp } from "./cli/help.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.ts";
-import { exportFromFile } from "./exports/html/index.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runWebMode, startWebBootstrap, type WebBootstrap } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import type { WebBootstrap } from "./modes/web/web-mode.ts";
 import { printTimings, resetTimings, time } from "./observability/timings.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./platform/process/http-dispatcher.ts";
@@ -326,6 +324,7 @@ async function createSessionManager(
 
 	if (parsed.resume) {
 		try {
+			const { selectSession } = await import("./cli/session-picker.ts");
 			const selectedPath = await selectSession(
 				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
 				(onProgress) => SessionManager.listAll(sessionDir, onProgress),
@@ -539,6 +538,7 @@ export async function main(args: string[], options?: MainOptions) {
 		let result: string;
 		try {
 			const outputPath = parsed.messages.length > 0 ? parsed.messages[0] : undefined;
+			const { exportFromFile } = await import("./exports/html/index.ts");
 			result = await exportFromFile(parsed.export, outputPath);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
@@ -572,7 +572,10 @@ export async function main(args: string[], options?: MainOptions) {
 	// the browser through it, and the page shows the boot phase until the runtime exists.
 	const webBootstrap: WebBootstrap | undefined =
 		appMode === "web"
-			? await startWebBootstrap({ port: parsed.webPort, openBrowser: !parsed.noOpenBrowser })
+			? await (await import("./modes/web/web-mode.ts")).startWebBootstrap({
+					port: parsed.webPort,
+					openBrowser: !parsed.noOpenBrowser,
+				})
 			: undefined;
 
 	// Run migrations (pass cwd for project-local migrations)
@@ -862,6 +865,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (appMode === "interactive") {
+		const { InteractiveMode } = await import("./modes/interactive/interactive-mode.ts");
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
 			modelFallbackMessage,
@@ -893,6 +897,7 @@ export async function main(args: string[], options?: MainOptions) {
 		await interactiveMode.run();
 	} else if (appMode === "web" && webBootstrap) {
 		printTimings();
+		const { runWebMode } = await import("./modes/web/web-mode.ts");
 		const exitCode = await runWebMode(runtime, webBootstrap, {
 			initialMessage,
 			initialImages,
@@ -903,6 +908,7 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(exitCode);
 	} else {
 		printTimings();
+		const { runPrintMode } = await import("./modes/print-mode.ts");
 		const exitCode = await runPrintMode(runtime, {
 			mode: toPrintOutputMode(appMode),
 			messages: parsed.messages,

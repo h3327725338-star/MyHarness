@@ -16,6 +16,8 @@ export interface SessionUsageStats {
 		total: number;
 	};
 	cost: number;
+	tokenAvailability?: Record<"input" | "output" | "cacheRead" | "cacheWrite", boolean>;
+	costIncomplete?: boolean;
 	costByCurrency?: Partial<Record<"USD" | "CNY", number>>;
 }
 
@@ -35,6 +37,16 @@ export function collectSessionUsageStats(
 	let totalMessages = 0;
 	let toolCalls = 0;
 	const usageTotals = createUsageTotals();
+	const tokenAvailability = { input: true, output: true, cacheRead: true, cacheWrite: true };
+	let samples = 0;
+	const trackAvailability = (usage: AssistantMessage["usage"]) => {
+		samples++;
+		for (const key of Object.keys(tokenAvailability) as Array<keyof typeof tokenAvailability>) {
+			const value = usage[key];
+			const reported = usage.reported?.[key] ?? value > 0;
+			tokenAvailability[key] &&= reported && Number.isFinite(value) && value >= 0;
+		}
+	};
 	const costByCurrency: Partial<Record<"USD" | "CNY", number>> = {};
 	const addCost = (currency: "USD" | "CNY", cost: number) => {
 		if (Number.isFinite(cost) && cost > 0) costByCurrency[currency] = (costByCurrency[currency] ?? 0) + cost;
@@ -46,6 +58,7 @@ export function collectSessionUsageStats(
 		liveMessage && !alreadyStored ? [...entries, { type: "message" as const, message: liveMessage }] : entries;
 	for (const entry of withLive) {
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+			trackAvailability(entry.usage);
 			addUsageToTotals(usageTotals, entry.usage);
 			addCost("USD", entry.usage.cost.total);
 		}
@@ -57,6 +70,7 @@ export function collectSessionUsageStats(
 		} else if (message.role === "toolResult") {
 			toolResults++;
 			if (message.usage) {
+				trackAvailability(message.usage);
 				addUsageToTotals(usageTotals, message.usage);
 				addCost("USD", message.usage.cost.total);
 			}
@@ -66,6 +80,7 @@ export function collectSessionUsageStats(
 			if (Array.isArray(assistantMsg.content)) {
 				toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
 			}
+			trackAvailability(assistantMsg.usage);
 			addUsageToTotals(usageTotals, assistantMsg.usage);
 			const model = resolveModel?.(assistantMsg.provider, assistantMsg.model);
 			const cost = model
@@ -91,5 +106,9 @@ export function collectSessionUsageStats(
 		// The legacy scalar is USD only; never add different currencies or return stale stored prices.
 		cost: costByCurrency.USD ?? 0,
 		costByCurrency,
+		tokenAvailability: samples
+			? tokenAvailability
+			: { input: false, output: false, cacheRead: false, cacheWrite: false },
+		costIncomplete: samples > 0 && Object.values(tokenAvailability).some((available) => !available),
 	};
 }

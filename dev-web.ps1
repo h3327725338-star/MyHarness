@@ -376,7 +376,7 @@ while ((Get-Date) -lt $deadline) {
 		break
 	}
 	# 日志读不到（被占用、被缓冲）时不能因此一直等下去：服务端口已经能应答就算就绪。
-	if ($port -ne 0 -and ($clock.ElapsedMilliseconds - $lastProbe) -ge 700) {
+	if ($port -ne 0 -and ($clock.ElapsedMilliseconds - $lastProbe) -ge 100) {
 		$lastProbe = $clock.ElapsedMilliseconds
 		if (Test-WebReady $port) {
 			$ready = $true
@@ -398,7 +398,7 @@ while ((Get-Date) -lt $deadline) {
 			break
 		}
 	} else {
-		Start-Sleep -Milliseconds 150
+		Start-Sleep -Milliseconds 50
 	}
 }
 
