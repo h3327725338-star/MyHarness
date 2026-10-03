@@ -91,6 +91,7 @@ export interface SlotStatus {
 	name: string | null;
 	/** First user message, so a session that is not saved to disk yet can still be listed by title. */
 	firstMessage: string;
+	hasContent: boolean;
 	active: boolean;
 	waiting: boolean;
 	completion: boolean;
@@ -233,6 +234,17 @@ export class WebHost {
 		return "";
 	}
 
+	get hasOperationContent(): boolean {
+		return this.session.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					(entry.type === "custom" &&
+						(entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY)) ||
+					(entry.type === "custom_message" && entry.display),
+			);
+	}
+
 	get status(): SlotStatus {
 		const run = this.session.getRunStateSnapshot();
 		return {
@@ -242,6 +254,7 @@ export class WebHost {
 			cwd: this.cwd,
 			name: this.session.sessionName ?? null,
 			firstMessage: this.firstUserText(),
+			hasContent: this.hasOperationContent || this.session.messages.length > 0,
 			active: isRunStateActive(run.state),
 			waiting: this.dialogs.requests.length > 0,
 			completion: this.completionActive,

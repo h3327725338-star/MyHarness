@@ -3,6 +3,7 @@ import { type HTMLElement, parse } from "node-html-parser";
 import { documentToMarkdown, isDocument } from "./document.ts";
 import { WebSearchError } from "./errors.ts";
 import { BROWSER_HEADERS, decodeBody, type FetchLike, requestBytes } from "./http.ts";
+import { RedirectCookies } from "./redirect-cookies.ts";
 import { checkResolvedHost, type HostLookup, validatePublicHttpUrl } from "./url.ts";
 
 export const PAGE_LIMITS = {
@@ -192,6 +193,7 @@ function isPlainText(contentType: string): boolean {
  */
 export async function readPage(url: string, options: ReadPageOptions): Promise<ReadPageResult> {
 	const maxRedirects = options.maxRedirects ?? PAGE_LIMITS.maxRedirects;
+	const cookies = new RedirectCookies();
 	let current = url;
 	for (let hop = 0; ; hop += 1) {
 		const validation = validatePublicHttpUrl(current);
@@ -208,7 +210,13 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 		const response = await requestBytes(
 			options.fetchImpl,
 			validation.url,
-			{ method: "GET", headers: BROWSER_HEADERS },
+			{
+				method: "GET",
+				headers: {
+					...BROWSER_HEADERS,
+					...(cookies.header(validation.url) ? { Cookie: cookies.header(validation.url) } : {}),
+				},
+			},
 			{
 				signal: options.signal,
 				timeoutMs: PAGE_LIMITS.requestTimeoutMs,
@@ -216,6 +224,7 @@ export async function readPage(url: string, options: ReadPageOptions): Promise<R
 				label: validation.hostname,
 			},
 		);
+		cookies.store(validation.url, response.headers);
 		if (response.status >= 300 && response.status < 400) {
 			const location = response.headers.get("location");
 			if (!location) throw new WebSearchError("http", `目标网页返回 HTTP ${response.status}，但没有跳转地址。`);

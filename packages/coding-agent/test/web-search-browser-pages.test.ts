@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/config/settings/index.ts";
@@ -394,7 +395,53 @@ describe("finding installed browsers", () => {
 	});
 });
 
+describe("redirect overflow browser fallback", () => {
+	it("tries the browser on redirect overflow, but respects disabled fallback", async () => {
+		const fake = fakeBrowser({ load: (url) => browserPage(url, article("Read", "Browser loaded the page.")) });
+		const routes = { "loop.example": () => new Response(null, { status: 302, headers: { Location: "/" } }) };
+		const { service } = createService(routes, fake.browser, { settings: { maxRedirects: 0 } });
+		const result = await service.fetch({ urls: ["https://loop.example/"] });
+		expect(result.pages).toHaveLength(1);
+		expect(fake.loads).toEqual(["https://loop.example/"]);
+		const disabled = createService(routes, fake.browser, { settings: { maxRedirects: 0, browserFallback: false } });
+		expect((await disabled.service.fetch({ urls: ["https://loop.example/"] })).failures[0].code).toBe(
+			"too_many_redirects",
+		);
+		expect(fake.loads).toHaveLength(1);
+	});
+});
+
 describe("importing the daily browser's cookies", () => {
+	it("snapshots committed WAL cookies while the source database remains open", () => {
+		const dir = mkdtempSync(join(tmpdir(), "myharness-live-cookie-"));
+		const file = join(dir, "cookies.sqlite");
+		const daily = new DatabaseSync(file);
+		try {
+			daily.exec(
+				"PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE cookies (value TEXT); INSERT INTO cookies VALUES ('live');",
+			);
+			const profile = join(dir, "profile");
+			const imported = importDailyCookiesOnce("Firefox", join(dir, "root"), profile, {
+				profile: dir,
+				files: [
+					{ from: file, to: "cookies.sqlite" },
+					{ from: `${file}-wal`, to: "cookies.sqlite-wal", optional: true },
+				],
+			});
+			expect(imported.ok, imported.error).toBe(true);
+			const snapshot = new DatabaseSync(join(profile, "cookies.sqlite"), { readOnly: true });
+			try {
+				expect(snapshot.prepare("SELECT value FROM cookies").get()?.value).toBe("live");
+			} finally {
+				snapshot.close();
+			}
+			expect(existsSync(join(profile, "cookies.sqlite-wal"))).toBe(false);
+			daily.exec("INSERT INTO cookies VALUES ('still running')");
+		} finally {
+			daily.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	const dirs: string[] = [];
 	const temp = () => {
 		const dir = mkdtempSync(join(tmpdir(), "myharness-cookies-"));

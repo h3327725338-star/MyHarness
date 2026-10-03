@@ -214,7 +214,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
 | `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–10 | 3 |
 | `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–20 | 10 |
 | `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–8 | 4 |
-| `maxRedirects` | 直接读取网页时最多跟随的跳转次数；0 = 不跟随。达到上限时返回 `too_many_redirects`，说明已达到设置的上限并提示可能的鉴权死循环或重定向配置问题 | 0–20 | 5 |
+| `maxRedirects` | 直接读取网页时最多跟随的跳转次数；0 = 不跟随。达到上限时产生 `too_many_redirects`，启用浏览器兜底时自动改用浏览器；无法兜底时说明跳转上限及可能的鉴权循环或配置问题 | 0–20 | 5 |
 
 ```json
 {

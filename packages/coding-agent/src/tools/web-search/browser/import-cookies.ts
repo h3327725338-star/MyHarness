@@ -1,6 +1,18 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 /**
  * "Use My Browser's Cookies": copies the cookies of the browser the user browses with every day into MyHarness' own
@@ -14,8 +26,8 @@ import { dirname, isAbsolute, join } from "node:path";
  *
  * - Firefox keeps cookies in `cookies.sqlite`, unencrypted.
  * - Chrome and Edge keep them in `Network/Cookies`, encrypted with a key in `Local State` that only works for the same
- *   Windows user on the same computer; the key section is copied along. While the daily browser is running it may
- *   hold the file locked; the copy then fails with a clear reason and is tried again on the next start.
+ *   Windows user on the same computer; the key section is copied along. SQLite files are opened read-only and
+ *   snapshotted with their committed WAL data, without requiring the daily browser to exit.
  */
 
 export type CookieBrowser = "firefox" | "chrome" | "edge";
@@ -176,8 +188,8 @@ export function importDailyCookiesOnce(
 	if (done?.ok) return done;
 	const fail = (error: string): CookieImportRecord => ({ ok: false, at: now(), source: source?.profile, error });
 	if (!source) return fail(`没有找到你日常使用的 ${label} 配置，没有可导入的 Cookie。`);
-	// Everything is read into ".import" copies first: MyHarness' profile changes only once all of it could be read,
-	// so a file the daily browser holds locked leaves the profile exactly as it was.
+	// Stage read-only snapshots first; never acquire an exclusive lock on the daily profile.
+	// SQLite merges committed WAL data into the snapshot, so its old sidecars must not be copied.
 	const staged: Array<{ temp: string; target: string }> = [];
 	const absent: string[] = (source.stale ?? []).map((path) => join(profileDir, path));
 	try {
@@ -197,6 +209,10 @@ export function importDailyCookiesOnce(
 		}
 		for (const file of source.files) {
 			const target = join(profileDir, file.to);
+			if (/(?:-wal|-shm|-journal)$/u.test(file.from)) {
+				absent.push(target);
+				continue;
+			}
 			if (!existsSync(file.from)) {
 				if (!file.optional) return fail(`没有找到 ${label} 的 Cookie 文件。`);
 				// A leftover of MyHarness' old cookie file would not belong to the new one.
@@ -205,7 +221,27 @@ export function importDailyCookiesOnce(
 			}
 			mkdirSync(dirname(target), { recursive: true });
 			staged.push({ temp: `${target}.import`, target });
-			copyFileSync(file.from, `${target}.import`);
+			const temp = `${target}.import`;
+			// Read-only SQLite takes a consistent snapshot even while the browser writes in WAL mode.
+			const header = Buffer.alloc(16);
+			const fd = openSync(file.from, "r");
+			try {
+				readSync(fd, header, 0, header.length, 0);
+			} finally {
+				closeSync(fd);
+			}
+			if (header.toString("latin1") === "SQLite format 3\0") {
+				const database = new DatabaseSync(file.from, { readOnly: true });
+				try {
+					database.exec("PRAGMA busy_timeout = 1000");
+					database.exec(`VACUUM INTO '${temp.replace(/'/gu, "''")}'`);
+				} finally {
+					database.close();
+				}
+				for (const suffix of ["-wal", "-shm", "-journal"]) absent.push(`${target}${suffix}`);
+			} else {
+				copyFileSync(file.from, temp);
+			}
 		}
 		if (localState !== undefined) writeFileSync(join(profileDir, "Local State"), localState);
 		for (const file of staged) renameSync(file.temp, file.target);
@@ -215,7 +251,7 @@ export function importDailyCookiesOnce(
 		const code = (error as NodeJS.ErrnoException).code;
 		const record = fail(
 			code === "EBUSY" || code === "EPERM" || code === "EACCES"
-				? `${label} 正在运行，它的 Cookie 文件被占用，没能导入。关闭 ${label} 后，下次使用浏览器兜底时会再次尝试。`
+				? `${label} 的 Cookie 文件暂时无法读取，可能受到文件权限或浏览器保护限制；下次使用浏览器兜底时会再次尝试。`
 				: `导入 ${label} 的 Cookie 失败：${error instanceof Error ? error.message : String(error)}`,
 		);
 		// Not written as done: the next start tries again.

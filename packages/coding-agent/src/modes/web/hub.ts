@@ -35,6 +35,7 @@ const STATUS_EVENTS = new Set([
 	"result_seen",
 	"dialogs",
 	"session_info",
+	"entry_appended",
 	"session_replaced",
 	"workspaces_changed",
 ]);
@@ -266,7 +267,8 @@ export class WebHostHub implements WebHostHubLink {
 				host.session.isIdle &&
 				!host.completionActive &&
 				(!defaultStorage || host.unbound === wantUnbound) &&
-				host.session.sessionManager.buildSessionContext().messages.length === 0,
+				host.session.sessionManager.buildSessionContext().messages.length === 0 &&
+				!host.hasOperationContent,
 		);
 		if (reusable) return { slot: reusable.slotId, created: false };
 		const sessionDir = manager.usesDefaultSessionDir() ? undefined : manager.getSessionDir();

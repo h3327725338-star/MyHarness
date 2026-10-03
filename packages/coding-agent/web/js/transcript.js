@@ -555,26 +555,35 @@ export function Transcript() {
 	const programmatic = useRef(false);
 	const onScroll = () => {
 		const el = scroller.current;
-		const near = el.scrollHeight - el.scrollTop - el.clientHeight < 72;
-		// Only an upward move by the reader releases the follow-lock; content growth never does.
-		if (programmatic.current) programmatic.current = false;
-		else if (el.scrollTop < lastTop.current - 2) stick.current = false;
-		if (near) stick.current = true;
+		const distance = Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop);
+		const near = distance <= 10;
+		// Size changes and scroll anchoring are not reader intent.
+		if (!programmatic.current && Date.now() - lastInteract.current < 500 && el.scrollTop < lastTop.current - 2 && distance > 72) stick.current = false;
+		if (near) { stick.current = true; programmatic.current = false; }
 		lastTop.current = el.scrollTop;
-		setAway((prev) => (prev === !near ? prev : !near));
+		const show = !stick.current && distance > 72;
+		setAway((prev) => (prev === show ? prev : show));
 		const header = document.querySelector(".main-header");
 		header?.classList.toggle("scrolled", el.scrollTop > 4);
 	};
-	const noteInteraction = () => {
-		lastInteract.current = Date.now();
+	const noteInteraction = (event) => {
+		const scrollInput = event.type === "wheel" ? event.deltaY < 0
+			: event.type === "keydown" ? ["ArrowUp", "PageUp", "Home"].includes(event.key)
+			: event.target === scroller.current;
+		if (scrollInput) {
+			lastInteract.current = Date.now();
+			programmatic.current = false;
+		}
 	};
 	const toBottom = (smooth = false) => {
 		const el = scroller.current;
 		if (!el) return;
 		programmatic.current = true;
+		setAway(false);
 		if (smooth) return el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
 		el.scrollTop = el.scrollHeight;
 		lastTop.current = el.scrollTop;
+		programmatic.current = false;
 	};
 	useLayoutEffect(() => {
 		if (stick.current && Date.now() - lastInteract.current > 500) toBottom();
@@ -582,9 +591,11 @@ export function Transcript() {
 	useEffect(() => {
 		if (!content.current || typeof ResizeObserver === "undefined") return undefined;
 		const ro = new ResizeObserver(() => {
-			if (stick.current && Date.now() - lastInteract.current > 500) toBottom();
+			if (stick.current) toBottom();
+			onScroll();
 		});
 		ro.observe(content.current);
+		ro.observe(scroller.current);
 		return () => ro.disconnect();
 	}, []);
 	const session = snap?.session?.id;

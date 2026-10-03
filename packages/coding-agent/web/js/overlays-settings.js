@@ -193,7 +193,7 @@ const SHORT_DESCRIPTION = {
 	"webSearch.maxRedirects": N_("Redirects followed per page read; 0 follows none."),
 	"webSearch.browserFallback": N_("Use a browser when blocked; checks may open a window."),
 	"webSearch.browser": N_("Auto: first installed browser."),
-	"webSearch.useBrowserCookies": N_("Copy login cookies once; close the source browser first."),
+	"webSearch.useBrowserCookies": N_("Copy login cookies once, even while your browser is open."),
 	"codeIntelligence.enabled": N_("Off: lightweight index only."),
 	webShutdownGraceSeconds: N_("Last tab closes: exit after delay; reopen cancels. Next close."),
 	shellPath: N_("Executable for bash."),

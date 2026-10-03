@@ -38,6 +38,7 @@ import {
 	findMostRecentSession,
 	getSessionHeaderCwd,
 	getSessionHeaderWorkspaceId,
+	hasPersistableSessionContent,
 	listAllSessions,
 	listSessionsForCwd,
 	listUnboundSessions,
@@ -909,7 +910,7 @@ export class SessionManager {
 		}
 		// Persist first so a write failure leaves the in-memory history and active
 		// context unchanged. The pending list is used when the session is flushed
-		// for the first time after an assistant message arrives.
+		// for the first time after a response or visible operation record arrives.
 		this._persist(entry, [...this.fileEntries, entry]);
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
@@ -1373,13 +1374,8 @@ export class SessionManager {
 			if (this.persist) ensureSessionDirectory(resolve(newSessionFile, ".."));
 			this._buildIndex();
 
-			// Only write the file now if it contains an assistant message.
-			// Otherwise defer to _persist(), which creates the file on the
-			// first assistant response, matching the newSession() contract
-			// and avoiding the duplicate-header bug when _persist()'s
-			// no-assistant guard later resets flushed to false.
-			const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
-			if (hasAssistant) {
+			// Write branches with responses or visible operation records; untouched drafts remain deferred.
+			if (hasPersistableSessionContent(this.fileEntries)) {
 				this._rewriteFile();
 				this.flushed = true;
 				this.writeMetadata();

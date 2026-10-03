@@ -199,8 +199,8 @@ export function Sidebar() {
 	// always be switched back to. That is a chat that runs or holds a first message, and also the chat on screen while it
 	// is still empty: a chat that was just created is the current row of the place it belongs to.
 	const unsaved = useMemo(() => {
-		const listable = (slot) => !!slot.sessionFile && (slot.firstMessage || slot.active || slot.slot === activeSlot);
-		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, empty: !slot.firstMessage && !slot.active && !slot.name });
+		const listable = (slot) => !!slot.sessionFile && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
+		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();
 		for (const slot of slots) {
 			if (!listable(slot) || slot.unbound) continue;

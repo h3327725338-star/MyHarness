@@ -370,7 +370,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				section: "Tools",
 				label: "Use my browser's cookies",
 				description:
-					"Copy the cookies of the same browser you use every day into the fallback profile (cookies only, once when switched on), so sites you are logged in to open without asking again. A running browser may keep its cookies locked; close it first.",
+					"Copy the cookies of the same browser you use every day into the fallback profile (cookies only, once when switched on), so sites you are logged in to open without asking again. A read-only snapshot lets you keep your browser open; browser encryption or protection may still require signing in again.",
 				type: "boolean",
 				value: web.useBrowserCookies,
 			},

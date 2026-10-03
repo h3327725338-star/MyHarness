@@ -63,6 +63,25 @@ describe("Web host (real runtime with a faux provider)", () => {
 		return dir;
 	}
 
+	it("persists a new chat containing only a Commit card and does not reuse it as empty", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const record = { tone: "ok", title: "Commit succeeded", hash: "abc1234", detail: "Saved" };
+		await fx.post("/api/git/record", record);
+		expect(existsSync(initial.session.file)).toBe(true);
+		const saved = SessionManager.open(initial.session.file);
+		expect(saved.getEntries().some((entry) => entry.type === "custom" && entry.customType === "web-git-status")).toBe(
+			true,
+		);
+		expect(saved.buildSessionContext().messages).toHaveLength(0);
+		const next = await fx.post("/api/sessions/new", {});
+		expect(next.created).toBe(true);
+		const slots = await fx.waitFor("slots", (data) =>
+			data.slots.some((slot: any) => slot.sessionFile === initial.session.file && slot.hasContent),
+		);
+		expect(slots.slots.some((slot: any) => slot.sessionFile === initial.session.file && slot.hasContent)).toBe(true);
+	});
+
 	async function start(): Promise<Fixture> {
 		const project = tempDir("myharness-web-project");
 		const dataRoot = tempDir("myharness-web-data");

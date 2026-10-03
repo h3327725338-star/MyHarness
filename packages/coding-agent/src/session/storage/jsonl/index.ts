@@ -950,7 +950,17 @@ function repairTruncatedSessionTail(filePath: string): void {
 	}
 }
 
-/** Preserve deferred first-write semantics: sessions are not flushed until an assistant message exists. */
+/** UI-visible operation records are real session content, even without a model response. */
+export function hasPersistableSessionContent(entries: FileEntry[]): boolean {
+	return entries.some(
+		(entry) =>
+			(entry.type === "message" && entry.message.role === "assistant") ||
+			(entry.type === "custom_message" && entry.display) ||
+			(entry.type === "custom" && (entry.customType === "web-git-status" || entry.customType === "web-run-changes")),
+	);
+}
+
+/** Defer the first write until a response or a visible operation record exists. */
 export function persistSessionEntry(
 	filePath: string,
 	entry: SessionEntry,
@@ -960,10 +970,7 @@ export function persistSessionEntry(
 ): boolean {
 	if (flushed && repairTruncatedTail) repairTruncatedSessionTail(filePath);
 
-	const hasAssistant = pendingEntries.some(
-		(candidate) => candidate.type === "message" && candidate.message.role === "assistant",
-	);
-	if (!hasAssistant) {
+	if (!hasPersistableSessionContent(pendingEntries)) {
 		if (flushed) {
 			appendSessionEntry(filePath, entry);
 			return true;

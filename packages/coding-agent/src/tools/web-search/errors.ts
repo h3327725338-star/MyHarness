@@ -22,6 +22,7 @@ const ACCESS_BLOCK_CODES: ReadonlySet<WebSearchFailureCode> = new Set([
 	"js_required",
 	"consent",
 	"degraded",
+	"too_many_redirects",
 ]);
 
 export function isAccessBlock(error: unknown): error is WebSearchError {

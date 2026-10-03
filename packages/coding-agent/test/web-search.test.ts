@@ -222,6 +222,34 @@ describe("page reading", () => {
 		for (const noise of ["menu", "alert", "foot", "javascript", "#x"]) expect(page.markdown).not.toContain(noise);
 	});
 
+	it("keeps authentication cookies along redirects without sharing them across reads or hosts", async () => {
+		const seen: string[] = [];
+		const { service } = createService(
+			{ maxRedirects: 5 },
+			{
+				"auth.example": (url, init) => {
+					const cookie = new Headers(init?.headers).get("cookie") ?? "";
+					seen.push(cookie);
+					if (url.pathname === "/") {
+						const headers = new Headers({ Location: "/finish" });
+						headers.append("Set-Cookie", "session=ready; Path=/; Secure; HttpOnly");
+						headers.append("Set-Cookie", "scoped=no; Path=/private");
+						return new Response(null, { status: 302, headers });
+					}
+					expect(cookie).toBe("session=ready");
+					return new Response(null, { status: 302, headers: { Location: "https://other.example/" } });
+				},
+				"other.example": (_url, init) => {
+					expect(new Headers(init?.headers).has("cookie")).toBe(false);
+					return html(htmlPage("Done", "<p>Authenticated redirect completed.</p>"));
+				},
+			},
+		);
+		for (let i = 0; i < 2; i++)
+			expect((await service.fetch({ urls: ["https://auth.example/"], fresh: true })).pages).toHaveLength(1);
+		expect(seen).toEqual(["", "session=ready", "", "session=ready"]);
+	});
+
 	it("follows redirects, re-validates every hop and blocks a redirect to a private address", async () => {
 		const { service } = createService(
 			{},
