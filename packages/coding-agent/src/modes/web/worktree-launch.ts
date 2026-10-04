@@ -127,7 +127,10 @@ export class WorktreeLauncher {
 					}
 				}
 				if (exited)
-					throw new Error("Copy startup failed. Check that its dependencies and source entry are compatible.");
+					throw new Error(
+						`Copy startup failed. Check that its dependencies and source entry are compatible. Log tail:
+${output.slice(-2000)}`,
+					);
 				await new Promise((done) => setTimeout(done, 150));
 			}
 			if (child.pid)
