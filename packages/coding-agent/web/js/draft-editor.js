@@ -192,6 +192,9 @@ export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, pla
 		const text = readText(el);
 		const sel = selectionIn(el);
 		const caret = sel ? sel.focus : text.length;
+		// IME edits bypass draw(), including cancellation back to the unchanged empty draft.
+		if (text) el.removeAttribute("data-empty");
+		else el.setAttribute("data-empty", "");
 		if (text === st.current.text) return;
 		remember("type");
 		commit(text, Math.min(caret, text.length));
@@ -226,7 +229,11 @@ export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, pla
 	useEffect(() => {
 		const el = root.current;
 		const before = (event) => live.current.onBeforeInput(event);
-		const start = () => (st.current.composing = true);
+		const start = () => {
+			st.current.composing = true;
+			// Hide the placeholder before the browser paints uncommitted IME text.
+			el.removeAttribute("data-empty");
+		};
 		const end = () => {
 			st.current.composing = false;
 			setTimeout(() => live.current.syncFromPage(), 0);
