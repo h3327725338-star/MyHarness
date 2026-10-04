@@ -25,7 +25,9 @@ process.stdin.on("data", (chunk: string) => {
 		const line = buffer.slice(0, newline).trim();
 		buffer = buffer.slice(newline + 1);
 		newline = buffer.indexOf("\n");
-		if (line.startsWith("prompt:")) void harness.session.prompt(line.slice("prompt:".length));
+		// The previous run can still be settling when the line arrives; a busy session rejects a new prompt.
+		if (line.startsWith("prompt:"))
+			void harness.session.waitForIdle().then(() => harness.session.prompt(line.slice("prompt:".length)));
 		if (line === "exit") process.exit(0);
 	}
 });

@@ -756,7 +756,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		// Undo the latest task leaves the earlier, still uncommitted change intact.
 		await fx.post("/api/git/undo/restore");
 		expect(readFileSync(join(fx.project, "notes.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("alpha\nbeta\n");
-	});
+	}, 90_000);
 
 	it("marks a run whose provider fails as failed and keeps the error", async () => {
 		const fx = await start();

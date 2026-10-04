@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { worktreeId } from "../../git/worktrees/display-name.ts";
@@ -13,11 +22,21 @@ export interface WorktreeServiceIdentity {
 	metadataAgentDir: string;
 }
 
+/** Resolves Windows short (8.3) aliases and symlinks so the same directory always compares equal. */
+function canonicalPath(path: string): string {
+	try {
+		return realpathSync.native(resolve(path));
+	} catch {
+		return resolve(path);
+	}
+}
+
 export function worktreeServiceIdentity(): WorktreeServiceIdentity | undefined {
 	const raw = process.env.MYHARNESS_WORKTREE_SERVICE;
 	if (!raw) return undefined;
 	const identity = JSON.parse(raw) as WorktreeServiceIdentity;
-	if (resolve(identity.path) !== resolve(process.cwd())) throw new Error("Worktree service directory mismatch.");
+	if (canonicalPath(identity.path) !== canonicalPath(process.cwd()))
+		throw new Error("Worktree service directory mismatch.");
 	return identity;
 }
 
