@@ -4,7 +4,7 @@
 
 ## 当前基线
 
-- 产品入口是 `packages/coding-agent/src/cli.ts` → `main.ts`；跨领域装配由 `application/resource-loader.ts` 和 `AgentSession` 完成。
+- 产品入口是 `packages/coding-agent/src/web.ts` → `main.ts`；跨领域装配由 `application/resource-loader.ts` 和 `AgentSession` 完成。
 - Agent Core 只处理 Agent state、event、loop、tool lifecycle、取消和队列，不拥有 Provider catalog、TUI 或 Node SQLite。
 - AI 包提供 Provider/Models/API/auth contract，但 `providers/all.ts` 不提供上游 Provider catalog；应用必须注册或配置 Provider。
 - Coding Agent 的 model runtime 负责 `models.json`、credential、模型 store 和 extension/native Provider 组合。

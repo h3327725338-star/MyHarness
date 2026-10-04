@@ -66,19 +66,6 @@ export {
 	type WorkspaceDataContext,
 	WorkspaceStore,
 } from "./application/workspace-store.ts";
-export { type Args, parseArgs } from "./cli/args.ts";
-export {
-	BUILTIN_SLASH_COMMANDS,
-	type BuiltinSlashCommand,
-	builtinSlashCommandsFor,
-	type ExpandedBuiltinPromptCommand,
-	expandBuiltinPromptCommand,
-	findBuiltinSlashCommand,
-	parseExpandedBuiltinPromptCommand,
-	parseSlashCommandInvocation,
-	type SlashCommandInvocation,
-	type SlashSurface,
-} from "./cli/slash-commands.ts";
 export {
 	getSessionConversationPath,
 	getSessionDir,
@@ -282,7 +269,6 @@ export type {
 	SlashCommandInfo,
 	SlashCommandSource,
 	SourceInfo,
-	TerminalInputHandler,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolDefinition,
@@ -391,6 +377,19 @@ export {
 	type Skill,
 	type SkillFrontmatter,
 } from "./skills/loader/index.ts";
+export { type Args, parseArgs } from "./startup/args.ts";
+export {
+	BUILTIN_SLASH_COMMANDS,
+	type BuiltinSlashCommand,
+	builtinSlashCommandsFor,
+	type ExpandedBuiltinPromptCommand,
+	expandBuiltinPromptCommand,
+	findBuiltinSlashCommand,
+	parseExpandedBuiltinPromptCommand,
+	parseSlashCommandInvocation,
+	type SlashCommandInvocation,
+	type SlashSurface,
+} from "./startup/slash-commands.ts";
 // Code Intelligence 统一数据模型（第 2 阶段）：供未来 Lightweight / Semantic Backend
 // 与 Symbol Store 共用。旧索引格式类型以 IndexedCodeSymbol / IndexedCodeReference 导出。
 export {

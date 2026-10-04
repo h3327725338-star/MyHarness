@@ -1,7 +1,7 @@
 import type { ProviderResponseMetadata } from "@myharness/ai";
 import type { Message } from "@myharness/ai/compat";
 
-/** The JSON event shape emitted by `myharness --mode json`. */
+/** The NDJSON event shape emitted by the internal delegated worker. */
 export interface DelegatedJsonEvent {
 	type?: string;
 	message?: Message;

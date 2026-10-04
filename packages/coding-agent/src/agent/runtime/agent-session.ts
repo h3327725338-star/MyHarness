@@ -32,12 +32,6 @@ import {
 	streamSimple,
 } from "@myharness/ai/compat";
 import type { ResourceExtensionPaths, ResourceLoader } from "../../application/resource-loader.ts";
-import {
-	expandBuiltinPromptCommand,
-	parseExpandedBuiltinPromptCommand,
-	parseSlashCommandInvocation,
-	type SlashCommandInfo,
-} from "../../cli/slash-commands.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import type { CompactionResult, CompactionSettings } from "../../context/compact/index.ts";
@@ -95,6 +89,12 @@ import { type ModelCycleResult, SessionModelController } from "../../providers/r
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { BranchSummaryEntry, SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { expandSkillCommand } from "../../skills/invocation.ts";
+import {
+	expandBuiltinPromptCommand,
+	parseExpandedBuiltinPromptCommand,
+	parseSlashCommandInvocation,
+	type SlashCommandInfo,
+} from "../../startup/slash-commands.ts";
 import {
 	applyAgentRoleBoundary,
 	type BuildSystemPromptOptions,
@@ -432,7 +432,7 @@ export class AgentSession {
 	private _initialActiveToolNames?: string[];
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
-	private _extensionMode: ExtensionMode = "print";
+	private _extensionMode: ExtensionMode = "headless";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -563,7 +563,7 @@ export class AgentSession {
 			workflow: workflowToolOptions,
 			ultracode: workflowToolOptions,
 			// Only the terminal UI has a person who can pass a CAPTCHA in Firefox.
-			interactiveChallenges: () => this._extensionMode === "tui" || this._extensionMode === "web",
+			interactiveChallenges: () => this._extensionMode === "web",
 		});
 		this._contextCoordinator = new AgentSessionContextCoordinator({
 			agent: this.agent,

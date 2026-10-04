@@ -21,7 +21,7 @@
 
 ### 依赖
 
-- 依赖：`src/config.ts`、`extensions/contracts`（诊断、`SourceInfo`）、`system-prompts/loader`（清单文案）、`cli/slash-commands.ts`（命令解析）、`utils`（frontmatter、路径）。
+- 依赖：`src/config.ts`、`extensions/contracts`（诊断、`SourceInfo`）、`system-prompts/loader`（清单文案）、`startup/slash-commands.ts`（命令解析）、`utils`（frontmatter、路径）。
 - 被依赖：`application/resource-loader.ts`、`agent/runtime`、`system-prompts/composer`、`modes/web`、`src/index.ts`。
 
 ## 维护

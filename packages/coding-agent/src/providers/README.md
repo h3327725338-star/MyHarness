@@ -63,7 +63,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 
 ### 依赖
 
-- 依赖：`@myharness/ai`、`config/settings`、`src/config.ts`、`utils`、`observability/telemetry.ts`、`agent/runtime/defaults.ts`、`session/manager`（类型，`session-model.ts` 记录模型与 Thinking 变更）、`cli/args.ts`（类型）。
+- 依赖：`@myharness/ai`、`config/settings`、`src/config.ts`、`utils`、`observability/telemetry.ts`、`agent/runtime/defaults.ts`、`session/manager`（类型，`session-model.ts` 记录模型与 Thinking 变更）、`startup/args.ts`（类型）。
 - 被依赖：`agent/runtime`、`agent/vision`、`cli`、`modes/*`、`extensions/runtime`、`git/ci`、`tools/github`、`main.ts`。
 
 ## 维护

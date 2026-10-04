@@ -7,7 +7,7 @@ import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@myhar
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { DEFAULT_THINKING_LEVEL } from "../../agent/runtime/defaults.ts";
-import { isValidThinkingLevel } from "../../cli/args.ts";
+import { isValidThinkingLevel } from "../../startup/args.ts";
 import type { ModelRuntime } from "./index.ts";
 
 /** Default model IDs for each known provider */

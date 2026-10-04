@@ -131,7 +131,7 @@ describe("ExtensionRunner", () => {
 				{ type: "project_trust", cwd: tempDir },
 				{
 					cwd: tempDir,
-					mode: "tui",
+					mode: "web",
 					hasUI: false,
 					ui: {
 						select: async () => undefined,
@@ -509,13 +509,13 @@ describe("ExtensionRunner", () => {
 			expect(ctx.signal?.aborted).toBe(true);
 		});
 
-		it("exposes print mode and hasUI false by default", async () => {
+		it("exposes headless mode and hasUI false by default", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
 			runner.bindCore(extensionActions, extensionContextActions);
 
 			const ctx = runner.createContext();
-			expect(ctx.mode).toBe("print");
+			expect(ctx.mode).toBe("headless");
 			expect(ctx.hasUI).toBe(false);
 		});
 
@@ -531,14 +531,14 @@ describe("ExtensionRunner", () => {
 			expect(ctx.isProjectTrusted()).toBe(false);
 		});
 
-		it("exposes tui mode with hasUI true when a TUI UI context is provided", async () => {
+		it("exposes web mode with hasUI true when a browser UI context is provided", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
 			runner.bindCore(extensionActions, extensionContextActions);
-			runner.setUIContext({} as ExtensionUIContext, "tui");
+			runner.setUIContext({} as ExtensionUIContext, "web");
 
 			const ctx = runner.createContext();
-			expect(ctx.mode).toBe("tui");
+			expect(ctx.mode).toBe("web");
 			expect(ctx.hasUI).toBe(true);
 		});
 	});

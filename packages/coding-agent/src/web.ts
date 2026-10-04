@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
- * CLI entry point for the refactored coding agent.
- * Uses main.ts with AgentSession and new mode modules.
- *
- * Test with: npx tsx src/cli.ts [args...]
+ * Process entry point for the local Web UI and internal delegated workers.
+ * Development: npx tsx src/web.ts [args...]
  */
 import { APP_NAME } from "./config.ts";
 import { main } from "./main.ts";

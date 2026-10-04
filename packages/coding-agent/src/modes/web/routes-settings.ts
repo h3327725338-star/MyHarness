@@ -8,8 +8,6 @@
  */
 
 import type { ThinkingLevel } from "@myharness/agent-core";
-import { settingsMenuFor } from "../../cli/settings-menu.ts";
-import { builtinSlashCommandsFor } from "../../cli/slash-commands.ts";
 import {
 	type SettingsManager,
 	WEB_SEARCH_BROWSER_IDS,
@@ -24,6 +22,8 @@ import { CONTEXT_WINDOW_UNIT_TOKENS, parseContextWindowInput } from "../../conte
 import { configureHttpDispatcher, HTTP_IDLE_TIMEOUT_CHOICES } from "../../platform/process/http-dispatcher.ts";
 import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
+import { settingsMenuFor } from "../../startup/settings-menu.ts";
+import { builtinSlashCommandsFor } from "../../startup/slash-commands.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
@@ -92,7 +92,7 @@ const QUEUE_MODES = [
 ];
 
 /**
- * Which setting of this API a row of the shared `/settings` menu (src/cli/settings-menu.ts) edits in the browser. A row
+ * Which setting of this API a row of the shared `/settings` menu (src/startup/settings-menu.ts) edits in the browser. A row
  * without an entry opens a page of its own there (Providers, Git, Web Search …). The menu itself (rows, order, names,
  * descriptions, choices) is never repeated here.
  */

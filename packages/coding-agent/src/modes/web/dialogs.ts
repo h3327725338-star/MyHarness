@@ -165,7 +165,6 @@ export class WebDialogBridge {
 			editor: (title, prefill) =>
 				this.ask("editor", { title }, { initialValue: prefill }) as Promise<string | undefined>,
 			notify: (message, type) => this.notify(message, type),
-			onTerminalInput: () => () => {},
 			setStatus: (key, text) => {
 				if (text === undefined) delete this.surface.statuses[key];
 				else this.surface.statuses[key] = text;

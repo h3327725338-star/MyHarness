@@ -35,21 +35,20 @@ Session 面板保持输入、缓存写入、缓存命中、输出的 Token 汇�
 
 ```powershell
 # 源码 checkout（Windows）
-.\dev.cmd --web
-# 或直接双击仓库根目录的 dev-web.cmd：与 dev.cmd --web 相同，但服务在后台无窗口运行（见下）
+.\dev-web.cmd
+# 查看服务日志：.\dev-web.cmd --console
 # 或已构建的 Web 启动入口
 myharness
 ```
 
 | 参数 | 说明 |
 | --- | --- |
-| `--web` | 兼容参数；不传也默认启动本地 Web UI。 |
 | `--port <n>` | 端口，默认 `7878`；被占用时依次尝试后面的 10 个端口；`0` 表示由系统分配。 |
 | `--no-open` | 不自动打开默认浏览器（终端会打印 `MyHarness Web UI: http://127.0.0.1:<port>/`）。 |
 
-**无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 每次启动都不复用已在运行的实例（默认端口 7878 或 `--port`）：先请求旧实例正常退出（`POST /api/shutdown`），15 秒内没退出则只结束确认是 MyHarness 的监听进程；端口被其他程序占用或旧实例无法结束时弹出错误并取消启动。这样打开的总是当前源码的后端（旧实例里未完成的对话会随之结束）。随后以隐藏方式运行 `dev.ps1 --web`，输出（UTF-8）写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动超过约 1 秒仍未就绪时会显示一个小启动窗口（深色、无边框、圆角，带 MyHarness 标志和一条细进度线，颜色与 Web UI 一致，不再是系统默认白色窗口），当前阶段文字对应 `dev.ps1` 打印的真实阶段（读取项目要求、Node.js、npm、依赖、bash、ffmpeg、加载并启动服务）和最后的服务监听，就绪后自动关闭；快速启动时不出现任何窗口。启动小窗右上角有标准的最小化和关闭按钮（按住窗口其余部分可拖动，最小化后从任务栏还原）：最小化只是收到后台，启动继续；关闭（或 Alt+F4）明确取消启动，并结束启动进程及其子进程（`taskkill /T`），不弹错误对话框。“就绪”不只看日志：服务端口一监听，`dev-web.ps1` 每约 0.1 秒用不走代理的短超时请求 `GET /api/boot`，应答就立即认为就绪，所以日志文件暂时读不到也不会一直等；服务端在存储迁移、会话查找、运行时创建之前就开始监听（`main.ts` 里 `startWebBootstrap` 最先执行），页面在这段时间显示 “Starting MyHarness…”。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径；日志必须按 UTF-8 读取，否则中文会乱码）。
+**无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 每次启动都不复用已在运行的实例（默认端口 7878 或 `--port`）：先请求旧实例正常退出（`POST /api/shutdown`），15 秒内没退出则只结束确认是 MyHarness 的监听进程；端口被其他程序占用或旧实例无法结束时弹出错误并取消启动。这样打开的总是当前源码的后端（旧实例里未完成的对话会随之结束）。随后以隐藏方式运行 `web-runtime.ps1`，输出（UTF-8）写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动超过约 1 秒仍未就绪时会显示一个小启动窗口（深色、无边框、圆角，带 MyHarness 标志和一条细进度线，颜色与 Web UI 一致，不再是系统默认白色窗口），当前阶段文字对应 `web-runtime.ps1` 打印的真实阶段（读取项目要求、Node.js、npm、依赖、bash、ffmpeg、加载并启动服务）和最后的服务监听，就绪后自动关闭；快速启动时不出现任何窗口。启动小窗右上角有标准的最小化和关闭按钮（按住窗口其余部分可拖动，最小化后从任务栏还原）：最小化只是收到后台，启动继续；关闭（或 Alt+F4）明确取消启动，并结束启动进程及其子进程（`taskkill /T`），不弹错误对话框。“就绪”不只看日志：服务端口一监听，`dev-web.ps1` 每约 0.1 秒用不走代理的短超时请求 `GET /api/boot`，应答就立即认为就绪，所以日志文件暂时读不到也不会一直等；服务端在存储迁移、会话查找、运行时创建之前就开始监听（`main.ts` 里 `startWebBootstrap` 最先执行），页面在这段时间显示 “Starting MyHarness…”。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径；日志必须按 UTF-8 读取，否则中文会乱码）。
 
-**启动耗时**：`dev.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。`dev.cmd` 与 `myharness` 也默认进入 Web；不再提供终端交互。
+**启动耗时**：`web-runtime.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。`myharness` 同样启动 Web；旧 `dev.cmd` 与多界面切换参数已移除。
 
 其余参数照常生效：`--session`、`--continue`、`--model`、`--thinking`、`--no-extensions`、`--approve/--no-approve` 等；命令行里的初始 message / `@file` 会在启动后作为第一条消息发送。终端里按 `Ctrl+C`（或界面里的 **Quit MyHarness**）会停止服务并结束当前任务。
 

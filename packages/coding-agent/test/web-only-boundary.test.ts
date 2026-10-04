@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +9,26 @@ function files(dir: string): string[] {
 	);
 }
 describe("Web-only product boundary", () => {
+	it("has only Web process and source launchers", () => {
+		const root = join(process.cwd(), "../..");
+		for (const removed of [
+			"dev.cmd",
+			"dev.ps1",
+			"myharness-test.ps1",
+			"myharness-test.sh",
+			"packages/ai/src/cli.ts",
+			"packages/coding-agent/src/cli.ts",
+			"packages/coding-agent/src/cli",
+		]) {
+			expect(existsSync(join(root, removed)), removed).toBe(false);
+		}
+		for (const kept of ["dev-web.cmd", "web-runtime.ps1", "web-source.ps1", "packages/coding-agent/src/web.ts"]) {
+			expect(existsSync(join(root, kept)), kept).toBe(true);
+		}
+		const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+		expect(manifest.bin.myharness).toBe("dist/web.js");
+		expect(JSON.parse(readFileSync(join(root, "packages/ai/package.json"), "utf8")).bin).toBeUndefined();
+	});
 	it("has no terminal package or removed frontend imports anywhere in product source", () => {
 		for (const file of files(src)) {
 			const source = readFileSync(file, "utf8");

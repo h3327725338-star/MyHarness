@@ -94,6 +94,6 @@ system prompt，后者作为 composer 的追加内容。
 - 当前目录共有 55 个 Prompt 正文 `.md` 文件；另有 `README.md`、`maintenance.md`、`roadmap.md` 维护文档，这三者不在 loader 的 Prompt 资源清单中。`session/commit-authorization.md` 不在其中。
 - 相关测试入口包括 `packages/ai/test/system-prompt-loader.test.ts`、`system-prompt-provider-scope.test.ts` 和 `packages/coding-agent/test/system-prompt-files.test.ts`。
 - 这些测试文件的存在只能证明测试入口和覆盖意图；本次文档核对没有把它们的历史记录写成新的测试通过结论。
-- `node scripts/smoke-cli-local-provider.mjs`：CLI 启动、15 次请求、429 恢复、12 轮真实 read 工具、持久化及重启续接通过；编译后的 CLI `--version` / `--help` 通过。
+- 历史终端 smoke 曾验证本地 Provider、429 恢复、read 工具与会话续接；对应终端测试脚本已随旧入口移除，这不是当前 Web 启动的验证结果。
 - `npm run build:offline`、全仓只读 Biome 检查、`node scripts/run-checks-parallel.mjs`（typecheck、浏览器打包、模型数据、依赖及锁文件等）通过。Biome 仅报告原有文件的两条 info；新增 HTTP 测试曾有类型错误，已修正并复验通过。
 - 仓库外的安装目录副本与实际编译的 Bun Loader 均验证了相邻 Prompt 资源加载。完整 Bun CLI 跨平台发行构建、云端模型响应及浏览器运行时文件读取未验证。

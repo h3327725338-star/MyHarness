@@ -11,7 +11,7 @@ MyHarness is an early-stage, source-based Web AI coding assistant for working in
 ## Core capabilities
 
 - **Code collaboration**: file, shell, PowerShell, editing, writing, Symbols, Git, and GitHub workflows exposed through the Coding Agent product layer.
-- **Entry points**: a local browser **Web UI** (`myharness`, loopback only; `--web` is optional) and a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed.
+- **Entry points**: a local browser **Web UI** (`myharness`, loopback only) and a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed.
 - **Project context**: project trust, `AGENTS.md` / `CLAUDE.md` context files, Workspace and Session management, Git integration, and context compaction.
 - **Extensibility**: TypeScript extensions, skills, prompt templates, themes, custom Providers, and MyHarness packages.
 - **Code Intelligence**: a lightweight Symbols index is available from the source tree. Semantic language-server modules remain optional and unavailable until a published, checksummed runtime manifest is provided.
@@ -32,15 +32,15 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev.cmd
+.\dev-web.cmd
 ```
 
 After startup, configure a Provider and model in `/settings`, then enter a task. Provider configuration is described in [Providers](packages/coding-agent/docs/providers.md) and [Settings](packages/coding-agent/docs/settings.md).
 
-To check that the source CLI can start without a Provider credential:
+To check that the Web source entry can start without a Provider credential:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\myharness-test.ps1 --help
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
 ```
 
 This smoke check does not prove that an external Provider, OAuth flow, Web Search service, or real model conversation works.
@@ -49,7 +49,7 @@ This smoke check does not prove that an external Provider, OAuth flow, Web Searc
 
 - [Coding Agent documentation index](packages/coding-agent/docs/index.md)
 - [Quickstart](packages/coding-agent/docs/quickstart.md)
-- [Usage and CLI reference](packages/coding-agent/docs/usage.md)
+- [Usage and Web startup](packages/coding-agent/docs/usage.md)
 - [Providers and models](packages/coding-agent/docs/providers.md)
 - [Windows setup](packages/coding-agent/docs/windows.md)
 - [Project status and validation boundaries](PROJECT_STATUS.md)

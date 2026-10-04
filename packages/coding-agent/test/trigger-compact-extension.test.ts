@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "..
 
 function createContext(tokens: number | null, compact = vi.fn()): ExtensionContext {
 	return {
-		mode: "print",
+		mode: "headless",
 		hasUI: false,
 		ui: {} as ExtensionContext["ui"],
 		cwd: process.cwd(),

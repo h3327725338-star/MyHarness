@@ -58,7 +58,7 @@
 
 ### 依赖
 
-- 依赖：`agent/runtime/messages.ts`、`cli/slash-commands.ts`、`context/compact`、`session`（manager、类型）、`system-prompts/composer`、`tools`、`providers/models/registry.ts`、`platform/process/exec.ts`、`git/repository`（包管理拉取 Git 源）、`modes/interactive`（仅类型：主题、快捷键、页脚数据）。
+- 依赖：`agent/runtime/messages.ts`、`startup/slash-commands.ts`、`context/compact`、`session`（manager、类型）、`system-prompts/composer`、`tools`、`providers/models/registry.ts`、`platform/process/exec.ts`、`git/repository`（包管理拉取 Git 源）；不依赖终端 UI。
 - 被依赖：`application`（ResourceLoader）、`agent/runtime`、`cli`、`modes/*`、`tools/contracts`、`prompts`/`skills`/`themes` 的 loader（只用 `contracts`）。
 
 ## 维护

@@ -1,18 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { parseArgs } from "../src/cli/args.ts";
+import { parseArgs } from "../src/startup/args.ts";
 
 describe("parseArgs", () => {
 	describe("Web UI flags", () => {
-		test("parses --web, --port and --no-open", () => {
-			const result = parseArgs(["--web", "--port", "8123", "--no-open"]);
-			expect(result.web).toBe(true);
+		test("parses --port and --no-open", () => {
+			const result = parseArgs(["--port", "8123", "--no-open"]);
 			expect(result.webPort).toBe(8123);
 			expect(result.noOpenBrowser).toBe(true);
 			expect(result.diagnostics).toEqual([]);
 		});
 
 		test("accepts --port=0 (system-assigned port)", () => {
-			expect(parseArgs(["--web", "--port=0"]).webPort).toBe(0);
+			expect(parseArgs(["--port=0"]).webPort).toBe(0);
 		});
 
 		test("rejects an invalid or missing --port value", () => {
@@ -116,42 +115,22 @@ describe("parseArgs", () => {
 
 		test("reports an invalid --mode value instead of ignoring it", () => {
 			const result = parseArgs(["--mode", "rpc"]);
-			expect(result.mode).toBeUndefined();
-			expect(result.diagnostics).toEqual([
-				{ type: "error", message: 'Invalid --mode value "rpc". Valid values: text, json' },
-			]);
+			expect(result.unknownFlags.get("mode")).toBe("rpc");
+			expect(result.diagnostics).toEqual([]);
 		});
 
 		test("reports a missing --mode value", () => {
 			const result = parseArgs(["--mode"]);
-			expect(result.diagnostics).toEqual([{ type: "error", message: "--mode requires a value" }]);
+			expect(result.unknownFlags.get("mode")).toBe(true);
 		});
 	});
 
-	describe("--print flag", () => {
-		test("parses --print flag", () => {
-			const result = parseArgs(["--print"]);
-			expect(result.print).toBe(true);
-		});
-
-		test("parses -p shorthand", () => {
-			const result = parseArgs(["-p"]);
-			expect(result.print).toBe(true);
-		});
-
-		test("parses prompt after -p even when it starts with YAML frontmatter", () => {
-			const prompt = "---\ntitle: hello\n---\nSay hi.";
-			const result = parseArgs(["-p", prompt]);
-			expect(result.print).toBe(true);
-			expect(result.messages).toEqual([prompt]);
-			expect(result.unknownFlags.size).toBe(0);
-		});
-
-		test("does not consume options after -p as prompts", () => {
-			const result = parseArgs(["-p", "--provider", "openai", "Say hi."]);
-			expect(result.print).toBe(true);
-			expect(result.provider).toBe("openai");
-			expect(result.messages).toEqual(["Say hi."]);
+	describe("removed terminal flags", () => {
+		test("does not accept terminal output flags as core options", () => {
+			for (const flag of ["print", "mode", "list-models", "web"]) {
+				expect(parseArgs([`--${flag}`]).unknownFlags.has(flag)).toBe(true);
+			}
+			expect(parseArgs(["-p"]).diagnostics).toEqual([{ type: "error", message: "Unknown option: -p" }]);
 		});
 	});
 
@@ -242,9 +221,8 @@ describe("parseArgs", () => {
 			]);
 		});
 
-		test("parses --mode", () => {
-			const result = parseArgs(["--mode", "json"]);
-			expect(result.mode).toBe("json");
+		test("leaves --mode for unknown-option validation", () => {
+			expect(parseArgs(["--mode", "json"]).unknownFlags.get("mode")).toBe("json");
 		});
 
 		test("parses --session", () => {
@@ -301,9 +279,8 @@ describe("parseArgs", () => {
 		});
 
 		test("works alongside other flags", () => {
-			const result = parseArgs(["--name", "named-run", "--print", "--model", "gpt-4o", "hello"]);
+			const result = parseArgs(["--name", "named-run", "--model", "gpt-4o", "hello"]);
 			expect(result.name).toBe("named-run");
-			expect(result.print).toBe(true);
 			expect(result.model).toBe("gpt-4o");
 			expect(result.messages).toEqual(["hello"]);
 		});
@@ -546,7 +523,6 @@ describe("parseArgs", () => {
 				"anthropic",
 				"--model",
 				"claude-sonnet",
-				"--print",
 				"--thinking",
 				"high",
 				"@prompt.md",
@@ -554,7 +530,6 @@ describe("parseArgs", () => {
 			]);
 			expect(result.provider).toBe("anthropic");
 			expect(result.model).toBe("claude-sonnet");
-			expect(result.print).toBe(true);
 			expect(result.thinking).toBe("high");
 			expect(result.fileArgs).toEqual(["prompt.md"]);
 			expect(result.messages).toEqual(["Do the task"]);

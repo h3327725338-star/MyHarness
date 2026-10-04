@@ -4,7 +4,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { parseSlashCommandInvocation } from "../cli/slash-commands.ts";
+import { parseSlashCommandInvocation } from "../startup/slash-commands.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import type { Skill } from "./loader/index.ts";
 

@@ -7,7 +7,7 @@ import { writePsdBuffer } from "ag-psd";
 import { strToU8, zipSync } from "fflate";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { processFileArguments } from "../src/cli/file-processor.ts";
+import { processFileArguments } from "../src/startup/file-processor.ts";
 import { createReadTool } from "../src/tools/files/read.ts";
 import { preprocessLocalFile } from "../src/utils/file-preprocess.ts";
 

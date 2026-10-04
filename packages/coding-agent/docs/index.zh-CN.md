@@ -2,7 +2,7 @@
 
 [English](index.md) | [简体中文](index.zh-CN.md)
 
-MyHarness 是一个终端代码协作工具。Coding Agent 产品层提供 CLI、AgentSession、工具、Session、Provider runtime、project trust 以及 extension/resource 系统。
+MyHarness 是一个本机浏览器代码协作工具。Coding Agent 产品层提供 Web UI、AgentSession、工具、Session、Provider runtime、project trust 以及 extension/resource 系统。
 
 ## 快速开始
 
@@ -11,7 +11,7 @@ MyHarness 是一个终端代码协作工具。Coding Agent 产品层提供 CLI�
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev.cmd
+.\dev-web.cmd
 ```
 
 启动 model-backed session 前，请先在 `models.json`、Settings、extension 中配置 Provider 和 model。library 层的 `ModelRuntime.create()` 仍然不会自动加载 Provider，只有产品入口或 extension 显式注册后才会出现 catalog。首次运行流程见 [Quickstart](quickstart.md)。
@@ -19,8 +19,8 @@ npm.cmd run build
 ## 从这里开始
 
 - [Quickstart](quickstart.md) — 安装、配置认证并运行第一个 Session。
-- [Web UI](web-ui.md) — 本机浏览器界面（`myharness --web`）：对话、Diff、文件、Terminal、Git、设置，以及它如何与 CLI 共用同一套 runtime。
-- [使用说明](usage.md) — Interactive mode、Slash Commands、context files 和 CLI 参考。
+- [Web UI](web-ui.md) — 唯一用户界面（`myharness`）：对话、Diff、文件、Terminal、Git、设置与生命周期。
+- [使用说明](usage.md) — 浏览器交互、Slash Commands、context files 和 Web 启动。
 - [Providers](providers.md) — Provider 配置、credentials 和 model runtime 边界。
 - [llama.cpp](llama-cpp.md) — 运行本地 router 和管理 models。
 - [安全](security.md) — Project Trust、sandbox 边界和漏洞报告。
@@ -32,7 +32,6 @@ npm.cmd run build
 - [Compaction](compaction.md) — context compaction 和 branch summaries。
 - [Git Worktrees](worktrees.md) — 通过 `/git` 管理开发 worktree。
 - [快捷键](keybindings.md) — 默认快捷键和自定义方式。
-- [TUI 设计系统](tui-design-system.md) — 视觉层级、共享 token、状态投影和终端交互规则。
 
 ## 扩展能力
 
@@ -47,15 +46,10 @@ npm.cmd run build
 ## 编程方式使用
 
 - [SDK](sdk.md) — 在 Node.js application 中嵌入 MyHarness。
-- [JSON event stream mode](json.md) — 从 print mode 输出 structured events。
-- [TUI components](tui.md) — 为 extensions 构建自定义 terminal UI。
 
 ## 参考与平台设置
 
 - [Session format](session-format.md) — JSONL format、entry types 和 SessionManager API。
-- [Termux on Android](termux.md)
-- [tmux](tmux.md)
-- [Terminal setup](terminal-setup.md)
 - [Shell aliases](shell-aliases.md)
 
 ## 开发

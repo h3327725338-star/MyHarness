@@ -95,7 +95,7 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 项目 `.myharness/SYSTEM.md`/`APPEND_SYSTEM.md` 只有在受信任时才优先于全局同名
 文件，未受信任时回退全局文件；它们不是根 `system-prompts/` 静态资源。
 
-Non-interactive modes（`-p` 和 `--mode json`）不会显示 trust prompt。如果没有适用的已保存 trust decision，它们使用 global settings 中的 `defaultProjectTrust`：`ask`（默认）和 `never` 会忽略 project resources，`always` 表示信任。使用 `--approve`/`-a` 或 `--no-approve`/`-na` 可以对单次运行覆盖 Project Trust。
+启动信任询问由浏览器回答；SDK 或内部 worker 无 UI 时不会显示询问。没有保存的决定时遵循 `defaultProjectTrust`；`ask` 且没有 UI 时不加载需信任的资源。Web 启动仍可用 `--approve` 或 `--no-approve` 覆盖本次 Trust。
 
 如果没有适用的 extension 或 saved decision，`defaultProjectTrust` 控制 fallback behavior。可以在 `~/.myharness/agent/settings.json` 中将它设置为 `"ask"`、`"always"` 或 `"never"`，也可以通过 `/settings` 修改。
 
@@ -323,7 +323,7 @@ Project `.myharness/settings.json`:
 
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
-| `theme` | string | - | Theme 名称（`"dark"`、`"light"` 或 custom）。未设置时，interactive TUI 默认使用 `"dark"`，但 SettingsManager 本身返回 `undefined`。 |
+| `theme` | string | - | 旧终端 Theme 名称；仅保留持久化兼容，不控制 Web 配色。 |
 | `externalEditor` | string | `$VISUAL`，其次 `$EDITOR`，最后 Windows 上的 Notepad 或其他系统上的 `nano` | Ctrl+G 使用的 external editor command；优先级高于 environment variables |
 | `quietStartup` | boolean | `false` | 隐藏 startup header |
 | `defaultProjectTrust` | `"ask"\|"always"\|"never"` | `"ask"` | Project Trust 的 fallback behavior。仅适用于 global setting |
@@ -336,7 +336,7 @@ Project `.myharness/settings.json`:
 | `outputPad` | `0\|1` | `1` | User messages、assistant messages 和 thinking 的 horizontal padding（0 或 1） |
 | `autocompleteMaxVisible` | number | `5` | Autocomplete dropdown 的最大可见 items 数量（3-20） |
 | `usageRanking` | object | `{}` | 用于给 top-level slash commands 和第一层 `/settings` items 排序的 global usage counters；内部 option lists 保持定义顺序 |
-| `showHardwareCursor` | boolean | `false`（或 `MYHARNESS_HARDWARE_CURSOR=1`） | TUI 为支持 IME 定位时显示 terminal cursor |
+| `showHardwareCursor` | boolean | `false`（或 `MYHARNESS_HARDWARE_CURSOR=1`） | 旧终端光标设置；仅保留持久化兼容 |
 
 使用 VS Code 时加入 `--wait`，这样 editor 退出后 MyHarness 才会继续：
 
@@ -357,7 +357,7 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `httpProxy` | string | - | 作为 `HTTP_PROXY` 和 `HTTPS_PROXY` 应用的 HTTP proxy URL。仅适用于 global setting。 |
-| `webShutdownGraceSeconds` | number | `10` | Web UI（`--web`）在最后一个浏览器页面断开后等待多少秒再退出；期间刷新或重新打开页面会取消退出。Web UI 设置范围为 0–3600 秒（包含 0–3006 秒），为保护页面刷新与 SSE 重连，实际等待至少 5 秒（包括配置为 0 时）；配置超过 5 秒时按配置等待。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
+| `webShutdownGraceSeconds` | number | `10` | Web UI在最后一个浏览器页面断开后等待多少秒再退出；期间刷新或重新打开页面会取消退出。Web UI 设置范围为 0–3600 秒（包含 0–3006 秒），为保护页面刷新与 SSE 重连，实际等待至少 5 秒（包括配置为 0 时）；配置超过 5 秒时按配置等待。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
 
 ```json
 {

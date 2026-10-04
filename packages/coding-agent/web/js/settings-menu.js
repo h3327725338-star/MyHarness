@@ -1,6 +1,6 @@
 // How the Web UI opens the rows of the /settings menu. The menu itself (rows, order, names, descriptions and fixed
-// choices) is defined once, in src/cli/settings-menu.ts, and arrives with GET /api/settings (`menu`); the terminal builds
-// its menu from the same definition. A row that edits one setting says so there (`setting`) and needs nothing here. The
+// choices) is defined once, in src/startup/settings-menu.ts, and arrives with GET /api/settings (`menu`).
+// A row that edits one setting says so there (`setting`) and needs nothing here. The
 // rows below open a page of their own in the inline command panel; this table only names them and their icon.
 // test/web-frontend-logic.test.ts checks that every row of the menu can be opened and that nothing here is left over.
 export const SETTINGS_MENU_PAGES = {

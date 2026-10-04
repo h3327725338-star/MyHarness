@@ -134,9 +134,9 @@ for platform in "${PLATFORMS[@]}"; do
     # explicit build entrypoints. The runtime can still use new URL(...), but the
     # worker must be present in the compiled executable.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/myharness.exe"
+        bun build --compile --target=bun-$platform ./dist/bun/web.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/myharness.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/myharness"
+        bun build --compile --target=bun-$platform ./dist/bun/web.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/myharness"
     fi
 done
 

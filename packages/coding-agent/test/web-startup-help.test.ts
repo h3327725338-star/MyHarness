@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { parseArgs } from "../src/cli/args.ts";
-import { CLI_HELP_SECTIONS, listCliHelpFlags, renderCliHelp } from "../src/cli/help.ts";
+import { parseArgs } from "../src/startup/args.ts";
+import { listWebStartupHelpFlags, renderWebStartupHelp, WEB_STARTUP_HELP_SECTIONS } from "../src/startup/help.ts";
 
 /** Valid sample value for flags whose value is validated further. */
 const SAMPLE_VALUE: Record<string, string> = {
@@ -11,18 +11,17 @@ const SAMPLE_VALUE: Record<string, string> = {
 	port: "0",
 };
 
-describe("top-level CLI help", () => {
+describe("Web startup help", () => {
 	test("renders a usage line with the app name", () => {
-		const help = renderCliHelp();
+		const help = renderWebStartupHelp();
 		expect(help).toMatch(/^Usage: \S+ \[options\]/);
 	});
 
 	test("advertises the general, model and session flags", () => {
-		const help = renderCliHelp();
+		const help = renderWebStartupHelp();
 		for (const flag of [
 			"--help",
 			"--version",
-			"--web",
 			"--no-open",
 			"--provider",
 			"--model",
@@ -39,12 +38,12 @@ describe("top-level CLI help", () => {
 	});
 
 	test("does not advertise removed terminal output modes", () => {
-		const flags = listCliHelpFlags();
+		const flags = listWebStartupHelpFlags();
 		for (const flag of ["print", "mode", "list-models"]) expect(flags).not.toContain(flag);
 	});
 
 	test("every advertised long flag is actually accepted by parseArgs", () => {
-		const flags = listCliHelpFlags();
+		const flags = listWebStartupHelpFlags();
 		expect(flags.length).toBeGreaterThan(10);
 
 		for (const name of flags) {
@@ -58,7 +57,7 @@ describe("top-level CLI help", () => {
 	});
 
 	test("every help section has at least one option", () => {
-		for (const section of CLI_HELP_SECTIONS) {
+		for (const section of WEB_STARTUP_HELP_SECTIONS) {
 			expect(section.options.length).toBeGreaterThan(0);
 		}
 	});

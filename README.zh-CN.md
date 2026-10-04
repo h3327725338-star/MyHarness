@@ -11,7 +11,7 @@ MyHarness 是一个面向项目目录的 Web AI 编程协作工具，处于 Earl
 ## 核心能力
 
 - **代码协作**：Coding Agent 产品层提供文件、Shell、PowerShell、编辑、写入、Symbols、Git 和 GitHub 工作流。
-- **入口**：默认启动本机浏览器 **Web UI**（`myharness`，只监听 loopback，`--web` 为兼容参数）；也提供 Node.js SDK 供进程内集成。终端 TUI、Print 和 JSON 用户模式已移除，Web Terminal 面板保留。
+- **入口**：默认启动本机浏览器 **Web UI**（`myharness`，只监听 loopback）；也提供 Node.js SDK 供进程内集成。终端 TUI、Print 和 JSON 用户模式已移除，Web Terminal 面板保留。
 - **项目上下文**：支持 project trust、`AGENTS.md` / `CLAUDE.md` context files、Workspace 与 Session 管理、Git 集成和 context compaction。
 - **可扩展**：支持 TypeScript extensions、skills、prompt templates、themes、custom Provider 和 MyHarness packages。
 - **Code Intelligence**：源码中提供 lightweight Symbols index。语义 language-server 模块仍是可选能力，只有在发布并提供校验值的 runtime manifest 后才会可用。
@@ -32,15 +32,15 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev.cmd
+.\dev-web.cmd
 ```
 
 启动后，在 `/settings` 中配置 Provider 和 model，再输入任务。配置说明见 [Providers](packages/coding-agent/docs/providers.md) 和 [Settings](packages/coding-agent/docs/settings.md)。
 
-没有 Provider 凭据时，可以先检查源码 CLI 是否能够启动：
+没有 Provider 凭据时，可以先检查Web 源码入口 是否能够启动：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\myharness-test.ps1 --help
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
 ```
 
 这个 smoke check 不能证明外部 Provider、OAuth flow、Web Search service 或真实 model conversation 已经成功。
@@ -49,7 +49,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\myharness-test.ps1 --h
 
 - [Coding Agent 中文文档索引](packages/coding-agent/docs/index.zh-CN.md)
 - [Quickstart](packages/coding-agent/docs/quickstart.md)
-- [使用说明与 CLI 参考](packages/coding-agent/docs/usage.md)
+- [使用说明与 Web 启动](packages/coding-agent/docs/usage.md)
 - [Provider 与 model](packages/coding-agent/docs/providers.md)
 - [Windows 设置](packages/coding-agent/docs/windows.md)
 - [当前项目状态与验证边界](PROJECT_STATUS.md)

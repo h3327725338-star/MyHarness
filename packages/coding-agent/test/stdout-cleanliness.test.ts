@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
-const cliPath = resolve(__dirname, "../src/cli.ts");
+const cliPath = resolve(__dirname, "../src/web.ts");
 
 const tempDirs: string[] = [];
 
@@ -79,7 +79,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	});
 }
 
-describe("stdout cleanliness in non-interactive modes", () => {
+describe("Web launcher version output", () => {
 	it("prints --version to stdout when stdout is redirected", async () => {
 		const result = await runCli(["--version"]);
 

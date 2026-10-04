@@ -47,9 +47,6 @@
 			"import": "./dist/bun-oauth.js"
 		}
 	},
-	"bin": {
-		"myharness-ai": "dist/cli.js"
-	},
 	"files": [
 		"dist",
 		"README.md"

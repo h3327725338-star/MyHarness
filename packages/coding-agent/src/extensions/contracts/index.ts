@@ -16,7 +16,6 @@ export type { ToolDefinition } from "./tool.ts";
 export type {
 	ExtensionUIContextPort,
 	ExtensionUIDialogOptions,
-	TerminalInputHandler,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
 } from "./ui.ts";

@@ -1,6 +1,6 @@
 /** Public/legacy Extension API compatibility barrel. */
 
-export type { SlashCommandInfo, SlashCommandSource } from "../../cli/slash-commands.ts";
+export type { SlashCommandInfo, SlashCommandSource } from "../../startup/slash-commands.ts";
 export type { SourceInfo } from "../contracts/source-info.ts";
 export {
 	clearExtensionCache,

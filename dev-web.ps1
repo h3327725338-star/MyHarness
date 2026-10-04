@@ -1,11 +1,11 @@
 ﻿# MyHarness Web UI 静默启动器（Windows，由 dev-web.cmd / dev-web.vbs 调用）
 #
 # 目标：从快捷方式启动 Web 模式后，不留下可见的 CMD / PowerShell 控制台窗口。
-#   * 服务进程（dev.ps1 --web -> tsx -> node）以“无窗口”方式在后台运行，输出写入日志文件。
+#   * 服务进程（web-runtime.ps1 -> node）以“无窗口”方式在后台运行，输出写入日志文件。
 #   * 本脚本只负责：每次都先让已在运行的旧实例退出（保证运行的是当前源码），再启动服务、等待它就绪，失败时弹出错误对话框。
 #   * 服务由页面里的“退出 MyHarness”或 POST /api/shutdown 正常结束；结束时整棵进程树随之退出。
 #   * 需要看控制台输出时，用 `dev-web.cmd --console`（保留原来的可见窗口方式）。
-#   * 启动超过约 1 秒仍未就绪时，显示一个小的进度窗口；进度来自 dev.ps1 / 服务端日志里真实出现的阶段，
+#   * 启动超过约 1 秒仍未就绪时，显示一个小的进度窗口；进度来自 web-runtime.ps1 / 服务端日志里真实出现的阶段，
 #     服务就绪后自动关闭。快速启动时不会出现任何窗口。
 #   * 日志由子进程以 UTF-8 写入，读取时必须显式指定 UTF-8，否则 PowerShell 5.1 会按系统 ANSI 代码页
 #     （中文系统为 GBK）解码，错误对话框里的中文就会变成乱码。
@@ -51,7 +51,7 @@ function Read-Log([string]$Path) {
 	}
 }
 
-# dev.ps1 依次打印的真实阶段（“==> ”开头的标题）。进度 = 已出现的阶段数 / 总阶段数，
+# web-runtime.ps1 依次打印的真实阶段（“==> ”开头的标题）。进度 = 已出现的阶段数 / 总阶段数，
 # 最后一步“服务监听”由服务端打印的 “MyHarness Web UI: http…” 确认。
 $Stages = @(
 	@{ Match = "读取项目要求"; Text = "读取项目要求" },
@@ -352,8 +352,8 @@ try {
 	New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 	Remove-Item -LiteralPath $OutLog, $ErrLog -Force -ErrorAction SilentlyContinue
 
-	$devScript = Join-Path $Root "dev.ps1"
-	$startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $devScript, "--web") + $forward
+	$devScript = Join-Path $Root "web-runtime.ps1"
+	$startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $devScript) + $forward
 	$process = Start-Process -FilePath "powershell.exe" -ArgumentList $startArgs -WorkingDirectory $Root `
 		-WindowStyle Hidden -PassThru -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog
 } catch {

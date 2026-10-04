@@ -7,9 +7,6 @@ export interface ExtensionUIDialogOptions {
 
 export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
-/** Raw terminal input listener. */
-export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
-
 /** Configuration for the frontend's working indicator. */
 export interface WorkingIndicatorOptions {
 	frames?: string[];
@@ -22,7 +19,6 @@ export interface ExtensionUIContextPort {
 	confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 	notify(message: string, type?: "info" | "warning" | "error"): void;
-	onTerminalInput(handler: TerminalInputHandler): () => void;
 	setStatus(key: string, text: string | undefined): void;
 	setWorkingMessage(message?: string): void;
 	setWorkingVisible(visible: boolean): void;

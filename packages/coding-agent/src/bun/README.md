@@ -8,13 +8,13 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `cli.ts` | Bun 二进制的进程入口：注册 OAuth 占位、恢复环境变量、注册 Bedrock，再加载 `src/cli.ts` |
+| `web.ts` | Bun Web 进程入口：注册 OAuth 占位、恢复环境变量、注册 Bedrock，再加载 `src/web.ts` |
 | `register-bedrock.ts` | 把 `@myharness/ai/bedrock-provider` 注册给 lazy Bedrock API |
 | `restore-sandbox-env.ts` | `restoreSandboxEnv()`：Bun 二进制在沙箱里 `process.env` 为空时，从 `/proc/self/environ` 恢复 |
 
 ### 依赖
 
-- 依赖：`src/cli.ts`、`src/config.ts`、`@myharness/ai/bedrock-provider`、`@myharness/ai/bun-oauth`。
+- 依赖：`src/web.ts`、`src/config.ts`、`@myharness/ai/bedrock-provider`、`@myharness/ai/bun-oauth`。
 - 被依赖：无（只作为构建入口）。
 
 ## 维护

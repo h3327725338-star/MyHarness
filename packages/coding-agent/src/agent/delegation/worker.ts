@@ -1,11 +1,11 @@
 /** Internal NDJSON worker for isolated Explore tasks. Not a user-facing output mode. */
 
-import { parseArgs } from "../../cli/args.ts";
 import { SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import { flushRawStdout, restoreStdout, takeOverStdout, writeRawStdout } from "../../platform/process/output-guard.ts";
 import { resolveCliModel } from "../../providers/runtime/model-resolver.ts";
 import { SessionManager } from "../../session/manager/index.ts";
+import { parseArgs } from "../../startup/args.ts";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../runtime/services.ts";
 
 export async function runDelegatedWorker(args: string[]): Promise<void> {
@@ -45,7 +45,7 @@ export async function runDelegatedWorker(args: string[]): Promise<void> {
 				contextWindowOverride: parsed.contextWindow,
 			});
 			session = created.session;
-			await session.bindExtensions({ mode: "json", onError: (error) => console.error(error.error) });
+			await session.bindExtensions({ mode: "headless", onError: (error) => console.error(error.error) });
 			session.subscribe((event) => writeRawStdout(`${JSON.stringify(event)}\n`));
 			let prompt = "";
 			process.stdin.setEncoding("utf8");

@@ -8,8 +8,8 @@
  * beyond that is applying the `paths` aliases from the root tsconfig.json, which this file
  * reproduces for the `@myharness/*` workspace packages.
  *
- * Usage: node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/cli.ts ...
- * It is only used by the Windows dev launcher (dev.ps1); tests and other tools keep using
+ * Usage: node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts ...
+ * It is only used by the Windows dev launcher (web-runtime.ps1); tests and other tools keep using
  * tsx / vitest.
  */
 

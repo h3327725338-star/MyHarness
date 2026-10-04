@@ -1,7 +1,7 @@
 /**
- * Main entry point for the coding agent CLI.
+ * Composition root for the local Web coding agent.
  *
- * This file handles CLI argument parsing and translates them into
+ * This file handles Web startup argument parsing and translates them into
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
@@ -15,11 +15,6 @@ import {
 } from "./agent/runtime/services.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./agent/runtime/session-runtime.ts";
 import { type AppMode, resolveProjectTrusted } from "./application/project-trust.ts";
-import { type Args, parseArgs } from "./cli/args.ts";
-import { processFileArguments } from "./cli/file-processor.ts";
-import { renderCliHelp } from "./cli/help.ts";
-import { buildInitialMessage } from "./cli/initial-message.ts";
-import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.ts";
@@ -33,6 +28,11 @@ import type { ModelRuntime } from "./providers/runtime/index.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./providers/runtime/model-resolver.ts";
 import { getMissingSessionCwdIssue, MissingSessionCwdError } from "./session/manager/cwd.ts";
 import { assertValidSessionId, SessionManager, setMirrorSessionsAllowed } from "./session/manager/index.ts";
+import { type Args, parseArgs } from "./startup/args.ts";
+import { processFileArguments } from "./startup/file-processor.ts";
+import { renderWebStartupHelp } from "./startup/help.ts";
+import { buildInitialMessage } from "./startup/initial-message.ts";
+import { createProjectTrustContext } from "./startup/project-trust.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "myharness -ne".';
@@ -200,7 +200,7 @@ async function createSessionManager(
 	cwd: string,
 	sessionDir: string | undefined,
 ): Promise<SessionManager> {
-	if (parsed.noSession || parsed.listModels !== undefined) {
+	if (parsed.noSession) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
 	}
 
@@ -393,7 +393,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// Top-level help must short-circuit before any session/runtime work so
 	// `--help` never creates a session or fails on unrelated validation.
 	if (parsed.help) {
-		console.log(renderCliHelp());
+		console.log(renderWebStartupHelp());
 		process.exit(0);
 	}
 
@@ -428,9 +428,6 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	if (parsed.print || parsed.mode !== undefined || parsed.listModels !== undefined) {
-		throw new Error("Terminal output modes have been removed. Use the Web UI.");
-	}
 	const appMode: AppMode = "web";
 
 	validateForkFlags(parsed);
@@ -666,16 +663,11 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 
-	// Read piped stdin content (if any)
-	const stdinContent: string | undefined = undefined;
-	time("readPipedStdin");
-
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
 		!settingsManager.getBlockImages(),
 		settingsManager.getVisionAssistantSettings().enabled,
-		stdinContent,
 	);
 	time("prepareInitialMessage");
 	if (deprecationWarnings.length > 0) await showDeprecationWarnings(deprecationWarnings);

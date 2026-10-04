@@ -236,7 +236,6 @@ const noOpUIContext: ExtensionUIContext = {
 	confirm: async () => false,
 	input: async () => undefined,
 	notify: () => {},
-	onTerminalInput: () => () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWorkingVisible: () => {},
@@ -257,7 +256,7 @@ export class ExtensionRunner {
 	private extensions: Extension[];
 	private runtime: ExtensionRuntime;
 	private uiContext: ExtensionUIContext;
-	private mode: ExtensionMode = "print";
+	private mode: ExtensionMode = "headless";
 	private cwd: string;
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
@@ -416,7 +415,7 @@ export class ExtensionRunner {
 		this.reloadHandler = async () => {};
 	}
 
-	setUIContext(uiContext?: ExtensionUIContext, mode: ExtensionMode = "print"): void {
+	setUIContext(uiContext?: ExtensionUIContext, mode: ExtensionMode = "headless"): void {
 		this.uiContext = uiContext ?? noOpUIContext;
 		this.mode = mode;
 	}

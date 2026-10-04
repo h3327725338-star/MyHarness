@@ -9,9 +9,9 @@
 import type { AgentMessage } from "@myharness/agent-core";
 import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
-import { parseExpandedBuiltinPromptCommand } from "../../cli/slash-commands.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
+import { parseExpandedBuiltinPromptCommand } from "../../startup/slash-commands.ts";
 
 /** Tool result details larger than this are replaced by a marker to keep payloads bounded. */
 const MAX_DETAILS_JSON_CHARS = 400_000;

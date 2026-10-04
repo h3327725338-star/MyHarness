@@ -18,5 +18,5 @@ exit /b 0
 
 :console
 shift
-call "%~dp0dev.cmd" --web %1 %2 %3 %4 %5 %6 %7 %8 %9
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0web-runtime.ps1" %1 %2 %3 %4 %5 %6 %7 %8 %9
 exit /b %ERRORLEVEL%

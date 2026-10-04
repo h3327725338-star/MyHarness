@@ -10,7 +10,7 @@ export interface SlashCommandInfo {
 }
 
 /** The interfaces a command is offered in. Every command runs the same underlying capability wherever it is offered. */
-export type SlashSurface = "cli" | "web";
+export type SlashSurface = "web";
 
 export interface BuiltinSlashCommand {
 	name: string;
@@ -23,9 +23,7 @@ export interface BuiltinSlashCommand {
 }
 
 /**
- * The one registry of built-in slash commands, read by the terminal UI (autocomplete and dispatch) and by the Web UI (the
- * `/` menu and the command handlers). Adding, renaming or removing a command here changes both; a command that only makes
- * sense in one interface says so in `surfaces` instead of being defined twice.
+ * The single registry read by the Web `/` menu and command handlers.
  */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "settings", description: "打开设置菜单", aliases: ["setting"] },
@@ -121,7 +119,7 @@ export function expandBuiltinPromptCommand(text: string): string {
 }
 
 /**
- * Recover the concise command for TUI display without exposing its injected instructions.
+ * Recover the concise command for Web display without exposing its injected instructions.
  *
  * Matches both the current English prefixes and the legacy Chinese prefixes so
  * that messages persisted by older versions can still be recognized.

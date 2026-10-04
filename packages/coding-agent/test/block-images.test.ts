@@ -2,8 +2,8 @@ import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { processFileArguments } from "../src/cli/file-processor.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
+import { processFileArguments } from "../src/startup/file-processor.ts";
 import { createReadTool } from "../src/tools/files/read.ts";
 
 // 1x1 red PNG image as base64 (smallest valid PNG)

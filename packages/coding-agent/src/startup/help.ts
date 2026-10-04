@@ -1,22 +1,22 @@
 /**
- * Top-level CLI help output. Keep it in sync with args.ts; cli-help.test.ts
+ * Web startup help output. Keep it in sync with args.ts; web-startup-help.test.ts
  * fails if an advertised flag is not accepted by parseArgs.
  */
 
 import { APP_NAME, CONFIG_DIR_NAME } from "../config.ts";
 
-export interface CliHelpOption {
+export interface WebStartupHelpOption {
 	/** Flag forms and their value placeholder, e.g. "-n, --name <name>". */
 	flags: string;
 	description: string;
 }
 
-export interface CliHelpSection {
+export interface WebStartupHelpSection {
 	title: string;
-	options: readonly CliHelpOption[];
+	options: readonly WebStartupHelpOption[];
 }
 
-export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
+export const WEB_STARTUP_HELP_SECTIONS: readonly WebStartupHelpSection[] = [
 	{
 		title: "General",
 		options: [
@@ -25,9 +25,8 @@ export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
 		],
 	},
 	{
-		title: "Modes",
+		title: "Web service",
 		options: [
-			{ flags: "--web", description: "Compatibility flag: the local Web UI is now the default" },
 			{ flags: "--port <n>", description: "Web UI port (default 7878; 0 picks a free port)" },
 			{ flags: "--no-open", description: "Do not open the browser automatically in Web UI mode" },
 			{ flags: "--export <file>", description: "Export a session file to HTML and exit" },
@@ -97,7 +96,7 @@ export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
 	},
 ];
 
-const CLI_HELP_INPUT = `Input:
+const WEB_STARTUP_HELP_INPUT = `Input:
   @file...      Include file contents in the initial message
   message...    Initial message; remaining arguments are queued as follow-ups
 
@@ -107,8 +106,8 @@ Project settings live in ${CONFIG_DIR_NAME}/settings.json; global settings in
 ~/${CONFIG_DIR_NAME}/agent/settings.json.`;
 
 /** Render the full top-level help text. */
-export function renderCliHelp(): string {
-	const sections = CLI_HELP_SECTIONS.map((section) => {
+export function renderWebStartupHelp(): string {
+	const sections = WEB_STARTUP_HELP_SECTIONS.map((section) => {
 		const lines = section.options.map((option) => {
 			const padding = " ".repeat(Math.max(2, 34 - option.flags.length));
 			return `  ${option.flags}${padding}${option.description}`;
@@ -116,16 +115,18 @@ export function renderCliHelp(): string {
 		return `${section.title}:\n${lines.join("\n")}`;
 	});
 
-	return [`Usage: ${APP_NAME} [options] [@files...] [messages...]`, "", ...sections, "", CLI_HELP_INPUT].join("\n");
+	return [`Usage: ${APP_NAME} [options] [@files...] [messages...]`, "", ...sections, "", WEB_STARTUP_HELP_INPUT].join(
+		"\n",
+	);
 }
 
 /**
  * Long flags advertised by the help text (without the leading `--`).
  * Used by tests to keep the help listing and `parseArgs` in sync.
  */
-export function listCliHelpFlags(): string[] {
+export function listWebStartupHelpFlags(): string[] {
 	const flags = new Set<string>();
-	for (const section of CLI_HELP_SECTIONS) {
+	for (const section of WEB_STARTUP_HELP_SECTIONS) {
 		for (const option of section.options) {
 			for (const token of option.flags.split(/[,\s]+/)) {
 				if (token.startsWith("--")) {

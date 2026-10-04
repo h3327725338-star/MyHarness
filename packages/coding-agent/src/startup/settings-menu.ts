@@ -43,9 +43,8 @@ const QUEUE_MODE_CHOICES: readonly SettingsMenuChoice[] = [
 
 /**
  * The one definition of the `/settings` menu: its rows, their order, names, descriptions and fixed choices. The
- * terminal UI builds its menu from it and the Web UI receives it through `GET /api/settings` (`menu`), so adding,
- * renaming, reordering or removing a row here changes both. A row that only makes sense in one interface says so in
- * `surfaces` instead of being defined a second time. Each interface only adds how a row is drawn and operated there.
+ * Web UI receives it through `GET /api/settings` (`menu`). Persisted legacy settings are kept separately
+ * for data compatibility; this registry is not a terminal frontend.
  */
 export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 	{ id: "providers", label: "Providers", description: "管理模型服务和密钥", kind: "submenu" },
@@ -179,9 +178,7 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 	},
 	{ id: "warnings", label: "Warnings", description: "管理费用相关警告", kind: "submenu" },
 	{ id: "thinking", label: "Thinking level", description: "调整模型思考强度", kind: "submenu" },
-	// The terminal's colour theme; the Web UI has its own appearance settings below.
-	{ id: "theme", label: "Theme", description: "更换界面配色", kind: "submenu", surfaces: ["cli"] },
-	// Things the terminal handles elsewhere (startup prompts, settings.json) or that only exist in the browser.
+	// Browser appearance and runtime settings.
 	{
 		id: "appearance",
 		label: "Appearance",

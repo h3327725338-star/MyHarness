@@ -14,13 +14,13 @@ From the repository root on Windows:
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev.cmd
+.\dev-web.cmd
 ```
 
-For a source-only CLI smoke check that does not need a Provider credential:
+For a Web source startup check that does not need a Provider credential:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\myharness-test.ps1 --help
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
 ```
 
 After a future npm publication, the intended package installation will be:
@@ -59,7 +59,7 @@ cd /path/to/project
 myharness
 ```
 
-For the current source checkout, run `.\dev.cmd` from the repository root
+For the current source checkout, run `.\dev-web.cmd` from the repository root
 instead; the process still operates on the directory from which you invoke it.
 
 ## Configure Provider and authentication
@@ -165,16 +165,16 @@ myharness -p @screenshot.png "What's in this image?"
 myharness -p @report.pdf "Summarize the text, charts, and page layout"
 ```
 
-Use `--mode json` for structured JSON event output. The current CLI does not provide `--mode rpc`; use the SDK for in-process integration.
+Use SDK subscriptions for in-process events. Public terminal print, JSON and RPC modes are removed.
 
 Local `@file` input can preprocess modern Office documents, PDF pages, SVG and design/image formats, and video keyframes. A directory input discovers those supported formats recursively and continues past individual failures. Audio and legacy DOC/XLS/PPT files are not processed.
 
 ## Next steps
 
-- [Using MyHarness](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
+- [Using MyHarness](usage.md) - browser interaction, slash commands, sessions, context files, and Web startup.
 - [Providers](providers.md) - authentication and model setup.
 - [Settings](settings.md) - global and project configuration.
 - [Keybindings](keybindings.md) - shortcuts and customization.
 - [MyHarness Packages](packages.md) - install shared extensions, skills, prompts, and themes.
 
-Platform notes: [Windows](windows.md), [Termux](termux.md), [tmux](tmux.md), [Terminal setup](terminal-setup.md), [Shell aliases](shell-aliases.md).
+Platform notes: [Windows](windows.md). Browser interaction and lifecycle: [Web UI](web-ui.md).

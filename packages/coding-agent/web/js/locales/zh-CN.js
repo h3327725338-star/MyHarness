@@ -1684,7 +1684,7 @@ export const serverTextEn = {
 		["检测到重复或失败的调查操作，正在保留部分结果", "Repeated or failed investigation steps detected; keeping partial results"],
 		["模型产生了新的调查分析", "The model produced new analysis"],
 		["子 Agent 未执行调查工具，返回内容不能视为完成", "The sub-agent ran no investigation tool, so its answer cannot count as complete"],
-		// Slash command descriptions (cli/slash-commands.ts)
+		// Slash command descriptions (startup/slash-commands.ts)
 		["打开设置菜单", "Open the settings menu"],
 		["打开改动（Diff）面板", "Open the Diff panel"],
 		["打开 Terminal 面板（命令历史与直接运行命令）", "Open the Terminal panel (command history and running commands directly)"],
@@ -1702,7 +1702,7 @@ export const serverTextEn = {
 		["运行多智能体工作流", "Run a multi-agent workflow"],
 		["全面处理复杂任务", "Handle a complex task end to end"],
 		["任务", "task"],
-		// The /settings menu (src/cli/settings-menu.ts): one definition for the terminal and the Web UI
+		// The /settings menu (src/startup/settings-menu.ts): Web menu definition
 		["管理模型服务和密钥", "Manage model services and keys"],
 		["在终端显示图片", "Show images in the terminal"],
 		["调整图片显示宽度", "Width of images in the terminal"],

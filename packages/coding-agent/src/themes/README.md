@@ -4,7 +4,7 @@
 
 ### 职责
 
-把主题 JSON 文件加载并校验成 `ThemeResource`。这是“资源”层；真正用于终端绘制的 `Theme` 类在 `modes/interactive/theme/`。
+把主题 JSON 文件加载并校验成 `ThemeResource`。这是旧持久化资源的兼容层，不提供终端 Theme 渲染，也不控制浏览器外观。
 
 ### loader/
 
@@ -16,7 +16,7 @@
 ### 依赖
 
 - 依赖：`src/config.ts`、`extensions/contracts`（诊断、`SourceInfo`）、`utils/paths.ts`。
-- 被依赖：`application/resource-loader.ts`、`modes/interactive`（主题控制器）、`src/index.ts`。
+- 被依赖：`application/resource-loader.ts`、`src/index.ts`。
 
 ## 维护
 

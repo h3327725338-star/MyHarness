@@ -1,5 +1,5 @@
 // How the Web UI runs each built-in slash command. The commands themselves (names, aliases, descriptions and which
-// interface offers them) come from the one registry in src/cli/slash-commands.ts, delivered by GET /api/resources;
+// interface offers them) come from the one registry in src/startup/slash-commands.ts, delivered by GET /api/resources;
 // this table only says what a command does in the browser. test/web-frontend-logic.test.ts checks that every command
 // the registry offers to the Web has an entry here and that nothing here is missing from the registry.
 //

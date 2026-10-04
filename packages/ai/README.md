@@ -57,7 +57,6 @@ Package documentation: [index](docs/index.md) · [maintenance](docs/maintenance.
 - [Bundling and Tree Shaking](#bundling-and-tree-shaking)
 - [OAuth Providers](#oauth-providers)
   - [Vertex AI (custom providers)](#vertex-ai-custom-providers)
-  - [CLI Login](#cli-login)
   - [Programmatic OAuth](#programmatic-oauth)
 - [Migrating from the Old Global API](#migrating-from-the-old-global-api)
 - [Development](#development)
@@ -1357,10 +1356,6 @@ await models.login('my-oauth-provider', 'oauth', {
 // From here on, requests resolve and refresh the token automatically
 await models.logout('my-oauth-provider');
 ```
-
-### CLI Login
-
-The `myharness-ai` CLI's `login`/`list` commands inspect the Providers returned by `builtinProviders()`. That list is empty in the current MyHarness tree, so a host should use `Models.login()` with an explicitly registered OAuth Provider or provide OAuth through a Coding Agent extension.
 
 ### Programmatic OAuth
 

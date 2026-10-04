@@ -779,29 +779,22 @@ describe("Web UI: search ranking", () => {
 describe("Web UI: shared /settings menu", () => {
 	it("can open every row the menu offers to the Web, and defines no row of its own", async () => {
 		const { SETTINGS_MENU_PAGES } = await import(new URL("settings-menu.js", webDir).href);
-		const { settingsMenuFor } = await import("../src/cli/settings-menu.ts");
+		const { settingsMenuFor } = await import("../src/startup/settings-menu.ts");
 		const { SETTINGS_MENU_SETTING } = await import("../src/modes/web/routes-settings.ts");
 		const web = settingsMenuFor("web").map((item) => item.id);
 		const openable = [...Object.keys(SETTINGS_MENU_SETTING), ...Object.keys(SETTINGS_MENU_PAGES)];
 		expect(new Set(openable).size).toBe(openable.length);
 		expect([...openable].sort()).toEqual([...web].sort());
-		// Everything in the terminal's menu is in the Web's, except what only a terminal has.
-		const terminalOnly = ["theme"];
-		for (const item of settingsMenuFor("cli")) {
-			if (!terminalOnly.includes(item.id)) expect(web).toContain(item.id);
-		}
 	});
 });
 
 describe("Web UI: shared slash-command registry", () => {
 	it("gives every built-in command the registry offers to the Web a way to run, and nothing else", async () => {
 		const { BUILTIN_COMMAND_KINDS } = await import(new URL("builtin-commands.js", webDir).href);
-		const { builtinSlashCommandsFor, findBuiltinSlashCommand } = await import("../src/cli/slash-commands.ts");
+		const { builtinSlashCommandsFor, findBuiltinSlashCommand } = await import("../src/startup/slash-commands.ts");
 		const web = builtinSlashCommandsFor("web").map((command) => command.name);
 		expect([...web].sort()).toEqual(Object.keys(BUILTIN_COMMAND_KINDS).sort());
 		expect(new Set(Object.values(BUILTIN_COMMAND_KINDS))).toEqual(new Set(["panel", "action", "prompt"]));
-		// Everything the terminal UI offers is also there for the Web.
-		for (const command of builtinSlashCommandsFor("cli")) expect(web).toContain(command.name);
 		// An alias resolves to its command.
 		expect(findBuiltinSlashCommand("setting")?.name).toBe("settings");
 	});

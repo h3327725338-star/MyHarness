@@ -119,7 +119,7 @@ describe("delegated read-only bash guard", () => {
 		expect(isAutoReviewValidationCommand("biome check .")).toBe(true);
 		expect(isAutoReviewValidationCommand("eslint packages/coding-agent/src")).toBe(true);
 		expect(isAutoReviewValidationCommand("prettier --check .")).toBe(true);
-		expect(isAutoReviewValidationCommand("node --check packages/coding-agent/src/cli.ts")).toBe(true);
+		expect(isAutoReviewValidationCommand("node --check packages/coding-agent/src/web.ts")).toBe(true);
 
 		expect(isAutoReviewValidationCommand("git grep test")).toBe(false);
 		expect(isAutoReviewValidationCommand("cat test-results.txt")).toBe(false);

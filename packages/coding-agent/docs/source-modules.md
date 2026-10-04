@@ -6,7 +6,7 @@
 
 | 路径 | 当前职责 |
 | --- | --- |
-| `src/cli.ts` | 进程入口、环境标志、HTTP dispatcher 和 `main()` 调用 |
+| `src/web.ts` | 进程入口、环境标志、HTTP dispatcher 和 `main()` 调用 |
 | `src/main.ts` | 参数解析后的启动装配：Settings、Trust、ResourceLoader、ModelRuntime、SessionManager、AgentSession、Interactive/Print mode |
 | `src/index.ts` | package public exports：SDK、Session、Provider、Tool、Extension、CLI 类型等 |
 | `src/config.ts` | Coding Agent 配置路径的兼容入口 |
@@ -20,7 +20,7 @@
 | `agent/` | `AgentSession` 生命周期与运行状态、runtime/sdk、delegation（含后台任务登记）、vision | 复用 AgentSession/runtime；不把 TUI I/O 放进 Agent runtime；板块规则放回各领域目录，`AgentSession` 只编排 | session lifecycle、后台 Explore、delegation/vision |
 | `application/` | 跨领域 use-case、`ResourceLoader`、WorkspaceStore facade；`git-push.ts` 编排显式 Push、remote 验证和 CI 验收；`git-workspace.ts`、`local-git-repository.ts`、`conversation-title.ts` 是前端访问 Git 与会话标题的入口 | 只编排领域模块；持久化实现留在 `data/`/`session/`；不把 Push 细节塞进 TUI | 跨 Git/Provider/Session/Workspace 的流程 |
 | `bun/` | Bun CLI、Bedrock 注册、sandbox 恢复 | Bun-specific 适配不反向污染普通 Node CLI | Bun 编译和运行时兼容 |
-| `cli/` | 参数、帮助、文件参数、trust、startup UI、model/config selector、slash commands | 解析和展示后调用 domain/runtime；不复制业务 | CLI flag、命令入口和 CLI 错误呈现 |
+| `startup/` | Web 启动参数、帮助、文件输入、trust、浏览器 slash commands 与设置表 | 不复制 domain/runtime 业务 | Web 启动参数与命令协议 |
 | `config/` | paths、SettingsManager、settings storage/migration、Project Trust | 配置格式、路径和信任语义集中管理 | settings、paths、trust、config migration |
 | `context/` | context item、budget/window/policy、project context、diff/presentation、compaction（含一次压缩的执行与会话树导航） | 压缩和过滤独立于具体 TUI；遵守 Agent role policy | 新上下文来源、预算和压缩策略 |
 | `data/` | Workspace registry/persistence/migration 的实际实现 | Workspace identity 不由 Session manager 重写 | workspace 数据格式和 migration |
@@ -46,7 +46,7 @@
 
 每个一级目录都有一份 `README.md`，分“说明”（职责、文件、对外接口、依赖）和“维护”两节，子目录在同一文件里逐个说明：
 
-[agent](../src/agent/README.md)、[application](../src/application/README.md)、[bun](../src/bun/README.md)、[cli](../src/cli/README.md)、[config](../src/config/README.md)、[context](../src/context/README.md)、[data](../src/data/README.md)、[exports](../src/exports/README.md)、[extensions](../src/extensions/README.md)、[git](../src/git/README.md)、[modes](../src/modes/README.md)、[observability](../src/observability/README.md)、[platform](../src/platform/README.md)、[prompts](../src/prompts/README.md)、[providers](../src/providers/README.md)、[session](../src/session/README.md)、[skills](../src/skills/README.md)、[symbols](../src/symbols/README.md)、[system-prompts](../src/system-prompts/README.md)、[themes](../src/themes/README.md)、[tools](../src/tools/README.md)、[ultracode](../src/ultracode/README.md)、[utils](../src/utils/README.md)、[workflow](../src/workflow/README.md)。
+[agent](../src/agent/README.md)、[application](../src/application/README.md)、[bun](../src/bun/README.md)、[startup](../src/startup/README.md)、[config](../src/config/README.md)、[context](../src/context/README.md)、[data](../src/data/README.md)、[exports](../src/exports/README.md)、[extensions](../src/extensions/README.md)、[git](../src/git/README.md)、[modes](../src/modes/README.md)、[observability](../src/observability/README.md)、[platform](../src/platform/README.md)、[prompts](../src/prompts/README.md)、[providers](../src/providers/README.md)、[session](../src/session/README.md)、[skills](../src/skills/README.md)、[symbols](../src/symbols/README.md)、[system-prompts](../src/system-prompts/README.md)、[themes](../src/themes/README.md)、[tools](../src/tools/README.md)、[ultracode](../src/ultracode/README.md)、[utils](../src/utils/README.md)、[workflow](../src/workflow/README.md)。
 
 `modes/` 下另有 [modes/interactive](../src/modes/interactive/README.md) 和 [modes/web](../src/modes/web/README.md)；`symbols/semantic/` 还有一份更细的 [README](../src/symbols/semantic/README.md)。
 

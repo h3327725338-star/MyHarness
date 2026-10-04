@@ -524,7 +524,7 @@ Specify which built-in tools to enable:
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
 
-The `edit` tool returns `details.diff` for MyHarness's TUI display and `details.patch` as a standard unified patch for SDK consumers.
+The `edit` tool returns `details.diff` for MyHarness's structured change display and `details.patch` as a standard unified patch for SDK consumers.
 
 ```typescript
 import { createAgentSession } from "@myharness/coding-agent";
@@ -1047,96 +1047,13 @@ session.subscribe((event) => {
 await session.prompt("Get status and list files.");
 ```
 
-## Run Modes
+## Web and SDK hosts
 
-The SDK exports run mode utilities for building custom interfaces on top of `createAgentSession()`:
+The browser host uses `startWebBootstrap` and `runWebMode` with `AgentSessionRuntime`. SDK hosts can prompt and subscribe to runtime events directly without a browser. `InteractiveMode` and `runPrintMode` are no longer exported.
 
-### InteractiveMode
+### Programmatic events
 
-Full TUI interactive mode with editor, chat history, and all built-in commands:
-
-```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  InteractiveMode,
-  SessionManager,
-} from "@myharness/coding-agent";
-
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
-  return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
-
-const mode = new InteractiveMode(runtime, {
-  migratedProviders: [],
-  modelFallbackMessage: undefined,
-  initialMessage: "Hello",
-  initialImages: [],
-  initialMessages: [],
-});
-
-await mode.run();
-```
-
-### runPrintMode
-
-Single-shot mode: send prompts, output result, exit:
-
-```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  runPrintMode,
-  SessionManager,
-} from "@myharness/coding-agent";
-
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
-  return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
-
-await runPrintMode(runtime, {
-  mode: "text",
-  initialMessage: "Hello",
-  initialImages: [],
-  messages: ["Follow up"],
-});
-```
-
-### JSON event stream mode
-
-For subprocesses that need structured output, use the current CLI JSON event stream:
-
-```bash
-myharness --mode json --no-session "Your prompt"
-```
-
-See [JSON event stream mode](json.md) for the event format. For in-process integration, use the SDK and `AgentSession`/`AgentSessionRuntime` directly.
+Use SDK `AgentSession`/`AgentSessionRuntime` subscriptions for in-process events. Public terminal JSON/print modes are removed. The internal delegated-worker NDJSON protocol is not a public SDK transport.
 
 ## Exports
 

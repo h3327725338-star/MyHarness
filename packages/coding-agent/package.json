@@ -7,7 +7,7 @@
 		"configDir": ".myharness"
 	},
 	"bin": {
-		"myharness": "dist/cli.js"
+		"myharness": "dist/web.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -29,8 +29,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
-		"build:binary": "npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/utils/jxl-decode-worker.ts --outfile dist/myharness && npm run copy-binary-assets",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/web.js && npm run copy-assets",
+		"build:binary": "npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/web.js ./src/utils/image-resize-worker.ts ./src/utils/jxl-decode-worker.ts --outfile dist/myharness && npm run copy-binary-assets",
 		"copy-assets": "shx mkdir -p dist/exports/html/vendor && shx cp src/exports/html/template.html src/exports/html/template.css src/exports/html/template.js dist/exports/html/ && shx cp src/exports/html/vendor/*.js dist/exports/html/vendor/ && npm run copy-code-intelligence-assets",
 		"copy-code-intelligence-assets": "shx mkdir -p dist/code-intelligence/licenses && shx cp code-intelligence/runtime-manifest.json code-intelligence/lsp-launcher.mjs code-intelligence/DEPENDENCY-MANIFEST.json dist/code-intelligence/ && shx cp -r code-intelligence/licenses/* dist/code-intelligence/licenses/",
 		"copy-binary-assets": "shx cp -r ../../system-prompts dist/system-prompts && shx cp -r web dist/web && shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/export-html/vendor && shx cp src/exports/html/template.html dist/export-html/ && shx cp src/exports/html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && npm run copy-code-intelligence-assets && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/ && npm run copy-rich-file-assets",

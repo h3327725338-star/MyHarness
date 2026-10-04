@@ -8,7 +8,7 @@ it("starts default Web without console input using isolated state", async () => 
 	const dir = mkdtempSync(join(tmpdir(), "myharness-web-default-test-"));
 	const child = spawn(
 		process.execPath,
-		[resolve("dist/cli.js"), "--no-open", "--port", "0", "--offline", "--no-extensions", "--no-context-files"],
+		[resolve("dist/web.js"), "--no-open", "--port", "0", "--offline", "--no-extensions", "--no-context-files"],
 		{
 			cwd: dir,
 			windowsHide: true,

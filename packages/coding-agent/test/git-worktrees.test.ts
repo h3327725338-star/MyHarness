@@ -22,7 +22,7 @@ function createRepository(): { root: string; agentDir: string; manager: GitWorkt
 	const agentDir = join(tempRoot, "agent data");
 	mkdirSync(root, { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
-	writeFileSync(join(root, "dev.cmd"), "@echo off\r\necho %CD%\r\n", "utf8");
+	writeFileSync(join(root, "dev-web.cmd"), "@echo off\r\necho %CD%\r\n", "utf8");
 	writeFileSync(join(root, "shared.txt"), "base\n", "utf8");
 	runGit(root, ["init", "-b", "main"]);
 	runGit(root, ["config", "user.name", "MyHarness Test"]);

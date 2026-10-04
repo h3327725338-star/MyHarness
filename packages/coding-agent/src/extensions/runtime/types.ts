@@ -43,7 +43,6 @@ export interface AutocompleteItem {
 
 import type { TSchema } from "typebox";
 import type { CustomMessage } from "../../agent/runtime/messages.ts";
-import type { SlashCommandInfo } from "../../cli/slash-commands.ts";
 import type { CompactionPreparation, CompactionResult } from "../../context/compact/index.ts";
 import type { ExecOptions, ExecResult } from "../../platform/process/exec.ts";
 import type { ModelRegistry } from "../../providers/models/registry.ts";
@@ -55,6 +54,7 @@ import type {
 	ReadonlySessionManager,
 	SessionEntry,
 } from "../../session/types.ts";
+import type { SlashCommandInfo } from "../../startup/slash-commands.ts";
 import type { BuildSystemPromptOptions } from "../../system-prompts/composer/index.ts";
 import type { EditToolDetails } from "../../tools/files/edit.ts";
 import type {
@@ -87,7 +87,6 @@ import type { ToolDefinition as ToolDefinitionContract } from "../contracts/tool
 import type {
 	ExtensionUIContextPort,
 	ExtensionUIDialogOptions,
-	TerminalInputHandler,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
 } from "../contracts/ui.ts";
@@ -103,7 +102,6 @@ export type {
 export type {
 	ExtensionUIContextPort,
 	ExtensionUIDialogOptions,
-	TerminalInputHandler,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
 } from "../contracts/ui.ts";
@@ -120,7 +118,7 @@ export interface ExtensionWidgetOptions {
 
 /**
  * UI context for extensions to request interactive UI.
- * Each mode (interactive, JSON, print) provides its own implementation.
+ * Web hosts provide browser dialogs; SDK and delegated workers may run headless.
  */
 export interface ExtensionUIContext extends ExtensionUIContextPort {
 	/** Show a selector and return the user's choice. */
@@ -134,9 +132,6 @@ export interface ExtensionUIContext extends ExtensionUIContextPort {
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;
-
-	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
-	onTerminalInput(handler: TerminalInputHandler): () => void;
 
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
@@ -209,12 +204,12 @@ export interface CompactOptions {
 /**
  * Context passed to extension event handlers.
  */
-export type ExtensionMode = "tui" | "web" | "json" | "print";
+export type ExtensionMode = "web" | "headless";
 
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
-	/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
+	/** Current host: browser UI or a headless SDK/worker. */
 	mode: ExtensionMode;
 	/** Whether the host supplied a dialog-capable UI implementation. */
 	hasUI: boolean;

@@ -11,13 +11,13 @@
 | 文件 | 内容 |
 | --- | --- |
 | `exec.ts` | `execCommand()`：给扩展和自定义工具用的通用命令执行（超时、取消、输出收集） |
-| `http-dispatcher.ts` | 全局 HTTP 分发器：空闲超时选项、代理设置；`configureHttpDispatcher()` 在 `cli.ts` 启动时调用 |
+| `http-dispatcher.ts` | 全局 HTTP 分发器：空闲超时选项、代理设置；`configureHttpDispatcher()` 在 `web.ts` 启动时调用 |
 | `output-guard.ts` | 接管/恢复 `stdout`，保证 print/json 模式输出干净，以及原始写入与背压 |
 
 ### 依赖
 
 - 依赖：`utils/child-process.ts`、`utils/shell.ts`、`undici`。
-- 被依赖：`cli.ts`、`main.ts`、`config/settings`、`extensions`、`modes/*`、`package-manager-cli.ts`。
+- 被依赖：`web.ts`、`main.ts`、`config/settings`、`extensions`、`modes/*`、`package-manager-cli.ts`。
 
 ## 维护
 

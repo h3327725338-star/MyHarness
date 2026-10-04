@@ -60,7 +60,7 @@ RUN npm install --ignore-scripts \
   && npm run build:offline
 
 WORKDIR /workspace
-ENTRYPOINT ["node", "/src/packages/coding-agent/dist/cli.js"]
+ENTRYPOINT ["node", "/src/packages/coding-agent/dist/web.js"]
 ```
 
 Build and run:

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { Args } from "../src/cli/args.ts";
-import { buildInitialMessage } from "../src/cli/initial-message.ts";
+import type { Args } from "../src/startup/args.ts";
+import { buildInitialMessage } from "../src/startup/initial-message.ts";
 
 function createArgs(messages: string[] = []): Args {
 	return {

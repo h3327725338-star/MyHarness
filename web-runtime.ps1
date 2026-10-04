@@ -1,15 +1,15 @@
-﻿# MyHarness 开发启动器（Windows，由 dev.cmd 调用）
+﻿# MyHarness 开发启动器（Windows，由 dev-web.cmd / dev-web.ps1 调用）
 #
-# 目标：双击 dev.cmd -> 自动准备环境 -> 以“当前项目源码”启动 MyHarness 开发模式。
+# 目标：双击 dev-web.cmd -> 自动准备环境 -> 以“当前项目源码”启动 MyHarness 开发模式。
 #
 # 事实依据（均来自本仓库源码/文档，非猜测）：
 #   * 包管理器 / lockfile：npm + package-lock.json（根 package.json 用 workspaces 定义 monorepo）。
 #   * Node 要求：根 package.json 的 engines.node（本脚本从该字段动态读取，不写死版本）。
 #   * 官方安装方式：README / docs/development.md 规定 `npm install --ignore-scripts`。
-#   * 开发启动方式：项目自带 myharness-test.ps1（Windows）/ myharness-test.sh（Linux、macOS），
-#     其本质是 `tsx packages/coding-agent/src/cli.ts`——由 tsx 直接运行 TypeScript 源码，
+#   * 开发启动方式：项目自带 web-source.ps1（Windows）/ web-source.sh（Linux、macOS），
+#     其本质是 `tsx packages/coding-agent/src/web.ts`——由 tsx 直接运行 TypeScript 源码，
 #     所以修改源码后无需先执行 npm run build（这也是本项目“开发模式”的真实含义）。
-#     本脚本复用 myharness-test.ps1，不另造一套启动逻辑。
+#     本脚本复用 web-source.ps1，不另造一套启动逻辑。
 #   * 仓库不内置上游 Provider 或模型目录。Provider / model 配置属于用户运行时配置
 #     （~/.myharness/agent/models.json）；启动器不读取、同步或校验上游模型目录。
 #   * bash：docs/windows.md 说明 MyHarness 的 bash 工具需要 bash（Windows 上通常用 Git for Windows）。
@@ -98,7 +98,7 @@ Write-Head "读取项目要求 (package.json -> engines.node)"
 
 $packageJsonPath = Join-Path $Root "package.json"
 if (-not (Test-Path -LiteralPath $packageJsonPath)) {
-	Write-Fail "找不到 $packageJsonPath。dev.cmd 必须放在项目根目录（与 package.json 同级）。"
+	Write-Fail "找不到 $packageJsonPath。Web 启动脚本必须放在项目根目录（与 package.json 同级）。"
 }
 
 $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
@@ -161,7 +161,7 @@ if (-not $nodePath) {
 	if ($nodeRange) {
 		Write-Host "        本项目要求：node $nodeRange" -ForegroundColor Red
 	}
-	Write-Host "        安装方式（任选其一，安装后重新双击 dev.cmd）：" -ForegroundColor Yellow
+	Write-Host "        安装方式（任选其一，安装后重新双击 dev-web.cmd）：" -ForegroundColor Yellow
 	Write-Host "          winget install --id OpenJS.NodeJS.LTS -e" -ForegroundColor Yellow
 	Write-Host "          https://nodejs.org/en/download   (Windows Installer, x64)" -ForegroundColor Yellow
 	Write-Host "        说明：Node.js 是系统级运行时，安装需要安装程序与管理员权限，" -ForegroundColor Yellow
@@ -315,14 +315,14 @@ Write-Note "手动 Provider 模式：仓库不加载上游 Provider catalog，�
 # ---------------------------------------------------------------------------
 Write-Head "启动 MyHarness 开发模式"
 
-$entryScript = Join-Path $Root "myharness-test.ps1"
+$entryScript = Join-Path $Root "web-source.ps1"
 if (-not (Test-Path -LiteralPath $entryScript)) {
 	Write-Fail "找不到 $entryScript（项目自带的开发入口）。"
 }
 
 # 默认用 Node 原生类型剥离 + scripts\dev-fast-loader.mjs 直接运行源码：tsx 会让约 1600 个模块
 # 逐个经过转换 hook，启动到 Web UI 监听前要 10 秒以上，原生方式约 2 秒。
-# 设置 MYHARNESS_DEV_LOADER=tsx（或使用 --no-env）可回到原来的 tsx 入口 myharness-test.ps1。
+# 设置 MYHARNESS_DEV_LOADER=tsx（或使用 --no-env）可回到原来的 tsx 入口 web-source.ps1。
 $fastLoader = Join-Path $Root "scripts\dev-fast-loader.mjs"
 $useTsx = ($env:MYHARNESS_DEV_LOADER -eq "tsx") -or ($args -contains "--no-env") -or (-not (Test-Path -LiteralPath $fastLoader))
 
@@ -331,15 +331,15 @@ $previous = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
 	if ($useTsx) {
-		Write-Note "入口：tsx packages\coding-agent\src\cli.ts（复用项目自带 myharness-test.ps1）"
+		Write-Note "入口：tsx packages\coding-agent\src\web.ts（复用项目自带 web-source.ps1）"
 		Write-Note "修改配置或核心源码后，请重启进程以加载改动。"
 		Write-Host ""
 		& $entryScript @args
 	} else {
-		Write-Note "入口：node --import scripts\dev-fast-loader.mjs packages\coding-agent\src\cli.ts"
+		Write-Note "入口：node --import scripts\dev-fast-loader.mjs packages\coding-agent\src\web.ts"
 		Write-Note "修改配置或核心源码后，请重启进程以加载改动。"
 		Write-Host ""
-		& node --import "./scripts/dev-fast-loader.mjs" "./packages/coding-agent/src/cli.ts" @args
+		& node --import "./scripts/dev-fast-loader.mjs" "./packages/coding-agent/src/web.ts" @args
 	}
 	if ($null -ne $LASTEXITCODE) { $runExit = [int]$LASTEXITCODE }
 } finally {

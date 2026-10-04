@@ -1,12 +1,10 @@
 /**
- * CLI argument parsing
+ * Web service startup argument parsing
  */
 
 import type { ThinkingLevel } from "@myharness/agent-core";
 import type { AgentRole } from "../agent/runtime/role.ts";
 import { parseContextWindowInput } from "../context/context-window.ts";
-
-export type Mode = "text" | "json";
 
 export interface Args {
 	agentRole?: AgentRole;
@@ -21,7 +19,6 @@ export interface Args {
 	resume?: boolean;
 	version?: boolean;
 	help?: boolean;
-	mode?: Mode;
 	name?: string;
 	noSession?: boolean;
 	session?: string;
@@ -35,9 +32,6 @@ export interface Args {
 	noBuiltinTools?: boolean;
 	extensions?: string[];
 	noExtensions?: boolean;
-	print?: boolean;
-	/** Start the local Web UI instead of the TUI. */
-	web?: boolean;
 	/** Loopback port for the Web UI (0 or undefined: default port). */
 	webPort?: number;
 	/** Do not open the browser automatically in Web UI mode. */
@@ -50,7 +44,6 @@ export interface Args {
 	themes?: string[];
 	noThemes?: boolean;
 	noContextFiles?: boolean;
-	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
@@ -86,7 +79,6 @@ const VALUE_FLAGS = new Set([
 	"skill",
 	"prompt-template",
 	"theme",
-	"mode",
 	"port",
 ]);
 
@@ -130,20 +122,6 @@ export function parseArgs(rawArgs: string[]): Args {
 			result.version = true;
 		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
-		} else if (arg === "--mode") {
-			if (i + 1 >= args.length) {
-				result.diagnostics.push({ type: "error", message: "--mode requires a value" });
-			} else {
-				const mode = args[++i];
-				if (mode === "text" || mode === "json") {
-					result.mode = mode;
-				} else {
-					result.diagnostics.push({
-						type: "error",
-						message: `Invalid --mode value "${mode}". Valid values: text, json`,
-					});
-				}
-			}
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
@@ -230,8 +208,6 @@ export function parseArgs(rawArgs: string[]): Args {
 					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
 				});
 			}
-		} else if (arg === "--web") {
-			result.web = true;
 		} else if (arg === "--port") {
 			const rawPort = i + 1 < args.length ? args[++i] : undefined;
 			const port = rawPort === undefined ? Number.NaN : Number(rawPort);
@@ -245,13 +221,6 @@ export function parseArgs(rawArgs: string[]): Args {
 			}
 		} else if (arg === "--no-open") {
 			result.noOpenBrowser = true;
-		} else if (arg === "--print" || arg === "-p") {
-			result.print = true;
-			const next = args[i + 1];
-			if (next !== undefined && !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))) {
-				result.messages.push(next);
-				i++;
-			}
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
@@ -276,13 +245,6 @@ export function parseArgs(rawArgs: string[]): Args {
 			result.noThemes = true;
 		} else if (arg === "--no-context-files" || arg === "-nc") {
 			result.noContextFiles = true;
-		} else if (arg === "--list-models") {
-			// Check if next arg is a search pattern (not a flag or file arg)
-			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
-				result.listModels = args[++i];
-			} else {
-				result.listModels = true;
-			}
 		} else if (arg === "--verbose") {
 			result.verbose = true;
 		} else if (arg === "--approve" || arg === "-a") {
