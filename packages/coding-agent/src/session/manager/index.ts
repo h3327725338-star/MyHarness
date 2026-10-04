@@ -898,6 +898,17 @@ export class SessionManager {
 		release?.();
 	}
 
+	/** Save a deferred session without adding a message or changing its model context. */
+	ensureSaved(): void {
+		if (!this.persist || !this.sessionFile || this.mirror) {
+			throw new Error("This session cannot be saved by this runtime.");
+		}
+		if (this.flushed && sessionFileExists(this.sessionFile)) return;
+		writeSessionFile(this.sessionFile, this.fileEntries, "wx");
+		this.flushed = true;
+		this.writeMetadata();
+	}
+
 	_persist(entry: SessionEntry, pendingEntries: FileEntry[] = this.fileEntries): void {
 		if (!this.persist || !this.sessionFile || this.mirror) return;
 		this.flushed = persistSessionEntry(

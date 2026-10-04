@@ -264,7 +264,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			}
 		}
 		for (const slot of showing) {
-			if (slot === host || hub.all().length === 1) {
+			if (slot.slotId === host.slotId || hub.all().length === 1) {
 				const result = await slot.runtimeHost.newSession();
 				if (result.cancelled) throw new HttpError(409, "Cancelled.");
 			} else {
@@ -292,7 +292,8 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			});
 		}
 	};
-	const assertKnownSession = async (path: string): Promise<void> => {
+	const assertKnownSession = async (path: string, allowDeferred = false): Promise<void> => {
+		if (allowDeferred && hub.slotsShowing(path).length > 0) return;
 		const known = (await SessionManager.listAll(sessionDir())).some(
 			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
 		);
@@ -306,7 +307,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	server.route("POST", "/api/sessions/archive", async ({ body }) => {
 		const input = asObject(body);
 		const path = asString(input.path, "path");
-		await assertKnownSession(path);
+		await assertKnownSession(path, true);
 		if (input.archived !== false) {
 			for (const slot of hub.slotsShowing(path)) {
 				if (!slot.session.isIdle || slot.completionActive || slot.gitTask) {
@@ -314,6 +315,9 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 				}
 			}
 		}
+		// Deferred drafts are visible from their slots but not discoverable on disk yet.
+		const owner = hub.slotsShowing(path)[0];
+		if (owner && !existsSync(path)) owner.session.sessionManager.ensureSaved();
 		await setSessionMarker(path, ".archived", input.archived !== false);
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
@@ -334,10 +338,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
 			throw new HttpError(400, "deleteArtifacts must be a boolean");
 		const path = asString(input.path, "path");
-		const known = (await SessionManager.listAll(sessionDir())).some(
-			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
-		);
-		if (!known) throw new HttpError(404, "Unknown session");
+		await assertKnownSession(path, true);
 		await releaseSessionSlots(path);
 		const deleted = await deleteSessionFile(path, {
 			permanent: true,

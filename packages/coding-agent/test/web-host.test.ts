@@ -165,6 +165,75 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === initial.slot).hasContent).toBe(true);
 	});
 
+	it("archives a deferred draft without inventing messages and restores it from disk", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const path = initial.session.file;
+		await fx.post("/api/sessions/touched", {}, initial.slot);
+		const next = await fx.post("/api/sessions/new", {}, initial.slot);
+		expect(existsSync(path)).toBe(false);
+		await fx.post("/api/sessions/archive", { path }, next.slot);
+		expect(existsSync(path)).toBe(true);
+		expect((await fx.get("/api/sessions/archived")).sessions.map((info: any) => info.path)).toContain(path);
+		expect((await fx.get("/api/state", initial.slot)).session.file).toBe(path);
+		expect(SessionManager.open(path).buildSessionContext().messages).toHaveLength(0);
+		await fx.hub.closeSlot(fx.hub.get(initial.slot)!);
+		await fx.post("/api/sessions/archive", { path, archived: false }, next.slot);
+		const reopened = await fx.post("/api/sessions/open", { path }, next.slot);
+		expect((await fx.get("/api/state", reopened.slot)).session.file).toBe(path);
+	});
+
+	it.each([false, true])("deletes deferred drafts with deleteArtifacts=%s", async (deleteArtifacts) => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const path = initial.session.file;
+		await fx.post("/api/sessions/touched", {}, initial.slot);
+		const uploads = join(dirname(path), "uploads");
+		mkdirSync(uploads, { recursive: true });
+		writeFileSync(join(uploads, "draft.txt"), "attachment");
+		const report = join(dirname(dirname(path)), "artifacts", "reports", "report.txt");
+		mkdirSync(dirname(report), { recursive: true });
+		writeFileSync(report, "keep unless explicitly deleted");
+		const next = await fx.post("/api/sessions/new", {}, initial.slot);
+		expect(existsSync(path)).toBe(false);
+		await fx.post("/api/sessions/delete", { path, deleteArtifacts }, next.slot);
+		expect(fx.hub.slotsShowing(path)).toHaveLength(0);
+		expect(existsSync(uploads)).toBe(false);
+		expect(existsSync(report)).toBe(!deleteArtifacts);
+		expect(existsSync(dirname(dirname(path)))).toBe(!deleteArtifacts);
+		expect((await fx.get("/api/state", next.slot)).slot).toBe(next.slot);
+	});
+
+	it("replaces the requesting slot when deleting its deferred current draft", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		await fx.post("/api/sessions/touched", {}, initial.slot);
+		await fx.post("/api/sessions/new", {}, initial.slot);
+		await fx.post("/api/sessions/delete", { path: initial.session.file }, initial.slot);
+		const after = await fx.get("/api/state", initial.slot);
+		expect(after.slot).toBe(initial.slot);
+		expect(after.session.file).not.toBe(initial.session.file);
+		expect(fx.hub.slotsShowing(initial.session.file)).toHaveLength(0);
+	});
+
+	it("refuses busy deferred drafts and arbitrary unknown paths", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		owner.broadcast("git_task", { active: true, kind: "commit", phase: "committing", startedAt: Date.now() });
+		try {
+			await expect(fx.post("/api/sessions/archive", { path: initial.session.file })).rejects.toThrow("409:");
+			await expect(fx.post("/api/sessions/delete", { path: initial.session.file })).rejects.toThrow("409:");
+			expect(existsSync(initial.session.file)).toBe(false);
+		} finally {
+			owner.broadcast("git_task", { active: false });
+		}
+		const unknown = join(fx.project, "unknown.jsonl");
+		await expect(fx.post("/api/sessions/archive", { path: unknown })).rejects.toThrow("404: Unknown session");
+		await expect(fx.post("/api/sessions/delete", { path: unknown })).rejects.toThrow("404: Unknown session");
+		expect(existsSync(`${unknown}.archived`)).toBe(false);
+	});
+
 	it("persists a new chat containing only a Commit card and does not reuse it as empty", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");
