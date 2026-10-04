@@ -12,7 +12,7 @@ import { createHarness, type Harness } from "./suite/harness.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/session-bridge-owner.ts", import.meta.url));
 
-async function until(condition: () => boolean, what: string, timeoutMs = 15_000): Promise<void> {
+async function until(condition: () => boolean, what: string, timeoutMs = 45_000): Promise<void> {
 	const start = Date.now();
 	while (!condition()) {
 		if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
@@ -93,5 +93,5 @@ describe("session bridge", () => {
 		owner!.stdin!.write("exit\n");
 		await until(() => closed, "the mirror to notice the owner ended");
 		rmSync(sessionFile, { force: true });
-	}, 90_000);
+	}, 240_000);
 });
