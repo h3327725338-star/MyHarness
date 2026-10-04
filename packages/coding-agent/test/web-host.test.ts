@@ -10,6 +10,11 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 } from "../src/agent/runtime/session-runtime.ts";
+import {
+	createInitialGitBaseline,
+	initializeGitRepository,
+	setLocalGitIdentity,
+} from "../src/git/repository/integration.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
 import { WebHttpServer } from "../src/modes/web/http-server.ts";
 import { WebHostHub } from "../src/modes/web/hub.ts";
@@ -567,6 +572,79 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(secondDiff.patch).toContain("+gamma");
 		expect(secondDiff.patch).not.toContain("+beta");
 		expect(secondDiff.summary).toMatchObject({ additions: 1, deletions: 0 });
+	});
+
+	it("does not repeat uncommitted changes in read-only follow-ups and isolates later task diffs", async () => {
+		const fx = await start();
+		writeFileSync(join(fx.project, "notes.txt"), "alpha\n");
+		expect(initializeGitRepository(fx.project).ok).toBe(true);
+		expect(setLocalGitIdentity(fx.project, { name: "Web test", email: "web@example.invalid" }).ok).toBe(true);
+		expect(createInitialGitBaseline(fx.project).ok).toBe(true);
+		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
+		owner.session.settingsManager.setGitIntegrationEnabled(true);
+		owner.session.settingsManager.setAutoMemorySettings({ enabled: false });
+		await owner.session.settingsManager.flush();
+
+		const run = async (responses: Parameters<typeof fx.faux.setResponses>[0], text: string) => {
+			const seen = fx.events.length;
+			fx.faux.setResponses(responses);
+			await fx.post("/api/prompt", { text });
+			await vi.waitFor(
+				() => expect(fx.events.slice(seen).some((event) => event.event === "run_finished")).toBe(true),
+				{
+					timeout: 30_000,
+				},
+			);
+			await owner.waitForCompletion();
+			await owner.session.waitForIdle();
+			return fx.events.slice(seen).find((event) => event.event === "run_finished")!.data;
+		};
+		const cards = async () =>
+			(await fx.get("/api/transcript")).items.filter((item: any) => item.kind === "runChanges");
+
+		await run(
+			[
+				fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\n" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage([fauxText("Done.")]),
+			],
+			"append beta",
+		);
+		const firstCheckpoint = owner.session.getGitCheckpoint()!;
+		expect(firstCheckpoint).toBeDefined();
+		expect(firstCheckpoint.status).toBe("created");
+		const firstCards = await cards();
+		expect(firstCards).toHaveLength(1);
+
+		for (const text of ["what changed?", "explain again"]) {
+			const finished = await run([fauxAssistantMessage([fauxText("Only explaining.")])], text);
+			expect(finished.changeCount).toBe(0);
+			expect(await cards()).toEqual(firstCards);
+			expect(owner.openCheckpoint()).toBe(firstCheckpoint);
+			expect(readFileSync(join(fx.project, "notes.txt"), "utf8")).toBe("alpha\nbeta\n");
+		}
+
+		await run(
+			[
+				fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\ngamma\n" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage([fauxText("Done again.")]),
+			],
+			"append gamma",
+		);
+		expect(owner.session.getGitCheckpoint()!.id).not.toBe(firstCheckpoint.id);
+		const after = await cards();
+		expect(after).toHaveLength(2);
+		expect(after[0]).toEqual(firstCards[0]);
+		const diff = await fx.get(`/api/changes/card-diff?id=${after[1].id}&path=notes.txt`);
+		expect(diff.patch).toContain("+gamma");
+		expect(diff.patch).not.toContain("+beta");
+		expect(diff.summary).toMatchObject({ additions: 1, deletions: 0 });
+		// Undo the latest task leaves the earlier, still uncommitted change intact.
+		await fx.post("/api/git/undo/restore");
+		expect(readFileSync(join(fx.project, "notes.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("alpha\nbeta\n");
 	});
 
 	it("marks a run whose provider fails as failed and keeps the error", async () => {

@@ -535,7 +535,7 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 		},
 	);
 
-	it("creates a fresh checkpoint for the next task after the previous one is retained", async () => {
+	it.each(["created", "retained"] as const)("isolates tasks after a %s checkpoint", async (status) => {
 		await withTemporaryAgentDirectory(async (harness) => {
 			harness.settingsManager.setGitIntegrationEnabled(true);
 			writeFileSync(join(harness.tempDir, "a.txt"), "initial a\n", "utf8");
@@ -564,10 +564,16 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			const checkpointA = harness.session.getGitCheckpoint();
 			expect(checkpointA?.status).toBe("created");
 
-			// 任务 A 结束（例如 PARTIAL）：关闭 checkpoint，不伪装成 completed。
-			const retained = harness.session.retainGitCheckpointWithoutVerification();
-			expect(retained.ok).toBe(true);
-			expect(checkpointA?.status).toBe("retained");
+			if (status === "retained") {
+				expect(harness.session.retainGitCheckpointWithoutVerification().ok).toBe(true);
+			}
+			// A read-only follow-up must not inherit A's change baseline or close its recovery record.
+			harness.setResponses([fauxAssistantMessage("Only explaining.")]);
+			await harness.session.prompt("explain task A");
+			expect(harness.session.getGitCheckpoint()).toBeUndefined();
+			expect(checkpointA?.status).toBe(status);
+			expect(loadGitCheckpoint(checkpointA!.storagePath).checkpoint?.status).toBe(status);
+			expect(readFileSync(join(harness.tempDir, "a.txt"), "utf8")).toBe("changed a\n");
 
 			// 任务 B：第一次修改必须创建全新的 checkpoint B，而不是复用 checkpoint A。
 			harness.setResponses([

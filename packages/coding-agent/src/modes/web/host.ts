@@ -1117,6 +1117,11 @@ export class WebHost {
 			uncommitted = after?.status === "created";
 		}
 
+		// Keep the previous task's recovery handle when the next run starts with
+		// a fresh checkpoint. Read-only follow-ups must not consume its baseline.
+		const open = session.getGitCheckpoint();
+		if (open?.status === "created") this.pendingStartupCheckpoint = open;
+
 		if (runId !== undefined) {
 			const record = this.tracker.finishRun(
 				runId,

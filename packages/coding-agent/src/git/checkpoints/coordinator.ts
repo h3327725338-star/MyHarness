@@ -134,8 +134,10 @@ export class AgentSessionGitCheckpointCoordinator {
 		return this.checkpoint;
 	}
 
-	resetIfNotCreated(): void {
-		if (this.checkpoint?.status !== "created") this.checkpoint = undefined;
+	resetForRun(): void {
+		// An open checkpoint remains on disk for Undo / Commit, but its baseline
+		// belongs to the previous task. Never reuse it for a new independent run.
+		this.checkpoint = undefined;
 		// Give each new run one fresh attempt, e.g. after the user fixed the path.
 		this.creationFailure = undefined;
 	}

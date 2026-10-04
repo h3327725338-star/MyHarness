@@ -1621,7 +1621,7 @@ export class AgentSession {
 		onAgentRunStarted?: () => void,
 		onContextPreflightPersisted?: () => void,
 	): Promise<void> {
-		this._gitCheckpointCoordinator.resetIfNotCreated();
+		this._gitCheckpointCoordinator.resetForRun();
 		if (this._beforeAgentRun) {
 			await this._beforeAgentRun();
 		}
