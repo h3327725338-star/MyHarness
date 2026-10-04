@@ -55,7 +55,7 @@ const harness = vi.hoisted(() => {
 	};
 });
 vi.mock("../web/js/ui.js", () => harness.hooks);
-const { StepCounts, createCountBuffer, COUNT_ROLL_MS } = await import(
+const { StepCounts, createCountBuffer, COUNT_ROLL_MS, COUNT_CHECK_MS } = await import(
 	new URL("../web/js/step-counts.js", import.meta.url).href
 );
 const css = readFileSync(new URL("../web/css/transcript.css", import.meta.url), "utf8");
@@ -68,9 +68,9 @@ function render(props: Record<string, unknown>) {
 }
 function cells(tree: { values: any[] }) {
 	return tree.values
-		.filter((value: any) => value?.values)
+		.filter((value: any) => value?.values && typeof value.values[0] === "function")
 		.map((value: any) => {
-			const [, component, current, previous] = value.values;
+			const [component, current, previous] = value.values;
 			const direction = value.strings.join("").includes('direction="up"') ? "up" : "down";
 			return { current, previous, direction, node: component({ value: current, previous, direction }) };
 		});
@@ -103,6 +103,7 @@ describe("Web step line counts", () => {
 		expect(COUNT_ROLL_MS).toBe(360);
 		expect(render({ running: true })).toBeNull();
 		render({ additions: 1, deletions: 2, running: true });
+		vi.advanceTimersByTime(COUNT_CHECK_MS);
 		expect(cells(render({ additions: 1, deletions: 2, running: true })).map((c) => c.current)).toEqual([1, 2]);
 		render({ additions: 3, deletions: 4, running: true });
 		render({ additions: 8, deletions: 5, running: true });
@@ -114,9 +115,10 @@ describe("Web step line counts", () => {
 		vi.useFakeTimers();
 		expect(render({ running: true })).toBeNull();
 		render({ additions: 12, deletions: 3, running: false });
+		vi.advanceTimersByTime(COUNT_CHECK_MS);
 		expect(cells(render({ additions: 12, deletions: 3, running: false })).map((c) => c.previous)).toEqual(["", ""]);
 		vi.advanceTimersByTime(6000);
-		expect(harness.renders()).toBe(1);
+		expect(harness.renders()).toBe(2);
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it("settles final small changes after the current roll without replaying unchanged counts", () => {
@@ -136,22 +138,59 @@ describe("Web step line counts", () => {
 		const historical = render({ additions: 10, deletions: 2, running: false });
 		for (const cell of cells(historical)) expect(cell.node.values).toContain("count-current");
 		render({ additions: 10, deletions: 7, running: false });
+		vi.advanceTimersByTime(COUNT_CHECK_MS);
 		const changed = cells(render({ additions: 10, deletions: 7, running: false }));
 		expect(changed[0].node.values).toContain("count-current");
 		expect(changed[1].node.values).toContain("count-current roll-down");
 	});
-	it("hides unknown and initial zero counts, and rolls back to zero without losing cell width", () => {
+	it("removes zero cells after an animated failure, leaving unchanged counts still", () => {
 		vi.useFakeTimers();
-		expect(render({ additions: 0, deletions: 0, running: false })).toBeNull();
-		render({ additions: 100, deletions: 0, running: false });
-		render({ additions: 9, deletions: 0, running: false });
-		const tree = render({ additions: 9, deletions: 0, running: false });
-		expect(cells(tree)[0].node.values[0]).toEqual({ minWidth: "3ch" });
-		render({ additions: 0, deletions: 0, running: false });
+		render({ additions: 15, deletions: 7, running: true });
+		render({ additions: 15, deletions: 0, removed: 1, running: false });
+		vi.advanceTimersByTime(COUNT_CHECK_MS);
+		const rolling = cells(render({ additions: 15, deletions: 0, removed: 1, running: false }));
+		expect(rolling.map((c) => c.current)).toEqual([15, 0]);
+		expect(rolling[0].previous).toBeUndefined();
 		vi.advanceTimersByTime(COUNT_ROLL_MS);
-		expect(cells(render({ additions: 0, deletions: 0, running: false }))[0].current).toBe(0);
-		render({ running: false });
-		expect(render({ running: false })).toBeNull();
+		expect(cells(render({ additions: 15, deletions: 0, removed: 1, running: false })).map((c) => c.current)).toEqual([15]);
+		render({ removed: 2, running: false });
+		vi.advanceTimersByTime(COUNT_CHECK_MS + COUNT_ROLL_MS);
+		expect(render({ removed: 2, running: false })).toBeNull();
+	});
+	it("updates preview and result corrections without rolling and retains missing live samples", () => {
+		vi.useFakeTimers();
+		expect(COUNT_CHECK_MS).toBe(200);
+		render({ additions: 32, deletions: 3, preview: true, running: true });
+		render({ running: true });
+		vi.advanceTimersByTime(200);
+		expect(cells(render({ running: true }))[0].current).toBe(32);
+		render({ additions: 36, deletions: 1, preview: false, running: true });
+		vi.advanceTimersByTime(200);
+		for (const cell of cells(render({ additions: 36, deletions: 1, running: true }))) expect(cell.previous).toBeUndefined();
+		render({ additions: 12, deletions: 0, running: false });
+		vi.advanceTimersByTime(200);
+		const corrected = cells(render({ additions: 12, deletions: 0, running: false }));
+		expect(corrected.map((c) => c.current)).toEqual([12]);
+		expect(corrected[0].previous).toBeUndefined();
+	});
+	it("checks at 200ms and keeps only the latest sample during a 360ms roll", () => {
+		vi.useFakeTimers();
+		const publish = vi.fn();
+		const buffer = createCountBuffer({ additions: 1, deletions: 0 }, publish);
+		buffer.update({ additions: 2, deletions: 0 });
+		vi.advanceTimersByTime(199);
+		expect(publish).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(publish.mock.calls[0][0].current.additions).toBe(2);
+		buffer.update({ additions: 3, deletions: 0 });
+		vi.advanceTimersByTime(200);
+		buffer.update({ additions: 9, deletions: 0 });
+		expect(publish).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(160);
+		expect(publish.mock.calls.at(-1)?.[0].current.additions).toBe(9);
+		expect(publish.mock.calls.map(([frame]) => frame.current.additions)).not.toContain(3);
+		buffer.dispose();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 	it("uses single-shot transforms with opposite entry/exit directions and existing motion tokens", () => {
 		expect(css).toMatch(/count-in-up[^\n]*translateY\(100%\)/);

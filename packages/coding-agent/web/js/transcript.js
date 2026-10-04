@@ -136,7 +136,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 				<span class=${step.status === "running" ? "shimmer-text" : "verb"}>${step.verb}</span>
 				${step.target ? html` <span class=${step.kind === "run" ? "mono target" : "target"}>${step.target}</span>` : null}
 				${step.detail ? html` <span class="dim">${step.detail}</span>` : null}
-				${step.kind === "edit" || step.kind === "write" ? html` <${StepCounts} ...${nothingRunning && step.preview ? undefined : step.extra} preview=${step.preview} running=${!nothingRunning && (step.status === "running" || step.status === "pending")} />` : null}
+				${step.kind === "edit" || step.kind === "write" ? html` <${StepCounts} ...${nothingRunning && step.preview ? undefined : step.extra} preview=${step.preview} source=${step.phase || "done"} removed=${step.isError || step.status === "cancelled" || (nothingRunning && step.preview) ? 1 : 0} running=${!nothingRunning && (step.status === "running" || step.status === "pending")} />` : null}
 				${exit ? html` <span class="err-text">${t("exit {exit}", { exit })}</span>` : null}
 				${step.status === "cancelled" ? html` <span class="dim">${t("not finished")}</span>` : null}
 			</span>
@@ -155,15 +155,34 @@ function Group({ group, forceOpen }) {
 	const [open, setOpen] = useState(!!forceOpen);
 	const nothingRunning = useStore((st) => !st.snap?.active && !st.snap?.flags?.background);
 	const list = group.actions;
+	const countSamples = useRef(new Map());
+	const countRevision = useRef(0);
 	if (list.length === 1 && !["web", "edit", "write"].includes(group.kind)) return html`<${ActionRow} step=${list[0]} />`;
 	const failed = list.filter((a) => a.isError).length;
 	const running = list.some((a) => a.status === "running" || a.status === "pending");
-	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(list.filter((step) => !nothingRunning || !step.preview)) : undefined;
+	let removed = 0;
+	const counted = list.map((step) => {
+		const cached = countSamples.current.get(step.key);
+		const discarded = step.isError || step.status === "cancelled" || (nothingRunning && step.preview);
+		if (discarded) {
+			if (cached) countSamples.current.set(step.key, { discarded: true });
+			removed++;
+			return { ...step, extra: undefined, preview: false };
+		}
+		if (step.extra) {
+			const stage = step.phase || "done";
+			if (cached?.extra && cached.stage !== stage) countRevision.current++;
+			countSamples.current.set(step.key, { extra: step.extra, preview: step.preview, stage });
+		}
+		else if (cached?.extra && (step.status === "pending" || step.status === "running")) return { ...step, extra: cached.extra, preview: true };
+		return step;
+	});
+	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(counted) : undefined;
 	return html`<div class="group">
 		<button class="group-head" onClick=${() => setOpen(!open)} aria-expanded=${open}>
 			<span class="action-ico">${running ? html`<${Spinner} />` : html`<${Icon} name=${KIND_ICON[group.kind] || "wrench"} size=${14} class="c-dim" />`}</span>
 			<span class=${`group-label truncate ${running ? "shimmer-text" : ""}`}>${groupLabel(group.kind, list)}</span>
-			${group.kind === "edit" || group.kind === "write" ? html`<${StepCounts} ...${totals} preview=${!nothingRunning && list.some((step) => step.preview)} running=${running && !nothingRunning} />` : null}
+			${group.kind === "edit" || group.kind === "write" ? html`<${StepCounts} ...${totals} preview=${counted.some((step) => step.preview)} source=${countRevision.current} removed=${removed} running=${running && !nothingRunning} />` : null}
 			${failed ? html`<span class="badge danger">${t("{failed} failed", { failed })}</span>` : null}
 			<span class="grow" />
 			<${Fold} />

@@ -135,6 +135,7 @@ export function describeAction(call, result, run, cwd) {
 	const shell = kind === "run" && result ? shellOutcome(result) : null;
 	const isError = shell === "cancelled" ? false : result ? result.isError : run?.status === "error";
 	const status = shell === "cancelled" ? "cancelled" : result ? (result.isError ? "error" : "done") : run?.status === "running" ? "running" : run?.status || "pending";
+	if (isError || status === "cancelled") extra = undefined;
 	const [ing, past, base] = (TENSES[kind] || TENSES.tool).map((word) => t(word));
 	const phase = !result && (kind === "edit" || kind === "write") ? (run?.status === "running" ? "applying" : "generating") : undefined;
 	const preview = !result && !run?.partialDetails && !!call.changePreview && !!extra;

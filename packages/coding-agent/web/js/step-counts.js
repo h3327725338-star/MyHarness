@@ -3,30 +3,48 @@ import { html, useLayoutEffect, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
 
 export const COUNT_ROLL_MS = 360;
+export const COUNT_CHECK_MS = 200;
 
-/** Keep at most one latest sample; let the current roll finish rather than restarting it. */
+/** One latest sample, a separate detection clock and a non-interruptible animation. */
 export function createCountBuffer(initial, publish) {
 	let shown = initial;
 	let pending = initial;
-	let timer;
+	let checkTimer;
+	let rollTimer;
 	let disposed = false;
-	const changed = () => shown?.additions !== pending?.additions || shown?.deletions !== pending?.deletions;
-	const flush = (immediate = false) => {
-		if (disposed || !changed()) return;
-		if (timer && !immediate) return;
-		if (timer) clearTimeout(timer);
-		const previous = shown;
+	const changed = () => ["additions", "deletions", "preview", "source", "removed"].some((key) => shown?.[key] !== pending?.[key]);
+	const flush = () => {
+		if (disposed || rollTimer || !changed()) return;
+		const old = shown;
 		shown = pending;
-		publish({ current: shown, previous });
-		timer = setTimeout(() => {
-			timer = undefined;
+		const rollback = (shown?.removed ?? 0) > (old?.removed ?? 0);
+		const corrected = old?.preview || shown?.preview || (old && old.source !== shown?.source);
+		const previous = {};
+		for (const key of ["additions", "deletions"]) {
+			const before = old?.[key] ?? "";
+			const after = shown?.[key] ?? 0;
+			if (before !== after && (rollback || (!corrected && after > (before || 0)))) previous[key] = before;
+		}
+		const animate = Object.keys(previous).length > 0;
+		publish({ current: shown, previous: animate ? previous : undefined });
+		if (animate) rollTimer = setTimeout(() => {
+			rollTimer = undefined;
+			// Retire old cells, including zero-valued cells, when the roll ends.
+			publish({ current: shown, previous: undefined });
 			flush();
 		}, COUNT_ROLL_MS);
 	};
 	return {
-		update(value) { pending = value; },
+		update(value) {
+			pending = value;
+			if (!checkTimer && changed()) checkTimer = setTimeout(function check() {
+				checkTimer = undefined;
+				flush();
+				if (!disposed && changed()) checkTimer = setTimeout(check, COUNT_CHECK_MS);
+			}, COUNT_CHECK_MS);
+		},
 		flush,
-		dispose() { disposed = true; clearTimeout(timer); },
+		dispose() { disposed = true; clearTimeout(checkTimer); clearTimeout(rollTimer); },
 	};
 }
 
@@ -38,29 +56,33 @@ function RollingNumber({ value, previous, direction }) {
 	</span>`;
 }
 
-/** Unknown counts stay absent. The first live number rolls in from an empty cell, never a fabricated zero. */
-export function StepCounts({ additions, deletions, running, preview }) {
-	const counts = Number.isFinite(additions) && Number.isFinite(deletions) ? { additions, deletions } : undefined;
+/** Unknown samples are not zero. Only explicit failure/cancellation removes retained counts. */
+export function StepCounts({ additions, deletions, running, preview, source, removed = 0 }) {
+	const known = Number.isFinite(additions) && Number.isFinite(deletions);
+	const retained = useRef(undefined);
+	let counts = known ? { additions, deletions, preview: !!preview, source, removed } : undefined;
+	if (counts) retained.current = counts;
+	else if (removed > (retained.current?.removed ?? 0)) {
+		counts = { additions: 0, deletions: 0, preview: false, source, removed };
+		retained.current = counts;
+	}
+	else if (retained.current && removed > 0 && retained.current.removed === removed) counts = retained.current;
+	else if (running && retained.current) counts = { ...retained.current, preview: true };
 	const [frame, setFrame] = useState(() => ({ current: counts, previous: undefined }));
-	const live = useRef(running);
 	const buffer = useRef(null);
 	if (!buffer.current) buffer.current = createCountBuffer(counts, setFrame);
 	useLayoutEffect(() => () => buffer.current.dispose(), []);
 	useLayoutEffect(() => {
 		buffer.current.update(counts);
-		if (running) live.current = true;
-		// Removing a failed/cancelled preview must not wait for an animation.
-		buffer.current.flush(!counts);
-	}, [additions, deletions, running]);
+	}, [additions, deletions, running, preview, source, removed]);
 	const current = frame.current;
-	if (!current || !counts) return null;
+	if (!current) return null;
 	const showAdd = current.additions || frame.previous?.additions;
 	const showDel = current.deletions || frame.previous?.deletions;
 	if (!showAdd && !showDel) return null;
-	const previous = frame.previous ?? (live.current ? { additions: "", deletions: "" } : undefined);
 	return html`<span class="counts step-counts">
-		${showAdd ? html`<span class="add"><span class=${live.current ? "count-sign pop" : "count-sign"}>+</span><${RollingNumber} value=${current.additions} previous=${previous?.additions} direction="up" /></span>` : null}
-		${showDel ? html`<span class="del"><span class=${live.current ? "count-sign pop" : "count-sign"}>−</span><${RollingNumber} value=${current.deletions} previous=${previous?.deletions} direction="down" /></span>` : null}
-		${preview ? html`<span class="count-preview">${t("Preview")}</span>` : null}
+		${showAdd ? html`<span class="add"><span class="count-sign">+</span><${RollingNumber} value=${current.additions} previous=${frame.previous?.additions} direction="up" /></span>` : null}
+		${showDel ? html`<span class="del"><span class="count-sign">−</span><${RollingNumber} value=${current.deletions} previous=${frame.previous?.deletions} direction="down" /></span>` : null}
+		${current.preview ? html`<span class="count-preview">${t("Preview")}</span>` : null}
 	</span>`;
 }
