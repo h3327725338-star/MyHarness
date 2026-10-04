@@ -68,16 +68,18 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .count-sign.pop { animation: count-pop var(--t-slow) var(--ease) both; }
 @keyframes count-pop { 0% { transform: scale(0.65); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 .step-counts > span { display: inline-flex; align-items: center; text-box: normal; }
-.count-number { display: inline-grid; height: 1em; line-height: 1; overflow: hidden; text-align: right; }
+.count-number { display: inline-grid; height: 1.35em; line-height: 1.35; overflow: hidden; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.count-preview { color: var(--text-3); font-size: var(--fs-xs); margin-left: 5px; }
+.step-counts { --count-roll-duration: 360ms; }
 .count-number > span { grid-area: 1 / 1; }
-.count-current.roll-up { animation: count-in-up var(--t-slow) var(--ease) both; }
-.count-old.roll-up { animation: count-out-up var(--t-slow) var(--ease) both; }
-.count-current.roll-down { animation: count-in-down var(--t-slow) var(--ease) both; }
-.count-old.roll-down { animation: count-out-down var(--t-slow) var(--ease) both; }
-@keyframes count-in-up { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes count-out-up { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-100%); opacity: 0; } }
-@keyframes count-in-down { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes count-out-down { from { transform: translateY(0); opacity: 1; } to { transform: translateY(100%); opacity: 0; } }
+.count-current.roll-up { animation: count-in-up var(--count-roll-duration) var(--ease) both; }
+.count-old.roll-up { animation: count-out-up var(--count-roll-duration) var(--ease) both; }
+.count-current.roll-down { animation: count-in-down var(--count-roll-duration) var(--ease) both; }
+.count-old.roll-down { animation: count-out-down var(--count-roll-duration) var(--ease) both; }
+@keyframes count-in-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes count-out-up { from { transform: translateY(0); } to { transform: translateY(-100%); } }
+@keyframes count-in-down { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+@keyframes count-out-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
 .err-text { color: var(--danger); font-size: var(--fs-sm); }
 .link-btn { color: var(--accent); font-size: var(--fs-sm); padding: 0 2px; border-radius: var(--r-xs); }
 .link-btn:hover:not(:disabled) { text-decoration: underline; }

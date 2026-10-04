@@ -55,7 +55,7 @@ const harness = vi.hoisted(() => {
 	};
 });
 vi.mock("../web/js/ui.js", () => harness.hooks);
-const { StepCounts, createCountBuffer, COUNT_CHANGE_THRESHOLD } = await import(
+const { StepCounts, createCountBuffer, COUNT_ROLL_MS } = await import(
 	new URL("../web/js/step-counts.js", import.meta.url).href
 );
 const css = readFileSync(new URL("../web/css/transcript.css", import.meta.url), "utf8");
@@ -82,6 +82,7 @@ afterEach(() => {
 
 describe("Web step line counts", () => {
 	it("coalesces samples and publishes nothing when counts are unchanged", () => {
+		vi.useFakeTimers();
 		const publish = vi.fn();
 		const buffer = createCountBuffer({ additions: 1, deletions: 2 }, publish);
 		buffer.update({ additions: 1, deletions: 2 });
@@ -97,59 +98,41 @@ describe("Web step line counts", () => {
 		buffer.flush();
 		expect(publish).toHaveBeenCalledTimes(1);
 	});
-	it("rolls each direction independently after three changed lines, without a timer", () => {
-		expect(COUNT_CHANGE_THRESHOLD).toBe(3);
-		render({ running: true });
-		render({ additions: 1, deletions: 2, running: true });
-		expect(harness.renders()).toBe(0);
-		render({ additions: 3, deletions: 2, running: true });
-		expect(harness.renders()).toBe(1);
-		expect(
-			cells(render({ additions: 3, deletions: 2, running: true })).map(({ current, previous, direction }) => ({
-				current,
-				previous,
-				direction,
-			})),
-		).toEqual([
-			{ current: 3, previous: 0, direction: "up" },
-			{ current: 0, previous: 0, direction: "down" },
-		]);
-		render({ additions: 5, deletions: 3, running: true });
-		expect(cells(render({ additions: 5, deletions: 3, running: true })).map((cell) => cell.current)).toEqual([3, 3]);
-		render({ additions: 6, deletions: 3, running: true });
-		const props = { additions: 6, deletions: 3, running: true };
-		const tree = render(props);
-		const renders = harness.renders();
-		expect(render(props)).toEqual(tree);
-		expect(harness.renders()).toBe(renders);
-	});
-	it("flushes the final result immediately, clears polling, and rolls first available counts from zero", () => {
+	it("shows small changes immediately and coalesces rapid samples until the roll finishes", () => {
 		vi.useFakeTimers();
-		expect(cells(render({ running: true })).map((cell) => cell.current)).toEqual([0, 0]);
+		expect(COUNT_ROLL_MS).toBe(360);
+		expect(render({ running: true })).toBeNull();
+		render({ additions: 1, deletions: 2, running: true });
+		expect(cells(render({ additions: 1, deletions: 2, running: true })).map((c) => c.current)).toEqual([1, 2]);
+		render({ additions: 3, deletions: 4, running: true });
+		render({ additions: 8, deletions: 5, running: true });
+		expect(cells(render({ additions: 8, deletions: 5, running: true })).map((c) => c.current)).toEqual([1, 2]);
+		vi.advanceTimersByTime(COUNT_ROLL_MS);
+		expect(cells(render({ additions: 8, deletions: 5, running: true })).map((c) => c.current)).toEqual([8, 5]);
+	});
+	it("rolls final counts from an empty cell without fabricating zero", () => {
+		vi.useFakeTimers();
+		expect(render({ running: true })).toBeNull();
 		render({ additions: 12, deletions: 3, running: false });
-		expect(harness.renders()).toBe(1);
-		expect(vi.getTimerCount()).toBe(0);
-		const tree = render({ additions: 12, deletions: 3, running: false });
-		expect(cells(tree).map((cell) => cell.previous)).toEqual([0, 0]);
+		expect(cells(render({ additions: 12, deletions: 3, running: false })).map((c) => c.previous)).toEqual(["", ""]);
 		vi.advanceTimersByTime(6000);
 		expect(harness.renders()).toBe(1);
+		expect(vi.getTimerCount()).toBe(0);
 	});
-	it("settles a one or two line remainder immediately on completion", () => {
+	it("settles final small changes after the current roll without replaying unchanged counts", () => {
+		vi.useFakeTimers();
 		render({ additions: 3, deletions: 3, running: true });
 		render({ additions: 4, deletions: 5, running: true });
-		expect(cells(render({ additions: 4, deletions: 5, running: true })).map((cell) => cell.current)).toEqual([3, 3]);
-		render({ additions: 4, deletions: 5, running: false });
-		expect(
-			cells(render({ additions: 4, deletions: 5, running: false })).map(({ current, previous }) => ({
-				current,
-				previous,
-			})),
-		).toEqual([
-			{ current: 4, previous: 3 },
-			{ current: 5, previous: 3 },
-		]);
+		render({ additions: 5, deletions: 6, running: false });
+		vi.advanceTimersByTime(COUNT_ROLL_MS);
+		expect(cells(render({ additions: 5, deletions: 6, running: false })).map((c) => c.current)).toEqual([5, 6]);
+		vi.advanceTimersByTime(COUNT_ROLL_MS);
+		const renders = harness.renders();
+		render({ additions: 5, deletions: 6, running: false });
+		expect(harness.renders()).toBe(renders);
 	});
 	it("does not animate historical counts or an unchanged half of a label", () => {
+		vi.useFakeTimers();
 		const historical = render({ additions: 10, deletions: 2, running: false });
 		for (const cell of cells(historical)) expect(cell.node.values).toContain("count-current");
 		render({ additions: 10, deletions: 7, running: false });
@@ -158,12 +141,14 @@ describe("Web step line counts", () => {
 		expect(changed[1].node.values).toContain("count-current roll-down");
 	});
 	it("hides unknown and initial zero counts, and rolls back to zero without losing cell width", () => {
+		vi.useFakeTimers();
 		expect(render({ additions: 0, deletions: 0, running: false })).toBeNull();
 		render({ additions: 100, deletions: 0, running: false });
 		render({ additions: 9, deletions: 0, running: false });
 		const tree = render({ additions: 9, deletions: 0, running: false });
 		expect(cells(tree)[0].node.values[0]).toEqual({ minWidth: "3ch" });
 		render({ additions: 0, deletions: 0, running: false });
+		vi.advanceTimersByTime(COUNT_ROLL_MS);
 		expect(cells(render({ additions: 0, deletions: 0, running: false }))[0].current).toBe(0);
 		render({ running: false });
 		expect(render({ running: false })).toBeNull();
@@ -173,6 +158,7 @@ describe("Web step line counts", () => {
 		expect(css).toMatch(/count-out-up[^\n]*translateY\(-100%\)/);
 		expect(css).toMatch(/count-in-down[^\n]*translateY\(-100%\)/);
 		expect(css).toMatch(/count-out-down[^\n]*translateY\(100%\)/);
-		expect(css).toContain("animation: count-in-up var(--t-slow) var(--ease) both");
+		expect(css).toContain("animation: count-in-up var(--count-roll-duration) var(--ease) both");
+		expect(css).toContain("--count-roll-duration: 360ms");
 	});
 });

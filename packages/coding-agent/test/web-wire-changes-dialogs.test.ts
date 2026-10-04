@@ -4,10 +4,45 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChangeTracker, countPatchLines, makePatch } from "../src/modes/web/changes.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
-import { entriesToWire, messageToWire, sanitizeDetails, toWireModel } from "../src/modes/web/wire.ts";
+import {
+	editChangePreview,
+	entriesToWire,
+	messageToWire,
+	sanitizeDetails,
+	toWireModel,
+} from "../src/modes/web/wire.ts";
 import type { SessionEntry } from "../src/session/types.ts";
 
 describe("web wire format", () => {
+	it("projects previews only for live updates, even when the provider initializes stopReason to stop", () => {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			stopReason: "stop",
+			content: [
+				{ type: "toolCall", id: "e", name: "edit", arguments: { edits: [{ oldText: "old", newText: "new" }] } },
+			],
+		} as never;
+		expect(messageToWire(message, { streaming: true })).toMatchObject({
+			blocks: [{ changePreview: { additions: 1, deletions: 1 } }],
+		});
+		const historical = messageToWire(message);
+		if (historical?.kind !== "assistant") throw new Error("expected assistant");
+		expect(historical.blocks[0]).not.toHaveProperty("changePreview");
+	});
+	it("counts received edit text only, retaining unchanged lines and bounding streamed work", () => {
+		expect(editChangePreview("edit", { edits: [{ oldText: "same\nold\n", newText: "same\nnew\nmore\n" }] })).toEqual({
+			additions: 2,
+			deletions: 1,
+		});
+		expect(editChangePreview("edit", { edits: [{ oldText: "old", newText: "n" }] })).toEqual({
+			additions: 1,
+			deletions: 1,
+		});
+		expect(editChangePreview("edit", { edits: [{ oldText: "old" }] })).toBeUndefined();
+		expect(editChangePreview("write", { content: "new" })).toBeUndefined();
+		expect(editChangePreview("edit", { edits: [{ oldText: "a".repeat(65_000), newText: "b" }] })).toBeUndefined();
+	});
 	it("restores UI-only Git records from existing Session custom entries", () => {
 		const entries: SessionEntry[] = [
 			{

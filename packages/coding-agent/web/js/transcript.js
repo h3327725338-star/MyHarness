@@ -136,7 +136,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 				<span class=${step.status === "running" ? "shimmer-text" : "verb"}>${step.verb}</span>
 				${step.target ? html` <span class=${step.kind === "run" ? "mono target" : "target"}>${step.target}</span>` : null}
 				${step.detail ? html` <span class="dim">${step.detail}</span>` : null}
-				${step.kind === "edit" || step.kind === "write" ? html` <${StepCounts} ...${step.extra} running=${!nothingRunning && (step.status === "running" || step.status === "pending")} />` : null}
+				${step.kind === "edit" || step.kind === "write" ? html` <${StepCounts} ...${nothingRunning && step.preview ? undefined : step.extra} preview=${step.preview} running=${!nothingRunning && (step.status === "running" || step.status === "pending")} />` : null}
 				${exit ? html` <span class="err-text">${t("exit {exit}", { exit })}</span>` : null}
 				${step.status === "cancelled" ? html` <span class="dim">${t("not finished")}</span>` : null}
 			</span>
@@ -158,12 +158,12 @@ function Group({ group, forceOpen }) {
 	if (list.length === 1 && !["web", "edit", "write"].includes(group.kind)) return html`<${ActionRow} step=${list[0]} />`;
 	const failed = list.filter((a) => a.isError).length;
 	const running = list.some((a) => a.status === "running" || a.status === "pending");
-	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(list) : undefined;
+	const totals = group.kind === "edit" || group.kind === "write" ? changeTotals(list.filter((step) => !nothingRunning || !step.preview)) : undefined;
 	return html`<div class="group">
 		<button class="group-head" onClick=${() => setOpen(!open)} aria-expanded=${open}>
 			<span class="action-ico">${running ? html`<${Spinner} />` : html`<${Icon} name=${KIND_ICON[group.kind] || "wrench"} size=${14} class="c-dim" />`}</span>
 			<span class=${`group-label truncate ${running ? "shimmer-text" : ""}`}>${groupLabel(group.kind, list)}</span>
-			${group.kind === "edit" || group.kind === "write" ? html`<${StepCounts} ...${totals} running=${running && !nothingRunning} />` : null}
+			${group.kind === "edit" || group.kind === "write" ? html`<${StepCounts} ...${totals} preview=${!nothingRunning && list.some((step) => step.preview)} running=${running && !nothingRunning} />` : null}
 			${failed ? html`<span class="badge danger">${t("{failed} failed", { failed })}</span>` : null}
 			<span class="grow" />
 			<${Fold} />

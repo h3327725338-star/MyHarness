@@ -83,6 +83,7 @@ export function describeAction(call, result, run, cwd) {
 			path = str(args.path || args.file_path);
 			target = shortPath(path, cwd);
 			const details = result ? result.details : run?.partialDetails;
+			if (!result && !run?.partialDetails && call.changePreview) extra = call.changePreview;
 			const patch = details?.patch || details?.diff;
 			if (patch) {
 				const c = countPatch(patch);
@@ -135,8 +136,10 @@ export function describeAction(call, result, run, cwd) {
 	const isError = shell === "cancelled" ? false : result ? result.isError : run?.status === "error";
 	const status = shell === "cancelled" ? "cancelled" : result ? (result.isError ? "error" : "done") : run?.status === "running" ? "running" : run?.status || "pending";
 	const [ing, past, base] = (TENSES[kind] || TENSES.tool).map((word) => t(word));
-	const verb = status === "running" || status === "pending" ? ing : shell === "cancelled" ? t("Stopped") : shell === "timeout" ? t("Timed out: {action}", { action: base }) : isError ? t("Failed to {action}", { action: base }) : past;
-	return { kind, verb, target, detail, path, extra, web, status, isError: !!isError };
+	const phase = !result && (kind === "edit" || kind === "write") ? (run?.status === "running" ? "applying" : "generating") : undefined;
+	const preview = !result && !run?.partialDetails && !!call.changePreview && !!extra;
+	const verb = phase === "generating" ? t(extra ? "Generating changes" : "Preparing changes") : phase === "applying" ? t("Applying changes") : status === "running" || status === "pending" ? ing : shell === "cancelled" ? t("Stopped") : shell === "timeout" ? t("Timed out: {action}", { action: base }) : isError ? t("Failed to {action}", { action: base }) : past;
+	return { kind, verb, target, detail, path, extra, preview, phase, web, status, isError: !!isError };
 }
 
 /**
@@ -196,8 +199,10 @@ export function groupLabel(kind, actions) {
 		case "run":
 			return pick(N_("Running {commands}"), N_("Ran {commands}"), { commands: count(n, "command") });
 		case "edit":
+			if (running) return t(actions.some((a) => a.phase === "applying") ? "Applying changes to {files}" : actions.some((a) => a.extra) ? "Generating changes for {files}" : "Preparing changes for {files}", { files: count(distinct(actions.map((a) => a.path)), "file") });
 			return pick(N_("Editing {files}"), N_("Edited {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "write":
+			if (running) return t(actions.some((a) => a.phase === "applying") ? "Applying changes to {files}" : "Preparing changes for {files}", { files: count(distinct(actions.map((a) => a.path)), "file") });
 			return pick(N_("Writing {files}"), N_("Wrote {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
 		case "web": {
 			// One line for everything the agent did on the web: rounds of searching, results returned, pages opened.
@@ -341,7 +346,7 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 				} else if (block.type === "toolCall") {
 					const result = results.get(block.id);
 					const run = ctx.toolRuns[block.id];
-					const call = { id: block.id, name: block.name, args: block.args };
+					const call = { id: block.id, name: block.name, args: block.args, changePreview: block.changePreview };
 					const described = describeAction(call, result, run, ctx.cwd);
 					const failedByAbort = !result && failed && !(run?.status === "running");
 					turn.steps.push({
@@ -352,6 +357,7 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 						run,
 						...described,
 						status: failedByAbort ? "cancelled" : described.status,
+						...(failedByAbort ? { extra: undefined, preview: false, phase: undefined } : {}),
 						startedAt: run?.startedAt || message.ts,
 						endedAt: result?.ts || run?.endedAt,
 					});

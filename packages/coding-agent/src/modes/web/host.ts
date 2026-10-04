@@ -701,7 +701,7 @@ export class WebHost {
 					this.cache.end(message);
 					this.cacheChanged = false;
 					this.broadcast("cache_hit", { cache: this.cache.current });
-					const item = messageToWire(message);
+					const item = messageToWire(message, { streaming: message.stopReason === "toolUse" });
 					this.broadcast("message_end", { liveId: this.liveAssistantId, item });
 					this.liveAssistantId = undefined;
 					this.liveUsageMessage = undefined;
@@ -884,7 +884,7 @@ export class WebHost {
 		const message = this.pendingAssistant;
 		this.pendingAssistant = undefined;
 		if (!message || !this.liveAssistantId) return;
-		const item = messageToWire(message);
+		const item = messageToWire(message, { streaming: true });
 		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
 		// A change that has to wait stays flagged and goes out with the next update (or the final value at the end).
 		this.broadcastUsage();

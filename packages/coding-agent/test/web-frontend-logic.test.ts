@@ -198,6 +198,27 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 });
 
 describe("Web UI: action descriptions", () => {
+	it("uses streamed edit previews until execution, then replaces them with validated counts", () => {
+		const call = { name: "edit", args: { path: "file.txt" }, changePreview: { additions: 2, deletions: 1 } };
+		expect(describeAction(call, undefined, undefined, "")).toMatchObject({
+			extra: call.changePreview,
+			preview: true,
+			phase: "generating",
+		});
+		expect(describeAction(call, undefined, { status: "running" }, "")).toMatchObject({
+			preview: true,
+			phase: "applying",
+		});
+		expect(
+			describeAction(
+				call,
+				undefined,
+				{ status: "running", partialDetails: { patch: "@@ -1 +1 @@\n-old\n+new\n" } },
+				"",
+			),
+		).toMatchObject({ extra: { additions: 1, deletions: 1 }, preview: false });
+		expect(describeAction(call, { isError: true }, undefined, "").extra).toBeUndefined();
+	});
 	it("reads running file change details and drops previews on failure", () => {
 		for (const name of ["edit", "write"]) {
 			const call = { name, args: { path: "file.txt" } };
