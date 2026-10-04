@@ -670,6 +670,7 @@ function connectEvents() {
 		});
 
 	on("boot", (d) => set({ boot: { ...state.boot, ...d } }));
+	on("worktree_name", (d) => set({ boot: { ...state.boot, worktreeService: d } }));
 	on("dialogs", (d) => (d.slot ? set({ dialogs: d.requests }) : set({ boot: { ...state.boot, dialogs: d.requests } })));
 	on("surface", (d) => set({ surface: d }));
 	on("editor_text", (d, slot) => slot === activeSlot && set({ editorInsert: { text: d.text, nonce: Date.now() } }));

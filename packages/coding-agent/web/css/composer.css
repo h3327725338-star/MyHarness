@@ -138,6 +138,9 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-wt-text .dim { font-size: var(--fs-xs); line-height: 1.35; }
 .branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
 .branch-copy { color: var(--text-2); }
+.branch-copy-actions { display: flex; flex: none; opacity: 0; }
+.branch-copy:hover .branch-copy-actions, .branch-copy:focus-within .branch-copy-actions { opacity: 1; }
+.branch-copy-actions .icon-btn { flex: none; }
 .branch-copy-info { flex: 1; min-width: 0; gap: 2px; }
 .branch-copy > svg { flex: none; }
 .branch-copy-path { font-size: var(--fs-xs); }

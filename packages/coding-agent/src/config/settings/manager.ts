@@ -1003,9 +1003,29 @@ export class SettingsManager {
 			: SETTINGS_DEFAULTS.webShutdownGraceSeconds;
 	}
 
+	getWorktreeShutdownGraceSeconds(): number {
+		const value = this.settings.worktreeShutdownGraceSeconds;
+		return typeof value === "number" && Number.isFinite(value) && value >= 0
+			? value
+			: this.getWebShutdownGraceSeconds();
+	}
+
+	setWorktreeShutdownGraceSeconds(seconds: number): void {
+		if (!Number.isFinite(seconds) || seconds < 0 || seconds > 3600) {
+			throw new Error(`Invalid worktreeShutdownGraceSeconds setting: ${String(seconds)}`);
+		}
+		this.globalSettings.worktreeShutdownGraceSeconds = seconds;
+		this.markModified("worktreeShutdownGraceSeconds");
+		this.save();
+	}
+
 	setWebShutdownGraceSeconds(seconds: number): void {
 		if (!Number.isFinite(seconds) || seconds < 0) {
 			throw new Error(`Invalid webShutdownGraceSeconds setting: ${String(seconds)}`);
+		}
+		if (this.globalSettings.worktreeShutdownGraceSeconds === undefined) {
+			this.globalSettings.worktreeShutdownGraceSeconds = this.getWorktreeShutdownGraceSeconds();
+			this.markModified("worktreeShutdownGraceSeconds");
 		}
 		this.globalSettings.webShutdownGraceSeconds = seconds;
 		this.markModified("webShutdownGraceSeconds");

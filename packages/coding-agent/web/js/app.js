@@ -46,6 +46,7 @@ function StatusPill() {
 }
 
 function Header() {
+	const copy = useStore((s) => s.boot.worktreeService);
 	const snap = useStore((s) => s.snap);
 	const items = useStore((s) => s.items);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
@@ -69,6 +70,7 @@ function Header() {
 		${editing
 			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
+		${copy ? html`<span class="badge truncate" title=${`${copy.name}\n${copy.path}`}>${t("Copy")} · ${copy.name}</span>` : null}
 		<span class="grow" />
 		<${StatusPill} />
 		${tabBtn("changes", "fileDiff", t("Changes"), changeCount ? String(changeCount) : "")}
@@ -214,8 +216,10 @@ export function App() {
 	const mainRef = useRef(null);
 	useWidthClass(mainRef, [snap != null, view.panelOpen, view.sidebarOpen]);
 	useEffect(() => {
-		document.title = snap?.session?.name ? `${snap.session.name} · MyHarness` : "MyHarness";
-	}, [snap?.session?.name]);
+		const copy = boot.worktreeService;
+		document.title = copy ? `[${t("Copy")}] ${clip(copy.name || "", 24)} · MyHarness` : `[${t("Main")}] ${snap?.session?.name ? `${clip(snap.session.name, 24)} · ` : ""}MyHarness`;
+	}, [snap?.session?.name, boot.worktreeService]);
+
 
 	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;
 	if (boot.phase !== "ready" || !snap) {

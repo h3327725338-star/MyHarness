@@ -490,6 +490,18 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				max: 3600,
 				unit: "seconds",
 			},
+			{
+				id: "worktreeShutdownGraceSeconds",
+				section: "Network",
+				label: "Copy tab exit delay",
+				description:
+					"After the last copy tab closes, exit after this delay. Reopening cancels; at least 5 seconds protects reloads.",
+				type: "number",
+				value: s.getWorktreeShutdownGraceSeconds(),
+				min: 0,
+				max: 3600,
+				unit: "seconds",
+			},
 			// Shell
 			{
 				id: "shellPath",
@@ -865,6 +877,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			}
 			case "webShutdownGraceSeconds":
 				s.setWebShutdownGraceSeconds(Math.floor(numberValue(value, id, 0, 3600)));
+				return;
+			case "worktreeShutdownGraceSeconds":
+				s.setWorktreeShutdownGraceSeconds(Math.floor(numberValue(value, id, 0, 3600)));
 				return;
 			case "shellPath":
 				s.setShellPath(typeof value === "string" && value.trim() ? value.trim() : undefined);

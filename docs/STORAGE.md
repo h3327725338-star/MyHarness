@@ -52,6 +52,15 @@ original file bytes; removing a draft attachment only removes its reference, not
 the stored file. Structured Session deletion removes them with the Session data
 directory; they must not be treated as disposable build cache.
 
+## Managed Worktree test services
+
+Display-only names are stored in `<agent>/worktrees/names/<path-id>.json`.
+Managed copy services use `<agent>/worktrees/services/<path-id>/` for private
+Agent configuration, sessions, data, startup logs and a loopback service identity
+record. Selected model/credential files are copied only on first startup;
+these private snapshots contain secrets and must never be committed or exposed.
+They are not a filesystem sandbox. Names do not change Git branch or path identity.
+
 ## Conversation-owned artifacts
 
 Temporary reports, research, plans, disposable verification scripts, test results

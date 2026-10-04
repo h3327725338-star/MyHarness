@@ -5,7 +5,8 @@ import { html, useEffect, useMemo, useRef, useState, Chevron, Collapse, COLLAPSE
 import { api, attempt, loadGitStatus, post, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
-import { serverText, t } from "./i18n.js";
+import { getLang, serverText, t } from "./i18n.js";
+import { openWorktreeTab } from "./worktree-tabs.js";
 
 /** A name for the branch of a new isolated copy: task-MMDD-HHmm. */
 function copyBranchName() {
@@ -72,6 +73,10 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [worktreesOpen, setWorktreesOpen] = useState(false);
 	const [isolating, setIsolating] = useState(false);
 	const [copyName, setCopyName] = useState("");
+	const [naming, setNaming] = useState(null);
+	const [displayName, setDisplayName] = useState("");
+	const [createDisplayName, setCreateDisplayName] = useState("");
+	const [autoName, setAutoName] = useState(false);
 	const known = useRef(null);
 	const list = useRef(null);
 	const linked = !!gitStatus.linkedWorktree;
@@ -163,7 +168,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		toast(t("Deleted branch {branch}", { branch: branch.name }), "info", 3500);
 	};
 	const main = worktrees?.list.find((w) => w.isMain);
-	const others = (worktrees?.list || []).filter((w) => !w.current);
+	const others = (worktrees?.list || []).filter((w) => !w.current || !w.isMain);
 	const setIsolation = (on) => {
 		if (linked) {
 			if (!on && main) enterCopy(main.path, t("Back in the main copy"));
@@ -181,11 +186,37 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			setBusy("");
 			return;
 		}
+		if (autoName) {
+			setBusy("");
+			await loadWorktrees();
+			await suggestName(created.worktree);
+			setIsolating(false);
+			return;
+		}
+		if (createDisplayName.trim()) await attempt(() => post("/api/git/worktrees/rename", { path: created.worktree.path, name: createDisplayName }, slot));
 		const entered = await attempt(() => post("/api/git/worktrees/enter", { path: created.worktree.path }));
 		setBusy("");
 		if (!entered) return loadWorktrees();
 		close();
 		await done(t("Now working in an isolated copy on {branch}", { branch }));
+	};
+
+	const startCopy = async (w) => {
+		setBusy(`start:${w.path}`);
+		await attempt(() => openWorktreeTab(w.path, () => post("/api/git/worktrees/start", { path: w.path }, slot)));
+		setBusy("");
+	};
+	const suggestName = async (w) => {
+		setBusy("name");
+		const result = await attempt(() => post("/api/git/worktrees/name-ai", { path: w.path, language: getLang() }, slot));
+		setBusy("");
+		if (result) { setNaming(w); setDisplayName(result.name); }
+	};
+	const saveName = async () => {
+		setBusy("name");
+		const result = await attempt(() => post("/api/git/worktrees/rename", { path: naming.path, name: displayName }, slot));
+		setBusy("");
+		if (result) { setNaming(null); await loadWorktrees(); }
 	};
 
 	const activate = (row) => (row.kind === "new" ? startNew() : switchTo(row.branch));
@@ -253,19 +284,26 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 					<input class="field sm grow" value=${copyName} aria-label=${t("Branch for the copy")} placeholder=${t("Branch for the copy")} onInput=${(e) => setCopyName(e.target.value)} />
 					<button class="btn sm primary" type="submit" disabled=${disabled || !copyName.trim()}>${t("Create and open")}</button>
 				</form>
+				<div class="branch-form"><input class="field sm grow" value=${createDisplayName} maxlength="80" aria-label=${t("Copy display name")} placeholder=${t("Copy display name (optional)")} onInput=${(e) => setCreateDisplayName(e.target.value)} /></div>
+				<label class="branch-hint"><input type="checkbox" checked=${autoName} onChange=${(e) => setAutoName(e.target.checked)} /> ${t("Let the main Agent name it")}</label>
 				<div class="branch-hint dim">${t("The new branch starts from main.")}</div>
 			<//>
 			${others.length ? html`<div class="pop-group">${t("Existing copies")}</div>` : null}
 			<div class="branch-copy-region">
-			${others.length ? html`<div class="branch-copies">${others.map((w) => html`<button key=${w.path} class="pop-item branch-copy" disabled=${disabled} onClick=${() => enterCopy(w.path, w.isMain ? t("Back in the main copy") : t("Opened the copy on {branch}", { branch: w.branch || t("(detached)") }))} title=${w.path}>
+			${others.length ? html`<div class="branch-copies">${others.map((w) => html`<div key=${w.path} class="pop-item branch-copy" title=${w.path}>
 				<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
 				<span class="col branch-copy-info">
-					<span class="truncate">${w.isMain ? t("Main copy") : w.branch || t("(detached)")}</span>
+					<span class="truncate">${w.isMain ? t("Main copy") : w.displayName || w.branch || w.path.split(/[\\/]/).pop()}</span>
 					<span class="dim truncate branch-copy-path">${w.path}</span>
 				</span>
-				${busy === `w:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="arrowRight" size=${13} class="dim" />`}
-			</button>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
+				<div class="branch-copy-actions">
+				<button class="icon-btn sm" disabled=${disabled} title=${t("Enter to edit")} aria-label=${t("Enter to edit")} onClick=${() => enterCopy(w.path)}><${Icon} name="arrowRight" size=${13} /></button>
+				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}>${busy === `start:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="play" size=${13} />`}</button>
+				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
+				</div>
+			</div>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
 			</div>
+			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
 			<//>
 		</div>
 	</div>`;

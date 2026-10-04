@@ -4,11 +4,13 @@
  */
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import { getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
+import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import { setMirrorSessionsAllowed } from "../../session/manager/index.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { WebDialogBridge } from "./dialogs.ts";
@@ -24,6 +26,7 @@ import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
 import { registerTerminalRoutes } from "./routes-terminal.ts";
 import { WebTerminals } from "./terminal.ts";
+import { worktreeServiceIdentity } from "./worktree-launch.ts";
 
 export const DEFAULT_WEB_PORT = 7878;
 const PORT_FALLBACK_ATTEMPTS = 10;
@@ -65,7 +68,22 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 		files: ["marked.min.js", "highlight.min.js"],
 	});
 	server.setIndexFile(join(getWebUiDir(), "index.html"));
+	const copyIdentity = worktreeServiceIdentity();
+	const serviceIdentity = () =>
+		copyIdentity
+			? {
+					id: copyIdentity.id,
+					path: copyIdentity.path,
+					name:
+						new WorktreeDisplayNames(copyIdentity.metadataAgentDir).get(copyIdentity.path) ??
+						copyIdentity.path.split(/[\\/]/u).pop(),
+				}
+			: null;
+	server.route("GET", "/api/worktree-service", () =>
+		copyIdentity ? { ...serviceIdentity(), token: copyIdentity.token } : {},
+	);
 	server.route("GET", "/api/boot", () => ({
+		worktreeService: serviceIdentity(),
 		phase,
 		detail: detail ?? null,
 		version: VERSION,
@@ -138,6 +156,21 @@ export async function runWebMode(
 	options: WebModeOptions = {},
 ): Promise<number> {
 	const { server, dialogs } = bootstrap;
+	const copyIdentity = worktreeServiceIdentity();
+	const nameTimer = copyIdentity
+		? setInterval(
+				() =>
+					server.broadcast("worktree_name", {
+						id: copyIdentity.id,
+						path: copyIdentity.path,
+						name:
+							new WorktreeDisplayNames(copyIdentity.metadataAgentDir).get(copyIdentity.path) ??
+							copyIdentity.path.split(/[\\/]/u).pop(),
+					}),
+				2000,
+			)
+		: undefined;
+	nameTimer?.unref();
 	let resolveExit: (code: number) => void = () => {};
 	const exited = new Promise<number>((resolve) => {
 		resolveExit = resolve;
@@ -162,7 +195,17 @@ export async function runWebMode(
 
 	// The server belongs to its browser pages: once the last one is gone for the grace period, it exits.
 	const lifecycle = new WebLifecycle({
-		getGraceSeconds: () => runtimeHost.services.settingsManager.getWebShutdownGraceSeconds(),
+		getGraceSeconds: () => {
+			if (!copyIdentity) return runtimeHost.services.settingsManager.getWebShutdownGraceSeconds();
+			try {
+				const settings = JSON.parse(readFileSync(join(copyIdentity.metadataAgentDir, "settings.json"), "utf8"));
+				const value = settings.worktreeShutdownGraceSeconds;
+				if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 3600) return value;
+			} catch {
+				/* Use the isolated startup settings if the source is unavailable. */
+			}
+			return runtimeHost.services.settingsManager.getWorktreeShutdownGraceSeconds();
+		},
 		onExpire: () => void shutdown(0),
 	});
 	server.onClientCountChange = (count) => lifecycle.clientCountChanged(count);
@@ -173,6 +216,7 @@ export async function runWebMode(
 		if (shuttingDown) return;
 		shuttingDown = true;
 		lifecycle.dispose();
+		if (nameTimer) clearInterval(nameTimer);
 		server.broadcast(restarting ? "restarting" : "shutdown", {});
 		try {
 			dialogs.dismissAll();

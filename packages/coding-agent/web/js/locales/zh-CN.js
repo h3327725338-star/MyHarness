@@ -7,6 +7,21 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Copy": "副本",
+	"Main": "主版本",
+	"Allow popups to open the copy tab.": "请允许弹出窗口，以打开副本标签页。",
+	"This copy predates managed copy startup. Update its source before starting it from this menu.": "此副本尚不支持菜单启动，请先更新副本源码。",
+	"This copy does not contain the MyHarness source startup entry.": "此副本不包含 MyHarness 源码启动入口。",
+	"Copy name must contain 1–80 characters.": "副本名称须包含 1–80 个字符。",
+	"Copy tab exit delay": "副本标签页关闭后退出等待时间",
+	"After the last copy tab closes, exit after this delay. Reopening cancels; at least 5 seconds protects reloads.": "最后一个副本标签页关闭后，等待指定时间再退出；重新打开会取消退出，实际至少等待 5 秒以保护刷新。",
+	"Enter to edit": "进入修改",
+	"Start copy": "启动副本",
+	"Rename copy": "重命名副本",
+	"Copy display name": "副本显示名称",
+	"Copy display name (optional)": "副本显示名称（可选）",
+	"Let the main Agent name it": "让主 Agent 命名",
+	"AI name": "AI 命名",
 	"Also permanently delete artifacts": "同时永久删除产出文件",
 	"Artifact files and their workspace/global references will be removed. Project files are not affected.": "将删除产出原文件，并移除工作区和全局的汇总引用。不会删除项目文件。",
 	"Artifacts and their origin remain available in workspace/global indexes.": "保留产出文件及来源信息，仍可从工作区和全局汇总入口找到。",

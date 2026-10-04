@@ -272,6 +272,7 @@ export interface Settings {
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	webShutdownGraceSeconds?: number; // Web UI: seconds to wait after the last browser page disconnects before the server exits
+	worktreeShutdownGraceSeconds?: number; // Independent test-copy service exit delay
 }
 
 export type SettingsScope = "global" | "project";
