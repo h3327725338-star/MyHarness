@@ -4,6 +4,18 @@
 
 > 项目阶段：Early-stage / Work in Progress。项目自身使用 Apache-2.0；继承代码和第三方组件继续使用各自的许可证与 attribution，见 `LICENSE`、`NOTICE` 和 `THIRD_PARTY_NOTICES.md`。
 
+## Web-only 边界更新
+
+当前用户入口仅为 Web：`cli.ts → main.ts → startWebBootstrap/runWebMode`。`--web` 是兼容参数；InteractiveMode、PrintMode、`packages/tui`、终端工具 renderer 与 clipboard 已移出 workspace。本文下方尚涉及这些名称的详细旧交互说明仅作为迁移前背景，不代表可调用的当前 API，当前启动与扩展边界以本节及 `packages/coding-agent/docs/web-ui.md` 为准。
+
+- 当前构建包：ai、agent、storage/sqlite-node、coding-agent；coding-agent 不依赖 tui。
+- Extension API 不再暴露终端组件、Theme、custom/editor/overlay factories 或 Tool 终端 render callbacks；Web 对话、业务事件与纯文本 widgets 保留。已有终端扩展需要迁移，不能视作兼容。
+- HTML 导出使用独立 CSS palette 与结构化数据，不初始化 Theme 或 ANSI renderer。
+- `cli/args.ts`、`cli/slash-commands.ts`、`cli/settings-menu.ts`、文件输入与模型解析仍是共享启动/协议能力，不是终端 UI。
+- Explore 使用 `agent/delegation/worker.ts` 的内部 NDJSON 子进程协议，不是公开 print mode；复用现有 AgentSession services。
+- Web Terminal 仍由 WebTerminals、node-pty 与 xterm 实现，不应因移除 TUI 而删除。
+- Session、Settings 与 Theme resource loader 的旧持久化兼容保留，不删除用户数据；不再无条件迁移终端快捷键。
+
 ## 如何阅读本文
 
 - **当前事实**：由当前源码、目录、Package manifest、脚本或测试直接确认。
@@ -59,8 +71,7 @@ MyHarness 是一个 npm workspace monorepo。它由五个主要 Package 组成�
 | --- | --- | --- | --- | --- |
 | packages/agent | Provider 无关的 Agent、Agent Loop、消息、Tool 执行队列、通用 Session 和 Harness 抽象 | 不负责 MyHarness CLI、TUI 页面、项目 Settings、产品 Provider catalog | packages/agent/src/index.ts；package 还暴露 ./node | packages/ai |
 | packages/ai | Provider、Model、AI API adapter、Auth/OAuth、streaming 和 usage 类型 | 不负责 MyHarness Session JSONL、Git、TUI、项目 Trust | packages/ai/src/index.ts 及 package.json 中声明的 subpath | 各 Provider SDK、Node/HTTP 能力 |
-| packages/coding-agent | MyHarness 产品编排、CLI、AgentSession、Session、Context、Tools、Git、Extensions、Provider Runtime、TUI mode | 不承担底层 Agent Loop 的全部实现；不直接把所有存储统一成 SQLite | packages/coding-agent/src/index.ts；CLI 为 src/cli.ts | agent、ai、tui |
-| packages/tui | 终端渲染、输入、布局、组件、焦点和主题基础能力 | 不负责 Agent 状态、Provider 请求、Session persistence 或 Git workflow | packages/tui/src/index.ts | marked、get-east-asian-width |
+| packages/coding-agent | MyHarness 产品编排、Web、AgentSession、Session、Context、Tools、Git、Extensions、Provider Runtime | 不承担底层 Agent Loop 的全部实现；不直接把所有存储统一成 SQLite | packages/coding-agent/src/index.ts；启动入口为 src/cli.ts | agent、ai、storage/sqlite-node |
 | packages/storage/sqlite-node | 通用 Agent Session/Storage 抽象的 Node node:sqlite backend 和 migration | 当前 coding-agent manifest/source 未确认直接使用它作为 CLI Session backend | packages/storage/sqlite-node/src/index.ts | agent、ai |
 
 Package 级依赖方向是：
@@ -113,13 +124,11 @@ coding-agent/src/main.ts
            └── Observability
 ~~~
 
-交互和非交互输出在 Agent Runtime 之后分流：
+用户交互由 Web 承接：
 
 ~~~text
 AgentSessionRuntime
-   ├── InteractiveMode ──→ coding-agent UI components ──→ packages/tui
-   ├── WebMode (--web) ──→ modes/web（loopback HTTP + SSE）──→ 浏览器 packages/coding-agent/web/
-   └── PrintMode ────────→ text/json output
+   └── WebMode (default) ──→ modes/web（loopback HTTP + SSE）──→ 浏览器 packages/coding-agent/web/
 ~~~
 
 application/ 当前是资源加载、Trust、Workspace 和若干 use case 的协调层。它不是一个名为 bootstrap 的完整启动层；启动对象的组装仍在 main.ts 和 agent/runtime/services.ts 中。
@@ -330,7 +339,7 @@ resolve app mode → migrations → Trust → Session Manager
         ↓
 createAgentSessionRuntime()
         ↓
-InteractiveMode.run()、runPrintMode() 或 runWebMode()（`--web`；HTTP 服务先于 runtime 启动，以便在浏览器里回答 Project Trust）
+runWebMode()（默认；HTTP 服务先于 runtime 启动，以便在浏览器里回答 Project Trust）
 ~~~
 
 ### Agent 执行链
@@ -383,13 +392,11 @@ Windows 语言模块由 `symbols/runtime/installation.ts` 安装到
 `scripts/build-code-intelligence-artifacts.mjs` 构建，需要上传到 manifest 里
 `releaseTag` 对应的 GitHub Release 后才能下载。
 
-### TUI 链
+### Web 展示链
 
 ~~~text
-InteractiveMode
-  → coding-agent interactive components
-  → @myharness/tui
-  → terminal renderer / input / focus / theme
+runWebMode → WebHost → HTTP/SSE routes → web/ browser components
+WebTerminals → node-pty → web/ xterm panel
 ~~~
 
 ### Tool 执行链

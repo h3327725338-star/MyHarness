@@ -148,61 +148,15 @@ for platform in "${PLATFORMS[@]}"; do
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
     cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
-    mkdir -p "$OUTPUT_DIR/$platform/theme"
-    cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"
-    mkdir -p "$OUTPUT_DIR/$platform/assets"
-    cp dist/modes/interactive/assets/* "$OUTPUT_DIR/$platform/assets/"
-    cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
+    cp -r dist/exports/html "$OUTPUT_DIR/$platform/export-html"
+    cp -r web "$OUTPUT_DIR/$platform/web"
     cp -r ../../system-prompts "$OUTPUT_DIR/$platform/system-prompts"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
 
-    case "$platform" in
-        darwin-arm64)
-            clipboard_native_package="clipboard-darwin-arm64"
-            clipboard_native_file="clipboard.darwin-arm64.node"
-            ;;
-        darwin-x64)
-            clipboard_native_package="clipboard-darwin-x64"
-            clipboard_native_file="clipboard.darwin-x64.node"
-            ;;
-        linux-x64)
-            clipboard_native_package="clipboard-linux-x64-gnu"
-            clipboard_native_file="clipboard.linux-x64-gnu.node"
-            ;;
-        linux-arm64)
-            clipboard_native_package="clipboard-linux-arm64-gnu"
-            clipboard_native_file="clipboard.linux-arm64-gnu.node"
-            ;;
-        windows-x64)
-            clipboard_native_package="clipboard-win32-x64-msvc"
-            clipboard_native_file="clipboard.win32-x64-msvc.node"
-            ;;
-        windows-arm64)
-            clipboard_native_package="clipboard-win32-arm64-msvc"
-            clipboard_native_file="clipboard.win32-arm64-msvc.node"
-            ;;
-    esac
-    mkdir -p "$OUTPUT_DIR/$platform/node_modules/@mariozechner"
-    cp -r ../../node_modules/@mariozechner/clipboard "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
-    cp -r ../../node_modules/@mariozechner/$clipboard_native_package "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
-    cp "../../node_modules/@mariozechner/$clipboard_native_package/$clipboard_native_file" \
-        "$OUTPUT_DIR/$platform/node_modules/@mariozechner/clipboard/"
-
-    # Copy terminal input native helpers next to compiled binaries.
-    if [[ "$platform" == darwin-* ]]; then
-        mkdir -p "$OUTPUT_DIR/$platform/native/darwin/prebuilds/$platform"
-        cp ../tui/native/darwin/prebuilds/$platform/darwin-modifiers.node "$OUTPUT_DIR/$platform/native/darwin/prebuilds/$platform/"
-    fi
-    if [[ "$platform" == windows-* ]]; then
-        if [[ "$platform" == "windows-arm64" ]]; then
-            win32_arch_dir="win32-arm64"
-        else
-            win32_arch_dir="win32-x64"
-        fi
-        mkdir -p "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir"
-        cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
-    fi
+    # Web Terminal uses node-pty, independently of the archived TUI.
+    mkdir -p "$OUTPUT_DIR/$platform/node_modules/@lydell"
+    cp -r ../../node_modules/@lydell/node-pty "$OUTPUT_DIR/$platform/node_modules/@lydell/"
 done
 
 # Create archives

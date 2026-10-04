@@ -12,8 +12,9 @@ import type { Provider } from "@myharness/ai";
 import * as _bundledMyHarnessAiCompat from "@myharness/ai/compat";
 import * as _bundledMyHarnessAiOauth from "@myharness/ai/oauth";
 import * as _bundledMyHarnessAiProviders from "@myharness/ai/providers/all";
-import type { KeyId } from "@myharness/tui";
-import * as _bundledMyHarnessTui from "@myharness/tui";
+
+type KeyId = string;
+
 import { createJiti } from "jiti/static";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
@@ -54,7 +55,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox/compile": _bundledTypeboxCompile,
 	"@sinclair/typebox/value": _bundledTypeboxValue,
 	"@myharness/agent-core": _bundledMyHarnessAgentCore,
-	"@myharness/tui": _bundledMyHarnessTui,
 	// Extensions resolve the myharness-ai root to the compat entrypoint (a strict
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
@@ -64,7 +64,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@myharness/ai/providers/all": _bundledMyHarnessAiProviders,
 	"@myharness/coding-agent": _bundledMyHarnessCodingAgent,
 	"@mariozechner/pi-agent-core": _bundledMyHarnessAgentCore,
-	"@mariozechner/pi-tui": _bundledMyHarnessTui,
 	"@mariozechner/pi-ai": _bundledMyHarnessAiCompat,
 	"@mariozechner/pi-ai/compat": _bundledMyHarnessAiCompat,
 	"@mariozechner/pi-ai/oauth": _bundledMyHarnessAiOauth,
@@ -121,7 +120,6 @@ function getAliases(): Record<string, string> {
 		throw new Error("Extension API entry is missing from the coding-agent package");
 	}
 	const myHarnessAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@myharness/agent-core");
-	const myHarnessTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@myharness/tui");
 	// Extensions resolve the myharness-ai root to the compat entrypoint (a strict
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
@@ -143,7 +141,6 @@ function getAliases(): Record<string, string> {
 	_aliases = {
 		"@myharness/coding-agent": myHarnessCodingAgentEntry,
 		"@myharness/agent-core": myHarnessAgentCoreEntry,
-		"@myharness/tui": myHarnessTuiEntry,
 		"@myharness/ai/providers/all": myHarnessAiProvidersEntry,
 		"@myharness/ai/providers/": myHarnessAiProvidersDirectory,
 		"@myharness/ai/api/": myHarnessAiApiDirectory,
@@ -153,7 +150,6 @@ function getAliases(): Record<string, string> {
 		"@myharness/ai": myHarnessAiCompatEntry,
 		"@mariozechner/pi-coding-agent": myHarnessCodingAgentEntry,
 		"@mariozechner/pi-agent-core": myHarnessAgentCoreEntry,
-		"@mariozechner/pi-tui": myHarnessTuiEntry,
 		"@mariozechner/pi-ai/providers/all": myHarnessAiProvidersEntry,
 		"@mariozechner/pi-ai/providers/": myHarnessAiProvidersDirectory,
 		"@mariozechner/pi-ai/api/": myHarnessAiApiDirectory,

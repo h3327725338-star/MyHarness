@@ -10,7 +10,7 @@ MyHarness is a minimal terminal coding harness. Adapt MyHarness to your workflow
 
 MyHarness ships with optional built-in `agent`, `workflow`, and `ultracode` tools for parallel, read-only exploration. `/workflow` runs a staged investigation, while `/ultracode` applies a stricter multi-workflow strategy. All three use the model and thinking level selected under **Sub Agent**.
 
-The CLI supports interactive, print, and JSON event-stream modes, and `myharness --web` starts a local browser UI on the same runtime (see [Web UI](docs/web-ui.md)). The package also exposes an SDK for embedding MyHarness in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
+`myharness` now starts the local browser Web UI by default (`--web` remains optional; see [Web UI](docs/web-ui.md)). Interactive terminal, print and user-facing JSON modes have been removed. The terminal-specific examples/reference sections below describe the pre-extraction API, not supported current entry points. Extensions must no longer import TUI components, Theme or terminal rendering callbacks. The package also exposes an SDK for embedding MyHarness in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
 
 ## Table of Contents
 
@@ -618,7 +618,7 @@ source keeps its own notices and license terms.
 
 - [@myharness/ai](../ai/README.md): Core LLM toolkit in this checkout
 - [@myharness/agent-core](../agent/README.md): Agent framework in this checkout
-- [@myharness/tui](../tui/README.md): Terminal UI components in this checkout
+- Terminal frontend sources are archived separately and are not a workspace dependency.
 
 The package names above are workspace package names; they are not currently
 available from the public npm registry.

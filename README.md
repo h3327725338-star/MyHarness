@@ -4,14 +4,14 @@
 
 [![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
 
-MyHarness is an early-stage, source-based terminal AI coding assistant for working in a project directory. It connects configured LLM Providers to repository files, shell commands, tools, and resumable sessions.
+MyHarness is an early-stage, source-based Web AI coding assistant for working in a project directory. It connects configured LLM Providers to repository files, shell commands, tools, and resumable sessions.
 
 > Status: Early-stage / Work in Progress. The current maintained and validated path is a Windows x64 source checkout. Configure a Provider, model, and credentials before expecting a real model-backed session.
 
 ## Core capabilities
 
 - **Code collaboration**: file, shell, PowerShell, editing, writing, Symbols, Git, and GitHub workflows exposed through the Coding Agent product layer.
-- **Entry points**: the terminal UI (Interactive), Print and JSON event stream modes, a local browser **Web UI** (`myharness --web`, loopback only) that shares the same runtime, and a Node.js SDK for in-process integrations.
+- **Entry points**: a local browser **Web UI** (`myharness`, loopback only; `--web` is optional) and a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed.
 - **Project context**: project trust, `AGENTS.md` / `CLAUDE.md` context files, Workspace and Session management, Git integration, and context compaction.
 - **Extensibility**: TypeScript extensions, skills, prompt templates, themes, custom Providers, and MyHarness packages.
 - **Code Intelligence**: a lightweight Symbols index is available from the source tree. Semantic language-server modules remain optional and unavailable until a published, checksummed runtime manifest is provided.

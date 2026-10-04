@@ -674,7 +674,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 
 	/** The settings list, with the fixed choices of a `select` row taken from the shared menu definition. */
 	const buildSettingsWithMenuChoices = (): SettingDef[] => {
-		const items = buildSettings();
+		const items = buildSettings().filter((item) => item.section !== "Terminal");
 		for (const row of settingsMenuFor("web")) {
 			const target = row.choices && items.find((item) => item.id === SETTINGS_MENU_SETTING[row.id]);
 			if (target && row.choices) target.options = row.choices.map((choice) => ({ ...choice }));

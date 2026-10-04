@@ -19,8 +19,8 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
-		"build:offline": "cd packages/tui && npm run build && cd ../ai && npm run build:offline && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
+		"build": "cd packages/ai && npm run build && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
+		"build:offline": "cd packages/ai && npm run build:offline && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"check": "biome check --write --error-on-warnings . && node scripts/run-checks-parallel.mjs",
 		"build:code-intelligence": "node scripts/build-code-intelligence-artifacts.mjs",
 		"audit:release": "node scripts/release-audit.mjs --worktree",
@@ -31,7 +31,6 @@
 		"check:shrinkwrap": "node scripts/generate-coding-agent-shrinkwrap.mjs --check",
 		"check:install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs --check",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
-		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"test": "npm run test --workspaces --if-present",
 		"test:web-search:e2e": "node scripts/run-web-search-e2e.mjs",
 		"version:patch": "npm version patch -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",

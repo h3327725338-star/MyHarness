@@ -17,4 +17,12 @@ process.emitWarning = (() => {}) as typeof process.emitWarning;
 // Runtime settings are applied once SettingsManager has loaded global/project settings.
 configureHttpDispatcher();
 
-main(process.argv.slice(2));
+const args = process.argv.slice(2);
+const run =
+	args[0] === "--internal-delegated-worker"
+		? import("./agent/delegation/worker.ts").then(({ runDelegatedWorker }) => runDelegatedWorker(args.slice(1)))
+		: main(args);
+void run.catch((error) => {
+	console.error(error instanceof Error ? error.message : String(error));
+	process.exitCode = 1;
+});

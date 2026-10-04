@@ -2,7 +2,7 @@
 
 ## 启动和装配
 
-当前启动链是 `src/cli.ts` → `src/main.ts`。`main.ts` 在完成参数、Project Trust、Settings、资源、Provider 和 Session 准备后，进入 `InteractiveMode`、print mode，或（`--web`）Web mode。Web mode 会先在 `startWebBootstrap` 里启动 loopback HTTP 服务（这样 Project Trust 问题可以在浏览器里回答），runtime 创建后由 `runWebMode` 接管；细节见 [Web UI](web-ui.md)。新增跨领域装配应优先放 `application/`，不要把所有流程继续堆进 CLI 或具体 UI component。
+当前启动链是 `src/cli.ts` → `src/main.ts`。`main.ts` 在完成参数、Project Trust、Settings、资源、Provider 和 Session 准备后，默认进入 Web mode（`--web` 仅作兼容参数）。已移除 InteractiveMode、print mode；启动不会读取控制台输入。Web mode 会先在 `startWebBootstrap` 里启动 loopback HTTP 服务（这样 Project Trust 问题可以在浏览器里回答），runtime 创建后由 `runWebMode` 接管；细节见 [Web UI](web-ui.md)。新增跨领域装配应优先放 `application/`，不要把所有流程继续堆进 CLI 或具体 UI component。
 
 ## Provider / Model 维护
 
@@ -25,11 +25,15 @@
 ## Tool / UI / platform
 
 - `tools/` 的 execution details 与 `tools/presentation/` 的展示保持分离。
-- `modes/interactive` 负责产品交互；可复用 terminal component 应放 `packages/tui`。
+- `web/` 负责浏览器产品交互。Web Terminal 的 node-pty/xterm 是 Web 功能，不属于已移出的 CLI/TUI。
 - `modes/web` 只做传输和展示投影：不复制 Agent、Session、Git、Provider 逻辑，改动 wire 格式或新增 API 前先读 [Web UI](web-ui.md) 的“维护”一节；前端（`packages/coding-agent/web/`）没有构建步骤。
-- UI 交互修改遵循 [Interaction guidelines](interaction-guidelines.md) 和 [TUI design system](tui-design-system.md)；共享 `SettingItem`/`SettingsList` contract 在产品层统一 Settings、导航、Action、状态和键盘行为。
+- UI 交互修改遵循 [Interaction guidelines](interaction-guidelines.md)；`cli/settings-menu.ts` 保留共享设置元数据，但 Web API 不展示 Terminal 专用设置。
 - `platform/process` 负责 Windows/Bun/Node 进程和 stdout 边界；不要在每个 tool 中复制。
 - `symbols` 的结果要保留 backend/source 信息；semantic backend 不可用时不能伪称已成功启动语言服务器。
+
+## 大批量 Git 提交
+
+Git repository integration 对 `add`、按路径 `commit` 和失败回滚 `reset` 使用临时 NUL 分隔 pathspec 文件；提交说明通过 `-F` 文件传递，避免 Windows 命令行长度限制。同步与异步入口均保留选定路径提交语义，不会连带提交无关已暂存文件；临时文件在执行后释放。
 
 ## 常用验证
 
@@ -43,7 +47,7 @@ npm.cmd run check:shrinkwrap
 npm.cmd run check:install-lock:coding-agent
 ```
 
-`npm.cmd run check` 会格式化写入；真实 CLI、InteractiveMode、Bun binary、外部 Provider、LSP 和完整 browser smoke 需要单独执行并单独报告。
+`npm.cmd run check` 会格式化写入；真实无控制台 Web 启动、Bun binary、外部 Provider、LSP 和完整 browser smoke 需要单独执行并单独报告。
 
 ## 文档同步
 

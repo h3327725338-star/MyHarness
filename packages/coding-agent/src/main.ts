@@ -5,7 +5,6 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual } from "@myharness/ai";
 import chalk from "chalk";
 import type { CreateAgentSessionOptions } from "./agent/runtime/sdk.ts";
@@ -16,61 +15,27 @@ import {
 } from "./agent/runtime/services.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./agent/runtime/session-runtime.ts";
 import { type AppMode, resolveProjectTrusted } from "./application/project-trust.ts";
-import { type Args, type Mode, parseArgs } from "./cli/args.ts";
+import { type Args, parseArgs } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { renderCliHelp } from "./cli/help.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
-import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
-import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import type { WebBootstrap } from "./modes/web/web-mode.ts";
 import { printTimings, resetTimings, time } from "./observability/timings.ts";
-import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./platform/process/http-dispatcher.ts";
-import { restoreStdout, takeOverStdout } from "./platform/process/output-guard.ts";
-import { formatNoModelsAvailableMessage } from "./providers/runtime/auth-guidance.ts";
 import type { ModelRuntime } from "./providers/runtime/index.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./providers/runtime/model-resolver.ts";
-import {
-	formatMissingSessionCwdPrompt,
-	getMissingSessionCwdIssue,
-	MissingSessionCwdError,
-	type SessionCwdIssue,
-} from "./session/manager/cwd.ts";
+import { getMissingSessionCwdIssue, MissingSessionCwdError } from "./session/manager/cwd.ts";
 import { assertValidSessionId, SessionManager, setMirrorSessionsAllowed } from "./session/manager/index.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "myharness -ne".';
-
-/**
- * Read all content from piped stdin.
- * Returns undefined if stdin is a TTY (interactive terminal).
- */
-async function readPipedStdin(): Promise<string | undefined> {
-	// If stdin is a TTY, we're running interactively - don't read stdin
-	if (process.stdin.isTTY) {
-		return undefined;
-	}
-
-	return new Promise((resolve) => {
-		let data = "";
-		process.stdin.setEncoding("utf8");
-		process.stdin.on("data", (chunk) => {
-			data += chunk;
-		});
-		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
-		});
-		process.stdin.resume();
-	});
-}
 
 function collectSettingsDiagnostics(
 	settingsManager: SettingsManager,
@@ -93,27 +58,6 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
-}
-
-function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
-	if (parsed.web) {
-		return "web";
-	}
-	if (parsed.mode === "json") {
-		return "json";
-	}
-	if (parsed.print || !stdinIsTTY || !stdoutIsTTY) {
-		return "print";
-	}
-	return "interactive";
-}
-
-function toPrintOutputMode(appMode: AppMode): Mode {
-	return appMode === "json" ? "json" : "text";
-}
-
-function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
-	return !parsed.print && parsed.mode === undefined && parsed.listModels !== undefined;
 }
 
 async function prepareInitialMessage(
@@ -192,20 +136,6 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 	return { type: "not_found", arg: sessionArg };
 }
 
-/** Prompt user for yes/no confirmation */
-async function promptConfirm(message: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const rl = createInterface({
-			input: process.stdin,
-			output: process.stdout,
-		});
-		rl.question(`${message} [y/N] `, (answer) => {
-			rl.close();
-			resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
-		});
-	});
-}
-
 function validateForkFlags(parsed: Args): void {
 	if (!parsed.fork) return;
 
@@ -269,7 +199,6 @@ async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	sessionDir: string | undefined,
-	settingsManager: SettingsManager,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -306,15 +235,8 @@ async function createSessionManager(
 			case "local":
 				return openSessionOrExit(resolved.path, sessionDir);
 
-			case "global": {
-				console.log(chalk.yellow(`Session found in different project: ${resolved.cwd}`));
-				const shouldFork = await promptConfirm("Fork this session into current directory?");
-				if (!shouldFork) {
-					console.log(chalk.dim("Aborted."));
-					process.exit(0);
-				}
-				return forkSessionOrExit(resolved.path, cwd, sessionDir);
-			}
+			case "global":
+				return openSessionOrExit(resolved.path, sessionDir);
 
 			case "not_found":
 				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
@@ -322,23 +244,7 @@ async function createSessionManager(
 		}
 	}
 
-	if (parsed.resume) {
-		try {
-			const { selectSession } = await import("./cli/session-picker.ts");
-			const selectedPath = await selectSession(
-				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
-				(onProgress) => SessionManager.listAll(sessionDir, onProgress),
-				settingsManager,
-			);
-			if (!selectedPath) {
-				console.log(chalk.dim("No session selected"));
-				process.exit(0);
-			}
-			return SessionManager.open(selectedPath, sessionDir);
-		} finally {
-			stopThemeWatcher();
-		}
-	}
+	// Session selection is performed in the browser. --resume starts the Web session list.
 
 	if (parsed.continue) {
 		return SessionManager.continueRecent(cwd, sessionDir);
@@ -464,16 +370,6 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 	return paths?.map((value) => (isLocalPath(value) ? resolvePath(value, cwd) : value));
 }
 
-async function promptForMissingSessionCwd(
-	issue: SessionCwdIssue,
-	settingsManager: SettingsManager,
-): Promise<string | undefined> {
-	return showStartupSelector(settingsManager, formatMissingSessionCwdPrompt(issue), [
-		{ label: "Continue", value: issue.fallbackCwd },
-		{ label: "Cancel", value: undefined },
-	]);
-}
-
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 }
@@ -491,23 +387,6 @@ export async function main(args: string[], options?: MainOptions) {
 	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
-
-	if (await handlePackageCommand(args, { extensionFactories })) {
-		const exitCode = process.exitCode ?? 0;
-		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
-			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
-			// one-shot commands alive. On Windows, Node can assert after fetch() if process.exit(0)
-			// runs during teardown; let successful `myharness update` drain naturally instead.
-			// https://github.com/nodejs/node/issues/56645
-			return;
-		}
-		process.exit(exitCode);
-		return;
-	}
-
-	if (await handleConfigCommand(args, { extensionFactories })) {
-		return;
-	}
 
 	const parsed = parseArgs(args);
 
@@ -549,23 +428,17 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	if (parsed.web && (parsed.print || parsed.mode !== undefined || parsed.listModels !== undefined)) {
-		console.error(chalk.red("Error: --web cannot be combined with --print, --mode or --list-models"));
-		process.exit(1);
+	if (parsed.print || parsed.mode !== undefined || parsed.listModels !== undefined) {
+		throw new Error("Terminal output modes have been removed. Use the Web UI.");
 	}
-	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	const shouldTakeOverStdout =
-		appMode !== "interactive" && appMode !== "web" && !isPlainRuntimeMetadataCommand(parsed);
-	if (shouldTakeOverStdout) {
-		takeOverStdout();
-	}
+	const appMode: AppMode = "web";
 
 	validateForkFlags(parsed);
 	validateSessionIdFlags(parsed);
 
 	// A session another MyHarness process (the Web UI, another terminal) is running is followed and shared, not refused.
 	// Print/JSON/RPC runs have nobody to hand the session over to, so they keep refusing it.
-	if (appMode === "interactive") setMirrorSessionsAllowed(true);
+	setMirrorSessionsAllowed(true);
 
 	// The Web UI server starts before anything slow (storage migrations, session lookup, runtime) so the port is
 	// listening, and launchers see "ready", as early as possible. Startup questions (Project Trust) are answered in
@@ -579,12 +452,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: undefined;
 
 	// Run migrations (pass cwd for project-local migrations)
-	const {
-		migratedAuthProviders: migratedProviders,
-		dataFrameworkSessionMigration,
-		workspaceRegistryMigration,
-		deprecationWarnings,
-	} = runMigrations(cwd);
+	const { dataFrameworkSessionMigration, workspaceRegistryMigration, deprecationWarnings } = runMigrations(cwd);
 	const sessionMigrationIssueCount =
 		dataFrameworkSessionMigration.conflicts.length +
 		dataFrameworkSessionMigration.errors.length +
@@ -608,10 +476,6 @@ export async function main(args: string[], options?: MainOptions) {
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
-	if (appMode === "interactive" && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
-		await showFirstTimeSetup(startupSettingsManager);
-		time("firstTimeSetup");
-	}
 
 	// Decide the final runtime cwd before creating cwd-bound runtime services.
 	// --session and --resume may select a session from another project, so project-local
@@ -623,19 +487,22 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
+	let sessionManager = await createSessionManager(parsed, cwd, sessionDir);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
-		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager);
-			if (!selectedCwd) {
-				process.exit(0);
-			}
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
-		} else {
-			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
-			process.exit(1);
+		const confirmed = await webBootstrap!.trustUi.confirm(
+			"Session folder unavailable",
+			new MissingSessionCwdError(missingSessionCwdIssue).message,
+		);
+		if (!confirmed) {
+			await webBootstrap!.server.close();
+			return;
 		}
+		sessionManager = SessionManager.open(
+			missingSessionCwdIssue.sessionFile!,
+			sessionDir,
+			missingSessionCwdIssue.fallbackCwd,
+		);
 	}
 	if (parsed.name !== undefined) {
 		const name = parsed.name.trim();
@@ -648,12 +515,7 @@ export async function main(args: string[], options?: MainOptions) {
 	time("createSessionManager");
 
 	const trustStore = new ProjectTrustStore(agentDir);
-	const sessionCwd = sessionManager.getCwd();
-	const autoTrustOnReloadCwd =
-		parsed.projectTrustOverride === undefined && !hasTrustRequiringProjectResources(sessionCwd)
-			? sessionCwd
-			: undefined;
-	const trustPromptMode: AppMode = parsed.listModels !== undefined ? "print" : appMode;
+	const trustPromptMode: AppMode = "web";
 	const projectTrustByCwd = new Map<string, boolean>();
 
 	const resolvedExtensionPaths = resolveCliPaths(cwd, parsed.extensions);
@@ -703,8 +565,7 @@ export async function main(args: string[], options?: MainOptions) {
 										cwd,
 										mode: isInitialRuntime ? trustPromptMode : appMode,
 										settingsManager: startupSettingsManager,
-										hasUI:
-											isInitialRuntime && (trustPromptMode === "interactive" || trustPromptMode === "web"),
+										hasUI: isInitialRuntime,
 										webUi: webBootstrap?.trustUi,
 									}),
 								onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
@@ -800,22 +661,13 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager,
 	});
 	time("createAgentSessionRuntime");
-	const { services, session, modelFallbackMessage } = runtime;
+	const { services } = runtime;
 	const { settingsManager, modelRuntime } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 
-	if (parsed.listModels !== undefined) {
-		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
-		await listModels(modelRuntime, searchPattern);
-		process.exit(0);
-	}
-
 	// Read piped stdin content (if any)
-	const stdinContent: string | undefined = appMode === "web" ? undefined : await readPipedStdin();
-	if (stdinContent !== undefined && appMode === "interactive") {
-		appMode = "print";
-	}
+	const stdinContent: string | undefined = undefined;
 	time("readPipedStdin");
 
 	const { initialMessage, initialImages } = await prepareInitialMessage(
@@ -826,13 +678,7 @@ export async function main(args: string[], options?: MainOptions) {
 		stdinContent,
 	);
 	time("prepareInitialMessage");
-	initTheme(settingsManager.getTheme(), appMode === "interactive");
-	time("initTheme");
-
-	// Show deprecation warnings in interactive mode
-	if (appMode === "interactive" && deprecationWarnings.length > 0) {
-		await showDeprecationWarnings(deprecationWarnings);
-	}
+	if (deprecationWarnings.length > 0) await showDeprecationWarnings(deprecationWarnings);
 
 	time("resolveModelScope");
 	reportDiagnostics(runtime.diagnostics);
@@ -844,18 +690,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
-	if (appMode !== "interactive" && appMode !== "web" && !session.model) {
-		console.error(chalk.red(formatNoModelsAvailableMessage()));
-		process.exit(1);
-	}
-
-	const startupBenchmark = isTruthyEnvFlag(process.env.MYHARNESS_STARTUP_BENCHMARK);
-	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: MYHARNESS_STARTUP_BENCHMARK only supports interactive mode"));
-		process.exit(1);
-	}
-
-	if (!offlineMode && (appMode === "interactive" || appMode === "web")) {
+	if (!offlineMode) {
 		const refreshController = new AbortController();
 		const refreshTimeout = setTimeout(() => refreshController.abort(), 15_000);
 		void modelRuntime
@@ -864,62 +699,13 @@ export async function main(args: string[], options?: MainOptions) {
 			.finally(() => clearTimeout(refreshTimeout));
 	}
 
-	if (appMode === "interactive") {
-		const { InteractiveMode } = await import("./modes/interactive/interactive-mode.ts");
-		const interactiveMode = new InteractiveMode(runtime, {
-			migratedProviders,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-		});
-		if (startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
-			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
-			}
-			return;
-		}
-
-		printTimings();
-		await interactiveMode.run();
-	} else if (appMode === "web" && webBootstrap) {
-		printTimings();
-		const { runWebMode } = await import("./modes/web/web-mode.ts");
-		const exitCode = await runWebMode(runtime, webBootstrap, {
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-		});
-		stopThemeWatcher();
-		process.exit(exitCode);
-	} else {
-		printTimings();
-		const { runPrintMode } = await import("./modes/print-mode.ts");
-		const exitCode = await runPrintMode(runtime, {
-			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
-		});
-		stopThemeWatcher();
-		restoreStdout();
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
-		return;
-	}
+	printTimings();
+	const { runWebMode } = await import("./modes/web/web-mode.ts");
+	const exitCode = await runWebMode(runtime, webBootstrap!, {
+		initialMessage,
+		initialImages,
+		initialMessages: parsed.messages,
+		verbose: parsed.verbose,
+	});
+	process.exitCode = exitCode;
 }

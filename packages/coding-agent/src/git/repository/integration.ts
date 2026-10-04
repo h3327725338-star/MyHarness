@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit as runGitAsyncImpl, runGitSync } from "./command.ts";
@@ -30,30 +31,75 @@ export interface GitStatusPreview {
 	truncated: boolean;
 }
 
+/** Keep selected-path mutations and commit messages below Windows command-line limits. */
+function prepareGitArguments(args: string[]): { args: string[]; dispose: () => void } {
+	const command = args[0];
+	const separator = args.indexOf("--");
+	const messageIndex = command === "commit" ? args.indexOf("-m") : -1;
+	const filePaths = ["add", "commit", "reset"].includes(command) && separator >= 0;
+	if (!filePaths && messageIndex < 0) return { args, dispose: () => {} };
+	const dir = mkdtempSync(path.join(tmpdir(), "myharness-git-args-"));
+	try {
+		const prepared = separator >= 0 ? args.slice(0, separator) : [...args];
+		if (messageIndex >= 0) {
+			const messageFile = path.join(dir, "message.txt");
+			writeFileSync(messageFile, args[messageIndex + 1], "utf8");
+			prepared.splice(messageIndex, 2, "-F", messageFile);
+		}
+		if (filePaths) {
+			const pathFile = path.join(dir, "paths.nul");
+			// Literal pathspecs prevent names containing wildcard characters from selecting other files.
+			writeFileSync(
+				pathFile,
+				args
+					.slice(separator + 1)
+					.map((name) => `:(literal)${name}\0`)
+					.join(""),
+				"utf8",
+			);
+			prepared.push(`--pathspec-from-file=${pathFile}`, "--pathspec-file-nul");
+		}
+		return { args: prepared, dispose: () => rmSync(dir, { recursive: true }) };
+	} catch (error) {
+		rmSync(dir, { recursive: true });
+		throw error;
+	}
+}
+
 export function runGit(cwd: string, args: string[], timeoutMs?: number): GitCommandResult {
-	return runGitSync(args, {
-		cwd,
-		timeoutMs: timeoutMs ?? GIT_TIMEOUT_MS,
-		env: { GIT_OPTIONAL_LOCKS: "0" },
-	});
+	const prepared = prepareGitArguments(args);
+	try {
+		return runGitSync(prepared.args, {
+			cwd,
+			timeoutMs: timeoutMs ?? GIT_TIMEOUT_MS,
+			env: { GIT_OPTIONAL_LOCKS: "0" },
+		});
+	} finally {
+		prepared.dispose();
+	}
 }
 
 /**
  * 异步运行 Git 命令（spawn，不阻塞事件循环）。
  * 与同步 runGit 保持相同的默认超时与环境，供后台提交任务使用。
  */
-export function runGitAsync(
+export async function runGitAsync(
 	cwd: string,
 	args: string[],
 	timeoutMs?: number,
 	signal?: AbortSignal,
 ): Promise<GitCommandResult> {
-	return runGitAsyncImpl(args, {
-		cwd,
-		timeoutMs: timeoutMs ?? GIT_TIMEOUT_MS,
-		env: { GIT_OPTIONAL_LOCKS: "0" },
-		signal,
-	});
+	const prepared = prepareGitArguments(args);
+	try {
+		return await runGitAsyncImpl(prepared.args, {
+			cwd,
+			timeoutMs: timeoutMs ?? GIT_TIMEOUT_MS,
+			env: { GIT_OPTIONAL_LOCKS: "0" },
+			signal,
+		});
+	} finally {
+		prepared.dispose();
+	}
 }
 
 export function inspectGitRepository(cwd: string): GitRepositoryState {
@@ -313,8 +359,11 @@ function reconcileCompletedCommit(
 	const headBefore = headBeforeOutput.trim();
 	const headAfter = validCommitHash(runGit(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]));
 	if (!headAfter || headAfter === headBefore) return undefined;
-	const pending = runGit(repositoryRoot, ["status", "--porcelain", "--untracked-files=all", "--", ...paths]);
-	return pending.ok && pending.stdout.trim() === "" ? completedCommitResult(headAfter) : undefined;
+	for (const name of paths) {
+		const pending = runGit(repositoryRoot, ["status", "--porcelain", "--untracked-files=all", "--", name]);
+		if (!pending.ok || pending.stdout.trim() !== "") return undefined;
+	}
+	return completedCommitResult(headAfter);
 }
 
 async function reconcileCompletedCommitAsync(
@@ -328,13 +377,16 @@ async function reconcileCompletedCommitAsync(
 		await runGitAsync(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"], undefined, signal),
 	);
 	if (!headAfter || headAfter === headBefore) return undefined;
-	const pending = await runGitAsync(
-		repositoryRoot,
-		["status", "--porcelain", "--untracked-files=all", "--", ...paths],
-		undefined,
-		signal,
-	);
-	return pending.ok && pending.stdout.trim() === "" ? completedCommitResult(headAfter) : undefined;
+	for (const name of paths) {
+		const pending = await runGitAsync(
+			repositoryRoot,
+			["status", "--porcelain", "--untracked-files=all", "--", name],
+			undefined,
+			signal,
+		);
+		if (!pending.ok || pending.stdout.trim() !== "") return undefined;
+	}
+	return completedCommitResult(headAfter);
 }
 
 export function createGitCommitForPaths(

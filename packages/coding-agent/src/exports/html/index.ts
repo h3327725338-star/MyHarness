@@ -3,7 +3,57 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
 import type { ToolDefinition } from "../../extensions/compat/types.ts";
-import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
+
+// Standalone HTML palette: export never initializes or loads a terminal theme.
+function getResolvedThemeColors(_name?: string): Record<string, string> {
+	return {
+		border: "#5f87ff",
+		borderAccent: "#00d7ff",
+		selectedBg: "#3a3a4a",
+		thinkingText: "#808080",
+		mdHeading: "#f0c674",
+		mdLink: "#81a2be",
+		mdCode: "#8abeb7",
+		mdCodeBlockBorder: "#808080",
+		mdQuote: "#808080",
+		mdQuoteBorder: "#808080",
+		mdHr: "#808080",
+		mdListBullet: "#8abeb7",
+		syntaxComment: "#6A9955",
+		syntaxKeyword: "#569CD6",
+		syntaxFunction: "#DCDCAA",
+		syntaxVariable: "#9CDCFE",
+		syntaxString: "#CE9178",
+		syntaxNumber: "#B5CEA8",
+		syntaxType: "#4EC9B0",
+		syntaxOperator: "#D4D4D4",
+		syntaxPunctuation: "#D4D4D4",
+		accent: "#8abeb7",
+		text: "#d4d4d4",
+		muted: "#808080",
+		dim: "#666666",
+		success: "#b5bd68",
+		error: "#cc6666",
+		warning: "#ffff00",
+		userMessageBg: "#343541",
+		userMessageText: "#d4d4d4",
+		toolPendingBg: "#282832",
+		toolSuccessBg: "#283228",
+		toolErrorBg: "#3c2828",
+		toolTitle: "#d4d4d4",
+		toolOutput: "#808080",
+		toolDiffAdded: "#b5bd68",
+		toolDiffRemoved: "#cc6666",
+		toolDiffContext: "#808080",
+		customMessageBg: "#2d2838",
+		customMessageText: "#d4d4d4",
+		customMessageLabel: "#9575cd",
+	};
+}
+function getThemeExportColors(_name?: string) {
+	return { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" };
+}
+
 import { SessionManager } from "../../session/manager/index.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
@@ -34,6 +84,7 @@ interface RenderedToolHtml {
 
 export interface ExportOptions {
 	outputPath?: string;
+	/** Legacy option accepted for compatibility; exports use a standalone dark palette. */
 	themeName?: string;
 	/** Optional tool renderer for custom tools */
 	toolRenderer?: ToolHtmlRenderer;
@@ -178,7 +229,7 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 const TEMPLATE_RENDERED_TOOLS = new Set(["bash", "read", "write", "edit", "ls"]);
 
 /**
- * Pre-render custom tools to HTML using their TUI renderers.
+ * Pre-render custom tools using an optional independent HTML adapter.
  */
 function preRenderCustomTools(
 	entries: SessionEntry[],
@@ -231,7 +282,7 @@ function preRenderCustomTools(
 
 /**
  * Export session to HTML using SessionManager and AgentState.
- * Used by TUI's /export command.
+ * Used by the Web session export endpoint and SDK.
  */
 export async function exportSessionToHtml(
 	sm: SessionManager,

@@ -1,7 +1,7 @@
 {
 	"name": "@myharness/coding-agent",
 	"version": "0.80.10",
-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "Local Web coding agent with tools and session management",
 	"type": "module",
 	"myHarnessConfig": {
 		"configDir": ".myharness"
@@ -30,10 +30,10 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
-		"build:binary": "npm --prefix ../tui run build && npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/utils/jxl-decode-worker.ts --outfile dist/myharness && npm run copy-binary-assets",
-		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/exports/html/vendor && shx cp src/exports/html/template.html src/exports/html/template.css src/exports/html/template.js dist/exports/html/ && shx cp src/exports/html/vendor/*.js dist/exports/html/vendor/ && npm run copy-code-intelligence-assets",
+		"build:binary": "npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/utils/jxl-decode-worker.ts --outfile dist/myharness && npm run copy-binary-assets",
+		"copy-assets": "shx mkdir -p dist/exports/html/vendor && shx cp src/exports/html/template.html src/exports/html/template.css src/exports/html/template.js dist/exports/html/ && shx cp src/exports/html/vendor/*.js dist/exports/html/vendor/ && npm run copy-code-intelligence-assets",
 		"copy-code-intelligence-assets": "shx mkdir -p dist/code-intelligence/licenses && shx cp code-intelligence/runtime-manifest.json code-intelligence/lsp-launcher.mjs code-intelligence/DEPENDENCY-MANIFEST.json dist/code-intelligence/ && shx cp -r code-intelligence/licenses/* dist/code-intelligence/licenses/",
-		"copy-binary-assets": "shx cp -r ../../system-prompts dist/system-prompts && shx cp -r web dist/web && shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/exports/html/template.html dist/export-html/ && shx cp src/exports/html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && npm run copy-code-intelligence-assets && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/ && npm run copy-rich-file-assets",
+		"copy-binary-assets": "shx cp -r ../../system-prompts dist/system-prompts && shx cp -r web dist/web && shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/export-html/vendor && shx cp src/exports/html/template.html dist/export-html/ && shx cp src/exports/html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && npm run copy-code-intelligence-assets && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/ && npm run copy-rich-file-assets",
 		"copy-rich-file-assets": "node ../../scripts/copy-coding-agent-rich-file-assets.mjs",
 		"test:code-intelligence-runtime": "vitest --run test/code-intelligence/runtime-manager.test.ts",
 		"test": "vitest --run",
@@ -43,7 +43,6 @@
 	"dependencies": {
 		"@myharness/agent-core": "^0.80.10",
 		"@myharness/ai": "^0.80.10",
-		"@myharness/tui": "^0.80.10",
 		"@napi-rs/canvas": "1.0.2",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"ag-psd": "31.0.2",
@@ -79,8 +78,7 @@
 		}
 	},
 	"optionalDependencies": {
-		"@lydell/node-pty": "1.1.0",
-		"@mariozechner/clipboard": "0.3.9"
+		"@lydell/node-pty": "1.1.0"
 	},
 	"devDependencies": {
 		"@types/cross-spawn": "6.0.6",
@@ -100,8 +98,7 @@
 		"coding-agent",
 		"ai",
 		"llm",
-		"cli",
-		"tui",
+		"web",
 		"agent"
 	],
 	"author": "Mario Zechner",

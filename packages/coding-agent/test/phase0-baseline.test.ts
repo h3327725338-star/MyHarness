@@ -37,8 +37,8 @@ describe("Phase 0 compatibility contracts", () => {
 			"SettingsManager",
 			"createAgentSession",
 			"main",
-			"InteractiveMode",
-			"runPrintMode",
+			"runWebMode",
+			"startWebBootstrap",
 		]) {
 			expect(facade, `public facade marker: ${marker}`).toContain(marker);
 		}
@@ -78,9 +78,9 @@ describe("Phase 0 compatibility contracts", () => {
 
 		const config = readRepositoryFile("packages/coding-agent/src/config.ts");
 		expect(config).toContain("export const isBunBinary");
-		expect(config).toContain('return join(getPackageDir(), "theme")');
+		expect(config).toContain('return join(getPackageDir(), "web")');
 		expect(config).toContain('return join(getPackageDir(), "export-html")');
-		expect(config).toContain('return join(getPackageDir(), "assets")');
+		expect(config).not.toContain("getInteractiveAssetsDir");
 	});
 
 	it("keeps the system-prompt lookup roots and composition entrypoints", () => {

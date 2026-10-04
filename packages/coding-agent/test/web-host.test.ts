@@ -727,19 +727,19 @@ describe("Web host (real runtime with a faux provider)", () => {
 	it("applies a saved project trust decision to the open chat at once", async () => {
 		const fx = await start();
 		mkdirSync(join(fx.project, ".myharness"));
-		writeFileSync(join(fx.project, ".myharness", "settings.json"), JSON.stringify({ quietStartup: true }));
-		const quietStartup = async () =>
-			(await fx.get("/api/settings")).items.find((item: any) => item.id === "quietStartup").value;
+		writeFileSync(join(fx.project, ".myharness", "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 12345 }));
+		const httpIdleTimeout = async () =>
+			(await fx.get("/api/settings")).items.find((item: any) => item.id === "httpIdleTimeoutMs").value;
 
 		expect(await fx.post("/api/trust", { option: "do-not-trust" })).toMatchObject({ ok: true, trusted: false });
 		expect(await fx.get("/api/trust")).toMatchObject({ requiresTrust: true, trusted: false, saved: false });
 		expect((await fx.get("/api/state")).trust).toEqual({ trusted: false, requiresTrust: true });
-		expect(await quietStartup()).toBe(false);
+		expect(await httpIdleTimeout()).not.toBe("12345");
 
 		// Trusting the project loads its own settings into the chat that is open.
 		expect(await fx.post("/api/trust", { option: "trust" })).toMatchObject({ ok: true, trusted: true });
 		expect(await fx.get("/api/trust")).toMatchObject({ trusted: true, saved: true });
-		expect(await quietStartup()).toBe(true);
+		expect(await httpIdleTimeout()).toBe("12345");
 		await expect(fx.post("/api/trust", { option: "nope" })).rejects.toThrow(/Unknown trust option/);
 	});
 

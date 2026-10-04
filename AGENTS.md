@@ -3,7 +3,7 @@
 ## 项目事实
 
 - 这是一个 npm/TypeScript/ESM monorepo。
-- 产品层在 packages/coding-agent/；Agent Core 在 packages/agent/；Provider/AI API 在 packages/ai/；TUI 基础能力在 packages/tui/。
+- 产品层在 packages/coding-agent/；Agent Core 在 packages/agent/；Provider/AI API 在 packages/ai/；浏览器界面在 packages/coding-agent/web/，服务端在 src/modes/web/。终端 CLI/TUI 已移出本仓库。
 - 当前整体架构和模块归属见 ARCHITECTURE_AND_DEVELOPMENT.md。
 - 当前源码没有 packages/coding-agent/src/core/、frontend/、shared/ 或 application/bootstrap/。
 
@@ -36,7 +36,6 @@
 | Web UI（`--web`、`modes/web/`、`packages/coding-agent/web/`） | `packages/coding-agent/docs/web-ui.md` |
 | Agent Core | `packages/agent/docs/index.md`、`packages/agent/docs/maintenance.md` |
 | Provider / AI API | `packages/ai/docs/index.md`、`packages/ai/docs/maintenance.md` |
-| TUI | `packages/tui/docs/index.md`、`packages/tui/docs/maintenance.md` |
 | 项目配置和 Project Trust | `.myharness/README.md`、`.myharness/maintenance.md`、Coding Agent `settings.md` |
 
 ## Git 写操作路由
@@ -84,7 +83,7 @@
 - 只修改完成当前任务所必须的内容，不顺手重构无关区域。
 - 不创建承载任意业务的万能目录，也不把业务逻辑塞进 utils/ 或具体 TUI component。
 - Agent 生命周期放 agent/runtime/；Session 格式和 persistence 放 session/；Context/Compact 放 context/；Git 原语放 git/；Provider runtime、Model 和 credential 放 providers/；Tool 放 tools/；Extension 放 extensions/。
-- 产品页面放 coding-agent 的 modes/interactive/；可复用终端基础组件放 packages/tui/。
+- 产品页面放 coding-agent 的 web/；Web 服务与交互桥接放 src/modes/web/，不得重新引入已移出的终端组件包。
 - Tool execution contract 与 presentation 分开；底层业务逻辑不要依赖具体 TUI 展示。
 - Application use case 用于跨领域业务流程，不用于替代底层领域模块，也不导入具体 TUI。
 - 通过正式 contract、runtime 或 API entry 连接模块，不要为了方便直接依赖不稳定的内部实现。

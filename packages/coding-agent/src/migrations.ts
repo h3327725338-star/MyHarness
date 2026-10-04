@@ -24,7 +24,6 @@ import {
 	migrateWorkspaceRegistry,
 	type WorkspaceRegistryMigrationResult,
 } from "./data/workspace-registry-migration.ts";
-import { migrateKeybindingsConfig } from "./modes/interactive/keybindings.ts";
 import {
 	type DataFrameworkSessionMigrationResult,
 	migrateSessionsToDataFramework,
@@ -179,23 +178,6 @@ function migrateCommandsToPrompts(baseDir: string, label: string): boolean {
 	return false;
 }
 
-function migrateKeybindingsConfigFile(): void {
-	const configPath = join(getAgentDir(), "keybindings.json");
-	if (!existsSync(configPath)) return;
-
-	try {
-		const parsed = JSON.parse(readFileSync(configPath, "utf-8")) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-			return;
-		}
-		const { config, migrated } = migrateKeybindingsConfig(parsed as Record<string, unknown>);
-		if (!migrated) return;
-		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
-	} catch {
-		// Ignore malformed files during migration
-	}
-}
-
 /**
  * Move fd/rg binaries from tools/ to bin/ if they exist.
  */
@@ -308,17 +290,6 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
 	console.log(chalk.yellow(`\nMove your extensions to the extensions/ directory.`));
 	console.log(chalk.yellow(`Migration guide: ${MIGRATION_GUIDE_URL}`));
 	console.log(chalk.yellow(`Documentation: ${EXTENSIONS_DOC_URL}`));
-	console.log(chalk.dim(`\nPress any key to continue...`));
-
-	await new Promise<void>((resolve) => {
-		process.stdin.setRawMode?.(true);
-		process.stdin.resume();
-		process.stdin.once("data", () => {
-			process.stdin.setRawMode?.(false);
-			process.stdin.pause();
-			resolve();
-		});
-	});
 	console.log();
 }
 
@@ -462,7 +433,6 @@ export function runMigrations(cwd: string): {
 	removeRetiredLegacySessionRoot(projectLegacyRoot, sourceResults[0]!);
 	cleanupEmptySessionDirectories(dataRoot);
 	migrateToolsToBin();
-	migrateKeybindingsConfigFile();
 	const deprecationWarnings = migrateExtensionSystem(cwd);
 	return {
 		migratedAuthProviders,

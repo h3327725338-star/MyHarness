@@ -7,7 +7,6 @@ import { join } from "node:path";
 const packages = [
 	{ directory: "packages/ai", name: "@myharness/ai" },
 	{ directory: "packages/agent", name: "@myharness/agent-core" },
-	{ directory: "packages/tui", name: "@myharness/tui" },
 	{ directory: "packages/coding-agent", name: "@myharness/coding-agent" },
 ];
 

@@ -25,7 +25,6 @@ export const NAV = [
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
-	{ id: "terminal", label: N_("Terminal UI"), icon: "terminal" },
 	{ id: "shortcuts", label: N_("Keyboard shortcuts"), icon: "gear" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];

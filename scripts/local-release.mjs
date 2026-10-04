@@ -7,7 +7,6 @@ import { spawnSync } from "node:child_process";
 
 const packages = [
 	{ directory: "packages/ai", name: "@myharness/ai" },
-	{ directory: "packages/tui", name: "@myharness/tui" },
 	{ directory: "packages/agent", name: "@myharness/agent-core" },
 	{ directory: "packages/coding-agent", name: "@myharness/coding-agent" },
 ];

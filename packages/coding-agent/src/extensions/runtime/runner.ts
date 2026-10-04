@@ -4,9 +4,10 @@
 
 import type { AgentMessage } from "@myharness/agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@myharness/ai";
-import type { KeyId } from "@myharness/tui";
-import type { KeybindingsConfig } from "../../modes/interactive/keybindings.ts";
-import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
+
+type KeyId = string;
+type KeybindingsConfig = Record<string, string | string[] | undefined>;
+
 import type { ModelRegistry } from "../../providers/models/registry.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { BuildSystemPromptOptions } from "../../system-prompts/composer/index.ts";
@@ -242,23 +243,12 @@ const noOpUIContext: ExtensionUIContext = {
 	setWorkingIndicator: () => {},
 	setHiddenThinkingLabel: () => {},
 	setWidget: () => {},
-	setFooter: () => {},
-	setHeader: () => {},
 	setTitle: () => {},
-	custom: async () => undefined as never,
 	pasteToEditor: () => {},
 	setEditorText: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
-	addAutocompleteProvider: () => {},
-	setEditorComponent: () => {},
-	getEditorComponent: () => undefined,
-	get theme() {
-		return theme;
-	},
 	getAllThemes: () => [],
-	getTheme: () => undefined,
-	setTheme: (_theme: string | Theme) => ({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };

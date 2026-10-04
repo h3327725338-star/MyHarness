@@ -8,7 +8,7 @@
 ## 仓库边界
 
 - 根目录是 npm/TypeScript/ESM monorepo，workspace 包在 `packages/*` 和 `packages/storage/*`。
-- 构建顺序由根 `package.json` 固定为 `tui → ai → agent → storage/sqlite-node → coding-agent`。
+- 构建顺序由根 `package.json` 固定为 `ai → agent → storage/sqlite-node → coding-agent`。
 - `data/` 是运行时数据目录并被 Git 忽略；不要把 session、cache、trace、credential 或本机生成物当作源码提交。
 - `.myharness/settings.json` 是当前项目配置，不是用户级 credential 存储；全局 auth、models 和 session 路径由 Coding Agent 配置代码决定。
 - 具体用户数据、Session、Workspace、trace、memory 和 Code Intelligence runtime 的边界见 [`docs/STORAGE.md`](docs/STORAGE.md)；发布前审计不得删除这些真实数据。
@@ -67,7 +67,7 @@ Linux/macOS runner。
 - Coding Agent：`ModelRuntime` 组合 `models.json`、模型 store、credential 和 extension provider；公共出口保持通过 `src/index.ts` 或声明的 package exports。
 - Session：格式、版本、migration、JSONL 容错和 projection 必须一起检查；不要让 UI 直接写 Session 文件。
 - SQLite：schema 变更必须有 migration、materialized state 更新和 `packages/agent/test/harness` 覆盖。
-- TUI：组件必须遵守 `render(width)`、`invalidate()`、焦点和 overlay contract；展示层不能反向承载业务状态。
+- Web UI：浏览器前端在 `packages/coding-agent/web/`，HTTP/SSE 与交互桥接在 `src/modes/web/`；展示层不能反向承载业务状态。原 CLI/TUI 源码归档不属于当前 workspace。
 - Prompt：固定文本在仓库 `system-prompts/`，组合逻辑在 Coding Agent composer；用户项目的 `SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、`CLAUDE.md` 和 skills 仍由各自 loader 管理。仓库自身的开发规则、CI 和维护流程只放在根 `AGENTS.md` 与仓库文档中。
 
 ## 敏感数据和发布

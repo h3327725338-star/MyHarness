@@ -119,8 +119,7 @@ npm --workspace packages/coding-agent run test -- test/specific.test.ts
 packages/
   ai/           # LLM Provider abstraction
   agent/        # Agent loop、harness 和 session abstractions
-  tui/          # Terminal UI components
-  coding-agent/ # CLI 和 interactive mode
+  coding-agent/ # Web UI、启动入口和产品 runtime
   storage/
     sqlite-node/ # node:sqlite session storage backend
 ```

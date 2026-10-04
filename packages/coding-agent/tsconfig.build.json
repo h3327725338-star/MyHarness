@@ -6,9 +6,7 @@
 			"@myharness/agent-core": ["../agent/dist/index.d.ts"],
 			"@myharness/agent-core/*": ["../agent/dist/*.d.ts"],
 			"@myharness/ai": ["../ai/dist/index.d.ts"],
-			"@myharness/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
-			"@myharness/tui": ["../tui/dist/index.d.ts"],
-			"@myharness/tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
+			"@myharness/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"]
 		},
 		"rootDir": "./src"
 	},

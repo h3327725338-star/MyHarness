@@ -9,7 +9,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionUIDialogOptions } from "../../extensions/contracts/ui.ts";
 import type { ExtensionUIContext } from "../../extensions/runtime/types.ts";
-import { theme } from "../interactive/theme/theme.ts";
 
 export type WebDialogKind = "select" | "confirm" | "input" | "editor";
 
@@ -196,13 +195,10 @@ export class WebDialogBridge {
 				}
 				this.onSurfaceChanged?.();
 			}) as ExtensionUIContext["setWidget"],
-			setFooter: () => {},
-			setHeader: () => {},
 			setTitle: (title) => {
 				this.surface.title = title;
 				this.onSurfaceChanged?.();
 			},
-			custom: async () => undefined as never,
 			pasteToEditor: (text) => {
 				this.editorText += text;
 				this.onEditorText?.(this.editorText);
@@ -212,15 +208,7 @@ export class WebDialogBridge {
 				this.onEditorText?.(text);
 			},
 			getEditorText: () => this.editorText,
-			addAutocompleteProvider: () => {},
-			setEditorComponent: () => {},
-			getEditorComponent: () => undefined,
-			get theme() {
-				return theme;
-			},
 			getAllThemes: options.getAllThemes,
-			getTheme: () => undefined,
-			setTheme: () => ({ success: false, error: "Theme switching is handled by the Web UI settings." }),
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
 		};

@@ -15,7 +15,9 @@ import type {
 	ExtensionUIContext,
 	ProviderConfig,
 } from "../src/extensions/runtime/types.ts";
-import { KeybindingsManager, type KeyId } from "../src/modes/interactive/keybindings.ts";
+
+type KeyId = string;
+
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import type { ModelRegistry } from "../src/providers/models/registry.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
@@ -25,7 +27,12 @@ describe("ExtensionRunner", () => {
 	let extensionsDir: string;
 	let sessionManager: SessionManager;
 	let modelRegistry: ModelRegistry;
-	const defaultKeybindings = new KeybindingsManager().getEffectiveConfig();
+	const defaultKeybindings: Record<string, string | string[]> = {
+		"app.interrupt": "escape",
+		"app.clear": "ctrl+c",
+		"app.model.cycleForward": "ctrl+p",
+		"app.clipboard.pasteImage": "ctrl+v",
+	};
 
 	beforeEach(async () => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myharness-runner-test-"));

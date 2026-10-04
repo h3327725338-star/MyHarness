@@ -4,14 +4,14 @@
 
 [![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
 
-MyHarness 是一个面向项目目录的终端 AI 编程协作工具，处于 Early-stage / Work in Progress 阶段。它把已配置的 LLM Provider 与项目文件、Shell 命令、工具和可恢复 Session 连接到同一个工作流中。
+MyHarness 是一个面向项目目录的 Web AI 编程协作工具，处于 Early-stage / Work in Progress 阶段。它把已配置的 LLM Provider 与项目文件、Shell 命令、工具和可恢复 Session 连接到同一个工作流中。
 
 > 当前状态：项目主要在 Windows x64 源码 checkout 上维护和验证。使用真实模型会话前，需要配置 Provider、model 以及对应凭据。
 
 ## 核心能力
 
 - **代码协作**：Coding Agent 产品层提供文件、Shell、PowerShell、编辑、写入、Symbols、Git 和 GitHub 工作流。
-- **入口**：终端 TUI（Interactive）、Print 和 JSON event stream 模式；本机浏览器 **Web UI**（`myharness --web`，只监听 loopback，与 CLI 共用同一套 runtime）；也提供 Node.js SDK 供进程内集成。
+- **入口**：默认启动本机浏览器 **Web UI**（`myharness`，只监听 loopback，`--web` 为兼容参数）；也提供 Node.js SDK 供进程内集成。终端 TUI、Print 和 JSON 用户模式已移除，Web Terminal 面板保留。
 - **项目上下文**：支持 project trust、`AGENTS.md` / `CLAUDE.md` context files、Workspace 与 Session 管理、Git 集成和 context compaction。
 - **可扩展**：支持 TypeScript extensions、skills、prompt templates、themes、custom Provider 和 MyHarness packages。
 - **Code Intelligence**：源码中提供 lightweight Symbols index。语义 language-server 模块仍是可选能力，只有在发布并提供校验值的 runtime manifest 后才会可用。

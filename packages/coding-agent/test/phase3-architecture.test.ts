@@ -43,19 +43,10 @@ describe("Phase 3 architecture boundaries", () => {
 		expect(source).not.toMatch(/private _trace(?:Run|ToolStarts|ModelRequests)/);
 	});
 
-	it("keeps InteractiveMode on the presentation side of extracted workflows", () => {
-		const source = readRepositoryFile("packages/coding-agent/src/modes/interactive/interactive-mode.ts");
+	it("keeps Web routes on the presentation side of workflows", () => {
+		const source = readRepositoryFile("packages/coding-agent/src/modes/web/routes-git.ts");
 		expect(source).toContain("application/use-cases/git-commit.ts");
-		expect(source).toContain("application/use-cases/provider-settings.ts");
-		expect(source).toContain("application/use-cases/workspace-session.ts");
-		for (const implementationImport of [
-			"generateCommitMessageForPathsAsync",
-			"createGitCommitForPathsAsync",
-			"getGitWorkingTreePathsAsync",
-			"getGitCheckpointPendingTaskPathsAsync",
-		]) {
-			expect(source, `${implementationImport} must stay in the Git use case`).not.toContain(implementationImport);
-		}
+		expect(source).toContain("application/use-cases/git-push.ts");
 	});
 
 	it("keeps the session-scoped domain modules independent from the frontend", () => {
@@ -116,19 +107,7 @@ describe("Phase 3 architecture boundaries", () => {
 		expect(source).not.toMatch(/private _(?:backgroundExploreTasks|workflowControls|pendingBashMessages)\b/);
 	});
 
-	it("keeps InteractiveMode away from Git and Session storage implementations", () => {
-		const source = readRepositoryFile("packages/coding-agent/src/modes/interactive/interactive-mode.ts");
-		expect(source).toContain("application/use-cases/git-workspace.ts");
-		expect(source).toContain("application/use-cases/local-git-repository.ts");
-		expect(source).toContain("application/use-cases/conversation-title.ts");
-
-		// Git reaches InteractiveMode through application use cases. The only direct
-		// import left is the stateless URL parser used to label package sources.
-		const gitImports = [...source.matchAll(/from\s+"(\.\.\/\.\.\/git\/[^"]+)"/g)].map((match) => match[1]);
-		expect(gitImports).toEqual(["../../git/repository/source.ts"]);
-		expect(source, "SessionManager is only used as a type here").toContain(
-			'import type { SessionManager } from "../../session/manager/index.ts";',
-		);
-		expect(source).not.toMatch(/SessionManager\.(?:open|list|create)\(/);
+	it("keeps Web dialogs independent from terminal components", () => {
+		expect(readRepositoryFile("packages/coding-agent/src/modes/web/dialogs.ts")).not.toMatch(noFrontendDependency);
 	});
 });

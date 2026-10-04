@@ -1,6 +1,6 @@
 # Web UI
 
-MyHarness 有两个同等的正式入口：终端里的 TUI，以及只在本机使用的浏览器 Web UI。两者共用同一个 `AgentSessionRuntime` / `AgentSession`、同一套 Session、Settings、Provider、Tool、Git checkpoint 和 Extension，没有第二套 Agent 逻辑。Web UI 是现有能力的另一个交互层，不是对 CLI 的重写。
+MyHarness 默认且唯一的用户交互入口是本机浏览器 Web UI。它使用现有 `AgentSessionRuntime` / `AgentSession`、Session、Settings、Provider、Tool、Git checkpoint 和 Extension，没有第二套 Agent 逻辑。终端 CLI/TUI 已移出本仓库；Web Terminal 面板仍保留。
 
 ## 会话治理、快捷键与指标
 
@@ -13,7 +13,7 @@ MyHarness 有两个同等的正式入口：终端里的 TUI，以及只在本机
 - Session Token 分为普通输入、缓存写入、缓存读取、输出，命中率为缓存读取 ÷（普通输入 + 缓存读取 + 缓存写入），固定两位小数。输入框用量浮层显示会话累计速度（具有配对计时的累计输出 ÷ 累计生成时间）与累计缓存命中；右侧“上下文窗口”仅显示容量进度条、已用/总容量和剩余空间；Session 的 Token 汇总行下方独立显示累计速度与累计命中率，沿用同一双列网格与“输入”左对齐，不再重复展示请求/累计缓存和耗时长列表。自动压缩开关与立即压缩按钮位于上下文进度条下方，与左侧剩余用量同一行；控件组右端与进度条右端对齐。Session 操作区仅保留导出 HTML。`usage` SSE 同批携带统计、cache、speed，正文与用量保留 50ms 合并窗口；这不是零延迟保证，Provider 仅在结束报告的输入和缓存无法提前精确显示。近似值统一用 `≈`，未知显示 `—`，明确报告的零显示 `0`。累计统计缺少部分样本时，只统计有依据的配对样本并标为近似。
 - 本地参考研读的是已安装 DeepSeek Harness 的 `app.asar` 中 `dsh-token-meter/lib/types/turn-usage.js`、`usage-projection.js`、`dsh-client-ui-chat/lib/client.js` 与 `dsh-client-ui-trajectory/lib/client.js`：采用不重叠输入分桶、替换当前请求样本避免重复累计，以及首个 Token 到结束的输出测速口径；没有复制其源码。
 
-启动时按实际选择的入口加载 Web、TUI 或 print mode，HTML 导出和会话选择器仅在使用时加载，不再通过 modes 聚合入口预加载所有界面。代码索引扫描与 LSP 连接仍沿用已有按查询触发的实现。
+启动默认加载 Web，`--print`、`--mode`、`--list-models` 已不支持。HTML 导出使用独立暗色 CSS palette 与结构化 Session 数据，不加载终端 Theme 或 ANSI 渲染器；旧 `themeName` 选项仅兼容接收。代码索引扫描与 LSP 连接仍沿用已有按查询触发的实现。
 
 Session 面板保持输入、缓存写入、缓存命中、输出的 Token 汇总行；累计速度与累计命中率放在紧接其下的独立行，左侧为空标签列。上游用量的可选逐项 `reported` 标记区分实测零与未上报；累计指标有任何样本缺项时显示 `—`，费用以 `≈` 标记不完整或生成中估算。旧记录没有逐项标记时，仅正值能证明对应维度有数据。模型输出的正文（包括后续工具调用前的文字）在步骤摘要之外、按发生顺序显示在各折叠块之间，不受步骤默认折叠设置影响。Changes 的任务切换使用共享浮层菜单，不再使用系统原生 select 弹窗。
 
@@ -37,19 +37,19 @@ Session 面板保持输入、缓存写入、缓存命中、输出的 Token 汇�
 # 源码 checkout（Windows）
 .\dev.cmd --web
 # 或直接双击仓库根目录的 dev-web.cmd：与 dev.cmd --web 相同，但服务在后台无窗口运行（见下）
-# 或已构建的 CLI
-myharness --web
+# 或已构建的 Web 启动入口
+myharness
 ```
 
 | 参数 | 说明 |
 | --- | --- |
-| `--web` | 启动本地 Web UI，而不是 TUI。不能与 `--print`、`--mode`、`--list-models` 同时使用。 |
+| `--web` | 兼容参数；不传也默认启动本地 Web UI。 |
 | `--port <n>` | 端口，默认 `7878`；被占用时依次尝试后面的 10 个端口；`0` 表示由系统分配。 |
 | `--no-open` | 不自动打开默认浏览器（终端会打印 `MyHarness Web UI: http://127.0.0.1:<port>/`）。 |
 
 **无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 每次启动都不复用已在运行的实例（默认端口 7878 或 `--port`）：先请求旧实例正常退出（`POST /api/shutdown`），15 秒内没退出则只结束确认是 MyHarness 的监听进程；端口被其他程序占用或旧实例无法结束时弹出错误并取消启动。这样打开的总是当前源码的后端（旧实例里未完成的对话会随之结束）。随后以隐藏方式运行 `dev.ps1 --web`，输出（UTF-8）写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动超过约 1 秒仍未就绪时会显示一个小启动窗口（深色、无边框、圆角，带 MyHarness 标志和一条细进度线，颜色与 Web UI 一致，不再是系统默认白色窗口），当前阶段文字对应 `dev.ps1` 打印的真实阶段（读取项目要求、Node.js、npm、依赖、bash、ffmpeg、加载并启动服务）和最后的服务监听，就绪后自动关闭；快速启动时不出现任何窗口。启动小窗右上角有标准的最小化和关闭按钮（按住窗口其余部分可拖动，最小化后从任务栏还原）：最小化只是收到后台，启动继续；关闭（或 Alt+F4）明确取消启动，并结束启动进程及其子进程（`taskkill /T`），不弹错误对话框。“就绪”不只看日志：服务端口一监听，`dev-web.ps1` 每约 0.1 秒用不走代理的短超时请求 `GET /api/boot`，应答就立即认为就绪，所以日志文件暂时读不到也不会一直等；服务端在存储迁移、会话查找、运行时创建之前就开始监听（`main.ts` 里 `startWebBootstrap` 最先执行），页面在这段时间显示 “Starting MyHarness…”。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径；日志必须按 UTF-8 读取，否则中文会乱码）。
 
-**启动耗时**：`dev.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。CLI 的 `dev.cmd` 与 `myharness` 不受影响。
+**启动耗时**：`dev.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。`dev.cmd` 与 `myharness` 也默认进入 Web；不再提供终端交互。
 
 其余参数照常生效：`--session`、`--continue`、`--model`、`--thinking`、`--no-extensions`、`--approve/--no-approve` 等；命令行里的初始 message / `@file` 会在启动后作为第一条消息发送。终端里按 `Ctrl+C`（或界面里的 **Quit MyHarness**）会停止服务并结束当前任务。
 

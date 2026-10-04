@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -42,7 +42,8 @@ const businessFiles = [
 	"packages/coding-agent/src/themes/loader/theme-resource.ts",
 ];
 
-const directPresentationImport = /(?:from|import\()\s*["'][^"']*(?:myharness-tui|modes\/interactive)[^"']*["']/;
+const directPresentationImport =
+	/(?:from|import\()\s*["'][^"']*(?:@myharness\/tui|myharness-tui|modes\/interactive)[^"']*["']/;
 const rendererMember = /\brender(?:Call|Result|Shell)\b/;
 
 describe("Phase 1 architecture boundaries", () => {
@@ -62,42 +63,19 @@ describe("Phase 1 architecture boundaries", () => {
 		const contract = readRepositoryFile("packages/coding-agent/src/tools/contracts/index.ts");
 		expect(contract).not.toMatch(rendererMember);
 
-		const legacyRenderUtils = readRepositoryFile("packages/coding-agent/src/tools/render-utils.ts");
-		expect(legacyRenderUtils).toContain("./presentation/render-utils.ts");
-		expect(legacyRenderUtils).not.toMatch(directPresentationImport);
+		expect(existsSync(resolve(repositoryRoot, "packages/coding-agent/src/tools/render-utils.ts"))).toBe(false);
 	});
 
-	it("keeps built-in rendering behind the presentation registry", () => {
-		const registry = readRepositoryFile("packages/coding-agent/src/tools/presentation/index.ts");
-		for (const toolName of [
-			"bash",
-			"pwsh",
-			"read",
-			"write",
-			"grep",
-			"find",
-			"ls",
-			"edit",
-			"symbols",
-			"agent",
-			"workflow",
-			"ultracode",
-		]) {
-			expect(registry, `renderer registry entry: ${toolName}`).toContain(`${toolName}:`);
-		}
-
-		const interactiveToolExecution = readRepositoryFile(
-			"packages/coding-agent/src/modes/interactive/components/tool-execution.ts",
+	it("keeps HTML export independent of terminal rendering", () => {
+		const exporter = readRepositoryFile("packages/coding-agent/src/exports/html/session-export.ts");
+		expect(exporter).not.toMatch(directPresentationImport);
+		expect(exporter).not.toContain("createToolHtmlRenderer");
+		expect(existsSync(resolve(repositoryRoot, "packages/coding-agent/src/exports/html/tool-renderer.ts"))).toBe(
+			false,
 		);
-		expect(interactiveToolExecution).toContain("getBuiltinToolRenderer");
-		expect(interactiveToolExecution).toContain("builtinRenderer?.renderCall");
-		expect(interactiveToolExecution).toContain("builtinRenderer?.renderResult");
-
-		const htmlToolRenderer = readRepositoryFile("packages/coding-agent/src/exports/html/tool-renderer.ts");
-		expect(htmlToolRenderer).toContain("getBuiltinToolRenderer");
 	});
 
-	it("keeps renderer callbacks on the public built-in tool definition API", () => {
+	it("exposes UI-neutral public built-in tool definitions", () => {
 		const definitions = [
 			createBashToolDefinition(process.cwd()),
 			createPwshToolDefinition(process.cwd()),
@@ -113,10 +91,10 @@ describe("Phase 1 architecture boundaries", () => {
 		];
 
 		for (const definition of definitions) {
-			expect(typeof definition.renderCall, `${definition.name} call renderer`).toBe("function");
-			expect(typeof definition.renderResult, `${definition.name} result renderer`).toBe("function");
+			expect(definition).not.toHaveProperty("renderCall");
+			expect(definition).not.toHaveProperty("renderResult");
 		}
-		expect(createEditToolDefinition(process.cwd()).renderShell).toBe("self");
+		expect(createEditToolDefinition(process.cwd())).not.toHaveProperty("renderShell");
 	});
 
 	it("keeps theme file parsing neutral until the interactive frontend creates a Theme", () => {
@@ -126,7 +104,8 @@ describe("Phase 1 architecture boundaries", () => {
 		expect(themeResource).not.toContain("myharness-tui");
 		expect(themeResource).not.toContain("modes/interactive");
 
-		const interactiveTheme = readRepositoryFile("packages/coding-agent/src/modes/interactive/theme/theme.ts");
-		expect(interactiveTheme).toContain("createThemeFromResource");
+		expect(existsSync(resolve(repositoryRoot, "packages/coding-agent/src/modes/interactive/theme/theme.ts"))).toBe(
+			false,
+		);
 	});
 });

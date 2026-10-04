@@ -60,14 +60,14 @@ describe("Phase 2 architecture boundaries", () => {
 		expect(typeof apiEntry.getAgentDir).toBe("function");
 		expect(typeof apiEntry.defineTool).toBe("function");
 		expect(typeof apiEntry.createReadTool).toBe("function");
-		expect(typeof apiEntry.BorderedLoader).toBe("function");
+		expect(apiEntry).not.toHaveProperty("BorderedLoader");
 		expect(typeof apiEntry.SessionManager).toBe("function");
 	});
 
 	it("keeps Tools and internal modules off the Extension public barrel", () => {
 		const publicFacade = readRepositoryFile("packages/coding-agent/src/index.ts");
 		const toolSource = readRepositoryFile("packages/coding-agent/src/tools/tool-definition-wrapper.ts");
-		const toolPresentationTypes = readRepositoryFile("packages/coding-agent/src/tools/presentation/types.ts");
+		const toolPresentationTypes = readRepositoryFile("packages/coding-agent/src/tools/presentation/public.ts");
 		expect(toolSource).toContain("../extensions/contracts/tool.ts");
 		expect(toolSource).not.toContain("extensions/types.ts");
 		expect(toolSource).not.toContain("extensions/index.ts");

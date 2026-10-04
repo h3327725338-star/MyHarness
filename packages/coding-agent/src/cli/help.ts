@@ -27,9 +27,7 @@ export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
 	{
 		title: "Modes",
 		options: [
-			{ flags: "-p, --print [message]", description: "Print response and exit (also reads piped stdin)" },
-			{ flags: "--mode <text|json>", description: "Output mode (default: text in print mode)" },
-			{ flags: "--web", description: "Start the local Web UI (loopback only) instead of the terminal UI" },
+			{ flags: "--web", description: "Compatibility flag: the local Web UI is now the default" },
 			{ flags: "--port <n>", description: "Web UI port (default 7878; 0 picks a free port)" },
 			{ flags: "--no-open", description: "Do not open the browser automatically in Web UI mode" },
 			{ flags: "--export <file>", description: "Export a session file to HTML and exit" },
@@ -46,7 +44,6 @@ export const CLI_HELP_SECTIONS: readonly CliHelpSection[] = [
 				description: "Thinking level: off, minimal, low, medium, high, xhigh, max",
 			},
 			{ flags: "--models <patterns>", description: "Comma-separated model scope for cycling" },
-			{ flags: "--list-models [search]", description: "List available models and exit" },
 			{ flags: "--context-window <size>", description: "Context window override (e.g. 256K)" },
 		],
 	},
@@ -104,9 +101,7 @@ const CLI_HELP_INPUT = `Input:
   @file...      Include file contents in the initial message
   message...    Initial message; remaining arguments are queued as follow-ups
 
-Package commands (run "${APP_NAME} <command> --help" for details):
-  ${APP_NAME} install|remove|update|list [...]
-  ${APP_NAME} config [-l]   Edit settings and package resources
+Configure Providers, resources, and sessions in the browser Settings panel.
 
 Project settings live in ${CONFIG_DIR_NAME}/settings.json; global settings in
 ~/${CONFIG_DIR_NAME}/agent/settings.json.`;

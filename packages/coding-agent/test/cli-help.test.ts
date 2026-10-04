@@ -22,8 +22,8 @@ describe("top-level CLI help", () => {
 		for (const flag of [
 			"--help",
 			"--version",
-			"--print",
-			"--mode",
+			"--web",
+			"--no-open",
 			"--provider",
 			"--model",
 			"--continue",
@@ -36,6 +36,11 @@ describe("top-level CLI help", () => {
 		]) {
 			expect(help).toContain(flag);
 		}
+	});
+
+	test("does not advertise removed terminal output modes", () => {
+		const flags = listCliHelpFlags();
+		for (const flag of ["print", "mode", "list-models"]) expect(flags).not.toContain(flag);
 	});
 
 	test("every advertised long flag is actually accepted by parseArgs", () => {

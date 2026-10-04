@@ -1256,9 +1256,7 @@ export function buildSubAgentArgs(options: {
 	guardPath: string;
 }): string[] {
 	return [
-		"--mode",
-		"json",
-		"--print",
+		"--internal-delegated-worker",
 		"--no-session",
 		"--no-context-files",
 		"--no-extensions",

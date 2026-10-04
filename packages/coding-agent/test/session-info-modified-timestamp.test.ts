@@ -2,8 +2,7 @@ import { writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionHeader } from "../src/session/manager/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
 
@@ -40,8 +39,6 @@ function createSessionFile(path: string): void {
 }
 
 describe("SessionInfo.modified", () => {
-	beforeAll(() => initTheme("dark"));
-
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});

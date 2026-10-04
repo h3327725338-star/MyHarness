@@ -2,6 +2,8 @@
 
 # Extensions
 
+> **Web-only API update:** terminal UI components, `@myharness/tui`, Theme, `ctx.ui.custom()`/editor factories and Tool `renderCall`/`renderResult` callbacks are no longer provided. Web dialogs, notifications, text widgets, Tool execution, lifecycle events and Provider registration remain. Message/entry renderer contracts now return plain strings. Terminal API examples further below are legacy reference only and must be migrated; inspect `src/extensions/api-entry.ts` and `src/extensions/runtime/types.ts` for current exports.
+
 Extensions are TypeScript modules that extend MyHarness's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
 > **Placement:** Put extensions in `~/.myharness/agent/extensions/` (global) or `.myharness/extensions/` (project-local) for auto-discovery. Use `MyHarness -e ./path.ts` only for quick tests. Extension files are loaded at startup; use `ctx.reload()` (print/JSON modes) or restart MyHarness to pick up changes.
@@ -10,10 +12,10 @@ Extensions are TypeScript modules that extend MyHarness's behavior. They can sub
 - **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
 - **Event interception** - Block or modify tool calls, inject context, customize compaction
 - **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, notify)
-- **Custom UI components** - Full TUI components with keyboard input via `ctx.ui.custom()` for complex interactions
+- **Web interaction** - Browser dialogs and plain-text widgets via `ctx.ui`
 - **Custom commands** - Register named commands via `pi.registerCommand()`
 - **Session persistence** - Store state that survives restarts via `pi.appendEntry()`
-- **Custom rendering** - Control how tool calls/results and messages appear in TUI
+- **Presentation** - Structured tool results are rendered by the Web frontend; message/entry renderers return text.
 
 **Example use cases:**
 - Permission gates (confirm before `rm -rf`, `sudo`, etc.)

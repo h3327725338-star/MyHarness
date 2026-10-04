@@ -213,8 +213,6 @@ export type {
 	AgentStartEvent,
 	AgentToolResult,
 	AgentToolUpdateCallback,
-	AppKeybinding,
-	AutocompleteProviderFactory,
 	BashToolCallEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -254,7 +252,6 @@ export type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
-	KeybindingsManager,
 	LoadExtensionsResult,
 	LsToolCallEvent,
 	MessageEndEvent,
@@ -294,7 +291,6 @@ export type {
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
 	ToolInfo,
-	ToolRenderResultOptions,
 	ToolResultEvent,
 	TurnEndEvent,
 	TurnStartEvent,
@@ -332,60 +328,8 @@ export {
 } from "./git/local-repositories/store.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
-// Run modes for programmatic SDK usage
-export {
-	InteractiveMode,
-	type InteractiveModeOptions,
-	type PrintModeOptions,
-	runPrintMode,
-} from "./modes/index.ts";
-// UI components for extensions
-export {
-	AssistantMessageComponent,
-	BashExecutionComponent,
-	BorderedLoader,
-	BranchSummaryMessageComponent,
-	CompactionSummaryMessageComponent,
-	CustomEditor,
-	CustomMessageComponent,
-	DynamicBorder,
-	ExtensionEditorComponent,
-	ExtensionInputComponent,
-	ExtensionSelectorComponent,
-	FooterComponent,
-	keyHint,
-	keyText,
-	ModelSelectorComponent,
-	type RenderDiffOptions,
-	rawKeyHint,
-	renderDiff,
-	SessionSelectorComponent,
-	type SettingsCallbacks,
-	type SettingsConfig,
-	SettingsSelectorComponent,
-	ShowImagesSelectorComponent,
-	SkillInvocationMessageComponent,
-	ThemeSelectorComponent,
-	ThinkingSelectorComponent,
-	ToolExecutionComponent,
-	type ToolExecutionOptions,
-	truncateToVisualLines,
-	UserMessageComponent,
-	type VisualTruncateResult,
-} from "./modes/interactive/components/index.ts";
-// Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
-export type { ReadonlyFooterDataProvider } from "./modes/interactive/footer-data-provider.ts";
-// Theme utilities for custom tools and extensions
-export {
-	getLanguageFromPath,
-	getMarkdownTheme,
-	getSelectListTheme,
-	getSettingsListTheme,
-	highlightCode,
-	initTheme,
-	Theme,
-	type ThemeColor,
-} from "./modes/interactive/theme/theme.ts";
+// The product exposes only the browser frontend.
+export { runWebMode, startWebBootstrap, type WebBootstrap, type WebModeOptions } from "./modes/web/index.ts";
 export type {
 	ApiKeyCollectionStore,
 	ProviderCredentialOverview,
@@ -600,7 +544,7 @@ export {
 	withFileMutationQueue,
 } from "./tools/registry.ts";
 // Clipboard utilities
-export { copyToClipboard } from "./utils/clipboard.ts";
+
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { convertToPng } from "./utils/image-convert.ts";
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
