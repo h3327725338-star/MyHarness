@@ -41,7 +41,7 @@ async function runGitTask(kind, activity, work) {
 		return await work(slot);
 	} finally {
 		inSlot(slot, () => set({ gitTask: null }));
-		loadGitStatus();
+		await inSlot(slot, () => loadGitStatus());
 	}
 }
 

@@ -518,14 +518,20 @@ export async function loadStats() {
 	}
 }
 
+const gitStatusRequests = new Map();
 export async function loadGitStatus() {
 	const slot = targetSlot ?? activeSlot;
+	const request = {};
+	gitStatusRequests.set(slot, request);
 	let status = null;
 	try {
 		status = await api("/api/git/status", { slot });
 	} catch {
 		status = null;
 	}
+	// A slow pre-commit query must not overwrite a newer post-commit result.
+	if (gitStatusRequests.get(slot) !== request) return;
+	gitStatusRequests.delete(slot);
 	runFor(slot, () => set({ gitStatus: status }));
 }
 
