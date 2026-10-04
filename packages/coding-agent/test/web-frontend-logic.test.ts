@@ -36,6 +36,24 @@ const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	...extra,
 });
 
+describe("Web UI: completion status", () => {
+	it("labels only the actual phase and keeps unknown phases neutral", async () => {
+		const { completionLabel } = await import(new URL("completion-status.js", webDir).href);
+		expect(completionLabel({ phase: "changes" })).toBe("Checking this task's file changes");
+		expect(completionLabel({ phase: "records" })).toBe("Saving task records");
+		expect(completionLabel({ phase: "memory" })).toBe("Organizing long-term memory");
+		expect(completionLabel({})).toBe("Finalizing task records");
+	});
+	it("waits 500ms once per task, not again on a phase change or old snapshot", async () => {
+		const { completionDelay } = await import(new URL("completion-status.js", webDir).href);
+		expect(completionDelay({ startedAt: 1000 }, 1000)).toBe(500);
+		expect(completionDelay({ startedAt: 1000, phase: "memory" }, 1300)).toBe(200);
+		expect(completionDelay({ startedAt: 1000 }, 1500)).toBe(0);
+		expect(completionDelay({ startedAt: 1000 }, 2000)).toBe(0);
+		expect(completionDelay({ startedAt: 2000 }, 1000)).toBe(500);
+	});
+});
+
 describe("Web UI: list presence ordering", () => {
 	it("places new rows first immediately while retaining exiting neighbours", async () => {
 		const { reconcileRows } = await import(new URL("list-presence.js", webDir).href);

@@ -186,6 +186,7 @@ export class WebHost {
 	private lastTerminalRunState: RunStateSnapshot | undefined;
 	private lastAgentEnd: { succeeded: boolean; willRetry: boolean; messages: AgentMessage[] } | undefined;
 	private completionPromise: Promise<void> | undefined;
+	private completionStatus: { phase: "changes" | "records" | "memory"; startedAt: number; runId?: number } | undefined;
 	private runFinished = new Map<number, RunFinishedPayload>();
 	/** Number of finished runs, and how many of them the browser has shown to the user (unread = the difference). */
 	private finishedRuns = 0;
@@ -497,6 +498,7 @@ export class WebHost {
 		this.lastTerminalRunState = undefined;
 		this.pendingStartupCheckpoint = undefined;
 		this.completionPromise = undefined;
+		this.completionStatus = undefined;
 		this.runFinished.clear();
 		this.seenRuns = this.finishedRuns;
 		// Run numbers start again with the next chat; a notification still waiting for an answer belonged to this one.
@@ -1023,24 +1025,33 @@ export class WebHost {
 	private startCompletion(): void {
 		if (this.completionPromise) return;
 		const runId = this.currentRunId;
+		this.completionStatus = { phase: "changes", startedAt: Date.now(), runId };
 		const promise = this.runCompletion(runId).catch((error) => {
 			this.broadcast("notice", {
 				id: `completion-${Date.now()}`,
-				message: `Task finalization failed: ${error instanceof Error ? error.message : String(error)}`,
+				message: `Task record finalization failed; task changes have been preserved: ${error instanceof Error ? error.message : String(error)}`,
 				type: "error",
 				ts: Date.now(),
 			});
 		});
 		this.completionPromise = promise;
-		this.broadcast("completion", { active: true, runId });
+		this.broadcast("completion", { active: true, ...this.completionStatus });
 		void promise.finally(() => {
-			if (this.completionPromise === promise) this.completionPromise = undefined;
+			if (this.completionPromise !== promise) return;
+			this.completionPromise = undefined;
+			this.completionStatus = undefined;
 			this.broadcast("completion", { active: false, runId });
 		});
 	}
 
 	waitForCompletion(): Promise<void> {
 		return this.completionPromise ?? Promise.resolve();
+	}
+
+	private setCompletionPhase(phase: "changes" | "records" | "memory"): void {
+		if (!this.completionStatus) return;
+		this.completionStatus = { ...this.completionStatus, phase };
+		this.broadcast("completion", { active: true, ...this.completionStatus });
 	}
 
 	private async runCompletion(runId: number | undefined): Promise<void> {
@@ -1062,7 +1073,7 @@ export class WebHost {
 		} catch (error) {
 			this.broadcast("notice", {
 				id: `detect-${Date.now()}`,
-				message: `Change detection failed: ${error instanceof Error ? error.message : String(error)}`,
+				message: `Task file change detection failed; the change list may be incomplete: ${error instanceof Error ? error.message : String(error)}`,
 				type: "warning",
 				ts: Date.now(),
 			});
@@ -1082,16 +1093,13 @@ export class WebHost {
 			if (finalDetection?.status === "indeterminate") indeterminateGit = true;
 		}
 
+		this.setCompletionPhase("records");
 		let uncommitted = false;
 		if (succeeded && !indeterminateGit) {
 			if (!session.isMirror && session.settingsManager.getAutoMemorySettings().enabled) {
-				this.broadcast("notice", {
-					id: `mem-run-${Date.now()}`,
-					message: "Auto Memory: consolidating this task's long-term memory…",
-					type: "info",
-					ts: Date.now(),
-				});
+				this.setCompletionPhase("memory");
 				await session.runAutoMemoryExtraction();
+				this.setCompletionPhase("records");
 			}
 			const decisionCheckpoint = session.getGitCheckpoint();
 			if (decisionCheckpoint?.status === "created") {
@@ -1343,6 +1351,7 @@ export class WebHost {
 				retrying: session.isRetrying,
 				bashRunning: session.isBashRunning,
 				completion: this.completionActive,
+				completionStatus: this.completionStatus ?? null,
 				mirror: session.isMirror,
 				background: session.backgroundTaskCount,
 			},

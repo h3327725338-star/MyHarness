@@ -13,6 +13,7 @@ import { rankSearch } from "./search.js";
 import { clip, debounce, fmtDuration, plural, pointerMoved } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
+import { completionDelay, completionLabel } from "./completion-status.js";
 
 const drafts = new Map();
 
@@ -98,6 +99,16 @@ function StatusStrips({ snap }) {
 	const retry = useStore((s) => s.retry);
 	const recovery = useStore((s) => s.recovery);
 	const completion = useStore((s) => s.completion);
+	const [visibleCompletion, setVisibleCompletion] = useState(null);
+	useEffect(() => {
+		setVisibleCompletion(null);
+		if (!completion) return undefined;
+		const show = () => setVisibleCompletion(completion.startedAt);
+		const delay = completionDelay(completion);
+		if (!delay) { show(); return undefined; }
+		const timer = setTimeout(show, delay);
+		return () => clearTimeout(timer);
+	}, [completion?.startedAt, !!completion]);
 	// A page opened during a compaction has no compaction_start event: the snapshot says it runs and since when.
 	const compacting = compaction || (snap?.flags?.compacting ? { reason: null, startedAt: snap.run?.lastActivityAt } : null);
 	const [tick, setTick] = useState(0);
@@ -117,7 +128,7 @@ function StatusStrips({ snap }) {
 		strips.push(html`<div class="strip warn" key="r"><${Spinner} /> <span>${t("Provider error — retrying ({attempt}/{maxAttempts}) in {remaining}s: {clip}", { attempt: retry.attempt, maxAttempts: retry.maxAttempts, remaining, clip: clip(retry.errorMessage, 120) })}</span><button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button></div>`);
 	}
 	if (recovery) strips.push(html`<div class="strip warn" key="v"><${Spinner} /> <span>${recovery.kind === "new-conversation" ? t("Recovering by rebuilding the conversation (#{conversation})", { conversation: recovery.conversation }) : t("Recovering from a provider problem ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })}: ${clip(recovery.errorMessage, 100)}</span></div>`);
-	if (completion && !snap?.active) strips.push(html`<div class="strip" key="f"><${Spinner} /> <span>${t("Finalizing the task (checking changes, memory)…")}</span></div>`);
+	if (completion && visibleCompletion === completion.startedAt && !snap?.active) strips.push(html`<div class="strip" key="f" role="status"><${Spinner} /> <span>${t(completionLabel(completion))}</span></div>`);
 	void tick;
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;
 }

@@ -64,6 +64,50 @@ describe("Web host (real runtime with a faux provider)", () => {
 		return dir;
 	}
 
+	it("reports real completion phases, restores snapshots, and clears failures", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		const internals = owner as any;
+		internals.lastAgentEnd = { succeeded: true, messages: [] };
+		const extraction = vi.spyOn(owner.session, "runAutoMemoryExtraction");
+		owner.session.settingsManager.setAutoMemorySettings({ enabled: false });
+		internals.startCompletion();
+		await owner.waitForCompletion();
+		expect(extraction).not.toHaveBeenCalled();
+		expect(internals.completionStatus).toBeUndefined();
+		await fx.waitFor("completion", (d) => d.active === false);
+		expect(fx.events.filter((event) => event.event === "completion").map((event) => event.data.phase)).not.toContain(
+			"memory",
+		);
+
+		owner.session.settingsManager.setAutoMemorySettings({ enabled: true });
+		let release!: () => void;
+		extraction.mockImplementation(
+			() =>
+				new Promise<boolean>((resolve) => {
+					release = () => resolve(true);
+				}),
+		);
+		internals.startCompletion();
+		await fx.waitFor("completion", (d) => d.phase === "memory");
+		const snapshot = await fx.get("/api/state");
+		expect(snapshot.flags.completion).toBe(true);
+		expect(snapshot.flags.completionStatus.phase).toBe("memory");
+		const startedAt = snapshot.flags.completionStatus.startedAt;
+		release();
+		await owner.waitForCompletion();
+		await fx.waitFor("completion", (d) => d.phase === "records" && d.startedAt === startedAt);
+		expect((await fx.get("/api/state")).flags.completionStatus).toBeNull();
+
+		extraction.mockRejectedValueOnce(new Error("extraction unavailable"));
+		internals.startCompletion();
+		await owner.waitForCompletion();
+		expect(owner.completionActive).toBe(false);
+		expect((await fx.get("/api/state")).flags.completionStatus).toBeNull();
+		await fx.waitFor("notice", (d) => d.message.includes("extraction unavailable"));
+	});
+
 	it("publishes usage in the same batch as text before provider usage arrives", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");
