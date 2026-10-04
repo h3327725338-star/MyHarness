@@ -7,6 +7,12 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Restart service": "重启服务",
+	"Restarting service…": "正在重启服务…",
+	"Service restarted successfully.": "服务重启成功。",
+	"Service restart failed.": "服务重启失败。",
+	"The service restarted, but the original chat could not be restored.": "服务已重启，但未能恢复原会话。",
+	"Service restart timed out. Start MyHarness again to reconnect.": "服务重启超时，请重新启动 MyHarness 后连接。",
 	"Copy": "副本",
 	"Main": "主版本",
 	"Allow popups to open the copy tab.": "请允许弹出窗口，以打开副本标签页。",

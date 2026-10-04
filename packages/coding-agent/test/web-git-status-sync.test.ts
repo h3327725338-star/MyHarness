@@ -6,7 +6,7 @@ it("ignores obsolete Git status responses independently for each Chat", async ()
 	const source = readFileSync(new URL("../web/js/store.js", import.meta.url), "utf8");
 	const start = source.indexOf("const gitStatusRequests = new Map();");
 	const code = source
-		.slice(start, source.indexOf("\nexport async function refreshAll()", start))
+		.slice(start, source.indexOf("\nexport async function restoreAfterRestart", start))
 		.replace("export ", "");
 	const requests: { slot: string; resolve: (value: unknown) => void; reject: (error: Error) => void }[] = [];
 	const counts = new Map<string, number | null>();

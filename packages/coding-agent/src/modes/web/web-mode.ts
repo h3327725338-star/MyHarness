@@ -4,7 +4,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
@@ -56,6 +57,7 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	setMirrorSessionsAllowed(true);
 	const server = new WebHttpServer();
 	const dialogs = new WebDialogBridge();
+	const instanceId = randomUUID();
 	let phase: "starting" | "ready" | "error" = "starting";
 	let detail: string | undefined;
 	const dialogResponders: Array<(id: string, value: string | boolean | undefined) => boolean> = [];
@@ -83,6 +85,7 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 		copyIdentity ? { ...serviceIdentity(), token: copyIdentity.token } : {},
 	);
 	server.route("GET", "/api/boot", () => ({
+		instanceId,
 		worktreeService: serviceIdentity(),
 		phase,
 		detail: detail ?? null,
@@ -178,6 +181,10 @@ export async function runWebMode(
 	let shuttingDown = false;
 	let restarting = false;
 	let restartSessionFile: string | undefined;
+	const restartEnvironment = { ...process.env };
+	const restartExecutable = process.execPath;
+	const restartArguments = [...process.execArgv];
+	const restartEntry = process.argv[1]!;
 	const hub = new WebHostHub({ server, version: VERSION, onShutdown: () => void shutdown(0) });
 	bootstrap.addDialogResponder((id, value) => hub.respondToDialog(id, value));
 	const host = hub.host;
@@ -232,25 +239,45 @@ export async function runWebMode(
 				code = 1;
 			}
 			if (restarting && code === 0) {
+				const restartLog = openSync(join(runtimeHost.services.agentDir, "web-restart.log"), "a");
+				const childArgs = [
+					...restartArguments,
+					restartEntry,
+					...process.argv
+						.slice(2)
+						.filter((arg) =>
+							["--offline", "--no-extensions", "--no-context-files", "--approve", "--no-approve"].includes(arg),
+						),
+					"--port",
+					String(bootstrap.port),
+					"--no-open",
+					...(restartSessionFile ? ["--session", restartSessionFile] : []),
+				];
+				const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+				const windowsCommand = `Start-Process -FilePath ${quote(restartExecutable)} -ArgumentList ${quote(childArgs.map((arg) => `"${arg.replaceAll('"', '\\"')}"`).join(" "))} -WorkingDirectory ${quote(process.cwd())} -WindowStyle Hidden -RedirectStandardOutput ${quote(join(runtimeHost.services.agentDir, "web-restart.out.log"))} -RedirectStandardError ${quote(join(runtimeHost.services.agentDir, "web-restart.err.log"))}`;
 				const child = spawn(
-					process.execPath,
-					[
-						...process.execArgv,
-						process.argv[1]!,
-						"--web",
-						"--port",
-						String(bootstrap.port),
-						"--no-open",
-						...(restartSessionFile ? ["--session", restartSessionFile] : []),
-					],
+					process.platform === "win32" ? "powershell.exe" : restartExecutable,
+					process.platform === "win32"
+						? ["-NoProfile", "-EncodedCommand", Buffer.from(windowsCommand, "utf16le").toString("base64")]
+						: childArgs,
 					{
+						env: restartEnvironment,
 						cwd: process.cwd(),
-						detached: true,
-						stdio: "ignore",
+						detached: process.platform !== "win32",
+						stdio: ["ignore", restartLog, restartLog],
 						windowsHide: true,
 					},
 				);
+				closeSync(restartLog);
 				child.on("error", (error) => console.error(`Restart failed: ${error.message}`));
+				await new Promise<void>((resolveSpawn, rejectSpawn) => {
+					if (process.platform === "win32")
+						child.once("exit", (code) =>
+							code === 0 ? resolveSpawn() : rejectSpawn(new Error(`Restart launcher exited: ${code}`)),
+						);
+					else child.once("spawn", resolveSpawn);
+					child.once("error", rejectSpawn);
+				});
 				child.unref();
 			}
 			resolveExit(code);
@@ -261,7 +288,11 @@ export async function runWebMode(
 		if (hub.all().some((slot) => !slot.session.isIdle || slot.completionActive || slot.gitTask)) {
 			throw new Error("Stop running tasks before restarting the service.");
 		}
-		restartSessionFile = host.session.sessionManager.isPersisted() ? host.session.sessionFile : undefined;
+		const manager = host.session.sessionManager;
+		if (manager.isPersisted() && host.session.sessionFile && !existsSync(host.session.sessionFile)) {
+			manager.appendCustomMessageEntry("web-service-restart", "Service restart", true, undefined, true);
+		}
+		restartSessionFile = manager.isPersisted() ? host.session.sessionFile : undefined;
 		restarting = true;
 		setTimeout(() => void shutdown(0), 100);
 		return { ok: true };

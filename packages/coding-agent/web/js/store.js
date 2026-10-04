@@ -74,6 +74,7 @@ export const state = {
 	connected: false,
 	everConnected: false,
 	shutdown: false,
+	restarting: false,
 	slots: [],
 	activeSlot: null,
 	/** Session file of a chat that was clicked in the sidebar and is still being opened (marked there at once). */
@@ -243,7 +244,7 @@ export async function api(path, options = {}) {
 	if (!res.ok) {
 		const err = new Error(serverText(data?.error, t("Request failed ({status})", { status: res.status })));
 		err.status = res.status;
-		if (res.status === 410 && slot) recoverLostSlot(slot);
+		if (res.status === 410 && slot && !state.restarting) recoverLostSlot(slot);
 		throw err;
 	}
 	return data;
@@ -535,6 +536,14 @@ export async function loadGitStatus() {
 	runFor(slot, () => set({ gitStatus: status }));
 }
 
+export async function restoreAfterRestart(snap, boot) {
+	bags.clear();
+	activeSlot = snap.slot;
+	state.activeSlot = snap.slot;
+	set({ snap, boot });
+	await refreshAll();
+}
+
 export async function refreshAll() {
 	for (const [id, bag] of bags) if (id !== activeSlot) bag.loaded = false;
 	await Promise.all([refreshSlot(activeSlot), loadWorkspaces(), loadSlots()]);
@@ -654,7 +663,7 @@ function connectEvents() {
 		const reconnect = state.everConnected;
 		set({ connected: true, everConnected: true });
 		if (reconnect) tellTerminals("reconnect");
-		if (reconnect && booted) await attempt(refreshAll, { quiet: true });
+		if (reconnect && booted && !state.restarting) await attempt(refreshAll, { quiet: true });
 	};
 	source.onerror = () => {
 		set({ connected: false });
@@ -683,6 +692,7 @@ function connectEvents() {
 	on("notice", (d) => toast(d.message, d.type === "error" ? "error" : d.type === "warning" ? "warning" : "info", d.type === "error" ? 10000 : 6000));
 	on("shutdown", () => set({ shutdown: true }));
 	on("slots", (d) => {
+		if (state.restarting) return;
 		set({ slots: d.slots });
 		markActiveSeen();
 	});

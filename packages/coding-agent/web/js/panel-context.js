@@ -2,6 +2,7 @@
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
 import { api, attempt, loadResources, loadStats, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
+import { restartService } from "./service-restart.js";
 import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-usage.js";
 import { N_, t } from "./i18n.js";
 import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.js";
@@ -133,6 +134,6 @@ export function ContextPanel() {
 			${resources?.contextFiles.map((f) => html`<div class="res-row" key=${f.path}><span class="truncate grow mono" title=${f.path}>${f.path}</span><span class="dim">${t("{fmtTokens} chars", { fmtTokens: fmtTokens(f.chars) })}</span></div>`)}
 			${resources && !resources.contextFiles.length ? html`<div class="dim">${t("No AGENTS.md / CLAUDE.md files found.")}</div>` : null}
 		<//>
-		<div class="ctx-foot"><button class="btn sm" onClick=${async () => (await attempt(() => post("/api/resources/reload")), loadResources(), toast(t("Resources reloaded"), "info", 2500))} disabled=${snap.active}><${Icon} name="refresh" size=${13} />${t("Reload resources")}</button></div>
+		<div class="ctx-foot"><button class="btn sm" onClick=${restartService} disabled=${snap.active || state.restarting}><${Icon} name="refresh" size=${13} />${t("Restart service")}</button></div>
 	</div>`;
 }

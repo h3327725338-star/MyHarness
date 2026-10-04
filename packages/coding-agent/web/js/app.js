@@ -231,7 +231,7 @@ export function App() {
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
-			${everConnected && !connected ? html`<div class="conn-banner" role="alert">${t("Connection to the local server lost — reconnecting…")}</div>` : null}
+			${state.restarting || (everConnected && !connected) ? html`<div class="conn-banner" role="alert">${state.restarting ? t("Restarting service…") : t("Connection to the local server lost — reconnecting…")}</div>` : null}
 			<${Header} />
 			<${Transcript} />
 			<${Composer} />

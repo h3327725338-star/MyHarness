@@ -36,6 +36,32 @@ it.skipIf(process.platform !== "win32")(
 				.toBe("ready");
 			const boot = (await fetch(`${url}api/boot`).then((r) => r.json())) as { worktreeService: { path: string } };
 			expect(boot.worktreeService.path).toBe(checkout);
+			const originalState = (await fetch(`${url}api/state`).then((r) => r.json())) as { session: { id: string } };
+			const before = (await fetch(`${url}api/boot`).then((r) => r.json())) as { instanceId: string };
+			const restarted = await fetch(`${url}api/restart`, {
+				method: "POST",
+				headers: { "x-myharness-web": "1", "content-type": "application/json" },
+				body: "{}",
+			});
+			expect(restarted.ok).toBe(true);
+			await expect
+				.poll(
+					async () => {
+						try {
+							const next = (await fetch(`${url}api/boot`).then((r) => r.json())) as {
+								instanceId: string;
+								phase: string;
+							};
+							return next.instanceId !== before.instanceId && next.phase === "ready";
+						} catch {
+							return false;
+						}
+					},
+					{ timeout: 45000 },
+				)
+				.toBe(true);
+			const restoredState = (await fetch(`${url}api/state`).then((r) => r.json())) as { session: { id: string } };
+			expect(restoredState.session.id).toBe(originalState.session.id);
 			const settings = (await fetch(`${url}api/settings`).then((r) => r.json())) as {
 				items: { id: string; value: number }[];
 			};
@@ -48,7 +74,7 @@ it.skipIf(process.platform !== "win32")(
 					method: "POST",
 					headers: { "x-myharness-web": "1", "content-type": "application/json" },
 					body: "{}",
-				});
+				}).catch(() => {});
 		}
 	},
 	90000,
