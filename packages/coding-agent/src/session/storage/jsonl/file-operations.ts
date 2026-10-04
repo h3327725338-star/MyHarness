@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import { getSessionDir, parseSessionDataPath } from "../../../config/paths/index.ts";
+import { assertDirectTree, preserveArtifactOrigin, refreshArtifactIndexes } from "../../artifacts/store.ts";
 
 function deleteTarget(sessionPath: string): { path: string; directory: boolean } {
 	const structured = parseSessionDataPath(sessionPath);
@@ -19,9 +21,31 @@ function deleteTarget(sessionPath: string): { path: string; directory: boolean }
 /** Delete a session file, preferring the platform trash command when available. */
 export async function deleteSessionFile(
 	sessionPath: string,
-	options: { permanent?: boolean } = {},
+	options: { permanent?: boolean; deleteArtifacts?: boolean } = {},
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
 	const target = deleteTarget(sessionPath);
+	const scope = parseSessionDataPath(sessionPath);
+	try {
+		assertDirectTree(target.path);
+		if (target.directory && scope && options.deleteArtifacts !== true) {
+			const hasArtifacts = existsSync(join(target.path, "artifacts"));
+			if (hasArtifacts) preserveArtifactOrigin(scope, sessionPath);
+			for (const entry of readdirSync(target.path)) {
+				if (hasArtifacts && (entry === "artifacts" || entry === "metadata")) continue;
+				await rm(join(target.path, entry), { recursive: true, force: false });
+			}
+			if (hasArtifacts) {
+				for (const entry of readdirSync(join(target.path, "metadata"))) {
+					if (entry !== "artifacts-origin.json")
+						await rm(join(target.path, "metadata", entry), { recursive: true });
+				}
+			} else await rm(target.path, { recursive: true });
+			refreshArtifactIndexes(scope.dataRoot);
+			return { ok: true, method: "unlink" };
+		}
+	} catch (error) {
+		return { ok: false, method: "unlink", error: error instanceof Error ? error.message : String(error) };
+	}
 	const trashArgs = target.path.startsWith("-") ? ["--", target.path] : [target.path];
 	const trashResult = options.permanent
 		? { status: null, error: undefined, stderr: "" }
@@ -37,6 +61,7 @@ export async function deleteSessionFile(
 	};
 
 	if (trashResult.status === 0 || !existsSync(target.path)) {
+		if (scope) refreshArtifactIndexes(scope.dataRoot);
 		return { ok: true, method: "trash" };
 	}
 
@@ -46,6 +71,7 @@ export async function deleteSessionFile(
 		await unlink(`${sessionPath}.archived`).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "ENOENT") throw error;
 		});
+		if (scope) refreshArtifactIndexes(scope.dataRoot);
 		return { ok: true, method: "unlink" };
 	} catch (err) {
 		const unlinkError = err instanceof Error ? err.message : String(err);

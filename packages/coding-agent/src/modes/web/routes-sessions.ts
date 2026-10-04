@@ -10,6 +10,8 @@ import {
 	validateConversationTitle,
 } from "../../agent/runtime/conversation-title.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
+import { getDataDir } from "../../config/paths/index.ts";
+import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
@@ -214,9 +216,17 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	server.route("POST", "/api/workspaces/remove", ({ body }) => {
-		const id = asString(asObject(body).id, "id");
+		const input = asObject(body);
+		const id = asString(input.id, "id");
+		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
+			throw new HttpError(400, "deleteArtifacts must be a boolean");
 		const workspace = host.workspaceStore.getById(id);
 		if (!workspace) throw new HttpError(404, "Unknown workspace");
+		if (input.deleteArtifacts === true) {
+			if (hub.statuses().some((slot) => slot.active))
+				throw new HttpError(409, "Stop running tasks before deleting workspace artifacts.");
+			deleteWorkspaceArtifacts(host.session.sessionManager.getDataRoot() ?? getDataDir(), workspace.workspaceId);
+		}
 		if (!host.workspaceStore.remove(id)) throw new HttpError(500, "Could not save the workspace list.");
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
@@ -320,13 +330,19 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	server.route("POST", "/api/sessions/delete", async ({ body }) => {
-		const path = asString(asObject(body).path, "path");
+		const input = asObject(body);
+		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
+			throw new HttpError(400, "deleteArtifacts must be a boolean");
+		const path = asString(input.path, "path");
 		const known = (await SessionManager.listAll(sessionDir())).some(
 			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
 		);
 		if (!known) throw new HttpError(404, "Unknown session");
 		await releaseSessionSlots(path);
-		const deleted = await deleteSessionFile(path, { permanent: true });
+		const deleted = await deleteSessionFile(path, {
+			permanent: true,
+			deleteArtifacts: input.deleteArtifacts === true,
+		});
 		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
 		await setSessionMarker(path, ".pinned", false);
 		host.broadcast("workspaces_changed", {});
@@ -334,11 +350,17 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	server.route("POST", "/api/sessions/clear", async ({ body }) => {
-		const rootPath = asString(asObject(body).rootPath, "rootPath");
+		const input = asObject(body);
+		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
+			throw new HttpError(400, "deleteArtifacts must be a boolean");
+		const rootPath = asString(input.rootPath, "rootPath");
 		const sessions = await useCase.listSessions(rootPath);
 		for (const session of sessions) await releaseSessionSlots(session.path);
 		for (const session of sessions) {
-			const deleted = await deleteSessionFile(session.path, { permanent: true });
+			const deleted = await deleteSessionFile(session.path, {
+				permanent: true,
+				deleteArtifacts: input.deleteArtifacts === true,
+			});
 			if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
 		}
 		return { ok: true };

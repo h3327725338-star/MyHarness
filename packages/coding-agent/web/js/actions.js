@@ -8,10 +8,10 @@ import { serverText, t } from "./i18n.js";
 let dialogResolver = null;
 
 /** Promise-based confirmation modal (rendered by overlays.js). */
-export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail }) {
+export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false }) {
 	return new Promise((resolve) => {
 		dialogResolver = resolve;
-		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail } });
+		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice } });
 	});
 }
 /** Promise-based text prompt (rendered by app.js). Resolves undefined when cancelled. */
@@ -206,9 +206,9 @@ export const actions = {
 	},
 
 	async deleteSession(path, title) {
-		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true });
+		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true, artifactChoice: true });
 		if (!ok) return;
-		const result = await attempt(() => post("/api/sessions/delete", { path }));
+		const result = await attempt(() => post("/api/sessions/delete", { path, deleteArtifacts: ok.deleteArtifacts === true }));
 		if (result) await refreshAll();
 	},
 
@@ -283,9 +283,9 @@ export const actions = {
 	},
 
 	async removeWorkspace(id, name) {
-		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove") });
+		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove"), artifactChoice: true });
 		if (!ok) return;
-		await attempt(() => post("/api/workspaces/remove", { id }));
+		await attempt(() => post("/api/workspaces/remove", { id, deleteArtifacts: ok.deleteArtifacts === true }));
 		await loadWorkspaces();
 	},
 

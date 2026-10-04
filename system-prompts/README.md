@@ -16,6 +16,7 @@
 | `session/commit-authorization.md` | 当前不存在；显式 `/commit` 的授权和 Git 事务边界由 Coding Agent 源码处理，不会从本目录加载 |
 | `session/auto-memory.md` | 仅 Auto Memory 完整启用时追加的记忆优先级约束 |
 | `session/project-context.md` | 有项目上下文时使用，变量 `projectContext` |
+| `session/artifacts.md` | 持久化结构化 Session 的临时产出存放规则，变量 `artifactsDir`；由 `_getTurnSystemPrompt` 追加实际对话路径，不适用于正式源码或用户指定路径 |
 | `session/working-directory.md` | 当前工作目录，变量 `cwd` |
 | `session/model-identity.md` | 当前模型已知时使用，变量 `name`、`provider` |
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
@@ -59,7 +60,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 
 编程会话顺序保持为：核心 → 当前工具说明 → 工具路由 → 当前工具规则 → 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 工作目录 → 当前模型 → 回复语言 → 角色边界。
 
-扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`、`agent/runtime/agent-session.ts` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
+扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`、`agent/runtime/agent-session.ts` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
 
 - `{{variable}}` 是纯文本替换，不执行代码，也不递归解释变量值。保留模板内原有变量名。
 - 正文不 trim；文件末尾一个换行作为文本文件终止符移除，CRLF 统一为 LF。
@@ -91,7 +92,7 @@ system prompt，后者作为 composer 的追加内容。
 
 下面的迁移数字和测试结果是历史记录，不代表每次 checkout 都重新执行过；当前结论必须以源码、测试和实际命令输出为准。
 
-- 当前目录共有 55 个 Prompt 正文 `.md` 文件；另有 `README.md`、`maintenance.md`、`roadmap.md` 维护文档，这三者不在 loader 的 Prompt 资源清单中。`session/commit-authorization.md` 不在其中。
+- 原迁移时目录共有 55 个 Prompt 正文 `.md` 文件；另有 `README.md`、`maintenance.md`、`roadmap.md` 维护文档，这三者不在 loader 的 Prompt 资源清单中。`session/commit-authorization.md` 不在其中。
 - 相关测试入口包括 `packages/ai/test/system-prompt-loader.test.ts`、`system-prompt-provider-scope.test.ts` 和 `packages/coding-agent/test/system-prompt-files.test.ts`。
 - 这些测试文件的存在只能证明测试入口和覆盖意图；本次文档核对没有把它们的历史记录写成新的测试通过结论。
 - 历史终端 smoke 曾验证本地 Provider、429 恢复、read 工具与会话续接；对应终端测试脚本已随旧入口移除，这不是当前 Web 启动的验证结果。

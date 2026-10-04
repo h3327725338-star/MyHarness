@@ -86,6 +86,7 @@ import {
 	withoutDeletedHeaders,
 } from "../../providers/runtime/request-auth.ts";
 import { type ModelCycleResult, SessionModelController } from "../../providers/runtime/session-model.ts";
+import { artifactScope, ensureSessionArtifacts } from "../../session/artifacts/store.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { BranchSummaryEntry, SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { expandSkillCommand } from "../../skills/invocation.ts";
@@ -101,6 +102,7 @@ import {
 	buildSystemPrompt,
 	collectSystemPromptOptions,
 } from "../../system-prompts/composer/index.ts";
+import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { SessionToolRegistry } from "../../tools/session-tool-registry.ts";
 import type { BashOperations } from "../../tools/shell/bash.ts";
 import type { BashResult } from "../../tools/shell/executor.ts";
@@ -1579,6 +1581,13 @@ export class AgentSession {
 	}
 
 	private _getTurnSystemPrompt(prompt: string): string {
+		const scope = artifactScope(this.sessionManager);
+		if (scope) {
+			const artifactsDir = ensureSessionArtifacts(scope);
+			if (!prompt.includes("<session_artifacts>")) {
+				prompt += `\n\n${loadSystemPrompt("session/artifacts.md", { artifactsDir })}`;
+			}
+		}
 		return applyAgentRoleBoundary(prompt, this._agentRole);
 	}
 

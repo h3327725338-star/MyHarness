@@ -7,6 +7,16 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Also permanently delete artifacts": "同时永久删除产出文件",
+	"Artifact files and their workspace/global references will be removed. Project files are not affected.": "将删除产出原文件，并移除工作区和全局的汇总引用。不会删除项目文件。",
+	"Artifacts and their origin remain available in workspace/global indexes.": "保留产出文件及来源信息，仍可从工作区和全局汇总入口找到。",
+	"Project files": "项目文件",
+	"Artifacts": "产出文件",
+	"This chat": "当前对话",
+	"This workspace": "当前工作区",
+	"All workspaces": "所有工作区",
+	"Source chat deleted": "来源对话已删除",
+	"No artifacts": "暂无产出文件",
 	"Wait for the current file import to finish.": "请等待当前文件导入完成。" ,
 	"Upload files from Explorer": "从 Explorer 上传文件",
 	"Remove attachment": "移除附件",

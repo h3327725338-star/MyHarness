@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
+import { getDataDir } from "../../config/paths/index.ts";
+import { artifactScope, refreshArtifactIndexes, resolveArtifact } from "../../session/artifacts/store.ts";
 import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
@@ -147,6 +149,33 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
 
 export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	const root = () => path.resolve(host.session.sessionManager.getCwd());
+
+	const artifactDataRoot = () => host.session.sessionManager.getDataRoot() ?? getDataDir();
+	server.route("GET", "/api/artifacts", ({ url }) => {
+		const scope = artifactScope(host.session.sessionManager);
+		const level = url.searchParams.get("scope") ?? "session";
+		if (!["session", "workspace", "global"].includes(level)) throw new HttpError(400, "Unknown artifact scope");
+		const entries = refreshArtifactIndexes(artifactDataRoot());
+		return {
+			entries: entries.filter(
+				(entry) =>
+					level === "global" ||
+					(entry.workspaceId === scope?.workspaceId &&
+						(level === "workspace" || entry.sessionId === scope?.sessionId)),
+			),
+		};
+	});
+	server.route("GET", "/api/artifacts/download", ({ url, res }) => {
+		let full: string;
+		try {
+			full = resolveArtifact(artifactDataRoot(), url.searchParams.get("path") ?? "");
+		} catch {
+			throw new HttpError(404, "Unknown artifact");
+		}
+		res.setHeader("Content-Type", "application/octet-stream");
+		res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(full))}`);
+		res.end(readFileSync(full));
+	});
 
 	// Browser uploads retain their original bytes as session-owned context references.
 	server.route("POST", "/api/files/upload", async ({ body }) => {

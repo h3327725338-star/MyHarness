@@ -124,10 +124,13 @@ function Toasts() {
 	</div>`)}</div>`;
 }
 
-function ConfirmModal({ dialog }) {
+export function ConfirmModal({ dialog }) {
+	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
 	return html`<${Modal} title=${dialog.title} onClose=${() => resolveConfirm(false)} width=${480}
-		footer=${html`<button class="btn" onClick=${() => resolveConfirm(false)}>${dialog.cancelLabel || t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus onClick=${() => resolveConfirm(true)}>${dialog.confirmLabel}</button>`}>
-		<div class="pre-wrap">${dialog.message}</div>${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
+		footer=${html`<button class="btn" autofocus=${dialog.artifactChoice} onClick=${() => resolveConfirm(false)}>${dialog.cancelLabel || t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus=${!dialog.artifactChoice} onClick=${() => resolveConfirm(dialog.artifactChoice ? { deleteArtifacts } : true)}>${dialog.confirmLabel}</button>`}>
+		<div class="pre-wrap">${dialog.message}</div>
+		${dialog.artifactChoice ? html`<label class="row"><input type="checkbox" checked=${deleteArtifacts} onChange=${(e) => setDeleteArtifacts(e.target.checked)} />${t("Also permanently delete artifacts")}</label><p class="dim">${deleteArtifacts ? t("Artifact files and their workspace/global references will be removed. Project files are not affected.") : t("Artifacts and their origin remain available in workspace/global indexes.")}</p>` : null}
+		${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
 	<//>`;
 }
 

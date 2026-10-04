@@ -56,7 +56,7 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 | `startup/` | Web 启动参数、帮助、文件与初始消息输入、浏览器命令和设置表 |
 | `agent/runtime/` | Agent 生命周期、运行时服务与 SDK、会话桥 |
 | `agent/delegation/` | 内部委托 worker、事件解析 |
-| `session/` | Session 格式、JSONL、投影、持久化、锁与 migration |
+| `session/` | Session 格式、JSONL、投影、持久化、锁与 migration；`artifacts/` 管理对话产出、来源保留及可重建的工作区/全局引用索引 |
 | `context/` | 上下文预算与压缩 |
 | `config/` | Settings、路径、Trust 与兼容迁移 |
 | `application/` | 资源加载、Trust、Workspace 及跨领域 use case |

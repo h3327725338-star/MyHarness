@@ -52,6 +52,51 @@ original file bytes; removing a draft attachment only removes its reference, not
 the stored file. Structured Session deletion removes them with the Session data
 directory; they must not be treated as disposable build cache.
 
+## Conversation-owned artifacts
+
+Temporary reports, research, plans, disposable verification scripts, test results
+and intermediate files default to a single conversation-owned location:
+
+```text
+< data root >/artifacts/{index.json,README.md}             global references
+< data root >/workspaces/<workspace-id>/artifacts/         workspace references
+< data root >/workspaces/<workspace-id>/sessions/<session-id>/artifacts/
+  reports/      reports and research
+  tests/        disposable scripts and results
+  temporary/    intermediate files
+```
+
+Only the Session directory holds file bytes. Parent indexes are derived from
+actual files, refreshed after file/shell tools and when browsing artifacts. They
+can be rebuilt without duplicating reports. The Web Files panel has an Artifacts
+view for the current chat, current Workspace and all Workspaces; files can be
+downloaded and every entry carries its Workspace/Session identity.
+
+Persisted structured Sessions receive their artifact path in the runtime prompt.
+Shell tools also expose `MYHARNESS_ARTIFACTS_DIR` and `MYHARNESS_TEMP_DIR` without
+changing cwd or globally redirecting TEMP/build output. This is an Agent default,
+not a filesystem sandbox: explicit user paths win, and arbitrary shell programs
+can still write elsewhere. Permanent source, maintained tests and official project
+docs remain in their usual paths. Legacy/custom flat and in-memory Session stores
+do not receive this structured artifact policy.
+
+The repository's `/data/` ignore protects the default tree. Artifact roots and
+parent index directories also create a local `.gitignore` containing `*`, useful
+with a different data root. Existing tracked files and `git add --force` are not
+made safe by ignore rules. Never auto-move files solely by filename heuristics.
+
+Deleting a chat defaults to preserving artifacts and a minimal
+`metadata/artifacts-origin.json` provenance record; chat contents, tool results
+and imported attachments are removed. Workspace/global references remain and mark
+the source chat deleted. The deletion UI offers an unchecked option to permanently
+delete artifacts too; that removes the original files and their derived references,
+not other chats' output. Bulk chat deletion follows the same backend default.
+
+Removing a Workspace still only unregisters it: project files and chats are not
+deleted. Its optional artifact-deletion choice removes only that Workspace's
+artifacts; keeping them leaves them available globally. Deleting artifacts refuses
+symbolic links/junctions rather than traversing indirect user-owned targets.
+
 ## Lifecycle and cleanup rules
 
 - `data/`, global Agent data, Session files, credentials, traces, memory and

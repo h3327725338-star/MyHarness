@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@myharness/ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -368,6 +368,40 @@ describe("Web host (real runtime with a faux provider)", () => {
 				(info: any) => info.path,
 			),
 		).not.toContain(path);
+	});
+
+	it("gives the Agent a conversation artifact path and indexes tool-created output", async () => {
+		const fx = await start();
+		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
+		const path = join(dirname(dirname(owner.session.sessionFile!)), "artifacts", "tests", "verification.txt");
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("write", { path, content: "verification result" })]),
+			fauxAssistantMessage([fauxText("done")]),
+		]);
+		await fx.post("/api/prompt", { text: "write temporary verification output" });
+		await fx.waitFor("run_finished");
+		expect(owner.session.agent.state.systemPrompt).toContain("<session_artifacts>");
+		expect(owner.session.agent.state.systemPrompt).toContain(dirname(dirname(path)));
+		expect(readFileSync(path, "utf8")).toBe("verification result");
+		expect((await fx.get("/api/artifacts?scope=session")).entries[0].name).toBe("tests/verification.txt");
+	});
+
+	it("lists conversation artifacts globally and keeps them after default chat deletion", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("saved answer")])]);
+		await fx.post("/api/prompt", { text: "artifact chat" });
+		await fx.waitFor("run_finished");
+		const file = (await fx.get("/api/state")).session.file;
+		const artifact = join(dirname(dirname(file)), "artifacts", "reports", "report.md");
+		writeFileSync(artifact, "kept report");
+		expect((await fx.get("/api/artifacts?scope=session")).entries).toHaveLength(1);
+		await fx.post("/api/sessions/delete", { path: file });
+		const entries = (await fx.get("/api/artifacts?scope=global")).entries;
+		const kept = entries.find((entry: any) => entry.path.endsWith("/reports/report.md"));
+		expect(kept).toBeDefined();
+		expect(kept.conversationDeleted).toBe(true);
+		expect(existsSync(artifact)).toBe(true);
+		expect(existsSync(file)).toBe(false);
 	});
 
 	it("pins a chat with a marker, reports its last activity and drops the marker with the chat", async () => {

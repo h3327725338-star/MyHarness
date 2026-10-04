@@ -7,6 +7,7 @@
  * registry is rebuilt and which tools are switched on.
  */
 
+import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
 import type { SettingsManager } from "../config/settings/index.ts";
 import type { ToolDefinition, ToolInfo } from "../extensions/compat/types.ts";
@@ -14,6 +15,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "../extensions/contra
 import type { ExtensionRunner } from "../extensions/runtime/runner.ts";
 import { wrapRegisteredTools } from "../extensions/runtime/wrapper.ts";
 import { WebSearchApiKeys } from "../providers/credentials/web-search-keys.ts";
+import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexes } from "../session/artifacts/store.ts";
 import type { SessionManager } from "../session/manager/index.ts";
 import type { UltracodeToolOptions, WorkflowToolOptions } from "../workflow/tool.ts";
 import { createAllToolDefinitions } from "./registry.ts";
@@ -74,6 +76,13 @@ export class SessionToolRegistry {
 		this._options = options;
 		this._allowedToolNames = options.allowedToolNames ? new Set(options.allowedToolNames) : undefined;
 		this._excludedToolNames = options.excludedToolNames ? new Set(options.excludedToolNames) : undefined;
+	}
+
+	private artifactEnvironment(): NodeJS.ProcessEnv {
+		const scope = artifactScope(this._options.sessionManager);
+		if (!scope) return {};
+		const root = ensureSessionArtifacts(scope);
+		return { MYHARNESS_ARTIFACTS_DIR: root, MYHARNESS_TEMP_DIR: join(root, "temporary") };
 	}
 
 	/** Whether the allow/deny lists let this tool be exposed. */
@@ -196,7 +205,14 @@ export class SessionToolRegistry {
 				)
 			: createAllToolDefinitions(this._options.cwd, {
 					read: { autoResizeImages, includeImages, omitDocumentPreviewImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: {
+						commandPrefix: shellCommandPrefix,
+						shellPath,
+						spawnHook: (context) => ({ ...context, env: { ...context.env, ...this.artifactEnvironment() } }),
+					},
+					pwsh: {
+						spawnHook: (context) => ({ ...context, env: { ...context.env, ...this.artifactEnvironment() } }),
+					},
 					symbols: { agentDir: this._options.agentDir, codeIntelligence: this._options.codeIntelligence },
 					agent: this._options.agent,
 					workflow: this._options.workflow,
@@ -265,12 +281,31 @@ export class SessionToolRegistry {
 			runner,
 		);
 
-		const persistedBuiltInTools = wrappedBuiltInTools.map((tool) =>
-			wrapToolWithResultPersistence(tool, sessionManager),
-		);
-		const persistedExtensionTools = (wrappedExtensionTools as AgentTool[]).map((tool) =>
-			wrapToolWithResultPersistence(tool, sessionManager),
-		);
+		const withArtifacts = (tool: AgentTool): AgentTool => {
+			const persisted = wrapToolWithResultPersistence(tool, sessionManager);
+			return {
+				...persisted,
+				execute: async (...args) => {
+					try {
+						return await persisted.execute(...args);
+					} finally {
+						const scope = artifactScope(sessionManager);
+						if (scope && ["write", "edit", "bash", "pwsh"].includes(tool.name)) {
+							try {
+								refreshArtifactIndexes(scope.dataRoot);
+							} catch (error) {
+								console.warn(
+									"[artifacts] Could not refresh derived indexes:",
+									error instanceof Error ? error.message : String(error),
+								);
+							}
+						}
+					}
+				},
+			};
+		};
+		const persistedBuiltInTools = wrappedBuiltInTools.map(withArtifacts);
+		const persistedExtensionTools = (wrappedExtensionTools as AgentTool[]).map(withArtifacts);
 		const toolRegistry = new Map(persistedBuiltInTools.map((tool) => [tool.name, tool]));
 		for (const tool of persistedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
