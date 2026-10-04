@@ -26,8 +26,17 @@ process.stdin.on("data", (chunk: string) => {
 		buffer = buffer.slice(newline + 1);
 		newline = buffer.indexOf("\n");
 		// The previous run can still be settling when the line arrives; a busy session rejects a new prompt.
-		if (line.startsWith("prompt:"))
-			void harness.session.waitForIdle().then(() => harness.session.prompt(line.slice("prompt:".length)));
+		if (line.startsWith("prompt:")) {
+			const text = line.slice("prompt:".length);
+			void harness.session
+				.waitForIdle()
+				.then(() => harness.session.prompt(text))
+				.then(
+					() => console.log("prompt-finished"),
+					(error: unknown) =>
+						console.log(`prompt-failed ${error instanceof Error ? error.message : String(error)}`),
+				);
+		}
 		if (line === "exit") process.exit(0);
 	}
 });

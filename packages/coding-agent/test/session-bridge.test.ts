@@ -12,10 +12,15 @@ import { createHarness, type Harness } from "./suite/harness.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/session-bridge-owner.ts", import.meta.url));
 
-async function until(condition: () => boolean, what: string, timeoutMs = 45_000): Promise<void> {
+async function until(
+	condition: () => boolean,
+	what: string,
+	timeoutMs = 45_000,
+	detail: () => string = () => "",
+): Promise<void> {
 	const start = Date.now();
 	while (!condition()) {
-		if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
+		if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${what}${detail()}`);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
 }
@@ -23,6 +28,7 @@ async function until(condition: () => boolean, what: string, timeoutMs = 45_000)
 describe("session bridge", () => {
 	let owner: ChildProcess | undefined;
 	let harness: Harness | undefined;
+	const ownerOutput = "";
 
 	afterEach(() => {
 		setMirrorSessionsAllowed(false);
@@ -86,7 +92,12 @@ describe("session bridge", () => {
 		// A prompt typed in the owner shows up here too.
 		types.length = 0;
 		owner!.stdin!.write("prompt:from the terminal\n");
-		await until(() => types.includes("agent_end"), "the terminal prompt to finish");
+		await until(
+			() => types.includes("agent_end"),
+			"the terminal prompt to finish",
+			45_000,
+			() => `; mirror events: ${types.join(",")}; mirror closed: ${closed}; owner output: ${ownerOutput}`,
+		);
 		await until(() => mirror.messages.length === 6, "the terminal prompt to sync");
 
 		// When the owner ends, the mirror reports it so the host can take the session over.
