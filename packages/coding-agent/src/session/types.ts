@@ -27,9 +27,19 @@ export interface SessionEntryBase {
 	timestamp: string;
 }
 
+/** Optional measured durations; absent fields in legacy records mean unknown, never zero. */
+export interface SessionMessageTiming {
+	requestMs?: number;
+	firstOutputMs?: number;
+	generationMs?: number;
+	toolMs?: number;
+}
+
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
+	/** Product metadata, never sent to the model. */
+	timing?: SessionMessageTiming;
 }
 
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {

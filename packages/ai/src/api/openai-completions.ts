@@ -1210,6 +1210,7 @@ function parseChunkUsage(
 	rawUsage: {
 		prompt_tokens?: number;
 		completion_tokens?: number;
+		total_tokens?: number;
 		prompt_cache_hit_tokens?: number;
 		prompt_cache_miss_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
@@ -1254,7 +1255,9 @@ function parseChunkUsage(
 		cacheRead: cacheReadTokens,
 		cacheWrite: cacheWriteTokens,
 		reasoning: count(rawUsage.completion_tokens_details?.reasoning_tokens),
-		totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
+		totalTokens: valid(rawUsage.total_tokens) ? rawUsage.total_tokens! : promptTokens + outputTokens,
+		totalReported:
+			valid(rawUsage.total_tokens) || (valid(rawUsage.prompt_tokens) && valid(rawUsage.completion_tokens)),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	calculateCost(model, usage);

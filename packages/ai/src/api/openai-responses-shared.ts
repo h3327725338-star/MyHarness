@@ -440,7 +440,10 @@ export async function processResponsesStream<TApi extends Api>(
 				cacheRead: cachedTokens,
 				cacheWrite: cacheWriteTokens,
 				reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
-				totalTokens: response.usage.total_tokens || 0,
+				totalTokens: response.usage.total_tokens ?? response.usage.input_tokens + response.usage.output_tokens,
+				totalReported:
+					valid(response.usage.total_tokens) ||
+					(valid(response.usage.input_tokens) && valid(response.usage.output_tokens)),
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
 		}

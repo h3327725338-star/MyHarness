@@ -142,6 +142,13 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 		expect(fmtTokens(999_960)).toBe("1.0M");
 		expect(fmtTokens(950)).toBe("950");
 		expect(fmtTokens(undefined)).toBe("—");
+		expect(fmtTokens(null)).toBe("—");
+		expect(fmtTokens(Number.NaN)).toBe("—");
+		expect(fmtTokens(Number.POSITIVE_INFINITY)).toBe("—");
+		expect(fmtTokens(0)).toBe("0"); // An explicitly reported zero is not missing.
+		expect(fmtTokens(179_968)).toBe("180.0K");
+		expect(fmtTokens(304_325)).toBe("304.3K");
+		expect(fmtTokens(13_284_352)).toBe("13.3M");
 	});
 	it("keeps the change card of a finished task inside its turn, one card per task", () => {
 		const card = (id: string, path: string) => ({

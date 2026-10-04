@@ -28,6 +28,10 @@ Sessions have a version field in the header:
 
 Existing sessions are automatically migrated to the current version (v3) when loaded.
 
+Message entries may additionally carry optional `timing` metadata: `requestMs`, `firstOutputMs`, `generationMs` for assistant requests and `toolMs` for tool results. Durations use a monotonic runtime clock and are recorded before the message is persisted. The first output must be a non-empty text, thinking, or tool-call delta; block-start events do not count. This metadata is outside `message` and is never sent to the model. The format remains v3; old entries without timing remain valid and their missing durations are unknown, not zero. Session speed uses only requests with paired output counts and generation durations, with incomplete coverage disclosed as approximate.
+
+Usage may carry `totalReported`, indicating that the total comes from upstream total/input-output counters rather than a sum of potentially incomplete buckets. This permits an exact prompt-cache hit rate when the provider omits the cache-write bucket but reports a reliable total and cache reads.
+
 ## Recovery diagnostics and durability
 
 The JSONL loader remains tolerant of malformed historical data: valid lines are loaded and invalid lines are skipped so a Session can still be opened. When diagnostics are requested, each skipped line is reported as `malformed_line`, `truncated_tail`, or `schema_invalid`, with its file path and line number. `SessionManager.getLoadDiagnostics()` exposes diagnostics captured while opening a persisted Session; SDK callers can also pass a diagnostics object to `loadEntriesFromFile()`.

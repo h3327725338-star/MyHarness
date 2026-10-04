@@ -7,7 +7,17 @@ function assistant(output: number, reasoning?: number): any {
 }
 
 function withInput(input: number, cacheRead: number, cacheWrite = 0): any {
-	return { role: "assistant", content: [], usage: { input, output: 0, cacheRead, cacheWrite } };
+	return {
+		role: "assistant",
+		content: [],
+		usage: {
+			input,
+			output: 0,
+			cacheRead,
+			cacheWrite,
+			reported: { input: true, output: true, cacheRead: true, cacheWrite: true },
+		},
+	};
 }
 
 describe("Web UI: generation speed", () => {
@@ -20,7 +30,7 @@ describe("Web UI: generation speed", () => {
 		expect(meter.update(assistant(0), "start")).toBe(false);
 		now = 6000;
 		// The first output does not make the number reliable: it stays detecting.
-		expect(meter.update(assistant(0), "text_delta")).toBe(false);
+		expect(meter.update(assistant(0), "text_delta", "x")).toBe(false);
 		expect(meter.current).toEqual({ state: "detecting", tps: null, live: true });
 		now = 8000;
 		expect(meter.end(assistant(100))).toEqual({ state: "final", tps: 50, live: false, tokens: 100, ms: 2000 });
@@ -30,7 +40,7 @@ describe("Web UI: generation speed", () => {
 		let now = 0;
 		const meter = new GenerationSpeedMeter(() => now);
 		meter.start();
-		meter.update(assistant(0), "text_delta");
+		meter.update(assistant(0), "text_delta", "x");
 		now = 2000;
 		meter.end(assistant(100));
 		expect(meter.current?.tps).toBe(50);
@@ -44,7 +54,7 @@ describe("Web UI: generation speed", () => {
 		let now = 0;
 		const meter = new GenerationSpeedMeter(() => now);
 		meter.start();
-		meter.update(assistant(10), "text_delta");
+		meter.update(assistant(10), "text_delta", "x");
 		now = 100;
 		meter.update(assistant(15), "text_delta");
 		expect(meter.current?.state).toBe("detecting"); // too short a span to be reliable
@@ -53,13 +63,14 @@ describe("Web UI: generation speed", () => {
 		expect(meter.current).toEqual({ state: "live", tps: 30, live: true });
 	});
 
-	it("does not count reasoning that happened hidden before the first visible output", () => {
+	it("uses reported output including reasoning once, like DeepSeek", () => {
 		let now = 0;
 		const meter = new GenerationSpeedMeter(() => now);
 		meter.start();
 		meter.update(assistant(0), "text_start");
+		meter.update(assistant(0), "text_delta", "x");
 		now = 1000;
-		expect(meter.end(assistant(300, 200))?.tps).toBe(100);
+		expect(meter.end(assistant(300, 200))?.tps).toBe(300);
 	});
 
 	it("is unavailable for a reply that was not streamed or too short to measure", () => {
@@ -69,7 +80,7 @@ describe("Web UI: generation speed", () => {
 		now = 3000;
 		expect(meter.end(assistant(100))).toEqual({ state: "unavailable", tps: null, live: false });
 		meter.start();
-		meter.update(assistant(0), "text_delta");
+		meter.update(assistant(0), "text_delta", "x");
 		now = 3100;
 		expect(meter.end(assistant(100))).toEqual({ state: "unavailable", tps: null, live: false });
 	});
@@ -82,7 +93,7 @@ describe("Web UI: generation speed", () => {
 		expect(meter.current).toEqual({ state: "unavailable", tps: null, live: false });
 		expect(meter.settle()).toBe(false);
 		meter.start();
-		meter.update(assistant(10), "text_delta");
+		meter.update(assistant(10), "text_delta", "x");
 		now = 1000;
 		meter.update(assistant(40), "text_delta");
 		expect(meter.settle()).toBe(true);
@@ -127,15 +138,19 @@ describe("Web UI: cache hit of a request", () => {
 	it("never invents 0%: a provider that has reported no cache use gives no number", () => {
 		const meter = new RequestCacheMeter();
 		meter.start(false);
-		expect(meter.update(withInput(1000, 0))).toBe(false);
+		const absent = withInput(1000, 0);
+		absent.usage.reported.cacheRead = false;
+		expect(meter.update(absent)).toBe(false);
 		expect(meter.current?.state).toBe("detecting");
-		expect(meter.end(withInput(1000, 0))).toEqual({ state: "unavailable", hitRate: null });
+		expect(meter.end(absent)).toEqual({ state: "unavailable", hitRate: null });
 	});
 
-	it("reports a real 0% once the session has seen cache use before", () => {
+	it("does not invent zero from earlier cache activity", () => {
 		const meter = new RequestCacheMeter();
 		meter.start(true);
-		expect(meter.end(withInput(1000, 0))).toEqual({ state: "final", hitRate: 0, read: 0, write: 0, input: 1000 });
+		const absent = withInput(1000, 0);
+		absent.usage.reported.cacheRead = false;
+		expect(meter.end(absent)).toEqual({ state: "unavailable", hitRate: null });
 	});
 
 	it("retains measured cache use through an unmeasured request and interruption", () => {
@@ -146,7 +161,7 @@ describe("Web UI: cache hit of a request", () => {
 		meter.start(true);
 		expect(meter.current).toEqual({ state: "final", hitRate: 0.9, read: 900, write: 0, input: 1000 });
 		expect(meter.settle()).toBe(false);
-		expect(meter.end(withInput(0, 0))?.hitRate).toBe(0.9);
+		expect(meter.end(withInput(0, 0))?.hitRate).toBeNull();
 		meter.start(true);
 		meter.update(withInput(100, 900));
 		expect(meter.settle()).toBe(true);

@@ -214,13 +214,13 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		const skills = loader.getSkills().skills;
 		// Cache use of the whole session so far, summed from what the provider reported for every request (compaction
 		// and branch summaries included). Without any reported cache activity the rate is unknown, not 0%.
-		const totals = session.getSessionStats().tokens;
-		const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
+		const measured = session.getSessionStats().cache;
 		const cache = {
-			input: totals.input,
-			read: totals.cacheRead,
-			write: totals.cacheWrite,
-			hitRate: totals.cacheRead + totals.cacheWrite > 0 && prompt > 0 ? totals.cacheRead / prompt : null,
+			input: measured.prompt.value,
+			read: measured.read.value,
+			write: measured.write.value,
+			hitRate: measured.hitRate.value,
+			estimated: measured.hitRate.estimated,
 		};
 		const breakdown = buildContextBreakdown({
 			budget: session.contextBudget,

@@ -162,6 +162,10 @@
 .cu-fill { display: block; height: 100%; border-radius: var(--r-pill); background: var(--accent); }
 .cu-fill.warn { background: var(--warn); } .cu-fill.danger { background: var(--danger); }
 .cu-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.cu-capacity-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cu-capacity-row > .cu-stat { flex-direction: row; align-items: baseline; gap: 6px; white-space: nowrap; }
+.cu-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
+.cu-controls .check-label { white-space: nowrap; }
 .cu-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: var(--fs-xs); }
 .cu-stat strong { font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cu-speed { display: inline-flex; align-items: center; gap: 5px; }

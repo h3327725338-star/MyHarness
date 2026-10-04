@@ -13,10 +13,8 @@
  *   estimated from the streamed text (about 4 characters per token, 0.7 token per CJK character), flagged
  *   `estimated`, so the number still moves while the reply is written. The final value replaces it with the
  *   reported one.
- * - `final`: the request ended with a reliable number: the reported output tokens over the time from the first
- *   streamed output to the end. When reasoning happens hidden before the first visible output (usage.reasoning
- *   without streamed thinking), only the visible tokens are counted, because the hidden ones were produced before the
- *   clock started.
+ * - `final`: reported output tokens (reasoning included once) divided by the time from the first non-empty
+ *   streamed output to the end, matching the session aggregate and DeepSeek's decode metric.
  * - `unavailable`: the request ended without a reliable number (a reply that arrived at once, no reported output
  *   tokens, a span too short to measure, or a request that was stopped before any number existed).
  */
@@ -39,14 +37,7 @@ export interface GenerationSpeed {
 	estimated?: boolean;
 }
 
-const OUTPUT_EVENTS = new Set([
-	"text_start",
-	"text_delta",
-	"thinking_start",
-	"thinking_delta",
-	"toolcall_start",
-	"toolcall_delta",
-]);
+const OUTPUT_EVENTS = new Set(["text_delta", "thinking_delta", "toolcall_delta"]);
 /** Shorter spans are dominated by delivery jitter. */
 const MIN_SPAN_MS = 250;
 /** The live speed is the throughput of roughly this much recent streaming. */
@@ -75,7 +66,6 @@ const UNAVAILABLE: GenerationSpeed = { state: "unavailable", tps: null, live: fa
 
 export class GenerationSpeedMeter {
 	private firstOutputAt: number | undefined;
-	private sawThinking = false;
 	private firstObservation: Observation | undefined;
 	private lastObservation: Observation | undefined;
 	/** Streamed output so far, estimated from the text, and the recent history of it. */
@@ -110,9 +100,8 @@ export class GenerationSpeedMeter {
 	/** Returns true when the shown value changed. */
 	update(message: AgentMessage, eventType: string | undefined, delta?: string): boolean {
 		const at = this.now();
-		if (eventType?.startsWith("thinking")) this.sawThinking = true;
 		let changed = false;
-		if (this.firstOutputAt === undefined && eventType && OUTPUT_EVENTS.has(eventType)) {
+		if (this.firstOutputAt === undefined && eventType && OUTPUT_EVENTS.has(eventType) && !!delta) {
 			this.firstOutputAt = at;
 			this.samples = [{ at, output: 0 }];
 			if (this.value?.tps == null && this.value?.state !== "detecting") {
@@ -159,15 +148,14 @@ export class GenerationSpeedMeter {
 		const at = this.now();
 		if (message.role !== "assistant") return this.value;
 		if (this.firstOutputAt === undefined) {
-			// Nothing was streamed: there is no reliable duration.
-			this.value = this.value?.tps != null ? { ...this.value, state: "final", live: false } : UNAVAILABLE;
+			// Nothing was streamed: never attribute the previous request's speed to this one.
+			this.value = UNAVAILABLE;
 			this.reset();
 			return this.value;
 		}
 		const span = at - this.firstOutputAt;
 		const output = outputTokens(message);
-		const hiddenReasoning = !this.sawThinking ? Math.max(0, message.usage?.reasoning ?? 0) : 0;
-		const tokens = output - hiddenReasoning;
+		const tokens = output;
 		if (tokens > 0 && span >= MIN_SPAN_MS) {
 			this.value = { state: "final", tps: (tokens * 1000) / span, live: false, tokens, ms: Math.round(span) };
 		} else if (output === 0 && this.estimated > 0 && span >= MIN_SPAN_MS) {
@@ -182,7 +170,7 @@ export class GenerationSpeedMeter {
 				estimated: true,
 			};
 		} else {
-			this.value = this.value?.tps != null ? { ...this.value, state: "final", live: false } : UNAVAILABLE;
+			this.value = UNAVAILABLE;
 		}
 		this.reset();
 		return this.value;
@@ -205,7 +193,6 @@ export class GenerationSpeedMeter {
 
 	private reset(): void {
 		this.firstOutputAt = undefined;
-		this.sawThinking = false;
 		this.firstObservation = undefined;
 		this.lastObservation = undefined;
 		this.estimated = 0;

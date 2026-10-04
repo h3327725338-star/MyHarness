@@ -49,6 +49,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				templates: [],
 				extensions: [],
 			}));
+			server.route("GET", "/api/context", () => ({ window: 128000, used: 10000, percent: 7.8 }));
 			server.route("GET", "/api/settings", () => ({ items: [] }));
 			server.route("GET", "/api/models", () => ({ models: [] }));
 			server.route("POST", "/api/sessions/archive", ({ body }) => {
@@ -66,7 +67,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/overlays.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/overlays.css"><link rel="stylesheet" href="/css/panels.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(
 				join(root, "test.js"),
@@ -75,7 +76,8 @@ import {h,render} from '/vendor/preact.js';
 import {Sidebar} from '/js/sidebar.js';
 import {SettingsModal} from '/js/overlays-settings.js';
 import {actions,resolveConfirm} from '/js/actions.js';
-import {CacheValue,SpeedValue,sessionCache} from '/js/context-usage.js';
+import {CacheValue,SpeedValue,sessionCache,ContextDetails} from '/js/context-usage.js';
+import {ContextPanel} from '/js/panel-context.js';
 import {loadWorkspaces,set,setView,state} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const app=document.getElementById('app');
@@ -122,6 +124,43 @@ try {
  const cache=sessionCache(stats); const speed={state:'live',tps:42.5,live:true};
  render(h('div',{},h(CacheValue,{session:cache}),h(CacheValue,{session:cache}),h(SpeedValue,{speed}),h(SpeedValue,{speed})),app); await wait(50);
  if(app.textContent.split('99.25%').length!==3 || app.textContent.split('43 t/s').length!==3) throw Error('meter values diverged');
+ const measurement=(value,estimated=false)=>({value,estimated});
+ const measuredStats={...stats,speed:measurement(25),cache:{prompt:measurement(10000),read:measurement(9925),write:measurement(null),hitRate:measurement(.9925)},latestRequest:{speed:measurement(100),cache:{read:measurement(800),write:measurement(null),hitRate:measurement(.8)},timing:{requestMs:3000,firstOutputMs:2000,generationMs:1000}},timing:{requestMs:measurement(8000),firstOutputMs:measurement(2000),generationMs:measurement(4000),toolMs:measurement(3000)}};
+ set({stats:measuredStats,snap:{...state.snap,active:false}});
+ render(h(ContextDetails),app); await wait(120);
+ if(!app.textContent.includes('25.0 t/s') || app.textContent.includes('100.0 t/s')) throw Error('popover is not cumulative');
+ render(h(ContextDetails,{capacityOnly:true}),app); await wait(120);
+ if(app.querySelectorAll('.cu-stat').length!==1 || app.querySelector('.kv') || app.querySelector('.cu-actions') || app.textContent.includes('t/s')) throw Error('capacity contains duplicate metrics: '+app.textContent);
+ measuredStats.speed=measurement(25,true);
+ measuredStats.tokens={input:304325,cacheWrite:0,cacheRead:13284352,output:34400};
+ measuredStats.cache.input=measurement(304325);
+ measuredStats.cache.read=measurement(13284352,true);
+ measuredStats.cache.hitRate=measurement(.9776,true);
+ measuredStats.userMessages=1000; measuredStats.assistantMessages=2000; measuredStats.toolCalls=3000;
+ set({stats:{...measuredStats},resources:{tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},snap:{...state.snap,session:{id:'fixture'},thinking:{supported:false}}});
+ render(h(ContextPanel),app); await wait(180);
+ const token=app.querySelector('.session-tokens'); const cumulative=app.querySelector('.session-cumulative');
+ if(!token?.textContent.includes('输入 304.3K · 缓存写入 — · 缓存命中 ≈ 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
+ if(!cumulative?.textContent.includes('累计速度 ≈ 25.0 t/s · 累计命中率 ≈ 97.76%')) throw Error('cumulative metrics wrong: '+cumulative?.textContent);
+ if(Math.abs(token.getBoundingClientRect().left-cumulative.getBoundingClientRect().left)>.1 || cumulative.getBoundingClientRect().top<=token.getBoundingClientRect().top) throw Error('cumulative row not aligned below tokens');
+ const context=app.querySelector('.cu');
+ if(context.querySelectorAll('.cu-stat').length!==1 || context.querySelector('.kv') || context.textContent.includes('t/s') || context.textContent.includes('缓存')) throw Error('context duplication remains');
+ const controls=context.querySelector('.cu-controls'); const compact=controls?.querySelector('.btn');
+ if(!controls?.textContent.includes('自动压缩') || !compact?.textContent.includes('立即压缩')) throw Error('context compression controls missing');
+ if(app.querySelector('.ctx-actions').querySelectorAll('button').length!==1 || !app.querySelector('.ctx-actions').textContent.includes('导出 HTML')) throw Error('bottom actions not simplified');
+ for(const width of [360,560]) {
+  context.style.width=width+'px'; context.style.boxSizing='border-box'; await wait(30);
+  const bar=context.querySelector('.cu-bar').getBoundingClientRect(); const group=controls.getBoundingClientRect(); const remaining=context.querySelector('.cu-stat').getBoundingClientRect();
+  if(Math.abs(bar.right-group.right)>.1 || Math.abs(bar.right-compact.getBoundingClientRect().right)>.1 || remaining.right>group.left || Math.abs(remaining.top+remaining.height/2-group.top-group.height/2)>2) throw Error('compression row alignment wrong at '+width);
+ }
+ set({snap:{...state.snap,active:true,autoCompaction:true}}); await wait(50);
+ if(!compact.disabled || controls.querySelector('[role="switch"]')?.getAttribute('aria-checked')!=='true') throw Error('compression state not preserved');
+ set({snap:{...state.snap,active:false,autoCompaction:false}}); await wait(50);
+ if(compact.disabled || controls.querySelector('[role="switch"]')?.getAttribute('aria-checked')!=='false') throw Error('compression state did not update');
+ if(/304,?325|13,?284,?352/.test(app.innerHTML)) throw Error('raw long integers remain');
+ measuredStats.speed=measurement(null); measuredStats.cache.hitRate=measurement(null); measuredStats.cache.input=measurement(null); measuredStats.tokens.output=undefined;
+ set({stats:{...measuredStats}}); await wait(60);
+ if(!cumulative.textContent.includes('累计速度 — · 累计命中率 —') || !token.textContent.includes('输入 —') || !token.textContent.includes('输出 —')) throw Error('missing metrics not dashed');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>'); }
 `,

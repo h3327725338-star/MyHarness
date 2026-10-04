@@ -452,6 +452,8 @@ export interface Usage {
 	 */
 	reasoning?: number;
 	totalTokens: number;
+	/** True only when the upstream explicitly supplied a valid total, not a derived sum. */
+	totalReported?: boolean;
 	cost: {
 		input: number;
 		output: number;

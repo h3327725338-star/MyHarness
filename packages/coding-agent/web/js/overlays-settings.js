@@ -5,7 +5,7 @@ import { html, useEffect, useMemo, useState, Collapse, Icon, Modal, Segmented, S
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
-import { clip, tokensToUnit, unitToTokens } from "./util.js";
+import { clip, fmtTokens, tokensToUnit, unitToTokens } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { ModelRefPicker } from "./model-menu.js";
@@ -104,7 +104,7 @@ function TokensField({ item, onApply }) {
 		} else if (tokens !== item.value) onApply(item.id, tokens);
 	};
 	return html`<span class="tokens-field">
-		${item.value != null ? html`<span class="tokens-exact dim" title=${t("The exact number of tokens that is saved.")}>${t("{n} tokens", { n: Number(item.value).toLocaleString(getLang()) })}</span>` : null}
+		${item.value != null ? html`<span class="tokens-exact dim" title=${t("tokens")}>${t("{n} tokens", { n: fmtTokens(Number(item.value)) })}</span>` : null}
 		<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t("{unit} tokens", { unit: item.unit })} label=${serverText(item.label)} placeholder=${t("Model limit")} invalid=${invalid} width=${190} />
 	</span>`;
 }

@@ -75,6 +75,7 @@ import {
 } from "../../extensions/runtime/runner.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { AgentSessionGitCheckpointCoordinator } from "../../git/checkpoints/coordinator.ts";
+import { RequestTimingTracker } from "../../observability/request-timing.ts";
 import type { RuntimeTrace, RuntimeTraceScope } from "../../observability/runtime-trace.ts";
 import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import { AgentSessionTraceCoordinator } from "../../observability/session-trace.ts";
@@ -92,7 +93,7 @@ import {
 } from "../../providers/runtime/request-auth.ts";
 import { type ModelCycleResult, SessionModelController } from "../../providers/runtime/session-model.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
-import type { BranchSummaryEntry, SessionEntry } from "../../session/types.ts";
+import type { BranchSummaryEntry, SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { expandSkillCommand } from "../../skills/invocation.ts";
 import {
 	applyAgentRoleBoundary,
@@ -323,6 +324,10 @@ export interface SessionStats {
 		total: number;
 	};
 	cost: number;
+	cache: import("../../observability/session-stats.ts").SessionUsageStats["cache"];
+	speed: import("../../observability/session-stats.ts").SessionUsageStats["speed"];
+	timing: import("../../observability/session-stats.ts").SessionUsageStats["timing"];
+	latestRequest?: import("../../observability/session-stats.ts").SessionUsageStats["latestRequest"];
 	contextUsage?: ContextUsage;
 }
 
@@ -1069,11 +1074,13 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	private _requestTiming = new RequestTimingTracker();
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		const generation = this._runtimeGeneration;
 		if (!this._ownsRuntimeGeneration(generation)) return;
+		const timing = this._requestTiming.observe(event);
 
 		if (event.type === "agent_start") {
 			const onRunStart = this._pendingRunStartCallback;
@@ -1113,7 +1120,7 @@ export class AgentSession {
 		// append back if persistence fails; otherwise a disk error would leave the
 		// live transcript/UI ahead of the resumable SessionManager history.
 		if (event.type === "message_end") {
-			this._persistMessageEnd(event);
+			this._persistMessageEnd(event, timing);
 		}
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: willRetry ?? false } : event);
@@ -1144,7 +1151,10 @@ export class AgentSession {
 		}
 	};
 
-	private _persistMessageEnd(event: Extract<AgentEvent, { type: "message_end" }>): void {
+	private _persistMessageEnd(
+		event: Extract<AgentEvent, { type: "message_end" }>,
+		timing?: SessionMessageTiming,
+	): void {
 		try {
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
@@ -1161,7 +1171,7 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				this.sessionManager.appendMessage(event.message, timing);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary)
 			// are persisted elsewhere.
@@ -1248,6 +1258,7 @@ export class AgentSession {
 		if (this._disposed) return;
 		this._disposed = true;
 		this._runtimeGeneration += 1;
+		this._requestTiming.reset();
 		this._backgroundWork.dispose();
 		try {
 			this.abortRetry();

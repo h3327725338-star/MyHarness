@@ -2,7 +2,7 @@
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
 import { api, attempt, loadResources, loadStats, post, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
-import { CacheValue, ContextDetails, SpeedValue, sessionCache } from "./context-usage.js";
+import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-usage.js";
 import { N_, t } from "./i18n.js";
 import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.js";
 
@@ -80,6 +80,11 @@ export function ContextPanel() {
 		loadStats();
 	}, [snap?.session?.id, snap?.lastRun?.runId]);
 	if (!snap) return null;
+	const measuredTokens = (key, fallback) => {
+		const item = stats?.cache?.[key];
+		return item ? item.value == null || !Number.isFinite(item.value) ? "—" : `${item.estimated ? "≈ " : ""}${fmtTokens(item.value)}` : fallback;
+	};
+	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
 	const toggleTool = async (name, on) => {
 		const active = new Set(resources.tools.filter((t) => t.active).map((t) => t.name));
 		if (on) active.add(name);
@@ -89,7 +94,7 @@ export function ContextPanel() {
 	};
 	return html`<div class="context-panel panel-scroll">
 		<${Section} title=${t("Context window")}>
-			<${ContextDetails} /><${AutoCompact} snap=${snap} />
+			<${ContextDetails} capacityOnly=${true} controls=${html`<${AutoCompact} snap=${snap} /><button class="btn sm" disabled=${snap.active} onClick=${actions.compact}>${t("Compact now")}</button>`} />
 		<//>
 		<${Section} title=${t("Session")}>
 			<div class="kv">
@@ -100,13 +105,12 @@ export function ContextPanel() {
 				<span>${t("Workspace")}</span><span class="truncate mono" title=${snap.cwd}>${snap.cwd}</span>
 				<span>${t("Session file")}</span><span class="kv-value"><span class="truncate mono" title=${snap.session.file || ""}>${snap.session.file ? basename(snap.session.file) : t("in-memory (not saved)")}</span>${snap.session.file ? html`<${CopyButton} text=${snap.session.file} label=${t("Copy path")} />` : null}</span>
 				${stats ? html`
-					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: stats.userMessages, assistantMessages: stats.assistantMessages, toolCalls: stats.toolCalls })}</span>
-					<span>${t("Tokens")}</span><span class="row" style=${{ flexWrap: "wrap" }} title=${Object.entries(stats.tokens).map(([key, value]) => `${key}: ${value?.toLocaleString() ?? "—"}`).join(" / ")}>
-						<span>${t("Input")} ${stats.tokenAvailability?.input === false ? "—" : fmtTokens(stats.tokens.input)} · ${t("Cache write")} ${stats.tokenAvailability?.cacheWrite === false ? "—" : fmtTokens(stats.tokens.cacheWrite)} · ${t("Cache read")} ${stats.tokenAvailability?.cacheRead === false ? "—" : fmtTokens(stats.tokens.cacheRead)} · ${t("Output")} ${stats.usageEstimated ? "~" : ""}${stats.tokenAvailability?.output === false && !stats.usageEstimated ? "—" : fmtTokens(stats.tokens.output)}</span>
-						<span><${CacheValue} session=${sessionCache(stats)} /></span>
+					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: fmtTokens(stats.userMessages), assistantMessages: fmtTokens(stats.assistantMessages), toolCalls: fmtTokens(stats.toolCalls) })}</span>
+					<span>${t("Tokens")}</span><span class="session-tokens">
+						<span>${t("Input")} ${measuredTokens("input", stats.tokenAvailability?.input === false ? "—" : fmtTokens(stats.tokens.input))} · ${t("Cache write")} ${measuredTokens("write", stats.tokenAvailability?.cacheWrite === false ? "—" : fmtTokens(stats.tokens.cacheWrite))} · ${t("Cache read")} ${measuredTokens("read", stats.tokenAvailability?.cacheRead === false ? "—" : fmtTokens(stats.tokens.cacheRead))} · ${t("Output")} ${stats.usageEstimated ? "≈ " : ""}${stats.tokenAvailability?.output === false && !stats.usageEstimated ? "—" : fmtTokens(stats.tokens.output)}</span>
 					</span>
-					<span>${t("Speed")}</span><span><${SpeedValue} speed=${snap.speed} /></span>
-					<span>${t("Cost")}</span><span>${stats.usageEstimated || stats.costIncomplete ? "≈ " : ""}${stats.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, cost]) => fmtCost(cost, currency)).join(" · ") || "—" : fmtCost(stats.cost)}</span>` : null}
+					<span aria-hidden="true"></span><span class="session-cumulative">${t("Cumulative speed")} ${fmtSpeed(stats.speed)} · ${t("Cumulative cache hit")} <${CacheValue} session=${sessionCache(stats)} /></span>
+					<span>${t("Cost")}</span><span>${cost !== "—" && (stats.usageEstimated || stats.costIncomplete) ? "≈ " : ""}${cost}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>

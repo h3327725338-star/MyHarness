@@ -2,6 +2,8 @@
 // Model IDs the user named becomes new models or updates exactly the fields it settled. No DOM here, so it can be
 // tested directly.
 
+import { fmtTokens } from "./util.js";
+
 export const BASE_LEVELS = ["off", "minimal", "low", "medium", "high"];
 export const EXTRA_LEVELS = ["xhigh", "max"];
 export const DEFAULT_CONTEXT = 128000;
@@ -77,8 +79,8 @@ export function fromK(text) {
 	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
 }
 
-/** A token count for display, e.g. "128K" or "131.072K". */
-export const fmtK = (tokens) => tokens >= 999950 ? `${(tokens / 1000000).toFixed(1)}M` : `${(tokens / 1000).toFixed(1)}K`;
+/** A token capacity in the shared compact display format. */
+export const fmtK = fmtTokens;
 
 /** `detected` records which fields were read from the endpoint's catalog (shown as "auto"). */
 export function modelDraft(model = {}, detected = {}) {

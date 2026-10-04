@@ -16,6 +16,7 @@
 
 import type { AgentMessage } from "@myharness/agent-core";
 import { estimateContextTokens } from "../../context/compact/compaction.ts";
+import { measureCache } from "../../observability/usage-measurements.ts";
 import type { RequestMeterState } from "./generation-speed.ts";
 
 export interface RequestCacheHit {
@@ -41,21 +42,20 @@ interface Usage {
 	reported: boolean;
 }
 
-function usageOf(message: AgentMessage): Usage | undefined {
+function usageOf(message: AgentMessage, prediction = false): Usage | undefined {
 	if (message.role !== "assistant") return undefined;
 	const usage = message.usage;
 	if (!usage) return undefined;
-	if (
-		usage.reported &&
-		["input", "cacheRead", "cacheWrite"].some((key) => !usage.reported?.[key as "input" | "cacheRead" | "cacheWrite"])
-	)
-		return undefined;
+	const measured = measureCache(usage);
+	if (!prediction && measured.hitRate.value === null) return undefined;
 	const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
 	return {
-		input: number(usage.input),
+		input: prediction
+			? number(usage.input)
+			: measured.prompt.value! - number(usage.cacheRead) - number(usage.cacheWrite),
 		read: number(usage.cacheRead),
 		write: number(usage.cacheWrite),
-		reported: usage.cacheReported === true,
+		reported: true,
 	};
 }
 
@@ -77,13 +77,13 @@ export function predictCacheHit(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]!;
 		if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
-		const usage = usageOf(message);
+		const usage = usageOf(message, true);
 		if (usage && usage.input + usage.read + usage.write > 0) {
 			last = message;
 			break;
 		}
 	}
-	const usage = last ? usageOf(last) : undefined;
+	const usage = last ? usageOf(last, true) : undefined;
 	if (!last || !usage) return undefined;
 	const previousPrompt = usage.input + usage.read + usage.write;
 	if (previousPrompt < MIN_CACHEABLE_TOKENS) return undefined;
@@ -160,7 +160,7 @@ export class RequestCacheMeter {
 		const usage = usageOf(message);
 		const prompt = usage ? usage.input + usage.read + usage.write : 0;
 		if (!usage || prompt <= 0) {
-			this.value = this.value?.hitRate != null ? { ...this.value, state: "final" } : UNAVAILABLE;
+			this.value = UNAVAILABLE;
 			return this.value;
 		}
 		if (usage.reported || usage.read + usage.write > 0) this.reported = true;

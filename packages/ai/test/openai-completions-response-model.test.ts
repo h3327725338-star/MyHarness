@@ -137,6 +137,24 @@ describe("openai-completions responseModel", () => {
 		expect(message.usage.cost.total).toBeCloseTo(0.00086);
 	});
 
+	it("preserves a reported exact total with absent cache-write usage", async () => {
+		mockState.chunks = [
+			{
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				usage: {
+					prompt_tokens: 1000,
+					completion_tokens: 100,
+					total_tokens: 1100,
+					prompt_tokens_details: { cached_tokens: 800 },
+				},
+			},
+		];
+		const message = await complete(openRouterAuto(), { messages: [] }, { apiKey: "test" });
+		expect(message.usage.totalReported).toBe(true);
+		expect(message.usage.totalTokens).toBe(1100);
+		expect(message.usage.reported?.cacheWrite).toBe(false);
+	});
+
 	it("distinguishes explicit zero cache counters from absent counters", async () => {
 		mockState.chunks = [
 			{

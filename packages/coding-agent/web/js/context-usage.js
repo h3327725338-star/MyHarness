@@ -1,13 +1,13 @@
 // Context usage: how full the model's context window is, the session's cache hit rate and the model's output speed.
-// The numbers come from GET /api/context (measured on the session on screen) and the snapshot's `speed`.
+// Session measurements come from the usage projection; the snapshot's speed is only the latest live request.
 import { html, useEffect, useRef, useState, Popover, Spinner } from "./ui.js";
 import { api, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { t } from "./i18n.js";
-import { getLang } from "./lang.js";
 import { fmtTokens } from "./util.js";
 
 export function sessionCache(stats) {
+	if (stats?.cache) return { input: stats.cache.prompt.value, read: stats.cache.read.value, write: stats.cache.write.value, hitRate: stats.cache.hitRate.value, estimated: stats.cache.hitRate.estimated };
 	if (!stats?.tokens) return null;
 	const { input, cacheRead: read, cacheWrite: write } = stats.tokens;
 	const total = input + read + write;
@@ -15,7 +15,9 @@ export function sessionCache(stats) {
 	return { input, read, write, hitRate: complete && total > 0 ? read / total : null };
 }
 
-const num = (n) => Math.round(n).toLocaleString(getLang());
+const num = fmtTokens;
+
+export const fmtSpeed = (item) => item?.value == null || !Number.isFinite(item.value) ? "—" : `${item.estimated ? "≈ " : ""}${item.value >= 1000 ? fmtTokens(item.value) : item.value.toFixed(1)} t/s`;
 const pct = (n, of) => (of > 0 ? (n / of) * 100 : 0);
 const fmtPct = (value) => `${value < 10 && value > 0 ? value.toFixed(1) : Math.round(value)}%`;
 
@@ -38,7 +40,7 @@ function useBreakdown(active) {
 	return { data, error };
 }
 
-/** Compact token count for the context display: 12200 → "12.2k", 128000 → "128.0k" (the exact number is in the tooltip). */
+/** Compact token count for the context display: 12200 → "12.2K", 128000 → "128.0K" (the exact number is in the tooltip). */
 export const fmtK = fmtTokens;
 
 /**
@@ -48,7 +50,7 @@ export const fmtK = fmtTokens;
  */
 function MeterValue({ state, text, title }) {
 	const detecting = state === "detecting";
-	return html`<span class=${`cu-speed ${state === "live" || detecting ? "live" : ""} ${detecting ? "detecting" : ""}`} title=${title}>${state === "live" || detecting ? html`<i class="cu-live" aria-hidden="true" />` : null}${detecting ? t("Detecting…") : text ?? "—"}</span>`;
+	return html`<span class=${`cu-speed ${state === "live" || detecting ? "live" : ""} ${detecting ? "detecting" : ""}`} title=${title}>${state === "live" || detecting ? html`<i class="cu-live" aria-hidden="true" />` : null}${detecting ? "—" : text ?? "—"}</span>`;
 }
 
 /** Output speed of the model: detecting from the start of the request, live while it streams, the request's average at its end; "—" when not measurable. */
@@ -71,7 +73,7 @@ export function SpeedValue({ speed }) {
 					: state === "unavailable"
 						? t("Not available: the reply was not streamed or the provider reported no output tokens.")
 						: t("Measured with the first model request.");
-	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${speed.estimated ? "~" : ""}${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
+	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${speed.estimated ? "≈ " : ""}${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
 }
 
 /** Cache hit of the model request: detecting from its start, then the share of its input tokens the provider served from its cache. */
@@ -93,14 +95,14 @@ export function CacheValue({ cache, session }) {
 							: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
 	// Before the first request of this run the whole session's figure (from the history) stands in.
 	const rate = state ? cache?.hitRate : sessionRate;
-	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${state && cache?.estimated ? "~" : ""}${(rate * 100).toFixed(2)}%`} />`;
+	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${(state ? cache?.estimated : session?.estimated) ? "≈ " : ""}${(rate * 100).toFixed(2)}%`} />`;
 }
 
 /**
  * The context at a glance: used / window, remaining, percent, the session's cache hit rate and the model's output
  * speed — small enough for the popover next to the input and the Session panel alike.
  */
-export function ContextDetails({ onDone }) {
+export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 	const snap = useStore((s) => s.snap);
 	const stats = useStore((s) => s.stats);
 	const { data, error } = useBreakdown(true);
@@ -110,20 +112,22 @@ export function ContextDetails({ onDone }) {
 	const remaining = Math.max(0, data.window - data.used);
 	const level = data.percent > 90 ? "danger" : data.percent > 70 ? "warn" : "";
 	const cache = sessionCache(stats) ?? data.cache;
+
 	return html`<div class="cu">
 		<div class="cu-top">
 			<div class="cu-sub" title=${`${num(data.used)} / ${num(data.window)} ${t("tokens")}`}><strong>${fmtK(data.used)}</strong> / ${fmtK(data.window)}</div>
 			<div class=${`cu-pct ${level}`}>${fmtPct(data.percent)}</div>
 		</div>
 		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used, window_))}%` }} /></div>
-		<div class="cu-stats">
+		<div class=${capacityOnly ? "cu-capacity-row" : "cu-stats"}>
 			<div class="cu-stat" title=${num(remaining)}><span class="dim">${t("Remaining")}</span><strong>${fmtK(remaining)}</strong></div>
-			<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
-			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong><${SpeedValue} speed=${snap?.speed} /></strong></div>
+			${controls ? html`<div class="cu-controls">${controls}</div>` : null}
+			${!capacityOnly ? html`<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
+			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Cumulative output divided by measured generation time; approximate when some requests have no timing.")}>${fmtSpeed(stats?.speed)}</strong></div>` : null}
 		</div>
-		<div class="cu-actions">
+		${!capacityOnly ? html`<div class="cu-actions">
 			<button class="btn sm" disabled=${snap?.active} onClick=${() => (onDone?.(), actions.compact())}>${t("Compact now")}</button>
-		</div>
+		</div>` : null}
 	</div>`;
 }
 

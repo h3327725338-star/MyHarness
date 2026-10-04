@@ -1,5 +1,6 @@
 import { type Api, type AssistantMessage, calculateCost, type Model } from "@myharness/ai/compat";
-import type { SessionEntry } from "../session/types.ts";
+import type { SessionEntry, SessionMessageTiming } from "../session/types.ts";
+import { type CacheMeasurements, type Measurement, measureCache, sumCache } from "./usage-measurements.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
 export interface SessionUsageStats {
@@ -16,6 +17,10 @@ export interface SessionUsageStats {
 		total: number;
 	};
 	cost: number;
+	cache: CacheMeasurements;
+	latestRequest?: { cache: CacheMeasurements; timing?: SessionMessageTiming; speed: Measurement };
+	timing: { requestMs: Measurement; firstOutputMs: Measurement; generationMs: Measurement; toolMs: Measurement };
+	speed: Measurement;
 	tokenAvailability?: Record<"input" | "output" | "cacheRead" | "cacheWrite", boolean>;
 	costIncomplete?: boolean;
 	costByCurrency?: Partial<Record<"USD" | "CNY", number>>;
@@ -39,8 +44,25 @@ export function collectSessionUsageStats(
 	const usageTotals = createUsageTotals();
 	const tokenAvailability = { input: true, output: true, cacheRead: true, cacheWrite: true };
 	let samples = 0;
+	const caches: CacheMeasurements[] = [];
+	const durations: Record<"requestMs" | "firstOutputMs" | "generationMs" | "toolMs", number[]> = {
+		requestMs: [],
+		firstOutputMs: [],
+		generationMs: [],
+		toolMs: [],
+	};
+	let requests = 0,
+		tools = 0,
+		speedSamples = 0,
+		speedTokens = 0,
+		speedMs = 0;
+	let latestRequest: SessionUsageStats["latestRequest"];
+	const countDuration = (key: keyof typeof durations, value: number | undefined) => {
+		if (typeof value === "number" && Number.isFinite(value) && value >= 0) durations[key].push(value);
+	};
 	const trackAvailability = (usage: AssistantMessage["usage"]) => {
 		samples++;
+		caches.push(measureCache(usage));
 		for (const key of Object.keys(tokenAvailability) as Array<keyof typeof tokenAvailability>) {
 			const value = usage[key];
 			const reported = usage.reported?.[key] ?? value > 0;
@@ -54,8 +76,10 @@ export function collectSessionUsageStats(
 
 	const alreadyStored =
 		liveMessage && entries.some((entry) => entry.type === "message" && entry.message === liveMessage);
-	const withLive =
-		liveMessage && !alreadyStored ? [...entries, { type: "message" as const, message: liveMessage }] : entries;
+	const withLive: readonly SessionEntry[] =
+		liveMessage && !alreadyStored
+			? [...entries, { type: "message" as const, id: "live", parentId: null, timestamp: "", message: liveMessage }]
+			: entries;
 	for (const entry of withLive) {
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			trackAvailability(entry.usage);
@@ -69,6 +93,8 @@ export function collectSessionUsageStats(
 			userMessages++;
 		} else if (message.role === "toolResult") {
 			toolResults++;
+			tools++;
+			countDuration("toolMs", entry.timing?.toolMs);
 			if (message.usage) {
 				trackAvailability(message.usage);
 				addUsageToTotals(usageTotals, message.usage);
@@ -77,6 +103,28 @@ export function collectSessionUsageStats(
 		} else if (message.role === "assistant") {
 			assistantMessages++;
 			const assistantMsg = message as AssistantMessage;
+			requests++;
+			for (const key of ["requestMs", "firstOutputMs", "generationMs"] as const)
+				countDuration(key, entry.timing?.[key]);
+			const ms = entry.timing?.generationMs;
+			const reportedOutput = assistantMsg.usage.reported?.output ?? assistantMsg.usage.output > 0;
+			const measurable =
+				ms !== undefined &&
+				Number.isFinite(ms) &&
+				ms > 0 &&
+				reportedOutput &&
+				Number.isFinite(assistantMsg.usage.output) &&
+				assistantMsg.usage.output >= 0;
+			const speed: Measurement = {
+				value: measurable ? (assistantMsg.usage.output * 1000) / ms! : null,
+				estimated: false,
+			};
+			if (measurable) {
+				speedSamples++;
+				speedTokens += assistantMsg.usage.output;
+				speedMs += ms!;
+			}
+			latestRequest = { cache: measureCache(assistantMsg.usage), timing: entry.timing, speed };
 			if (Array.isArray(assistantMsg.content)) {
 				toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
 			}
@@ -90,7 +138,22 @@ export function collectSessionUsageStats(
 		}
 	}
 
+	const duration = (key: keyof typeof durations, expected: number, average = false): Measurement => ({
+		value: durations[key].length
+			? durations[key].reduce((sum, value) => sum + value, 0) / (average ? durations[key].length : 1)
+			: null,
+		estimated: durations[key].length !== expected,
+	});
 	return {
+		cache: sumCache(caches),
+		latestRequest,
+		timing: {
+			requestMs: duration("requestMs", requests),
+			firstOutputMs: duration("firstOutputMs", requests, true),
+			generationMs: duration("generationMs", requests),
+			toolMs: duration("toolMs", tools),
+		},
+		speed: { value: speedMs > 0 ? (speedTokens * 1000) / speedMs : null, estimated: speedSamples !== requests },
 		userMessages,
 		assistantMessages,
 		toolCalls,

@@ -4,7 +4,7 @@
 // the same data.
 import { html, useEffect, useRef, useState, Collapse, Icon, Segmented, Spinner, Toggle } from "./ui.js";
 import { post } from "./store.js";
-import { effortName } from "./util.js";
+import { effortName, fmtTokens } from "./util.js";
 import { N_, t } from "./i18n.js";
 import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, fmtK, fromK, levelStatus, levelUnconfirmed, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
 
@@ -142,7 +142,7 @@ function KField({ label, detected, value, onInput }) {
 	const tokens = fromK(value);
 	return html`<label class="col field-label"><span class="field-name">${label}${detected ? html` <${Detected} />` : null}</span>
 		<span class="k-field"><input class="field mono" inputmode="decimal" value=${value} onInput=${(e) => onInput(e.target.value)} /><span class="k-unit" aria-hidden="true">K</span></span>
-		<span class="dim pf-hint">${tokens ? t("{n} tokens", { n: tokens.toLocaleString() }) : t("1K = 1000 tokens")}</span>
+		<span class="dim pf-hint">${tokens ? t("{n} tokens", { n: fmtTokens(tokens) }) : t("1K = 1000 tokens")}</span>
 	</label>`;
 }
 

@@ -72,6 +72,7 @@ import {
 	type SessionJsonlDiagnostics,
 	type SessionListProgress,
 	type SessionMessageEntry,
+	type SessionMessageTiming,
 	type SessionMetadataDiagnostic,
 	type SessionTreeNode,
 	type ThinkingLevelChangeEntry,
@@ -928,13 +929,14 @@ export class SessionManager {
 	 * so it is easier to find them.
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
-	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+	appendMessage(message: Message | CustomMessage | BashExecutionMessage, timing?: SessionMessageTiming): string {
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			message,
+			...(timing ? { timing } : {}),
 		};
 		this._appendEntry(entry);
 		return entry.id;

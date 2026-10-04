@@ -452,6 +452,14 @@ describe("Web host (real runtime with a faux provider)", () => {
 		// While the task ran, the context use and the session's totals were pushed to the page.
 		const usage = fx.events.filter((entry) => entry.event === "usage").at(-1)?.data as any;
 		expect(usage.stats).toMatchObject({ userMessages: 1, assistantMessages: 2, toolCalls: 1 });
+		expect(usage.stats.latestRequest.timing.requestMs).toBeGreaterThanOrEqual(0);
+		expect(usage.stats.timing.toolMs.value).toBeGreaterThanOrEqual(0);
+		const entries = fx.hub.get((await fx.get("/api/state")).slot)!.session.sessionManager.getEntries();
+		expect(
+			entries
+				.filter((entry: any) => entry.type === "message" && entry.message.role === "assistant")
+				.every((entry: any) => entry.timing?.requestMs >= 0),
+		).toBe(true);
 		expect(usage.context.budget.activeTokens).toBeGreaterThan(0);
 
 		// A second task in the same chat: the first card stays and still shows its own diff, the new card holds only
