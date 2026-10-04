@@ -1,7 +1,7 @@
 // Context usage: how full the model's context window is, the session's cache hit rate and the model's output speed.
 // Session measurements come from the usage projection; the snapshot's speed is only the latest live request.
-import { html, useEffect, useRef, useState, Popover, Spinner } from "./ui.js";
-import { api, useStore } from "./store.js";
+import { html, useEffect, useRef, useState, Popover } from "./ui.js";
+import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { t } from "./i18n.js";
 import { fmtTokens } from "./util.js";
@@ -21,23 +21,15 @@ export const fmtSpeed = (item) => item?.value == null || !Number.isFinite(item.v
 const pct = (n, of) => (of > 0 ? (n / of) * 100 : 0);
 const fmtPct = (value) => `${value < 10 && value > 0 ? value.toFixed(1) : Math.round(value)}%`;
 
-/** Loads the breakdown for the session on screen and again whenever its token count changes. */
-function useBreakdown(active) {
-	const tokens = useStore((s) => s.snap?.context?.budget?.activeTokens);
-	const session = useStore((s) => s.snap?.session?.id);
-	const [data, setData] = useState(null);
-	const [error, setError] = useState("");
-	useEffect(() => {
-		if (!active) return undefined;
-		let cancelled = false;
-		api("/api/context")
-			.then((result) => !cancelled && (setData(result), setError("")))
-			.catch((e) => !cancelled && setError(e.message));
-		return () => {
-			cancelled = true;
-		};
-	}, [active, tokens, session]);
-	return { data, error };
+/** The same live snapshot as the ring: opening details never needs a separate breakdown request. */
+export function contextCapacity(context) {
+	const budget = context?.budget;
+	const usage = context?.usage;
+	const finite = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+	const used = finite(budget?.activeTokens) ?? finite(usage?.tokens);
+	const window = finite(budget?.effectiveWindow) ?? finite(usage?.contextWindow);
+	const percent = finite(budget?.percent) ?? finite(usage?.percent) ?? (used != null && window > 0 ? used / window * 100 : null);
+	return { used, window, percent };
 }
 
 /** Compact token count for the context display: 12200 → "12.2K", 128000 → "128.0K" (the exact number is in the tooltip). */
@@ -105,22 +97,22 @@ export function CacheValue({ cache, session }) {
 export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 	const snap = useStore((s) => s.snap);
 	const stats = useStore((s) => s.stats);
-	const { data, error } = useBreakdown(true);
-	if (error) return html`<div class="notice danger">${error}</div>`;
-	if (!data) return html`<div class="empty"><${Spinner} /></div>`;
-	const window_ = Math.max(data.window, 1);
-	const remaining = Math.max(0, data.window - data.used);
+	const data = contextCapacity(snap?.context);
+	const window_ = Math.max(data.window ?? 0, 1);
+	const remaining = data.window != null && data.used != null ? Math.max(0, data.window - data.used) : null;
+	const tokensText = (value) => value == null ? "—" : fmtK(value);
+	const percentText = data.percent == null ? "—" : fmtPct(data.percent);
 	const level = data.percent > 90 ? "danger" : data.percent > 70 ? "warn" : "";
-	const cache = sessionCache(stats) ?? data.cache;
+	const cache = sessionCache(stats);
 
 	return html`<div class="cu">
 		<div class="cu-top">
-			<div class="cu-sub" title=${`${num(data.used)} / ${num(data.window)} ${t("tokens")}`}><strong>${fmtK(data.used)}</strong> / ${fmtK(data.window)}</div>
-			<div class=${`cu-pct ${level}`}>${fmtPct(data.percent)}</div>
+			<div class="cu-sub" title=${`${tokensText(data.used)} / ${tokensText(data.window)} ${t("tokens")}`}><strong>${tokensText(data.used)}</strong> / ${tokensText(data.window)}</div>
+			<div class=${`cu-pct ${level}`}>${percentText}</div>
 		</div>
-		<div class="cu-bar" role="img" aria-label=${`${fmtPct(data.percent)} ${t("used")}`}><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used, window_))}%` }} /></div>
+		<div class="cu-bar" role="img" aria-label=${`${percentText} ${t("used")}`} ><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used ?? 0, window_))}%` }} /></div>
 		<div class=${capacityOnly ? "cu-capacity-row" : "cu-stats"}>
-			<div class="cu-stat" title=${num(remaining)}><span class="dim">${t("Remaining")}</span><strong>${fmtK(remaining)}</strong></div>
+			<div class="cu-stat" title=${tokensText(remaining)}><span class="dim">${t("Remaining")}</span><strong>${tokensText(remaining)}</strong></div>
 			${controls ? html`<div class="cu-controls">${controls}</div>` : null}
 			${!capacityOnly ? html`<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
 			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Cumulative output divided by measured generation time; approximate when some requests have no timing.")}>${fmtSpeed(stats?.speed)}</strong></div>` : null}
