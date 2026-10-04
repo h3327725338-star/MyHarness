@@ -6,6 +6,7 @@ import { chatTitle, clip, fmtDuration, loadPrefs, plural, savePrefs, taskWorkLin
 import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
+import { takeRestartState } from "./restart-state.js";
 
 import { validShortcuts } from "./shortcuts.js";
 
@@ -630,7 +631,10 @@ async function initialLoad() {
 	const snap = await api("/api/state", { slot: "" });
 	activeSlot = snap.slot;
 	state.activeSlot = snap.slot;
+	const view = takeRestartState(snap.session?.id);
+	if (view) state.view = { ...state.view, ...view };
 	await refreshAll();
+	if (view) toast(t("Service restarted successfully."), "info", 3500);
 }
 
 export async function boot() {

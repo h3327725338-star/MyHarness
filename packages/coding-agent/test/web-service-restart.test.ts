@@ -11,7 +11,8 @@ function fixture(confirmed = true, failure = false) {
 		if (failure) throw new Error("Restart refused");
 	});
 	const toast = vi.fn();
-	const restore = vi.fn(async () => {});
+	const save = vi.fn();
+	const reload = vi.fn();
 	const context = vm.createContext({
 		state,
 		set: (update: any) => {
@@ -26,7 +27,8 @@ function fixture(confirmed = true, failure = false) {
 					: { instanceId: "new", phase: "ready" },
 		post,
 		toast,
-		restoreAfterRestart: restore,
+		saveRestartState: save,
+		location: { reload },
 		t: (text: string) => text,
 		confirmDialog: async () => confirmed,
 		setTimeout: (callback: () => void) => callback(),
@@ -35,14 +37,15 @@ function fixture(confirmed = true, failure = false) {
 		source.replace(/^import .*;\r?\n/gm, "").replace("export async function", "async function"),
 		context,
 	);
-	return { state, updates, post, toast, restore, restart: () => context.restartService() };
+	return { state, updates, post, toast, save, reload, restart: () => context.restartService() };
 }
 
-it("keeps restart feedback local, confirms once, restores the chat and clears busy state", async () => {
+it("confirms once, waits for the new service, saves tab state and reloads the page", async () => {
 	const fx = fixture();
 	await Promise.all([fx.restart(), fx.restart()]);
 	expect(fx.post).toHaveBeenCalledTimes(1);
-	expect(fx.restore).toHaveBeenCalledTimes(1);
+	expect(fx.save).toHaveBeenCalledWith("chat", { panelOpen: true, selectedTerminal: null });
+	expect(fx.reload).toHaveBeenCalledTimes(1);
 	expect(fx.updates.map((update) => update.restartPhase).filter(Boolean)).toEqual([
 		"requesting",
 		"waiting",
@@ -50,7 +53,7 @@ it("keeps restart feedback local, confirms once, restores the chat and clears bu
 	]);
 	expect(fx.state.restarting).toBe(false);
 	expect(fx.state.restartError).toBeNull();
-	expect(fx.toast).toHaveBeenCalledWith("Service restarted successfully.", "info", 3500);
+	expect(fx.toast).not.toHaveBeenCalled();
 });
 
 it("cancels without restarting and keeps failures inline for retry", async () => {
@@ -62,6 +65,17 @@ it("cancels without restarting and keeps failures inline for retry", async () =>
 	expect(failed.state.restartError).toBe("Restart refused");
 	expect(failed.state.restarting).toBe(false);
 	expect(failed.toast).not.toHaveBeenCalled();
+	expect(failed.reload).not.toHaveBeenCalled();
+});
+
+it("keeps the page and draft when the reload handoff cannot be saved", async () => {
+	const fx = fixture();
+	fx.save.mockImplementation(() => {
+		throw new Error("Storage full");
+	});
+	await fx.restart();
+	expect(fx.state.restartError).toBe("Storage full");
+	expect(fx.reload).not.toHaveBeenCalled();
 });
 
 it("does not overlay the header and guards both click and keyboard sending during restart", () => {

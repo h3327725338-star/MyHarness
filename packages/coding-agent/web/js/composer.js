@@ -15,7 +15,7 @@ import { serverText, t } from "./i18n.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
 
-const drafts = new Map();
+import { drafts, registerRestartDraft } from "./restart-state.js";
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -300,6 +300,7 @@ export function Composer() {
 	}, [text, images, sessionId]);
 	const latest = useRef({ text, images, sessionId });
 	latest.current = { text, images, sessionId };
+	useEffect(() => registerRestartDraft(() => latest.current), []);
 	useEffect(
 		() => () => {
 			const { text: t0, images: i0, sessionId: id } = latest.current;
