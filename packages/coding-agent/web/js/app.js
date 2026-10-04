@@ -29,6 +29,7 @@ function StatusPill() {
 	const dialogs = useStore((s) => s.dialogs);
 	const compaction = useStore((s) => s.compaction);
 	const completion = useStore((s) => s.completion);
+	const memory = useStore((s) => s.memoryMaintenance);
 	if (!snap) return null;
 	if (dialogs.length && snap.active) return html`<span class="status-pill warn" role="status"><${Icon} name="clock" size=${13} />${t("Waiting for you")}</span>`;
 	if (compaction) return html`<span class="status-pill" role="status"><${Spinner} />${t("Compacting context")}</span>`;
@@ -37,6 +38,8 @@ function StatusPill() {
 		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} />${detail}</span>`;
 	}
 	if (completion) return html`<span class="status-pill" role="status"><${Spinner} />${t("Finishing up")}</span>`;
+	if (memory?.phase === "warning") return html`<span class="status-pill warn" role="status" title=${memory.error || t("Memory maintenance needs attention")}><${Icon} name="alertTriangle" size=${13} />${t("Memory maintenance needs attention")}</span>`;
+	if (memory?.phase === "processing" || memory?.phase === "pending") return html`<span class="status-pill" role="status" title=${t("Memory runs in the background; you can keep working")}><${Icon} name="clock" size=${13} />${t("Updating memory in background")}</span>`;
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {
 		const ui = OUTCOME_UI[last.outcome];

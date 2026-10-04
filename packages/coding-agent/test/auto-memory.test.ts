@@ -363,4 +363,100 @@ describe("auto memory", () => {
 		expect(context).not.toHaveProperty("tools");
 		expect(options.reasoning).toBe("high");
 	});
+
+	it("bounds background failures and retains pending work", async () => {
+		vi.useFakeTimers();
+		const runner = vi.fn(async () => "invalid output");
+		const manager = new AutoMemoryManager({
+			cwd: testRoot,
+			sessionId: "failed-job",
+			dataRoot,
+			agentDir: join(testRoot, "agent"),
+			persisted: true,
+			settingsManager: SettingsManager.inMemory({
+				autoMemory: { enabled: true, provider: "test", model: "memory" },
+			}),
+			modelRunner: runner,
+		});
+		const entries = [
+			{
+				type: "message",
+				id: "failure",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "Remember this preference", timestamp: Date.now() },
+			},
+		] as unknown as SessionEntry[];
+		try {
+			await manager.enqueueMaintenance(entries);
+			await vi.advanceTimersByTimeAsync(1500);
+			await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+			await manager.waitForBackgroundTasks();
+			await vi.waitFor(() => expect(manager.getMaintenanceStatus().phase).toBe("pending"));
+			await manager.waitForMaintenancePersistence();
+			await vi.advanceTimersByTimeAsync(30_000);
+			await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(2));
+			await manager.waitForBackgroundTasks();
+			await vi.waitFor(() => expect(manager.getMaintenanceStatus().phase).toBe("pending"));
+			await manager.waitForMaintenancePersistence();
+			await vi.advanceTimersByTimeAsync(60_000);
+			await vi.waitFor(() => expect(manager.getMaintenanceStatus().phase).toBe("warning"));
+			await vi.advanceTimersByTimeAsync(300_000);
+			expect(runner).toHaveBeenCalledTimes(3);
+		} finally {
+			manager.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("persists debounced work, survives cancellation, and resumes without awaiting a model", async () => {
+		vi.useFakeTimers();
+		const modelRunner = vi.fn(async () => '{"operations":[]}');
+		const options = {
+			cwd: testRoot,
+			sessionId: "resumed",
+			workspaceId: "workspace",
+			dataRoot,
+			agentDir: join(testRoot, "agent"),
+			persisted: true,
+			settingsManager: SettingsManager.inMemory({
+				autoMemory: { enabled: true, provider: "test", model: "memory" },
+			}),
+			modelRunner,
+		};
+		const entries = [
+			{
+				type: "message",
+				id: "new-user",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "Remember source-first" }],
+					timestamp: Date.now(),
+				},
+			},
+		] as unknown as SessionEntry[];
+		let first: AutoMemoryManager | undefined;
+		let resumed: AutoMemoryManager | undefined;
+		try {
+			first = new AutoMemoryManager(options);
+			await first.enqueueMaintenance(entries);
+			await first.enqueueMaintenance(entries);
+			expect(modelRunner).not.toHaveBeenCalled();
+			const paths = getAutoMemoryPaths(testRoot, options.agentDir, options);
+			const job = join(paths.sessionDir, "maintenance.json");
+			expect(existsSync(job)).toBe(true);
+			first.dispose();
+			resumed = new AutoMemoryManager(options);
+			await vi.advanceTimersByTimeAsync(1500);
+			await vi.waitFor(() => expect(existsSync(job)).toBe(false));
+			expect(modelRunner).toHaveBeenCalledOnce();
+			expect(resumed.getMaintenanceStatus().phase).toBe("idle");
+		} finally {
+			first?.dispose();
+			resumed?.dispose();
+			vi.useRealTimers();
+		}
+	});
 });

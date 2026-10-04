@@ -33,6 +33,35 @@ function memory(scope: string, name: string, body = "shared-key original") {
 const settingsManager = SettingsManager.inMemory({ autoMemory: { enabled: true, provider: "test", model: "memory" } });
 
 describe("hierarchical memory storage", () => {
+	it("finds old relevant memories beyond the former 200-entry cutoff", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		await writeMemoryFile(
+			join(p.globalDir, "old.md"),
+			memory("global", "important", "rare-anchor confirmed convention"),
+		);
+		for (let i = 0; i < 205; i++) {
+			await writeMemoryFile(
+				join(p.globalDir, `new-${i}.md`),
+				memory("global", `new-${i}`, `unrelated ${i}`).replaceAll("2026-01-01", "2026-02-01"),
+			);
+		}
+		const manager = new AutoMemoryManager({
+			...f,
+			cwd: f.root,
+			workspaceId: "a",
+			sessionId: "one",
+			persisted: true,
+			settingsManager,
+		});
+		try {
+			expect((await manager.recall("rare-anchor"))?.content).toContain("confirmed convention");
+			expect((await manager.recall("rare-anchor"))?.content).toContain("confirmed convention");
+			expect(await manager.recall("no-matching-topic")).toBeUndefined();
+		} finally {
+			manager.dispose();
+		}
+	});
 	it("shares global/workspace memory, isolates conversations, and excludes archives", async () => {
 		const f = fixture();
 		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });

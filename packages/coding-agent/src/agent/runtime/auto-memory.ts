@@ -38,6 +38,9 @@ export interface MemoryEntry {
 	filePath: string;
 	workspaceId?: string;
 	sessionId?: string;
+	sourceEntryId?: string;
+	sourceWorkspaceId?: string;
+	sourceSessionId?: string;
 }
 
 export interface MemoryOperation {
@@ -82,7 +85,20 @@ interface AutoMemoryManagerOptions {
 	dataRoot?: string;
 	workspaceId?: string;
 	onError?: (operation: "recall" | "extract" | "consolidate", error: Error) => void;
+	onStatus?: (status: MemoryMaintenanceStatus) => void;
 	modelRunner?: AutoMemoryModelRunner;
+}
+
+export interface MemoryMaintenanceStatus {
+	phase: "idle" | "pending" | "processing" | "warning";
+	error?: string;
+}
+
+interface MemoryMaintenanceJob {
+	version: 1;
+	id: string;
+	entries: SessionEntry[];
+	attempts: number;
 }
 
 export type AutoMemoryModelRunner = (options: {
@@ -92,10 +108,8 @@ export type AutoMemoryModelRunner = (options: {
 	task: string;
 }) => Promise<string>;
 
-const MEMORY_FILE_LIMIT = 200;
 const MEMORY_BODY_MAX_BYTES = 4 * 1024;
 const RECALL_TURN_MAX_BYTES = 20 * 1024;
-const RECALL_SESSION_MAX_BYTES = 60 * 1024;
 const EXTRACTION_TRANSCRIPT_MAX_BYTES = 24 * 1024;
 const EXTRACTION_MANIFEST_MAX_BYTES = 16 * 1024;
 const CONSOLIDATION_INPUT_MAX_BYTES = 60 * 1024;
@@ -227,6 +241,12 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 			filePath,
 			workspaceId: typeof parsed.frontmatter.workspaceId === "string" ? parsed.frontmatter.workspaceId : undefined,
 			sessionId: typeof parsed.frontmatter.sessionId === "string" ? parsed.frontmatter.sessionId : undefined,
+			sourceEntryId:
+				typeof parsed.frontmatter.sourceEntryId === "string" ? parsed.frontmatter.sourceEntryId : undefined,
+			sourceWorkspaceId:
+				typeof parsed.frontmatter.sourceWorkspaceId === "string" ? parsed.frontmatter.sourceWorkspaceId : undefined,
+			sourceSessionId:
+				typeof parsed.frontmatter.sourceSessionId === "string" ? parsed.frontmatter.sourceSessionId : undefined,
 		};
 	} catch {
 		return undefined;
@@ -238,7 +258,6 @@ function scanMemoryDirectory(directory: string, scope: MemoryScope): MemoryEntry
 	if (!fs.existsSync(directory)) return [];
 	const entries: MemoryEntry[] = [];
 	for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
-		if (entries.length >= MEMORY_FILE_LIMIT) break;
 		if (!item.isFile() || !item.name.endsWith(".md")) continue;
 		assertDirectPath(path.join(directory, item.name));
 		const entry = parseMemoryFile(path.join(directory, item.name), scope);
@@ -256,6 +275,9 @@ function serializeMemory(entry: MemoryEntry): string {
 		scope: entry.scope,
 		workspaceId: entry.workspaceId,
 		sessionId: entry.sessionId,
+		sourceEntryId: entry.sourceEntryId,
+		sourceWorkspaceId: entry.sourceWorkspaceId,
+		sourceSessionId: entry.sourceSessionId,
 		createdAt: entry.createdAt,
 		updatedAt: entry.updatedAt,
 	}).trim();
@@ -362,19 +384,34 @@ function lexicalTerms(value: string): Set<string> {
 function lexicalSelection(query: string, entries: MemoryEntry[]): MemoryEntry[] {
 	const terms = lexicalTerms(query);
 	if (terms.size === 0) return [];
-	return entries
-		.map((entry, index) => {
-			const haystack = `${entry.name}\n${entry.description}\n${entry.content}`.toLowerCase();
+	const documents = entries.map((entry) => ({
+		entry,
+		terms: lexicalTerms(`${entry.name}\n${entry.description}\n${entry.content}`),
+	}));
+	const frequencies = new Map<string, number>();
+	for (const document of documents) {
+		for (const term of terms) if (document.terms.has(term)) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+	}
+	const ranked = documents
+		.map(({ entry, terms: documentTerms }) => {
 			let score = 0;
 			for (const term of terms) {
-				if (haystack.includes(term)) score++;
+				if (documentTerms.has(term)) score += Math.log(1 + entries.length / (frequencies.get(term) ?? 1));
 			}
-			return { entry, score, index };
+			return { entry, score: score / Math.sqrt(Math.max(1, documentTerms.size)) };
 		})
-		.filter((item) => item.score > 0)
-		.sort((a, b) => b.score - a.score || a.index - b.index)
-		.slice(0, MAX_RECALLED_MEMORIES)
-		.map((item) => item.entry);
+		.filter(({ score }) => score > 0)
+		.sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt));
+	const best = ranked[0]?.score ?? 0;
+	const seen = new Set<string>();
+	return ranked
+		.filter(({ entry, score }) => {
+			const key = `${entry.scope}:${entry.content.replace(/\s+/g, " ").trim().toLowerCase()}`;
+			if (score < best * 0.5 || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.map(({ entry }) => entry);
 }
 
 function formatTranscript(entries: SessionEntry[], lastEntryId?: string): { text: string; lastEntryId?: string } {
@@ -390,39 +427,160 @@ function formatTranscript(entries: SessionEntry[], lastEntryId?: string): { text
 
 	const selected: typeof candidates = [];
 	let bytes = 0;
-	for (let index = candidates.length - 1; index >= 0; index--) {
-		const item = candidates[index];
+	for (const candidate of candidates) {
+		const item = { ...candidate, text: truncateUtf8(candidate.text, EXTRACTION_TRANSCRIPT_MAX_BYTES) };
 		const formatted = `${item.role === "user" ? "User" : "Main AI"}:\n${item.text}\n`;
 		const itemBytes = Buffer.byteLength(formatted, "utf8");
 		if (selected.length > 0 && bytes + itemBytes > EXTRACTION_TRANSCRIPT_MAX_BYTES) break;
 		selected.push(item);
 		bytes += itemBytes;
 	}
-	selected.reverse();
 	return {
 		text: selected.map((item) => `${item.role === "user" ? "User" : "Main AI"}:\n${item.text}`).join("\n\n"),
-		lastEntryId: candidates.at(-1)?.id,
+		lastEntryId: selected.at(-1)?.id,
 	};
 }
 
 export class AutoMemoryManager {
 	private readonly options: AutoMemoryManagerOptions;
 	private initializedPaths?: AutoMemoryPaths;
-	private readonly recalledIds = new Set<string>();
+	private maintenanceProcessing = false;
+	private maintenanceTimer?: NodeJS.Timeout;
+	private maintenanceStatus: MemoryMaintenanceStatus = { phase: "idle" };
+	private maintenanceEnqueue: Promise<void> = Promise.resolve();
 	private readonly reportedErrors = new Set<string>();
-	private recalledBytes = 0;
 	private backgroundQueue: Promise<void> = Promise.resolve();
 	private readonly disposeController = new AbortController();
 	private disposed = false;
 
 	constructor(options: AutoMemoryManagerOptions) {
 		this.options = options;
+		if (options.persisted) this.scheduleMaintenance();
+	}
+
+	getMaintenanceStatus(): MemoryMaintenanceStatus {
+		return { ...this.maintenanceStatus };
+	}
+
+	private setMaintenanceStatus(status: MemoryMaintenanceStatus): void {
+		this.maintenanceStatus = status;
+		try {
+			this.options.onStatus?.(status);
+		} catch {
+			/* Observers cannot stop maintenance. */
+		}
+	}
+
+	private get maintenancePath(): string {
+		return path.join(this.paths.sessionDir, "maintenance.json");
+	}
+
+	/** Persist work before returning; model work is debounced and never awaited by the chat. */
+	enqueueMaintenance(entries: SessionEntry[]): Promise<void> {
+		if (!this.isEnabled() || this.disposed) return Promise.resolve();
+		const snapshot = entries.flatMap((entry): SessionEntry[] => {
+			if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant"))
+				return [];
+			let text: string;
+			try {
+				text = sanitizeMemoryText(contentText(entry.message.content, "\n"));
+			} catch {
+				text = "[Sensitive message omitted from memory maintenance]";
+			}
+			return [{ ...entry, message: { ...entry.message, content: [{ type: "text", text }] } }];
+		});
+		const queued = this.maintenanceEnqueue.then(async () => {
+			this.assertActive();
+			const cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
+			const start = cursor ? snapshot.findIndex((entry) => entry.id === cursor) + 1 : 0;
+			const delta = snapshot.slice(Math.max(0, start));
+			if (delta.length === 0) return;
+			await writeMemoryFile(
+				this.maintenancePath,
+				JSON.stringify({ version: 1, id: randomUUID(), entries: delta, attempts: 0 }),
+			);
+			this.setMaintenanceStatus({ phase: "pending" });
+			this.scheduleMaintenance();
+		});
+		this.maintenanceEnqueue = queued.catch(() => undefined);
+		return queued;
+	}
+
+	private scheduleMaintenance(delay = 1500): void {
+		if (this.disposed) return;
+		if (this.maintenanceTimer) clearTimeout(this.maintenanceTimer);
+		this.maintenanceTimer = setTimeout(() => {
+			this.maintenanceTimer = undefined;
+			void this.processMaintenance().catch((error) => {
+				if (!this.disposed) this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
+			});
+		}, delay);
+		this.maintenanceTimer.unref?.();
+	}
+
+	private async processMaintenance(): Promise<void> {
+		if (this.disposed || !this.isEnabled()) return;
+		if (this.maintenanceProcessing) {
+			this.scheduleMaintenance();
+			return;
+		}
+		this.maintenanceProcessing = true;
+		try {
+			await this.processMaintenanceJob();
+		} finally {
+			this.maintenanceProcessing = false;
+		}
+	}
+
+	private async processMaintenanceJob(): Promise<void> {
+		await this.maintenanceEnqueue;
+		assertDirectPath(this.maintenancePath);
+		if (!fs.existsSync(this.maintenancePath)) return;
+		const job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
+		if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string")
+			throw new Error("Invalid memory maintenance job");
+		if (job.attempts >= 3) {
+			this.setMaintenanceStatus({ phase: "warning", error: "Memory maintenance paused after repeated failures" });
+			return;
+		}
+		this.setMaintenanceStatus({ phase: "processing" });
+		const ok = await this.runExtraction(job.entries);
+		if (this.disposed) return;
+		// Serialize with enqueue so a completed old job cannot erase a newer snapshot.
+		const settled = this.maintenanceEnqueue.then(async () => {
+			this.assertActive();
+			const current = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
+			if (current.id !== job.id) {
+				this.scheduleMaintenance();
+				return;
+			}
+			if (ok) {
+				const cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
+				if (formatTranscript(job.entries, cursor).text) {
+					this.scheduleMaintenance();
+					return;
+				}
+				await fs.promises.unlink(this.maintenancePath);
+				this.setMaintenanceStatus({ phase: "idle" });
+			} else {
+				job.attempts++;
+				await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
+				this.setMaintenanceStatus({
+					phase: job.attempts >= 3 ? "warning" : "pending",
+					error: job.attempts >= 3 ? "Memory maintenance failed; saved work will be retained" : undefined,
+				});
+				if (job.attempts < 3) this.scheduleMaintenance(30_000 * job.attempts);
+			}
+		});
+		this.maintenanceEnqueue = settled.catch(() => undefined);
+		await settled;
 	}
 
 	/** Invalidate background work owned by a replaced AgentSession. */
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		if (this.maintenanceTimer) clearTimeout(this.maintenanceTimer);
 		this.disposeController.abort();
 	}
 
@@ -534,19 +692,17 @@ export class AutoMemoryManager {
 			...scanMemoryDirectory(this.paths.globalDir, "global"),
 			...scanMemoryDirectory(this.paths.projectDir, "workspace"),
 			...scanMemoryDirectory(this.paths.sessionDir, "session"),
-		]
-			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-			.slice(0, MEMORY_FILE_LIMIT);
+		].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}
 
 	async recall(query: string): Promise<CustomMessage | undefined> {
 		if (this.disposed) return undefined;
 		const settings = this.getSettings();
-		if (!settings || this.recalledBytes >= RECALL_SESSION_MAX_BYTES) return undefined;
+		if (!settings) return undefined;
 		let candidates: MemoryEntry[];
 		try {
 			await migrateLegacyMemories(this.paths.dataRoot, this.options.agentDir);
-			candidates = this.loadEntries().filter((entry) => !this.recalledIds.has(entry.id));
+			candidates = this.loadEntries();
 		} catch (error) {
 			this.reportError("recall", error);
 			return undefined;
@@ -564,19 +720,13 @@ export class AutoMemoryManager {
 		for (const entry of selected) {
 			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
 			const sectionBytes = Buffer.byteLength(section, "utf8");
-			if (
-				sections.length > 0 &&
-				(turnBytes + sectionBytes > RECALL_TURN_MAX_BYTES ||
-					this.recalledBytes + turnBytes + sectionBytes > RECALL_SESSION_MAX_BYTES)
-			) {
+			if (turnBytes + sectionBytes > RECALL_TURN_MAX_BYTES) {
 				break;
 			}
 			sections.push(section);
 			turnBytes += sectionBytes;
-			this.recalledIds.add(entry.id);
 		}
 		if (sections.length === 0) return undefined;
-		this.recalledBytes += turnBytes;
 
 		return {
 			role: "custom",
@@ -625,6 +775,10 @@ export class AutoMemoryManager {
 		return result;
 	}
 
+	async waitForMaintenancePersistence(): Promise<void> {
+		await this.maintenanceEnqueue;
+	}
+
 	async waitForBackgroundTasks(): Promise<void> {
 		await this.backgroundQueue;
 	}
@@ -642,10 +796,26 @@ export class AutoMemoryManager {
 		await refreshMemoryIndexes(this.paths.dataRoot);
 	}
 
-	private async applyOperations(operations: MemoryOperation[], allowDelete: boolean): Promise<void> {
+	private async applyOperations(
+		operations: MemoryOperation[],
+		allowDelete: boolean,
+		snapshot?: MemoryEntry[],
+		sourceEntryId?: string,
+	): Promise<void> {
 		this.assertActive();
 		await this.withLock(async () => {
 			const existing = new Map(this.loadEntries().map((entry) => [entry.id, entry]));
+			if (snapshot) {
+				if (existing.size !== snapshot.length)
+					throw new Error("Memory changed during maintenance; retry with fresh context");
+				for (const entry of snapshot) {
+					if (
+						existing.get(entry.id)?.updatedAt !== entry.updatedAt ||
+						existing.get(entry.id)?.content !== entry.content
+					)
+						throw new Error("Memory changed during maintenance; retry with fresh context");
+				}
+			}
 			for (const operation of operations.slice(0, 20)) {
 				this.assertActive();
 				if (operation.action === "delete") {
@@ -698,6 +868,22 @@ export class AutoMemoryManager {
 					continue;
 				}
 				if (!name || !description || !content) continue;
+				if (
+					previous?.content === content &&
+					previous.name === name &&
+					previous.description === description &&
+					previous.type === operation.type
+				)
+					continue;
+				if (
+					!previous &&
+					[...existing.values()].some(
+						(entry) =>
+							entry.scope === scope &&
+							entry.content.replace(/\s+/g, " ").trim() === content.replace(/\s+/g, " ").trim(),
+					)
+				)
+					continue;
 				const directory =
 					scope === "global"
 						? this.paths.globalDir
@@ -717,6 +903,9 @@ export class AutoMemoryManager {
 					filePath,
 					workspaceId: scope === "global" ? undefined : this.paths.workspaceId,
 					sessionId: scope === "session" ? this.paths.sessionId : undefined,
+					sourceEntryId: sourceEntryId ?? previous?.sourceEntryId,
+					sourceWorkspaceId: sourceEntryId ? this.paths.workspaceId : previous?.sourceWorkspaceId,
+					sourceSessionId: sourceEntryId ? this.paths.sessionId : previous?.sourceSessionId,
 				};
 				this.assertActive();
 				if (previous) await archiveMemoryFile(previous.filePath, "updated");
@@ -734,9 +923,9 @@ export class AutoMemoryManager {
 			const state = readState(this.paths.statePath);
 			const now = new Date();
 			state.sessions[this.options.sessionId] = { lastEntryId, updatedAt: now.toISOString() };
-			const sessionEntries = Object.entries(state.sessions)
-				.sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt))
-				.slice(0, 100);
+			const sessionEntries = Object.entries(state.sessions).sort((a, b) =>
+				b[1].updatedAt.localeCompare(a[1].updatedAt),
+			);
 			state.sessions = Object.fromEntries(sessionEntries);
 			const consolidation = state.consolidation[this.paths.workspaceId] ?? { sessionIds: [] };
 			state.consolidation[this.paths.workspaceId] = consolidation;
@@ -782,7 +971,7 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const operations = parseMemoryOperations(output);
 		if (operations === undefined) throw new Error("Auto Memory 返回了无效的操作格式");
-		await this.applyOperations(operations.slice(0, 12), false);
+		await this.applyOperations(operations.slice(0, 12), false, existing, transcript.lastEntryId);
 		this.assertActive();
 		const { shouldConsolidate } = await this.updateState(transcript.lastEntryId);
 		if (shouldConsolidate) {
@@ -807,7 +996,7 @@ export class AutoMemoryManager {
 		const chunks: string[] = [];
 		let bytes = 0;
 		for (const entry of entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
-			const chunk = `ID: ${entry.id}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}\nContent:\n${entry.content}`;
+			const chunk = `ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}\nContent:\n${entry.content}`;
 			const chunkBytes = Buffer.byteLength(chunk, "utf8");
 			if (chunks.length > 0 && bytes + chunkBytes > CONSOLIDATION_INPUT_MAX_BYTES) break;
 			chunks.push(chunk);
@@ -822,7 +1011,7 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const operations = parseMemoryOperations(output);
 		if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
-		await this.applyOperations(operations, true);
+		await this.applyOperations(operations, true, entries);
 		await this.updateState(lastEntryId, true);
 	}
 }

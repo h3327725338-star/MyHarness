@@ -75,7 +75,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const owner = fx.hub.get(initial.slot)!;
 		const internals = owner as any;
 		internals.lastAgentEnd = { succeeded: true, messages: [] };
-		const extraction = vi.spyOn(owner.session, "runAutoMemoryExtraction");
+		const extraction = vi.spyOn(owner.session, "scheduleAutoMemoryMaintenance");
 		owner.session.settingsManager.setAutoMemorySettings({ enabled: false });
 		internals.startCompletion();
 		await owner.waitForCompletion();
@@ -87,22 +87,13 @@ describe("Web host (real runtime with a faux provider)", () => {
 		);
 
 		owner.session.settingsManager.setAutoMemorySettings({ enabled: true });
-		let release!: () => void;
-		extraction.mockImplementation(
-			() =>
-				new Promise<boolean>((resolve) => {
-					release = () => resolve(true);
-				}),
-		);
+		extraction.mockResolvedValue(undefined);
 		internals.startCompletion();
-		await fx.waitFor("completion", (d) => d.phase === "memory");
-		const snapshot = await fx.get("/api/state");
-		expect(snapshot.flags.completion).toBe(true);
-		expect(snapshot.flags.completionStatus.phase).toBe("memory");
-		const startedAt = snapshot.flags.completionStatus.startedAt;
-		release();
 		await owner.waitForCompletion();
-		await fx.waitFor("completion", (d) => d.phase === "records" && d.startedAt === startedAt);
+		expect(extraction).toHaveBeenCalledOnce();
+		expect(fx.events.filter((event) => event.event === "completion").map((event) => event.data.phase)).not.toContain(
+			"memory",
+		);
 		expect((await fx.get("/api/state")).flags.completionStatus).toBeNull();
 
 		extraction.mockRejectedValueOnce(new Error("extraction unavailable"));
@@ -111,6 +102,57 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(owner.completionActive).toBe(false);
 		expect((await fx.get("/api/state")).flags.completionStatus).toBeNull();
 		await fx.waitFor("notice", (d) => d.message.includes("extraction unavailable"));
+	});
+
+	it("finishes the chat while background memory is still waiting for its model", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		owner.session.settingsManager.setAutoMemorySettings({ enabled: true, provider: "test", model: "memory" });
+		owner.session.sessionManager.appendMessage({
+			role: "user",
+			content: "Remember the confirmed project convention",
+			timestamp: Date.now(),
+		});
+		const memory = (owner.session as any)._autoMemory;
+		let release!: () => void;
+		vi.spyOn(memory, "runExtraction").mockImplementation(
+			() =>
+				new Promise<boolean>((resolve) => {
+					release = () => resolve(false);
+				}),
+		);
+		try {
+			(owner as any).lastAgentEnd = { succeeded: true, messages: [] };
+			(owner as any).startCompletion();
+			await owner.waitForCompletion();
+			await fx.waitFor("memory_status", (d) => d.phase === "processing");
+			const snapshot = await fx.get("/api/state");
+			expect(snapshot.memoryMaintenance.phase).toBe("processing");
+			expect(snapshot.flags.completion).toBe(false);
+			expect(owner.session.isIdle).toBe(true);
+		} finally {
+			release?.();
+		}
+	});
+
+	it("keeps only current-turn recalled memory in model context without rewriting history", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const session = fx.hub.get(initial.slot)!.session;
+		const old = {
+			role: "custom" as const,
+			customType: "auto-memory-recall",
+			content: "old memory",
+			display: false,
+			timestamp: Date.now(),
+		};
+		const current = { ...old, content: "current memory" };
+		const history = [old, { role: "user" as const, content: "new question", timestamp: Date.now() }, current];
+		const context = await session.agent.transformContext!(history, new AbortController().signal);
+		expect(context).not.toContain(old);
+		expect(context).toContainEqual(current);
+		expect(history).toHaveLength(3);
 	});
 
 	it("publishes usage in the same batch as text before provider usage arrives", async () => {

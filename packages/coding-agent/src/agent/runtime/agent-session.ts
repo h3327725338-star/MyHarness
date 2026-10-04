@@ -119,7 +119,7 @@ import {
 	type VisionAssistantProgress,
 } from "../vision/assistant.ts";
 import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
-import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager } from "./auto-memory.ts";
+import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager, type MemoryMaintenanceStatus } from "./auto-memory.ts";
 import type { CustomMessage } from "./messages.ts";
 import { type AgentRole, restrictToolNamesForRole } from "./role.ts";
 import {
@@ -154,6 +154,7 @@ export type AgentSessionEvent =
 	  }
 	| { type: "agent_settled" }
 	| { type: "sub_agent_progress"; progress: SubAgentBackgroundProgress }
+	| { type: "auto_memory_status"; status: MemoryMaintenanceStatus }
 	| {
 			type: "auto_memory_error";
 			operation: "recall" | "extract" | "consolidate";
@@ -643,6 +644,9 @@ export class AgentSession {
 			modelRuntime: config.modelRuntime,
 			getMainModel: () => this._mainModelRef(),
 			persisted: config.sessionManager.isPersisted(),
+			onStatus: (status) => {
+				if (this._ownsRuntimeGeneration(ownerGeneration)) this._emit({ type: "auto_memory_status", status });
+			},
 			onError: (operation, error) => {
 				if (!this._ownsRuntimeGeneration(ownerGeneration)) return;
 				this._emit({
@@ -690,7 +694,19 @@ export class AgentSession {
 		});
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {
-			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			// Keep persisted history intact, but only send the current turn's recall.
+			let lastUser = -1;
+			for (let index = messages.length - 1; index >= 0; index--) {
+				if (messages[index].role === "user") {
+					lastUser = index;
+					break;
+				}
+			}
+			const current = messages.filter(
+				(message, index) =>
+					message.role !== "custom" || message.customType !== "auto-memory-recall" || index > lastUser,
+			);
+			const transformed = previousTransformContext ? await previousTransformContext(current, signal) : current;
 			return this._visionAssistant.transformContext(transformed, signal);
 		};
 
@@ -1038,6 +1054,14 @@ export class AgentSession {
 		return this._autoMemory.runExtraction(this.sessionManager.getBranch());
 	}
 
+	async scheduleAutoMemoryMaintenance(): Promise<void> {
+		await this._autoMemory.enqueueMaintenance(this.sessionManager.getBranch());
+	}
+
+	getAutoMemoryMaintenanceStatus() {
+		return this._autoMemory.getMaintenanceStatus();
+	}
+
 	private async _prepareGitCheckpointToolMutation(
 		event: Extract<AgentEvent, { type: "tool_execution_start" }>,
 	): Promise<void> {
@@ -1326,7 +1350,7 @@ export class AgentSession {
 			const pending = Promise.all([
 				this.waitForIdle(),
 				this._bash.activeCompletion ?? Promise.resolve(),
-				this._autoMemory.waitForBackgroundTasks(),
+				this._autoMemory.waitForMaintenancePersistence(),
 			]).then(
 				() => undefined,
 				() => undefined,

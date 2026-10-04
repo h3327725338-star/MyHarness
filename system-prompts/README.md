@@ -31,7 +31,7 @@
 | `tools/routing/organization-heading.md`、`organization-boundary.md` | 至少一个编排工具启用时的标题与组合约束 |
 | `compaction/coding-agent/system.md` | 编程会话压缩、分支摘要、长回合前缀摘要的系统职责 |
 | `compaction/harness/system.md` | 通用 AgentHarness 压缩及分支摘要的系统职责；与编程版不同，不能直接合并 |
-| `memory/extractor.md`、`consolidator.md` | 独立记忆提取、合并请求的系统职责 |
+| `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容 |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
 | `tasks/conversation-title.md` | 独立会话标题生成请求 |
 | `tasks/vision-assistant.md` | 独立视觉转录请求 |

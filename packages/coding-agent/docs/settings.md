@@ -151,10 +151,12 @@ Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则�
 
 1. 在 main model 收到新的 user request 前（包括新 session 的第一次 request），通过有边界的本地文本匹配选择相关的已保存 memories。Recall 不会发起 blocking model request；
 2. 将这些 memories 作为 hidden、low-priority context 添加。它们不能覆盖 system、global、project 或当前 user instructions，也不会授予 tool permissions；
-3. Task 的 post-processing 完成后，发起一次 tool-free structured model request，处理最终的 conversation delta，并在发布 main AI 的 final text 前等待结果。该 request 会提取持久的 user preferences、corrections、project facts、conversation-specific information 和有用的 references；
+3. Task 完成后，只等待待处理任务安全写入当前 Conversation 的 `memory/maintenance.json`，不等待记忆模型。后台合并短时间内的任务快照，逐批处理尚未提取的 conversation delta，提取持久的 preferences、corrections、project facts 和 references；
 4. 当前 Workspace 至少存在五个不同 sessions，且距离上次 consolidation 已经过 24 小时后，请选中的 model 合并重复或过长的 memories。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。
 
-选中的 model 用于 extraction 和 consolidation，不用于同步 recall step。Extraction 会收到有边界的 conversation delta 和 memory manifest，但没有 project tools，因此不能独立检查或修改项目。启用该功能会将 conversation content 发送给选中的 model，并将 final-text publication 延迟到 request 完成，可能产生 model usage。如果 extraction 失败，MyHarness 会报告 warning 并释放 final response，不会无限期阻塞。Automatic memory 只适用于 persisted sessions；`--no-session` runs 不会读写 long-term memory。
+选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
+
+Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 200 条；本地词项稀有度和文本长度参与排序，按相对相关性筛选并在同层去重。仍使用 20 KB 作为异常保护，不是精确 Token 预算，也不是语义向量检索。每次模型请求过滤旧轮次的 recall message，仅保留当前 user message 后的 recall，磁盘对话历史不改写。更新使用乐观冲突检测，已有内容变化后重新提取；相同内容不重复归档。新记忆记录提取来源的 Workspace、Session 和末条 Entry ID。这是批次来源，不是逐句证据标注；目前没有专用历史搜索工具。Automatic memory 只适用于 persisted sessions；`--no-session` 不读写 long-term memory。
 
 Memory Markdown files 是 source of truth：
 
@@ -170,7 +172,7 @@ Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Mar
 
 删除 Chat（包括勾选删除产出）仍保留其 `memory/`；移除 Workspace 不删除记忆，保留原 ID 归属。Files → Memories 可按当前 Chat、Workspace、所有 Workspace 汇总查看 active/归档，包括来源已删除或 Workspace 已取消登记的数据；恢复归档前保存当前版本，恢复操作不删除原归档。当前没有永久删除记忆的 UI/API；不会因自动整理或删除其他数据而隐式永久删除。
 
-关闭该 setting 会停止 extraction 和 recall，但不会删除已有 memory files。写入前，MyHarness 会拒绝 private keys，并 redacts 常见的 API-key、token、password、secret 和 Bearer credential patterns。这是 defensive filter，不能保证检测出所有可能的 secret formats。
+关闭该 setting 会停止安排新的 extraction 和 recall，但不会删除已有 memory files 或待处理快照。已经开始的请求仍可能完成；runtime 释放时取消。写入前，MyHarness 会拒绝 private keys，并 redacts 常见的 API-key、token、password、secret 和 Bearer credential patterns。这是 defensive filter，不能保证检测出所有可能的 secret formats。
 
 ```json
 {

@@ -7,6 +7,9 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Memory maintenance needs attention": "记忆维护需要检查",
+	"Memory runs in the background; you can keep working": "记忆在后台处理，不影响继续操作",
+	"Updating memory in background": "后台更新记忆",
 	"Memories": "记忆",
 	"Active memories": "当前记忆",
 	"Memory archive": "记忆归档",

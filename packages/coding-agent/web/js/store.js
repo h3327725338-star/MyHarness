@@ -33,6 +33,7 @@ const SLOT_DEFAULTS = () => ({
 	retry: null,
 	recovery: null,
 	completion: false,
+	memoryMaintenance: null,
 	subAgents: {},
 	resources: null,
 	gitStatus: undefined,
@@ -303,6 +304,7 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 		state.dialogs = snap.dialogs;
 		state.surface = snap.surface;
 		state.completion = snap.flags.completion ? (snap.flags.completionStatus ?? { startedAt: Date.now() }) : false;
+	state.memoryMaintenance = snap.memoryMaintenance ?? null;
 		emit();
 	});
 	return snap;
@@ -715,6 +717,7 @@ function connectEvents() {
 	on("agent_end", () => {});
 	on("agent_settled", () => {});
 	on("completion", (d) => set({ completion: d.active ? { ...d, startedAt: d.startedAt ?? Date.now() } : false }));
+	on("memory_status", (d) => set({ memoryMaintenance: d }));
 	on("run_state", (d) => {
 		if (!state.snap) return;
 		state.snap = { ...state.snap, run: d, active: ["queued", "starting", "running", "waiting", "recovering"].includes(d.state) };

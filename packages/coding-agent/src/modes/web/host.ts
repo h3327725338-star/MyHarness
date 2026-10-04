@@ -838,13 +838,11 @@ export class WebHost {
 					details: sanitizeDetails(event.progress.details),
 				});
 				return;
+			case "auto_memory_status":
+				this.broadcast("memory_status", event.status);
+				return;
 			case "auto_memory_error":
-				this.broadcast("notice", {
-					id: `mem-${Date.now()}`,
-					message: `Auto Memory (${event.operation}) failed: ${event.errorMessage}`,
-					type: "warning",
-					ts: Date.now(),
-				});
+				// Background failures are shown by the quiet maintenance status, not transcript notices.
 				return;
 			case "vision_assistant_start":
 			case "vision_assistant_end":
@@ -1097,9 +1095,7 @@ export class WebHost {
 		let uncommitted = false;
 		if (succeeded && !indeterminateGit) {
 			if (!session.isMirror && session.settingsManager.getAutoMemorySettings().enabled) {
-				this.setCompletionPhase("memory");
-				await session.runAutoMemoryExtraction();
-				this.setCompletionPhase("records");
+				await session.scheduleAutoMemoryMaintenance();
 			}
 			const decisionCheckpoint = session.getGitCheckpoint();
 			if (decisionCheckpoint?.status === "created") {
@@ -1330,6 +1326,7 @@ export class WebHost {
 		return {
 			slot: this.slotId,
 			gitTask: this.gitTask,
+			memoryMaintenance: session.getAutoMemoryMaintenanceStatus(),
 			app: { version: this.version, startedAt: this.startedAt, platform: process.platform },
 			cwd,
 			workspace: workspace
