@@ -3,10 +3,11 @@
 - 规则：
 - 不要仅因为条目较旧就删除它。
 - 不要改变已确认事实的含义。
-- 删除前，确保有效信息存在于保留或更新后的条目中。
+- delete 表示将旧条目归档，不是永久删除；更新前的旧版本也会归档。归档前，确保有效信息存在于保留或更新后的条目中。
+- 不改变记忆的 global/workspace/session 归属，不将对话信息自动提升到其他层。
 - 不要保存或生成任何秘密信息。
 - 最多返回 20 个操作；不需要整理时返回空数组。
 - 最终回复只能包含：
 - <MEMORY_OPERATIONS>
-- {"operations":[{"action":"upsert","id":"existing ID","scope":"global|project","type":"user|feedback|project|reference","name":"short title","description":"one sentence on when it is relevant","content":"memory body"},{"action":"delete","id":"existing ID"}]}
+- {"operations":[{"action":"upsert","id":"existing ID","scope":"global|workspace|session","type":"user|feedback|project|reference","name":"short title","description":"one sentence on when it is relevant","content":"memory body"},{"action":"delete","id":"existing ID"}]}
 - </MEMORY_OPERATIONS>

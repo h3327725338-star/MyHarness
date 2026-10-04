@@ -33,7 +33,10 @@ The project root contains the project configuration and runtime data:
 | `%USERPROFILE%\.myharness\agent\trust.json` | Project trust decisions | User security state; preserve unless the user explicitly asks to reset it |
 | `%USERPROFILE%\.myharness\agent\sessions\` | Legacy flat Session location | Compatibility/migration source only; do not treat it as the current default |
 | `%USERPROFILE%\.myharness\agent\traces\` | Runtime traces | Potentially sensitive diagnostics; redact before sharing |
-| `%USERPROFILE%\.myharness\agent\memory\` | Optional global/project memory and its indexes | User-authored or model-assisted data; preserve and redact before sharing |
+| `%USERPROFILE%\.myharness\agent\memory\` | Legacy memory migration source | Copied once per source Agent directory into the active Data root; originals preserved |
+| `<data>\memory\` | Global active memories, archive, derived index, extraction state and migration records | Shared only within this Data root; user-owned data |
+| `<data>\workspaces\<workspace-id>\memory\` | Workspace active memories, archive and reference index | Shared by this Workspace's conversations |
+| `<data>\workspaces\<workspace-id>\sessions\<session-id>\memory\` | Conversation active memories and archive | Retained when the conversation is deleted, even when artifacts are explicitly deleted |
 | `<project>\.myharness\settings.json` | Project Settings | Project-local configuration; tracked only when intentionally supplied |
 | `<project>\data\workspaces\<workspace-id>\` | Workspace registry, metadata and Session roots | Ignored runtime data; contains user conversations and paths |
 | `<project>\data\workspaces\<workspace-id>\sessions\<session-id>\conversation\` | Session JSONL entries | Primary product Session store; user data, not disposable build output |
@@ -51,6 +54,12 @@ directory, so matching names do not overwrite one another. These are user-owned
 original file bytes; removing a draft attachment only removes its reference, not
 the stored file. Structured Session deletion removes them with the Session data
 directory; they must not be treated as disposable build cache.
+
+## Long-term memory
+
+Memory bodies are Markdown with metadata and are stored once at their owning global, Workspace or Conversation level. Recall uses only active global + current Workspace + current Conversation files. `archive/` is excluded from recall and stores prior versions and consolidated entries; age alone is not an archival rule. Files → Memories provides hierarchy-wide browsing and archive restoration. Restoring first archives any current version and retains the restored archive itself.
+
+All derived indexes, extraction cursors, migration records and pending ownership data live inside the active Data root. Workspace identity is the stable Workspace ID rather than a project-path hash. Old project-path hashes are used only to match legacy files to retained Workspace metadata; ambiguous or unmatched files are copied into `memory/pending/` without becoming global. Old files are not deleted, and migration markers prevent repeat imports. Removing a Workspace or deleting a Chat does not grant permission to remove its memories; its IDs remain attached to retained data. No permanent memory deletion UI/API is currently provided.
 
 ## Managed Worktree test services
 

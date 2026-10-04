@@ -637,6 +637,8 @@ export class AgentSession {
 		this._autoMemory = new AutoMemoryManager({
 			cwd: config.cwd,
 			sessionId: config.sessionManager.getSessionId(),
+			dataRoot: config.sessionManager.getDataRoot(),
+			workspaceId: config.sessionManager.getWorkspaceId(),
 			settingsManager: config.settingsManager,
 			modelRuntime: config.modelRuntime,
 			getMainModel: () => this._mainModelRef(),

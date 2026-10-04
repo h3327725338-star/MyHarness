@@ -27,10 +27,12 @@ export async function deleteSessionFile(
 	const scope = parseSessionDataPath(sessionPath);
 	try {
 		assertDirectTree(target.path);
-		if (target.directory && scope && options.deleteArtifacts !== true) {
-			const hasArtifacts = existsSync(join(target.path, "artifacts"));
+		const hasMemory = target.directory && existsSync(join(target.path, "memory"));
+		if (target.directory && scope && (options.deleteArtifacts !== true || hasMemory)) {
+			const hasArtifacts = options.deleteArtifacts !== true && existsSync(join(target.path, "artifacts"));
 			if (hasArtifacts) preserveArtifactOrigin(scope, sessionPath);
 			for (const entry of readdirSync(target.path)) {
+				if (hasMemory && entry === "memory") continue;
 				if (hasArtifacts && (entry === "artifacts" || entry === "metadata")) continue;
 				await rm(join(target.path, entry), { recursive: true, force: false });
 			}
@@ -39,7 +41,7 @@ export async function deleteSessionFile(
 					if (entry !== "artifacts-origin.json")
 						await rm(join(target.path, "metadata", entry), { recursive: true });
 				}
-			} else await rm(target.path, { recursive: true });
+			} else if (!hasMemory) await rm(target.path, { recursive: true });
 			refreshArtifactIndexes(scope.dataRoot);
 			return { ok: true, method: "unlink" };
 		}

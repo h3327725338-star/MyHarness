@@ -15,7 +15,8 @@
 | `manager/cwd.ts` | 会话记录的工作目录不存在时的检查与提示 |
 | `projection/index.ts` | 从条目树到上下文：`buildSessionContext()`、`buildContextEntries()`、`getLatestCompactionEntry()`、环检测 |
 | `storage/jsonl/index.ts` | JSONL 的解析与容错、文件头读取、追加与重写、会话目录与元数据、列表扫描、搬迁 |
-| `storage/jsonl/file-operations.ts` | `deleteSessionFile()` |
+| `storage/jsonl/file-operations.ts` | `deleteSessionFile()`，删除聊天时保留独立 memory 目录 |
+| `memory/store.ts` | Data 内总层/Workspace/Conversation 记忆、归档、引用索引、迁移和恢复 |
 | `migrations/index.ts` | 条目版本迁移到当前版本 |
 | `migrations/storage.ts` | 旧会话目录迁入数据目录 |
 | `migrations/data-framework.ts` | 会话迁入 `data/workspaces/<workspace-id>/sessions/<session-id>/` 布局 |

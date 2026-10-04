@@ -56,7 +56,7 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 | `startup/` | Web 启动参数、帮助、文件与初始消息输入、浏览器命令和设置表 |
 | `agent/runtime/` | Agent 生命周期、运行时服务与 SDK、会话桥 |
 | `agent/delegation/` | 内部委托 worker、事件解析 |
-| `session/` | Session 格式、JSONL、投影、持久化、锁与 migration；`artifacts/` 管理对话产出、来源保留及可重建的工作区/全局引用索引 |
+| `session/` | Session 格式、JSONL、投影、持久化、锁与 migration；`artifacts/` 管理对话产出、来源保留及可重建的工作区/全局引用索引；`memory/` 管理 Data 内三层长期记忆的存储、归档、索引、恢复和旧目录迁移 |
 | `context/` | 上下文预算与压缩 |
 | `config/` | Settings、路径、Trust 与兼容迁移 |
 | `application/` | 资源加载、Trust、Workspace 及跨领域 use case |
@@ -90,6 +90,8 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 项目 Trust 控制项目配置与扩展。受信任项目 `.myharness/SYSTEM.md` 覆盖全局 `SYSTEM.md`，不受信任则回退全局；`APPEND_SYSTEM.md` 使用相同优先级，不简单合并两边。`AGENTS.md` / `CLAUDE.md` 是独立项目上下文，除非显式关闭，否则不因 Trust 被跳过。
 
 根 `system-prompts/` 面向所有产品用户，不承载仓库自身 CI 与维护规则。仓库开发约定只放根 `AGENTS.md` 及其路由文档。
+
+长期记忆存放在当前 Data root 的总层、Workspace 和 Conversation 的 `memory/`，由稳定 ID 归属；旧 Agent memory 只作为保留的迁移来源。删除聊天或移除工作区不隐式删除记忆，自动替代和更新保留归档。Agent runtime 负责提取/召回编排，Session memory store 负责持久化。
 
 Session、cache、trace、credential、memory、Workspace 和代码智能运行时不属于源码清理范围。存储路径与数据安全见 `docs/STORAGE.md`；不可为了清理入口删除运行时数据。
 

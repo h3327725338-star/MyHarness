@@ -7,6 +7,11 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Memories": "记忆",
+	"Active memories": "当前记忆",
+	"Memory archive": "记忆归档",
+	"Restore memory": "恢复记忆",
+	"Restore this memory? The current version will be archived.": "恢复这条记忆？当前版本会先保存在归档里。",
 	"Restart service": "重启服务",
 	"Restart service?": "重启服务？",
 	"Sending will be temporarily unavailable. Your current draft will be kept.": "重启期间暂时无法发送消息，当前草稿会保留。",

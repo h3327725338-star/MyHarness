@@ -9,6 +9,7 @@ import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { getDataDir } from "../../config/paths/index.ts";
 import { artifactScope, refreshArtifactIndexes, resolveArtifact } from "../../session/artifacts/store.ts";
+import { listMemoryFiles, migrateLegacyMemories, restoreMemoryArchive } from "../../session/memory/store.ts";
 import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
@@ -175,6 +176,31 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		res.setHeader("Content-Type", "application/octet-stream");
 		res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(full))}`);
 		res.end(readFileSync(full));
+	});
+
+	server.route("GET", "/api/memory", async ({ url }) => {
+		const dataRoot = artifactDataRoot();
+		await migrateLegacyMemories(dataRoot);
+		const level = url.searchParams.get("scope") ?? "session";
+		if (!["session", "workspace", "global"].includes(level)) throw new HttpError(400, "Unknown memory scope");
+		const manager = host.session.sessionManager;
+		return {
+			entries: listMemoryFiles(dataRoot).filter(
+				(entry) =>
+					level === "global" ||
+					(entry.workspaceId === manager.getWorkspaceId() &&
+						(level === "workspace" || entry.sessionId === manager.getSessionId())),
+			),
+		};
+	});
+	server.route("POST", "/api/memory/restore", async ({ body }) => {
+		const payload = body as { path?: unknown } | null;
+		if (typeof payload?.path !== "string") throw new HttpError(400, "Expected an archive path");
+		// A restore can replace active text. Do not race a running task or its memory extraction.
+		if (!host.session.isIdle || host.completionActive)
+			throw new HttpError(409, "Wait for the current task to finish");
+		await restoreMemoryArchive(artifactDataRoot(), payload.path);
+		return { ok: true };
 	});
 
 	// Browser uploads retain their original bytes as session-owned context references.

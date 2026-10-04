@@ -151,16 +151,24 @@ Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则�
 
 1. 在 main model 收到新的 user request 前（包括新 session 的第一次 request），通过有边界的本地文本匹配选择相关的已保存 memories。Recall 不会发起 blocking model request；
 2. 将这些 memories 作为 hidden、low-priority context 添加。它们不能覆盖 system、global、project 或当前 user instructions，也不会授予 tool permissions；
-3. Task 的 post-processing 完成后，发起一次 tool-free structured model request，处理最终的 conversation delta，并在发布 main AI 的 final text 前等待结果。该 request 会提取持久的 user preferences、corrections、已验证的 project facts 和有用的 references；
-4. 至少存在五个不同 sessions，且距离上次 consolidation 已经过 24 小时后，请选中的 model 合并重复或过长的 memories。
+3. Task 的 post-processing 完成后，发起一次 tool-free structured model request，处理最终的 conversation delta，并在发布 main AI 的 final text 前等待结果。该 request 会提取持久的 user preferences、corrections、project facts、conversation-specific information 和有用的 references；
+4. 当前 Workspace 至少存在五个不同 sessions，且距离上次 consolidation 已经过 24 小时后，请选中的 model 合并重复或过长的 memories。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。
 
 选中的 model 用于 extraction 和 consolidation，不用于同步 recall step。Extraction 会收到有边界的 conversation delta 和 memory manifest，但没有 project tools，因此不能独立检查或修改项目。启用该功能会将 conversation content 发送给选中的 model，并将 final-text publication 延迟到 request 完成，可能产生 model usage。如果 extraction 失败，MyHarness 会报告 warning 并释放 final response，不会无限期阻塞。Automatic memory 只适用于 persisted sessions；`--no-session` runs 不会读写 long-term memory。
 
 Memory Markdown files 是 source of truth：
 
-- Global preferences 和 feedback：`~/.myharness/agent/memory/global/*.md`；
-- Project-specific memory：`~/.myharness/agent/memory/projects/<project-hash>/*.md`；
-- Derived index 和 extraction state：`~/.myharness/agent/memory/index.json` 与 `state.json`。
+- 当前 Data 内跨工作区共享的 Global memory：`<data>/memory/*.md`；
+- Workspace memory：`<data>/workspaces/<workspace-id>/memory/*.md`；
+- Conversation memory：`<data>/workspaces/<workspace-id>/sessions/<session-id>/memory/*.md`；
+- 每层的 `archive/` 保存更新前或整理替代的旧版本，默认不参与 recall；
+- 全局引用索引和 extraction state：`<data>/memory/index.json` 与 `state.json`，Workspace 的 `memory/index.json` 汇总自己的记忆和对话记忆，不复制正文。
+
+Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Markdown，不读取兄弟对话、其他工作区、归档或待归属记忆。Scope 为 `global|workspace|session`；旧模型输出的 `project` scope 作为 Workspace 的兼容别名。没有 Workspace 的持久化对话使用现有 `unbound` 容器；custom/legacy flat Session 没有 Workspace identity 时也使用该容器及当前 Data root。
+
+首次读取/提取或打开 Files → Memories 时，将旧 Agent memory 复制到当前 Data；Global 进入总层，旧 project hash 根据保留的 Workspace metadata rootPath 匹配。无法唯一匹配的保存在 `<data>/memory/pending/`，不参与 recall；旧 index/state 保存到 `memory/legacy/` 作为迁移记录，不沿用旧 project consolidation 分组。每个来源 Agent directory 有独立迁移标记，防止重复导入；旧文件不会删除。迁移之后只在新 Data 中正常读写。
+
+删除 Chat（包括勾选删除产出）仍保留其 `memory/`；移除 Workspace 不删除记忆，保留原 ID 归属。Files → Memories 可按当前 Chat、Workspace、所有 Workspace 汇总查看 active/归档，包括来源已删除或 Workspace 已取消登记的数据；恢复归档前保存当前版本，恢复操作不删除原归档。当前没有永久删除记忆的 UI/API；不会因自动整理或删除其他数据而隐式永久删除。
 
 关闭该 setting 会停止 extraction 和 recall，但不会删除已有 memory files。写入前，MyHarness 会拒绝 private keys，并 redacts 常见的 API-key、token、password、secret 和 Bearer credential patterns。这是 defensive filter，不能保证检测出所有可能的 secret formats。
 

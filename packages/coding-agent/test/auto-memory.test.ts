@@ -15,7 +15,8 @@ import type { ModelRuntime } from "../src/providers/runtime/index.ts";
 import type { SessionEntry } from "../src/session/manager/index.ts";
 
 describe("auto memory", () => {
-	const testRoot = join(tmpdir(), "myharness-auto-memory-tests");
+	const testRoot = join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "myharness-auto-memory-tests");
+	const dataRoot = join(testRoot, "data");
 
 	afterEach(() => {
 		rmSync(testRoot, { recursive: true, force: true });
@@ -28,12 +29,12 @@ describe("auto memory", () => {
 		mkdirSync(firstProject, { recursive: true });
 		mkdirSync(secondProject, { recursive: true });
 
-		const first = getAutoMemoryPaths(firstProject, agentDir);
-		const second = getAutoMemoryPaths(secondProject, agentDir);
+		const first = getAutoMemoryPaths(firstProject, agentDir, { dataRoot, workspaceId: "first", sessionId: "one" });
+		const second = getAutoMemoryPaths(secondProject, agentDir, { dataRoot, workspaceId: "second", sessionId: "two" });
 
 		expect(first.globalDir).toBe(second.globalDir);
 		expect(first.projectDir).not.toBe(second.projectDir);
-		expect(first.projectKey).not.toBe(second.projectKey);
+		expect(first.workspaceId).not.toBe(second.workspaceId);
 	});
 
 	it("accepts tagged, fenced, and direct structured memory operations", () => {
@@ -133,6 +134,8 @@ describe("auto memory", () => {
 		const extractor = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "session-one",
+			dataRoot,
+			workspaceId: "project",
 			settingsManager,
 			persisted: true,
 			agentDir,
@@ -141,7 +144,11 @@ describe("auto memory", () => {
 		extractor.scheduleExtraction(entries);
 		await extractor.waitForBackgroundTasks();
 
-		const paths = getAutoMemoryPaths(projectDir, agentDir);
+		const paths = getAutoMemoryPaths(projectDir, agentDir, {
+			dataRoot,
+			workspaceId: "project",
+			sessionId: "session-one",
+		});
 		expect(existsSync(join(paths.globalDir, "source-first.md"))).toBe(true);
 		expect(existsSync(join(paths.projectDir, "project-language.md"))).toBe(true);
 		expect(readFileSync(join(paths.globalDir, "source-first.md"), "utf8")).toContain("先检查真实源码");
@@ -150,6 +157,8 @@ describe("auto memory", () => {
 		const nextSession = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "session-two",
+			dataRoot,
+			workspaceId: "project",
 			settingsManager,
 			persisted: true,
 			agentDir,
@@ -168,6 +177,7 @@ describe("auto memory", () => {
 		const extractor = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "failed-session",
+			dataRoot,
 			settingsManager: SettingsManager.inMemory({
 				autoMemory: {
 					enabled: true,
@@ -206,6 +216,7 @@ describe("auto memory", () => {
 		const extractor = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "observer-failure-session",
+			dataRoot,
 			settingsManager: SettingsManager.inMemory({
 				autoMemory: {
 					enabled: true,
@@ -246,6 +257,7 @@ describe("auto memory", () => {
 		const extractor = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "disposed-session",
+			dataRoot,
 			settingsManager: SettingsManager.inMemory({
 				autoMemory: {
 					enabled: true,
@@ -281,7 +293,11 @@ describe("auto memory", () => {
 		release?.();
 		expect(await extraction).toBe(false);
 		await extractor.waitForBackgroundTasks();
-		const paths = getAutoMemoryPaths(projectDir, join(testRoot, "disposed-agent"));
+		const paths = getAutoMemoryPaths(projectDir, join(testRoot, "disposed-agent"), {
+			dataRoot,
+			workspaceId: "unbound",
+			sessionId: "disposed-session",
+		});
 		expect(existsSync(join(paths.globalDir, "disposed-memory.md"))).toBe(false);
 	});
 
@@ -310,6 +326,7 @@ describe("auto memory", () => {
 		const extractor = new AutoMemoryManager({
 			cwd: projectDir,
 			sessionId: "direct-session",
+			dataRoot,
 			settingsManager: SettingsManager.inMemory({
 				autoMemory: {
 					enabled: true,

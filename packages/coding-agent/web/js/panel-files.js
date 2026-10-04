@@ -1,6 +1,6 @@
 // Files panel: workspace tree and viewer, with rendered editing for Markdown only.
 import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, Collapse, VirtualRows } from "./ui.js";
-import { api, state, useStore } from "./store.js";
+import { api, post, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
@@ -23,6 +23,32 @@ function ArtifactsBrowser() {
 		<div class="panel-scroll">${error ? html`<div class="notice danger">${error}</div>` : entries.length ? entries.map((entry) => html`<div class="col"><a class="tree-row" href=${`/api/artifacts/download?path=${encodeURIComponent(entry.path)}&slot=${encodeURIComponent(state.activeSlot || "")}`} download>${entry.name} · ${fmtBytes(entry.size)}</a><small class="dim">${entry.workspaceId} / ${entry.sessionId}${entry.conversationDeleted ? ` · ${t("Source chat deleted")}` : ""}</small></div>`) : html`<div class="empty">${t("No artifacts")}</div>`}</div></div>`;
 }
 
+function MemoryBrowser() {
+	const sessionId = useStore((s) => s.snap?.session?.id);
+	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
+	const [scope, setScope] = useState("session");
+	const [archived, setArchived] = useState(false);
+	const [entries, setEntries] = useState([]);
+	const [error, setError] = useState("");
+	const [restoring, setRestoring] = useState(false);
+	const load = async () => {
+		try { const result = await api(`/api/memory?scope=${scope}`); setEntries(result.entries); setError(""); }
+		catch (e) { setError(e.message); }
+	};
+	useEffect(() => { let live = true; api(`/api/memory?scope=${scope}`).then((result) => { if (live) { setEntries(result.entries); setError(""); } }).catch((e) => { if (live) setError(e.message); }); return () => { live = false; }; }, [scope, sessionId, lastRunId]);
+	const restore = async (entry) => {
+		if (restoring || !window.confirm(t("Restore this memory? The current version will be archived."))) return;
+		setRestoring(true);
+		try { await post("/api/memory/restore", { path: entry.path }); await load(); }
+		catch (e) { setError(e.message); }
+		finally { setRestoring(false); }
+	};
+	const visible = entries.filter((entry) => entry.archived === archived);
+	return html`<div class="col"><div class="panel-toolbar">${[["session", "This chat"], ["workspace", "This workspace"], ["global", "All workspaces"]].map(([id, label]) => html`<button class=${`btn ${scope === id ? "primary" : ""}`} onClick=${() => setScope(id)}>${t(label)}</button>`)}<button class="btn" onClick=${load}>${t("Reload")}</button></div>
+		<div class="panel-toolbar"><button class=${`btn ${!archived ? "primary" : ""}`} onClick=${() => setArchived(false)}>${t("Active memories")}</button><button class=${`btn ${archived ? "primary" : ""}`} onClick=${() => setArchived(true)}>${t("Memory archive")}</button></div>
+		<div class="panel-scroll">${error ? html`<div class="notice danger">${error}</div>` : null}${visible.map((entry) => html`<details class="col"><summary>${entry.name}</summary><small class="dim">${entry.scope} · ${entry.workspaceId || ""} / ${entry.sessionId || ""}<br />${entry.path}</small><pre class="wrap">${entry.content}</pre>${entry.archived && entry.scope !== "pending" ? html`<button class="btn" disabled=${restoring} onClick=${() => restore(entry)}>${t("Restore memory")}</button>` : null}</details>`)}</div></div>`;
+}
+
 const ST = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 
 const TreeRow = memo(function TreeRow({ entry, depth, expanded, onToggle, status, task, onOpen, isCurrent }) {
@@ -41,6 +67,7 @@ export function FilesPanel() {
 	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
 	const sessionId = useStore((s) => s.snap?.session?.id);
 	const [artifactMode, setArtifactMode] = useState(false);
+	const [memoryMode, setMemoryMode] = useState(false);
 	const [tree, setTree] = useState({}); // dir -> entries
 	const [expanded, setExpanded] = useState({ "": true });
 	const [statusMap, setStatusMap] = useState({});
@@ -139,8 +166,8 @@ export function FilesPanel() {
 	};
 
 	return html`<div class="files-panel">
-		<div class="panel-toolbar"><button class=${`btn ${!artifactMode ? "primary" : ""}`} onClick=${() => setArtifactMode(false)}>${t("Project files")}</button><button class=${`btn ${artifactMode ? "primary" : ""}`} onClick=${() => setArtifactMode(true)}>${t("Artifacts")}</button></div>
-		${artifactMode ? html`<${ArtifactsBrowser} />` : html`<div class=${`files-tree ${viewing ? "hidden" : ""}`}>
+		<div class="panel-toolbar"><button class=${`btn ${!artifactMode && !memoryMode ? "primary" : ""}`} onClick=${() => { setArtifactMode(false); setMemoryMode(false); }}>${t("Project files")}</button><button class=${`btn ${artifactMode ? "primary" : ""}`} onClick=${() => { setArtifactMode(true); setMemoryMode(false); }}>${t("Artifacts")}</button><button class=${`btn ${memoryMode ? "primary" : ""}`} onClick=${() => { setMemoryMode(true); setArtifactMode(false); }}>${t("Memories")}</button></div>
+		${memoryMode ? html`<${MemoryBrowser} />` : artifactMode ? html`<${ArtifactsBrowser} />` : html`<div class=${`files-tree ${viewing ? "hidden" : ""}`}>
 			<div class="panel-toolbar">
 				<div class="pop-search grow"><${Icon} name="search" size=${14} /><input placeholder=${t("Find file…")} value=${query} onInput=${(e) => setQuery(e.target.value)} /></div>
 				<button class=${`icon-btn sm ${showIgnored ? "active" : ""}`} title=${t("Show ignored files")} aria-pressed=${showIgnored} onClick=${() => setShowIgnored(!showIgnored)}><${Icon} name="eye" size=${15} /></button>

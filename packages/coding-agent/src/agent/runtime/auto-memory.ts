@@ -2,19 +2,28 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { contentText } from "@myharness/ai";
-import lockfile from "proper-lockfile";
 import { stringify as stringifyYaml } from "yaml";
+import { getDataDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import type { AutoMemorySettings, SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import { runGitSync } from "../../git/repository/command.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
+import { assertDirectPath } from "../../session/artifacts/store.ts";
+import {
+	archiveMemoryFile,
+	getMemoryPaths,
+	migrateLegacyMemories,
+	refreshMemoryIndexes,
+	withMemoryLock,
+	writeMemoryFile,
+} from "../../session/memory/store.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import type { CustomMessage } from "./messages.ts";
 
-export type MemoryScope = "global" | "project";
+export type MemoryScope = "global" | "workspace" | "session" | "project";
 export type MemoryType = "user" | "feedback" | "project" | "reference";
 
 export interface MemoryEntry {
@@ -27,6 +36,8 @@ export interface MemoryEntry {
 	createdAt: string;
 	updatedAt: string;
 	filePath: string;
+	workspaceId?: string;
+	sessionId?: string;
 }
 
 export interface MemoryOperation {
@@ -49,6 +60,10 @@ interface AutoMemoryPaths {
 	root: string;
 	globalDir: string;
 	projectDir: string;
+	sessionDir: string;
+	dataRoot: string;
+	workspaceId: string;
+	sessionId: string;
 	indexPath: string;
 	statePath: string;
 	projectRoot: string;
@@ -64,6 +79,8 @@ interface AutoMemoryManagerOptions {
 	getMainModel?: () => MainModelRef | undefined;
 	persisted: boolean;
 	agentDir?: string;
+	dataRoot?: string;
+	workspaceId?: string;
 	onError?: (operation: "recall" | "extract" | "consolidate", error: Error) => void;
 	modelRunner?: AutoMemoryModelRunner;
 }
@@ -87,7 +104,7 @@ const CONSOLIDATION_MIN_SESSIONS = 5;
 const CONSOLIDATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const AUTO_MEMORY_TIMEOUT_MS = 5 * 60 * 1000;
 const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
-const MEMORY_SCOPES = new Set<MemoryScope>(["global", "project"]);
+const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
 
 const MEMORY_CONTEXT_RULES = loadSystemPrompt("memory/recalled-context.md");
 
@@ -112,17 +129,23 @@ function resolveProjectRoot(cwd: string): string {
 	return path.resolve(cwd);
 }
 
-export function getAutoMemoryPaths(cwd: string, agentDir = getAgentDir()): AutoMemoryPaths {
+export function getAutoMemoryPaths(
+	cwd: string,
+	agentDir = getAgentDir(),
+	location?: { dataRoot: string; workspaceId: string; sessionId: string },
+): AutoMemoryPaths {
 	const projectRoot = resolveProjectRoot(cwd);
 	const normalizedRoot = process.platform === "win32" ? projectRoot.toLowerCase() : projectRoot;
 	const projectKey = createHash("sha256").update(normalizedRoot).digest("hex").slice(0, 20);
-	const root = path.join(agentDir, "memory");
+	const resolved = location ?? { dataRoot: getDataDir(), workspaceId: UNBOUND_WORKSPACE_ID, sessionId: "legacy" };
+	void agentDir; // Retained for callers of the former path API; no data is stored here.
+	const paths = getMemoryPaths(resolved);
 	return {
-		root,
-		globalDir: path.join(root, "global"),
-		projectDir: path.join(root, "projects", projectKey),
-		indexPath: path.join(root, "index.json"),
-		statePath: path.join(root, "state.json"),
+		...paths,
+		projectDir: paths.workspaceDir,
+		dataRoot: resolved.dataRoot,
+		workspaceId: resolved.workspaceId,
+		sessionId: resolved.sessionId,
 		projectRoot,
 		projectKey,
 	};
@@ -168,7 +191,7 @@ function slugify(value: string): string {
 }
 
 function isSafeMemoryId(id: string): boolean {
-	return /^(global|project)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
+	return /^(global|workspace|session|project)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
 }
 
 function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEntry | undefined {
@@ -202,6 +225,8 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 			updatedAt:
 				typeof parsed.frontmatter.updatedAt === "string" ? parsed.frontmatter.updatedAt : new Date(0).toISOString(),
 			filePath,
+			workspaceId: typeof parsed.frontmatter.workspaceId === "string" ? parsed.frontmatter.workspaceId : undefined,
+			sessionId: typeof parsed.frontmatter.sessionId === "string" ? parsed.frontmatter.sessionId : undefined,
 		};
 	} catch {
 		return undefined;
@@ -209,11 +234,13 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 }
 
 function scanMemoryDirectory(directory: string, scope: MemoryScope): MemoryEntry[] {
+	assertDirectPath(directory);
 	if (!fs.existsSync(directory)) return [];
 	const entries: MemoryEntry[] = [];
 	for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
 		if (entries.length >= MEMORY_FILE_LIMIT) break;
 		if (!item.isFile() || !item.name.endsWith(".md")) continue;
+		assertDirectPath(path.join(directory, item.name));
 		const entry = parseMemoryFile(path.join(directory, item.name), scope);
 		if (entry) entries.push(entry);
 	}
@@ -227,22 +254,12 @@ function serializeMemory(entry: MemoryEntry): string {
 		description: entry.description,
 		type: entry.type,
 		scope: entry.scope,
+		workspaceId: entry.workspaceId,
+		sessionId: entry.sessionId,
 		createdAt: entry.createdAt,
 		updatedAt: entry.updatedAt,
 	}).trim();
 	return `---\n${frontmatter}\n---\n\n${entry.content}\n`;
-}
-
-async function atomicWrite(filePath: string, content: string): Promise<void> {
-	await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-	const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-	await fs.promises.writeFile(tempPath, content, { encoding: "utf8", mode: 0o600 });
-	try {
-		await fs.promises.rename(tempPath, filePath);
-	} catch (error) {
-		await fs.promises.rm(tempPath, { force: true });
-		throw error;
-	}
 }
 
 function readState(statePath: string): MemoryState {
@@ -414,7 +431,11 @@ export class AutoMemoryManager {
 	}
 
 	private get paths(): AutoMemoryPaths {
-		this.initializedPaths ??= getAutoMemoryPaths(this.options.cwd, this.options.agentDir);
+		this.initializedPaths ??= getAutoMemoryPaths(this.options.cwd, this.options.agentDir, {
+			dataRoot: this.options.dataRoot ?? getDataDir(),
+			workspaceId: this.options.workspaceId ?? UNBOUND_WORKSPACE_ID,
+			sessionId: this.options.sessionId,
+		});
 		return this.initializedPaths;
 	}
 
@@ -511,7 +532,8 @@ export class AutoMemoryManager {
 	private loadEntries(): MemoryEntry[] {
 		return [
 			...scanMemoryDirectory(this.paths.globalDir, "global"),
-			...scanMemoryDirectory(this.paths.projectDir, "project"),
+			...scanMemoryDirectory(this.paths.projectDir, "workspace"),
+			...scanMemoryDirectory(this.paths.sessionDir, "session"),
 		]
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 			.slice(0, MEMORY_FILE_LIMIT);
@@ -523,6 +545,7 @@ export class AutoMemoryManager {
 		if (!settings || this.recalledBytes >= RECALL_SESSION_MAX_BYTES) return undefined;
 		let candidates: MemoryEntry[];
 		try {
+			await migrateLegacyMemories(this.paths.dataRoot, this.options.agentDir);
 			candidates = this.loadEntries().filter((entry) => !this.recalledIds.has(entry.id));
 		} catch (error) {
 			this.reportError("recall", error);
@@ -608,68 +631,15 @@ export class AutoMemoryManager {
 
 	private async withLock<T>(fn: () => Promise<T>): Promise<T> {
 		this.assertActive();
-		await fs.promises.mkdir(this.paths.root, { recursive: true });
-		const release = await lockfile.lock(this.paths.root, {
-			realpath: false,
-			retries: { retries: 5, minTimeout: 20, maxTimeout: 100 },
-		});
-		try {
+		return withMemoryLock(this.paths.dataRoot, async () => {
 			this.assertActive();
-			return await fn();
-		} finally {
-			await release();
-		}
+			return fn();
+		});
 	}
 
 	private async writeIndex(): Promise<void> {
 		this.assertActive();
-		const indexedEntries: Array<Record<string, unknown>> = [];
-		for (const entry of scanMemoryDirectory(this.paths.globalDir, "global")) {
-			const { filePath, content: _content, ...metadata } = entry;
-			indexedEntries.push({
-				...metadata,
-				path: path.relative(this.paths.root, filePath).replace(/\\/g, "/"),
-			});
-		}
-		const projectsDir = path.join(this.paths.root, "projects");
-		if (fs.existsSync(projectsDir)) {
-			for (const item of fs.readdirSync(projectsDir, { withFileTypes: true })) {
-				if (!item.isDirectory()) continue;
-				const directory = path.join(projectsDir, item.name);
-				for (const entry of scanMemoryDirectory(directory, "project")) {
-					const { filePath, content: _content, ...metadata } = entry;
-					indexedEntries.push({
-						...metadata,
-						projectKey: item.name,
-						path: path.relative(this.paths.root, filePath).replace(/\\/g, "/"),
-					});
-				}
-			}
-		}
-		let projectRoots: Record<string, string> = {};
-		try {
-			const previous = JSON.parse(fs.readFileSync(this.paths.indexPath, "utf8")) as {
-				projectRoots?: Record<string, string>;
-			};
-			if (previous.projectRoots && typeof previous.projectRoots === "object") {
-				projectRoots = previous.projectRoots;
-			}
-		} catch {
-			// The index is derived data and can be rebuilt from Markdown files.
-		}
-		projectRoots[this.paths.projectKey] = this.paths.projectRoot;
-		await atomicWrite(
-			this.paths.indexPath,
-			`${JSON.stringify(
-				{
-					version: 1,
-					projectRoots,
-					entries: indexedEntries.slice(0, MEMORY_FILE_LIMIT),
-				},
-				null,
-				2,
-			)}\n`,
-		);
+		await refreshMemoryIndexes(this.paths.dataRoot);
 	}
 
 	private async applyOperations(operations: MemoryOperation[], allowDelete: boolean): Promise<void> {
@@ -683,7 +653,8 @@ export class AutoMemoryManager {
 					if (!operation.id || !isSafeMemoryId(operation.id)) continue;
 					const target = existing.get(operation.id);
 					if (!target) continue;
-					await fs.promises.rm(target.filePath, { force: true });
+					await archiveMemoryFile(target.filePath, "consolidated");
+					await fs.promises.unlink(target.filePath);
 					existing.delete(operation.id);
 					continue;
 				}
@@ -699,7 +670,9 @@ export class AutoMemoryManager {
 				) {
 					continue;
 				}
-				const scope = operation.scope;
+				const scope = operation.scope === "project" ? "workspace" : operation.scope;
+				// Consolidation must not promote conversation information into a broader scope.
+				if (allowDelete && (!operation.id || existing.get(operation.id)?.scope !== scope)) continue;
 				if (operation.id && (!isSafeMemoryId(operation.id) || !operation.id.startsWith(`${scope}/`))) {
 					continue;
 				}
@@ -725,7 +698,12 @@ export class AutoMemoryManager {
 					continue;
 				}
 				if (!name || !description || !content) continue;
-				const directory = scope === "global" ? this.paths.globalDir : this.paths.projectDir;
+				const directory =
+					scope === "global"
+						? this.paths.globalDir
+						: scope === "session"
+							? this.paths.sessionDir
+							: this.paths.projectDir;
 				const filePath = path.join(directory, `${id.slice(scope.length + 1)}.md`);
 				const entry: MemoryEntry = {
 					id,
@@ -737,10 +715,13 @@ export class AutoMemoryManager {
 					createdAt: previous?.createdAt ?? now,
 					updatedAt: now,
 					filePath,
+					workspaceId: scope === "global" ? undefined : this.paths.workspaceId,
+					sessionId: scope === "session" ? this.paths.sessionId : undefined,
 				};
 				this.assertActive();
-				await atomicWrite(filePath, serializeMemory(entry));
-				if (previous && previous.filePath !== filePath) await fs.promises.rm(previous.filePath, { force: true });
+				if (previous) await archiveMemoryFile(previous.filePath, "updated");
+				await writeMemoryFile(filePath, serializeMemory(entry));
+				if (previous && previous.filePath !== filePath) await fs.promises.unlink(previous.filePath);
 				existing.set(id, entry);
 			}
 			await this.writeIndex();
@@ -757,8 +738,8 @@ export class AutoMemoryManager {
 				.sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt))
 				.slice(0, 100);
 			state.sessions = Object.fromEntries(sessionEntries);
-			const consolidation = state.consolidation[this.paths.projectKey] ?? { sessionIds: [] };
-			state.consolidation[this.paths.projectKey] = consolidation;
+			const consolidation = state.consolidation[this.paths.workspaceId] ?? { sessionIds: [] };
+			state.consolidation[this.paths.workspaceId] = consolidation;
 			if (!consolidation.sessionIds.includes(this.options.sessionId)) {
 				consolidation.sessionIds.push(this.options.sessionId);
 			}
@@ -772,7 +753,7 @@ export class AutoMemoryManager {
 				consolidation.sessionIds.length >= CONSOLIDATION_MIN_SESSIONS &&
 				Date.now() - lastAt >= CONSOLIDATION_INTERVAL_MS;
 			this.assertActive();
-			await atomicWrite(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
+			await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
 			return { shouldConsolidate };
 		});
 	}
@@ -782,6 +763,7 @@ export class AutoMemoryManager {
 		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
 	): Promise<void> {
 		this.assertActive();
+		await migrateLegacyMemories(this.paths.dataRoot, this.options.agentDir);
 		const state = readState(this.paths.statePath);
 		const cursor = state.sessions[this.options.sessionId]?.lastEntryId;
 		const transcript = formatTranscript(entries, cursor);
@@ -792,7 +774,7 @@ export class AutoMemoryManager {
 			settings,
 			systemPrompt: MEMORY_EXTRACTOR_PROMPT,
 			task: [
-				`Current project root: ${this.paths.projectRoot}`,
+				`Current project root: ${this.paths.projectRoot}\nWorkspace ID: ${this.paths.workspaceId}\nSession ID: ${this.paths.sessionId}`,
 				`Existing memory list:\n${formatManifest(existing)}`,
 				`New conversation since last extraction:\n${transcript.text}`,
 			].join("\n\n"),
