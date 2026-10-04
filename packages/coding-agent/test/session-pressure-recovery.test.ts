@@ -121,7 +121,15 @@ async function spawnWorker(
 	});
 	const readyPath = join(root, `${id}.ready.json`);
 	await waitForFile(readyPath);
-	const ready = JSON.parse(readFileSync(readyPath, "utf8")) as { file: string; sessionDir: string };
+	// The file appears before its content is fully written, so wait until it parses.
+	let ready: { file: string; sessionDir: string } | undefined;
+	for (const deadline = Date.now() + 10_000; !ready; await delay(20)) {
+		try {
+			ready = JSON.parse(readFileSync(readyPath, "utf8")) as { file: string; sessionDir: string };
+		} catch (error) {
+			if (Date.now() >= deadline) throw error;
+		}
+	}
 	return { child, file: ready.file, sessionDir: ready.sessionDir };
 }
 
