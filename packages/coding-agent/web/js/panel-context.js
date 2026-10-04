@@ -72,6 +72,10 @@ function TreeView({ snap }) {
 export function ContextPanel() {
 	const snap = useStore((s) => s.snap);
 	const resources = useStore((s) => s.resources);
+	const restarting = useStore((s) => s.restarting);
+	const restartPhase = useStore((s) => s.restartPhase);
+	const restartError = useStore((s) => s.restartError);
+	const restartDetail = { requesting: t("Requesting service restart"), waiting: t("Waiting for the service to reconnect"), starting: t("Starting the service"), restoring: t("Restoring the conversation") }[restartPhase];
 	// The totals come from the store: loaded once per session here, then kept current by the server's `usage` events.
 	const stats = useStore((s) => s.stats);
 	useEffect(() => {
@@ -134,6 +138,9 @@ export function ContextPanel() {
 			${resources?.contextFiles.map((f) => html`<div class="res-row" key=${f.path}><span class="truncate grow mono" title=${f.path}>${f.path}</span><span class="dim">${t("{fmtTokens} chars", { fmtTokens: fmtTokens(f.chars) })}</span></div>`)}
 			${resources && !resources.contextFiles.length ? html`<div class="dim">${t("No AGENTS.md / CLAUDE.md files found.")}</div>` : null}
 		<//>
-		<div class="ctx-foot"><button class="btn sm" onClick=${restartService} disabled=${snap.active || state.restarting}><${Icon} name="refresh" size=${13} />${t("Restart service")}</button></div>
+		<div class="ctx-foot service-restart" aria-busy=${restarting}>
+			<button class="btn sm" onClick=${restartService} disabled=${snap.active || restarting}>${restarting ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${13} />`}${restarting ? t("Restarting service…") : restartError ? t("Retry") : t("Restart service")}</button>
+			<div class=${`service-restart-detail ${restartError ? "c-danger" : "dim"}`} role=${restartError ? "alert" : "status"} aria-live="polite">${restartError || (restarting ? restartDetail : "")}</div>
+		</div>
 	</div>`;
 }

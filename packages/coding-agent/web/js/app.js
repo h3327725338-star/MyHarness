@@ -209,6 +209,7 @@ export function App() {
 	const view = useStore((s) => s.view);
 	const connected = useStore((s) => s.connected);
 	const everConnected = useStore((s) => s.everConnected);
+	const restarting = useStore((s) => s.restarting);
 	const shutdown = useStore((s) => s.shutdown);
 	useShortcuts();
 	// The panel stays mounted while it slides out, and only turns "open" a frame after it is mounted, so both directions animate.
@@ -222,7 +223,7 @@ export function App() {
 
 
 	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;
-	if (boot.phase !== "ready" || !snap) {
+	if ((!restarting && boot.phase !== "ready") || !snap) {
 		return html`<div class="splash"><div class="splash-card">
 			${boot.phase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${boot.detail}</div>` : html`<${Spinner} /><div>${boot.phase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
 		</div>${boot.dialogs?.length ? html`<${BootDialogs} dialogs=${boot.dialogs} />` : null}</div>`;
@@ -231,7 +232,7 @@ export function App() {
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
-			${state.restarting || (everConnected && !connected) ? html`<div class="conn-banner" role="alert">${state.restarting ? t("Restarting service…") : t("Connection to the local server lost — reconnecting…")}</div>` : null}
+			${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null}
 			<${Header} />
 			<${Transcript} />
 			<${Composer} />

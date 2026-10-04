@@ -254,6 +254,8 @@ export function Composer() {
 	const items = useStore((s) => s.items);
 	const gitStatus = useStore((s) => s.gitStatus);
 	const activeSlot = useStore((s) => s.activeSlot);
+	const restarting = useStore((s) => s.restarting);
+	const connected = useStore((s) => s.connected);
 	const sessionId = snap?.session?.id;
 	const active = !!snap?.active;
 	// The branch / worktree chips above the input: read when the folder or the chat on screen changes and after each run.
@@ -488,6 +490,7 @@ export function Composer() {
 	}, []);
 
 	const send = async (mode) => {
+		if (state.restarting || !state.connected) return;
 		const references = images.filter((item) => item.path);
 		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${text ? `\n\n${text}` : ""}` : text;
 		if ((!value.trim() && images.length === 0) || sending || importing.current) return;
@@ -547,7 +550,7 @@ export function Composer() {
 		}
 	};
 
-	const canSend = (text.trim() || images.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
+	const canSend = !restarting && connected && (text.trim() || images.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0;
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 

@@ -75,6 +75,8 @@ export const state = {
 	everConnected: false,
 	shutdown: false,
 	restarting: false,
+	restartPhase: null,
+	restartError: null,
 	slots: [],
 	activeSlot: null,
 	/** Session file of a chat that was clicked in the sidebar and is still being opened (marked there at once). */

@@ -131,6 +131,9 @@
 /* Buttons under the content of a section, and under the last section. */
 .ctx-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .ctx-foot { display: flex; align-items: center; gap: 8px; padding: 10px var(--pad-panel) 0; }
+.service-restart { flex-direction: column; align-items: flex-start; }
+.service-restart > .btn { min-width: 120px; }
+.service-restart-detail { min-height: 2.6em; font-size: var(--fs-sm); line-height: 1.3; overflow-wrap: anywhere; }
 .kv-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
 .kv > span:nth-child(odd) { color: var(--text-3); white-space: nowrap; }

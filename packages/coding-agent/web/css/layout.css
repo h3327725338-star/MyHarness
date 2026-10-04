@@ -102,7 +102,7 @@
 
 .splash { height: 100%; display: grid; place-items: center; color: var(--text-3); }
 .splash-card { width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
-.conn-banner { position: absolute; top: 0; left: 0; right: 0; z-index: 70; padding: 6px 12px; text-align: center; font-size: var(--fs-sm); background: var(--warn-soft); color: var(--warn); border-bottom: 1px solid var(--border); }
+.conn-banner { flex: 0 0 auto; padding: 6px 12px; text-align: center; font-size: var(--fs-sm); background: var(--warn-soft); color: var(--warn); border-bottom: 1px solid var(--border); }
 
 .panel[data-w="xs"] .tab-label, .panel[data-w="s"] .tab-label { max-width: 0; opacity: 0; }
 .panel[data-w="xs"] .tab, .panel[data-w="s"] .tab { padding: 0 9px; gap: 0; }

@@ -8,10 +8,16 @@
 
 export const zhCN = {
 	"Restart service": "重启服务",
+	"Restart service?": "重启服务？",
+	"Sending will be temporarily unavailable. Your current draft will be kept.": "重启期间暂时无法发送消息，当前草稿会保留。",
+	"Requesting service restart": "正在请求重启服务",
+	"Waiting for the service to reconnect": "等待服务重新连接",
+	"Starting the service": "正在启动服务",
+	"Restoring the conversation": "正在恢复对话",
 	"Restarting service…": "正在重启服务…",
 	"Service restarted successfully.": "服务重启成功。",
 	"Service restart failed.": "服务重启失败。",
-	"The service restarted, but the original chat could not be restored.": "服务已重启，但未能恢复原会话。",
+	"The service restarted, but the original chat could not be restored.": "服务已重启，但未能恢复原对话。",
 	"Service restart timed out. Start MyHarness again to reconnect.": "服务重启超时，请重新启动 MyHarness 后连接。",
 	"Copy": "副本",
 	"Main": "主版本",
