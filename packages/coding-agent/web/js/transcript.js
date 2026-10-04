@@ -351,7 +351,7 @@ function UserMessage({ item, turn }) {
 			${item.command ? html`<div class="chip-line"><span class="badge accent">/${item.command.name}</span></div>` : null}
 			${item.skill ? html`<div class="chip-line"><span class="badge accent">${t("skill: {name}", { name: item.skill.name })}</span></div>` : null}
 			${item.images?.length ? html`<div class="user-images">${item.images.map((img, i) => html`<img key=${i} src=${`data:${img.mimeType};base64,${img.data}`} alt=${t("attached image")} />`)}</div>` : null}
-			${item.text ? html`<${Markdown} text=${item.text} class="user-text" />` : null}
+			${item.text ? html`<${Markdown} text=${item.text} class="user-text" breaks=${true} />` : null}
 		</div>
 		<div class="msg-actions">
 			<${CopyButton} text=${item.text} label=${t("Copy message")} />

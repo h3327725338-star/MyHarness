@@ -67,14 +67,14 @@ export function highlight(code, language) {
 }
 
 const cache = new Map();
-export function renderMarkdown(text) {
-	const key = text;
+export function renderMarkdown(text, { breaks = false } = {}) {
+	const key = `${breaks ? "breaks" : "normal"}\0${text}`;
 	const hit = cache.get(key);
 	if (hit !== undefined) return hit;
 	const md = getEngine();
 	let out;
 	try {
-		out = md ? md.parse(text) : `<pre>${esc(text)}</pre>`;
+		out = md ? md.parse(text, { breaks }) : `<pre>${esc(text)}</pre>`;
 	} catch {
 		out = `<pre>${esc(text)}</pre>`;
 	}
@@ -86,7 +86,7 @@ export function renderMarkdown(text) {
 /** Markdown block. A delegated click handles the code copy buttons; nothing in the text opens a panel. */
 export class Markdown extends Component {
 	shouldComponentUpdate(next) {
-		return next.text !== this.props.text || next.class !== this.props.class;
+		return next.text !== this.props.text || next.class !== this.props.class || next.breaks !== this.props.breaks;
 	}
 	onClick = (event) => {
 		const copy = event.target.closest?.(".code-copy");
@@ -98,8 +98,8 @@ export class Markdown extends Component {
 			});
 		}
 	};
-	render({ text, class: cls }) {
-		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: renderMarkdown(text || "") }, onClick: this.onClick });
+	render({ text, class: cls, breaks = false }) {
+		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: renderMarkdown(text || "", { breaks }) }, onClick: this.onClick });
 	}
 }
 
