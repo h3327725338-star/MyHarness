@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { findWorkspaceDataContext } from "../../data/workspace-store.ts";
 import type {
 	ProjectTrustContext,
 	ReplacedSessionContext,
@@ -379,6 +380,8 @@ export class AgentSessionRuntime {
 	async switchWorkspace(
 		cwd: string,
 		options?: {
+			/** Worktree entry uses existing registrations only; unregistered copies stay unbound. */
+			registerWorkspace?: boolean;
 			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
 		},
@@ -404,8 +407,13 @@ export class AgentSessionRuntime {
 		const sessionDir = this.session.sessionManager.usesDefaultSessionDir()
 			? undefined
 			: this.session.sessionManager.getSessionDir();
+		const storageOptions = { dataRoot: this.session.sessionManager.getDataRoot(), agentDir: this.services.agentDir };
+		const useUnboundStorage =
+			!sessionDir && options?.registerWorkspace === false && !findWorkspaceDataContext(resolvedCwd, storageOptions);
 		const sessionManager = this.session.sessionManager.isPersisted()
-			? SessionManager.create(resolvedCwd, sessionDir)
+			? useUnboundStorage
+				? SessionManager.createUnbound(resolvedCwd, undefined, storageOptions)
+				: SessionManager.create(resolvedCwd, sessionDir, undefined, storageOptions)
 			: SessionManager.inMemory(resolvedCwd);
 
 		await this.replaceRuntime(

@@ -9,6 +9,8 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 } from "../src/agent/runtime/session-runtime.ts";
+import { GitWorktreeUseCase } from "../src/application/use-cases/git-worktree.ts";
+import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import type {
 	ExtensionFactory,
 	SessionBeforeForkEvent,
@@ -36,7 +38,10 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 	});
 
 	async function createRuntimeHost(extensionFactory: ExtensionFactory) {
-		const tempDir = join(tmpdir(), `myharness-runtime-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const tempDir = join(
+			process.env.MYHARNESS_TEMP_DIR ?? tmpdir(),
+			`myharness-runtime-events-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		mkdirSync(tempDir, { recursive: true });
 
 		const faux = registerFauxProvider();
@@ -97,7 +102,10 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: SessionManager.create(tempDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			}),
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -154,6 +162,44 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			{ type: "session_shutdown", reason: "resume", targetSessionFile: originalSessionFile },
 			{ type: "session_start", reason: "resume", previousSessionFile: secondSessionFile },
 		]);
+	});
+
+	it("enters an unregistered copy without adding a Workspace and returns to the registered main folder", async () => {
+		const { runtimeHost } = await createRuntimeHost(() => {});
+		const main = runtimeHost.session.sessionManager.getCwd();
+		const dataRoot = runtimeHost.session.sessionManager.getDataRoot()!;
+		const copy = join(main, "..", `${main.split(/[\\/]/).pop()}-copy`);
+		mkdirSync(copy, { recursive: true });
+		cleanups.unshift(() => rmSync(copy, { recursive: true, force: true }));
+		const registry = () => WorkspaceStore.create(main, dataRoot).list();
+		const before = registry();
+		const worktrees = new GitWorktreeUseCase({
+			getAgentDir: () => main,
+			getCurrentCwd: () => runtimeHost.session.sessionManager.getCwd(),
+			isSessionIdle: () => runtimeHost.session.isIdle,
+			switchWorkspace: (cwd) => runtimeHost.switchWorkspace(cwd, { registerWorkspace: false }),
+		});
+
+		expect(await worktrees.enter({ path: copy, isMain: false, branch: "test-copy", locked: false })).toMatchObject({
+			ok: true,
+		});
+		expect(runtimeHost.session.sessionManager.getCwd()).toBe(copy);
+		expect(runtimeHost.session.sessionManager.isUnbound()).toBe(true);
+		await runtimeHost.session.prompt("persist copy chat");
+		const file = runtimeHost.session.sessionFile!;
+		expect(SessionManager.open(file).getCwd()).toBe(copy);
+		expect(SessionManager.open(file).isUnbound()).toBe(true);
+		expect(registry()).toEqual(before);
+		await runtimeHost.newSession();
+		expect(runtimeHost.session.sessionManager.isUnbound()).toBe(true);
+		expect(registry()).toEqual(before);
+
+		expect(await worktrees.enter({ path: main, isMain: true, branch: "main", locked: false })).toMatchObject({
+			ok: true,
+		});
+		expect(runtimeHost.session.sessionManager.getCwd()).toBe(main);
+		expect(runtimeHost.session.sessionManager.getWorkspaceId()).toBe(before[0].workspaceId);
+		expect(registry()).toEqual(before);
 	});
 
 	it("honors session_before_switch cancellation", async () => {

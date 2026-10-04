@@ -91,6 +91,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		isSessionIdle: () => host.session.isIdle,
 		switchWorkspace: (target) =>
 			host.runtimeHost.switchWorkspace(target, {
+				registerWorkspace: false,
 				projectTrustContextFactory: (nextCwd) => host.createProjectTrustContext(nextCwd),
 			}),
 	});
