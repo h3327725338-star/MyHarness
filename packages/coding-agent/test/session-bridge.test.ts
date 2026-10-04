@@ -28,7 +28,7 @@ async function until(
 describe("session bridge", () => {
 	let owner: ChildProcess | undefined;
 	let harness: Harness | undefined;
-	const ownerOutput = "";
+	let ownerOutput = "";
 
 	afterEach(() => {
 		setMirrorSessionsAllowed(false);
@@ -45,9 +45,11 @@ describe("session bridge", () => {
 		});
 		owner = child;
 		let output = "";
+		ownerOutput = "";
 		child.stdout!.setEncoding("utf8");
 		child.stdout!.on("data", (chunk: string) => {
 			output += chunk;
+			ownerOutput = output;
 		});
 		await until(() => /ready .+\n/.test(output), "the owner process to be ready", 60_000);
 		return /ready (.+)\n/.exec(output)![1]!.trim();
