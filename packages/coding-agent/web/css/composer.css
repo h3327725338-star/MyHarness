@@ -108,8 +108,8 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; line-height: 15px; }
 .popover.branch-pop { padding: 3px; animation: fade-in var(--t-base) var(--ease) both; overflow-y: auto; }
 .popover.branch-pop.leaving { animation: fade-out var(--t-base) var(--ease) both; pointer-events: none; }
-.branch-list { height: 171px; overflow-y: auto; scrollbar-gutter: stable; }
-.branch-copy-region { height: 68px; overflow-y: auto; scrollbar-gutter: stable; }
+.branch-list { max-height: 171px; overflow-y: auto; scrollbar-gutter: stable; }
+.branch-copy-region { max-height: 156px; overflow-y: auto; scrollbar-gutter: stable; }
 .branch-row { cursor: pointer; }
 .branch-row.hi { background: var(--surface-hover); color: var(--text); }
 .branch-row.active { color: var(--text); font-weight: 600; }
@@ -129,12 +129,18 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-form { display: flex; gap: 6px; padding: 4px 6px 2px; }
 .branch-hint { padding: 2px 8px 6px; font-size: var(--fs-xs); }
 .branch-wt { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 2px; }
+.branch-wt-heading { width: 100%; }
+.branch-wt-heading .dim { font-size: var(--fs-xs); }
+.branch-wt-heading .chev { flex: none; transform: rotate(-90deg); transition: transform var(--t-base) var(--ease); }
+.branch-wt-heading[aria-expanded="true"] .chev { transform: rotate(0deg); }
 .branch-wt-row { display: flex; align-items: center; gap: 10px; padding: 2px 8px 6px; }
 .branch-wt-text { gap: 1px; min-width: 0; font-size: 12.5px; color: var(--text); }
 .branch-wt-text .dim { font-size: var(--fs-xs); line-height: 1.35; }
 .branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
 .branch-copy { color: var(--text-2); }
-.branch-copy-path { flex: 1 1 0; text-align: right; font-size: var(--fs-xs); }
+.branch-copy-info { flex: 1; min-width: 0; gap: 2px; }
+.branch-copy > svg { flex: none; }
+.branch-copy-path { font-size: var(--fs-xs); }
 .widget { margin: 0; padding: 6px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */

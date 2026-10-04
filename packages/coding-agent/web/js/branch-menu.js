@@ -18,6 +18,27 @@ const POP_EXIT_MS = 160;
 
 export function BranchChip({ gitStatus }) {
 	const anchor = useRef(null);
+	const slot = useStore((s) => s.activeSlot);
+	// Keep data outside the popover's lifetime, but never reuse it for a different Chat.
+	const branchSource = useMemo(() => {
+		const source = { data: null, pending: null, loadedAt: 0 };
+		source.load = (force = false) => {
+			if (!force && source.data && Date.now() - source.loadedAt < 1000) return Promise.resolve(source.data);
+			if (!source.pending) {
+				source.pending = api("/api/git/branches", { slot }).then((data) => {
+					source.data = data;
+					source.loadedAt = Date.now();
+					return data;
+				}).finally(() => { source.pending = null; });
+			}
+			return source.pending;
+		};
+		return source;
+	}, [slot]);
+	useEffect(() => {
+		// Start before the first click; status updates also refresh changes made outside this menu.
+		branchSource.load().catch(() => {});
+	}, [branchSource, gitStatus]);
 	const [open, setOpen] = useState(false);
 	const { mounted } = usePresence(open, POP_EXIT_MS);
 	const linked = !!gitStatus.linkedWorktree;
@@ -31,14 +52,14 @@ export function BranchChip({ gitStatus }) {
 			<${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${mounted} exitMs=${0} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${open ? "" : "leaving"}`}>
-			<${BranchMenu} gitStatus=${gitStatus} close=${() => setOpen(false)} />
+			<${BranchMenu} key=${slot} gitStatus=${gitStatus} branchSource=${branchSource} slot=${slot} close=${() => setOpen(false)} />
 		<//>
 	</span>`;
 }
 
-function BranchMenu({ gitStatus, close }) {
+function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const running = useStore((s) => !!s.snap?.active);
-	const [data, setData] = useState(null);
+	const [data, setData] = useState(branchSource.data);
 	const [error, setError] = useState("");
 	const [worktrees, setWorktrees] = useState(null);
 	const [query, setQuery] = useState("");
@@ -48,15 +69,16 @@ function BranchMenu({ gitStatus, close }) {
 	const [newName, setNewName] = useState("");
 	const [confirm, setConfirm] = useState("");
 	const [removing, setRemoving] = useState("");
+	const [worktreesOpen, setWorktreesOpen] = useState(false);
 	const [isolating, setIsolating] = useState(false);
 	const [copyName, setCopyName] = useState("");
 	const known = useRef(null);
 	const list = useRef(null);
 	const linked = !!gitStatus.linkedWorktree;
 
-	const load = async () => {
+	const load = async (force = false) => {
 		try {
-			const next = await api("/api/git/branches");
+			const next = await branchSource.load(force);
 			// Branches that were not in the list before (a new one) fade in; the first list does not animate.
 			known.current = data ? new Set(data.branches.map((b) => b.name)) : null;
 			setData(next);
@@ -67,20 +89,22 @@ function BranchMenu({ gitStatus, close }) {
 	};
 	const loadWorktrees = async () => {
 		try {
-			setWorktrees({ list: (await api("/api/git/worktrees")).worktrees || [] });
+			setWorktrees({ list: (await api("/api/git/worktrees", { slot })).worktrees || [] });
 		} catch (e) {
 			setWorktrees({ list: [], error: serverText(e.message, t("Cannot list worktrees.")) });
 		}
 	};
 	useEffect(() => {
 		load();
-		loadWorktrees();
 	}, []);
+	useEffect(() => {
+		if (worktreesOpen && !worktrees) loadWorktrees();
+	}, [worktreesOpen]);
 
 	const branches = useMemo(() => rankSearch(data?.branches || [], query, { names: (b) => [b.name] }), [data, query]);
 	const exact = branches.some((b) => b.name === query.trim());
 	// Rows the keyboard moves over: the branches, then "New branch".
-	const rows = [...branches.map((b) => ({ kind: "branch", branch: b })), { kind: "new" }];
+	const rows = data ? [...branches.map((b) => ({ kind: "branch", branch: b })), { kind: "new" }] : [];
 	useEffect(() => setSel(0), [query]);
 	useEffect(() => {
 		list.current?.querySelector(`[data-row="${sel}"]`)?.scrollIntoView({ block: "nearest" });
@@ -133,7 +157,7 @@ function BranchMenu({ gitStatus, close }) {
 		// The row folds away first, then the list is read again.
 		setRemoving(branch.name);
 		setTimeout(async () => {
-			await load();
+			await load(true);
 			setRemoving("");
 		}, COLLAPSE_MS);
 		toast(t("Deleted branch {branch}", { branch: branch.name }), "info", 3500);
@@ -166,12 +190,12 @@ function BranchMenu({ gitStatus, close }) {
 
 	const activate = (row) => (row.kind === "new" ? startNew() : switchTo(row.branch));
 	const onSearchKey = (event) => {
-		if (event.isComposing) return;
+		if (event.isComposing || disabled || !rows.length) return;
 		if (event.key === "ArrowDown") return event.preventDefault(), setSel((sel + 1) % rows.length);
 		if (event.key === "ArrowUp") return event.preventDefault(), setSel((sel - 1 + rows.length) % rows.length);
 		if (event.key === "Enter") return event.preventDefault(), rows[sel] && activate(rows[sel]);
 	};
-	const disabled = running || !!busy;
+	const disabled = running || !!busy || !data;
 
 	return html`<div class="branch-menu" role="dialog" aria-label=${t("Branches")}>
 		<div class="pop-search"><${Icon} name="search" size=${13} /><input autofocus value=${query} placeholder=${t("Search branches")} aria-label=${t("Search branches")}
@@ -199,7 +223,7 @@ function BranchMenu({ gitStatus, close }) {
 			})}
 		</div>
 		<div class="branch-foot">
-			<button data-row=${rows.length - 1} class=${`pop-item branch-new ${sel === rows.length - 1 ? "hi" : ""}`} disabled=${disabled} onClick=${startNew} onMouseMove=${() => sel !== rows.length - 1 && setSel(rows.length - 1)} aria-expanded=${creating}>
+			<button data-row=${rows.length - 1} class=${`pop-item branch-new ${data && sel === rows.length - 1 ? "hi" : ""}`} disabled=${disabled} onClick=${startNew} onMouseMove=${() => sel !== rows.length - 1 && setSel(rows.length - 1)} aria-expanded=${creating}>
 				<${Icon} name="plus" size=${13} /><span class="truncate">${query.trim() && !exact ? t("New branch “{name}”", { name: query.trim() }) : t("New branch")}</span>
 			</button>
 			<${Collapse} open=${creating}>
@@ -212,7 +236,10 @@ function BranchMenu({ gitStatus, close }) {
 			<//>
 		</div>
 		<div class="branch-wt">
-			<div class="pop-group">${t("Worktree")}</div>
+			<button class="pop-item branch-wt-heading" aria-expanded=${worktreesOpen} onClick=${() => setWorktreesOpen(!worktreesOpen)}>
+				<${Chevron} /><span>${t("Worktree")}</span><span class="dim">${t("Isolated working copies")}</span>
+			</button>
+			<${Collapse} open=${worktreesOpen}>
 			<div class="branch-wt-row">
 				<div class="col grow branch-wt-text">
 					<span>${t("Work in an isolated copy")}</span>
@@ -228,14 +255,18 @@ function BranchMenu({ gitStatus, close }) {
 				</form>
 				<div class="branch-hint dim">${t("The new branch starts from main.")}</div>
 			<//>
+			${others.length ? html`<div class="pop-group">${t("Existing copies")}</div>` : null}
 			<div class="branch-copy-region">
 			${others.length ? html`<div class="branch-copies">${others.map((w) => html`<button key=${w.path} class="pop-item branch-copy" disabled=${disabled} onClick=${() => enterCopy(w.path, w.isMain ? t("Back in the main copy") : t("Opened the copy on {branch}", { branch: w.branch || t("(detached)") }))} title=${w.path}>
 				<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
-				<span class="truncate">${w.isMain ? t("Main copy") : w.branch || t("(detached)")}</span>
-				<span class="dim truncate branch-copy-path">${w.isMain ? w.branch || "" : w.path}</span>
+				<span class="col branch-copy-info">
+					<span class="truncate">${w.isMain ? t("Main copy") : w.branch || t("(detached)")}</span>
+					<span class="dim truncate branch-copy-path">${w.path}</span>
+				</span>
 				${busy === `w:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="arrowRight" size=${13} class="dim" />`}
 			</button>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
 			</div>
+			<//>
 		</div>
 	</div>`;
 }

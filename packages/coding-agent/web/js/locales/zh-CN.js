@@ -1496,6 +1496,8 @@ export const zhCN = {
 	"New branch": "新建分支",
 	"Starts from the commit checked out now and switches to it.": "从当前检出的提交新建，并切换过去。",
 	"Worktree": "Worktree",
+	"Isolated working copies": "隔离工作副本",
+	"Existing copies": "已有副本",
 	"Work in an isolated copy": "在隔离副本中工作",
 	"This chat runs in a separate worktree; the main copy and its branch are untouched.": "这个 Chat 在独立的 Worktree 中运行，主副本和它的分支不受影响。",
 	"A new chat runs in a separate worktree on its own branch; this folder and branch stay as they are.": "在独立的 Worktree 和新分支上开一个新 Chat，当前文件夹和分支保持不变。",

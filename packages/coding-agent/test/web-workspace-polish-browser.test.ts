@@ -10,8 +10,10 @@ const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
 	"animates folder and draft presence, edits aliases and labels model prices in currency units",
 	async () => {
-		const root = mkdtempSync(join(tmpdir(), "myharness-polish-browser-"));
+		const root = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "myharness-polish-browser-"));
 		const server = new WebHttpServer();
+		let branchRequests = 0;
+		let worktreeRequests = 0;
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
@@ -26,13 +28,22 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			}));
 			server.route("GET", "/api/changes", () => ({ files: [] }));
 			server.route("GET", "/api/git/branches", async () => {
+				branchRequests++;
 				await new Promise((resolve) => setTimeout(resolve, 500));
 				return { branches: [{ name: "main", current: true, committedAt: 1 }] };
 			});
 			server.route("GET", "/api/git/worktrees", async () => {
+				worktreeRequests++;
 				await new Promise((resolve) => setTimeout(resolve, 800));
-				return { worktrees: [{ path: "C:/project", isMain: true, current: true }] };
+				return {
+					worktrees: [
+						{ path: "C:/project", isMain: true, current: true },
+						{ path: "C:/copies/task-fix", branch: "task-fix" },
+						{ path: "C:/copies/detached" },
+					],
+				};
 			});
+			server.route("GET", "/api/test/request-counts", () => ({ branchRequests, worktreeRequests }));
 			server.route("POST", "/api/files/upload", () => ({ name: "notes.txt", path: "C:/session/uploads/notes.txt" }));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("GET", "/api/resources", () => ({ commands: [] }));
@@ -59,6 +70,7 @@ import {actions} from '/js/actions.js';
 import {setLang} from '/js/lang.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const check=(ok,msg)=>{if(!ok)throw Error(msg)};
+const until=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await wait(50)}throw Error('timed out waiting for UI')};
 try {
  setView({motion:'on',lang:'zh-CN'}); setLang('zh-CN');
  set({snap:{session:{id:'test'},flags:{}},slots:[]});
@@ -94,14 +106,56 @@ try {
  input=document.querySelector('.ws-row input');input.value='Friendly';input.dispatchEvent(new Event('input',{bubbles:true}));await wait(30);input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await wait(200);
  check(renamed?.name==='Friendly'&&state.workspaces.list[0].rootPath==='C:/project','alias changed path or not saved');
  render(null,document.getElementById('app'));
+ document.getElementById('app').style.cssText='position:fixed;bottom:20px;left:20px';
  render(h(BranchChip,{gitStatus:{branch:'main'}}),document.getElementById('app'));await wait(50);
  document.querySelector('.branch-chip').click();await wait(150);
  let pop=document.querySelector('.branch-pop');check(pop&&!pop.classList.contains('leaving'),'branch entered with exit animation');
- const before=pop.getBoundingClientRect();await wait(1000);const after=pop.getBoundingClientRect();
- check(Math.abs(before.height-after.height)<1&&Math.abs(before.top-after.top)<3,'async lists shifted popover');
+ check(!document.querySelector('.branch-new.hi'),'new branch highlighted while loading');
+ const initialCounts=await (await fetch('/api/test/request-counts')).json();
+ check(initialCounts.branchRequests===1&&initialCounts.worktreeRequests===0,'prefetch duplicated or collapsed worktrees requested: '+JSON.stringify(initialCounts));
+ const search=document.querySelector('.pop-search input');
+ search.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await wait(30);
+ check(!document.querySelector('.branch-foot form'),'Enter creates branch while loading');
+ await until(()=>document.querySelector('.branch-name')?.textContent==='main');
+ await wait(400);pop=document.querySelector('.branch-pop');
  check(pop.textContent.includes('main'),'branches missing');
+ const listHeight=document.querySelector('.branch-list').offsetHeight;
+ check(listHeight>0&&listHeight<60,'single branch reserves empty space');
+ const anchor=document.querySelector('.branch-chip').getBoundingClientRect();
+ const anchored=()=>Math.abs(pop.getBoundingClientRect().bottom-anchor.top+6)<3||Math.abs(pop.getBoundingClientRect().top-8)<3;
+ check(anchored(),'compact popover lost anchor');
+ const heading=document.querySelector('.branch-wt-heading');
+ check(heading.getAttribute('aria-expanded')==='false'&&!document.querySelector('.branch-wt-row'),'worktrees not collapsed by default');
+ const compactHeight=pop.offsetHeight;
+ heading.click();await until(()=>document.querySelectorAll('.branch-copy').length===2);await wait(450);
+ check(heading.getAttribute('aria-expanded')==='true'&&document.querySelector('.branch-wt-row'),'worktrees not expanded');
+ check(pop.offsetHeight>compactHeight&&anchored(),'expanded popover lost anchor');
+ check(pop.textContent.includes('已有副本')&&document.querySelectorAll('.branch-copy').length===2,'copy group missing');
+ const copyInfo=document.querySelector('.branch-copy-info');
+ check(copyInfo.children.length===2&&copyInfo.children[1].getBoundingClientRect().top>copyInfo.children[0].getBoundingClientRect().top,'copy name and path not stacked');
+ document.querySelector('.branch-wt-row .toggle').click();await wait(400);
+ check(document.querySelector('[aria-label="副本使用的分支"]'),'creation form missing');
+ heading.click();await wait(400);
+ check(!document.querySelector('.branch-wt-row')&&pop.offsetHeight===compactHeight,'worktree collapse retains blank space');
+ heading.click();await wait(400);
+ check(document.querySelector('[aria-label="副本使用的分支"]'),'folding changed isolation selection');
+ heading.click();await wait(400);
  document.querySelector('.branch-chip').click();await wait(240);check(!document.querySelector('.branch-pop'),'popover exit retained');
+ document.querySelector('.branch-chip').click();await wait(60);
+ check(document.querySelector('.branch-name')?.textContent==='main'&&!document.querySelector('.branch-new.hi'),'cached branches not immediately available');
+ check(document.querySelector('.branch-row.hi.active'),'current branch not selected');
+ document.querySelector('.branch-chip').click();await wait(240);
  render(null,document.getElementById('app'));
+ render(h(BranchChip,{gitStatus:{branch:'task-fix',linkedWorktree:true}}),document.getElementById('app'));await wait(60);
+ document.querySelector('.branch-chip').click();await until(()=>document.querySelector('.branch-name')&&document.querySelector('.branch-wt-heading'));await wait(400);
+ check(document.querySelector('.branch-chip .wt-tag')&&!document.querySelector('.branch-wt-row'),'linked copy not labelled or defaults expanded');
+ document.querySelector('.branch-wt-heading').click();await until(()=>{const toggle=document.querySelector('.branch-wt-row .toggle');return toggle&&!toggle.disabled});await wait(400);
+ check(document.querySelector('.branch-wt-row .toggle').getAttribute('aria-checked')==='true','linked isolation state missing');
+ document.querySelector('.branch-wt-heading').click();await wait(400);
+ check(document.querySelector('.branch-chip .wt-tag'),'folding clears worktree label');
+ render(null,document.getElementById('app'));
+ document.getElementById('app').style.cssText='';
+ if (${process.env.MYHARNESS_BRANCH_MENU_ONLY !== "1"}) {
  set({snap:{session:{id:'import'},flags:{},trust:{trusted:true},model:{id:'m',input:['text','image']}},gitStatus:null,resources:{commands:[]},items:[],dialogs:[],queue:{steering:[],followUp:[]},surface:{widgets:{},statuses:{}}});
  render(h(Composer,{}),document.getElementById('app'));await wait(200);
  const dt=new DataTransfer();dt.items.add(new File(['hello'],'notes.txt',{type:'text/plain'}));
@@ -131,6 +185,7 @@ try {
  const add=[...document.querySelectorAll('.pf-pricing button')].find(el=>el.textContent.includes('添加计价阶梯'));check(add&&!add.classList.contains('ghost')&&add.querySelector('svg'),'tier button missing');add.click();await wait(100);
  check(document.querySelectorAll('.pf-pricing input[type=number]').length===9,'tier fields missing');
  const kv=document.createElement('div');kv.className='kv';kv.style.width='280px';kv.innerHTML='<span>运行过 Shell 命令</span><span>yes</span>';document.body.append(kv);check(getComputedStyle(kv.firstChild).whiteSpace==='nowrap','checkpoint label wraps');
+ }
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error){document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.stack+'</p>');}
 `,
