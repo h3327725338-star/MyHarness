@@ -1,2 +1,2 @@
-# 工具说明
-- 运行严格、多轮、经过独立审查的只读复杂任务 workflow
+# Tool description
+- Run a rigorous, multiround, independently reviewed, read-only workflow for complex tasks.

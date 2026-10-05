@@ -1,2 +1,2 @@
-# 工具选择
-- 需要符号定义、引用、实现、调用关系、类型层次、诊断信息或文件结构时，优先使用 `symbols`；纯文本匹配或读取原文仍可以使用 grep/read。
+# Tool selection
+- Prefer symbols for symbol definitions, references, implementations, call relationships, type hierarchies, diagnostics, or file structure. Use grep/read for plain-text matching or original content.

@@ -1,2 +1,2 @@
-# 使用规则
-- write 只能用于创建新文件或完整重写现有文件
+# Usage rules
+- Use write only to create new files or completely rewrite existing files.

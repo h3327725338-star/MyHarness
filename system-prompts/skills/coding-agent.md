@@ -1,4 +1,4 @@
-# 技能读取规则
-- 以下 skills 为特定任务提供专门指令。
-- 当任务符合某个 skill 的描述时，使用 read 工具加载该 skill 文件。
-- 当 skill 文件引用相对路径时，将其解析为相对于 skill 目录（SKILL.md 的父目录 / 路径的 dirname）的路径，并在工具命令中使用绝对路径。
+# Skill loading rules
+- The following skills provide specialized instructions for particular tasks.
+- When a task matches a skill's description, use the read tool to load that skill file.
+- Resolve relative paths referenced by a skill file against the skill directory, the parent directory of SKILL.md or the path's dirname, and use absolute paths in tool commands.

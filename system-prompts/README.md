@@ -1,6 +1,6 @@
 # 自动注入系统指令
 
-直接编辑本目录的 UTF-8 `.md` 文件，然后重启 MyHarness。无需编译 Prompt、无需生成文件，也没有 watcher。正文保持迁移前的英文原文；本说明不注入模型。
+直接编辑本目录的 UTF-8 `.md` 文件，然后重启 MyHarness。无需编译 Prompt、无需生成文件，也没有 watcher。内置提示词正文统一使用英文，采用 `# ` 标题和 `- ` 正文；标题紧接正文，板块之间空一行。本说明不注入模型。
 
 维护规则见 [maintenance.md](maintenance.md)，后续开发边界见 [roadmap.md](roadmap.md)。
 

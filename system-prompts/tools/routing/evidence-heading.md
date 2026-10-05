@@ -1,2 +1,2 @@
-# 证据工具
-- 可以按需组合使用证据工具：
+# Evidence tools
+- Combine evidence tools as needed:

@@ -14,13 +14,14 @@
 ## 修改步骤
 
 1. 先用 `rg --files system-prompts` 确认目标文件真实存在，再读对应 loader/composer 和测试。
-2. 保留现有模板变量、文本作用域、文件末尾换行和英文正文约定；不要把 API schema 或 user message 模板误迁为 system Prompt。
+2. 保留现有模板变量、文本作用域、协议标签和文件末尾换行。所有内置提示词使用英文；每个板块以 `# ` 标题开头，紧接一行或多行 `- ` 正文，标题与正文之间不空行，板块之间空一行。协议标签与 JSON 示例也作为正文列表项保留；不要把 API schema 或 user message 模板误迁为 system Prompt。
 3. 同步更新 `system-prompts/README.md` 的文件表或加载说明（确实受影响时才改）。
 4. 运行受影响 package 的测试；需要确认新文本已被进程读取时，重启 MyHarness。当前没有 watcher。
 5. 检查 `git diff --check`，确认没有把本机路径、Token、Cookie 或会话内容写入 Prompt。
 
 ## 验证边界
 
+- `packages/ai/test/system-prompt-format.test.ts` 检查全部 56 个内置正文资源的英文与标题/列表板块格式，不检查根目录的维护文档，也不限制动态注入的项目文件、技能或用户内容。
 - 静态核对只能证明文件和 loader/composer 的关系；不能证明外部 Provider 已收到新 Prompt。
 - 测试通过只能证明测试覆盖的 loader/composer 行为；不能替代真实 CLI、OAuth 或模型请求验证。
 - `MYHARNESS_SYSTEM_PROMPT_DIR` 是替代目录，不是缺失文件的回退目录；文档和测试都应保持这一点。

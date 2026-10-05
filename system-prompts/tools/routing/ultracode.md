@@ -1,2 +1,2 @@
-# 工具选择
-- `ultracode`：用于确实需要独立审查、反例和失败路径检查的高风险任务。
+# Tool selection
+- ultracode: use for high-risk tasks that genuinely require independent review, counterexamples, and failure-path checks.

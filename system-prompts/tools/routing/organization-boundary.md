@@ -1,2 +1,2 @@
-# 组织边界
-- 除非用户明确选择了某种模式，或之前方法返回的新证据证明需要升级，否则不要仅仅因为广泛条件重叠就机械地叠加多个组织工具。
+# Organization boundaries
+- Unless the user explicitly selects a mode or new evidence from an earlier method justifies escalation, do not mechanically combine multiple orchestration tools merely because their broad selection conditions overlap.

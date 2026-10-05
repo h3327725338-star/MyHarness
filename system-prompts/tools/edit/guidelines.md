@@ -1,5 +1,5 @@
-# 使用规则
-- 使用 edit 进行精确修改（edits[].oldText 必须完全匹配）。
-- 修改同一文件中多个不相邻的位置时，在一次 edit 调用中传入多个 edits[] 条目，不要重复调用。
-- 每个 edits[].oldText 都针对原始文件匹配，而不是针对依次应用后的结果。不要使用重叠或嵌套的 edits；将相邻修改合并为一个 edit。
-- 在保持唯一性的前提下，让 edits[].oldText 尽可能短；不要附带大量未修改的上下文。
+# Usage rules
+- Use edit for precise modifications; edits[].oldText must match exactly.
+- When changing multiple nonadjacent locations in one file, pass multiple edits[] entries in one edit call instead of making repeated calls.
+- Each edits[].oldText matches against the original file, not the result of sequential edits. Do not use overlapping or nested edits; combine adjacent changes into one edit.
+- Keep edits[].oldText as short as possible while retaining uniqueness. Do not include large amounts of unchanged context.

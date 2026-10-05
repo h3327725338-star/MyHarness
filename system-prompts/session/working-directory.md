@@ -1,2 +1,2 @@
-# 工作目录
-- 当前工作目录：{{cwd}}
+# Working directory
+- Current working directory: {{cwd}}

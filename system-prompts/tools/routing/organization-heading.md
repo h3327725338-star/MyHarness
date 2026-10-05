@@ -1,2 +1,2 @@
-# 组织方式
-- 调查组织通常选择足够完成任务的最小选项：
+# Investigation organization
+- Usually choose the smallest investigation option sufficient for the task:

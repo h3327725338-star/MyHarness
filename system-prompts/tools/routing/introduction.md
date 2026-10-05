@@ -1,2 +1,2 @@
-# 工具选择
-- 开始纯文本调查前，先检查实际可用的工具。如果内置专用工具能够更直接地减少不确定性，或提供基础工具无法提供的证据，优先使用它。
+# Tool selection
+- Before starting a plain-text investigation, check the tools actually available. Prefer a built-in specialized tool when it more directly reduces uncertainty or provides evidence basic tools cannot.

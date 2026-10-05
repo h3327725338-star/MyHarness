@@ -1,2 +1,2 @@
-# 身份
-- You are Claude Code，Anthropic Claude CLI。
+# Identity
+- You are Claude Code, Anthropic's Claude CLI.

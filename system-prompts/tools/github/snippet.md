@@ -1,2 +1,2 @@
-# 工具说明
-- 访问已连接的 GitHub 账户，包括私有仓库和账户电子邮件
+# Tool description
+- Access the connected GitHub account, including private repositories and account email addresses.

@@ -1,8 +1,8 @@
-# 使用规则
-- 当调查存在清晰的连续阶段依赖，或第一轮结果后需要交叉审查时，使用 workflow；单阶段并行调查使用 agent，高风险的独立反证使用 ultracode。
-- 当用户明确输入 /workflow 时，必须调用 workflow；当用户明确输入 /ultracode 时，必须调用 ultracode；显式命令优先于自动判断。
-- 将任务拆分为顺序清晰的阶段；每个阶段分配多个互不重叠的只读任务。
-- 调查、验证和查找遗漏应分属不同阶段；后续阶段会自动收到前一阶段的结果。
-- Workflow 子 Agent 只能调查，不得修改文件或创建更低层级的 Agent。任何修改都由 Main Agent 在 workflow 返回后亲自完成。
-- 后续阶段会收到前一阶段的结构化、有界结果。先阅读该结果中的 findings、evidence、conflicts 和 unresolved，只对未解决或冲突点做定向复核，不要重新扫描整个仓库。
-- 一个任务的 partial 结果仍可供后续阶段使用；只有某阶段没有任何可用调查结果时才停止整个 workflow。
+# Usage rules
+- Use workflow when investigation has clear sequential stage dependencies or needs cross-review after the first round. Use agent for single-stage parallel investigation and ultracode for high-risk independent attempts to disprove findings.
+- When the user explicitly enters /workflow, call workflow; when the user explicitly enters /ultracode, call ultracode. Explicit commands take priority over automatic selection.
+- Divide the task into clearly ordered stages, assigning multiple nonoverlapping read-only tasks to each stage.
+- Put investigation, verification, and searching for omissions in separate stages. Later stages automatically receive the previous stage's results.
+- Workflow sub-Agents may investigate only; they must not modify files or create lower-level Agents. The Main Agent performs all modifications personally after workflow returns.
+- Later stages receive structured, bounded results from the previous stage. Read findings, evidence, conflicts, and unresolved matters first; review only unresolved or conflicting points instead of rescanning the whole repository.
+- A task's partial results remain usable by later stages. Stop the entire workflow only when a stage has no usable investigation results.

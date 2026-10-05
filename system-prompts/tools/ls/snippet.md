@@ -1,2 +1,2 @@
-# 工具说明
-- 列出目录内容
+# Tool description
+- List directory contents.

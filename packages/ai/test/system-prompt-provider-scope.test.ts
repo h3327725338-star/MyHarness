@@ -53,7 +53,7 @@ describe("provider instruction scope on actual HTTP requests", () => {
 	it("adds the file identity before global text only for Anthropic OAuth", async () => {
 		const oauth = await capture("anthropic-messages", "sk-ant-oat01-test");
 		expect(oauth.system.map((block: { text: string }) => block.text)).toEqual([
-			"# 身份\n- You are Claude Code，Anthropic Claude CLI。",
+			"# Identity\n- You are Claude Code, Anthropic's Claude CLI.",
 			"GLOBAL_SENTINEL",
 		]);
 		const ordinary = await capture("anthropic-messages", "test-key");

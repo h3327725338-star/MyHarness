@@ -1,2 +1,2 @@
-# 工具选择
-- `workflow`：当调查存在清晰的连续阶段依赖，或第一轮结果后需要交叉检查时使用。
+# Tool selection
+- workflow: use when investigation has clear sequential stage dependencies or needs cross-checking after the first round.

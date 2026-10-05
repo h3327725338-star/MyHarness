@@ -1,2 +1,2 @@
-# 工具说明
-- 读取文件内容
+# Tool description
+- Read file contents.

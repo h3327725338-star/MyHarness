@@ -1,2 +1,2 @@
-# 工具说明
-- 通过精确的文本替换编辑文件；一次调用支持多个不相邻的修改
+# Tool description
+- Edit files through precise text replacements; one call supports multiple nonadjacent changes.

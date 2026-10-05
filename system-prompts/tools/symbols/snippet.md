@@ -1,2 +1,2 @@
-# 工具说明
-- 查询代码符号和关系：按名称或准确位置查找符号、定义、引用、实现、调用链、类型层次、文件大纲和编译诊断，并返回 file:line 位置；语义结果是精确的，轻量词法结果只能作为线索，同时也支持纯文本搜索
+# Tool description
+- Query code symbols and relationships: find symbols, definitions, references, implementations, call chains, type hierarchies, file outlines, and compiler diagnostics by name or exact position, returning file:line locations. Semantic results are precise; lightweight lexical results are leads only. Plain-text search is also supported.

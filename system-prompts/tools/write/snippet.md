@@ -1,2 +1,2 @@
-# 工具说明
-- 创建或覆盖文件
+# Tool description
+- Create or overwrite files.

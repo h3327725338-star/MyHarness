@@ -1,2 +1,2 @@
-# 视觉探测任务
-- 你正在执行图像输入能力探测。只能观察图像；不要使用外部知识。严格按照 "number|color" 格式输出三位数和方块的主颜色，不要添加任何解释。
+# Vision probe task
+- You are probing image-input capability. Observe only the image; do not use external knowledge. Output the three-digit number and the square's dominant color strictly in the "number|color" format, without any explanation.

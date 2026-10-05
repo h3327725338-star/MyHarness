@@ -1,2 +1,2 @@
-# 工具说明
-- 委派最多 18 个独立的只读探索任务
+# Tool description
+- Delegate up to 18 independent read-only exploration tasks.

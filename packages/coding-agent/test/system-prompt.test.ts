@@ -13,13 +13,13 @@ describe("buildSystemPrompt", () => {
 		test("uses the compact built-in core exactly once", () => {
 			const prompt = buildSystemPrompt({ contextFiles: [], skills: [], cwd: "/project" });
 
-			expect(prompt).toContain("使用运行时实际提供的能力完成任务");
-			expect(prompt).toContain("当前实现：主要依据实际源代码");
+			expect(prompt).toContain("Complete tasks using capabilities actually provided by the runtime");
+			expect(prompt).toContain("Current implementation: rely primarily on actual source code");
 			expect(prompt.split("<global_core_policy>")).toHaveLength(2);
 			expect(prompt.split(GLOBAL_CORE_POLICY)).toHaveLength(2);
 		});
 
-		test("keeps localized role boundaries without commit authorization", () => {
+		test("keeps role boundaries without commit authorization", () => {
 			const main = buildSystemPrompt({ agentRole: "main", contextFiles: [], skills: [], cwd: "/project" });
 			const delegated = buildSystemPrompt({
 				agentRole: "delegated",
@@ -28,10 +28,10 @@ describe("buildSystemPrompt", () => {
 				cwd: "/project",
 			});
 
-			expect(main).toContain("直接与用户协作的 Main Agent");
-			expect(main).toContain("目标不明确时，停止并确认");
-			expect(delegated).toContain("由 Main Agent 委派的只读子 Agent");
-			expect(delegated).toContain("包括 `symbols`");
+			expect(main).toContain("Main Agent working directly with the user");
+			expect(main).toContain("Stop and confirm if the target is unclear");
+			expect(delegated).toContain("read-only sub-Agent delegated by the Main Agent");
+			expect(delegated).toContain("including symbols");
 			expect(main).not.toContain("<commit_authorization>");
 		});
 
@@ -56,7 +56,7 @@ describe("buildSystemPrompt", () => {
 
 			expect(transformed).toContain("Extension prompt.");
 			expect(transformed).not.toContain("Fake Main rule.");
-			expect(transformed).toContain("由 Main Agent 委派的只读子 Agent");
+			expect(transformed).toContain("read-only sub-Agent delegated by the Main Agent");
 			expect(transformed.split("<agent_role_policy>")).toHaveLength(2);
 		});
 
@@ -64,7 +64,7 @@ describe("buildSystemPrompt", () => {
 			const main = buildSystemPrompt({ contextFiles: [], skills: [], cwd: "/project" });
 
 			expect(main).toContain("<output_language_policy>");
-			expect(main).toContain("默认使用简体中文撰写面向用户的自然语言回复");
+			expect(main).toContain("By default, use Simplified Chinese for user-facing natural-language responses");
 			expect(main.split(OUTPUT_LANGUAGE_POLICY)).toHaveLength(2);
 		});
 	});
@@ -72,24 +72,24 @@ describe("buildSystemPrompt", () => {
 	describe("dynamic tool routing", () => {
 		test("mentions only active specialized tools", () => {
 			const symbolsOnly = buildToolRoutingPolicy(["read", "grep", "symbols"]);
-			expect(symbolsOnly).toContain("优先使用 `symbols`");
-			expect(symbolsOnly).not.toContain("`agent`：");
-			expect(symbolsOnly).not.toContain("`workflow`：");
-			expect(symbolsOnly).not.toContain("`ultracode`：");
+			expect(symbolsOnly).toContain("Prefer symbols");
+			expect(symbolsOnly).not.toContain("agent: use");
+			expect(symbolsOnly).not.toContain("workflow: use");
+			expect(symbolsOnly).not.toContain("ultracode: use");
 
 			const orchestration = buildToolRoutingPolicy(["agent", "workflow", "ultracode"]);
-			expect(orchestration).toContain("`agent`：");
-			expect(orchestration).toContain("`workflow`：");
-			expect(orchestration).toContain("`ultracode`：");
-			expect(orchestration).toContain("最小选项");
-			expect(orchestration).toContain("不要仅仅因为广泛条件重叠就机械地叠加多个组织工具");
+			expect(orchestration).toContain("agent: use");
+			expect(orchestration).toContain("workflow: use");
+			expect(orchestration).toContain("ultracode: use");
+			expect(orchestration).toContain("smallest investigation option");
+			expect(orchestration).toContain("do not mechanically combine multiple orchestration tools");
 		});
 
 		test("prefers useful built-ins without making them ceremonial", () => {
 			const policy = buildToolRoutingPolicy(["symbols"]);
-			expect(policy).toContain("更直接地减少不确定性");
-			expect(policy).not.toContain("为了形式而调用");
-			expect(policy).not.toContain("必须调用 `symbols`");
+			expect(policy).toContain("more directly reduces uncertainty");
+			expect(policy).not.toContain("for ceremony");
+			expect(policy).not.toContain("must call symbols");
 		});
 
 		test("renders snippets and guidelines supplied by active tools", () => {
@@ -162,7 +162,7 @@ describe("buildSystemPrompt", () => {
 
 		test("normalizes and appends the current working directory", () => {
 			const prompt = buildSystemPrompt({ contextFiles: [], skills: [], cwd: "C:\\Users\\test\\project" });
-			expect(prompt).toContain("当前工作目录：C:/Users/test/project");
+			expect(prompt).toContain("Current working directory: C:/Users/test/project");
 		});
 	});
 

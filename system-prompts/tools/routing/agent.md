@@ -1,2 +1,2 @@
-# 工具选择
-- `agent`：当存在多个真正独立且适合并行调查的方向时使用。
+# Tool selection
+- agent: use when there are multiple genuinely independent directions suitable for parallel investigation.

@@ -1,2 +1,2 @@
-# 工具说明
-- 运行分阶段、可并行的只读多 Agent workflow
+# Tool description
+- Run a staged, parallelizable, read-only multi-Agent workflow.
