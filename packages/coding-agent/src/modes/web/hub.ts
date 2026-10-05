@@ -150,6 +150,7 @@ export class WebHostHub implements WebHostHubLink {
 				if (other === host || !other.session.isIdle) continue;
 				void (async () => {
 					await other.session.settingsManager.reload();
+					other.refreshConversationNaming();
 					// Providers added, edited or deleted here must reach the other runtimes too (each has its own ModelRuntime).
 					if (event === "models_changed") {
 						await other.session.modelRuntime.reloadConfig();

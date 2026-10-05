@@ -190,6 +190,7 @@ const SHORT_DESCRIPTION = {
 	contextWindowSubAgent: N_("Empty: model limit."),
 	enabledModels: N_("Comma-separated patterns; next session. Empty: all."),
 	fallbackModel: N_("Takes over when the main model keeps failing."),
+	conversationNaming: N_("Name automatically; check new replies every 10 minutes."),
 	autoMemory: N_("Save memory after each task."),
 	subAgent: N_("Delegate read-only investigation."),
 	visionAssistant: N_("Use a model for image analysis."),

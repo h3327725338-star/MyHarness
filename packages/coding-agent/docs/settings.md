@@ -122,6 +122,7 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 | `showCacheMissNotices` | boolean | `false` | 在发生明显 prompt-cache miss 时显示 Transcript notice |
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
+| `conversationNaming` | object | `{ "enabled": false }` | Global 对话自动命名；设置 → 智能体 → 助手选择模型、思考级别和开关。 |
 | `subAgent` | object | `{ "enabled": false }` | Global built-in exploration-agent 和 workflow configuration。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
@@ -129,11 +130,28 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
 
-Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
+Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
 
 - 没有设置 `provider` / `model`（Web UI 里的“使用主模型”）：运行时使用当前 main model，并且连同它当前的 Thinking Effort 一起继承；main model 变了就跟着变。如果另外写了 `thinkingLevel`，只覆盖 Effort。
 - 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）。
 - 只写了 `provider` 或 `model` 其中一个，视为没有配置。
+
+#### conversationNaming（对话自动命名）
+
+默认关闭，启用后未单独选择模型时跟随当前主模型及思考级别；可在设置 → 智能体 → 助手的“对话自动命名”行选择独立模型、思考级别或关闭。第一条完整回复后后台命名；以后只处理新增完整回复，距上次成功检查至少 10 分钟且当前 Chat 没有任务、收尾或 Git 操作时检查。不要求累积五轮，也不要求再空闲十分钟。主题未明显变化时要求模型保留原名；成功检查但未改名也更新检查时间。中止、错误和工具调用中间回复不作为新完整回复。
+
+待检查内容沿用 Session JSONL 消息，成功检查记录为 `conversation-naming` custom entry（末条已检查回复 ID、检查时间、自动标题 entry ID），不进入主模型上下文。关闭进程不执行，也不为命名延迟退出；下次加载该 Chat 时根据保存的记录补查，不扫描所有历史 Chat。已有手动/显式 AI 标题及后来由用户或扩展设置的标题均不自动覆盖。失败或空输出保留原名和待检查内容，运行期间延后十分钟重试，不阻塞聊天、不弹任务失败通知。对话文本会发送给选择的命名模型并产生额外 API 用量；没有工具权限。
+
+```json
+{
+  "conversationNaming": {
+    "enabled": true,
+    "provider": "my-provider",
+    "model": "my-naming-model",
+    "thinkingLevel": "low"
+  }
+}
+```
 
 #### thinkingBudgets
 

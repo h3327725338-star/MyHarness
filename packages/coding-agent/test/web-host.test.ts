@@ -70,6 +70,36 @@ describe("Web host (real runtime with a faux provider)", () => {
 		return dir;
 	}
 
+	it("exposes the naming helper setting and generates a background title after a completed reply", async () => {
+		const fx = await start();
+		const state = await fx.get("/api/state");
+		const owner = fx.hub.slotsShowing(state.session.file)[0]!;
+		const settings = await fx.get("/api/settings");
+		expect(settings.items.find((item: any) => item.id === "conversationNaming")).toMatchObject({
+			section: "Assistants",
+			type: "modelRef",
+			value: { enabled: false },
+		});
+		const model = owner.session.model!;
+		await fx.post("/api/settings", {
+			id: "conversationNaming",
+			value: { enabled: true, provider: model.provider, model: model.id, thinkingLevel: "off" },
+		});
+		const complete = vi
+			.spyOn(owner.session.modelRuntime, "completeSimple")
+			.mockResolvedValue(fauxAssistantMessage([fauxText("Automatic conversation titles")]));
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("Finished implementing naming")])]);
+		await fx.post("/api/prompt", { text: "Implement conversation naming" });
+		await fx.waitFor("session_info", (data) => data.name === "Automatic conversation titles");
+		expect((await fx.get("/api/state")).session.name).toBe("Automatic conversation titles");
+		expect(
+			owner.session.sessionManager
+				.getEntries()
+				.some((entry) => entry.type === "custom" && entry.customType === "conversation-naming"),
+		).toBe(true);
+		complete.mockRestore();
+	});
+
 	it("opens isolated modes, saves drafts and keeps personalization out of Coding", async () => {
 		const fx = await start();
 		const coding = await fx.get("/api/state");
@@ -395,6 +425,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		};
 		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			// Other tests queue faux responses for foreground tasks only.
+			services.settingsManager.setConversationNamingSettings({ enabled: false });
 			return {
 				...(await createAgentSessionFromServices({
 					services,

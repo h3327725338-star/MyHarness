@@ -91,6 +91,9 @@ export interface AutoMemorySettings {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/** Background conversation naming; shares the helper-model selection contract. */
+export interface ConversationNamingSettings extends AutoMemorySettings {}
+
 export interface VisionAssistantSettings {
 	enabled?: boolean; // default: false
 	provider?: string;
@@ -259,6 +262,7 @@ export interface Settings {
 	warnings?: WarningSettings;
 	subAgent?: SubAgentSettings; // Global-only inspection sub-agent configuration; Bash guard is not a sandbox
 	autoMemory?: AutoMemorySettings; // Global-only long-term memory configuration
+	conversationNaming?: ConversationNamingSettings; // Global-only background conversation naming
 	visionAssistant?: VisionAssistantSettings; // Global-only dedicated image analysis configuration
 	fallbackModel?: FallbackModelSettings; // Global-only model that takes over when the main model keeps failing
 	codeIntelligence?: CodeIntelligenceSettings;

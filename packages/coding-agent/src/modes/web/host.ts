@@ -11,6 +11,7 @@ import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
+import { ConversationNaming } from "../../agent/runtime/conversation-naming.ts";
 import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
@@ -158,6 +159,12 @@ export class WebHost {
 	inputTouched = false;
 	tracker: ChangeTracker;
 	private readonly hub: WebHostHubLink | undefined;
+
+	private conversationNaming: ConversationNaming | undefined;
+
+	refreshConversationNaming(): void {
+		this.conversationNaming?.refresh();
+	}
 
 	private unsubscribe: (() => void) | undefined;
 	private generation = 0;
@@ -359,6 +366,7 @@ export class WebHost {
 	}
 
 	private async bindSession(): Promise<void> {
+		this.conversationNaming?.dispose();
 		this.operationStarted = false;
 		this.inputTouched = false;
 		this.gitTask = null;
@@ -368,6 +376,10 @@ export class WebHost {
 		this.tracker = new ChangeTracker(this.cwd);
 		const generation = this.generation;
 		const session = this.session;
+		this.conversationNaming = new ConversationNaming(
+			session,
+			() => session.isIdle && !this.completionActive && !this.gitTask,
+		);
 		await session.bindExtensions({
 			uiContext: this.dialogs.createExtensionUiContext({
 				getAllThemes: () => [],
@@ -427,6 +439,7 @@ export class WebHost {
 				});
 			}
 		});
+		this.refreshConversationNaming();
 	}
 
 	/**
@@ -550,6 +563,7 @@ export class WebHost {
 
 	/** Stop forwarding events and release the runtime. Used when the hub closes an idle or deleted slot. */
 	async dispose(): Promise<void> {
+		this.conversationNaming?.dispose();
 		this.generation += 1;
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
@@ -1043,6 +1057,7 @@ export class WebHost {
 			this.completionPromise = undefined;
 			this.completionStatus = undefined;
 			this.broadcast("completion", { active: false, runId });
+			this.refreshConversationNaming();
 		});
 	}
 

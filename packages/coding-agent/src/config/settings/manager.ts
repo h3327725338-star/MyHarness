@@ -528,7 +528,7 @@ export class SettingsManager {
 			changed = true;
 		}
 
-		for (const field of ["autoMemory", "subAgent", "visionAssistant"] as const) {
+		for (const field of ["autoMemory", "conversationNaming", "subAgent", "visionAssistant"] as const) {
 			const configured = this.globalSettings[field];
 			if (configured?.provider === providerId && (modelId === undefined || configured.model === modelId)) {
 				this.globalSettings[field] = { ...configured, enabled: false };
@@ -709,6 +709,19 @@ export class SettingsManager {
 	setAutoMemorySettings(settings: AutoMemorySettings): void {
 		this.globalSettings.autoMemory = { ...settings };
 		this.markModified("autoMemory");
+		this.save();
+	}
+
+	getConversationNamingSettings(): AutoMemorySettings & { enabled: boolean } {
+		return {
+			...this.globalSettings.conversationNaming,
+			enabled: this.globalSettings.conversationNaming?.enabled ?? false,
+		};
+	}
+
+	setConversationNamingSettings(settings: AutoMemorySettings): void {
+		this.globalSettings.conversationNaming = { ...settings };
+		this.markModified("conversationNaming");
 		this.save();
 	}
 

@@ -218,6 +218,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const s = settings();
 		const session = host.session;
 		const autoMemory = s.getAutoMemorySettings();
+		const conversationNaming = s.getConversationNamingSettings();
 		const subAgent = s.getSubAgentSettings();
 		const vision = s.getVisionAssistantSettings();
 		const fallbackModel = s.getFallbackModelSettings();
@@ -320,6 +321,16 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				value: s.getEnableSkillCommands(),
 			},
 			// Memory & assistants
+			{
+				id: "conversationNaming",
+				section: "Assistants",
+				label: "Conversation naming",
+				description:
+					"Name after the first reply; check new replies at most every 10 minutes. Manual names are preserved.",
+				type: "modelRef",
+				value: { ...modelRef(conversationNaming), enabled: conversationNaming.enabled },
+				note: "enabled",
+			},
 			{
 				id: "autoMemory",
 				section: "Assistants",
@@ -768,6 +779,17 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				const parsed = parseContextWindowInput(text);
 				if (parsed.error) throw new HttpError(400, parsed.error);
 				s.setContextWindowSettings({ ...current, [role]: parsed.value });
+				return;
+			}
+			case "conversationNaming": {
+				const ref = modelRefValue(value);
+				s.setConversationNamingSettings({
+					enabled: (value as { enabled?: unknown } | undefined)?.enabled === true,
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				host.refreshConversationNaming();
 				return;
 			}
 			case "autoMemory": {
