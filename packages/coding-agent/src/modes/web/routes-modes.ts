@@ -52,9 +52,13 @@ export function registerModeRoutes(server: WebHttpServer, host: WebHost, hub: We
 					throw new HttpError(400, "Draft attachments are too large");
 				draft = { text: candidate.text, attachments };
 			}
-			host.inputTouched = true;
+			// What the composer holds decides whether the chat counts as used: a draft that was cleared does not.
+			const touched = draft !== null && (draft.text.trim() !== "" || draft.attachments.length > 0);
+			const changed = host.inputTouched !== touched;
+			host.inputTouched = touched;
 			host.session.sessionManager.ensureSaved();
 			store().setDraft(selected, host.session.sessionId, draft);
+			if (changed) host.broadcast("session_info", { name: host.session.sessionName ?? null });
 		}
 		return { state: store().get(selected) };
 	});

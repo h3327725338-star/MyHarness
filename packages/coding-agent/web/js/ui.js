@@ -4,6 +4,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import htm from "/vendor/htm.js";
 import { Icon } from "./icons.js";
 import { t } from "./i18n.js";
+import { reconcileRows } from "./list-presence.js";
 
 export const html = htm.bind(h);
 export { Component, Fragment, createContext, h, render, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon };
@@ -163,7 +164,8 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 			return undefined;
 		}
 		const onKey = (event) => {
-			if (event.key === "Escape") {
+			// A dialog that is fading out (Overlay, inert) no longer answers the keyboard.
+			if (event.key === "Escape" && !ref.current?.closest("[inert]")) {
 				event.stopPropagation();
 				onClose?.();
 			}
@@ -174,7 +176,9 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		first?.focus?.();
 		return () => {
 			window.removeEventListener("keydown", onKey, true);
-			previous?.focus?.();
+			// Hand the keyboard back to what had it, unless the focus has already moved on (the dialog may fade out first).
+			const active = document.activeElement;
+			if (!active || active === document.body || ref.current?.contains(active)) previous?.focus?.();
 		};
 	}, []);
 	if (inline) {
@@ -201,11 +205,12 @@ export function Toggle({ checked, onChange, disabled, label }) {
 }
 
 /**
- * The fold arrow of every foldable row. One glyph that turns half a turn (CSS, `.fold-chev`), driven by the
- * `aria-expanded` of the element it sits in, so the arrow and the content move with the same motion.
+ * The fold arrow of every foldable row. Folded it points right, open it points down: one glyph that turns a quarter
+ * turn (CSS, `.fold-chev`), driven by the `aria-expanded` of the element it sits in, so the arrow and the content
+ * move with the same motion.
  */
 export function Fold() {
-	return html`<${Icon} name="chevronDown" size=${13} class="fold-chev" />`;
+	return html`<${Icon} name="chevronRight" size=${13} class="fold-chev" />`;
 }
 
 /** Added / removed lines the way the Diff view writes them: green +N and red −N (a part that is zero is left out). */
@@ -298,6 +303,100 @@ export function Collapse({ open, children, class: cls, keepMounted = false }) {
 	const { mounted, shown } = usePresence(open, COLLAPSE_MS + 40);
 	if (!mounted && !keepMounted) return null;
 	return html`<div class=${`collapse ${shown ? "open" : ""} ${cls || ""}`} inert=${!open}><div class="collapse-inner">${children}</div></div>`;
+}
+
+/**
+ * A line or block that folds in when it appears (`content` is not null) and folds out when it goes, with the motion of
+ * Collapse. It keeps its last content while it folds out, because by then the caller has already dropped it.
+ */
+export function FoldIn({ content, class: cls }) {
+	const last = useRef(content);
+	if (content) last.current = content;
+	return html`<${Collapse} open=${!!content} class=${cls}>${last.current}<//>`;
+}
+
+/**
+ * The motion of the "Show all" / "Show more" buttons. They swap a block's content for a longer (or shorter) version in
+ * one step, so there is nothing for CSS to transition: the block is measured before (`run(change)`) and after the change
+ * and its height glides between the two with the motion of Collapse. At most a screen of the change is animated; what
+ * lies further down is below the fold, so it appears with the last frame. Without motion nothing is animated.
+ * Give `ref` to the block that grows and call `run` with the state change.
+ */
+export function useHeightGlide() {
+	const ref = useRef(null);
+	const before = useRef(null);
+	const gliding = useRef(null);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		const start = before.current;
+		before.current = null;
+		if (start === null) return;
+		// A glide still running would be measured as the height it has reached, not the one the content has.
+		gliding.current?.cancel();
+		gliding.current = null;
+		if (!el?.animate || !motionEnabled()) return;
+		const end = el.offsetHeight;
+		if (end === start) return;
+		const keyframes = [Math.min(start, end + innerHeight), Math.min(end, start + innerHeight)].map((px) => ({ height: `${px}px`, overflow: "hidden" }));
+		gliding.current = el.animate(keyframes, { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+	});
+	const run = useCallback((change) => {
+		before.current = ref.current ? ref.current.offsetHeight : null;
+		change();
+		// A change that renders nothing must not leave its measurement for some later render.
+		requestAnimationFrame(() => { before.current = null; });
+	}, []);
+	return { ref, run };
+}
+
+/**
+ * The rows of a list whose rows come and go, plus the rows that just left, kept for the length of the fold-away motion
+ * so a removed row can animate out (see reconcileRows). `key` names the property that identifies a row. `present` is the
+ * set of rows that are really in the list, `initial` the set that was there when the list first appeared (those are shown
+ * at once; a row that arrives later, or comes back, grows in): give both to ListSlot.
+ */
+export function useRetainedRows(items, key = "path") {
+	const signature = items.map((item) => item[key]).join("\n");
+	const [retained, setRetained] = useState(items);
+	useLayoutEffect(() => {
+		setRetained((old) => reconcileRows(old, items, key));
+		const timer = setTimeout(() => setRetained(items), COLLAPSE_MS + 60);
+		return () => clearTimeout(timer);
+	}, [signature]);
+	const present = new Set(items.map((item) => item[key]));
+	const initial = useRef(null);
+	if (initial.current === null) initial.current = new Set(present);
+	for (const id of initial.current) if (!present.has(id)) initial.current.delete(id);
+	return { rows: reconcileRows(retained, items, key), present, initial: initial.current };
+}
+
+/** One row of such a list: it grows in when it arrives after the list was shown (`initial` false) and folds away when it is no longer `present`. */
+export function ListSlot({ present, initial, children }) {
+	const [open, setOpen] = useState(initial && present);
+	useLayoutEffect(() => {
+		setOpen(present);
+	}, [present]);
+	return html`<${Collapse} open=${open}>${children}<//>`;
+}
+
+/**
+ * Keeps an overlay (a dialog, the command palette) mounted while it fades out, so it leaves the way it came in. While it
+ * leaves it ignores the pointer, the keyboard and assistive technology (`inert`) and shows what it showed, because the
+ * caller's state is already gone. Without motion it leaves at once. The fade is `.overlay-host.closing` in overlays.css.
+ */
+export function Overlay({ show, children }) {
+	const { mounted } = usePresence(show, motionEnabled() ? 150 : 0);
+	const last = useRef(null);
+	const round = useRef(0);
+	const was = useRef(false);
+	if (show) {
+		last.current = children;
+		// An overlay that opens again while the old one still fades out is a new one: it starts from scratch.
+		if (!was.current) round.current += 1;
+	}
+	was.current = show;
+	if (!mounted) return null;
+	return html`<div key=${round.current} class=${`overlay-host ${show ? "" : "closing"}`} inert=${!show}>${last.current}</div>`;
 }
 
 /**

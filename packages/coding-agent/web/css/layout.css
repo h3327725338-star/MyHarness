@@ -46,7 +46,9 @@
 .chat-row .slot-status { display: grid; place-items: center; }
 .chat-row .title { padding: 0 6px; }
 .chat-row .slot-end { position: relative; height: 100%; display: flex; align-items: center; justify-content: flex-end; }
-.chat-row .when { font-size: var(--fs-xs); color: var(--text-4); transition: opacity var(--t-fast); }
+.chat-row .when { font-size: var(--fs-xs); color: var(--text-4); transition: opacity var(--t-fast), color var(--t-fast); }
+/* On the selected row (a lighter surface) the time moves up one text level, so it stays as readable as on the others. */
+.chat-row.current .when { color: var(--text-3); }
 .chat-row .row-actions { position: absolute; right: 0; display: flex; opacity: 0; pointer-events: none; transition: opacity var(--t-fast); }
 .chat-row:hover .when, .chat-row:focus-within .when { opacity: 0; }
 .chat-row:hover .row-actions, .chat-row:focus-within .row-actions { opacity: 1; pointer-events: auto; }
@@ -93,7 +95,11 @@
 .panel-body { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .panel .resizer { left: -4px; }
 
-.toasts { position: absolute; top: 52px; right: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 60; pointer-events: none; max-width: 420px; }
+.toasts { position: absolute; top: 52px; right: 14px; display: flex; flex-direction: column; z-index: 60; pointer-events: none; max-width: 420px; }
+/* A toast sits in a Collapse slot (Toasts in app.js) so a dismissed one folds away; its spacing is inside the slot, and while it
+   is shown the slot does not clip its shadow. */
+.toast-slot .toast { margin-bottom: 8px; }
+.toast-slot.open > .collapse-inner { overflow: visible; }
 .toast { pointer-events: auto; padding: 9px 12px; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-md); animation: fade-in var(--t-base) var(--ease); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 55%, var(--border-strong)); }
 .toast.warning { border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong)); }

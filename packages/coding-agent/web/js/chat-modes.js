@@ -20,6 +20,9 @@ export function draftToServer({ text = "", images = [] } = {}) {
 	return { text, attachments };
 }
 
+/** Whether a draft as the server stores it (`{ text, attachments }`) holds anything: typed text or an attachment. */
+export const draftHasContent = (draft) => !!draft && (!!String(draft.text ?? "").trim() || (Array.isArray(draft.attachments) && draft.attachments.length > 0));
+
 /** A saved draft back in the shape the composer uses (`{ text, images }`); unknown attachment entries are skipped. */
 export function draftFromServer(draft) {
 	if (!draft || typeof draft.text !== "string") return null;

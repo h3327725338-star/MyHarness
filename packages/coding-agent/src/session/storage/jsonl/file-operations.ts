@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { getSessionDir, parseSessionDataPath } from "../../../config/paths/index.ts";
-import { assertDirectTree, preserveArtifactOrigin, refreshArtifactIndexes } from "../../artifacts/store.ts";
+import { assertDirectTree, preserveArtifactOrigin, refreshSessionArtifactIndexes } from "../../artifacts/store.ts";
 
 function deleteTarget(sessionPath: string): { path: string; directory: boolean } {
 	const structured = parseSessionDataPath(sessionPath);
@@ -42,7 +42,7 @@ export async function deleteSessionFile(
 						await rm(join(target.path, "metadata", entry), { recursive: true });
 				}
 			} else if (!hasMemory) await rm(target.path, { recursive: true });
-			refreshArtifactIndexes(scope.dataRoot);
+			refreshSessionArtifactIndexes(scope);
 			return { ok: true, method: "unlink" };
 		}
 	} catch (error) {
@@ -63,7 +63,7 @@ export async function deleteSessionFile(
 	};
 
 	if (trashResult.status === 0 || !existsSync(target.path)) {
-		if (scope) refreshArtifactIndexes(scope.dataRoot);
+		if (scope) refreshSessionArtifactIndexes(scope);
 		return { ok: true, method: "trash" };
 	}
 
@@ -73,7 +73,7 @@ export async function deleteSessionFile(
 		await unlink(`${sessionPath}.archived`).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "ENOENT") throw error;
 		});
-		if (scope) refreshArtifactIndexes(scope.dataRoot);
+		if (scope) refreshSessionArtifactIndexes(scope);
 		return { ok: true, method: "unlink" };
 	} catch (err) {
 		const unlinkError = err instanceof Error ? err.message : String(err);

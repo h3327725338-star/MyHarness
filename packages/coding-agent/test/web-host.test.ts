@@ -240,6 +240,31 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === initial.slot).hasContent).toBe(true);
 	});
 
+	it("lets a chat whose input was erased again count as untouched", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const content = async () =>
+			(await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === initial.slot).hasContent;
+		const draft = (value: unknown) => fx.post("/api/modes/state", { mode: "coding", draft: value }, initial.slot);
+		await fx.post("/api/sessions/touched", {}, initial.slot);
+		expect(await content()).toBe(true);
+		// Typing, then erasing: the page says so, and the chat is blank again (and reusable as the next new chat).
+		await fx.post("/api/sessions/touched", { touched: false }, initial.slot);
+		expect(await content()).toBe(false);
+		expect((await fx.post("/api/sessions/new", {}, initial.slot)).slot).toBe(initial.slot);
+		// A saved draft decides the same way: text or an attachment counts, a cleared or blank one does not.
+		await draft({ text: "typed", attachments: [] });
+		expect(await content()).toBe(true);
+		await draft(null);
+		expect(await content()).toBe(false);
+		await draft({ text: "  \n", attachments: [] });
+		expect(await content()).toBe(false);
+		await draft({ text: "", attachments: [{ kind: "file", name: "a.txt", path: "a.txt" }] });
+		expect(await content()).toBe(true);
+		await draft({ text: "", attachments: [] });
+		expect(await content()).toBe(false);
+	});
+
 	it("archives a deferred draft without inventing messages and restores it from disk", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");
@@ -552,6 +577,31 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(kept.conversationDeleted).toBe(true);
 		expect(existsSync(artifact)).toBe(true);
 		expect(existsSync(file)).toBe(false);
+	});
+
+	it("reads one chat's or one workspace's artifacts from its own folders and only All workspaces refreshes the indexes", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("saved answer")])]);
+		await fx.post("/api/prompt", { text: "artifact chat" });
+		await fx.waitFor("run_finished");
+		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
+		const file = owner.session.sessionFile!;
+		writeFileSync(join(dirname(dirname(file)), "artifacts", "reports", "report.md"), "kept report");
+		const sessionId = owner.session.sessionManager.getSessionId();
+		const globalIndex = join(owner.session.sessionManager.getDataRoot()!, "artifacts", "index.json");
+		const indexed = () =>
+			existsSync(globalIndex) &&
+			JSON.parse(readFileSync(globalIndex, "utf8")).entries.some((entry: any) => entry.sessionId === sessionId);
+		for (const scope of ["session", "workspace"]) {
+			const entries = (await fx.get(`/api/artifacts?scope=${scope}`)).entries;
+			expect(entries.map((entry: any) => entry.name)).toEqual(["reports/report.md"]);
+		}
+		expect(indexed()).toBe(false);
+		const global = (await fx.get("/api/artifacts?scope=global")).entries;
+		expect(global.filter((entry: any) => entry.sessionId === sessionId).map((entry: any) => entry.name)).toEqual([
+			"reports/report.md",
+		]);
+		expect(indexed()).toBe(true);
 	});
 
 	it("pins a chat with a marker, reports its last activity and drops the marker with the chat", async () => {

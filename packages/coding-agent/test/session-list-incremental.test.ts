@@ -92,4 +92,82 @@ describe("listing sessions reads each file once and then only what was appended"
 		expect(info.firstMessage.startsWith("omega question")).toBe(true);
 		expect(info.name).toBeUndefined();
 	});
+
+	it("marks a file with nothing but the setup written at creation as blank, until anything else is written", async () => {
+		const root = mkdtempSync(join(tmpdir(), "myharness-list-blank-"));
+		roots.push(root);
+		const header = { type: "session", id: "b1", version: 3, timestamp: new Date(1000).toISOString(), cwd: root };
+		const setup = [
+			{
+				type: "model_change",
+				id: "m1",
+				parentId: null,
+				timestamp: new Date(1001).toISOString(),
+				provider: "p",
+				modelId: "m",
+			},
+			{
+				type: "thinking_level_change",
+				id: "t1",
+				parentId: "m1",
+				timestamp: new Date(1002).toISOString(),
+				thinkingLevel: "medium",
+			},
+		];
+		const lines = (entries: unknown[]) => entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+		const list = async (file: string) => (await SessionManager.list(root, root)).find((info) => info.path === file)!;
+
+		const file = join(root, "b1.jsonl");
+		writeFileSync(file, lines([header, ...setup]));
+		let info = await list(file);
+		expect(info.messageCount).toBe(0);
+		expect(info.blank).toBe(true);
+
+		// A half-written line says nothing yet: the file is still blank until it is complete.
+		appendFileSync(file, `{"type":"message","id":"a1","parentId":"t1"`);
+		expect((await list(file)).blank).toBe(true);
+		appendFileSync(
+			file,
+			`,"timestamp":"${new Date(2000).toISOString()}","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}\n`,
+		);
+		info = await list(file);
+		expect(info.messageCount).toBe(1);
+		expect(info.blank).toBe(false);
+
+		// Anything a person or an operation made keeps a chat from being blank, whatever else it holds.
+		const others: Record<string, unknown> = {
+			name: {
+				type: "session_info",
+				id: "n1",
+				parentId: "t1",
+				timestamp: new Date(3000).toISOString(),
+				name: "Named",
+			},
+			"operation card": {
+				type: "custom",
+				id: "c1",
+				parentId: "t1",
+				timestamp: new Date(3000).toISOString(),
+				customType: "web-git-status",
+				data: {},
+			},
+			label: {
+				type: "label",
+				id: "l1",
+				parentId: "t1",
+				timestamp: new Date(3000).toISOString(),
+				targetId: "t1",
+				label: "x",
+			},
+		};
+		for (const [name, entry] of Object.entries(others)) {
+			const other = join(root, `other-${name.replace(/\W/g, "")}.jsonl`);
+			writeFileSync(other, lines([{ ...header, id: `o-${name}` }, ...setup, entry]));
+			expect((await list(other)).blank, name).toBe(false);
+		}
+		// A line this reader does not understand is not "nothing".
+		const odd = join(root, "odd.jsonl");
+		writeFileSync(odd, `${lines([{ ...header, id: "odd" }, ...setup])}not json at all\n`);
+		expect((await list(odd)).blank).toBe(false);
+	});
 });

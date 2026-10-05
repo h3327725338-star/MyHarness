@@ -8,7 +8,12 @@ import * as path from "node:path";
 import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { getDataDir } from "../../config/paths/index.ts";
-import { artifactScope, refreshArtifactIndexes, resolveArtifact } from "../../session/artifacts/store.ts";
+import {
+	artifactScope,
+	listArtifacts,
+	refreshArtifactIndexes,
+	resolveArtifact,
+} from "../../session/artifacts/store.ts";
 import { listMemoryFiles, migrateLegacyMemories, restoreMemoryArchive } from "../../session/memory/store.ts";
 import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
@@ -156,14 +161,16 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const scope = artifactScope(host.session.sessionManager);
 		const level = url.searchParams.get("scope") ?? "session";
 		if (!["session", "workspace", "global"].includes(level)) throw new HttpError(400, "Unknown artifact scope");
-		const entries = refreshArtifactIndexes(artifactDataRoot());
+		const dataRoot = artifactDataRoot();
+		// Only "All workspaces" reads every Workspace (and refreshes the derived indexes with it); that blocks the server
+		// for seconds on a data root with many Workspaces, so the other views read just their own folders.
+		if (level === "global") return { entries: refreshArtifactIndexes(dataRoot) };
+		if (!scope) return { entries: [] };
 		return {
-			entries: entries.filter(
-				(entry) =>
-					level === "global" ||
-					(entry.workspaceId === scope?.workspaceId &&
-						(level === "workspace" || entry.sessionId === scope?.sessionId)),
-			),
+			entries: listArtifacts(dataRoot, {
+				workspaceId: scope.workspaceId,
+				...(level === "session" ? { sessionId: scope.sessionId } : {}),
+			}),
 		};
 	});
 	server.route("GET", "/api/artifacts/download", ({ url, res }) => {

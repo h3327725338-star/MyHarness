@@ -139,8 +139,9 @@ setLang(state.view.lang);
 
 // ---- Sidebar lists, one set per mode ---------------------------------------------------------------
 // Each mode has its own Workspaces and chats. `state.workspaces` is the set of the mode on screen; loads that finish
-// after a switch write into the set of the mode they were made for.
-const emptyLists = () => ({ list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false });
+// after a switch write into the set of the mode they were made for. `loaded` turns true once the mode's Workspaces
+// were read, so an empty list that was never loaded is not shown as "No workspaces".
+const emptyLists = () => ({ list: [], loaded: false, currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false });
 const listsByMode = { coding: emptyLists(), general: emptyLists() };
 export const uiMode = () => state.view.chatMode;
 Object.defineProperty(state, "workspaces", {
@@ -431,7 +432,7 @@ export async function loadSlots() {
  */
 export async function loadWorkspaces(mode = uiMode(), slot) {
 	const data = await api(`/api/workspaces?mode=${mode}`, slot === undefined ? {} : { slot });
-	patchLists(mode, { list: data.workspaces, currentPath: data.currentPath, currentSessionFile: data.currentSessionFile });
+	patchLists(mode, { list: data.workspaces, loaded: true, currentPath: data.currentPath, currentSessionFile: data.currentSessionFile });
 	emit();
 	const current = data.workspaces.find((w) => w.current);
 	const expanded = state.view[expandedKey(mode)] || {};
@@ -615,7 +616,6 @@ function setModeState(mode, value) {
 	emit(true);
 }
 
-const listsReady = (mode, slot) => Promise.race([loadWorkspaces(mode, slot).catch(() => {}), new Promise((done) => setTimeout(done, 1500))]);
 const sameFile = (a, b) => !!a && !!b && a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
 
 /**
@@ -693,6 +693,18 @@ export function clearDraft(entry) {
 	return sendDraft({ ...entry, text: "", images: [] });
 }
 
+// Whether a chat's composer holds anything is told to the server at once (before the delayed draft save): a chat with
+// input stays listed, and one whose input was erased again is a blank chat like a new one. The requests of one chat run
+// one after the other, so an erase can never overtake the typing it undoes. Resolves with whether the server took it.
+const touchQueues = new Map();
+export function setChatTouched(slot, touched) {
+	const next = (touchQueues.get(slot) ?? Promise.resolve())
+		.then(() => post("/api/sessions/touched", { touched }, slot))
+		.then(() => true, () => false);
+	touchQueues.set(slot, next);
+	return next;
+}
+
 /**
  * Show the other mode: save the draft and the chat on screen, ask the server for the mode's chat (its latest one, or a
  * new blank one), then reveal it from the switch. A failure (for example a saved chat that cannot be opened) is shown
@@ -741,7 +753,7 @@ export const isLatestSwitch = (seq) => seq === switchSeq;
 /**
  * Show another open session. Sessions keep running in the background, so this only changes which bag is on screen.
  * Nothing on screen (an animation, a list) is waited for: the bag is loaded first if needed, then shown at once. A
- * session of the other mode brings its mode with it (revealed from the mode switch, after its lists are loaded).
+ * session of the other mode brings its mode with it (revealed from the mode switch, its lists loading behind it).
  */
 export async function activateSlot(slot, seq = nextSwitch()) {
 	if (!slot || slot === activeSlot) return;
@@ -758,9 +770,9 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 	};
 	if (mode !== state.view.chatMode) {
 		flushDrafts();
-		// Cached lists can render immediately; refresh them without holding up the reveal.
-		void listsReady(mode, slot);
-		if (!isLatestSwitch(seq)) return;
+		// The reveal never waits for the lists: loaded ones render at once and refresh behind it, and ones that were
+		// not read yet (the page prefetches them when it is idle) show "Loading…" and fill in as they arrive.
+		loadWorkspaces(mode, slot).catch(() => {});
 		const previousSlot = activeSlot;
 		const previousMode = state.view.chatMode;
 		await revealMode(show, { from: previousMode, to: mode, restore: () => {
@@ -860,6 +872,17 @@ async function initialLoad() {
 	if (view) toast(t("Service restarted successfully."), "info", 3500);
 }
 
+/**
+ * The other mode's Workspaces and chats are read shortly after the page is up, so the first click on the mode switch
+ * finds them ready. Only the lists are read: nothing is opened, created or saved for the other mode.
+ */
+function prefetchOtherMode() {
+	setTimeout(() => {
+		const other = state.view.chatMode === "coding" ? "general" : "coding";
+		if (document.visibilityState === "visible" && !listsByMode[other].loaded) loadWorkspaces(other).catch(() => {});
+	}, 1200);
+}
+
 export async function boot() {
 	applyAppearance();
 	matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyAppearance);
@@ -875,6 +898,7 @@ export async function boot() {
 				booted = true;
 				loadModels();
 				connectEvents();
+				prefetchOtherMode();
 				return;
 			}
 			if (boot.phase === "error") return;

@@ -8,6 +8,7 @@
    above the input. Centred with auto margins (no transform), so an entrance animation cannot move it off centre. */
 .jump-btn { position: absolute; left: 0; right: 0; bottom: 12px; margin: 0 auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); color: var(--text-2); z-index: 4; animation: fade-only var(--t-base) var(--ease); transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
 .jump-btn:hover { background: var(--surface-hover); color: var(--text); }
+.jump-btn.leaving { animation: fade-only-out var(--t-base) var(--ease) both; pointer-events: none; }
 
 .turn { display: flex; flex-direction: column; gap: 10px; }
 

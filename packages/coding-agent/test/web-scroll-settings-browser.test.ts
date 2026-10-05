@@ -53,10 +53,12 @@ try {
  assert(document.querySelector('.jump-btn'),'reader scrolling up must show button');
  card.style.height='1100px';await wait(100);
  assert(document.querySelector('.jump-btn'),'reading older output must not be forced down');
+ let fading=false;new MutationObserver(()=>{if(document.querySelector('.jump-btn.leaving'))fading=true;}).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
  document.querySelector('.jump-btn').click();await wait(700);
- assert(bottom()&&!document.querySelector('.jump-btn'),'jump must hide button');
+ assert(bottom()&&!document.querySelector('.jump-btn:not(.leaving)'),'jump must hide button');
+ assert(fading&&!document.querySelector('.jump-btn'),'jump button must fade out and then leave');
  scroller.style.height='300px';await wait(100);
- assert(bottom()&&!document.querySelector('.jump-btn'),'viewport resize must stay pinned');
+ assert(bottom()&&!document.querySelector('.jump-btn:not(.leaving)'),'viewport resize must stay pinned');
  for(const lang of ['en','zh-CN']) {
   setView({lang,settingsSection:'appearance'});render(h(SettingsModal),document.getElementById('app'));await wait(200);
   const buttons=[...document.querySelectorAll('.settings-nav button')];assert(buttons.length>0,'missing settings navigation');

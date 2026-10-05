@@ -1,4 +1,16 @@
-// Order of the chats in a sidebar group: pinned chats first, then running ones, then the most recent activity first.
+// Which chats a sidebar group lists and in which order: pinned chats first, then running ones, then the most recent
+// activity first.
+
+/**
+ * A saved chat that holds nothing the user made (`blank`, reported by the server: only the setup written when the chat
+ * was created) and that nothing keeps on the list. It is what a mode was left on, or a new chat that was never used, so
+ * it stops being listed once another chat is shown. Its file is never deleted. Kept on the list: the chat on screen
+ * (`current`), a pinned or named one, one that holds a draft, and one that is open with something in it (`slot`).
+ */
+export function isLeftBlank(info, { current = false, draft = false, slot } = {}) {
+	if (!info.blank || info.pinned || info.name || current || draft) return false;
+	return !(slot && (slot.hasContent || slot.firstMessage || slot.name || slot.active || slot.completion || slot.waiting));
+}
 
 /**
  * When something last happened in a chat: the newest of its saved activity (`modified`, the last message) and what

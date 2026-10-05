@@ -1,6 +1,6 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
 import { api, useStore, setView } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
@@ -22,9 +22,10 @@ function Ansi({ text }) {
 
 function Output({ text, max = 20_000, tail = false }) {
 	const [all, setAll] = useState(false);
+	const glide = useHeightGlide();
 	const shown = !all && text.length > max ? (tail ? text.slice(-max) : text.slice(0, max)) : text;
-	return html`<div class="raw-block"><pre class="raw-pre"><${Ansi} text=${shown} /></pre>
-		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
+	return html`<div class="raw-block" ref=${glide.ref}><pre class="raw-pre"><${Ansi} text=${shown} /></pre>
+		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => setAll(!all))}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
 const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
@@ -32,9 +33,10 @@ const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
 /** Text read from a Markdown file renders like the chat; everything else stays plain/code output. */
 function MarkdownOutput({ text, max = 60_000 }) {
 	const [all, setAll] = useState(false);
+	const glide = useHeightGlide();
 	const shown = !all && text.length > max ? text.slice(0, max) : text;
-	return html`<div class="raw-block raw-md"><${Markdown} text=${shown} />
-		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
+	return html`<div class="raw-block raw-md" ref=${glide.ref}><${Markdown} text=${shown} />
+		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => setAll(!all))}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
 function RawDetails({ step }) {
@@ -483,6 +485,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 /** A command the user ran with "!": the same row as a command the agent runs (glyph, what it did, the command), then its output. */
 function BashCard({ item }) {
 	const [open, setOpen] = useState(false);
+	const glide = useHeightGlide();
 	const status = item.status || (item.cancelled ? "cancelled" : item.timedOut ? "timeout" : item.exitCode ? "failed" : item.exitCode === undefined && item.status === "running" ? "running" : "done");
 	const output = item.output || "";
 	const lines = output.split("\n");
@@ -490,13 +493,13 @@ function BashCard({ item }) {
 	const label = { running: t("Running"), done: t("Ran"), failed: t("Exited {code}", { code: item.exitCode }), cancelled: t("Cancelled"), timeout: t("Timed out"), error: t("Failed to start") }[status] || t("Ran");
 	const failed = status === "failed" || status === "timeout" || status === "error";
 	const step = { status: status === "running" ? "running" : status === "cancelled" ? "cancelled" : "done", isError: failed, kind: "run" };
-	return html`<div class=${`action bash-entry s-${status} ${failed ? "err" : ""}`}>
+	return html`<div class=${`action bash-entry s-${status} ${failed ? "err" : ""}`} ref=${glide.ref}>
 		<div class="action-row static">
 			<span class="action-ico"><${StatusGlyph} step=${step} /></span>
 			<span class="action-text truncate"><span class=${status === "running" ? "shimmer-text" : "verb"}>${label}</span> <span class="mono target">${item.command}</span></span>
 			${item.excludeFromContext ? html`<span class="action-tail"><span class="badge">${t("not in context")}</span></span>` : null}
 		</div>
-		${output ? html`<pre class="bash-out"><${Ansi} text=${open ? output : preview} /></pre>${lines.length > 8 ? html`<button class="btn sm ghost" onClick=${() => setOpen(!open)}>${open ? t("Show less") : t("Show all {length} lines", { length: lines.length })}</button>` : null}` : null}
+		${output ? html`<pre class="bash-out"><${Ansi} text=${open ? output : preview} /></pre>${lines.length > 8 ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => setOpen(!open))}>${open ? t("Show less") : t("Show all {length} lines", { length: lines.length })}</button>` : null}` : null}
 		${item.truncated && item.fullOutputPath ? html`<div class="dim bash-note">${t("Output truncated. Full output saved at {fullOutputPath}", { fullOutputPath: item.fullOutputPath })}</div>` : null}
 	</div>`;
 }
@@ -569,6 +572,8 @@ export function Transcript() {
 	const stick = useRef(true);
 	const lastInteract = useRef(0);
 	const [away, setAway] = useState(false);
+	// The jump button fades out when it is no longer needed (it keeps its place while it does).
+	const jump = usePresence(away, 160);
 	const lastTop = useRef(0);
 	const programmatic = useRef(false);
 	const holdPlace = useRef(false);
@@ -674,6 +679,6 @@ export function Transcript() {
 				<div class="transcript-end" />
 			</div>
 		</div>
-		${away ? html`<button class="jump-btn" onClick=${() => { stick.current = true; toBottom(true); }} title=${active ? t("Follow live output") : t("Jump to latest")} aria-label=${active ? t("Follow live output") : t("Jump to latest")}><${Icon} name="arrowDown" size=${16} /></button>` : null}
+		${jump.mounted ? html`<button class=${`jump-btn ${away ? "" : "leaving"}`} onClick=${() => { stick.current = true; toBottom(true); }} title=${active ? t("Follow live output") : t("Jump to latest")} aria-label=${active ? t("Follow live output") : t("Jump to latest")}><${Icon} name="arrowDown" size=${16} /></button>` : null}
 	</div>`;
 }

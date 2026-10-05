@@ -15,7 +15,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "../extensions/contra
 import type { ExtensionRunner } from "../extensions/runtime/runner.ts";
 import { wrapRegisteredTools } from "../extensions/runtime/wrapper.ts";
 import { WebSearchApiKeys } from "../providers/credentials/web-search-keys.ts";
-import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexes } from "../session/artifacts/store.ts";
+import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexesIfChanged } from "../session/artifacts/store.ts";
 import type { SessionManager } from "../session/manager/index.ts";
 import type { UltracodeToolOptions, WorkflowToolOptions } from "../workflow/tool.ts";
 import { createAllToolDefinitions } from "./registry.ts";
@@ -292,7 +292,7 @@ export class SessionToolRegistry {
 						const scope = artifactScope(sessionManager);
 						if (scope && ["write", "edit", "bash", "pwsh"].includes(tool.name)) {
 							try {
-								refreshArtifactIndexes(scope.dataRoot);
+								refreshArtifactIndexesIfChanged(scope);
 							} catch (error) {
 								console.warn(
 									"[artifacts] Could not refresh derived indexes:",

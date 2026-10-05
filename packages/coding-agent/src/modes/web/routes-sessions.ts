@@ -181,6 +181,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			created: info.created.getTime(),
 			modified: info.modified.getTime(),
 			messageCount: info.messageCount,
+			blank: info.blank === true,
 			parentSessionPath: info.parentSessionPath ?? null,
 			pinned: existsSync(`${info.path}.pinned`),
 			current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
@@ -503,8 +504,10 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	server.route("GET", "/api/sessions/stats", () => host.usage().stats);
-	server.route("POST", "/api/sessions/touched", () => {
-		host.inputTouched = true;
+	server.route("POST", "/api/sessions/touched", ({ body }) => {
+		// The page tells whether the chat's composer holds anything; `touched: false` follows when it was emptied again, so a
+		// chat that was typed into and cleared is not kept listed for the typing.
+		host.inputTouched = asObject(body ?? {}).touched !== false;
 		host.broadcast("session_info", { name: host.session.sessionName ?? null });
 		return { ok: true };
 	});

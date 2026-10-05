@@ -69,7 +69,7 @@ svg { display: block; flex: none; }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
 .btn.primary:hover:not(:disabled), .btn.primary:active:not(:disabled) { background: var(--accent-strong); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-strong)); }
-.btn.danger.solid { background: var(--danger); color: #fff; border-color: transparent; }
+.btn.danger.solid { background: var(--danger); color: var(--on-danger); border-color: transparent; }
 .btn.danger.solid:hover:not(:disabled), .btn.danger.solid:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 86%, #000); }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
@@ -164,15 +164,13 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .collapse { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t-base) var(--ease), visibility 0s linear var(--t-slow); }
 .collapse.open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
 .collapse-inner { min-width: 0; min-height: 0; overflow: hidden; }
-/* The fold arrow (Fold in ui.js): one glyph that turns half a turn with the element it sits in, so every foldable row
-   shows its state with the same motion as its content. */
+/* The fold arrow (Fold in ui.js, and .disclose for a head that has its arrow at the start: session sections, model
+   cards): one right-pointing glyph that turns a quarter turn, right to down, with the element it sits in, so every
+   foldable row shows its state with the same motion as its content. Folded = right, open = down. */
 .fold-chevron { flex: none; transition: transform var(--t-slow) var(--ease); }
 .fold-chevron.open { transform: rotate(90deg); }
-.fold-chev { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
-[aria-expanded="true"] .fold-chev { transform: rotate(180deg); }
-/* The same for a head that has its arrow at the start (session sections, model cards): a quarter turn, right to down. */
-.disclose { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
-[aria-expanded="true"] .disclose { transform: rotate(90deg); }
+.fold-chev, .disclose { color: var(--text-3); flex: none; transition: transform var(--t-slow) var(--ease); }
+[aria-expanded="true"] .fold-chev, [aria-expanded="true"] .disclose { transform: rotate(90deg); }
 
 /* A number with a fixed unit after it: one field look, the unit is inside at the right and cannot be edited. */
 .unit-field { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--bg-inset); cursor: text; min-width: 0; transition: border-color var(--t-fast); }

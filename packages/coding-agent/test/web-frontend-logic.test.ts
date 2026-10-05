@@ -152,6 +152,48 @@ describe("Web UI: chat order in the sidebar", () => {
 	});
 });
 
+describe("Web UI: blank chats left behind", () => {
+	it("hides a saved blank chat once nothing keeps it on the list, and never one that holds anything", async () => {
+		const { isLeftBlank } = await import(new URL("chat-order.js", webDir).href);
+		const blank = { path: "b", blank: true };
+		expect(isLeftBlank(blank)).toBe(true);
+		expect(isLeftBlank(blank, { slot: { hasContent: false, firstMessage: "", active: false } })).toBe(true);
+		// What keeps it: it is on screen, pinned or named, holds a draft, or is open with something in it.
+		expect(isLeftBlank(blank, { current: true })).toBe(false);
+		expect(isLeftBlank({ ...blank, pinned: true })).toBe(false);
+		expect(isLeftBlank({ ...blank, name: "Plan" })).toBe(false);
+		expect(isLeftBlank(blank, { draft: true })).toBe(false);
+		for (const content of [
+			{ hasContent: true },
+			{ firstMessage: "hi" },
+			{ name: "x" },
+			{ active: true },
+			{ completion: true },
+			{ waiting: true },
+		]) {
+			expect(isLeftBlank(blank, { slot: content }), JSON.stringify(content)).toBe(false);
+		}
+		// Only the server says a chat is blank: a chat without messages may still hold operation cards, and an older server sends no flag.
+		expect(isLeftBlank({ path: "m", messageCount: 0 })).toBe(false);
+		expect(isLeftBlank({ path: "m", blank: false })).toBe(false);
+	});
+
+	it("counts a saved draft only when it holds text or an attachment", async () => {
+		const { draftHasContent } = await import(new URL("chat-modes.js", webDir).href);
+		expect(draftHasContent(undefined)).toBe(false);
+		expect(draftHasContent({ text: "  \n", attachments: [] })).toBe(false);
+		expect(draftHasContent({ text: "hello", attachments: [] })).toBe(true);
+		expect(draftHasContent({ text: "", attachments: [{ kind: "file", name: "a", path: "p" }] })).toBe(true);
+	});
+
+	it("keeps rows that left in place by their own key, for lists of workspaces and toasts too", async () => {
+		const { reconcileRows } = await import(new URL("list-presence.js", webDir).href);
+		const old = [{ id: "a" }, { id: "b" }, { id: "c" }];
+		const current = [{ id: "a" }, { id: "c" }, { id: "d" }];
+		expect(reconcileRows(old, current, "id").map((row: any) => row.id)).toEqual(["a", "b", "c", "d"]);
+	});
+});
+
 describe("Web UI: Commit repair containment", () => {
 	const marker = { kind: "custom", id: "repair", ts: 2, customType: "git-commit-repair", display: false };
 	const user = { kind: "user", ts: 1, text: "task", images: [] };

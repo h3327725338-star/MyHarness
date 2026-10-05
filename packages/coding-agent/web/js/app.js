@@ -1,5 +1,5 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Modal, Resizer, Spinner, usePresence } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
 import { attempt, dismissToast, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
@@ -61,18 +61,23 @@ function Header() {
 	const firstUser = items.find((i) => i.kind === "user" && i.text);
 	// A chat that has no name and no message yet has no title to show. The workspace is shown above the input, not here.
 	const title = snap?.session?.name || (firstUser ? clip(firstUser.text.replace(/\s+/g, " "), 70) : "");
-	const commit = async () => {
+	// An edit ends once, whichever way: Enter saves, Escape keeps the title as it was. The box that closes also loses the
+	// focus, and that must neither save what was typed after Escape nor save a second time after Enter.
+	const ended = useRef(true);
+	const finish = async (save) => {
+		if (ended.current) return;
+		ended.current = true;
 		setEditing(false);
 		const next = value.trim();
-		if (next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
+		if (save && next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
 	};
 	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	return html`<header class="main-header">
 		${!sidebarOpen ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
-			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onKeyDown=${(e) => (e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
-			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
+			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
+			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { ended.current = false; setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
 		${copy ? html`<span class="badge truncate" title=${`${copy.name}\n${copy.path}`}>${t("Copy")} · ${copy.name}</span>` : null}
 		<span class="grow" />
 		<${StatusPill} />
@@ -120,13 +125,15 @@ function PanelContainer() {
 	</aside>`;
 }
 
-function Toasts() {
+export function Toasts() {
 	const toasts = useStore((s) => s.toasts);
-	return html`<div class="toasts" aria-live="polite">${toasts.map((item) => html`<div key=${item.id} class=${`toast ${item.type}`} role=${item.type === "error" ? "alert" : "status"}>
+	// A dismissed toast stays while it fades and folds away, so the ones below it slide up instead of jumping.
+	const { rows, present } = useRetainedRows(toasts, "id");
+	return html`<div class="toasts" aria-live="polite">${rows.map((item) => html`<${Collapse} key=${item.id} open=${present.has(item.id)} class="toast-slot"><div class=${`toast ${item.type}`} role=${item.type === "error" ? "alert" : "status"}>
 		<${Icon} name=${item.type === "error" ? "alertCircle" : item.type === "warning" ? "alertTriangle" : "info"} size=${15} class=${item.type === "error" ? "c-danger" : item.type === "warning" ? "c-warn" : "c-dim"} />
 		<span class="msg grow">${item.message}</span>
 		<button class="icon-btn sm" aria-label=${t("Dismiss")} onClick=${() => dismissToast(item.id)}><${Icon} name="x" size=${13} /></button>
-	</div>`)}</div>`;
+	</div><//>`)}</div>`;
 }
 
 export function ConfirmModal({ dialog }) {
@@ -235,19 +242,19 @@ export function App() {
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
-			${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null}
+			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />
 			<${Composer} />
 			<${Toasts} />
 		</main>
 		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}
-		${view.settingsOpen ? html`<${SettingsModal} />` : null}
-		${view.providerEditor ? html`<${ProviderEditorHost} key=${view.providerEditor.id ?? ""} id=${view.providerEditor.id} />` : null}
-		${view.palette ? html`<${CommandPalette} />` : null}
-		${view.dialog?.type === "git-setup" ? html`<${GitSetupDialog} />` : null}
-		${view.dialog?.type === "confirm" ? html`<${ConfirmModal} dialog=${view.dialog} />` : null}
-		${view.dialog?.type === "input" ? html`<${InputModal} dialog=${view.dialog} />` : null}
+		<${Overlay} show=${!!view.settingsOpen}>${view.settingsOpen ? html`<${SettingsModal} />` : null}<//>
+		<${Overlay} show=${!!view.providerEditor}>${view.providerEditor ? html`<${ProviderEditorHost} key=${view.providerEditor.id ?? ""} id=${view.providerEditor.id} />` : null}<//>
+		<${Overlay} show=${!!view.palette}>${view.palette ? html`<${CommandPalette} />` : null}<//>
+		<${Overlay} show=${view.dialog?.type === "git-setup"}>${view.dialog?.type === "git-setup" ? html`<${GitSetupDialog} />` : null}<//>
+		<${Overlay} show=${view.dialog?.type === "confirm"}>${view.dialog?.type === "confirm" ? html`<${ConfirmModal} dialog=${view.dialog} />` : null}<//>
+		<${Overlay} show=${view.dialog?.type === "input"}>${view.dialog?.type === "input" ? html`<${InputModal} dialog=${view.dialog} />` : null}<//>
 	</div>`;
 }
 

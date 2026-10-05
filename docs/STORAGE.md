@@ -85,10 +85,14 @@ and intermediate files default to a single conversation-owned location:
 ```
 
 Only the Session directory holds file bytes. Parent indexes are derived from
-actual files, refreshed after file/shell tools and when browsing artifacts. They
-can be rebuilt without duplicating reports. The Web Files panel has an Artifacts
-view for the current chat, current Workspace and all Workspaces; files can be
-downloaded and every entry carries its Workspace/Session identity.
+actual files and can be rebuilt without duplicating reports. After a file/shell
+tool only the chat that ran it is updated in them, and only when its artifacts
+changed; the All workspaces view and chat deletion rebuild them completely, and
+a file whose content is unchanged is not rewritten. One walk checks each folder
+for symbolic links/junctions once, not once per file below it. The Web Files
+panel has an Artifacts view for the current chat, current Workspace and all
+Workspaces (the first two read just their own folders); files can be downloaded
+and every entry carries its Workspace/Session identity.
 
 Persisted structured Sessions receive their artifact path in the runtime prompt.
 Shell tools also expose `MYHARNESS_ARTIFACTS_DIR` and `MYHARNESS_TEMP_DIR` without

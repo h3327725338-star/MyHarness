@@ -172,6 +172,11 @@ export interface SessionInfo {
 	created: Date;
 	modified: Date;
 	messageCount: number;
+	/**
+	 * The file holds nothing the user made: besides the header only the model and thinking setup written when the
+	 * chat was created (no message, name, label, operation card or other entry).
+	 */
+	blank?: boolean;
 	firstMessage: string;
 	allMessagesText: string;
 }

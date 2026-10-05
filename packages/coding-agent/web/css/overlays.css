@@ -1,5 +1,8 @@
 .scrim { position: fixed; inset: 0; z-index: 200; background: var(--scrim); display: grid; place-items: center; padding: 24px; animation: fade-in var(--t-fast) var(--ease); }
 .scrim.top { align-items: start; padding-top: 12vh; }
+/* An overlay that is closing (Overlay in ui.js) fades out where it is and lets every click through. */
+.overlay-host { display: contents; }
+.overlay-host.closing > .scrim { animation: fade-only-out var(--t-base) var(--ease) both; pointer-events: none; }
 .modal { max-width: min(100%, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-pop); animation: fade-in var(--t-base) var(--ease); }
 .modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; flex: none; }
 .modal-title { font-size: 15px; font-weight: 650; }

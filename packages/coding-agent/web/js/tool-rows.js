@@ -1,7 +1,7 @@
 // Pieces of a tool row that look the same wherever the row appears (inside a step list, inside a group, as the web
 // aggregate): the glyph at its start, and what a web search or page read really did (the results it returned, the pages
 // it opened, what went wrong), built only from the data the tool's result carries.
-import { html, Collapse, Icon, Spinner, useState } from "./ui.js";
+import { html, Collapse, Icon, Spinner, useHeightGlide, useState } from "./ui.js";
 import { count, serverText, t } from "./i18n.js";
 import { clip } from "./util.js";
 
@@ -38,12 +38,13 @@ function PageLink({ url, title, note }) {
 
 function PageList({ label, items, render }) {
 	const [all, setAll] = useState(false);
+	const glide = useHeightGlide();
 	if (!items.length) return null;
 	const shown = all ? items : items.slice(0, SHOWN);
-	return html`<div class="web-block">
+	return html`<div class="web-block" ref=${glide.ref}>
 		<div class="web-label">${label}<span class="web-count">${items.length}</span></div>
 		<ol class="web-list">${shown.map(render)}</ol>
-		${items.length > SHOWN ? html`<button class="link-btn web-more" onClick=${() => setAll(!all)}>${all ? t("Show less") : t("Show all {length}", { length: items.length })}</button>` : null}
+		${items.length > SHOWN ? html`<button class="link-btn web-more" onClick=${() => glide.run(() => setAll(!all))}>${all ? t("Show less") : t("Show all {length}", { length: items.length })}</button>` : null}
 	</div>`;
 }
 

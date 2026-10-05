@@ -520,6 +520,8 @@ interface SessionScan {
 	/** The first line was not a Session header: not a Session file. */
 	invalid: boolean;
 	messageCount: number;
+	/** Nothing but the header and the model / thinking setup has been seen (see SessionInfo.blank). */
+	blank: boolean;
 	firstMessage: string;
 	allMessages: string[];
 	textChars: number;
@@ -559,7 +561,11 @@ function rememberSessionScan(filePath: string, scan: SessionScan): void {
 function applySessionScanLine(scan: SessionScan, line: string): void {
 	if (scan.invalid) return;
 	const entry = parseSessionEntryLine(line);
-	if (!entry) return;
+	if (!entry) {
+		// A line that is not a valid entry is not something this scan understands: do not call the file blank.
+		if (line.trim() && scan.header) scan.blank = false;
+		return;
+	}
 	if (!scan.header) {
 		if (entry.type !== "session") {
 			scan.invalid = true;
@@ -568,6 +574,7 @@ function applySessionScanLine(scan: SessionScan, line: string): void {
 		scan.header = entry;
 		return;
 	}
+	if (entry.type !== "model_change" && entry.type !== "thinking_level_change") scan.blank = false;
 	if (entry.type === "session_info") scan.name = entry.name?.trim() || undefined;
 	if (entry.type !== "message") return;
 	scan.messageCount++;
@@ -640,6 +647,7 @@ function sessionInfoFromScan(filePath: string, scan: SessionScan, mtime: Date): 
 		created: new Date(header.timestamp),
 		modified,
 		messageCount: scan.messageCount,
+		blank: scan.blank,
 		firstMessage: scan.firstMessage || "(no messages)",
 		allMessagesText: scan.allMessages.join(" "),
 	};
@@ -661,6 +669,7 @@ async function buildSessionInfoUncached(filePath: string): Promise<SessionInfo |
 						header: null,
 						invalid: false,
 						messageCount: 0,
+						blank: true,
 						firstMessage: "",
 						allMessages: [],
 						textChars: 0,
@@ -745,32 +754,34 @@ export async function listSessionsFromDir(dir: string, onProgress?: SessionListP
 	return sessions;
 }
 
+/**
+ * The conversation files (`<session>/conversation/*.jsonl`) of every Session folder under a Workspace's sessions folder.
+ * The folders are read at the same time rather than one after the other (listing thousands of chats spent most of its
+ * time waiting between those reads); the result keeps the order of the folders.
+ */
+async function listConversationFiles(workspaceSessionsDir: string): Promise<string[]> {
+	const sessionEntries = await readdir(workspaceSessionsDir, { withFileTypes: true }).catch(() => []);
+	const perSession = await Promise.all(
+		sessionEntries
+			.filter((entry) => entry.isDirectory())
+			.map(async (entry) => {
+				// A partially-created Session directory is not a listable Session.
+				const conversationDir = join(workspaceSessionsDir, entry.name, "conversation");
+				const fileEntries = await readdir(conversationDir, { withFileTypes: true }).catch(() => []);
+				return fileEntries
+					.filter((file) => file.isFile() && file.name.endsWith(".jsonl"))
+					.map((file) => join(conversationDir, file.name));
+			}),
+	);
+	return perSession.flat();
+}
+
 async function listSessionFilesFromWorkspaceDir(
 	workspaceSessionsDir: string,
 	onProgress?: SessionListProgress,
 ): Promise<SessionInfo[]> {
 	if (!existsSync(workspaceSessionsDir)) return [];
-	let sessionDirectories: string[] = [];
-	try {
-		sessionDirectories = (await readdir(workspaceSessionsDir, { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => join(workspaceSessionsDir, entry.name));
-	} catch {
-		return [];
-	}
-
-	const files: string[] = [];
-	for (const sessionDirectory of sessionDirectories) {
-		const conversationDirectory = join(sessionDirectory, "conversation");
-		try {
-			const conversationFiles = (await readdir(conversationDirectory, { withFileTypes: true }))
-				.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-				.map((entry) => join(conversationDirectory, entry.name));
-			files.push(...conversationFiles);
-		} catch {
-			// A partially-created Session directory is not a listable Session.
-		}
-	}
+	const files = await listConversationFiles(workspaceSessionsDir);
 
 	let loaded = 0;
 	const results = await buildSessionInfosWithConcurrency(files, () => {
@@ -842,24 +853,16 @@ export async function listAllSessions(
 
 	const sessionsDir = getDataDir();
 	try {
-		const allFiles: string[] = [];
 		const workspaceStore = WorkspaceStore.create(getAgentDir(), sessionsDir);
 		const workspaceIds = [
 			...workspaceStore.list().map((workspace) => workspace.workspaceId),
 			...workspaceStore.listDetachedWorkspaceIds(),
 		];
-		for (const workspaceId of workspaceIds) {
-			const workspaceSessionsDir = getWorkspaceSessionsDir(sessionsDir, workspaceId);
-			for (const sessionEntry of await readdir(workspaceSessionsDir, { withFileTypes: true }).catch(() => [])) {
-				if (!sessionEntry.isDirectory()) continue;
-				const conversationDir = join(workspaceSessionsDir, sessionEntry.name, "conversation");
-				for (const fileEntry of await readdir(conversationDir, { withFileTypes: true }).catch(() => [])) {
-					if (fileEntry.isFile() && fileEntry.name.endsWith(".jsonl")) {
-						allFiles.push(join(conversationDir, fileEntry.name));
-					}
-				}
-			}
-		}
+		const allFiles = (
+			await Promise.all(
+				workspaceIds.map((workspaceId) => listConversationFiles(getWorkspaceSessionsDir(sessionsDir, workspaceId))),
+			)
+		).flat();
 
 		let loaded = 0;
 		const results = await buildSessionInfosWithConcurrency(allFiles, () => {

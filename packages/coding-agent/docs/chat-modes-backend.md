@@ -17,7 +17,7 @@ Workspace 保存模式登记 `modes`，旧登记默认仅 Coding。同一物理�
 - `POST /api/sessions/new` 接受可选 `mode`，省略时继承请求 slot。`rootPath / unbound` 保持原语义。空白聊天仅同模式可复用。
 - `POST /api/sessions/open` 保持原接口，打开结果所属模式从快照读取；不能用界面模式覆盖文件模式。
 - `GET /api/workspaces?mode=general`：只返回该模式登记。省略模式时使用请求 slot 模式。
-- `GET /api/workspaces/sessions?path=...&mode=general`、`GET /api/sessions/unbound?mode=general`、`GET /api/sessions/archived?mode=general`：只返回该模式聊天。每个 summary 增加 `mode`。
+- `GET /api/workspaces/sessions?path=...&mode=general`、`GET /api/sessions/unbound?mode=general`、`GET /api/sessions/archived?mode=general`：只返回该模式聊天。每个 summary 增加 `mode` 和 `blank`：Session 文件里除了创建时写入的模型和思考级别设置之外没有别的记录（没有消息、名称、标签、操作卡片等）时为 `true`。前端用它不再列出被留下的空白聊天（文件不删除，见 web-ui.md）。
 - `POST /api/workspaces/add|remove|rename` 接受可选 `mode`，用于匹配登记；默认请求 slot 模式。`remove` 仅取消该模式登记。重命名仍修改共享 Workspace 名称。明确删除产出仍是共享数据操作，需保留现有确认和运行中保护。
 - `POST /api/sessions/clear` 仅清理指定 `mode` 的聊天（默认请求 slot 模式），不能误删另一侧。
 
@@ -26,7 +26,8 @@ Workspace 保存模式登记 `modes`，旧登记默认仅 Coding。同一物理�
 状态保存在 `<agentDir>/chat-mode-state.json`，原子写入并加锁，不放进模型上下文或 credentials。每个模式独立保存 `lastSessionFile / model / drafts`；草稿以稳定 Session ID 为键，不以短期 slot 为键。模型选择包括 `provider / id`，Provider 和可用模型配置共用。
 
 - `GET /api/modes/state` → `{ coding: ModeState, general: ModeState }`。
-- `POST /api/modes/state` → `{ state: ModeState }`。body：`{ mode, sessionFile?, draft? }`，必须发送到匹配聊天 slot。`sessionFile` 必须等于该 slot 的文件；这会保存空白 Session，以便重新打开。`draft` 为 `{ text, attachments: object[] }`，`null` 或空草稿清除记录。文本最多 1,000,000 字符、附件最多 12 个；附件是现有前端附件描述，不进行第二次上传、不作为已发送消息。
+- `POST /api/modes/state` → `{ state: ModeState }`。body：`{ mode, sessionFile?, draft? }`，必须发送到匹配聊天 slot。`sessionFile` 必须等于该 slot 的文件；这会保存空白 Session，以便重新打开；它在上面的列表里带 `blank: true`。`draft` 为 `{ text, attachments: object[] }`，`null` 或空草稿清除记录。文本最多 1,000,000 字符、附件最多 12 个；附件是现有前端附件描述，不进行第二次上传、不作为已发送消息。草稿内容同时决定这个聊天是否算“输入过”：文本去掉空白后非空或带附件为是，否则（包括 `null`）为否；标记变化时广播 `session_info`，`slots` 里的 `hasContent` 随之更新。
+- `POST /api/sessions/touched`，body `{ touched?: boolean }`（省略为 `true`）：页面在输入框里有内容（有文字或附件）时发 `true`，删空后发 `false`，不必等草稿的延迟保存。标记为“输入过”的空聊天不会被 `POST /api/sessions/new` 复用，也不会被当作被留下的空白聊天；标记为否的就和没输入过的新聊天一样。上传附件、保存非空草稿也会置为“输入过”。
 - `POST /api/modes/open` body `{ mode }` → `{ slot, created, mode, state }`。优先恢复上次聊天，仍在运行时复用原 slot；无有效记录时创建该模式的 unbound 空白聊天。文件存在但打开失败会明确报错，不掩盖损坏或丢失目录。
 - 模型实际切换后后端保存该聊天模式的模型选择；新聊天使用本模式保存的选择。已有聊天优先恢复自己的模型记录。模型已删除、禁用或无认证时沿用现有回退，不伪造可用状态。
 

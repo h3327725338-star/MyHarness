@@ -1,7 +1,7 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
-import { api, attempt, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { DraftEditor } from "./draft-editor.js";
@@ -306,11 +306,15 @@ export function Composer() {
 		}
 		lastSession.current = sessionId;
 	}, [sessionId]);
-	const touched = useRef(new Set());
+	// What the server was last told about each chat: it holds input (it stays listed) or it was emptied again (it is a blank
+	// chat like a new one). Only a change is sent.
+	const touched = useRef(new Map());
 	useEffect(() => {
-		if (lastSession.current !== sessionId || (!text && !images.length) || touched.current.has(sessionId)) return;
-		touched.current.add(sessionId);
-		post("/api/sessions/touched", {}).catch(() => touched.current.delete(sessionId));
+		if (lastSession.current !== sessionId) return;
+		const has = !!text.trim() || images.length > 0;
+		if ((touched.current.get(sessionId) ?? false) === has) return;
+		touched.current.set(sessionId, has);
+		setChatTouched(activeSlot, has).then((ok) => ok || touched.current.set(sessionId, !has));
 	}, [text, images, sessionId]);
 	const latest = useRef({ text, images, sessionId });
 	latest.current = { text, images, sessionId };

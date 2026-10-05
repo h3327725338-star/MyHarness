@@ -1,15 +1,14 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, Collapse, COLLAPSE_MS, motionEnabled } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, motionEnabled, useHeightGlide, useRetainedRows } from "./ui.js";
 import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
-import { reconcileRows } from "./list-presence.js";
-import { orderChats } from "./chat-order.js";
+import { isLeftBlank, orderChats } from "./chat-order.js";
 import { shortcutFor } from "./shortcuts.js";
-import { chatModeOf, expandedKey } from "./chat-modes.js";
+import { chatModeOf, draftHasContent, expandedKey } from "./chat-modes.js";
 import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
@@ -41,26 +40,35 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const [value, setValue] = useState("");
 	// A chat that was just created has no message and no file on disk yet: it is listed as "New chat", and there is
 	// nothing to rename or delete until its first message.
-	// A saved chat without messages (kept as its mode's latest chat, or holding a draft) is still a new chat.
-	const title = info.empty || (info.messageCount === 0 && !info.name) ? t("New chat") : chatTitle(info);
+	// A saved chat that is blank (kept as its mode's latest chat, or holding a draft) is the same new chat, and stays
+	// "New chat" while it only holds a draft: typing must not rename it.
+	const fresh = !!(info.empty || info.blank);
+	const unnamed = !info.name && (info.messageCount === 0 || (info.unsaved && !info.firstMessage));
+	const title = fresh || unnamed ? t("New chat") : chatTitle(info);
 	const busy = !!(slot && (slot.active || slot.completion));
+	// An edit ends once, whichever way: Enter saves, Escape keeps the name as it was. The box that closes also loses the
+	// focus, and that must neither save what was typed after Escape nor save a second time after Enter.
+	const ended = useRef(true);
 	const startEdit = () => {
-		if (info.empty) return;
+		if (fresh) return;
+		ended.current = false;
 		setValue(info.name || title);
 		setEditing(true);
 	};
-	const commit = async () => {
+	const finish = async (save) => {
+		if (ended.current) return;
+		ended.current = true;
 		setEditing(false);
 		const next = value.trim();
-		if (next && next !== info.name) await actions.renameSession(info.path, next);
+		if (save && next && next !== info.name) await actions.renameSession(info.path, next);
 	};
 	const open = () => !editing && !current && actions.openSession(info.path);
-	return html`<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.key === "Enter" && open()}>
+	return html`<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}>
 		${editing
-			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${commit} onClick=${(e) => e.stopPropagation()}
-				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? commit() : e.key === "Escape" && setEditing(false))} />`
+			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
+				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: html`<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
-				<span class="slot-end">${info.empty ? null : html`<span class="when">${relTime(info.modified)}</span>
+				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
 							${(close) => html`
@@ -80,10 +88,11 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
  */
-function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult, expandKey }) {
+function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
+	const glide = useHeightGlide();
 	const [editing, setEditing] = useState(false);
 	const [alias, setAlias] = useState("");
 	const startRename = () => { setAlias(workspace.name); setEditing(true); };
@@ -95,16 +104,22 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 		if (showing) setRendered(true);
 	}, [showing]);
 	// Pinned, then running, then most recent activity first (see chat-order.js); an archived chat is never pinned on top.
+	// A blank chat that was left behind is not listed (see isLeftBlank); the archive lists what was archived on purpose.
 	const list = useMemo(() => {
-		const all = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
+		const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
+		const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: !!currentFile && pathKey(info.path) === pathKey(currentFile), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
 		if (!filter) return all;
 		const q = filter.toLowerCase();
 		return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
-	}, [sessions, filter, slotsByFile, archived]);
+	}, [sessions, filter, slotsByFile, archived, currentFile, drafts]);
 	if (filter && !list.length) return null;
 	const shown = showAll || filter ? list : list.slice(0, 12);
 	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
 	const create = () => (general ? actions.newSession(undefined, { unbound: true }) : actions.newSession(workspace.rootPath));
+	const note = error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>`
+		: sessions === undefined ? html`<div class="dim side-note">${t("Loading…")}</div>`
+		: !list.length ? html`<div class="dim side-note">${general ? t("No chats without a workspace") : t("No chats yet")}</div>`
+		: null;
 	const toggle = () => {
 		setView({ [expandKey]: { ...state.view[expandKey], [workspace.rootPath]: !open } });
 		if (!open && sessions === undefined) reload();
@@ -130,12 +145,10 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 		<div class=${`collapse ${showing ? "open" : ""}`} inert=${!showing}>
 			<div class="collapse-inner">
 				${rendered
-					? html`<div class="ws-children">
-						${sessions === undefined && !error ? html`<div class="dim side-note">${t("Loading…")}</div>` : null}
-						${error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>` : null}
-						${sessions && !sessions.length ? html`<div class="dim side-note">${general ? t("No chats without a workspace") : t("No chats yet")}</div>` : null}
-						<${ChatRows} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
-						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => setShowAll(true)}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
+					? html`<div class="ws-children" ref=${glide.ref}>
+						<${FoldIn} content=${note} />
+						<${ChatRows} key=${showAll ? "all" : "head"} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
+						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => glide.run(() => setShowAll(true))}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
 			</div>
@@ -143,14 +156,10 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	</div>`;
 }
 
-// Keep removed rows mounted until their shared fade/collapse transition has finished. Rows that are there when the list
-// first appears are simply shown; only rows that arrive later grow in.
+// One chat row of a group. Removed rows stay mounted until their shared fade/collapse transition has finished; rows that
+// are there when the list first appears are simply shown, only rows that arrive later grow in (see ListSlot).
 function DraftChat({ info, present, initial, renderRow }) {
-	const [open, setOpen] = useState(initial && present);
-	useLayoutEffect(() => {
-		setOpen(present);
-	}, [present]);
-	return html`<div class="chat-slot" data-path=${info.path}><${Collapse} open=${open}>${renderRow(info)}<//></div>`;
+	return html`<div class="chat-slot" data-path=${info.path}><${ListSlot} present=${present} initial=${initial}>${renderRow(info)}<//></div>`;
 }
 
 /**
@@ -160,18 +169,8 @@ function DraftChat({ info, present, initial, renderRow }) {
  */
 function ChatRows({ items, renderRow }) {
 	const signature = items.map((item) => item.path).join("\n");
-	const [retained, setRetained] = useState(items);
-	const initial = useRef(null);
-	if (initial.current === null) initial.current = new Set(items.map((item) => item.path));
-	useLayoutEffect(() => {
-		setRetained((old) => reconcileRows(old, items));
-		const timer = setTimeout(() => setRetained(items), COLLAPSE_MS + 60);
-		return () => clearTimeout(timer);
-	}, [signature]);
-	const visible = reconcileRows(retained, items);
-	const present = new Set(items.map((item) => item.path));
-	// A row that left is animated in again if it comes back later.
-	for (const path of initial.current) if (!present.has(path)) initial.current.delete(path);
+	// Rows that left stay for the length of the fold-away; a row that left is animated in again if it comes back later.
+	const { rows: visible, present, initial } = useRetainedRows(items);
 	// Only a pure reorder needs a slide. Inserts/exits already move their neighbours through grid collapse;
 	// measuring those intermediate heights and applying FLIP again caused the second downward nudge.
 	// Fixed row indices give the displacement without reading layout or mixing reads with animation writes.
@@ -193,7 +192,13 @@ function ChatRows({ items, renderRow }) {
 			], { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
 		}
 	}, [signature]);
-	return html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.current.has(info.path)} renderRow=${renderRow} />`)}</div>`;
+	return html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.has(info.path)} renderRow=${renderRow} />`)}</div>`;
+}
+
+/** The Workspaces of a mode: one that is added grows in, one that is removed folds away. */
+function WorkspaceList({ list, renderGroup }) {
+	const { rows, present, initial } = useRetainedRows(list, "id");
+	return rows.map((w) => html`<${ListSlot} key=${w.id} present=${present.has(w.id)} initial=${initial.has(w.id)}>${renderGroup(w)}<//>`);
 }
 
 function AddWorkspaceDialog({ onClose }) {
@@ -217,6 +222,8 @@ export function Sidebar() {
 	// A chat that was clicked is marked at once, while it is still being opened.
 	const openingFile = useStore((s) => s.opening);
 	const shownFile = openingFile || currentFile;
+	// Saved drafts of this mode, by chat: a blank chat that holds one stays on the list.
+	const drafts = useStore((s) => s.modeState?.[s.view.chatMode]?.drafts);
 	const allSlots = useStore((s) => s.slots);
 	const slots = useMemo(() => allSlots.filter((slot) => chatModeOf(slot.mode) === mode), [allSlots, mode]);
 	const activeSlot = useStore((s) => s.activeSlot);
@@ -280,13 +287,13 @@ export function Sidebar() {
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll" key=${mode}>
 			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
-			${ws.list.map((w) => {
+			<${WorkspaceList} list=${ws.list} renderGroup=${(w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} />`;
-			})}
-			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
-			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} />`;
+			}} />
+			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
 			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} expandKey=${expandKey} />
 		</div>
 		<div class="sidebar-foot">
