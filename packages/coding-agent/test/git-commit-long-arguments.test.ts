@@ -24,11 +24,11 @@ for (const asynchronous of [false, true]) {
 		expect(runGit(dir, ["commit", "-m", "baseline"]).ok).toBe(true);
 		writeFileSync(join(dir, "unrelated"), "unrelated staged content");
 		expect(runGit(dir, ["add", "unrelated"]).ok).toBe(true);
-		const folder = "selected-" + "x".repeat(90);
+		const folder = `selected-${"x".repeat(90)}`;
 		mkdirSync(join(dir, folder));
 		const paths = Array.from({ length: 322 }, (_, i) => `${folder}/file-${i}.txt`);
 		for (const name of paths) writeFileSync(join(dir, name), "selected");
-		const message = "refactor: selected files\n\n" + "Detailed description\n".repeat(2000);
+		const message = `refactor: selected files\n\n${"Detailed description\n".repeat(2000)}`;
 		const commit = asynchronous
 			? await createGitCommitForPathsAsync(dir, paths, message)
 			: createGitCommitForPaths(dir, paths, message);

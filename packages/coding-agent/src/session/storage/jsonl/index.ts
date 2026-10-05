@@ -632,6 +632,7 @@ function sessionInfoFromScan(filePath: string, scan: SessionScan, mtime: Date): 
 	return {
 		path: filePath,
 		id: header.id,
+		mode: header.mode === "general" ? "general" : "coding",
 		workspaceId: getSessionHeaderWorkspaceId(header) ?? parseSessionDataPath(filePath)?.workspaceId,
 		cwd,
 		name: scan.name,

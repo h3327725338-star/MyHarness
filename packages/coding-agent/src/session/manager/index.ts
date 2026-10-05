@@ -56,11 +56,13 @@ import {
 } from "../storage/jsonl/index.ts";
 import {
 	type BranchSummaryEntry,
+	type ChatMode,
 	type CompactionEntry,
 	CURRENT_SESSION_VERSION,
 	type CustomEntry,
 	type CustomMessageEntry,
 	type FileEntry,
+	getChatMode,
 	type LabelEntry,
 	type ModelChangeEntry,
 	type NewSessionOptions,
@@ -446,7 +448,12 @@ export class SessionManager {
 		}
 	}
 
+	getMode(): ChatMode {
+		return getChatMode(this.getHeader());
+	}
+
 	newSession(options?: NewSessionOptions): string | undefined {
+		const mode = options?.mode ?? this.getMode();
 		if (options?.id !== undefined) {
 			assertValidSessionId(options.id);
 		}
@@ -456,6 +463,7 @@ export class SessionManager {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: this.sessionId,
+			mode,
 			timestamp,
 			cwd: this.cwd,
 			workspaceId: this.workspaceId,
@@ -584,7 +592,10 @@ export class SessionManager {
 		if (!this.defaultStorage || !this.workspaceId) return false;
 		if (this.workspaceId === UNBOUND_WORKSPACE_ID) return true;
 		if (!this.dataRoot) return false;
-		return WorkspaceStore.create(getDefaultAgentDir(), this.dataRoot).getById(this.workspaceId) === undefined;
+		return (
+			WorkspaceStore.create(getDefaultAgentDir(), this.dataRoot).getById(this.workspaceId, this.getMode()) ===
+			undefined
+		);
 	}
 
 	getDataRoot(): string | undefined {
@@ -991,6 +1002,7 @@ export class SessionManager {
 		_legacyFlow?: unknown,
 		collapseToCheckpoint = false,
 		replacementHistory?: AgentMessage[],
+		usageSource?: CompactionEntry["usageSource"],
 	): string {
 		const id = generateId(this.byId);
 		const entry: CompactionEntry<T> = {
@@ -1007,6 +1019,7 @@ export class SessionManager {
 			details,
 			usage,
 			fromHook,
+			...(usageSource ? { usageSource } : {}),
 			...(replacementHistory ? { replacementHistory } : {}),
 		};
 		this._appendEntry(entry);
@@ -1349,6 +1362,7 @@ export class SessionManager {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
+			mode: this.getMode(),
 			timestamp,
 			cwd: this.cwd,
 			workspaceId: this.defaultStorage ? this.workspaceId : undefined,
@@ -1470,7 +1484,7 @@ export class SessionManager {
 		if (sessionDir) {
 			return new SessionManager(cwd, normalizePath(sessionDir), undefined, true, options);
 		}
-		const context = resolveWorkspaceDataContext(cwd, storageOptions);
+		const context = resolveWorkspaceDataContext(cwd, { ...storageOptions, mode: options?.mode });
 		return new SessionManager(
 			cwd,
 			getWorkspaceSessionsDir(context.dataRoot, context.workspace.workspaceId),
@@ -1511,11 +1525,12 @@ export class SessionManager {
 	 * Workspace that contains `cwd`.
 	 */
 	static createLike(current: SessionManager, cwd: string, options?: NewSessionOptions): SessionManager {
+		options = { mode: current.getMode(), ...options };
 		if (!current.usesDefaultSessionDir()) return SessionManager.create(cwd, current.getSessionDir(), options);
 		if (current.isUnbound()) {
 			return SessionManager.createUnbound(cwd, options, { dataRoot: current.getDataRoot() });
 		}
-		return SessionManager.create(cwd, undefined, options);
+		return SessionManager.create(cwd, undefined, options, { dataRoot: current.getDataRoot() });
 	}
 
 	/**
@@ -1661,6 +1676,7 @@ export class SessionManager {
 			id: newSessionId,
 			timestamp,
 			cwd: resolvedTargetCwd,
+			mode: getChatMode(sourceHeader),
 			workspaceId: context?.workspace.workspaceId,
 			parentSession: resolvedSourcePath,
 		};

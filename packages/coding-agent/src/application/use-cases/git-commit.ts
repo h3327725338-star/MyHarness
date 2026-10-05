@@ -3,42 +3,11 @@ import {
 	getGitCheckpointPendingTaskPathsAsync,
 	getGitWorkingTreePathsAsync,
 } from "../../git/checkpoints/checkpoint.ts";
-import { type GeneratedCommitMessage, generateCommitMessageForPathsAsync } from "../../git/commits/message.ts";
-import {
-	createGitCommitForPathsAsync,
-	GIT_COMMIT_TIMEOUT_MS,
-	type GitCommandResult,
-} from "../../git/repository/integration.ts";
+import { type CommitMessageContext, readCommitMessageContext } from "../../git/commits/ai-message.ts";
+import type { GeneratedCommitMessage } from "../../git/commits/message.ts";
+import { createGitCommitForPathsAsync, type GitCommandResult } from "../../git/repository/integration.ts";
 
-const AUTO_REPAIR_MAX_ATTEMPTS = 1;
-const GIT_COMMIT_RETRY_TIMEOUT_MS = 300_000;
-
-const UNRECOVERABLE_GIT_FAILURE_PATTERNS = [
-	"authentication",
-	"permission denied",
-	"access denied",
-	"could not read username",
-	"could not read password",
-	"terminal prompts disabled",
-	"unable to access",
-	"commit succeeded",
-	"提交命令已返回成功，但无法确认新 commit",
-	"could not resolve host",
-	"connection refused",
-	"connection timed out",
-	"network is unreachable",
-	"network unreachable",
-	"not a git repository",
-	"index file corrupt",
-	"bad object",
-	"cannot lock ref",
-	"does not appear to be a git repository",
-	"unable to write new index file",
-] as const;
-
-export type GitCommitFailureClass = "transient" | "no-changes" | "code-quality" | "unrecoverable";
-
-export type GitCommitTaskPhase = "checking" | "generating" | "submitting" | "analyzing" | "fixing";
+export type GitCommitTaskPhase = "checking" | "generating" | "submitting" | "repairing";
 
 export interface GitCommitTarget {
 	repositoryRoot: string;
@@ -70,8 +39,11 @@ export type GitCommitSubmissionResult =
 
 export interface GitCommitUseCaseHost {
 	updatePhase: (phase: GitCommitTaskPhase, activity: string) => void;
-	/** A hidden Agent turn; resolves only after repair and completion have settled. */
+	/** An isolated, tool-free model request; never starts a coding/repair turn. */
+	generateMessage: (context: CommitMessageContext) => Promise<GeneratedCommitMessage>;
+	/** Only invoked for an explicitly reported pre-commit hook failure, at most once. */
 	repairCode?: (failure: GitCommandResult) => Promise<boolean>;
+	signal?: AbortSignal;
 }
 
 export function normalizeGitCommitTarget(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): GitCommitTarget {
@@ -79,10 +51,6 @@ export function normalizeGitCommitTarget(targetOrCheckpoint: GitCommitTarget | G
 		return { repositoryRoot: targetOrCheckpoint.repositoryRoot, checkpoint: targetOrCheckpoint };
 	}
 	return targetOrCheckpoint;
-}
-
-export function gitFailureSignature(failure: GitCommandResult): string {
-	return [failure.exitCode, failure.failureKind, failure.stderr.trim(), failure.stdout.trim()].join("\u0000");
 }
 
 export function isGitNoChangesFailure(result: GitCommandResult): boolean {
@@ -94,25 +62,9 @@ export function isGitNoChangesFailure(result: GitCommandResult): boolean {
 	);
 }
 
-export function classifyGitCommitFailure(failure: GitCommandResult): GitCommitFailureClass {
-	if (isGitNoChangesFailure(failure)) return "no-changes";
-	if (failure.stderr.includes("没有可保存的本轮修改路径")) return "no-changes";
-	const detail = `${failure.error ?? ""}\n${failure.stderr}`.toLowerCase();
-	// Git's index.lock is a mutual-exclusion lock. MyHarness cannot prove that
-	// a lock belongs to a stale process, so it is never safe to auto-repair.
-	if (detail.includes("index.lock")) return "unrecoverable";
-	if (failure.failureKind === "timeout" || failure.failureKind === "spawn") return "transient";
-	if (detail.includes("unable to create")) return "transient";
-	const fatalLines = detail.split(/\r?\n/).filter((line) => line.trim().startsWith("fatal:"));
-	if (UNRECOVERABLE_GIT_FAILURE_PATTERNS.some((pattern) => fatalLines.some((line) => line.includes(pattern)))) {
-		return "unrecoverable";
-	}
-	return "code-quality";
-}
-
 /**
  * Runs the non-visual Git commit workflow. The caller owns task indicators,
- * checkpoint lifecycle decisions, and any Agent repair turn.
+ * checkpoint lifecycle decisions, and a tool-free commit-description request.
  */
 export class GitCommitUseCase {
 	private readonly host: GitCommitUseCaseHost;
@@ -122,7 +74,10 @@ export class GitCommitUseCase {
 	}
 
 	async execute(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): Promise<GitCommitWorkflowResult> {
-		const target = normalizeGitCommitTarget(targetOrCheckpoint);
+		return this.executeAttempt(normalizeGitCommitTarget(targetOrCheckpoint), true);
+	}
+
+	private async executeAttempt(target: GitCommitTarget, allowRepair: boolean): Promise<GitCommitWorkflowResult> {
 		this.host.updatePhase("checking", "正在检查改动");
 		const pending = await this.readPendingPaths(target);
 		if (pending.error) return { status: "read-error", target, error: pending.error };
@@ -131,13 +86,34 @@ export class GitCommitUseCase {
 		}
 
 		this.host.updatePhase("generating", "正在生成提交信息");
-		const message = await generateCommitMessageForPathsAsync(target.repositoryRoot, pending.paths);
-		const outcome = await this.submitWithRepair(target, pending.paths, message);
+		const context = await readCommitMessageContext(target.repositoryRoot, pending.paths, this.host.signal);
+		const message = await this.host.generateMessage(context);
+		this.host.signal?.throwIfAborted();
+		// Do not commit changes made by another chat/editor while the description was being generated.
+		const latest = await this.readPendingPaths(target);
+		if (latest.error || !latest.paths) throw new Error(latest.error ?? "Cannot recheck commit paths.");
+		const current = await readCommitMessageContext(target.repositoryRoot, latest.paths, this.host.signal);
+		if (JSON.stringify(current) !== JSON.stringify(context)) {
+			throw new Error("The repository changed while generating the commit description. Run /commit again.");
+		}
+		const outcome = await this.submit(target, pending.paths, message);
 		if (outcome.status === "committed") {
 			return { status: "committed", target, paths: pending.paths, message, commitHash: outcome.commitHash };
 		}
 		if (outcome.status === "no-changes") {
 			return { status: "no-changes", target, paths: pending.paths, message };
+		}
+		const diagnostic = `${outcome.failure.stdout}\n${outcome.failure.stderr}`;
+		const hookFailed =
+			outcome.failure.failureKind === "exit" &&
+			/(?:husky\s*-\s*pre-commit\s+(?:script|hook)\s+failed|pre-commit\s+hook\s+failed)/iu.test(diagnostic);
+		if (allowRepair && hookFailed && this.host.repairCode) {
+			this.host.updatePhase("repairing", "正在修复提交前检查发现的问题");
+			if (await this.host.repairCode(outcome.failure)) {
+				this.host.signal?.throwIfAborted();
+				// Repair changed the diff: regenerate the description and run normal hooks again.
+				return this.executeAttempt(target, false);
+			}
 		}
 		return { status: "failed", target, paths: pending.paths, message, failure: outcome.failure };
 	}
@@ -147,8 +123,8 @@ export class GitCommitUseCase {
 	): Promise<{ paths?: string[]; error?: string }> {
 		const target = normalizeGitCommitTarget(targetOrCheckpoint);
 		return target.checkpoint
-			? getGitCheckpointPendingTaskPathsAsync(target.checkpoint)
-			: getGitWorkingTreePathsAsync(target.repositoryRoot);
+			? getGitCheckpointPendingTaskPathsAsync(target.checkpoint, this.host.signal)
+			: getGitWorkingTreePathsAsync(target.repositoryRoot, [], this.host.signal);
 	}
 
 	/**
@@ -161,54 +137,25 @@ export class GitCommitUseCase {
 		paths: string[],
 		message: GeneratedCommitMessage,
 	): Promise<GitCommitSubmissionResult> {
-		return this.submitWithRepair(normalizeGitCommitTarget(targetOrCheckpoint), paths, message);
-	}
-
-	async submitWithRepair(
-		target: GitCommitTarget,
-		paths: string[],
-		message: GeneratedCommitMessage,
-	): Promise<GitCommitSubmissionResult> {
+		const target = normalizeGitCommitTarget(targetOrCheckpoint);
 		this.host.updatePhase("submitting", "正在提交");
-		const firstResult = await createGitCommitForPathsAsync(target.repositoryRoot, paths, message.full);
+		this.host.signal?.throwIfAborted();
+		const firstResult = await createGitCommitForPathsAsync(
+			target.repositoryRoot,
+			paths,
+			message.full,
+			undefined,
+			this.host.signal,
+		);
 		if (firstResult.ok) return { status: "committed", commitHash: firstResult.commitHash };
 		if (await this.confirmNoChanges(target, firstResult)) return { status: "no-changes" };
 
-		let failure = firstResult;
-		for (let attempt = 1; attempt <= AUTO_REPAIR_MAX_ATTEMPTS; attempt += 1) {
-			this.host.updatePhase("analyzing", "正在分析失败原因");
-			const classification = classifyGitCommitFailure(failure);
-			let timeoutMs: number | undefined;
-			if (classification === "code-quality" && this.host.repairCode) {
-				this.host.updatePhase("fixing", `正在修复并重新提交（${attempt}/${AUTO_REPAIR_MAX_ATTEMPTS}）`);
-				if (!(await this.host.repairCode(failure))) break;
-				const pending = await this.readPendingPaths(target);
-				if (pending.error || !pending.paths) break;
-				if (!pending.paths.length) return { status: "no-changes" };
-				paths.splice(0, paths.length, ...pending.paths);
-			} else {
-				if (classification !== "transient") break;
-				timeoutMs = this.planRepair(target.repositoryRoot, failure);
-				if (timeoutMs === undefined) break;
-				this.host.updatePhase("fixing", `正在修复并重新提交（${attempt}/${AUTO_REPAIR_MAX_ATTEMPTS}）`);
-			}
-			const retryResult = await createGitCommitForPathsAsync(target.repositoryRoot, paths, message.full, timeoutMs);
-			if (retryResult.ok) return { status: "committed", commitHash: retryResult.commitHash };
-			if (await this.confirmNoChanges(target, retryResult)) return { status: "no-changes" };
-			failure = retryResult;
-		}
-		return { status: "failed", failure };
+		return { status: "failed", failure: firstResult };
 	}
 
 	private async confirmNoChanges(target: GitCommitTarget, result: GitCommandResult): Promise<boolean> {
 		if (!isGitNoChangesFailure(result)) return false;
 		const pending = await this.readPendingPaths(target);
 		return !pending.error && pending.paths?.length === 0;
-	}
-
-	planRepair(_repositoryRoot: string, failure: GitCommandResult): number | undefined {
-		if (failure.failureKind === "timeout") return GIT_COMMIT_RETRY_TIMEOUT_MS;
-		if (failure.failureKind === "spawn") return GIT_COMMIT_TIMEOUT_MS;
-		return undefined;
 	}
 }

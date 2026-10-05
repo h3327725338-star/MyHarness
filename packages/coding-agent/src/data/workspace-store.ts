@@ -11,6 +11,7 @@ import {
 	UNBOUND_WORKSPACE_ID,
 } from "../config/paths/index.ts";
 import { getAgentDir } from "../config.ts";
+import type { ChatMode } from "../session/types.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../utils/paths.ts";
 
@@ -21,6 +22,8 @@ const SAFE_WORKSPACE_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 /** A persisted Workspace identity and its current filesystem location. */
 export interface Workspace {
+	/** Sidebar registrations; identity and memory remain shared across modes. */
+	modes?: ChatMode[];
 	/** Stable identity. It survives rootPath changes. */
 	workspaceId: string;
 	/** Backwards-compatible alias for callers that still use Workspace.id. */
@@ -34,6 +37,7 @@ export interface Workspace {
 }
 
 interface PersistedWorkspace {
+	modes?: unknown;
 	workspaceId?: unknown;
 	id?: unknown;
 	name?: unknown;
@@ -126,6 +130,7 @@ function defaultWorkspaceName(rootPath: string): string {
 function serializeWorkspace(workspace: Workspace): PersistedWorkspace {
 	return {
 		workspaceId: workspace.workspaceId,
+		modes: workspace.modes,
 		name: workspace.name,
 		rootPath: workspace.rootPath,
 		createdAt: workspace.createdAt,
@@ -153,6 +158,9 @@ function normalizeWorkspace(value: unknown, legacyMode = false): { workspace?: W
 		: (persistedId ?? legacyId ?? createWorkspaceId());
 	return {
 		workspace: {
+			modes: Array.isArray(candidate.modes)
+				? candidate.modes.filter((mode): mode is ChatMode => mode === "coding" || mode === "general")
+				: ["coding"],
 			workspaceId,
 			id: workspaceId,
 			name: candidate.name || defaultWorkspaceName(rootPath),
@@ -316,8 +324,10 @@ export class WorkspaceStore {
 		return store;
 	}
 
-	list(): Workspace[] {
-		return this.workspaces.map((workspace) => ({ ...workspace }));
+	list(mode?: ChatMode): Workspace[] {
+		return this.workspaces
+			.filter((workspace) => !mode || (workspace.modes ?? ["coding"]).includes(mode))
+			.map((workspace) => ({ ...workspace, modes: [...(workspace.modes ?? ["coding"])] }));
 	}
 
 	/** Issues found while checking the registry against its per-Workspace metadata. */
@@ -419,8 +429,8 @@ export class WorkspaceStore {
 		return undefined;
 	}
 
-	getById(id: string): Workspace | undefined {
-		const workspace = this.workspaces.find((candidate) => candidate.workspaceId === id || candidate.id === id);
+	getById(id: string, mode?: ChatMode): Workspace | undefined {
+		const workspace = this.list(mode).find((candidate) => candidate.workspaceId === id || candidate.id === id);
 		return workspace ? { ...workspace } : undefined;
 	}
 
@@ -430,8 +440,8 @@ export class WorkspaceStore {
 	}
 
 	/** Find the most specific registered Workspace containing a path. */
-	getByPath(path: string): Workspace | undefined {
-		const matches = this.workspaces.filter(
+	getByPath(path: string, mode?: ChatMode): Workspace | undefined {
+		const matches = this.list(mode).filter(
 			(workspace) => relativeWorkspacePath(path, workspace.rootPath) !== undefined,
 		);
 		const workspace = matches.sort((a, b) => pathLength(b.rootPath) - pathLength(a.rootPath))[0];
@@ -468,18 +478,29 @@ export class WorkspaceStore {
 		return result.workspace;
 	}
 
-	add(input: string, baseDir: string = process.cwd(), persist = true): AddWorkspaceResult {
+	add(input: string, baseDir: string = process.cwd(), persist = true, mode: ChatMode = "coding"): AddWorkspaceResult {
 		const validation = validateWorkspacePath(input, baseDir);
 		if ("error" in validation) return { ok: false, error: validation.error };
 		const { rootPath } = validation;
 
-		if (this.workspaces.some((workspace) => pathsEqual(workspace.rootPath, rootPath))) {
-			return { ok: false, error: `Workspace 已添加：${rootPath}` };
+		const existing = this.workspaces.find((workspace) => pathsEqual(workspace.rootPath, rootPath));
+		if (existing) {
+			const previous = existing.modes;
+			if ((previous ?? ["coding"]).includes(mode)) return { ok: false, error: `Workspace 已添加：${rootPath}` };
+			existing.modes = [...(previous ?? ["coding"]), mode];
+			try {
+				if (persist) this.save();
+				return { ok: true, workspace: { ...existing } };
+			} catch (error) {
+				existing.modes = previous;
+				return { ok: false, error: `保存 Workspace 列表失败：${String(error)}` };
+			}
 		}
 
 		const detached = this.findDetachedWorkspace(rootPath);
 		const workspaceId = detached?.workspaceId ?? (this.dataRoot ? createWorkspaceId() : rootPath);
 		const workspace: Workspace = {
+			modes: [mode],
 			workspaceId,
 			id: workspaceId,
 			name: detached?.name ?? defaultWorkspaceName(rootPath),
@@ -519,7 +540,20 @@ export class WorkspaceStore {
 		}
 	}
 
-	remove(id: string): boolean {
+	remove(id: string, mode?: ChatMode): boolean {
+		if (mode) {
+			const workspace = this.workspaces.find((entry) => entry.workspaceId === id || entry.id === id);
+			if (!workspace || !(workspace.modes ?? ["coding"]).includes(mode)) return false;
+			const previous = workspace.modes;
+			workspace.modes = (previous ?? ["coding"]).filter((entry) => entry !== mode);
+			try {
+				this.save();
+				return true;
+			} catch {
+				workspace.modes = previous;
+				return false;
+			}
+		}
 		const index = this.workspaces.findIndex(
 			(workspace) => workspace.workspaceId === id || workspace.id === id || pathsEqual(workspace.rootPath, id),
 		);
@@ -639,11 +673,15 @@ export function validateWorkspacePath(input: string, baseDir: string): { rootPat
 /** Resolve and persist the Workspace context used by default Session storage. */
 export function resolveWorkspaceDataContext(
 	rootPath: string,
-	options: { agentDir?: string; dataRoot?: string } = {},
+	options: { agentDir?: string; dataRoot?: string; mode?: ChatMode } = {},
 ): WorkspaceDataContext {
 	const dataRoot = resolvePath(options.dataRoot ?? getDataDir());
 	const store = WorkspaceStore.create(options.agentDir ?? getAgentDir(), dataRoot);
-	return { dataRoot, workspace: store.ensureForPath(rootPath) };
+	const existing = store.getByPath(rootPath);
+	if (existing) return { dataRoot, workspace: existing };
+	const result = store.add(rootPath, process.cwd(), true, options.mode ?? "coding");
+	if (!result.ok || !result.workspace) throw new Error(result.error ?? "Could not create Workspace");
+	return { dataRoot, workspace: result.workspace };
 }
 
 /**

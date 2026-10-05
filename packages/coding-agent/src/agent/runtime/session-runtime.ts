@@ -410,11 +410,12 @@ export class AgentSessionRuntime {
 		const storageOptions = { dataRoot: this.session.sessionManager.getDataRoot(), agentDir: this.services.agentDir };
 		const useUnboundStorage =
 			!sessionDir && options?.registerWorkspace === false && !findWorkspaceDataContext(resolvedCwd, storageOptions);
+		const newSessionOptions = { mode: this.session.sessionManager.getMode() };
 		const sessionManager = this.session.sessionManager.isPersisted()
 			? useUnboundStorage
-				? SessionManager.createUnbound(resolvedCwd, undefined, storageOptions)
-				: SessionManager.create(resolvedCwd, sessionDir, undefined, storageOptions)
-			: SessionManager.inMemory(resolvedCwd);
+				? SessionManager.createUnbound(resolvedCwd, newSessionOptions, storageOptions)
+				: SessionManager.create(resolvedCwd, sessionDir, newSessionOptions, storageOptions)
+			: SessionManager.inMemory(resolvedCwd, newSessionOptions);
 
 		await this.replaceRuntime(
 			"new",
@@ -625,7 +626,7 @@ export class AgentSessionRuntime {
 		const previousSessionFile = this.session.sessionFile;
 		const sessionManager = this.session.sessionManager.isPersisted()
 			? SessionManager.createLike(this.session.sessionManager, this.cwd)
-			: SessionManager.inMemory(this.cwd);
+			: SessionManager.inMemory(this.cwd, { mode: this.session.sessionManager.getMode() });
 		if (options?.parentSession) {
 			sessionManager.newSession({ parentSession: options.parentSession });
 		}

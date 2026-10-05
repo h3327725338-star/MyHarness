@@ -88,6 +88,7 @@ import {
 import { type ModelCycleResult, SessionModelController } from "../../providers/runtime/session-model.ts";
 import { artifactScope, ensureSessionArtifacts } from "../../session/artifacts/store.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
+import { ModeStateStore } from "../../session/mode-state.ts";
 import type { BranchSummaryEntry, SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { expandSkillCommand } from "../../skills/invocation.ts";
 import {
@@ -484,6 +485,11 @@ export class AgentSession {
 				onModelSet: () => {
 					this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
 					this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+					const model = this.agent.state.model;
+					if (model)
+						new ModeStateStore(this._agentDir ?? getAgentDir()).update(this.sessionManager.getMode(), {
+							model: { provider: model.provider, id: model.id },
+						});
 				},
 				notifyModelSelect: async (model, previousModel, source) => {
 					await this._extensionRunner.emit({ type: "model_select", model, previousModel, source });
@@ -1536,11 +1542,18 @@ export class AgentSession {
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
-		this._baseSystemPromptOptions = collectSystemPromptOptions(this._resourceLoader, {
-			cwd: this._cwd,
-			tools: this._tools.getPromptContributions(toolNames),
-			currentModel: this.model,
-		});
+		this._baseSystemPromptOptions = {
+			...collectSystemPromptOptions(this._resourceLoader, {
+				cwd: this._cwd,
+				tools: this._tools.getPromptContributions(toolNames),
+				currentModel: this.model,
+			}),
+			mode: this.sessionManager.getMode(),
+			personalPrompt:
+				this.sessionManager.getMode() === "general"
+					? new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt()
+					: undefined,
+		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
 
@@ -1570,6 +1583,7 @@ export class AgentSession {
 		const resolved = resolveAssistantModel(settings, this._mainModelRef());
 		return {
 			...settings,
+			chatMode: this.sessionManager.getMode(),
 			provider: resolved?.provider,
 			model: resolved?.model,
 			thinkingLevel: resolved?.thinkingLevel,
@@ -1607,6 +1621,11 @@ export class AgentSession {
 	}
 
 	private _getTurnSystemPrompt(prompt: string): string {
+		if (this.sessionManager.getMode() === "general") {
+			const personalPrompt = new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt();
+			prompt = prompt.replace(/\s*<user_personalization>[\s\S]*?<\/user_personalization>/gu, "");
+			if (personalPrompt.trim()) prompt += `\n\n<user_personalization>\n${personalPrompt}\n</user_personalization>`;
+		}
 		const scope = artifactScope(this.sessionManager);
 		if (scope) {
 			const artifactsDir = ensureSessionArtifacts(scope);

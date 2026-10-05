@@ -168,3 +168,76 @@
 	--hl-attr: #9a6a00;
 	--hl-type: #12796a;
 }
+
+/* Both mode colours of the Coding / General switch, shown on both sides whatever the mode on screen. */
+:root[data-theme="dark"] { --mode-coding: #79a8f5; --mode-general: #88c0d0; --mode-on: #242b36; }
+:root[data-theme="light"] { --mode-coding: #2c66d6; --mode-general: #39778b; --mode-on: #ffffff; }
+
+/* General: Nord-inspired blue-grey surfaces and a restrained frost accent. Coding keeps the colours above. */
+:root[data-theme="dark"][data-chat-mode="general"] {
+	--bg-app: #252b35;
+	--bg-panel: #2e3440;
+	--bg-raised: #343c4b;
+	--bg-inset: #272d38;
+	--surface-hover: #414b5c;
+	--surface-active: #4c566a;
+	--surface-select: #404f62;
+	--border: #414b5c;
+	--border-strong: #586579;
+	--border-focus: #88c0d0;
+
+	--text: #eceff4;
+	--text-2: #d8dee9;
+	--text-3: #b0bbcd;
+	--text-4: #96a3b8;
+	--text-inverse: #2e3440;
+
+	--accent: #88c0d0;
+	--accent-strong: #a3d2df;
+	--accent-soft: rgba(136, 192, 208, 0.13);
+	--accent-line: rgba(136, 192, 208, 0.45);
+	--on-accent: #242b36;
+	--selection-bg: rgba(136, 192, 208, 0.3);
+
+	--user-bg: #3b4658;
+	--user-border: #4c596f;
+	--code-bg: #2e3440;
+	--inline-code-bg: #414b5c;
+	--scrim: rgba(25, 30, 39, 0.65);
+	--hl-keyword: #b48ead;
+	--hl-string: #a3be8c;
+	--hl-number: #d08770;
+	--hl-comment: #96a3b8;
+	--hl-title: #88c0d0;
+	--hl-attr: #ebcb8b;
+	--hl-type: #8fbcbb;
+}
+
+:root[data-theme="light"][data-chat-mode="general"] {
+	--bg-app: #e5e9f0;
+	--bg-panel: #f3f5f9;
+	--bg-raised: #ffffff;
+	--bg-inset: #eceff4;
+	--surface-hover: #e5e9f0;
+	--surface-active: #d8dee9;
+	--surface-select: #dbe8ee;
+	--border: #d8dee9;
+	--border-strong: #b4c0d0;
+	--border-focus: #39778b;
+	--text: #2e3440;
+	--text-2: #4c566a;
+	--text-3: #59677c;
+	--text-4: #6a788d;
+
+	--accent: #39778b;
+	--accent-strong: #2d6174;
+	--accent-soft: rgba(57, 119, 139, 0.1);
+	--accent-line: rgba(57, 119, 139, 0.4);
+	--on-accent: #ffffff;
+	--selection-bg: rgba(57, 119, 139, 0.24);
+
+	--user-bg: #e5ebf3;
+	--user-border: #d0dbe7;
+	--code-bg: #eceff4;
+	--inline-code-bg: #e5e9f0;
+}

@@ -89,7 +89,7 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 
 项目 Trust 控制项目配置与扩展。受信任项目 `.myharness/SYSTEM.md` 覆盖全局 `SYSTEM.md`，不受信任则回退全局；`APPEND_SYSTEM.md` 使用相同优先级，不简单合并两边。`AGENTS.md` / `CLAUDE.md` 是独立项目上下文，除非显式关闭，否则不因 Trust 被跳过。
 
-根 `system-prompts/` 面向所有产品用户，不承载仓库自身 CI 与维护规则。仓库开发约定只放根 `AGENTS.md` 及其路由文档。
+根 `system-prompts/` 面向所有产品用户，不承载仓库自身 CI 与维护规则。共享资源放 `common/`，Coding / General 身份放 `coding/`、`general/`；聊天模式保存在 Session header，旧聊天默认 Coding，每次请求按聊天归属而非界面开关组合。两个模式沿用同一 Agent/runtime，Workspace 模式登记分开但稳定身份和记忆共用。模式偏好和草稿由 Session 的 `mode-state.ts` 保存，Web 接口约定见 `packages/coding-agent/docs/chat-modes-backend.md`；前端接入另行完成。仓库开发约定只放根 `AGENTS.md` 及其路由文档。
 
 长期记忆存放在当前 Data root 的总层、Workspace 和 Conversation 的 `memory/`，由稳定 ID 归属；旧 Agent memory 只作为保留的迁移来源。删除聊天或移除工作区不隐式删除记忆，自动替代和更新保留归档。Agent runtime 负责提取/召回编排，Session memory store 负责持久化。记忆维护通过 Conversation memory 内可恢复的待处理快照在后台运行，不纳入 Web Chat completion 或重启保护；runtime 释放时取消，重新打开 Chat 时恢复。每次模型请求只使用当前轮的 recall，旧 recall 的磁盘历史保留但不累积发送。
 

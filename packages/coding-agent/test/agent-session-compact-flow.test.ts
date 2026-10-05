@@ -31,10 +31,17 @@ describe("Codex Compact lifecycle", () => {
 				responses: ["S".repeat(window * ratio * 4)],
 			});
 			try {
+				h.agent.state.model.cost = { ...h.agent.state.model.cost, currency: "CNY" };
 				seed(h);
 				const result = await h.session.compact();
 				expect(h.faux.callCount).toBe(1);
-				expect(h.sessionManager.getBranch().filter((e) => e.type === "compaction")).toHaveLength(1);
+				const compactions = h.sessionManager.getBranch().filter((e) => e.type === "compaction");
+				expect(compactions).toHaveLength(1);
+				expect(compactions[0].usageSource).toEqual({
+					provider: h.agent.state.model.provider,
+					model: h.agent.state.model.id,
+					currency: h.agent.state.model.cost.currency ?? "USD",
+				});
 				expect(result).not.toHaveProperty("targetTokens");
 				checkReleased(h);
 			} finally {

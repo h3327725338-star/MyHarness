@@ -38,7 +38,9 @@ export async function runDelegatedWorker(args: string[]): Promise<void> {
 			if (!resolved.model) throw new Error(resolved.error ?? "Delegated model not available");
 			const created = await createAgentSessionFromServices({
 				services,
-				sessionManager: SessionManager.inMemory(cwd),
+				sessionManager: SessionManager.inMemory(cwd, {
+					mode: process.env.MYHARNESS_INTERNAL_CHAT_MODE === "general" ? "general" : "coding",
+				}),
 				model: resolved.model,
 				thinkingLevel: parsed.thinking,
 				tools: parsed.tools,

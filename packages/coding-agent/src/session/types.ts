@@ -4,18 +4,28 @@ import type { ImageContent, TextContent, Usage } from "@myharness/ai";
 /** The on-disk Session JSONL format version. Keep at v3 for compatibility. */
 export const CURRENT_SESSION_VERSION = 3;
 
+export type ChatMode = "coding" | "general";
+
+/** Missing mode in legacy data always means Coding. */
+export function getChatMode(value: { mode?: unknown } | null | undefined): ChatMode {
+	return value?.mode === "general" ? "general" : "coding";
+}
+
 export interface SessionHeader {
 	type: "session";
 	version?: number;
 	id: string;
 	timestamp: string;
 	cwd: string;
+	/** Immutable chat mode; absent in legacy Coding sessions. */
+	mode?: ChatMode;
 	/** Stable Data Framework Workspace identity. Optional for legacy sessions. */
 	workspaceId?: string;
 	parentSession?: string;
 }
 
 export interface NewSessionOptions {
+	mode?: ChatMode;
 	id?: string;
 	parentSession?: string;
 }
@@ -55,6 +65,8 @@ export interface ModelChangeEntry extends SessionEntryBase {
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
+	/** Actual billing source at request time; absent in legacy or extension-owned records. */
+	usageSource?: { provider: string; model: string; currency: "USD" | "CNY" };
 	summary: string;
 	firstKeptEntryId: string;
 	tokensBefore: number;
@@ -150,6 +162,7 @@ export interface SessionContext {
 }
 
 export interface SessionInfo {
+	mode?: ChatMode;
 	path: string;
 	id: string;
 	workspaceId?: string;

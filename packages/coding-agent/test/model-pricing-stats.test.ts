@@ -34,6 +34,38 @@ const entries = (...messages: AssistantMessage[]) =>
 	messages.map((item) => ({ type: "message", message: item })) as SessionEntry[];
 
 describe("custom model pricing in session statistics", () => {
+	it("uses the persisted compaction currency, not the current model pricing", () => {
+		const usage = message(5000).usage;
+		usage.cost.total = 0.14346072;
+		const compact = {
+			type: "compaction",
+			usage,
+			usageSource: { provider: "summary", model: "compact", currency: "CNY" },
+		} as SessionEntry;
+		const stats = collectSessionUsageStats([compact], () => ({ ...model, cost: { ...model.cost, currency: "USD" } }));
+		expect(stats.costByCurrency).toEqual({ CNY: 0.14346072 });
+		expect(stats.cost).toBe(0);
+		const reopened = collectSessionUsageStats(JSON.parse(JSON.stringify([compact])));
+		expect(reopened.costByCurrency).toEqual(stats.costByCurrency);
+	});
+	it("keeps USD and CNY compactions separate", () => {
+		const usage = message(5000).usage;
+		usage.cost.total = 0.2;
+		const entries = ["CNY", "USD"].map((currency) => ({
+			type: "compaction",
+			usage,
+			usageSource: { provider: "summary", model: "compact", currency },
+		})) as SessionEntry[];
+		expect(collectSessionUsageStats(entries).costByCurrency).toEqual({ CNY: 0.2, USD: 0.2 });
+	});
+	it("does not invent a currency for legacy or extension compaction costs", () => {
+		const usage = message(5000).usage;
+		usage.cost.total = 0.14346072;
+		const stats = collectSessionUsageStats([{ type: "compaction", usage } as SessionEntry], () => model);
+		expect(stats.costByCurrency).toEqual({});
+		expect(stats.costIncomplete).toBe(true);
+		expect(usage.cost.total).toBe(0.14346072);
+	});
 	it("uses a strict per-request input threshold including caches, without mutating stored usage", () => {
 		const first = message(5000);
 		const second = message(5001);

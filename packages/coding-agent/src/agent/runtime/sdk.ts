@@ -14,6 +14,7 @@ import { ModelRuntime } from "../../providers/runtime/index.ts";
 import { findInitialModel } from "../../providers/runtime/model-resolver.ts";
 import { readSessionBridgeDescriptor } from "../../session/bridge/descriptor.ts";
 import { SessionManager } from "../../session/manager/index.ts";
+import { ModeStateStore } from "../../session/mode-state.ts";
 import {
 	createBashTool,
 	createCodingTools,
@@ -207,10 +208,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
 
 	let model = options.model;
+	if (!model && !existingSession.model) {
+		const selection = new ModeStateStore(agentDir).get(sessionManager.getMode()).model;
+		if (selection) {
+			const selected = modelRuntime.getModel(selection.provider, selection.id);
+			if (
+				selected &&
+				modelRuntime.hasConfiguredAuth(selected.provider) &&
+				modelRuntime.isProviderEnabled(selected.provider)
+			)
+				model = selected;
+		}
+	}
 	let modelFallbackMessage: string | undefined;
 
 	// If session has data, try to restore model from it
-	if (!model && hasExistingSession && existingSession.model) {
+	if (!model && existingSession.model) {
 		const restoredModel = modelRuntime.getModel(existingSession.model.provider, existingSession.model.modelId);
 		if (restoredModel && modelRuntime.hasConfiguredAuth(restoredModel.provider)) {
 			model = restoredModel;

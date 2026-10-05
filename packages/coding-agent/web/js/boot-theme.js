@@ -8,6 +8,7 @@
 		const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 		document.documentElement.dataset.theme = dark ? "dark" : "light";
 		if (prefs.motion) document.documentElement.dataset.motion = prefs.motion;
+		document.documentElement.dataset.chatMode = prefs.chatMode === "general" ? "general" : "coding";
 	} catch {
 		document.documentElement.dataset.theme = "dark";
 	}

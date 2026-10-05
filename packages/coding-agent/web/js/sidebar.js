@@ -9,6 +9,8 @@ import { chatTitle, clip, normPath, relTime } from "./util.js";
 import { reconcileRows } from "./list-presence.js";
 import { orderChats } from "./chat-order.js";
 import { shortcutFor } from "./shortcuts.js";
+import { chatModeOf, expandedKey } from "./chat-modes.js";
+import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
@@ -39,7 +41,8 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const [value, setValue] = useState("");
 	// A chat that was just created has no message and no file on disk yet: it is listed as "New chat", and there is
 	// nothing to rename or delete until its first message.
-	const title = info.empty ? t("New chat") : chatTitle(info);
+	// A saved chat without messages (kept as its mode's latest chat, or holding a draft) is still a new chat.
+	const title = info.empty || (info.messageCount === 0 && !info.name) ? t("New chat") : chatTitle(info);
 	const busy = !!(slot && (slot.active || slot.completion));
 	const startEdit = () => {
 		if (info.empty) return;
@@ -77,7 +80,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
  */
-function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult }) {
+function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, hasUnreadResult, expandKey }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
@@ -103,7 +106,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
 	const create = () => (general ? actions.newSession(undefined, { unbound: true }) : actions.newSession(workspace.rootPath));
 	const toggle = () => {
-		setView({ expanded: { ...state.view.expanded, [workspace.rootPath]: !open } });
+		setView({ [expandKey]: { ...state.view[expandKey], [workspace.rootPath]: !open } });
 		if (!open && sessions === undefined) reload();
 	};
 	return html`<div class="ws">
@@ -204,14 +207,18 @@ function AddWorkspaceDialog({ onClose }) {
 export function Sidebar() {
 	const ws = useStore((s) => s.workspaces);
 	const shortcuts = useStore((s) => s.view.shortcuts);
-	const expanded = useStore((s) => s.view.expanded);
+	// Each mode has its own Workspaces, chats and open groups; the slot list holds the open chats of both modes.
+	const mode = useStore((s) => s.view.chatMode);
+	const expandKey = expandedKey(mode);
+	const expanded = useStore((s) => s.view[expandedKey(s.view.chatMode)]) || {};
 	const currentWorkspace = useStore((s) => s.snap?.workspace?.id);
 	const currentWorkspaceRoot = useStore((s) => s.snap?.workspace?.rootPath);
 	const currentFile = useStore((s) => s.snap?.session?.file);
 	// A chat that was clicked is marked at once, while it is still being opened.
 	const openingFile = useStore((s) => s.opening);
 	const shownFile = openingFile || currentFile;
-	const slots = useStore((s) => s.slots);
+	const allSlots = useStore((s) => s.slots);
+	const slots = useMemo(() => allSlots.filter((slot) => chatModeOf(slot.mode) === mode), [allSlots, mode]);
 	const activeSlot = useStore((s) => s.activeSlot);
 	const connected = useStore((s) => s.connected);
 	// The box shows what is typed at once; the lists are filtered a moment after the last key, not on every key.
@@ -264,22 +271,23 @@ export function Sidebar() {
 	};
 	return html`<aside class="sidebar" aria-label=${t("Workspaces and chats")}>
 		<div class="sidebar-top">
-			<div class="brand"><span class="brand-mark"><${Icon} name="gitCommit" size=${14} sw=${2} /></span><span class="grow">MyHarness</span>
+			<div class="brand"><${ModeSwitch} /><span class="grow">MyHarness</span>
 				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
+			<${ModeTasks} />
 			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in No Folder (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
 			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
-		<div class="sidebar-scroll">
+		<div class="sidebar-scroll" key=${mode}>
 			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
 			${ws.list.map((w) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} />`;
+				return html`<${Workspace} key=${w.id} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} />`;
 			})}
 			${!ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null}
-			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} />
-			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} />
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("No Folder") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+			<${Workspace} archived workspace=${{ rootPath: "<archived>", name: t("Archive") }} error=${ws.errors["<archived>"]} open=${!!expanded["<archived>"]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} expandKey=${expandKey} />
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>

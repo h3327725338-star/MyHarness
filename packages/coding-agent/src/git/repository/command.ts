@@ -291,14 +291,17 @@ export function runGit(args: string[], options: GitCommandOptions = {}): Promise
 			});
 		};
 
+		// Decode across chunk boundaries; UTF-8 characters can span pipe reads.
+		child.stdout?.setEncoding("utf8");
+		child.stderr?.setEncoding("utf8");
 		if (child.stdout) {
 			child.stdout.on("data", (data) => {
-				stdout += data.toString();
+				stdout += data;
 			});
 		}
 		if (child.stderr) {
 			child.stderr.on("data", (data) => {
-				stderr += data.toString();
+				stderr += data;
 			});
 		}
 		child.once("error", onError);

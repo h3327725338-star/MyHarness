@@ -1,5 +1,6 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { GENERAL_KEY, activateSlot, api, attempt, emit, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, toast } from "./store.js";
+import { GENERAL_KEY, activateSlot, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
+import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { normPath } from "./util.js";
@@ -166,10 +167,12 @@ export const actions = {
 	 * follows the one on screen; `unbound` starts a chat that belongs to no workspace.
 	 */
 	async newSession(rootPath, { unbound = false } = {}) {
-		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound }));
+		const mode = uiMode();
+		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound, mode }));
 		if (result?.slot) {
 			const group = unbound ? GENERAL_KEY : rootPath;
-			if (group) setView({ expanded: { ...state.view.expanded, [group]: true } });
+			const key = expandedKey(mode);
+			if (group) setView({ [key]: { ...state.view[key], [group]: true } });
 			await showSlot(result.slot);
 		}
 		return result;
@@ -181,8 +184,20 @@ export const actions = {
 	 */
 	async newChat() {
 		const result = await actions.newSession(undefined, { unbound: true });
-		if (result?.slot && state.view.expanded?.[GENERAL_KEY] === false) setView({ expanded: { ...state.view.expanded, [GENERAL_KEY]: true } });
+		const key = expandedKey(uiMode());
+		if (result?.slot && state.view[key]?.[GENERAL_KEY] === false) setView({ [key]: { ...state.view[key], [GENERAL_KEY]: true } });
 		return result;
+	},
+
+	/** Show the other mode (Coding / General) with its latest chat; see store.switchChatMode. */
+	switchMode(mode) {
+		return switchChatMode(mode);
+	},
+
+	/** A task reminder was clicked: show that chat directly (its mode comes with it) and save it as its mode's latest chat. */
+	async openTask(slot) {
+		set({ opening: null });
+		await attempt(() => showSlot(slot));
 	},
 
 	/**
@@ -193,6 +208,7 @@ export const actions = {
 	async openSession(path) {
 		const seq = nextSwitch();
 		set({ opening: path });
+		flushDrafts();
 		try {
 			const open = state.slots.find((s) => s.sessionFile && samePath(s.sessionFile, path));
 			if (open) return await attempt(() => showSlot(open.slot, seq));
@@ -252,7 +268,7 @@ export const actions = {
 	},
 
 	async addWorkspace(path) {
-		const result = await attempt(() => post("/api/workspaces/add", { path }));
+		const result = await attempt(() => post("/api/workspaces/add", { path, mode: uiMode() }));
 		if (result) await loadWorkspaces();
 		return result;
 	},
@@ -277,7 +293,7 @@ export const actions = {
 	},
 
 	async renameWorkspace(id, name) {
-		const result = await attempt(() => post("/api/workspaces/rename", { id, name }));
+		const result = await attempt(() => post("/api/workspaces/rename", { id, name, mode: uiMode() }));
 		if (result) await loadWorkspaces();
 		return result;
 	},
@@ -285,7 +301,7 @@ export const actions = {
 	async removeWorkspace(id, name) {
 		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove"), artifactChoice: true });
 		if (!ok) return;
-		await attempt(() => post("/api/workspaces/remove", { id, deleteArtifacts: ok.deleteArtifacts === true }));
+		await attempt(() => post("/api/workspaces/remove", { id, deleteArtifacts: ok.deleteArtifacts === true, mode: uiMode() }));
 		await loadWorkspaces();
 	},
 

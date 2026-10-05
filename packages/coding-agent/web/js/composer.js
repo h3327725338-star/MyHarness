@@ -1,7 +1,7 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
-import { api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadResources, loadSnapshot, post, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { DraftEditor } from "./draft-editor.js";
@@ -16,6 +16,7 @@ import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
 
 import { drafts, registerRestartDraft } from "./restart-state.js";
+import { chatModeOf, draftFromServer } from "./chat-modes.js";
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -257,6 +258,7 @@ export function Composer() {
 	const restarting = useStore((s) => s.restarting);
 	const connected = useStore((s) => s.connected);
 	const sessionId = snap?.session?.id;
+	const chatMode = chatModeOf(snap?.mode);
 	const active = !!snap?.active;
 	// The branch / worktree chips above the input: read when the folder or the chat on screen changes and after each run.
 	useEffect(() => {
@@ -281,11 +283,23 @@ export function Composer() {
 		if (!state.resources) loadResources().catch(() => {});
 	}, [sessionId]);
 
+	// The draft is also saved on the server (per chat, in its mode) a moment after each edit, so it comes back when the
+	// chat is reopened later, in another tab or after the browser was closed. This runs before the effect below adopts a
+	// newly shown chat, so the previous chat's text is never saved under the new one.
+	useEffect(() => {
+		if (!sessionId || lastSession.current !== sessionId) return;
+		scheduleDraftSave({ slot: activeSlot, mode: chatMode, sessionId, text, images });
+	}, [text, images, sessionId]);
+
 	// Drafts follow the session so switching chats does not lose typed text.
 	useEffect(() => {
 		if (lastSession.current !== null && lastSession.current !== sessionId) drafts.set(lastSession.current, { text, images });
 		if (lastSession.current !== sessionId) {
-			const draft = drafts.get(sessionId);
+			if (lastSession.current !== null) flushDrafts();
+			// What the server saved for this chat; the text edited in this tab (if any) is newer and wins.
+			const saved = sessionId ? draftFromServer(state.modeState?.[chatMode]?.drafts?.[sessionId]) : null;
+			if (saved) markDraftSaved(sessionId, saved);
+			const draft = drafts.get(sessionId) || saved;
 			setText(draft?.text || "");
 			setImages(draft?.images || []);
 			setHistoryIndex(-1);
@@ -434,6 +448,7 @@ export function Composer() {
 		if (importing.current) { toast(t("Wait for the current file import to finish."), "warning"); return; }
 		const targetSession = sessionId;
 		const targetSlot = activeSlot;
+		const targetMode = chatMode;
 		const initial = latest.current;
 		importing.current = true;
 		setLoadingFiles(true);
@@ -457,7 +472,9 @@ export function Composer() {
 					if (latest.current.sessionId === targetSession) setImages((prev) => [...prev, attachment]);
 					else {
 						const draft = drafts.get(targetSession) || initial;
-						drafts.set(targetSession, { text: draft.text, images: [...draft.images, attachment] });
+						const next = { text: draft.text, images: [...draft.images, attachment] };
+						drafts.set(targetSession, next);
+						scheduleDraftSave({ slot: targetSlot, mode: targetMode, sessionId: targetSession, ...next });
 					}
 				} catch (error) { toast(serverText(error.message, t("Could not read the file.")), "error"); }
 			}
@@ -497,6 +514,7 @@ export function Composer() {
 		if ((!value.trim() && images.length === 0) || sending || importing.current) return;
 		if (!active && !value.trim() && images.length === 0) return;
 		setSending(true);
+		const target = { slot: activeSlot, mode: chatMode, sessionId };
 		const attached = images.filter((item) => !item.path).map(({ mimeType, data }) => ({ mimeType, data }));
 		const previousText = text;
 		const previousImages = images;
@@ -508,7 +526,7 @@ export function Composer() {
 		if (!result.handled && !result.ok) {
 			setText(previousText);
 			setImages(previousImages);
-		}
+		} else if (target.sessionId) clearDraft(target);
 	};
 
 	const onKeyDown = (event) => {

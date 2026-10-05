@@ -15,7 +15,13 @@ import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
-import type { SessionEntry, SessionInfo, SessionTreeNode } from "../../session/types.ts";
+import {
+	type ChatMode,
+	getChatMode,
+	type SessionEntry,
+	type SessionInfo,
+	type SessionTreeNode,
+} from "../../session/types.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -128,6 +134,11 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	const activeRenames = new Map<string, Promise<unknown>>();
+	const requestMode = (value?: unknown): ChatMode => {
+		if (value === undefined || value === null) return host.session.sessionManager.getMode();
+		if (value !== "coding" && value !== "general") throw new HttpError(400, "Invalid chat mode");
+		return value;
+	};
 
 	const requireIdle = (what: string) => {
 		if (!host.session.isIdle || host.completionActive || host.gitTask) {
@@ -143,13 +154,14 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		return { ok: true };
 	});
 
-	server.route("GET", "/api/workspaces", () => {
+	server.route("GET", "/api/workspaces", ({ url }) => {
+		const mode = requestMode(url.searchParams.get("mode"));
 		const cwd = host.session.sessionManager.getCwd();
 		const current = host.workspace;
 		return {
 			currentPath: cwd,
 			currentSessionFile: host.session.sessionFile ?? null,
-			workspaces: host.workspaceStore.list().map((workspace) => ({
+			workspaces: host.workspaceStore.list(mode).map((workspace) => ({
 				id: workspace.workspaceId,
 				name: workspace.name,
 				rootPath: workspace.rootPath,
@@ -162,6 +174,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const currentFile = host.session.sessionFile;
 		return {
 			path: info.path,
+			mode: getChatMode(info),
 			id: info.id,
 			name: info.name ?? null,
 			firstMessage: info.firstMessage,
@@ -177,19 +190,36 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	server.route("GET", "/api/workspaces/sessions", async ({ url }) => {
 		const rootPath = url.searchParams.get("path");
 		if (!rootPath) throw new HttpError(400, "Missing path");
-		const sessions = (await useCase.listSessions(rootPath)).filter((info) => !existsSync(`${info.path}.archived`));
+		const mode = requestMode(url.searchParams.get("mode"));
+		const sessions = host.workspaceStore.getByPath(rootPath, mode)
+			? (await useCase.listSessions(rootPath)).filter(
+					(info) => getChatMode(info) === mode && !existsSync(`${info.path}.archived`),
+				)
+			: [];
 		return { sessions: sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime()).map(sessionSummary) };
 	});
 
 	/** Chats that belong to no registered Workspace: created without one, or left behind by a removed Workspace. */
-	server.route("GET", "/api/sessions/unbound", async () => {
-		const sessions = (await SessionManager.listUnbound()).filter((info) => !existsSync(`${info.path}.archived`));
+	server.route("GET", "/api/sessions/unbound", async ({ url }) => {
+		const mode = requestMode(url.searchParams.get("mode"));
+		const sessions = (await SessionManager.listAll(sessionDir())).filter(
+			(info) =>
+				getChatMode(info) === mode &&
+				!existsSync(`${info.path}.archived`) &&
+				(!info.workspaceId || !host.workspaceStore.getById(info.workspaceId, mode)),
+		);
 		return { sessions: sessions.map(sessionSummary) };
 	});
 
 	server.route("POST", "/api/workspaces/add", ({ body }) => {
-		const input = asString(asObject(body).path, "path");
-		const result = host.workspaceStore.add(input, host.session.sessionManager.getCwd());
+		const payload = asObject(body);
+		const input = asString(payload.path, "path");
+		const result = host.workspaceStore.add(
+			input,
+			host.session.sessionManager.getCwd(),
+			true,
+			requestMode(payload.mode),
+		);
 		if (!result.ok || !result.workspace) throw new HttpError(400, result.error ?? "Failed to add workspace");
 		return {
 			workspace: {
@@ -209,7 +239,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const id = asString(input.id, "id");
 		const name = asString(input.name, "name").trim();
 		if (!name) throw new HttpError(400, "Missing name");
-		if (!host.workspaceStore.getById(id)) throw new HttpError(404, "Unknown workspace");
+		if (!host.workspaceStore.getById(id, requestMode(input.mode))) throw new HttpError(404, "Unknown workspace");
 		if (!host.workspaceStore.rename(id, name)) throw new HttpError(500, "Could not save the workspace list.");
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
@@ -220,14 +250,15 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const id = asString(input.id, "id");
 		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
 			throw new HttpError(400, "deleteArtifacts must be a boolean");
-		const workspace = host.workspaceStore.getById(id);
+		const mode = requestMode(input.mode);
+		const workspace = host.workspaceStore.getById(id, mode);
 		if (!workspace) throw new HttpError(404, "Unknown workspace");
 		if (input.deleteArtifacts === true) {
 			if (hub.statuses().some((slot) => slot.active))
 				throw new HttpError(409, "Stop running tasks before deleting workspace artifacts.");
 			deleteWorkspaceArtifacts(host.session.sessionManager.getDataRoot() ?? getDataDir(), workspace.workspaceId);
 		}
-		if (!host.workspaceStore.remove(id)) throw new HttpError(500, "Could not save the workspace list.");
+		if (!host.workspaceStore.remove(id, mode)) throw new HttpError(500, "Could not save the workspace list.");
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
 	});
@@ -236,7 +267,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	server.route("POST", "/api/sessions/new", async ({ body }) => {
 		const payload = asObject(body ?? {});
 		const rootPath = typeof payload.rootPath === "string" && payload.rootPath ? payload.rootPath : undefined;
-		return hub.newSession(host, rootPath, payload.unbound === true);
+		return hub.newSession(host, rootPath, payload.unbound === true, requestMode(payload.mode));
 	});
 
 	server.route("POST", "/api/sessions/open", async ({ body }) => {
@@ -273,9 +304,12 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		}
 	};
 
-	server.route("GET", "/api/sessions/archived", async () => ({
+	server.route("GET", "/api/sessions/archived", async ({ url }) => ({
 		sessions: (await SessionManager.listAll(sessionDir()))
-			.filter((info) => existsSync(`${info.path}.archived`))
+			.filter(
+				(info) =>
+					getChatMode(info) === requestMode(url.searchParams.get("mode")) && existsSync(`${info.path}.archived`),
+			)
 			.map(sessionSummary),
 	}));
 	/** Set or clear a marker file next to the session's JSONL (`.archived`, `.pinned`); the session data is not touched. */
@@ -355,7 +389,9 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
 			throw new HttpError(400, "deleteArtifacts must be a boolean");
 		const rootPath = asString(input.rootPath, "rootPath");
-		const sessions = await useCase.listSessions(rootPath);
+		const sessions = (await useCase.listSessions(rootPath)).filter(
+			(info) => getChatMode(info) === requestMode(input.mode),
+		);
 		for (const session of sessions) await releaseSessionSlots(session.path);
 		for (const session of sessions) {
 			const deleted = await deleteSessionFile(session.path, {

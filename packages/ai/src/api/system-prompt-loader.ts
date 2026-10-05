@@ -34,7 +34,10 @@ export function loadSystemPrompt(
 	try {
 		if (!fs || !path) throw new Error("filesystem prompt loading is unavailable in this runtime");
 		if (!/^[a-z0-9-]+(?:\/[a-z0-9-]+)*\.md$/u.test(file)) throw new Error("invalid prompt path");
-		location = path.resolve(directory, file);
+		// Keep the established logical resource names for SDK/tools; built-ins now live under common.
+		const scoped = /^(common|coding|general)\//u.test(file);
+		const legacyLocation = path.resolve(directory, file);
+		location = scoped || fs.existsSync(legacyLocation) ? legacyLocation : path.resolve(directory, "common", file);
 		const bytes = fs.readFileSync(location);
 		let text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n");
 		if (!text.trim()) throw new Error("empty prompt");

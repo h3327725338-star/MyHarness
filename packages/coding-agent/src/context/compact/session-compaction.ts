@@ -225,6 +225,9 @@ export class SessionCompactionRunner {
 			undefined,
 			true,
 			result.replacementHistory,
+			!fromExtension && result.usage
+				? { provider: model.provider, model: model.id, currency: model.cost.currency ?? "USD" }
+				: undefined,
 		);
 		result.firstKeptEntryId = id;
 		agent.state.messages = sessionManager.buildSessionContext().messages;

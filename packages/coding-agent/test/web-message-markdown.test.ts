@@ -26,7 +26,10 @@ describe("user message Markdown line breaks", () => {
 
 	it("keeps headings, lists, bold, paragraphs and code formatting, and escapes raw HTML", () => {
 		const render = renderer();
-		const html = render("# Heading\n\n- first\n- second\n\n**bold**\nnext\n\n```ts\nline1\nline2\n```\n\n<script>bad()</script>", { breaks: true });
+		const html = render(
+			"# Heading\n\n- first\n- second\n\n**bold**\nnext\n\n```ts\nline1\nline2\n```\n\n<script>bad()</script>",
+			{ breaks: true },
+		);
 		expect(html).toContain("<h1>Heading</h1>");
 		expect(html).toContain("<li>first</li>");
 		expect(html).toContain("<li>second</li>");

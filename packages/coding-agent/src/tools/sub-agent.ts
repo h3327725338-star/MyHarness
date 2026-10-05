@@ -96,6 +96,7 @@ export function formatDelegatedTaskPrompt(task: SubAgentTaskSpec): string {
 }
 
 export interface SubAgentRuntimeSettings {
+	chatMode?: "coding" | "general";
 	enabled: boolean;
 	provider?: string;
 	model?: string;
@@ -119,6 +120,7 @@ export type ResolvedSubAgentRuntimeSettings = Required<
 > &
 	Pick<
 		SubAgentRuntimeSettings,
+		| "chatMode"
 		| "contextWindow"
 		| "taskTimeoutMs"
 		| "totalRuntimeLimitMs"
@@ -325,6 +327,7 @@ export function resolveSubAgentRuntimeSettings(
 ): ResolvedSubAgentRuntimeSettings {
 	const totalRuntimeLimitMs = resolveTotalRuntimeLimit(settings);
 	return {
+		chatMode: settings.chatMode,
 		provider: settings.provider ?? "",
 		model: settings.model ?? "",
 		thinkingLevel: settings.thinkingLevel ?? "off",
@@ -749,6 +752,7 @@ async function runExploreTask(options: {
 	guardPath: string;
 	signal?: AbortSignal;
 	onProgress?: (result: ExploreTaskResult) => void;
+	chatMode?: "coding" | "general";
 	traceContext?: RuntimeTraceChildContext;
 }): Promise<ExploreTaskResult> {
 	const eventState = createDelegatedEventState();
@@ -821,6 +825,7 @@ async function runExploreTask(options: {
 				windowsHide: true,
 				env: {
 					...process.env,
+					MYHARNESS_INTERNAL_CHAT_MODE: options.chatMode ?? "coding",
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
@@ -1411,6 +1416,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						cwd: options.cwd,
 						provider: options.settings.provider,
 						model: options.settings.model,
+						chatMode: options.settings.chatMode,
 						thinkingLevel: options.settings.thinkingLevel,
 						contextWindow: options.settings.contextWindow,
 						description: task.description,

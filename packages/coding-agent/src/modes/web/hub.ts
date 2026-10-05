@@ -18,6 +18,7 @@ import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspac
 import { getDataDir } from "../../config.ts";
 import { ensureDefaultWorkingDir } from "../../data/workspace-store.ts";
 import { SessionManager } from "../../session/manager/index.ts";
+import type { ChatMode } from "../../session/types.ts";
 import { pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { type SlotStatus, WebHost, type WebHostHubLink } from "./host.ts";
@@ -252,7 +253,12 @@ export class WebHostHub implements WebHostHubLink {
 	 * chat that belongs to no Workspace stays that way, and `unbound` asks for one explicitly. A new unbound chat runs in
 	 * MyHarness's own default working directory, not in the folder of a Workspace it may have been removed from.
 	 */
-	async newSession(from: WebHost, rootPath?: string, unbound = false): Promise<{ slot: string; created: boolean }> {
+	async newSession(
+		from: WebHost,
+		rootPath?: string,
+		unbound = false,
+		mode: ChatMode = from.session.sessionManager.getMode(),
+	): Promise<{ slot: string; created: boolean }> {
 		const manager = from.session.sessionManager;
 		const defaultStorage = manager.usesDefaultSessionDir() && manager.isPersisted();
 		const wantUnbound = defaultStorage && (unbound || (!rootPath && from.unbound));
@@ -266,6 +272,7 @@ export class WebHostHub implements WebHostHubLink {
 		// An untouched empty chat of the same kind in the same folder is already what the user asks for.
 		const reusable = [from, ...this.all()].find(
 			(host) =>
+				host.session.sessionManager.getMode() === mode &&
 				pathIdentityKey(host.cwd) === pathIdentityKey(cwd) &&
 				host.session.isIdle &&
 				!host.gitTask &&
@@ -277,10 +284,10 @@ export class WebHostHub implements WebHostHubLink {
 		if (reusable) return { slot: reusable.slotId, created: false };
 		const sessionDir = manager.usesDefaultSessionDir() ? undefined : manager.getSessionDir();
 		const sessionManager = !manager.isPersisted()
-			? SessionManager.inMemory(cwd)
+			? SessionManager.inMemory(cwd, { mode })
 			: wantUnbound
-				? SessionManager.createUnbound(cwd, undefined, { dataRoot: manager.getDataRoot() })
-				: SessionManager.create(cwd, sessionDir);
+				? SessionManager.createUnbound(cwd, { mode }, { dataRoot: manager.getDataRoot() })
+				: SessionManager.create(cwd, sessionDir, { mode });
 		const runtime = await from.runtimeHost.createSibling({
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile: from.session.sessionFile },

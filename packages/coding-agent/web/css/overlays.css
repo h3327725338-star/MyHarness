@@ -197,3 +197,5 @@
 .k-field { position: relative; display: flex; }
 .k-field .field { width: 100%; padding-right: 26px; }
 .k-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); font-size: var(--fs-sm); pointer-events: none; }
+.personal-prompt { width: 100%; min-height: 180px; }
+.personal-prompt.invalid { border-color: var(--danger); }

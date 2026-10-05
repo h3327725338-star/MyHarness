@@ -22,6 +22,7 @@ import { registerAccountRoutes } from "./routes-accounts.ts";
 import { registerCoreRoutes } from "./routes-core.ts";
 import { registerFileRoutes, registerFolderBrowser } from "./routes-files.ts";
 import { registerGitRoutes } from "./routes-git.ts";
+import { registerModeRoutes } from "./routes-modes.ts";
 import { registerProviderRoutes } from "./routes-providers.ts";
 import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
@@ -190,6 +191,7 @@ export async function runWebMode(
 	const host = hub.host;
 	registerCoreRoutes(server, host);
 	registerSessionRoutes(server, host, hub);
+	registerModeRoutes(server, host, hub);
 	registerFileRoutes(server, host);
 	registerFolderBrowser(server, host);
 	registerGitRoutes(server, host);

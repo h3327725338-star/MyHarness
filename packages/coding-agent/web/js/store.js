@@ -7,6 +7,8 @@ import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 import { takeRestartState } from "./restart-state.js";
+import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
+import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
 
@@ -84,7 +86,10 @@ export const state = {
 	/** Session file of a chat that was clicked in the sidebar and is still being opened (marked there at once). */
 	opening: null,
 	toasts: [],
-	workspaces: { list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false },
+	/** Saved state of each mode (`GET /api/modes/state`): its last chat, model choice and drafts; null until loaded. */
+	modeState: null,
+	/** Changes when the General personal prompt was saved somewhere (`mode_preferences_changed`). */
+	modePreferencesNonce: 0,
 	models: null,
 	settings: null,
 	providers: null,
@@ -100,6 +105,10 @@ export const state = {
 		panelTab: prefs.panelTab ?? "changes",
 		panelW: prefs.panelW ?? 560,
 		expanded: prefs.expanded ?? {},
+		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
+		expandedGeneral: prefs.expandedGeneral ?? {},
+		// The mode on screen. It is only this page's choice: a chat's mode is stored in the chat and never changes.
+		chatMode: chatModeOf(prefs.chatMode),
 		settingsOpen: false,
 		settingsSection: "appearance",
 		/** `{ id }` of a provider to show in Settings → Providers (`id: null` adds one); turned into `providerSel` on arrival. */
@@ -127,6 +136,24 @@ export const state = {
 };
 
 setLang(state.view.lang);
+
+// ---- Sidebar lists, one set per mode ---------------------------------------------------------------
+// Each mode has its own Workspaces and chats. `state.workspaces` is the set of the mode on screen; loads that finish
+// after a switch write into the set of the mode they were made for.
+const emptyLists = () => ({ list: [], currentPath: null, currentSessionFile: null, sessions: {}, unbound: undefined, errors: {}, loading: false });
+const listsByMode = { coding: emptyLists(), general: emptyLists() };
+export const uiMode = () => state.view.chatMode;
+Object.defineProperty(state, "workspaces", {
+	enumerable: true,
+	configurable: true,
+	get: () => listsByMode[uiMode()],
+	set: (value) => {
+		listsByMode[uiMode()] = value;
+	},
+});
+function patchLists(mode, patch) {
+	listsByMode[mode] = { ...listsByMode[mode], ...patch };
+}
 
 for (const key of SLOT_KEYS) {
 	Object.defineProperty(state, key, {
@@ -177,7 +204,7 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "expandedGeneral", "chatMode", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -192,6 +219,7 @@ export function applyAppearance() {
 	const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 	root.dataset.theme = dark ? "dark" : "light";
 	root.dataset.motion = state.view.motion === "system" ? "" : state.view.motion;
+	root.dataset.chatMode = state.view.chatMode;
 	root.style.setProperty("--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
 	root.style.setProperty("--sidebar-w", `${state.view.sidebarW}px`);
 	root.style.setProperty("--panel-w", `${state.view.panelW}px`);
@@ -397,21 +425,26 @@ export async function loadSlots() {
 	}
 }
 
-export async function loadWorkspaces() {
-	const data = await api("/api/workspaces");
-	state.workspaces = { ...state.workspaces, list: data.workspaces, currentPath: data.currentPath, currentSessionFile: data.currentSessionFile };
+/**
+ * Load the Workspaces of a mode (the one on screen by default) and the chat lists its sidebar shows. `slot` is the
+ * chat whose Workspace counts as current (the one on screen by default).
+ */
+export async function loadWorkspaces(mode = uiMode(), slot) {
+	const data = await api(`/api/workspaces?mode=${mode}`, slot === undefined ? {} : { slot });
+	patchLists(mode, { list: data.workspaces, currentPath: data.currentPath, currentSessionFile: data.currentSessionFile });
 	emit();
 	const current = data.workspaces.find((w) => w.current);
-	const targets = new Set(Object.keys(state.view.expanded).filter((key) => state.view.expanded[key]));
+	const expanded = state.view[expandedKey(mode)] || {};
+	const targets = new Set(Object.keys(expanded).filter((key) => expanded[key]));
 	if (current) targets.add(current.rootPath);
-	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== "<archived>").map((root) => loadSessions(root)).concat([loadUnbound(), loadArchived()]));
+	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== "<archived>").map((root) => loadSessions(root, mode)).concat([loadUnbound(mode), loadArchived(mode)]));
 }
 
-export async function loadArchived() {
+export async function loadArchived(mode = uiMode()) {
 	try {
-		const data = await api("/api/sessions/archived");
-		state.workspaces = { ...state.workspaces, archived: data.sessions };
-	} catch (error) { setListError("<archived>", listFailure(error)); }
+		const data = await api(`/api/sessions/archived?mode=${mode}`);
+		patchLists(mode, { archived: data.sessions });
+	} catch (error) { setListError("<archived>", listFailure(error), mode); }
 	emit();
 }
 
@@ -424,21 +457,21 @@ function listFailure(error) {
 	return error.message || t("Could not load the chats.");
 }
 
-function setListError(key, message) {
-	const errors = { ...state.workspaces.errors };
+function setListError(key, message, mode = uiMode()) {
+	const errors = { ...listsByMode[mode].errors };
 	if (message) errors[key] = message;
 	else delete errors[key];
-	state.workspaces = { ...state.workspaces, errors };
+	patchLists(mode, { errors });
 }
 
 /** Chats that belong to no workspace (created without one, or left behind by a removed workspace). */
-export async function loadUnbound() {
+export async function loadUnbound(mode = uiMode()) {
 	try {
-		const data = await api("/api/sessions/unbound", { slot: "" });
-		setListError(GENERAL_KEY, "");
-		state.workspaces = { ...state.workspaces, unbound: data.sessions };
+		const data = await api(`/api/sessions/unbound?mode=${mode}`, { slot: "" });
+		setListError(GENERAL_KEY, "", mode);
+		patchLists(mode, { unbound: data.sessions });
 	} catch (error) {
-		setListError(GENERAL_KEY, listFailure(error));
+		setListError(GENERAL_KEY, listFailure(error), mode);
 	}
 	emit();
 }
@@ -448,20 +481,23 @@ function reloadActiveChats() {
 	reloadChatsOf(state.snap, false);
 }
 
-/** Reload the chat list a session belongs to; with `onlyLoaded`, only a list the sidebar has loaded already. */
+/** Reload the chat list a session belongs to (in its own mode); with `onlyLoaded`, only a list already loaded. */
 function reloadChatsOf(snap, onlyLoaded = true) {
 	if (!snap || snap === true) return;
+	const mode = chatModeOf(snap.mode);
+	const lists = listsByMode[mode];
 	const root = snap.workspace?.rootPath;
 	if (root) {
-		if (!onlyLoaded || state.workspaces.sessions[root] !== undefined) loadSessions(root);
-	} else if (!onlyLoaded || state.workspaces.unbound !== undefined) loadUnbound();
+		if (!onlyLoaded || lists.sessions[root] !== undefined) loadSessions(root, mode);
+	} else if (!onlyLoaded || lists.unbound !== undefined) loadUnbound(mode);
 }
 
 // Listing a workspace's chats reads every saved session file on the server, so requests for the same workspace are
 // merged: one runs at a time, and requests made while it runs cause exactly one more read afterwards.
 const sessionLoads = new Map();
-export function loadSessions(rootPath) {
-	const running = sessionLoads.get(rootPath);
+export function loadSessions(rootPath, mode = uiMode()) {
+	const key = `${mode}\n${rootPath}`;
+	const running = sessionLoads.get(key);
 	if (running) {
 		running.again = true;
 		return running.promise;
@@ -472,21 +508,21 @@ export function loadSessions(rootPath) {
 			do {
 				load.again = false;
 				try {
-					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}`);
-					setListError(rootPath, "");
-					state.workspaces = { ...state.workspaces, sessions: { ...state.workspaces.sessions, [rootPath]: data.sessions } };
+					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}&mode=${mode}`);
+					setListError(rootPath, "", mode);
+					patchLists(mode, { sessions: { ...listsByMode[mode].sessions, [rootPath]: data.sessions } });
 					emit();
 				} catch (error) {
 					// Keep what was listed before; without a list the sidebar shows this reason and a retry.
-					setListError(rootPath, listFailure(error));
+					setListError(rootPath, listFailure(error), mode);
 					emit();
 				}
 			} while (load.again);
 		} finally {
-			sessionLoads.delete(rootPath);
+			sessionLoads.delete(key);
 		}
 	})();
-	sessionLoads.set(rootPath, load);
+	sessionLoads.set(key, load);
 	return load.promise;
 }
 
@@ -545,6 +581,7 @@ export async function restoreAfterRestart(snap, boot) {
 	bags.clear();
 	activeSlot = snap.slot;
 	state.activeSlot = snap.slot;
+	setChatMode(snap.mode);
 	set({ snap, boot });
 	await refreshAll();
 }
@@ -552,6 +589,146 @@ export async function restoreAfterRestart(snap, boot) {
 export async function refreshAll() {
 	for (const [id, bag] of bags) if (id !== activeSlot) bag.loaded = false;
 	await Promise.all([refreshSlot(activeSlot), loadWorkspaces(), loadSlots()]);
+}
+
+// ---- Coding / General ------------------------------------------------------------------------------
+// The mode on screen always is the mode of the chat on screen: showing a chat of the other mode (a task reminder, a
+// notification) switches the page with it. Only this page remembers the mode; it is never sent to a running chat.
+
+/** Put a mode on screen (its colours via `data-chat-mode`, its sidebar lists) and remember it in this browser. */
+function setChatMode(mode) {
+	const next = chatModeOf(mode);
+	if (state.view.chatMode === next) return;
+	state.view = { ...state.view, chatMode: next };
+	persistView();
+}
+
+export async function loadModeState() {
+	state.modeState = await api("/api/modes/state", { slot: activeSlot ?? "" });
+	emit();
+	return state.modeState;
+}
+
+function setModeState(mode, value) {
+	if (!value) return;
+	state.modeState = { ...(state.modeState || {}), [mode]: value };
+	emit(true);
+}
+
+const listsReady = (mode, slot) => Promise.race([loadWorkspaces(mode, slot).catch(() => {}), new Promise((done) => setTimeout(done, 1500))]);
+const sameFile = (a, b) => !!a && !!b && a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
+
+/**
+ * Save a shown chat as its mode's latest chat (`POST /api/modes/state`, sent to that chat's slot). A blank chat is
+ * saved only with `force` (when its mode is left), so clicking through new chats does not leave empty files behind.
+ */
+export function rememberChat(slot, { force = false } = {}) {
+	const snap = bags.get(slot)?.snap;
+	const file = snap?.session?.file;
+	if (!slot || !file || !snap.session.persisted || snap.flags?.mirror) return Promise.resolve();
+	const mode = chatModeOf(snap.mode);
+	if (sameFile(state.modeState?.[mode]?.lastSessionFile, file)) return Promise.resolve();
+	const info = state.slots.find((item) => item.slot === slot);
+	const blank = info ? !(info.hasContent || info.firstMessage || info.name || info.active) : !bags.get(slot)?.items?.length;
+	if (blank && !force) return Promise.resolve();
+	return post("/api/modes/state", { mode, sessionFile: file }, slot)
+		.then((result) => setModeState(mode, result?.state))
+		.catch(() => {});
+}
+
+// Drafts are saved on the server per chat (by its session ID, in its mode) a moment after the last edit, and at once
+// before another chat or mode is shown. `savedDrafts` holds what the server has, so an unchanged draft is not sent again.
+const draftSaves = new Map();
+const savedDrafts = new Map();
+const draftFailures = new Set();
+const DRAFT_DELAY = 700;
+
+const draftKey = (draft) => JSON.stringify(draftToServer(draft));
+
+/** Remember that the server already has this draft (it was just restored from there). */
+export function markDraftSaved(sessionId, draft) {
+	if (sessionId) savedDrafts.set(sessionId, draft && (draft.text || draft.images?.length) ? draftKey(draft) : "");
+}
+
+function sendDraft(entry) {
+	const empty = !entry.text && !entry.images.length;
+	const key = empty ? "" : draftKey(entry);
+	if ((savedDrafts.get(entry.sessionId) ?? "") === key) return Promise.resolve();
+	savedDrafts.set(entry.sessionId, key);
+	return post("/api/modes/state", { mode: entry.mode, draft: empty ? null : draftToServer(entry) }, entry.slot)
+		.then((result) => {
+			draftFailures.delete(entry.sessionId);
+			setModeState(entry.mode, result?.state);
+		})
+		.catch((error) => {
+			savedDrafts.delete(entry.sessionId);
+			if (draftFailures.has(entry.sessionId)) return;
+			draftFailures.add(entry.sessionId);
+			toast(t("The draft could not be saved: {error}", { error: error.message || "" }), "warning", 6000);
+		});
+}
+
+/** The composer's text or attachments changed: save them shortly (`{ slot, mode, sessionId, text, images }`). */
+export function scheduleDraftSave(entry) {
+	const snap = bags.get(entry.slot)?.snap;
+	if (!entry.sessionId || !entry.slot || !snap?.session?.persisted || snap.flags?.mirror) return;
+	const pending = draftSaves.get(entry.sessionId);
+	if (pending) clearTimeout(pending.timer);
+	const job = { entry, timer: setTimeout(() => (draftSaves.delete(entry.sessionId), sendDraft(entry)), DRAFT_DELAY) };
+	draftSaves.set(entry.sessionId, job);
+}
+
+/** Send every draft that waits for its delay now (before a chat or mode switch, or when the page is hidden). */
+export function flushDrafts() {
+	const jobs = [...draftSaves.values()];
+	draftSaves.clear();
+	return Promise.all(jobs.map((job) => (clearTimeout(job.timer), sendDraft(job.entry))));
+}
+
+/** A message was sent: the chat's draft is gone, also on the server, so reopening it does not bring the text back. */
+export function clearDraft(entry) {
+	const pending = draftSaves.get(entry.sessionId);
+	if (pending) clearTimeout(pending.timer);
+	draftSaves.delete(entry.sessionId);
+	return sendDraft({ ...entry, text: "", images: [] });
+}
+
+/**
+ * Show the other mode: save the draft and the chat on screen, ask the server for the mode's chat (its latest one, or a
+ * new blank one), then reveal it from the switch. A failure (for example a saved chat that cannot be opened) is shown
+ * and the page stays where it is.
+ */
+export async function switchChatMode(target) {
+	const mode = chatModeOf(target);
+	state.view = { ...state.view, modeIntent: mode };
+	emit();
+	if (reverseModeReveal(mode)) return;
+	const seq = nextSwitch();
+	if (mode === state.view.chatMode) return;
+	const leaving = activeSlot;
+	const saved = Promise.all([flushDrafts(), rememberChat(leaving, { force: true })]);
+	const cached = [...bags].find(([id, bag]) => id !== leaving && bag.loaded && chatModeOf(bag.snap?.mode) === mode && sameFile(bag.snap?.session?.file, state.modeState?.[mode]?.lastSessionFile));
+	if (cached) {
+		await activateSlot(cached[0], seq);
+		return;
+	}
+	await saved;
+	if (!isLatestSwitch(seq)) return;
+	let result;
+	try {
+		result = await post("/api/modes/open", { mode }, leaving ?? "");
+	} catch (error) {
+		if (isLatestSwitch(seq)) {
+			state.view = { ...state.view, modeIntent: state.view.chatMode };
+			emit();
+			toast(serverText(error.message, t("The operation failed.")), "error", 9000);
+		}
+		return;
+	}
+	setModeState(mode, result.state);
+	if (!isLatestSwitch(seq)) return;
+	if (!state.slots.some((item) => item.slot === result.slot)) await loadSlots();
+	await activateSlot(result.slot, seq);
 }
 
 // ---- Switching between sessions ------------------------------------------------------------------
@@ -563,17 +740,38 @@ export const isLatestSwitch = (seq) => seq === switchSeq;
 
 /**
  * Show another open session. Sessions keep running in the background, so this only changes which bag is on screen.
- * Nothing on screen (an animation, a list) is waited for: the bag is loaded first if needed, then shown at once.
+ * Nothing on screen (an animation, a list) is waited for: the bag is loaded first if needed, then shown at once. A
+ * session of the other mode brings its mode with it (revealed from the mode switch, after its lists are loaded).
  */
 export async function activateSlot(slot, seq = nextSwitch()) {
 	if (!slot || slot === activeSlot) return;
 	if (!bagOf(slot).loaded) await refreshSlot(slot);
 	if (!isLatestSwitch(seq)) return;
-	activeSlot = slot;
-	state.activeSlot = slot;
-	state.view = { ...state.view, selectedTerminal: null };
-	emit();
+	const mode = chatModeOf(bagOf(slot).snap?.mode);
+	const show = () => {
+		activeSlot = slot;
+		state.activeSlot = slot;
+		state.view = { ...state.view, selectedTerminal: null };
+		setChatMode(mode);
+		state.view = { ...state.view, modeIntent: mode };
+		emit();
+	};
+	if (mode !== state.view.chatMode) {
+		flushDrafts();
+		// Cached lists can render immediately; refresh them without holding up the reveal.
+		void listsReady(mode, slot);
+		if (!isLatestSwitch(seq)) return;
+		const previousSlot = activeSlot;
+		const previousMode = state.view.chatMode;
+		await revealMode(show, { from: previousMode, to: mode, restore: () => {
+			activeSlot = previousSlot;
+			state.activeSlot = previousSlot;
+			setChatMode(previousMode);
+			emit();
+		} });
+	} else show();
 	markActiveSeen();
+	rememberChat(slot);
 	const bag = bagOf(slot);
 	if (!bag.resources) loadResources();
 	if (bag.gitStatus === undefined) loadGitStatus();
@@ -595,7 +793,7 @@ function recoverLostSlot(slot) {
 	recovering.add(slot);
 	(async () => {
 		try {
-			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", {}, "");
+			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", { mode: state.view.chatMode }, "");
 			activeSlot = null;
 			await activateSlot(result.slot);
 			await loadSlots();
@@ -629,13 +827,36 @@ let booted = false;
 /** A failed fallback was just reported; the retry failure that follows it is not reported again. */
 let fallbackFailureShown = false;
 
+/**
+ * The first chat on screen: the latest chat of the mode this browser showed last (`POST /api/modes/open`). The chat
+ * the server started with is kept when it already is that mode's chat, or after a service restart (it is the chat
+ * that was on screen). Without mode support on the server the page shows the server's chat and follows its mode.
+ */
 async function initialLoad() {
 	const snap = await api("/api/state", { slot: "" });
-	activeSlot = snap.slot;
-	state.activeSlot = snap.slot;
+	let slot = snap.slot;
+	let mode = chatModeOf(snap.mode);
 	const view = takeRestartState(snap.session?.id);
 	if (view) state.view = { ...state.view, ...view };
+	try {
+		const modes = await api("/api/modes/state", { slot });
+		state.modeState = modes;
+		const wanted = chatModeOf(state.view.chatMode);
+		if (!view && (wanted !== mode || (modes[wanted]?.lastSessionFile && !sameFile(modes[wanted].lastSessionFile, snap.session?.file)))) {
+			const opened = await post("/api/modes/open", { mode: wanted }, slot);
+			slot = opened.slot;
+			mode = wanted;
+			state.modeState = { ...modes, [wanted]: opened.state };
+		}
+	} catch (error) {
+		if (error.status !== 404) toast(serverText(error.message, t("The operation failed.")), "error", 9000);
+	}
+	activeSlot = slot;
+	state.activeSlot = slot;
+	setChatMode(mode);
+	applyAppearance();
 	await refreshAll();
+	rememberChat(slot);
 	if (view) toast(t("Service restarted successfully."), "info", 3500);
 }
 
@@ -643,6 +864,8 @@ export async function boot() {
 	applyAppearance();
 	matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyAppearance);
 	document.addEventListener("visibilitychange", markActiveSeen);
+	// A draft waiting for its delay is sent when the page is hidden: closing the tab may not finish a last request.
+	document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && flushDrafts());
 	const poll = async () => {
 		try {
 			const boot = await api("/api/boot", { slot: "" });
@@ -863,6 +1086,10 @@ function connectEvents() {
 	on("workspaces_changed", async (d, slot) => {
 		await attempt(() => loadSnapshot(slot), { quiet: true });
 		await attempt(() => loadWorkspaces(), { quiet: true });
+	});
+	on("mode_preferences_changed", () => {
+		state.modePreferencesNonce += 1;
+		emit(true);
 	});
 	on("login_event", (d) => set({ loginEvent: d.type === "done" ? null : d }));
 	on("github_event", (d) => set({ githubEvent: { ...d, nonce: Date.now() } }));

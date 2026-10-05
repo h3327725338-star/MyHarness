@@ -5,14 +5,14 @@ import { api, useStore, setView } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, changeTotals, groupSteps, groupLabel, OUTCOME_LABEL, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
+import { buildTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
 import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
 
-const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertCircle" };
+import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 
 // ---- Small pieces ----------------------------------------------------------------------------
 function Ansi({ text }) {
@@ -269,27 +269,6 @@ function currentActivity(turn, run) {
 	return t("Working…");
 }
 
-function summaryText({ outcome, duration, stats, changeCount, live }) {
-	const bits = [];
-	if (stats.actions) bits.push(plural(stats.actions, "action"));
-	if (changeCount) bits.push(t("{files} changed", { files: plural(changeCount, "file") }));
-	const tail = bits.length ? ` · ${bits.join(" · ")}` : "";
-	const dur = duration ? fmtDuration(duration) : "";
-	if (live) return "";
-	switch (outcome) {
-		case "completed":
-			return `${dur ? t("Worked for {duration}", { duration: dur }) : t("Worked")}${tail}`;
-		case "partial":
-			return `${t("Partially completed")}${dur ? ` · ${dur}` : ""}${tail}`;
-		case "failed":
-			return `${dur ? t("Failed after {duration}", { duration: dur }) : t("Failed")}${tail}`;
-		case "cancelled":
-			return `${dur ? t("Cancelled after {duration}", { duration: dur }) : t("Cancelled")}${tail}`;
-		default:
-			return `${OUTCOME_LABEL[outcome] ? t(OUTCOME_LABEL[outcome]) : outcome}${tail}`;
-	}
-}
-
 /**
  * One foldable block of reasoning and tool calls. A turn has one block per stretch of work between the texts the model
  * wrote (see turnSegments); the last block carries the turn's state: working (glyph, current action, timer) or how it
@@ -302,7 +281,8 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	useEffect(() => { if (!interacted.current) setOpen(defaultOpen); }, [defaultOpen]);
 	// While the context is compacted the strip above the input shows it, with its own timer and Cancel: this row stays
 	// still (no working glyph, activity or timer) and is not drawn at all when the turn has no steps yet.
-	const live = last && running && !compacting;
+	const summary = processSummaryState({ last, running, compacting, outcome, duration, stats, changeCount });
+	const live = summary.live;
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
 		if (!live) return undefined;
@@ -311,14 +291,8 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	}, [live]);
 	if (!steps.length && !live) return null;
 	const elapsed = live ? now - (snapRun?.startedAt || turn.startedAt || now) : duration;
-	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${OUTCOME_ICON[outcome] || (outcome === "running" ? "clock" : "checkCircle")} size=${14} class=${`c-${outcome}`} />`;
-	const label = live
-		? currentActivity(turn, snapRun)
-		: last
-			? summaryText({ outcome, duration, stats, changeCount })
-			: stats.actions
-				? summaryText({ outcome: "completed", duration: 0, stats, changeCount: stats.files })
-				: t("Reasoning");
+	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${summary.icon} size=${14} class=${`c-${summary.outcome}`} />`;
+	const label = live ? currentActivity(turn, snapRun) : summary.label;
 	const head = html`<span class="summary-ico">${icon}</span>
 		<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
 		${live ? html`<span class="summary-meta dim">${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}</span>` : null}
@@ -326,7 +300,7 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	// Waiting for the model's first step: there is nothing to unfold yet, so the row is only the working glyph, what is
 	// happening and the timer (no arrow, and no empty area under it).
 	if (!steps.length) return html`<div class=${`summary live o-${outcome}`}><div class="summary-head" role="status">${head}</div></div>`;
-	return html`<div class=${`summary ${live ? "live" : ""} o-${outcome}`}>
+	return html`<div class=${`summary ${live ? "live" : ""} o-${summary.outcome}`}>
 		<button class="summary-head" onClick=${() => { interacted.current = true; setOpen(!open); }} aria-expanded=${open} title=${open ? t("Hide steps") : t("Show what the agent did")}>
 			${head}
 			<span class="grow" />
@@ -491,14 +465,13 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	// its own at the end, the way the turn starts.
 	const pending = working && !turn.final && (!tail || tail.type === "text");
 	const lastBlock = pending ? undefined : segments.filter((segment) => segment.type === "process").pop();
-	const single = segments.every((segment) => segment.type === "process");
 	const expanded = processDefault === "expanded";
 	return html`<section class=${`turn ${live ? "live" : ""}`}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		${segments.map((segment) =>
 			segment.type === "text"
 				? html`<div class="final" key=${segment.key}><${Markdown} text=${segment.step.text} /></div>`
-				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${single ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${single ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} />`,
+				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} />`,
 		)}
 		${pending ? html`<${ProcessSummary} key=${`sum-${turn.key}-pending`} turn=${turn} steps=${[]} outcome=${outcome} live=${working} compacting=${compacting} snapRun=${snapRun} defaultOpen=${false} />` : null}
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}

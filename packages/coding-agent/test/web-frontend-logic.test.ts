@@ -65,6 +65,66 @@ describe("Web UI: list presence ordering", () => {
 	});
 });
 
+describe("Web UI: Coding / General modes", () => {
+	it("maps composer attachments to saved drafts and back without uploading again", async () => {
+		const { draftFromServer, draftToServer } = await import(new URL("chat-modes.js", webDir).href);
+		const image = { name: "a.png", mimeType: "image/png", data: "AAA", url: "data:image/png;base64,AAA" };
+		const file = { name: "doc.txt", path: "C:/uploads/doc.txt" };
+		const saved = draftToServer({ text: "中文草稿", images: [image, file] });
+		expect(saved).toEqual({
+			text: "中文草稿",
+			attachments: [
+				{ kind: "image", name: "a.png", mimeType: "image/png", data: "AAA" },
+				{ kind: "file", name: "doc.txt", path: "C:/uploads/doc.txt" },
+			],
+		});
+		expect(draftFromServer(JSON.parse(JSON.stringify(saved)))).toEqual({ text: "中文草稿", images: [image, file] });
+		expect(draftFromServer({ text: "x", attachments: [null, { unknown: true }] })).toEqual({ text: "x", images: [] });
+		expect(draftFromServer(undefined)).toBeNull();
+	});
+
+	it("summarizes the other mode's tasks from slot status without its own state machine", async () => {
+		const { chatModeOf, expandedKey, modeSignal, modeTasks, slotSignal, taskCounts } = await import(
+			new URL("chat-modes.js", webDir).href
+		);
+		expect(chatModeOf(undefined)).toBe("coding");
+		expect(chatModeOf("general")).toBe("general");
+		expect(expandedKey("coding")).toBe("expanded");
+		expect(expandedKey("general")).toBe("expandedGeneral");
+		const slot = (id: string, mode: string | undefined, patch: object) => ({
+			slot: id,
+			mode,
+			active: false,
+			waiting: false,
+			completion: false,
+			unread: false,
+			lastOutcome: null,
+			lastActivityAt: 0,
+			...patch,
+		});
+		const slots = [
+			slot("a", "general", { unread: true, lastOutcome: "completed", lastActivityAt: 2 }),
+			slot("b", "general", { active: true }),
+			slot("c", "general", { unread: true, lastOutcome: "failed" }),
+			slot("d", "general", { waiting: true, active: true }),
+			slot("e", "general", { lastOutcome: "completed" }),
+			slot("f", undefined, { unread: true, lastOutcome: "failed" }),
+			slot("g", "general", { unread: true, lastOutcome: "completed", lastActivityAt: 5 }),
+		];
+		expect(slotSignal(slots[4])).toBeNull();
+		const tasks = modeTasks(slots, "general", "g");
+		expect(tasks.map((task: any) => [task.slot.slot, task.signal])).toEqual([
+			["d", "waiting"],
+			["c", "failed"],
+			["b", "running"],
+			["a", "completed"],
+		]);
+		expect(taskCounts(tasks)).toEqual({ waiting: 1, failed: 1, completed: 1 });
+		expect(modeSignal(slots, "coding")).toBe("failed");
+		expect(modeSignal([], "general")).toBeNull();
+	});
+});
+
 describe("Web UI: chat order in the sidebar", () => {
 	it("keeps a new blank chat first, then pinned, running and most recently active chats", async () => {
 		const { orderChats } = await import(new URL("chat-order.js", webDir).href);
@@ -347,6 +407,70 @@ describe("Web UI: turns", () => {
 		const groups = groupSteps(turn.steps);
 		expect(groups.map((g: any) => `${g.kind}:${g.actions.length}`)).toEqual(["read:2", "run:1"]);
 		expect(turnOutcome(turn, { run: { outcome: "failed" }, live: false, waiting: false })).toBe("failed");
+	});
+});
+
+describe("Web UI: process summary status", () => {
+	it("keeps earlier blocks neutral for every task outcome, including failed local actions", async () => {
+		const { processSummaryState } = await import(new URL("process-summary.js", webDir).href);
+		for (const outcome of ["running", "completed", "failed", "partial", "cancelled", "waiting"]) {
+			const summary = processSummaryState({
+				last: false,
+				running: outcome === "running",
+				outcome,
+				stats: { actions: 7, files: 1, failedActions: 1 },
+				duration: 5000,
+				changeCount: 2,
+			});
+			expect(summary).toEqual({ live: false, icon: "list", label: "7 actions", outcome: "neutral" });
+		}
+		expect(processSummaryState({ last: false, stats: { actions: 0 } }).label).toBe("Reasoning");
+	});
+
+	it("does not show the Chinese completion label on earlier blocks", async () => {
+		const { processSummaryState } = await import(new URL("process-summary.js", webDir).href);
+		const { getLang, setLang } = await import(new URL("lang.js", webDir).href);
+		const previous = getLang();
+		try {
+			setLang("zh-CN");
+			expect(
+				processSummaryState({ last: false, running: true, outcome: "running", stats: { actions: 7 } }).label,
+			).toBe("7 个操作");
+			expect(
+				processSummaryState({ last: true, outcome: "completed", stats: { actions: 8 }, duration: 0 }).label,
+			).toBe("已完成 · 8 个操作");
+		} finally {
+			setLang(previous);
+		}
+	});
+
+	it("reserves live activity and whole-task results for the last block", async () => {
+		const { processSummaryState } = await import(new URL("process-summary.js", webDir).href);
+		const props = { last: true, stats: { actions: 8 }, changeCount: 2, duration: 5000 };
+		expect(processSummaryState({ ...props, running: true, outcome: "running" })).toMatchObject({
+			live: true,
+			label: "",
+			outcome: "running",
+		});
+		expect(processSummaryState({ ...props, running: true, compacting: true, outcome: "running" })).toMatchObject({
+			live: false,
+			icon: "clock",
+			outcome: "running",
+		});
+		expect(processSummaryState({ ...props, outcome: "completed" })).toEqual({
+			live: false,
+			icon: "checkCircle",
+			label: "Worked for 5s · 8 actions · 2 files changed",
+			outcome: "completed",
+		});
+		for (const [outcome, icon] of [
+			["failed", "alertCircle"],
+			["partial", "alertTriangle"],
+			["cancelled", "stopCircle"],
+			["waiting", "clock"],
+		]) {
+			expect(processSummaryState({ ...props, outcome })).toMatchObject({ live: false, icon, outcome });
+		}
 	});
 });
 

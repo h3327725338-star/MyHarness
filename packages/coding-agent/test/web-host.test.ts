@@ -21,6 +21,7 @@ import { WebHostHub } from "../src/modes/web/hub.ts";
 import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
 import { registerFileRoutes } from "../src/modes/web/routes-files.ts";
 import { registerGitRoutes } from "../src/modes/web/routes-git.ts";
+import { registerModeRoutes } from "../src/modes/web/routes-modes.ts";
 import { registerProviderRoutes } from "../src/modes/web/routes-providers.ts";
 import { registerSessionRoutes } from "../src/modes/web/routes-sessions.ts";
 import { registerSettingsRoutes } from "../src/modes/web/routes-settings.ts";
@@ -68,6 +69,38 @@ describe("Web host (real runtime with a faux provider)", () => {
 		});
 		return dir;
 	}
+
+	it("opens isolated modes, saves drafts and keeps personalization out of Coding", async () => {
+		const fx = await start();
+		const coding = await fx.get("/api/state");
+		expect(coding.mode).toBe("coding");
+		await fx.post(
+			"/api/modes/state",
+			{ mode: "coding", sessionFile: coding.session.file, draft: { text: "coding draft", attachments: [] } },
+			coding.slot,
+		);
+		await fx.post("/api/modes/personal-prompt", { prompt: "PERSONAL_GENERAL_ONLY" }, coding.slot);
+		const opened = await fx.post("/api/modes/open", { mode: "general" }, coding.slot);
+		const general = await fx.get("/api/state", opened.slot);
+		expect(general.mode).toBe("general");
+		expect(opened.slot).not.toBe(coding.slot);
+		const generalOwner = fx.hub.get(opened.slot)!;
+		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose assistant");
+		expect(generalOwner.session.agent.state.systemPrompt).toContain("PERSONAL_GENERAL_ONLY");
+		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("software engineering assistant");
+		expect(fx.hub.get(coding.slot)!.session.agent.state.systemPrompt).not.toContain("PERSONAL_GENERAL_ONLY");
+		const back = await fx.post("/api/modes/open", { mode: "coding" }, opened.slot);
+		expect(back.slot).toBe(coding.slot);
+		expect(back.state.drafts[coding.session.id].text).toBe("coding draft");
+		const again = await fx.post("/api/modes/open", { mode: "general" }, coding.slot);
+		expect(again.slot).toBe(opened.slot);
+		const beforeReloadId = general.session.id;
+		await fx.hub.closeSlot(generalOwner);
+		const restored = await fx.post("/api/modes/open", { mode: "general" }, coding.slot);
+		expect(restored.slot).not.toBe(opened.slot);
+		expect((await fx.get("/api/state", restored.slot)).session.id).toBe(beforeReloadId);
+		expect((await fx.get("/api/slots")).slots.map((slot: any) => slot.mode)).toEqual(["coding", "general"]);
+	});
 
 	it("reports real completion phases, restores snapshots, and clears failures", async () => {
 		const fx = await start();
@@ -364,6 +397,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const host = hub.host;
 		registerCoreRoutes(server, host);
 		registerSessionRoutes(server, host, hub);
+		registerModeRoutes(server, host, hub);
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
@@ -882,8 +916,11 @@ describe("Web host (real runtime with a faux provider)", () => {
 		void fx.post("/api/prompt", { text: "slow task" }, first.slot);
 		await fx.waitFor("agent_start", (data) => data.slot === first.slot);
 		expect((await fx.get("/api/state", first.slot)).active).toBe(true);
-		const other = await fx.post("/api/sessions/new", {}, first.slot);
+		const other = await fx.post("/api/sessions/new", { mode: "general" }, first.slot);
 		expect(other.slot).not.toBe(first.slot);
+		expect((await fx.get("/api/state", other.slot)).mode).toBe("general");
+		expect(fx.hub.get(first.slot)!.session.agent.state.systemPrompt).toContain("software engineering assistant");
+		expect(fx.hub.get(other.slot)!.session.agent.state.systemPrompt).not.toContain("software engineering assistant");
 		fx.faux.appendResponses([fauxAssistantMessage([fauxText("fast answer")])]);
 		await fx.post("/api/prompt", { text: "fast task" }, other.slot);
 		await fx.waitFor("run_finished", (data) => data.slot === other.slot);

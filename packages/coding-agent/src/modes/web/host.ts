@@ -82,6 +82,7 @@ export interface RunFinishedPayload {
 
 /** What the sidebar needs to show about one open session (running, waiting, last outcome). */
 export interface SlotStatus {
+	mode: import("../../session/types.ts").ChatMode;
 	slot: string;
 	sessionFile: string | null;
 	sessionId: string;
@@ -290,6 +291,7 @@ export class WebHost {
 	get status(): SlotStatus {
 		const run = this.session.getRunStateSnapshot();
 		return {
+			mode: this.session.sessionManager.getMode(),
 			slot: this.slotId,
 			sessionFile: this.session.sessionFile ?? null,
 			sessionId: this.session.sessionId,
@@ -313,7 +315,7 @@ export class WebHost {
 		if (!manager.usesDefaultSessionDir() || !manager.isPersisted()) return false;
 		const workspaceId = manager.getWorkspaceId();
 		if (!workspaceId) return false;
-		return workspaceId === UNBOUND_WORKSPACE_ID || !this.workspaceStore.getById(workspaceId);
+		return workspaceId === UNBOUND_WORKSPACE_ID || !this.workspaceStore.getById(workspaceId, manager.getMode());
 	}
 
 	/**
@@ -324,7 +326,9 @@ export class WebHost {
 	get workspace(): Workspace | undefined {
 		const manager = this.session.sessionManager;
 		const workspaceId = manager.usesDefaultSessionDir() ? manager.getWorkspaceId() : undefined;
-		return workspaceId ? this.workspaceStore.getById(workspaceId) : this.workspaceStore.getByPath(manager.getCwd());
+		return workspaceId
+			? this.workspaceStore.getById(workspaceId, manager.getMode())
+			: this.workspaceStore.getByPath(manager.getCwd(), manager.getMode());
 	}
 
 	get unread(): boolean {
@@ -1324,6 +1328,7 @@ export class WebHost {
 		const settings = session.settingsManager;
 		const run = session.getRunStateSnapshot();
 		return {
+			mode: manager.getMode(),
 			slot: this.slotId,
 			gitTask: this.gitTask,
 			memoryMaintenance: session.getAutoMemoryMaintenanceStatus(),

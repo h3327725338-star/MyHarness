@@ -4,6 +4,10 @@
 
 维护规则见 [maintenance.md](maintenance.md)，后续开发边界见 [roadmap.md](roadmap.md)。
 
+## Coding / General 模式
+
+共享正文位于 `common/`，两个模式的身份分别位于 `coding/identity.md` 和 `general/identity.md`。以下表格保留 loader 的逻辑资源名；实际共享路径加 `common/` 前缀。loader 兼容旧布局的替代目录，但只在同一指定目录内查找，不回退安装目录。共用资源按原条件注入，不遍历目录。General 可追加用户个性化内容，Project Context、工具、设置和长期记忆继续沿用现有机制。后端接口和前端接入边界见 [双模式后端约定](../packages/coding-agent/docs/chat-modes-backend.md)。
+
 ## 文件与作用域
 
 | 文件（相对本目录） | 职责与生效条件 |
@@ -34,6 +38,7 @@
 | `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容 |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
 | `tasks/conversation-title.md` | 独立会话标题生成请求 |
+| `tasks/commit-message.md` | `/commit` 的独立无工具提交说明请求；按模型容量分批分析 Diff、保留来源、分层合并及补读核对后生成一个提交说明，参考 Git 历史，不添加 AI 署名 |
 | `tasks/vision-assistant.md` | 独立视觉转录请求 |
 | `tasks/vision-probe.md` | 图像输入能力探测请求 |
 | `tasks/shell-adjudicator.md` | 生成的只读 shell 审查扩展内，受保护候选命令的 AI 判定请求 |
@@ -58,7 +63,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 
 唯一文本入口：`packages/ai/src/api/system-prompt-loader.ts` 的 `loadSystemPrompt` / `loadSystemPromptLines`。编程会话的组合入口是 `packages/coding-agent/src/system-prompts/composer/index.ts`，本地 loader 边界是 `packages/coding-agent/src/system-prompts/loader/index.ts`；各独立任务只加载自己的文件，不遍历目录或按字母序自动注入。
 
-编程会话顺序保持为：核心 → 当前工具说明 → 工具路由 → 当前工具规则 → 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 工作目录 → 当前模型 → 回复语言 → 角色边界。
+主聊天顺序为：当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → 当前工具规则 → General 个性化内容（有配置时）→ 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 工作目录 → 当前模型 → 回复语言 → 角色边界。
 
 扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`、`agent/runtime/agent-session.ts` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
 

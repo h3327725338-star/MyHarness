@@ -14,7 +14,6 @@
 .app.sidebar-collapsed .sidebar { visibility: hidden; opacity: 0; transition: opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
 .sidebar-top { padding: 10px var(--pad-side) 6px; display: flex; flex-direction: column; gap: 4px; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px 6px; font-weight: 650; letter-spacing: 0.01em; font-size: 14px; }
-.brand-mark { width: 22px; height: 22px; border-radius: var(--r-sm); background: var(--bg-raised); border: 1px solid var(--border-strong); display: grid; place-items: center; color: var(--accent); }
 .nav-btn { display: flex; align-items: center; gap: 8px; height: var(--h-row); padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); width: 100%; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast); }
 .nav-btn:hover { background: var(--surface-hover); color: var(--text); }
 .nav-btn.primary-nav { color: var(--text); font-weight: 550; }
@@ -111,3 +110,49 @@
 .panel-pane { width: 100%; }
 @media (prefers-reduced-motion: reduce) { .tab, .tab-label { transition: none; } }
 
+
+/* Coding / General switch (top-left of the sidebar): an oval with both mode colours always visible; the knob sits on the
+   mode on screen. Each side carries the marker of its mode's tasks (see mode-switch.js). */
+.mode-switch { position: relative; flex: none; display: grid; grid-template-columns: 1fr 1fr; width: 60px; height: 32px; padding: 0; border-radius: var(--r-pill); border: 1px solid var(--border-strong); background: var(--bg-inset); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .16); overflow: visible; cursor: pointer; transition: border-color var(--t-fast); view-transition-name: mode-switch; }
+.mode-switch:hover { border-color: var(--text-4); }
+.mode-switch:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.mode-side { position: relative; display: grid; place-items: center; height: 100%; transition: color var(--t-base) var(--ease); }
+.mode-side > svg { width: 13px; height: 13px; transition: opacity 160ms ease; }
+.mode-side.coding { border-radius: var(--r-pill) 0 0 var(--r-pill); background: color-mix(in srgb, var(--mode-coding) 10%, transparent); color: var(--mode-coding); }
+.mode-side.general { border-radius: 0 var(--r-pill) var(--r-pill) 0; background: color-mix(in srgb, var(--mode-general) 10%, transparent); color: var(--mode-general); }
+.mode-switch.coding .mode-side.coding > svg, .mode-switch.general .mode-side.general > svg { opacity: 0; }
+.mode-knob { position: absolute; z-index: 1; top: 2px; left: 2px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mode-coding); color: var(--mode-on); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 2px 4px rgba(0, 0, 0, .22); transition: background 520ms ease, color 160ms ease; pointer-events: none; }
+.mode-switch.general .mode-knob { transform: translateX(28px); background: var(--mode-general); }
+.mode-morph-icon { display: block; }
+.mode-signal { position: absolute; z-index: 2; top: -5px; display: grid; place-items: center; pointer-events: none; }
+.mode-side.coding .mode-signal { left: -4px; }
+.mode-side.general .mode-signal { right: -4px; }
+.mode-mark { display: grid; place-items: center; width: 13px; height: 13px; border-radius: 50%; background: var(--bg-app); }
+.mode-mark.c-ok { color: var(--ok); }
+.mode-breath { display: block; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px var(--bg-app); animation: mode-breath 1.6s ease-in-out infinite; }
+.mode-breath.coding { background: var(--mode-coding); }
+.mode-breath.general { background: var(--mode-general); }
+@keyframes mode-breath { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.72); } }
+:root[data-motion="off"] .mode-breath { animation: none; }
+:root[data-motion="off"] .mode-knob, :root[data-motion="off"] .mode-side > svg { transition: none; }
+@media (prefers-reduced-motion: reduce) { :root:not([data-motion="on"]) .mode-breath { animation: none; } :root:not([data-motion="on"]) .mode-knob { transition: none; } }
+
+/* Results of the other mode: one short line that opens the list of its tasks. */
+.mode-tasks-anchor { display: block; }
+.mode-tasks { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-2); font-size: var(--fs-sm); text-align: left; transition: background var(--t-fast), color var(--t-fast); }
+.mode-tasks:hover { background: var(--surface-hover); color: var(--text); }
+.mode-tag { flex: none; padding: 1px 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600; }
+.mode-tag.coding { color: var(--mode-coding); background: color-mix(in srgb, var(--mode-coding) 16%, transparent); }
+.mode-tag.general { color: var(--mode-general); background: color-mix(in srgb, var(--mode-general) 16%, transparent); }
+.pop-head { padding: 4px 8px 6px; font-size: var(--fs-xs); }
+.mode-task-mark { display: grid; place-items: center; width: 14px; flex: none; }
+.mode-task-state { flex: none; }
+
+/* The switch reveals the other mode with one circle growing from it (mode-transition.js), not with a cross-fade. */
+/* Every generated snapshot layer must let physical clicks reach the live switch underneath. */
+::view-transition, ::view-transition-group(*), ::view-transition-image-pair(*), ::view-transition-old(*), ::view-transition-new(*) { pointer-events: none; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { clip-path: circle(0px at 0 0); }
+/* Keep the switch above the page reveal so its soft motion and icon morph remain visible. */
+::view-transition-group(mode-switch), ::view-transition-new(mode-switch) { animation: none; }
+::view-transition-old(mode-switch) { display: none; }

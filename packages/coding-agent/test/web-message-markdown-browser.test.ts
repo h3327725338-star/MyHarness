@@ -18,10 +18,18 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 		try {
 			for (const dir of ["js", "vendor", "css"])
 				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
-			server.mount({ prefix: "/markdown/", directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)) });
+			server.mount({
+				prefix: "/markdown/",
+				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
+			});
 			server.mount({ prefix: "/test/", directory: root });
-			writeFileSync(join(root, "index.html"), '<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app"></div><img src="/hold" hidden><script src="/markdown/marked.min.js"></script><script type="module" src="/test/test.js"></script>');
-			writeFileSync(join(root, "test.js"), `
+			writeFileSync(
+				join(root, "index.html"),
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app"></div><img src="/hold" hidden><script src="/markdown/marked.min.js"></script><script type="module" src="/test/test.js"></script>',
+			);
+			writeFileSync(
+				join(root, "test.js"),
+				`
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {Markdown,renderMarkdown} from '/js/markdown.js';
@@ -45,11 +53,20 @@ try {
  if(app.querySelector('br')) throw Error('normal mode not restored');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
-`);
-			server.route("GET", "/hold", async () => { await new Promise((resolve) => setTimeout(resolve, 12_000)); return {}; });
+`,
+			);
+			server.route("GET", "/hold", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 12_000));
+				return {};
+			});
 			server.setIndexFile(join(root, "index.html"));
 			const { port } = await server.listen(0);
-			const page = await browser.solveChallenge({ url: `http://127.0.0.1:${port}/`, readySelector: "#ready", label: "User message line breaks", isSolved: (p) => p.text.includes('id="ready">') });
+			const page = await browser.solveChallenge({
+				url: `http://127.0.0.1:${port}/`,
+				readySelector: "#ready",
+				label: "User message line breaks",
+				isSolved: (p) => p.text.includes('id="ready">'),
+			});
 			expect(page.text).toContain('id="ready">passed');
 		} finally {
 			await browser.shutdown();

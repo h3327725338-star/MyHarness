@@ -69,6 +69,7 @@ export function collectSessionUsageStats(
 			tokenAvailability[key] &&= reported && Number.isFinite(value) && value >= 0;
 		}
 	};
+	let unknownCompactionCost = false;
 	const costByCurrency: Partial<Record<"USD" | "CNY", number>> = {};
 	const addCost = (currency: "USD" | "CNY", cost: number) => {
 		if (Number.isFinite(cost) && cost > 0) costByCurrency[currency] = (costByCurrency[currency] ?? 0) + cost;
@@ -84,7 +85,11 @@ export function collectSessionUsageStats(
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			trackAvailability(entry.usage);
 			addUsageToTotals(usageTotals, entry.usage);
-			addCost("USD", entry.usage.cost.total);
+			if (entry.type === "compaction") {
+				const currency = entry.usageSource?.currency;
+				if (currency === "USD" || currency === "CNY") addCost(currency, entry.usage.cost.total);
+				else if (entry.usage.cost.total > 0) unknownCompactionCost = true;
+			} else addCost("USD", entry.usage.cost.total);
 		}
 		if (entry.type !== "message") continue;
 		totalMessages++;
@@ -172,6 +177,7 @@ export function collectSessionUsageStats(
 		tokenAvailability: samples
 			? tokenAvailability
 			: { input: false, output: false, cacheRead: false, cacheWrite: false },
-		costIncomplete: samples > 0 && Object.values(tokenAvailability).some((available) => !available),
+		costIncomplete:
+			unknownCompactionCost || (samples > 0 && Object.values(tokenAvailability).some((available) => !available)),
 	};
 }

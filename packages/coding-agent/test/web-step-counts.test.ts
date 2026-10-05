@@ -152,7 +152,9 @@ describe("Web step line counts", () => {
 		expect(rolling.map((c) => c.current)).toEqual([15, 0]);
 		expect(rolling[0].previous).toBeUndefined();
 		vi.advanceTimersByTime(COUNT_ROLL_MS);
-		expect(cells(render({ additions: 15, deletions: 0, removed: 1, running: false })).map((c) => c.current)).toEqual([15]);
+		expect(cells(render({ additions: 15, deletions: 0, removed: 1, running: false })).map((c) => c.current)).toEqual([
+			15,
+		]);
 		render({ removed: 2, running: false });
 		vi.advanceTimersByTime(COUNT_CHECK_MS + COUNT_ROLL_MS);
 		expect(render({ removed: 2, running: false })).toBeNull();
@@ -166,7 +168,8 @@ describe("Web step line counts", () => {
 		expect(cells(render({ running: true }))[0].current).toBe(32);
 		render({ additions: 36, deletions: 1, preview: false, running: true });
 		vi.advanceTimersByTime(200);
-		for (const cell of cells(render({ additions: 36, deletions: 1, running: true }))) expect(cell.previous).toBeUndefined();
+		for (const cell of cells(render({ additions: 36, deletions: 1, running: true })))
+			expect(cell.previous).toBeUndefined();
 		render({ additions: 12, deletions: 0, running: false });
 		vi.advanceTimersByTime(200);
 		const corrected = cells(render({ additions: 12, deletions: 0, running: false }));

@@ -62,6 +62,21 @@ describe("git command runner", () => {
 		});
 	});
 
+	it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
+		const child = new MockGitProcess();
+		spawnProcessMock.mockReturnValueOnce(child);
+		const resultPromise = runGit(["diff"]);
+		const text = "中文改动🙂\n";
+		for (const byte of Buffer.from(text)) {
+			child.stdout.write(Buffer.from([byte]));
+			child.stderr.write(Buffer.from([byte]));
+		}
+		child.stdout.end();
+		child.stderr.end();
+		child.emit("close", 0, null);
+		await expect(resultPromise).resolves.toMatchObject({ ok: true, stdout: text, stderr: text });
+	});
+
 	it("classifies a non-zero Git exit separately from a spawn failure", async () => {
 		const child = new MockGitProcess();
 		spawnProcessMock.mockReturnValueOnce(child);

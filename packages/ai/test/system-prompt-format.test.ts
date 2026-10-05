@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -14,8 +14,8 @@ function resources(directory: string): string[] {
 
 describe("built-in prompt resource format", () => {
 	const files = resources(root);
-	it("covers all 56 runtime resources, excluding repository maintenance documents", () => {
-		expect(files).toHaveLength(56);
+	it("covers all 59 runtime resources, excluding repository maintenance documents", () => {
+		expect(files).toHaveLength(59);
 	});
 	for (const file of files) {
 		it(`uses English heading-and-bullet blocks: ${file.slice(root.length + 1)}`, () => {

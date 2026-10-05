@@ -14,13 +14,21 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 		mkdirSync(base, { recursive: true });
 		const root = mkdtempSync(join(base, "step-counts-"));
 		const server = new WebHttpServer();
-		const browser = new LocalBrowser({ kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind, rootDir: join(root, "browser") });
+		const browser = new LocalBrowser({
+			kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind,
+			rootDir: join(root, "browser"),
+		});
 		try {
 			for (const dir of ["js", "vendor", "css"])
 				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
 			server.mount({ prefix: "/test/", directory: root });
-			writeFileSync(join(root, "index.html"), '<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>');
-			writeFileSync(join(root, "test.js"), `
+			writeFileSync(
+				join(root, "index.html"),
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
+			);
+			writeFileSync(
+				join(root, "test.js"),
+				`
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {StepCounts} from '/js/step-counts.js';
@@ -54,11 +62,20 @@ try {
  await wait(400);if(add()!==12||head().querySelector('.del')) throw Error('failure lost completed counts');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' '+error.stack;document.body.append(p);}
-`);
-			server.route("GET", "/hold", async () => { await new Promise((resolve) => setTimeout(resolve, 12_000)); return {}; });
+`,
+			);
+			server.route("GET", "/hold", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 12_000));
+				return {};
+			});
 			server.setIndexFile(join(root, "index.html"));
 			const { port } = await server.listen(0);
-			const page = await browser.solveChallenge({ url: `http://127.0.0.1:${port}/`, readySelector: "#ready", label: "Step count animations", isSolved: (p) => p.text.includes('id="ready">') });
+			const page = await browser.solveChallenge({
+				url: `http://127.0.0.1:${port}/`,
+				readySelector: "#ready",
+				label: "Step count animations",
+				isSolved: (p) => p.text.includes('id="ready">'),
+			});
 			expect(page.text).toContain('id="ready">passed');
 		} finally {
 			await browser.shutdown();

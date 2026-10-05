@@ -2,12 +2,15 @@
 
 import { type AgentRole, getAgentRolePrompt } from "../../agent/runtime/role.ts";
 import { filterContextFilesForAgentRole, filterContextForAgentRole } from "../../context/context-policy.ts";
+import type { ChatMode } from "../../session/types.ts";
 import { formatSkillsForPrompt, type Skill } from "../../skills/loader/index.ts";
 import { loadSystemPrompt } from "../loader/index.ts";
 
 export type { AgentRole } from "../../agent/runtime/role.ts";
 
 export interface BuildSystemPromptOptions {
+	mode?: ChatMode;
+	personalPrompt?: string;
 	agentRole?: AgentRole;
 	customPrompt?: string;
 	selectedTools?: string[];
@@ -57,6 +60,10 @@ export function collectSystemPromptOptions(
 
 export const GLOBAL_CORE_POLICY = loadSystemPrompt("global/core.md");
 export const OUTPUT_LANGUAGE_POLICY = loadSystemPrompt("global/output-language.md");
+const MODE_IDENTITIES = {
+	coding: loadSystemPrompt("coding/identity.md"),
+	general: loadSystemPrompt("general/identity.md"),
+};
 
 function formatAvailableTools(tools: string[], toolSnippets: Record<string, string> | undefined): string {
 	if (tools.length === 0) return "(none)";
@@ -120,6 +127,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const skills = providedSkills ?? [];
 	const guidelines = (promptGuidelines ?? []).map((item) => item.trim()).filter(Boolean);
 	const sections = [
+		MODE_IDENTITIES[options.mode ?? "coding"],
 		GLOBAL_CORE_POLICY,
 		`<available_tools>\n${formatAvailableTools(tools, toolSnippets)}\n</available_tools>`,
 		buildToolRoutingPolicy(tools),
@@ -128,6 +136,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		sections.push(
 			`<active_tool_guidelines>\n${guidelines.map((item) => `- ${item}`).join("\n")}\n</active_tool_guidelines>`,
 		);
+	if (options.mode === "general" && options.personalPrompt?.trim()) {
+		sections.push(`<user_personalization>\n${options.personalPrompt}\n</user_personalization>`);
+	}
 	if (filteredCustomPrompt) sections.push(filteredCustomPrompt);
 	if (filteredAppendSystemPrompt) sections.push(filteredAppendSystemPrompt);
 	if (contextFiles.length > 0) {

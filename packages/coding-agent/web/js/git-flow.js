@@ -60,7 +60,6 @@ export function commitChanges() {
 		}
 		if (result.status === "no-changes") return show(slot, { tone: "info", title: t("Nothing to commit"), detail: t("There are no local changes to commit.") });
 		if (result.status === "failed") {
-			toast(t("Commit failed. Automatic recovery stopped; no further retries will run."), "error", 9000);
 			return show(slot, {
 				tone: "error",
 				title: t("Commit failed"),
