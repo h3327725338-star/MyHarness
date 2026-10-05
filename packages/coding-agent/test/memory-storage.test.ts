@@ -178,7 +178,7 @@ describe("hierarchical memory storage", () => {
 			persisted: true,
 			settingsManager,
 			modelRunner: async ({ systemPrompt }) =>
-				systemPrompt.includes("审查现有记忆")
+				systemPrompt.includes("Review existing memories")
 					? JSON.stringify({ operations: [{ action: "delete", id: "workspace/note" }] })
 					: '{"operations":[]}',
 		});

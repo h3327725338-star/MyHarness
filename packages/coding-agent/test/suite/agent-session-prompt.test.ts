@@ -134,10 +134,10 @@ describe("AgentSession prompt characterization", () => {
 
 		await harness.session.prompt("inspect the project");
 
-		expect(harness.session.systemPrompt).toContain("只读子 Agent");
+		expect(harness.session.systemPrompt).toContain("read-only sub-Agent");
 		expect(providerPrompts).toHaveLength(1);
 		expect(providerPrompts[0]).toContain("<agent_role_policy>");
-		expect(providerPrompts[0]).toContain("只读子 Agent");
+		expect(providerPrompts[0]).toContain("read-only sub-Agent");
 		expect(providerPrompts[0]).not.toContain("<commit_authorization>");
 	});
 

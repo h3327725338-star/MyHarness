@@ -130,16 +130,16 @@ describe("prompt cache stability", () => {
 	describe("Test 5: Main Agent role", () => {
 		it("keeps the main role and task boundary", () => {
 			const mainPrompt = getAgentRolePrompt("main");
-			expect(mainPrompt).toContain("直接与用户协作的 Main Agent");
-			expect(mainPrompt).toContain("不要自行扩大任务范围");
+			expect(mainPrompt).toContain("the Main Agent working directly with the user");
+			expect(mainPrompt).toContain("Do not expand the task scope on your own");
 		});
 	});
 
 	describe("Test 6: Delegated Agent role", () => {
 		it("keeps the delegated agent within its read-only role", () => {
 			const delegatedPrompt = getAgentRolePrompt("delegated");
-			expect(delegatedPrompt).toContain("由 Main Agent 委派的只读子 Agent");
-			expect(delegatedPrompt).toContain("包括 `symbols`");
+			expect(delegatedPrompt).toContain("read-only sub-Agent delegated by the Main Agent");
+			expect(delegatedPrompt).toContain("including symbols");
 		});
 	});
 
@@ -151,8 +151,8 @@ describe("prompt cache stability", () => {
 				cwd: "/project",
 			});
 
-			const baseRule = "当前实现：主要依据实际源代码";
-			const scopeRule = "不要自行扩大任务范围";
+			const baseRule = "Current implementation: rely primarily on actual source code";
+			const scopeRule = "Do not expand the task scope on your own";
 			expect(prompt.split(baseRule).length - 1).toBe(1);
 			expect(prompt.split(scopeRule).length - 1).toBe(1);
 		});

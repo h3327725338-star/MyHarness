@@ -261,8 +261,10 @@ describe("skills", () => {
 			const xmlStart = result.indexOf("<available_skills>");
 			const introText = result.substring(0, xmlStart);
 
-			expect(introText).toContain("以下 skills 为特定任务提供专门指令。");
-			expect(introText).toContain("当任务符合某个 skill 的描述时，使用 read 工具加载该 skill 文件。");
+			expect(introText).toContain("The following skills provide specialized instructions for particular tasks.");
+			expect(introText).toContain(
+				"When a task matches a skill's description, use the read tool to load that skill file.",
+			);
 		});
 
 		it("should escape XML special characters", () => {

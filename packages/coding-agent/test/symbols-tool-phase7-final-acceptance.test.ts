@@ -527,7 +527,11 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 
 		expect(router.findSymbol).toHaveBeenCalledTimes(20);
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(session.systemPrompt.match(/仅在确实存在复用或重复风险时使用 find_symbol/g)).toHaveLength(1);
+		expect(
+			session.systemPrompt.match(
+				/use find_symbol only when there is a real risk of duplication or a reusable implementation/g,
+			),
+		).toHaveLength(1);
 		session.dispose();
 		expect(router.dispose).not.toHaveBeenCalled();
 		expect(index.dispose).not.toHaveBeenCalled();
@@ -546,12 +550,20 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(session.systemPrompt).toContain("仅在确实存在复用或重复风险时使用 find_symbol");
+		expect(session.systemPrompt).toContain(
+			"use find_symbol only when there is a real risk of duplication or a reusable implementation",
+		);
 		session.setActiveToolsByName([]);
-		expect(session.systemPrompt).not.toContain("仅在确实存在复用或重复风险时使用 find_symbol");
+		expect(session.systemPrompt).not.toContain(
+			"use find_symbol only when there is a real risk of duplication or a reusable implementation",
+		);
 		session.setActiveToolsByName(["symbols"]);
 		await session.reload();
-		expect(session.systemPrompt.match(/仅在确实存在复用或重复风险时使用 find_symbol/g)).toHaveLength(1);
+		expect(
+			session.systemPrompt.match(
+				/use find_symbol only when there is a real risk of duplication or a reusable implementation/g,
+			),
+		).toHaveLength(1);
 		session.dispose();
 	});
 

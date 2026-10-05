@@ -36,7 +36,7 @@ describe("workflow tool", () => {
 		expect(
 			(workflowTool.parameters as { properties: { phases: { minItems?: number } } }).properties.phases.minItems,
 		).toBe(1);
-		expect(tool.promptGuidelines?.join("\n")).toContain("普通的分阶段调查使用 workflow");
+		expect(tool.promptGuidelines?.join("\n")).toContain("Use workflow for ordinary staged investigation");
 		await expect(
 			tool.execute(
 				"test-call",
