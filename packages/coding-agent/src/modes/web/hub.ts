@@ -37,6 +37,7 @@ const STATUS_EVENTS = new Set([
 	"result_seen",
 	"dialogs",
 	"session_info",
+	"conversation_naming",
 	"entry_appended",
 	"session_replaced",
 	"workspaces_changed",

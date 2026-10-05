@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/agent/runtime/agent-session.ts";
 import {
 	CONVERSATION_NAMING_INTERVAL_MS,
+	CONVERSATION_NAMING_RETRY_MS,
 	CONVERSATION_NAMING_STATE,
 	ConversationNaming,
 	conversationNamingWork,
@@ -166,6 +167,118 @@ describe("background conversation naming", () => {
 		const reopened = SessionManager.open(manager.getSessionFile()!);
 		expect(conversationNamingWork(reopened, 1001)?.delay).toBe(CONVERSATION_NAMING_INTERVAL_MS - 1);
 		expect(conversationNamingWork(reopened, 1000 + CONVERSATION_NAMING_INTERVAL_MS)?.delay).toBe(0);
+	});
+
+	it("retries a missing model three times, persists exhaustion, and allows explicit retry", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.session.modelRuntime.getModel.mockReturnValue(undefined as never);
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.worker.status).toMatchObject({ phase: "retrying", retries: 1 });
+		await vi.advanceTimersByTimeAsync(3 * CONVERSATION_NAMING_RETRY_MS);
+		expect(f.session.modelRuntime.getModel).toHaveBeenCalledTimes(4);
+		expect(f.worker.status).toMatchObject({ phase: "failed", retries: 3 });
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(CONVERSATION_NAMING_INTERVAL_MS);
+		expect(f.session.modelRuntime.getModel).toHaveBeenCalledTimes(4);
+		f.worker.dispose();
+		const reopened = new ConversationNaming(f.session as unknown as AgentSession, () => true);
+		reopened.refresh();
+		expect(reopened.status?.phase).toBe("failed");
+		f.session.modelRuntime.getModel.mockReturnValue(f.model);
+		reopened.retry();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.session.sessionName).toBe("对话自动命名");
+		expect(reopened.status).toBeNull();
+		reopened.dispose();
+	});
+
+	it("uses a stale first title and immediately catches up without a ten-minute cooldown", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		let finish!: (value: AssistantMessage) => void;
+		f.completeSimple.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		f.manager.appendMessage(reply("new completed reply"));
+		f.worker.refresh();
+		finish(reply("First title"));
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(f.session.sessionName).toBe("First title");
+		expect(conversationNamingWork(f.manager)?.delay).toBe(0);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.completeSimple).toHaveBeenCalledTimes(2);
+		expect(conversationNamingWork(f.manager)).toBeUndefined();
+		expect(f.completeSimple.mock.calls[0][2]).toMatchObject({ maxRetries: 0 });
+		f.worker.dispose();
+	});
+
+	it("retries empty model output promptly without consuming pending work", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.completeSimple.mockResolvedValue(reply(""));
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(1 + 3 * CONVERSATION_NAMING_RETRY_MS);
+		expect(f.completeSimple).toHaveBeenCalledTimes(4);
+		expect(f.worker.status?.phase).toBe("failed");
+		expect(f.session.sessionName).toBeUndefined();
+		expect(conversationNamingWork(f.manager)).toBeDefined();
+		f.worker.dispose();
+	});
+
+	it("recovers from a request failure on the first retry and publishes progress", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.worker.dispose();
+		const statuses: unknown[] = [];
+		const worker = new ConversationNaming(
+			f.session as unknown as AgentSession,
+			() => true,
+			(status) => statuses.push(status),
+		);
+		f.completeSimple.mockRejectedValueOnce(new Error("offline"));
+		worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(worker.status).toMatchObject({ phase: "retrying", retries: 1, error: "offline" });
+		await vi.advanceTimersByTimeAsync(CONVERSATION_NAMING_RETRY_MS);
+		expect(f.completeSimple).toHaveBeenCalledTimes(2);
+		expect(worker.status).toBeNull();
+		expect(statuses).toContainEqual({ phase: "processing", retries: 1 });
+		worker.dispose();
+	});
+
+	it("keeps a valid in-flight first title while busy and waits only for idle to catch up", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.worker.dispose();
+		let idle = true;
+		const worker = new ConversationNaming(f.session as unknown as AgentSession, () => idle);
+		let finish!: (value: AssistantMessage) => void;
+		f.completeSimple.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		idle = false;
+		f.manager.appendMessage(reply("latest"));
+		finish(reply("Early title"));
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.session.sessionName).toBe("Early title");
+		expect(f.completeSimple).toHaveBeenCalledTimes(1);
+		idle = true;
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(f.completeSimple).toHaveBeenCalledTimes(2);
+		worker.dispose();
 	});
 
 	it("preserves explicit settings and defaults to disabled", () => {

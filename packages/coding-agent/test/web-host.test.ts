@@ -97,6 +97,10 @@ describe("Web host (real runtime with a faux provider)", () => {
 				.getEntries()
 				.some((entry) => entry.type === "custom" && entry.customType === "conversation-naming"),
 		).toBe(true);
+		expect(
+			(await fx.get("/api/slots")).slots.find((slot: any) => slot.slot === owner.slotId).conversationNaming,
+		).toBeNull();
+		expect(await fx.post("/api/sessions/naming-retry", { path: owner.session.sessionFile })).toEqual({ ok: true });
 		complete.mockRestore();
 	});
 

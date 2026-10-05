@@ -3,7 +3,7 @@ import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon
 import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
-import { t } from "./i18n.js";
+import { t, serverText } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
 import { isLeftBlank, orderChats } from "./chat-order.js";
@@ -46,6 +46,9 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const unnamed = !info.name && (info.messageCount === 0 || (info.unsaved && !info.firstMessage));
 	const title = fresh || unnamed ? t("New chat") : chatTitle(info);
 	const busy = !!(slot && (slot.active || slot.completion));
+	const naming = slot?.conversationNaming;
+	const namingLabel = naming?.phase === "failed" ? t("Title failed") : naming?.phase === "retrying" ? t("Title retry {count}/3", { count: naming.retries }) : t("Naming…");
+	const namingHint = naming?.phase === "failed" ? `${t("Automatic naming failed after 3 retries. Click to retry.")} ${naming.error ? serverText(naming.error) : ""}` : `${namingLabel}${naming?.error ? ` — ${serverText(naming.error)}` : ""}`;
 	// An edit ends once, whichever way: Enter saves, Escape keeps the name as it was. The box that closes also loses the
 	// focus, and that must neither save what was typed after Escape nor save a second time after Enter.
 	const ended = useRef(true);
@@ -68,6 +71,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: html`<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
+				${naming ? html`<button class=${`naming-status ${naming.phase === "failed" || naming.phase === "retrying" ? "warn" : ""}`} title=${namingHint} aria-label=${namingHint} disabled=${naming.phase !== "failed"} onClick=${(e) => { e.stopPropagation(); actions.retryConversationNaming(info.path); }}><${Icon} name=${naming.phase === "failed" ? "alertTriangle" : "sparkle"} size=${12} />${namingLabel}</button>` : null}
 				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>

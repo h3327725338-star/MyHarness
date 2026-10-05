@@ -45,6 +45,8 @@ export interface ConversationTitleGeneratorOptions {
 	/** Preserve the existing title unless the main topic has materially changed. */
 	currentTitle?: string;
 	signal?: AbortSignal;
+	/** Background naming owns its retry budget; explicit rename keeps Provider defaults. */
+	maxRetries?: number;
 }
 
 export interface ConversationBatchRenameProgress {
@@ -277,7 +279,7 @@ export async function generateConversationTitle(
 		const response: AssistantMessage = await options.modelRuntime.completeSimple(model, context, {
 			signal: controller.signal,
 			timeoutMs: getTitleRequestTimeout(options.settingsManager),
-			maxRetries: retry.maxRetries,
+			maxRetries: options.maxRetries ?? retry.maxRetries,
 			maxRetryDelayMs: retry.maxRetryDelayMs,
 			maxTokens: CONVERSATION_TITLE_MAX_OUTPUT_TOKENS,
 			reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,

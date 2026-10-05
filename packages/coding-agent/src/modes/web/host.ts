@@ -11,7 +11,7 @@ import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
-import { ConversationNaming } from "../../agent/runtime/conversation-naming.ts";
+import { ConversationNaming, type ConversationNamingStatus } from "../../agent/runtime/conversation-naming.ts";
 import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
@@ -104,6 +104,7 @@ export interface SlotStatus {
 	 * Git operation): the sidebar orders chats by it. Null until something happens; merely showing the chat is not activity.
 	 */
 	lastActivityAt: number | null;
+	conversationNaming: ConversationNamingStatus | null;
 }
 
 /** Events that count as activity of a session for the sidebar order (see SlotStatus.lastActivityAt). */
@@ -163,6 +164,10 @@ export class WebHost {
 
 	refreshConversationNaming(): void {
 		this.conversationNaming?.refresh();
+	}
+
+	retryConversationNaming(): void {
+		this.conversationNaming?.retry();
 	}
 
 	private unsubscribe: (() => void) | undefined;
@@ -311,6 +316,7 @@ export class WebHost {
 			unread: this.unread,
 			unbound: this.unbound,
 			lastActivityAt: this.lastActivityAt,
+			conversationNaming: this.conversationNaming?.status ?? null,
 		};
 	}
 
@@ -377,6 +383,7 @@ export class WebHost {
 		this.conversationNaming = new ConversationNaming(
 			session,
 			() => session.isIdle && !this.completionActive && !this.gitTask,
+			(status) => this.broadcast("conversation_naming", status ?? {}),
 		);
 		await session.bindExtensions({
 			uiContext: this.dialogs.createExtensionUiContext({

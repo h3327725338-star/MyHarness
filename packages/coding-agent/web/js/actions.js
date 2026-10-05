@@ -260,6 +260,10 @@ export const actions = {
 		return result;
 	},
 
+	async retryConversationNaming(path) {
+		return attempt(() => post("/api/sessions/naming-retry", { path }));
+	},
+
 	async renameSessionWithAi(path) {
 		toast(t("Generating a title…"), "info", 2000);
 		const result = await attempt(() => post("/api/sessions/rename-ai", { path }));

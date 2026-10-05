@@ -428,6 +428,14 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		return { title };
 	});
 
+	server.route("POST", "/api/sessions/naming-retry", ({ body }) => {
+		const path = asString(asObject(body).path, "path");
+		const owner = openSlot(path);
+		if (!owner) throw new HttpError(409, "Open this chat before retrying automatic naming.");
+		owner.retryConversationNaming();
+		return { ok: true };
+	});
+
 	server.route("POST", "/api/sessions/rename-ai", async ({ body }) => {
 		const path = asString(asObject(body).path, "path");
 		const key = pathIdentityKey(path);

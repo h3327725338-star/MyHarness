@@ -43,6 +43,10 @@
 .chat-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px 16px; align-items: center; height: var(--h-row); padding: 0 4px 0 38px; border-radius: var(--r-md); cursor: pointer; color: var(--text-2); position: relative; transition: background var(--t-fast), color var(--t-fast), box-shadow var(--t-fast); }
 .chat-row:hover { background: var(--surface-hover); color: var(--text); }
 .chat-row.current { background: var(--surface-select); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.chat-row:has(.naming-status) { grid-template-columns: minmax(0, 1fr) auto 44px 16px; }
+.chat-row .naming-status { display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
+.chat-row .naming-status:disabled { opacity: 1; cursor: default; }
+.chat-row .naming-status.warn { color: var(--warn); }
 .chat-row .slot-status { display: grid; place-items: center; }
 .chat-row .title { padding: 0 6px; }
 .chat-row .slot-end { position: relative; height: 100%; display: flex; align-items: center; justify-content: flex-end; }
