@@ -82,7 +82,7 @@ it("repairs an explicitly failed pre-commit hook once and regenerates from the r
 	expect(generateMessage).toHaveBeenLastCalledWith(repaired);
 	expect(createGitCommitForPathsAsync).toHaveBeenCalledTimes(2);
 });
-it("stops after a second hook failure without another repair", async () => {
+it("stops after three repair rounds and reports the limit with the latest hook failure", async () => {
 	const repairCode = vi.fn().mockResolvedValue(true);
 	vi.mocked(createGitCommitForPathsAsync).mockResolvedValue({
 		...failed,
@@ -92,8 +92,27 @@ it("stops after a second hook failure without another repair", async () => {
 		repositoryRoot: "repo",
 	});
 	expect(result.status).toBe("failed");
-	expect(repairCode).toHaveBeenCalledTimes(1);
-	expect(createGitCommitForPathsAsync).toHaveBeenCalledTimes(2);
+	expect(repairCode).toHaveBeenCalledTimes(3);
+	expect(generateMessage).toHaveBeenCalledTimes(4);
+	expect(createGitCommitForPathsAsync).toHaveBeenCalledTimes(4);
+	if (result.status !== "failed") throw new Error("Expected failure");
+	expect(result.failure.stderr).toContain("husky - pre-commit script failed");
+	expect(result.failure.stderr).toContain("stopped after 3 rounds");
+});
+it.each([2, 3])("can commit after repair round %s", async (rounds) => {
+	const repairCode = vi.fn().mockResolvedValue(true);
+	const submit = vi.mocked(createGitCommitForPathsAsync);
+	for (let round = 0; round < rounds; round++) {
+		submit.mockResolvedValueOnce({ ...failed, stderr: "pre-commit hook failed" });
+	}
+	submit.mockResolvedValueOnce({ ...failed, ok: true, commitHash: "repaired" });
+	const result = await new GitCommitUseCase({ updatePhase: vi.fn(), generateMessage, repairCode }).execute({
+		repositoryRoot: "repo",
+	});
+	expect(result.status).toBe("committed");
+	expect(repairCode).toHaveBeenCalledTimes(rounds);
+	expect(generateMessage).toHaveBeenCalledTimes(rounds + 1);
+	expect(submit).toHaveBeenCalledTimes(rounds + 1);
 });
 it.each(["timeout", "cancelled", "spawn", "exit"] as const)(
 	"does not repair unrelated %s failures",

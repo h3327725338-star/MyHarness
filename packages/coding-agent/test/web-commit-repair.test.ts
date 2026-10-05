@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), repair: false }));
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), repair: false, repairResult: undefined as boolean | undefined }));
 vi.mock("../src/application/use-cases/git-commit.ts", () => ({
 	GitCommitUseCase: class {
 		private host: {
@@ -19,7 +19,9 @@ vi.mock("../src/application/use-cases/git-commit.ts", () => ({
 				diff: "real delta",
 				history: "recent history",
 			});
-			if (mocks.repair) await this.host.repairCode({ stdout: "type error", stderr: "pre-commit hook failed" });
+			if (mocks.repair) {
+				mocks.repairResult = await this.host.repairCode({ stdout: "type error", stderr: "pre-commit hook failed" });
+			}
 			return mocks.execute();
 		}
 	},
@@ -37,8 +39,15 @@ import { registerGitRoutes } from "../src/modes/web/routes-git.ts";
 afterEach(() => {
 	vi.clearAllMocks();
 	mocks.repair = false;
+	mocks.repairResult = undefined;
 });
-it.each([false, true])("generates an isolated description and only runs the requested repair (%s)", async (repair) => {
+it.each([
+	{ repair: false, terminalReason: undefined },
+	{ repair: true, terminalReason: "completed" },
+	{ repair: true, terminalReason: "user-cancelled" },
+	{ repair: true, terminalReason: "tool-error" },
+	{ repair: true, terminalReason: undefined },
+])("uses the settled repair outcome ($repair, $terminalReason)", async ({ repair, terminalReason }) => {
 	mocks.repair = repair;
 	const completeSimple = vi.fn().mockResolvedValue({
 		stopReason: "stop",
@@ -64,7 +73,7 @@ it.each([false, true])("generates an isolated description and only runs the requ
 			sendCustomMessage,
 			abort: vi.fn(),
 			waitForIdle: vi.fn(),
-			getRunStateSnapshot: () => ({ state: "completed" }),
+			getRunStateSnapshot: () => ({ state: "idle", terminalReason }),
 		},
 		completionActive: false,
 		waitForCompletion: vi.fn(),
@@ -91,9 +100,11 @@ it.each([false, true])("generates an isolated description and only runs the requ
 		expect(((await response.json()) as { failure: string }).failure).toContain("hook diagnostic\ncheck failed");
 		if (repair) {
 			expect(sendCustomMessage).toHaveBeenCalledTimes(1);
+			expect(mocks.repairResult).toBe(terminalReason === "completed");
 			const [entry, options] = sendCustomMessage.mock.calls[0]!;
 			expect(entry.customType).toBe("git-commit-repair");
 			expect(entry.content).toContain("Do not bypass");
+			expect(entry.content).toContain("up to three repair rounds total");
 			expect(entry.content).toContain("type error");
 			expect(options).toEqual({ triggerTurn: true });
 		} else expect(sendCustomMessage).not.toHaveBeenCalled();

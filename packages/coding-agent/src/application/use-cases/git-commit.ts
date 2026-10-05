@@ -41,7 +41,7 @@ export interface GitCommitUseCaseHost {
 	updatePhase: (phase: GitCommitTaskPhase, activity: string) => void;
 	/** An isolated, tool-free model request; never starts a coding/repair turn. */
 	generateMessage: (context: CommitMessageContext) => Promise<GeneratedCommitMessage>;
-	/** Only invoked for an explicitly reported pre-commit hook failure, at most once. */
+	/** Only invoked for an explicitly reported pre-commit hook failure, at most three rounds. */
 	repairCode?: (failure: GitCommandResult) => Promise<boolean>;
 	signal?: AbortSignal;
 }
@@ -74,10 +74,10 @@ export class GitCommitUseCase {
 	}
 
 	async execute(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): Promise<GitCommitWorkflowResult> {
-		return this.executeAttempt(normalizeGitCommitTarget(targetOrCheckpoint), true);
+		return this.executeAttempt(normalizeGitCommitTarget(targetOrCheckpoint), 0);
 	}
 
-	private async executeAttempt(target: GitCommitTarget, allowRepair: boolean): Promise<GitCommitWorkflowResult> {
+	private async executeAttempt(target: GitCommitTarget, repairRounds: number): Promise<GitCommitWorkflowResult> {
 		this.host.updatePhase("checking", "正在检查改动");
 		const pending = await this.readPendingPaths(target);
 		if (pending.error) return { status: "read-error", target, error: pending.error };
@@ -107,12 +107,24 @@ export class GitCommitUseCase {
 		const hookFailed =
 			outcome.failure.failureKind === "exit" &&
 			/(?:husky\s*-\s*pre-commit\s+(?:script|hook)\s+failed|pre-commit\s+hook\s+failed)/iu.test(diagnostic);
-		if (allowRepair && hookFailed && this.host.repairCode) {
-			this.host.updatePhase("repairing", "正在修复提交前检查发现的问题");
+		if (hookFailed && this.host.repairCode && repairRounds >= 3) {
+			return {
+				status: "failed",
+				target,
+				paths: pending.paths,
+				message,
+				failure: {
+					...outcome.failure,
+					stderr: `${outcome.failure.stderr}\nAutomatic pre-commit repair stopped after 3 rounds; checks still failed.`,
+				},
+			};
+		}
+		if (repairRounds < 3 && hookFailed && this.host.repairCode) {
+			this.host.updatePhase("repairing", `正在修复提交前检查发现的问题（第 ${repairRounds + 1}/3 轮）`);
 			if (await this.host.repairCode(outcome.failure)) {
 				this.host.signal?.throwIfAborted();
 				// Repair changed the diff: regenerate the description and run normal hooks again.
-				return this.executeAttempt(target, false);
+				return this.executeAttempt(target, repairRounds + 1);
 			}
 		}
 		return { status: "failed", target, paths: pending.paths, message, failure: outcome.failure };
