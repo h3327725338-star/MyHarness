@@ -56,7 +56,10 @@ export interface MemoryOperation {
 interface MemoryState {
 	version: 1;
 	sessions: Record<string, { lastEntryId?: string; updatedAt: string }>;
-	consolidation: Record<string, { lastAt?: string; sessionIds: string[] }>;
+	consolidation: Record<
+		string,
+		{ lastAt?: string; sessionIds: string[]; pendingChanges?: number; pendingSince?: string; revision?: number }
+	>;
 }
 
 interface AutoMemoryPaths {
@@ -114,8 +117,8 @@ const EXTRACTION_TRANSCRIPT_MAX_BYTES = 24 * 1024;
 const EXTRACTION_MANIFEST_MAX_BYTES = 16 * 1024;
 const CONSOLIDATION_INPUT_MAX_BYTES = 60 * 1024;
 const MAX_RECALLED_MEMORIES = 5;
-const CONSOLIDATION_MIN_SESSIONS = 5;
-const CONSOLIDATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const CONSOLIDATION_MIN_CHANGES = 5;
+const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const AUTO_MEMORY_TIMEOUT_MS = 5 * 60 * 1000;
 const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
@@ -302,6 +305,9 @@ function readState(statePath: string): MemoryState {
 			consolidation[projectKey] = {
 				lastAt: typeof value.lastAt === "string" ? value.lastAt : undefined,
 				sessionIds: value.sessionIds.filter((id): id is string => typeof id === "string"),
+				pendingChanges: typeof value.pendingChanges === "number" ? Math.max(0, value.pendingChanges) : undefined,
+				pendingSince: typeof value.pendingSince === "string" ? value.pendingSince : undefined,
+				revision: typeof value.revision === "number" ? value.revision : 0,
 			};
 		}
 		return {
@@ -446,6 +452,7 @@ export class AutoMemoryManager {
 	private initializedPaths?: AutoMemoryPaths;
 	private maintenanceProcessing = false;
 	private maintenanceTimer?: NodeJS.Timeout;
+	private consolidationTimer?: NodeJS.Timeout;
 	private maintenanceStatus: MemoryMaintenanceStatus = { phase: "idle" };
 	private maintenanceEnqueue: Promise<void> = Promise.resolve();
 	private readonly reportedErrors = new Set<string>();
@@ -455,7 +462,10 @@ export class AutoMemoryManager {
 
 	constructor(options: AutoMemoryManagerOptions) {
 		this.options = options;
-		if (options.persisted) this.scheduleMaintenance();
+		if (options.persisted) {
+			this.scheduleMaintenance();
+			this.scheduleConsolidationCheck(1500);
+		}
 	}
 
 	getMaintenanceStatus(): MemoryMaintenanceStatus {
@@ -561,7 +571,7 @@ export class AutoMemoryManager {
 					return;
 				}
 				await fs.promises.unlink(this.maintenancePath);
-				this.setMaintenanceStatus({ phase: "idle" });
+				if (this.maintenanceStatus.phase !== "warning") this.setMaintenanceStatus({ phase: "idle" });
 			} else {
 				job.attempts++;
 				await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
@@ -576,11 +586,69 @@ export class AutoMemoryManager {
 		await settled;
 	}
 
+	private scheduleConsolidationCheck(delay = 30_000): void {
+		if (this.disposed) return;
+		if (this.consolidationTimer) clearTimeout(this.consolidationTimer);
+		this.consolidationTimer = setTimeout(() => {
+			this.consolidationTimer = undefined;
+			void this.runConsolidation().finally(() => this.scheduleConsolidationCheck());
+		}, delay);
+		this.consolidationTimer.unref?.();
+	}
+
+	/** Run saved due work, or explicitly review all memories visible to this conversation. */
+	runConsolidation(force = false): Promise<boolean> {
+		const settings = this.getSettings();
+		if (this.disposed || !settings) return Promise.resolve(false);
+		const result = this.backgroundQueue.then(async () => {
+			try {
+				await this.initializeConsolidationState();
+				if (!force && !this.consolidationDue()) return true;
+				this.setMaintenanceStatus({ phase: "processing" });
+				await this.consolidate(settings);
+				this.setMaintenanceStatus({ phase: "idle" });
+				return true;
+			} catch (error) {
+				this.reportError("consolidate", error);
+				if (!this.disposed) this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
+				return false;
+			}
+		});
+		this.backgroundQueue = result.then(() => undefined);
+		return result;
+	}
+
+	private consolidationDue(): boolean {
+		const value = readState(this.paths.statePath).consolidation[this.paths.workspaceId];
+		return (
+			!!value &&
+			(value.pendingChanges ?? 0) > 0 &&
+			((value.pendingChanges ?? 0) >= CONSOLIDATION_MIN_CHANGES ||
+				Date.now() - Date.parse(value.pendingSince ?? "") >= CONSOLIDATION_INTERVAL_MS)
+		);
+	}
+
+	private async initializeConsolidationState(): Promise<void> {
+		await this.withLock(async () => {
+			const state = readState(this.paths.statePath);
+			const value = state.consolidation[this.paths.workspaceId] ?? { sessionIds: [] };
+			if (value.pendingChanges !== undefined) return;
+			// Older states counted conversations. Recover actual changed memories instead.
+			const changed = this.loadEntries().filter((entry) => !value.lastAt || entry.updatedAt > value.lastAt);
+			value.pendingChanges = changed.length;
+			value.pendingSince = changed.map((entry) => entry.updatedAt).sort()[0];
+			value.revision = 0;
+			state.consolidation[this.paths.workspaceId] = value;
+			await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
+		});
+	}
+
 	/** Invalidate background work owned by a replaced AgentSession. */
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
 		if (this.maintenanceTimer) clearTimeout(this.maintenanceTimer);
+		if (this.consolidationTimer) clearTimeout(this.consolidationTimer);
 		this.disposeController.abort();
 	}
 
@@ -805,6 +873,7 @@ export class AutoMemoryManager {
 		this.assertActive();
 		await this.withLock(async () => {
 			const existing = new Map(this.loadEntries().map((entry) => [entry.id, entry]));
+			let changedCount = 0;
 			if (snapshot) {
 				if (existing.size !== snapshot.length)
 					throw new Error("Memory changed during maintenance; retry with fresh context");
@@ -912,12 +981,22 @@ export class AutoMemoryManager {
 				await writeMemoryFile(filePath, serializeMemory(entry));
 				if (previous && previous.filePath !== filePath) await fs.promises.unlink(previous.filePath);
 				existing.set(id, entry);
+				changedCount++;
+			}
+			if (!allowDelete && changedCount > 0) {
+				const state = readState(this.paths.statePath);
+				const value = state.consolidation[this.paths.workspaceId] ?? { sessionIds: [] };
+				value.pendingChanges = (value.pendingChanges ?? 0) + changedCount;
+				value.pendingSince ??= new Date().toISOString();
+				value.revision = (value.revision ?? 0) + 1;
+				state.consolidation[this.paths.workspaceId] = value;
+				await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
 			}
 			await this.writeIndex();
 		});
 	}
 
-	private async updateState(lastEntryId: string, markConsolidated = false): Promise<{ shouldConsolidate: boolean }> {
+	private async updateState(lastEntryId: string): Promise<{ shouldConsolidate: boolean }> {
 		this.assertActive();
 		return this.withLock(async () => {
 			const state = readState(this.paths.statePath);
@@ -932,15 +1011,10 @@ export class AutoMemoryManager {
 			if (!consolidation.sessionIds.includes(this.options.sessionId)) {
 				consolidation.sessionIds.push(this.options.sessionId);
 			}
-			if (markConsolidated) {
-				consolidation.lastAt = now.toISOString();
-				consolidation.sessionIds = [];
-			}
-			const lastAt = consolidation.lastAt ? Date.parse(consolidation.lastAt) : 0;
 			const shouldConsolidate =
-				!markConsolidated &&
-				consolidation.sessionIds.length >= CONSOLIDATION_MIN_SESSIONS &&
-				Date.now() - lastAt >= CONSOLIDATION_INTERVAL_MS;
+				(consolidation.pendingChanges ?? 0) > 0 &&
+				((consolidation.pendingChanges ?? 0) >= CONSOLIDATION_MIN_CHANGES ||
+					Date.now() - Date.parse(consolidation.pendingSince ?? "") >= CONSOLIDATION_INTERVAL_MS);
 			this.assertActive();
 			await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
 			return { shouldConsolidate };
@@ -953,6 +1027,7 @@ export class AutoMemoryManager {
 	): Promise<void> {
 		this.assertActive();
 		await migrateLegacyMemories(this.paths.dataRoot, this.options.agentDir);
+		await this.initializeConsolidationState();
 		const state = readState(this.paths.statePath);
 		const cursor = state.sessions[this.options.sessionId]?.lastEntryId;
 		const transcript = formatTranscript(entries, cursor);
@@ -976,42 +1051,62 @@ export class AutoMemoryManager {
 		const { shouldConsolidate } = await this.updateState(transcript.lastEntryId);
 		if (shouldConsolidate) {
 			try {
-				await this.consolidate(settings, transcript.lastEntryId);
+				await this.consolidate(settings);
 			} catch (error) {
 				this.reportError("consolidate", error);
+				this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
 			}
 		}
 	}
 
 	private async consolidate(
 		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
-		lastEntryId: string,
 	): Promise<void> {
 		this.assertActive();
+		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
-		if (entries.length === 0) {
-			await this.updateState(lastEntryId, true);
-			return;
-		}
-		const chunks: string[] = [];
+		const batches: MemoryEntry[][] = [[]];
 		let bytes = 0;
+		const format = (entry: MemoryEntry) =>
+			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}\nContent:\n${entry.content}`;
 		for (const entry of entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
-			const chunk = `ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}\nContent:\n${entry.content}`;
-			const chunkBytes = Buffer.byteLength(chunk, "utf8");
-			if (chunks.length > 0 && bytes + chunkBytes > CONSOLIDATION_INPUT_MAX_BYTES) break;
-			chunks.push(chunk);
+			const chunkBytes = Buffer.byteLength(format(entry), "utf8");
+			if (batches.at(-1)!.length > 0 && bytes + chunkBytes > CONSOLIDATION_INPUT_MAX_BYTES) {
+				batches.push([]);
+				bytes = 0;
+			}
+			batches.at(-1)!.push(entry);
 			bytes += chunkBytes;
 		}
-		const output = await this.runModel({
-			cwd: this.options.cwd,
-			settings,
-			systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-			task: `Please consolidate the following existing memories:\n\n${chunks.join("\n\n---\n\n")}`,
+		for (const batch of batches) {
+			if (batch.length === 0) continue;
+			const snapshot = this.loadEntries();
+			const output = await this.runModel({
+				cwd: this.options.cwd,
+				settings,
+				systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
+				task: `Please consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+			});
+			this.assertActive();
+			const operations = parseMemoryOperations(output);
+			if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+			const ids = new Set(batch.map((entry) => entry.id));
+			await this.applyOperations(
+				operations.filter((operation) => !!operation.id && ids.has(operation.id)),
+				true,
+				snapshot,
+			);
+		}
+		await this.withLock(async () => {
+			const state = readState(this.paths.statePath);
+			const value = state.consolidation[this.paths.workspaceId];
+			if (value && (value.revision ?? 0) === revision) {
+				value.lastAt = new Date().toISOString();
+				value.sessionIds = [];
+				value.pendingChanges = 0;
+				value.pendingSince = undefined;
+				await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
+			}
 		});
-		this.assertActive();
-		const operations = parseMemoryOperations(output);
-		if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
-		await this.applyOperations(operations, true, entries);
-		await this.updateState(lastEntryId, true);
 	}
 }

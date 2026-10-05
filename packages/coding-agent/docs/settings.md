@@ -174,7 +174,7 @@ Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Mod
 1. 在 main model 收到新的 user request 前（包括新 session 的第一次 request），通过有边界的本地文本匹配选择相关的已保存 memories。Recall 不会发起 blocking model request；
 2. 将这些 memories 作为 hidden、low-priority context 添加。它们不能覆盖 system、global、project 或当前 user instructions，也不会授予 tool permissions；
 3. Task 完成后，只等待待处理任务安全写入当前 Conversation 的 `memory/maintenance.json`，不等待记忆模型。后台合并短时间内的任务快照，逐批处理尚未提取的 conversation delta，提取持久的 preferences、corrections、project facts 和 references；
-4. 当前 Workspace 至少存在五个不同 sessions，且距离上次 consolidation 已经过 24 小时后，请选中的 model 合并重复或过长的 memories。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。
+4. 当前 Workspace 的新增或实质更新累计达到 5 条时立即后台整理；不足 5 条但大于零时，从第一条待整理变化起满 3 小时整理，后续变化不重置计时。重复且无变化的写入不计数，整理自身的修改不计入下一轮。计数与起始时间保存在 `state.json`，成功整理后清零，失败保留；旧 session-count 状态按当前 active memories 的更新时间恢复。存活的 persisted Chat runtime 每 30 秒检查到期任务，无需新消息；关闭服务期间不运行，打开 Chat 后恢复检查。整理只读取该 runtime 可见的 Global、Workspace 和当前 Conversation，超出输入保护的记忆分批全部检查，不跨 Conversation 提升归属。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。
 
 选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
 
