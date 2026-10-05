@@ -53,7 +53,6 @@ export function collectSessionUsageStats(
 	};
 	let requests = 0,
 		tools = 0,
-		speedSamples = 0,
 		speedTokens = 0,
 		speedMs = 0;
 	let latestRequest: SessionUsageStats["latestRequest"];
@@ -81,7 +80,9 @@ export function collectSessionUsageStats(
 		liveMessage && !alreadyStored
 			? [...entries, { type: "message" as const, id: "live", parentId: null, timestamp: "", message: liveMessage }]
 			: entries;
-	for (const entry of withLive) {
+	// Replayed snapshots replace the same durable entry; distinct retry entries still add.
+	const settledEntries = new Map(withLive.map((entry) => [entry.id, entry]));
+	for (const entry of settledEntries.values()) {
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			trackAvailability(entry.usage);
 			addUsageToTotals(usageTotals, entry.usage);
@@ -118,14 +119,13 @@ export function collectSessionUsageStats(
 				Number.isFinite(ms) &&
 				ms > 0 &&
 				reportedOutput &&
-				Number.isFinite(assistantMsg.usage.output) &&
+				Number.isSafeInteger(assistantMsg.usage.output) &&
 				assistantMsg.usage.output >= 0;
 			const speed: Measurement = {
 				value: measurable ? (assistantMsg.usage.output * 1000) / ms! : null,
 				estimated: false,
 			};
 			if (measurable) {
-				speedSamples++;
 				speedTokens += assistantMsg.usage.output;
 				speedMs += ms!;
 			}
@@ -158,7 +158,7 @@ export function collectSessionUsageStats(
 			generationMs: duration("generationMs", requests),
 			toolMs: duration("toolMs", tools),
 		},
-		speed: { value: speedMs > 0 ? (speedTokens * 1000) / speedMs : null, estimated: speedSamples !== requests },
+		speed: { value: speedMs > 0 ? (speedTokens * 1000) / speedMs : null, estimated: false },
 		userMessages,
 		assistantMessages,
 		toolCalls,

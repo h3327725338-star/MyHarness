@@ -9,7 +9,8 @@ const packageJsonFiles = [];
 function collectPackageJsonFiles(directory) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
-			if (!ignoredDirectories.has(entry.name)) {
+			// Root data/ contains runtime state and downloaded inspection artifacts, not repository packages.
+			if (!ignoredDirectories.has(entry.name) && !(directory === "." && entry.name === "data")) {
 				collectPackageJsonFiles(join(directory, entry.name));
 			}
 			continue;

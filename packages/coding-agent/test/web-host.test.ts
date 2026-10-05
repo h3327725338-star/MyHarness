@@ -218,7 +218,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(history).toHaveLength(3);
 	});
 
-	it("publishes usage in the same batch as text before provider usage arrives", async () => {
+	it("keeps cumulative usage settled instead of estimating unfinished streamed output", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");
 		const owner = fx.hub.get(initial.slot)!;
@@ -232,9 +232,12 @@ describe("Web host (real runtime with a faux provider)", () => {
 			assistantMessageEvent: { type: "text_delta", delta: "Streaming output without reported usage" },
 		});
 		internals.flushAssistant();
-		expect(owner.usage().stats.tokens.output).toBeGreaterThan(0);
-		expect(owner.usage().stats.usageEstimated).toBe(true);
+		expect(owner.usage().stats.tokens.output).toBe(0);
+		expect(owner.usage().stats.usageEstimated).toBe(false);
 		message.usage.output = 17;
+		expect(owner.usage().stats.tokens.output).toBe(0);
+		owner.session.sessionManager.appendMessage(message);
+		internals.onSessionEvent({ type: "message_end", message });
 		expect(owner.usage().stats.tokens.output).toBe(17);
 		expect(owner.usage().stats.usageEstimated).toBe(false);
 	});

@@ -11,7 +11,7 @@ export interface CacheMeasurements {
 	prompt: Measurement;
 	hitRate: Measurement;
 }
-const valid = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+const valid = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 
 /** Missing buckets stay unknown. An exact total can establish prompt size without a write bucket. */
 export function measureCache(usage: Usage): CacheMeasurements {
@@ -44,6 +44,11 @@ export function measureCache(usage: Usage): CacheMeasurements {
 		valid(usage.output) &&
 		usage.reported?.output &&
 		(prompt.value === null || usage.totalTokens - usage.output !== prompt.value);
+	const invalidBuckets =
+		prompt.value !== null &&
+		!prompt.estimated &&
+		[input, read, write].reduce((total, item) => total + (item.value ?? 0), 0) > prompt.value;
+	if (contradictoryTotal || invalidBuckets) prompt = { value: null, estimated: false };
 	const hitRate: Measurement = {
 		value:
 			!contradictoryTotal &&
@@ -59,7 +64,7 @@ export function measureCache(usage: Usage): CacheMeasurements {
 	return { input, read, write, prompt, hitRate };
 }
 
-/** Aggregate only paired known numerators/denominators; disclose missing requests as approximate coverage. */
+/** DeepSeek composer compatibility: absent cache buckets contribute zero; absent usage is skipped. */
 export function sumCache(samples: CacheMeasurements[]): CacheMeasurements {
 	const sum = (key: "input" | "read" | "write" | "prompt"): Measurement => {
 		const known = samples.map((sample) => sample[key]).filter((item) => item.value !== null);
@@ -68,16 +73,20 @@ export function sumCache(samples: CacheMeasurements[]): CacheMeasurements {
 			estimated: known.length !== samples.length || known.some((item) => item.estimated),
 		};
 	};
-	const paired = samples.filter((sample) => sample.hitRate.value !== null);
-	const prompt = paired.reduce((total, sample) => total + sample.prompt.value!, 0);
+	const available = samples.filter((sample) => sample.input.value !== null && sample.prompt.value !== null);
+	const read = available.reduce((total, sample) => total + (sample.read.value ?? 0), 0);
+	const prompt = available.reduce(
+		(total, sample) => total + sample.input.value! + (sample.read.value ?? 0) + (sample.write.value ?? 0),
+		0,
+	);
 	return {
 		input: sum("input"),
 		read: sum("read"),
 		write: sum("write"),
-		prompt: sum("prompt"),
+		prompt: { value: available.length && valid(prompt) ? prompt : null, estimated: false },
 		hitRate: {
-			value: prompt > 0 ? paired.reduce((total, sample) => total + sample.read.value!, 0) / prompt : null,
-			estimated: paired.length !== samples.length || paired.some((sample) => sample.hitRate.estimated),
+			value: valid(prompt) && valid(read) && prompt > 0 ? read / prompt : null,
+			estimated: false,
 		},
 	};
 }

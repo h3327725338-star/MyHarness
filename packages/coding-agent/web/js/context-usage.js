@@ -12,7 +12,7 @@ export function sessionCache(stats) {
 	const { input, cacheRead: read, cacheWrite: write } = stats.tokens;
 	const total = input + read + write;
 	const complete = !stats.tokenAvailability || ["input", "cacheRead", "cacheWrite"].every((key) => stats.tokenAvailability[key]);
-	return { input, read, write, hitRate: complete && total > 0 ? read / total : null };
+	return { input: total, read, write, hitRate: complete && total > 0 ? read / total : null };
 }
 
 const num = fmtTokens;
@@ -84,7 +84,7 @@ export function CacheValue({ cache, session }) {
 						? t("The provider has reported no cache use for this request.")
 						: sessionRate == null
 							? t("The provider has reported no cache use in this session.")
-							: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input + session.read + session.write) });
+							: t("Cache reads {read} of {total} input tokens over the whole session", { read: num(session.read), total: num(session.input) });
 	// Before the first request of this run the whole session's figure (from the history) stands in.
 	const rate = state ? cache?.hitRate : sessionRate;
 	return html`<${MeterValue} state=${state} title=${title} text=${rate == null ? undefined : `${(state ? cache?.estimated : session?.estimated) ? "≈ " : ""}${(rate * 100).toFixed(2)}%`} />`;
@@ -115,7 +115,7 @@ export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 			<div class="cu-stat" title=${tokensText(remaining)}><span class="dim">${t("Remaining")}</span><strong>${tokensText(remaining)}</strong></div>
 			${controls ? html`<div class="cu-controls">${controls}</div>` : null}
 			${!capacityOnly ? html`<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
-			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Cumulative output divided by measured generation time; approximate when some requests have no timing.")}>${fmtSpeed(stats?.speed)}</strong></div>` : null}
+			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Reported output divided by its paired first-output-to-completion time; requests without both measurements are excluded.")}>${fmtSpeed(stats?.speed)}</strong></div>` : null}
 		</div>
 		${!capacityOnly ? html`<div class="cu-actions">
 			<button class="btn sm" disabled=${snap?.active} onClick=${() => (onDone?.(), actions.compact())}>${t("Compact now")}</button>

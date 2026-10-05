@@ -1213,6 +1213,7 @@ function parseChunkUsage(
 		total_tokens?: number;
 		prompt_cache_hit_tokens?: number;
 		prompt_cache_miss_tokens?: number;
+		cached_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
 		completion_tokens_details?: { reasoning_tokens?: number };
 	},
@@ -1220,7 +1221,9 @@ function parseChunkUsage(
 ): AssistantMessage["usage"] {
 	const count = (value: unknown): number =>
 		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-	const cacheReadTokens = count(rawUsage.prompt_cache_hit_tokens ?? rawUsage.prompt_tokens_details?.cached_tokens);
+	const rawCacheRead =
+		rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? rawUsage.cached_tokens;
+	const cacheReadTokens = count(rawCacheRead);
 	const cacheWriteTokens = count(rawUsage.prompt_tokens_details?.cache_write_tokens);
 	const promptTokens = count(
 		rawUsage.prompt_tokens ?? count(rawUsage.prompt_cache_miss_tokens) + cacheReadTokens + cacheWriteTokens,
@@ -1242,12 +1245,13 @@ function parseChunkUsage(
 		reported: {
 			input: valid(rawUsage.prompt_tokens) || valid(rawUsage.prompt_cache_miss_tokens),
 			output: valid(rawUsage.completion_tokens),
-			cacheRead: valid(rawUsage.prompt_cache_hit_tokens ?? rawUsage.prompt_tokens_details?.cached_tokens),
+			cacheRead: valid(rawCacheRead),
 			cacheWrite: valid(rawUsage.prompt_tokens_details?.cache_write_tokens),
 		},
 		cacheReported:
 			rawUsage.prompt_cache_hit_tokens !== undefined ||
 			rawUsage.prompt_cache_miss_tokens !== undefined ||
+			rawUsage.cached_tokens !== undefined ||
 			rawUsage.prompt_tokens_details?.cached_tokens !== undefined ||
 			rawUsage.prompt_tokens_details?.cache_write_tokens !== undefined,
 		input,

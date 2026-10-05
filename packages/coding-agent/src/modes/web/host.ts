@@ -29,7 +29,6 @@ import {
 	collectFinalWorkspaceChanges,
 	type WorkspaceBaseline,
 } from "../../git/repository/workspace-changes.ts";
-import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import {
@@ -40,7 +39,7 @@ import {
 } from "../../utils/popup-notification.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
-import { estimateStreamedTokens, GenerationSpeedMeter } from "./generation-speed.ts";
+import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { RequestCacheMeter } from "./request-cache.ts";
 import {
@@ -179,7 +178,6 @@ export class WebHost {
 	/** Prompt-cache hit rate of the current model request, from the usage the provider reports (see request-cache.ts). */
 	private cache = new RequestCacheMeter();
 	private cacheChanged = false;
-	private liveUsageMessage: AssistantMessage | undefined;
 	private readonly toolTimers = new Map<
 		string,
 		{ last: number; timer?: ReturnType<typeof setTimeout>; pending?: unknown }
@@ -688,7 +686,6 @@ export class WebHost {
 			case "message_start": {
 				const message = event.message;
 				if (message.role === "assistant") {
-					this.liveUsageMessage = message;
 					this.beginRequestMeters();
 					this.liveAssistantId = `live-${++this.liveMessageSeq}`;
 					const item = messageToWire(message);
@@ -705,7 +702,6 @@ export class WebHost {
 					const delta = typeof streamed?.delta === "string" ? streamed.delta : undefined;
 					if (this.speed.update(event.message, streamed?.type, delta)) this.speedChanged = true;
 					if (this.cache.update(event.message)) this.cacheChanged = true;
-					this.liveUsageMessage = event.message;
 					this.scheduleAssistantUpdate(event.message);
 				}
 				return;
@@ -722,7 +718,6 @@ export class WebHost {
 					const item = messageToWire(message, { streaming: message.stopReason === "toolUse" });
 					this.broadcast("message_end", { liveId: this.liveAssistantId, item });
 					this.liveAssistantId = undefined;
-					this.liveUsageMessage = undefined;
 				} else if (message.role === "toolResult") {
 					// Tool results are delivered through tool_end with the same data.
 				} else {
@@ -1277,45 +1272,13 @@ export class WebHost {
 			cache: this.cache.current,
 			stats: {
 				...session.getSessionStats(),
-				usageEstimated: !!this.liveUsageMessage && this.liveUsageMessage.usage.output === 0,
-				...(this.liveUsageMessage
-					? collectSessionUsageStats(
-							session.sessionManager.getEntries(),
-							(provider, model) => session.modelRuntime.getModel(provider, model),
-							this.streamingUsageMessage(),
-						)
-					: {}),
+				usageEstimated: false,
+				// Whole-session meters use durable settlements, not unfinished stream previews.
 			},
 			session: {
 				file: session.sessionFile ?? null,
 				name: session.sessionName ?? null,
 				persisted: session.sessionManager.isPersisted(),
-			},
-		};
-	}
-
-	/** Never persist estimates; the provider's final usage replaces this UI-only preview. */
-	private streamingUsageMessage(): AssistantMessage | undefined {
-		const message = this.liveUsageMessage;
-		if (!message || message.usage.output > 0) return message;
-		const text = message.content
-			.map((part) =>
-				part.type === "text"
-					? part.text
-					: part.type === "thinking"
-						? part.thinking
-						: part.type === "toolCall"
-							? JSON.stringify(part.arguments)
-							: "",
-			)
-			.join("");
-		const output = Math.ceil(estimateStreamedTokens(text));
-		return {
-			...message,
-			usage: {
-				...message.usage,
-				output,
-				totalTokens: message.usage.input + output + message.usage.cacheRead + message.usage.cacheWrite,
 			},
 		};
 	}

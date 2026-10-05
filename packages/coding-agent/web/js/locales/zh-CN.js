@@ -1274,7 +1274,7 @@ export const zhCN = {
 	"Session generation time": "Session 累计生成时间",
 	"Session request time": "Session 累计请求耗时",
 	"Session tool time": "Session 累计工具耗时",
-	"Cumulative output divided by measured generation time; approximate when some requests have no timing.": "累计输出量除以对应的累计生成时间；部分请求缺少计时记录时为近似值。",
+	"Reported output divided by its paired first-output-to-completion time; requests without both measurements are excluded.": "接口报告的输出量除以对应的首次输出到结束时间；缺少输出量或计时的请求不参与统计。",
 	"≈ means an estimate or incomplete measurement coverage; — means unavailable. Tool durations are summed and may overlap.": "≈ 表示估算或统计覆盖不完整；— 表示无法取得。工具耗时为各次执行时间之和，并行执行可能重叠。",
 	"Terminal UI": "终端界面",
 	"Delete provider": "删除 Provider",

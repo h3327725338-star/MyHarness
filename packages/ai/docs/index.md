@@ -33,7 +33,7 @@
 
 ## Usage 统计约定
 
-`Usage.input` 是不含缓存命中与缓存写入的普通输入；总输入为 `input + cacheRead + cacheWrite`。OpenAI 兼容接口的 `prompt_tokens` 已含缓存，DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 分别表示命中与未命中，不能再把命中加到完整 prompt 上。`output` 已含报告的 reasoning Token，费用不再次加上 reasoning。
+`Usage.input` 是不含缓存命中与缓存写入的普通输入；总输入为 `input + cacheRead + cacheWrite`。OpenAI 兼容接口按 `prompt_tokens_details.cached_tokens`、`prompt_cache_hit_tokens`、顶层 `cached_tokens` 的优先级读取缓存命中；`prompt_tokens` 已含缓存，DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 分别表示命中与未命中，不能再把命中加到完整 prompt 上。`output` 已含报告的 reasoning Token，费用不再次加上 reasoning。
 
 可选的 `Usage.reported` 分别记录 input、output、cacheRead、cacheWrite 是否由上游有效数值确认；算术字段保留原有数字类型，缺项不再被展示层当成实测零。旧记录未带标记时，零值无法证明已上报。该字段为兼容性追加，不改变原有计费计算。
 

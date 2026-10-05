@@ -9,13 +9,15 @@
 | 脚本 | 作用 | 默认写入 |
 | --- | --- | --- |
 | `run-checks-parallel.mjs` | 并行运行 pinned deps、TS imports、shrinkwrap、install-lock、`tsgo` 和 browser smoke | 子进程缓存/构建产物可能更新 |
-| `check-pinned-deps.mjs` | 检查外部依赖是否使用精确版本 | 否 |
+| `check-pinned-deps.mjs` | 检查仓库外部依赖是否使用精确版本；不扫描根 `data/` 运行时数据目录 | 否 |
 | `check-ts-relative-imports.mjs` | 检查 `.ts` 中相对 `.js` import | 否 |
 | `check-browser-smoke.mjs` | 运行 browser smoke 检查 | 由 smoke 运行决定 |
 | `generate-coding-agent-shrinkwrap.mjs` | 生成或 `--check` 校验发布 shrinkwrap；不带 `--check` 会写文件 | 是（不带 `--check`） |
 | `generate-coding-agent-install-lock.mjs` | 生成或 `--check` 校验独立安装 lock；不带 `--check` 会写目录文件 | 是（不带 `--check`） |
 | `check-lockfile-commit.mjs` | 提交前阻止不符合锁文件约束的状态 | 否 |
 | `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式、用户路径、运行时产物、License 和 manifest；staged 模式还检查整个 index 中是否残留 Agent/Harness/IDE 本地状态目录 | 否 |
+
+依赖检查的扫描边界回归测试：`node --test scripts/check-pinned-deps.test.mjs`。
 
 `npm run check` 先执行 `biome check --write`，再调用 `run-checks-parallel.mjs`；不要在自动化中把它当作纯诊断命令。
 

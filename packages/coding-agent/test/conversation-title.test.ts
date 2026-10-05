@@ -114,6 +114,30 @@ describe("conversation title generation", () => {
 		expect(String(context.messages[0]!.content)).toContain("修复 Workspace 侧栏中的会话管理");
 	});
 
+	it("requests compact new titles without extra calls or shortening an unchanged existing title", async () => {
+		const session = SessionManager.inMemory();
+		session.appendMessage({ role: "user", content: "调整会话改动汇总和重启恢复", timestamp: Date.now() });
+		const existingTitle = "右侧栏改为汇总当前会话改动并支持重启恢复";
+		const completeSimple = vi.fn(async (..._args: Parameters<ConversationTitleModelRuntime["completeSimple"]>) =>
+			assistantMessage(existingTitle),
+		);
+		const result = await generateConversationTitle({
+			sessionManager: session,
+			modelRuntime: { getModel: () => undefined, completeSimple } as ConversationTitleModelRuntime,
+			settingsManager: settingsManager(),
+			fallbackModel: fakeModel,
+			currentTitle: existingTitle,
+		});
+		expect(result).toEqual({ status: "renamed", title: existingTitle });
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		const context = completeSimple.mock.calls[0]![1] as Context;
+		expect(context.systemPrompt).toContain("core subject plus the main purpose");
+		expect(context.systemPrompt).toContain("6-10 Chinese characters");
+		expect(context.systemPrompt).toContain("2-4 words");
+		expect(context.systemPrompt).toContain("Do not shorten an existing title solely because it is long");
+		expect(String(context.messages[0]!.content)).toContain("Return the existing title exactly");
+	});
+
 	it("normalizes structured and markdown-wrapped model output", async () => {
 		const session = SessionManager.inMemory();
 		session.appendMessage({ role: "user", content: "修复模型标题解析", timestamp: Date.now() });

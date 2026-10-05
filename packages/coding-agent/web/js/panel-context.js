@@ -85,9 +85,11 @@ export function ContextPanel() {
 		loadStats();
 	}, [snap?.session?.id, snap?.lastRun?.runId]);
 	if (!snap) return null;
-	const measuredTokens = (key, fallback) => {
-		const item = stats?.cache?.[key];
-		return item ? item.value == null || !Number.isFinite(item.value) ? "—" : `${item.estimated ? "≈ " : ""}${fmtTokens(item.value)}` : fallback;
+	// DeepSeek's session projection displays numeric buckets, with absent cache counts accumulated as zero.
+	// Availability flags remain available for diagnostics and costs, not as a gate on this compatibility display.
+	const tokenCount = (key) => {
+		const value = stats?.tokens?.[key];
+		return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? fmtTokens(value) : "—";
 	};
 	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
 	const toggleTool = async (name, on) => {
@@ -112,7 +114,7 @@ export function ContextPanel() {
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: fmtTokens(stats.userMessages), assistantMessages: fmtTokens(stats.assistantMessages), toolCalls: fmtTokens(stats.toolCalls) })}</span>
 					<span>${t("Tokens")}</span><span class="session-tokens">
-						<span>${t("Input")} ${measuredTokens("input", stats.tokenAvailability?.input === false ? "—" : fmtTokens(stats.tokens.input))} · ${t("Cache write")} ${measuredTokens("write", stats.tokenAvailability?.cacheWrite === false ? "—" : fmtTokens(stats.tokens.cacheWrite))} · ${t("Cache read")} ${measuredTokens("read", stats.tokenAvailability?.cacheRead === false ? "—" : fmtTokens(stats.tokens.cacheRead))} · ${t("Output")} ${stats.usageEstimated ? "≈ " : ""}${stats.tokenAvailability?.output === false && !stats.usageEstimated ? "—" : fmtTokens(stats.tokens.output)}</span>
+						<span>${t("Input")} ${tokenCount("input")} · ${t("Cache write")} ${tokenCount("cacheWrite")} · ${t("Cache read")} ${tokenCount("cacheRead")} · ${t("Output")} ${tokenCount("output")}</span>
 					</span>
 					<span aria-hidden="true"></span><span class="session-cumulative">${t("Cumulative speed")} ${fmtSpeed(stats.speed)} · ${t("Cumulative cache hit")} <${CacheValue} session=${sessionCache(stats)} /></span>
 					<span>${t("Cost")}</span><span>${cost !== "—" && (stats.usageEstimated || stats.costIncomplete) ? "≈ " : ""}${cost}</span>` : null}

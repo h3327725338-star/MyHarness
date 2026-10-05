@@ -104,24 +104,12 @@ export class RequestCacheMeter {
 
 	/**
 	 * A model request starts. `reportedBefore`: the session's earlier requests already contained cache tokens.
-	 * `predicted`: what the request is expected to read from the cache (see predictCacheHit), shown until the provider
-	 * reports the real usage; only used for a provider that has reported cache use before. Returns true when the shown
-	 * value changed.
+	 * The legacy prediction argument is ignored: only provider-reported counts are displayed.
+	 * Returns true when the shown value changed.
 	 */
-	start(reportedBefore: boolean, predicted?: { read: number; input: number }): boolean {
+	start(reportedBefore: boolean, _predicted?: { read: number; input: number }): boolean {
 		this.reported = reportedBefore;
-		const next: RequestCacheHit =
-			reportedBefore && predicted && predicted.input > 0
-				? {
-						state: "live",
-						hitRate: Math.min(1, predicted.read / predicted.input),
-						read: predicted.read,
-						input: predicted.input,
-						estimated: true,
-					}
-				: this.value?.hitRate != null
-					? { ...this.value, state: "final" }
-					: DETECTING;
+		const next: RequestCacheHit = this.value?.hitRate != null ? { ...this.value, state: "final" } : DETECTING;
 		const changed = JSON.stringify(this.value) !== JSON.stringify(next);
 		this.value = next;
 		return changed;

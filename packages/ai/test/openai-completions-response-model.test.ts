@@ -116,6 +116,13 @@ describe("openai-completions responseModel", () => {
 		{ prompt_tokens: 1000, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 },
 		{ prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 },
 		{ prompt_tokens: 1000, prompt_tokens_details: { cached_tokens: 800 } },
+		{ prompt_tokens: 1000, cached_tokens: 800 },
+		{
+			prompt_tokens: 1000,
+			prompt_tokens_details: { cached_tokens: 800 },
+			prompt_cache_hit_tokens: 500,
+			cached_tokens: 400,
+		},
 	])("normalizes reported usage and bills cache hits separately: %j", async (usage) => {
 		mockState.chunks = [
 			{

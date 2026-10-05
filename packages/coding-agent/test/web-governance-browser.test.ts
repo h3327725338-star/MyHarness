@@ -129,6 +129,8 @@ try {
  set({stats:measuredStats,snap:{...state.snap,active:false}});
  render(h(ContextDetails),app); await wait(120);
  if(!app.textContent.includes('25.0 t/s') || app.textContent.includes('100.0 t/s')) throw Error('popover is not cumulative');
+ const cacheTitle=[...app.querySelectorAll('[title]')].find(el=>el.title.includes('9.9K'))?.title;
+ if(!cacheTitle?.includes('10.0K') || cacheTitle.includes('19.9K')) throw Error('cache denominator counted twice: '+cacheTitle);
  render(h(ContextDetails,{capacityOnly:true}),app); await wait(120);
  if(app.querySelectorAll('.cu-stat').length!==1 || app.querySelector('.kv') || app.querySelector('.cu-actions') || app.textContent.includes('t/s')) throw Error('capacity contains duplicate metrics: '+app.textContent);
  measuredStats.speed=measurement(25,true);
@@ -137,10 +139,12 @@ try {
  measuredStats.cache.read=measurement(13284352,true);
  measuredStats.cache.hitRate=measurement(.9776,true);
  measuredStats.userMessages=1000; measuredStats.assistantMessages=2000; measuredStats.toolCalls=3000;
+ measuredStats.tokenAvailability={input:false,cacheRead:false,cacheWrite:false,output:false};
+ measuredStats.usageEstimated=true;
  set({stats:{...measuredStats},resources:{tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},snap:{...state.snap,session:{id:'fixture'},thinking:{supported:false}}});
  render(h(ContextPanel),app); await wait(180);
  const token=app.querySelector('.session-tokens'); const cumulative=app.querySelector('.session-cumulative');
- if(!token?.textContent.includes('输入 304.3K · 缓存写入 — · 缓存命中 ≈ 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
+ if(!token?.textContent.includes('输入 304.3K · 缓存写入 0 · 缓存命中 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
  if(!cumulative?.textContent.includes('累计速度 ≈ 25.0 t/s · 累计命中率 ≈ 97.76%')) throw Error('cumulative metrics wrong: '+cumulative?.textContent);
  if(Math.abs(token.getBoundingClientRect().left-cumulative.getBoundingClientRect().left)>.1 || cumulative.getBoundingClientRect().top<=token.getBoundingClientRect().top) throw Error('cumulative row not aligned below tokens');
  const context=app.querySelector('.cu');
@@ -160,7 +164,7 @@ try {
  if(/304,?325|13,?284,?352/.test(app.innerHTML)) throw Error('raw long integers remain');
  measuredStats.speed=measurement(null); measuredStats.cache.hitRate=measurement(null); measuredStats.cache.input=measurement(null); measuredStats.tokens.output=undefined;
  set({stats:{...measuredStats}}); await wait(60);
- if(!cumulative.textContent.includes('累计速度 — · 累计命中率 —') || !token.textContent.includes('输入 —') || !token.textContent.includes('输出 —')) throw Error('missing metrics not dashed');
+ if(!cumulative.textContent.includes('累计速度 — · 累计命中率 —') || !token.textContent.includes('输入 304.3K') || !token.textContent.includes('输出 —')) throw Error('missing metrics not dashed');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>'); }
 `,

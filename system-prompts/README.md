@@ -37,7 +37,7 @@
 | `compaction/harness/system.md` | 通用 AgentHarness 压缩及分支摘要的系统职责；与编程版不同，不能直接合并 |
 | `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容 |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
-| `tasks/conversation-title.md` | 独立会话标题生成请求 |
+| `tasks/conversation-title.md` | 独立会话标题生成请求；新标题用核心对象＋主要目的，中文目标 6–10 字、最多 12 字，英文 2–4 词，保留必要技术名称；主题未变时保留已有标题，不为缩短旧标题增加请求 |
 | `tasks/commit-message.md` | `/commit` 的独立无工具提交说明请求；按模型容量分批分析 Diff、保留来源、分层合并及补读核对后生成一个提交说明，参考 Git 历史，不添加 AI 署名 |
 | `tasks/vision-assistant.md` | 独立视觉转录请求 |
 | `tasks/vision-probe.md` | 图像输入能力探测请求 |

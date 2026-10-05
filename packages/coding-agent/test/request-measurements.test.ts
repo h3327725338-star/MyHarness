@@ -68,13 +68,30 @@ describe("request and cumulative measurements", () => {
 		expect(measured.hitRate.value).toBeNull();
 		expect(measured.prompt.estimated).toBe(true);
 	});
-	it("pairs cumulative cache numerators with their denominators and marks incomplete coverage", () => {
+	it("skips absent usage samples without hiding the cumulative cache share", () => {
 		const measured = sumCache([
 			measureCache(usage()),
 			measureCache(usage({ reported: { input: false, output: false, cacheRead: false, cacheWrite: false } })),
 		]);
-		expect(measured.hitRate).toEqual({ value: 0.8, estimated: true });
+		expect(measured.hitRate).toEqual({ value: 0.8, estimated: false });
 		expect(measured.read).toEqual({ value: 800, estimated: true });
+	});
+	it("matches DeepSeek composer accounting for absent cache buckets and aborted zero samples", () => {
+		const first = usage({
+			input: 1000,
+			cacheRead: 0,
+			totalTokens: 1100,
+			reported: { input: true, output: true, cacheRead: false, cacheWrite: false },
+		});
+		const aborted = usage({ input: 0, output: 0, cacheRead: 0, totalTokens: 0, reported: undefined });
+		const stats = collectSessionUsageStats([entry(first), entry(usage()), entry(aborted)]);
+		expect(stats.cache.hitRate).toEqual({ value: 0.4, estimated: false });
+		expect(stats.cache.prompt.value).toBe(2000);
+		expect(sumCache([measureCache(aborted)]).hitRate.value).toBeNull();
+	});
+	it("does not include contradictory samples in compatibility totals", () => {
+		const stats = sumCache([measureCache(usage()), measureCache(usage({ totalReported: true, totalTokens: 999 }))]);
+		expect(stats.hitRate.value).toBe(0.8);
 	});
 	it("weights session speed by generation time, not the mean of request speeds", () => {
 		const stats = collectSessionUsageStats([
@@ -86,11 +103,26 @@ describe("request and cumulative measurements", () => {
 		expect(stats.timing.requestMs.value).toBe(7000);
 		expect(stats.latestRequest?.speed.value).toBe(100);
 	});
-	it("does not invent legacy timing and marks measured-subset speed approximate", () => {
+	it("uses only paired reported output and timing, without inventing legacy timing", () => {
 		const stats = collectSessionUsageStats([entry(usage()), entry(usage(), { generationMs: 1000 })]);
-		expect(stats.speed).toEqual({ value: 100, estimated: true });
+		expect(stats.speed).toEqual({ value: 100, estimated: false });
 		expect(stats.timing.requestMs.value).toBeNull();
 		expect(collectSessionUsageStats([entry(usage())]).speed.value).toBeNull();
+	});
+	it("replaces a replayed entry but counts distinct retry entries", () => {
+		const first = entry(usage(), { generationMs: 1000 });
+		const replacement = { ...first, message: assistant(usage({ output: 200 })) };
+		const retry = entry(usage(), { generationMs: 1000 });
+		const stats = collectSessionUsageStats([first, replacement, retry]);
+		expect(stats.tokens.output).toBe(300);
+		expect(stats.assistantMessages).toBe(2);
+		expect(stats.speed.value).toBe(150);
+	});
+	it("rejects unsafe and fractional cache counts and includes zero-input samples", () => {
+		expect(measureCache(usage({ cacheRead: 800.5 })).hitRate.value).toBeNull();
+		expect(measureCache(usage({ cacheRead: Number.MAX_SAFE_INTEGER + 1 })).hitRate.value).toBeNull();
+		const zero = measureCache(usage({ input: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 100 }));
+		expect(sumCache([zero, measureCache(usage())]).hitRate.value).toBe(0.8);
 	});
 	it("keeps timing on the session entry, not in the model message", () => {
 		const manager = SessionManager.inMemory();
