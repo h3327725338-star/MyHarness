@@ -170,82 +170,120 @@
 	--hl-type: #12796a;
 }
 
-/* Both mode colours of the Coding / General switch, shown on both sides whatever the mode on screen. */
-:root[data-theme="dark"] { --mode-coding: #79a8f5; --mode-general: #88c0d0; --mode-on: #242b36; }
-:root[data-theme="light"] { --mode-coding: #2c66d6; --mode-general: #39778b; --mode-on: #ffffff; }
+/* Each switch side follows that mode's saved scheme, even while the other mode is on screen.
+   Light display shares the blue base accent, just like its page palette. */
+:root[data-theme="dark"] { --mode-coding: #79a8f5; --mode-general: #79a8f5; --mode-on: #242b36; }
+:root[data-theme="light"] { --mode-coding: #2c66d6; --mode-general: #2c66d6; --mode-on: #ffffff; }
+:root[data-theme="dark"][data-coding-color-theme="forest"] { --mode-coding: #a7c080; }
+:root[data-theme="dark"][data-coding-color-theme="amber"] { --mode-coding: #d4ae82; }
+:root[data-theme="dark"][data-general-color-theme="forest"] { --mode-general: #a7c080; }
+:root[data-theme="dark"][data-general-color-theme="amber"] { --mode-general: #d4ae82; }
 
-/* General: Nord-inspired blue-grey surfaces and a restrained frost accent. Coding keeps the colours above. */
-:root[data-theme="dark"][data-chat-mode="general"] {
-	--bg-app: #252b35;
-	--bg-panel: #2e3440;
-	--bg-raised: #343c4b;
-	--bg-inset: #272d38;
-	--surface-hover: #414b5c;
-	--surface-active: #4c566a;
-	--surface-select: #404f62;
-	--border: #414b5c;
-	--border-strong: #586579;
-	--border-focus: #88c0d0;
+/* Colour schemes apply to both chat modes. Classic uses the base palette above. */
+:root[data-theme="dark"][data-color-theme="forest"] {
+	--bg-app: #1f2221;
+	--bg-panel: #292e2b;
+	--bg-raised: #363c38;
+	--bg-inset: #242825;
+	--surface-hover: #3c423e;
+	--surface-active: #454c46;
+	--surface-select: #3b4438;
+	--border: #464c47;
+	--border-strong: #626a63;
+	--border-focus: #a7c080;
+	--text: #e3e4df;
+	--text-2: #bfc3bd;
+	--text-3: #a5aaa3;
+	--text-4: #8a918a;
+	--text-inverse: #242825;
+	--accent: #a7c080;
+	--accent-strong: #bdd49a;
+	--accent-soft: rgba(167, 192, 128, 0.13);
+	--accent-line: rgba(167, 192, 128, 0.45);
+	--on-accent: #202b22;
+	--selection-bg: rgba(167, 192, 128, 0.3);
+	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a5aaa3' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	--ok: #b2ce95;
+	--warn: #dbbc7f;
+	--danger: #e9a09c;
+	--ok-soft: rgba(178, 206, 149, 0.12);
+	--warn-soft: rgba(219, 188, 127, 0.12);
+	--danger-soft: rgba(233, 160, 156, 0.11);
+	--on-danger: #2a1110;
+	--user-bg: #353d34;
+	--user-border: #4c5749;
+	--code-bg: #242825;
+	--inline-code-bg: #3c423e;
+	--scrim: rgba(15, 22, 18, 0.65);
+	--diff-add-bg: rgba(167, 192, 128, 0.12);
+	--diff-add-gutter: rgba(167, 192, 128, 0.2);
+	--diff-add-text: #b2ce95;
+	--diff-del-bg: rgba(233, 160, 156, 0.12);
+	--diff-del-gutter: rgba(233, 160, 156, 0.2);
+	--diff-del-text: #e9a09c;
+	--diff-hunk: #9bbfb0;
+	--hl-keyword: #d3a0bc;
+	--hl-string: #a7c080;
+	--hl-number: #e0b089;
+	--hl-comment: #8a918a;
+	--hl-title: #a7c080;
+	--hl-attr: #dbbc7f;
+	--hl-type: #9bbfb0;
+}
 
-	--text: #eceff4;
-	--text-2: #d8dee9;
-	--text-3: #b0bbcd;
-	--text-4: #96a3b8;
-	--text-inverse: #2e3440;
+:root[data-theme="dark"][data-color-theme="amber"] {
+	--bg-app: #23201e;
+	--bg-panel: #302b28;
+	--bg-raised: #3e3732;
+	--bg-inset: #292522;
+	--surface-hover: #453d37;
+	--surface-active: #4e443c;
+	--surface-select: #493c30;
+	--border: #4e4640;
+	--border-strong: #70655b;
+	--border-focus: #d4ae82;
 
-	--accent: #88c0d0;
-	--accent-strong: #a3d2df;
-	--accent-soft: rgba(136, 192, 208, 0.13);
-	--accent-line: rgba(136, 192, 208, 0.45);
-	--on-accent: #242b36;
-	--selection-bg: rgba(136, 192, 208, 0.3);
-	--ok: #6bcb96;
-	--warn: #efb667;
-	--danger: #f79c96;
-	--ok-soft: rgba(107, 203, 150, 0.12);
-	--warn-soft: rgba(239, 182, 103, 0.12);
-	--danger-soft: rgba(247, 156, 150, 0.11);
+	--text: #e6e3df;
+	--text-2: #c6c0b9;
+	--text-3: #b0a89f;
+	--text-4: #999087;
+	--text-inverse: #292522;
+
+	--accent: #d4ae82;
+	--accent-strong: #e4c39b;
+	--accent-soft: rgba(212, 174, 130, 0.13);
+	--accent-line: rgba(212, 174, 130, 0.45);
+	--on-accent: #2c2118;
+	--selection-bg: rgba(212, 174, 130, 0.3);
+	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23b0a89f' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+	--ok: #b2ce95;
+	--warn: #dbbc7f;
+	--danger: #e9a09c;
+	--ok-soft: rgba(178, 206, 149, 0.12);
+	--warn-soft: rgba(219, 188, 127, 0.12);
+	--danger-soft: rgba(233, 160, 156, 0.11);
 	--on-danger: #2a1110;
 
-	--user-bg: #3b4658;
-	--user-border: #4c596f;
-	--code-bg: #2e3440;
-	--inline-code-bg: #414b5c;
-	--scrim: rgba(25, 30, 39, 0.65);
-	--hl-keyword: #b48ead;
-	--hl-string: #a3be8c;
-	--hl-number: #d08770;
-	--hl-comment: #96a3b8;
-	--hl-title: #88c0d0;
-	--hl-attr: #ebcb8b;
-	--hl-type: #8fbcbb;
+	--user-bg: #40372f;
+	--user-border: #5d4e40;
+	--code-bg: #292522;
+	--inline-code-bg: #453d37;
+	--scrim: rgba(22, 17, 14, 0.65);
+	--diff-add-bg: rgba(167, 192, 128, 0.12);
+	--diff-add-gutter: rgba(167, 192, 128, 0.2);
+	--diff-add-text: #b2ce95;
+	--diff-del-bg: rgba(233, 160, 156, 0.12);
+	--diff-del-gutter: rgba(233, 160, 156, 0.2);
+	--diff-del-text: #e9a09c;
+	--diff-hunk: #9bbfb0;
+	--hl-keyword: #d3a0bc;
+	--hl-string: #a7c080;
+	--hl-number: #e0b089;
+	--hl-comment: #999087;
+	--hl-title: #d4ae82;
+	--hl-attr: #dbbc7f;
+	--hl-type: #9bbfb0;
 }
 
-:root[data-theme="light"][data-chat-mode="general"] {
-	--bg-app: #e5e9f0;
-	--bg-panel: #f3f5f9;
-	--bg-raised: #ffffff;
-	--bg-inset: #eceff4;
-	--surface-hover: #e5e9f0;
-	--surface-active: #d8dee9;
-	--surface-select: #dbe8ee;
-	--border: #d8dee9;
-	--border-strong: #b4c0d0;
-	--border-focus: #39778b;
-	--text: #2e3440;
-	--text-2: #4c566a;
-	--text-3: #59677c;
-	--text-4: #6a788d;
-
-	--accent: #39778b;
-	--accent-strong: #2d6174;
-	--accent-soft: rgba(57, 119, 139, 0.1);
-	--accent-line: rgba(57, 119, 139, 0.4);
-	--on-accent: #ffffff;
-	--selection-bg: rgba(57, 119, 139, 0.24);
-
-	--user-bg: #e5ebf3;
-	--user-border: #d0dbe7;
-	--code-bg: #eceff4;
-	--inline-code-bg: #e5e9f0;
-}
+/* Light display uses the shared base palette for every colour scheme. */

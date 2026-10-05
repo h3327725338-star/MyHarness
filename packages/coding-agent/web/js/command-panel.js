@@ -10,6 +10,7 @@ import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
+import { COLOR_THEMES } from "./appearance-themes.js";
 import { requestNotificationPermission } from "./notifications.js";
 import { rankSearch } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
@@ -519,7 +520,7 @@ function appearanceScreen() {
 		title: t("Appearance"),
 		rows: [
 			choice("lang", "UI language", "Language of the MyHarness interface. Chat content is never translated.", "lang", LANGUAGES),
-			choice("theme", "Theme", "Dark and light are separate designs; “System” follows Windows.", "theme", [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]),
+			choice("theme", "Display mode", "Dark and light are separate designs; “System” follows Windows.", "theme", [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]),
 			choice("motion", "Animations", "Loading shimmer, expand/collapse and fades. Status is always shown in text too.", "motion", [{ value: "system", label: "System" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]),
 			choice("runMode", "While a task is running", "What Enter does with a message sent while the agent is working.", "runMode", Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: mode.label, desc: mode.hint }))),
 			{
@@ -530,6 +531,7 @@ function appearanceScreen() {
 				chevron: true,
 				onEnter: (ctx) => ctx.push(() => inputScreen({ title: t("Reading width"), label: t("Width of the conversation column in px (620–1100). Empty: grows with the window."), value: state.view.readWidth === "auto" ? "" : String(state.view.readWidth), type: "number", min: 620, max: 1100, placeholder: t("Auto"), onSubmit: (value, c) => (setView({ readWidth: readWidthValue(value) }), c.pop()) })),
 			},
+			choice("colorTheme", "Color theme", "Saved for the current chat mode. Dark colors only; light uses the shared palette.", "colorTheme", COLOR_THEMES),
 			choice("processDefault", "Run steps", "Whether the steps behind a finished answer start expanded.", "processDefault", [{ value: "collapsed", label: "Collapsed" }, { value: "expanded", label: "Expanded" }]),
 			{
 				key: "notify",

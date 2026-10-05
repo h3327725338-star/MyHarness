@@ -9,6 +9,10 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 可以直接编辑文件，也可以使用 `/settings` 修改常用选项。
 
+## Web 外观与配色主题
+
+设置 → 外观的“显示模式”保留跟随系统／深色／浅色；“阅读宽度”下方新增“配色主题”：经典炭黑（`classic`，原 Coding 配色）、静谧森林（`forest`，克制灰绿）和暖夜琥珀（`amber`，暖棕深灰）。选择立即生效，并通过现有浏览器偏好 `myharness.web.prefs` 的 `colorThemes.coding` / `colorThemes.general` 分别保存，刷新前的启动脚本也读取它，避免先显示另一套配色。旧版共享 `colorTheme` 首次读取时作为两边初始值保留，之后各自独立修改；未设置或无效值使用经典炭黑。设置只修改当前 Coding／General 模式的配色，切换时恢复目标模式的选择；当前三套仅改变深色显示，浅色共用基础配色。无需重启，不写入项目或全局 Agent settings。
+
 ## Web 专属快捷键与代码智能状态
 
 Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式与无新数据时的 HTTP 空闲超时提供说明。

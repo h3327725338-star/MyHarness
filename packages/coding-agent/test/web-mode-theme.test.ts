@@ -4,9 +4,23 @@ import { describe, expect, it } from "vitest";
 const { modeIconPaths } = await import(new URL("../web/js/mode-icon.js", import.meta.url).href);
 const css = readFileSync(new URL("../web/css/tokens.css", import.meta.url), "utf8");
 
-function palette(theme: string) {
-	const block = css.split(`:root[data-theme="${theme}"][data-chat-mode="general"] {`)[1].split("}")[0];
-	return Object.fromEntries([...block.matchAll(/--([\w-]+): (#[\da-f]{6});/g)].map((m) => [m[1], m[2]]));
+function palette(theme: string, scheme = "amber") {
+	const get = resolved(theme, scheme);
+	return Object.fromEntries(
+		[
+			"bg-app",
+			"bg-panel",
+			"bg-raised",
+			"text",
+			"text-2",
+			"text-3",
+			"text-4",
+			"border",
+			"border-strong",
+			"accent",
+			"on-accent",
+		].map((key) => [key, get(key)]),
+	);
 }
 function luminance(hex: string) {
 	const channels = hex
@@ -50,18 +64,18 @@ describe("mode icon morph", () => {
 	});
 });
 
-// The four palettes as the browser resolves them: the base, the theme on top of it, and for General its own overrides.
+// Resolve the base display palette and the chosen scheme, independently of chat mode.
 function block(selector: string) {
 	const start = css.indexOf(`${selector} {`);
 	if (start < 0) return {} as Record<string, string>;
 	const body = css.slice(start + selector.length + 2, css.indexOf("}", start));
 	return Object.fromEntries([...body.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 }
-function resolved(theme: string, mode: "coding" | "general") {
+function resolved(theme: string, scheme: string) {
 	const values: Record<string, string> = {
 		...block(":root"),
 		...block(`:root[data-theme="${theme}"]`),
-		...(mode === "general" ? block(`:root[data-theme="${theme}"][data-chat-mode="general"]`) : {}),
+		...block(`:root[data-theme="${theme}"][data-color-theme="${scheme}"]`),
 	};
 	const get = (name: string): string => {
 		const value = values[name];
@@ -91,13 +105,11 @@ function over(color: string, surface: string) {
 	return toHex([r, g, b].map((channel, i) => channel * a + base[i] * (1 - a)));
 }
 
-describe("Coding and General palettes read alike", () => {
+describe("All selectable palettes stay readable", () => {
 	const palettes = (["dark", "light"] as const).flatMap((theme) =>
-		(["coding", "general"] as const).map((mode) => ({
-			name: `${mode} ${theme}`,
-			theme,
-			mode,
-			get: resolved(theme, mode),
+		(["classic", "forest", "amber"] as const).map((scheme) => ({
+			name: `${scheme} ${theme}`,
+			get: resolved(theme, scheme),
 		})),
 	);
 	for (const { name, get } of palettes) {
@@ -122,27 +134,57 @@ describe("Coding and General palettes read alike", () => {
 			expect(contrast(get("border-strong"), get("bg-panel"))).toBeGreaterThanOrEqual(1.6);
 		});
 	}
-	for (const theme of ["dark", "light"] as const) {
-		it(`${theme}: both modes keep the same contrast tiers for the quiet text levels`, () => {
-			const coding = resolved(theme, "coding");
-			const general = resolved(theme, "general");
-			for (const level of ["text-3", "text-4"]) {
-				const gap = Math.abs(
-					contrast(coding(level), coding("bg-panel")) - contrast(general(level), general("bg-panel")),
-				);
-				expect(gap, level).toBeLessThanOrEqual(1.5);
-			}
-		});
-	}
+	it("does not couple surface colors to chat mode", () => {
+		expect(css).not.toContain('[data-chat-mode="general"]');
+		for (const scheme of ["forest", "amber"]) {
+			expect(palette("light", scheme)).toEqual(palette("light", "classic"));
+		}
+	});
+	it("restores the saved forest preview and retains classic charcoal", () => {
+		expect(palette("dark", "forest")["bg-panel"]).toBe("#292e2b");
+		expect(palette("dark", "forest").accent).toBe("#a7c080");
+		expect(palette("dark", "classic")["bg-panel"]).toBe("#1c1d1d");
+		expect(palette("dark", "classic").accent).toBe("#79a8f5");
+	});
 });
 
-describe("General Nord palette", () => {
-	it("has distinct dark surfaces and a frost accent", () => {
+describe("Warm Amber dark palette", () => {
+	it("separates warm charcoal surface tiers without saturated brown backgrounds", () => {
 		const p = palette("dark");
-		expect(p["bg-panel"]).toBe("#2e3440");
-		expect(luminance(p["bg-app"])).toBeLessThan(luminance(p["bg-panel"]));
-		expect(p.accent).toBe("#88c0d0");
-		expect(new Set([p["bg-app"], p["bg-panel"], p["bg-raised"]]).size).toBe(3);
+		expect(p["bg-panel"]).toBe("#302b28");
+		expect(p.accent).toBe("#d4ae82");
+		for (const [lower, upper] of [
+			["bg-app", "bg-panel"],
+			["bg-panel", "bg-raised"],
+		]) {
+			expect(luminance(p[lower])).toBeLessThan(luminance(p[upper]));
+			expect(contrast(p[lower], p[upper])).toBeGreaterThanOrEqual(1.15);
+		}
+		for (const surface of ["bg-app", "bg-panel", "bg-raised"]) {
+			const [r, g, b] = hex3(p[surface]);
+			expect(r).toBeGreaterThan(g);
+			expect(g).toBeGreaterThan(b);
+			expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThanOrEqual(12);
+			expect(p[surface]).not.toBe(resolved("dark", "classic")(surface));
+		}
+	});
+	it("keeps body text soft-white and limits warm tint in secondary text and borders", () => {
+		const p = palette("dark");
+		const body = hex3(p.text);
+		expect(Math.max(...body) - Math.min(...body)).toBeLessThanOrEqual(8);
+		for (const token of ["text-2", "text-3", "text-4", "border", "border-strong"]) {
+			const channels = hex3(p[token]);
+			expect(Math.max(...channels) - Math.min(...channels), token).toBeLessThanOrEqual(24);
+		}
+	});
+	it("maps each switch side to its own saved dark theme accent", () => {
+		for (const mode of ["coding", "general"]) {
+			for (const scheme of ["forest", "amber"]) {
+				expect(block(`:root[data-theme="dark"][data-${mode}-color-theme="${scheme}"]`)[`mode-${mode}`]).toBe(
+					palette("dark", scheme).accent,
+				);
+			}
+		}
 	});
 	for (const theme of ["dark", "light"]) {
 		it(`keeps text and accent readable in ${theme} mode`, () => {

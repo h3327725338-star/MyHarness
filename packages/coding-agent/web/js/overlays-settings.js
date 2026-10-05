@@ -8,6 +8,7 @@ import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./short
 import { clip, fmtTokens, tokensToUnit, unitToTokens } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
+import { COLOR_THEMES } from "./appearance-themes.js";
 import { ModelRefPicker } from "./model-menu.js";
 import { notificationPermission, requestNotificationPermission } from "./notifications.js";
 import { ProvidersPage } from "./providers-page.js";
@@ -403,9 +404,10 @@ function Appearance({ conversation = false }) {
 	return html`
 		${!conversation ? html`<${Card} title=${t("Interface")}>
 			<${Row} label=${t("UI language")} description=${t("Interface only; not messages.")}><${Segmented} value=${view.lang} onChange=${(v) => set({ lang: v })} options=${LANGUAGES} /><//>
-			<${Row} label=${t("Theme")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
+			<${Row} label=${t("Display mode")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
 			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
+			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><select class="field" aria-label=${t("Color theme")} value=${view.colorTheme} onChange=${(e) => set({ colorTheme: e.target.value })}>${COLOR_THEMES.map((theme) => html`<option value=${theme.value}>${t(theme.label)}</option>`)}</select><//>
 		<//>` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>

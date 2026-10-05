@@ -6,6 +6,7 @@ import { chatTitle, clip, fmtDuration, loadPrefs, plural, savePrefs, taskWorkLin
 import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
+import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
@@ -124,6 +125,8 @@ export const state = {
 		// The shell the Terminal panel opens ("powershell", "cmd", …); empty means the first one the server offers.
 		termShell: prefs.termShell ?? "",
 		theme: prefs.theme ?? "system",
+		colorThemes: modeColorThemesOf(prefs),
+		colorTheme: modeColorThemesOf(prefs)[chatModeOf(prefs.chatMode)],
 		motion: prefs.motion ?? "system",
 		processDefault: prefs.processDefault ?? "collapsed",
 		runMode: runModeOf(prefs.runMode),
@@ -192,7 +195,10 @@ export function set(patch) {
 }
 
 export function setView(patch) {
-	state.view = { ...state.view, ...patch };
+	const mode = chatModeOf(patch.chatMode ?? state.view.chatMode);
+	const colorThemes = { ...state.view.colorThemes };
+	if (Object.hasOwn(patch, "colorTheme")) colorThemes[mode] = colorThemeOf(patch.colorTheme);
+	state.view = { ...state.view, ...patch, colorThemes, colorTheme: colorThemes[mode] };
 	persistView();
 	emit();
 }
@@ -205,7 +211,7 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "expandedGeneral", "chatMode", "theme", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -219,6 +225,10 @@ export function applyAppearance() {
 	const mode = state.view.theme;
 	const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 	root.dataset.theme = dark ? "dark" : "light";
+	state.view.colorTheme = colorThemeOf(state.view.colorThemes[state.view.chatMode]);
+	root.dataset.colorTheme = state.view.colorTheme;
+	root.dataset.codingColorTheme = colorThemeOf(state.view.colorThemes.coding);
+	root.dataset.generalColorTheme = colorThemeOf(state.view.colorThemes.general);
 	root.dataset.motion = state.view.motion === "system" ? "" : state.view.motion;
 	root.dataset.chatMode = state.view.chatMode;
 	root.style.setProperty("--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
@@ -596,7 +606,7 @@ export async function refreshAll() {
 // The mode on screen always is the mode of the chat on screen: showing a chat of the other mode (a task reminder, a
 // notification) switches the page with it. Only this page remembers the mode; it is never sent to a running chat.
 
-/** Put a mode on screen (its colours via `data-chat-mode`, its sidebar lists) and remember it in this browser. */
+/** Put a mode on screen (its identity via `data-chat-mode`, its sidebar lists) and remember it in this browser. */
 function setChatMode(mode) {
 	const next = chatModeOf(mode);
 	if (state.view.chatMode === next) return;

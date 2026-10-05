@@ -277,6 +277,12 @@ export const zhCN = {
 
 	// ---- Settings
 	Appearance: "外观",
+	"Display mode": "显示模式",
+	"Color theme": "配色主题",
+	"Classic Charcoal": "经典炭黑",
+	"Quiet Forest": "静谧森林",
+	"Warm Amber": "暖夜琥珀",
+	"Saved for the current chat mode. Dark colors only; light uses the shared palette.": "仅保存当前聊天模式的选择；只改变深色配色，浅色使用统一配色。",
 	Agent: "智能体",
 	Providers: "Provider",
 	"Tools & assistants": "工具与助手",
