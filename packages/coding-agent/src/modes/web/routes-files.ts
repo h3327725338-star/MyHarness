@@ -19,6 +19,7 @@ import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { collectSessionChanges } from "./session-changes.ts";
 import { RUN_CHANGES_ENTRY } from "./wire.ts";
 
 const MAX_TEXT_BYTES = 1.5 * 1024 * 1024;
@@ -408,7 +409,12 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 
 	// ---- Changes / Diff ---------------------------------------------------------
 	server.route("GET", "/api/changes", async ({ url }) => {
-		const scope = url.searchParams.get("scope") === "worktree" ? "worktree" : "run";
+		const requestedScope = url.searchParams.get("scope");
+		const scope = requestedScope === "worktree" ? "worktree" : requestedScope === "session" ? "session" : "run";
+		if (scope === "session") {
+			const { files } = collectSessionChanges(host.session.sessionManager.getBranch());
+			return { scope, files, total: files.length };
+		}
 		const checkpoint = host.session.getGitCheckpoint();
 		if (scope === "worktree") {
 			const listed = await host.tracker.listWorktreeChanges();
@@ -444,9 +450,16 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	server.route("GET", "/api/changes/diff", async ({ url }) => {
-		const scope = url.searchParams.get("scope") === "worktree" ? "worktree" : "run";
+		const requestedScope = url.searchParams.get("scope");
+		const scope = requestedScope === "worktree" ? "worktree" : requestedScope === "session" ? "session" : "run";
 		const file = url.searchParams.get("path");
 		if (!file) throw new HttpError(400, "Missing path");
+		if (scope === "session") {
+			const { files, diffs } = collectSessionChanges(host.session.sessionManager.getBranch());
+			const summary = files.find((candidate) => candidate.path === file);
+			if (!summary) throw new HttpError(404, "No such change");
+			return { summary, history: diffs.get(file) ?? [] };
+		}
 		if (scope === "worktree") {
 			const listed = await host.tracker.listWorktreeChanges();
 			const change = listed.changes.find((candidate) => candidate.path === file);

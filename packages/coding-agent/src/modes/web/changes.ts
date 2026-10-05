@@ -22,7 +22,7 @@ const MAX_FILES_WITH_STATS = 300;
 const MAX_CARD_PATCH_CHARS = 200_000;
 const MAX_CARD_PATCH_CHARS_PER_RUN = 1_000_000;
 
-export type ChangeScope = "run" | "worktree";
+export type ChangeScope = "session" | "run" | "worktree";
 
 export interface FileChangeSummary {
 	path: string;

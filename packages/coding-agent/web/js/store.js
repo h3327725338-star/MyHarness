@@ -118,7 +118,7 @@ export const state = {
 		providerSel: null,
 		palette: false,
 		dialog: null,
-		changesScope: "run",
+		changesScope: "session",
 		selectedTerminal: null,
 		// Terminal panel: the real shell ("shell") or the list of commands run in this chat ("commands").
 		termView: "shell",

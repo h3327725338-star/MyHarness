@@ -3,7 +3,7 @@
 // numbers, context lines, green additions and red deletions), and ↑/↓ or the arrows in the list switch files without leaving
 // the panel. The panel is opened, closed and switched only by its own buttons in the header: nothing in here opens another
 // panel.
-import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton, Menu, MenuItem } from "./ui.js";
+import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
 import { api, loadGitStatus, setView, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
 import { PanelBody } from "./command-panel.js";
@@ -35,6 +35,11 @@ function DiffPane({ file, mode, entry }) {
 		? html`<div class="c-danger pad">${entry.error}</div>`
 		: !data
 			? html`<div class="pad"><${Spinner} /></div>`
+			: data.history
+				? data.history.map((part) => html`<section key=${part.entryId}>
+					<div class="hunk-head">${fmtDateTime(part.timestamp)}</div>
+					${part.summary.binary ? html`<div class="pad dim">${t("Binary file — no text diff.")}</div>` : part.summary.unavailable ? html`<div class="pad dim">${serverText(part.summary.unavailable)}</div>` : part.patch ? html`<${DiffView} patch=${part.patch} mode=${mode} language=${languageFor(file.path)} />` : html`<div class="pad dim">${t("No content changes.")}</div>`}
+				</section>`)
 			: data.summary.binary
 				? html`<div class="pad dim">${t("Binary file — no text diff.")}</div>`
 				: data.summary.unavailable
@@ -54,8 +59,8 @@ function DiffPane({ file, mode, entry }) {
 }
 
 export function ChangesPanel() {
-	const scope = useStore((s) => s.view.changesScope);
-	const pinnedRun = useStore((s) => s.view.changesRunId);
+	const storedScope = useStore((s) => s.view.changesScope);
+	const scope = storedScope === "worktree" ? "worktree" : "session";
 	const snap = useStore((s) => s.snap);
 	const gitStatus = useStore((s) => s.gitStatus);
 	const lastRunId = snap?.lastRun?.runId;
@@ -69,43 +74,47 @@ export function ChangesPanel() {
 	const [diffs, setDiffs] = useState({});
 	const [nonce, setNonce] = useState(0);
 	const listRef = useRef(null);
-	const runId = scope === "run" ? (pinnedRun ?? undefined) : undefined;
+	const loadVersion = useRef(0);
 
 	const load = useCallback(async () => {
+		const version = ++loadVersion.current;
 		setLoading(true);
 		try {
-			const q = scope === "worktree" ? "scope=worktree" : `scope=run${runId != null ? `&runId=${runId}` : ""}`;
+			const q = `scope=${scope}`;
 			const result = await api(`/api/changes?${q}`);
+			if (version !== loadVersion.current) return;
 			setData(result);
 			setError("");
 			setNonce((n) => n + 1);
 		} catch (e) {
-			setError(e.message);
+			if (version === loadVersion.current) setError(e.message);
 		} finally {
-			setLoading(false);
+			if (version === loadVersion.current) setLoading(false);
 		}
-	}, [scope, runId]);
+	}, [scope, snap?.session?.id]);
 	useEffect(() => {
+		setData(null);
+		setChosen("");
+		setDiffs({});
 		load();
-	}, [scope, runId, lastRunId, snap?.session?.id]);
+		return () => { loadVersion.current += 1; };
+	}, [scope, lastRunId, active, snap?.session?.id]);
 	useEffect(() => {
 		loadGitStatus();
 	}, [lastRunId, active]);
 
 	const files = data?.files || [];
-	const effectiveRunId = data?.run?.runId ?? runId;
 	const total = files.reduce((acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }), { add: 0, del: 0 });
 	const selected = files.find((f) => f.path === chosen) || files[0];
 	const at = selected ? files.indexOf(selected) : -1;
-	const runs = data?.runs || [];
 
 	// The diff of the file being read, fetched when it is chosen and again after the list is refreshed; what is already on
 	// screen stays until the new one arrives, so reading is never interrupted by a spinner.
-	const diffKey = selected ? `${scope}|${scope === "run" ? (effectiveRunId ?? "") : ""}|${selected.path}` : "";
+	const diffKey = selected ? `${snap?.session?.id}|${scope}|${selected.path}` : "";
 	useEffect(() => {
 		if (!selected) return undefined;
 		let cancelled = false;
-		const url = `/api/changes/diff?scope=${scope}${scope === "run" && effectiveRunId != null ? `&runId=${effectiveRunId}` : ""}&path=${encodeURIComponent(selected.path)}`;
+		const url = `/api/changes/diff?scope=${scope}&path=${encodeURIComponent(selected.path)}`;
 		api(url)
 			.then((d) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { data: d } })))
 			.catch((e) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { error: e.message } })));
@@ -132,26 +141,19 @@ export function ChangesPanel() {
 
 	return html`<div class="changes-panel">
 		<div class="panel-toolbar">
-			<${Segmented} value=${scope} onChange=${setScope} options=${[{ value: "run", label: t("This task") }, { value: "worktree", label: t("Working tree") }]} />
-			${scope === "run" && runs.length > 1 ? html`<${Menu} class="task-menu" width=${280} trigger=${({ toggle, open }) => html`<button class="btn sm" aria-label=${t("Task")} aria-expanded=${open} onClick=${toggle}>${t("Task {runId} · {files}", { runId: effectiveRunId ?? "", files: plural(data?.run?.fileCount ?? files.length, "file") })}<${Icon} name="chevronDown" size=${12} /></button>`}>
-				${(close) => runs.map((r) => html`<${MenuItem} key=${r.runId} active=${r.runId === effectiveRunId} label=${t("Task {runId} · {files}", { runId: r.runId, files: plural(r.fileCount, "file") })} sub=${r.endedAt ? fmtDateTime(r.endedAt) : undefined} onClick=${() => { setView({ changesRunId: r.runId }); setChosen(""); close(); }} />`)}
-			<//>` : null}
+			<${Segmented} value=${scope} onChange=${setScope} options=${[{ value: "session", label: t("Current conversation") }, { value: "worktree", label: t("Working tree") }]} />
 			<span class="grow" />
 			<${Segmented} value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
 			<button class="icon-btn sm" title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${load}><${Icon} name="refresh" size=${15} /></button>
 		</div>
 		<${GitBar} gitStatus=${gitStatus} active=${active} />
-		<div class="changes-basis">${scope === "run" ? t("This task's changes, compared with the workspace before the task started.") : head ? t("Uncommitted changes, compared with the latest commit {sha}.", { sha: head }) : t("Uncommitted changes, compared with the latest commit.")}</div>
+		<div class="changes-basis">${scope === "session" ? t("Files changed in this conversation. Counts and diffs include saved edits from each task, including committed or undone edits.") : head ? t("Uncommitted changes, compared with the latest commit {sha}.", { sha: head }) : t("Uncommitted changes, compared with the latest commit.")}</div>
 		<div class="changes-notes">
-			${scope === "run" && data?.run?.checkpointStatus === "restored" ? html`<div class="notice"><${Icon} name="undo" size=${14} /><span>${t("This task was undone: the workspace was restored to how it was before the task. The list shows what the task had changed.")}</span></div>` : null}
-			${scope === "run" && data?.run && data.run.reliability === "indeterminate" ? html`<div class="notice warn"><${Icon} name="alertTriangle" size=${14} /><span>${data.run.reason ? t("Change detection may be incomplete: {reason}", { reason: serverText(data.run.reason) }) : t("Change detection may be incomplete.")}</span></div>` : null}
-			${scope === "run" && data?.run?.git && (data.run.git.headChanged || data.run.git.localRefChanges?.length) ? html`<div class="notice"><${Icon} name="gitCommit" size=${14} /><span>${data.run.git.taskCreatedHistory ? t("This task also changed Git history (it created commits).") : t("This task also changed Git history.")}</span></div>` : null}
-			${scope === "run" && data?.run?.git?.externalSideEffectsUnknown ? html`<div class="notice warn"><${Icon} name="alertTriangle" size=${14} /><span>${t("Shell commands ran during this task; effects outside the workspace (network, other folders) cannot be verified or undone.")}</span></div>` : null}
 			${error ? html`<div class="notice danger">${error}</div>` : null}
 		</div>
 		${data?.error && scope === "worktree" ? html`<div class="empty">${serverText(data.error)}</div>` : null}
 		${loading && !data ? html`<div class="empty"><${Spinner} /></div>` : null}
-		${data && !files.length && !data.error ? html`<${Empty} icon="fileDiff" title=${scope === "run" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("The last task did not change any files.")) : t("No uncommitted changes in the Git working tree.")} />` : null}
+		${data && !files.length && !data.error ? html`<${Empty} icon="fileDiff" title=${scope === "session" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("No saved file changes in this conversation.")) : t("No uncommitted changes in the Git working tree.")} />` : null}
 		${selected
 			? html`<div class="changes-body">
 				<div class="cfiles">
