@@ -422,9 +422,14 @@ export function createGitCommitForPaths(
 	);
 	if (!commitResult.ok) {
 		const reconciled = reconcileCompletedCommit(repositoryRoot, filteredPaths, headBefore.stdout);
-		if (reconciled) return reconciled;
+		if (reconciled) {
+			runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
+			return reconciled;
+		}
 		runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
+		return commitResult;
 	}
+	runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
 	return commitResult;
 }
 
@@ -467,10 +472,15 @@ export async function createGitCommitForPathsAsync(
 	);
 	if (!commitResult.ok) {
 		const reconciled = await reconcileCompletedCommitAsync(repositoryRoot, filteredPaths, headBefore.stdout, signal);
-		if (reconciled) return reconciled;
+		if (reconciled) {
+			await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
+			return reconciled;
+		}
 		await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 		return commitResult;
 	}
+
+	await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 
 	// A zero exit status is necessary but not sufficient for the caller's
 	// success state: confirm that Git created a real commit object and expose
