@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	createProductClientCapabilities,
@@ -5,6 +6,7 @@ import {
 	PRODUCT_CLIENT_FEATURES,
 	resolveClientCapabilities,
 } from "../../../src/symbols/lsp/language-server/client-capabilities.ts";
+import { resolveServerProfile } from "../../../src/symbols/lsp/language-server/server-profiles.ts";
 import { createMockEnvironment, FULL_CAPABILITIES, type MockEnvironment } from "../helpers/configurable-server.ts";
 
 const environments: MockEnvironment[] = [];
@@ -16,6 +18,20 @@ afterEach(async () => {
 type Json = Record<string, any>;
 
 describe("product client capability profile", () => {
+	it.each(["managed-vue", "custom-vue", "mock-ts"])(
+		"only delegates cross-language targets for the managed split-language profile (%s)",
+		(id) => {
+			const profile = resolveServerProfile({
+				id,
+				languages: ["vue"],
+				command: "unused",
+				args: [],
+				configured: true,
+				priority: 200,
+			});
+			expect(profile.targetSymbolRouting).toBe(id === "managed-vue" ? "target-language" : undefined);
+		},
+	);
 	it("advertises what the semantic backend implements and nothing else", () => {
 		const capabilities = createProductClientCapabilities(PRODUCT_CLIENT_FEATURES) as Json;
 
@@ -142,6 +158,24 @@ describe("capabilities sent to a real server process", () => {
 		});
 	});
 
+	it("loads the managed Rust root manifest through an explicit project configuration", async () => {
+		const rust = createMockEnvironment([
+			{
+				id: "managed-rust",
+				languages: ["rust"],
+				config: { capabilities: FULL_CAPABILITIES, documentSymbols: { "src/main.rs": [] } },
+			},
+		]);
+		environments.push(rust);
+		rust.write("Cargo.toml", '[package]\nname = "lab"\nversion = "0.1.0"\n');
+		rust.write("src/main.rs", "fn main() {}\n");
+		await rust.backend.fileSymbols("src/main.rs", { workspaceRoot: rust.root, language: "rust", timeoutMs: 10_000 });
+		const profile = resolveServerProfile(
+			{ id: "managed-rust", languages: ["rust"], command: "unused", args: [], configured: true, priority: 200 },
+			rust.root,
+		);
+		expect(profile.configuration).toEqual({ "rust-analyzer": { linkedProjects: [join(rust.root, "Cargo.toml")] } });
+	});
 	it("initialize carries the product profile with the definition override applied", async () => {
 		const environment = createMockEnvironment([
 			{

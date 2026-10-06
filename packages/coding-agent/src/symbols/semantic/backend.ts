@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
 
 import { getCodeLanguage } from "../index/code-index.ts";
@@ -101,6 +102,7 @@ import type {
 	SemanticClientSessionSnapshot,
 	SemanticDocumentStateSnapshot,
 	SemanticReferencesQueryOptions,
+	ServerRefactorProposal,
 } from "./types.ts";
 import { analyzeHeritage } from "./typescript-heritage.ts";
 import { runWorkspaceSymbolQuery, type WorkspaceQueryHost } from "./workspace-symbols.ts";
@@ -539,7 +541,27 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				asJsonObject({ ...params, newName }),
 				options,
 			);
-			return { identifier, prepared, edit, versions: this.openDocumentVersions(session) };
+			const versions = this.openDocumentVersions(session);
+			const definition = this.manager.registry.getAll().find((item) => item.id === session.definitionId);
+			const diskVersion = definition
+				? resolveServerProfile(definition, session.workspaceRoot).unopenedEditVersion
+				: undefined;
+			if (diskVersion !== undefined && isJsonObject(edit) && Array.isArray(edit.documentChanges)) {
+				for (const change of edit.documentChanges) {
+					if (!isJsonObject(change) || !isJsonObject(change.textDocument)) continue;
+					const descriptor = change.textDocument;
+					if (
+						descriptor.version !== diskVersion ||
+						typeof descriptor.uri !== "string" ||
+						!descriptor.uri.startsWith("file:")
+					)
+						continue;
+					const targetDocument = this.resolveDocument(session.workspaceRoot, fileURLToPath(descriptor.uri));
+					if (!Object.keys(versions).some((path) => samePath(path, targetDocument.absolutePath)))
+						descriptor.version = null;
+				}
+			}
+			return { identifier, prepared, edit, versions };
 		});
 		const { identifier, prepared, edit, versions } = query.value;
 		const range = tryCodeRange(identifier.range, query.state.text);
@@ -571,6 +593,8 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				method: "textDocument/rename",
 			});
 		}
+		const consumerWarning = this.consumerCoverageWarning(session);
+		if (consumerWarning) warnings.push(consumerWarning);
 		return {
 			items: [
 				{
@@ -589,6 +613,188 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				provenance: { definitionIds: [session.definitionId] },
 			},
 		};
+	}
+
+	async previewRefactor(
+		filePath: string,
+		range: CodeRange,
+		title: string,
+		options: SemanticBackendQueryOptions,
+	): Promise<ServerRefactorProposal> {
+		const document = this.resolveDocument(options.workspaceRoot, filePath);
+		const language = this.resolveLanguage(document, options.language);
+		const session = await this.acquireSession(document, language, options);
+		const provider = session.client.lastInitializeResult?.capabilities.codeActionProvider;
+		if (provider !== true && !isJsonObject(provider)) throw new SemanticCapabilityUnsupportedError("codeAction");
+		const query = await this.runSynchronizedQuery(session, document, language, options, async (state) => {
+			if (
+				!isCodePositionValid(range.start, state.text) ||
+				!isCodePositionValid(range.end, state.text) ||
+				range.start.line > range.end.line ||
+				(range.start.line === range.end.line && range.start.character > range.end.character)
+			)
+				throw new SemanticBackendError(
+					"invalid_document_position",
+					"refactor range is outside the document or reversed",
+				);
+			const snapshot = { text: state.text, version: state.version, generation: session.generation };
+			const raw = await this.request<unknown>(
+				session,
+				"textDocument/codeAction",
+				asJsonObject({
+					textDocument: { uri: state.uri },
+					range: { start: lspPositionJson(range.start), end: lspPositionJson(range.end) },
+					context: { diagnostics: [], only: ["refactor"], triggerKind: 1 },
+				}),
+				options,
+			);
+			if (!Array.isArray(raw))
+				throw new SemanticBackendError("invalid_server_response", "codeAction response must be an array");
+			const matches = raw.filter((entry) => isJsonObject(entry) && entry.title === title);
+			if (matches.length !== 1)
+				throw new SemanticBackendError(
+					"unsupported_target",
+					"Refactor title is missing or ambiguous; choose an exact unique server action",
+				);
+			let action = matches[0];
+			if (!isJsonObject(action))
+				throw new SemanticBackendError("invalid_server_response", "invalid refactor action");
+			if (action.disabled !== undefined)
+				throw new SemanticBackendError("unsupported_target", "disabled refactor actions cannot be planned");
+			if (action.command !== undefined) {
+				const edit = await this.planTypeScriptArrowRefactor(session, document, range, action, options);
+				return { edit, snapshot };
+			}
+			if (!action.edit && action.data !== undefined && isJsonObject(provider) && provider.resolveProvider === true) {
+				action = await this.request<unknown>(session, "codeAction/resolve", action, options);
+			}
+			if (
+				!isJsonObject(action) ||
+				action.title !== title ||
+				typeof action.kind !== "string" ||
+				!(action.kind === "refactor" || action.kind.startsWith("refactor.")) ||
+				action.disabled !== undefined ||
+				action.command !== undefined ||
+				!isJsonObject(action.edit)
+			)
+				throw new SemanticBackendError(
+					"unsupported_target",
+					"Refactor must be an enabled edit-only action; commands and interactive actions require a dedicated reviewed adapter",
+				);
+			return { edit: action.edit, snapshot };
+		});
+		const { snapshot } = query.value;
+		if (
+			(await this.readDocumentText(document)) !== snapshot.text ||
+			query.state.version !== snapshot.version ||
+			session.generation !== snapshot.generation
+		)
+			throw new SemanticBackendError("request_failed", "Source or project changed while planning server refactor");
+		options.signal?.throwIfAborted();
+		return {
+			title,
+			edit: query.value.edit,
+			definitionId: session.definitionId,
+			documentVersions: this.openDocumentVersions(session),
+		};
+	}
+
+	/** A reviewed read-only compiler request, not execution of the server's apply command. */
+	private async planTypeScriptArrowRefactor(
+		session: ClientSession,
+		document: ResolvedWorkspaceDocument,
+		range: CodeRange,
+		action: JsonObject,
+		options: SemanticBackendQueryOptions,
+	): Promise<JsonObject> {
+		const refuse = (): never => {
+			throw new SemanticBackendError("unsupported_target", "command refactor has no dedicated read-only adapter");
+		};
+		const command = action.command;
+		if (
+			session.definitionId !== "managed-javascript-typescript" ||
+			!isJsonObject(command) ||
+			command.command !== "_typescript.applyRefactoring" ||
+			!Array.isArray(command.arguments) ||
+			command.arguments.length !== 1
+		)
+			return refuse();
+		const argument = command.arguments[0];
+		if (
+			!isJsonObject(argument) ||
+			typeof argument.file !== "string" ||
+			!samePath(argument.file, document.absolutePath) ||
+			argument.refactor !== "Add or remove braces in an arrow function" ||
+			!(
+				argument.action === "Add braces to arrow function" ||
+				argument.action === "Remove braces from arrow function"
+			) ||
+			action.kind !==
+				(argument.action === "Add braces to arrow function"
+					? "refactor.rewrite.arrow.braces.add"
+					: "refactor.rewrite.arrow.braces.remove")
+		)
+			return refuse();
+		const raw = await this.request<unknown>(
+			session,
+			"workspace/executeCommand",
+			asJsonObject({
+				command: "typescript.tsserverRequest",
+				arguments: [
+					"getEditsForRefactor",
+					{
+						file: document.uri,
+						startLine: range.start.line + 1,
+						startOffset: range.start.character + 1,
+						endLine: range.end.line + 1,
+						endOffset: range.end.character + 1,
+						refactor: argument.refactor,
+						action: argument.action,
+					},
+					{ executionTarget: 0 },
+				],
+			}),
+			options,
+		);
+		if (
+			!isJsonObject(raw) ||
+			raw.command !== "getEditsForRefactor" ||
+			raw.success !== true ||
+			!isJsonObject(raw.body) ||
+			raw.body.commands !== undefined ||
+			raw.body.notApplicableReason !== undefined ||
+			!Array.isArray(raw.body.edits) ||
+			raw.body.edits.length !== 1
+		)
+			return refuse();
+		const file = raw.body.edits[0];
+		if (
+			!isJsonObject(file) ||
+			typeof file.fileName !== "string" ||
+			!samePath(file.fileName, document.absolutePath) ||
+			file.isNewFile === true ||
+			!Array.isArray(file.textChanges) ||
+			file.textChanges.length === 0
+		)
+			return refuse();
+		const position = (value: JsonValue | undefined): JsonObject => {
+			if (
+				!isJsonObject(value) ||
+				typeof value.line !== "number" ||
+				!Number.isInteger(value.line) ||
+				value.line < 1 ||
+				typeof value.offset !== "number" ||
+				!Number.isInteger(value.offset) ||
+				value.offset < 1
+			)
+				return refuse();
+			return { line: value.line - 1, character: value.offset - 1 };
+		};
+		const edits = file.textChanges.map((change) => {
+			if (!isJsonObject(change) || typeof change.newText !== "string") return refuse();
+			return { range: { start: position(change.start), end: position(change.end) }, newText: change.newText };
+		});
+		return { changes: { [document.uri]: edits } };
 	}
 
 	/** A server that refuses a rename says so with an error response; that is an answer, not a failed request. */
@@ -680,7 +886,16 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			});
 			return this.request<unknown>(session, "textDocument/references", params, options);
 		});
-		return this.convertReferences(query.value, session.workspaceRoot);
+		const result = this.convertReferences(query.value, session.workspaceRoot);
+		const consumerWarning = this.consumerCoverageWarning(session);
+		return consumerWarning
+			? { ...result, meta: semanticMeta("partial", [...(result.meta.warnings ?? []), consumerWarning]) }
+			: result;
+	}
+
+	private consumerCoverageWarning(session: ClientSession): string | undefined {
+		const definition = this.manager.registry.getAll().find((entry) => entry.id === session.definitionId);
+		return definition ? resolveServerProfile(definition, session.workspaceRoot).consumerCoverageWarning : undefined;
 	}
 
 	async getDiagnostics(filePath: string, options: SemanticBackendQueryOptions): Promise<DiagnosticsResult> {
@@ -730,6 +945,12 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			await this.waitForPushDiagnostics(session, documentKey, query.version, options.signal, options.timeoutMs);
 		}
 		const snapshot = session.diagnostics.get(documentKey);
+		if ((await this.readDocumentText(document)) !== query.text) {
+			return {
+				items: [],
+				meta: semanticMeta("partial", ["diagnostic disk snapshot changed during analysis; query again"]),
+			};
+		}
 		if (!snapshot) {
 			const warnings = session.diagnosticWarnings.get(documentKey) ?? [];
 			return {
@@ -1546,10 +1767,17 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			const memoKey = `${getDocumentIdentity(targetDocument.absolutePath, workspaceRoot)}\u0000${targetLanguage}`;
 			let symbolsPromise = targetSymbolMemo.get(memoKey);
 			if (!symbolsPromise) {
+				const sourceDefinition = this.manager.registry.getAll().find((server) => server.id === definitionId);
+				const delegateTarget =
+					sourceDefinition !== undefined &&
+					!sourceDefinition.languages.includes(targetLanguage) &&
+					resolveServerProfile(sourceDefinition, workspaceRoot).targetSymbolRouting === "target-language";
 				const targetOptions: SemanticBackendQueryOptions = {
 					workspaceRoot,
 					language: targetLanguage,
-					definitionId,
+					// A cross-language definition (for example Vue -> TypeScript) must be
+					// normalized by a server that actually supports the target language.
+					definitionId: delegateTarget ? undefined : definitionId,
 					signal: options.signal,
 					timeoutMs: options.timeoutMs,
 				};

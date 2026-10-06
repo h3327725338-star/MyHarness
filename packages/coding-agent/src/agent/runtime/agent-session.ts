@@ -13,6 +13,7 @@
  * 各运行模式使用此类，并在其上添加自己的 I/O 层。
  */
 
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
 	Agent,
@@ -34,6 +35,8 @@ import {
 import type { ResourceExtensionPaths, ResourceLoader } from "../../application/resource-loader.ts";
 import { createChangeControl } from "../../changes/factory.ts";
 import type { ChangeControl } from "../../changes/service.ts";
+import { sha256 } from "../../changes/text-file.ts";
+import { ChangeVerification, strictToolAllowed, verificationSnapshot } from "../../changes/verification.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import type { CompactionResult, CompactionSettings } from "../../context/compact/index.ts";
@@ -75,6 +78,7 @@ import { RequestTimingTracker } from "../../observability/request-timing.ts";
 import type { RuntimeTrace, RuntimeTraceScope } from "../../observability/runtime-trace.ts";
 import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import { AgentSessionTraceCoordinator } from "../../observability/session-trace.ts";
+import { execCommand } from "../../platform/process/exec.ts";
 import { expandPromptTemplate, type PromptTemplate } from "../../prompts/loader/index.ts";
 import { ModelRegistry } from "../../providers/models/registry.ts";
 import { ProviderRecoveryCoordinator } from "../../providers/recovery/coordinator.ts";
@@ -461,6 +465,7 @@ export class AgentSession {
 	// Tool registry for extension getTools/setTools
 	private readonly _tools: SessionToolRegistry;
 	readonly changeControl: ChangeControl;
+	private _verificationRepairAttempts = 0;
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -554,6 +559,7 @@ export class AgentSession {
 			onControlsRelease: (toolCallId: string) => this._backgroundWork.releaseWorkflowControls(toolCallId),
 		};
 		this.changeControl = createChangeControl({
+			mode: () => this.settingsManager.getCodeIntelligenceSettings().changeControl?.mode ?? "assist",
 			gates: config.codeIntelligence?.changeGates,
 			agentDir: config.agentDir ?? getAgentDir(),
 			workspaceRoot: config.cwd,
@@ -564,6 +570,29 @@ export class AgentSession {
 					});
 					return approved ? { approved: true } : { approved: false, reason: "approval declined or unavailable" };
 				},
+			},
+		});
+		this.changeControl.verification = new ChangeVerification({
+			store: this.changeControl.store,
+			workspaceRoot: config.cwd,
+			settings: () => this.settingsManager.getCodeIntelligenceSettings().changeControl?.verification ?? {},
+			snapshot: async () => {
+				const index = config.codeIntelligence?.index;
+				if (!index?.getWorkspaceFacts) return undefined;
+				await index.ensureFresh();
+				const facts = index.getWorkspaceFacts();
+				if (!facts.complete) return undefined;
+				const markers = await Promise.all(
+					facts.markers.map(async (path) => ({ path, hash: sha256(await readFile(join(config.cwd, path))) })),
+				);
+				return verificationSnapshot([...facts.files, ...markers]);
+			},
+			run: async (check, signal) => {
+				const result = await execCommand(check.command, [...check.args], config.cwd, {
+					signal,
+					timeout: Math.min(600_000, Math.max(1000, check.timeoutMs ?? 120_000)),
+				});
+				return { code: result.code, output: `${result.stdout}\n${result.stderr}` };
 			},
 		});
 		this.changeControl.onCommitted(async ({ changeset }) => {
@@ -821,6 +850,16 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			if (
+				(this.changeControl.mode === "strict" || this.changeControl.verification?.repairing) &&
+				!strictToolAllowed(toolCall.name, this._tools.isTrustedBuiltIn(toolCall.name))
+			) {
+				return {
+					block: true,
+					reason:
+						"Strict change control refuses unbrokered shell, delegated and custom tools. Use symbols/read for inspection and edit/write/refactor for controlled changes.",
+				};
+			}
 			try {
 				await this._prepareGitCheckpointToolMutation({
 					type: "tool_execution_start",
@@ -1687,6 +1726,7 @@ export class AgentSession {
 		onContextPreflightPersisted?: () => void,
 	): Promise<void> {
 		this._gitCheckpointCoordinator.resetForRun();
+		this.changeControl.verification?.beginTask();
 		if (this._beforeAgentRun) {
 			await this._beforeAgentRun();
 		}
@@ -1776,6 +1816,8 @@ export class AgentSession {
 				this._emittingAgentSettled = false;
 				this._resolveIdleWaitIfIdle();
 			}
+			this.changeControl.verification?.endRepair();
+			this._verificationRepairAttempts = 0;
 			this._abortRequested = false;
 		}
 		if (runFailed) throw runError;
@@ -1871,6 +1913,45 @@ export class AgentSession {
 			return true;
 		}
 
+		const verificationSettings = this.settingsManager.getCodeIntelligenceSettings().changeControl?.verification;
+		if (
+			msg.stopReason === "stop" &&
+			this.changeControl.mode !== "off" &&
+			verificationSettings?.enabled !== false &&
+			(this.changeControl.mode === "strict" ||
+				verificationSettings?.enabled === true ||
+				(verificationSettings?.checks?.length ?? 0) > 0)
+		) {
+			const verification = this.changeControl.verification;
+			if (verification && (await verification.status(true)).state !== "verified") {
+				const result = await verification.verify(this.agent.signal, true);
+				if (result.state !== "verified") {
+					const configuredBudget = verificationSettings?.maxRepairAttempts ?? 3;
+					const budget = Number.isFinite(configuredBudget)
+						? Math.min(3, Math.max(0, Math.floor(configuredBudget)))
+						: 0;
+					if (result.state === "failed" && !this._abortRequested && this._verificationRepairAttempts < budget) {
+						this._verificationRepairAttempts++;
+						await verification.beginRepair(true);
+						await this._queueFollowUp(
+							`Verification failed. Repair only problems caused by the authorized change; do not disable checks or alter unrelated code. Attempt ${this._verificationRepairAttempts}/${budget}.\n${result.checks.map((check) => `${check.name}: exit ${check.code}\n${check.output}`).join("\n")}`,
+						);
+						return true;
+					}
+					verification.endRepair();
+					this._verificationRepairAttempts = 0;
+					this._runStateTracker.terminal = {
+						state: "blocked",
+						activity: "代码变更尚未验证，不能按成功结束",
+						reason: "change-verification",
+						error: result.reason,
+					};
+					return false;
+				}
+			}
+		}
+		this.changeControl.verification?.endRepair();
+		this._verificationRepairAttempts = 0;
 		const outcome = terminalOutcomeFromAssistant(msg);
 		// A failed request is reported with its cause and what to do, never as a bare status code.
 		if (msg.stopReason === "error") outcome.error = this._fallbackFailure ?? explainProviderError(msg.errorMessage);

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +190,26 @@ describe("TypeScript heritage adapter", () => {
 		expect(names(withProject)).toContain("Child:extends@packages/b/src/child.ts");
 		if (withProject.status === "ok")
 			expect(withProject.projects).toEqual(["tsconfig.json", "packages/b/tsconfig.json"]);
+	});
+
+	it.each(["source", "configuration"] as const)("invalidates cached compiler results after %s changes", (change) => {
+		const path = change === "source" ? "src/circle.ts" : "tsconfig.json";
+		const target = join(root, path);
+		const before = FILES[path];
+		const originalStat = statSync(target);
+		try {
+			expect(names(ask("subtypes", "src/base.ts", 3, 24))).toContain("Circle:extends@src/circle.ts");
+			const changed =
+				change === "source"
+					? before.replace("extends B", "extends X")
+					: JSON.stringify({ ...JSON.parse(TSCONFIG), exclude: ["src/circle.ts"] });
+			writeFileSync(target, changed);
+			utimesSync(target, originalStat.atime, originalStat.mtime);
+			expect(names(ask("subtypes", "src/base.ts", 3, 24))).not.toContain("Circle:extends@src/circle.ts");
+		} finally {
+			writeFileSync(target, before);
+		}
+		expect(names(ask("subtypes", "src/base.ts", 3, 24))).toContain("Circle:extends@src/circle.ts");
 	});
 
 	it("says so when the position is not inside a class or interface", () => {

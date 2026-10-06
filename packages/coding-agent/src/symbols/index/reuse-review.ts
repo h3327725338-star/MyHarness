@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type * as TS from "typescript";
 import type { ChangeGate, ChangeGateInput, ChangeGateVerdict } from "../../changes/service.ts";
-import { decodeTextFile } from "../../changes/text-file.ts";
+import { decodeTextFile, sha256 } from "../../changes/text-file.ts";
 import { loadTypeScript, locateTypeScriptModule } from "../semantic/typescript-heritage.ts";
 import type { CodeSymbolIndex } from "./code-index.ts";
 
@@ -27,10 +27,11 @@ export class StructuralReuseGate implements ChangeGate {
 		if (!located)
 			return this.unknown(input, "a workspace or managed TypeScript compiler is required for reuse review");
 		const { ts } = loadTypeScript(located.path, located.source);
-		await this.index.ensureFresh();
+		await this.index.ensureFresh(input.signal);
 		const facts = this.index.getWorkspaceFacts();
+		const scanned: Array<readonly [string, string]> = [];
 		let bytes = 0;
-		let incomplete = !facts.complete;
+		let incomplete = !facts.complete || input.changeset.files.some((file) => !/\.[cm]?[jt]sx?$/iu.test(file.path));
 		const originals = new Map<string, Map<string, number>>();
 		for (const file of facts.files) {
 			if (!/\.[cm]?[jt]sx?$/iu.test(file.path)) continue;
@@ -40,20 +41,53 @@ export class StructuralReuseGate implements ChangeGate {
 				break;
 			}
 			try {
-				originals.set(
-					file.path,
-					fingerprints(
-						ts,
-						file.path,
-						decodeTextFile(await readFile(resolve(this.root, file.path)), file.path).text,
-					),
-				);
+				input.signal?.throwIfAborted();
+				const sourceBytes = await readFile(resolve(this.root, file.path));
+				scanned.push([file.path, sha256(sourceBytes)]);
+				originals.set(file.path, fingerprints(ts, file.path, decodeTextFile(sourceBytes, file.path).text));
+			} catch {
+				input.signal?.throwIfAborted();
+				incomplete = true;
+			}
+		}
+		for (const marker of facts.markers) {
+			try {
+				scanned.push([marker, sha256(await readFile(resolve(this.root, marker)))]);
 			} catch {
 				incomplete = true;
 			}
 		}
+		const snapshot = sha256(
+			JSON.stringify({
+				compiler: ts.version,
+				files: facts.files,
+				scanned,
+				complete: !incomplete,
+				preview: input.changeset.files,
+			}),
+		);
+		const refuse = (paths: readonly string[], message: string): ChangeGateVerdict => ({
+			allow: false,
+			code: "REUSE_REVIEW_REQUIRED",
+			paths,
+			message,
+			...(!incomplete
+				? {
+						userException: {
+							snapshot,
+							scope: [...new Set([...input.changeset.files.map((file) => file.path), ...paths])].sort(),
+						},
+					}
+				: {}),
+		});
+		const candidates = new Map<string, { paths: readonly string[]; message: string }>();
+		const addCandidate = (paths: readonly string[], message: string): void => {
+			const key = [...paths].sort().join("\u0000");
+			if (!candidates.has(key)) candidates.set(key, { paths, message });
+		};
 		const newBlocks = new Map<string, string>();
 		for (const file of input.changeset.files) {
+			input.signal?.throwIfAborted();
 			if (!/\.[cm]?[jt]sx?$/iu.test(file.path)) {
 				incomplete = true;
 				continue;
@@ -69,38 +103,39 @@ export class StructuralReuseGate implements ChangeGate {
 				if (count <= previousCount) continue;
 				const proposedCandidate = newBlocks.get(fingerprint);
 				if (proposedCandidate && proposedCandidate !== file.path)
-					return {
-						allow: false,
-						code: "REUSE_REVIEW_REQUIRED",
-						paths: [proposedCandidate, file.path],
-						message:
-							"The changeset introduces matching structural blocks in multiple files; review a shared implementation before committing.",
-					};
+					addCandidate(
+						[proposedCandidate, file.path],
+						"The changeset introduces matching structural blocks in multiple files; review a shared implementation before committing.",
+					);
 				newBlocks.set(fingerprint, file.path);
 				if (previousCount === 0 && count > 1)
-					return {
-						allow: false,
-						code: "REUSE_REVIEW_REQUIRED",
-						paths: [file.path],
-						message: `${file.path} introduces repeated structural blocks within the proposed file; review reuse before committing.`,
-					};
+					addCandidate(
+						[file.path],
+						`${file.path} introduces repeated structural blocks within the proposed file; review reuse before committing.`,
+					);
 				if (previousCount > 0)
-					return {
-						allow: false,
-						code: "REUSE_REVIEW_REQUIRED",
-						paths: [file.path],
-						message: `${file.path} introduces additional occurrences of an existing structural code block; review reuse before copying within the same file.`,
-					};
+					addCandidate(
+						[file.path],
+						`${file.path} introduces additional occurrences of an existing structural code block; review reuse before copying within the same file.`,
+					);
 				for (const [candidate, existing] of originals) {
 					if (candidate !== file.path && existing.has(fingerprint))
-						return {
-							allow: false,
-							code: "REUSE_REVIEW_REQUIRED",
-							paths: [file.path, candidate],
-							message: `${file.path} introduces a ${WINDOW}-token structural clone of ${candidate}. Compare source, tests, side effects and cancellation contracts; reuse or modify the existing implementation. Structural similarity is not behavioral equivalence.`,
-						};
+						addCandidate(
+							[file.path, candidate],
+							`${file.path} introduces a ${WINDOW}-token structural clone of ${candidate}. Compare source, tests, side effects and cancellation contracts; reuse or modify the existing implementation. Structural similarity is not behavioral equivalence.`,
+						);
 				}
 			}
+		}
+		if (candidates.size > 0) {
+			const all = [...candidates.values()];
+			if (all.length > 100)
+				return {
+					allow: false,
+					code: "REUSE_REVIEW_REQUIRED",
+					message: "reuse candidate review exceeds 100 groups; reduce the change scope",
+				};
+			return refuse([...new Set(all.flatMap((entry) => entry.paths))], all.map((entry) => entry.message).join("\n"));
 		}
 		return incomplete
 			? this.unknown(input, "reuse coverage is incomplete (index, language, read failure or byte budget)")

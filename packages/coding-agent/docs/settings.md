@@ -90,6 +90,16 @@ Custom Providers 会出现在与其他 configured/extension services 相同的 *
 
 已有的 custom/configured Providers 可以进行 connection test、编辑、添加 models 或删除。Connection test 会发送一个很小的 model request，可能产生少量 Provider 费用。删除只由当前 `models.json` configuration 提供的 Provider 时，会删除其 entry、已保存的 credentials、legacy vision-store copy 和 cached remote model catalog；重新创建相同 Provider ID 时不会带回这些本地 credentials。如果是 extension/native Provider 仍提供同一 ID，删除 models.json overlay 后它仍然可用，environment variables 和 remote accounts 也不会改变。custom headers、详细 compatibility overrides 等 advanced fields 仍可直接编辑 `models.json`。
 
+## 受控代码变更与验证
+
+`codeIntelligence.changeControl.mode` 支持 `off`、默认 `assist` 和 `strict`。Session 的本地 edit/write/refactor 共用检查与变更记录。strict 只允许原生 read/grep/find/ls/symbols/edit/write/refactor，拒绝 shell、委托和自定义工具；同名扩展不能获得原生工具权限。这是 Agent 工具边界，不是操作系统 sandbox，不能约束扩展初始化或外部用户进程。
+
+`codeIntelligence.changeControl.verification` 支持 `enabled`、`checks` 和 `maxRepairAttempts`（默认 3，上限 3）。每个 check 为 `{ "name": "typecheck", "command": "绝对可执行路径", "args": [], "timeoutMs": 120000 }`。配置这些命令意味着授权执行；命令直接运行、不经过 shell，不从 package.json 猜测并执行脚本。Windows 的 `.cmd` 脚本需显式配置相应解释器与参数。检查可能写缓存、运行项目代码或访问网络，用户须审查。不要把含 `--write` 的检查当只读验证。
+
+受控写入前记录检查基线，提交后持久保留待验证状态。`refactor` 的 `verify` operation 和 Agent 收尾运行配置的检查；源文件/项目标记快照或检查配置变化使成功失效。未配置检查、索引覆盖不足、检查异常和并发修改记为 unknown。assist 默认未配置时不自动拦截聊天收尾；显式 enabled 为 true 或配置 checks 后才启用自动收尾检查。strict 默认执行收尾检查。自动收尾和修复仅处理当前用户任务的受控修改，继续修复的回合保留该范围。历史欠账仍供显式 status/verify 查询，不阻止无修改聊天，也不扩大修复权限。跳过自动检查不清除待验证记录，也不代表修改已经验证通过。strict 要求可通过的修改前基线；assist 允许写入，但不能以失败基线的相同退出码证明无新增问题。当前不支持对原有诊断逐项归因。
+
+通过基线后新检查失败，可在最多三轮内继续修复，受控写入只允许原变更文件范围，且修复期间拒绝非受控工具；扩展范围需用户重新授权。仍失败或未知则任务为 blocked，不广泛回滚、不自动关闭规则。`enabled: false` 显式关闭验证，`off` 关闭门禁及自动收尾检查。`refactor review_impact` 将问题、预期行为、根因、证据、修改/不受影响/外部消费者清单、兼容策略、检查和覆盖限制绑定到一个确切预览。strict apply 要求该记录且声明 coverage 为 complete；计划不是用户授权，也不是系统证明影响查全。实际改动路径必须和计划的 modify 项完全一致，预览变化需重新审查。尚无自动生成并核实的完整影响图、业务等价检索或全语言验收，不代表完整开发闭环已达成。
+
 ## Project Trust
 
 交互模式启动时，如果项目文件夹包含 project-local settings、resources 或 project `.agents/skills`，且该文件夹或其 parent folder 在 `~/.myharness/agent/trust.json` 中没有已保存的决定，MyHarness 会先询问是否信任项目。信任项目后，MyHarness 才会加载 `.myharness/settings.json` 和 `.myharness` resources、安装缺少的 project packages，并执行 project extensions。

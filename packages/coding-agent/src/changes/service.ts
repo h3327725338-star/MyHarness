@@ -13,8 +13,10 @@
  *               — called while the files are still locked, so a listener must not start another change.
  */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getDocumentIdentity } from "../symbols/path-semantics.ts";
+import { writeFileAtomically } from "../utils/atomic-write.ts";
 import { type ApprovalPort, assessChangeRisk, type ChangeRisk, describeChangeset } from "./approval.ts";
 import { type ChangeStore, type Journal, type MutationPermit, newPermitId } from "./change-store.ts";
 import {
@@ -32,6 +34,7 @@ import {
 	type ChangeFs,
 	type RecoveryReport,
 } from "./executor.ts";
+import { type ImpactPlan, ImpactPlans } from "./impact-plan.ts";
 import { type ChangeControlMode, DEFAULT_CHANGE_CONTROL_MODE } from "./mode.ts";
 import { type PatchChange, planPatch } from "./patch-plan.ts";
 import { resolveScopedFile } from "./path-scope.ts";
@@ -56,20 +59,24 @@ export interface ChangeGateInput {
 	readonly content: ChangesetContent;
 	readonly origin: ChangeOrigin;
 	readonly mode: ChangeControlMode;
+	readonly impactPlan?: ImpactPlan;
+	readonly signal?: AbortSignal;
 }
 
 export type ChangeGateVerdict =
-	| { readonly allow: true }
+	| { readonly allow: true; readonly evidence?: unknown }
 	| {
 			readonly allow: false;
 			readonly code: ChangeErrorCode;
 			readonly message: string;
 			readonly paths?: readonly string[];
+			readonly userException?: { readonly snapshot: string; readonly scope: readonly string[] };
 	  };
 
 /** A rule a change must pass before it may be approved. Gates do not run when change control is off. */
 export interface ChangeGate {
 	readonly name: string;
+	readonly recheckAfterApproval?: boolean;
 	check(input: ChangeGateInput): Promise<ChangeGateVerdict>;
 }
 
@@ -98,8 +105,8 @@ export interface WorkspaceEditPreviewOptions {
 	readonly source?: Changeset["source"];
 	/** Absolute path to the version the client holds open (see documentVersionLookup). */
 	readonly knownVersion?: (absolutePath: string) => number | undefined;
-	/** The edit renames this identifier: every replaced range must hold exactly this text. */
-	readonly rename?: { readonly oldName: string };
+	/** Check full-name ranges against disk; minimal edits must reconstruct both names uniquely. */
+	readonly rename?: { readonly oldName: string; readonly newName?: string };
 }
 
 export interface ApplyChangeOptions {
@@ -168,6 +175,8 @@ export function documentVersionLookup(
 export class ChangeControl {
 	readonly workspaceRoot: string;
 	readonly store: ChangeStore;
+	readonly impactPlans: ImpactPlans;
+	verification?: import("./verification.ts").ChangeVerification;
 	private readonly options: ChangeControlOptions;
 	private readonly executor: ChangeExecutor;
 	private readonly listeners = new Set<(event: ChangeCommitted) => void | Promise<void>>();
@@ -180,6 +189,7 @@ export class ChangeControl {
 		this.options = options;
 		this.workspaceRoot = options.workspaceRoot;
 		this.store = options.store;
+		this.impactPlans = new ImpactPlans(options.store);
 		this.executor = new ChangeExecutor({
 			store: options.store,
 			workspaceRoot: options.workspaceRoot,
@@ -187,6 +197,12 @@ export class ChangeControl {
 			lock: options.lock,
 			onCommitted: (changeset) => this.notifyCommitted(changeset),
 		});
+	}
+
+	async reviewImpact(changesetId: string, plan: ImpactPlan): Promise<void> {
+		const built = await this.store.loadChangeset(changesetId);
+		if (!built) throw new ChangeControlError("NOT_FOUND", "Preview the change before reviewing its impact");
+		await this.impactPlans.save(built.changeset, plan);
 	}
 
 	get mode(): ChangeControlMode {
@@ -220,7 +236,7 @@ export class ChangeControl {
 		if (decoded.files.length === 0) {
 			throw new ChangeControlError("INVALID_EDIT", "the edit changes nothing");
 		}
-		if (options.rename) verifyRenameEdits(decoded.files, options.rename.oldName);
+		if (options.rename) verifyRenameEdits(decoded.files, options.rename.oldName, options.rename.newName);
 		return this.keep(
 			buildChangeset({
 				workspaceRoot: this.workspaceRoot,
@@ -290,19 +306,43 @@ export class ChangeControl {
 		const built = await this.store.loadChangeset(changesetId);
 		if (!built) throw new ChangeControlError("NOT_FOUND", `no stored change ${changesetId}; preview it again`);
 		const { changeset, content } = built;
+		const impactPlan = this.mode === "strict" ? await this.impactPlans.load(changeset.id) : undefined;
+		const gateInput: ChangeGateInput = {
+			changeset,
+			content,
+			origin: options.origin,
+			mode: this.mode,
+			impactPlan,
+			signal: options.signal,
+		};
 
+		const exceptions = new Map<ChangeGate, { snapshot: string; scope: readonly string[]; approvedAt: number }>();
 		if (this.mode !== "off") {
-			for (const gate of this.options.gates ?? []) {
-				const verdict = await gate.check({ changeset, content, origin: options.origin, mode: this.mode });
-				if (!verdict.allow) {
-					throw new ChangeControlError(verdict.code, verdict.message, {
-						paths: verdict.paths ? [...verdict.paths] : undefined,
-					});
-				}
+			for (const gate of [...(this.options.gates ?? []), ...(this.verification ? [this.verification] : [])]) {
+				await this.requireGate(gate, gateInput, exceptions);
 			}
 		}
+		if (this.mode === "strict") {
+			const plan = await this.impactPlans.load(changeset.id);
+			if (!plan || plan.coverage !== "complete") {
+				throw new ChangeControlError(
+					"PERMIT_REQUIRED",
+					"Strict changes require an exact-preview root/impact plan with complete declared coverage; missing or uncertain coverage is not approval",
+				);
+			}
+		}
+		if (this.mode === "strict") await this.assertImpactReviewUnchanged(changeset, impactPlan);
 		const risk = assessChangeRisk(changeset);
-		const approvedBy = await this.approve(changeset, risk, options.signal);
+		const approval = await this.approve(changeset, risk, options.signal);
+		const approvedBy = exceptions.size > 0 ? "user" : approval;
+		if (this.mode === "strict") await this.assertImpactReviewUnchanged(changeset, impactPlan);
+		if (this.mode !== "off") {
+			for (const gate of this.options.gates ?? []) {
+				if (gate.recheckAfterApproval || exceptions.has(gate)) await this.requireGate(gate, gateInput, exceptions);
+			}
+		}
+		if (this.mode === "strict") await this.assertImpactReviewUnchanged(changeset, impactPlan);
+		options.signal?.throwIfAborted();
 
 		const now = this.options.now?.() ?? Date.now();
 		const permit: MutationPermit = {
@@ -329,6 +369,96 @@ export class ChangeControl {
 		} finally {
 			this.inFlight.delete(changeset.id);
 		}
+	}
+
+	private async assertImpactReviewUnchanged(changeset: Changeset, expected: ImpactPlan | undefined): Promise<void> {
+		if (JSON.stringify(await this.impactPlans.load(changeset.id)) !== JSON.stringify(expected))
+			throw new ChangeControlError(
+				"EDIT_CONFLICT",
+				"Impact plan changed during apply; repeat review and approval before writing",
+			);
+		await this.impactPlans.assertFresh(changeset);
+	}
+
+	private async requireGate(
+		gate: ChangeGate,
+		input: ChangeGateInput,
+		exceptions: Map<ChangeGate, { snapshot: string; scope: readonly string[]; approvedAt: number }>,
+	): Promise<void> {
+		input.signal?.throwIfAborted();
+		let verdict = await gate.check(input);
+		const accepted = exceptions.get(gate);
+		if (accepted) {
+			const elapsed = (this.options.now?.() ?? Date.now()) - accepted.approvedAt;
+			if (
+				verdict.allow ||
+				verdict.userException?.snapshot !== accepted.snapshot ||
+				JSON.stringify(verdict.userException.scope) !== JSON.stringify(accepted.scope) ||
+				elapsed < 0 ||
+				elapsed > (this.options.permitTtlMs ?? DEFAULT_PERMIT_TTL_MS)
+			)
+				throw new ChangeControlError("REUSE_REVIEW_REQUIRED", "Reuse exception changed or expired after approval");
+			verdict = { allow: true, evidence: { approvedBy: "user", exception: accepted, reason: verdict.message } };
+		}
+		if (!verdict.allow && verdict.userException && this.options.approval) {
+			const candidate = verdict;
+			const binding = verdict.userException;
+			const startedAt = this.options.now?.() ?? Date.now();
+			const decision = await this.options.approval.request(
+				{
+					title: "Review reuse exception",
+					message: `${verdict.message}\n\nAccept only after comparing source and contracts and determining reuse is unsuitable. This exception covers only this preview and source snapshot.\nScope: ${binding.scope.join(", ")}\nSnapshot: ${binding.snapshot}\n\n${describeChangeset(input.changeset)}`,
+					changeset: input.changeset,
+					risk: { level: "needs_user", reasons: [verdict.message] },
+				},
+				{ signal: input.signal },
+			);
+			input.signal?.throwIfAborted();
+			if (!decision.approved) throw new ChangeControlError(candidate.code, decision.reason);
+			const fresh = await gate.check(input);
+			const elapsed = (this.options.now?.() ?? Date.now()) - startedAt;
+			if (
+				fresh.allow ||
+				fresh.code !== candidate.code ||
+				fresh.message !== candidate.message ||
+				fresh.userException?.snapshot !== binding.snapshot ||
+				JSON.stringify(fresh.userException.scope) !== JSON.stringify(binding.scope) ||
+				elapsed < 0 ||
+				elapsed > (this.options.permitTtlMs ?? DEFAULT_PERMIT_TTL_MS)
+			)
+				throw new ChangeControlError(
+					candidate.code,
+					"Reuse review changed or expired during approval; review current candidates again",
+				);
+			const approvedAt = this.options.now?.() ?? Date.now();
+			exceptions.set(gate, { ...binding, approvedAt });
+			verdict = {
+				allow: true,
+				evidence: { approvedBy: "user", exception: binding, reason: candidate.message, approvedAt },
+			};
+		}
+		if (verdict.allow && verdict.evidence !== undefined) {
+			const directory = join(this.store.root, "gate-evidence");
+			await mkdir(directory, { recursive: true });
+			await writeFileAtomically(
+				join(directory, `${input.changeset.id}-${sha256(gate.name)}.json`),
+				JSON.stringify({
+					version: 1,
+					changesetId: input.changeset.id,
+					gate: gate.name,
+					files: input.changeset.files.map((file) => ({
+						path: file.path,
+						baseHash: file.baseHash,
+						afterHash: file.afterHash,
+					})),
+					evidence: verdict.evidence,
+				}),
+			);
+		}
+		if (!verdict.allow)
+			throw new ChangeControlError(verdict.code, verdict.message, {
+				paths: verdict.paths ? [...verdict.paths] : undefined,
+			});
 	}
 
 	private async approve(

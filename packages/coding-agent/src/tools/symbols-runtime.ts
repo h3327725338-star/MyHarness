@@ -35,11 +35,18 @@ export interface SymbolsIndexPort {
 	searchCode(pattern: string, options?: CodeSearchOptions): Promise<CodeSearchMatch[]>;
 	getCodeMap(path?: string, options?: CodeQueryOptions): Promise<CodeMapEntry[]>;
 	getStats(): CodeIndexStats;
+	getWorkspaceFacts?(): import("../symbols/index/code-index.ts").WorkspaceFacts;
 }
 
 export interface SymbolsCodeIntelligenceServices {
 	readonly changeGates?: readonly ChangeGate[];
 	readonly notifyCommitted?: (paths: readonly string[]) => Promise<void>;
+	readonly previewRefactor?: (
+		filePath: string,
+		range: import("../symbols/types.ts").CodeRange,
+		title: string,
+		options: import("../symbols/semantic/types.ts").SemanticBackendQueryOptions,
+	) => Promise<import("../symbols/semantic/types.ts").ServerRefactorProposal>;
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
 	readonly index: SymbolsIndexPort;

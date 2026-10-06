@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChangeControl } from "../../../src/changes/factory.ts";
 import type { CodeSymbol, CodeSymbolTreeNode } from "../../../src/symbols/types.ts";
@@ -12,7 +11,12 @@ import {
 	RefactorToolError,
 	type RefactorToolInput,
 } from "../../../src/tools/refactor.ts";
-import { createRealTsLab, type RealTsLab, realTypeScriptServerAvailable } from "./real-runtime.ts";
+import {
+	createRealTsLab,
+	type RealTsLab,
+	realTypeScriptServerAvailable,
+	runRestoredConsumerFault,
+} from "./real-runtime.ts";
 
 const available = realTypeScriptServerAvailable();
 const TIMEOUT = 180_000;
@@ -98,6 +102,43 @@ describe.skipIf(!available)("refactor against a real TypeScript language server"
 
 	const read = (path: string): string => readFileSync(join(lab.root, ...path.split("/")), "utf8");
 
+	it(
+		"plans a managed compiler arrow refactor without writing, applies it, and detects a broken unopened consumer",
+		async () => {
+			const source = "export const twice = (value: number): number => value * 2;\n";
+			writeFileSync(join(lab.root, "src/arrow.ts"), source);
+			writeFileSync(
+				join(lab.root, "src/arrow-consumer.ts"),
+				'import { twice } from "./arrow"; export const answer = twice(21);\n',
+			);
+			const preview = await run({
+				operation: "preview_server_refactor",
+				path: "src/arrow.ts",
+				title: "Add braces to arrow function",
+				range: { start: { line: 0, character: 46 }, end: { line: 0, character: 55 } },
+			});
+			expect(read("src/arrow.ts")).toBe(source);
+			expect(preview.details?.files?.map((file) => file.path)).toEqual(["src/arrow.ts"]);
+			await run({ operation: "apply", changesetId: idOf(preview.text) });
+			expect(read("src/arrow.ts")).toContain("return value * 2;");
+			expect(
+				runRestoredConsumerFault(
+					{
+						readText: read,
+						write: (path, text) => writeFileSync(join(lab.root, path), text),
+					},
+					"src/arrow-consumer.ts",
+					(text) => text.replace("twice(21)", 'twice("invalid")'),
+					() => {
+						const errors = compile(lab.root);
+						if (errors) throw new Error(errors);
+					},
+				),
+			).toEqual([true, false, true]);
+		},
+		TIMEOUT,
+	);
+
 	function idOf(text: string): string {
 		const id = /changesetId: ([0-9a-f]{32})/u.exec(text)?.[1];
 		if (!id) throw new Error(`no changesetId in: ${text}`);
@@ -128,8 +169,70 @@ describe.skipIf(!available)("refactor against a real TypeScript language server"
 			// Nothing is written by a preview.
 			expect(read("src/util.ts")).toContain("export function formatArea");
 
-			const applied = await run({ operation: "apply", changesetId: idOf(preview.text) });
-			expect(applied.details).toMatchObject({ state: "committed", approval: "policy" });
+			const id = idOf(preview.text);
+			const strict = createChangeControl({
+				agentDir,
+				workspaceRoot: lab.root,
+				mode: () => "strict",
+				gates: lab.runtime.services.changeGates,
+			});
+			await lab.runtime.index.ensureFresh();
+			const modified = new Set(preview.details?.files?.map((file) => file.path));
+			const affected = lab.runtime.index.getWorkspaceFacts().files.map((file) => ({
+				path: file.path,
+				disposition: modified.has(file.path) ? ("modify" as const) : ("unaffected" as const),
+				reason: modified.has(file.path) ? "server rename edit" : "unchanged compatibility consumer or fixture",
+			}));
+			const plan = {
+				problem: "function needs the reviewed name",
+				expectedBehavior: "aliases and callbacks retain behavior",
+				rootCause: "declaration name",
+				rootPaths: ["src/util.ts"],
+				evidence: ["real server rename and independently compiled fixture"],
+				affected: [
+					...affected,
+					{
+						path: new URL("lib.es5.d.ts", `file:///${(tscPath as string).replaceAll("\\", "/")}`).href,
+						disposition: "external" as const,
+						reason: "standard library formatting helper call; rename does not change its API",
+					},
+				],
+				compatibility: "public fmt alias remains unchanged",
+				checks: ["real tsc noEmit"],
+				coverage: "complete" as const,
+				limitations: [],
+			};
+			// A complete declaration is not permission when a real unopened consumer is missing.
+			await strict.reviewImpact(id, {
+				...plan,
+				affected: plan.affected.filter((file) => file.path !== "src/consumer.ts"),
+			});
+			await expect(strict.apply(id, { origin: { kind: "refactor" } })).rejects.toMatchObject({
+				code: "PERMIT_REQUIRED",
+			});
+			expect(read("src/util.ts")).toContain("export function formatArea");
+			await strict.reviewImpact(id, { ...plan, affected });
+			await expect(strict.apply(id, { origin: { kind: "refactor" } })).rejects.toThrow("outgoing_calls coverage");
+			await strict.reviewImpact(id, plan);
+			const cancelled = new AbortController();
+			cancelled.abort();
+			await expect(strict.apply(id, { origin: { kind: "refactor" }, signal: cancelled.signal })).rejects.toThrow();
+			expect(read("src/util.ts")).toContain("export function formatArea");
+			expect((await strict.apply(id, { origin: { kind: "refactor" } })).result.status).toBe("committed");
+			const receiptDirectory = join(strict.store.root, "gate-evidence");
+			const receiptPath = readdirSync(receiptDirectory).find((name) => name.startsWith(id));
+			expect(receiptPath).toBeDefined();
+			const receipt = JSON.parse(readFileSync(join(receiptDirectory, receiptPath!), "utf8"));
+			expect(receipt).toMatchObject({
+				changesetId: id,
+				gate: "semantic-impact-coverage-v1",
+				evidence: {
+					queries: expect.arrayContaining([
+						expect.objectContaining({ relation: "references" }),
+						expect.objectContaining({ relation: "incoming_calls" }),
+					]),
+				},
+			});
 
 			expect(read("src/util.ts")).toContain("export function formatSurface(value: number)");
 			expect(read("src/index.ts")).toContain('export { formatSurface as fmt, pick } from "./util";');

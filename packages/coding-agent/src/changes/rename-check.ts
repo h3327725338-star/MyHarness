@@ -1,7 +1,6 @@
 /**
- * A rename edit is only trusted when every range it replaces holds the name being renamed in the file as it is on
- * disk. A server that worked from an older version of a file, or a position that does not line up, would otherwise
- * replace unrelated text with the new name.
+ * Trust full-name ranges against disk, or minimal ranges only when their surrounding identifier uniquely
+ * reconstructs the requested old and new names. Full-name server edits may include alias-preserving syntax.
  */
 
 import { ChangeControlError } from "./errors.ts";
@@ -14,15 +13,42 @@ function quoted(text: string): string {
 	return JSON.stringify(shown);
 }
 
-export function verifyRenameEdits(files: readonly DecodedFileEdit[], oldName: string): { replacements: number } {
+export function verifyRenameEdits(
+	files: readonly DecodedFileEdit[],
+	oldName: string,
+	newName?: string,
+): { replacements: number } {
 	let replacements = 0;
 	const problems: string[] = [];
 	for (const file of files) {
 		for (const edit of file.edits) {
 			replacements++;
-			if (edit.oldText !== oldName) {
-				problems.push(`${file.path}: the edit replaces ${quoted(edit.oldText)}, not ${quoted(oldName)}`);
+			if (edit.oldText === oldName) continue;
+			// Roslyn may emit a minimal edit that leaves a shared prefix/suffix unchanged.
+			// Accept only when the surrounding full token exactly reconstructs both names.
+			let matches = 0;
+			if (newName !== undefined && /^[\p{L}\p{N}_$]+$/u.test(oldName)) {
+				for (let prefix = 0; prefix <= oldName.length - edit.oldText.length; prefix++) {
+					const start = edit.start - prefix;
+					const end = start + oldName.length;
+					if (start < 0 || end > file.beforeText.length || edit.end > end) continue;
+					if (file.beforeText.slice(start, end) !== oldName) continue;
+					if (
+						/[\p{L}\p{N}_$]/u.test(file.beforeText[start - 1] ?? "") ||
+						/[\p{L}\p{N}_$]/u.test(file.beforeText[end] ?? "")
+					)
+						continue;
+					if (
+						file.beforeText.slice(start, edit.start) + edit.newText + file.beforeText.slice(edit.end, end) ===
+						newName
+					)
+						matches++;
+				}
 			}
+			if (matches !== 1)
+				problems.push(
+					`${file.path}: the edit replaces ${quoted(edit.oldText)}, not a verified rename of ${quoted(oldName)}`,
+				);
 		}
 	}
 	if (replacements === 0) {

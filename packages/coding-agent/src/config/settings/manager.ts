@@ -794,6 +794,7 @@ export class SettingsManager {
 			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.codeIntelligenceEnabled,
 			disabledLanguages: [...(settings?.disabledLanguages ?? [])],
 			servers: settings?.servers === undefined ? undefined : structuredClone(settings.servers),
+			changeControl: settings?.changeControl === undefined ? undefined : structuredClone(settings.changeControl),
 		};
 	}
 

@@ -368,9 +368,12 @@ export class LanguageServerManager {
 					},
 				],
 			};
-			initializeOptions.initializationOptions = resolveServerProfile(entry.definition).initializationOptions;
+			const profile = resolveServerProfile(entry.definition, entry.workspaceRoot);
+			initializeOptions.initializationOptions = profile.initializationOptions;
 			if (entry.definition.clientInfo !== undefined) initializeOptions.clientInfo = entry.definition.clientInfo;
 			await this.waitForStartupPhase(entry, client.initialize(initializeOptions));
+			if (profile.configuration)
+				await client.notify("workspace/didChangeConfiguration", { settings: profile.configuration });
 			this.ensureEntryCanStart(entry);
 
 			entry.state = "ready";

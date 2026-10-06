@@ -1,5 +1,6 @@
 import type { SettingsManager } from "../../config/settings/index.ts";
 import { CodeSymbolIndex } from "../index/code-index.ts";
+import { ImpactCoverageGate } from "../index/impact-coverage.ts";
 import { LightweightCodeIntelligenceBackend } from "../index/lightweight/backend.ts";
 import { StructuralReuseGate } from "../index/reuse-review.ts";
 import { CodeIntelligenceRouter } from "../index/router/router.ts";
@@ -79,6 +80,7 @@ export class CodeIntelligenceRuntime {
 		this.servicesValue = Object.freeze({
 			workspaceRoot: this.workspaceRoot,
 			changeGates: [
+				new ImpactCoverageGate(this.index, this.router, this.workspaceRoot),
 				new StructuralReuseGate(
 					this.index,
 					this.workspaceRoot,
@@ -95,6 +97,7 @@ export class CodeIntelligenceRuntime {
 				await this.semantic?.notifyCommitted(paths, this.workspaceRoot);
 				await this.index.ensureFresh();
 			},
+			previewRefactor: this.semantic?.previewRefactor.bind(this.semantic),
 			router: this.router,
 			index: this.index as CodeIntelligenceRuntimeServices["index"],
 			symbolStore: this.symbolStore,

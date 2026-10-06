@@ -259,6 +259,16 @@ describe("CodeIntelligenceInstallationManager", () => {
 		expect(updated.getModuleStatus("java").status).toBe("update-available");
 		await updated.install("java");
 		expect(updated.getModuleStatus("java").installedVersion).toBe("2.0.0");
+		await rm(
+			path.join(root, "agent", "code-intelligence", "components", "jre", "21", ".myharness-code-intelligence.json"),
+		);
+		expect(updated.getModuleStatus("java").status).toBe("repair-needed");
+		expect(
+			updated
+				.createInstalledLanguageServerRegistry()
+				?.getAll()
+				.some((server) => server.id === "managed-java") ?? false,
+		).toBe(false);
 		await updated.remove("java");
 		expect(updated.getModuleStatus("java").status).toBe("not-installed");
 	});

@@ -32,11 +32,14 @@ const RENAME_EDIT = {
 	},
 };
 
-function environmentWith(config: MockServerConfig, options: { applyEditTimeoutMs?: number } = {}): MockEnvironment {
+function environmentWith(
+	config: MockServerConfig,
+	options: { applyEditTimeoutMs?: number; id?: string } = {},
+): MockEnvironment {
 	const environment = createMockEnvironment(
 		[
 			{
-				id: "mock-ts",
+				id: options.id ?? "mock-ts",
 				languages: ["typescript"],
 				config: { documentSymbols: { "src/a.ts": [] }, ...config },
 			},
@@ -73,7 +76,154 @@ async function rejection(promise: Promise<unknown>): Promise<SemanticBackendErro
 	return error as SemanticBackendError;
 }
 
+describe("formal edit-only server refactor", () => {
+	it.each(["valid", "other-file", "new-file", "commands", "invalid-position", "other-server"] as const)(
+		"validates compiler adapter result: %s",
+		async (shape) => {
+			const title = "Add braces to arrow function";
+			const env = environmentWith(
+				{
+					capabilities: { ...RENAME_CAPABILITIES, codeActionProvider: true },
+					responses: {
+						"textDocument/codeAction": [
+							{
+								title,
+								kind: "refactor.rewrite.arrow.braces.add",
+								command: {
+									command: "_typescript.applyRefactoring",
+									arguments: [
+										{
+											file: "@uri:src/a.ts",
+											refactor: "Add or remove braces in an arrow function",
+											action: title,
+										},
+									],
+								},
+							},
+						],
+						"workspace/executeCommand": {
+							command: "getEditsForRefactor",
+							success: true,
+							body: {
+								...(shape === "commands" ? { commands: [] } : {}),
+								edits: [
+									{
+										fileName: shape === "other-file" ? "@uri:src/b.ts" : "@uri:src/a.ts",
+										...(shape === "new-file" ? { isNewFile: true } : {}),
+										textChanges: [
+											{
+												start: { line: shape === "invalid-position" ? 0 : 1, offset: 14 },
+												end: { line: 1, offset: 19 },
+												newText: "Beta",
+											},
+										],
+									},
+								],
+							},
+						},
+					},
+				},
+				{ id: shape === "other-server" ? "mock-ts" : "managed-javascript-typescript" },
+			);
+			const pending = env.backend.previewRefactor("src/a.ts", ALPHA_RANGE, title, queryOptions(env));
+			if (shape === "valid") expect(await pending).toMatchObject({ edit: { changes: expect.any(Object) } });
+			else await expect(pending).rejects.toMatchObject({ code: "unsupported_target" });
+			const requests = env
+				.log(shape === "other-server" ? "mock-ts" : "managed-javascript-typescript")
+				.filter((entry) => entry.method === "workspace/executeCommand");
+			if (shape === "other-server") expect(requests).toEqual([]);
+			else
+				expect(requests).toEqual([
+					expect.objectContaining({
+						params: expect.objectContaining({
+							command: "typescript.tsserverRequest",
+							arguments: expect.arrayContaining(["getEditsForRefactor"]),
+						}),
+					}),
+				]);
+		},
+	);
+	it.each(["edit", "resolved", "command", "resolved-command", "ambiguous", "disabled"] as const)(
+		"validates %s action before controlled preview",
+		async (shape) => {
+			const action = {
+				title: "Extract helper",
+				kind: "refactor.extract",
+				...(shape === "resolved" || shape === "resolved-command" ? { data: { key: 1 } } : { edit: RENAME_EDIT }),
+				...(shape === "command" ? { command: { command: "unsafe" } } : {}),
+				...(shape === "disabled" ? { disabled: { reason: "not valid" } } : {}),
+			};
+			const env = environmentWith({
+				capabilities: { ...RENAME_CAPABILITIES, codeActionProvider: { resolveProvider: true } },
+				responses: {
+					"textDocument/codeAction": shape === "ambiguous" ? [action, action] : [action],
+					"codeAction/resolve": {
+						title: action.title,
+						kind: action.kind,
+						edit: RENAME_EDIT,
+						...(shape === "resolved-command" ? { command: { command: "unsafe" } } : {}),
+					},
+				},
+			});
+			const result = env.backend.previewRefactor("src/a.ts", ALPHA_RANGE, action.title, queryOptions(env));
+			if (shape === "edit" || shape === "resolved")
+				expect(await result).toMatchObject({
+					title: action.title,
+					definitionId: "mock-ts",
+					edit: { changes: expect.any(Object) },
+				});
+			else await expect(result).rejects.toMatchObject({ code: "unsupported_target" });
+			expect(env.log("mock-ts").some((entry) => entry.method === "workspace/executeCommand")).toBe(false);
+		},
+	);
+	it.each(["source", "project"] as const)("rejects %s changes during an in-flight action", async (scope) => {
+		const env = environmentWith({
+			capabilities: { ...RENAME_CAPABILITIES, codeActionProvider: true },
+			responses: {
+				"textDocument/codeAction": {
+					$delayMs: 300,
+					$result: [{ title: "Extract helper", kind: "refactor.extract", edit: RENAME_EDIT }],
+				},
+			},
+		});
+		const pending = rejection(
+			env.backend.previewRefactor("src/a.ts", ALPHA_RANGE, "Extract helper", queryOptions(env)),
+		);
+		await expect
+			.poll(() => env.log("mock-ts").some((entry) => entry.method === "textDocument/codeAction"))
+			.toBe(true);
+		if (scope === "source") env.write("src/a.ts", SOURCE.replace("Alpha", "Gamma"));
+		else await env.backend.notifyCommitted([join(env.root, "src/b.ts")], env.root);
+		expect(await pending).toMatchObject({ code: "request_failed" });
+	});
+});
+
 describe("semantic rename", () => {
+	it.each([
+		{ id: "managed-go", path: "src/b.ts", version: 0, expected: null },
+		{ id: "managed-go", path: "src/b.ts", version: 2, expected: 2 },
+		{ id: "managed-go", path: "src/a.ts", version: 0, expected: 0 },
+		{ id: "mock-ts", path: "src/b.ts", version: 0, expected: 0 },
+	])(
+		"normalizes only unopened managed Go version zero ($id/$path/$version)",
+		async ({ id, path, version, expected }) => {
+			const environment = environmentWith(
+				renameConfig({
+					"textDocument/rename": {
+						documentChanges: [
+							{
+								textDocument: { uri: `@uri:${path}`, version },
+								edits: [{ range: ALPHA_RANGE, newText: "Beta" }],
+							},
+						],
+					},
+				}),
+				{ id },
+			);
+			const result = await environment.backend.rename(TARGET, "Beta", queryOptions(environment));
+			expect(result.items[0]?.edit).toMatchObject({ documentChanges: [{ textDocument: { version: expected } }] });
+		},
+	);
 	it("asks the server to prepare and rename, and returns its edit untouched with the document versions", async () => {
 		const environment = environmentWith(renameConfig());
 

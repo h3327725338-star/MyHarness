@@ -4,6 +4,7 @@ import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type {
 	CallHierarchyResult,
 	CodePosition,
+	CodeRange,
 	CodeSymbolKind,
 	DefinitionResult,
 	DiagnosticsResult,
@@ -112,7 +113,21 @@ export interface SemanticClientSessionSnapshot {
 	readonly documents: readonly SemanticDocumentStateSnapshot[];
 }
 
+export interface ServerRefactorProposal {
+	readonly title: string;
+	readonly edit: unknown;
+	readonly definitionId: string;
+	readonly documentVersions: Readonly<Record<string, number>>;
+}
+
 export interface SemanticBackendApi {
+	/** Formal edit planning; apply commands are never executed. Narrow reviewed adapters may query compiler edits. */
+	previewRefactor?(
+		filePath: string,
+		range: CodeRange,
+		title: string,
+		options: SemanticBackendQueryOptions,
+	): Promise<ServerRefactorProposal>;
 	fileSymbols(filePath: string, options: SemanticBackendQueryOptions): Promise<FileSymbolsResult>;
 	findDefinition(target: SymbolTarget, options: SemanticBackendQueryOptions): Promise<DefinitionResult>;
 	findReferences(target: SymbolTarget, options: SemanticReferencesQueryOptions): Promise<ReferencesResult>;

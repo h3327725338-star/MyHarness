@@ -10,6 +10,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
 import { type ChangeErrorCode, isChangeControlError } from "../changes/errors.ts";
 import { createChangeControl } from "../changes/factory.ts";
+import { validateImpactPlan } from "../changes/impact-plan.ts";
 import { MAX_PATCH_EDITS_PER_FILE, MAX_PATCH_FILES, type PatchChange } from "../changes/patch-plan.ts";
 import type { ApplyOutcome, ChangeOrigin, ChangePreview } from "../changes/service.ts";
 import { type ChangeControl, documentVersionLookup } from "../changes/service.ts";
@@ -81,6 +82,30 @@ const changesetIdSchema = Type.String({ pattern: "^[0-9a-f]{32}$", description: 
 const refactorOperationSchemas = [
 	Type.Object(
 		{
+			operation: Type.Literal("preview_server_refactor"),
+			path: nonEmptyString,
+			title: nonEmptyString,
+			range: Type.Object(
+				{
+					start: Type.Object(
+						{ line: nonNegativeInteger, character: nonNegativeInteger },
+						{ additionalProperties: false },
+					),
+					end: Type.Object(
+						{ line: nonNegativeInteger, character: nonNegativeInteger },
+						{ additionalProperties: false },
+					),
+				},
+				{ additionalProperties: false },
+			),
+			definitionId: Type.Optional(nonEmptyString),
+			language: Type.Optional(nonEmptyString),
+			timeoutMs: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 600_000 })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
 			operation: Type.Literal("preview_rename"),
 			target: targetSchema,
 			newName: Type.String({ minLength: 1, maxLength: MAX_NEW_NAME_LENGTH }),
@@ -108,6 +133,43 @@ const refactorOperationSchemas = [
 	),
 	Type.Object({ operation: Type.Literal("discard"), changesetId: changesetIdSchema }, { additionalProperties: false }),
 	Type.Object({ operation: Type.Literal("recover") }, { additionalProperties: false }),
+	Type.Object({ operation: Type.Literal("verify") }, { additionalProperties: false }),
+	Type.Object(
+		{
+			operation: Type.Literal("review_impact"),
+			changesetId: changesetIdSchema,
+			plan: Type.Object(
+				{
+					problem: nonEmptyString,
+					expectedBehavior: nonEmptyString,
+					rootCause: nonEmptyString,
+					rootPaths: Type.Array(nonEmptyString, { minItems: 1, maxItems: 500 }),
+					evidence: Type.Array(nonEmptyString, { minItems: 1, maxItems: 500 }),
+					affected: Type.Array(
+						Type.Object(
+							{
+								path: nonEmptyString,
+								disposition: Type.Union([
+									Type.Literal("modify"),
+									Type.Literal("unaffected"),
+									Type.Literal("external"),
+								]),
+								reason: nonEmptyString,
+							},
+							{ additionalProperties: false },
+						),
+						{ minItems: 1, maxItems: 500 },
+					),
+					compatibility: nonEmptyString,
+					checks: Type.Array(nonEmptyString, { minItems: 1, maxItems: 500 }),
+					coverage: Type.Union([Type.Literal("complete"), Type.Literal("partial"), Type.Literal("unknown")]),
+					limitations: Type.Array(nonEmptyString, { maxItems: 500 }),
+				},
+				{ additionalProperties: false },
+			),
+		},
+		{ additionalProperties: false },
+	),
 ];
 
 export type RefactorToolInput = Static<(typeof refactorOperationSchemas)[number]>;
@@ -307,6 +369,18 @@ export function validateRefactorInput(input: unknown): RefactorToolInput {
 			}
 			return input as RefactorToolInput;
 		}
+		case "preview_server_refactor": {
+			requireText(args.path, operation, "path");
+			requireText(args.title, operation, "title");
+			const range = recordOf(args.range);
+			if (Object.keys(range).some((key) => key !== "start" && key !== "end"))
+				fail(operation, "range contains unknown fields");
+			for (const position of [range.start, range.end])
+				validateTarget({ type: "position", path: args.path, position }, operation);
+			for (const label of ["definitionId", "language"] as const)
+				if (args[label] !== undefined) requireText(args[label], operation, label);
+			return input as RefactorToolInput;
+		}
 		case "preview_patch":
 			requireText(args.description, operation, "description", 300);
 			validatePatchChanges(args.changes, operation);
@@ -318,7 +392,12 @@ export function validateRefactorInput(input: unknown): RefactorToolInput {
 		case "status":
 			validateChangesetId(args.changesetId, operation, false);
 			return input as RefactorToolInput;
+		case "review_impact":
+			validateChangesetId(args.changesetId, operation, true);
+			validateImpactPlan(args.plan);
+			return input as RefactorToolInput;
 		case "recover":
+		case "verify":
 			return input as RefactorToolInput;
 	}
 }
@@ -485,14 +564,21 @@ export function createRefactorToolDefinition(
 			}
 		}
 		const result = await router.rename(target, input.newName, routing);
-		const proposal = result.items[0];
-		if (!proposal) throw new RefactorToolError("RENAME_REFUSED", "the language server proposed no rename");
-		if (input.expectedName !== undefined && input.expectedName !== proposal.oldName) {
+		const locatedProposal = result.items[0];
+		if (locatedProposal && input.expectedName !== undefined && input.expectedName !== locatedProposal.oldName) {
 			throw new RefactorToolError(
 				"TARGET_AMBIGUOUS",
-				`the position is on '${proposal.oldName}', not '${input.expectedName}'; nothing was previewed`,
+				`the position is on '${locatedProposal.oldName}', not '${input.expectedName}'; nothing was previewed`,
 			);
 		}
+		if (result.meta.source !== "semantic" || result.meta.completeness !== "complete") {
+			throw new RefactorToolError(
+				"CAPABILITY_UNSUPPORTED",
+				`Rename coverage is incomplete; no preview was stored. ${result.meta.warnings?.join("; ") ?? "Resolve project coverage before applying a rename."}`,
+			);
+		}
+		const proposal = result.items[0];
+		if (!proposal) throw new RefactorToolError("RENAME_REFUSED", "the language server proposed no rename");
 		if (symbolName !== undefined && symbolName !== proposal.oldName) {
 			throw new RefactorToolError(
 				"TARGET_AMBIGUOUS",
@@ -504,7 +590,7 @@ export function createRefactorToolDefinition(
 			description: `Rename ${proposal.oldName} to ${proposal.newName}`,
 			source: "rename",
 			knownVersion: documentVersionLookup(proposal.documentVersions, runtime.workspaceRoot),
-			rename: { oldName: proposal.oldName },
+			rename: { oldName: proposal.oldName, newName: proposal.newName },
 		});
 
 		const warnings = [...(result.meta.warnings ?? [])];
@@ -609,7 +695,7 @@ export function createRefactorToolDefinition(
 		name: "refactor",
 		label: "refactor",
 		description:
-			"Controlled changes across files. preview_rename asks the language server for a rename and preview_patch plans exact-text edits and new files over several files; neither writes anything. apply writes a previewed change by its changesetId, after the change gates and approval. status and recover report and finish unfinished changes; discard drops a preview. Each operation accepts only its own parameters.",
+			"Controlled changes across files. preview_server_refactor selects an exact unique enabled edit-only LSP refactor title for a range; commands are refused. preview_rename asks the language server for a rename and preview_patch plans exact-text edits and new files over several files; neither writes anything. apply writes a previewed change by its changesetId, after the change gates and approval. review_impact records root cause, evidence, affected callers/API/tests, compatibility and check coverage for an exact preview; strict apply requires it. verify runs host-configured project checks; status and recover report and finish unfinished changes; discard drops a preview. Each operation accepts only its own parameters.",
 		promptSnippet: loadSystemPrompt("tools/refactor/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/refactor/guidelines.md"),
 		parameters: refactorSchema,
@@ -622,8 +708,52 @@ export function createRefactorToolDefinition(
 					case "preview_rename":
 						output = await previewRename(input, signal);
 						break;
+					case "preview_server_refactor": {
+						const planner = options?.codeIntelligence?.previewRefactor;
+						if (!planner)
+							throw new RefactorToolError(
+								"CAPABILITY_UNSUPPORTED",
+								"No formal server refactor planner is configured",
+							);
+						const proposal = await planner(input.path, input.range, input.title, {
+							workspaceRoot: runtime.workspaceRoot,
+							definitionId: input.definitionId,
+							language: input.language,
+							timeoutMs: input.timeoutMs ?? 60000,
+							signal,
+						});
+						const preview = await control().previewWorkspaceEdit(proposal.edit, {
+							description: proposal.title,
+							knownVersion: documentVersionLookup(proposal.documentVersions, runtime.workspaceRoot),
+						});
+						const diff = diffSection(preview);
+						output = {
+							text: [
+								`[preview_server_refactor] ${proposal.title} (server ${proposal.definitionId})`,
+								`changesetId: ${preview.changeset.id}`,
+								...fileLines(preview.changeset),
+								approvalLine(preview),
+								...diff.lines,
+								"Nothing is written; apply the stored changeset only after review.",
+							].join("\n"),
+							details: {
+								operation: "preview_server_refactor",
+								changesetId: preview.changeset.id,
+								files: detailsFiles(preview.changeset),
+								outputTruncated: diff.truncated,
+							},
+						};
+						break;
+					}
 					case "preview_patch":
 						output = await previewPatch(input);
+						break;
+					case "review_impact":
+						await control().reviewImpact(input.changesetId, input.plan);
+						output = {
+							text: `[review_impact] Saved review for ${input.changesetId}; declared coverage: ${input.plan.coverage}. This is not verification or user approval.`,
+							details: { operation: "review_impact", changesetId: input.changesetId },
+						};
 						break;
 					case "apply":
 						output = applied(await control().apply(input.changesetId, { origin, signal }));
@@ -637,10 +767,12 @@ export function createRefactorToolDefinition(
 						break;
 					case "status": {
 						const status = control().status(input.changesetId);
+						const verification = await control().verification?.status();
 						output = {
 							text: [
 								"[status]",
 								`mode: ${control().mode}`,
+								`verification: ${verification ? `${verification.state}: ${verification.reason}` : "unknown: no verification service configured"}`,
 								...(status.entries.length === 0
 									? ["no change has been applied yet"]
 									: status.entries.map(
@@ -650,6 +782,17 @@ export function createRefactorToolDefinition(
 								...(status.recoveryFailure ? [`recovery on startup failed: ${status.recoveryFailure}`] : []),
 							].join("\n"),
 							details: { operation: "status", changesetId: input.changesetId },
+						};
+						break;
+					}
+					case "verify": {
+						const verification = control().verification;
+						const result = verification
+							? await verification.verify(signal)
+							: { state: "unknown", reason: "No verification service configured", checks: [] };
+						output = {
+							text: `[verify] ${result.state}: ${result.reason}\n${result.checks.map((check) => `${check.name}: exit ${check.code}\n${check.output}`).join("\n")}`,
+							details: { operation: "verify", state: result.state },
 						};
 						break;
 					}

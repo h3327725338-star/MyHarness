@@ -61,6 +61,13 @@ export function createProductClientCapabilities(
 		definition: { dynamicRegistration: false, linkSupport: true },
 		implementation: { dynamicRegistration: false, linkSupport: true },
 		references: { dynamicRegistration: false },
+		codeAction: {
+			dynamicRegistration: false,
+			codeActionLiteralSupport: {
+				codeActionKind: { valueSet: ["refactor", "refactor.extract", "refactor.inline", "refactor.rewrite"] },
+			},
+			resolveSupport: { properties: ["edit"] },
+		},
 		hover: { dynamicRegistration: false, contentFormat: ["markdown", "plaintext"] },
 		callHierarchy: { dynamicRegistration: false },
 		typeHierarchy: { dynamicRegistration: false },

@@ -16,7 +16,8 @@
  * refuses projects over a file budget and reports that limit.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type * as TS from "typescript";
@@ -132,18 +133,16 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 function fileStamp(fileNames: readonly string[]): string {
-	let total = 0;
-	let latest = 0;
-	for (const fileName of fileNames) {
+	const hash = createHash("sha256");
+	for (const fileName of [...new Set(fileNames)].sort()) {
+		hash.update(JSON.stringify(normalizeKey(fileName)));
 		try {
-			const stats = statSync(fileName);
-			total += stats.size;
-			latest = Math.max(latest, stats.mtimeMs);
+			hash.update(createHash("sha256").update(readFileSync(fileName)).digest());
 		} catch {
-			total += 1;
+			hash.update("missing");
 		}
 	}
-	return `${fileNames.length}:${total}:${latest}`;
+	return hash.digest("hex");
 }
 
 interface ParsedProject {
@@ -205,15 +204,20 @@ function enclosingConfigs(workspaceRoot: string, fileName: string): string[] {
 function createProjectProgram(ts: typeof TS, project: ParsedProject, extraRoots: readonly string[]): ProjectProgram {
 	const rootNames = [...new Set([...project.fileNames, ...extraRoots])];
 	const key = project.configPath ? normalizeKey(project.configPath) : `inferred:${normalizeKey(extraRoots[0] ?? "")}`;
-	const stamp = fileStamp(rootNames);
 	const cached = programCache.get(key);
+	const configuration = JSON.stringify({ options: project.options, references: project.references, rootNames });
+	const dependencyPaths = cached?.program.getSourceFiles().map((source) => source.fileName) ?? [];
+	const stamp = `${configuration}:${fileStamp([...rootNames, ...dependencyPaths])}`;
 	if (cached && cached.stamp === stamp) return cached;
 	const program = ts.createProgram({
 		rootNames,
 		options: { ...project.options, noEmit: true },
-		oldProgram: cached?.program,
 	});
-	const entry: ProjectProgram = { configPath: project.configPath, program, stamp };
+	const entry: ProjectProgram = {
+		configPath: project.configPath,
+		program,
+		stamp: `${configuration}:${fileStamp([...rootNames, ...program.getSourceFiles().map((source) => source.fileName)])}`,
+	};
 	programCache.delete(key);
 	programCache.set(key, entry);
 	while (programCache.size > MAX_CACHED_PROGRAMS) {

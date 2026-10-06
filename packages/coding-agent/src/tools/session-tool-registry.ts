@@ -108,6 +108,14 @@ export class SessionToolRegistry {
 		}));
 	}
 
+	/** Overrides and extension tools cannot gain strict-mode privileges by reusing a built-in name. */
+	isTrustedBuiltIn(name: string): boolean {
+		return (
+			this._options.baseToolsOverride === undefined &&
+			this._definitions.get(name)?.definition === this._baseToolDefinitions.get(name)
+		);
+	}
+
 	getDefinition(name: string): ToolDefinition | undefined {
 		return this._definitions.get(name)?.definition;
 	}

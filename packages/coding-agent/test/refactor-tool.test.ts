@@ -75,6 +75,7 @@ function harness(
 		approval?: ApprovalPort;
 		router?: Partial<CodeIntelligenceRouterApi>;
 		searchCode?: (pattern: string) => Promise<Array<{ path: string; line: number; text: string }>>;
+		previewRefactor?: SymbolsCodeIntelligenceServices["previewRefactor"];
 	} = {},
 ): Harness {
 	const workspace = createTestWorkspace(FILES);
@@ -99,6 +100,7 @@ function harness(
 	} as unknown as CodeIntelligenceRouterApi;
 	const services: SymbolsCodeIntelligenceServices = {
 		workspaceRoot: workspace.root,
+		previewRefactor: options.previewRefactor,
 		router,
 		index: { ensureFresh: async () => ({}), searchCode, getStats: () => ({}) } as unknown as SymbolsIndexPort,
 	};
@@ -134,6 +136,55 @@ function idOf(text: string): string {
 	return match[1];
 }
 
+describe("controlled formal refactor preview", () => {
+	it("shares preview/apply and detects a downstream second edit", async () => {
+		let workspace!: TestWorkspace;
+		const h = harness({
+			previewRefactor: async () => ({
+				title: "Extract helper",
+				definitionId: "mock-ts",
+				documentVersions: {},
+				edit: proposalFor(workspace).edit,
+			}),
+		});
+		workspace = h.workspace;
+		const input = {
+			operation: "preview_server_refactor",
+			path: "src/a.ts",
+			title: "Extract helper",
+			range: { start: { line: 0, character: 13 }, end: { line: 0, character: 18 } },
+		};
+		const preview = await run(h, input);
+		expect(workspace.readText("src/a.ts")).toBe(FILES["src/a.ts"]);
+		workspace.write("src/b.ts", "// user second edit\n");
+		await expect(run(h, { operation: "apply", changesetId: idOf(preview.text) })).rejects.toMatchObject({
+			code: "EDIT_CONFLICT",
+		});
+		expect(workspace.readText("src/a.ts")).toBe(FILES["src/a.ts"]);
+		workspace.write("src/b.ts", FILES["src/b.ts"]);
+		const fresh = await run(h, input);
+		await run(h, { operation: "apply", changesetId: idOf(fresh.text) });
+		expect(workspace.readText("src/a.ts")).toContain("class Beta");
+		expect(workspace.readText("src/b.ts")).toContain("import { Beta }");
+	});
+});
+
+describe("incomplete semantic rename", () => {
+	it("does not store a preview or modify files when consumers may be missing", async () => {
+		const h = harness({
+			rename: async () => ({
+				items: [],
+				meta: { source: "semantic", completeness: "partial", warnings: ["unopened consumers omitted"] },
+			}),
+		});
+		const error = await failure(h, { operation: "preview_rename", target: POSITION, newName: "Beta" });
+		expect(error).toMatchObject({ code: "CAPABILITY_UNSUPPORTED" });
+		expect(error.message).toContain("unopened consumers omitted");
+		expect(await h.control.status()).toEqual({ entries: [] });
+		expect(h.workspace.readText("src/a.ts")).toBe(FILES["src/a.ts"]);
+	});
+});
+
 describe("refactor schema", () => {
 	interface Branch {
 		properties: Record<string, { const?: string }>;
@@ -146,12 +197,15 @@ describe("refactor schema", () => {
 
 		expect(schema.type).toBe("object");
 		expect(schema.anyOf.map((branch) => branch.properties.operation?.const)).toEqual([
+			"preview_server_refactor",
 			"preview_rename",
 			"preview_patch",
 			"apply",
 			"status",
 			"discard",
 			"recover",
+			"verify",
+			"review_impact",
 		]);
 		for (const branch of schema.anyOf) expect(branch.additionalProperties).toBe(false);
 	});

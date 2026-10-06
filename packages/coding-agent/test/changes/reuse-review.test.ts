@@ -2,7 +2,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ApprovalPort } from "../../src/changes/approval.ts";
 import { createChangeControl } from "../../src/changes/factory.ts";
+import type { ChangeGate } from "../../src/changes/service.ts";
 import { CodeSymbolIndex } from "../../src/symbols/index/code-index.ts";
 import { StructuralReuseGate } from "../../src/symbols/index/reuse-review.ts";
 
@@ -11,13 +13,19 @@ afterEach(async () => {
 	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 const body = `let total = 0; for (const value of values) { if (value > 0) { total += value * 2; } else { total -= value; } } return total;`;
-async function setup() {
+async function setup(approval?: ApprovalPort, extraGate?: ChangeGate, now?: () => number) {
 	const root = await mkdtemp(join(tmpdir(), "reuse-gate-"));
 	roots.push(root);
 	await writeFile(join(root, "existing.ts"), `export function sum(values: number[]) { ${body} }`);
 	const index = new CodeSymbolIndex({ cwd: root, agentDir: join(root, "agent") });
 	const gate = new StructuralReuseGate(index, root, [resolve("../..")]);
-	const control = createChangeControl({ workspaceRoot: root, agentDir: join(root, "agent"), gates: [gate] });
+	const control = createChangeControl({
+		workspaceRoot: root,
+		agentDir: join(root, "agent"),
+		gates: [gate, ...(extraGate ? [extraGate] : [])],
+		approval,
+		now,
+	});
 	return { root, control };
 }
 describe("actual-diff structural reuse review", () => {
@@ -94,6 +102,60 @@ describe("actual-diff structural reuse review", () => {
 			code: "REUSE_REVIEW_REQUIRED",
 		});
 	});
+
+	it.each(["accept", "decline", "changed", "cancel", "new-file", "config", "expired", "after-gate"] as const)(
+		"binds explicit reuse exception: %s",
+		async (action) => {
+			let labRoot = "";
+			let clock = 1000;
+			const abort = new AbortController();
+			const { root, control } = await setup(
+				{
+					request: async (request) => {
+						expect(request.title).toBe("Review reuse exception");
+						expect(request.message).toContain("Snapshot:");
+						if (action === "accept") expect(request.message).toContain("second.ts");
+						if (action === "changed")
+							await writeFile(
+								join(labRoot, "existing.ts"),
+								`// changed\nexport function sum(values: number[]) { ${body} }`,
+							);
+						if (action === "new-file") await writeFile(join(labRoot, "new.ts"), "export const added = 1;");
+						if (action === "config")
+							await writeFile(join(labRoot, "tsconfig.json"), '{"compilerOptions":{"strict":true}}');
+						if (action === "expired") clock += 300001;
+						if (action === "cancel") abort.abort();
+						return action === "decline" ? { approved: false, reason: "reuse required" } : { approved: true };
+					},
+				},
+				{
+					name: "subsequent-gate",
+					check: async () => {
+						if (action === "after-gate")
+							await writeFile(
+								join(labRoot, "existing.ts"),
+								`// later gate\nexport function sum(values: number[]) { ${body} }`,
+							);
+						return { allow: true };
+					},
+				},
+				() => clock,
+			);
+			labRoot = root;
+			if (action === "accept")
+				await writeFile(join(root, "second.ts"), `export function sumAgain(values: number[]) { ${body} }`);
+			const preview = await control.previewWrite("copy.ts", `export function copy(values: number[]) { ${body} }`);
+			const applying = control.apply(preview.changeset.id, { origin: { kind: "write" }, signal: abort.signal });
+			if (action === "accept") {
+				const outcome = await applying;
+				expect(outcome.result.status).toBe("committed");
+				expect(outcome.approvedBy).toBe("user");
+			} else {
+				await expect(applying).rejects.toBeDefined();
+				await expect(readFile(join(root, "copy.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+			}
+		},
+	);
 
 	it("does not call different literals/operators equivalent", async () => {
 		const { control } = await setup();

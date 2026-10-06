@@ -645,15 +645,19 @@ describe("LspSemanticBackend: diagnostics and failures", () => {
 		expect(result.meta.warnings?.some((warning) => warning.includes("generation"))).toBe(true);
 	});
 
-	it("does not accept a delayed pull as current after concurrent dependency synchronization", async () => {
-		const environment = await createEnvironment("pull-diagnostics-delayed");
-		const pending = environment.backend.getDiagnostics("src/source.ts", options(environment.root));
-		await waitFor(async () => (await state(environment)).methodCounts["textDocument/diagnostic"] === 1);
-		await environment.backend.fileSymbols("src/target.ts", options(environment.root));
-		const result = await pending;
-		expect(result.meta.completeness).toBe("partial");
-		expect(result.meta.warnings?.some((warning) => warning.includes("stale"))).toBe(true);
-	});
+	it.each(["dependency", "disk"])(
+		"does not certify delayed diagnostics after concurrent %s changes",
+		async (change) => {
+			const environment = await createEnvironment("pull-diagnostics-delayed");
+			const pending = environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+			await waitFor(async () => (await state(environment)).methodCounts["textDocument/diagnostic"] === 1);
+			if (change === "dependency") await environment.backend.fileSymbols("src/target.ts", options(environment.root));
+			else await writeFile(join(environment.root, "src/source.ts"), "export const concurrent = 1;\n", "utf8");
+			const result = await pending;
+			expect(result.meta.completeness).toBe("partial");
+			expect(result.meta.warnings?.join(" ")).toContain(change === "dependency" ? "stale" : "disk snapshot changed");
+		},
+	);
 
 	it("does not certify unsynchronized related pull documents", async () => {
 		const environment = await createEnvironment("pull-diagnostics-related");

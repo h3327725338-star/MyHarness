@@ -193,26 +193,57 @@ describe("ChangeControl gates", () => {
 		expect(workspace.readText("src/a.ts")).toBe(FILES["src/a.ts"]);
 	});
 
-	it("hands the gate the changeset, its content and the mode, and skips gates when control is off", async () => {
-		const workspace = createTestWorkspace(FILES);
-		const seen: Array<{ mode: string; bytes: string }> = [];
-		const gate: ChangeGate = {
-			name: "spy",
-			check: async ({ changeset, content, mode }) => {
-				seen.push({ mode, bytes: content.after.get(changeset.files[0]?.path ?? "")?.toString("utf8") ?? "" });
-				return { allow: true };
-			},
-		};
-		const strict = controlFor(workspace, { mode: "strict", gates: [gate] });
-		const preview = await strict.previewPatch(RENAME_PATCH, { description: "rename" });
-		await strict.apply(preview.changeset.id, { origin: ORIGIN });
-		expect(seen).toEqual([{ mode: "strict", bytes: "export class Beta {}\n" }]);
+	it.each([
+		{ recheckAfterApproval: false, rejectAfterApproval: false },
+		{ recheckAfterApproval: true, rejectAfterApproval: false },
+		{ recheckAfterApproval: true, rejectAfterApproval: true },
+	])(
+		"honors gate recheck=$recheckAfterApproval rejection=$rejectAfterApproval while skipping off mode",
+		async ({ recheckAfterApproval, rejectAfterApproval }) => {
+			const workspace = createTestWorkspace(FILES);
+			const seen: Array<{ mode: string; bytes: string }> = [];
+			const gate: ChangeGate = {
+				name: "spy",
+				recheckAfterApproval,
+				check: async ({ changeset, content, mode }) => {
+					seen.push({ mode, bytes: content.after.get(changeset.files[0]?.path ?? "")?.toString("utf8") ?? "" });
+					return rejectAfterApproval && seen.length === 2
+						? { allow: false, code: "EDIT_CONFLICT", message: "consumer changed during approval" }
+						: { allow: true };
+				},
+			};
+			const strict = controlFor(workspace, { mode: "strict", gates: [gate] });
+			const preview = await strict.previewPatch(RENAME_PATCH, { description: "rename" });
+			await strict.reviewImpact(preview.changeset.id, {
+				problem: "rename declaration",
+				expectedBehavior: "declaration is Beta",
+				rootCause: "declaration name",
+				rootPaths: ["src/a.ts"],
+				evidence: ["fixture source"],
+				affected: [{ path: "src/a.ts", disposition: "modify", reason: "declaration" }],
+				compatibility: "isolated gate fixture",
+				checks: ["assert written bytes"],
+				coverage: "complete",
+				limitations: [],
+			});
+			const applied = strict.apply(preview.changeset.id, { origin: ORIGIN });
+			if (rejectAfterApproval) {
+				await expect(applied).rejects.toMatchObject({ code: "EDIT_CONFLICT" });
+				expect(workspace.readText("src/a.ts")).toBe(FILES["src/a.ts"]);
+			} else await applied;
+			expect(seen).toEqual(
+				Array.from({ length: recheckAfterApproval ? 2 : 1 }, () => ({
+					mode: "strict",
+					bytes: "export class Beta {}\n",
+				})),
+			);
 
-		const off = controlFor(createTestWorkspace(FILES), { mode: "off", gates: [gate] });
-		const other = await off.previewPatch(RENAME_PATCH, { description: "rename" });
-		await off.apply(other.changeset.id, { origin: ORIGIN });
-		expect(seen).toHaveLength(1);
-	});
+			const off = controlFor(createTestWorkspace(FILES), { mode: "off", gates: [gate] });
+			const other = await off.previewPatch(RENAME_PATCH, { description: "rename" });
+			await off.apply(other.changeset.id, { origin: ORIGIN });
+			expect(seen).toHaveLength(recheckAfterApproval ? 2 : 1);
+		},
+	);
 });
 
 describe("ChangeControl workspace edits", () => {
@@ -233,41 +264,55 @@ describe("ChangeControl workspace edits", () => {
 		};
 	}
 
-	it("previews a rename edit of several files after checking every range holds the old name", async () => {
-		const workspace = createTestWorkspace(FILES);
-		const control = controlFor(workspace);
+	it.each([
+		{ newName: "Beta", text: "Beta", removed: 5 },
+		{ newName: "Omega", text: "Omeg", removed: 4 },
+	])(
+		"previews a cross-file rename to $newName with verified full or minimal ranges",
+		async ({ newName, text, removed }) => {
+			const workspace = createTestWorkspace(FILES);
+			const control = controlFor(workspace);
 
-		const preview = await control.previewWorkspaceEdit(
-			editFor(workspace, {
-				"src/a.ts": [[0, 13, 0, 18, "Beta"]],
-				"src/b.ts": [
-					[0, 9, 0, 14, "Beta"],
-					[1, 4, 1, 9, "Beta"],
-				],
-			}),
-			{ description: "Rename Alpha to Beta", source: "rename", rename: { oldName: "Alpha" } },
-		);
+			const preview = await control.previewWorkspaceEdit(
+				editFor(workspace, {
+					"src/a.ts": [[0, 13, 0, 13 + removed, text]],
+					"src/b.ts": [
+						[0, 9, 0, 9 + removed, text],
+						[1, 4, 1, 4 + removed, text],
+					],
+				}),
+				{ description: `Rename Alpha to ${newName}`, source: "rename", rename: { oldName: "Alpha", newName } },
+			);
 
-		expect(preview.changeset.files.map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
-		expect(preview.changeset.source).toBe("rename");
-		await control.apply(preview.changeset.id, { origin: ORIGIN });
-		expect(workspace.readText("src/b.ts")).toBe("import { Beta } from './a';\nnew Beta();\n");
-	});
+			expect(preview.changeset.files.map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
+			expect(preview.changeset.source).toBe("rename");
+			await control.apply(preview.changeset.id, { origin: ORIGIN });
+			expect(workspace.readText("src/b.ts")).toBe(`import { ${newName} } from './a';\nnew ${newName}();\n`);
+		},
+	);
 
-	it("refuses a rename edit whose ranges do not hold the old name, saving nothing", async () => {
-		const workspace = createTestWorkspace(FILES);
-		const control = controlFor(workspace);
+	it.each([
+		{ content: FILES["src/a.ts"], start: 12, end: 17, text: "Beta", newName: "Beta" },
+		{ content: FILES["src/a.ts"], start: 13, end: 17, text: "Omeg", newName: "Beta" },
+		{ content: "export class AlphaExtra {}\n", start: 13, end: 17, text: "Omeg", newName: "Omega" },
+		{ content: "export class PreAlpha {}\n", start: 16, end: 20, text: "Omeg", newName: "Omega" },
+	])(
+		"refuses a stale, wrong-name or embedded-token rename ($content), saving nothing",
+		async ({ content, start, end, text, newName }) => {
+			const workspace = createTestWorkspace({ ...FILES, "src/a.ts": content });
+			const control = controlFor(workspace);
 
-		const code = await codeOf(
-			control.previewWorkspaceEdit(editFor(workspace, { "src/a.ts": [[0, 12, 0, 17, "Beta"]] }), {
-				description: "x",
-				rename: { oldName: "Alpha" },
-			}),
-		);
+			const code = await codeOf(
+				control.previewWorkspaceEdit(editFor(workspace, { "src/a.ts": [[0, start, 0, end, text]] }), {
+					description: "x",
+					rename: { oldName: "Alpha", newName },
+				}),
+			);
 
-		expect(code).toBe("SNAPSHOT_STALE");
-		expect(existsSync(join(workspace.storeRoot, "changesets"))).toBe(false);
-	});
+			expect(code).toBe("SNAPSHOT_STALE");
+			expect(existsSync(join(workspace.storeRoot, "changesets"))).toBe(false);
+		},
+	);
 
 	it("checks the document version a server edited against the one the client holds", async () => {
 		const workspace = createTestWorkspace(FILES);

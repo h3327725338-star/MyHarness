@@ -4,6 +4,8 @@
  * recorded in the feature matrix), not guesses about every server of a language.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { JsonObject } from "../types.ts";
 import type { LanguageServerDefinition } from "./types.ts";
 
@@ -19,8 +21,16 @@ export interface LanguageServerProfile {
 	 * extends/implements relations from the project's compiler instead.
 	 */
 	readonly typeHierarchyAdapter?: "typescript";
+	/** Split-language servers delegate target symbol normalization to the target language's server. */
+	readonly targetSymbolRouting?: "target-language";
+	/** gopls marks unopened disk document edits with zero. */
+	readonly unopenedEditVersion?: 0;
+	/** Observed limitation: successful responses may omit unopened consumers. */
+	readonly consumerCoverageWarning?: string;
 	/** Server startup policy, not a claim about client capabilities. */
 	readonly initializationOptions?: JsonObject;
+	/** Known servers needing explicit project configuration after initialized. */
+	readonly configuration?: JsonObject;
 }
 
 const DEFAULT_PROFILE: LanguageServerProfile = Object.freeze({ workspaceSymbolScope: "workspace" });
@@ -40,6 +50,24 @@ function isTypeScriptLanguageServer(definition: LanguageServerDefinition): boole
 	return definition.args.some((argument) => /typescript-language-server/iu.test(argument));
 }
 
-export function resolveServerProfile(definition: LanguageServerDefinition): LanguageServerProfile {
-	return isTypeScriptLanguageServer(definition) ? TYPESCRIPT_PROFILE : DEFAULT_PROFILE;
+export function resolveServerProfile(
+	definition: LanguageServerDefinition,
+	workspaceRoot?: string,
+): LanguageServerProfile {
+	if (definition.id === "managed-shell")
+		return {
+			...DEFAULT_PROFILE,
+			consumerCoverageWarning:
+				"managed-shell references are not object-scope-aware and references/rename may omit unopened sourced consumers during background indexing; project coverage is partial",
+		};
+	if (definition.id === "managed-go") return { ...DEFAULT_PROFILE, unopenedEditVersion: 0 };
+	if (definition.id === "managed-vue" || definition.id === "managed-svelte")
+		return { ...DEFAULT_PROFILE, targetSymbolRouting: "target-language" };
+	if (isTypeScriptLanguageServer(definition)) return TYPESCRIPT_PROFILE;
+	if (definition.id === "managed-rust" && workspaceRoot) {
+		const manifest = join(workspaceRoot, "Cargo.toml");
+		if (existsSync(manifest))
+			return { ...DEFAULT_PROFILE, configuration: { "rust-analyzer": { linkedProjects: [manifest] } } };
+	}
+	return DEFAULT_PROFILE;
 }
