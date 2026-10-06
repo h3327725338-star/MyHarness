@@ -77,6 +77,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [displayName, setDisplayName] = useState("");
 	const [createDisplayName, setCreateDisplayName] = useState("");
 	const [autoName, setAutoName] = useState(false);
+	const [deletingCopy, setDeletingCopy] = useState(null);
 	const known = useRef(null);
 	const list = useRef(null);
 	const linked = !!gitStatus.linkedWorktree;
@@ -201,6 +202,18 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		await done(t("Now working in an isolated copy on {branch}", { branch }));
 	};
 
+	const deleteCopy = async () => {
+		if (!deletingCopy || deletingCopy.isMain || deletingCopy.current || running || busy) return;
+		setBusy(`delete:${deletingCopy.path}`);
+		const result = await attempt(() => post("/api/git/worktrees/delete", { path: deletingCopy.path }, slot));
+		setBusy("");
+		if (!result) return;
+		setDeletingCopy(null);
+		if (naming?.path === deletingCopy.path) setNaming(null);
+		await Promise.all([loadWorktrees(), load(true)]);
+		await done(t("Copy deleted"));
+	};
+
 	const startCopy = async (w) => {
 		setBusy(`start:${w.path}`);
 		await attempt(() => openWorktreeTab(w.path, () => post("/api/git/worktrees/start", { path: w.path }, slot)));
@@ -299,10 +312,15 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 				<div class="branch-copy-actions">
 				<button class="icon-btn sm" disabled=${disabled} title=${t("Enter to edit")} aria-label=${t("Enter to edit")} onClick=${() => enterCopy(w.path)}><${Icon} name="arrowRight" size=${13} /></button>
 				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}>${busy === `start:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="play" size=${13} />`}</button>
-				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
+				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>
+				<button class="icon-btn sm" disabled=${disabled || w.current} title=${t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => setDeletingCopy(w)}><${Icon} name="trash" size=${13} /></button>` : null}
 				</div>
 			</div>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
 			</div>
+			${deletingCopy ? html`<div class="branch-note" role="group" aria-label=${t("Delete copy?")}>
+				<div>${t("Delete copy “{name}”? Its folder will be deleted, not its branch. This does not merge changes into main.", { name: deletingCopy.displayName || deletingCopy.branch || deletingCopy.path.split(/[\\/]/).pop() })}</div>
+				<div class="branch-form"><button class="btn sm danger" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${deleteCopy}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Delete")}</button><button class="btn sm" disabled=${!!busy} onClick=${() => setDeletingCopy(null)}>${t("Cancel")}</button></div>
+			</div>` : null}
 			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
 			<//>
 		</div>

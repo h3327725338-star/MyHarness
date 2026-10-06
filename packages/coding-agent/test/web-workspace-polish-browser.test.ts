@@ -14,6 +14,8 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 		const server = new WebHttpServer();
 		let branchRequests = 0;
 		let worktreeRequests = 0;
+		let copyDeleteRequests = 0;
+		let copyDeleted = false;
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
@@ -38,12 +40,23 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				return {
 					worktrees: [
 						{ path: "C:/project", isMain: true, current: true },
-						{ path: "C:/copies/task-fix", branch: "task-fix" },
-						{ path: "C:/copies/detached" },
+						...(copyDeleted ? [] : [{ path: "C:/copies/task-fix", branch: "task-fix" }]),
+						{ path: "C:/copies/detached", current: true },
 					],
 				};
 			});
-			server.route("GET", "/api/test/request-counts", () => ({ branchRequests, worktreeRequests }));
+			server.route("GET", "/api/test/request-counts", () => ({
+				branchRequests,
+				worktreeRequests,
+				copyDeleteRequests,
+			}));
+			server.route("POST", "/api/git/worktrees/delete", ({ body }) => {
+				expect(body).toMatchObject({ path: "C:/copies/task-fix" });
+				copyDeleteRequests++;
+				if (copyDeleteRequests === 1) throw new Error("Copy has uncommitted changes");
+				copyDeleted = true;
+				return { ok: true };
+			});
 			server.route("POST", "/api/files/upload", () => ({ name: "notes.txt", path: "C:/session/uploads/notes.txt" }));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("GET", "/api/resources", () => ({ commands: [] }));
@@ -139,6 +152,21 @@ try {
  check(pop.textContent.includes('已有副本')&&document.querySelectorAll('.branch-copy').length===2,'copy group missing');
  const copyInfo=document.querySelector('.branch-copy-info');
  check(copyInfo.children.length===2&&copyInfo.children[1].getBoundingClientRect().top>copyInfo.children[0].getBoundingClientRect().top,'copy name and path not stacked');
+ const copyDeletes=()=>[...document.querySelectorAll('[aria-label="删除副本"]')];
+ check(copyDeletes().length===2&&!copyDeletes()[0].disabled&&copyDeletes()[1].disabled,'copy deletion protection missing');
+ set({snap:{...state.snap,active:true}});await wait(60);check(copyDeletes().every(button=>button.disabled),'running task permits copy deletion');
+ set({snap:{...state.snap,active:false}});await wait(60);
+ copyDeletes()[0].click();await wait(60);
+ let deletion=document.querySelector('[aria-label="删除副本？"]');check(deletion?.textContent.includes('保留分支'),'copy deletion confirmation missing');
+ deletion.querySelectorAll('button')[1].click();await wait(60);
+ check(!document.querySelector('[aria-label="删除副本？"]')&&(await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===0,'cancel deletes copy');
+ copyDeletes()[0].click();await wait(60);document.querySelector('[aria-label="删除副本？"] button').click();
+ for(let i=0;i<100;i++){if((await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===1)break;await wait(50)}
+ await wait(100);
+ await until(()=>!document.querySelector('[aria-label="删除副本？"] button').disabled);
+ check(document.querySelectorAll('.branch-copy').length===2&&document.querySelector('[aria-label="删除副本？"]'),'failed deletion removes copy or loses confirmation');
+ document.querySelector('[aria-label="删除副本？"] button').click();await until(()=>document.querySelectorAll('.branch-copy').length===1);
+ check(!document.querySelector('[aria-label="删除副本？"]')&&document.querySelector('.branch-copy').textContent.includes('detached'),'successful deletion not refreshed');
  document.querySelector('.branch-wt-row .toggle').click();await wait(400);
  check(document.querySelector('[aria-label="副本使用的分支"]'),'creation form missing');
  heading.click();await wait(400);
