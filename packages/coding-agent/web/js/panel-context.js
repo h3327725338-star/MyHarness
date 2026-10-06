@@ -69,6 +69,21 @@ function TreeView({ snap }) {
 	</div>`)}</div>`;
 }
 
+/**
+ * Format session token counts. Absent / undetected buckets (e.g. providers that do not
+ * report cache writes) display "—" instead of claiming a measured zero.
+ */
+export function formatSessionTokenCount(stats, key) {
+	const value = stats?.tokens?.[key];
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return "—";
+	const cacheKey = { input: "input", cacheRead: "read", cacheWrite: "write" }[key];
+	const undetected =
+		stats?.tokenAvailability?.[key] === false ||
+		(cacheKey && stats?.cache && stats.cache[cacheKey]?.value == null);
+	if (value === 0 && undetected) return "—";
+	return fmtTokens(value);
+}
+
 export function ContextPanel() {
 	const snap = useStore((s) => s.snap);
 	const resources = useStore((s) => s.resources);
@@ -85,12 +100,7 @@ export function ContextPanel() {
 		loadStats();
 	}, [snap?.session?.id, snap?.lastRun?.runId]);
 	if (!snap) return null;
-	// DeepSeek's session projection displays numeric buckets, with absent cache counts accumulated as zero.
-	// Availability flags remain available for diagnostics and costs, not as a gate on this compatibility display.
-	const tokenCount = (key) => {
-		const value = stats?.tokens?.[key];
-		return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? fmtTokens(value) : "—";
-	};
+	const tokenCount = (key) => formatSessionTokenCount(stats, key);
 	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
 	const toggleTool = async (name, on) => {
 		const active = new Set(resources.tools.filter((t) => t.active).map((t) => t.name));

@@ -144,7 +144,7 @@ try {
  set({stats:{...measuredStats},resources:{tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},snap:{...state.snap,session:{id:'fixture'},thinking:{supported:false}}});
  render(h(ContextPanel),app); await wait(180);
  const token=app.querySelector('.session-tokens'); const cumulative=app.querySelector('.session-cumulative');
- if(!token?.textContent.includes('输入 304.3K · 缓存写入 0 · 缓存命中 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
+ if(!token?.textContent.includes('输入 304.3K · 缓存写入 — · 缓存命中 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
  if(!cumulative?.textContent.includes('累计速度 ≈ 25.0 t/s · 累计命中率 ≈ 97.76%')) throw Error('cumulative metrics wrong: '+cumulative?.textContent);
  if(Math.abs(token.getBoundingClientRect().left-cumulative.getBoundingClientRect().left)>.1 || cumulative.getBoundingClientRect().top<=token.getBoundingClientRect().top) throw Error('cumulative row not aligned below tokens');
  const context=app.querySelector('.cu');
