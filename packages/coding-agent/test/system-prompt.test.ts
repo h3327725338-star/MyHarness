@@ -64,7 +64,7 @@ describe("buildSystemPrompt", () => {
 			const main = buildSystemPrompt({ contextFiles: [], skills: [], cwd: "/project" });
 
 			expect(main).toContain("<output_language_policy>");
-			expect(main).toContain("By default, use Simplified Chinese for user-facing natural-language responses");
+			expect(main).toContain("By default, match and respond in the language used by the user");
 			expect(main.split(OUTPUT_LANGUAGE_POLICY)).toHaveLength(2);
 		});
 	});
