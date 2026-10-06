@@ -941,7 +941,7 @@ function generalScreen() {
 		if (sessions === undefined) loadUnbound();
 	}, []);
 	return {
-		title: t("Conversations"),
+		title: t("Default"),
 		subtitle: t("Chats that belong to no workspace"),
 		loading: sessions === undefined && !error,
 		error,
@@ -975,7 +975,7 @@ function workspaceRoot() {
 				chevron: true,
 				onEnter: (c) => c.push(() => workspaceScreen(w)),
 			})),
-			{ key: "general", label: t("Conversations"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
+			{ key: "general", label: t("Default"), desc: t("Chats that belong to no workspace"), badges: !currentRoot ? [t("current")] : [], chevron: true, onEnter: (c) => c.push(() => generalScreen()) },
 			{
 				key: "add",
 				label: t("Add workspace"),

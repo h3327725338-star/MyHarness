@@ -285,7 +285,7 @@ export function Sidebar() {
 			<div class="brand"><${ModeSwitch} /><span class="grow">MyHarness</span>
 				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
 			<${ModeTasks} />
-			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in Conversations (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
+			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
 			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
@@ -297,7 +297,7 @@ export function Sidebar() {
 				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} />`;
 			}} />
 			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
-			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Conversations") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>
