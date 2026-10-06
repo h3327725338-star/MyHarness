@@ -9,6 +9,7 @@
 
 import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
+import type { ChangeControl } from "../changes/service.ts";
 import type { SettingsManager } from "../config/settings/index.ts";
 import type { ToolDefinition, ToolInfo } from "../extensions/compat/types.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "../extensions/contracts/source-info.ts";
@@ -43,6 +44,8 @@ export interface SessionToolRegistryOptions {
 	/** Whether tools registered by extensions are exposed (not for delegated sessions). */
 	includeExtensionTools: boolean;
 	codeIntelligence?: SymbolsCodeIntelligenceServices;
+	/** The session's change control, shared by refactor and by the edit and write tools. */
+	changeControl?: ChangeControl;
 	/** Replaces the built-in tools (custom runtimes). */
 	baseToolsOverride?: Record<string, AgentTool>;
 	allowedToolNames?: string[];
@@ -176,6 +179,7 @@ export class SessionToolRegistry {
 					"edit",
 					"write",
 					"symbols",
+					"refactor",
 					"github",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
 				];
@@ -205,6 +209,8 @@ export class SessionToolRegistry {
 				)
 			: createAllToolDefinitions(this._options.cwd, {
 					read: { autoResizeImages, includeImages, omitDocumentPreviewImages },
+					edit: { changeControl: this._options.changeControl },
+					write: { changeControl: this._options.changeControl },
 					bash: {
 						commandPrefix: shellCommandPrefix,
 						shellPath,
@@ -214,6 +220,12 @@ export class SessionToolRegistry {
 						spawnHook: (context) => ({ ...context, env: { ...context.env, ...this.artifactEnvironment() } }),
 					},
 					symbols: { agentDir: this._options.agentDir, codeIntelligence: this._options.codeIntelligence },
+					refactor: {
+						agentDir: this._options.agentDir,
+						codeIntelligence: this._options.codeIntelligence,
+						changeControl: this._options.changeControl,
+						sessionId: () => sessionManager.getSessionId(),
+					},
 					agent: this._options.agent,
 					workflow: this._options.workflow,
 					ultracode: this._options.ultracode,
@@ -290,7 +302,7 @@ export class SessionToolRegistry {
 						return await persisted.execute(...args);
 					} finally {
 						const scope = artifactScope(sessionManager);
-						if (scope && ["write", "edit", "bash", "pwsh"].includes(tool.name)) {
+						if (scope && ["write", "edit", "refactor", "bash", "pwsh"].includes(tool.name)) {
 							try {
 								refreshArtifactIndexesIfChanged(scope);
 							} catch (error) {

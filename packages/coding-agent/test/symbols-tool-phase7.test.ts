@@ -362,7 +362,7 @@ describe("Symbols Tool V2", () => {
 		expect(router.findSymbol).toHaveBeenCalledTimes(1);
 		expect(index.ensureFresh).not.toHaveBeenCalled();
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(session.getAllTools().find((tool) => tool.name === "symbols")?.promptGuidelines).toHaveLength(8);
+		expect(session.getAllTools().find((tool) => tool.name === "symbols")?.promptGuidelines).toHaveLength(9);
 		session.dispose();
 	});
 });

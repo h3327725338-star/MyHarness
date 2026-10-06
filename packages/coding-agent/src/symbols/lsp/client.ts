@@ -55,9 +55,13 @@ export type LspRequestHandler = (params: JsonValue | undefined) => JsonValue | P
 export interface LspInitializeOptions {
 	rootUri?: string | null;
 	clientInfo?: LspClientInfo;
-	/** 缺省为 {}：只声明 MyHarness 真实支持的能力 */
+	/**
+	 * 缺省为 {}：纯协议客户端不自带产品能力。产品运行时由 LanguageServerManager 传入
+	 * client-capabilities.ts 中实际实现的能力 profile。
+	 */
 	capabilities?: LspClientCapabilities;
 	workspaceFolders?: LspWorkspaceFolder[] | null;
+	initializationOptions?: JsonValue;
 }
 
 interface PendingRequest {
@@ -175,6 +179,7 @@ export class LspClient {
 		if (options.rootUri !== undefined) params.rootUri = options.rootUri;
 		if (options.clientInfo !== undefined) params.clientInfo = options.clientInfo;
 		if (options.workspaceFolders !== undefined) params.workspaceFolders = options.workspaceFolders;
+		if (options.initializationOptions !== undefined) params.initializationOptions = options.initializationOptions;
 
 		let result: LspInitializeResult;
 		try {

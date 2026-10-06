@@ -1,0 +1,10 @@
+# Usage rules
+- Use preview_rename for a semantic rename of a class, function, method, property, variable or type across the project: it asks the language server, so references, re-exports and overrides are renamed together and unrelated objects with the same name are not. Use a symbol_id, or a precise position plus expectedName so the wrong identifier is never renamed.
+- A rename is not a signature or behavior change. To change parameters, return values or behavior, find the root cause, list the definitions, callers, implementations, configuration and tests that need to change (inspect_symbol helps), and carry the whole change in one preview_patch.
+- Use preview_patch for any other change that spans files, and for new files: edits[].oldText must match the file exactly once, as in edit; a file you create must not exist yet.
+- Read the preview before applying. It lists every file, the diffs, the approval needed, and other files that still mention the old name as text; check those, they may need a patch of their own.
+- Apply with the changesetId the preview returned. If a file changed after the preview, apply fails with EDIT_CONFLICT and writes nothing: preview again from the current files. Never edit around a refused change.
+- A change that needs the user's approval is asked for when you apply it. If the user declines or cannot be asked, apply fails with PERMIT_REQUIRED; do not look for another way to write the same files.
+- After apply, the change is not verified until diagnostics and project checks have run. Do not describe it as verified before they report; fix new errors they report in your next change.
+- Use status to see unfinished or recent changes and recover to finish the rollback of an interrupted one. RECOVERY_CONFLICT means a person changed a file after the change was written; leave that file to them.
+- Pass only parameters supported by the chosen operation.

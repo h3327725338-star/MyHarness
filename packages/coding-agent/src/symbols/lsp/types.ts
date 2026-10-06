@@ -112,6 +112,7 @@ export type LspInitializeParams = {
 	clientInfo?: LspClientInfo;
 	capabilities: LspClientCapabilities;
 	workspaceFolders?: LspWorkspaceFolder[] | null;
+	initializationOptions?: JsonValue;
 };
 
 export interface LspInitializeResult {

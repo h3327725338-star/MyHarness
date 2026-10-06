@@ -1,8 +1,10 @@
+import type { WorkspaceInventory } from "../index/workspace-inventory.ts";
 import type { LspClient } from "../lsp/client.ts";
 import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type {
 	CallHierarchyResult,
 	CodePosition,
+	CodeSymbolKind,
 	DefinitionResult,
 	DiagnosticsResult,
 	FileSymbolsResult,
@@ -10,6 +12,7 @@ import type {
 	ImplementationsResult,
 	IntelligenceResult,
 	ReferencesResult,
+	RenameResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
@@ -30,6 +33,8 @@ export interface SemanticCapabilities {
 	readonly hoverProvider: boolean;
 	readonly callHierarchyProvider: boolean;
 	readonly typeHierarchyProvider: boolean;
+	readonly renameProvider: boolean;
+	readonly prepareRenameProvider: boolean;
 	readonly positionEncoding: "utf-16";
 }
 
@@ -40,6 +45,18 @@ export interface SemanticBackendQueryOptions {
 	readonly signal?: AbortSignal;
 	readonly timeoutMs?: number;
 	readonly limit?: number;
+	/**
+	 * workspace/symbol only. Path and kind filters are applied by the backend before the limit, so a
+	 * correct candidate is not cut off by the server's own ordering.
+	 */
+	readonly path?: string;
+	readonly kinds?: readonly CodeSymbolKind[];
+	/** workspace/symbol only: languages and projects of the workspace, supplied by the router. */
+	readonly workspaceInventory?: WorkspaceInventory;
+	/** workspace/symbol only: most servers queried per request (default 3). */
+	readonly maxServers?: number;
+	/** workspace/symbol only: servers queried at the same time (default 3). */
+	readonly maxConcurrency?: number;
 }
 
 export interface SemanticReferencesQueryOptions extends SemanticBackendQueryOptions {
@@ -47,8 +64,33 @@ export interface SemanticReferencesQueryOptions extends SemanticBackendQueryOpti
 	readonly includeDeclaration?: boolean;
 }
 
+/** A server's workspace/applyEdit request, as the backend hands it to the gateway. */
+export interface ApplyEditRequest {
+	readonly label: string | undefined;
+	/** The WorkspaceEdit exactly as the server sent it. */
+	readonly edit: unknown;
+	readonly definitionId: string;
+	readonly workspaceRoot: string;
+	/** Versions of the documents the client holds open (absolute path to version). */
+	readonly documentVersions: Readonly<Record<string, number>>;
+	/** Aborted when the backend stops waiting for the answer; the gateway must not change files after that. */
+	readonly signal: AbortSignal;
+}
+
+export interface ApplyEditResponse {
+	readonly applied: boolean;
+	readonly failureReason?: string;
+}
+
+/** Decides what becomes of edits a server asks the client to apply. Without a gateway every request is refused. */
+export interface ApplyEditGateway {
+	apply(request: ApplyEditRequest): Promise<ApplyEditResponse>;
+}
+
 export interface SemanticBackendOptions {
 	readonly manager: LanguageServerManager;
+	/** How long a server's workspace/applyEdit request may wait for the gateway (default 30 s). */
+	readonly applyEditTimeoutMs?: number;
 }
 
 export interface SemanticDocumentStateSnapshot {
@@ -96,6 +138,17 @@ export interface SemanticBackendApi {
 		target: Extract<SymbolTarget, { type: "position" }>,
 		options: SemanticBackendQueryOptions,
 	): Promise<TypeHierarchyResult>;
+	/**
+	 * textDocument/prepareRename + textDocument/rename. Returns the server's WorkspaceEdit as a proposal; nothing is
+	 * written. Optional so a backend that cannot rename is still a valid semantic backend.
+	 */
+	rename?(
+		target: Extract<SymbolTarget, { type: "position" }>,
+		newName: string,
+		options: SemanticBackendQueryOptions,
+	): Promise<RenameResult>;
+	/** Invalidate project diagnostics and synchronize already-open documents after a controlled commit. */
+	notifyCommitted?(paths: readonly string[], workspaceRoot: string): Promise<void>;
 	getDiagnostics(filePath: string, options: SemanticBackendQueryOptions): Promise<DiagnosticsResult>;
 	closeDocument(filePath: string, options: SemanticBackendQueryOptions): Promise<void>;
 	dispose(): Promise<void>;

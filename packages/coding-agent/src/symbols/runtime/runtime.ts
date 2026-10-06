@@ -1,6 +1,7 @@
 import type { SettingsManager } from "../../config/settings/index.ts";
 import { CodeSymbolIndex } from "../index/code-index.ts";
 import { LightweightCodeIntelligenceBackend } from "../index/lightweight/backend.ts";
+import { StructuralReuseGate } from "../index/reuse-review.ts";
 import { CodeIntelligenceRouter } from "../index/router/router.ts";
 import { LanguageServerManager, normalizeWorkspaceRoot } from "../lsp/language-server/manager.ts";
 import { LanguageServerRegistry } from "../lsp/language-server/registry.ts";
@@ -77,6 +78,23 @@ export class CodeIntelligenceRuntime {
 		});
 		this.servicesValue = Object.freeze({
 			workspaceRoot: this.workspaceRoot,
+			changeGates: [
+				new StructuralReuseGate(
+					this.index,
+					this.workspaceRoot,
+					registry
+						.getAll()
+						.flatMap((definition) =>
+							definition.env?.MYHARNESS_CODE_INTELLIGENCE_ROOT
+								? [definition.env.MYHARNESS_CODE_INTELLIGENCE_ROOT]
+								: [],
+						),
+				),
+			],
+			notifyCommitted: async (paths: readonly string[]) => {
+				await this.semantic?.notifyCommitted(paths, this.workspaceRoot);
+				await this.index.ensureFresh();
+			},
 			router: this.router,
 			index: this.index as CodeIntelligenceRuntimeServices["index"],
 			symbolStore: this.symbolStore,

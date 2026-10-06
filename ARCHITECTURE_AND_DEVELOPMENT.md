@@ -64,7 +64,8 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 | `tools/` | 工具执行 contract、权限、取消和结果 |
 | `extensions/` | contracts、API entry、loader、runtime 与包管理 |
 | `git/` | Git 原语、checkpoint、Worktree 和提交/推送流程 |
-| `symbols/` | 代码索引、语义查询、语言服务器与模块安装 |
+| `symbols/` | 代码索引、语义查询、语言服务器与模块安装；复用现有索引的 TS/JS 结构克隆审查 |
+| `changes/` | 文件变更预览、门禁、批准、hash-bound permit、共享锁、journal 与精确恢复；由 AgentSession 注入 edit/write/refactor |
 | `system-prompts/` | 产品 prompt 组合与 loader；静态资源在仓库根同名目录 |
 | `modes/web/` | HTTP/SSE、WebHost、页面交互桥接与真实 Shell Terminal |
 | `exports/` | HTML / JSONL 数据导出，不是终端输出模式 |

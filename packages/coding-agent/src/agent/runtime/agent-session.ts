@@ -32,6 +32,8 @@ import {
 	streamSimple,
 } from "@myharness/ai/compat";
 import type { ResourceExtensionPaths, ResourceLoader } from "../../application/resource-loader.ts";
+import { createChangeControl } from "../../changes/factory.ts";
+import type { ChangeControl } from "../../changes/service.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import type { CompactionResult, CompactionSettings } from "../../context/compact/index.ts";
@@ -458,6 +460,7 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private readonly _tools: SessionToolRegistry;
+	readonly changeControl: ChangeControl;
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -550,6 +553,22 @@ export class AgentSession {
 				this._backgroundWork.setWorkflowControls(toolCallId, controls),
 			onControlsRelease: (toolCallId: string) => this._backgroundWork.releaseWorkflowControls(toolCallId),
 		};
+		this.changeControl = createChangeControl({
+			gates: config.codeIntelligence?.changeGates,
+			agentDir: config.agentDir ?? getAgentDir(),
+			workspaceRoot: config.cwd,
+			approval: {
+				request: async (request, options) => {
+					const approved = await this._extensionUIContext?.confirm(request.title, request.message, {
+						signal: options?.signal,
+					});
+					return approved ? { approved: true } : { approved: false, reason: "approval declined or unavailable" };
+				},
+			},
+		});
+		this.changeControl.onCommitted(async ({ changeset }) => {
+			await config.codeIntelligence?.notifyCommitted?.(changeset.files.map((file) => file.absolutePath));
+		});
 		this._tools = new SessionToolRegistry({
 			cwd: config.cwd,
 			agentDir: config.agentDir,
@@ -558,6 +577,7 @@ export class AgentSession {
 			customTools: this._agentRole === "main" ? (config.customTools ?? []) : [],
 			includeExtensionTools: this._agentRole !== "delegated",
 			codeIntelligence: config.codeIntelligence,
+			changeControl: this.changeControl,
 			baseToolsOverride: config.baseToolsOverride,
 			allowedToolNames,
 			excludedToolNames: config.excludedToolNames,

@@ -1,5 +1,5 @@
 import { normalizeWorkspaceRoot } from "../../lsp/language-server/manager.ts";
-import { isInsideWorkspace, normalizeDocumentPath } from "../../path-semantics.ts";
+import { isInsideWorkspace, normalizeDocumentPath, relativeToWorkspace } from "../../path-semantics.ts";
 import { SemanticBackendError } from "../../semantic/errors.ts";
 import type {
 	SemanticAdvancedBackendApi,
@@ -19,6 +19,7 @@ import type {
 	ImplementationsResult,
 	IntelligenceResult,
 	ReferencesResult,
+	RenameResult,
 	ResolvedSymbolResult,
 	SymbolQuery,
 	SymbolSearchResult,
@@ -27,6 +28,7 @@ import type {
 	WorkspaceSymbolsResult,
 } from "../../types.ts";
 import type { LightweightBackendApi, LightweightQueryOptions } from "../lightweight/types.ts";
+import type { WorkspaceInventory } from "../workspace-inventory.ts";
 import { CodeIntelligenceRouterError } from "./errors.ts";
 import {
 	backendForTarget,
@@ -93,7 +95,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		if (normalized.mode === "lightweight") {
 			this.requireLightweightCompatibleOptions(normalized, "file_symbols");
 			const result = await this.lightweight.fileSymbols(filePath, this.lightweightOptions(normalized));
-			this.observeFileSymbols(filePath, result);
+			this.observeFileSymbols(filePath, result, normalized);
 			return result;
 		}
 
@@ -102,7 +104,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 				filePath,
 				this.semanticOptions(normalized),
 			);
-			this.observeFileSymbols(filePath, result);
+			this.observeFileSymbols(filePath, result, normalized);
 			return result;
 		}
 		if (!this.semantic) {
@@ -115,7 +117,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 
 		try {
 			const result = await this.semantic.fileSymbols(filePath, this.semanticOptions(normalized));
-			this.observeFileSymbols(filePath, result);
+			this.observeFileSymbols(filePath, result, normalized);
 			return result;
 		} catch (cause) {
 			const decision = classifyFileSymbolsFallback(cause, normalized.definitionId, normalized.signal);
@@ -149,19 +151,21 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 				message: "semantic backend is not configured",
 			});
 		}
+		const pathFilter = this.resolveWorkspacePathFilter(normalized);
 		try {
-			const result = await this.requireAdvancedSemantic("workspace_symbols").workspaceSymbols(
-				query,
-				this.semanticOptions({
-					...normalized,
-					limit: normalized.limit,
-				}),
-			);
-			const filtered = this.filterWorkspaceSymbols(result, normalized);
-			this.observeSymbols(filtered.items, filtered.meta.source, normalized);
-			return filtered;
+			const inventory = await this.workspaceInventory(normalized);
+			const result = await this.requireAdvancedSemantic("workspace_symbols").workspaceSymbols(query, {
+				...this.semanticOptions(normalized),
+				path: pathFilter.relative,
+				kinds: normalized.kinds,
+				workspaceInventory: inventory.value,
+			});
+			const filtered = this.filterWorkspaceSymbols(result, normalized, pathFilter.absolute);
+			const output = inventory.warning ? this.withWarning(filtered, inventory.warning) : filtered;
+			this.observeSymbols(output.items, output.meta.source, normalized);
+			return output;
 		} catch (cause) {
-			const decision = classifyWorkspaceSymbolsFallback(cause, normalized.signal);
+			const decision = classifyWorkspaceSymbolsFallback(cause, normalized.definitionId, normalized.signal);
 			if (!decision || normalized.mode === "semantic") throw cause;
 			return this.runWorkspaceFallback(query, normalized, cause, decision);
 		}
@@ -217,19 +221,61 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 	}
 
 	async supertypes(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<TypeHierarchyResult> {
-		const result = await this.routeAdvancedTarget("supertypes", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("supertypes").supertypes(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("supertypes", target, options, async (position, normalized) =>
+			this.requireAdvancedSemantic("supertypes").supertypes(position, await this.typeHierarchyOptions(normalized)),
 		);
 		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "supertypes"));
 		return result;
 	}
 
 	async subtypes(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<TypeHierarchyResult> {
-		const result = await this.routeAdvancedTarget("subtypes", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("subtypes").subtypes(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("subtypes", target, options, async (position, normalized) =>
+			this.requireAdvancedSemantic("subtypes").subtypes(position, await this.typeHierarchyOptions(normalized)),
 		);
 		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "subtypes"));
 		return result;
+	}
+
+	/**
+	 * The language server's rename of the target. The server that produced a symbol_id answers for it, so a
+	 * symbol is never renamed by whichever server happens to be preferred for its language now.
+	 */
+	async rename(
+		target: SymbolTarget,
+		newName: string,
+		options: CodeIntelligenceRoutingOptions = {},
+	): Promise<RenameResult> {
+		const normalized = this.normalizeOptions(options, "rename");
+		if (normalized.mode === "lightweight") {
+			throw this.error("unsupported_operation", "rename requires the semantic backend", "rename");
+		}
+		const semantic = this.requireSemantic("rename");
+		if (typeof semantic.rename !== "function") {
+			throw this.error("unsupported_operation", "semantic backend does not implement rename", "rename");
+		}
+		let position: Extract<SymbolTarget, { type: "position" }>;
+		let effective = normalized;
+		if (target.type === "position") {
+			position = target;
+		} else {
+			const resolved =
+				target.type === "symbol_id"
+					? await this.resolveStoredSymbol(target.symbolId, normalized, "rename")
+					: await this.resolveNamePath(target, normalized, "rename");
+			if (!resolved.symbol.selectionRange) {
+				throw this.error(
+					"unsupported_target",
+					"rename requires a precise selection range; this symbol only has line-level precision",
+					"rename",
+				);
+			}
+			position = { type: "position", path: resolved.symbol.path, position: resolved.symbol.selectionRange.start };
+			const definitionId = resolved.symbol.provenance?.definitionId;
+			if (normalized.definitionId === undefined && definitionId !== undefined) {
+				effective = { ...normalized, definitionId };
+			}
+		}
+		return semantic.rename(position, newName, this.semanticOptions(effective));
 	}
 
 	async findDefinition(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<DefinitionResult> {
@@ -412,6 +458,12 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		};
 	}
 
+	/** Type hierarchy adapters search the other projects of the workspace for subtypes. */
+	private async typeHierarchyOptions(options: CodeIntelligenceRoutingOptions): Promise<SemanticBackendQueryOptions> {
+		const inventory = await this.workspaceInventory(options);
+		return { ...this.semanticOptions(options), workspaceInventory: inventory.value };
+	}
+
 	private semanticReferencesOptions(options: CodeIntelligenceRoutingOptions): SemanticReferencesQueryOptions {
 		return {
 			...this.semanticOptions(options),
@@ -441,12 +493,17 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		}
 	}
 
-	private observeFileSymbols(filePath: string, result: FileSymbolsResult): void {
+	private observeFileSymbols(
+		filePath: string,
+		result: FileSymbolsResult,
+		options?: CodeIntelligenceRoutingOptions,
+	): void {
 		if (!this.symbolStore) return;
 		const symbols = result.items.flatMap((node) => this.flattenTree(node));
 		this.symbolStore.replaceFile(filePath, symbols, {
 			source: result.meta.source,
 			workspaceRoot: this.workspaceRoot,
+			definitionId: options?.definitionId,
 			completeness: result.meta.completeness,
 		});
 	}
@@ -561,12 +618,15 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		if (options.mode === "lightweight" && backend === "semantic") {
 			throw this.error("unsupported_target", "lightweight mode cannot use a semantic symbol_id", operation);
 		}
+		// A symbol must be re-read from the server that produced it, not from whichever server is preferred now.
+		const definitionId = options.definitionId ?? record.definitionId ?? record.symbol.provenance?.definitionId;
 		let result: FileSymbolsResult;
 		try {
 			result =
 				backend === "semantic"
 					? await this.requireSemantic(operation).fileSymbols(record.symbol.path, {
 							...this.semanticOptions(options),
+							definitionId,
 						})
 					: await this.lightweight.fileSymbols(record.symbol.path, this.lightweightOptions(options));
 		} catch (cause) {
@@ -598,7 +658,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		this.symbolStore.upsert(current, {
 			source: result.meta.source,
 			workspaceRoot: this.workspaceRoot,
-			definitionId: options.definitionId,
+			definitionId: backend === "semantic" ? definitionId : options.definitionId,
 		});
 		return {
 			symbol: current,
@@ -629,7 +689,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			const result = await this.lightweight.fileSymbols(filePath, this.lightweightOptions(options));
 			throwIfAborted(options.signal);
 			const output = cloneWithFallback(result as IntelligenceResult<T>, decision);
-			this.observeFileSymbols(filePath, output as FileSymbolsResult);
+			this.observeFileSymbols(filePath, output as FileSymbolsResult, options);
 			return output;
 		} catch (fallbackCause) {
 			if (options.signal?.aborted || isAbortError(fallbackCause)) throw fallbackCause;
@@ -644,27 +704,62 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		}
 	}
 
+	/** Validate a workspace path filter once; the backend filters before its limit, the router re-checks after. */
+	private resolveWorkspacePathFilter(options: CodeIntelligenceRoutingOptions): {
+		readonly absolute?: string;
+		readonly relative?: string;
+	} {
+		if (options.path === undefined) return {};
+		try {
+			const absolute = normalizeDocumentPath(options.path, this.workspaceRoot);
+			if (!isInsideWorkspace(this.workspaceRoot, absolute)) {
+				throw new Error("path is outside the workspace root");
+			}
+			const relative = relativeToWorkspace(this.workspaceRoot, absolute);
+			return { absolute, relative: relative === "" ? undefined : relative };
+		} catch (cause) {
+			throw this.error(
+				"invalid_routing_options",
+				"workspace symbol path must be inside the workspace root",
+				"workspace_symbols",
+				cause,
+			);
+		}
+	}
+
+	/** Languages and projects of the workspace; absent (with a reason) when the index cannot provide them. */
+	private async workspaceInventory(
+		options: CodeIntelligenceRoutingOptions,
+	): Promise<{ readonly value?: WorkspaceInventory; readonly warning?: string }> {
+		if (typeof this.lightweight.getWorkspaceInventory !== "function") return {};
+		try {
+			const value = await this.lightweight.getWorkspaceInventory(this.lightweightOptions(options));
+			return value ? { value } : {};
+		} catch (cause) {
+			if (options.signal?.aborted || isAbortError(cause)) throw cause;
+			const reason = cause instanceof Error ? cause.message : String(cause);
+			return {
+				warning: `workspace language inventory is unavailable (${reason}); language servers were chosen by priority`,
+			};
+		}
+	}
+
+	private withWarning(result: WorkspaceSymbolsResult, warning: string): WorkspaceSymbolsResult {
+		return {
+			items: result.items,
+			meta: {
+				...result.meta,
+				completeness: "partial",
+				warnings: [...new Set([...(result.meta.warnings ?? []), warning])],
+			},
+		};
+	}
+
 	private filterWorkspaceSymbols(
 		result: WorkspaceSymbolsResult,
 		options: CodeIntelligenceRoutingOptions,
+		pathFilter: string | undefined,
 	): WorkspaceSymbolsResult {
-		let pathFilter: string | undefined;
-		if (options.path !== undefined) {
-			try {
-				const absoluteFilter = normalizeDocumentPath(options.path, this.workspaceRoot);
-				if (!isInsideWorkspace(this.workspaceRoot, absoluteFilter)) {
-					throw new Error("path is outside the workspace root");
-				}
-				pathFilter = absoluteFilter;
-			} catch (cause) {
-				throw this.error(
-					"invalid_routing_options",
-					"workspace symbol path must be inside the workspace root",
-					"workspace_symbols",
-					cause,
-				);
-			}
-		}
 		const kindFilter = options.kinds ? new Set(options.kinds) : undefined;
 		let items = result.items.filter((symbol) => {
 			if (pathFilter && !isInsideWorkspace(pathFilter, normalizeDocumentPath(symbol.path, this.workspaceRoot))) {

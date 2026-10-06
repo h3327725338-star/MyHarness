@@ -110,7 +110,7 @@ export class SymbolStore implements SymbolStoreApi {
 			workspaceIdentity: workspaceIdentity(options.workspaceRoot ?? this.workspaceRoot),
 			observedGeneration: ++this.generation,
 			lastSeen: Date.now(),
-			definitionId: options.definitionId,
+			definitionId: options.definitionId ?? symbol.provenance?.definitionId,
 		});
 		this.entries.set(symbol.id, record);
 		return cloneRecord(record);

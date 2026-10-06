@@ -73,8 +73,12 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		const options = semanticOptions(environment.root);
 
 		const workspace = await environment.backend.workspaceSymbols("Target", options);
-		expect(workspace.items[0]).toMatchObject({ name: "Target", path: "src/target.ts", namePath: "Container/Target" });
+		// A workspace hit is canonicalized against the file symbol tree: same object, same name path and id as
+		// file_symbols reports, not a server-specific `containerName/name` composition.
+		expect(workspace.items[0]).toMatchObject({ name: "Target", path: "src/target.ts", namePath: "Target" });
 		expect(workspace.items[0]?.selectionRange).toBeDefined();
+		const fileTree = await environment.backend.fileSymbols("src/target.ts", options);
+		expect(workspace.items[0]?.id).toBe(fileTree.items[0]?.symbol.id);
 
 		const hover = await environment.backend.hover(
 			{ type: "position", path: "src/target.ts", position: { line: 0, character: 14 } },
@@ -136,7 +140,10 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		expect(fileSymbols.items[0]?.symbol.path).toBe("SRC/TARGET.TS");
 		expect(definition.items[0]?.path).toBe("SRC/TARGET.TS");
 		expect(references.items).toHaveLength(2);
-		expect(workspaceSymbols.items[0]?.path).toBe("src/target.ts");
+		// The workspace hit joins the document state opened through the alias, so its path (and id) match
+		// what file_symbols and definition report in this session.
+		expect(workspaceSymbols.items[0]?.path).toBe("SRC/TARGET.TS");
+		expect(workspaceSymbols.items[0]?.id).toBe(fileSymbols.items[0]?.symbol.id);
 		expect(filteredWorkspaceSymbols.items).toHaveLength(1);
 		expect(hover.items[0]?.contents[0]).toMatchObject({ kind: "markdown" });
 		expect(store.size).toBeGreaterThan(0);

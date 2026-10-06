@@ -11,7 +11,9 @@ import type {
 	CodeQueryOptions,
 	IndexedCodeReference,
 	IndexedCodeSymbol,
+	WorkspaceFacts,
 } from "../code-index.ts";
+import type { WorkspaceInventory } from "../workspace-inventory.ts";
 
 export interface LightweightQueryOptions {
 	readonly signal?: AbortSignal;
@@ -26,6 +28,8 @@ export interface LightweightIndexPort {
 	findDefinition(name: string, options?: CodeQueryOptions): Promise<IndexedCodeSymbol[]>;
 	findReferences(name: string, options?: CodeQueryOptions): Promise<IndexedCodeReference[]>;
 	listFileSymbols(path: string, options?: CodeQueryOptions): Promise<IndexedCodeSymbol[]>;
+	/** Optional: files and project markers seen by the last refresh. Injected test indexes may omit it. */
+	getWorkspaceFacts?(): WorkspaceFacts;
 }
 
 export interface LightweightBackendApi {
@@ -33,6 +37,8 @@ export interface LightweightBackendApi {
 	fileSymbols(filePath: string, options?: LightweightQueryOptions): Promise<FileSymbolsResult>;
 	findDefinition(target: SymbolTarget, options?: LightweightQueryOptions): Promise<DefinitionResult>;
 	findReferences(target: SymbolTarget, options?: LightweightQueryOptions): Promise<ReferencesResult>;
+	/** Languages and projects of the workspace, or undefined when the index cannot provide them. */
+	getWorkspaceInventory?(options?: LightweightQueryOptions): Promise<WorkspaceInventory | undefined>;
 }
 
 export interface LightweightBackendOptions {

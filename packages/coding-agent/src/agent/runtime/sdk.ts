@@ -25,6 +25,7 @@ import {
 	createPwshTool,
 	createReadOnlyTools,
 	createReadTool,
+	createRefactorTool,
 	createSymbolsTool,
 	createWriteTool,
 	type SymbolsCodeIntelligenceServices,
@@ -61,14 +62,14 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (read, bash, pwsh, edit, write, symbols, github)
+	 * - "builtin": disable the default built-in tools (read, bash, pwsh, edit, write, symbols, refactor, github)
 	 *   but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, MyHarness enables the default built-in tools (read, bash, pwsh, edit, write, symbols, github)
+	 * When omitted, MyHarness enables the default built-in tools (read, bash, pwsh, edit, write, symbols, refactor, github)
 	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
 	 */
@@ -134,6 +135,7 @@ export {
 	createFindTool,
 	createLsTool,
 	createPwshTool,
+	createRefactorTool,
 	createSymbolsTool,
 };
 
@@ -282,6 +284,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					"edit",
 					"write",
 					"symbols",
+					"refactor",
 					"github",
 					...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
 				] as ToolName[])

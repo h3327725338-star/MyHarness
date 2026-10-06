@@ -1,3 +1,4 @@
+import type { ChangeGate } from "../changes/service.ts";
 import {
 	type CodeIndexRefreshSummary,
 	type CodeIndexStats,
@@ -37,6 +38,8 @@ export interface SymbolsIndexPort {
 }
 
 export interface SymbolsCodeIntelligenceServices {
+	readonly changeGates?: readonly ChangeGate[];
+	readonly notifyCommitted?: (paths: readonly string[]) => Promise<void>;
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
 	readonly index: SymbolsIndexPort;

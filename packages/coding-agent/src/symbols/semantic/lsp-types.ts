@@ -92,6 +92,7 @@ export interface RawLspDiagnosticReport {
 	readonly items: readonly JsonValue[];
 	readonly version: number | undefined;
 	readonly resultId: string | undefined;
+	readonly relatedDocuments?: Readonly<Record<string, RawLspDiagnosticReport>>;
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {
@@ -206,6 +207,25 @@ function parseCallHierarchyItem(value: unknown): RawLspCallHierarchyItem | undef
 	return { name: value.name, kind: value.kind, uri: value.uri, range, selectionRange, data: value.data };
 }
 
+export type RawLspPrepareRename =
+	| { readonly kind: "range"; readonly range: RawLspRange; readonly placeholder: string | undefined }
+	| { readonly kind: "default" };
+
+/** textDocument/prepareRename result: Range | { range, placeholder } | { defaultBehavior: true } | null. */
+export function readPrepareRename(value: unknown): RawLspPrepareRename | null | undefined {
+	if (value === null) return null;
+	if (!isJsonObject(value)) return undefined;
+	if (value.defaultBehavior === true) return { kind: "default" };
+	if (value.start !== undefined) {
+		const range = readRange(value);
+		return range ? { kind: "range", range, placeholder: undefined } : undefined;
+	}
+	const range = readRange(value.range);
+	if (!range) return undefined;
+	if (value.placeholder !== undefined && typeof value.placeholder !== "string") return undefined;
+	return { kind: "range", range, placeholder: value.placeholder };
+}
+
 export function readCallHierarchyItem(value: unknown): RawLspCallHierarchyItem | undefined {
 	return parseCallHierarchyItem(value);
 }
@@ -252,9 +272,24 @@ export function readPublishDiagnosticsParams(value: unknown): RawPublishDiagnost
 
 /** Parse the pull-diagnostics report from textDocument/diagnostic. */
 export function readDiagnosticReport(value: unknown): RawLspDiagnosticReport | undefined {
+	return readDiagnosticReportValue(value, true);
+}
+
+function readDiagnosticReportValue(value: unknown, allowRelated: boolean): RawLspDiagnosticReport | undefined {
 	if (!isJsonObject(value) || (value.kind !== "full" && value.kind !== "unchanged")) return undefined;
 	if (value.resultId !== undefined && typeof value.resultId !== "string") return undefined;
 	if (value.version !== undefined && !isFiniteInteger(value.version)) return undefined;
+	let relatedDocuments: Record<string, RawLspDiagnosticReport> | undefined;
+	if (value.relatedDocuments !== undefined) {
+		if (!allowRelated || !isJsonObject(value.relatedDocuments)) return undefined;
+		relatedDocuments = Object.create(null) as Record<string, RawLspDiagnosticReport>;
+		for (const [uri, raw] of Object.entries(value.relatedDocuments)) {
+			const report = readDiagnosticReportValue(raw, false);
+			if (!report) return undefined;
+			relatedDocuments[uri] = report;
+		}
+	}
+	if (value.kind === "unchanged" && typeof value.resultId !== "string") return undefined;
 	if (value.kind === "full") {
 		if (!Array.isArray(value.items)) return undefined;
 		return {
@@ -262,6 +297,7 @@ export function readDiagnosticReport(value: unknown): RawLspDiagnosticReport | u
 			items: value.items,
 			version: value.version,
 			resultId: value.resultId,
+			relatedDocuments,
 		};
 	}
 	return {
@@ -269,6 +305,7 @@ export function readDiagnosticReport(value: unknown): RawLspDiagnosticReport | u
 		items: [],
 		version: value.version,
 		resultId: value.resultId,
+		relatedDocuments,
 	};
 }
 

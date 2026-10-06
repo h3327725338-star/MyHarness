@@ -627,6 +627,53 @@ describe("LspSemanticBackend: diagnostics and failures", () => {
 		expect(fixture.methodCounts["textDocument/diagnostic"]).toBe(1);
 	});
 
+	it("reuses only a pull resultId and accepts a versionless unchanged standard report", async () => {
+		const environment = await createEnvironment("pull-diagnostics");
+		const first = await environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+		const second = await environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+		expect(second.items).toEqual(first.items);
+		expect(second.meta.completeness).toBe("complete");
+		expect((await state(environment)).lastSemanticRequest?.params.previousResultId).toBe("pull-1");
+	});
+
+	it("invalidates cached caller diagnostics after synchronizing a dependency", async () => {
+		const environment = await createEnvironment("diagnostics");
+		await waitForDiagnostics(environment, 1);
+		await environment.backend.fileSymbols("src/target.ts", options(environment.root));
+		const result = await environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+		expect(result.meta.completeness).toBe("partial");
+		expect(result.meta.warnings?.some((warning) => warning.includes("generation"))).toBe(true);
+	});
+
+	it("does not accept a delayed pull as current after concurrent dependency synchronization", async () => {
+		const environment = await createEnvironment("pull-diagnostics-delayed");
+		const pending = environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+		await waitFor(async () => (await state(environment)).methodCounts["textDocument/diagnostic"] === 1);
+		await environment.backend.fileSymbols("src/target.ts", options(environment.root));
+		const result = await pending;
+		expect(result.meta.completeness).toBe("partial");
+		expect(result.meta.warnings?.some((warning) => warning.includes("stale"))).toBe(true);
+	});
+
+	it("does not certify unsynchronized related pull documents", async () => {
+		const environment = await createEnvironment("pull-diagnostics-related");
+		const result = await environment.backend.getDiagnostics("src/source.ts", options(environment.root));
+		expect(result.meta.completeness).toBe("partial");
+		expect(result.meta.warnings?.some((warning) => warning.includes("unsynchronized"))).toBe(true);
+	});
+
+	it("synchronizes opened changed files on commit without another semantic query", async () => {
+		const environment = await createEnvironment("diagnostics");
+		await environment.backend.fileSymbols("src/source.ts", options(environment.root));
+		await writeFile(join(environment.root, "src/source.ts"), `${sourceText}\nexport const changed = 1;`, "utf8");
+		await environment.backend.notifyCommitted([join(environment.root, "src/source.ts")], environment.root);
+		expect(environment.backend.getSessions()[0].documents[0]).toMatchObject({
+			version: 2,
+			text: `${sourceText}\nexport const changed = 1;`,
+		});
+		expect((await state(environment)).counts.didChange).toBe(1);
+	});
+
 	it("keeps a visible partial result when an advertised pull provider rejects the request", async () => {
 		const environment = await createEnvironment("pull-diagnostics-unsupported");
 		const result = await environment.backend.getDiagnostics("src/source.ts", options(environment.root));

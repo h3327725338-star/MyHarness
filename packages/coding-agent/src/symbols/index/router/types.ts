@@ -9,6 +9,7 @@ import type {
 	HoverResult,
 	ImplementationsResult,
 	ReferencesResult,
+	RenameResult,
 	ResolvedSymbolResult,
 	SymbolQuery,
 	SymbolSearchResult,
@@ -52,6 +53,8 @@ export interface CodeIntelligenceRouterApi {
 	outgoingCalls?(target: SymbolTarget, options?: CodeIntelligenceRoutingOptions): Promise<CallHierarchyResult>;
 	supertypes?(target: SymbolTarget, options?: CodeIntelligenceRoutingOptions): Promise<TypeHierarchyResult>;
 	subtypes?(target: SymbolTarget, options?: CodeIntelligenceRoutingOptions): Promise<TypeHierarchyResult>;
+	/** Ask the language server for the edit that renames the target; nothing is written. */
+	rename?(target: SymbolTarget, newName: string, options?: CodeIntelligenceRoutingOptions): Promise<RenameResult>;
 }
 
 /** The complete router surface exposed by the Phase 8 runtime. */

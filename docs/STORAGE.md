@@ -119,6 +119,22 @@ deleted. Its optional artifact-deletion choice removes only that Workspace's
 artifacts; keeping them leaves them available globally. Deleting artifacts refuses
 symbolic links/junctions rather than traversing indirect user-owned targets.
 
+## Controlled change state
+
+`<agent>/change-control/workspaces/<normalized-path-hash>/` stores versioned
+changeset manifests, proposed after bytes, diffs, permits and recovery journals.
+`<agent>/change-control/locks/` coordinates controlled writers across processes.
+These records can contain project source; treat them as private runtime data,
+not disposable cache or public reports. A Session shares one ChangeControl
+between local edit, write and refactor tools. Recovery restores only transaction
+writes whose current bytes still match the journal; external edits cause a
+recovery conflict and are not overwritten. Ordinary filesystems do not provide
+atomic visibility across several files.
+
+Verification debt persistence and final completion enforcement are not yet
+implemented by this change state. A committed journal is not proof that project
+checks or tests passed.
+
 ## Lifecycle and cleanup rules
 
 - `data/`, global Agent data, Session files, credentials, traces, memory and

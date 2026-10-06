@@ -81,6 +81,51 @@ export interface CodeIndexRefreshSummary {
 	symbolCount: number;
 }
 
+/** Project configuration files whose presence says how a language server should treat a directory. */
+const PROJECT_MARKER_NAMES = new Set([
+	"tsconfig.json",
+	"jsconfig.json",
+	"package.json",
+	"pyproject.toml",
+	"setup.py",
+	"setup.cfg",
+	"requirements.txt",
+	"pyrightconfig.json",
+	"cargo.toml",
+	"go.mod",
+	"go.work",
+	"pom.xml",
+	"build.gradle",
+	"build.gradle.kts",
+	"settings.gradle",
+	"settings.gradle.kts",
+	"cmakelists.txt",
+	"compile_commands.json",
+	"composer.json",
+	"gemfile",
+	"package.swift",
+]);
+
+function isProjectMarker(fileName: string): boolean {
+	const lower = fileName.toLowerCase();
+	return PROJECT_MARKER_NAMES.has(lower) || lower.endsWith(".csproj") || lower.endsWith(".sln");
+}
+
+/** A read-only view of what the last refresh saw; it is the input of the workspace language inventory. */
+export interface WorkspaceFacts {
+	readonly files: ReadonlyArray<{
+		readonly path: string;
+		readonly language: string;
+		readonly size: number;
+		readonly hash: string;
+	}>;
+	/** Workspace-relative paths of project configuration files found during the last scan. */
+	readonly markers: readonly string[];
+	/** False when the last scan stopped at a limit, skipped files, or could not read a directory. */
+	readonly complete: boolean;
+	readonly limits: readonly string[];
+}
+
 export interface CodeIndexOptions {
 	cwd: string;
 	agentDir?: string;
@@ -128,6 +173,7 @@ interface DiscoveredFile {
 
 interface FileDiscoveryResult {
 	files: DiscoveredFile[];
+	markers: string[];
 	limitReached: boolean;
 	incomplete: boolean;
 }
@@ -678,6 +724,7 @@ async function discoverFiles(
 	signal?: AbortSignal,
 ): Promise<FileDiscoveryResult> {
 	const result: DiscoveredFile[] = [];
+	const markers: string[] = [];
 	let limitReached = false;
 	let incomplete = false;
 	const walk = async (directory: string): Promise<void> => {
@@ -710,6 +757,7 @@ async function discoverFiles(
 				continue;
 			}
 			if (!entry.isFile() || matcher.ignores(relPath)) continue;
+			if (isProjectMarker(entry.name)) markers.push(relPath);
 			const language = getCodeLanguage(relPath);
 			if (!language) continue;
 			try {
@@ -721,7 +769,7 @@ async function discoverFiles(
 		}
 	};
 	await walk(root);
-	return { files: result, limitReached, incomplete };
+	return { files: result, markers, limitReached, incomplete };
 }
 
 export class CodeSymbolIndex {
@@ -736,6 +784,8 @@ export class CodeSymbolIndex {
 	private refreshQueue: Promise<void> = Promise.resolve();
 	private lastUpdated?: number;
 	private lastRefreshSummary?: CodeIndexRefreshSummary;
+	private lastMarkers: string[] = [];
+	private lastScanLimits: string[] = [];
 
 	constructor(options: CodeIndexOptions) {
 		this.root = normalizeWorkspaceRoot(options.cwd);
@@ -755,6 +805,21 @@ export class CodeSymbolIndex {
 			symbolCount: [...this.files.values()].reduce((total, file) => total + file.symbols.length, 0),
 			lastUpdated: this.lastUpdated,
 			storagePath: this.storagePath,
+		};
+	}
+
+	/** Snapshot of the files and project markers from the last refresh (call ensureFresh first). */
+	getWorkspaceFacts(): WorkspaceFacts {
+		return {
+			files: [...this.files.values()].map((file) => ({
+				path: file.path,
+				language: file.language,
+				size: file.size,
+				hash: file.hash,
+			})),
+			markers: [...this.lastMarkers],
+			complete: this.lastScanLimits.length === 0,
+			limits: [...this.lastScanLimits],
 		};
 	}
 
@@ -896,6 +961,12 @@ export class CodeSymbolIndex {
 		}
 
 		const incomplete = discovery.limitReached || scanIncomplete;
+		this.lastMarkers = discovery.markers;
+		this.lastScanLimits = [
+			...(discovery.limitReached ? [`file discovery stopped at the ${this.maxFiles} file limit`] : []),
+			...(discovery.incomplete ? ["some directories or files could not be read"] : []),
+			...(limitSkipped > 0 ? [`${limitSkipped} file(s) were skipped because of size limits`] : []),
+		];
 		if (incomplete) {
 			for (const [filePath, previous] of this.files) {
 				if (!nextFiles.has(filePath)) nextFiles.set(filePath, previous);

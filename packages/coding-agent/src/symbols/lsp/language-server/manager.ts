@@ -7,6 +7,7 @@ import { LspClient, type LspInitializeOptions } from "../client.ts";
 import { LspProcessError } from "../errors.ts";
 import type { LspClientState, LspLogger } from "../types.ts";
 import { toFileUri } from "../uri.ts";
+import { resolveClientCapabilities } from "./client-capabilities.ts";
 import { discoverExecutable, type ExecutableDiscoveryResult } from "./discovery.ts";
 import {
 	InvalidWorkspaceRootError,
@@ -22,6 +23,7 @@ import {
 	UnsupportedLanguageError,
 } from "./errors.ts";
 import { LanguageServerRegistry, normalizeLanguageId } from "./registry.ts";
+import { resolveServerProfile } from "./server-profiles.ts";
 import type {
 	LanguageServerAcquireOptions,
 	LanguageServerClientFactory,
@@ -32,6 +34,7 @@ import type {
 	ManagedLanguageServer,
 	ManagedLanguageServerState,
 } from "./types.ts";
+import { planWorkspaceServers, type WorkspaceServerPlan, type WorkspaceServerPlanOptions } from "./workspace-plan.ts";
 
 interface ManagedEntry {
 	readonly key: string;
@@ -180,9 +183,24 @@ export class LanguageServerManager {
 	}
 
 	/**
-	 * Acquire a server for workspace-level requests that have no source file.
-	 * An explicit definition remains strict; otherwise the highest-priority
-	 * registered definition is selected deterministically.
+	 * Choose the servers that should answer a workspace-level request. Selection is based on the languages
+	 * present in the workspace, never on global priority alone, and nothing is started here.
+	 */
+	planWorkspaceServers(options: WorkspaceServerPlanOptions): WorkspaceServerPlan {
+		this.ensureActive();
+		return planWorkspaceServers(this.registry, {
+			...options,
+			workspaceRoot: normalizeWorkspaceRoot(options.workspaceRoot),
+		});
+	}
+
+	/**
+	 * Acquire one server for a workspace-level request that has no source file.
+	 * An explicit definition remains strict; otherwise the highest-priority registered definition is
+	 * selected deterministically.
+	 *
+	 * Legacy single-server entry. It ignores which languages the workspace contains, so the semantic
+	 * backend uses {@link planWorkspaceServers} instead.
 	 */
 	async acquireForWorkspace(options: {
 		readonly workspaceRoot: string;
@@ -331,9 +349,18 @@ export class LanguageServerManager {
 
 			phase = "initialize";
 			const rootUri = toFileUri(entry.workspaceRoot);
+			// The product advertises what the semantic backend implements. A definition may only
+			// narrow that profile; anything it tries to enable beyond it is dropped and logged.
+			const clientCapabilities = resolveClientCapabilities(entry.definition.capabilities);
+			if (clientCapabilities.rejected.length > 0) {
+				this.log(
+					"warn",
+					`language server ${entry.definition.id}: ignored client capability overrides that are not implemented: ${clientCapabilities.rejected.join(", ")}`,
+				);
+			}
 			const initializeOptions: LspInitializeOptions = {
 				rootUri,
-				capabilities: entry.definition.capabilities ?? {},
+				capabilities: clientCapabilities.capabilities,
 				workspaceFolders: [
 					{
 						uri: rootUri,
@@ -341,6 +368,7 @@ export class LanguageServerManager {
 					},
 				],
 			};
+			initializeOptions.initializationOptions = resolveServerProfile(entry.definition).initializationOptions;
 			if (entry.definition.clientInfo !== undefined) initializeOptions.clientInfo = entry.definition.clientInfo;
 			await this.waitForStartupPhase(entry, client.initialize(initializeOptions));
 			this.ensureEntryCanStart(entry);

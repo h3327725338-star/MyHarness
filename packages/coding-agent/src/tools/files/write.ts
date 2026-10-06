@@ -2,6 +2,7 @@ import { mkdir as fsMkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
+import type { ChangeControl } from "../../changes/service.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
@@ -70,6 +71,8 @@ const defaultWriteOperations: WriteOperations = {
 export interface WriteToolOptions {
 	/** Custom operations for file writing. Default: local filesystem */
 	operations?: WriteOperations;
+	/** Local writes use this shared broker when supplied by the session or SDK. */
+	changeControl?: ChangeControl;
 }
 
 export function createWriteToolDefinition(
@@ -93,6 +96,29 @@ export function createWriteToolDefinition(
 			_ctx?,
 		) {
 			const absolutePath = resolveToCwd(path, cwd);
+			if (options?.changeControl) {
+				if (options.operations) throw new Error("Controlled writes do not support remote/custom operations");
+				const preview = await options.changeControl.previewWrite(absolutePath, content);
+				const outcome = await options.changeControl.apply(preview.changeset.id, {
+					origin: { kind: "write", toolCallId: _toolCallId },
+					signal,
+				});
+				const file = preview.changeset.files[0]!;
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+						},
+					],
+					details: {
+						created: file.operation === "create",
+						additions: file.additions,
+						deletions: file.deletions,
+						...(outcome.result.committedAfterCancel ? { mutationStatus: "committed-after-cancel" as const } : {}),
+					},
+				};
+			}
 			const dir = dirname(absolutePath);
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the

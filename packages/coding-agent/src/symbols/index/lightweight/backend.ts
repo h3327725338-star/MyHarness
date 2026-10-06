@@ -14,6 +14,7 @@ import type {
 	SymbolTarget,
 } from "../../types.ts";
 import { type CodeQueryOptions, CodeSymbolIndex } from "../code-index.ts";
+import { buildWorkspaceInventory, type WorkspaceInventory } from "../workspace-inventory.ts";
 import { LightweightBackendError, LightweightUnsupportedTargetError } from "./errors.ts";
 import type {
 	LightweightBackendApi,
@@ -191,6 +192,12 @@ export class LightweightCodeIntelligenceBackend implements LightweightBackendApi
 			items: limited.items,
 			meta: lightweightMeta(prepared.refreshLimited || limited.limited ? "partial" : "complete", warnings),
 		};
+	}
+
+	async getWorkspaceInventory(options: LightweightQueryOptions = {}): Promise<WorkspaceInventory | undefined> {
+		if (typeof this.index.getWorkspaceFacts !== "function") return undefined;
+		await this.index.ensureFresh(options.signal);
+		return buildWorkspaceInventory(this.index.getWorkspaceFacts());
 	}
 
 	private async prepare(signal: AbortSignal | undefined): Promise<PreparedQuery> {
