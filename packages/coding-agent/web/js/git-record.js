@@ -15,9 +15,33 @@ export function gitDetailNodes(text) {
 export function GitRecord({ result, task, children, activity }) {
 	const [open, setOpen] = useState(false);
 	const [repairOpen, setRepairOpen] = useState(false);
-	const repair = children ? html`<button class="link-btn" aria-expanded=${repairOpen} onClick=${() => setRepairOpen(!repairOpen)}>${repairOpen ? t("Hide details") : t("Details")}</button><${Collapse} open=${repairOpen}>${children}<//>` : null;
-	if (task || !result) return html`<div class="strip git-result fade-in" role="status"><div class="strip-line"><${Spinner} /><span>${serverText(task?.activity, t("Working…"))}</span>${task ? html`<button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button>` : null}</div>${activity ? html`<div class="dim" role="status">${activity}</div>` : null}${repair}</div>`;
-	const hasDetails = !!result.lines && result.lines !== result.detail;
+	const hasDetails = !!result?.lines && result.lines !== result.detail;
+	const hasToggle = hasDetails || !!children;
+	const detailsOpen = hasDetails && children ? (open || repairOpen) : (hasDetails ? open : repairOpen);
+	const toggleDetails = () => {
+		const next = !detailsOpen;
+		if (hasDetails) setOpen(next);
+		if (children) setRepairOpen(next);
+	};
+	const toggleBtn = hasToggle
+		? html`<button class="link-btn" aria-expanded=${detailsOpen} onClick=${toggleDetails}>${detailsOpen ? t("Hide details") : t("Details")}</button>`
+		: null;
+
+	if (task || !result) {
+		const showActivity = !!activity && !repairOpen;
+		return html`<div class="strip git-result fade-in" role="status">
+			<div class="strip-line">
+				<${Spinner} />
+				<span class="truncate">${serverText(task?.activity, t("Working…"))}</span>
+				<span class="grow" />
+				${task ? html`<button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button>` : null}
+				${toggleBtn}
+			</div>
+			${showActivity ? html`<div class="strip-activity dim" role="status" title=${activity}>${activity}</div>` : null}
+			${children ? html`<${Collapse} open=${repairOpen}>${children}<//>` : null}
+		</div>`;
+	}
+
 	return html`<div class=${`strip git-result ${result.tone} fade-in`} role=${result.tone === "error" ? "alert" : "status"}>
 		<div class="strip-line">
 			<${Icon} name=${{ ok: "checkCircle", info: "info", warn: "alertTriangle", error: "alertCircle" }[result.tone]} size=${14} />
@@ -26,9 +50,9 @@ export function GitRecord({ result, task, children, activity }) {
 			${result.detail ? html`<span class="strip-detail truncate" title=${result.detail}>${result.detail}</span>` : null}
 			<span class="grow" />
 			${result.fix ? html`<button class="link-btn" onClick=${() => actions.send(result.fix.prompt)}>${result.fix.label}</button>` : null}
-			${hasDetails ? html`<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide details") : t("Details")}</button>` : null}
+			${toggleBtn}
 		</div>
 		<${Collapse} open=${open}><pre class="strip-lines">${result.tone === "ok" && result.hash ? gitDetailNodes(result.lines) : result.lines}</pre><//>
-		${repair}
+		${children ? html`<${Collapse} open=${repairOpen}>${children}<//>` : null}
 	</div>`;
 }

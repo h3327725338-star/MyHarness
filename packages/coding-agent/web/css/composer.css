@@ -166,6 +166,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip-hash { flex: none; padding: 0 5px; border-radius: var(--r-xs); background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--fs-xs); }
 .strip-detail { min-width: 0; color: var(--text-2); }
 .strip-lines { margin: 0 12px 8px; padding: 8px 10px; max-height: 180px; overflow: auto; background: var(--code-bg); border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.strip-activity { padding: 0 12px 8px 34px; font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .strip.git-result.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .strip.git-result.error { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .strip.git-result.warn { color: var(--warn); }
