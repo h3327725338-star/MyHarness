@@ -389,6 +389,51 @@ async function reconcileCompletedCommitAsync(
 	return completedCommitResult(headAfter);
 }
 
+/** Reinstall the selected index entries without stale stat data; never stage worktree content. */
+function selectedIndexEntries(output: string, paths: string[]): string {
+	const selected = new Set(paths);
+	return output
+		.split("\0")
+		.filter((entry) => {
+			const separator = entry.indexOf("\t");
+			return separator >= 0 && selected.has(entry.slice(separator + 1));
+		})
+		.map((entry) => `${entry}\0`)
+		.join("");
+}
+
+function reconcileCommitIndex(repositoryRoot: string, paths: string[]): GitCommandResult {
+	const reset = runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...paths]);
+	if (!reset.ok) return reset;
+	const entries = runGitSync(["ls-files", "--stage", "-z"], { cwd: repositoryRoot, preserveOutput: true });
+	if (!entries.ok) return entries;
+	const input = selectedIndexEntries(entries.stdout, paths);
+	if (!input) return reset;
+	return runGitSync(["update-index", "-z", "--index-info"], { cwd: repositoryRoot, input });
+}
+
+async function reconcileCommitIndexAsync(
+	repositoryRoot: string,
+	paths: string[],
+	signal?: AbortSignal,
+): Promise<GitCommandResult> {
+	const reset = await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...paths], undefined, signal);
+	if (!reset.ok) return reset;
+	const entries = await runGitAsyncImpl(["ls-files", "--stage", "-z"], { cwd: repositoryRoot, signal });
+	if (!entries.ok) return entries;
+	const input = selectedIndexEntries(entries.stdout, paths);
+	if (!input) return reset;
+	return runGitAsyncImpl(["update-index", "-z", "--index-info"], { cwd: repositoryRoot, input, signal });
+}
+
+function commitIndexFailure(result: GitCommandResult): GitCommandResult {
+	return {
+		...result,
+		ok: false,
+		stderr: `Commit created, but selected-path index cleanup failed: ${result.stderr || result.error || "unknown Git error"}`,
+	};
+}
+
 export function createGitCommitForPaths(
 	repositoryRoot: string,
 	paths: string[],
@@ -423,14 +468,14 @@ export function createGitCommitForPaths(
 	if (!commitResult.ok) {
 		const reconciled = reconcileCompletedCommit(repositoryRoot, filteredPaths, headBefore.stdout);
 		if (reconciled) {
-			runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
-			return reconciled;
+			const cleanup = reconcileCommitIndex(repositoryRoot, filteredPaths);
+			return cleanup.ok ? reconciled : commitIndexFailure(cleanup);
 		}
 		runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
 		return commitResult;
 	}
-	runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
-	return commitResult;
+	const cleanup = reconcileCommitIndex(repositoryRoot, filteredPaths);
+	return cleanup.ok ? commitResult : commitIndexFailure(cleanup);
 }
 
 /**
@@ -473,14 +518,15 @@ export async function createGitCommitForPathsAsync(
 	if (!commitResult.ok) {
 		const reconciled = await reconcileCompletedCommitAsync(repositoryRoot, filteredPaths, headBefore.stdout, signal);
 		if (reconciled) {
-			await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
-			return reconciled;
+			const cleanup = await reconcileCommitIndexAsync(repositoryRoot, filteredPaths, signal);
+			return cleanup.ok ? reconciled : commitIndexFailure(cleanup);
 		}
 		await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 		return commitResult;
 	}
 
-	await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
+	const cleanup = await reconcileCommitIndexAsync(repositoryRoot, filteredPaths, signal);
+	if (!cleanup.ok) return commitIndexFailure(cleanup);
 
 	// A zero exit status is necessary but not sufficient for the caller's
 	// success state: confirm that Git created a real commit object and expose
