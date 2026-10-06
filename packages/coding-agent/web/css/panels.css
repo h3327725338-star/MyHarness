@@ -1,6 +1,8 @@
 .panel-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .panel-pane[hidden] { display: none; }
-.panel-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px var(--pad-panel); flex: none; border-bottom: 1px solid var(--border); min-height: 46px; }
+.panel-close { position: absolute; top: 10px; right: 10px; z-index: 15; background: var(--bg-panel); }
+.panel-toolbar { display: flex; align-items: center; gap: 6px; height: 44px; min-height: 44px; box-sizing: border-box; padding: 0 var(--pad-panel); padding-right: calc(var(--pad-panel) + 30px); flex: none; border-bottom: 1px solid var(--border); }
+.panel-toolbar .panel-title { font-weight: 600; font-size: 13px; color: var(--text); }
 /* Every bar of the panel starts and ends on the panel's inset. An icon button has no frame, so at either end of a bar
    it hangs into the inset by the space around its glyph: the glyph, not its invisible box, ends on the line. */
 :is(.panel-tabs, .panel-toolbar, .gitbar, .cfiles-head, .cdiff-head) > .icon-btn.sm:last-child { margin-right: -4px; }
@@ -120,11 +122,13 @@
 .term-note { padding: 4px var(--pad-panel) 8px; font-size: var(--fs-xs); }
 
 /* Session/context */
-.context-panel { padding-bottom: var(--pad-panel); }
+.context-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.context-panel .panel-scroll { padding-bottom: var(--pad-panel); }
 .ctx-section { border-bottom: 1px solid var(--border); }
 .ctx-head { display: flex; align-items: center; gap: 6px; padding: 10px var(--pad-panel); cursor: pointer; font-weight: 600; font-size: 13px; }
 .ctx-head:hover { background: var(--surface-hover); }
 .ctx-body { padding: 0 var(--pad-panel) var(--pad-panel); display: flex; flex-direction: column; gap: 6px; }
+.ctx-body.ctx-body-top { padding-top: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
 /* The context figures bring their own spacing for the popover of the input bar; inside a section the section spaces them. */
 .ctx-body > .cu { padding: 0; }
 .ctx-body > .check-label { margin-top: 4px; align-self: flex-start; }

@@ -90,8 +90,6 @@ function Header() {
 
 function PanelContainer() {
 	const tab = useStore((s) => s.view.panelTab);
-	const snap = useStore((s) => s.snap);
-	const bashRunning = !!snap?.flags?.bashRunning;
 	const panelRef = useRef(null);
 	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
 	// from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
@@ -103,19 +101,9 @@ function PanelContainer() {
 		document.documentElement.style.setProperty("--panel-w", `${w}px`);
 	};
 	useWidthClass(panelRef, [], [440, 440]);
-	const tabs = [
-		{ id: "changes", label: t("Changes"), icon: "fileDiff" },
-		{ id: "files", label: t("Files"), icon: "folder" },
-		{ id: "terminal", label: t("Terminal"), icon: "terminal" },
-		{ id: "context", label: t("Session"), icon: "layers" },
-	];
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
-		<div class="panel-tabs" role="tablist">
-			${tabs.map((tab_) => html`<button key=${tab_.id} role="tab" class="tab" title=${tab_.label} aria-selected=${tab === tab_.id} onClick=${() => setView({ panelTab: tab_.id })}><${Icon} name=${tab_.icon} size=${14} /><span class="tab-label">${tab_.label}</span>${tab_.id === "terminal" && bashRunning ? html`<${Spinner} />` : null}</button>`)}
-			<span class="grow" />
-			<button class="icon-btn sm" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => setView({ panelOpen: false })}><${Icon} name="x" size=${15} /></button>
-		</div>
+		<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => setView({ panelOpen: false })}><${Icon} name="x" size=${15} /></button>
 		<div class="panel-body">
 			<div class="panel-pane" hidden=${tab !== "changes"}>${tab === "changes" ? html`<${ChangesPanel} />` : null}</div>
 			<div class="panel-pane" hidden=${tab !== "files"}><${FilesPanel} /></div>

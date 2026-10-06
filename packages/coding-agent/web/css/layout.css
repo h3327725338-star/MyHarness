@@ -77,7 +77,7 @@
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 
 .main-header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; flex: none; border-bottom: 1px solid transparent; }
-.main-header.scrolled { border-bottom-color: var(--border); }
+.main-header.scrolled, .app.panel-open .main-header { border-bottom-color: var(--border); }
 .title-btn { max-width: 46%; padding: 0 6px; height: var(--h-control-sm); border-radius: var(--r-md); font-weight: 600; font-size: 14px; text-align: left; }
 .title-btn:hover { background: var(--surface-hover); }
 

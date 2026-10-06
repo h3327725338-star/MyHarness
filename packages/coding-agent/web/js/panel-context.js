@@ -109,11 +109,15 @@ export function ContextPanel() {
 		await attempt(() => post("/api/tools/active", { names: [...active] }));
 		await loadResources();
 	};
-	return html`<div class="context-panel panel-scroll">
-		<${Section} title=${t("Context window")}>
-			<${ContextDetails} capacityOnly=${true} controls=${html`<${AutoCompact} snap=${snap} /><button class="btn sm" disabled=${snap.active} onClick=${actions.compact}>${t("Compact now")}</button>`} />
-		<//>
-		<${Section} title=${t("Session")}>
+	return html`<div class="context-panel">
+		<div class="panel-toolbar">
+			<span class="panel-title">${t("Context window")}</span>
+		</div>
+		<div class="panel-scroll">
+			<div class="ctx-body ctx-body-top">
+				<${ContextDetails} capacityOnly=${true} controls=${html`<${AutoCompact} snap=${snap} /><button class="btn sm" disabled=${snap.active} onClick=${actions.compact}>${t("Compact now")}</button>`} />
+			</div>
+			<${Section} title=${t("Session")}>
 			<div class="kv">
 				<span>${t("Name")}</span><span class="truncate">${snap.session.name || "—"}</span>
 				<span>${t("Model")}</span><span class="truncate">${snap.model ? `${snap.model.provider}/${snap.model.id}` : "—"}</span>
@@ -154,5 +158,5 @@ export function ContextPanel() {
 			<button class="btn sm" onClick=${restartService} disabled=${snap.active || restarting}>${restarting ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${13} />`}${restarting ? t("Restarting service…") : restartError ? t("Retry") : t("Restart service")}</button>
 			<div class=${`service-restart-detail ${restartError ? "c-danger" : "dim"}`} role=${restartError ? "alert" : "status"} aria-live="polite">${restartError || (restarting ? restartDetail : "")}</div>
 		</div>
-	</div>`;
+	</div></div>`;
 }
