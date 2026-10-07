@@ -158,7 +158,7 @@ interface IndexedFile {
 }
 
 interface PersistedCodeIndex {
-	version: 2;
+	version: typeof INDEX_VERSION;
 	root: string;
 	updatedAt: number;
 	files: Record<string, IndexedFile>;
@@ -179,7 +179,7 @@ interface FileDiscoveryResult {
 }
 
 // Bump when parser or masking behavior changes so stale symbol data is rebuilt.
-const INDEX_VERSION = 2 as const;
+const INDEX_VERSION = 3 as const;
 const DEFAULT_MAX_FILES = 10_000;
 const DEFAULT_MAX_FILE_BYTES = 1_000_000;
 const DEFAULT_MAX_TOTAL_BYTES = 50_000_000;
@@ -532,6 +532,36 @@ const CODE_IDENTIFIER = String.raw`[\p{ID_Start}_$][\p{ID_Continue}$]*`;
 const PYTHON_IDENTIFIER = String.raw`[\p{ID_Start}_][\p{ID_Continue}]*`;
 const GO_IDENTIFIER = String.raw`[\p{L}_][\p{L}\p{N}_]*`;
 
+// A declaration head may carry modifiers and, for Java/C#/C++-style signatures, the
+// return type before the name. The token count is bounded so a single very long line
+// cannot turn prefix backtracking into quadratic work.
+const METHOD_HEAD_TOKEN = String.raw`[\p{L}\p{N}_$\[\]<>?.]+[ \t]+`;
+// The `=` and parenthesis exclusions keep `watch(config, (next) => {` and
+// `on("dialogs", (d) => (a ? set({ x }) : set({ y })))` from reading as a head plus a
+// return type plus a body. It costs us TS methods whose return type is itself a
+// function type, such as `): (() => void) {`.
+const METHOD_RETURN_TYPE = String.raw`(?:[ \t]*(?::|->)[^;{}=()\n]*|[ \t]+(?:throws|where)[ \t]+[^;{}=()\n]*)?`;
+
+// Tokens that can never be a modifier or return type, so a name after one is a call,
+// not a declaration (for example `new Runnable() {`).
+const NON_DECLARATION_HEAD_TOKENS = new Set([
+	"new",
+	"return",
+	"typeof",
+	"instanceof",
+	"await",
+	"yield",
+	"delete",
+	"throw",
+	"else",
+	"do",
+	"case",
+	"in",
+	"of",
+]);
+
+const FUNCTION_HEAD_KEYWORD = /(?:^|[ \t])(?:func|fun|fn|def)(?:[ \t]|$)/;
+
 /**
  * Extract symbols without requiring a language server or a runtime compiler.
  * The parser is intentionally conservative: false positives are worse than
@@ -595,18 +625,6 @@ export function parseCodeSymbols(
 		);
 	}
 
-	const methods = new RegExp(
-		String.raw`^[ \t]*(?:(?:public|private|protected|internal|static|abstract|override|virtual|final|async)\s+)*(${CODE_IDENTIFIER})\s*\([^;\n]*\)\s*\{`,
-		"gmu",
-	);
-	for (const match of masked.matchAll(methods)) {
-		const offset = match.index ?? 0;
-		const line = lineTextAt(content, lineNumberAt(masked, offset));
-		if (/\b(function|if|for|while|switch|catch)\b/.test(line)) continue;
-		if (symbols.some((symbol) => symbol.name === match[1] && symbol.line === lineNumberAt(masked, offset))) continue;
-		add("method", match[1], offset, isExported(line));
-	}
-
 	const arrows = new RegExp(
 		String.raw`^[ \t]*(export\s+)?(?:const|let|var)\s+(${CODE_IDENTIFIER})\s*=\s*(?:async\s*)?(?:\([^=\n]*\)|${CODE_IDENTIFIER})\s*=>`,
 		"gmu",
@@ -660,6 +678,24 @@ export function parseCodeSymbols(
 			match.index ?? 0,
 			/^\s*pub\b/.test(lineTextAt(content, lineNumberAt(masked, match.index ?? 0))),
 		);
+
+	// Runs last on purpose: the generic head matcher also recognises `func`/`fn` lines,
+	// and the language-specific patterns above know the right kind and export rules.
+	const methods = new RegExp(
+		String.raw`^[ \t]*((?:${METHOD_HEAD_TOKEN}){0,8})(${CODE_IDENTIFIER})[ \t]*(?:<[^<>\n]*>)?\([^;\n]*\)[ \t]*${METHOD_RETURN_TYPE}[ \t]*\{`,
+		"gmu",
+	);
+	for (const match of masked.matchAll(methods)) {
+		const offset = match.index ?? 0;
+		const line = lineTextAt(content, lineNumberAt(masked, offset));
+		if (/\b(function|if|for|while|switch|catch)\b/.test(line)) continue;
+		const head = match[1] ?? "";
+		const headTokens = head ? head.trim().split(/[ \t]+/) : [];
+		const lastHeadToken = headTokens[headTokens.length - 1];
+		if (lastHeadToken && NON_DECLARATION_HEAD_TOKENS.has(lastHeadToken)) continue;
+		if (symbols.some((symbol) => symbol.name === match[2] && symbol.line === lineNumberAt(masked, offset))) continue;
+		add(FUNCTION_HEAD_KEYWORD.test(head) ? "function" : "method", match[2], offset, isExported(line));
+	}
 
 	const exports = /\bexport\s*\{([^}]+)\}/g;
 	const exportedNames = new Set<string>();
