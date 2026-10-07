@@ -1,9 +1,17 @@
 .composer-zone { flex: none; padding: 0 20px 12px; }
 /* Narrow main column (detail panel open): drop low-value composer items first, never the send button. */
-.main[data-w="s"] .env-status { display: none; }
-.main[data-w="s"] .env-chip { max-width: 45%; }
+.main[data-w="s"] .env-status, .main[data-w="xs"] .env-status { display: none; }
+.main[data-w="s"] .composer-env > .env-chip, .main[data-w="s"] .branch-anchor { max-width: 45%; }
+.main[data-w="s"] .branch-chip { max-width: 100%; }
 .main[data-w="s"] .chip { max-width: 150px; }
 .main[data-w="xs"] .chip .chip-text { display: none; }
+.main[data-w="xs"] .composer-env > .env-chip { max-width: calc(100% - 28px); }
+.main[data-w="xs"] .branch-anchor { flex: none; max-width: none; }
+.main[data-w="xs"] .branch-chip { width: 22px; min-width: 22px; padding: 0; justify-content: center; }
+.main[data-w="xs"] .branch-chip .truncate,
+.main[data-w="xs"] .branch-chip .chev,
+.main[data-w="xs"] .branch-chip .wt-tag,
+.main[data-w="xs"] .branch-chip .badge { display: none; }
 .composer-col { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; position: relative; }
 
 .composer { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px 12px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-xl); transition: border-color var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
@@ -118,10 +126,11 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 
 /* The branch chip opens the branch popover (branch-menu.js). In an isolated copy (a linked worktree) it says so. */
 .branch-anchor { display: inline-flex; min-width: 0; max-width: 55%; flex: 0 1 auto; }
-.branch-chip { max-width: 100%; padding-right: 5px; transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast); }
+.branch-chip { max-width: 100%; padding-right: 5px; overflow: hidden; transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast); }
 .branch-chip[aria-expanded="true"] { color: var(--text); background: var(--surface-hover); border-color: var(--border-strong); }
 .branch-chip .chev { flex: none; transition: transform var(--t-base) var(--ease); }
 .branch-chip[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.branch-chip .badge { flex: none; height: 16px; padding: 0 5px; font-size: 10.5px; line-height: 16px; }
 .branch-chip.wt { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; line-height: 15px; }
 .popover.branch-pop { padding: 3px; animation: fade-in var(--t-base) var(--ease) both; overflow-y: auto; }
