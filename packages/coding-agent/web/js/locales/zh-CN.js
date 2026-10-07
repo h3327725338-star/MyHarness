@@ -205,6 +205,7 @@ export const zhCN = {
 	List: "列表",
 	"Numbered list": "编号列表",
 	Quote: "引用",
+	"Remove quote": "移除引用",
 	Code: "代码",
 	"Link URL": "链接地址",
 	Link: "链接",

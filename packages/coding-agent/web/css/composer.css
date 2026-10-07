@@ -89,6 +89,24 @@
 .thumb-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); }
 .thumb-x:hover { color: var(--danger); }
 
+/* Quoted text pills above composer input */
+.quote-shelf { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
+.quote-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 300px; padding: 0 4px 0 8px; background: var(--bg-base); border: 1px solid var(--border-strong); border-radius: var(--r-md); font-size: var(--fs-xs); color: var(--text-2); transition: border-color var(--t-fast), color var(--t-fast); }
+.quote-pill:hover { border-color: var(--border-focus); color: var(--text); }
+.quote-pill-icon { display: inline-flex; align-items: center; color: var(--accent); flex: none; }
+.quote-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-sans); }
+.quote-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 50%; background: transparent; color: var(--text-3); cursor: pointer; padding: 0; margin-left: 2px; flex: none; transition: background var(--t-fast), color var(--t-fast); }
+.quote-pill-x:hover { background: var(--surface-hover); color: var(--danger); }
+
+/* Floating quote toolbar on text selection */
+.floating-quote-bar { position: fixed; z-index: 210; display: flex; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; transform: translate(-50%, -100%); animation: quote-bar-in var(--t-fast) var(--ease) both; pointer-events: auto; }
+.floating-quote-bar.flipped { transform: translate(-50%, 0); animation: quote-bar-in-flipped var(--t-fast) var(--ease) both; }
+@keyframes quote-bar-in { from { opacity: 0; transform: translate(-50%, -85%) scale(0.96); } to { opacity: 1; transform: translate(-50%, -100%) scale(1); } }
+@keyframes quote-bar-in-flipped { from { opacity: 0; transform: translate(-50%, -15%) scale(0.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+.floating-quote-btn { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: var(--r-sm); border: none; background: transparent; color: var(--text); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; user-select: none; transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast); }
+.floating-quote-btn:hover { background: var(--surface-hover); color: var(--accent); }
+.floating-quote-btn:active { transform: scale(0.96); }
+
 /* Where the task runs (folder, branch, worktree, trust): small chips just above the input card. */
 .composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }
 .composer-env:empty { display: none; }

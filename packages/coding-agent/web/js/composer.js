@@ -252,6 +252,7 @@ export function Composer() {
 	const dialogs = useStore((s) => s.dialogs);
 	const surface = useStore((s) => s.surface);
 	const editorInsert = useStore((s) => s.editorInsert);
+	const quoteInsert = useStore((s) => s.quoteInsert);
 	const items = useStore((s) => s.items);
 	const gitStatus = useStore((s) => s.gitStatus);
 	const activeSlot = useStore((s) => s.activeSlot);
@@ -269,6 +270,7 @@ export function Composer() {
 	const [text, setText] = useState("");
 	const [caret, setCaret] = useState(0);
 	const [images, setImages] = useState([]);
+	const [quotes, setQuotes] = useState([]);
 	// What Enter does while the agent runs: the default chosen in Settings.
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
 	const [sending, setSending] = useState(false);
@@ -288,12 +290,12 @@ export function Composer() {
 	// newly shown chat, so the previous chat's text is never saved under the new one.
 	useEffect(() => {
 		if (!sessionId || lastSession.current !== sessionId) return;
-		scheduleDraftSave({ slot: activeSlot, mode: chatMode, sessionId, text, images });
-	}, [text, images, sessionId]);
+		scheduleDraftSave({ slot: activeSlot, mode: chatMode, sessionId, text, images, quotes });
+	}, [text, images, quotes, sessionId]);
 
 	// Drafts follow the session so switching chats does not lose typed text.
 	useEffect(() => {
-		if (lastSession.current !== null && lastSession.current !== sessionId) drafts.set(lastSession.current, { text, images });
+		if (lastSession.current !== null && lastSession.current !== sessionId) drafts.set(lastSession.current, { text, images, quotes });
 		if (lastSession.current !== sessionId) {
 			if (lastSession.current !== null) flushDrafts();
 			// What the server saved for this chat; the text edited in this tab (if any) is newer and wins.
@@ -302,6 +304,7 @@ export function Composer() {
 			const draft = drafts.get(sessionId) || saved;
 			setText(draft?.text || "");
 			setImages(draft?.images || []);
+			setQuotes(draft?.quotes || []);
 			setHistoryIndex(-1);
 		}
 		lastSession.current = sessionId;
@@ -311,18 +314,18 @@ export function Composer() {
 	const touched = useRef(new Map());
 	useEffect(() => {
 		if (lastSession.current !== sessionId) return;
-		const has = !!text.trim() || images.length > 0;
+		const has = !!text.trim() || images.length > 0 || quotes.length > 0;
 		if ((touched.current.get(sessionId) ?? false) === has) return;
 		touched.current.set(sessionId, has);
 		setChatTouched(activeSlot, has).then((ok) => ok || touched.current.set(sessionId, !has));
-	}, [text, images, sessionId]);
-	const latest = useRef({ text, images, sessionId });
-	latest.current = { text, images, sessionId };
+	}, [text, images, quotes, sessionId]);
+	const latest = useRef({ text, images, quotes, sessionId });
+	latest.current = { text, images, quotes, sessionId };
 	useEffect(() => registerRestartDraft(() => latest.current), []);
 	useEffect(
 		() => () => {
-			const { text: t0, images: i0, sessionId: id } = latest.current;
-			if (id) drafts.set(id, { text: t0, images: i0 });
+			const { text: t0, images: i0, quotes: q0, sessionId: id } = latest.current;
+			if (id) drafts.set(id, { text: t0, images: i0, quotes: q0 });
 		},
 		[],
 	);
@@ -331,6 +334,11 @@ export function Composer() {
 		setText((prev) => (editorInsert.replace || !prev ? editorInsert.text : `${prev}${prev.endsWith("\n") || !prev ? "" : "\n"}${editorInsert.text}`));
 		setTimeout(() => area.current?.focus(), 0);
 	}, [editorInsert?.nonce]);
+	useEffect(() => {
+		if (!quoteInsert?.text) return;
+		setQuotes((prev) => [...prev, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: quoteInsert.text }]);
+		setTimeout(() => area.current?.focus(), 0);
+	}, [quoteInsert?.nonce]);
 	// More than three lines: an icon in the card's corner opens the same card as a large, centred editor.
 	const [tall, setTall] = useState(false);
 	const [expanded, setExpanded] = useState(false);
@@ -511,10 +519,17 @@ export function Composer() {
 		};
 	}, []);
 
+const quotePreview = (text) => {
+	const firstLine = String(text || "").trim().split("\n")[0] || "";
+	return firstLine.length > 28 ? `${firstLine.slice(0, 28)}…` : firstLine;
+};
+
 	const send = async (mode) => {
 		if (state.restarting || !state.connected) return;
+		const quotePrefix = quotes.map((q) => q.text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n\n");
+		const body = quotePrefix ? (text ? `${quotePrefix}\n\n${text}` : quotePrefix) : text;
 		const references = images.filter((item) => item.path);
-		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${text ? `\n\n${text}` : ""}` : text;
+		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${body ? `\n\n${body}` : ""}` : body;
 		if ((!value.trim() && images.length === 0) || sending || importing.current) return;
 		if (!active && !value.trim() && images.length === 0) return;
 		setSending(true);
@@ -522,19 +537,27 @@ export function Composer() {
 		const attached = images.filter((item) => !item.path).map(({ mimeType, data }) => ({ mimeType, data }));
 		const previousText = text;
 		const previousImages = images;
+		const previousQuotes = quotes;
 		setText("");
 		setImages([]);
+		setQuotes([]);
 		setHistoryIndex(-1);
 		const result = await actions.submit(value, { images: attached, mode: mode || (active ? runMode : "auto") });
 		setSending(false);
 		if (!result.handled && !result.ok) {
 			setText(previousText);
 			setImages(previousImages);
+			setQuotes(previousQuotes);
 		} else if (target.sessionId) clearDraft(target);
 	};
 
 	const onKeyDown = (event) => {
 		if (event.isComposing || event.keyCode === 229) return;
+		if (event.key === "Backspace" && !text && quotes.length > 0) {
+			event.preventDefault();
+			setQuotes((prev) => prev.slice(0, -1));
+			return;
+		}
 		if (menuOpen) {
 			if (event.key === "ArrowDown") return event.preventDefault(), setSel((sel + 1) % suggestions.length);
 			if (event.key === "ArrowUp") return event.preventDefault(), setSel((sel - 1 + suggestions.length) % suggestions.length);
@@ -573,8 +596,8 @@ export function Composer() {
 		}
 	};
 
-	const canSend = !restarting && connected && (text.trim() || images.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
-	const showStop = active && !text.trim() && images.length === 0;
+	const canSend = !restarting && connected && (text.trim() || images.length || quotes.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
+	const showStop = active && !text.trim() && images.length === 0 && quotes.length === 0;
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 
 	return html`<div class="composer-zone">
@@ -600,6 +623,7 @@ export function Composer() {
 						: null}
 				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
+				${quotes.length ? html`<div class="quote-shelf">${quotes.map((q, i) => html`<div class="quote-pill" key=${q.id} title=${q.text}><span class="quote-pill-icon"><${Icon} name="quote" size=${12} /></span><span class="quote-pill-text truncate">${quotePreview(q.text)}</span><button class="quote-pill-x" aria-label=${t("Remove quote")} title=${t("Remove quote")} onClick=${() => setQuotes(quotes.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				${loadingFiles ? html`<div class="branch-note dim" role="status"><${Spinner} />${t("Loading files…")}</div>` : null}
 				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}

@@ -8,7 +8,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"shows artifact scopes and submits the explicit deletion choice in a real browser",
+	"shows only project search and tree and submits the explicit deletion choice in a real browser",
 	async () => {
 		const root = mkdtempSync(join(tmpdir(), "myharness-artifact-browser-"));
 		const server = new WebHttpServer();
@@ -34,7 +34,9 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 					},
 				],
 			}));
-			server.route("GET", "/api/files/list", () => ({ entries: [] }));
+			server.route("GET", "/api/files/list", () => ({
+				entries: [{ name: "AGENTS.md", path: "AGENTS.md", type: "file" }],
+			}));
 			server.route("GET", "/api/changes", () => ({ files: [] }));
 			server.route("POST", "/api/sessions/delete", ({ body }) => {
 				choice = body;
@@ -74,11 +76,9 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms)); const app=document.getElementBy
 try {
  setView({lang:'zh-CN'}); set({activeSlot:'slot-a',snap:{session:{id:'s'},lastRun:{runId:1}}});
  render(h(FilesPanel),app); await wait(150);
- [...app.querySelectorAll('button')].find(b=>b.textContent==='产出文件').click(); await wait(150);
- if(!app.textContent.includes('report-session.md')) throw Error('session scope missing');
- [...app.querySelectorAll('button')].find(b=>b.textContent==='所有工作区').click(); await wait(150);
- if(!app.textContent.includes('report-global.md') || !app.textContent.includes('来源对话已删除')) throw Error('global scope missing');
- if(!app.querySelector('a').href.includes('slot=slot-a')) throw Error('download slot missing');
+ if(app.querySelectorAll('.panel-toolbar').length!==1) throw Error('extra files toolbar');
+ if(!app.querySelector('.panel-toolbar input') || !app.querySelector('[role="tree"]')?.textContent.includes('AGENTS.md')) throw Error('project search or tree missing');
+ if([...app.querySelectorAll('button')].some(b=>['项目文件','产出文件','记忆'].includes(b.textContent))) throw Error('removed navigation returned');
  const cancelled=actions.deleteSession('chat.jsonl','Saved chat'); await wait(20);
  render(h(ConfirmModal,{dialog:state.view.dialog}),app); await wait(40);
  if(app.querySelector('input').checked) throw Error('unsafe deletion default');

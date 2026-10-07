@@ -15,15 +15,16 @@ export const expandedKey = (mode) => (chatModeOf(mode) === "general" ? "expanded
  * The composer's attachments as the server stores them in a draft (`draft.attachments`): an image keeps its data, a
  * file keeps the path it was already uploaded to. Nothing is uploaded again and nothing becomes a sent message.
  */
-export function draftToServer({ text = "", images = [] } = {}) {
+export function draftToServer({ text = "", images = [], quotes = [] } = {}) {
 	const attachments = images.map((item) => (item.path ? { kind: "file", name: item.name, path: item.path } : { kind: "image", name: item.name, mimeType: item.mimeType, data: item.data }));
-	return { text, attachments };
+	const savedQuotes = Array.isArray(quotes) ? quotes.filter((q) => q && typeof q.text === "string" && q.text.trim()).map((q) => ({ id: q.id, text: q.text })) : [];
+	return savedQuotes.length ? { text, attachments, quotes: savedQuotes } : { text, attachments };
 }
 
-/** Whether a draft as the server stores it (`{ text, attachments }`) holds anything: typed text or an attachment. */
-export const draftHasContent = (draft) => !!draft && (!!String(draft.text ?? "").trim() || (Array.isArray(draft.attachments) && draft.attachments.length > 0));
+/** Whether a draft as the server stores it holds anything: typed text, an attachment, or a quote. */
+export const draftHasContent = (draft) => !!draft && (!!String(draft.text ?? "").trim() || (Array.isArray(draft.attachments) && draft.attachments.length > 0) || (Array.isArray(draft.quotes) && draft.quotes.length > 0));
 
-/** A saved draft back in the shape the composer uses (`{ text, images }`); unknown attachment entries are skipped. */
+/** A saved draft back in the shape the composer uses (`{ text, images, quotes }`); unknown attachment entries are skipped. */
 export function draftFromServer(draft) {
 	if (!draft || typeof draft.text !== "string") return null;
 	const images = [];
@@ -32,7 +33,18 @@ export function draftFromServer(draft) {
 		if (typeof item.path === "string") images.push({ name: typeof item.name === "string" ? item.name : item.path, path: item.path });
 		else if (typeof item.data === "string" && typeof item.mimeType === "string") images.push({ name: typeof item.name === "string" ? item.name : "image", mimeType: item.mimeType, data: item.data, url: `data:${item.mimeType};base64,${item.data}` });
 	}
-	return { text: draft.text, images };
+	const result = { text: draft.text, images };
+	if (Array.isArray(draft.quotes) && draft.quotes.length > 0) {
+		const quotes = [];
+		for (const item of draft.quotes) {
+			if (!item || typeof item !== "object") continue;
+			if (typeof item.text === "string" && item.text.trim()) {
+				quotes.push({ id: item.id || `q-${Math.random().toString(36).slice(2, 8)}`, text: item.text });
+			}
+		}
+		if (quotes.length) result.quotes = quotes;
+	}
+	return result;
 }
 
 /**

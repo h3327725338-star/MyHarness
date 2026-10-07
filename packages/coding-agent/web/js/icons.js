@@ -80,6 +80,7 @@ const ICONS = {
 	maximize: [P("M15 3h6v6"), P("M9 21H3v-6"), P("m21 3-7 7"), P("m3 21 7-7")],
 	minimize: [P("M4 14h6v6"), P("M20 10h-6V4"), P("m14 10 7-7"), P("m3 21 7-7")],
 	quit: [P("M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M16 8l4 4-4 4M20 12H9")],
+	quote: [P("M10 11H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3 3 3 0 0 1 3 3v4zM10 11c0 3.5-2 6-5 7"), P("M21 11h-4a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3 3 3 0 0 1 3 3v4zM21 11c0 3.5-2 6-5 7")],
 };
 
 export function Icon({ name, size = 16, sw = 1.7, class: cls, style }) {

@@ -95,6 +95,7 @@ export const state = {
 	settings: null,
 	providers: null,
 	editorInsert: null,
+	quoteInsert: null,
 	loginEvent: null,
 	/** Latest GitHub Connect progress from the server (device code, done, error), with a nonce per event. */
 	githubEvent: null,
@@ -657,11 +658,11 @@ const draftKey = (draft) => JSON.stringify(draftToServer(draft));
 
 /** Remember that the server already has this draft (it was just restored from there). */
 export function markDraftSaved(sessionId, draft) {
-	if (sessionId) savedDrafts.set(sessionId, draft && (draft.text || draft.images?.length) ? draftKey(draft) : "");
+	if (sessionId) savedDrafts.set(sessionId, draft && (draft.text || draft.images?.length || draft.quotes?.length) ? draftKey(draft) : "");
 }
 
 function sendDraft(entry) {
-	const empty = !entry.text && !entry.images.length;
+	const empty = !entry.text && !entry.images?.length && !entry.quotes?.length;
 	const key = empty ? "" : draftKey(entry);
 	if ((savedDrafts.get(entry.sessionId) ?? "") === key) return Promise.resolve();
 	savedDrafts.set(entry.sessionId, key);
@@ -700,7 +701,7 @@ export function clearDraft(entry) {
 	const pending = draftSaves.get(entry.sessionId);
 	if (pending) clearTimeout(pending.timer);
 	draftSaves.delete(entry.sessionId);
-	return sendDraft({ ...entry, text: "", images: [] });
+	return sendDraft({ ...entry, text: "", images: [], quotes: [] });
 }
 
 // Whether a chat's composer holds anything is told to the server at once (before the delayed draft save): a chat with

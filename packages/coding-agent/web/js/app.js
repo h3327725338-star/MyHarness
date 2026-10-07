@@ -12,6 +12,7 @@ import { ContextPanel } from "./panel-context.js";
 import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
+import { FloatingQuoteToolbar } from "./quote-toolbar.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
@@ -235,6 +236,7 @@ export function App() {
 			<${Transcript} />
 			<${Composer} />
 			<${Toasts} />
+			<${FloatingQuoteToolbar} />
 		</main>
 		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}
 		<${Overlay} show=${!!view.settingsOpen}>${view.settingsOpen ? html`<${SettingsModal} />` : null}<//>

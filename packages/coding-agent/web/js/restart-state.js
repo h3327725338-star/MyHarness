@@ -10,7 +10,11 @@ export function registerRestartDraft(reader) {
 
 export function saveRestartState(sessionId, view) {
 	const current = currentDraft();
-	if (current?.sessionId) drafts.set(current.sessionId, { text: current.text, images: current.images });
+	if (current?.sessionId) {
+		const entry = { text: current.text, images: current.images };
+		if (current.quotes !== undefined) entry.quotes = current.quotes;
+		drafts.set(current.sessionId, entry);
+	}
 	// Do not reload if storage is unavailable/full: the existing page must retain the draft.
 	sessionStorage.setItem(KEY, JSON.stringify({ sessionId, view, drafts: [...drafts], savedAt: Date.now() }));
 }

@@ -77,6 +77,12 @@ export const actions = {
 		set({ editorInsert: { text, replace, nonce: Date.now() } });
 	},
 
+	addQuote(text) {
+		const trimmed = String(text || "").trim();
+		if (!trimmed) return;
+		set({ quoteInsert: { text: trimmed, nonce: Date.now() } });
+	},
+
 	async send(text, { images, mode } = {}) {
 		return attempt(() => post("/api/prompt", { text, images, mode }));
 	},
