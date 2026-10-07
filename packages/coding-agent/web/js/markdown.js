@@ -3,6 +3,9 @@ import { h } from "/vendor/preact.js";
 import { Component } from "/vendor/preact.js";
 import { t } from "./i18n.js";
 import { looseStrong } from "./util.js";
+import { localLinkPath } from "./local-file-links.js";
+import { linkifyLocalFiles, openLocalFile, showLocalFileMenu } from "./local-files.js";
+import { activeSlotId } from "./store.js";
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
@@ -29,6 +32,8 @@ function getEngine() {
 			},
 			link({ href, title, tokens }) {
 				const inner = this.parser.parseInline(tokens);
+				const local = localLinkPath(href);
+				if (local) return `<a href="#" data-local-path="${esc(local)}" title="${esc(local)}">${inner}</a>`;
 				if (!SAFE_LINK.test(href || "")) return inner;
 				const external = /^https?:/i.test(href);
 				return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ""}${external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${inner}</a>`;
@@ -85,10 +90,27 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 
 /** Markdown block. A delegated click handles the code copy buttons; nothing in the text opens a panel. */
 export class Markdown extends Component {
+	root = null;
+	generation = 0;
+	slot = null;
+	componentDidMount() { this.linkify(); }
+	componentDidUpdate() { this.linkify(); }
+	componentWillUnmount() { this.generation++; }
+	linkify() {
+		const generation = ++this.generation;
+		this.slot = activeSlotId();
+		if (this.root) void linkifyLocalFiles(this.root, this.slot, () => generation === this.generation);
+	}
+	onContextMenu = (event) => {
+		const link = event.target.closest?.("[data-local-path]");
+		if (link) void showLocalFileMenu(event, link.dataset.localPath, this.slot);
+	};
 	shouldComponentUpdate(next) {
 		return next.text !== this.props.text || next.class !== this.props.class || next.breaks !== this.props.breaks;
 	}
 	onClick = (event) => {
+		const link = event.target.closest?.("[data-local-path]");
+		if (link) { event.preventDefault(); void openLocalFile(link.dataset.localPath, this.slot); return; }
 		const copy = event.target.closest?.(".code-copy");
 		if (copy) {
 			const code = copy.closest(".code-block")?.querySelector("code");
@@ -99,7 +121,7 @@ export class Markdown extends Component {
 		}
 	};
 	render({ text, class: cls, breaks = false }) {
-		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: renderMarkdown(text || "", { breaks }) }, onClick: this.onClick });
+		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: renderMarkdown(text || "", { breaks }) }, onClick: this.onClick, onContextMenu: this.onContextMenu, ref: (node) => { this.root = node; } });
 	}
 }
 

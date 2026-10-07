@@ -19,6 +19,7 @@ import type { RunChangeCardFile } from "./changes.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { resolveLocalFile, runLocalFileAction } from "./local-files.ts";
 import { collectSessionChanges } from "./session-changes.ts";
 import { RUN_CHANGES_ENTRY } from "./wire.ts";
 
@@ -156,6 +157,31 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
 
 export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	const root = () => path.resolve(host.session.sessionManager.getCwd());
+
+	server.route("POST", "/api/files/local", async ({ body }) => {
+		const payload = body as { path?: unknown; action?: unknown; handler?: unknown } | null;
+		if (!payload || !["resolve", "choices", "open", "reveal", "handler"].includes(String(payload.action)))
+			throw new HttpError(400, "Unknown local file action");
+		let localPath = payload.path;
+		if (typeof localPath === "string" && localPath.startsWith("/api/artifacts/download?")) {
+			const artifactPath = new URL(localPath, "http://localhost").searchParams.get("path") ?? "";
+			try {
+				localPath = resolveArtifact(artifactDataRoot(), artifactPath);
+			} catch {
+				throw new HttpError(404, "Unknown artifact");
+			}
+		}
+		const target = await resolveLocalFile(root(), localPath);
+		if (payload.action === "resolve") return target;
+		if (payload.action === "handler" && typeof payload.handler !== "string")
+			throw new HttpError(400, "Expected an opening method");
+		const result = await runLocalFileAction(
+			target.path,
+			String(payload.action),
+			typeof payload.handler === "string" ? payload.handler : "",
+		);
+		return payload.action === "choices" ? { ...target, choices: result } : { ...target, opened: true };
+	});
 
 	const artifactDataRoot = () => host.session.sessionManager.getDataRoot() ?? getDataDir();
 	server.route("GET", "/api/artifacts", ({ url }) => {

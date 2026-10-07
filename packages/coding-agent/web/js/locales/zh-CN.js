@@ -7,6 +7,13 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Open in File Explorer": "在资源管理器中打开",
+	"Show in File Explorer": "在资源管理器中定位",
+	"Open with {app}": "使用 {app} 打开",
+	"Open in": "打开方式",
+	"Default app": "默认应用",
+	"File name": "文件名",
+	"Full path": "完整路径",
 	Coding: "Coding",
 	General: "General",
 	"General mode": "General 模式",
