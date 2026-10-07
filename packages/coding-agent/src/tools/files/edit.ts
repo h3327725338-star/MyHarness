@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
-import type { ChangeControl } from "../../changes/service.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
@@ -82,8 +81,6 @@ const defaultEditOperations: EditOperations = {
 export interface EditToolOptions {
 	/** Custom operations for file editing. Default: local filesystem */
 	operations?: EditOperations;
-	/** Local writes use this shared broker when supplied by the session or SDK. */
-	changeControl?: ChangeControl;
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -136,25 +133,6 @@ export function createEditToolDefinition(
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, _ctx?) {
 			const { path, edits } = validateEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);
-			if (options?.changeControl) {
-				if (options.operations) throw new Error("Controlled edits do not support remote/custom operations");
-				const preview = await options.changeControl.previewPatch([{ path: absolutePath, edits }], {
-					description: `Edit ${path}`,
-				});
-				const outcome = await options.changeControl.apply(preview.changeset.id, {
-					origin: { kind: "edit", toolCallId: _toolCallId },
-					signal,
-				});
-				const patch = preview.diffs.values().next().value ?? "";
-				return {
-					content: [{ type: "text" as const, text: `Successfully replaced ${edits.length} block(s) in ${path}.` }],
-					details: {
-						diff: patch,
-						patch,
-						...(outcome.result.committedAfterCancel ? { mutationStatus: "committed-after-cancel" as const } : {}),
-					},
-				};
-			}
 
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the

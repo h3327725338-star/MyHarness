@@ -62,15 +62,6 @@ export {
 	type WriteToolOptions,
 } from "./files/write.ts";
 export {
-	createRefactorTool,
-	createRefactorToolDefinition,
-	type RefactorToolDetails,
-	RefactorToolError,
-	type RefactorToolInput,
-	RefactorToolInputError,
-	type RefactorToolOptions,
-} from "./refactor.ts";
-export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -161,7 +152,6 @@ import {
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./files/ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./files/read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./files/write.ts";
-import { createRefactorTool, createRefactorToolDefinition, type RefactorToolOptions } from "./refactor.ts";
 import { createPwshTool, createPwshToolDefinition, type PwshToolOptions } from "./shell/pwsh.ts";
 import { createSubAgentTool, createSubAgentToolDefinition, type SubAgentToolOptions } from "./sub-agent.ts";
 import { createSymbolsTool, createSymbolsToolDefinition, type SymbolsToolOptions } from "./symbols.ts";
@@ -186,7 +176,6 @@ export type ToolName =
 	| "find"
 	| "ls"
 	| "symbols"
-	| "refactor"
 	| "agent"
 	| "workflow"
 	| "ultracode"
@@ -203,7 +192,6 @@ export const allToolNames: Set<ToolName> = new Set([
 	"find",
 	"ls",
 	"symbols",
-	"refactor",
 	"agent",
 	"workflow",
 	"ultracode",
@@ -222,7 +210,6 @@ export interface ToolsOptions {
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
 	symbols?: SymbolsToolOptions;
-	refactor?: RefactorToolOptions;
 	agent?: SubAgentToolOptions;
 	workflow?: WorkflowToolOptions;
 	ultracode?: UltracodeToolOptions;
@@ -252,8 +239,6 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "symbols":
 			return createSymbolsToolDefinition(cwd, options?.symbols);
-		case "refactor":
-			return createRefactorToolDefinition(cwd, options?.refactor);
 		case "agent":
 			return createSubAgentToolDefinition(cwd, options?.agent);
 		case "workflow":
@@ -291,8 +276,6 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "symbols":
 			return createSymbolsTool(cwd, options?.symbols);
-		case "refactor":
-			return createRefactorTool(cwd, options?.refactor);
 		case "agent":
 			return createSubAgentTool(cwd, options?.agent);
 		case "workflow":
@@ -338,7 +321,6 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		symbols: createSymbolsToolDefinition(cwd, options?.symbols),
-		refactor: createRefactorToolDefinition(cwd, options?.refactor),
 		agent: createSubAgentToolDefinition(cwd, options?.agent),
 		workflow: createWorkflowToolDefinition(cwd, options?.workflow),
 		ultracode: createUltracodeToolDefinition(cwd, options?.ultracode),
@@ -377,7 +359,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		symbols: createSymbolsTool(cwd, options?.symbols),
-		refactor: createRefactorTool(cwd, options?.refactor),
 		agent: createSubAgentTool(cwd, options?.agent),
 		workflow: createWorkflowTool(cwd, options?.workflow),
 		ultracode: createUltracodeTool(cwd, options?.ultracode),

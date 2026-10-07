@@ -81,51 +81,6 @@ export interface CodeIndexRefreshSummary {
 	symbolCount: number;
 }
 
-/** Project configuration files whose presence says how a language server should treat a directory. */
-const PROJECT_MARKER_NAMES = new Set([
-	"tsconfig.json",
-	"jsconfig.json",
-	"package.json",
-	"pyproject.toml",
-	"setup.py",
-	"setup.cfg",
-	"requirements.txt",
-	"pyrightconfig.json",
-	"cargo.toml",
-	"go.mod",
-	"go.work",
-	"pom.xml",
-	"build.gradle",
-	"build.gradle.kts",
-	"settings.gradle",
-	"settings.gradle.kts",
-	"cmakelists.txt",
-	"compile_commands.json",
-	"composer.json",
-	"gemfile",
-	"package.swift",
-]);
-
-function isProjectMarker(fileName: string): boolean {
-	const lower = fileName.toLowerCase();
-	return PROJECT_MARKER_NAMES.has(lower) || lower.endsWith(".csproj") || lower.endsWith(".sln");
-}
-
-/** A read-only view of what the last refresh saw; it is the input of the workspace language inventory. */
-export interface WorkspaceFacts {
-	readonly files: ReadonlyArray<{
-		readonly path: string;
-		readonly language: string;
-		readonly size: number;
-		readonly hash: string;
-	}>;
-	/** Workspace-relative paths of project configuration files found during the last scan. */
-	readonly markers: readonly string[];
-	/** False when the last scan stopped at a limit, skipped files, or could not read a directory. */
-	readonly complete: boolean;
-	readonly limits: readonly string[];
-}
-
 export interface CodeIndexOptions {
 	cwd: string;
 	agentDir?: string;
@@ -158,7 +113,7 @@ interface IndexedFile {
 }
 
 interface PersistedCodeIndex {
-	version: typeof INDEX_VERSION;
+	version: 2;
 	root: string;
 	updatedAt: number;
 	files: Record<string, IndexedFile>;
@@ -173,13 +128,12 @@ interface DiscoveredFile {
 
 interface FileDiscoveryResult {
 	files: DiscoveredFile[];
-	markers: string[];
 	limitReached: boolean;
 	incomplete: boolean;
 }
 
 // Bump when parser or masking behavior changes so stale symbol data is rebuilt.
-const INDEX_VERSION = 3 as const;
+const INDEX_VERSION = 2 as const;
 const DEFAULT_MAX_FILES = 10_000;
 const DEFAULT_MAX_FILE_BYTES = 1_000_000;
 const DEFAULT_MAX_TOTAL_BYTES = 50_000_000;
@@ -532,36 +486,6 @@ const CODE_IDENTIFIER = String.raw`[\p{ID_Start}_$][\p{ID_Continue}$]*`;
 const PYTHON_IDENTIFIER = String.raw`[\p{ID_Start}_][\p{ID_Continue}]*`;
 const GO_IDENTIFIER = String.raw`[\p{L}_][\p{L}\p{N}_]*`;
 
-// A declaration head may carry modifiers and, for Java/C#/C++-style signatures, the
-// return type before the name. The token count is bounded so a single very long line
-// cannot turn prefix backtracking into quadratic work.
-const METHOD_HEAD_TOKEN = String.raw`[\p{L}\p{N}_$\[\]<>?.]+[ \t]+`;
-// The `=` and parenthesis exclusions keep `watch(config, (next) => {` and
-// `on("dialogs", (d) => (a ? set({ x }) : set({ y })))` from reading as a head plus a
-// return type plus a body. It costs us TS methods whose return type is itself a
-// function type, such as `): (() => void) {`.
-const METHOD_RETURN_TYPE = String.raw`(?:[ \t]*(?::|->)[^;{}=()\n]*|[ \t]+(?:throws|where)[ \t]+[^;{}=()\n]*)?`;
-
-// Tokens that can never be a modifier or return type, so a name after one is a call,
-// not a declaration (for example `new Runnable() {`).
-const NON_DECLARATION_HEAD_TOKENS = new Set([
-	"new",
-	"return",
-	"typeof",
-	"instanceof",
-	"await",
-	"yield",
-	"delete",
-	"throw",
-	"else",
-	"do",
-	"case",
-	"in",
-	"of",
-]);
-
-const FUNCTION_HEAD_KEYWORD = /(?:^|[ \t])(?:func|fun|fn|def)(?:[ \t]|$)/;
-
 /**
  * Extract symbols without requiring a language server or a runtime compiler.
  * The parser is intentionally conservative: false positives are worse than
@@ -625,6 +549,18 @@ export function parseCodeSymbols(
 		);
 	}
 
+	const methods = new RegExp(
+		String.raw`^[ \t]*(?:(?:public|private|protected|internal|static|abstract|override|virtual|final|async)\s+)*(${CODE_IDENTIFIER})\s*\([^;\n]*\)\s*\{`,
+		"gmu",
+	);
+	for (const match of masked.matchAll(methods)) {
+		const offset = match.index ?? 0;
+		const line = lineTextAt(content, lineNumberAt(masked, offset));
+		if (/\b(function|if|for|while|switch|catch)\b/.test(line)) continue;
+		if (symbols.some((symbol) => symbol.name === match[1] && symbol.line === lineNumberAt(masked, offset))) continue;
+		add("method", match[1], offset, isExported(line));
+	}
+
 	const arrows = new RegExp(
 		String.raw`^[ \t]*(export\s+)?(?:const|let|var)\s+(${CODE_IDENTIFIER})\s*=\s*(?:async\s*)?(?:\([^=\n]*\)|${CODE_IDENTIFIER})\s*=>`,
 		"gmu",
@@ -678,24 +614,6 @@ export function parseCodeSymbols(
 			match.index ?? 0,
 			/^\s*pub\b/.test(lineTextAt(content, lineNumberAt(masked, match.index ?? 0))),
 		);
-
-	// Runs last on purpose: the generic head matcher also recognises `func`/`fn` lines,
-	// and the language-specific patterns above know the right kind and export rules.
-	const methods = new RegExp(
-		String.raw`^[ \t]*((?:${METHOD_HEAD_TOKEN}){0,8})(${CODE_IDENTIFIER})[ \t]*(?:<[^<>\n]*>)?\([^;\n]*\)[ \t]*${METHOD_RETURN_TYPE}[ \t]*\{`,
-		"gmu",
-	);
-	for (const match of masked.matchAll(methods)) {
-		const offset = match.index ?? 0;
-		const line = lineTextAt(content, lineNumberAt(masked, offset));
-		if (/\b(function|if|for|while|switch|catch)\b/.test(line)) continue;
-		const head = match[1] ?? "";
-		const headTokens = head ? head.trim().split(/[ \t]+/) : [];
-		const lastHeadToken = headTokens[headTokens.length - 1];
-		if (lastHeadToken && NON_DECLARATION_HEAD_TOKENS.has(lastHeadToken)) continue;
-		if (symbols.some((symbol) => symbol.name === match[2] && symbol.line === lineNumberAt(masked, offset))) continue;
-		add(FUNCTION_HEAD_KEYWORD.test(head) ? "function" : "method", match[2], offset, isExported(line));
-	}
 
 	const exports = /\bexport\s*\{([^}]+)\}/g;
 	const exportedNames = new Set<string>();
@@ -760,7 +678,6 @@ async function discoverFiles(
 	signal?: AbortSignal,
 ): Promise<FileDiscoveryResult> {
 	const result: DiscoveredFile[] = [];
-	const markers: string[] = [];
 	let limitReached = false;
 	let incomplete = false;
 	const walk = async (directory: string): Promise<void> => {
@@ -793,7 +710,6 @@ async function discoverFiles(
 				continue;
 			}
 			if (!entry.isFile() || matcher.ignores(relPath)) continue;
-			if (isProjectMarker(entry.name)) markers.push(relPath);
 			const language = getCodeLanguage(relPath);
 			if (!language) continue;
 			try {
@@ -805,7 +721,7 @@ async function discoverFiles(
 		}
 	};
 	await walk(root);
-	return { files: result, markers, limitReached, incomplete };
+	return { files: result, limitReached, incomplete };
 }
 
 export class CodeSymbolIndex {
@@ -820,8 +736,6 @@ export class CodeSymbolIndex {
 	private refreshQueue: Promise<void> = Promise.resolve();
 	private lastUpdated?: number;
 	private lastRefreshSummary?: CodeIndexRefreshSummary;
-	private lastMarkers: string[] = [];
-	private lastScanLimits: string[] = [];
 
 	constructor(options: CodeIndexOptions) {
 		this.root = normalizeWorkspaceRoot(options.cwd);
@@ -841,21 +755,6 @@ export class CodeSymbolIndex {
 			symbolCount: [...this.files.values()].reduce((total, file) => total + file.symbols.length, 0),
 			lastUpdated: this.lastUpdated,
 			storagePath: this.storagePath,
-		};
-	}
-
-	/** Snapshot of the files and project markers from the last refresh (call ensureFresh first). */
-	getWorkspaceFacts(): WorkspaceFacts {
-		return {
-			files: [...this.files.values()].map((file) => ({
-				path: file.path,
-				language: file.language,
-				size: file.size,
-				hash: file.hash,
-			})),
-			markers: [...this.lastMarkers],
-			complete: this.lastScanLimits.length === 0,
-			limits: [...this.lastScanLimits],
 		};
 	}
 
@@ -997,12 +896,6 @@ export class CodeSymbolIndex {
 		}
 
 		const incomplete = discovery.limitReached || scanIncomplete;
-		this.lastMarkers = discovery.markers;
-		this.lastScanLimits = [
-			...(discovery.limitReached ? [`file discovery stopped at the ${this.maxFiles} file limit`] : []),
-			...(discovery.incomplete ? ["some directories or files could not be read"] : []),
-			...(limitSkipped > 0 ? [`${limitSkipped} file(s) were skipped because of size limits`] : []),
-		];
 		if (incomplete) {
 			for (const [filePath, previous] of this.files) {
 				if (!nextFiles.has(filePath)) nextFiles.set(filePath, previous);

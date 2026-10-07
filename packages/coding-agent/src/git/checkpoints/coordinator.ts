@@ -49,11 +49,6 @@ function classifyTool(
 			checkpointToolName: "bash",
 		};
 	}
-	if (toolName === "refactor") {
-		// Previews, status and discard write nothing in the project; apply and recover do.
-		const operation = args && typeof args === "object" ? (args as Record<string, unknown>).operation : undefined;
-		return { requiresCheckpoint: operation === "apply" || operation === "recover", checkpointToolName: "scan" };
-	}
 	if (READ_ONLY_TOOLS.has(toolName)) return { requiresCheckpoint: false };
 	return { requiresCheckpoint: true, checkpointToolName: "scan" };
 }

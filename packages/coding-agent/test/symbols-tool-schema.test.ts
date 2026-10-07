@@ -98,18 +98,6 @@ describe("Symbols operation-specific tool schema", () => {
 			outgoing_calls: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
 			supertypes: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
 			subtypes: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
-			inspect_symbol: [
-				"operation",
-				"target",
-				"facets",
-				"pageSize",
-				"mode",
-				"language",
-				"definitionId",
-				"timeoutMs",
-				"continuation",
-				"maxChars",
-			],
 			status: ["operation", "maxChars"],
 		};
 
@@ -147,45 +135,6 @@ describe("Symbols operation-specific tool schema", () => {
 			{ operation: "search_code", query: "commit", mode: "auto" },
 			{ operation: "code_map", path: ".", mode: "auto" },
 			{ operation: "code_map", path: ".", timeoutMs: 1000 },
-		]) {
-			expect(() => validate(definition, arguments_)).toThrow('Validation failed for tool "symbols"');
-		}
-	});
-
-	it("keeps inspect_symbol to a target query or a continuation, never both", () => {
-		const definition = createSymbolsToolDefinition(process.cwd());
-		const target = { type: "position", path: "src/a.ts", position: { line: 3, character: 7 } };
-
-		expect(validate(definition, { operation: "inspect_symbol", target })).toEqual({
-			operation: "inspect_symbol",
-			target,
-		});
-		expect(
-			validate(definition, {
-				operation: "inspect_symbol",
-				target: { type: "symbol_id", symbolId: "s1" },
-				facets: ["references", "supertypes"],
-				pageSize: 5,
-				definitionId: "typescript",
-			}),
-		).toMatchObject({ operation: "inspect_symbol", pageSize: 5 });
-		expect(validate(definition, { operation: "inspect_symbol", continuation: "abc" })).toEqual({
-			operation: "inspect_symbol",
-			continuation: "abc",
-		});
-
-		for (const arguments_ of [
-			{ operation: "inspect_symbol" },
-			{ operation: "inspect_symbol", target: { type: "name_path", namePath: "A/b" } },
-			{ operation: "inspect_symbol", target, facets: ["references", "nonsense"] },
-			{ operation: "inspect_symbol", target, facets: [] },
-			{ operation: "inspect_symbol", target, facets: ["references", "references"] },
-			{ operation: "inspect_symbol", target, pageSize: 0 },
-			{ operation: "inspect_symbol", target, pageSize: 101 },
-			{ operation: "inspect_symbol", target, limit: 10 },
-			{ operation: "inspect_symbol", target, continuation: "abc" },
-			{ operation: "inspect_symbol", continuation: "abc", pageSize: 5 },
-			{ operation: "inspect_symbol", continuation: "" },
 		]) {
 			expect(() => validate(definition, arguments_)).toThrow('Validation failed for tool "symbols"');
 		}

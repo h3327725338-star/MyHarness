@@ -8,21 +8,6 @@ import {
 	type IndexedCodeSymbol,
 } from "../symbols/index/code-index.ts";
 import type { CodeIntelligenceRoutingOptions } from "../symbols/index/router/types.ts";
-import {
-	continueInspect,
-	decodeContinuation,
-	INSPECT_FACETS,
-	type InspectContinuation,
-	InspectContinuationError,
-	type InspectFacet,
-	type InspectFacetItem,
-	type InspectFacetName,
-	type InspectFacetStatus,
-	type InspectResult,
-	type InspectTarget,
-	inspectSymbol,
-	MAX_INSPECT_PAGE_SIZE,
-} from "../symbols/inspect/inspect-symbol.ts";
 import type { CodeIntelligenceRuntimeStatus } from "../symbols/runtime/types.ts";
 import type {
 	CallHierarchyResult,
@@ -39,7 +24,6 @@ import type {
 	ImplementationsResult,
 	IntelligenceResultMeta,
 	IntelligenceSource,
-	QueryCoverage,
 	ReferencesResult,
 	ResolvedSymbolResult,
 	ResultCompleteness,
@@ -130,7 +114,6 @@ type SymbolsOperation =
 	| "outgoing_calls"
 	| "supertypes"
 	| "subtypes"
-	| "inspect_symbol"
 	| "status";
 
 const positionTargetSchema = Type.Object({
@@ -155,7 +138,6 @@ const symbolIdTargetSchema = Type.Object({
 
 const targetSchema = Type.Union([positionTargetSchema, namePathTargetSchema, symbolIdTargetSchema]);
 const preciseTargetSchema = Type.Union([positionTargetSchema, symbolIdTargetSchema]);
-const inspectFacetSchema = Type.Union(INSPECT_FACETS.map((facet) => Type.Literal(facet)));
 const routingModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("semantic"), Type.Literal("lightweight")]);
 const lightweightRoutingModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("lightweight")]);
 const optionalPathSchema = Type.Optional(
@@ -371,30 +353,6 @@ const symbolsOperationSchemas = [
 	),
 	Type.Object(
 		{
-			operation: Type.Literal("inspect_symbol"),
-			target: preciseTargetSchema,
-			facets: Type.Optional(
-				Type.Array(inspectFacetSchema, { minItems: 1, maxItems: INSPECT_FACETS.length, uniqueItems: true }),
-			),
-			pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_INSPECT_PAGE_SIZE })),
-			...semanticRoutingProperties,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("inspect_symbol"),
-			continuation: Type.String({
-				minLength: 1,
-				description: "Continuation value returned by an earlier inspect_symbol facet",
-			}),
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
 			operation: Type.Literal("status"),
 			maxChars: maxCharsSchema,
 		},
@@ -412,36 +370,12 @@ const symbolsSchema = Type.Unsafe<SymbolsToolInput>({
 
 export type SymbolsToolTarget = Static<typeof targetSchema>;
 
-export interface SymbolsInspectFacetDetails {
-	name: InspectFacetName;
-	status: InspectFacetStatus;
-	total: number;
-	offset: number;
-	hasMore: boolean;
-	source?: IntelligenceSource;
-	completeness?: ResultCompleteness;
-	reason?: string;
-	/** The items were left out of the text to respect the output budget. */
-	omitted?: boolean;
-}
-
-export interface SymbolsInspectDetails {
-	snapshot: string;
-	stale?: string;
-	facets: SymbolsInspectFacetDetails[];
-}
-
 export interface SymbolsToolDetails {
 	operation: SymbolsToolInput["operation"];
 	source?: IntelligenceSource;
 	completeness?: ResultCompleteness;
 	fallback?: IntelligenceResultMeta["fallback"];
 	warnings?: string[];
-	/** Which language servers answered, failed or were not asked (workspace-level queries). */
-	coverage?: QueryCoverage;
-	provenance?: IntelligenceResultMeta["provenance"];
-	/** Per-facet outcome of an inspect_symbol call. */
-	inspect?: SymbolsInspectDetails;
 	legacyCompatibility?: boolean;
 	refresh?: CodeIndexRefreshSummary;
 	fileCount?: number;
@@ -576,23 +510,7 @@ function validateTarget(value: unknown, operation: string): SymbolTarget {
 	throw new SymbolsToolInputError(operation, `${operation} target has an unsupported type`);
 }
 
-function validateInspectFacets(value: unknown, operation: string): void {
-	if (value === undefined) return;
-	if (
-		!Array.isArray(value) ||
-		value.length === 0 ||
-		value.length > INSPECT_FACETS.length ||
-		new Set(value).size !== value.length ||
-		value.some((facet) => typeof facet !== "string" || !(INSPECT_FACETS as readonly string[]).includes(facet))
-	) {
-		throw new SymbolsToolInputError(
-			operation,
-			`${operation} facets must be a non-empty list of distinct names from: ${INSPECT_FACETS.join(", ")}`,
-		);
-	}
-}
-
-function validatePreciseSemanticTarget(value: unknown, operation: string): InspectTarget {
+function validatePreciseSemanticTarget(value: unknown, operation: string): SymbolTarget {
 	const target = validateTarget(value, operation);
 	if (target.type === "name_path") {
 		throw new SymbolsToolInputError(operation, `${operation} requires a position or symbol_id target`);
@@ -649,7 +567,6 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 		operation !== "outgoing_calls" &&
 		operation !== "supertypes" &&
 		operation !== "subtypes" &&
-		operation !== "inspect_symbol" &&
 		operation !== "status"
 	) {
 		throw new SymbolsToolInputError(String(operation ?? ""), "symbols operation is required and must be supported");
@@ -674,29 +591,6 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 		const target = validateTarget(args.target, operation);
 		if (target.type !== "symbol_id")
 			throw new SymbolsToolInputError(operation, "resolve_symbol requires a symbol_id target");
-		return input;
-	}
-
-	if (operation === "inspect_symbol") {
-		if (hasValue(args, "continuation")) {
-			const extra = Object.keys(args).filter(
-				(key) => args[key] !== undefined && key !== "operation" && key !== "continuation" && key !== "maxChars",
-			);
-			if (extra.length > 0) {
-				throw new SymbolsToolInputError(
-					operation,
-					`inspect_symbol with a continuation accepts only continuation and maxChars; remove: ${extra.join(", ")}`,
-				);
-			}
-			requireNonEmpty(args.continuation, operation, "continuation");
-			return input;
-		}
-		if (!hasValue(args, "target")) {
-			throw new SymbolsToolInputError(operation, "inspect_symbol requires target or continuation");
-		}
-		validatePreciseSemanticTarget(args.target, operation);
-		validateInspectFacets(args.facets, operation);
-		validateInteger(args.pageSize, operation, "pageSize", 1, MAX_INSPECT_PAGE_SIZE);
 		return input;
 	}
 
@@ -983,47 +877,11 @@ function metaHeader(details: SymbolsToolDetails): string {
 	return `[${parts.join(" ")}]`;
 }
 
-function describeCoverageEntry(entry: QueryCoverage["entries"][number]): string {
-	const subject = [
-		entry.definitionId,
-		entry.language,
-		entry.project === undefined ? undefined : `project=${entry.project || "."}`,
-	]
-		.filter((part) => part !== undefined && part !== "")
-		.join(" ");
-	const detail = entry.detail ? ` (${entry.detail})` : "";
-	return `${subject || "server"} status=${entry.status}${detail}`;
-}
-
-/** Coverage is shown only when it carries information the header does not: something was not covered. */
-function coverageNotices(coverage: QueryCoverage | undefined): string[] {
-	if (!coverage) return [];
-	const notices: string[] = [];
-	const answered = coverage.entries.filter((entry) => entry.status === "ok" || entry.status === "empty");
-	const gaps = coverage.entries.filter((entry) => entry.status !== "ok" && entry.status !== "empty");
-	const truncated = coverage.entries.filter((entry) => entry.truncated);
-	notices.push(
-		`[coverage] mode=${coverage.mode} answered=${answered.length} not_covered=${gaps.length}${truncated.length > 0 ? " truncated=true" : ""}`,
-	);
-	for (const entry of gaps) notices.push(`[coverage] ${describeCoverageEntry(entry)}`);
-	if (coverage.inventory && !coverage.inventory.complete) {
-		notices.push(`[coverage] workspace scan incomplete: ${coverage.inventory.limits.join("; ")}`);
-	}
-	return notices;
-}
-
 function composeOutput(details: SymbolsToolDetails, lines: string[], emptyText: string): string {
 	const notices: string[] = [metaHeader(details)];
 	if (details.fallback?.message) notices.push(`[fallback] ${details.fallback.message}`);
 	if (details.completeness === "partial") notices.push("[warning] result is partial and may be incomplete");
 	for (const warning of details.warnings ?? []) notices.push(`[warning] ${warning}`);
-	if (details.provenance?.adapter) {
-		const { name, detail } = details.provenance.adapter;
-		notices.push(
-			`[adapter] ${name}${detail ? ` (${detail})` : ""}: relations come from the written extends/implements clauses`,
-		);
-	}
-	notices.push(...coverageNotices(details.coverage));
 	notices.push(lines.length > 0 ? lines.join("\n") : emptyText);
 	return notices.join("\n");
 }
@@ -1051,8 +909,6 @@ function detailsFromMeta(operation: SymbolsOperation, meta: IntelligenceResultMe
 		completeness: meta.completeness,
 		fallback: meta.fallback,
 		warnings: meta.warnings ? [...meta.warnings] : undefined,
-		...(meta.coverage ? { coverage: meta.coverage } : {}),
-		...(meta.provenance ? { provenance: meta.provenance } : {}),
 	};
 }
 
@@ -1082,14 +938,7 @@ function renderDomainResult(
 	} else if (operation === "incoming_calls" || operation === "outgoing_calls") {
 		lines = (result as CallHierarchyResult).items.flatMap((edge) => formatCallEdge(edge, supportsSymbolIds));
 	} else if (operation === "supertypes" || operation === "subtypes") {
-		const relations = new Map(
-			(result.meta.hierarchy?.relations ?? []).map((entry) => [entry.symbolId, entry.relation]),
-		);
-		lines = (result as TypeHierarchyResult).items.map((symbol) => {
-			const line = formatCodeSymbol(symbol, "", supportsSymbolIds);
-			const relation = relations.get(symbol.id);
-			return relation ? `${line} [${relation}]` : line;
-		});
+		lines = (result as TypeHierarchyResult).items.map((symbol) => formatCodeSymbol(symbol, "", supportsSymbolIds));
 	} else {
 		lines = (result as DiagnosticsResult).items.map(formatDiagnostic);
 	}
@@ -1101,158 +950,6 @@ function renderDomainResult(
 		),
 		details,
 	};
-}
-
-function isAnswered(status: InspectFacetStatus): boolean {
-	return status === "ok" || status === "empty";
-}
-
-function formatInspectItem(
-	facet: InspectFacet,
-	item: InspectFacetItem,
-	relations: ReadonlyMap<string, string>,
-	supportsSymbolIds: boolean,
-): string[] {
-	switch (facet.name) {
-		case "references":
-			return [formatCodeReference(item as CodeReference)];
-		case "incoming_calls":
-		case "outgoing_calls":
-			return formatCallEdge(item as import("../symbols/types.ts").CodeCallEdge, supportsSymbolIds);
-		case "hover":
-			return formatHover(item as CodeHoverInfo);
-		case "diagnostics":
-			return [formatDiagnostic(item as CodeDiagnostic)];
-		case "supertypes":
-		case "subtypes": {
-			const symbol = item as CodeSymbol;
-			const line = formatCodeSymbol(symbol, "", supportsSymbolIds);
-			const relation = relations.get(symbol.id);
-			return [relation ? `${line} [${relation}]` : line];
-		}
-		default:
-			return [formatCodeSymbol(item as CodeSymbol, "", supportsSymbolIds)];
-	}
-}
-
-function inspectFacetHeader(facet: InspectFacet, omitted: boolean): string {
-	const parts = [`status=${facet.status}`];
-	if (isAnswered(facet.status) || facet.status === "stale") parts.push(`total=${facet.total}`);
-	if (facet.status === "ok") {
-		parts.push(omitted ? "showing=none" : `showing=${facet.offset + 1}-${facet.offset + facet.items.length}`);
-	}
-	if (facet.meta) parts.push(`source=${facet.meta.source}`, `completeness=${facet.meta.completeness}`);
-	if (facet.meta?.fallback) parts.push(`fallback=${facet.meta.fallback.reason}`);
-	// A facet whose items were left out has no continuation: resuming would silently skip them.
-	if (facet.continuation && !omitted) parts.push(`continuation=${facet.continuation}`);
-	return `[facet ${facet.name}] ${parts.join(" ")}`;
-}
-
-function inspectFacetNotes(facet: InspectFacet): string[] {
-	const notes: string[] = [];
-	if (facet.reason) notes.push(`  reason: ${facet.reason}`);
-	if (facet.meta?.fallback?.message) notes.push(`  [fallback] ${facet.meta.fallback.message}`);
-	for (const warning of facet.meta?.warnings ?? []) notes.push(`  [warning] ${warning}`);
-	const adapter = facet.meta?.provenance?.adapter;
-	if (adapter) {
-		notes.push(
-			`  [adapter] ${adapter.name}${adapter.detail ? ` (${adapter.detail})` : ""}: relations come from the written extends/implements clauses`,
-		);
-	}
-	for (const notice of coverageNotices(facet.meta?.coverage)) notes.push(`  ${notice}`);
-	return notes;
-}
-
-function inspectFacetBody(facet: InspectFacet, supportsSymbolIds: boolean): string[] {
-	const relations = new Map((facet.meta?.hierarchy?.relations ?? []).map((entry) => [entry.symbolId, entry.relation]));
-	const lines = facet.items.flatMap((item) => formatInspectItem(facet, item, relations, supportsSymbolIds));
-	if (facet.byFile && facet.byFile.length > 0) {
-		lines.push(`by_file: ${facet.byFile.map((entry) => `${entry.path}=${entry.count}`).join(", ")}`);
-	}
-	return lines.map((line) => `  ${line}`);
-}
-
-const INSPECT_OMITTED_NOTE =
-	"  items omitted to fit maxChars; ask for this facet alone (facets: [name]) or raise maxChars";
-
-/** Facet-level output budget: whole item blocks are dropped from the end, so no continuation value is cut in half. */
-function renderInspectResult(
-	result: InspectResult,
-	supportsSymbolIds: boolean,
-	maxChars: number,
-): { text: string; details: SymbolsToolDetails } {
-	const answered = result.facets.filter((facet) => isAnswered(facet.status));
-	const unanswered = result.facets.filter((facet) => !isAnswered(facet.status));
-	const sources = new Set(result.facets.map((facet) => facet.meta?.source));
-	const complete =
-		!result.stale &&
-		result.facets.length > 0 &&
-		unanswered.length === 0 &&
-		result.facets.every((facet) => facet.meta?.completeness !== "partial");
-	const definitionIds = [
-		...new Set(result.facets.flatMap((facet) => facet.meta?.provenance?.definitionIds ?? [])),
-	].sort();
-
-	const head: string[] = [];
-	const symbol = result.target.symbol;
-	const position = result.target.position;
-	const targetText = symbol
-		? formatCodeSymbol(symbol, "", supportsSymbolIds)
-		: position
-			? `${position.path}:${position.position.line + 1}:${position.position.character}`
-			: "unresolved";
-	head.push(`[inspect] target: ${targetText}`);
-	if (result.stale) {
-		head.push(`[stale] ${result.stale}; locate the symbol again with workspace_symbols or file_symbols`);
-	} else if (unanswered.length > 0) {
-		head.push(
-			`[inspect] answered=${answered.length}/${result.facets.length}; not answered: ${unanswered
-				.map((facet) => `${facet.name}=${facet.status}`)
-				.join(", ")}`,
-		);
-	}
-
-	const sections = result.facets.map((facet) => ({
-		facet,
-		notes: inspectFacetNotes(facet),
-		body: inspectFacetBody(facet, supportsSymbolIds),
-		omitted: false,
-	}));
-	const render = (): string[] => [
-		...head,
-		...sections.flatMap((section) => [
-			inspectFacetHeader(section.facet, section.omitted),
-			...section.notes,
-			...(section.omitted ? [INSPECT_OMITTED_NOTE] : section.body),
-		]),
-	];
-	const headerLine = `[source=${sources.has("semantic") ? "semantic" : "lightweight"} completeness=${complete ? "complete" : "partial"}]`;
-	const size = (): number => headerLine.length + 1 + render().join("\n").length;
-	for (let index = sections.length - 1; index >= 0 && size() > maxChars; index--) {
-		if (sections[index].body.length > 0) sections[index].omitted = true;
-	}
-
-	const details: SymbolsToolDetails = {
-		operation: "inspect_symbol",
-		source: sources.has("semantic") ? "semantic" : "lightweight",
-		completeness: complete ? "complete" : "partial",
-		...(definitionIds.length > 0 ? { provenance: { definitionIds } } : {}),
-		inspect: {
-			snapshot: result.snapshot,
-			...(result.stale ? { stale: result.stale } : {}),
-			facets: sections.map(({ facet, omitted }) => ({
-				name: facet.name,
-				status: facet.status,
-				total: facet.total,
-				offset: facet.offset,
-				hasMore: facet.continuation !== undefined,
-				...(facet.meta ? { source: facet.meta.source, completeness: facet.meta.completeness } : {}),
-				...(facet.reason ? { reason: facet.reason } : {}),
-				...(omitted ? { omitted: true } : {}),
-			})),
-		},
-	};
-	return { text: [headerLine, ...render()].join("\n"), details };
 }
 
 function directDetails(
@@ -1289,7 +986,7 @@ export function createSymbolsToolDefinition(
 		name: "symbols",
 		label: "symbols",
 		description:
-			"Structured queries for project code symbols, definitions, references, implementations, call relationships, type hierarchies, file structure, and diagnostics; inspect_symbol profiles one object across all of these with a per-facet status; also supports explicit text search. The operation selects a closed, operation-specific parameter set: do not combine parameters from different operations. Semantic results state their source and completeness; lightweight lexical results are only leads.",
+			"Structured queries for project code symbols, definitions, references, implementations, call relationships, type hierarchies, file structure, and diagnostics; also supports explicit text search. The operation selects a closed, operation-specific parameter set: do not combine parameters from different operations. Semantic results state their source and completeness; lightweight lexical results are only leads.",
 		promptSnippet: loadSystemPrompt("tools/symbols/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/symbols/guidelines.md"),
 		parameters: symbolsSchema,
@@ -1333,34 +1030,6 @@ export function createSymbolsToolDefinition(
 					await advancedRouter.resolveSymbol(target.symbolId, routingOptions(args, signal)),
 					supportsSymbolIds,
 				);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "inspect_symbol") {
-				const advancedRouter = requireAdvancedRouter(runtime.router, operation);
-				const raw = recordOf(args);
-				let inspected: InspectResult;
-				if (hasValue(raw, "continuation")) {
-					let continuation: InspectContinuation;
-					try {
-						continuation = decodeContinuation(
-							requireNonEmpty(raw.continuation, operation, "continuation"),
-							signal,
-						);
-					} catch (cause) {
-						if (cause instanceof InspectContinuationError)
-							throw new SymbolsToolInputError(operation, cause.message);
-						throw cause;
-					}
-					inspected = await continueInspect(advancedRouter, continuation);
-				} else {
-					inspected = await inspectSymbol(advancedRouter, {
-						target: validatePreciseSemanticTarget(raw.target, operation),
-						facets: raw.facets as InspectFacetName[] | undefined,
-						pageSize: raw.pageSize as number | undefined,
-						routing: routingOptions(args, signal),
-					});
-				}
-				const rendered = renderInspectResult(inspected, supportsSymbolIds, maxChars);
 				text = rendered.text;
 				details = rendered.details;
 			} else if (

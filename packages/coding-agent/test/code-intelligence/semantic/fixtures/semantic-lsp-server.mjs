@@ -68,7 +68,7 @@ function capabilities() {
 		result.callHierarchyProvider = {};
 		result.typeHierarchyProvider = {};
 	}
-	if (["pull-diagnostics", "pull-diagnostics-unsupported", "pull-diagnostics-delayed", "pull-diagnostics-related"].includes(scenario)) result.diagnosticProvider = true;
+	if (scenario === "pull-diagnostics" || scenario === "pull-diagnostics-unsupported") result.diagnosticProvider = true;
 	if (scenario === "unsupported-position") result.positionEncoding = "utf-8";
 	else result.positionEncoding = "utf-16";
 	return result;
@@ -289,18 +289,9 @@ function handleRequest(id, method, params) {
 		else respond(id, symbolTree());
 		return;
 	}
-	if (scenario === "pull-diagnostics-delayed" && method === "textDocument/diagnostic") {
-		setTimeout(() => respond(id, { kind: "full", resultId: "delayed", items: [] }), 150);
-		return;
-	}
-	if (scenario === "pull-diagnostics-related" && method === "textDocument/diagnostic") {
-		respond(id, { kind: "full", items: [], relatedDocuments: { [targetUri()]: { kind: "full", resultId: "related", items: [] } } });
-		return;
-	}
 	if (scenario === "pull-diagnostics" && method === "textDocument/diagnostic") {
 		const uri = params?.textDocument?.uri;
-		if (params?.previousResultId === "pull-1") respond(id, { kind: "unchanged", resultId: "pull-1" });
-		else respond(id, { kind: "full", resultId: "pull-1", items: diagnostics(uri, 1).params.diagnostics });
+		respond(id, { kind: "full", resultId: "pull-1", version: 1, items: diagnostics(uri, 1).params.diagnostics });
 		return;
 	}
 	if (scenario === "pull-diagnostics-unsupported" && method === "textDocument/diagnostic") {

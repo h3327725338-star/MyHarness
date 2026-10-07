@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // Installed language modules point MYHARNESS_CODE_INTELLIGENCE_ROOT at their
 // own small directory. The legacy private bundle used a runtime/ directory;
@@ -381,27 +381,6 @@ function runVueServerWithTypeScriptProxy(spec) {
   let nextTsSequence = 1;
   const pendingTsRequests = new Map();
   const openDocuments = new Map();
-  const semanticRequests = new Map();
-  const semanticCommands = new Map([
-    ["textDocument/definition", "definition"],
-    ["textDocument/references", "references"],
-    ["textDocument/hover", "quickinfo"],
-    ["textDocument/prepareRename", "rename"],
-    ["textDocument/rename", "rename"],
-    ["textDocument/diagnostic", "semanticDiagnosticsSync"],
-  ]);
-  const lspRange = (span) => {
-    const valid = (point) => Number.isInteger(point?.line) && point.line > 0 && Number.isInteger(point?.offset) && point.offset > 0;
-    if (!valid(span?.start) || !valid(span?.end) || span.end.line < span.start.line ||
-        (span.end.line === span.start.line && span.end.offset < span.start.offset)) {
-      throw new Error("Invalid TypeScript semantic response range");
-    }
-    return {
-      start: { line: span.start.line - 1, character: span.start.offset - 1 },
-      end: { line: span.end.line - 1, character: span.end.offset - 1 },
-    };
-  };
-  const location = (span) => ({ uri: pathToFileURL(span.file).href, range: lspRange(span) });
 
   const sendToVue = (message) => {
     if (vue.stdin?.writable) vue.stdin.write(encodeLsp(message));
@@ -411,10 +390,6 @@ function runVueServerWithTypeScriptProxy(spec) {
     // writes Content-Length framed protocol messages on stdout.
     if (ts.stdin?.writable) ts.stdin.write(`${JSON.stringify(message)}\n`);
   };
-  sendToTypeScript({
-    seq: nextTsSequence++, type: "request", command: "configure",
-    arguments: { extraFileExtensions: [{ extension: ".vue", isMixedContent: true, scriptKind: 7 }] },
-  });
   const sendDocumentToTypeScript = (message) => {
     const document = message.params?.textDocument;
     if (!document?.uri || typeof document.text !== "string") return;
@@ -434,7 +409,7 @@ function runVueServerWithTypeScriptProxy(spec) {
         file,
         fileContent: document.text,
         projectRootPath: process.cwd().replaceAll("\\", "/"),
-        scriptKindName: document.languageId === "vue" ? "Deferred" : undefined,
+        scriptKindName: document.languageId === "vue" ? "TS" : undefined,
       },
     });
   };
@@ -525,13 +500,6 @@ function runVueServerWithTypeScriptProxy(spec) {
     });
   };
   const forwardVueMessage = (message) => {
-    if (sameId(message.id, initializeId) && message.result?.capabilities) {
-      message.result.capabilities.definitionProvider = true;
-      message.result.capabilities.referencesProvider = true;
-      message.result.capabilities.hoverProvider = true;
-      message.result.capabilities.renameProvider = { prepareProvider: true };
-      message.result.capabilities.diagnosticProvider = { interFileDependencies: true, workspaceDiagnostics: false };
-    }
     const requestParams = message.method === "tsserver/request" && Array.isArray(message.params) && message.params.length === 1 && Array.isArray(message.params[0])
       ? message.params[0]
       : message.params;
@@ -551,64 +519,6 @@ function runVueServerWithTypeScriptProxy(spec) {
   };
   const forwardTypeScriptMessage = (message) => {
     if (message?.type !== "response" || !Number.isInteger(message.request_seq)) return;
-    const semantic = semanticRequests.get(message.request_seq);
-    if (semantic) {
-      semanticRequests.delete(message.request_seq);
-      clearTimeout(semantic.timer);
-      if (!message.success) {
-        process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: semantic.request.id, error: { code: -32603, message: message.message || "TypeScript semantic request failed" } }));
-        return;
-      }
-      const request = semantic.request;
-      try {
-      let body = message.body;
-      if (request.method === "textDocument/diagnostic" && !Array.isArray(body)) {
-        throw new Error("Expected diagnostic array");
-      }
-      if (request.method === "textDocument/diagnostic" && !semantic.syntactic) {
-        const seq = nextTsSequence++;
-        const timer = setTimeout(() => {
-          if (!semanticRequests.delete(seq)) return;
-          process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: "Vue syntactic diagnostics timed out" } }));
-        }, 30000);
-        semanticRequests.set(seq, { request, timer, syntactic: true, diagnostics: body || [] });
-        sendToTypeScript({ seq, type: "request", command: "syntacticDiagnosticsSync", arguments: { file: fileURLToPath(request.params.textDocument.uri).replaceAll("\\", "/"), includeLinePosition: true } });
-        return;
-      }
-      if (semantic.syntactic) body = [...semantic.diagnostics, ...(body || [])];
-      let result;
-      switch (request.method) {
-        case "textDocument/diagnostic":
-          result = { kind: "full", items: (body || []).map(item => ({
-            range: lspRange({ start: item.startLocation, end: item.endLocation }),
-            message: typeof item.message === "string" ? item.message : (() => { throw new Error("Expected diagnostic message"); })(), code: item.code,
-            severity: item.category === "warning" ? 2 : item.category === "suggestion" ? 4 : 1,
-            source: "vue-typescript-semantic",
-          })) };
-          break;
-        case "textDocument/definition": result = (body || []).map(location); break;
-        case "textDocument/references": result = (body?.refs || []).filter(ref => request.params.context?.includeDeclaration || !ref.isDefinition).map(location); break;
-        case "textDocument/hover": result = body ? { contents: { kind: "plaintext", value: [body.displayString, body.documentation].filter(Boolean).join("\n") }, range: lspRange(body) } : null; break;
-        case "textDocument/prepareRename": result = body?.info?.canRename ? { range: lspRange(body.info.triggerSpan), placeholder: body.info.displayName } : null; break;
-        case "textDocument/rename": {
-          if (!body?.info?.canRename) {
-            process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: body?.info?.localizedErrorMessage || "Cannot rename this object" } }));
-            return;
-          }
-          const changes = {};
-          for (const group of body.locs || []) {
-            changes[pathToFileURL(group.file).href] = group.locs.map(span => ({ range: lspRange(span), newText: `${span.prefixText || ""}${request.params.newName}${span.suffixText || ""}` }));
-          }
-          result = { changes };
-          break;
-        }
-      }
-      process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: request.id, result }));
-      } catch (error) {
-        process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: `Invalid Vue semantic response: ${error instanceof Error ? error.message : String(error)}` } }));
-      }
-      return;
-    }
     const vueRequestId = pendingTsRequests.get(message.request_seq);
     if (vueRequestId === undefined) return;
     pendingTsRequests.delete(message.request_seq);
@@ -627,29 +537,6 @@ function runVueServerWithTypeScriptProxy(spec) {
       if (message.method === "textDocument/didOpen") sendDocumentToTypeScript(message);
       if (message.method === "textDocument/didChange") applyDocumentChanges(message);
       if (message.method === "textDocument/didClose") closeDocumentInTypeScript(message);
-      const command = semanticCommands.get(message.method);
-      if (command && message.id !== undefined) {
-        let file;
-        try { file = fileURLToPath(message.params.textDocument.uri).replaceAll("\\", "/"); }
-        catch { process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Invalid document URI" } })); return; }
-        const seq = nextTsSequence++;
-        const timer = setTimeout(() => {
-          if (!semanticRequests.delete(seq)) return;
-          process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Vue TypeScript semantic request timed out" } }));
-        }, 30000);
-        semanticRequests.set(seq, { request: message, timer });
-        sendToTypeScript({ seq, type: "request", command, arguments: { file, line: message.params.position ? message.params.position.line + 1 : undefined, offset: message.params.position ? message.params.position.character + 1 : undefined, includeLinePosition: true, findInStrings: false, findInComments: false, providePrefixAndSuffixTextForRename: true } });
-        return;
-      }
-      if (message.method === "$/cancelRequest") {
-        for (const [seq, pending] of semanticRequests) {
-          if (sameId(pending.request.id, message.params?.id)) {
-            clearTimeout(pending.timer);
-            semanticRequests.delete(seq);
-            process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: pending.request.id, error: { code: -32800, message: "Request cancelled" } }));
-          }
-        }
-      }
       if (message.method !== "tsserver/response") sendToVue(message);
     });
   });
@@ -666,11 +553,6 @@ function runVueServerWithTypeScriptProxy(spec) {
   const stop = () => {
     if (stopping) return;
     stopping = true;
-    for (const pending of semanticRequests.values()) {
-      clearTimeout(pending.timer);
-      process.stdout.write(encodeLsp({ jsonrpc: "2.0", id: pending.request.id, error: { code: -32603, message: "Vue semantic server stopped before completing the request" } }));
-    }
-    semanticRequests.clear();
     stopServer(vue);
     stopServer(ts);
   };
@@ -692,7 +574,7 @@ function runVueServerWithTypeScriptProxy(spec) {
   });
   ts.once("exit", (code, signal) => {
     if (!stopping && code && code !== 0) process.stderr.write(`[myharness-symbols] private TypeScript proxy exited with code=${code} signal=${signal || "none"}\n`);
-    if (!stopping) stop();
+    if (!stopping && vue.exitCode === null) stopServer(vue);
   });
 }
 

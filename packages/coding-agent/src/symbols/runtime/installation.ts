@@ -569,7 +569,7 @@ export class CodeIntelligenceInstallationManager {
 		if (installed.version !== moduleVersion(entry)) {
 			return Object.freeze({ ...base, status: "update-available", installedVersion: installed.version });
 		}
-		if (!this.isHealthyInstall(installed.installPath, entry.artifact) || !this.hasHealthySharedComponents(entry)) {
+		if (!this.isHealthyInstall(installed.installPath, entry.artifact)) {
 			return Object.freeze({ ...base, status: "repair-needed", installedVersion: installed.version });
 		}
 		return Object.freeze({ ...base, status: "installed", installedVersion: installed.version });
@@ -719,8 +719,7 @@ export class CodeIntelligenceInstallationManager {
 					!installed ||
 					!isVersionCompatible(this.myharnessVersion, this.manifest.myharnessVersionRange) ||
 					entry.availability ||
-					!this.isHealthyInstall(installed.installPath, entry.artifact) ||
-					!this.hasHealthySharedComponents(entry)
+					!this.isHealthyInstall(installed.installPath, entry.artifact)
 				)
 					continue;
 				const languages = entry.languages.filter((language) => !disabled.has(normalizeId(language)));
@@ -749,14 +748,6 @@ export class CodeIntelligenceInstallationManager {
 			registry.register(definition);
 		}
 		return registry.size === 0 ? undefined : registry;
-	}
-
-	private hasHealthySharedComponents(entry: CodeIntelligenceModuleManifestEntry): boolean {
-		return entry.sharedComponents.every((id) => {
-			const installed = this.state.components[id];
-			const component = this.manifest.sharedComponents.find((candidate) => candidate.id === id);
-			return Boolean(installed && component && this.isHealthyInstall(installed.installPath, component.artifact));
-		});
 	}
 
 	private requireInstallableModule(id: string): CodeIntelligenceModuleManifestEntry {

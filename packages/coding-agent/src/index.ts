@@ -46,7 +46,6 @@ export {
 	createPwshTool,
 	createReadOnlyTools,
 	createReadTool,
-	createRefactorTool,
 	createSymbolsTool,
 	createWriteTool,
 	type PromptTemplate,
@@ -67,9 +66,6 @@ export {
 	type WorkspaceDataContext,
 	WorkspaceStore,
 } from "./application/workspace-store.ts";
-export { ChangeControlError, type ChangeErrorCode } from "./changes/errors.ts";
-export { changeControlLockRoot, changeControlRoot, createChangeControl } from "./changes/factory.ts";
-export { type ChangeCommitted, ChangeControl, type ChangeControlOptions, type ChangeGate } from "./changes/service.ts";
 export {
 	getSessionConversationPath,
 	getSessionDir,

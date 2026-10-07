@@ -188,11 +188,6 @@ export interface CodeIntelligenceSettings {
 	enabled?: boolean;
 	disabledLanguages?: string[];
 	servers?: Record<string, LanguageServerConfiguration>;
-	/** Controlled local edit/write/refactor policy. strict denies unbrokered Agent tools, not external processes. */
-	changeControl?: {
-		mode?: "off" | "assist" | "strict";
-		verification?: import("../../changes/verification.ts").VerificationSettings;
-	};
 }
 
 export interface UsageRankingSettings {

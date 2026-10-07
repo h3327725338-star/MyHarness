@@ -112,11 +112,6 @@ export interface CodeSymbol {
 	/** 精确 body range（函数体/类体等）；未知时缺省 */
 	bodyRange?: CodeRange;
 	/**
-	 * 整个声明的范围（包含修饰符/装饰器/签名与主体）。扁平 SymbolInformation 和 workspace symbol
-	 * 只提供这个范围；它不是名称范围，也不是 bodyRange。名称无法无歧义定位时，用它保留来源精度。
-	 */
-	declarationRange?: CodeRange;
-	/**
 	 * 0-based 声明行（行级精度）。
 	 * 轻量 parser 只能确定声明行、无法确定精确 column 时使用；
 	 * 此时 selectionRange 保持 undefined，两者同时存在只是精度不同，不是互相替代。
@@ -140,16 +135,6 @@ export interface CodeSymbol {
 	visibility?: SymbolVisibility;
 	/** 是否导出（export/pub 等）；未知时缺省 */
 	exported?: boolean;
-
-	/** 产出该符号的语言服务器与项目根；词法后端不提供。重定位/重构必须沿用它，不得改用别的服务器。 */
-	provenance?: SymbolProvenance;
-}
-
-/** 符号的语义来源：哪个 language server 定义、在哪个项目根下观察到。 */
-export interface SymbolProvenance {
-	readonly definitionId: string;
-	/** 服务器实例所在的项目根（绝对路径，规范化后）。 */
-	readonly projectRoot?: string;
 }
 
 /** 树形展示用：file_symbols 等需要层级结构的场景。Symbol Store 本身存扁平记录。 */
@@ -232,53 +217,9 @@ export type IntelligenceSource = "semantic" | "lightweight";
 /** 结果完整性：complete 表示该来源下结果完整，partial 表示受限制截断。 */
 export type ResultCompleteness = "complete" | "partial";
 
-/** 一次跨服务器/跨项目查询里，每个被查询对象的覆盖状态。 */
-export type CoverageStatus = "ok" | "empty" | "unsupported" | "timeout" | "failed" | "skipped";
-
-export interface CoverageEntry {
-	readonly definitionId?: string;
-	readonly language?: string;
-	/** 项目根（相对工作区；"" 表示工作区根）。 */
-	readonly project?: string;
-	readonly status: CoverageStatus;
-	readonly itemCount?: number;
-	readonly truncated?: boolean;
-	readonly detail?: string;
-}
-
-export interface QueryCoverage {
-	/**
-	 * explicit-definition：调用方指定了 definitionId，严格只查它；
-	 * explicit-language：调用方指定了语言；
-	 * inventory：按工作区语言清单选择服务器；
-	 * unranked：没有语言清单，按优先级取前几个服务器；
-	 * adapter：由编译器 adapter（如 TypeScript 继承关系）按项目查询。
-	 */
-	readonly mode: "explicit-definition" | "explicit-language" | "inventory" | "unranked" | "adapter";
-	readonly entries: readonly CoverageEntry[];
-	readonly inventory?: {
-		readonly complete: boolean;
-		readonly languages: ReadonlyArray<{ readonly language: string; readonly fileCount: number }>;
-		readonly limits: readonly string[];
-	};
-}
-
 export interface IntelligenceResultMeta {
 	source: IntelligenceSource;
 	completeness: ResultCompleteness;
-
-	/** 产出本结果的语言服务器定义；仅语义后端提供。 */
-	provenance?: {
-		readonly definitionIds: readonly string[];
-		/** 结果不是来自 LSP 请求而是来自编译器 adapter 时的来源说明。 */
-		readonly adapter?: { readonly name: string; readonly detail?: string };
-	};
-	/** 类型层级结果：每个返回符号与查询目标之间的显式关系。 */
-	hierarchy?: {
-		readonly relations: ReadonlyArray<{ readonly symbolId: string; readonly relation: "extends" | "implements" }>;
-	};
-	/** 跨服务器/跨项目查询的逐项覆盖；仅 workspace 级查询提供。 */
-	coverage?: QueryCoverage;
 
 	/** 仅当结果来自降级路径时存在（例如 semantic backend 不可用后使用 lexical） */
 	fallback?: {
@@ -335,24 +276,6 @@ export interface CodeCallEdge {
 // 语义化结果别名
 // =============================================================================
 
-/** A rename the language server proposes. Nothing has been written: the edit is the server's own WorkspaceEdit. */
-export interface RenameProposal {
-	/** The identifier the server agreed to rename, as it is in the source. */
-	readonly oldName: string;
-	readonly newName: string;
-	/** Where that identifier is. */
-	readonly location: CodeLocation;
-	/** The server's WorkspaceEdit exactly as received; decoded and verified by the change layer. */
-	readonly edit: unknown;
-	readonly definitionId: string;
-	readonly workspaceRoot: string;
-	/** Versions of the documents the client holds open (absolute path to version): the base of any versioned edit. */
-	readonly documentVersions: Readonly<Record<string, number>>;
-	/** Whether the server confirmed the position with prepareRename; otherwise the name came from the source text. */
-	readonly prepared: boolean;
-}
-
-export type RenameResult = IntelligenceResult<RenameProposal>;
 export type SymbolSearchResult = IntelligenceResult<CodeSymbol>;
 export type DefinitionResult = IntelligenceResult<CodeSymbol>;
 export type ReferencesResult = IntelligenceResult<CodeReference>;

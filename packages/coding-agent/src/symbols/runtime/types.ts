@@ -1,4 +1,3 @@
-import type { ChangeGate } from "../../changes/service.ts";
 import type { SymbolsIndexPort } from "../../tools/symbols-runtime.ts";
 import type { CodeSymbolIndex } from "../index/code-index.ts";
 import type { CodeIntelligenceRouterApi } from "../index/router/types.ts";
@@ -16,9 +15,6 @@ export interface CodeIntelligenceRuntimeStatus {
 }
 
 export interface CodeIntelligenceRuntimeServices {
-	readonly changeGates?: readonly ChangeGate[];
-	readonly notifyCommitted?: (paths: readonly string[]) => Promise<void>;
-	readonly previewRefactor?: NonNullable<SemanticBackendApi["previewRefactor"]>;
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
 	readonly index: SymbolsIndexPort & CodeSymbolIndex;

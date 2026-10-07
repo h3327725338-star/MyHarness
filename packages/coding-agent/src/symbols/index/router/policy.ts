@@ -27,8 +27,7 @@ export type RouterOperation =
 	| "incoming_calls"
 	| "outgoing_calls"
 	| "supertypes"
-	| "subtypes"
-	| "rename";
+	| "subtypes";
 
 export type RouterBackend = "semantic" | "lightweight" | "unsupported";
 
@@ -128,12 +127,9 @@ export function classifyFileSymbolsFallback(
 
 export function classifyWorkspaceSymbolsFallback(
 	error: unknown,
-	definitionId: string | undefined,
 	signal: AbortSignal | undefined,
 ): FallbackDecision | undefined {
-	// An explicit definition means "this server and nothing else": its failure is reported, not hidden
-	// behind a lexical answer that looks like a semantic one.
-	if (definitionId !== undefined || signal?.aborted || isAbortError(error)) return undefined;
+	if (signal?.aborted || isAbortError(error)) return undefined;
 	if (error instanceof SemanticCapabilityUnsupportedError) {
 		return {
 			reason: "semantic_capability_unsupported",

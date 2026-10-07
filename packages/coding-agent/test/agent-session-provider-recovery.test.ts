@@ -14,7 +14,6 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession, type AgentSessionEvent } from "../src/agent/runtime/agent-session.ts";
 import { convertToLlm } from "../src/agent/runtime/messages.ts";
-import { ChangeVerification } from "../src/changes/verification.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import {
@@ -226,64 +225,6 @@ describe("AgentSession provider recovery", () => {
 			},
 		};
 	}
-
-	it.each([
-		{ outcome: "passed", exitCode: 0, configured: true, enabled: true, calls: 1, terminal: "completed" },
-		{ outcome: "failed", exitCode: 1, configured: true, enabled: true, calls: 4, terminal: "blocked" },
-		{ outcome: "unknown", exitCode: 0, configured: false, enabled: true, calls: 1, terminal: "blocked" },
-		{
-			outcome: "unconfigured default",
-			exitCode: 0,
-			configured: false,
-			enabled: undefined,
-			calls: 1,
-			terminal: "completed",
-		},
-	])("does not complete committed changes with $outcome verification incorrectly", async (scenario) => {
-		let applyChange: () => Promise<void>;
-		const created = await createHarness({
-			turns: [
-				{ kind: "tools", calls: [{ id: "change", name: "step", arguments: { name: "change" } }] },
-				{ kind: "text", text: "The change is complete." },
-			],
-			tools: {
-				step: {
-					...makeStepTool([]),
-					execute: async () => {
-						await applyChange();
-						return { content: [{ type: "text", text: "committed" }], details: undefined };
-					},
-				},
-			},
-		});
-		created.session.settingsManager.applyOverrides({
-			codeIntelligence: { changeControl: { verification: { enabled: scenario.enabled } } },
-		});
-		let checkCount = 0;
-		const verification = new ChangeVerification({
-			store: created.session.changeControl.store,
-			workspaceRoot: tempDir,
-			settings: () => ({
-				checks: scenario.configured ? [{ name: "project", command: "host-approved", args: [] }] : [],
-			}),
-			snapshot: async () => "fixed-test-snapshot",
-			run: async () => ({ code: checkCount++ === 0 ? 0 : scenario.exitCode, output: "test check" }),
-		});
-		created.session.changeControl.verification = verification;
-		applyChange = async () => {
-			const preview = await created.session.changeControl.previewWrite("changed.txt", "authorized change");
-			await created.session.changeControl.apply(preview.changeset.id, { origin: { kind: "write" } });
-		};
-		await created.session.prompt("Finish the authorized change");
-		expect(created.callCount()).toBe(scenario.calls + 1);
-		expect(created.runStates.filter((state) => state === "completed" || state === "blocked")).toEqual([
-			scenario.terminal,
-		]);
-		expect(verification.repairing).toBe(false);
-		expect((await verification.status()).state).toBe(
-			scenario.configured && scenario.terminal === "completed" ? "verified" : "pending",
-		);
-	});
 
 	it("recovers in the same conversation when tool-call markup fails to parse", async () => {
 		const executed: string[] = [];

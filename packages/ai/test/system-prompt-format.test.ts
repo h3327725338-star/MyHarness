@@ -14,11 +14,8 @@ function resources(directory: string): string[] {
 
 describe("built-in prompt resource format", () => {
 	const files = resources(root);
-	it("covers all 61 runtime resources, including controlled refactor instructions", () => {
-		expect(files).toHaveLength(61);
-		expect(files).toContain(join(root, "common/tools/refactor/snippet.md"));
-		expect(files).toContain(join(root, "common/tools/refactor/guidelines.md"));
-		for (const name of ["README.md", "maintenance.md", "roadmap.md"]) expect(files).not.toContain(join(root, name));
+	it("covers all 59 runtime resources, excluding repository maintenance documents", () => {
+		expect(files).toHaveLength(59);
 	});
 	for (const file of files) {
 		it(`uses English heading-and-bullet blocks: ${file.slice(root.length + 1)}`, () => {

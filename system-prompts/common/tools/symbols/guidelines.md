@@ -1,7 +1,6 @@
 # Usage rules
 - Use file_symbols for a single file's structure; use workspace_symbols or find_symbol to discover project symbols by name; use the appropriate find_* operation for definitions, references, or implementations.
 - Use incoming_calls/outgoing_calls for call relationships, supertypes/subtypes for type hierarchies, and diagnostics for diagnostics; use search_code or grep for plain-text matching.
-- Use inspect_symbol when you need several relationships of the same object at once (for example before changing or removing it): it asks one position or symbol_id for every facet and reports ok, empty, unsupported, environment_blocked, stale, failed or skipped per facet. A facet that says unsupported or environment_blocked was not answered; do not read it as "none". When a facet shows a continuation value, pass it back as `continuation` to read the next page; a `stale` page means the answer changed, so start again.
 - Before adding a class, function, method, or type, use find_symbol only when there is a real risk of duplication or a reusable implementation. Do not query for every edit or repeat queries that add no information.
 - For semantic definitions/references/implementations, hover, calls, and parent/child type queries, use accurate 0-based UTF-16 positions. Prefer returned symbol_id values for subsequent precise operations.
 - A symbol_id locates a symbol within the current workspace; it is not a permanent identifier. If it is unknown or stale, retrieve it again with workspace_symbols or file_symbols. Never invent IDs or positions.

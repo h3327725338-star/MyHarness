@@ -13,9 +13,7 @@ export type SemanticErrorCode =
 	| "result_conversion_failed"
 	| "request_failed"
 	| "server_unavailable"
-	| "environment_blocked"
-	| "ambiguous_target"
-	| "rename_not_allowed";
+	| "ambiguous_target";
 
 export interface SemanticBackendErrorOptions {
 	readonly cause?: unknown;
@@ -86,13 +84,6 @@ export class SemanticDocumentSyncError extends SemanticBackendError {
 export class SemanticUnsupportedTargetError extends SemanticBackendError {
 	constructor(targetType: string) {
 		super("unsupported_target", `semantic backend does not support target type: ${targetType}`);
-	}
-}
-
-/** A prerequisite the operation needs (a compiler, a toolchain) is missing in this environment. */
-export class SemanticEnvironmentBlockedError extends SemanticBackendError {
-	constructor(message: string, cause?: unknown) {
-		super("environment_blocked", message, { cause });
 	}
 }
 

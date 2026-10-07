@@ -47,15 +47,6 @@ function parseProvider(value: unknown): { supported: boolean; resolveProvider: b
 	return { supported: true, resolveProvider: value.resolveProvider === true };
 }
 
-function parseRenameProvider(value: unknown): { supported: boolean; prepareProvider: boolean } {
-	if (value === true) return { supported: true, prepareProvider: false };
-	if (!isJsonObject(value)) return { supported: false, prepareProvider: false };
-	if (value.prepareProvider !== undefined && typeof value.prepareProvider !== "boolean") {
-		throw new SemanticBackendError("invalid_server_response", "renameProvider.prepareProvider must be boolean");
-	}
-	return { supported: true, prepareProvider: value.prepareProvider === true };
-}
-
 export function parseSemanticCapabilities(result: LspInitializeResult | undefined): SemanticCapabilities {
 	const capabilities = result?.capabilities;
 	if (!isJsonObject(capabilities)) {
@@ -67,7 +58,6 @@ export function parseSemanticCapabilities(result: LspInitializeResult | undefine
 	const callHierarchy = parseProvider(capabilities.callHierarchyProvider);
 	const typeHierarchy = parseProvider(capabilities.typeHierarchyProvider);
 	const diagnostic = parseProvider(capabilities.diagnosticProvider);
-	const rename = parseRenameProvider(capabilities.renameProvider);
 	return Object.freeze({
 		...sync,
 		diagnosticProvider: diagnostic.supported,
@@ -80,8 +70,6 @@ export function parseSemanticCapabilities(result: LspInitializeResult | undefine
 		hoverProvider: hover.supported,
 		callHierarchyProvider: callHierarchy.supported,
 		typeHierarchyProvider: typeHierarchy.supported,
-		renameProvider: rename.supported,
-		prepareRenameProvider: rename.prepareProvider,
 		positionEncoding: parsePositionEncoding(capabilities.positionEncoding),
 	});
 }
