@@ -112,7 +112,8 @@ export function collectSessionUsageStats(
 			requests++;
 			for (const key of ["requestMs", "firstOutputMs", "generationMs"] as const)
 				countDuration(key, entry.timing?.[key]);
-			const ms = entry.timing?.generationMs;
+			// Never mix legacy first-chunk/Agent timing with Provider end-to-end samples.
+			const ms = entry.timing?.providerRequestMs;
 			const reportedOutput = assistantMsg.usage.reported?.output ?? assistantMsg.usage.output > 0;
 			const measurable =
 				ms !== undefined &&
@@ -120,7 +121,9 @@ export function collectSessionUsageStats(
 				ms > 0 &&
 				reportedOutput &&
 				Number.isSafeInteger(assistantMsg.usage.output) &&
-				assistantMsg.usage.output >= 0;
+				assistantMsg.usage.output >= 0 &&
+				assistantMsg.stopReason !== "error" &&
+				assistantMsg.stopReason !== "aborted";
 			const speed: Measurement = {
 				value: measurable ? (assistantMsg.usage.output * 1000) / ms! : null,
 				estimated: false,

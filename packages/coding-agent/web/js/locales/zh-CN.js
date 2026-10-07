@@ -1281,6 +1281,8 @@ export const zhCN = {
 	"Latest request speed": "最新请求速度",
 	"Session cumulative speed": "Session 累计速度",
 	"Cumulative speed": "累计速度",
+	"Request average: {tokens} reported output tokens in {seconds}s, including first-output wait and network time.": "请求平均速度：{tokens} 个上游报告的输出 Token，耗时 {seconds} 秒，包含首字等待和网络时间。",
+	"Not available: no paired Provider request duration and output count, or the request failed or was cancelled.": "速度不可用：缺少配对的 Provider 请求耗时与输出计数，或请求失败、已取消。",
 	"Cumulative cache hit": "累计命中率",
 	"Latest request cache hit": "最新请求缓存命中",
 	"Latest request cache read": "最新请求缓存读取",

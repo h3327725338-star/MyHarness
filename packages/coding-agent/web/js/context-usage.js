@@ -60,10 +60,10 @@ export function SpeedValue({ speed }) {
 					? speed.tokens != null && speed.estimated
 						? t("Average of this request, estimated from the streamed text: about {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
 						: speed.tokens != null
-						? t("Average of this request: {tokens} output tokens in {seconds}s after the first token.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
+						? t("Request average: {tokens} reported output tokens in {seconds}s, including first-output wait and network time.", { tokens: num(speed.tokens), seconds: (speed.ms / 1000).toFixed(1) })
 						: t("Last measured speed of the request that was stopped.")
 					: state === "unavailable"
-						? t("Not available: the reply was not streamed or the provider reported no output tokens.")
+						? t("Not available: no paired Provider request duration and output count, or the request failed or was cancelled.")
 						: t("Measured with the first model request.");
 	return html`<${MeterValue} state=${state} title=${title} text=${value == null ? undefined : `${speed.estimated ? "≈ " : ""}${value < 10 ? value.toFixed(1) : Math.round(value)} t/s`} />`;
 }

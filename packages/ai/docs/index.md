@@ -41,6 +41,10 @@
 
 可选的 `Usage.cacheReported` 表示接口明确返回了缓存计数（包括零）；缺省仍兼容旧 Session，不能将缺少字段当作实测零。费用按当前模型配置的每百万 Token 单价、每次请求的完整输入阶梯计算，不使用 Session 累计输入判阶梯。
 
+## 客户端请求计时
+
+可选的 `AssistantMessage.requestDurationMs` 保存客户端 API 全程耗时（毫秒）。目前 `openai-completions` adapter 使用 `performance.now()`，在调用 SDK 前开始、消费完响应流后结束。包含首字等待、网络、SDK 处理及配置的 SDK 内部重试，不是服务器纯生成耗时；不包含调用前的 payload hook、Agent 消费、持久化或 Web 展示。其他 adapter 尚未接入时不应虚构计时。
+
 ## 运行时证据
 
 源码和 package manifest 可以证明导出与静态行为；不能单独证明外部 API、OAuth、网络 model refresh 或真实请求成功。此类结论必须附实际运行日志/测试结果，并脱敏。

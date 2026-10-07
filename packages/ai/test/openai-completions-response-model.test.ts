@@ -7,6 +7,9 @@ import type { Model } from "../src/types.ts";
 
 const mockState = vi.hoisted(() => ({
 	chunks: [] as unknown[],
+	now: 0,
+	requestWaitMs: 0,
+	chunkGapMs: 0,
 }));
 
 vi.mock("openai", () => {
@@ -17,7 +20,10 @@ vi.mock("openai", () => {
 					const chunks = mockState.chunks;
 					const stream = {
 						async *[Symbol.asyncIterator]() {
-							for (const chunk of chunks) yield chunk;
+							for (const chunk of chunks) {
+								mockState.now += mockState.chunkGapMs;
+								yield chunk;
+							}
 						},
 					};
 					const promise = Promise.resolve(stream) as Promise<typeof stream> & {
@@ -26,10 +32,10 @@ vi.mock("openai", () => {
 							response: { status: number; headers: Headers };
 						}>;
 					};
-					promise.withResponse = async () => ({
-						data: stream,
-						response: { status: 200, headers: new Headers() },
-					});
+					promise.withResponse = async () => {
+						mockState.now += mockState.requestWaitMs;
+						return { data: stream, response: { status: 200, headers: new Headers() } };
+					};
 					return promise;
 				},
 			},
@@ -56,6 +62,38 @@ function openRouterAuto(): Model<"openai-completions"> {
 describe("openai-completions responseModel", () => {
 	beforeEach(() => {
 		mockState.chunks = [];
+		mockState.now = mockState.requestWaitMs = mockState.chunkGapMs = 0;
+	});
+
+	it("measures the SDK request through response consumption, excluding payload preparation and caller work", async () => {
+		mockState.requestWaitMs = 5000;
+		mockState.chunkGapMs = 100;
+		mockState.chunks = [
+			{ choices: [{ index: 0, delta: { content: "batched output" } }] },
+			{
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				usage: { prompt_tokens: 10, completion_tokens: 119 },
+			},
+		];
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => mockState.now);
+		try {
+			const message = await complete(
+				openRouterAuto(),
+				{ messages: [] },
+				{
+					apiKey: "test",
+					onPayload: () => {
+						mockState.now += 3000;
+					},
+				},
+			);
+			expect(message.requestDurationMs).toBe(5200);
+			mockState.now += 10000;
+			expect(message.requestDurationMs).toBe(5200);
+			expect(message.usage.output).toBe(119);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("surfaces routed chunk.model on responseModel without changing model", async () => {

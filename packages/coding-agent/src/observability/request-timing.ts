@@ -34,6 +34,11 @@ export class RequestTimingTracker {
 			if (this.requestStart === undefined) return undefined;
 			const timing: SessionMessageTiming = {
 				requestMs: Math.max(0, at - this.requestStart),
+				...(typeof event.message.requestDurationMs === "number" &&
+				Number.isFinite(event.message.requestDurationMs) &&
+				event.message.requestDurationMs > 0
+					? { providerRequestMs: event.message.requestDurationMs }
+					: {}),
 				...(this.firstOutput === undefined
 					? {}
 					: {

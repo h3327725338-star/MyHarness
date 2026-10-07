@@ -93,26 +93,40 @@ describe("request and cumulative measurements", () => {
 		const stats = sumCache([measureCache(usage()), measureCache(usage({ totalReported: true, totalTokens: 999 }))]);
 		expect(stats.hitRate.value).toBe(0.8);
 	});
-	it("weights session speed by generation time, not the mean of request speeds", () => {
+	it("weights session speed by Provider request time, including first-output wait", () => {
 		const stats = collectSessionUsageStats([
-			entry(usage({ output: 100 }), { generationMs: 1000, requestMs: 3000, firstOutputMs: 2000 }),
-			entry(usage({ output: 300 }), { generationMs: 3000, requestMs: 4000, firstOutputMs: 1000 }),
+			entry(usage({ output: 100 }), {
+				generationMs: 1000,
+				requestMs: 3000,
+				firstOutputMs: 2000,
+				providerRequestMs: 3000,
+			}),
+			entry(usage({ output: 300 }), {
+				generationMs: 3000,
+				requestMs: 4000,
+				firstOutputMs: 1000,
+				providerRequestMs: 4000,
+			}),
 		]);
-		expect(stats.speed).toEqual({ value: 100, estimated: false });
+		expect(stats.speed.value).toBeCloseTo(400 / 7);
 		expect(stats.timing.firstOutputMs.value).toBe(1500);
 		expect(stats.timing.requestMs.value).toBe(7000);
-		expect(stats.latestRequest?.speed.value).toBe(100);
+		expect(stats.latestRequest?.speed.value).toBe(75);
 	});
 	it("uses only paired reported output and timing, without inventing legacy timing", () => {
-		const stats = collectSessionUsageStats([entry(usage()), entry(usage(), { generationMs: 1000 })]);
+		const stats = collectSessionUsageStats([
+			entry(usage()),
+			entry(usage(), { generationMs: 1, requestMs: 5000 }),
+			entry(usage(), { providerRequestMs: 1000 }),
+		]);
 		expect(stats.speed).toEqual({ value: 100, estimated: false });
-		expect(stats.timing.requestMs.value).toBeNull();
+		expect(stats.timing.requestMs.value).toBe(5000);
 		expect(collectSessionUsageStats([entry(usage())]).speed.value).toBeNull();
 	});
 	it("replaces a replayed entry but counts distinct retry entries", () => {
-		const first = entry(usage(), { generationMs: 1000 });
+		const first = entry(usage(), { providerRequestMs: 1000 });
 		const replacement = { ...first, message: assistant(usage({ output: 200 })) };
-		const retry = entry(usage(), { generationMs: 1000 });
+		const retry = entry(usage(), { providerRequestMs: 1000 });
 		const stats = collectSessionUsageStats([first, replacement, retry]);
 		expect(stats.tokens.output).toBe(300);
 		expect(stats.assistantMessages).toBe(2);
@@ -126,9 +140,14 @@ describe("request and cumulative measurements", () => {
 	});
 	it("keeps timing on the session entry, not in the model message", () => {
 		const manager = SessionManager.inMemory();
-		manager.appendMessage(assistant(), { requestMs: 3000, firstOutputMs: 2000, generationMs: 1000 });
+		manager.appendMessage(assistant(), {
+			requestMs: 3000,
+			firstOutputMs: 2000,
+			generationMs: 1000,
+			providerRequestMs: 3000,
+		});
 		const restored = JSON.parse(JSON.stringify(manager.getEntries())) as SessionEntry[];
-		expect(collectSessionUsageStats(restored).speed.value).toBe(100);
+		expect(collectSessionUsageStats(restored).speed.value).toBeCloseTo(100 / 3);
 		expect(restored[0]).toHaveProperty("timing.generationMs", 1000);
 		expect(restored[0]).not.toHaveProperty("message.timing");
 	});
@@ -164,14 +183,46 @@ describe("request and cumulative measurements", () => {
 		try {
 			const manager = SessionManager.create(directory, directory);
 			manager.appendMessage({ role: "user", content: "request", timestamp: 1 });
-			manager.appendMessage(assistant(), { requestMs: 3000, firstOutputMs: 2000, generationMs: 1000 });
+			manager.appendMessage(assistant(), {
+				requestMs: 3000,
+				firstOutputMs: 2000,
+				generationMs: 1000,
+				providerRequestMs: 3000,
+			});
 			const restored = SessionManager.open(manager.getSessionFile()!, directory);
 			const stats = collectSessionUsageStats(restored.getEntries());
-			expect(stats.speed).toEqual({ value: 100, estimated: false });
+			expect(stats.speed.value).toBeCloseTo(100 / 3);
+			expect(restored.getEntries().at(-1)).toHaveProperty("timing.providerRequestMs", 3000);
 			expect(stats.cache.hitRate).toEqual({ value: 0.8, estimated: false });
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
+	});
+	it("persists Provider timing independently of delayed Agent events", () => {
+		let now = 0;
+		const tracker = new RequestTimingTracker(() => now);
+		const message = { ...assistant(), requestDurationMs: 5239 };
+		tracker.observe({ type: "turn_start" } as AgentEvent);
+		tracker.observe({ type: "message_start", message } as AgentEvent);
+		now = 5200;
+		tracker.observe({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "text_delta", delta: "batch" },
+		} as AgentEvent);
+		now = 10000;
+		expect(tracker.observe({ type: "message_end", message } as AgentEvent)).toMatchObject({
+			requestMs: 10000,
+			providerRequestMs: 5239,
+		});
+	});
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid Provider duration %s", (ms) => {
+		expect(collectSessionUsageStats([entry(usage(), { providerRequestMs: ms })]).speed.value).toBeNull();
+	});
+	it.each(["error", "aborted"] as const)("excludes %s requests from speed", (stopReason) => {
+		const sample = entry(usage(), { providerRequestMs: 1000 });
+		if (sample.type === "message" && sample.message.role === "assistant") sample.message.stopReason = stopReason;
+		expect(collectSessionUsageStats([sample]).speed.value).toBeNull();
 	});
 	it("reset does not leak timing into a switched session", () => {
 		const tracker = new RequestTimingTracker();

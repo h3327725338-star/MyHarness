@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { GenerationSpeedMeter } from "../src/modes/web/generation-speed.ts";
 import { RequestCacheMeter } from "../src/modes/web/request-cache.ts";
 
-function assistant(output: number, reported = true): any {
+function assistant(output: number, reported = true, requestDurationMs?: number): any {
 	return {
 		role: "assistant",
+		requestDurationMs,
 		usage: {
 			input: 200,
 			output,
@@ -17,10 +18,10 @@ function assistant(output: number, reported = true): any {
 	};
 }
 
-describe("DeepSeek-style request meters", () => {
-	it("waits for settled output, without character estimates or sliding-window speed", () => {
+describe("end-to-end request speed and cache meters", () => {
+	it("includes first-output wait instead of measuring batch delivery speed", () => {
 		let now = 0;
-		const meter = new GenerationSpeedMeter(() => now);
+		const meter = new GenerationSpeedMeter();
 		meter.start();
 		now = 5000;
 		meter.update(assistant(0), "text_delta", "x".repeat(4000));
@@ -28,37 +29,49 @@ describe("DeepSeek-style request meters", () => {
 		expect(meter.update(assistant(100), "thinking_delta", "reasoning")).toBe(false);
 		expect(meter.current?.tps).toBeNull();
 		now = 7000;
-		expect(meter.end(assistant(300))).toEqual({ state: "final", tps: 150, live: false, tokens: 300, ms: 2000 });
+		expect(meter.end(assistant(300, true, now))).toEqual({
+			state: "final",
+			tps: 300 / 7,
+			live: false,
+			tokens: 300,
+			ms: 7000,
+		});
 		expect(meter.start()).toBe(false);
-		expect(meter.current?.tps).toBe(150);
+		expect(meter.current?.tps).toBe(300 / 7);
 	});
-	it("accepts positive short spans and explicit zero, but not missing output counts", () => {
+	it("accepts measured duration and explicit zero, but not missing output counts", () => {
 		let now = 0;
-		const meter = new GenerationSpeedMeter(() => now);
+		const meter = new GenerationSpeedMeter();
 		meter.start();
 		meter.update(assistant(0), "toolcall_delta", "{}");
 		now = 100;
-		expect(meter.end(assistant(10))?.tps).toBe(100);
+		expect(meter.end(assistant(10, true, now))?.tps).toBe(100);
 		meter.start();
 		meter.update(assistant(0), "text_delta", "x");
 		now = 200;
-		expect(meter.end(assistant(0))?.tps).toBe(0);
+		expect(meter.end(assistant(0, true, 100))?.tps).toBe(0);
 		meter.start();
 		meter.update(assistant(0), "text_delta", "x".repeat(1000));
 		now = 1000;
-		expect(meter.end(assistant(0, false))?.state).toBe("unavailable");
+		expect(meter.end(assistant(0, false, now))?.state).toBe("unavailable");
 	});
-	it("does not infer timing from empty chunks or turn interruption into a final estimate", () => {
-		let now = 0;
-		const meter = new GenerationSpeedMeter(() => now);
+	it("does not infer Provider timing from chunks or turn interruption into an estimate", () => {
+		const meter = new GenerationSpeedMeter();
 		meter.start();
 		meter.update(assistant(10), "text_delta", "");
-		now = 1000;
 		expect(meter.end(assistant(100))?.tps).toBeNull();
 		meter.start();
 		meter.update(assistant(100), "text_delta", "x");
 		expect(meter.settle()).toBe(true);
 		expect(meter.current?.state).toBe("unavailable");
+	});
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid duration %s", (ms) => {
+		expect(new GenerationSpeedMeter().end(assistant(100, true, ms))?.tps).toBeNull();
+	});
+	it("does not count failed calls or inflate the observed batched sample", () => {
+		const meter = new GenerationSpeedMeter();
+		expect(meter.end(assistant(119, true, 5239))?.tps).toBeCloseTo(22.71);
+		expect(meter.end({ ...assistant(119, true, 5239), stopReason: "error" })?.tps).toBeNull();
 	});
 	it("uses disjoint input buckets, ignores predictions and preserves explicit zero", () => {
 		const meter = new RequestCacheMeter();

@@ -39,6 +39,8 @@ export interface SessionEntryBase {
 
 /** Optional measured durations; absent fields in legacy records mean unknown, never zero. */
 export interface SessionMessageTiming {
+	/** Provider API duration; excludes Agent preparation and event consumers. */
+	providerRequestMs?: number;
 	requestMs?: number;
 	firstOutputMs?: number;
 	generationMs?: number;
