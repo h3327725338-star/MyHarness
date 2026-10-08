@@ -381,69 +381,68 @@ export function getAutoReviewCommandSafetyText(command: string): string {
 	return result;
 }
 
-export function hasUnsafeDelegatedBashCommand(command: string): boolean {
-	const trimmed = command.trim();
-	if (trimmed === "") return true;
+const DELEGATED_READ_ONLY_EXECUTABLES = new Set([
+	"cat",
+	"type",
+	"more",
+	"head",
+	"tail",
+	"echo",
+	"printf",
+	"rg",
+	"grep",
+	"find",
+	"fd",
+	"ls",
+	"dir",
+	"pwd",
+	"where",
+	"which",
+	"stat",
+	"wc",
+	"diff",
+	"sort",
+	"uniq",
+	"git",
+	"get-content",
+	"get-childitem",
+	"gci",
+	"gc",
+	"select-string",
+	"measure-object",
+	"get-location",
+	"file",
+	"od",
+	"cut",
+	"tr",
+]);
 
-	// Do not allow a delegated command to compose another shell operation or
-	// redirect output into a file. This also blocks command substitution.
-	if (hasUnquotedShellSyntax(trimmed)) return true;
-
+function delegatedExecutableOf(trimmed: string): string {
 	const firstToken = trimmed.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-	const executable = (firstToken?.[1] ?? firstToken?.[2] ?? firstToken?.[3] ?? "")
-		.split(/[\\/]/)
-		.at(-1)
-		?.replace(/\.(?:exe|cmd|bat)$/i, "")
-		.toLowerCase();
-	const readOnlyExecutables = new Set([
-		"cat",
-		"type",
-		"more",
-		"head",
-		"tail",
-		"rg",
-		"grep",
-		"find",
-		"fd",
-		"ls",
-		"dir",
-		"pwd",
-		"where",
-		"which",
-		"stat",
-		"wc",
-		"diff",
-		"sort",
-		"uniq",
-		"git",
-		"get-content",
-		"get-childitem",
-		"gci",
-		"gc",
-		"select-string",
-		"measure-object",
-		"get-location",
-		"file",
-		"od",
-		"cut",
-		"tr",
-	]);
-	if (!executable || !readOnlyExecutables.has(executable)) return true;
+	return (
+		(firstToken?.[1] ?? firstToken?.[2] ?? firstToken?.[3] ?? "")
+			.split(/[\\/]/)
+			.at(-1)
+			?.replace(/\.(?:exe|cmd|bat)$/i, "")
+			.toLowerCase() ?? ""
+	);
+}
 
-	// These options can execute another program or turn an inspection utility
-	// into a writer even when the executable itself looks harmless.
-	if (
+/**
+ * These options can execute another program or turn an inspection utility
+ * into a writer even when the executable itself looks harmless.
+ */
+function hasUnsafeDelegatedSegmentOptions(trimmed: string, executable: string): boolean {
+	return (
 		/(?:^|\s)(?:xargs|--exec|--pre|--replace|--output|--in-place|--delete|--remove|--write|--install)(?:\s|=|$)|(?:^|\s)-exec(?:dir)?(?:\s|$)/i.test(
 			trimmed,
 		) ||
 		/(?:^|\s)-(?:delete|fdelete|fls|fprint|fprintf)(?:\s|$)/i.test(trimmed) ||
 		(/(?:^|\s)-o(?:\s|=)/i.test(trimmed) && executable !== "grep" && executable !== "rg")
-	) {
-		return true;
-	}
+	);
+}
 
-	if (executable !== "git") return false;
-
+function isUnsafeDelegatedGitInvocation(trimmed: string): boolean {
 	const tokens = trimmed.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, ""));
 	let subcommandIndex = 1;
 	if (tokens[subcommandIndex] === "--no-pager") subcommandIndex += 1;
@@ -527,6 +526,91 @@ export function hasUnsafeDelegatedBashCommand(command: string): boolean {
 	}
 
 	return false;
+}
+
+function isUnsafeDelegatedSingleCommand(trimmed: string): boolean {
+	const executable = delegatedExecutableOf(trimmed);
+	if (!executable || !DELEGATED_READ_ONLY_EXECUTABLES.has(executable)) return true;
+	if (hasUnsafeDelegatedSegmentOptions(trimmed, executable)) return true;
+	if (executable !== "git") return false;
+	return isUnsafeDelegatedGitInvocation(trimmed);
+}
+
+function isSafeDelegatedSegment(segment: string): boolean {
+	const trimmedSegment = segment.trim();
+	if (trimmedSegment === "") return false;
+	if (delegatedExecutableOf(trimmedSegment) === "cd") return isSafeAutoReviewCdCommand(trimmedSegment);
+	return !isUnsafeDelegatedSingleCommand(trimmedSegment);
+}
+
+/**
+ * Delegated (Explore) Bash boundary. A command is safe when every shell
+ * sequence segment (split on ;, &&, and pipes) is an individually read-only
+ * inspection command, and any output redirection only drops diagnostics into
+ * the null device or a temp path. Command substitution and opaque shell
+ * structures (||, <, subshells, backticks) stay blocked.
+ */
+export function hasUnsafeDelegatedBashCommand(command: string): boolean {
+	const trimmed = command.trim();
+	if (trimmed === "") return true;
+	if (trimmed.includes("`") || /\$\(|\$\{/.test(trimmed)) return true;
+	const normalized = stripAutoReviewDiagnosticRedirections(trimmed);
+	if (normalized === undefined) return true;
+	const segments = splitAutoReviewShellSequence(normalized);
+	if (!segments) return true;
+	return !segments.every((segment) => isSafeDelegatedSegment(segment));
+}
+
+/**
+ * Stable marker embedded in every guard block reason so callers (and the
+ * Explore watchdog) can distinguish a read-only guard interception from a real
+ * tool failure. Guard interceptions must not count as consecutive tool errors.
+ */
+export const READ_ONLY_GUARD_BLOCK_MARKER = "[read-only-guard]";
+
+/** True when a tool result is a read-only guard interception rather than a real failure. */
+export function isReadOnlyGuardBlockedToolResult(result: unknown): boolean {
+	if (!result || typeof result !== "object" || !("content" in result)) return false;
+	const content = (result as { content?: unknown }).content;
+	if (!Array.isArray(content)) return false;
+	return content.some(
+		(part) =>
+			part !== null &&
+			typeof part === "object" &&
+			(part as { type?: unknown }).type === "text" &&
+			typeof (part as { text?: unknown }).text === "string" &&
+			(part as { text: string }).text.includes(READ_ONLY_GUARD_BLOCK_MARKER),
+	);
+}
+
+/** Human-readable block explanation so the sub-agent model can correct itself. */
+export function describeDelegatedBashBlock(command: string, blockReason: string): string {
+	const hint =
+		"每个命令段都是只读检查命令时，管道、&&、; 与 2>/dev/null 诊断重定向都是允许的；也可以改用 read/grep/find/ls/symbols 工具。";
+	const trimmed = command.trim();
+	let detail = "";
+	if (trimmed === "") {
+		detail = "命令为空";
+	} else if (trimmed.includes("`") || /\$\(|\$\{/.test(trimmed)) {
+		detail = "包含命令替换（反引号或 $(...)）";
+	} else {
+		const normalized = stripAutoReviewDiagnosticRedirections(trimmed);
+		if (normalized === undefined) {
+			detail = "包含写入或非诊断用途的输出重定向";
+		} else {
+			const segments = splitAutoReviewShellSequence(normalized);
+			if (!segments) {
+				detail = "包含无法安全解析的 shell 组合（如 ||、子 shell、输入重定向 <）";
+			} else {
+				const unsafeSegment = segments.find((segment) => !isSafeDelegatedSegment(segment));
+				if (unsafeSegment) {
+					const executable = delegatedExecutableOf(unsafeSegment.trim());
+					detail = `命令段不是允许的只读检查命令：${executable || unsafeSegment.trim()}`;
+				}
+			}
+		}
+	}
+	return `${READ_ONLY_GUARD_BLOCK_MARKER} ${blockReason}${detail ? `原因：${detail}。` : ""}${hint}`;
 }
 
 function stripAutoReviewDiagnosticRedirections(command: string): string | undefined {
@@ -812,6 +896,14 @@ const hasUnsafeOutputRedirection = hasUnsafeAutoReviewOutputRedirection;
 const getAutoReviewCommandSafetyText = ${getAutoReviewCommandSafetyText.toString()};
 const getCommandSafetyText = getAutoReviewCommandSafetyText;
 const hasUnsafeDelegatedBashCommand = ${hasUnsafeDelegatedBashCommand.toString()};
+const DELEGATED_READ_ONLY_EXECUTABLES = new Set(${JSON.stringify([...DELEGATED_READ_ONLY_EXECUTABLES])});
+const delegatedExecutableOf = ${delegatedExecutableOf.toString()};
+const hasUnsafeDelegatedSegmentOptions = ${hasUnsafeDelegatedSegmentOptions.toString()};
+const isUnsafeDelegatedGitInvocation = ${isUnsafeDelegatedGitInvocation.toString()};
+const isUnsafeDelegatedSingleCommand = ${isUnsafeDelegatedSingleCommand.toString()};
+const isSafeDelegatedSegment = ${isSafeDelegatedSegment.toString()};
+const describeDelegatedBashBlock = ${describeDelegatedBashBlock.toString()};
+const READ_ONLY_GUARD_BLOCK_MARKER = ${JSON.stringify(READ_ONLY_GUARD_BLOCK_MARKER)};
 const isSafeAutoReviewNullOutputCommand = ${isSafeAutoReviewNullOutputCommand.toString()};
 const isAutoReviewValidationCommand = ${isAutoReviewValidationCommand.toString()};
 const stripAutoReviewDiagnosticRedirections = ${stripAutoReviewDiagnosticRedirections.toString()};
@@ -914,18 +1006,20 @@ export default function (pi) {
     const command = typeof event.input.command === "string" ? event.input.command : "";
     bashCommandCount += 1;
     if (typeof maxBashCommands === "number" && bashCommandCount > maxBashCommands) {
-      return { block: true, reason: "已到达 Bash 命令数量上限。" };
+      return {
+        block: true,
+        reason: READ_ONLY_GUARD_BLOCK_MARKER + " 已到达 Bash 命令数量上限。请停止新的检查，整理已有调查证据并输出最终报告。",
+      };
     }
-    const safetyText = getCommandSafetyText(command);
     const strictBlocked =
       hasUnsafeDelegatedBashCommand(command) ||
       hasUnsafeOutputRedirection(command) ||
-      patterns.some((pattern) => pattern.test(safetyText));
+      hasExplicitAutoReviewBlockedPattern(command, patterns.map((pattern) => [pattern.source, pattern.flags]));
     if (strictBlocked && adjudicator && !hasHardAutoReviewBashCommand(command, patterns.map((pattern) => [pattern.source, pattern.flags]))) {
       if (await askAiToAdjudicateReadonly(command, ctx)) return;
     }
     if (strictBlocked) {
-      return { block: true, reason: ${JSON.stringify(blockReason)} };
+      return { block: true, reason: describeDelegatedBashBlock(command, ${JSON.stringify(blockReason)}) };
     }
   });
 }`;

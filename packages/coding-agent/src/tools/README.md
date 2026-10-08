@@ -17,7 +17,7 @@
 | `truncate.ts` | 按行数和字节数截断输出 |
 | `output-accumulator.ts` | 流式输出累积，内存有上限 |
 | `path-utils.ts` | 工具参数里的路径展开与解析 |
-| `sub-agent.ts` | `agent` 工具：启动只读的 Explore 子进程（前台或后台批次），收集结果、超时与停滞检测；`runExploreBatch()` 也被 `workflow/` 使用 |
+| `sub-agent.ts` | `agent` 工具：启动只读的 Explore 子进程（前台或后台批次），通过 NDJSON stdin 下发任务与“收敛提醒” steering 消息，收集结果、超时与停滞检测；只有 stall watchdog、墙钟超时、`maxTurns` 和取消会真正终止任务，重复操作/连续工具失败/无新信息只注入提醒；带 `questions` 的任务要求逐项回答并附 `## Completion checklist`，缺失即记为 `partial`（`stopReason: "incomplete_answer"`）；`runExploreBatch()` 也被 `workflow/` 使用 |
 | `symbols.ts` | `symbols` 工具：符号、定义、引用、诊断等查询 |
 | `symbols-runtime.ts` | `symbols` 工具需要的运行时端口：索引、路由、安装状态 |
 | `render-utils.ts` | 旧路径的兼容 re-export（实际在 `presentation/render-utils.ts`） |
@@ -42,7 +42,7 @@
 | `pwsh.ts` | `pwsh` 工具（Windows PowerShell） |
 | `executor.ts` | `executeBashWithOperations()`：用户直接执行命令（`!命令`）时用的流式执行 |
 | `session-bash.ts` | `SessionBashRunner`：一个会话里用户直接执行的命令。同一时间只跑一条，完整输出落盘，结果写入会话；Agent 正在运行时先排队，等本轮结束再写入 |
-| `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：拒绝列表 + 只读允许列表 + 可选的模型裁决 |
+| `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：按 shell 序列段（管道、`&&`、`;`）逐段用只读允许列表 + 危险选项/拒绝列表判定，诊断重定向（`2>/dev/null`）与临时路径写入不影响判定，可选的模型裁决；拦截结果带 `[read-only-guard]` 标记和具体原因，不计入连续工具失败 |
 
 ### github/
 

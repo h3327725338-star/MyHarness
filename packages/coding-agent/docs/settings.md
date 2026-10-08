@@ -213,12 +213,13 @@ Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Mar
 
 - `agent` 将一次 investigation 拆分为多个并行 Explore tasks。数量上限由 `maxTasks` 配置：默认 `3`，可在设置面板“子智能体（Explore）”行内或 `settings.json` 中调整，取值范围 1–18（18 是协议硬上限）。每次调用都按保存后的最新值生效，不需要重启会话。
 - 每个 delegated Explore task 默认没有总时间上限（`totalRuntimeLimitMs` 以毫秒为单位；`0` 表示无上限，`taskTimeoutMs` 是兼容旧配置的别名）。默认 Stall Timeout 为 10 分钟：它只在没有有效新进展时计时，检测到新的工具范围或结果会重置计时器。
-- `maxTurns` 默认 `0`（无限制）；达到正数上限会保留 `partial` 结果。`stallTimeoutMs` 为 `0` 时关闭 stall watchdog；`noProgressDetection` 和 `repeatedOperationDetection` 默认开启。
+- `maxTurns` 默认 `0`（无限制）；达到正数上限会保留 `partial` 结果。`stallTimeoutMs` 为 `0` 时关闭 stall watchdog。硬停止只保留给真实不可用进展：stall watchdog、墙钟超时、`maxTurns` 上限和取消；`noProgressDetection` 和 `repeatedOperationDetection`（默认开启）控制的是向运行中的子 Agent 注入“收敛提醒” steering 消息的强度（重复操作、连续工具失败、几轮无新信息按阈值周期性提醒），计数本身不再终止任务。
+- 带 `questions` 的 Explore task 要求子 Agent 逐项回答并在报告末尾给出 `## Completion checklist`；报告缺清单或声明了未回答问题时，任务记为 `partial`（`stopReason: "incomplete_answer"`）并列出未回答项。
 - `workflow` 运行一个或多个 sequential phases，每个 phase 可以包含多个并行 Explore tasks。第一个 phase 之后的每个 phase 都会收到上一阶段的 results。
 
 `/workflow` 和 `/ultracode` prompt commands 分别指示 main AI 使用 `workflow` 和 `ultracode` tools。`/ultracode` 使用更严格的中文 instructions；如果第一次 Ultracode run 不够，会继续执行后续 run。所有 phase 和 task descriptions 都由 main AI 决定；child agents 不能再创建更多 agents。
 
-Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edit 或 write。它们使用基于 blacklist 的 Bash guard，因此这个 setting 面向 inspection，而不是严格的 read-only security boundary。
+Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edit 或 write。它们的 Bash 命令由 delegated read-only guard 按 shell 序列段判定：每个段（管道、`&&`、`;`）都是允许的只读检查命令时放行，诊断重定向（如 `2>/dev/null`）不影响判定；命中的命令会被拦截并返回带 `[read-only-guard]` 标记的具体原因，这类拦截不计入子 Agent 的连续工具失败统计。guard 基于可执行命令白名单和危险选项检查，面向 inspection，而不是严格的 read-only security boundary。
 
 ```json
 {

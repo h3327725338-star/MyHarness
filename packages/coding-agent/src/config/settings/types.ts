@@ -81,9 +81,17 @@ export interface SubAgentSettings {
 	stallTimeoutMs?: number;
 	/** Total wall-clock limit for one delegated task. Zero means unlimited. */
 	totalRuntimeLimitMs?: number;
-	/** Stop a task when deterministic progress checks find no new information. */
+	/**
+	 * Inject a "收敛提醒" steering message into the running task when progress
+	 * checks find no new information or repeated failing tool calls. Counting
+	 * never stops the task; only the stall watchdog, wall-clock limit, `maxTurns`
+	 * and cancellation do.
+	 */
 	noProgressDetection?: boolean;
-	/** Stop a task after repeated equivalent tool operations. */
+	/**
+	 * Inject a "收敛提醒" steering message after repeated equivalent tool
+	 * operations in a delegated task.
+	 */
 	repeatedOperationDetection?: boolean;
 }
 

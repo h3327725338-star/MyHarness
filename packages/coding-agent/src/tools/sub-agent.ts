@@ -25,7 +25,7 @@ import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loade
 import { getMyHarnessInvocation } from "../utils/myharness-invocation.ts";
 import { killProcessTreeAndWait } from "../utils/shell.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
-import { createReadOnlyGuardExtensionSource } from "./shell/read-only-guard.ts";
+import { createReadOnlyGuardExtensionSource, isReadOnlyGuardBlockedToolResult } from "./shell/read-only-guard.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { FULL_TEXT_OUTPUT } from "./tool-result-persistence.ts";
 import { truncateHead } from "./truncate.ts";
@@ -42,6 +42,7 @@ export const DEFAULT_SUB_AGENT_MAX_TURNS = 0;
 export const DEFAULT_SUB_AGENT_STALL_TIMEOUT_MS = 10 * 60 * 1_000;
 export const DEFAULT_SUB_AGENT_NO_PROGRESS_DETECTION = true;
 export const DEFAULT_SUB_AGENT_REPEATED_OPERATION_DETECTION = true;
+/** Reminder cadence: re-inject a steering reminder after every N repeats/errors/idle turns. */
 const REPEATED_OPERATION_THRESHOLD = 3;
 const CONSECUTIVE_TOOL_ERROR_THRESHOLD = 3;
 const NO_PROGRESS_TURN_THRESHOLD = 3;
@@ -62,7 +63,12 @@ const subAgentSchema = Type.Object({
 			scope: Type.Optional(
 				Type.Array(Type.String(), { description: "Files, modules, or runtime areas that are in scope" }),
 			),
-			questions: Type.Optional(Type.Array(Type.String(), { description: "Specific questions to answer" })),
+			questions: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
+				}),
+			),
 			expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
 			stopConditions: Type.Optional(
 				Type.Array(Type.String(), { description: "Conditions for stopping the investigation" }),
@@ -89,12 +95,59 @@ export function formatDelegatedTaskPrompt(task: SubAgentTaskSpec): string {
 	const sections = [task.prompt];
 	if (task.goal) sections.push(`Goal:\n${task.goal}`);
 	if (task.scope?.length) sections.push(`Scope:\n${task.scope.map((item) => `- ${item}`).join("\n")}`);
-	if (task.questions?.length) sections.push(`Questions:\n${task.questions.map((item) => `- ${item}`).join("\n")}`);
+	if (task.questions?.length) {
+		sections.push(`Questions:\n${task.questions.map((item) => `- ${item}`).join("\n")}`);
+		sections.push(
+			"Report requirement: answer every question under Questions item by item in the final report, and end the report with a '## Completion checklist' section containing the two lines '- answered: <number of answered questions>' and '- unanswered: <each unanswered question, separated by semicolons; write none if everything is answered>'. A question that cannot be answered must appear under unanswered together with the missing evidence.",
+		);
+	}
 	if (task.expectedOutput) sections.push(`Expected output:\n${task.expectedOutput}`);
 	if (task.stopConditions?.length) {
 		sections.push(`Stop conditions:\n${task.stopConditions.map((item) => `- ${item}`).join("\n")}`);
 	}
 	return sections.join("\n\n");
+}
+
+export interface ExploreReportCompleteness {
+	complete: boolean;
+	unanswered: string[];
+	note: string;
+}
+
+const UNANSWERED_LINE_PATTERN = /^\s*(?:[-*]\s*)?unanswered\s*[:：]\s*(.*)$/gim;
+
+/**
+ * Explore reports for tasks with Questions must end with a self-declared
+ * checklist (see system-prompts roles/explore.md). This check trusts only the
+ * sub-agent's own declaration: a missing checklist or any declared unanswered
+ * item downgrades the task to partial so the Main Agent sees exactly which
+ * questions still need work.
+ */
+export function evaluateExploreReportCompleteness(
+	questions: readonly string[] | undefined,
+	report: string,
+): ExploreReportCompleteness {
+	const required = (questions ?? []).map((item) => item.trim()).filter((item) => item !== "");
+	if (required.length === 0) return { complete: true, unanswered: [], note: "" };
+	const declaredLines = [...report.matchAll(UNANSWERED_LINE_PATTERN)].map((match) => match[1] ?? "");
+	if (declaredLines.length === 0) {
+		return {
+			complete: false,
+			unanswered: required,
+			note: `报告未提供 Completion checklist 清单，无法确认 ${required.length} 个问题是否逐项回答。`,
+		};
+	}
+	const unanswered = declaredLines
+		.flatMap((chunk) => chunk.split(/[;；]+/))
+		.map((item) => item.replace(/^[-*\s]+/, "").trim())
+		.filter((item) => item !== "" && !/^(none|no|n\/a|-+)$/i.test(item) && item !== "无");
+	return unanswered.length === 0
+		? { complete: true, unanswered: [], note: "" }
+		: {
+				complete: false,
+				unanswered,
+				note: `子 Agent 在报告中声明以下问题未回答：${unanswered.join("；")}。`,
+			};
 }
 
 export interface SubAgentRuntimeSettings {
@@ -182,9 +235,8 @@ export type ExploreTaskStatus = "running" | "completed" | "partial" | "failed" |
 export type ExploreTaskStopReason =
 	| "completed"
 	| "max_turns_reached"
-	| "no_progress"
 	| "stalled"
-	| "partial_tool_failure"
+	| "incomplete_answer"
 	| "context_budget"
 	| "timeout"
 	| "cancelled"
@@ -288,12 +340,15 @@ export class SubAgentTaskTimeoutError extends Error {
 	}
 }
 
+/**
+ * Hard convergence stops are limited to genuine non-progress: the stall
+ * watchdog, the explicit turn cap, wall-clock timeouts, and cancellation.
+ * Repeated operations / consecutive tool failures / idle turns only inject
+ * steering reminders into the running child and never terminate it by count.
+ */
 class SubAgentConvergenceStopError extends Error {
 	readonly code = "SUB_AGENT_CONVERGENCE_STOP";
-	readonly stopReason: Extract<
-		ExploreTaskStopReason,
-		"max_turns_reached" | "no_progress" | "stalled" | "partial_tool_failure"
-	>;
+	readonly stopReason: Extract<ExploreTaskStopReason, "max_turns_reached" | "stalled">;
 
 	constructor(stopReason: SubAgentConvergenceStopError["stopReason"], message: string) {
 		super(message);
@@ -760,6 +815,7 @@ async function runExploreTask(options: {
 	description: string;
 	prompt: string;
 	goal?: string;
+	questions?: string[];
 	systemPromptPath: string;
 	guardPath: string;
 	signal?: AbortSignal;
@@ -841,19 +897,17 @@ async function runExploreTask(options: {
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
-			// 任务 prompt 经 stdin 传入，避免超长命令行触发 ENAMETOOLONG。
+			// 任务 prompt 与运行中提醒都通过 stdin 以 NDJSON 行传入：
+			// 避免超长命令行触发 ENAMETOOLONG，并允许向运行中的子会话注入 steering 提醒。
 			child.stdin?.on("error", () => {});
-			child.stdin?.end(options.prompt);
+			const writeWorkerInput = (payload: { type: "prompt" | "steer"; text: string }) => {
+				if (!child.stdin?.writable) return false;
+				return child.stdin.write(`${JSON.stringify(payload)}\n`, "utf8");
+			};
+			writeWorkerInput({ type: "prompt", text: options.prompt });
 			let buffer = "";
 			let settled = false;
-			let stopKind:
-				| "aborted"
-				| "timeout"
-				| "max_turns_reached"
-				| "no_progress"
-				| "stalled"
-				| "partial_tool_failure"
-				| undefined;
+			let stopKind: "aborted" | "timeout" | "max_turns_reached" | "stalled" | undefined;
 			let stopFinished = false;
 			let stopConfirmed = false;
 			let taskTimer: NodeJS.Timeout | undefined;
@@ -863,8 +917,15 @@ async function runExploreTask(options: {
 			const seenScopes = new Set<string>();
 			const seenResultHashes = new Set<string>();
 			const seenAssistantHashes = new Set<string>();
-			let convergenceWarningIssued = false;
-			let toolErrorWarningIssued = false;
+			const warnedOperationKeys = new Set<string>();
+			// Steering reminders reach the running child session through its stdin;
+			// they nudge the model but never terminate the task by themselves.
+			const injectSteeringReminder = (text: string) => {
+				if (settled || stopKind) return;
+				currentResult.lastToolInfo = truncateDisplay(text, 160);
+				writeWorkerInput({ type: "steer", text });
+				emitProgress();
+			};
 
 			const settle = (fn: () => void) => {
 				if (settled) return;
@@ -872,6 +933,7 @@ async function runExploreTask(options: {
 				if (taskTimer) clearTimeout(taskTimer);
 				if (stallTimer) clearTimeout(stallTimer);
 				options.signal?.removeEventListener("abort", onAbort);
+				child.stdin?.end();
 				fn();
 			};
 			const armStallTimer = () => {
@@ -900,17 +962,10 @@ async function runExploreTask(options: {
 						reject(new SubAgentTaskTimeoutError(taskTimeoutMs));
 						return;
 					}
-					if (
-						stopKind === "max_turns_reached" ||
-						stopKind === "no_progress" ||
-						stopKind === "stalled" ||
-						stopKind === "partial_tool_failure"
-					) {
+					if (stopKind === "max_turns_reached" || stopKind === "stalled") {
 						const messagesByReason = {
 							max_turns_reached: `达到 Sub Agent 最大 turns 限制（${maxTurns}）`,
-							no_progress: "连续多轮没有产生新的调查信息",
 							stalled: `超过 ${Math.round(stallTimeoutMs / 60_000)} 分钟没有有效进展`,
-							partial_tool_failure: "连续多个调查工具调用失败",
 						} as const;
 						reject(new SubAgentConvergenceStopError(stopKind, messagesByReason[stopKind]));
 						return;
@@ -930,9 +985,7 @@ async function runExploreTask(options: {
 							? "已取消"
 							: kind === "stalled"
 								? "检测到长时间没有有效进展，正在停止"
-								: kind === "max_turns_reached"
-									? `达到最大 turns（${maxTurns}），正在保留部分结果`
-									: "检测到重复或失败的调查操作，正在保留部分结果";
+								: `达到最大 turns（${maxTurns}），正在保留部分结果`;
 				emitProgress();
 				void waitForProcessStop(child.pid).then((confirmed) => {
 					stopFinished = true;
@@ -994,11 +1047,15 @@ async function runExploreTask(options: {
 						} else if (currentResult.diagnostics) {
 							currentResult.diagnostics.noProgressTurns = 0;
 						}
+						const idleTurns = currentResult.diagnostics?.noProgressTurns ?? 0;
 						if (
 							noProgressDetection &&
-							(currentResult.diagnostics?.noProgressTurns ?? 0) >= NO_PROGRESS_TURN_THRESHOLD
+							idleTurns >= NO_PROGRESS_TURN_THRESHOLD &&
+							(idleTurns - NO_PROGRESS_TURN_THRESHOLD) % NO_PROGRESS_TURN_THRESHOLD === 0
 						) {
-							requestStop("no_progress");
+							injectSteeringReminder(
+								`收敛提醒：连续 ${idleTurns} 轮没有产生新的调查信息。请更换关键词、路径或工具做针对性检查；如果已有证据足够，请直接整理输出最终报告。`,
+							);
 						}
 						if (maxTurns > 0 && (currentResult.turnCount ?? 0) >= maxTurns) {
 							requestStop("max_turns_reached");
@@ -1047,23 +1104,24 @@ async function runExploreTask(options: {
 							});
 						}
 						currentResult.lastToolInfo = resultSummary;
-						if (event.isError) {
+						if (event.isError && isReadOnlyGuardBlockedToolResult(event.result)) {
+							// 只读守卫拦截：reason 已包含给模型的可执行指引；它不是工具故障，
+							// 不计入连续失败数，避免把策略拦截误判成子 Agent 卡死。
+						} else if (event.isError) {
 							currentResult.diagnostics!.consecutiveToolErrors += 1;
 							pushUniqueLimited(
 								currentResult.unresolved,
 								`${formatToolCall(event.toolName, toolArgs, options.cwd)}：${resultSummary}`,
 							);
+							const errorStreak = currentResult.diagnostics!.consecutiveToolErrors;
 							if (
 								noProgressDetection &&
-								currentResult.diagnostics!.consecutiveToolErrors >= CONSECUTIVE_TOOL_ERROR_THRESHOLD
+								errorStreak >= CONSECUTIVE_TOOL_ERROR_THRESHOLD &&
+								(errorStreak - CONSECUTIVE_TOOL_ERROR_THRESHOLD) % CONSECUTIVE_TOOL_ERROR_THRESHOLD === 0
 							) {
-								if (!toolErrorWarningIssued) {
-									toolErrorWarningIssued = true;
-									currentResult.lastToolInfo = "收敛提醒：连续调查工具失败，请更换策略或整理已有证据";
-									emitProgress();
-								} else {
-									requestStop("partial_tool_failure");
-								}
+								injectSteeringReminder(
+									`收敛提醒：连续 ${errorStreak} 次调查工具调用失败。请检查参数与路径是否正确，或改用其他只读工具；必要时基于已有证据输出报告。`,
+								);
 							}
 						} else {
 							currentResult.diagnostics!.consecutiveToolErrors = 0;
@@ -1089,13 +1147,14 @@ async function runExploreTask(options: {
 									`${formatToolCall(event.toolName, toolArgs, options.cwd)}：${resultSummary}`,
 								);
 							if (repeatedOperationDetection && operationCount >= REPEATED_OPERATION_THRESHOLD) {
-								if (!convergenceWarningIssued) {
-									convergenceWarningIssued = true;
-									currentResult.lastToolInfo = `收敛提醒：你似乎在重复已完成的调查，请复用已有证据、更换策略或结束任务（${formatToolCall(event.toolName, toolArgs, options.cwd)}）`;
-									emitProgress();
+								if (!warnedOperationKeys.has(operationKey)) {
+									warnedOperationKeys.add(operationKey);
+									injectSteeringReminder(
+										`收敛提醒：你似乎在重复已完成的调查（${formatToolCall(event.toolName, toolArgs, options.cwd)}）。请复用已有证据，改用未调查的角度；如果证据已足够，请直接输出最终报告。`,
+									);
 								} else {
 									currentResult.lastToolInfo = `检测到重复操作：${formatToolCall(event.toolName, toolArgs, options.cwd)}`;
-									requestStop("no_progress");
+									emitProgress();
 								}
 							}
 						}
@@ -1163,11 +1222,7 @@ async function runExploreTask(options: {
 	if (stopError) {
 		const stopReason = stopReasonForError(stopError);
 		currentResult.stopReason = stopReason;
-		const convergenceStop =
-			stopReason === "max_turns_reached" ||
-			stopReason === "no_progress" ||
-			stopReason === "stalled" ||
-			stopReason === "partial_tool_failure";
+		const convergenceStop = stopReason === "max_turns_reached" || stopReason === "stalled";
 		currentResult.status =
 			stopReason === "timeout"
 				? hasUsefulResult(currentResult)
@@ -1218,12 +1273,20 @@ async function runExploreTask(options: {
 					typeof (message as { errorMessage?: unknown }).errorMessage === "string" &&
 					(message as { errorMessage: string }).errorMessage.length > 0,
 			);
-		const errorMessage =
-			stderr.trim() ||
+		const stderrText = stderr.trim();
+		const childErrorMessage =
+			stderrText ||
 			(childError
 				? ((childError as { errorMessage: string }).errorMessage ??
 					`Sub-agent process exited with code ${exitCode}`)
 				: `Sub-agent process exited with code ${exitCode}`);
+		// A child that emitted not a single event never started the task (bad entry,
+		// parent/worker version skew, startup crash). Say that plainly instead of
+		// handing raw stderr back as if it were the sub-agent's report.
+		const errorMessage =
+			messages.length === 0
+				? `子 Agent 进程未产生任何事件（退出码 ${exitCode}），任务没有真正开始${stderrText ? `；进程输出：${stderrText}` : ""}`
+				: childErrorMessage;
 		if (hasUsefulResult(currentResult)) {
 			currentResult.status = "partial";
 			finalizePartialResult(
@@ -1247,6 +1310,28 @@ async function runExploreTask(options: {
 		currentResult.stopReason = "runtime_error";
 		currentResult.error = "子 Agent 未执行调查工具，返回内容不能视为完成";
 		currentResult.lastToolInfo = currentResult.error;
+		emitProgress();
+		return currentResult;
+	}
+	const completeness = evaluateExploreReportCompleteness(options.questions, fullOutput);
+	if (!completeness.complete) {
+		currentResult.status = "partial";
+		currentResult.stopReason = "incomplete_answer";
+		currentResult.error = completeness.note;
+		currentResult.goal ??= currentResult.prompt;
+		for (const item of completeness.unanswered) {
+			pushUniqueLimited(currentResult.unresolved, `问题未逐项回答：${item}`);
+		}
+		currentResult.recommendedNextInvestigation ??= [];
+		pushUniqueLimited(currentResult.recommendedNextInvestigation, "针对未回答的问题做定向补查");
+		const annotatedOutput = `${fullOutput}\n\n[自动检查] ${completeness.note}`;
+		currentResult.output = truncateSubAgentOutput(annotatedOutput);
+		Object.defineProperty(currentResult, "fullOutput", {
+			value: annotatedOutput,
+			enumerable: false,
+			configurable: true,
+		});
+		currentResult.lastToolInfo = "报告未满足问题逐项回答要求，已标记为 partial";
 		emitProgress();
 		return currentResult;
 	}
@@ -1434,6 +1519,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						description: task.description,
 						prompt: taskPrompts[index] ?? task.prompt,
 						goal: task.goal ?? task.prompt,
+						questions: task.questions,
 						systemPromptPath,
 						guardPath,
 						signal: options.signal

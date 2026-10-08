@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	createReadOnlyGuardExtensionSource,
+	describeDelegatedBashBlock,
 	hasHardAutoReviewBashCommand,
 	hasUnsafeAutoReviewOutputRedirection,
 	hasUnsafeDelegatedBashCommand,
 	isAutoReviewAiAdjudicationCandidate,
 	isAutoReviewValidationCommand,
+	isReadOnlyGuardBlockedToolResult,
+	READ_ONLY_GUARD_BLOCK_MARKER,
 } from "../src/tools/shell/read-only-guard.ts";
 
 describe("delegated read-only bash guard", () => {
@@ -35,25 +38,25 @@ describe("delegated read-only bash guard", () => {
 		expect(await handler?.({ toolName: "bash", input: { command: "git diff -- src/a.ts" } })).toBeUndefined();
 		expect(await handler?.({ toolName: "bash", input: { command: "ls -la" } })).toBeUndefined();
 		expect(await handler?.({ toolName: "bash", input: { command: "git status --short" } })).toBeUndefined();
-		expect(await handler?.({ toolName: "bash", input: { command: "npm test" } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: "npm test" } })).toMatchObject({
 			block: true,
-			reason: "blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] blocked/),
 		});
-		expect(await handler?.({ toolName: "bash", input: { command: "echo probe > /tmp/probe.txt" } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: "echo changed > src/a.ts" } })).toMatchObject({
 			block: true,
-			reason: "blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] blocked/),
 		});
-		expect(await handler?.({ toolName: "bash", input: { command: "rm src/a.ts" } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: "rm src/a.ts" } })).toMatchObject({
 			block: true,
-			reason: "blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] blocked/),
 		});
-		expect(await handler?.({ toolName: "bash", input: { command: "git add src/a.ts" } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: "git add src/a.ts" } })).toMatchObject({
 			block: true,
-			reason: "blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] blocked/),
 		});
-		expect(await handler?.({ toolName: "bash", input: { command: "npm install foo" } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: "npm install foo" } })).toMatchObject({
 			block: true,
-			reason: "blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] blocked/),
 		});
 	});
 
@@ -73,7 +76,7 @@ describe("delegated read-only bash guard", () => {
 		expect(await handler?.({ toolName: "bash", input: { command: "git diff -- src/a.ts" } })).toBeUndefined();
 		expect(await handler?.({ toolName: "bash", input: { command: "git status --short" } })).toEqual({
 			block: true,
-			reason: "已到达 Bash 命令数量上限。",
+			reason: expect.stringContaining("已到达 Bash 命令数量上限。"),
 		});
 	});
 
@@ -92,6 +95,19 @@ describe("delegated read-only bash guard", () => {
 		expect(hasUnsafeDelegatedBashCommand("find . -delete")).toBe(true);
 		expect(hasUnsafeDelegatedBashCommand("sort -o src/a.ts src/b.ts")).toBe(true);
 		expect(hasUnsafeDelegatedBashCommand("echo changed > src/a.ts")).toBe(true);
+	});
+
+	it("judges every shell sequence segment, so read-only pipelines and separators pass", () => {
+		expect(hasUnsafeDelegatedBashCommand("ls packages; echo ---; ls docs")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("ls -R src/agent/delegation 2>/dev/null")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand('grep -rn "sub-agent" packages/coding-agent/src | wc -l')).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("git status --porcelain && git rev-parse HEAD")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand('printf "%s" "note"')).toBe(false);
+
+		expect(hasUnsafeDelegatedBashCommand("ls packages; rm -rf build")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("grep -n agent package.json > notes.txt")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("cat src/a.ts | tee src/b.ts")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("echo hi | bash")).toBe(true);
 	});
 
 	it("allows only read-only branch and tag listings", () => {
@@ -222,9 +238,9 @@ describe("delegated read-only bash guard", () => {
 				await handler?.({ toolName: "bash", input: { command: moduleInspectionCommand } }, context),
 			).toBeUndefined();
 			expect(fetchMock).toHaveBeenCalledTimes(2);
-			expect(await handler?.({ toolName: "bash", input: { command: "rm src/a.ts" } }, context)).toEqual({
+			expect(await handler?.({ toolName: "bash", input: { command: "rm src/a.ts" } }, context)).toMatchObject({
 				block: true,
-				reason: "delegated blocked",
+				reason: expect.stringMatching(/^\[read-only-guard\] delegated blocked/),
 			});
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 			aiDecision = "deny";
@@ -233,9 +249,9 @@ describe("delegated read-only bash guard", () => {
 					{ toolName: "bash", input: { command: 'find . -name "*.bak" -o -name "*.orig"' } },
 					context,
 				),
-			).toEqual({
+			).toMatchObject({
 				block: true,
-				reason: "delegated blocked",
+				reason: expect.stringMatching(/^\[read-only-guard\] delegated blocked/),
 			});
 			expect(fetchMock).toHaveBeenCalledTimes(3);
 		} finally {
@@ -256,9 +272,37 @@ describe("delegated read-only bash guard", () => {
 		});
 
 		expect(await handler?.({ toolName: "bash", input: { command: "git status --short" } })).toBeUndefined();
-		expect(await handler?.({ toolName: "bash", input: { command: 'python -c "print(1)"' } })).toEqual({
+		expect(await handler?.({ toolName: "bash", input: { command: 'python -c "print(1)"' } })).toMatchObject({
 			block: true,
-			reason: "delegated blocked",
+			reason: expect.stringMatching(/^\[read-only-guard\] delegated blocked/),
 		});
+	});
+
+	it("allows safe read-only shell sequences and keeps opaque structures blocked", () => {
+		expect(hasUnsafeDelegatedBashCommand("cat package.json | grep name")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("git status --short && git log --oneline -5")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("ls -la; pwd")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("grep foo src/a.ts 2>/dev/null")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("find . -name '*.ts' | head -20")).toBe(false);
+		expect(hasUnsafeDelegatedBashCommand("cd packages && ls")).toBe(false);
+
+		expect(hasUnsafeDelegatedBashCommand("git status || echo done")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("cat < src/a.ts")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("echo $(whoami)")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("ls | xargs rm")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("git commit -m x")).toBe(true);
+		expect(hasUnsafeDelegatedBashCommand("ls -la > out.txt")).toBe(true);
+	});
+
+	it("marks guard block reasons so they are not counted as real tool failures", () => {
+		const reason = describeDelegatedBashBlock("rm src/a.ts", "blocked");
+		expect(reason.startsWith(`${READ_ONLY_GUARD_BLOCK_MARKER} blocked`)).toBe(true);
+		expect(reason).toContain("命令段不是允许的只读检查命令：rm");
+		expect(isReadOnlyGuardBlockedToolResult({ content: [{ type: "text", text: reason }] })).toBe(true);
+		expect(isReadOnlyGuardBlockedToolResult({ content: [{ type: "text", text: "ENOENT: no such file" }] })).toBe(
+			false,
+		);
+		expect(isReadOnlyGuardBlockedToolResult(undefined)).toBe(false);
+		expect(isReadOnlyGuardBlockedToolResult({ content: "not-an-array" })).toBe(false);
 	});
 });

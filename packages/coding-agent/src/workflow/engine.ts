@@ -29,7 +29,12 @@ const workflowTaskSchema = Type.Object({
 	}),
 	goal: Type.Optional(Type.String({ description: "The bounded question this task must answer" })),
 	scope: Type.Optional(Type.Array(Type.String(), { description: "Files, modules, or runtime areas in scope" })),
-	questions: Type.Optional(Type.Array(Type.String(), { description: "Specific questions to answer" })),
+	questions: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
+		}),
+	),
 	expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
 	stopConditions: Type.Optional(Type.Array(Type.String(), { description: "Conditions for stopping" })),
 });
