@@ -7,6 +7,7 @@ import {
 	createSubAgentToolDefinition,
 	hasSuccessfulInvestigationEvidence,
 	resolvedTaskTimeoutMs,
+	resolveExploreMaxTasks,
 	resolveSubAgentRuntimeSettings,
 	runExploreBatch,
 	truncateSubAgentOutput,
@@ -50,11 +51,12 @@ describe("sub agent", () => {
 			getSettings: () => ({ enabled: false }),
 		});
 
+		// No configured cap: the default of 3 applies before the enabled check.
 		await expect(
 			tool.execute(
 				"test-call",
 				{
-					tasks: Array.from({ length: 19 }, (_, index) => ({
+					tasks: Array.from({ length: 4 }, (_, index) => ({
 						description: `Task ${index + 1}`,
 						prompt: "Inspect one independent area.",
 					})),
@@ -63,7 +65,52 @@ describe("sub agent", () => {
 				undefined,
 				undefined as any,
 			),
-		).rejects.toThrow("between 1 and 18");
+		).rejects.toThrow("between 1 and 3");
+
+		// A configured cap of 2 rejects a third task.
+		const capped = createSubAgentToolDefinition(process.cwd(), {
+			getSettings: () => ({
+				enabled: true,
+				provider: "openai",
+				model: "gpt-test",
+				thinkingLevel: "high",
+				maxTasks: 2,
+			}),
+		});
+		await expect(
+			capped.execute(
+				"test-call",
+				{
+					tasks: Array.from({ length: 3 }, (_, index) => ({
+						description: `Task ${index + 1}`,
+						prompt: "Inspect one independent area.",
+					})),
+				},
+				undefined,
+				undefined,
+				undefined as any,
+			),
+		).rejects.toThrow("between 1 and 2");
+	});
+
+	it("clamps the task cap to the protocol range of 1 to 18", () => {
+		expect(resolveExploreMaxTasks(undefined)).toBe(3);
+		expect(resolveExploreMaxTasks({ maxTasks: 18 })).toBe(18);
+		expect(resolveExploreMaxTasks({ maxTasks: 99 })).toBe(18);
+		expect(resolveExploreMaxTasks({ maxTasks: 0 })).toBe(1);
+		expect(resolveExploreMaxTasks({ maxTasks: Number.NaN })).toBe(3);
+	});
+
+	it("advertises the configured task cap in the tool name, snippet and guidelines", () => {
+		const capped = createSubAgentToolDefinition(process.cwd(), {
+			getSettings: () => ({ enabled: false, maxTasks: 7 }),
+		});
+		expect(capped.description).toContain("one to 7 independent");
+		expect(capped.promptSnippet).toContain("up to 7 independent read-only exploration tasks");
+		expect(capped.promptGuidelines?.some((line) => line.includes("at most 7 tasks"))).toBe(true);
+		const defaulted = createSubAgentToolDefinition(process.cwd());
+		expect(defaulted.description).toContain("one to 3 independent");
+		expect(defaulted.promptSnippet).toContain("up to 3 independent read-only exploration tasks");
 	});
 
 	it("uses no task deadline by default", () => {

@@ -1,6 +1,21 @@
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "../../platform/process/http-dispatcher.ts";
 import type { Settings } from "./types.ts";
 
+/** Allowed range for the user-configurable sub-agent task cap; the schema itself never exceeds `maxTasks.max`. */
+export const SUB_AGENT_SETTING_RANGES = {
+	maxTasks: { min: 1, max: 18 },
+} as const;
+
+/**
+ * The session-level retry attempt count as a plain number: `"unlimited"` (what settings.json stores) becomes Infinity,
+ * so the retry loop only stops on success or cancel. Anything missing or invalid falls back to the default.
+ */
+export function normalizeRetryMaxRetries(value: unknown): number {
+	if (value === "unlimited") return Number.POSITIVE_INFINITY;
+	if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
+	return SETTINGS_DEFAULTS.retry.maxRetries;
+}
+
 /** Defaults used by SettingsManager getters; omitted settings stay omitted on disk. */
 export const SETTINGS_DEFAULTS = {
 	transport: "auto",
@@ -59,6 +74,8 @@ export const SETTINGS_DEFAULTS = {
 	defaultSubAgentMaxTurns: 0,
 	defaultSubAgentNoProgressDetection: true,
 	defaultSubAgentRepeatedOperationDetection: true,
+	// Explore sub-agents one Agent tool call may start by default; the user can configure 1–18.
+	defaultSubAgentMaxTasks: 3,
 	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 	webShutdownGraceSeconds: 10,
 	webSearch: {

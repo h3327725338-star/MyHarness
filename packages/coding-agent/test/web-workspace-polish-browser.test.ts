@@ -87,6 +87,8 @@ const check=(ok,msg)=>{if(!ok)throw Error(msg)};
 const until=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await wait(50)}throw Error('timed out waiting for UI')};
 try {
  setView({motion:'on',lang:'zh-CN'}); setLang('zh-CN');
+ // Send 只在页面已连上服务端事件流时可用；本测试直接渲染组件而不连事件流，所以要手动进入 connected 态。
+ set({connected:true});
  set({snap:{session:{id:'test'},flags:{},context:{budget:{activeTokens:250,effectiveWindow:1000,percent:25}}},slots:[]});
  render(h(ContextDetails,{}),document.getElementById('app')); await wait(30);
  check(document.querySelector('.cu-top').textContent.includes('25%')&&!document.querySelector('.empty'),'context opens without data or shows loading');

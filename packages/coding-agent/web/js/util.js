@@ -304,6 +304,32 @@ export function unitToTokens(text, unitSize) {
 	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
 }
 
+/**
+ * The unit and the typed number a stored `numberUnit` value is shown with: a fixed unit ("unlimited", "disabled")
+ * wins when the value equals it, otherwise the first measured unit whose multiplier divides the value exactly, and
+ * failing that the last measured one. `typed` is "" for a fixed unit: its field holds no number.
+ */
+export function storedToUnitValue(stored, units) {
+	for (const unit of units) if (unit.fixed !== undefined && unit.fixed === stored) return { unit, typed: "" };
+	const measured = units.filter((unit) => unit.fixed === undefined);
+	const exact = measured.find(
+		(unit) => typeof stored === "number" && Number.isFinite(stored) && stored % (unit.multiplier ?? 1) === 0,
+	);
+	const unit = exact ?? measured[measured.length - 1];
+	if (!unit) return { unit: undefined, typed: String(stored ?? "") };
+	return { unit, typed: String(typeof stored === "number" ? stored / (unit.multiplier ?? 1) : stored) };
+}
+
+/** The stored value behind a typed number in one unit; undefined when it is not a whole number inside the range. */
+export function unitValueToStored(text, unit, min, max) {
+	const text2 = String(text ?? "").trim();
+	if (text2 === "" || !unit || !/^\d+$/u.test(text2)) return undefined;
+	const stored = Number(text2) * (unit.multiplier ?? 1);
+	if (min !== undefined && stored < min) return undefined;
+	if (max !== undefined && stored > max) return undefined;
+	return Number.isSafeInteger(stored) ? stored : undefined;
+}
+
 // ---- Markdown: bold next to punctuation ------------------------------------------------------
 // CommonMark only opens or closes `**` where the text around it "flanks" the right way, so `**` next to punctuation
 // with a letter on its other side is left as plain text: a quoted or bracketed phrase in bold inside a sentence, or a

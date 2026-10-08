@@ -10,6 +10,7 @@
 import type { ThinkingLevel } from "@myharness/agent-core";
 import {
 	type SettingsManager,
+	SUB_AGENT_SETTING_RANGES,
 	WEB_SEARCH_BROWSER_IDS,
 	WEB_SEARCH_SETTING_RANGES,
 } from "../../config/settings/index.ts";
@@ -19,7 +20,7 @@ import {
 	ProjectTrustStore,
 } from "../../config/trust/index.ts";
 import { CONTEXT_WINDOW_UNIT_TOKENS, parseContextWindowInput } from "../../context/context-window.ts";
-import { configureHttpDispatcher, HTTP_IDLE_TIMEOUT_CHOICES } from "../../platform/process/http-dispatcher.ts";
+import { configureHttpDispatcher, MAX_HTTP_IDLE_TIMEOUT_MS } from "../../platform/process/http-dispatcher.ts";
 import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
 import { settingsMenuFor } from "../../startup/settings-menu.ts";
@@ -27,7 +28,18 @@ import { builtinSlashCommandsFor } from "../../startup/slash-commands.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
-type SettingType = "boolean" | "enum" | "number" | "text" | "modelRef" | "multi" | "tokens";
+type SettingType = "boolean" | "enum" | "number" | "numberUnit" | "text" | "modelRef" | "multi" | "tokens";
+
+/**
+ * One unit of a `numberUnit` row. `multiplier` converts the typed number to the stored value; a `fixed` unit needs no
+ * number at all ("unlimited", "disabled") and saves its own value.
+ */
+interface NumberUnitOption {
+	value: string;
+	label: string;
+	multiplier?: number;
+	fixed?: number | "unlimited";
+}
 
 interface SettingDef {
 	id: string;
@@ -47,6 +59,12 @@ interface SettingDef {
 	unitSize?: number;
 	/** Setting applies only to the next session/turn, or needs a restart. */
 	note?: string;
+	/** Range of the inline whole-number field shown on a `modelRef` row (sub-agent task cap). */
+	inlineNumber?: { min: number; max: number };
+	/** `numberUnit` only: the units the typed number can be read in; the first matching one is how the value is shown. */
+	units?: NumberUnitOption[];
+	/** `numberUnit` only: what to tell the user when the typed number is out of range. */
+	maxHint?: string;
 	/** The setting is stored in the project instead of the global settings file. */
 	scope?: "global" | "project";
 }
@@ -290,7 +308,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "autoRetry",
 				section: "Agent",
 				label: "Auto-retry provider errors",
-				description: `Retry transient provider errors (up to ${retry.maxRetries} times).`,
+				description:
+					"Retry transient provider errors automatically. The number of attempts is set under Network & shell.",
 				type: "boolean",
 				value: session.autoRetryEnabled,
 			},
@@ -346,8 +365,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Sub-agents (Explore)",
 				description: "Allow the agent to delegate read-only investigation to sub-agents.",
 				type: "modelRef",
-				value: { ...modelRef(subAgent), enabled: subAgent.enabled },
+				value: { ...modelRef(subAgent), enabled: subAgent.enabled, maxTasks: subAgent.maxTasks },
 				note: "enabled",
+				inlineNumber: { min: SUB_AGENT_SETTING_RANGES.maxTasks.min, max: SUB_AGENT_SETTING_RANGES.maxTasks.max },
 			},
 			{
 				id: "visionAssistant",
@@ -476,17 +496,36 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				options: TRANSPORTS,
 			},
 			{
+				id: "retryMaxRetries",
+				section: "Network",
+				label: "Auto-retry attempts",
+				description:
+					"While auto-retry is on, how many extra attempts a failed model request gets before it gives up. The wait between attempts doubles (2s, 4s, 8s) up to 60s. Unlimited keeps retrying until it succeeds or you stop the task.",
+				type: "numberUnit",
+				value: Number.isFinite(retry.maxRetries) ? retry.maxRetries : "unlimited",
+				min: 0,
+				max: Number.MAX_SAFE_INTEGER,
+				units: [
+					{ value: "times", label: "times" },
+					{ value: "unlimited", label: "Unlimited", fixed: "unlimited" },
+				],
+			},
+			{
 				id: "httpIdleTimeoutMs",
 				section: "Network",
 				label: "HTTP idle timeout",
 				description:
 					"Maximum wait without new data while generating or waiting for the model. Disconnects on timeout to avoid hanging.",
-				type: "enum",
-				value: String(s.getHttpIdleTimeoutMs()),
-				options: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => ({
-					value: String(choice.timeoutMs),
-					label: choice.label,
-				})),
+				type: "numberUnit",
+				value: s.getHttpIdleTimeoutMs(),
+				min: 0,
+				max: MAX_HTTP_IDLE_TIMEOUT_MS,
+				maxHint: "About 24 days is the longest wait the network stack can keep; choose Disabled for no timeout.",
+				units: [
+					{ value: "minutes", label: "minutes", multiplier: 60_000 },
+					{ value: "seconds", label: "seconds", multiplier: 1_000 },
+					{ value: "disabled", label: "Disabled", fixed: 0 },
+				],
 			},
 			{
 				id: "webShutdownGraceSeconds",
@@ -700,7 +739,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const items = buildSettings().filter((item) => item.section !== "Terminal");
 		for (const row of settingsMenuFor("web")) {
 			const target = row.choices && items.find((item) => item.id === SETTINGS_MENU_SETTING[row.id]);
-			if (target && row.choices) target.options = row.choices.map((choice) => ({ ...choice }));
+			if (target && target.type === "enum" && row.choices)
+				target.options = row.choices.map((choice) => ({ ...choice }));
 		}
 		return items;
 	};
@@ -807,12 +847,24 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				const ref = modelRefValue(value);
 				const enabled = (value as { enabled?: unknown } | undefined)?.enabled === true;
 				const current = s.getSubAgentSettings();
+				const rawMaxTasks = (value as { maxTasks?: unknown } | undefined)?.maxTasks;
+				const maxTasks =
+					rawMaxTasks === undefined
+						? current.maxTasks
+						: numberValue(
+								rawMaxTasks,
+								"subAgent.maxTasks",
+								SUB_AGENT_SETTING_RANGES.maxTasks.min,
+								SUB_AGENT_SETTING_RANGES.maxTasks.max,
+							);
+				if (!Number.isInteger(maxTasks)) throw new HttpError(400, '"subAgent.maxTasks" must be a whole number');
 				s.setSubAgentSettings({
 					...current,
 					enabled,
 					provider: ref.provider,
 					model: ref.model,
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+					maxTasks,
 				});
 				session.setSubAgentEnabled(enabled);
 				return;
@@ -892,9 +944,19 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				return;
 			}
 			case "httpIdleTimeoutMs": {
-				const timeout = numberValue(value, id, 0, 3_600_000);
+				const timeout = numberValue(value, id, 0, MAX_HTTP_IDLE_TIMEOUT_MS);
 				s.setHttpIdleTimeoutMs(timeout);
 				configureHttpDispatcher(timeout);
+				return;
+			}
+			case "retryMaxRetries": {
+				if (value === "unlimited") {
+					s.setRetryMaxRetries("unlimited");
+					return;
+				}
+				const attempts = numberValue(value, id, 0, Number.MAX_SAFE_INTEGER);
+				if (!Number.isInteger(attempts)) throw new HttpError(400, '"retryMaxRetries" must be a whole number');
+				s.setRetryMaxRetries(attempts);
 				return;
 			}
 			case "webShutdownGraceSeconds":

@@ -275,6 +275,7 @@ describe("SettingsManager", () => {
 				taskTimeoutMs: 900_000,
 				totalRuntimeLimitMs: 900_000,
 				maxTurns: 0,
+				maxTasks: 3,
 				stallTimeoutMs: 600_000,
 				noProgressDetection: true,
 				repeatedOperationDetection: true,
@@ -306,10 +307,24 @@ describe("SettingsManager", () => {
 				taskTimeoutMs: 0,
 				totalRuntimeLimitMs: 0,
 				maxTurns: 0,
+				maxTasks: 3,
 				stallTimeoutMs: 600_000,
 				noProgressDetection: true,
 				repeatedOperationDetection: true,
 			});
+		});
+
+		it("clamps the configured sub-agent task cap to the 1–18 range", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSubAgentSettings().maxTasks).toBe(3);
+			manager.setSubAgentSettings({ enabled: true, maxTasks: 5 });
+			expect(manager.getSubAgentSettings().maxTasks).toBe(5);
+			manager.setSubAgentSettings({ enabled: true, maxTasks: 25 });
+			expect(manager.getSubAgentSettings().maxTasks).toBe(18);
+			manager.setSubAgentSettings({ enabled: true, maxTasks: 0 });
+			expect(manager.getSubAgentSettings().maxTasks).toBe(1);
+			manager.setSubAgentSettings({ enabled: true, maxTasks: Number.NaN });
+			expect(manager.getSubAgentSettings().maxTasks).toBe(3);
 		});
 
 		it("normalizes convergence settings and keeps unlimited values explicit", async () => {
@@ -795,6 +810,35 @@ describe("SettingsManager", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 
 			expect(() => manager.getHttpIdleTimeoutMs()).toThrow("Invalid httpIdleTimeoutMs setting");
+		});
+	});
+
+	describe("retry.maxRetries", () => {
+		it("defaults to 3 and stores a typed count", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getRetrySettings().maxRetries).toBe(3);
+			manager.setRetryMaxRetries(5);
+			expect(manager.getRetrySettings().maxRetries).toBe(5);
+			await manager.flush();
+			expect(SettingsManager.create(projectDir, agentDir).getRetrySettings().maxRetries).toBe(5);
+		});
+
+		it('stores "unlimited" on disk and reads it back as an endless budget', async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setRetryMaxRetries("unlimited");
+			await manager.flush();
+			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")).retry.maxRetries).toBe("unlimited");
+			expect(SettingsManager.create(projectDir, agentDir).getRetrySettings().maxRetries).toBe(
+				Number.POSITIVE_INFINITY,
+			);
+		});
+
+		it("falls back to the default for broken disk values and rejects invalid writes", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { maxRetries: "lots" } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getRetrySettings().maxRetries).toBe(3);
+			expect(() => manager.setRetryMaxRetries(-1)).toThrow(/Invalid retry.maxRetries/);
+			expect(() => manager.setRetryMaxRetries(2.5)).toThrow(/Invalid retry.maxRetries/);
 		});
 	});
 

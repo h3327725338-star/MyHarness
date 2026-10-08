@@ -3,6 +3,12 @@ import * as undici from "undici";
 
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 
+/**
+ * The largest idle timeout the JS/undici timers wait for reliably (int32 milliseconds, about 24.8 days). Anything
+ * longer is meant to be expressed as "disabled" (0), never as a bigger number.
+ */
+export const MAX_HTTP_IDLE_TIMEOUT_MS = 2_147_483_647;
+
 export const HTTP_IDLE_TIMEOUT_CHOICES = [
 	{ label: "30 sec", timeoutMs: 30_000 },
 	{ label: "1 min", timeoutMs: 60_000 },

@@ -19,9 +19,11 @@ const {
 	shellOutcome,
 	shortPath,
 	stripAnsi,
+	storedToUnitValue,
 	taskWorkLine,
 	tokensToUnit,
 	unitToTokens,
+	unitValueToStored,
 } = await import(new URL("util.js", webDir).href);
 const { byUsage, rankSearch, searchTier } = await import(new URL("search.js", webDir).href);
 
@@ -34,6 +36,46 @@ const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	model: "m",
 	final: true,
 	...extra,
+});
+
+describe("Web UI: numberUnit fields (retry attempts, HTTP idle timeout)", () => {
+	const timeoutUnits = [
+		{ value: "minutes", label: "minutes", multiplier: 60_000 },
+		{ value: "seconds", label: "seconds", multiplier: 1_000 },
+		{ value: "disabled", label: "Disabled", fixed: 0 },
+	];
+	const retryUnits = [
+		{ value: "times", label: "times" },
+		{ value: "unlimited", label: "Unlimited", fixed: "unlimited" },
+	];
+
+	it("shows the stored value in the largest unit that fits it exactly", () => {
+		expect(storedToUnitValue(300_000, timeoutUnits).typed).toBe("5");
+		expect(storedToUnitValue(300_000, timeoutUnits).unit.value).toBe("minutes");
+		expect(storedToUnitValue(30_000, timeoutUnits).unit.value).toBe("seconds");
+		expect(storedToUnitValue(30_000, timeoutUnits).typed).toBe("30");
+		// A value no whole unit fits (an old hand-edited settings.json) falls back to the finest unit.
+		expect(storedToUnitValue(45_500, timeoutUnits).typed).toBe("45.5");
+	});
+
+	it("reads fixed units (unlimited, disabled) back as no-number choices", () => {
+		expect(storedToUnitValue(0, timeoutUnits).unit.value).toBe("disabled");
+		expect(storedToUnitValue(0, timeoutUnits).typed).toBe("");
+		expect(storedToUnitValue("unlimited", retryUnits).unit.value).toBe("unlimited");
+		expect(storedToUnitValue(3, retryUnits).typed).toBe("3");
+	});
+
+	it("accepts only whole typed numbers whose stored value is inside the range", () => {
+		expect(unitValueToStored("5", timeoutUnits[0], 0, 2_147_483_647)).toBe(300_000);
+		expect(unitValueToStored("30", timeoutUnits[1], 0, 2_147_483_647)).toBe(30_000);
+		expect(unitValueToStored("3", retryUnits[0], 0, Number.MAX_SAFE_INTEGER)).toBe(3);
+		expect(unitValueToStored("0", retryUnits[0], 0, Number.MAX_SAFE_INTEGER)).toBe(0);
+		expect(unitValueToStored("2.5", retryUnits[0], 0, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+		expect(unitValueToStored("-1", retryUnits[0], 0, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+		expect(unitValueToStored("", retryUnits[0], 0, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+		// 99999999 minutes is past what any timer can wait: it must be refused, not stored.
+		expect(unitValueToStored("99999999", timeoutUnits[0], 0, 2_147_483_647)).toBeUndefined();
+	});
 });
 
 describe("Web UI: completion status", () => {
@@ -862,6 +904,68 @@ describe("Web UI: provider model catalog", () => {
 		expect(updated.levels.low).toBe(false);
 		expect(updated.detected).toMatchObject({ contextWindow: true, levels: true });
 		expect(updated.detected.maxTokens).toBeUndefined();
+	});
+
+	it("keeps the detection notice in step with the models still in the form", () => {
+		const own = models.modelDraft({ id: "own" });
+		const current = models.modelDraft({ id: "m", contextWindow: 1000 });
+		const found = [
+			{ id: "m", contextWindow: 2000, thinkingSource: "unconfirmed" },
+			{ id: "new", name: "new" },
+		];
+		const summary = models.applyDetection([own, current], found);
+		const record = models.detectRecord(summary, found, {
+			unlisted: ["new"],
+			unsettled: ["m", "new"],
+			listError: { code: "timeout" },
+		});
+		expect(record.touched.map((entry: any) => [entry.id, entry.added])).toEqual([
+			["m", false],
+			["new", true],
+		]);
+		// Nothing removed yet: everything the detection did is still reported.
+		expect(models.detectOutcome(record, summary.models)).toMatchObject({
+			total: 2,
+			added: 1,
+			updated: 1,
+			unlisted: ["new"],
+			unsettled: ["m", "new"],
+			listError: { code: "timeout" },
+		});
+		// Removing a model the detection did not touch says nothing about this detection.
+		expect(
+			models.detectOutcome(
+				record,
+				summary.models.filter((entry: any) => entry.uid !== own.uid),
+			),
+		).toMatchObject({
+			total: 2,
+			added: 1,
+		});
+		// Removing the model it added drops that part of the summary and the warnings naming it.
+		const withoutAdded = summary.models.filter((entry: any) => entry.id !== "new");
+		expect(models.detectOutcome(record, withoutAdded)).toMatchObject({
+			total: 1,
+			added: 0,
+			updated: 1,
+			unlisted: [],
+			unsettled: ["m"],
+		});
+		// Removing every model it produced leaves nothing to report, even with other models still in the list.
+		expect(models.detectOutcome(record, [current, own])).toMatchObject({ total: 1, added: 0, updated: 1 });
+		expect(models.detectOutcome(record, [own])).toBeNull();
+		expect(models.detectOutcome(record, [])).toBeNull();
+		expect(models.detectOutcome(null, summary.models)).toBeNull();
+	});
+
+	it("names a removed Model ID in no warning of a detection that is still reported", () => {
+		const found = [{ id: "a" }, { id: "b" }];
+		const summary = models.applyDetection([], found);
+		const record = models.detectRecord(summary, found, { unsettled: ["a", "b"] });
+		const kept = summary.models.filter((entry: any) => entry.id !== "a");
+		expect(models.detectOutcome(record, kept)).toMatchObject({ total: 1, added: 1, unsettled: ["b"] });
+		// An ID the detection never reached a model for is not reported either.
+		expect(models.detectRecord(summary, found, { unsettled: ["missing"] }).unsettled).toEqual([]);
 	});
 
 	it("takes only confirmed probe levels and keeps the others as they were", () => {

@@ -928,6 +928,63 @@ describe("Web host (real runtime with a faux provider)", () => {
 		);
 	});
 
+	it("stores the sub-agent task cap inside its 1–18 range", async () => {
+		const fx = await start();
+		const subAgentItem = async () =>
+			(await fx.get("/api/settings")).items.find((item: any) => item.id === "subAgent");
+		expect(await subAgentItem()).toMatchObject({
+			type: "modelRef",
+			inlineNumber: { min: 1, max: 18 },
+			value: { maxTasks: 3 },
+		});
+		await fx.post("/api/settings", { id: "subAgent", value: { ...(await subAgentItem()).value, maxTasks: 5 } });
+		expect((await subAgentItem()).value.maxTasks).toBe(5);
+		// Out of range and fractional writes are rejected; a save without the field keeps the stored cap.
+		await expect(fx.post("/api/settings", { id: "subAgent", value: { maxTasks: 25 } })).rejects.toThrow(
+			/between 1 and 18/,
+		);
+		await expect(fx.post("/api/settings", { id: "subAgent", value: { maxTasks: 2.5 } })).rejects.toThrow(
+			/whole number/,
+		);
+		await fx.post("/api/settings", { id: "subAgent", value: { enabled: true } });
+		expect((await subAgentItem()).value.maxTasks).toBe(5);
+	});
+
+	it("writes the auto-retry attempt count and the free HTTP idle timeout", async () => {
+		const fx = await start();
+		const item = async (id: string) => (await fx.get("/api/settings")).items.find((i: any) => i.id === id);
+		expect(await item("retryMaxRetries")).toMatchObject({
+			type: "numberUnit",
+			section: "Network",
+			value: 3,
+			min: 0,
+			units: [
+				{ value: "times", label: "times" },
+				{ value: "unlimited", label: "Unlimited", fixed: "unlimited" },
+			],
+		});
+		await fx.post("/api/settings", { id: "retryMaxRetries", value: 5 });
+		expect((await item("retryMaxRetries")).value).toBe(5);
+		await fx.post("/api/settings", { id: "retryMaxRetries", value: "unlimited" });
+		expect((await item("retryMaxRetries")).value).toBe("unlimited");
+		await expect(fx.post("/api/settings", { id: "retryMaxRetries", value: 2.5 })).rejects.toThrow(/whole number/);
+		await expect(fx.post("/api/settings", { id: "retryMaxRetries", value: -1 })).rejects.toThrow(/between 0 and/);
+		// The idle timeout row carries the stored milliseconds; the seconds/minutes choice is only how it is typed.
+		const timeout = await item("httpIdleTimeoutMs");
+		expect(timeout).toMatchObject({ type: "numberUnit", min: 0 });
+		expect(typeof timeout.value).toBe("number");
+		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 10 * 60_000 });
+		expect((await item("httpIdleTimeoutMs")).value).toBe(600_000);
+		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 45_000 });
+		expect((await item("httpIdleTimeoutMs")).value).toBe(45_000);
+		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 0 });
+		expect((await item("httpIdleTimeoutMs")).value).toBe(0);
+		// Anything past the timer range is refused; "disabled" (0) is the way to wait forever.
+		await expect(fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 2_147_483_648 })).rejects.toThrow(
+			/between 0 and/,
+		);
+	});
+
 	it("lists settings, resources and providers and validates setting writes", async () => {
 		const fx = await start();
 		const settings = await fx.get("/api/settings");
@@ -1127,12 +1184,12 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(await fx.post("/api/trust", { option: "do-not-trust" })).toMatchObject({ ok: true, trusted: false });
 		expect(await fx.get("/api/trust")).toMatchObject({ requiresTrust: true, trusted: false, saved: false });
 		expect((await fx.get("/api/state")).trust).toEqual({ trusted: false, requiresTrust: true });
-		expect(await httpIdleTimeout()).not.toBe("12345");
+		expect(await httpIdleTimeout()).not.toBe(12345);
 
 		// Trusting the project loads its own settings into the chat that is open.
 		expect(await fx.post("/api/trust", { option: "trust" })).toMatchObject({ ok: true, trusted: true });
 		expect(await fx.get("/api/trust")).toMatchObject({ trusted: true, saved: true });
-		expect(await httpIdleTimeout()).toBe("12345");
+		expect(await httpIdleTimeout()).toBe(12345);
 		await expect(fx.post("/api/trust", { option: "nope" })).rejects.toThrow(/Unknown trust option/);
 	});
 

@@ -192,7 +192,7 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 			budget?: ContextBudgetSnapshot;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+	| { type: "auto_retry_start"; attempt: number; maxAttempts: number | null; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| {
 			/**
@@ -361,6 +361,22 @@ type AgentOperation = {
 // ============================================================================
 // AgentSession Class
 // ============================================================================
+
+/**
+ * Cap of the exponential backoff between automatic retries. With a large or unlimited attempt count the doubling
+ * delay would otherwise grow past what any timer can wait (and past any useful recovery window).
+ */
+export const MAX_RETRY_BACKOFF_MS = 60_000;
+
+/** The wait before retry `attempt` (1-based): `baseDelayMs` doubled per attempt, never longer than the cap. */
+export function retryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
+	return Math.min(baseDelayMs * 2 ** (attempt - 1), MAX_RETRY_BACKOFF_MS);
+}
+
+/** The attempt count as shown to the user: an unlimited budget reads as "∞". */
+function retryAttemptsShown(maxRetries: number): number | string {
+	return Number.isFinite(maxRetries) ? maxRetries : "∞";
+}
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -3115,20 +3131,21 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const delayMs = retryBackoffDelayMs(settings.baseDelayMs, this._retryAttempt);
+		const maxAttemptsShown = retryAttemptsShown(settings.maxRetries);
 		// Publish the cancellable state before notifying listeners. A listener may
 		// call abortRetry() synchronously from the auto_retry_start event.
 		const retryController = new AbortController();
 		this._retryAbortController = retryController;
 		const operationId = this._beginOperation("retry", retryController);
 
-		this._setRunState("recovering", `正在重试 (${this._retryAttempt}/${settings.maxRetries})`, {
+		this._setRunState("recovering", `正在重试 (${this._retryAttempt}/${maxAttemptsShown})`, {
 			detail: message.errorMessage || "未知错误",
 		});
 		this._emit({
 			type: "auto_retry_start",
 			attempt: this._retryAttempt,
-			maxAttempts: settings.maxRetries,
+			maxAttempts: Number.isFinite(settings.maxRetries) ? settings.maxRetries : null,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
 		});
@@ -3136,7 +3153,7 @@ export class AgentSession {
 		if (traceScope) {
 			this._recordRuntimeTrace(traceScope, "retry", {
 				attempt: this._retryAttempt,
-				maxAttempts: settings.maxRetries,
+				maxAttempts: maxAttemptsShown,
 				delayMs,
 				status: "scheduled",
 			});

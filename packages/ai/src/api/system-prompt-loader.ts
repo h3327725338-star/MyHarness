@@ -57,8 +57,8 @@ export function loadSystemPrompt(
 }
 
 /** Each nonempty line is one tool guideline; preserve order and wording. */
-export function loadSystemPromptLines(file: string): string[] {
-	return loadSystemPrompt(file)
+export function loadSystemPromptLines(file: string, variables: Readonly<Record<string, string>> = {}): string[] {
+	return loadSystemPrompt(file, variables)
 		.split("\n")
 		.filter((line) => line.trim().length > 0);
 }

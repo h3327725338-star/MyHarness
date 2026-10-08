@@ -181,6 +181,10 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .unit-input { flex: 1 1 auto; min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); outline: none; font-size: var(--fs-md); font-variant-numeric: tabular-nums; text-align: right; }
 .unit-input::placeholder { color: var(--text-4); }
 .unit-suffix { flex: none; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; user-select: none; }
+/* The unit of a numberUnit field: a plain select living inside the same bordered box as the number, with the shared chevron. */
+.unit-select { flex: none; height: 100%; border: 0; background: transparent; appearance: none; -webkit-appearance: none; padding: 0 13px 0 0; background-image: var(--chev-img); background-repeat: no-repeat; background-position: right center; background-size: 10px 10px; color: var(--text-3); font-size: var(--fs-sm); outline: none; cursor: pointer; }
+.unit-field:hover .unit-select, .unit-field:focus-within .unit-select { color: var(--text); }
+.unit-select option { background: var(--bg-raised); color: var(--text); }
 
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 :root[data-motion="off"] .spinner { animation: none; }

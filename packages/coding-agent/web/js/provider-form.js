@@ -6,7 +6,7 @@ import { html, useEffect, useRef, useState, Collapse, Icon, Segmented, Spinner, 
 import { post } from "./store.js";
 import { effortName, fmtTokens } from "./util.js";
 import { N_, t } from "./i18n.js";
-import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, fmtK, fromK, levelStatus, levelUnconfirmed, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
+import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, detectOutcome, detectRecord, fmtK, fromK, levelStatus, levelUnconfirmed, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -231,7 +231,9 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [idsText, setIdsText] = useState("");
-	const [detect, setDetect] = useState({ status: "idle", message: "", notes: [] });
+	// `result` is what the last detection settled, kept per model entry, so the notice can follow the list while the
+	// user still edits it; `message` / `notes` carry a failure, which is about the request and not about the entries.
+	const [detect, setDetect] = useState({ status: "idle", message: "", notes: [], result: null });
 	// Models whose settings are open. A model added by hand opens at once.
 	const [openModels, setOpenModels] = useState(() => new Set());
 	const rootRef = useRef(null);
@@ -271,10 +273,10 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 	/** Checks exactly the Model IDs typed in the box; nothing else is looked up or changed. */
 	const runDetect = async () => {
 		const ids = parseModelIds(idsText);
-		if (!ids.length) return setDetect({ status: "error", message: t("Type one or more Model IDs to detect."), notes: [] });
-		if (!ready) return setDetect({ status: "error", message: t("Complete the connection first (Base URL and API key)."), notes: [] });
+		if (!ids.length) return setDetect({ status: "error", message: t("Type one or more Model IDs to detect."), notes: [], result: null });
+		if (!ready) return setDetect({ status: "error", message: t("Complete the connection first (Base URL and API key)."), notes: [], result: null });
 		// Each named Model ID is asked directly, level by level; it does not have to be in the endpoint's model list.
-		setDetect({ status: "loading", message: "", notes: [] });
+		setDetect({ status: "loading", message: "", notes: [], result: null });
 		let result;
 		try {
 			result = await withTimeout(
@@ -295,23 +297,23 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 				DETECT_TIMEOUT_MS,
 			);
 		} catch (e) {
-			if (alive.current) setDetect({ status: "error", message: detectFailure(e), notes: [] });
+			if (alive.current) setDetect({ status: "error", message: detectFailure(e), notes: [], result: null });
 			return;
 		}
 		if (!alive.current) return;
-		if (!result.ok) return setDetect({ status: "error", message: detectMessage(result), notes: [] });
+		if (!result.ok) return setDetect({ status: "error", message: detectMessage(result), notes: [], result: null });
 		const summary = applyDetection(draftRef.current.models, result.models);
 		setDraft({ ...draftRef.current, models: summary.models });
 		setDirty(true);
-		const notes = [];
-		if (result.listError) notes.push(t("The model list could not be read ({reason}); only the thinking effort was tested.", { reason: detectMessage(result.listError) }));
-		if (result.unlisted?.length) notes.push(t("Not in the endpoint's model list: {ids}. Check the spelling; they were added with default values.", { ids: result.unlisted.join(", ") }));
-		const unsettled = result.models.filter((m) => !m.thinkingSource || m.thinkingSource === "unconfirmed").map((m) => m.id);
-		if (unsettled.length) notes.push(t("Thinking effort could not be settled for: {ids}. Their current setting is kept.", { ids: unsettled.join(", ") }));
 		setDetect({
 			status: "ok",
-			message: t("Detected {n}: {added} added, {updated} updated. Save to keep the result.", { n: result.models.length, added: summary.added.length, updated: summary.updated.length }),
-			notes,
+			message: "",
+			notes: [],
+			result: detectRecord(summary, result.models, {
+				unlisted: result.unlisted ?? [],
+				unsettled: result.models.filter((m) => !m.thinkingSource || m.thinkingSource === "unconfirmed").map((m) => m.id),
+				listError: result.listError ?? null,
+			}),
 		});
 		if (summary.added.length) setOpenModels((current) => new Set([...current, ...summary.added.map((m) => m.uid)]));
 		setIdsText("");
@@ -369,7 +371,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 		setDraft(makeDraft());
 		setView("form");
 		setError("");
-		setDetect({ status: "idle", message: "", notes: [] });
+		setDetect({ status: "idle", message: "", notes: [], result: null });
 		setDirty(false);
 	};
 
@@ -377,6 +379,22 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 	const authOptions = [{ value: "key", label: t("API key") }, { value: "config", label: t("Set in models.json") }];
 	const configHasKey = !!draft.raw.apiKey;
 	const detecting = detect.status === "loading";
+	// What the notice says is worked out from the models that are still in the form: removing an entry the detection
+	// produced takes its part of the summary and the warnings naming it away, and the notice disappears with the last one.
+	const outcome = detect.status === "ok" ? detectOutcome(detect.result, draft.models) : null;
+	const notice = outcome
+		? {
+				warn: false,
+				message: t("Detected {n}: {added} added, {updated} updated. Save to keep the result.", { n: outcome.total, added: outcome.added, updated: outcome.updated }),
+				notes: [
+					...(outcome.listError ? [t("The model list could not be read ({reason}); only the thinking effort was tested.", { reason: detectMessage(outcome.listError) })] : []),
+					...(outcome.unlisted.length ? [t("Not in the endpoint's model list: {ids}. Check the spelling; they were added with default values.", { ids: outcome.unlisted.join(", ") })] : []),
+					...(outcome.unsettled.length ? [t("Thinking effort could not be settled for: {ids}. Their current setting is kept.", { ids: outcome.unsettled.join(", ") })] : []),
+				],
+			}
+		: detect.message && detect.status !== "loading"
+			? { warn: detect.status === "error", message: detect.message, notes: detect.notes }
+			: null;
 	return html`<div ref=${rootRef} class="pf stack">
 		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
 		${view === "json"
@@ -417,7 +435,7 @@ export function ProviderForm({ initial, apiTypes, keyArea, hasStoredKey, onSaved
 							<button class="btn" disabled=${detecting || !idsText.trim()} onClick=${runDetect}>${detecting ? html`<${Spinner} />` : html`<${Icon} name="search" size=${13} />`}${detecting ? t("Detecting…") : t("Detect")}</button>
 						</div>
 						<span class="dim pf-hint">${t("Only the Model IDs typed here are checked (separate several with commas or spaces). A new ID is added; for an existing model only what the detection settles is updated. Each thinking effort is tested with a tiny real request to the model, which the service may bill; a level that cannot be checked keeps its current setting.")}</span>
-						${detect.message ? html`<div class=${`notice ${detect.status === "error" ? "warn" : ""}`} role="status">${detect.message}${detect.notes.map((note, i) => html`<div class="dim pf-hint" key=${i}>${note}</div>`)}</div>` : null}
+						${notice ? html`<div class=${`notice ${notice.warn ? "warn" : ""}`} role="status">${notice.message}${notice.notes.map((note, i) => html`<div class="dim pf-hint" key=${i}>${note}</div>`)}</div>` : null}
 					</div>
 					${!draft.models.length ? html`<div class="dim pf-hint">${t("No model yet. Type its Model ID above and detect it, or add it manually.")}</div>` : null}
 					${draft.models.map((model) => html`<${ModelCard} key=${model.uid} model=${model} open=${openModels.has(model.uid)} onToggle=${() => toggleOpen(model.uid)} onChange=${(next) => updateModel(model.uid, next)} onRemove=${() => patch({ models: draft.models.filter((m) => m.uid !== model.uid) })} />`)}

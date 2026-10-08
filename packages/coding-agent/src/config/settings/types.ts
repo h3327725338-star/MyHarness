@@ -25,8 +25,9 @@ export interface ProviderRetrySettings {
 
 export interface RetrySettings {
 	enabled?: boolean; // default: true
-	maxRetries?: number; // default: 3
-	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
+	/** Extra attempts after a failed request; `"unlimited"` (stored in settings.json) retries until it succeeds or the user cancels. */
+	maxRetries?: number | "unlimited"; // default: 3
+	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s, capped at 60s)
 	provider?: ProviderRetrySettings;
 }
 
@@ -74,6 +75,8 @@ export interface SubAgentSettings {
 	taskTimeoutMs?: number;
 	/** Maximum model/tool turns in one delegated task. Zero means unlimited. */
 	maxTurns?: number;
+	/** Maximum Explore sub-agents one Agent tool call may start. Range 1–18; default 3. */
+	maxTasks?: number;
 	/** Maximum time without meaningful progress. Zero disables the stall watchdog. */
 	stallTimeoutMs?: number;
 	/** Total wall-clock limit for one delegated task. Zero means unlimited. */

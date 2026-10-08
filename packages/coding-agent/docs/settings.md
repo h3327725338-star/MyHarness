@@ -15,7 +15,7 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 ## Web 专属快捷键与代码智能状态
 
-Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式与无新数据时的 HTTP 空闲超时提供说明。
+Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式与无新数据时的 HTTP 空闲超时提供说明；**自动重试次数**和 **HTTP 空闲超时**都是自由输入的数字加可选单位（次数：次／无限；超时：秒／分钟／停用，停用即不超时），不再限死在固定选项里；超时实际存储值仍是毫秒，上限为定时器能可靠等待的约 24.8 天（`2147483647` ms），更长请选停用。
 
 代码智能页把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
@@ -211,7 +211,7 @@ Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Mar
 
 `Sub Agent` 是 global 设置。启用后，在 `/settings` 中 MyHarness 会要求选择一个可用 model，以及该 model 支持的 thinking level。之后 main AI 可以使用：
 
-- `agent` 将一次 investigation 拆分为最多 18 个并行 Explore tasks。
+- `agent` 将一次 investigation 拆分为多个并行 Explore tasks。数量上限由 `maxTasks` 配置：默认 `3`，可在设置面板“子智能体（Explore）”行内或 `settings.json` 中调整，取值范围 1–18（18 是协议硬上限）。每次调用都按保存后的最新值生效，不需要重启会话。
 - 每个 delegated Explore task 默认没有总时间上限（`totalRuntimeLimitMs` 以毫秒为单位；`0` 表示无上限，`taskTimeoutMs` 是兼容旧配置的别名）。默认 Stall Timeout 为 10 分钟：它只在没有有效新进展时计时，检测到新的工具范围或结果会重置计时器。
 - `maxTurns` 默认 `0`（无限制）；达到正数上限会保留 `partial` 结果。`stallTimeoutMs` 为 `0` 时关闭 stall watchdog；`noProgressDetection` 和 `repeatedOperationDetection` 默认开启。
 - `workflow` 运行一个或多个 sequential phases，每个 phase 可以包含多个并行 Explore tasks。第一个 phase 之后的每个 phase 都会收到上一阶段的 results。
@@ -227,6 +227,7 @@ Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edi
     "provider": "anthropic",
     "model": "claude-opus-4-6",
     "thinkingLevel": "high",
+    "maxTasks": 3,
     "taskTimeoutMs": 0,
     "totalRuntimeLimitMs": 0,
     "maxTurns": 0,
@@ -445,8 +446,8 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `retry.enabled` | boolean | `true` | 启用 agent-level automatic retry，用于 transient errors |
-| `retry.maxRetries` | number | `3` | agent-level retry 的最大 attempts |
-| `retry.baseDelayMs` | number | `2000` | agent-level exponential backoff 的 base delay（2s、4s、8s） |
+| `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络的“自动重试次数”行可填任意整数或选无限） |
+| `retry.baseDelayMs` | number | `2000` | agent-level exponential backoff 的 base delay（2s、4s、8s；逐次翻倍，单次最长 60s，保证大次数或不限次数时重试间隔不会无限增长） |
 | `retry.provider.timeoutMs` | number | `300000`（由 `httpIdleTimeoutMs` 提供） | Provider/SDK request timeout，单位为 milliseconds；显式设置后覆盖全局 HTTP idle timeout |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK 额外 retry 次数；未设置时 MyHarness 对支持该选项的内置 adapter 只发起一次请求 |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | 失败前允许的最大 server-requested delay（60s） |
@@ -497,7 +498,7 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 | `steeringMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Steering messages 的发送方式 |
 | `followUpMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Follow-up messages 的发送方式 |
 | `transport` | string | `"auto"` | 支持多种 transports 的 Providers 使用的 preferred transport：`"sse"`、`"websocket"`、`"websocket-cached"` 或 `"auto"` |
-| `httpIdleTimeoutMs` | number | `300000` | HTTP header/body idle timeout，单位为 milliseconds；也用于有显式 stream idle timeout 的 Providers。设置为 `0` 可关闭 |
+| `httpIdleTimeoutMs` | number | `300000` | HTTP header/body idle timeout，单位为 milliseconds；也用于有显式 stream idle timeout 的 Providers。设置为 `0` 可关闭；上限 `2147483647`（约 24.8 天，JS 定时器能可靠等待的最大值）。Web 设置 → 网络里按秒或分钟自由输入，无固定档位 |
 | `websocketConnectTimeoutMs` | number | - | 支持 WebSocket transports 的 Providers 使用的 WebSocket connect/open handshake timeout，单位为 milliseconds。未设置时使用 SDK default。设置为 `0` 可关闭 |
 
 ### Terminal & Images

@@ -5,7 +5,7 @@ import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segm
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
-import { clip, fmtTokens, tokensToUnit, unitToTokens } from "./util.js";
+import { clip, fmtTokens, storedToUnitValue, tokensToUnit, unitToTokens, unitValueToStored } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
@@ -129,6 +129,90 @@ function UnitNumberField({ item, onApply }) {
 	return html`<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t(item.unit)} label=${serverText(item.label)} invalid=${!inRange(draft)} width=${120} />`;
 }
 
+/**
+ * A whole number the user types together with the unit they pick for it from the row's own list ("5 | minutes ▾",
+ * "3 | times ▾"). A fixed unit ("Unlimited", "Disabled") carries no number: picking it saves at once and the field
+ * shows empty. Changing the unit keeps the effective value and only retypes it in the new unit.
+ */
+function NumberUnitField({ item, onApply }) {
+	const units = item.units || [];
+	const derived = storedToUnitValue(item.value, units);
+	const [unit, setUnit] = useState(derived.unit?.value);
+	const [draft, setDraft] = useState(derived.typed);
+	useEffect(() => {
+		const next = storedToUnitValue(item.value, units);
+		setUnit(next.unit?.value);
+		setDraft(next.typed);
+	}, [JSON.stringify(item.value)]);
+	const active = units.find((u) => u.value === unit) ?? derived.unit;
+	const fixed = !active || active.fixed !== undefined;
+	const invalid = !fixed && draft.trim() !== "" && unitValueToStored(draft, active, item.min, item.max) === undefined;
+	const commit = (text) => {
+		if (fixed || text.trim() === derived.typed) return;
+		const stored = unitValueToStored(text, active, item.min, item.max);
+		if (stored === undefined) {
+			setDraft(derived.typed);
+			toast(
+				item.maxHint && /^\d+$/u.test(text.trim()) ? serverText(item.maxHint) : t("Enter a whole number of {unit}.", { unit: serverText(active?.label ?? "") }),
+				"warning",
+				4000,
+			);
+		} else if (stored !== item.value) onApply(item.id, stored);
+	};
+	const changeUnit = (next) => {
+		const nu = units.find((u) => u.value === next);
+		if (!nu) return;
+		if (nu.fixed !== undefined) {
+			setUnit(next);
+			onApply(item.id, nu.fixed);
+			return;
+		}
+		const stored =
+			unitValueToStored(draft, active, item.min, item.max) ?? (typeof item.value === "number" ? item.value : undefined);
+		setUnit(next);
+		setDraft(stored === undefined ? "" : String(Math.round(stored / (nu.multiplier ?? 1))));
+	};
+	return html`<span class=${`unit-field ${invalid ? "invalid" : ""} ${fixed ? "disabled" : ""}`} style=${{ width: 170 }}>
+		<input class="unit-input mono" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} disabled=${fixed} value=${fixed ? "" : draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${(e) => commit(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), commit(e.currentTarget.value))} />
+		<select class="unit-select" aria-label=${t("Unit")} value=${unit} onChange=${(e) => changeUnit(e.target.value)}>${units.map((u) => html`<option key=${u.value} value=${u.value}>${serverText(u.label)}</option>`)}</select>
+	<//>`;
+}
+
+/**
+ * The inline whole-number box on a modelRef row (the sub-agent cap): a small number field with the allowed range
+ * spelled out next to it ("1–18"). Out-of-range or fractional input is restored with a toast; a valid change saves.
+ */
+function InlineNumberField({ item, onApply }) {
+	const value = item.value || {};
+	const min = item.inlineNumber?.min ?? 1;
+	const max = item.inlineNumber?.max ?? 18;
+	const shown = String(value.maxTasks ?? "");
+	const [draft, setDraft] = useState(shown);
+	useEffect(() => setDraft(shown), [shown]);
+	const inRange = (text) => {
+		const n = Number(text);
+		return text.trim() !== "" && Number.isInteger(n) && n >= min && n <= max;
+	};
+	const commit = (text) => {
+		if (!inRange(text)) {
+			setDraft(shown);
+			toast(t("Enter a whole number from {min} to {max}.", { min, max }), "warning", 4000);
+		} else if (Number(text) !== value.maxTasks) onApply(item.id, { ...value, maxTasks: Number(text) });
+	};
+	return html`<input
+		class="field num"
+		type="number"
+		min=${min}
+		max=${max}
+		step="1"
+		aria-label=${t("Max sub-agents per call")}
+		value=${draft}
+		onInput=${(e) => setDraft(e.target.value)}
+		onBlur=${() => commit(draft)}
+		onKeyDown=${(e) => e.key === "Enter" && e.target.blur()}
+	/><span class="dim">(${min}–${max})</span>`;
+}
+
 function SettingControl({ item, models, onApply }) {
 	const [draft, setDraft] = useState(item.value);
 	useEffect(() => setDraft(item.value), [JSON.stringify(item.value)]);
@@ -140,6 +224,8 @@ function SettingControl({ item, models, onApply }) {
 		case "number":
 			if (item.unit) return html`<${UnitNumberField} item=${item} onApply=${onApply} />`;
 			return html`<input class="field num" type="number" aria-label=${serverText(item.label)} min=${item.min} max=${item.max} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => String(draft) !== String(item.value) && onApply(item.id, Number(draft))} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
+		case "numberUnit":
+			return html`<${NumberUnitField} item=${item} onApply=${onApply} />`;
 		case "tokens":
 			return html`<${TokensField} item=${item} onApply=${onApply} />`;
 		case "text":
@@ -149,8 +235,12 @@ function SettingControl({ item, models, onApply }) {
 		case "modelRef": {
 			const v = item.value || {};
 			const hasEnable = item.note === "enabled";
-			return html`<${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...v, ...ref })} />
-				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...v, enabled: on })} />` : null}`;
+			// maxTasks is owned by the inline field alone: the other controls on this row must not resend a stale copy of it.
+			const rest = { ...v };
+			delete rest.maxTasks;
+			return html`<${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
+				${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}
+				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}`;
 		}
 		default:
 			return null;

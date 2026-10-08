@@ -250,6 +250,47 @@ export function applyDetection(models, foundList) {
 	return { models: next, added, updated };
 }
 
+/**
+ * What one detection settled, remembered per model entry of the form (`uid`) instead of as finished sentences: the user
+ * can still remove an entry before saving, and every part of the notice that belonged to it must go with it.
+ * `summary` is applyDetection's answer for the same found list; `unlisted` / `unsettled` name Model IDs.
+ */
+export function detectRecord(summary, foundList, { unlisted = [], unsettled = [], listError = null } = {}) {
+	const uidOf = (id) => summary.models.find((model) => model.id.trim() === id)?.uid;
+	const addedUids = new Set(summary.added.map((model) => model.uid));
+	const entries = (ids) =>
+		[...new Set(ids)]
+			.map((id) => ({ uid: uidOf(id), id }))
+			.filter((entry) => entry.uid);
+	return {
+		touched: entries(foundList.map((found) => found.id)).map((entry) => ({ ...entry, added: addedUids.has(entry.uid) })),
+		unlisted: entries(unlisted),
+		unsettled: entries(unsettled),
+		listError,
+	};
+}
+
+/**
+ * The part of a detection that still applies to the models left in the form: a removed entry takes its share of the
+ * summary and its warnings with it, and once nothing this detection added or changed is left there is nothing to
+ * report, so the notice is gone (`null`). Models the detection did not touch do not matter either way.
+ */
+export function detectOutcome(record, models) {
+	if (!record) return null;
+	const present = new Set(models.map((model) => model.uid));
+	const kept = (entries) => entries.filter((entry) => present.has(entry.uid));
+	const touched = kept(record.touched);
+	if (!touched.length) return null;
+	return {
+		total: touched.length,
+		added: touched.filter((entry) => entry.added).length,
+		updated: touched.filter((entry) => !entry.added).length,
+		unlisted: kept(record.unlisted).map((entry) => entry.id),
+		unsettled: kept(record.unsettled).map((entry) => entry.id),
+		listError: record.listError,
+	};
+}
+
 /** The address shown in the empty Base URL field. It is only an example: it is never saved and never used. */
 export const BASE_URL_EXAMPLE = "https://api.example.com/v1";
 

@@ -5,7 +5,7 @@ import { Agent, type AgentEvent, type AgentTool } from "@myharness/agent-core";
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@myharness/ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgentSession } from "../src/agent/runtime/agent-session.ts";
+import { AgentSession, MAX_RETRY_BACKOFF_MS, retryBackoffDelayMs } from "../src/agent/runtime/agent-session.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
@@ -70,7 +70,7 @@ describe("AgentSession retry", () => {
 
 	async function createSession(options?: {
 		failCount?: number;
-		maxRetries?: number;
+		maxRetries?: number | "unlimited";
 		delayAssistantMessageEndMs?: number;
 	}) {
 		const failCount = options?.failCount ?? 1;
@@ -165,6 +165,39 @@ describe("AgentSession retry", () => {
 		expect(events).toContain("start:2");
 		expect(events).toContain("end:success=false");
 		expect(created.session.isRetrying).toBe(false);
+	});
+
+	it("retries without an attempt limit until the request succeeds", async () => {
+		const created = await createSession({ failCount: 5, maxRetries: "unlimited" });
+		const starts: Array<{ attempt: number; maxAttempts: number | null }> = [];
+		const events: string[] = [];
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") {
+				starts.push({ attempt: event.attempt, maxAttempts: event.maxAttempts });
+				events.push(`start:${event.attempt}`);
+			}
+			if (event.type === "auto_retry_end") events.push(`end:success=${event.success}`);
+		});
+
+		await created.session.prompt("Test");
+
+		// Six requests: the original plus five unlimited retries; the events say the budget has no end.
+		expect(created.getCallCount()).toBe(6);
+		expect(events).toEqual(["start:1", "start:2", "start:3", "start:4", "start:5", "end:success=true"]);
+		expect(starts.every((start) => start.maxAttempts === null)).toBe(true);
+	});
+
+	describe("retry backoff", () => {
+		it("doubles per attempt and stays capped for huge or unlimited attempt counts", () => {
+			expect(retryBackoffDelayMs(2000, 1)).toBe(2000);
+			expect(retryBackoffDelayMs(2000, 2)).toBe(4000);
+			expect(retryBackoffDelayMs(2000, 3)).toBe(8000);
+			expect(retryBackoffDelayMs(2000, 5)).toBe(32000);
+			expect(retryBackoffDelayMs(2000, 6)).toBe(MAX_RETRY_BACKOFF_MS);
+			// A delay past the int32 timer range would fire immediately without the cap: unlimited retries must keep waiting.
+			expect(retryBackoffDelayMs(2000, 40)).toBe(MAX_RETRY_BACKOFF_MS);
+			expect(MAX_RETRY_BACKOFF_MS).toBeLessThanOrEqual(2_147_483_647);
+		});
 	});
 
 	it("prompt waits for retry completion even when assistant message_end handling is delayed", async () => {

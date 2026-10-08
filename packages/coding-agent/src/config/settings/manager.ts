@@ -10,9 +10,11 @@ import { normalizePath } from "../../utils/paths.ts";
 import { assertProjectSettingsWritable, canReadProjectSettings } from "../trust/index.ts";
 import {
 	mergeSettings,
+	normalizeRetryMaxRetries,
 	PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES,
 	parseTimeoutSetting,
 	SETTINGS_DEFAULTS,
+	SUB_AGENT_SETTING_RANGES,
 	WEB_SEARCH_BROWSER_IDS,
 	WEB_SEARCH_ENGINE_IDS,
 	WEB_SEARCH_SETTING_RANGES,
@@ -643,6 +645,8 @@ export class SettingsManager {
 		const configuredTaskTimeoutMs = settings?.totalRuntimeLimitMs ?? settings?.taskTimeoutMs;
 		const configuredMaxTurns = settings?.maxTurns;
 		const configuredStallTimeoutMs = settings?.stallTimeoutMs;
+		const configuredMaxTasks = settings?.maxTasks;
+		const maxTasksRange = SUB_AGENT_SETTING_RANGES.maxTasks;
 		return {
 			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.featureEnabled,
 			provider: settings?.provider,
@@ -664,6 +668,10 @@ export class SettingsManager {
 				Number.isFinite(configuredMaxTurns) && configuredMaxTurns !== undefined && configuredMaxTurns >= 0
 					? Math.floor(configuredMaxTurns)
 					: SETTINGS_DEFAULTS.defaultSubAgentMaxTurns,
+			maxTasks:
+				Number.isFinite(configuredMaxTasks) && configuredMaxTasks !== undefined
+					? Math.min(Math.max(Math.floor(configuredMaxTasks), maxTasksRange.min), maxTasksRange.max)
+					: SETTINGS_DEFAULTS.defaultSubAgentMaxTasks,
 			stallTimeoutMs:
 				Number.isFinite(configuredStallTimeoutMs) &&
 				configuredStallTimeoutMs !== undefined &&
@@ -979,9 +987,22 @@ export class SettingsManager {
 	getRetrySettings(): { enabled: boolean; maxRetries: number; baseDelayMs: number } {
 		return {
 			enabled: this.getRetryEnabled(),
-			maxRetries: this.settings.retry?.maxRetries ?? SETTINGS_DEFAULTS.retry.maxRetries,
+			maxRetries: normalizeRetryMaxRetries(this.settings.retry?.maxRetries),
 			baseDelayMs: this.settings.retry?.baseDelayMs ?? SETTINGS_DEFAULTS.retry.baseDelayMs,
 		};
+	}
+
+	/** How many extra attempts an automatic retry makes; `"unlimited"` keeps retrying until it succeeds or is cancelled. */
+	setRetryMaxRetries(value: number | "unlimited"): void {
+		if (value !== "unlimited" && (!Number.isInteger(value) || value < 0)) {
+			throw new Error(`Invalid retry.maxRetries setting: ${String(value)}`);
+		}
+		if (!this.globalSettings.retry) {
+			this.globalSettings.retry = {};
+		}
+		this.globalSettings.retry.maxRetries = value;
+		this.markModified("retry", "maxRetries");
+		this.save();
 	}
 
 	getHttpIdleTimeoutMs(): number {

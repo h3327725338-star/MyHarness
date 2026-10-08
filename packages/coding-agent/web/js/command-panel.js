@@ -16,7 +16,7 @@ import { rankSearch } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
 import { RUN_MODES } from "./run-modes.js";
 import { saveSetting } from "./settings-apply.js";
-import { chatTitle, clip, effortName, fmtDateTime, modelEfforts, plural, pointerMoved, relTime, tokensToUnit, unitToTokens } from "./util.js";
+import { chatTitle, clip, effortName, fmtDateTime, modelEfforts, plural, pointerMoved, relTime, storedToUnitValue, tokensToUnit, unitToTokens, unitValueToStored } from "./util.js";
 
 // ---- Reusable screens ------------------------------------------------------------------------------------
 const tr = (text) => (text ? serverText(text) : text);
@@ -331,6 +331,11 @@ function shownValue(item) {
 			return capValue(item);
 		case "number":
 			return item.value === undefined || item.value === null ? "—" : item.unit ? `${item.value} ${t(item.unit)}` : String(item.value);
+		case "numberUnit": {
+			const { unit, typed } = storedToUnitValue(item.value, item.units || []);
+			if (!unit) return String(item.value ?? "—");
+			return unit.fixed !== undefined ? tr(unit.label) : `${typed} ${tr(unit.label)}`;
+		}
 		default:
 			return item.value === undefined || item.value === null ? "—" : String(item.value);
 	}
@@ -362,6 +367,8 @@ function itemRow(item) {
 			};
 		case "number":
 			return { ...row, onEnter: (ctx) => ctx.push(() => numberScreen(item)) };
+		case "numberUnit":
+			return { ...row, onEnter: (ctx) => ctx.push(() => numberUnitScreen(item)) };
 		case "tokens":
 			return { ...row, onEnter: (ctx) => ctx.push(() => tokensScreen(item)) };
 		case "text":
@@ -394,6 +401,54 @@ function numberScreen(item) {
 			if (!inRange(value)) return;
 			await applySetting(item.id, Number(value));
 			c.pop();
+		},
+	});
+}
+
+/**
+ * A typed number whose unit the user picks from the row's own list (minutes/seconds/disabled, times/unlimited). A
+ * fixed unit saves at once; a measured unit opens a second level that types the number in that unit and saves the
+ * stored value.
+ */
+function numberUnitScreen(item) {
+	const live = () => state.settings?.items.find((i) => i.id === item.id) || item;
+	return optionsScreen({
+		title: tr(item.label),
+		subtitle: tr(item.description),
+		options: (item.units || []).map((u) => ({ value: u.value, label: tr(u.label) })),
+		value: storedToUnitValue(live().value, item.units || []).unit?.value,
+		onPick: async (unitValue, c) => {
+			const unit = (item.units || []).find((u) => u.value === unitValue);
+			if (!unit) return;
+			if (unit.fixed !== undefined) {
+				await applySetting(item.id, unit.fixed);
+				c.pop();
+				return;
+			}
+			const mult = unit.multiplier ?? 1;
+			const typed = storedToUnitValue(live().value, item.units);
+			const start =
+				typed.unit && typed.unit.fixed === undefined && typeof live().value === "number"
+					? String(Math.round(live().value / mult))
+					: "";
+			c.push(() =>
+				inputScreen({
+					title: tr(item.label),
+					label: tr(unit.label),
+					value: start,
+					type: "number",
+					min: item.min === undefined ? undefined : Math.ceil(item.min / mult),
+					max: item.max === undefined ? undefined : Math.floor(item.max / mult),
+					unit: tr(unit.label),
+					valid: (text) => unitValueToStored(text, unit, item.min, item.max) !== undefined,
+					onSubmit: async (text, cc) => {
+						const stored = unitValueToStored(text, unit, item.min, item.max);
+						if (stored === undefined) return;
+						await applySetting(item.id, stored);
+						cc.pop();
+					},
+				}),
+			);
 		},
 	});
 }

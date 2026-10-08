@@ -13,6 +13,7 @@ import {
 	extractDelegatedMessageToolEvidence,
 } from "../agent/delegation/event-parser.ts";
 import { DELEGATED_TOOL_NAMES } from "../agent/runtime/role.ts";
+import { SETTINGS_DEFAULTS, SUB_AGENT_SETTING_RANGES } from "../config/settings/defaults.ts";
 import {
 	classifyToolStatus,
 	getRuntimeTraceEnvironment,
@@ -29,7 +30,8 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { FULL_TEXT_OUTPUT } from "./tool-result-persistence.ts";
 import { truncateHead } from "./truncate.ts";
 
-const MAX_EXPLORE_TASKS = 18;
+/** Protocol hard cap for Explore tasks; the user-configurable cap (`subAgent.maxTasks`, default 3) is enforced per call. */
+const MAX_EXPLORE_TASKS = SUB_AGENT_SETTING_RANGES.maxTasks.max;
 const PER_TASK_OUTPUT_CAP = 20 * 1024;
 const SUB_AGENT_STOP_TIMEOUT_MS = 5_000;
 /** Zero means delegated Explore tasks have no wall-clock deadline by default. */
@@ -109,6 +111,8 @@ export interface SubAgentRuntimeSettings {
 	totalRuntimeLimitMs?: number;
 	/** Maximum model/tool turns; zero means unlimited. */
 	maxTurns?: number;
+	/** Maximum Explore sub-agents one Agent tool call may start; clamped to 1–18 at runtime. */
+	maxTasks?: number;
 	/** Maximum time without meaningful progress; zero disables the watchdog. */
 	stallTimeoutMs?: number;
 	noProgressDetection?: boolean;
@@ -312,6 +316,14 @@ export function resolvedSubAgentStallTimeoutMs(value: number | undefined): numbe
 	return Number.isFinite(value) && value !== undefined && value >= 0
 		? Math.floor(value)
 		: DEFAULT_SUB_AGENT_STALL_TIMEOUT_MS;
+}
+
+/** Explore sub-agents one Agent call may start: the configured `subAgent.maxTasks`, clamped to 1–18 (default 3). */
+export function resolveExploreMaxTasks(settings?: { maxTasks?: number } | undefined): number {
+	const value = settings?.maxTasks;
+	if (!Number.isFinite(value) || value === undefined) return SETTINGS_DEFAULTS.defaultSubAgentMaxTasks;
+	const { min, max } = SUB_AGENT_SETTING_RANGES.maxTasks;
+	return Math.min(Math.max(Math.floor(value), min), max);
 }
 
 function resolvedBoolean(value: boolean | undefined, fallback: boolean): boolean {
@@ -1553,22 +1565,25 @@ export function createSubAgentToolDefinition(
 	cwd: string,
 	options?: SubAgentToolOptions,
 ): BusinessToolDefinition<typeof subAgentSchema, SubAgentToolDetails> {
+	const advertisedMaxTasks = resolveExploreMaxTasks(options?.getSettings?.());
+	const promptVariables = { maxTasks: String(advertisedMaxTasks) };
 	return {
 		name: "agent",
 		label: "Agent",
-		description:
-			"Delegates one to eighteen independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.",
-		promptSnippet: loadSystemPrompt("tools/agent/snippet.md"),
-		promptGuidelines: loadSystemPromptLines("tools/agent/guidelines.md"),
+		description: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.`,
+		promptSnippet: loadSystemPrompt("tools/agent/snippet.md", promptVariables),
+		promptGuidelines: loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
 		parameters: subAgentSchema,
-		// Each call already runs up to 18 tasks in parallel. Serializing separate
-		// Agent tool calls keeps the process-wide Explore concurrency capped at 18.
+		// Each call already runs its tasks in parallel, capped by the configured subAgent.maxTasks. Serializing
+		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema keeps
+		// MAX_EXPLORE_TASKS as the protocol hard cap; execute enforces the live configured value below it.
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, onUpdate) {
-			if (params.tasks.length < 1 || params.tasks.length > MAX_EXPLORE_TASKS) {
-				throw new Error(`Agent requires between 1 and ${MAX_EXPLORE_TASKS} Explore tasks.`);
-			}
 			const settings = options?.getSettings?.() ?? { enabled: false };
+			const maxTasks = resolveExploreMaxTasks(settings);
+			if (params.tasks.length < 1 || params.tasks.length > maxTasks) {
+				throw new Error(`Agent requires between 1 and ${maxTasks} Explore tasks.`);
+			}
 			if (!settings.enabled) throw new Error("Sub Agent is disabled in /settings.");
 			if (!settings.provider || !settings.model || !settings.thinkingLevel) {
 				throw new Error("Sub Agent model or thinking level is not configured. Configure it in /settings.");
