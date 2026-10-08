@@ -25,6 +25,8 @@ interface StoredModeState {
 	version: 1;
 	coding: ModeState;
 	general: ModeState;
+	/** Added after the single-prompt version, so older files legitimately lack it and default to empty. */
+	codingPersonalPrompt?: string;
 	generalPersonalPrompt: string;
 }
 
@@ -54,14 +56,21 @@ export class ModeStateStore {
 
 	private read(): StoredModeState {
 		if (!existsSync(this.path)) {
-			return { version: 1, coding: emptyState(), general: emptyState(), generalPersonalPrompt: "" };
+			return {
+				version: 1,
+				coding: emptyState(),
+				general: emptyState(),
+				codingPersonalPrompt: "",
+				generalPersonalPrompt: "",
+			};
 		}
 		const value = JSON.parse(readFileSync(this.path, "utf8")) as StoredModeState;
 		if (
 			value.version !== 1 ||
 			!validState(value.coding) ||
 			!validState(value.general) ||
-			typeof value.generalPersonalPrompt !== "string"
+			typeof value.generalPersonalPrompt !== "string" ||
+			(value.codingPersonalPrompt !== undefined && typeof value.codingPersonalPrompt !== "string")
 		) {
 			throw new Error("Invalid chat mode state; existing file was not overwritten.");
 		}
@@ -109,13 +118,23 @@ export class ModeStateStore {
 		});
 	}
 
-	getPersonalPrompt(): string {
-		return this.read().generalPersonalPrompt;
+	getPersonalPrompt(mode: ChatMode): string {
+		return this.getPersonalPrompts()[mode];
 	}
 
-	setPersonalPrompt(prompt: string): void {
+	getPersonalPrompts(): Record<ChatMode, string> {
+		const value = this.read();
+		return { coding: value.codingPersonalPrompt ?? "", general: value.generalPersonalPrompt };
+	}
+
+	setPersonalPrompts(prompts: Partial<Record<ChatMode, string>>): void {
 		this.mutate((value) => {
-			value.generalPersonalPrompt = prompt;
+			if (prompts.coding !== undefined) value.codingPersonalPrompt = prompts.coding;
+			if (prompts.general !== undefined) value.generalPersonalPrompt = prompts.general;
 		});
+	}
+
+	setPersonalPrompt(mode: ChatMode, prompt: string): void {
+		this.setPersonalPrompts({ [mode]: prompt });
 	}
 }

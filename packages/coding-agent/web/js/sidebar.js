@@ -71,8 +71,10 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: html`<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
-				${naming ? html`<button class=${`naming-status ${naming.phase === "failed" || naming.phase === "retrying" ? "warn" : ""}`} title=${namingHint} aria-label=${namingHint} disabled=${naming.phase !== "failed"} onClick=${(e) => { e.stopPropagation(); actions.retryConversationNaming(info.path); }}><${Icon} name=${naming.phase === "failed" ? "alertTriangle" : "sparkle"} size=${12} />${namingLabel}</button>` : null}
-				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
+				${naming ? (naming.phase === "failed"
+						? html`<button class="naming-status" title=${namingHint} aria-label=${namingHint} onClick=${(e) => { e.stopPropagation(); actions.retryConversationNaming(info.path); }}><${Icon} name="refresh" size=${13} /></button>`
+						: html`<span class="naming-status"><${Spinner} title=${namingHint} /></span>`) : null}
+				<span class="slot-end">${fresh ? null : html`${busy ? null : html`<span class="when">${relTime(info.modified)}</span>`}
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
 							${(close) => html`

@@ -53,34 +53,59 @@ describe("chat modes", () => {
 		store.update("coding", { lastSessionFile: "coding.jsonl", model: { provider: "p", id: "coding" } });
 		store.update("general", { lastSessionFile: "general.jsonl", model: { provider: "p", id: "general" } });
 		store.setDraft("general", "chat", { text: "unfinished", attachments: [{ path: "attachment.txt" }] });
-		store.setPersonalPrompt("my preference");
+		store.setPersonalPrompt("general", "my preference");
+		store.setPersonalPrompt("coding", "coding preference");
 		const reopened = new ModeStateStore(path);
 		expect(reopened.get("coding").model?.id).toBe("coding");
 		expect(reopened.get("general").drafts.chat.attachments).toEqual([{ path: "attachment.txt" }]);
-		expect(reopened.getPersonalPrompt()).toBe("my preference");
+		expect(reopened.getPersonalPrompt("general")).toBe("my preference");
+		expect(reopened.getPersonalPrompt("coding")).toBe("coding preference");
+		store.setPersonalPrompt("coding", "");
+		expect(reopened.getPersonalPrompt("general")).toBe("my preference");
+		expect(reopened.getPersonalPrompt("coding")).toBe("");
 		store.setDraft("general", "chat", null);
 		expect(reopened.get("general").drafts.chat).toBeUndefined();
+	});
+	it("defaults the Coding personal prompt to empty for older state files", () => {
+		const path = fixture("legacy-prompt");
+		const emptyMode = { lastSessionFile: null, model: null, drafts: {} };
+		writeFileSync(
+			join(path, "chat-mode-state.json"),
+			JSON.stringify({ version: 1, coding: emptyMode, general: emptyMode, generalPersonalPrompt: "legacy" }),
+		);
+		const store = new ModeStateStore(path);
+		expect(store.getPersonalPrompts()).toEqual({ coding: "", general: "legacy" });
+		store.setPersonalPrompt("coding", "added later");
+		expect(new ModeStateStore(path).getPersonalPrompts()).toEqual({ coding: "added later", general: "legacy" });
 	});
 	it("does not overwrite damaged persisted state", () => {
 		const path = fixture("damaged");
 		const file = join(path, "chat-mode-state.json");
 		writeFileSync(file, "invalid json");
-		expect(() => new ModeStateStore(path).setPersonalPrompt("replace")).toThrow();
+		expect(() => new ModeStateStore(path).setPersonalPrompt("general", "replace")).toThrow();
 		expect(readFileSync(file, "utf8")).toBe("invalid json");
 	});
-	it("shares tools and project rules without leaking mode identity or personalization", () => {
+	it("shares tools and project rules while each mode gets only its own personal prompt first", () => {
 		const base = {
 			cwd: "/project",
 			selectedTools: ["read", "write"],
 			contextFiles: [{ path: "/project/AGENTS.md", content: "PROJECT_RULE" }],
-			personalPrompt: "PERSONAL_GENERAL",
+			personalPrompts: { coding: "PERSONAL_CODING", general: "PERSONAL_GENERAL" },
 		};
 		const coding = buildSystemPrompt({ ...base, mode: "coding" });
 		const general = buildSystemPrompt({ ...base, mode: "general" });
 		expect(coding).toContain("software engineering assistant");
+		expect(coding).toContain("PERSONAL_CODING");
 		expect(coding).not.toContain("PERSONAL_GENERAL");
 		expect(general).not.toContain("software engineering assistant");
 		expect(general).toContain("PERSONAL_GENERAL");
-		for (const prompt of [coding, general]) expect(prompt).toContain("PROJECT_RULE");
+		expect(general).not.toContain("PERSONAL_CODING");
+		for (const prompt of [coding, general]) {
+			expect(prompt).toContain("PROJECT_RULE");
+			// Highest priority: the personal block precedes the built-in core policy and everything after it.
+			expect(prompt.indexOf("<user_personalization")).toBeLessThan(prompt.indexOf("<global_core_policy>"));
+		}
+		const none = buildSystemPrompt({ ...base, personalPrompts: undefined, mode: "general" });
+		expect(none).not.toContain("<user_personalization");
 	});
 });

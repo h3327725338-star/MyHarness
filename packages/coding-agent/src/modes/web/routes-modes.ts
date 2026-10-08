@@ -81,13 +81,22 @@ export function registerModeRoutes(server: WebHttpServer, host: WebHost, hub: We
 		store().update(selected, { lastSessionFile: opened.session.sessionFile ?? null });
 		return { ...result, mode: selected, state: store().get(selected) };
 	});
-	server.route("GET", "/api/modes/personal-prompt", () => ({ mode: "general", prompt: store().getPersonalPrompt() }));
+	server.route("GET", "/api/modes/personal-prompt", () => store().getPersonalPrompts());
 	server.route("POST", "/api/modes/personal-prompt", ({ body }) => {
-		const prompt = object(body).prompt;
-		if (typeof prompt !== "string" || prompt.length > 100_000 || prompt.includes("\u0000"))
-			throw new HttpError(400, "Invalid personal prompt");
-		store().setPersonalPrompt(prompt);
-		host.broadcast("mode_preferences_changed", { mode: "general" });
-		return { ok: true };
+		const input = object(body);
+		const updates: Partial<Record<ChatMode, string>> = {};
+		for (const selected of ["coding", "general"] as ChatMode[]) {
+			if (input[selected] === undefined) continue;
+			const prompt = input[selected];
+			if (typeof prompt !== "string" || prompt.includes("\u0000"))
+				throw new HttpError(400, `Invalid ${selected} personal prompt`);
+			updates[selected] = prompt;
+		}
+		if (Object.keys(updates).length === 0) throw new HttpError(400, "Nothing to save");
+		const modeStore = store();
+		modeStore.setPersonalPrompts(updates);
+		for (const selected of Object.keys(updates) as ChatMode[])
+			host.broadcast("mode_preferences_changed", { mode: selected });
+		return modeStore.getPersonalPrompts();
 	});
 }

@@ -113,7 +113,24 @@ describe("Web host (real runtime with a faux provider)", () => {
 			{ mode: "coding", sessionFile: coding.session.file, draft: { text: "coding draft", attachments: [] } },
 			coding.slot,
 		);
-		await fx.post("/api/modes/personal-prompt", { prompt: "PERSONAL_GENERAL_ONLY" }, coding.slot);
+		await fx.post(
+			"/api/modes/personal-prompt",
+			{ coding: "PERSONAL_CODING_ONLY", general: "PERSONAL_GENERAL_ONLY" },
+			coding.slot,
+		);
+		// No length cap any more: far beyond the old 100,000-character limit saves unchanged.
+		const long = "x".repeat(200_000);
+		expect(await fx.post("/api/modes/personal-prompt", { general: long }, coding.slot)).toEqual({
+			coding: "PERSONAL_CODING_ONLY",
+			general: long,
+		});
+		expect(
+			await fx.post(
+				"/api/modes/personal-prompt",
+				{ coding: "PERSONAL_CODING_ONLY", general: "PERSONAL_GENERAL_ONLY" },
+				coding.slot,
+			),
+		).toEqual({ coding: "PERSONAL_CODING_ONLY", general: "PERSONAL_GENERAL_ONLY" });
 		const opened = await fx.post("/api/modes/open", { mode: "general" }, coding.slot);
 		const general = await fx.get("/api/state", opened.slot);
 		expect(general.mode).toBe("general");
@@ -121,7 +138,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const generalOwner = fx.hub.get(opened.slot)!;
 		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose assistant");
 		expect(generalOwner.session.agent.state.systemPrompt).toContain("PERSONAL_GENERAL_ONLY");
+		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("PERSONAL_CODING_ONLY");
 		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("software engineering assistant");
+		expect(generalOwner.session.agent.state.systemPrompt.indexOf("<user_personalization")).toBe(0);
 		expect(fx.hub.get(coding.slot)!.session.agent.state.systemPrompt).not.toContain("PERSONAL_GENERAL_ONLY");
 		const back = await fx.post("/api/modes/open", { mode: "coding" }, opened.slot);
 		expect(back.slot).toBe(coding.slot);
@@ -134,6 +153,14 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(restored.slot).not.toBe(opened.slot);
 		expect((await fx.get("/api/state", restored.slot)).session.id).toBe(beforeReloadId);
 		expect((await fx.get("/api/slots")).slots.map((slot: any) => slot.mode)).toEqual(["coding", "general"]);
+		// A real Coding turn gets only the Coding prompt, and it heads the system prompt (highest priority).
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("coding answer")])]);
+		await fx.post("/api/prompt", { text: "coding personalization check" }, coding.slot);
+		await fx.waitFor("run_finished");
+		const codingTurnPrompt = fx.hub.get(coding.slot)!.session.agent.state.systemPrompt;
+		expect(codingTurnPrompt.indexOf("<user_personalization")).toBe(0);
+		expect(codingTurnPrompt).toContain("PERSONAL_CODING_ONLY");
+		expect(codingTurnPrompt).not.toContain("PERSONAL_GENERAL_ONLY");
 	});
 
 	it("reports real completion phases, restores snapshots, and clears failures", async () => {

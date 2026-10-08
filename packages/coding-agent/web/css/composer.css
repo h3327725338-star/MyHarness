@@ -200,8 +200,13 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip.git-result.info { color: var(--text); }
 .strip.git-result .link-btn { flex: none; white-space: nowrap; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .strip.git-result .icon-btn { color: inherit; opacity: 0.8; }
-.strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.strip > span:not(.spinner) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .strip > span.strip-time { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* The strip's action (Cancel, Cancel retry): a compact bordered control on one line, vertically centered with the
+   text — never a bare link that wraps character by character when the message is long. */
+.strip > .link-btn { flex: none; white-space: nowrap; color: inherit; padding: 2px 10px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: var(--r-md); background: color-mix(in srgb, var(--bg-raised) 55%, transparent); font-size: var(--fs-sm); line-height: 1.5; transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
+.strip > .link-btn:hover:not(:disabled) { text-decoration: none; background: var(--surface-hover); border-color: color-mix(in srgb, currentColor 45%, transparent); }
+.strip > .link-btn:active:not(:disabled) { background: var(--surface-active); }
 .queue { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 12px; background: var(--bg-inset); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
 .queue-head .link-btn { margin-left: auto; }

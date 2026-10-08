@@ -102,6 +102,7 @@ import {
 	type BuildSystemPromptOptions,
 	buildSystemPrompt,
 	collectSystemPromptOptions,
+	personalizationBlock,
 } from "../../system-prompts/composer/index.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { SessionToolRegistry } from "../../tools/session-tool-registry.ts";
@@ -1565,10 +1566,7 @@ export class AgentSession {
 				currentModel: this.model,
 			}),
 			mode: this.sessionManager.getMode(),
-			personalPrompt:
-				this.sessionManager.getMode() === "general"
-					? new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt()
-					: undefined,
+			personalPrompts: new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompts(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
@@ -1637,11 +1635,11 @@ export class AgentSession {
 	}
 
 	private _getTurnSystemPrompt(prompt: string): string {
-		if (this.sessionManager.getMode() === "general") {
-			const personalPrompt = new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt();
-			prompt = prompt.replace(/\s*<user_personalization>[\s\S]*?<\/user_personalization>/gu, "");
-			if (personalPrompt.trim()) prompt += `\n\n<user_personalization>\n${personalPrompt}\n</user_personalization>`;
-		}
+		const personalPrompt = new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt(
+			this.sessionManager.getMode(),
+		);
+		prompt = prompt.replace(/\s*<user_personalization>[\s\S]*?<\/user_personalization>/gu, "").trim();
+		if (personalPrompt.trim()) prompt = `${personalizationBlock(personalPrompt)}\n\n${prompt}`;
 		const scope = artifactScope(this.sessionManager);
 		if (scope) {
 			const artifactsDir = ensureSessionArtifacts(scope);

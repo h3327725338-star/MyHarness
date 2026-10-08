@@ -37,10 +37,12 @@ Workspace 保存模式登记 `modes`，旧登记默认仅 Coding。同一物理�
 
 ## 个性化提示词
 
-- `GET /api/modes/personal-prompt` → `{ mode: "general", prompt }`。
-- `POST /api/modes/personal-prompt` body `{ prompt: string }` → `{ ok: true }`。最大 100,000 字符，空字符串清除。
+存储字段为 `chat-mode-state.json` 的 `codingPersonalPrompt` 和 `generalPersonalPrompt`，两套彼此独立；旧文件缺少 `codingPersonalPrompt` 时按空字符串处理，不视为损坏。
+
+- `GET /api/modes/personal-prompt` → `{ coding, general }`。
+- `POST /api/modes/personal-prompt` body `{ coding?: string, general?: string }`（至少一项）→ 返回保存后的 `{ coding, general }`。不设长度上限，空字符串清除，含 NUL 拒绝。
 - 保存后 SSE `mode_preferences_changed` 提示前端刷新编辑内容。
-- 仅 General 请求追加个性化内容。已有正在执行的一次模型请求不会中途替换；后续请求使用已保存内容。Coding 不注入。
+- 个性化提示词以最高优先级放在各自模式 System Prompt 最前，优先于内置身份、核心规则与其它通用指令；只注入当前模式的提示词，Coding/General 互不串扰。已有正在执行的一次模型请求不会中途替换；后续请求使用已保存内容。
 - Project Trust、SYSTEM/APPEND、AGENTS/CLAUDE、skills 和扩展的既有语义保留；General 也读取项目上下文。
 
 ## Prompt 资源

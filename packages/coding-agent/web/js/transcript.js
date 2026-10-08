@@ -333,7 +333,7 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 		${error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
 		<div class="banner-actions">
-			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry(turn.user)}>${t("Retry")}</button>` : null}
+			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry()}>${t("Retry")}</button>` : null}
 			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => openCommand("git")}>${t("Undo or commit")}</button>` : null}
 		</div>
 	</div>`;

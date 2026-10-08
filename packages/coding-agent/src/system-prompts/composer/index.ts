@@ -10,7 +10,8 @@ export type { AgentRole } from "../../agent/runtime/role.ts";
 
 export interface BuildSystemPromptOptions {
 	mode?: ChatMode;
-	personalPrompt?: string;
+	/** Global personal prompts per chat mode; only the current mode's text is ever injected. */
+	personalPrompts?: Partial<Record<ChatMode, string>>;
 	agentRole?: AgentRole;
 	customPrompt?: string;
 	selectedTools?: string[];
@@ -64,6 +65,19 @@ const MODE_IDENTITIES = {
 	coding: loadSystemPrompt("coding/identity.md"),
 	general: loadSystemPrompt("general/identity.md"),
 };
+
+/**
+ * The user's global personal prompt as a block. It is placed ahead of every built-in section so it carries the
+ * highest instruction priority for the session, above the mode identity and the core policy.
+ */
+export function personalizationBlock(personalPrompt: string): string {
+	return [
+		`<user_personalization priority="highest">`,
+		"The user's own global instructions for this chat mode. They take precedence over the built-in system prompt and other general guidance whenever the two conflict.",
+		personalPrompt.trim(),
+		`</user_personalization>`,
+	].join("\n");
+}
 
 function formatAvailableTools(tools: string[], toolSnippets: Record<string, string> | undefined): string {
 	if (tools.length === 0) return "(none)";
@@ -126,7 +140,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const contextFiles = filterContextFilesForAgentRole(providedContextFiles ?? [], agentRole);
 	const skills = providedSkills ?? [];
 	const guidelines = (promptGuidelines ?? []).map((item) => item.trim()).filter(Boolean);
+	const personalPrompt = options.personalPrompts?.[options.mode ?? "coding"];
 	const sections = [
+		personalPrompt?.trim() ? personalizationBlock(personalPrompt) : undefined,
 		MODE_IDENTITIES[options.mode ?? "coding"],
 		GLOBAL_CORE_POLICY,
 		`<available_tools>\n${formatAvailableTools(tools, toolSnippets)}\n</available_tools>`,
@@ -136,9 +152,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		sections.push(
 			`<active_tool_guidelines>\n${guidelines.map((item) => `- ${item}`).join("\n")}\n</active_tool_guidelines>`,
 		);
-	if (options.mode === "general" && options.personalPrompt?.trim()) {
-		sections.push(`<user_personalization>\n${options.personalPrompt}\n</user_personalization>`);
-	}
 	if (filteredCustomPrompt) sections.push(filteredCustomPrompt);
 	if (filteredAppendSystemPrompt) sections.push(filteredAppendSystemPrompt);
 	if (contextFiles.length > 0) {

@@ -21,7 +21,7 @@ export const NAV = [
 	{ id: "appearance", label: N_("Appearance"), icon: "eye" },
 	{ id: "conversation", label: N_("Conversation & scheduling"), icon: "clock" },
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
-	{ id: "personal", label: N_("General personalization"), icon: "chat" },
+	{ id: "personal", label: N_("Personalization"), icon: "chat" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
@@ -44,7 +44,7 @@ const PAGE_NOTE = {
 	conversation: N_("Message delivery and run steps."),
 	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
-	personal: N_("Your own instructions for General chats. Coding chats never receive them."),
+	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and what it tells you about."),
@@ -575,29 +575,29 @@ function Safety({ items, models }) {
 		].map(([section, title]) => (bySection(section).length ? html`<${Card} key=${section} title=${title}>${bySection(section).map(row)}<//>` : null))}`;
 }
 
-const PERSONAL_PROMPT_MAX = 100_000;
-
 /**
- * The General personal prompt (`/api/modes/personal-prompt`). It is added to later requests of General chats only; a
- * request that is already running keeps the text it started with. Saved elsewhere (another tab), it is read again
- * unless this page holds unsaved edits.
+ * The two global personal prompts (`/api/modes/personal-prompt`): one per chat mode, saved together, no character
+ * limit. Each mode receives only its own text, injected with the highest priority; a request that is already running
+ * keeps the text it started with. Saved elsewhere (another tab), both are read again unless this page holds unsaved
+ * edits. The two cards fold open and shut with the standard Collapse motion and start folded.
  */
-function PersonalPrompt() {
+function Personalization() {
 	const nonce = useStore((s) => s.modePreferencesNonce);
 	const [saved, setSaved] = useState(null);
-	const [value, setValue] = useState("");
+	const [value, setValue] = useState({ coding: "", general: "" });
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
-	const edits = useRef({ saved: null, value: "" });
+	const edits = useRef({ saved: null, value: { coding: "", general: "" } });
 	edits.current = { saved, value };
 	useEffect(() => {
 		let cancelled = false;
 		api("/api/modes/personal-prompt")
 			.then((data) => {
 				if (cancelled) return;
+				const next = { coding: data.coding ?? "", general: data.general ?? "" };
 				const { saved: before, value: current } = edits.current;
-				setSaved(data.prompt);
-				if (before === null || current === before) setValue(data.prompt);
+				setSaved(next);
+				if (before === null || (current.coding === before.coding && current.general === before.general)) setValue(next);
 				setError("");
 			})
 			.catch((e) => !cancelled && setError(serverText(e.message, t("The operation failed."))));
@@ -605,23 +605,41 @@ function PersonalPrompt() {
 			cancelled = true;
 		};
 	}, [nonce]);
-	const tooLong = value.length > PERSONAL_PROMPT_MAX;
-	const dirty = saved !== null && value !== saved;
+	const dirty = saved !== null && (value.coding !== saved.coding || value.general !== saved.general);
 	const save = async () => {
 		setBusy(true);
-		const ok = await attempt(() => post("/api/modes/personal-prompt", { prompt: value }), { success: value ? t("Personal prompt saved.") : t("Personal prompt cleared.") });
+		const ok = await attempt(
+			() => post("/api/modes/personal-prompt", { coding: value.coding, general: value.general }),
+			{ success: t("Personal prompts saved.") },
+		);
 		setBusy(false);
-		if (ok) setSaved(value);
+		if (ok) setSaved({ coding: value.coding, general: value.general });
 	};
-	return html`<${Card} title=${t("Personal prompt")} description=${t("Added to the next requests of General chats. A reply that is being written keeps the prompt it started with.")}>
+	const card = (mode, title, description) => html`<${Card} key=${mode} title=${t(title)} collapsible>
 		<div class="set-card-body col">
-			${saved === null && !error ? html`<${Spinner} />` : html`<textarea class=${`field personal-prompt ${tooLong ? "invalid" : ""}`} rows="10" value=${value} disabled=${saved === null} placeholder=${t("For example: how you like answers, what you do, what to keep in mind.")} aria-label=${t("Personal prompt")} onInput=${(e) => setValue(e.target.value)} />`}
-			${error ? html`<div class="notice danger">${error}</div>` : null}
-			<div class="row"><span class=${`dim grow ${tooLong ? "c-danger" : ""}`}>${t("{count} / {max} characters", { count: value.length.toLocaleString(), max: PERSONAL_PROMPT_MAX.toLocaleString() })}</span>
-				${dirty ? html`<button class="btn" disabled=${busy} onClick=${() => setValue(saved)}>${t("Discard changes")}</button>` : null}
-				<button class="btn primary" disabled=${busy || !dirty || tooLong} onClick=${save}>${t("Save")}</button></div>
+			<div class="set-desc">${t(description)}</div>
+			${saved === null && !error
+				? html`<${Spinner} />`
+				: html`<textarea
+						class="field personal-prompt"
+						rows="10"
+						value=${value[mode]}
+						disabled=${saved === null}
+						placeholder=${t("For example: how you like answers, what you do, what to keep in mind.")}
+						aria-label=${t(title)}
+						onInput=${(e) => setValue({ ...value, [mode]: e.target.value })}
+					/>`}
 		</div>
 	<//>`;
+	return html`
+		${error ? html`<div class="notice danger">${error}</div>` : null}
+		${card("coding", "Coding mode global personal prompt", "Injected into the next requests of Coding chats only, ahead of the built-in system prompt.")}
+		${card("general", "General mode global personal prompt", "Injected into the next requests of General chats only, ahead of the built-in system prompt.")}
+		<div class="row personal-foot">
+			<span class="dim grow">${t("Each chat gets only its own mode's prompt, with the highest priority. No character limit.")}</span>
+			${dirty ? html`<button class="btn" disabled=${busy} onClick=${() => setValue(saved)}>${t("Discard changes")}</button>` : null}
+			<button class="btn primary" disabled=${busy || !dirty} onClick=${save}>${t("Save")}</button>
+		</div>`;
 }
 
 function About() {
@@ -667,7 +685,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${PersonalPrompt} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

@@ -143,9 +143,15 @@ export const actions = {
 		}
 	},
 
-	async retry(userItem) {
+	/**
+	 * Resume a run that stopped early. The interrupted run's file changes and conversation context are already kept in
+	 * the session, so instead of re-sending the original task (which makes the model redo it from scratch) this sends a
+	 * short continue instruction — exactly what a user typing "continue" in the composer does: the agent picks the work
+	 * up from the current state and only finishes what is still missing.
+	 */
+	async retry() {
 		if (state.snap?.active) return toast(t("Wait for the current run to finish (or stop it) before retrying."), "warning");
-		return actions.send(userItem.text, { images: userItem.images });
+		return actions.send(t("Continue the interrupted task from its current state. Keep every file change and step already completed; do not redo them or start over."));
 	},
 
 	async editAndResend(userItem) {

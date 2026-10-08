@@ -89,7 +89,7 @@ export const state = {
 	toasts: [],
 	/** Saved state of each mode (`GET /api/modes/state`): its last chat, model choice and drafts; null until loaded. */
 	modeState: null,
-	/** Changes when the General personal prompt was saved somewhere (`mode_preferences_changed`). */
+	/** Changes when either global personal prompt was saved somewhere (`mode_preferences_changed`). */
 	modePreferencesNonce: 0,
 	models: null,
 	settings: null,
