@@ -8,7 +8,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"retains group previews, corrects without rolling and animates failed counts out",
+	"shows only validated counts, rolls real growth and animates failed counts out",
 	async () => {
 		const base = process.env.MYHARNESS_TEMP_DIR || tmpdir();
 		mkdirSync(base, { recursive: true });
@@ -45,18 +45,19 @@ try {
  if(app.querySelector('.counts')) throw Error('zero counts retained');
  render(null,app);
  setView({processDefault:'expanded'});
- const call=(id,preview)=>({type:'toolCall',id,name:'edit',args:{path:id+'.ts'},...(preview?{changePreview:preview}:{})});
+ const call=(id)=>({type:'toolCall',id,name:'edit',args:{path:id+'.ts'}});
  const patch=n=>'@@ -0,0 +1,'+n+' @@\\n'+Array(n).fill('+new').join('\\n');
- const baseItems=[{kind:'user',id:'u',ts:1,text:'edit',images:[]},{kind:'assistant',id:'a',ts:2,blocks:[call('done'),call('live',{additions:20,deletions:2})],stopReason:'toolUse'},{kind:'toolResult',ts:3,toolCallId:'done',toolName:'edit',details:{patch:patch(12)},isError:false}];
+ const baseItems=[{kind:'user',id:'u',ts:1,text:'edit',images:[]},{kind:'assistant',id:'a',ts:2,blocks:[call('done'),call('live')],stopReason:'toolUse'},{kind:'toolResult',ts:3,toolCallId:'done',toolName:'edit',details:{patch:patch(12)},isError:false}];
  set({items:baseItems,snap:{active:true,cwd:'C:/test',flags:{},session:{id:'test'}},toolRuns:{},runs:{},dialogs:[],userBash:{},userBashOrder:[]});
  render(h(Transcript,{}),app);await wait(300);
  const head=()=>app.querySelector('.group-head');
  const add=()=>Number(head().querySelector('.add .count-current').textContent);
- if(add()!==32) throw Error('initial group total');
- set({items:baseItems.map(i=>i.id==='a'?{...i,blocks:[call('done'),call('live')]}:i)});await wait(300);
- if(add()!==32||!head().querySelector('.count-preview')) throw Error('missing preview deducted');
+ if(add()!==12||head().querySelector('.count-preview')) throw Error('count shown before a real diff or badge left behind');
  set({toolRuns:{live:{status:'running',partialDetails:{patch:patch(24)}}}});await wait(300);
- if(add()!==36||head().querySelector('.count-preview')||head().querySelector('.roll-up')) throw Error('validated correction rolled');
+ if(add()!==36||head().querySelector('.count-preview')) throw Error('validated count not summed or badge shown');
+ if(!head().querySelector('.add .roll-up')) throw Error('real growth not rolled');
+ await wait(400);
+ if(head().querySelector('.roll-up')) throw Error('roll not retired');
  set({items:[...baseItems,{kind:'toolResult',ts:4,toolCallId:'live',toolName:'edit',isError:true,text:'failed'}]});await wait(250);
  if(!head().querySelector('.roll-up')) throw Error('group failure not animated');
  await wait(400);if(add()!==12||head().querySelector('.del')) throw Error('failure lost completed counts');

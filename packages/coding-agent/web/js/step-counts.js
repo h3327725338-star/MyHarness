@@ -1,6 +1,6 @@
 // Presentation only: coalesce reported change sets, never estimate a file diff.
+// Every sample here comes from a real diff the tool produced; values only grow, so rolls always move forward.
 import { html, useLayoutEffect, useRef, useState } from "./ui.js";
-import { t } from "./i18n.js";
 
 export const COUNT_ROLL_MS = 360;
 export const COUNT_CHECK_MS = 200;
@@ -12,18 +12,18 @@ export function createCountBuffer(initial, publish) {
 	let checkTimer;
 	let rollTimer;
 	let disposed = false;
-	const changed = () => ["additions", "deletions", "preview", "source", "removed"].some((key) => shown?.[key] !== pending?.[key]);
+	const changed = () => ["additions", "deletions", "removed"].some((key) => shown?.[key] !== pending?.[key]);
 	const flush = () => {
 		if (disposed || rollTimer || !changed()) return;
 		const old = shown;
 		shown = pending;
 		const rollback = (shown?.removed ?? 0) > (old?.removed ?? 0);
-		const corrected = old?.preview || shown?.preview || (old && old.source !== shown?.source);
 		const previous = {};
 		for (const key of ["additions", "deletions"]) {
 			const before = old?.[key] ?? "";
 			const after = shown?.[key] ?? 0;
-			if (before !== after && (rollback || (!corrected && after > (before || 0)))) previous[key] = before;
+			// Real counts only grow while work lands, or leave on an explicit failure. Anything else snaps: a value never rolls backwards on its own.
+			if (before !== after && (rollback || after > (before || 0))) previous[key] = before;
 		}
 		const animate = Object.keys(previous).length > 0;
 		publish({ current: shown, previous: animate ? previous : undefined });
@@ -57,32 +57,35 @@ function RollingNumber({ value, previous, direction }) {
 }
 
 /** Unknown samples are not zero. Only explicit failure/cancellation removes retained counts. */
-export function StepCounts({ additions, deletions, running, preview, source, removed = 0 }) {
+export function StepCounts({ additions, deletions, running, removed = 0 }) {
 	const known = Number.isFinite(additions) && Number.isFinite(deletions);
 	const retained = useRef(undefined);
-	let counts = known ? { additions, deletions, preview: !!preview, source, removed } : undefined;
+	let counts = known ? { additions, deletions, removed } : undefined;
 	if (counts) retained.current = counts;
 	else if (removed > (retained.current?.removed ?? 0)) {
-		counts = { additions: 0, deletions: 0, preview: false, source, removed };
+		counts = { additions: 0, deletions: 0, removed };
 		retained.current = counts;
 	}
 	else if (retained.current && removed > 0 && retained.current.removed === removed) counts = retained.current;
-	else if (running && retained.current) counts = { ...retained.current, preview: true };
+	else if (running && retained.current) counts = retained.current;
 	const [frame, setFrame] = useState(() => ({ current: counts, previous: undefined }));
 	const buffer = useRef(null);
 	if (!buffer.current) buffer.current = createCountBuffer(counts, setFrame);
+	const live = useRef(false);
 	useLayoutEffect(() => () => buffer.current.dispose(), []);
 	useLayoutEffect(() => {
+		if (running) live.current = true;
 		buffer.current.update(counts);
-	}, [additions, deletions, running, preview, source, removed]);
+	}, [additions, deletions, running, removed]);
 	const current = frame.current;
 	if (!current) return null;
 	const showAdd = current.additions || frame.previous?.additions;
 	const showDel = current.deletions || frame.previous?.deletions;
 	if (!showAdd && !showDel) return null;
+	// Signs pop once when their cell first enters during live work; history rows stay static.
+	const signClass = live.current ? "count-sign pop" : "count-sign";
 	return html`<span class="counts step-counts">
-		${showAdd ? html`<span class="add"><span class="count-sign">+</span><${RollingNumber} value=${current.additions} previous=${frame.previous?.additions} direction="up" /></span>` : null}
-		${showDel ? html`<span class="del"><span class="count-sign">−</span><${RollingNumber} value=${current.deletions} previous=${frame.previous?.deletions} direction="down" /></span>` : null}
-		${current.preview ? html`<span class="count-preview">${t("Preview")}</span>` : null}
+		${showAdd ? html`<span class="add"><span class=${signClass}>+</span><${RollingNumber} value=${current.additions} previous=${frame.previous?.additions} direction="up" /></span>` : null}
+		${showDel ? html`<span class="del"><span class=${signClass}>−</span><${RollingNumber} value=${current.deletions} previous=${frame.previous?.deletions} direction="down" /></span>` : null}
 	</span>`;
 }

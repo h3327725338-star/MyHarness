@@ -342,17 +342,21 @@ describe("Web UI: permanent Git records and unknown pricing", () => {
 });
 
 describe("Web UI: action descriptions", () => {
-	it("uses streamed edit previews until execution, then replaces them with validated counts", () => {
-		const call = { name: "edit", args: { path: "file.txt" }, changePreview: { additions: 2, deletions: 1 } };
+	it("shows edit counts only from the real diff, never from streamed arguments", () => {
+		const call = { name: "edit", args: { path: "file.txt" } };
+		// Before the tool runs there is nothing to count: no estimated extra, just the preparing wording.
 		expect(describeAction(call, undefined, undefined, "")).toMatchObject({
-			extra: call.changePreview,
-			preview: true,
+			verb: "Preparing changes",
 			phase: "generating",
 		});
+		expect(describeAction(call, undefined, undefined, "").extra).toBeUndefined();
 		expect(describeAction(call, undefined, { status: "running" }, "")).toMatchObject({
-			preview: true,
+			verb: "Applying changes",
 			phase: "applying",
 		});
+		// A leftover changePreview on an old call object is ignored: only real patch data counts.
+		const stale = { ...call, changePreview: { additions: 9, deletions: 9 } };
+		expect(describeAction(stale, undefined, { status: "running" }, "").extra).toBeUndefined();
 		expect(
 			describeAction(
 				call,
@@ -360,10 +364,15 @@ describe("Web UI: action descriptions", () => {
 				{ status: "running", partialDetails: { patch: "@@ -1 +1 @@\n-old\n+new\n" } },
 				"",
 			),
-		).toMatchObject({ extra: { additions: 1, deletions: 1 }, preview: false });
+		).toMatchObject({ extra: { additions: 1, deletions: 1 } });
+		expect(
+			describeAction(stale, { isError: false, details: { patch: "@@ -1 +1,2 @@\n-a\n+b\n+c\n" } }, undefined, ""),
+		).toMatchObject({
+			extra: { additions: 2, deletions: 1 },
+		});
 		expect(describeAction(call, { isError: true }, undefined, "").extra).toBeUndefined();
 	});
-	it("reads running file change details and drops previews on failure", () => {
+	it("reads running file change details and drops counts on failure", () => {
 		for (const name of ["edit", "write"]) {
 			const call = { name, args: { path: "file.txt" } };
 			const run = {

@@ -68,9 +68,10 @@ function render(props: Record<string, unknown>) {
 }
 function cells(tree: { values: any[] }) {
 	return tree.values
-		.filter((value: any) => value?.values && typeof value.values[0] === "function")
+		.filter((value: any) => value?.values?.some((v: any) => typeof v === "function"))
 		.map((value: any) => {
-			const [component, current, previous] = value.values;
+			const index = value.values.findIndex((v: any) => typeof v === "function");
+			const [component, current, previous] = value.values.slice(index);
 			const direction = value.strings.join("").includes('direction="up"') ? "up" : "down";
 			return { current, previous, direction, node: component({ value: current, previous, direction }) };
 		});
@@ -159,17 +160,25 @@ describe("Web step line counts", () => {
 		vi.advanceTimersByTime(COUNT_CHECK_MS + COUNT_ROLL_MS);
 		expect(render({ removed: 2, running: false })).toBeNull();
 	});
-	it("updates preview and result corrections without rolling and retains missing live samples", () => {
+	it("retains the last real sample, rolls genuine growth forward and never animates a value backwards", () => {
 		vi.useFakeTimers();
 		expect(COUNT_CHECK_MS).toBe(200);
-		render({ additions: 32, deletions: 3, preview: true, running: true });
+		// A momentary render without fresh data keeps the last real sample.
+		render({ additions: 32, deletions: 3 });
 		render({ running: true });
 		vi.advanceTimersByTime(200);
 		expect(cells(render({ running: true }))[0].current).toBe(32);
-		render({ additions: 36, deletions: 1, preview: false, running: true });
+		// A later real sample that grows rolls up; a shrinking half with no failure just settles quietly.
+		render({ additions: 36, deletions: 1 });
 		vi.advanceTimersByTime(200);
-		for (const cell of cells(render({ additions: 36, deletions: 1, running: true })))
-			expect(cell.previous).toBeUndefined();
+		const grown = cells(render({ additions: 36, deletions: 1 }));
+		expect(grown[0].current).toBe(36);
+		expect(grown[0].previous).toBe(32);
+		expect(grown[1].current).toBe(1);
+		expect(grown[1].previous).toBeUndefined();
+		vi.advanceTimersByTime(COUNT_ROLL_MS);
+		// No failure was reported, so the smaller deletion never plays a reverse roll.
+		expect(cells(render({ additions: 36, deletions: 1 })).some((c) => c.previous !== undefined)).toBe(false);
 		render({ additions: 12, deletions: 0, running: false });
 		vi.advanceTimersByTime(200);
 		const corrected = cells(render({ additions: 12, deletions: 0, running: false }));
@@ -195,12 +204,13 @@ describe("Web step line counts", () => {
 		buffer.dispose();
 		expect(vi.getTimerCount()).toBe(0);
 	});
-	it("uses single-shot transforms with opposite entry/exit directions and existing motion tokens", () => {
+	it("keeps the roll animation on existing motion tokens and dropped every estimate marker", () => {
 		expect(css).toMatch(/count-in-up[^\n]*translateY\(100%\)/);
 		expect(css).toMatch(/count-out-up[^\n]*translateY\(-100%\)/);
 		expect(css).toMatch(/count-in-down[^\n]*translateY\(-100%\)/);
 		expect(css).toMatch(/count-out-down[^\n]*translateY\(100%\)/);
 		expect(css).toContain("animation: count-in-up var(--count-roll-duration) var(--ease) both");
 		expect(css).toContain("--count-roll-duration: 360ms");
+		expect(css).not.toMatch(/count-preview/);
 	});
 });

@@ -12,7 +12,6 @@ import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { parseExpandedBuiltinPromptCommand } from "../../startup/slash-commands.ts";
-import { countLineChanges } from "../../tools/files/edit-diff.ts";
 
 /** Tool result details larger than this are replaced by a marker to keep payloads bounded. */
 const MAX_DETAILS_JSON_CHARS = 400_000;
@@ -47,30 +46,7 @@ export type WireAssistantBlock =
 			id: string;
 			name: string;
 			args: unknown;
-			changePreview?: { additions: number; deletions: number };
 	  };
-
-/** Counts the currently received replacement text, not applied file changes. Never read files during projection. */
-export function editChangePreview(name: string, input: unknown): { additions: number; deletions: number } | undefined {
-	if (name !== "edit" || !input || typeof input !== "object") return undefined;
-	const args = input as { edits?: unknown; oldText?: unknown; newText?: unknown };
-	const edits = Array.isArray(args.edits) ? args.edits : [args];
-	let additions = 0;
-	let deletions = 0;
-	let received = false;
-	let size = 0;
-	for (const edit of edits) {
-		if (!edit || typeof edit.oldText !== "string" || typeof edit.newText !== "string") continue;
-		size += edit.oldText.length + edit.newText.length;
-		// Bound repeated diff work while the model streams. Large replacements wait for validated tool details.
-		if (size > 64_000 || edits.length > 100) return undefined;
-		const changes = countLineChanges(edit.oldText, edit.newText);
-		additions += changes.additions;
-		deletions += changes.deletions;
-		received = true;
-	}
-	return received ? { additions, deletions } : undefined;
-}
 
 export interface WireUsage {
 	input: number;
@@ -226,10 +202,7 @@ function wireUsage(usage: {
 }
 
 /** Project one AgentMessage into a wire item. Returns undefined for messages with no visible form. */
-export function messageToWire(
-	message: AgentMessage,
-	meta: { id?: string; ts?: number; streaming?: boolean } = {},
-): WireItem | undefined {
+export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: number } = {}): WireItem | undefined {
 	const ts = meta.ts ?? (typeof message.timestamp === "number" ? message.timestamp : Date.now());
 	switch (message.role) {
 		case "user": {
@@ -267,7 +240,6 @@ export function messageToWire(
 						id: block.id,
 						name: block.name,
 						args: block.arguments,
-						...(meta.streaming ? { changePreview: editChangePreview(block.name, block.arguments) } : {}),
 					});
 				}
 			}

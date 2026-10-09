@@ -76,7 +76,6 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 @keyframes count-pop { 0% { transform: scale(0.65); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 .step-counts > span { display: inline-flex; align-items: center; text-box: normal; }
 .count-number { display: inline-grid; height: 1.35em; line-height: 1.35; overflow: hidden; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-.count-preview { color: var(--text-3); font-size: var(--fs-xs); margin-left: 5px; }
 .step-counts { --count-roll-duration: 360ms; }
 .count-number > span { grid-area: 1 / 1; }
 .count-current.roll-up { animation: count-in-up var(--count-roll-duration) var(--ease) both; }
@@ -94,12 +93,20 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 
 /* Raw layer */
 .raw { margin: 2px 0 8px 24px; padding: 8px 10px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); font-size: 12.5px; }
+/* One main scroll viewport for the whole expanded card: the wheel anywhere inside scrolls this same box, and at either
+   end it keeps going to the transcript, so no spot in the card is a dead zone that cannot scroll. */
+.raw-body { max-height: min(58vh, 640px); overflow-y: auto; scrollbar-gutter: stable; }
 .raw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-bottom: 6px; }
 .raw-key { color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; }
 .raw code { font-size: 12px; } .raw code.err { color: var(--danger); }
 .raw-label { color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 3px; }
-.raw-pre { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
-.raw-md { padding: 8px 12px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-sm); max-height: 480px; overflow: auto; overscroll-behavior: contain; font-size: 13px; }
+/* Arguments and Result are separate raised cards inside the inset shell: a quiet border and a fixed gap make the split unmistakable at a glance. */
+.raw-section { margin-top: 10px; padding: 8px 10px 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-md); }
+.raw-section .raw-label { margin: 0 0 6px; }
+.raw-section.raw-err { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.raw-section.raw-err .raw-label { color: var(--danger); }
+.raw-pre { margin: 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.raw-md { padding: 8px 12px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
 /* Result details: the tool's metadata, set apart from the result above it by a rule and its own bordered card. */
 .raw-extra { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-strong); }
 .raw-extra-head { display: flex; align-items: center; gap: 6px; width: 100%; height: var(--h-control-sm); padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-raised); color: var(--text-2); font-size: var(--fs-sm); text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
