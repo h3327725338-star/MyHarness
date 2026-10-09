@@ -98,11 +98,19 @@
 .tokens-field { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
 .tokens-field > .input-group { width: 100%; }
 .tokens-exact { font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* A model choice with its own switch and an optional number: the picker takes what the switch leaves, the number is a second line. */
+/* A model choice with its own switch, an optional mode list and an optional number: one line, the picker takes what the others leave. */
 .mref { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mref-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mref-main > .model-ref { flex: 1 1 0; width: auto; min-width: 0; }
 .mref-main > .toggle { flex: none; }
+.mref-main > .mref-mode { flex: none; width: 118px; }
+.mref-main > .input-group { flex: none; width: 92px; gap: 4px; }
+.mref-main > .input-group > .group-input { flex: none; width: 40px; padding-left: 6px; padding-right: 6px; text-align: center; }
+.mref-main > .input-group > .group-unit { width: 48px; padding: 0 4px; }
+/* A row whose control needs more than one short column (model, effort, mode, number and switch on a single line) widens that column;
+   in a modal too narrow for that, the control takes its own line under the text instead of being squeezed. */
+.set-row.wide { --set-control-w: 480px; }
+@media (max-width: 900px) { .set-row.wide { grid-template-columns: minmax(0, 1fr); row-gap: 8px; --set-control-w: 100%; } }
 .set-control .model-ref { height: var(--h-control); }
 .set-control .model-ref .select { height: var(--h-control); }
 .set-control .model-ref-effort { max-width: 76px; }

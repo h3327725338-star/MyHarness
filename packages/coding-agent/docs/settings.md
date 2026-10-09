@@ -123,7 +123,7 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `conversationNaming` | object | `{ "enabled": false }` | Global 对话自动命名；设置 → 智能体 → 助手选择模型、思考级别和开关。 |
-| `subAgent` | object | `{ "enabled": false }` | Global built-in exploration-agent 和 workflow configuration。通过 `/settings` 设置。 |
+| `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
 | `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
@@ -209,7 +209,7 @@ Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Mar
 
 #### subAgent
 
-`Sub Agent` 是 global 设置。启用后，在 `/settings` 中 MyHarness 会要求选择一个可用 model，以及该 model 支持的 thinking level。之后 main AI 可以使用：
+`Sub Agent` 是 global 设置。启用后，在 `/settings` 中 MyHarness 会要求选择一个可用 model，以及该 model 支持的 thinking level。在启用开关前面还有一个模式选择器（只读 / 读写，默认只读）；切换只影响之后新派出的子代理，正在运行的子代理不变；保存后当前会话的 `agent`/`workflow`/`ultracode` 工具说明会立即按新模式重建，主 AI 不必等到新会话才知道子代理能否写入。之后 main AI 可以使用：
 
 - `agent` 将一次 investigation 拆分为多个并行 Explore tasks。数量上限由 `maxTasks` 配置：默认 `3`，可在设置面板“子智能体（Explore）”行内或 `settings.json` 中调整，取值范围 1–18（18 是协议硬上限）。每次调用都按保存后的最新值生效，不需要重启会话。
 - 每个 delegated Explore task 默认没有总时间上限（`totalRuntimeLimitMs` 以毫秒为单位；`0` 表示无上限，`taskTimeoutMs` 是兼容旧配置的别名）。默认 Stall Timeout 为 10 分钟：它只在没有有效新进展时计时，检测到新的工具范围或结果会重置计时器。
@@ -217,14 +217,17 @@ Recall 只读取 Global、当前 Workspace 和当前 Conversation 的 active Mar
 - 带 `questions` 的 Explore task 要求子 Agent 逐项回答并在报告末尾给出 `## Completion checklist`；报告缺清单或声明了未回答问题时，任务记为 `partial`（`stopReason: "incomplete_answer"`）并列出未回答项。
 - `workflow` 运行一个或多个 sequential phases，每个 phase 可以包含多个并行 Explore tasks。第一个 phase 之后的每个 phase 都会收到上一阶段的 results。
 
-`/workflow` 和 `/ultracode` prompt commands 分别指示 main AI 使用 `workflow` 和 `ultracode` tools。`/ultracode` 使用更严格的中文 instructions；如果第一次 Ultracode run 不够，会继续执行后续 run。所有 phase 和 task descriptions 都由 main AI 决定；child agents 不能再创建更多 agents。
+`/workflow` 和 `/ultracode` prompt commands 分别指示 main AI 使用 `workflow` 和 `ultracode` tools。`/ultracode` 使用更严格的中文 instructions；如果第一次 Ultracode run 不够，会继续执行后续 run。所有 phase 和 task descriptions 都由 main AI 决定；child agents 不能再创建更多 agents。`workflow` 和 `ultracode` 与 `agent` 共用同一套子代理运行时，因此也跟随同一个模式开关：读写模式下它们派出的子代理同样只能在各自 worktree 内写入，两个工具的描述、参数提示和系统提示里的相关句子会按模式改写；只读模式下这些文字与开关加入之前逐字一致。
 
-Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edit 或 write。它们的 Bash 命令由 delegated read-only guard 按 shell 序列段判定：每个段（管道、`&&`、`;`）都是允许的只读检查命令时放行，诊断重定向（如 `2>/dev/null`）不影响判定；命中的命令会被拦截并返回带 `[read-only-guard]` 标记的具体原因，这类拦截不计入子 Agent 的连续工具失败统计。guard 基于可执行命令白名单和危险选项检查，面向 inspection，而不是严格的 read-only security boundary。
+只读模式（`mode: "read-only"`，默认，即历史行为）：Child agents 可以使用 read、grep、find、ls 和 Bash，但不能使用 edit 或 write。它们的 Bash 命令由 delegated read-only guard 按 shell 序列段判定：每个段（管道、`&&`、`;`）都是允许的只读检查命令时放行，诊断重定向（如 `2>/dev/null`）不影响判定；命中的命令会被拦截并返回带 `[read-only-guard]` 标记的具体原因，这类拦截不计入子 Agent 的连续工具失败统计。guard 基于可执行命令白名单和危险选项检查，面向 inspection，而不是严格的 read-only security boundary。
+
+读写模式（`mode: "read-write"`）：子代理在只读六个工具之外额外获得 edit、write 和 pwsh（与 main 写入配置中的写入/执行工具一致）。每个读写子代理任务各自从当前分支最新提交创建一个独立 Git Worktree（与副本功能同一套创建逻辑，位于 `<agentDir>/worktrees/<仓库名>/<分支名>`），工作目录锁定在该 worktree 内；文件工具的 `path` 参数由 delegated write guard（`[delegated-write-guard]` 标记）在工具层强制检查，越出 worktree 直接拒绝并在结果中报告，不弹任何确认框。两种模式共同的硬规则：子代理不能使用任何派发工具（agent/workflow/ultracode 及同名动态工具在运行时被 `[nested-dispatch-guard]` 拒绝）；读写子代理永远不能 `git commit`、`git push`、`git merge`、`git add`，也不能执行改写历史或删除内容的命令（`reset --hard`、`clean`、`push --force`、`branch -D`、`worktree remove` 等）；这些限制在工具层拦截，无法通过参数解锁，提交由 main Agent 在用户明确要求下自行完成。任务结束时：没有任何改动的 worktree 自动清理（同时删除自动创建的分支）；有未提交或未跟踪改动的 worktree 永远保留，并在结果中返回 worktree 路径、分支名和改动文件列表，改动摘要与测试结果由子代理报告。工作区不是 Git 仓库（或没有 main 主 worktree/没有任何提交）时，派出读写子代理会直接报错，只读模式不受影响。shell 的边界是工具层对每个命令段的解析检查：git 只放行只读子命令；cd 目标必须留在 worktree，且 `Set-Location`/`Push-Location`/`pushd`/`popd` 等切换目录的命令、嵌套 shell 与内联代码执行（`bash -c`、`pwsh -Command`、`cmd /c`、`node -e`、`eval`、`iex`、`xargs`、远程 shell 等能把边界检查带出命令解析范围的手段）被直接拒绝；命令参数中的绝对路径、主目录（`~`/`$HOME`/`%USERPROFILE%`）、无法确认的环境变量路径和重定向目标都会接受 worktree 包含性检查。管道、`&&`、`;` 逐段检查；无法安全解析的结构一律拒绝。这不承诺操作系统级沙箱（例如脚本文件内部的写操作无法逐行审查）；文件工具的路径限制是硬约束。被拦截的操作在工具结果中以 `[delegated-write-guard]` 标记报告，不计入子代理连续工具失败统计。
 
 ```json
 {
   "subAgent": {
     "enabled": true,
+    "mode": "read-only",
     "provider": "anthropic",
     "model": "claude-opus-4-6",
     "thinkingLevel": "high",

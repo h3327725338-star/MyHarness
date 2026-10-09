@@ -269,6 +269,7 @@ describe("SettingsManager", () => {
 
 			expect(manager.getSubAgentSettings()).toEqual({
 				enabled: true,
+				mode: "read-only",
 				provider: "openai",
 				model: "gpt-test",
 				thinkingLevel: "high",
@@ -290,6 +291,19 @@ describe("SettingsManager", () => {
 			});
 		});
 
+		it("stores the sub-agent capability mode and falls back to read-only", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSubAgentSettings().mode).toBe("read-only");
+			manager.setSubAgentSettings({ enabled: true, mode: "read-write" });
+			await manager.flush();
+			expect(manager.getSubAgentSettings().mode).toBe("read-write");
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.subAgent).toEqual({ enabled: true, mode: "read-write" });
+			// Anything that is not exactly "read-write" normalizes back to the safe default.
+			manager.setSubAgentSettings({ enabled: true, mode: "nonsense" as never });
+			expect(manager.getSubAgentSettings().mode).toBe("read-only");
+		});
+
 		it("keeps the selected model when sub-agent execution is turned off", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setSubAgentSettings({
@@ -301,6 +315,7 @@ describe("SettingsManager", () => {
 
 			expect(manager.getSubAgentSettings()).toEqual({
 				enabled: false,
+				mode: "read-only",
 				provider: "openai",
 				model: "gpt-test",
 				thinkingLevel: "medium",

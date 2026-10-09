@@ -79,8 +79,13 @@ export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // consumed by UI layer (?? true), not enforced by getWarnings()
 }
 
+/** Explore sub-agent capability mode. "read-only" keeps the historical inspection-only runtime. */
+export type SubAgentMode = "read-only" | "read-write";
+
 export interface SubAgentSettings {
 	enabled?: boolean; // default: false
+	/** Sub-agent capability mode; anything missing or invalid falls back to "read-only". */
+	mode?: SubAgentMode; // default: "read-only"
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;

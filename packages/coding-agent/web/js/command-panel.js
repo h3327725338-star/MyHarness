@@ -505,6 +505,25 @@ function modelRefScreen(ctx, id) {
 	const commit = (next) => applySetting(id, { ...(live()?.value || {}), ...next });
 	const levels = modelEfforts(findModel(models, v.provider, v.model));
 	const rows = [];
+	if (item.modeSelect)
+		rows.push({
+			key: "mode",
+			label: t("Sub-agent mode"),
+			value: tr((item.modeSelect.options.find((o) => o.value === (v.mode || "read-only")) || { label: String(v.mode || "") }).label),
+			chevron: true,
+			onEnter: (c) =>
+				c.push(() =>
+					optionsScreen({
+						title: t("Sub-agent mode"),
+						options: item.modeSelect.options.map((o) => ({ value: o.value, label: tr(o.label) })),
+						value: v.mode || "read-only",
+						onPick: async (value, cc) => {
+							await commit({ mode: value });
+							cc.pop();
+						},
+					}),
+				),
+		});
 	if (item.note === "enabled") rows.push({ key: "enabled", label: t("Enabled"), toggle: !!v.enabled, onEnter: () => commit({ enabled: !v.enabled }) });
 	rows.push({
 		key: "model",

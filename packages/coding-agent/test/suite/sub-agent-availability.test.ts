@@ -49,6 +49,45 @@ describe("sub-agent tool availability", () => {
 		}
 	});
 
+	it("re-advertises the delegation tools when the sub-agent mode changes in a running session", async () => {
+		const harness = await createHarness({
+			settings: {
+				subAgent: {
+					enabled: true,
+					mode: "read-only",
+					provider: "faux",
+					model: "faux-model",
+					thinkingLevel: "medium",
+				},
+			},
+		});
+		try {
+			expect(harness.session.getToolDefinition("agent")?.description).toContain(
+				"Sub-agents cannot modify the project",
+			);
+			const current = harness.settingsManager.getSubAgentSettings();
+			harness.settingsManager.setSubAgentSettings({ ...current, mode: "read-write" });
+			harness.session.setSubAgentEnabled(true);
+			const agent = harness.session.getToolDefinition("agent");
+			expect(agent?.description).toContain("its own Git worktree");
+			expect(agent?.description).not.toContain("Sub-agents cannot modify the project");
+			expect(harness.session.getActiveToolNames()).toEqual(
+				expect.arrayContaining(["agent", "workflow", "ultracode"]),
+			);
+			expect(harness.session.systemPrompt).toContain("- agent:");
+			harness.settingsManager.setSubAgentSettings({
+				...harness.settingsManager.getSubAgentSettings(),
+				mode: "read-only",
+			});
+			harness.session.setSubAgentEnabled(true);
+			expect(harness.session.getToolDefinition("agent")?.description).toContain(
+				"Sub-agents cannot modify the project",
+			);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
 	it("does not bypass an explicit tool allowlist", async () => {
 		const harness = await createHarness({
 			settings: { subAgent: { enabled: true } },

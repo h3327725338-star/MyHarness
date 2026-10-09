@@ -691,6 +691,7 @@ export class SettingsManager {
 		const maxTasksRange = SUB_AGENT_SETTING_RANGES.maxTasks;
 		return {
 			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.featureEnabled,
+			mode: settings?.mode === "read-write" ? "read-write" : "read-only",
 			provider: settings?.provider,
 			model: settings?.model,
 			thinkingLevel: settings?.thinkingLevel,

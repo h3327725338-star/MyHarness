@@ -16,7 +16,9 @@
 | `global/output-language.md` | 编程会话的用户回复语言策略 |
 | `roles/main.md` | Main 授权边界；保留现有 `reviewer` 同样使用此文本的行为 |
 | `roles/delegated.md` | 只读委派会话的执行边界 |
+| `roles/delegated-write.md` | 读写模式（Sub Agent 设置为「读写」）委派会话的执行边界，仅限自身 worktree、永不 commit/push |
 | `roles/explore.md` | Explore 子进程通过 `--append-system-prompt` 追加的专用职责 |
+| `roles/explore-write.md` | 读写模式 Explore 子进程追加的专用职责，含 worktree 边界与末尾 `## Worktree result` 返回格式 |
 | `session/commit-authorization.md` | 当前不存在；显式 `/commit` 的授权和 Git 事务边界由 Coding Agent 源码处理，不会从本目录加载 |
 | `session/auto-memory.md` | 仅 Auto Memory 完整启用时追加的记忆优先级约束 |
 | `session/project-context.md` | 有项目上下文时使用，变量 `projectContext` |

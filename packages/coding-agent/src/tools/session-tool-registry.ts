@@ -18,7 +18,7 @@ import { WebSearchApiKeys } from "../providers/credentials/web-search-keys.ts";
 import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexesIfChanged } from "../session/artifacts/store.ts";
 import type { SessionManager } from "../session/manager/index.ts";
 import type { UltracodeToolOptions, WorkflowToolOptions } from "../workflow/tool.ts";
-import { createAllToolDefinitions } from "./registry.ts";
+import { createAllToolDefinitions, createToolDefinition, type ToolName } from "./registry.ts";
 import type { SubAgentToolOptions } from "./sub-agent.ts";
 import type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
 import { createToolDefinitionFromAgentTool } from "./tool-definition-wrapper.ts";
@@ -180,6 +180,22 @@ export class SessionToolRegistry {
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
 				];
 		return this.withSubAgentTools(requested ?? defaultActiveToolNames, settings.getSubAgentSettings().enabled);
+	}
+
+	/**
+	 * Recreate only the delegation tool definitions. Their advertised capability (description, schema, prompt
+	 * snippet) follows the Sub Agent mode setting, so a mode change must not wait for a new session to be visible
+	 * to the Main Agent.
+	 */
+	rebuildDelegationDefinitions(): void {
+		if (this._options.baseToolsOverride) return;
+		const { cwd, agent, workflow, ultracode } = this._options;
+		for (const name of SUB_AGENT_TOOL_NAMES) {
+			this._baseToolDefinitions.set(
+				name,
+				createToolDefinition(name as ToolName, cwd, { agent, workflow, ultracode }) as ToolDefinition,
+			);
+		}
 	}
 
 	/** Recreate the built-in tool definitions from the current settings. */

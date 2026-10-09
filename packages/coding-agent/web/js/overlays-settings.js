@@ -54,8 +54,8 @@ const PAGE_NOTE = {
 /** Groups of settings that share a switch: the switch sits in the card header, the rest of the group below it. */
 const GROUPS = { "webSearch.": "webSearch.enabled" };
 
-function Row({ label, description, children, stack, off }) {
-	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
+function Row({ label, description, children, stack, off, wide }) {
+	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""} ${wide ? "wide" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
 }
 
 function Card({ title, description, action, children, collapsible = false }) {
@@ -228,10 +228,12 @@ function SettingControl({ item, models, onApply }) {
 			// maxTasks is owned by the inline field alone: the other controls on this row must not resend a stale copy of it.
 			const rest = { ...v };
 			delete rest.maxTasks;
+			const modeSelect = item.modeSelect
+				? html`<select class="select mref-mode" aria-label=${t("Sub-agent mode")} title=${t("Sub-agent mode")} value=${v.mode === "read-write" ? "read-write" : "read-only"} onChange=${(e) => onApply(item.id, { ...rest, mode: e.target.value })}>${item.modeSelect.options.map((o) => html`<option key=${o.value} value=${o.value}>${serverText(o.label)}</option>`)}</select>`
+				: null;
 			return html`<div class="mref">
 				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
-				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}</div>
-				${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}
+				${modeSelect}${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}</div>
 			</div>`;
 		}
 		default:
@@ -274,7 +276,6 @@ const SHORT_DESCRIPTION = {
 	fallbackModel: N_("Takes over when the main model keeps failing."),
 	conversationNaming: N_("Name automatically; check new replies every 10 minutes."),
 	autoMemory: N_("Save memory after each task."),
-	subAgent: N_("Delegate read-only investigation."),
 	visionAssistant: N_("Use a model for image analysis."),
 	"webSearch.enabled": N_("Enable search and page reads."),
 	"webSearch.maxRedirects": N_("Redirects followed per page read; 0 follows none."),
@@ -289,6 +290,8 @@ const SHORT_DESCRIPTION = {
 	popupNotifications: N_("Notify on completion, failure or stop."),
 };
 const describe = (item) => {
+	if (item.id === "subAgent")
+		return t(item.value && item.value.mode === "read-write" ? "Writable, limited to their own worktrees." : "Delegate read-only investigation.");
 	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
 	const text = item.section === "Terminal" ? String(item.description || "").replace(/^Terminal UI: /, "") : item.description;
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
@@ -297,7 +300,7 @@ const describe = (item) => {
 /** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
-	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off}>
+	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off} wide=${item.type === "modelRef" && !!(item.modeSelect || item.inlineNumber)}>
 		${before || (item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }

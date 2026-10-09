@@ -417,7 +417,7 @@ const DELEGATED_READ_ONLY_EXECUTABLES = new Set([
 	"tr",
 ]);
 
-function delegatedExecutableOf(trimmed: string): string {
+export function delegatedExecutableOf(trimmed: string): string {
 	const firstToken = trimmed.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
 	return (
 		(firstToken?.[1] ?? firstToken?.[2] ?? firstToken?.[3] ?? "")
@@ -432,7 +432,7 @@ function delegatedExecutableOf(trimmed: string): string {
  * These options can execute another program or turn an inspection utility
  * into a writer even when the executable itself looks harmless.
  */
-function hasUnsafeDelegatedSegmentOptions(trimmed: string, executable: string): boolean {
+export function hasUnsafeDelegatedSegmentOptions(trimmed: string, executable: string): boolean {
 	return (
 		/(?:^|\s)(?:xargs|--exec|--pre|--replace|--output|--in-place|--delete|--remove|--write|--install)(?:\s|=|$)|(?:^|\s)-exec(?:dir)?(?:\s|$)/i.test(
 			trimmed,
@@ -442,7 +442,7 @@ function hasUnsafeDelegatedSegmentOptions(trimmed: string, executable: string): 
 	);
 }
 
-function isUnsafeDelegatedGitInvocation(trimmed: string): boolean {
+export function isUnsafeDelegatedGitInvocation(trimmed: string): boolean {
 	const tokens = trimmed.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, ""));
 	let subcommandIndex = 1;
 	if (tokens[subcommandIndex] === "--no-pager") subcommandIndex += 1;
@@ -528,7 +528,7 @@ function isUnsafeDelegatedGitInvocation(trimmed: string): boolean {
 	return false;
 }
 
-function isUnsafeDelegatedSingleCommand(trimmed: string): boolean {
+export function isUnsafeDelegatedSingleCommand(trimmed: string): boolean {
 	const executable = delegatedExecutableOf(trimmed);
 	if (!executable || !DELEGATED_READ_ONLY_EXECUTABLES.has(executable)) return true;
 	if (hasUnsafeDelegatedSegmentOptions(trimmed, executable)) return true;
@@ -536,7 +536,7 @@ function isUnsafeDelegatedSingleCommand(trimmed: string): boolean {
 	return isUnsafeDelegatedGitInvocation(trimmed);
 }
 
-function isSafeDelegatedSegment(segment: string): boolean {
+export function isSafeDelegatedSegment(segment: string): boolean {
 	const trimmedSegment = segment.trim();
 	if (trimmedSegment === "") return false;
 	if (delegatedExecutableOf(trimmedSegment) === "cd") return isSafeAutoReviewCdCommand(trimmedSegment);
@@ -563,12 +563,15 @@ export function hasUnsafeDelegatedBashCommand(command: string): boolean {
 
 /**
  * Stable marker embedded in every guard block reason so callers (and the
- * Explore watchdog) can distinguish a read-only guard interception from a real
+ * Explore watchdog) can distinguish a guard interception from a real
  * tool failure. Guard interceptions must not count as consecutive tool errors.
+ * The read-write delegated guard uses its own marker (kept in sync with
+ * `WRITE_GUARD_BLOCK_MARKER` in delegated-write-guard.ts).
  */
 export const READ_ONLY_GUARD_BLOCK_MARKER = "[read-only-guard]";
+export const DELEGATED_WRITE_GUARD_BLOCK_MARKER = "[delegated-write-guard]";
 
-/** True when a tool result is a read-only guard interception rather than a real failure. */
+/** True when a tool result is a guard interception rather than a real failure. */
 export function isReadOnlyGuardBlockedToolResult(result: unknown): boolean {
 	if (!result || typeof result !== "object" || !("content" in result)) return false;
 	const content = (result as { content?: unknown }).content;
@@ -579,7 +582,8 @@ export function isReadOnlyGuardBlockedToolResult(result: unknown): boolean {
 			typeof part === "object" &&
 			(part as { type?: unknown }).type === "text" &&
 			typeof (part as { text?: unknown }).text === "string" &&
-			(part as { text: string }).text.includes(READ_ONLY_GUARD_BLOCK_MARKER),
+			((part as { text: string }).text.includes(READ_ONLY_GUARD_BLOCK_MARKER) ||
+				(part as { text: string }).text.includes(DELEGATED_WRITE_GUARD_BLOCK_MARKER)),
 	);
 }
 
@@ -680,7 +684,7 @@ function stripAutoReviewDiagnosticRedirections(command: string): string | undefi
 	return result.trim();
 }
 
-function splitAutoReviewShellSequence(
+export function splitAutoReviewShellSequence(
 	command: string,
 	allowCommandSubstitutions = false,
 	allowStructuredBlocks = false,
@@ -791,14 +795,14 @@ function splitAutoReviewShellSequence(
 	return segments;
 }
 
-function getAutoReviewCommandTokens(command: string): string[] | undefined {
+export function getAutoReviewCommandTokens(command: string): string[] | undefined {
 	return command
 		.trim()
 		.match(/(?:"[^"]*"|'[^']*'|[^\s;&|<>`]+)/g)
 		?.map((token) => token.replace(/^["']|["']$/g, ""));
 }
 
-function isSafeAutoReviewCdCommand(command: string): boolean {
+export function isSafeAutoReviewCdCommand(command: string): boolean {
 	const tokens = getAutoReviewCommandTokens(command);
 	if (!tokens || tokens.length !== 2 || tokens[0].toLowerCase() !== "cd") return false;
 	const target = tokens[1];

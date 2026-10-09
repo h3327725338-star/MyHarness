@@ -12,8 +12,15 @@ import {
 	type DelegatedJsonEvent,
 	extractDelegatedMessageToolEvidence,
 } from "../agent/delegation/event-parser.ts";
-import { DELEGATED_TOOL_NAMES } from "../agent/runtime/role.ts";
+import {
+	type DelegatedWorktreeHandle,
+	finalizeDelegatedWorktree,
+	prepareDelegatedWorktree,
+} from "../agent/delegation/worktree-sandbox.ts";
+import { DELEGATED_TOOL_NAMES, DELEGATED_WRITE_TOOL_NAMES } from "../agent/runtime/role.ts";
 import { SETTINGS_DEFAULTS, SUB_AGENT_SETTING_RANGES } from "../config/settings/defaults.ts";
+import type { SubAgentMode } from "../config/settings/types.ts";
+import { getAgentDir } from "../config.ts";
 import {
 	classifyToolStatus,
 	getRuntimeTraceEnvironment,
@@ -25,6 +32,7 @@ import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loade
 import { getMyHarnessInvocation } from "../utils/myharness-invocation.ts";
 import { killProcessTreeAndWait } from "../utils/shell.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
+import { createDelegatedWriteGuardExtensionSource } from "./shell/delegated-write-guard.ts";
 import { createReadOnlyGuardExtensionSource, isReadOnlyGuardBlockedToolResult } from "./shell/read-only-guard.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { FULL_TEXT_OUTPUT } from "./tool-result-persistence.ts";
@@ -49,44 +57,60 @@ const NO_PROGRESS_TURN_THRESHOLD = 3;
 const PARTIAL_SUMMARY_CAP = 12 * 1024;
 const MAX_STRUCTURED_ITEMS = 24;
 
-const subAgentSchema = Type.Object({
-	tasks: Type.Array(
-		Type.Object({
-			description: Type.String({
-				description: "Short name for this independent exploration task",
-			}),
-			prompt: Type.String({
-				description:
-					"Clearly describe the investigation scope and the expected findings to check; must not require modifying files",
-			}),
-			goal: Type.Optional(Type.String({ description: "The bounded question this task must answer" })),
-			scope: Type.Optional(
-				Type.Array(Type.String(), { description: "Files, modules, or runtime areas that are in scope" }),
-			),
-			questions: Type.Optional(
-				Type.Array(Type.String(), {
-					description:
-						'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
-				}),
-			),
-			expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
-			stopConditions: Type.Optional(
-				Type.Array(Type.String(), { description: "Conditions for stopping the investigation" }),
-			),
+const SUB_AGENT_TASKS_DESCRIPTION = "Independent exploration tasks to run in parallel";
+const SUB_AGENT_BACKGROUND_DESCRIPTION =
+	"Run the Explore tasks in the background so the Main Agent can continue other useful independent work";
+
+function createSubAgentTaskItemSchema(mode: SubAgentMode) {
+	return Type.Object({
+		description: Type.String({
+			description: "Short name for this independent exploration task",
 		}),
-		{
-			description: "Independent exploration tasks to run in parallel",
+		prompt: Type.String({
+			description:
+				mode === "read-write"
+					? "Clearly describe the investigation scope and the changes the sub-agent should make; it edits only inside its own Git worktree and never commits"
+					: "Clearly describe the investigation scope and the expected findings to check; must not require modifying files",
+		}),
+		goal: Type.Optional(Type.String({ description: "The bounded question this task must answer" })),
+		scope: Type.Optional(
+			Type.Array(Type.String(), { description: "Files, modules, or runtime areas that are in scope" }),
+		),
+		questions: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
+			}),
+		),
+		expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
+		stopConditions: Type.Optional(
+			Type.Array(Type.String(), { description: "Conditions for stopping the investigation" }),
+		),
+	});
+}
+
+function createSubAgentSchemaBody(mode: SubAgentMode) {
+	return {
+		tasks: Type.Array(createSubAgentTaskItemSchema(mode), {
+			description: SUB_AGENT_TASKS_DESCRIPTION,
 			minItems: 1,
 			maxItems: MAX_EXPLORE_TASKS,
-		},
-	),
-	run_in_background: Type.Optional(
-		Type.Boolean({
-			description:
-				"Run the Explore tasks in the background so the Main Agent can continue other useful independent work",
 		}),
-	),
-});
+		run_in_background: Type.Optional(Type.Boolean({ description: SUB_AGENT_BACKGROUND_DESCRIPTION })),
+	};
+}
+
+const subAgentSchema = Type.Object(createSubAgentSchemaBody("read-only"));
+
+/**
+ * The read-only schema object is returned unchanged so the default mode keeps
+ * the historical tool protocol byte-for-byte; only the read-write variant
+ * re-describes the task prompt field.
+ */
+function createSubAgentSchema(mode: SubAgentMode): typeof subAgentSchema {
+	if (mode !== "read-write") return subAgentSchema;
+	return Type.Object(createSubAgentSchemaBody(mode)) as typeof subAgentSchema;
+}
 
 export type SubAgentToolInput = Static<typeof subAgentSchema>;
 export type SubAgentTaskSpec = SubAgentToolInput["tasks"][number];
@@ -152,6 +176,8 @@ export function evaluateExploreReportCompleteness(
 
 export interface SubAgentRuntimeSettings {
 	chatMode?: "coding" | "general";
+	/** Sub-agent capability mode; anything other than "read-write" keeps the read-only runtime. */
+	mode?: SubAgentMode;
 	enabled: boolean;
 	provider?: string;
 	model?: string;
@@ -177,6 +203,7 @@ export type ResolvedSubAgentRuntimeSettings = Required<
 > &
 	Pick<
 		SubAgentRuntimeSettings,
+		| "mode"
 		| "chatMode"
 		| "contextWindow"
 		| "taskTimeoutMs"
@@ -222,12 +249,20 @@ export interface SubAgentToolTrace {
 	resultSummary?: string;
 }
 
-const INVESTIGATION_TOOL_NAMES = new Set(["read", "grep", "find", "ls", "bash", "symbols"]);
+const INVESTIGATION_TOOL_NAMES = new Set<string>(DELEGATED_TOOL_NAMES);
+const INVESTIGATION_WRITE_TOOL_NAMES = new Set<string>(DELEGATED_WRITE_TOOL_NAMES);
 
-export function hasSuccessfulInvestigationEvidence(transcript: readonly SubAgentToolTrace[]): boolean {
-	return transcript.some(
-		(entry) => entry.status === "completed" && INVESTIGATION_TOOL_NAMES.has(entry.toolName.toLowerCase()),
-	);
+/**
+ * A delegated task counts as having done real work when its transcript shows a
+ * successful tool call. In read-write mode the write tools are productive work
+ * too; the read-only tool set is unchanged.
+ */
+export function hasSuccessfulInvestigationEvidence(
+	transcript: readonly SubAgentToolTrace[],
+	mode: SubAgentMode = "read-only",
+): boolean {
+	const allowed = mode === "read-write" ? INVESTIGATION_WRITE_TOOL_NAMES : INVESTIGATION_TOOL_NAMES;
+	return transcript.some((entry) => entry.status === "completed" && allowed.has(entry.toolName.toLowerCase()));
 }
 
 export type ExploreTaskStatus = "running" | "completed" | "partial" | "failed" | "timeout" | "cancelled";
@@ -297,6 +332,10 @@ export interface ExploreTaskResult {
 	recommendedNextInvestigation?: string[];
 	diagnostics?: ExploreTaskDiagnostics;
 	contextTelemetry?: ExploreTaskContextTelemetry;
+	/** Read-write tasks only: own worktree kept because it has uncommitted changes. */
+	worktreePath?: string;
+	branchName?: string;
+	changedFiles?: string[];
 	transcript: SubAgentToolTrace[];
 	taskId?: string;
 	runId?: string;
@@ -394,6 +433,7 @@ export function resolveSubAgentRuntimeSettings(
 ): ResolvedSubAgentRuntimeSettings {
 	const totalRuntimeLimitMs = resolveTotalRuntimeLimit(settings);
 	return {
+		mode: settings.mode === "read-write" ? "read-write" : "read-only",
 		chatMode: settings.chatMode,
 		provider: settings.provider ?? "",
 		model: settings.model ?? "",
@@ -428,6 +468,7 @@ function waitForProcessStop(pid: number | undefined): Promise<boolean> {
 }
 
 const EXPLORE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore.md");
+const EXPLORE_WRITE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore-write.md");
 
 function getFinalAssistantText(messages: Message[]): string {
 	for (let index = messages.length - 1; index >= 0; index--) {
@@ -645,6 +686,7 @@ function cloneExploreTaskResult(result: ExploreTaskResult): ExploreTaskResult {
 		evidence: result.evidence ? [...result.evidence] : undefined,
 		conflicts: result.conflicts ? [...result.conflicts] : undefined,
 		unresolved: result.unresolved ? [...result.unresolved] : undefined,
+		changedFiles: result.changedFiles ? [...result.changedFiles] : undefined,
 		recommendedNextInvestigation: result.recommendedNextInvestigation
 			? [...result.recommendedNextInvestigation]
 			: undefined,
@@ -682,6 +724,10 @@ function formatTaskReport(result: ExploreTaskResult, full = false): string {
 		`### [${result.description}] ${status}${result.stopReason ? ` · ${result.stopReason}` : ""}`,
 		`目标：${full ? (result.goal ?? result.prompt) : truncateDisplay(result.goal ?? result.prompt, 1_200)}`,
 		`工具调用：${result.toolUseCount} · turns：${result.turnCount ?? 0} · tokens：${result.tokens}`,
+		result.worktreePath
+			? `读写 Worktree：${result.worktreePath}${result.branchName ? `（分支 ${result.branchName}）` : ""}`
+			: "",
+		result.changedFiles?.length ? formatItems("改动文件", result.changedFiles) : "",
 		result.lastMeaningfulProgress ? `最近有效进展：${result.lastMeaningfulProgress}` : "",
 		formatItems("已覆盖范围", result.coveredScope),
 		formatItems("已知发现", result.findings),
@@ -724,9 +770,9 @@ function collectTranscriptEvidence(result: ExploreTaskResult, cwd: string): void
 	}
 }
 
-function hasUsefulResult(result: ExploreTaskResult): boolean {
+function hasUsefulResult(result: ExploreTaskResult, mode: SubAgentMode = "read-only"): boolean {
 	return (
-		hasSuccessfulInvestigationEvidence(result.transcript) ||
+		hasSuccessfulInvestigationEvidence(result.transcript, mode) ||
 		Boolean(result.evidence?.length || result.findings?.length)
 	);
 }
@@ -821,6 +867,8 @@ async function runExploreTask(options: {
 	signal?: AbortSignal;
 	onProgress?: (result: ExploreTaskResult) => void;
 	chatMode?: "coding" | "general";
+	/** Capability mode of this task; "read-write" workers run in their own worktree. */
+	mode?: SubAgentMode;
 	traceContext?: RuntimeTraceChildContext;
 }): Promise<ExploreTaskResult> {
 	const eventState = createDelegatedEventState();
@@ -894,6 +942,8 @@ async function runExploreTask(options: {
 				env: {
 					...process.env,
 					MYHARNESS_INTERNAL_CHAT_MODE: options.chatMode ?? "coding",
+					...(options.mode === "read-write" ? { MYHARNESS_INTERNAL_DELEGATED_MODE: "read-write" } : {}),
+					...(options.mode === "read-write" ? { MYHARNESS_INTERNAL_DELEGATED_WORKTREE: options.cwd } : {}),
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
@@ -1313,7 +1363,7 @@ async function runExploreTask(options: {
 		emitProgress();
 		return currentResult;
 	}
-	if (!hasSuccessfulInvestigationEvidence(currentResult.transcript)) {
+	if (!hasSuccessfulInvestigationEvidence(currentResult.transcript, options.mode)) {
 		currentResult.status = "failed";
 		currentResult.stopReason = "runtime_error";
 		currentResult.error = "子 Agent 未执行调查工具，返回内容不能视为完成";
@@ -1364,7 +1414,9 @@ export function buildSubAgentArgs(options: {
 	contextWindow?: number;
 	systemPromptPath: string;
 	guardPath: string;
+	mode?: SubAgentMode;
 }): string[] {
+	const toolNames = options.mode === "read-write" ? DELEGATED_WRITE_TOOL_NAMES : DELEGATED_TOOL_NAMES;
 	return [
 		"--internal-delegated-worker",
 		"--no-session",
@@ -1373,7 +1425,7 @@ export function buildSubAgentArgs(options: {
 		"--extension",
 		options.guardPath,
 		"--tools",
-		DELEGATED_TOOL_NAMES.join(","),
+		toolNames.join(","),
 		"--model",
 		`${options.provider}/${options.model}`,
 		"--thinking",
@@ -1410,9 +1462,10 @@ export interface ExploreBatchResult {
 }
 
 export async function runExploreBatch(options: RunExploreBatchOptions): Promise<ExploreBatchResult> {
+	const mode: SubAgentMode = options.settings.mode === "read-write" ? "read-write" : "read-only";
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "myharness-sub-agent-"));
 	const systemPromptPath = path.join(tempDir, "explore-prompt.md");
-	const guardPath = path.join(tempDir, "read-only-guard.js");
+	const guardPath = path.join(tempDir, mode === "read-write" ? "delegated-write-guard.js" : "read-only-guard.js");
 	const taskPrompts = options.tasks.map(formatDelegatedTaskPrompt);
 	const parentTraceScope = options.parentTraceScope;
 	const taskTraceContexts = options.tasks.map((task) => {
@@ -1457,7 +1510,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 	}));
 	const emitProgress = () => {
 		const usable = results.filter(
-			(result) => result.status === "completed" || (result.status === "partial" && hasUsefulResult(result)),
+			(result) => result.status === "completed" || (result.status === "partial" && hasUsefulResult(result, mode)),
 		).length;
 		options.onProgress?.({
 			completed: results.filter((result) => result.status === "completed").length,
@@ -1494,20 +1547,42 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 			});
 		}
 		await Promise.all([
-			fs.promises.writeFile(systemPromptPath, EXPLORE_SYSTEM_PROMPT, { encoding: "utf8", mode: 0o600 }),
+			fs.promises.writeFile(
+				systemPromptPath,
+				mode === "read-write" ? EXPLORE_WRITE_SYSTEM_PROMPT : EXPLORE_SYSTEM_PROMPT,
+				{ encoding: "utf8", mode: 0o600 },
+			),
 			fs.promises.writeFile(
 				guardPath,
-				createReadOnlyGuardExtensionSource("Sub Agent 已拦截命中的修改型 Bash 命令。", {
-					mode: "delegated",
-					adjudicator: {
-						provider: options.settings.provider,
-						model: options.settings.model,
-					},
-				}),
+				mode === "read-write"
+					? createDelegatedWriteGuardExtensionSource()
+					: createReadOnlyGuardExtensionSource("Sub Agent 已拦截命中的修改型 Bash 命令。", {
+							mode: "delegated",
+							adjudicator: {
+								provider: options.settings.provider,
+								model: options.settings.model,
+							},
+						}),
 				{ encoding: "utf8", mode: 0o600 },
 			),
 		]);
 		emitProgress();
+		// Read-write tasks each run inside their own fresh Git worktree, created
+		// up front so an unusable workspace fails the whole dispatch with a clear
+		// reason instead of after some workers already started.
+		const worktreeHandles: Array<DelegatedWorktreeHandle | undefined> = options.tasks.map(() => undefined);
+		if (mode === "read-write") {
+			for (let index = 0; index < options.tasks.length; index++) {
+				const prepared = prepareDelegatedWorktree({ cwd: options.cwd, agentDir: getAgentDir() });
+				if (!prepared.ok) {
+					for (const handle of worktreeHandles) {
+						if (handle) finalizeDelegatedWorktree(handle);
+					}
+					throw new Error(`无法派出读写子代理：${prepared.error}`);
+				}
+				worktreeHandles[index] = prepared.handle;
+			}
+		}
 		// Per-task abort controllers: the panel can kill a single Explore task
 		// while the rest of the batch keeps running.
 		const taskControllers = options.tasks.map(() => new AbortController());
@@ -1518,10 +1593,14 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 				const traceContext = taskTraceContexts[index]?.context;
 				try {
 					results[index] = await runExploreTask({
-						cwd: options.cwd,
+						cwd:
+							mode === "read-write" && worktreeHandles[index]
+								? worktreeHandles[index].worktreePath
+								: options.cwd,
 						provider: options.settings.provider,
 						model: options.settings.model,
 						chatMode: options.settings.chatMode,
+						mode,
 						thinkingLevel: options.settings.thinkingLevel,
 						contextWindow: options.settings.contextWindow,
 						description: task.description,
@@ -1631,11 +1710,33 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		}
 		if (normalizedRejectedTask) emitProgress();
 
+		// Finalize every read-write worktree: clean ones are removed automatically,
+		// anything with uncommitted or untracked changes is kept and reported.
+		if (mode === "read-write") {
+			for (let index = 0; index < worktreeHandles.length; index++) {
+				const handle = worktreeHandles[index];
+				if (!handle) continue;
+				const finalized = finalizeDelegatedWorktree(handle);
+				if (finalized.dirty) {
+					results[index] = {
+						...results[index],
+						worktreePath: handle.worktreePath,
+						branchName: handle.branchName,
+						changedFiles: finalized.changedFiles,
+					};
+					if (finalized.error) {
+						results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
+					}
+				}
+			}
+			emitProgress();
+		}
+
 		const details: SubAgentToolDetails = {
 			completed: results.filter((result) => result.status === "completed").length,
 			total: results.length,
 			usable: results.filter(
-				(result) => result.status === "completed" || (result.status === "partial" && hasUsefulResult(result)),
+				(result) => result.status === "completed" || (result.status === "partial" && hasUsefulResult(result, mode)),
 			).length,
 			findings: results.reduce((count, result) => count + (result.findings?.length ?? 0), 0),
 			results: results.map(cloneExploreTaskResult),
@@ -1659,15 +1760,27 @@ export function createSubAgentToolDefinition(
 	cwd: string,
 	options?: SubAgentToolOptions,
 ): BusinessToolDefinition<typeof subAgentSchema, SubAgentToolDetails> {
-	const advertisedMaxTasks = resolveExploreMaxTasks(options?.getSettings?.());
-	const promptVariables = { maxTasks: String(advertisedMaxTasks) };
+	const settingsSnapshot = options?.getSettings?.();
+	const mode: SubAgentMode = settingsSnapshot?.mode === "read-write" ? "read-write" : "read-only";
+	const advertisedMaxTasks = resolveExploreMaxTasks(settingsSnapshot);
+	const promptVariables = { maxTasks: String(advertisedMaxTasks), capability: mode };
 	return {
 		name: "agent",
 		label: "Agent",
-		description: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.`,
+		description:
+			mode === "read-write"
+				? `Delegates one to ${advertisedMaxTasks} independent investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Each sub-agent may edit files and run commands only inside its own Git worktree (a separate checkout kept under the settings directory); it can never commit, push, merge or stage, cannot start further sub-agents, and reports its worktree path, branch and changed files back with the result. Changes stay uncommitted for the Main Agent and the user to review.`
+				: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.`,
 		promptSnippet: loadSystemPrompt("tools/agent/snippet.md", promptVariables),
-		promptGuidelines: loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
-		parameters: subAgentSchema,
+		promptGuidelines: [
+			...loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
+			...(mode === "read-write"
+				? [
+						"Read-write Explore sub-agents edit only inside their own Git worktree, never commit, push, merge or stage, and never start further sub-agents; their result reports the worktree path, branch and changed files.",
+					]
+				: []),
+		],
+		parameters: createSubAgentSchema(mode),
 		// Each call already runs its tasks in parallel, capped by the configured subAgent.maxTasks. Serializing
 		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema keeps
 		// MAX_EXPLORE_TASKS as the protocol hard cap; execute enforces the live configured value below it.

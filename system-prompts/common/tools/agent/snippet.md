@@ -1,2 +1,2 @@
 # Tool description
-- Delegate up to {{maxTasks}} independent read-only exploration tasks.
+- Delegate up to {{maxTasks}} independent {{capability}} exploration tasks.

@@ -977,6 +977,32 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await subAgentItem()).value.maxTasks).toBe(5);
 	});
 
+	it("exposes and stores the sub-agent capability mode", async () => {
+		const fx = await start();
+		const subAgentItem = async () =>
+			(await fx.get("/api/settings")).items.find((item: any) => item.id === "subAgent");
+		const initial = await subAgentItem();
+		expect(initial.modeSelect).toMatchObject({
+			options: [
+				{ value: "read-only", label: "Read only" },
+				{ value: "read-write", label: "Read & write" },
+			],
+		});
+		expect(initial.value.mode).toBe("read-only");
+		expect(initial.description).toContain("read-only investigation");
+
+		await fx.post("/api/settings", { id: "subAgent", value: { ...initial.value, mode: "read-write" } });
+		expect((await subAgentItem()).value.mode).toBe("read-write");
+		expect((await subAgentItem()).description).toContain("worktree");
+
+		// Invalid modes are rejected and a save without the field keeps the stored mode.
+		await expect(fx.post("/api/settings", { id: "subAgent", value: { mode: "write-only" } })).rejects.toThrow(
+			/must be "read-only" or "read-write"/,
+		);
+		await fx.post("/api/settings", { id: "subAgent", value: { enabled: true } });
+		expect((await subAgentItem()).value.mode).toBe("read-write");
+	});
+
 	it("writes the auto-retry attempt count and the separate network timeouts", async () => {
 		const fx = await start();
 		const item = async (id: string) => (await fx.get("/api/settings")).items.find((i: any) => i.id === id);

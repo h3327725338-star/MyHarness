@@ -3,15 +3,83 @@ import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 /** The execution role of a MyHarness session. */
 export type AgentRole = "main" | "delegated" | "reviewer";
 
+/** Capability level a delegated worker may run with; read-only is the historical default. */
+export type DelegatedCapabilities = "read-only" | "read-write";
+
 /** Read-only inspection tools available to ordinary delegated sessions. */
 export const DELEGATED_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "symbols"] as const;
+
+/**
+ * Read-write delegated tools: the read-only set plus the write tools the main agent's
+ * write configuration already ships with (`edit`, `write`, `pwsh`). Edits are still
+ * confined to the worker's own Git worktree by the delegated write guard.
+ */
+export const DELEGATED_WRITE_TOOL_NAMES = [...DELEGATED_TOOL_NAMES, "edit", "write", "pwsh"] as const;
+
 const delegatedToolNameSet = new Set<string>(DELEGATED_TOOL_NAMES);
+const delegatedWriteToolNameSet = new Set<string>(DELEGATED_WRITE_TOOL_NAMES);
 const MAIN_ROLE_POLICY = loadSystemPrompt("roles/main.md");
 const DELEGATED_ROLE_POLICY = loadSystemPrompt("roles/delegated.md");
+const DELEGATED_WRITE_ROLE_POLICY = loadSystemPrompt("roles/delegated-write.md");
+
+/**
+ * Tool names that dispatch more agents. A delegated session must never use them.
+ * Exact built-in names plus dispatch-related name fragments matched as substrings,
+ * so a future MCP or skill tool cannot dodge the rule by renaming or namespacing
+ * (e.g. `agent_x`, `subagent-run`, `mcp_server_run-agent`, `delegate_task`).
+ * None of the whitelisted inspection/write tool names contain these fragments.
+ */
+const NESTED_DISPATCH_TOOL_NAMES = new Set(["agent", "workflow", "ultracode", "subagent", "sub-agent", "sub_agent"]);
+const NESTED_DISPATCH_NAME_FRAGMENTS = [
+	"agent",
+	"subagent",
+	"sub-agent",
+	"sub_agent",
+	"workflow",
+	"ultracode",
+	"delegate",
+	"dispatch",
+];
+
+/** Marker embedded in every nested-dispatch rejection so callers can recognize it. */
+export const NESTED_DISPATCH_REJECT_MARKER = "[nested-dispatch-guard]";
+
+/** Process-local capability of a delegated worker; the Main process always stays "read-only". */
+let delegatedCapabilities: DelegatedCapabilities = "read-only";
+
+/** Configure the delegated tool boundary. Only a delegated worker process should ever set this. */
+export function setDelegatedCapabilities(capabilities: DelegatedCapabilities | undefined): void {
+	delegatedCapabilities = capabilities === "read-write" ? "read-write" : "read-only";
+}
+
+/** The capabilities currently active for delegated tool restriction in this process. */
+export function getDelegatedCapabilities(): DelegatedCapabilities {
+	return delegatedCapabilities;
+}
+
+/** The tool names the active delegated capability allows. */
+export function getDelegatedToolNames(capabilities?: DelegatedCapabilities): readonly string[] {
+	const mode = capabilities ?? delegatedCapabilities;
+	return mode === "read-write" ? DELEGATED_WRITE_TOOL_NAMES : DELEGATED_TOOL_NAMES;
+}
+
+/**
+ * Whether a tool name is an agent/workflow dispatch tool a delegated session
+ * must never run. Matches the built-in dispatch tools exactly and any tool
+ * whose name contains a dispatch fragment (defense against renamed or
+ * namespaced MCP/skill dispatch tools). Inspection/write tools never match.
+ */
+export function isNestedDispatchToolName(toolName: string): boolean {
+	const name = toolName.toLowerCase();
+	if (NESTED_DISPATCH_TOOL_NAMES.has(name)) return true;
+	return NESTED_DISPATCH_NAME_FRAGMENTS.some((fragment) => name.includes(fragment));
+}
 
 /** Preserve the existing reviewer-to-main policy mapping. */
 export function getAgentRolePrompt(agentRole: AgentRole): string {
-	if (agentRole === "delegated") return DELEGATED_ROLE_POLICY;
+	if (agentRole === "delegated") {
+		return delegatedCapabilities === "read-write" ? DELEGATED_WRITE_ROLE_POLICY : DELEGATED_ROLE_POLICY;
+	}
 	return MAIN_ROLE_POLICY;
 }
 
@@ -23,6 +91,7 @@ export function restrictToolNamesForRole(
 	if (agentRole === "main") {
 		return requestedToolNames === undefined ? undefined : [...requestedToolNames];
 	}
-	if (requestedToolNames === undefined) return [...DELEGATED_TOOL_NAMES];
-	return requestedToolNames.filter((name) => delegatedToolNameSet.has(name));
+	const allowed = delegatedCapabilities === "read-write" ? delegatedWriteToolNameSet : delegatedToolNameSet;
+	if (requestedToolNames === undefined) return [...getDelegatedToolNames()];
+	return requestedToolNames.filter((name) => allowed.has(name));
 }

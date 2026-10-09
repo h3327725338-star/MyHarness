@@ -130,7 +130,12 @@ import {
 import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager, type MemoryMaintenanceStatus } from "./auto-memory.ts";
 import type { CustomMessage } from "./messages.ts";
-import { type AgentRole, restrictToolNamesForRole } from "./role.ts";
+import {
+	type AgentRole,
+	isNestedDispatchToolName,
+	NESTED_DISPATCH_REJECT_MARKER,
+	restrictToolNamesForRole,
+} from "./role.ts";
 import {
 	type RunState,
 	type RunStateSnapshot,
@@ -831,6 +836,16 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			// Baseline: a delegated session never dispatches further agents, whatever
+			// name a future registration path (MCP, skills) gives such a tool. This
+			// check sits at the single runtime chokepoint every executed tool call
+			// passes through, so it cannot be bypassed from the tool list side.
+			if (this._agentRole === "delegated" && isNestedDispatchToolName(toolCall.name)) {
+				return {
+					block: true,
+					reason: `${NESTED_DISPATCH_REJECT_MARKER} Delegated sub-agents must not dispatch further sub-agents. This call was rejected by the runtime: do the work yourself and continue the task.`,
+				};
+			}
 			try {
 				await this._prepareGitCheckpointToolMutation({
 					type: "tool_execution_start",
@@ -1522,9 +1537,13 @@ export class AgentSession {
 		this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
 	}
 
-	/** Enable or disable the built-in inspection sub-agent tool for subsequent turns. */
+	/**
+	 * Apply the Sub Agent settings (enabled flag and read-only/read-write mode) to subsequent turns: the delegation
+	 * tool definitions are rebuilt so the Main Agent sees the capability that will really be used.
+	 */
 	setSubAgentEnabled(enabled: boolean): void {
-		this.setActiveToolsByName(this._tools.withSubAgentTools(this.getActiveToolNames(), enabled));
+		this._tools.rebuildDelegationDefinitions();
+		this._refreshToolRegistry({ activeToolNames: this._tools.withSubAgentTools(this.getActiveToolNames(), enabled) });
 	}
 
 	/** Rebuild the built-in registry after a global setting changes in the current task. */

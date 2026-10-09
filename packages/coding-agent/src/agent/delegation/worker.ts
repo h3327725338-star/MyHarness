@@ -6,6 +6,7 @@ import { flushRawStdout, restoreStdout, takeOverStdout, writeRawStdout } from ".
 import { resolveCliModel } from "../../providers/runtime/model-resolver.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { parseArgs } from "../../startup/args.ts";
+import { setDelegatedCapabilities } from "../runtime/role.ts";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../runtime/services.ts";
 
 /**
@@ -37,6 +38,12 @@ export function parseDelegatedWorkerLine(line: string): { type: "prompt" | "stee
 export async function runDelegatedWorker(args: string[]): Promise<void> {
 	takeOverStdout();
 	try {
+		// The parent process declares this worker's capability through the
+		// environment. Anything but the explicit "read-write" value stays on the
+		// historical read-only tool boundary.
+		setDelegatedCapabilities(
+			process.env.MYHARNESS_INTERNAL_DELEGATED_MODE === "read-write" ? "read-write" : "read-only",
+		);
 		const parsed = parseArgs(args);
 		const cwd = process.cwd();
 		const agentDir = getAgentDir();

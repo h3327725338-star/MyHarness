@@ -67,6 +67,8 @@ interface SettingDef {
 	note?: string;
 	/** Range of the inline whole-number field shown on a `modelRef` row (sub-agent task cap). */
 	inlineNumber?: { min: number; max: number };
+	/** `modelRef` only: a small selector shown before the enable toggle (sub-agent capability mode). */
+	modeSelect?: { options: Array<{ value: string; label: string }> };
 	/** `numberUnit` only: the units the typed number can be read in; the first matching one is how the value is shown. */
 	units?: NumberUnitOption[];
 	/** `numberUnit` only: what to tell the user when the typed number is out of range. */
@@ -367,10 +369,24 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				id: "subAgent",
 				section: "Assistants",
 				label: "Sub-agents (Explore)",
-				description: "Allow the agent to delegate read-only investigation to sub-agents.",
+				description:
+					subAgent.mode === "read-write"
+						? "Let sub-agents edit files and run commands, each limited to its own worktree."
+						: "Allow the agent to delegate read-only investigation to sub-agents.",
 				type: "modelRef",
-				value: { ...modelRef(subAgent), enabled: subAgent.enabled, maxTasks: subAgent.maxTasks },
+				value: {
+					...modelRef(subAgent),
+					enabled: subAgent.enabled,
+					maxTasks: subAgent.maxTasks,
+					mode: subAgent.mode,
+				},
 				note: "enabled",
+				modeSelect: {
+					options: [
+						{ value: "read-only", label: "Read only" },
+						{ value: "read-write", label: "Read & write" },
+					],
+				},
 				inlineNumber: { min: SUB_AGENT_SETTING_RANGES.maxTasks.min, max: SUB_AGENT_SETTING_RANGES.maxTasks.max },
 			},
 			{
@@ -881,9 +897,14 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 								SUB_AGENT_SETTING_RANGES.maxTasks.max,
 							);
 				if (!Number.isInteger(maxTasks)) throw new HttpError(400, '"subAgent.maxTasks" must be a whole number');
+				const rawMode = (value as { mode?: unknown } | undefined)?.mode;
+				if (rawMode !== undefined && rawMode !== "read-only" && rawMode !== "read-write") {
+					throw new HttpError(400, '"subAgent.mode" must be "read-only" or "read-write"');
+				}
 				s.setSubAgentSettings({
 					...current,
 					enabled,
+					mode: rawMode === undefined ? current.mode : (rawMode as "read-only" | "read-write"),
 					provider: ref.provider,
 					model: ref.model,
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,

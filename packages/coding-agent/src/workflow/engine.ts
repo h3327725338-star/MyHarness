@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Static, Type } from "typebox";
+import type { SubAgentMode } from "../config/settings/types.ts";
 import type { RuntimeTrace, RuntimeTraceScope } from "../observability/runtime-trace.ts";
 import type { BusinessToolDefinition } from "../tools/contracts/index.ts";
 import {
@@ -19,42 +20,54 @@ import { wrapToolDefinition } from "../tools/tool-definition-wrapper.ts";
 import { FULL_TEXT_OUTPUT } from "../tools/tool-result-persistence.ts";
 import { INVESTIGATION_TOOL_PROFILES, type InvestigationToolKind } from "../ultracode/profile.ts";
 
-const workflowTaskSchema = Type.Object({
-	description: Type.String({
-		description: "Short name for this read-only investigation task",
-	}),
-	prompt: Type.String({
-		description:
-			"Clearly describe the investigation scope, the facts to confirm, and the evidence to return; must not require modifying files",
-	}),
-	goal: Type.Optional(Type.String({ description: "The bounded question this task must answer" })),
-	scope: Type.Optional(Type.Array(Type.String(), { description: "Files, modules, or runtime areas in scope" })),
-	questions: Type.Optional(
-		Type.Array(Type.String(), {
+function createInvestigationTaskSchema(mode: SubAgentMode) {
+	return Type.Object({
+		description: Type.String({
 			description:
-				'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
+				mode === "read-write"
+					? "Short name for this investigation task"
+					: "Short name for this read-only investigation task",
 		}),
-	),
-	expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
-	stopConditions: Type.Optional(Type.Array(Type.String(), { description: "Conditions for stopping" })),
-});
+		prompt: Type.String({
+			description:
+				mode === "read-write"
+					? "Clearly describe the investigation scope, the facts to confirm, and the evidence to return; in the current read-write mode a task may also ask the sub-agent to edit files or run commands, but only inside its own Git worktree and it never commits"
+					: "Clearly describe the investigation scope, the facts to confirm, and the evidence to return; must not require modifying files",
+		}),
+		goal: Type.Optional(Type.String({ description: "The bounded question this task must answer" })),
+		scope: Type.Optional(Type.Array(Type.String(), { description: "Files, modules, or runtime areas in scope" })),
+		questions: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					'Specific questions to answer; the report must answer each one and end with a "## Completion checklist" section, otherwise the task is returned as partial',
+			}),
+		),
+		expectedOutput: Type.Optional(Type.String({ description: "Expected evidence-oriented output" })),
+		stopConditions: Type.Optional(Type.Array(Type.String(), { description: "Conditions for stopping" })),
+	});
+}
 
-const workflowPhaseSchema = Type.Object({
-	name: Type.String({
-		description: 'Phase name, e.g. "Investigate", "Verify", "Cross-check"',
-	}),
-	tasks: Type.Array(workflowTaskSchema, {
-		description: "Read-only Explore tasks run in parallel within this phase",
-		minItems: 1,
-	}),
-});
+function createInvestigationPhaseSchema(mode: SubAgentMode) {
+	return Type.Object({
+		name: Type.String({
+			description: 'Phase name, e.g. "Investigate", "Verify", "Cross-check"',
+		}),
+		tasks: Type.Array(createInvestigationTaskSchema(mode), {
+			description:
+				mode === "read-write"
+					? "Explore tasks run in parallel within this phase"
+					: "Read-only Explore tasks run in parallel within this phase",
+			minItems: 1,
+		}),
+	});
+}
 
-function createInvestigationSchema(minPhases: number) {
+function createInvestigationSchema(minPhases: number, mode: SubAgentMode = "read-only") {
 	return Type.Object({
 		name: Type.String({
 			description: "Short name for the workflow",
 		}),
-		phases: Type.Array(workflowPhaseSchema, {
+		phases: Type.Array(createInvestigationPhaseSchema(mode), {
 			description: "Phases executed in order; each phase may run multiple tasks in parallel",
 			minItems: minPhases,
 		}),
@@ -151,11 +164,11 @@ function cloneDetails(details: WorkflowToolDetails): WorkflowToolDetails {
 	};
 }
 
-function isUsableTaskResult(result: ExploreTaskResult): boolean {
+function isUsableTaskResult(result: ExploreTaskResult, mode: SubAgentMode): boolean {
 	if (result.status === "completed") return true;
 	if (result.status !== "partial" && result.status !== "timeout") return false;
 	return (
-		hasSuccessfulInvestigationEvidence(result.transcript) ||
+		hasSuccessfulInvestigationEvidence(result.transcript, mode) ||
 		Boolean(result.evidence?.length || result.findings?.length)
 	);
 }
@@ -172,6 +185,7 @@ function finalizeUnsettledPhaseTasks(
 	status: Exclude<WorkflowTerminalStatus, "completed">,
 	error: string,
 	model: string | undefined,
+	mode: SubAgentMode,
 ): void {
 	phase.results = tasks.map((task, index) => {
 		const current = phase.results[index];
@@ -193,7 +207,7 @@ function finalizeUnsettledPhaseTasks(
 		};
 	});
 	phase.completed = phase.results.filter((task) => task.status === "completed").length;
-	phase.usable = phase.results.filter(isUsableTaskResult).length;
+	phase.usable = phase.results.filter((task) => isUsableTaskResult(task, mode)).length;
 	phase.findings = phase.results.reduce((count, task) => count + (task.findings?.length ?? 0), 0);
 }
 
@@ -230,19 +244,72 @@ The structured, bounded results of the previous phase "${previousPhase.name}" we
 Read this summary before starting. Use its findings, evidence, conflicts, covered scope, and unresolved items as the starting point. Do not rescan the whole repository; only perform targeted checks for unresolved or conflicting points.`;
 }
 
+/**
+ * Read-write capability wording for the shared investigation tool prompts.
+ * The read-only mode keeps every historical string untouched; only read-write
+ * re-describes the clauses that would otherwise forbid sub-agent edits.
+ */
+const READ_WRITE_CAPABILITY_WORDING: ReadonlyArray<readonly [string, string]> = [
+	["multiple read-only Explores", "multiple Explores"],
+	[
+		"sub-agents may not modify files or create further agents",
+		"sub-agents never start further agents; in the current read-write mode each may edit only inside its own Git worktree and never commits or pushes",
+	],
+	["read-only multi-Agent workflow", "multi-Agent workflow"],
+	["read-only workflow for complex tasks", "workflow for complex tasks"],
+	["multiple nonoverlapping read-only tasks", "multiple nonoverlapping tasks"],
+	[
+		"Workflow sub-Agents may investigate only; they must not modify files or create lower-level Agents. The Main Agent performs all modifications personally after workflow returns.",
+		"In read-write mode each Workflow sub-agent may edit files and run commands only inside its own Git worktree and never starts lower-level Agents; its result reports the worktree path, branch and changed files. The Main Agent reviews those changes and performs any commit.",
+	],
+	[
+		"All sub-Agents may only investigate, read, search, and run verification commands that do not modify the project. They must not modify files or create lower-level Agents. The Main Agent performs all modifications, then must call Ultracode again for independent verification and run necessary type checks, tests, or builds.",
+		"In read-write mode each sub-agent may edit files and run commands only inside its own Git worktree and never starts lower-level Agents; its result reports the worktree path, branch and changed files. The Main Agent reviews those changes, performs any commit, and must call Ultracode again for independent verification and run necessary type checks, tests, or builds.",
+	],
+];
+
+function withCapabilityWording(text: string, mode: SubAgentMode): string {
+	if (mode !== "read-write") return text;
+	return READ_WRITE_CAPABILITY_WORDING.reduce((current, [from, to]) => current.replace(from, to), text);
+}
+
+function normalizeSubAgentMode(mode: SubAgentMode | undefined): SubAgentMode {
+	return mode === "read-write" ? "read-write" : "read-only";
+}
+
+/**
+ * The read-only schema object is returned unchanged so the default mode keeps
+ * the historical tool protocol byte-for-byte; only read-write re-describes the
+ * task fields that would otherwise tell the Main Agent edits are impossible.
+ */
+function investigationSchemaFor<K extends InvestigationToolKind>(kind: K, mode: SubAgentMode): InvestigationSchema<K> {
+	if (mode !== "read-write") {
+		return (kind === "ultracode" ? ultracodeSchema : workflowSchema) as InvestigationSchema<K>;
+	}
+	return createInvestigationSchema(
+		INVESTIGATION_TOOL_PROFILES[kind].minPhases,
+		"read-write",
+	) as InvestigationSchema<K>;
+}
+
 export function createInvestigationToolDefinition<K extends InvestigationToolKind>(
 	cwd: string,
 	kind: K,
 	options?: WorkflowToolOptions,
 ): BusinessToolDefinition<InvestigationSchema<K>, WorkflowToolDetails> {
 	const profile = INVESTIGATION_TOOL_PROFILES[kind];
-	const parameters = (kind === "ultracode" ? ultracodeSchema : workflowSchema) as InvestigationSchema<K>;
+	const settingsAtBuild = options?.getSettings?.();
+	const modeAtBuild = normalizeSubAgentMode(settingsAtBuild?.mode);
+	const parameters = investigationSchemaFor(kind, modeAtBuild);
+	// Read-only profiles keep their historical wording verbatim; only the
+	// capability clauses change when the Sub Agent mode is read-write.
+	const description = withCapabilityWording(profile.description, modeAtBuild);
 	return {
 		name: kind,
 		label: profile.label,
-		description: profile.description,
-		promptSnippet: profile.promptSnippet,
-		promptGuidelines: profile.promptGuidelines,
+		description,
+		promptSnippet: withCapabilityWording(profile.promptSnippet, modeAtBuild),
+		promptGuidelines: profile.promptGuidelines.map((line) => withCapabilityWording(line, modeAtBuild)),
 		parameters,
 		executionMode: "sequential",
 		async execute(toolCallId, params, signal, onUpdate) {
@@ -478,7 +545,9 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 
 					phaseDetails.results = result.details.results.map(cloneResult);
 					const successfulTasks = phaseDetails.results.filter((task) => task.status === "completed").length;
-					const usableTasks = phaseDetails.results.filter(isUsableTaskResult).length;
+					const usableTasks = phaseDetails.results.filter((task) =>
+						isUsableTaskResult(task, normalizeSubAgentMode(runtimeSettings.mode)),
+					).length;
 					phaseDetails.completed = successfulTasks;
 					phaseDetails.usable = usableTasks;
 					phaseDetails.findings = phaseDetails.results.reduce(
@@ -578,6 +647,7 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 						terminalStatus,
 						message,
 						details.model,
+						normalizeSubAgentMode(runtimeSettings.mode),
 					);
 					if (activePhaseTraceScope) {
 						await recordTrace(activePhaseTraceScope, "phase-finished", {
