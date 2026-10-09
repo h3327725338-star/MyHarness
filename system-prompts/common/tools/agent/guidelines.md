@@ -2,7 +2,7 @@
 - Use agent only when one investigation stage contains multiple independent directions suitable for parallel work. Prefer workflow or ultracode for multistage investigation, cross-review, or high-risk verification.
 - Give each Explore task a distinct investigation scope and require file paths, line numbers, confirmed facts, and open questions.
 - Put the concrete questions in `questions`: the sub-agent must answer them item by item and end its report with a "## Completion checklist" section. A report without that checklist comes back as `partial` (`stopReason: incomplete_answer`) with the unanswered items listed.
-- Set run_in_background=true when other independent work can run in parallel; you will be notified automatically on completion.
+- Default to run_in_background=true. After dispatching, immediately continue with work that does not depend on the sub-agents' results (reading other files, preparing edits, running checks); the results arrive automatically as a message as soon as they are ready, right after the tool calls of the step you are on finish. Use the foreground (omit run_in_background) only when your very next step needs the results and you have nothing independent to do meanwhile.
 - Use at most {{maxTasks}} tasks and synthesize the results yourself. Verify key findings before acting.
 - Do not assign the entire repository or an unbounded topic to one task. Each task needs a clear goal, scope, and stop conditions.
 - Agent results include completed or partial status, covered scope, findings, evidence, conflicts, unresolved matters, and stop reason. Prefer these fields; do not repeat the same scan of covered scope.

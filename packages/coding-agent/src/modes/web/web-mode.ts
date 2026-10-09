@@ -187,6 +187,8 @@ export async function runWebMode(
 	const restartArguments = [...process.execArgv];
 	const restartEntry = process.argv[1]!;
 	const hub = new WebHostHub({ server, version: VERSION, onShutdown: () => void shutdown(0) });
+	/** Anything still running: routes that stop or replace the process must wait for it. */
+	const hasActiveWork = () => hub.all().some((slot) => !slot.session.isIdle || slot.completionActive || slot.gitTask);
 	bootstrap.addDialogResponder((id, value) => hub.respondToDialog(id, value));
 	const host = hub.host;
 	registerCoreRoutes(server, host);
@@ -202,7 +204,8 @@ export async function runWebMode(
 	const terminals = new WebTerminals((event, data) => server.broadcast(event, data));
 	registerTerminalRoutes(server, host, terminals);
 
-	// The server belongs to its browser pages: once the last one is gone for the grace period, it exits.
+	// The server belongs to its browser pages: once the last one is gone for the grace period, it exits — but never
+	// in the middle of running work; the countdown waits for the task to settle before it fires.
 	const lifecycle = new WebLifecycle({
 		getGraceSeconds: () => {
 			if (!copyIdentity) return runtimeHost.services.settingsManager.getWebShutdownGraceSeconds();
@@ -216,6 +219,7 @@ export async function runWebMode(
 			return runtimeHost.services.settingsManager.getWorktreeShutdownGraceSeconds();
 		},
 		onExpire: () => void shutdown(0),
+		isBusy: hasActiveWork,
 	});
 	server.onClientCountChange = (count) => lifecycle.clientCountChanged(count);
 	// A page may have connected while the runtime was still starting.
@@ -287,9 +291,7 @@ export async function runWebMode(
 	};
 	server.route("POST", "/api/restart", () => {
 		if (shuttingDown) throw new Error("The service is already stopping.");
-		if (hub.all().some((slot) => !slot.session.isIdle || slot.completionActive || slot.gitTask)) {
-			throw new Error("Stop running tasks before restarting the service.");
-		}
+		if (hasActiveWork()) throw new Error("Stop running tasks before restarting the service.");
 		const manager = host.session.sessionManager;
 		if (manager.isPersisted() && host.session.sessionFile && !existsSync(host.session.sessionFile)) {
 			manager.appendCustomMessageEntry("web-service-restart", "Service restart", true, undefined, true);

@@ -10,7 +10,7 @@ import {
 	type ThinkingLevel,
 	trimCodexRemoteToolOutputs,
 } from "@myharness/agent-core";
-import { estimateMessageTokens } from "@myharness/ai";
+import { type AssistantMessage, contentText, estimateMessageTokens } from "@myharness/ai";
 import { clampThinkingLevel, completeSimple, isContextOverflow, type Model, type Usage } from "@myharness/ai/compat";
 import { convertToLlm } from "../../agent/runtime/messages.ts";
 import { buildSessionContext } from "../../session/projection/index.ts";
@@ -99,6 +99,9 @@ export function prepareCompaction(
 		settings,
 	};
 }
+function hasSummaryText(response: AssistantMessage): boolean {
+	return contentText(response.content, "\n").trim().length > 0;
+}
 export async function compact(
 	preparation: CompactionPreparation,
 	model: Model<any>,
@@ -159,8 +162,27 @@ export async function compact(
 		isOverflow: (response) => isContextOverflow(response, model.contextWindow),
 		complete: async (messages) => {
 			const context = { systemPrompt, messages };
-			const options = { apiKey, headers, env, signal, ...(reasoning && reasoning !== "off" ? { reasoning } : {}) };
-			return streamFn ? (await streamFn(model, context, options)).result() : completeSimple(model, context, options);
+			const request = async (effort: typeof reasoning) => {
+				const options = {
+					apiKey,
+					headers,
+					env,
+					signal,
+					...(effort && effort !== "off" ? { reasoning: effort } : {}),
+				};
+				return streamFn
+					? (await streamFn(model, context, options)).result()
+					: completeSimple(model, context, options);
+			};
+			const response = await request(reasoning);
+			if (response.stopReason === "error" || response.stopReason === "aborted" || hasSummaryText(response))
+				return response;
+			// A reasoning model that inherited the main chat effort can spend the whole answer on thinking and leave no
+			// text. Ask once more without reasoning before giving up, so an empty checkpoint is never written.
+			const retried = reasoning && reasoning !== "off" ? await request(undefined) : response;
+			if (retried.stopReason !== "error" && retried.stopReason !== "aborted" && !hasSummaryText(retried))
+				throw Object.assign(new Error("Compaction returned an empty summary"), { terminal: true });
+			return retried;
 		},
 	});
 	return {

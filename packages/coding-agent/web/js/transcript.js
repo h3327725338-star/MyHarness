@@ -518,7 +518,7 @@ function Standalone({ item, task, snap, runs, processDefault }) {
 	if (item.kind === "compaction" || item.kind === "branchSummary") {
 		const title = item.kind === "compaction" ? (item.tokensBefore ? t("Context compacted (was ~{tokens} tokens)", { tokens: fmtTokens(item.tokensBefore) }) : t("Context compacted")) : t("Returned from another branch");
 		return html`<div class="marker"><button class="marker-head" onClick=${() => setOpen(!open)} aria-expanded=${open}><span class="marker-line" /><span class="marker-text"><${Icon} name=${item.kind === "compaction" ? "layers" : "gitBranch"} size=${13} /> ${title}<${Fold} /></span><span class="marker-line" /></button>
-			<${Collapse} open=${open}><div class="marker-body"><${Markdown} text=${item.summary} /></div><//></div>`;
+			<${Collapse} open=${open}><div class="marker-body">${item.summary?.trim() ? html`<${Markdown} text=${item.summary} />` : html`<div class="dim">${t("This compaction saved no readable summary.")}</div>`}</div><//></div>`;
 	}
 	if (item.kind === "reload") return html`<div class="marker"><span class="marker-text">${item.ok ? t("Configuration reloaded") : t("Reload failed: {error}", { error: item.error })}</span></div>`;
 	if (item.kind === "custom") {

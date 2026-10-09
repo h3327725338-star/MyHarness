@@ -285,7 +285,11 @@ export class WebHttpServer {
 			this.onSseDisconnect?.(client);
 		});
 		this.onClientCountChange?.(this.sseClients.size);
-		this.onSseConnect?.(client);
+		try {
+			this.onSseConnect?.(client);
+		} catch {
+			// The connect-time snapshot failed; keep the stream open (the page refreshes its state on every connect).
+		}
 	}
 
 	private async readJson(req: IncomingMessage): Promise<unknown> {

@@ -26,6 +26,7 @@ const {
 	unitValueToStored,
 } = await import(new URL("util.js", webDir).href);
 const { byUsage, rankSearch, searchTier } = await import(new URL("search.js", webDir).href);
+const { createSseWatchdog, isDeadStream } = await import(new URL("sse-watchdog.js", webDir).href);
 
 const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	kind: "assistant",
@@ -1327,5 +1328,82 @@ describe("Web UI: the composer draft drawn as Markdown", async () => {
 		const emoji = text.indexOf("👍");
 		expect(deletionRange(text, emoji + 4, "deleteContentBackward")).toEqual([emoji, emoji + 4]);
 		expect(deletionRange(text, 0, "deleteContentBackward")).toEqual([0, 0]);
+	});
+});
+
+describe("SSE reconnect watchdog", () => {
+	const fakeTimers = () => {
+		const queue: Array<{ at: number; run: () => void }> = [];
+		let now = 0;
+		return {
+			setTimeoutFn: (run: () => void, ms: number) => {
+				const item = { at: now + ms, run };
+				queue.push(item);
+				return item;
+			},
+			clearTimeoutFn: (handle: unknown) => {
+				const index = queue.indexOf(handle as { at: number; run: () => void });
+				if (index >= 0) queue.splice(index, 1);
+			},
+			advance(ms: number) {
+				now += ms;
+				for (const item of [...queue]) {
+					if (item.at <= now) {
+						queue.splice(queue.indexOf(item), 1);
+						item.run();
+					}
+				}
+			},
+		};
+	};
+
+	it("recognizes streams that will never produce events again", () => {
+		expect(isDeadStream(null)).toBe(true);
+		expect(isDeadStream(undefined)).toBe(true);
+		expect(isDeadStream({ readyState: 2 })).toBe(true); // EventSource.CLOSED
+		expect(isDeadStream({ readyState: 0 })).toBe(false); // CONNECTING: the browser still retries
+		expect(isDeadStream({ readyState: 1 })).toBe(false); // OPEN
+	});
+
+	it("rebuilds only a permanently failed stream, once, after the delay", () => {
+		let closed = true;
+		let rebuilds = 0;
+		const timers = fakeTimers();
+		const dog = createSseWatchdog({ isClosed: () => closed, rebuild: () => rebuilds++, ...timers });
+		dog.watch(); // not closed? it is closed
+		closed = false;
+		dog.watch(); // an alive stream is left to the browser's own retry
+		expect(rebuilds).toBe(0);
+		closed = true;
+		timers.advance(3000);
+		expect(rebuilds).toBe(1);
+		dog.watch();
+		closed = true;
+		timers.advance(3000);
+		expect(rebuilds).toBe(2);
+	});
+
+	it("skips the rebuild when a healthy stream reopened before the timer, and revive acts at once", () => {
+		let closed = true;
+		let rebuilds = 0;
+		const timers = fakeTimers();
+		const dog = createSseWatchdog({ isClosed: () => closed, rebuild: () => rebuilds++, ...timers });
+		dog.watch();
+		closed = false; // the browser's own retry won
+		timers.advance(3000);
+		expect(rebuilds).toBe(0);
+		closed = true;
+		dog.revive();
+		expect(rebuilds).toBe(1);
+	});
+
+	it("revive cancels a pending timer so the rebuild happens exactly once", () => {
+		let rebuilds = 0;
+		const timers = fakeTimers();
+		const dog = createSseWatchdog({ isClosed: () => true, rebuild: () => rebuilds++, ...timers });
+		dog.watch();
+		dog.revive();
+		timers.advance(10_000);
+		expect(rebuilds).toBe(1);
 	});
 });

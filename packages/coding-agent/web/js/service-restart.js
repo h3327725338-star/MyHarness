@@ -13,14 +13,18 @@ export async function restartService() {
 		if (!confirmed) return;
 		set({ restartError: null, restartPhase: "requesting", restarting: true });
 		const expected = state.snap?.session?.id;
-		const before = await api("/api/boot", { slot: "" });
+		const before = await api("/api/boot", { slot: "", timeoutMs: 3000 });
 		await post("/api/restart");
 		set({ restartPhase: "waiting" });
 		const deadline = Date.now() + 90000;
 		while (Date.now() < deadline) {
 			await new Promise((done) => setTimeout(done, 500));
 			let boot;
-			try { boot = await api("/api/boot", { slot: "" }); } catch { continue; }
+			try {
+				boot = await api("/api/boot", { slot: "", timeoutMs: 3000 });
+			} catch {
+				continue;
+			}
 			if (boot.instanceId === before.instanceId) continue;
 			if (boot.phase === "error") throw new Error(boot.detail || t("Service restart failed."));
 			if (boot.phase !== "ready") {
@@ -29,7 +33,7 @@ export async function restartService() {
 			}
 			set({ restartPhase: "restoring" });
 			// Replace obsolete slot IDs before the normal reconnect refresh reads them.
-			const snap = await api("/api/state", { slot: "" });
+			const snap = await api("/api/state", { slot: "", timeoutMs: 8000 });
 			if (expected && snap.session?.id !== expected) throw new Error(t("The service restarted, but the original chat could not be restored."));
 			saveRestartState(expected, { ...state.view, selectedTerminal: null });
 			location.reload();

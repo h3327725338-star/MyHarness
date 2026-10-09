@@ -83,7 +83,7 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const app=document.getElementById('app');
 try {
  document.documentElement.dataset.motion='on';
- setView({lang:'zh-CN',motion:'on',expanded:{'<general>':true,'<archived>':true}});
+ setView({lang:'zh-CN',motion:'on',expanded:{'<general>':true}});
  await loadWorkspaces(); render(h(Sidebar),app); await wait(400);
  const row=document.querySelector('.chat-row');
  if(!row) throw Error('saved row missing');
@@ -100,13 +100,24 @@ try {
  if(draft.isConnected) throw Error('blank draft not removed');
  row.querySelector('button').click(); await wait(100);
  const archive=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='归档');
- if(!archive) throw Error('archive menu missing'); archive.click(); await wait(100);
- const height=row.closest('.collapse').getBoundingClientRect().height;
- if(height<=0 || height>=34) throw Error('archive exit hard cut: '+height);
- await wait(500);
+ if(!archive) throw Error('archive menu missing'); archive.click();
+ let folded=false;
+ for(let i=0;i<24;i++){
+  await wait(25);
+  const h=row.closest('.collapse')?.getBoundingClientRect().height ?? 0;
+  if(h<=0) break;
+  if(h<33) folded=true;
+ }
+ if(!folded) throw Error('archive exit hard cut');
+ await wait(400);
+ if(document.querySelector('.chat-row')) throw Error('archived row still listed after archive');
+ const archiveGroup=[...document.querySelectorAll('.ws-row')].find(r=>r.textContent.includes('已归档对话'));
+ if(!archiveGroup) throw Error('archive entry missing');
+ archiveGroup.click(); await wait(400);
  const rows=[...document.querySelectorAll('.chat-row')];
- if(rows.length!==1 || !rows[0].closest('.ws').textContent.includes('归档')) throw Error('archive membership wrong');
+ if(rows.length!==1 || !rows[0].closest('.ws').textContent.includes('已归档对话')) throw Error('archive membership wrong');
  await actions.archiveSession('C:/fixture/chat.jsonl',false); await wait(400);
+ if([...document.querySelectorAll('.ws-row')].some(r=>r.textContent.includes('已归档对话'))) throw Error('archive entry not removed after last restore');
  const deletion=actions.deleteSession('C:/fixture/chat.jsonl','Saved chat'); await wait(30);
  if(state.view.dialog?.confirmLabel!=='删除') throw Error('confirmation missing');
  resolveConfirm(true); await deletion; await wait(400);

@@ -479,6 +479,8 @@ export class AgentSession {
 	private _resolvePromptAdmission: (() => void) | undefined;
 	private _emittingAgentSettled = false;
 	private _abortRequested = false;
+	/** Wakes the final answer's wait for background Explore batches (see _holdForBackgroundExplore). */
+	private _wakeBackgroundWait: (() => void) | undefined;
 
 	// Hot-rebuild state: last error encountered while reloading model configuration
 	private _lastReloadError?: string;
@@ -571,8 +573,14 @@ export class AgentSession {
 			sessionManager: this.sessionManager,
 			isDisposed: () => this._disposed,
 			emitProgress: (progress) => this._emit({ type: "sub_agent_progress", progress }),
-			onBatchSettled: () => this._resolveIdleWaitIfIdle(),
-			deliverResult: (message) => this.sendCustomMessage(message, { triggerTurn: true, deliverAs: "followUp" }),
+			onBatchSettled: () => {
+				this._resolveIdleWaitIfIdle();
+				this._signalBackgroundWait();
+			},
+			// A running main Agent gets the result as soon as its current turn (and the tool calls of that turn) has
+			// finished, before its next model request. A follow-up would wait until the Agent stops by itself, which a
+			// long tool loop never does.
+			deliverResult: (message) => this.sendCustomMessage(message, { triggerTurn: true, deliverAs: "steer" }),
 		});
 		const workflowToolOptions = {
 			getSettings: () => this._subAgentSettings(),
@@ -1053,7 +1061,9 @@ export class AgentSession {
 				reason: "interrupted",
 			} satisfies RunTerminalOutcome);
 		this._runStateTracker.setTerminalReason(terminal.reason);
-		// Whatever the outcome (completed, cancelled, failed), the task is over and so is everything it started.
+		// Whatever the outcome (completed, cancelled, failed), the task is over and so is everything it started. A task
+		// that completed normally has already waited for its background Explore batches (_holdForBackgroundExplore);
+		// what is still running here belongs to a task that failed or was stopped, or is a workflow.
 		this._backgroundWork.cancel();
 		this._setRunState(terminal.state, terminal.activity, {
 			error: terminal.error,
@@ -1355,6 +1365,7 @@ export class AgentSession {
 		this._runtimeGeneration += 1;
 		this._requestTiming.reset();
 		this._backgroundWork.dispose();
+		this._signalBackgroundWait();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1934,8 +1945,53 @@ export class AgentSession {
 		const outcome = terminalOutcomeFromAssistant(msg);
 		// A failed request is reported with its cause and what to do, never as a bare status code.
 		if (msg.stopReason === "error") outcome.error = this._fallbackFailure ?? explainProviderError(msg.errorMessage);
+		// The model gave its final answer, but background Explore batches it started have not reported back yet.
+		if (outcome.state === "completed") {
+			const held = await this._holdForBackgroundExplore();
+			if (held === "continue") return true;
+			if (held === "stopped") {
+				this._runStateTracker.terminal = {
+					state: "cancelled",
+					activity: "任务已取消",
+					error: "任务已取消",
+					reason: "user-cancelled",
+				};
+				return false;
+			}
+		}
 		this._runStateTracker.terminal = outcome;
 		return false;
+	}
+
+	/** Wake the wait of _holdForBackgroundExplore, if one is in progress. */
+	private _signalBackgroundWait(): void {
+		const wake = this._wakeBackgroundWait;
+		this._wakeBackgroundWait = undefined;
+		wake?.();
+	}
+
+	/**
+	 * The model finished answering while background Explore batches are still running. Their results belong to this
+	 * task, so it stays open (settling would cancel them) until each batch has reported back: the result arrives as a
+	 * queued steering message, and the caller runs one more turn on it. "continue": such a continuation (or a message
+	 * from the user) is waiting. "stopped": the user stopped the task while it waited. "none": nothing to wait for, or
+	 * everything came back without a queued message (a discarded result); the task settles as usual.
+	 */
+	private async _holdForBackgroundExplore(): Promise<"none" | "continue" | "stopped"> {
+		if (this._backgroundWork.runningExploreCount === 0) return "none";
+		while (
+			!this._disposed &&
+			!this._abortRequested &&
+			this._backgroundWork.runningExploreCount > 0 &&
+			!this.agent.hasQueuedMessages()
+		) {
+			this._setRunState("waiting", "等待子智能体");
+			await new Promise<void>((resolve) => {
+				this._wakeBackgroundWait = resolve;
+			});
+		}
+		if (this._abortRequested) return "stopped";
+		return !this._disposed && this.agent.hasQueuedMessages() ? "continue" : "none";
 	}
 
 	/**
@@ -2244,6 +2300,7 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		});
+		this._signalBackgroundWait();
 	}
 
 	/**
@@ -2261,6 +2318,7 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		});
+		this._signalBackgroundWait();
 	}
 
 	/**
@@ -2324,6 +2382,7 @@ export class AgentSession {
 			} else {
 				this.agent.steer(appMessage);
 			}
+			this._signalBackgroundWait();
 		} else if (options?.triggerTurn) {
 			await this._runAgentPrompt(appMessage);
 		} else {
@@ -2430,6 +2489,7 @@ export class AgentSession {
 	async abort(): Promise<void> {
 		if (this._isAgentRunActive) this._abortRequested = true;
 		this._backgroundWork.cancel();
+		this._signalBackgroundWait();
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBash();

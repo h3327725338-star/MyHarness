@@ -29,7 +29,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `event-parser.ts` | 解析子进程（Sub-agent）输出的 JSON 事件流，供 `tools/sub-agent.ts` 使用 |
-| `background-work.ts` | `SessionBackgroundWork`：一个会话的主任务启动的后台工作（后台 Explore 批次、运行中的 workflow/ultracode）。登记、进度限流、主任务结束时一并取消、批次完成后把结果交回模型 |
+| `background-work.ts` | `SessionBackgroundWork`：一个会话的主任务启动的后台工作（后台 Explore 批次、运行中的 workflow/ultracode）。登记、进度限流、批次完成后把结果交回模型；主任务失败、被停止时一并取消。主任务想正常收尾而后台 Explore 批次还没回来时，由 `AgentSession`（`_holdForBackgroundExplore`）保持任务打开，等结果回来再跑一轮后才结算 |
 
 ### vision/
 

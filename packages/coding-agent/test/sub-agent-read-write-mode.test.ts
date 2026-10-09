@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -620,5 +620,88 @@ describe("read-write batch end-to-end through the fake delegated worker", () => 
 		expect(existsSync(join(agentDir, "worktrees"))).toBe(false);
 		// The read-only transcript still validates as before.
 		expect(result.details.results[0].status).toBe("completed");
+	});
+
+	it("hands the worker the workspace's uncommitted files and tells it what could not be carried over", async () => {
+		const { repoDir, agentDir } = makeRepository();
+		// Uncommitted work of the dispatching workspace, plus a nested repository that cannot be copied as a file.
+		writeFileSync(join(repoDir, "a.txt"), "edited but not committed\n", "utf8");
+		writeFileSync(join(repoDir, "untracked.txt"), "only on disk\n", "utf8");
+		mkdirSync(join(repoDir, "nested-repo"));
+		expect(initializeGitRepository(join(repoDir, "nested-repo")).ok).toBe(true);
+		writeFileSync(join(repoDir, "nested-repo", "inner.txt"), "inner\n", "utf8");
+
+		const scratch = mkdtempSync(join(tmpdir(), "myharness-rw-e2e-snapshot-"));
+		createdDirectories.push(scratch);
+		const entryPath = join(scratch, "worker.mjs");
+		const dumpPath = join(scratch, "seen.json");
+		// The fake worker reports what it can see in its own cwd and which prompt line the parent sent it.
+		writeFileSync(
+			entryPath,
+			[
+				'import { existsSync, readFileSync, writeFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				'let input = "";',
+				'process.stdin.setEncoding("utf8");',
+				'process.stdin.on("data", (chunk) => {',
+				"  input += chunk;",
+				'  if (!input.includes("\\n")) return;',
+				"  process.stdin.pause();",
+				`  writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({`,
+				'    a: readFileSync(join(process.cwd(), "a.txt"), "utf8"),',
+				'    untracked: existsSync(join(process.cwd(), "untracked.txt")),',
+				'    nested: existsSync(join(process.cwd(), "nested-repo")),',
+				'    prompt: JSON.parse(input.split("\\n")[0]).text,',
+				"  }));",
+				'  const event = { type: "agent_end", messages: [',
+				'    { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }], timestamp: 1 },',
+				'    { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 2 },',
+				'    { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 3 },',
+				"  ] };",
+				'  process.stdout.write(JSON.stringify(event) + "\\n", () => process.exit(0));',
+				"});",
+			].join("\n"),
+			"utf8",
+		);
+		process.env.MYHARNESS_CLI_ENTRY = entryPath;
+		process.env[ENV_AGENT_DIR] = agentDir;
+
+		const result = await runExploreBatch({
+			cwd: repoDir,
+			tasks: [{ description: "Look", prompt: "Look at the project." }],
+			settings: resolveSubAgentRuntimeSettings({
+				enabled: true,
+				provider: "p",
+				model: "m",
+				thinkingLevel: "off",
+				mode: "read-write",
+			}),
+		});
+
+		const seen = JSON.parse(readFileSync(dumpPath, "utf8")) as {
+			a: string;
+			untracked: boolean;
+			nested: boolean;
+			prompt: string;
+		};
+		// The worker works on the same files the Main Agent sees right now, not on the last commit.
+		expect(seen.a.replace(/\r\n/g, "\n")).toBe("edited but not committed\n");
+		expect(seen.untracked).toBe(true);
+		expect(seen.nested).toBe(false);
+		// It is told which uncommitted file is missing, and the Main Agent's report says so too.
+		expect(seen.prompt).toContain("Look at the project.");
+		expect(seen.prompt).toContain("Workspace snapshot notes");
+		expect(seen.prompt).toContain("nested-repo");
+		const task = result.details.results[0];
+		expect(task.status).toBe("completed");
+		expect(task.unresolved?.some((item) => item.includes("未带入 Worktree") && item.includes("nested-repo"))).toBe(
+			true,
+		);
+		// The imported files are not the worker's changes: an untouched worktree is still cleaned up.
+		expect(task.worktreePath).toBeUndefined();
+		expect(task.changedFiles).toBeUndefined();
+		// And the dispatching workspace keeps its own uncommitted state.
+		expect(readFileSync(join(repoDir, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("edited but not committed\n");
+		expect(runGit(repoDir, ["status", "--porcelain"]).stdout).toContain("untracked.txt");
 	});
 });

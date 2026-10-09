@@ -49,6 +49,29 @@ describe("Compact thinking adapter", () => {
 		);
 		expect(completeSimpleMock.mock.calls[0][2].reasoning).toBe("medium");
 	});
+	it("asks again without reasoning when the inherited effort leaves no summary text", async () => {
+		const thinkingOnly = {
+			...fauxAssistantMessage(""),
+			content: [{ type: "thinking" as const, thinking: "pondering" }],
+		};
+		completeSimpleMock
+			.mockReset()
+			.mockResolvedValueOnce(thinkingOnly)
+			.mockResolvedValueOnce(fauxAssistantMessage("summary"));
+		const result = await compact(preparation, model, "key", undefined, undefined, undefined, "high");
+		expect(result.summary).toBe("summary");
+		expect(result.replacementHistory?.at(-1)).toMatchObject({ role: "user" });
+		expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+		expect(completeSimpleMock.mock.calls[0][2].reasoning).toBe("high");
+		expect(completeSimpleMock.mock.calls[1][2].reasoning).toBeUndefined();
+	});
+	it.each(["off", "high"] as const)("rejects instead of writing an empty checkpoint (effort %s)", async (effort) => {
+		completeSimpleMock.mockReset().mockResolvedValue(fauxAssistantMessage("  \n"));
+		await expect(compact(preparation, model, "key", undefined, undefined, undefined, effort)).rejects.toThrow(
+			"empty summary",
+		);
+		expect(completeSimpleMock).toHaveBeenCalledTimes(effort === "off" ? 1 : 2);
+	});
 	it("uses session base instructions, native history, and no tools", async () => {
 		await compact(
 			preparation,

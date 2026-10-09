@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, motionEnabled, useHeightGlide, useRetainedRows } from "./ui.js";
-import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
+import { ARCHIVED_KEY, GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -94,7 +94,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
  */
-function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey }) {
+function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [showAll, setShowAll] = useState(false);
@@ -131,7 +131,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 		if (!open && sessions === undefined) reload();
 	};
 	return html`<div class="ws">
-		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${general ? t("Chats that belong to no workspace") : workspace.rootPath} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
+		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${title ?? (general ? t("Chats that belong to no workspace") : workspace.rootPath)} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
 			${general ? null : html`<${Icon} name="folder" size=${15} class="ws-folder" />`}
 			${editing ? html`<input class="field title-edit" autofocus aria-label=${t("Rename")} value=${alias} onInput=${(e) => setAlias(e.target.value)} onClick=${(e) => e.stopPropagation()} onKeyDown=${(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); saveAlias(); } else if (e.key === "Escape") setEditing(false); }} />` : html`<span class="name truncate">${workspace.name}</span>`}
@@ -300,6 +300,7 @@ export function Sidebar() {
 			}} />
 			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
 			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+			${archivedChats?.length ? html`<${Workspace} archived workspace=${{ rootPath: ARCHIVED_KEY, name: t("Archived chats") }} title=${t("Chats you archived, restore them here")} error=${ws.errors[ARCHIVED_KEY]} isCurrent=${false} open=${!!expanded[ARCHIVED_KEY]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
 		</div>
 		<div class="sidebar-foot">
 			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>

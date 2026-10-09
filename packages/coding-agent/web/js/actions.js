@@ -8,9 +8,20 @@ import { serverText, t } from "./i18n.js";
 
 let dialogResolver = null;
 
+/**
+ * A modal that replaces a still-pending one must resolve the old Promise, or the awaiting flow (e.g. the service
+ * restart button) hangs forever and silently swallows every later click. The fallback matches each dialog's cancel.
+ */
+function releasePendingDialog(fallback) {
+	const resolver = dialogResolver;
+	dialogResolver = null;
+	resolver?.(fallback);
+}
+
 /** Promise-based confirmation modal (rendered by overlays.js). */
 export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false }) {
 	return new Promise((resolve) => {
+		releasePendingDialog(false);
 		dialogResolver = resolve;
 		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice } });
 	});
@@ -18,15 +29,14 @@ export function confirmDialog({ title, message, confirmLabel = t("Confirm"), can
 /** Promise-based text prompt (rendered by app.js). Resolves undefined when cancelled. */
 export function inputDialog({ title, label, initial = "", confirmLabel = t("Save"), placeholder = "" }) {
 	return new Promise((resolve) => {
+		releasePendingDialog(undefined);
 		dialogResolver = resolve;
 		setView({ dialog: { type: "input", title, label, initial, confirmLabel, placeholder } });
 	});
 }
 export function resolveConfirm(value) {
-	const resolver = dialogResolver;
-	dialogResolver = null;
+	releasePendingDialog(value);
 	setView({ dialog: null });
-	resolver?.(value);
 }
 
 /** What each "action" built-in command does (BUILTIN_COMMAND_KINDS says which commands are actions). */
@@ -324,6 +334,7 @@ export const actions = {
 
 	/** The dialog that turns Git integration on for the workspace (identity, repository, first version). */
 	openGitSetup() {
+		releasePendingDialog(false);
 		setView({ dialog: { type: "git-setup" } });
 	},
 
@@ -377,7 +388,7 @@ function moveListed(path, archived, info) {
 	const without = (list) => (list && list.some((item) => samePath(item.path, path)) ? list.filter((item) => !samePath(item.path, path)) : list);
 	if (archived) {
 		const sessions = Object.fromEntries(Object.entries(lists.sessions).map(([root, list]) => [root, without(list)]));
-		const archivedList = info && lists.archived ? [info, ...without(lists.archived)] : lists.archived;
+		const archivedList = info ? [info, ...(without(lists.archived) || [])] : lists.archived;
 		state.workspaces = { ...lists, sessions, unbound: without(lists.unbound), archived: archivedList };
 	} else {
 		state.workspaces = { ...lists, archived: without(lists.archived) };

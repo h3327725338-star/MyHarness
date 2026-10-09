@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -106,6 +106,154 @@ describe("delegated worktree sandbox", () => {
 		// Nothing is deleted automatically: directory and branch stay for the user.
 		expect(existsSync(handle.worktreePath)).toBe(true);
 		expect(runGit(repoDir, ["branch", "--list", handle.branchName]).stdout).toContain(handle.branchName);
+	});
+
+	describe("uncommitted workspace changes", () => {
+		/** A repository whose committed state differs from what is on disk now. */
+		function createDirtyRepository(): { repoDir: string; agentDir: string; commit: string } {
+			const repoDir = track(createTemporaryDirectory("myharness-wt-dirty"));
+			const agentDir = track(createTemporaryDirectory("myharness-wt-agent"));
+			mkdirSync(join(repoDir, "src"));
+			writeFileSync(join(repoDir, "a.txt"), "base\n", "utf8");
+			writeFileSync(join(repoDir, "gone.txt"), "will be deleted\n", "utf8");
+			writeFileSync(join(repoDir, "src", "kept.txt"), "kept\n", "utf8");
+			writeFileSync(join(repoDir, ".gitignore"), "ignored.log\n", "utf8");
+			expect(initializeGitRepository(repoDir).ok).toBe(true);
+			expect(setLocalGitIdentity(repoDir, { name: "Sandbox Test", email: "sandbox@example.invalid" }).ok).toBe(true);
+			expect(createInitialGitBaseline(repoDir).ok).toBe(true);
+			const commit = runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim();
+			// Uncommitted work: a modified file, a deleted one, a new untracked one (also inside a new directory), and an ignored one.
+			writeFileSync(join(repoDir, "a.txt"), "modified in the workspace\n", "utf8");
+			rmSync(join(repoDir, "gone.txt"));
+			writeFileSync(join(repoDir, "new-file.txt"), "brand new\n", "utf8");
+			mkdirSync(join(repoDir, "fresh"));
+			writeFileSync(join(repoDir, "fresh", "inner.txt"), "inside a new directory\n", "utf8");
+			writeFileSync(join(repoDir, "ignored.log"), "never copied\n", "utf8");
+			return { repoDir, agentDir, commit };
+		}
+
+		const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+		it("starts the worktree from the workspace's uncommitted files and keeps the worker's changes separate", () => {
+			const { repoDir, agentDir, commit } = createDirtyRepository();
+			const prepared = prepareDelegatedWorktree({ cwd: repoDir, agentDir });
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const { handle } = prepared;
+			const worktree = handle.worktreePath;
+
+			// The worker sees what the Main Agent sees: modified, deleted, new and nested-new files; ignored files stay out.
+			expect(read(join(worktree, "a.txt"))).toBe("modified in the workspace\n");
+			expect(existsSync(join(worktree, "gone.txt"))).toBe(false);
+			expect(read(join(worktree, "new-file.txt"))).toBe("brand new\n");
+			expect(read(join(worktree, "fresh", "inner.txt"))).toBe("inside a new directory\n");
+			expect(read(join(worktree, "src", "kept.txt"))).toBe("kept\n");
+			expect(existsSync(join(worktree, "ignored.log"))).toBe(false);
+			expect(handle.importedFiles).toBe(3);
+			expect(handle.importNotes).toEqual([]);
+
+			// The copy is one snapshot commit on the worktree's own branch; the worktree starts clean.
+			expect(handle.baseCommit).toBe(commit);
+			expect(handle.snapshotCommit).toBeDefined();
+			expect(runGit(worktree, ["rev-parse", "HEAD"]).stdout.trim()).toBe(handle.snapshotCommit);
+			expect(runGit(worktree, ["rev-parse", "HEAD^"]).stdout.trim()).toBe(commit);
+			expect(runGit(worktree, ["status", "--porcelain", "--untracked-files=all"]).stdout.trim()).toBe("");
+
+			// The dispatching workspace is untouched: still dirty, same HEAD, same files.
+			expect(runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim()).toBe(commit);
+			expect(read(join(repoDir, "a.txt"))).toBe("modified in the workspace\n");
+			expect(existsSync(join(repoDir, "gone.txt"))).toBe(false);
+			expect(existsSync(join(repoDir, "new-file.txt"))).toBe(true);
+
+			// Only what the worker changes afterwards is reported, never the imported files.
+			writeFileSync(join(worktree, "worker-note.txt"), "by the worker\n", "utf8");
+			writeFileSync(join(worktree, "new-file.txt"), "edited by the worker\n", "utf8");
+			const finalized = finalizeDelegatedWorktree(handle);
+			expect(finalized.dirty).toBe(true);
+			expect([...finalized.changedFiles].sort()).toEqual(["new-file.txt", "worker-note.txt"]);
+			expect(existsSync(worktree)).toBe(true);
+		});
+
+		it("removes an untouched worktree even though it started from a snapshot", () => {
+			const { repoDir, agentDir, commit } = createDirtyRepository();
+			const prepared = prepareDelegatedWorktree({ cwd: repoDir, agentDir });
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const { handle } = prepared;
+
+			const finalized = finalizeDelegatedWorktree(handle);
+			expect(finalized).toEqual({ dirty: false, changedFiles: [], removed: true });
+			expect(existsSync(handle.worktreePath)).toBe(false);
+			expect(runGit(repoDir, ["branch", "--list", "myharness-subagent-*"]).stdout.trim()).toBe("");
+			// Dropping the snapshot loses nothing: the changes are still in the workspace, whose HEAD did not move.
+			expect(runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim()).toBe(commit);
+			expect(read(join(repoDir, "a.txt"))).toBe("modified in the workspace\n");
+		});
+
+		it("adds no snapshot commit when the workspace is clean", () => {
+			const { repoDir } = createRepository();
+			track(repoDir);
+			const agentDir = track(createTemporaryDirectory("myharness-wt-agent"));
+			const prepared = prepareDelegatedWorktree({ cwd: repoDir, agentDir });
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			expect(prepared.handle.snapshotCommit).toBeUndefined();
+			expect(prepared.handle.importedFiles).toBe(0);
+			expect(runGit(prepared.handle.worktreePath, ["rev-parse", "HEAD"]).stdout.trim()).toBe(
+				prepared.handle.baseCommit,
+			);
+			finalizeDelegatedWorktree(prepared.handle);
+		});
+
+		it("follows a tracked file that became a directory and a directory that became a file", () => {
+			const repoDir = track(createTemporaryDirectory("myharness-wt-typechange"));
+			const agentDir = track(createTemporaryDirectory("myharness-wt-agent"));
+			writeFileSync(join(repoDir, "was-file"), "i was a file\n", "utf8");
+			mkdirSync(join(repoDir, "was-dir"));
+			writeFileSync(join(repoDir, "was-dir", "x.txt"), "x\n", "utf8");
+			expect(initializeGitRepository(repoDir).ok).toBe(true);
+			expect(setLocalGitIdentity(repoDir, { name: "Sandbox Test", email: "sandbox@example.invalid" }).ok).toBe(true);
+			expect(createInitialGitBaseline(repoDir).ok).toBe(true);
+			rmSync(join(repoDir, "was-file"));
+			mkdirSync(join(repoDir, "was-file"));
+			writeFileSync(join(repoDir, "was-file", "y.txt"), "y\n", "utf8");
+			rmSync(join(repoDir, "was-dir"), { recursive: true });
+			writeFileSync(join(repoDir, "was-dir"), "i am a file now\n", "utf8");
+
+			const prepared = prepareDelegatedWorktree({ cwd: repoDir, agentDir });
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const worktree = prepared.handle.worktreePath;
+			expect(prepared.handle.importNotes).toEqual([]);
+			expect(read(join(worktree, "was-file", "y.txt"))).toBe("y\n");
+			expect(read(join(worktree, "was-dir"))).toBe("i am a file now\n");
+			expect(runGit(worktree, ["status", "--porcelain", "--untracked-files=all"]).stdout.trim()).toBe("");
+		});
+
+		it("skips what cannot be copied and says so instead of failing the dispatch", () => {
+			const { repoDir, agentDir } = createDirtyRepository();
+			// A nested repository is a directory entry for the outer one: it cannot be carried over as a file.
+			mkdirSync(join(repoDir, "nested-repo"));
+			expect(initializeGitRepository(join(repoDir, "nested-repo")).ok).toBe(true);
+			writeFileSync(join(repoDir, "nested-repo", "inner.txt"), "inner\n", "utf8");
+			// A file over the size limit.
+			writeFileSync(join(repoDir, "huge.bin"), Buffer.alloc(51 * 1024 * 1024));
+
+			const prepared = prepareDelegatedWorktree({ cwd: repoDir, agentDir });
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const { handle } = prepared;
+			expect(
+				handle.importNotes.some((note) => note.startsWith("nested-repo") && note.includes("子模块或嵌套仓库")),
+			).toBe(true);
+			expect(handle.importNotes.some((note) => note.startsWith("huge.bin") && note.includes("50 MB"))).toBe(true);
+			expect(existsSync(join(handle.worktreePath, "huge.bin"))).toBe(false);
+			expect(existsSync(join(handle.worktreePath, "nested-repo"))).toBe(false);
+			// Everything else still arrived.
+			expect(read(join(handle.worktreePath, "a.txt"))).toBe("modified in the workspace\n");
+			expect(handle.importedFiles).toBe(3);
+			finalizeDelegatedWorktree(handle);
+		}, 30_000);
 	});
 
 	it("removes a clean worktree and its generated branch", () => {

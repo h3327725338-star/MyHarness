@@ -4,6 +4,7 @@ import { WebLifecycle } from "../src/modes/web/lifecycle.ts";
 function harness(graceSeconds = 10) {
 	let grace = graceSeconds;
 	let now = 0;
+	let busy = false;
 	let pending: { at: number; run: () => void } | undefined;
 	let expired = 0;
 	const lifecycle = new WebLifecycle({
@@ -11,6 +12,7 @@ function harness(graceSeconds = 10) {
 		onExpire: () => {
 			expired++;
 		},
+		isBusy: () => busy,
 		setTimer: (run, delay) => {
 			pending = { at: now + delay, run };
 			return pending;
@@ -23,6 +25,9 @@ function harness(graceSeconds = 10) {
 		lifecycle,
 		setGrace: (value: number) => {
 			grace = value;
+		},
+		setBusy: (value: boolean) => {
+			busy = value;
 		},
 		advance(ms: number) {
 			now += ms;
@@ -134,6 +139,36 @@ describe("Web UI lifecycle", () => {
 		h.lifecycle.clientCountChanged(1);
 		h.lifecycle.clientCountChanged(0);
 		h.lifecycle.dispose();
+		h.advance(60_000);
+		expect(h.expired).toBe(0);
+	});
+
+	it("waits for running work instead of expiring, and exits once the work settles", () => {
+		const h = harness(10);
+		h.setBusy(true);
+		h.lifecycle.clientCountChanged(1);
+		h.lifecycle.clientCountChanged(0);
+		h.advance(10_000);
+		expect(h.expired).toBe(0);
+		expect(h.waiting).toBe(true); // postponed: the countdown keeps waiting for the task, not for the clock
+		h.advance(25_000);
+		expect(h.expired).toBe(0);
+		h.setBusy(false);
+		h.advance(9_999);
+		expect(h.expired).toBe(0);
+		h.advance(1);
+		expect(h.expired).toBe(1);
+	});
+
+	it("a page returning during a postponed busy wait cancels the countdown", () => {
+		const h = harness(10);
+		h.setBusy(true);
+		h.lifecycle.clientCountChanged(1);
+		h.lifecycle.clientCountChanged(0);
+		h.advance(10_000); // busy at the deadline: re-armed instead of expiring
+		h.lifecycle.clientCountChanged(1); // the browser comes back
+		expect(h.waiting).toBe(false);
+		h.setBusy(false);
 		h.advance(60_000);
 		expect(h.expired).toBe(0);
 	});

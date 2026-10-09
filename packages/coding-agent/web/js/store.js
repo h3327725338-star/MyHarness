@@ -9,6 +9,7 @@ import { runModeOf } from "./run-modes.js";
 import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
+import { createSseWatchdog, isDeadStream } from "./sse-watchdog.js";
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
@@ -264,6 +265,8 @@ export function useStore(selector = (s) => s) {
 export async function api(path, options = {}) {
 	const slot = options.slot ?? targetSlot ?? activeSlot;
 	const init = { method: options.method || "GET", headers: { "x-myharness-web": "1" } };
+	// A half-dead server would otherwise hold one await forever; callers that poll pass a per-attempt budget.
+	if (options.timeoutMs) init.signal = AbortSignal.timeout(options.timeoutMs);
 	if (slot) init.headers["x-myharness-slot"] = slot;
 	if (options.body !== undefined) {
 		init.headers["content-type"] = "application/json";
@@ -450,19 +453,22 @@ export async function loadWorkspaces(mode = uiMode(), slot) {
 	const expanded = state.view[expandedKey(mode)] || {};
 	const targets = new Set(Object.keys(expanded).filter((key) => expanded[key]));
 	if (current) targets.add(current.rootPath);
-	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== "<archived>").map((root) => loadSessions(root, mode)).concat([loadUnbound(mode), loadArchived(mode)]));
+	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== ARCHIVED_KEY).map((root) => loadSessions(root, mode)).concat([loadUnbound(mode), loadArchived(mode)]));
 }
 
 export async function loadArchived(mode = uiMode()) {
 	try {
 		const data = await api(`/api/sessions/archived?mode=${mode}`);
 		patchLists(mode, { archived: data.sessions });
-	} catch (error) { setListError("<archived>", listFailure(error), mode); }
+	} catch (error) { setListError(ARCHIVED_KEY, listFailure(error), mode); }
 	emit();
 }
 
 /** Key of the "General" group (chats that belong to no workspace) in the sidebar's expanded / error maps. */
 export const GENERAL_KEY = "<general>";
+
+/** Key of the "Archived" group: archived chats hide from their groups and are restored from this sidebar entry. */
+export const ARCHIVED_KEY = "<archived>";
 
 /** Why a chat list could not be loaded, in words the sidebar can show instead of an endless "Loading…". */
 function listFailure(error) {
@@ -848,6 +854,21 @@ function tellTerminals(type, data) {
 // ---- Boot + SSE ------------------------------------------------------------------------------
 let source = null;
 let booted = false;
+/** The browser gives up on a stream whose (re)connect failed with a status; this watchdog rebuilds those, always. */
+const sseWatchdog = createSseWatchdog({
+	isClosed: () => isDeadStream(source),
+	rebuild: () => {
+		if (source) {
+			try {
+				source.close();
+			} catch {
+				/* already gone */
+			}
+		}
+		source = null;
+		connectEvents();
+	},
+});
 /** A failed fallback was just reported; the retry failure that follows it is not reported again. */
 let fallbackFailureShown = false;
 
@@ -901,6 +922,8 @@ export async function boot() {
 	document.addEventListener("visibilitychange", markActiveSeen);
 	// A draft waiting for its delay is sent when the page is hidden: closing the tab may not finish a last request.
 	document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && flushDrafts());
+	// Returning to a hidden tab must not wait for a throttled timer: revive a dead event stream the moment it is seen.
+	document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && !state.connected && sseWatchdog.revive());
 	const poll = async () => {
 		try {
 			const boot = await api("/api/boot", { slot: "" });
@@ -934,6 +957,8 @@ function connectEvents() {
 	};
 	source.onerror = () => {
 		set({ connected: false });
+		// Only a stream the browser abandoned for good needs this: while it still retries, readyState is CONNECTING.
+		sseWatchdog.watch();
 	};
 	// Handlers receive (data, slot) and run with the state accessors bound to that session.
 	const on = (name, fn) =>

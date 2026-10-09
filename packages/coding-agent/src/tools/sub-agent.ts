@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, ThinkingLevel } from "@myharness/agent-core";
 import type { Message } from "@myharness/ai/compat";
 import { type Static, Type } from "typebox";
@@ -59,7 +60,7 @@ const MAX_STRUCTURED_ITEMS = 24;
 
 const SUB_AGENT_TASKS_DESCRIPTION = "Independent exploration tasks to run in parallel";
 const SUB_AGENT_BACKGROUND_DESCRIPTION =
-	"Run the Explore tasks in the background so the Main Agent can continue other useful independent work";
+	"Preferred. Run the Explore tasks in the background and keep working on independent steps while they run; results arrive automatically. Omit only when you have nothing else to do until the results are in.";
 
 function createSubAgentTaskItemSchema(mode: SubAgentMode) {
 	return Type.Object({
@@ -470,17 +471,21 @@ function waitForProcessStop(pid: number | undefined): Promise<boolean> {
 const EXPLORE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore.md");
 const EXPLORE_WRITE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore-write.md");
 
-function getFinalAssistantText(messages: Message[]): string {
+/**
+ * The task report is the last assistant message that carries no tool call: a message with a tool call is a remark
+ * made in the middle of the run, never the final answer. The delegated worker repeats every message in its closing
+ * `agent_end` event, so a copy of such a remark can arrive after the real report and must not replace it. Only when
+ * every assistant message carries a tool call (a run stopped half-way) does the last one stand in.
+ */
+export function getFinalAssistantText(messages: Message[]): string {
+	let lastAssistant: Message | undefined;
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
 		if (message.role !== "assistant") continue;
-		return message.content
-			.filter((part): part is Extract<(typeof message.content)[number], { type: "text" }> => part.type === "text")
-			.map((part) => part.text)
-			.join("\n")
-			.trim();
+		lastAssistant ??= message;
+		if (!assistantContainsToolCall(message)) return assistantText(message);
 	}
-	return "";
+	return lastAssistant ? assistantText(lastAssistant) : "";
 }
 
 export function truncateSubAgentOutput(output: string): string {
@@ -1221,14 +1226,18 @@ async function runExploreTask(options: {
 				taskTimer = setTimeout(() => requestStop("timeout"), taskTimeoutMs);
 			}
 			armStallTimer();
-			child.stdout.on("data", (data: Buffer) => {
-				buffer += data.toString();
+			// A pipe chunk may end inside a multibyte character; each stream keeps its own decoder so the cut-off
+			// bytes are completed by the next chunk instead of turning into U+FFFD.
+			const stdoutDecoder = new StringDecoder("utf8");
+			const stderrDecoder = new StringDecoder("utf8");
+			child.stdout.on("data", (data: Buffer | string) => {
+				buffer += typeof data === "string" ? data : stdoutDecoder.write(data);
 				const lines = buffer.split("\n");
 				buffer = lines.pop() ?? "";
 				for (const line of lines) processLine(line);
 			});
-			child.stderr.on("data", (data: Buffer) => {
-				stderr = truncateSubAgentOutput(stderr + data.toString());
+			child.stderr.on("data", (data: Buffer | string) => {
+				stderr = truncateSubAgentOutput(stderr + (typeof data === "string" ? data : stderrDecoder.write(data)));
 			});
 			child.on("error", (error) => {
 				// A failed spawn (ENOENT: no node/global myharness on PATH, EACCES...) must say which command
@@ -1248,6 +1257,8 @@ async function runExploreTask(options: {
 				settle(() => reject(wrapped));
 			});
 			child.on("close", (code) => {
+				buffer += stdoutDecoder.end();
+				stderr = truncateSubAgentOutput(stderr + stderrDecoder.end());
 				if (buffer.trim()) processLine(buffer);
 				if (stopKind || options.signal?.aborted) {
 					if (!stopKind) onAbort();
@@ -1588,6 +1599,14 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		const taskControllers = options.tasks.map(() => new AbortController());
 		const lastProgressAt = options.tasks.map(() => undefined as string | undefined);
 		options.onKillReady?.((index) => taskControllers[index]?.abort());
+		// Uncommitted files of the Main Agent's workspace that could not be copied into a worktree: the worker is told.
+		const workerPromptFor = (index: number): string => {
+			const base = taskPrompts[index] ?? options.tasks[index]?.prompt ?? "";
+			const notes = worktreeHandles[index]?.importNotes ?? [];
+			return notes.length === 0
+				? base
+				: `${base}\n\nWorkspace snapshot notes (these uncommitted files of the Main Agent's workspace are NOT in your worktree):\n${notes.map((note) => `- ${note}`).join("\n")}`;
+		};
 		const taskSettlements = await Promise.allSettled(
 			options.tasks.map(async (task, index) => {
 				const traceContext = taskTraceContexts[index]?.context;
@@ -1604,7 +1623,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						thinkingLevel: options.settings.thinkingLevel,
 						contextWindow: options.settings.contextWindow,
 						description: task.description,
-						prompt: taskPrompts[index] ?? task.prompt,
+						prompt: workerPromptFor(index),
 						goal: task.goal ?? task.prompt,
 						questions: task.questions,
 						systemPromptPath,
@@ -1717,6 +1736,12 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 				const handle = worktreeHandles[index];
 				if (!handle) continue;
 				const finalized = finalizeDelegatedWorktree(handle);
+				for (const note of handle.importNotes) {
+					results[index].unresolved = pushUniqueLimited(
+						results[index].unresolved,
+						`未带入 Worktree 的未提交文件：${note}`,
+					);
+				}
 				if (finalized.dirty) {
 					results[index] = {
 						...results[index],
@@ -1769,14 +1794,14 @@ export function createSubAgentToolDefinition(
 		label: "Agent",
 		description:
 			mode === "read-write"
-				? `Delegates one to ${advertisedMaxTasks} independent investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Each sub-agent may edit files and run commands only inside its own Git worktree (a separate checkout kept under the settings directory); it can never commit, push, merge or stage, cannot start further sub-agents, and reports its worktree path, branch and changed files back with the result. Changes stay uncommitted for the Main Agent and the user to review.`
+				? `Delegates one to ${advertisedMaxTasks} independent investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Each sub-agent may edit files and run commands only inside its own Git worktree (a separate checkout kept under the settings directory, made from the current HEAD plus a copy of the workspace's uncommitted changes as they are now, so it sees the same files you see; your later edits are not visible to it, and your workspace cannot be read from it by absolute path); it can never commit, push, merge or stage, cannot start further sub-agents, and reports its worktree path, branch and changed files back with the result. Changes stay uncommitted for the Main Agent and the user to review.`
 				: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.`,
 		promptSnippet: loadSystemPrompt("tools/agent/snippet.md", promptVariables),
 		promptGuidelines: [
 			...loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
 			...(mode === "read-write"
 				? [
-						"Read-write Explore sub-agents edit only inside their own Git worktree, never commit, push, merge or stage, and never start further sub-agents; their result reports the worktree path, branch and changed files.",
+						"Read-write Explore sub-agents edit only inside their own Git worktree, never commit, push, merge or stage, and never start further sub-agents; their result reports the worktree path, branch and changed files. Each worktree starts as a snapshot of the current workspace (HEAD plus its uncommitted changes): refer to files by paths relative to the project root, because absolute paths of your own workspace are not readable from a worktree.",
 					]
 				: []),
 		],

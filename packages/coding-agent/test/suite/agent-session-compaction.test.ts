@@ -170,6 +170,49 @@ describe("AgentSession compaction characterization", () => {
 		).toBe(true);
 	});
 
+	it("carries the checkpoint summary into the next request when compaction runs on the main model", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 512_000 }] });
+		harnesses.push(harness);
+		expect(harness.settingsManager.getCompactionModelSettings().model).toBeUndefined();
+		harness.setResponses([fauxAssistantMessage("The rollout codeword is PINEAPPLE.")]);
+		await harness.session.prompt("Goal: migrate the billing database. Tell me the rollout codeword.");
+		const normalStreamFunction = harness.session.agent.streamFunction;
+
+		useSummaryStreamFn(harness, "## Goal\nMigrate billing. Rollout codeword: PINEAPPLE.");
+		await harness.session.compact();
+		harness.session.agent.streamFunction = normalStreamFunction;
+
+		const checkpoint = harness.sessionManager.getEntries().find((entry) => entry.type === "compaction");
+		expect(checkpoint?.type === "compaction" ? checkpoint.summary : "").toContain("PINEAPPLE");
+
+		let sent: string[] = [];
+		harness.setResponses([
+			(context) => {
+				sent = context.messages.map(getMessageText);
+				return fauxAssistantMessage("It was PINEAPPLE.");
+			},
+		]);
+		await harness.session.prompt("What was the codeword?");
+
+		expect(sent.some((text) => text.includes("Goal: migrate the billing database"))).toBe(true);
+		expect(sent.some((text) => text.includes("Rollout codeword: PINEAPPLE"))).toBe(true);
+		expect(sent.at(-1)).toBe("What was the codeword?");
+	});
+
+	it("keeps the context and writes no checkpoint when the compaction model returns no summary text", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 512_000 }] });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const beforeMessages = harness.session.messages.slice();
+		useSummaryStreamFn(harness, "   ");
+
+		await expect(harness.session.compact()).rejects.toThrow("empty summary");
+
+		expect(harness.session.messages).toEqual(beforeMessages);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(harness.eventsOfType("compaction_end").at(-1)?.errorMessage).toContain("empty summary");
+	});
+
 	it("throws when compacting without a model", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

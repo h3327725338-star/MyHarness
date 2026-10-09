@@ -14,6 +14,11 @@ export interface WebLifecycleOptions {
 	getGraceSeconds: () => number;
 	/** Called once when the grace period ends with no page connected. */
 	onExpire: () => void;
+	/**
+	 * True while the server still has work running. The countdown then waits for that work instead of expiring, so a
+	 * running task is never killed by the exit timer. Checked again at the end of every grace period.
+	 */
+	isBusy?: () => boolean;
 	/** Timer hooks, overridable for tests. */
 	setTimer?: (callback: () => void, delayMs: number) => unknown;
 	clearTimer?: (handle: unknown) => void;
@@ -48,6 +53,11 @@ export class WebLifecycle {
 			return;
 		}
 		if (!this.seenClient || this.timer !== undefined) return;
+		this.arm();
+	}
+
+	/** Start (or restart) one grace countdown; a busy server re-arms instead of expiring. */
+	private arm(): void {
 		// EventSource retries after 1.5s; even a zero exit delay must allow a reload to reconnect.
 		const seconds = this.options.getGraceSeconds();
 		const delayMs = Math.max(5_000, (Number.isFinite(seconds) ? Math.max(0, seconds) : 10) * 1000);
@@ -56,6 +66,11 @@ export class WebLifecycle {
 		this.timer = start(() => {
 			if (this.expired || this.count > 0 || generation !== this.generation) return;
 			this.timer = undefined;
+			if (this.options.isBusy?.()) {
+				// Running work outranks the exit timer: wait the grace period again, and again until the server is idle.
+				this.arm();
+				return;
+			}
 			this.expired = true;
 			this.options.onExpire();
 		}, delayMs);

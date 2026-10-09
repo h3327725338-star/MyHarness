@@ -82,6 +82,13 @@ follow the current chat settings (with effort clamped to the selected model's ca
 Explicit selections persist under `compaction.provider`, `compaction.model` and
 `compaction.thinkingLevel`; they do not change the chat model.
 
+A compaction checkpoint must carry a readable summary. If the compaction model answers with no text (for example a
+reasoning model that inherited the chat effort and spent the whole answer on thinking), MyHarness asks once more
+without reasoning. If there is still no text, compaction fails with `Compaction returned an empty summary`: nothing is
+written and the active context stays as it was. Provider-side (OpenAI Responses) compaction keeps an encrypted
+checkpoint instead of a summary; the Web UI card for such a checkpoint, and for older checkpoints saved with an empty
+summary, says that no readable summary was saved.
+
 ```
 Before compaction:
 

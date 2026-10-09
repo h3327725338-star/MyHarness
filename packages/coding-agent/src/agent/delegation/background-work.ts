@@ -26,7 +26,7 @@ export interface SessionBackgroundWorkHost {
 	emitProgress(progress: SubAgentBackgroundProgress): void;
 	/** A batch left the registry; the session may have become idle. */
 	onBatchSettled(): void;
-	/** Hand a finished batch back to the model as a follow-up turn. */
+	/** Hand a finished batch back to the model: right after its current turn if it is running, else as a new turn. */
 	deliverResult(message: Pick<CustomMessage, "customType" | "content" | "display" | "details">): Promise<void>;
 }
 
@@ -91,8 +91,10 @@ export class SessionBackgroundWork {
 	}
 
 	/**
-	 * The main task ended (completed, cancelled, failed, timed out) or the user pressed stop: everything it started
-	 * goes with it. Background Explore batches are aborted, their cards are settled as cancelled right away
+	 * The main task ended (cancelled, failed, timed out, or completed with only a workflow still running) or the user
+	 * pressed stop: everything it started goes with it. A task that completes normally never gets here with a running
+	 * Explore batch: AgentSession keeps it open until the batch has reported back. Background Explore batches are
+	 * aborted, their cards are settled as cancelled right away
 	 * (no spinner, no "running in the background"), and running workflows are killed.
 	 */
 	cancel(): void {
