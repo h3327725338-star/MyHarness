@@ -9,6 +9,8 @@
 
 import type { ThinkingLevel } from "@myharness/agent-core";
 import {
+	MAX_NETWORK_MAX_ATTEMPTS,
+	MIN_NETWORK_MAX_ATTEMPTS,
 	type SettingsManager,
 	SUB_AGENT_SETTING_RANGES,
 	WEB_SEARCH_BROWSER_IDS,
@@ -20,7 +22,11 @@ import {
 	ProjectTrustStore,
 } from "../../config/trust/index.ts";
 import { CONTEXT_WINDOW_UNIT_TOKENS, parseContextWindowInput } from "../../context/context-window.ts";
-import { configureHttpDispatcher, MAX_HTTP_IDLE_TIMEOUT_MS } from "../../platform/process/http-dispatcher.ts";
+import {
+	configureHttpDispatcher,
+	MAX_NETWORK_TIMEOUT_MS,
+	MIN_NETWORK_TIMEOUT_MS,
+} from "../../platform/process/http-dispatcher.ts";
 import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts";
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
 import { settingsMenuFor } from "../../startup/settings-menu.ts";
@@ -137,9 +143,7 @@ export const SETTINGS_MENU_SETTING: Readonly<Record<string, string>> = {
 	"steering-mode": "steeringMode",
 	"follow-up-mode": "followUpMode",
 	transport: "transport",
-	"http-idle-timeout": "httpIdleTimeoutMs",
 	"hide-thinking": "hideThinkingBlock",
-	"cache-miss-notices": "showCacheMissNotices",
 	"collapse-changelog": "collapseChangelog",
 	"quiet-startup": "quietStartup",
 	"install-telemetry": "enableInstallTelemetry",
@@ -246,7 +250,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const compaction = s.getCompactionModelSettings();
 		const context = s.getContextWindowSettings();
 		const retry = s.getRetrySettings();
-		const warnings = s.getWarnings();
+		const networkTimeouts = s.getNetworkTimeouts();
 		return [
 			// Agent
 			{
@@ -510,22 +514,56 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					{ value: "unlimited", label: "Unlimited", fixed: "unlimited" },
 				],
 			},
+			// Timeouts & retries: three independent limits and one attempt budget for network failures.
 			{
-				id: "httpIdleTimeoutMs",
-				section: "Network",
-				label: "HTTP idle timeout",
+				id: "network.connectTimeoutMs",
+				section: "Timeouts & retries",
+				label: "Connect timeout",
 				description:
-					"Maximum wait without new data while generating or waiting for the model. Disconnects on timeout to avoid hanging.",
+					"Longest time to set up a connection, TLS handshake included. Only applies when a new connection is opened.",
 				type: "numberUnit",
-				value: s.getHttpIdleTimeoutMs(),
-				min: 0,
-				max: MAX_HTTP_IDLE_TIMEOUT_MS,
-				maxHint: "About 24 days is the longest wait the network stack can keep; choose Disabled for no timeout.",
-				units: [
-					{ value: "minutes", label: "minutes", multiplier: 60_000 },
-					{ value: "seconds", label: "seconds", multiplier: 1_000 },
-					{ value: "disabled", label: "Disabled", fixed: 0 },
-				],
+				value: networkTimeouts.connectTimeoutMs,
+				min: MIN_NETWORK_TIMEOUT_MS,
+				max: MAX_NETWORK_TIMEOUT_MS,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1_000 }],
+			},
+			{
+				id: "network.firstByteTimeoutMs",
+				section: "Timeouts & retries",
+				label: "First-byte timeout",
+				description:
+					"Longest wait after a request is sent until the server starts to answer (the response headers).",
+				type: "numberUnit",
+				value: networkTimeouts.firstByteTimeoutMs,
+				min: MIN_NETWORK_TIMEOUT_MS,
+				max: MAX_NETWORK_TIMEOUT_MS,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1_000 }],
+			},
+			{
+				id: "network.streamIdleTimeoutMs",
+				section: "Timeouts & retries",
+				label: "Stream idle timeout",
+				description:
+					"Longest gap between two pieces of data once the answer has started. It restarts with every piece, so the total length is not limited.",
+				type: "numberUnit",
+				value: networkTimeouts.streamIdleTimeoutMs,
+				min: MIN_NETWORK_TIMEOUT_MS,
+				max: MAX_NETWORK_TIMEOUT_MS,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1_000 }],
+			},
+			{
+				id: "retry.networkMaxAttempts",
+				section: "Timeouts & retries",
+				label: "Attempts per model (first included)",
+				description: "After this many failed attempts, the fallback model takes over.",
+				type: "number",
+				value: s.getNetworkMaxAttempts(),
+				min: MIN_NETWORK_MAX_ATTEMPTS,
+				max: MAX_NETWORK_MAX_ATTEMPTS,
+				unit: "times",
 			},
 			{
 				id: "webShutdownGraceSeconds",
@@ -583,13 +621,6 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					{ value: "never", label: "Never trust" },
 				],
 			},
-			{
-				id: "warnings.anthropicExtraUsage",
-				section: "Safety",
-				label: "Warn about extra-usage billing",
-				type: "boolean",
-				value: warnings.anthropicExtraUsage ?? true,
-			},
 			// Notifications & privacy
 			{
 				id: "popupNotifications",
@@ -612,14 +643,6 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Analytics data sharing",
 				type: "boolean",
 				value: s.getEnableAnalytics(),
-			},
-			{
-				id: "showCacheMissNotices",
-				section: "Display",
-				label: "Cache-miss notices",
-				description: "Show a notice when a response paid for a large prompt-cache miss.",
-				type: "boolean",
-				value: s.getShowCacheMissNotices(),
 			},
 			// Terminal UI: the same settings the terminal's /settings edits. They change how the terminal UI looks and
 			// behaves (stored in the shared settings.json); the Web UI has its own Appearance settings.
@@ -943,12 +966,20 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				session.agent.transport = value as ReturnType<SettingsManager["getTransport"]>;
 				return;
 			}
-			case "httpIdleTimeoutMs": {
-				const timeout = numberValue(value, id, 0, MAX_HTTP_IDLE_TIMEOUT_MS);
-				s.setHttpIdleTimeoutMs(timeout);
-				configureHttpDispatcher(timeout);
+			case "network.connectTimeoutMs":
+			case "network.firstByteTimeoutMs":
+			case "network.streamIdleTimeoutMs": {
+				const key = id.slice("network.".length) as
+					| "connectTimeoutMs"
+					| "firstByteTimeoutMs"
+					| "streamIdleTimeoutMs";
+				s.setNetworkTimeout(key, numberValue(value, id, MIN_NETWORK_TIMEOUT_MS, MAX_NETWORK_TIMEOUT_MS));
+				configureHttpDispatcher(s.getNetworkTimeouts());
 				return;
 			}
+			case "retry.networkMaxAttempts":
+				s.setNetworkMaxAttempts(numberValue(value, id, MIN_NETWORK_MAX_ATTEMPTS, MAX_NETWORK_MAX_ATTEMPTS));
+				return;
 			case "retryMaxRetries": {
 				if (value === "unlimited") {
 					s.setRetryMaxRetries("unlimited");
@@ -975,9 +1006,6 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				if (value !== "ask" && value !== "always" && value !== "never") throw new HttpError(400, "Invalid value");
 				s.setDefaultProjectTrust(value);
 				return;
-			case "warnings.anthropicExtraUsage":
-				s.setWarnings({ ...s.getWarnings(), anthropicExtraUsage: boolValue(value, id) });
-				return;
 			case "popupNotifications":
 				s.setPopupNotificationsEnabled(boolValue(value, id));
 				return;
@@ -986,9 +1014,6 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				return;
 			case "enableAnalytics":
 				s.setEnableAnalytics(boolValue(value, id));
-				return;
-			case "showCacheMissNotices":
-				s.setShowCacheMissNotices(boolValue(value, id));
 				return;
 			case "hideThinkingBlock":
 				s.setHideThinkingBlock(boolValue(value, id));

@@ -327,10 +327,12 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 	if (turn.stats.failedActions) facts.push(t("{actions} failed", { actions: plural(turn.stats.failedActions, "action") }));
 	const titles = { partial: N_("Partially completed"), failed: N_("Failed"), cancelled: N_("Cancelled"), waiting: N_("Waiting for you"), unanswered: N_("No response") };
 	const blurbs = { cancelled: N_("You stopped this run before it finished."), unanswered: N_("The message was sent but the agent did not respond.") };
-	const blurb = blurbs[outcome] ? t(blurbs[outcome]) : "";
+	// A network failure after output started: what was shown stays, nothing is resent on its own, "Retry" continues it.
+	const interrupted = run?.terminalReason === "output-interrupted";
+	const blurb = interrupted ? t("The connection dropped while the answer was being written. What was shown is kept; nothing is resent automatically.") : blurbs[outcome] ? t(blurbs[outcome]) : "";
 	return html`<div class=${`banner o-${outcome}`} role="status">
-		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${titles[outcome] ? t(titles[outcome]) : outcome}</strong></div>
-		${error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
+		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${interrupted ? t("Interrupted") : titles[outcome] ? t(titles[outcome]) : outcome}</strong></div>
+		${interrupted ? html`<div class="banner-error">${blurb}${error ? html`<br />${clip(serverText(error, ""), 300)}` : null}</div>` : error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
 		<div class="banner-actions">
 			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry()}>${t("Retry")}</button>` : null}

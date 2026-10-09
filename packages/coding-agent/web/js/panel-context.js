@@ -1,7 +1,7 @@
-// Session panel: context budget, session stats, active tools, loaded resources and the branch tree.
+// Session panel: context budget, session stats, active tools and loaded resources.
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
-import { api, attempt, loadResources, loadStats, post, setView, state, toast, useStore } from "./store.js";
-import { actions, confirmDialog } from "./actions.js";
+import { attempt, loadResources, loadStats, post, setView, state, useStore } from "./store.js";
+import { actions } from "./actions.js";
 import { restartService } from "./service-restart.js";
 import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-usage.js";
 import { N_, t } from "./i18n.js";
@@ -21,6 +21,8 @@ const TOOL_DESCRIPTIONS = {
 	github: N_("Access connected GitHub resources."),
 	web_search: N_("Search the web and read results."),
 	web_fetch: N_("Read web pages and documents."),
+	workflow: N_("Staged read-only exploration for parallel multi-module investigation and verification."),
+	ultracode: N_("Deep high-risk investigation with counterexample and failure-path checks."),
 };
 export const toolDescription = (tool) => TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
 
@@ -37,36 +39,6 @@ function Section({ title, count, children, defaultOpen = true, action }) {
 
 function AutoCompact({ snap }) {
 	return html`<label class="check-label sm dim"><${Toggle} checked=${snap.autoCompaction} label=${t("Auto-compact")} onChange=${(v) => attempt(async () => { await post("/api/settings", { id: "autoCompact", value: v }); })} />${t("Auto-compact")}</label>`;
-}
-
-function TreeView({ snap }) {
-	const [tree, setTree] = useState(null);
-	const load = async () => {
-		try {
-			setTree(await api("/api/sessions/tree"));
-		} catch (e) {
-			toast(e.message, "error");
-		}
-	};
-	useEffect(() => {
-		load();
-	}, [snap?.session?.id, snap?.run?.runId, snap?.active]);
-	if (!tree) return html`<${Spinner} />`;
-	const rows = tree.rows.filter((r) => ["user", "assistant", "compaction", "branchSummary"].includes(r.kind));
-	if (!rows.length) return html`<div class="dim">${t("Nothing to branch from yet.")}</div>`;
-	const navigate = async (row) => {
-		const ok = await confirmDialog({ title: t("Go back to this point?"), message: t("The conversation continues from here on a new branch; earlier messages stay in the session file. If this is a message of yours, its text goes back into the composer."), confirmLabel: t("Navigate") });
-		if (!ok) return;
-		const result = await attempt(() => post("/api/sessions/navigate", { targetId: row.id }));
-		if (result?.editorText) actions.insertIntoComposer(result.editorText, { replace: true });
-	};
-	return html`<div class="tree">${rows.map((row) => html`<div class=${`tree-node ${row.onPath ? "on-path" : ""} ${row.isLeaf ? "leaf" : ""}`} key=${row.id} style=${{ paddingLeft: `${4 + Math.min(row.depth, 6) * 12}px` }}>
-		<span class=${`kind kind-${row.kind}`}>${row.kind === "user" ? t("You") : row.kind === "assistant" ? "AI" : row.kind === "compaction" ? "⟲" : "⑂"}</span>
-		<span class="truncate grow" title=${row.text}>${clip(row.text.replace(/\s+/g, " "), 70) || t("(no text)")}</span>
-		${row.childCount > 1 ? html`<span class="badge" title=${t("Branch point")}>${row.childCount}⑂</span>` : null}
-		<button class="btn sm tree-action" disabled=${snap.active} onClick=${() => navigate(row)}>${row.isLeaf ? t("current") : t("Go back")}</button>
-		${row.kind === "user" ? html`<button class="btn sm tree-action" disabled=${snap.active} onClick=${() => actions.editAndResend({ id: row.id, text: row.text })}>${t("fork")}</button>` : null}
-	</div>`)}</div>`;
 }
 
 /**
@@ -136,7 +108,6 @@ export function ContextPanel() {
 			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
 		${snap.checkpoint ? html`<${Section} title=${t("Git checkpoint")}><div class="kv"><span>${t("Status")}</span><span>${t(snap.checkpoint.status)}</span><span>${t("Created")}</span><span>${fmtDateTime(Date.parse(snap.checkpoint.createdAt))}</span><span>${t("Shell used")}</span><span>${snap.checkpoint.hadBash ? t("yes — external effects cannot be undone") : t("no")}</span></div><//>` : null}
-		<${Section} title=${t("Branches")} defaultOpen=${false}><${TreeView} snap=${snap} /><//>
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => html`<div class="res-row" key=${tool.name}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><${Toggle} checked=${tool.active} label=${tool.name} disabled=${snap.active} onChange=${(v) => toggleTool(tool.name, v)} /></div>`)}
 		<//>

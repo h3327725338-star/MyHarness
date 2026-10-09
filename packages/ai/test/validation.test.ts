@@ -114,3 +114,86 @@ describe("validateToolArguments", () => {
 		}
 	});
 });
+
+describe("repairStringifiedContainers", () => {
+	function typeboxTool(): Tool {
+		return {
+			name: "run",
+			description: "Runs phases",
+			parameters: Type.Object({
+				name: Type.String(),
+				phases: Type.Array(
+					Type.Object({
+						label: Type.String(),
+						tasks: Type.Array(Type.Object({ description: Type.String(), prompt: Type.String() })),
+					}),
+					{ minItems: 1 },
+				),
+			}) as Tool["parameters"],
+		};
+	}
+
+	it("parses an array parameter that a model channel serialized as a JSON string", () => {
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "t1",
+			name: "run",
+			arguments: {
+				name: "audit",
+				phases: '[{"label":"Investigate","tasks":[{"description":"d","prompt":"p"}]}]',
+			},
+		};
+		expect(validateToolArguments(typeboxTool(), toolCall)).toEqual({
+			name: "audit",
+			phases: [{ label: "Investigate", tasks: [{ description: "d", prompt: "p" }] }],
+		});
+	});
+
+	it("repairs stringified containers nested inside array items", () => {
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "t1",
+			name: "run",
+			arguments: {
+				name: "audit",
+				phases: [{ label: "Investigate", tasks: '[{"description":"d","prompt":"p"}]' }],
+			},
+		};
+		expect(validateToolArguments(typeboxTool(), toolCall)).toEqual({
+			name: "audit",
+			phases: [{ label: "Investigate", tasks: [{ description: "d", prompt: "p" }] }],
+		});
+	});
+
+	it("leaves genuine string arguments untouched and still reports unparseable ones", () => {
+		const literal: ToolCall = {
+			type: "toolCall",
+			id: "t1",
+			name: "run",
+			arguments: { name: "keep {me} literal", phases: [{ label: "x", tasks: [{ description: "d", prompt: "p" }] }] },
+		};
+		expect(validateToolArguments(typeboxTool(), literal).name).toBe("keep {me} literal");
+
+		const broken: ToolCall = {
+			type: "toolCall",
+			id: "t2",
+			name: "run",
+			arguments: { name: "n", phases: "[label: x]" },
+		};
+		expect(() => validateToolArguments(typeboxTool(), broken)).toThrow("Validation failed");
+	});
+
+	it("repairs the same slip against serialized plain JSON schemas", () => {
+		const tool: Tool = {
+			name: "run",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: { items: { type: "array", items: { type: "string" } } },
+				required: ["items"],
+			} as Tool["parameters"],
+		};
+		const toolCall: ToolCall = { type: "toolCall", id: "t1", name: "run", arguments: { items: '["a","b"]' } };
+		expect(validateToolArguments(tool, toolCall)).toEqual({ items: ["a", "b"] });
+	});
+});

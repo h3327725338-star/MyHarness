@@ -14,6 +14,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -92,13 +93,15 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			timestamp: Date.now(),
 		};
 
+		let headersReceived = false;
+		const fetchErrors = captureFetchErrors(model.provider);
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
-			const client = createClient(model, apiKey, options);
+			const client = createClient(model, apiKey, options, fetchErrors.fetch);
 			let params = buildParams(model, context, options, deploymentName);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -111,6 +114,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			headersReceived = true;
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(openaiStream, output, stream, model);
@@ -133,6 +137,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
+			if (!options?.signal?.aborted) recordProviderFailure(output, fetchErrors.error ?? error, { headersReceived });
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -231,7 +236,12 @@ function resolveAzureConfig(
 	};
 }
 
-function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
+function createClient(
+	model: Model<"azure-openai-responses">,
+	apiKey: string,
+	options?: AzureOpenAIResponsesOptions,
+	fetch?: FetchErrorCapture["fetch"],
+) {
 	const headers = { ...model.headers };
 
 	if (options?.headers) {
@@ -246,6 +256,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
+		...(fetch ? { fetch } : {}),
 	});
 }
 

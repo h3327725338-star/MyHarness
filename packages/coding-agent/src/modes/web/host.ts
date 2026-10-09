@@ -803,6 +803,7 @@ export class WebHost {
 					maxAttempts: event.maxAttempts,
 					delayMs: event.delayMs,
 					errorMessage: explainProviderError(event.errorMessage),
+					errorCategory: event.errorCategory,
 				});
 				return;
 			case "auto_retry_end":

@@ -507,8 +507,24 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 					emitProgress();
 
 					if (phaseDetails.status !== "completed" && phaseDetails.status !== "partial") {
+						// Carry each failed task's own reason (including the worker's startup stderr) into the
+						// message: without it the caller only sees a count and has to reproduce the failure to
+						// learn the cause, while the plain Explore tool already shows the same details.
+						const clip = (text: string, limit = 400) =>
+							text.length <= limit ? text : `${text.slice(0, limit)}…`;
+						const reasons = phaseDetails.results
+							.filter((task) => task.status !== "completed" && task.status !== "partial")
+							.map((task) => {
+								const detail = [task.stopReason, task.error ?? task.lastToolInfo]
+									.filter(Boolean)
+									.map(String)
+									.join(": ");
+								return `${task.description || "task"}(${task.status}): ${clip(detail) || "unknown"}`;
+							});
 						throw new Error(
-							`${profile.label} 阶段“${phase.name}”没有可用调查结果（${usableTasks}/${phase.tasks.length}），已停止后续阶段。`,
+							`${profile.label} 阶段“${phase.name}”没有可用调查结果（${usableTasks}/${phase.tasks.length}）` +
+								(reasons.length > 0 ? `。失败任务：${reasons.join("；")}` : "") +
+								"，已停止后续阶段。",
 						);
 					}
 

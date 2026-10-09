@@ -131,7 +131,7 @@ function modelScreen(ctx, arg) {
 /** A settings item by id, as the server lists it (GET /api/settings). */
 const settingItem = (id) => state.settings?.items.find((item) => item.id === id);
 
-/** A screen with a few related settings (Web Search, Context Window, Warnings …). */
+/** A screen with a few related settings (Web Search, Context Window …). */
 function groupScreen(title, ids, subtitle) {
 	return () => {
 		const rows = ids.map((id) => settingItem(id)).filter(Boolean).map((item) => itemRow(item));
@@ -143,7 +143,7 @@ const onOff = (value) => (value ? t("On") : t("Off"));
 
 const WEB_SEARCH_SETTINGS = ["webSearch.enabled", "webSearch.engines", "webSearch.pagesPerSearch", "webSearch.maxUrlsPerFetch", "webSearch.fetchConcurrency", "webSearch.browserFallback", "webSearch.browser", "webSearch.useBrowserCookies"];
 const CONTEXT_WINDOW_SETTINGS = ["contextWindowMain", "contextWindowSubAgent"];
-const WARNING_SETTINGS = ["warnings.anthropicExtraUsage"];
+const NETWORK_TIMEOUT_SETTINGS = ["network.connectTimeoutMs", "network.firstByteTimeoutMs", "network.streamIdleTimeoutMs", "retry.networkMaxAttempts"];
 
 /**
  * The pages behind the rows of the /settings menu that are not a single setting (SETTINGS_MENU_PAGES names them):
@@ -157,13 +157,13 @@ const MENU_PAGES = {
 		value: (snap) => (snap?.model ? `${snap.model.provider}/${snap.model.id}${snap.thinking?.supported ? ` · ${effortName(snap.thinking.level)}` : ""}` : t("Not selected")),
 	},
 	"web-search": { open: groupScreen("Web Search", WEB_SEARCH_SETTINGS), settings: WEB_SEARCH_SETTINGS, value: () => (settingItem("webSearch.enabled") ? onOff(settingItem("webSearch.enabled").value) : "") },
+	"network-timeouts": { open: groupScreen("Timeouts & retries", NETWORK_TIMEOUT_SETTINGS), settings: NETWORK_TIMEOUT_SETTINGS },
 	"context-window": {
 		open: () => groupScreen("Context Window", CONTEXT_WINDOW_SETTINGS, t("Empty uses the model's own window."))(),
 		settings: CONTEXT_WINDOW_SETTINGS,
 		value: () => CONTEXT_WINDOW_SETTINGS.map((id) => capValue(settingItem(id))).join(" · "),
 	},
 	"git-integration": { open: () => gitRoot(), value: (snap) => (snap?.git ? onOff(snap.git.enabled) : "") },
-	warnings: { open: groupScreen("Warnings", WARNING_SETTINGS), settings: WARNING_SETTINGS },
 	thinking: { open: () => effortScreen(), value: (snap) => (snap?.thinking?.supported ? effortName(snap.thinking.level) : "") },
 	appearance: { open: () => appearanceScreen() },
 	"project-trust": { open: (c) => projectTrustScreen(c), value: (snap) => (snap?.trust?.requiresTrust ? (snap.trust.trusted ? t("Trusted") : t("Not trusted")) : "") },

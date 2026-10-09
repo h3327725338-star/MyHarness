@@ -157,7 +157,7 @@ function LoginNotice() {
 	return null;
 }
 
-function ProviderDetail({ provider, entry, apiTypes, onSaved, onDirty, onDeleted }) {
+function ProviderDetail({ provider, entry, apiTypes, defaults, onSaved, onDirty, onDeleted }) {
 	const [sub, setSub] = useState("main");
 	const [busy, setBusy] = useState("");
 	useEffect(() => setSub("main"), [provider.id]);
@@ -187,7 +187,7 @@ function ProviderDetail({ provider, entry, apiTypes, onSaved, onDirty, onDeleted
 		${provider.missingBaseUrl ? html`<div class="notice warn" role="status">${t("The Base URL is not filled in, so this provider is off. Enter the Base URL and save to use it.")}</div>` : null}
 		<${LoginNotice} />
 		${entry
-			? html`<${ProviderForm} key=${provider.id} initial=${{ id: entry.id, config: entry.config }} apiTypes=${apiTypes} keyArea=${keyArea} hasStoredKey=${hasStoredKey} onSaved=${onSaved} onDirty=${onDirty}
+			? html`<${ProviderForm} key=${provider.id} initial=${{ id: entry.id, config: entry.config }} apiTypes=${apiTypes} defaults=${defaults} keyArea=${keyArea} hasStoredKey=${hasStoredKey} onSaved=${onSaved} onDirty=${onDirty}
 				footerStart=${html`<button class="btn danger" disabled=${!!busy} onClick=${remove}><${Icon} name="trash" size=${13} />${busy === "delete" ? t("Deleting…") : t("Delete provider")}</button>`} />`
 			: html`<section class="set-card">
 				<div class="set-card-head"><strong>${t("Connection")}</strong></div>
@@ -258,9 +258,9 @@ export function ProvidersPage() {
 				: sel === NEW || !current
 					? html`<div class="stack">
 						<div class="prov-head"><div class="col grow"><div class="prov-title">${t("Add provider")}</div><div class="dim">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")}</div></div></div>
-						<${ProviderForm} key="new" initial=${null} apiTypes=${custom.apiTypes} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} />
+						<${ProviderForm} key="new" initial=${null} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} />
 					</div>`
-					: html`<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setSel(null))} />`}
+					: html`<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setSel(null))} />`}
 			${providers?.modelsPath ? html`<div class="dim mono truncate pf-hint prov-path" title=${providers.modelsPath}>${providers.modelsPath}</div>` : null}
 		</div>
 	</div>`;

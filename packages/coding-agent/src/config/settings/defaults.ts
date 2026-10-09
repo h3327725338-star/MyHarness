@@ -1,4 +1,4 @@
-import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "../../platform/process/http-dispatcher.ts";
+import { DEFAULT_NETWORK_TIMEOUTS, parseNetworkTimeoutMs } from "../../platform/process/http-dispatcher.ts";
 import type { Settings } from "./types.ts";
 
 /** Allowed range for the user-configurable sub-agent task cap; the schema itself never exceeds `maxTasks.max`. */
@@ -33,6 +33,7 @@ export const SETTINGS_DEFAULTS = {
 		enabled: true,
 		maxRetries: 3,
 		baseDelayMs: 2_000,
+		networkMaxAttempts: 2,
 		maxRetryDelayMs: 60_000,
 	},
 	terminal: {
@@ -76,7 +77,7 @@ export const SETTINGS_DEFAULTS = {
 	defaultSubAgentRepeatedOperationDetection: true,
 	// Explore sub-agents one Agent tool call may start by default; the user can configure 1–18.
 	defaultSubAgentMaxTasks: 3,
-	defaultHttpIdleTimeoutMs: DEFAULT_HTTP_IDLE_TIMEOUT_MS,
+	network: DEFAULT_NETWORK_TIMEOUTS,
 	webShutdownGraceSeconds: 10,
 	webSearch: {
 		enabled: false,
@@ -146,13 +147,42 @@ export function mergeSettings(base: Settings, overrides: Settings): Settings {
 	return result;
 }
 
+/** A timeout setting where `0` (or the string "disabled") means no timeout; `undefined` when the value is absent. */
 export function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
-	const timeoutMs = parseHttpIdleTimeoutMs(value);
-	if (timeoutMs !== undefined) {
-		return timeoutMs;
+	const parsed = parseDisableableTimeout(value);
+	if (parsed !== undefined) {
+		return parsed;
 	}
 	if (value !== undefined) {
 		throw new Error(`Invalid ${settingName} setting: ${String(value)}`);
 	}
 	return undefined;
+}
+
+function parseDisableableTimeout(value: unknown): number | undefined {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed.toLowerCase() === "disabled") return 0;
+		if (trimmed.length === 0) return undefined;
+		return parseDisableableTimeout(Number(trimmed));
+	}
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+	return Math.floor(value);
+}
+
+/** A request time limit read from settings: a valid value, or `undefined` so the default applies. */
+export function readNetworkTimeoutSetting(value: unknown): number | undefined {
+	return parseNetworkTimeoutMs(value);
+}
+
+export const MIN_NETWORK_MAX_ATTEMPTS = 1;
+export const MAX_NETWORK_MAX_ATTEMPTS = 20;
+
+export function readNetworkMaxAttempts(value: unknown): number | undefined {
+	return typeof value === "number" &&
+		Number.isInteger(value) &&
+		value >= MIN_NETWORK_MAX_ATTEMPTS &&
+		value <= MAX_NETWORK_MAX_ATTEMPTS
+		? value
+		: undefined;
 }

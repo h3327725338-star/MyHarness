@@ -24,13 +24,15 @@ beforeEach(() => {
 		route === "/api/git/record" ? { id: "saved" } : { status: "failed", failure: "hook failed\nlog" },
 	);
 });
-it("keeps the error card without a user-log repair action and notifies after recovery stops", async () => {
+it("keeps the error card without a user-log repair action and no duplicate recovery-stop toast", async () => {
 	await commitChanges();
 	expect(store.state.items).toHaveLength(1);
 	expect(store.state.items[0]!.result).toMatchObject({ tone: "error", lines: "hook failed\nlog" });
 	expect(store.state.items[0]!.result).not.toHaveProperty("fix");
 	expect(store.post.mock.calls.map((call) => call[0])).toEqual(["/api/git/commit", "/api/git/record"]);
-	expect(store.toast).toHaveBeenCalledWith(expect.stringContaining("no further retries"), "error", 9000);
+	// The failure card already carries the full diagnostics; the separate "recovery stopped" toast was
+	// deliberately removed (commit c1c575c: 移除重复的自动恢复停止 toast), so nothing may toast here.
+	expect(store.toast).not.toHaveBeenCalled();
 	expect(store.loadGitStatus).toHaveBeenCalledTimes(1);
 	expect(store.state.gitTask).toBeNull();
 });

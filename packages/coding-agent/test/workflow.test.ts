@@ -240,6 +240,37 @@ describe("workflow tool", () => {
 		});
 	});
 
+	it("names each failed task's own reason when a phase has no usable result", async () => {
+		// A crashed worker child used to leave only "（0/3）" behind: the SyntaxError on its stderr was
+		// recorded on the task but never carried into the returned message, unlike the plain Explore tool.
+		const runBatch = vi.fn(async (options): Promise<ExploreBatchResult> => {
+			const results = options.tasks.map((task: { description: string; prompt: string }) => ({
+				...completedTask(task.description, task.prompt, ""),
+				status: "failed" as const,
+				stopReason: "runtime_error" as const,
+				error: "SyntaxError: The requested module '@myharness/ai' does not provide an export named 'setProviderDispatcherResolver' (STDERR)",
+			}));
+			return { text: "", fullText: "", details: { completed: 0, total: results.length, results } };
+		});
+		const tool = createWorkflowToolDefinition(process.cwd(), {
+			getSettings: () => ({ enabled: true, provider: "openai", model: "gpt-test", thinkingLevel: "high" }),
+			runBatch,
+		});
+
+		await expect(
+			tool.execute(
+				"test-call",
+				{
+					name: "检查登录",
+					phases: [{ name: "调查", tasks: [{ description: "查代码", prompt: "检查登录代码" }] }],
+				},
+				undefined,
+				undefined,
+				undefined as any,
+			),
+		).rejects.toThrow(/查代码\(failed\): runtime_error: SyntaxError.*setProviderDispatcherResolver/s);
+	});
+
 	it("enforces a phase deadline even when the batch never settles", async () => {
 		const tool = createWorkflowToolDefinition(process.cwd(), {
 			getSettings: () => ({

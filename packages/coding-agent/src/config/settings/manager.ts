@@ -6,13 +6,18 @@ import {
 	type ContextWindowSettings,
 	normalizeContextWindowSettings,
 } from "../../context/context-window.ts";
+import type { NetworkTimeouts } from "../../platform/process/http-dispatcher.ts";
 import { normalizePath } from "../../utils/paths.ts";
 import { assertProjectSettingsWritable, canReadProjectSettings } from "../trust/index.ts";
 import {
+	MAX_NETWORK_MAX_ATTEMPTS,
+	MIN_NETWORK_MAX_ATTEMPTS,
 	mergeSettings,
 	normalizeRetryMaxRetries,
 	PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES,
 	parseTimeoutSetting,
+	readNetworkMaxAttempts,
+	readNetworkTimeoutSetting,
 	SETTINGS_DEFAULTS,
 	SUB_AGENT_SETTING_RANGES,
 	WEB_SEARCH_BROWSER_IDS,
@@ -152,6 +157,41 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 	};
 }
 
+const reportedRemovedSettings = new Set<string>();
+
+/** Test hook: forget which removed settings were already reported. */
+export function resetRemovedSettingNotices(): void {
+	reportedRemovedSettings.clear();
+}
+
+function noticeRemovedSetting(scope: SettingsScope, key: string, message: string): void {
+	const id = `${scope}:${key}`;
+	if (reportedRemovedSettings.has(id)) return;
+	reportedRemovedSettings.add(id);
+	console.warn(`[settings] ${scope} settings.json: "${key}" ${message}`);
+}
+
+/**
+ * `httpIdleTimeoutMs` (one limit for everything) and `retry.provider.timeoutMs` (a second, whole-request SDK limit) are
+ * gone; each is reported once per process. They are never mapped onto the new `network.*` limits: the old number was one value for three different waits.
+ */
+function noticeRemovedTimeoutSettings(settings: Settings, scope: SettingsScope): void {
+	if (settings.httpIdleTimeoutMs !== undefined) {
+		noticeRemovedSetting(
+			scope,
+			"httpIdleTimeoutMs",
+			"is no longer used and was ignored; set network.connectTimeoutMs, network.firstByteTimeoutMs and network.streamIdleTimeoutMs instead.",
+		);
+	}
+	if (settings.retry?.provider?.timeoutMs !== undefined) {
+		noticeRemovedSetting(
+			scope,
+			"retry.provider.timeoutMs",
+			"is no longer used and was ignored; the first-byte limit is network.firstByteTimeoutMs.",
+		);
+	}
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
@@ -202,6 +242,8 @@ export class SettingsManager {
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectTrusted);
 		const initialErrors: SettingsError[] = [];
+		noticeRemovedTimeoutSettings(globalLoad.settings, "global");
+		noticeRemovedTimeoutSettings(projectLoad.settings, "project");
 		if (globalLoad.error) {
 			initialErrors.push({ scope: "global", error: globalLoad.error });
 		}
@@ -1005,25 +1047,52 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getHttpIdleTimeoutMs(): number {
-		return (
-			parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ??
-			SETTINGS_DEFAULTS.defaultHttpIdleTimeoutMs
-		);
+	/** The three request time limits; a missing or invalid value uses its default. */
+	getNetworkTimeouts(): NetworkTimeouts {
+		const stored = this.settings.network;
+		const defaults = SETTINGS_DEFAULTS.network;
+		return {
+			connectTimeoutMs: readNetworkTimeoutSetting(stored?.connectTimeoutMs) ?? defaults.connectTimeoutMs,
+			firstByteTimeoutMs: readNetworkTimeoutSetting(stored?.firstByteTimeoutMs) ?? defaults.firstByteTimeoutMs,
+			streamIdleTimeoutMs: readNetworkTimeoutSetting(stored?.streamIdleTimeoutMs) ?? defaults.streamIdleTimeoutMs,
+		};
 	}
 
-	setHttpIdleTimeoutMs(timeoutMs: number): void {
-		if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-			throw new Error(`Invalid httpIdleTimeoutMs setting: ${String(timeoutMs)}`);
+	setNetworkTimeout(key: keyof NetworkTimeouts, timeoutMs: number): void {
+		if (readNetworkTimeoutSetting(timeoutMs) === undefined) {
+			throw new Error(`Invalid network.${key} setting: ${String(timeoutMs)}`);
 		}
-		this.globalSettings.httpIdleTimeoutMs = Math.floor(timeoutMs);
-		this.markModified("httpIdleTimeoutMs");
+		if (!this.globalSettings.network) {
+			this.globalSettings.network = {};
+		}
+		this.globalSettings.network[key] = Math.floor(timeoutMs);
+		this.markModified("network", key);
 		this.save();
 	}
 
-	getProviderRetrySettings(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs: number } {
+	/** Attempts per model (the first included) for a network failure before the fallback model takes over. */
+	getNetworkMaxAttempts(): number {
+		return (
+			readNetworkMaxAttempts(this.settings.retry?.networkMaxAttempts) ?? SETTINGS_DEFAULTS.retry.networkMaxAttempts
+		);
+	}
+
+	setNetworkMaxAttempts(attempts: number): void {
+		if (readNetworkMaxAttempts(attempts) === undefined) {
+			throw new Error(
+				`Invalid retry.networkMaxAttempts setting: ${String(attempts)} (${MIN_NETWORK_MAX_ATTEMPTS}-${MAX_NETWORK_MAX_ATTEMPTS})`,
+			);
+		}
+		if (!this.globalSettings.retry) {
+			this.globalSettings.retry = {};
+		}
+		this.globalSettings.retry.networkMaxAttempts = attempts;
+		this.markModified("retry", "networkMaxAttempts");
+		this.save();
+	}
+
+	getProviderRetrySettings(): { maxRetries?: number; maxRetryDelayMs: number } {
 		return {
-			timeoutMs: this.settings.retry?.provider?.timeoutMs,
 			maxRetries: this.settings.retry?.provider?.maxRetries,
 			maxRetryDelayMs: this.settings.retry?.provider?.maxRetryDelayMs ?? SETTINGS_DEFAULTS.retry.maxRetryDelayMs,
 		};

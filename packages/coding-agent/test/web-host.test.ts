@@ -977,7 +977,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await subAgentItem()).value.maxTasks).toBe(5);
 	});
 
-	it("writes the auto-retry attempt count and the free HTTP idle timeout", async () => {
+	it("writes the auto-retry attempt count and the separate network timeouts", async () => {
 		const fx = await start();
 		const item = async (id: string) => (await fx.get("/api/settings")).items.find((i: any) => i.id === id);
 		expect(await item("retryMaxRetries")).toMatchObject({
@@ -996,19 +996,38 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await item("retryMaxRetries")).value).toBe("unlimited");
 		await expect(fx.post("/api/settings", { id: "retryMaxRetries", value: 2.5 })).rejects.toThrow(/whole number/);
 		await expect(fx.post("/api/settings", { id: "retryMaxRetries", value: -1 })).rejects.toThrow(/between 0 and/);
-		// The idle timeout row carries the stored milliseconds; the seconds/minutes choice is only how it is typed.
-		const timeout = await item("httpIdleTimeoutMs");
-		expect(timeout).toMatchObject({ type: "numberUnit", min: 0 });
-		expect(typeof timeout.value).toBe("number");
-		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 10 * 60_000 });
-		expect((await item("httpIdleTimeoutMs")).value).toBe(600_000);
-		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 45_000 });
-		expect((await item("httpIdleTimeoutMs")).value).toBe(45_000);
-		await fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 0 });
-		expect((await item("httpIdleTimeoutMs")).value).toBe(0);
-		// Anything past the timer range is refused; "disabled" (0) is the way to wait forever.
-		await expect(fx.post("/api/settings", { id: "httpIdleTimeoutMs", value: 2_147_483_648 })).rejects.toThrow(
-			/between 0 and/,
+		// Each timeout row carries the stored milliseconds; the unit shown (seconds) is only how it is typed.
+		for (const [id, value] of [
+			["network.connectTimeoutMs", 10_000],
+			["network.firstByteTimeoutMs", 60_000],
+			["network.streamIdleTimeoutMs", 60_000],
+		] as const) {
+			expect(await item(id)).toMatchObject({
+				type: "numberUnit",
+				section: "Timeouts & retries",
+				value,
+				min: 1000,
+				max: 3_600_000,
+				units: [{ value: "seconds", label: "seconds", multiplier: 1000 }],
+			});
+		}
+		expect(await item("httpIdleTimeoutMs")).toBeUndefined();
+		await fx.post("/api/settings", { id: "network.firstByteTimeoutMs", value: 90_000 });
+		expect((await item("network.firstByteTimeoutMs")).value).toBe(90_000);
+		expect((await item("network.connectTimeoutMs")).value).toBe(10_000);
+		expect((await item("network.streamIdleTimeoutMs")).value).toBe(60_000);
+		// Zero would mean "no limit"; there is none, so anything below one second or past an hour is refused.
+		await expect(fx.post("/api/settings", { id: "network.streamIdleTimeoutMs", value: 0 })).rejects.toThrow(
+			/between 1000 and/,
+		);
+		await expect(fx.post("/api/settings", { id: "network.connectTimeoutMs", value: 3_600_001 })).rejects.toThrow(
+			/between 1000 and/,
+		);
+		expect(await item("retry.networkMaxAttempts")).toMatchObject({ type: "number", value: 2, min: 1, max: 20 });
+		await fx.post("/api/settings", { id: "retry.networkMaxAttempts", value: 4 });
+		expect((await item("retry.networkMaxAttempts")).value).toBe(4);
+		await expect(fx.post("/api/settings", { id: "retry.networkMaxAttempts", value: 0 })).rejects.toThrow(
+			/between 1 and/,
 		);
 	});
 
@@ -1204,19 +1223,22 @@ describe("Web host (real runtime with a faux provider)", () => {
 	it("applies a saved project trust decision to the open chat at once", async () => {
 		const fx = await start();
 		mkdirSync(join(fx.project, ".myharness"));
-		writeFileSync(join(fx.project, ".myharness", "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 12345 }));
-		const httpIdleTimeout = async () =>
-			(await fx.get("/api/settings")).items.find((item: any) => item.id === "httpIdleTimeoutMs").value;
+		writeFileSync(
+			join(fx.project, ".myharness", "settings.json"),
+			JSON.stringify({ network: { firstByteTimeoutMs: 12345 } }),
+		);
+		const firstByteTimeout = async () =>
+			(await fx.get("/api/settings")).items.find((item: any) => item.id === "network.firstByteTimeoutMs").value;
 
 		expect(await fx.post("/api/trust", { option: "do-not-trust" })).toMatchObject({ ok: true, trusted: false });
 		expect(await fx.get("/api/trust")).toMatchObject({ requiresTrust: true, trusted: false, saved: false });
 		expect((await fx.get("/api/state")).trust).toEqual({ trusted: false, requiresTrust: true });
-		expect(await httpIdleTimeout()).not.toBe(12345);
+		expect(await firstByteTimeout()).not.toBe(12345);
 
 		// Trusting the project loads its own settings into the chat that is open.
 		expect(await fx.post("/api/trust", { option: "trust" })).toMatchObject({ ok: true, trusted: true });
 		expect(await fx.get("/api/trust")).toMatchObject({ trusted: true, saved: true });
-		expect(await httpIdleTimeout()).toBe(12345);
+		expect(await firstByteTimeout()).toBe(12345);
 		await expect(fx.post("/api/trust", { option: "nope" })).rejects.toThrow(/Unknown trust option/);
 	});
 

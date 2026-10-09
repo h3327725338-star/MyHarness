@@ -661,7 +661,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { services } = runtime;
 	const { settingsManager, modelRuntime } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
-	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+	configureHttpDispatcher(settingsManager.getNetworkTimeouts());
 
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,

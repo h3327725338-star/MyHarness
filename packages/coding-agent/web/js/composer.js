@@ -10,10 +10,11 @@ import { BranchChip } from "./branch-menu.js";
 import { ContextMeter } from "./context-usage.js";
 import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
-import { clip, debounce, fmtDuration, plural, pointerMoved } from "./util.js";
+import { debounce, fmtDuration, plural, pointerMoved } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
+import { retryReason } from "./retry-reason.js";
 
 import { drafts, registerRestartDraft } from "./restart-state.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
@@ -95,10 +96,25 @@ function DialogBar({ dialog }) {
 	</div>`;
 }
 
+/** A provider-problem strip: one line (status, short cause, action); the full error opens on hover or click. */
+function ProviderStrip({ status, message, category, cancel }) {
+	const [open, setOpen] = useState(false);
+	const detail = String(message ?? "").trim();
+	return html`<div class="strip warn strip-retry" role="status">
+		<${Spinner} />
+		<button class="strip-main" type="button" title=${detail} aria-expanded=${open} disabled=${!detail} onClick=${() => setOpen(!open)}>
+			<span class="strip-status">${status}</span><span class="strip-reason">${retryReason(detail, category)}</span>${detail ? html`<${Icon} name="chevronDown" size=${12} class="strip-chev" />` : null}
+		</button>
+		${cancel || null}
+		${open && detail ? html`<pre class="strip-detail-text">${detail}</pre>` : null}
+	</div>`;
+}
+
 function StatusStrips({ snap }) {
 	const compaction = useStore((s) => s.compaction);
 	const retry = useStore((s) => s.retry);
 	const recovery = useStore((s) => s.recovery);
+	const fallbackTo = useStore((s) => s.fallbackTo);
 	const completion = useStore((s) => s.completion);
 	const [visibleCompletion, setVisibleCompletion] = useState(null);
 	useEffect(() => {
@@ -126,9 +142,10 @@ function StatusStrips({ snap }) {
 	}
 	if (retry) {
 		const remaining = Math.max(0, Math.ceil((retry.at + retry.delayMs - Date.now()) / 1000));
-		strips.push(html`<div class="strip warn" key="r"><${Spinner} /> <span>${t("Provider error — retrying ({attempt}/{maxAttempts}) in {remaining}s: {clip}", { attempt: retry.attempt, maxAttempts: retry.maxAttempts ?? "∞", remaining, clip: clip(retry.errorMessage, 120) })}</span><button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button></div>`);
+		strips.push(html`<${ProviderStrip} key="r" status=${t("Retry {attempt}/{maxAttempts} in {remaining}s", { attempt: retry.attempt, maxAttempts: retry.maxAttempts ?? "∞", remaining })} message=${retry.errorMessage} category=${retry.errorCategory} cancel=${html`<button class="link-btn" onClick=${() => post("/api/abort-retry")}>${t("Cancel retry")}</button>`} />`);
 	}
-	if (recovery) strips.push(html`<div class="strip warn" key="v"><${Spinner} /> <span>${recovery.kind === "new-conversation" ? t("Recovering by rebuilding the conversation (#{conversation})", { conversation: recovery.conversation }) : t("Recovering from a provider problem ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })}: ${clip(recovery.errorMessage, 100)}</span></div>`);
+	if (fallbackTo) strips.push(html`<div class="strip" key="m" role="status"><${Spinner} /> <span>${t("Switched to {model}", { model: fallbackTo })}</span></div>`);
+	if (recovery) strips.push(html`<${ProviderStrip} key="v" status=${recovery.kind === "new-conversation" ? t("Rebuilding conversation (#{conversation})", { conversation: recovery.conversation }) : t("Provider recovery ({attempt}/{budget})", { attempt: recovery.attempt, budget: recovery.budget })} message=${recovery.errorMessage} />`);
 	if (completion && visibleCompletion === completion.startedAt && !snap?.active) strips.push(html`<div class="strip" key="f" role="status"><${Spinner} /> <span>${t(completionLabel(completion))}</span></div>`);
 	void tick;
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;

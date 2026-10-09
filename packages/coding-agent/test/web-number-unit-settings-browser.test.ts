@@ -9,12 +9,13 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 const installed = detectInstalledBrowsers();
 
 /**
- * The `numberUnit` rows of the Network page (auto-retry attempts with "Unlimited", HTTP idle timeout typed in
- * minutes/seconds with "Disabled"): they render as one bordered number field plus a unit dropdown, show the stored
- * value in the largest fitting unit, translate in Chinese, and save the exact stored value on the server.
+ * The `numberUnit` rows of the Network page: auto-retry attempts with "Unlimited" (number + unit dropdown), and the
+ * three timeouts of the "Timeouts & retries" card typed in seconds (number + fixed unit text, stored in milliseconds).
+ * They translate in Chinese and save the exact stored value on the server; the card also shows a note and the longest
+ * wait the current numbers add up to.
  */
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"types a retry count and an idle timeout with their own units and saves the stored value",
+	"types a retry count and the three timeouts with their own units and saves the stored value",
 	async () => {
 		const root = mkdtempSync(join(tmpdir(), "myharness-number-unit-"));
 		const server = new WebHttpServer();
@@ -39,20 +40,51 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				],
 			},
 			{
-				id: "httpIdleTimeoutMs",
-				section: "Network",
-				label: "HTTP idle timeout",
-				description: "Maximum wait without new data while waiting for the model.",
+				id: "network.connectTimeoutMs",
+				section: "Timeouts & retries",
+				label: "Connect timeout",
+				description: "Longest time to set up a connection.",
 				type: "numberUnit",
-				value: 300000,
-				min: 0,
-				max: 2147483647,
-				maxHint: "About 24 days is the longest wait; choose Disabled for no timeout.",
-				units: [
-					{ value: "minutes", label: "minutes", multiplier: 60000 },
-					{ value: "seconds", label: "seconds", multiplier: 1000 },
-					{ value: "disabled", label: "Disabled", fixed: 0 },
-				],
+				value: 10000,
+				min: 1000,
+				max: 3600000,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1000 }],
+			},
+			{
+				id: "network.firstByteTimeoutMs",
+				section: "Timeouts & retries",
+				label: "First-byte timeout",
+				description: "Longest wait until the server starts to answer.",
+				type: "numberUnit",
+				value: 60000,
+				min: 1000,
+				max: 3600000,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1000 }],
+			},
+			{
+				id: "network.streamIdleTimeoutMs",
+				section: "Timeouts & retries",
+				label: "Stream idle timeout",
+				description: "Longest gap between two pieces of data.",
+				type: "numberUnit",
+				value: 60000,
+				min: 1000,
+				max: 3600000,
+				maxHint: "Enter 1 to 3600 seconds.",
+				units: [{ value: "seconds", label: "seconds", multiplier: 1000 }],
+			},
+			{
+				id: "retry.networkMaxAttempts",
+				section: "Timeouts & retries",
+				label: "Attempts per model (first included)",
+				description: "After this many failed attempts, the fallback model takes over.",
+				type: "number",
+				value: 2,
+				min: 1,
+				max: 20,
+				unit: "times",
 			},
 		];
 		try {
@@ -90,27 +122,41 @@ try {
  render(h(SettingsModal,{}),document.getElementById('app'));
  await wait(400);
  const retry=rowByLabel('自动重试次数');
- const timeout=rowByLabel('HTTP 空闲超时');
- assert(retry&&timeout,'both network rows render');
- assert(retry.querySelector('.unit-input').value==='3','the count shows the typed number');
+ const rowStarting=(label)=>[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.set-label')?.textContent.startsWith(label));
+ const connect=rowStarting('建连超时');
+ const firstByte=rowStarting('首包超时');
+ const idle=rowStarting('静默超时');
+ const attempts=rowStarting('同一模型最多尝试次数（含第一次）');
+ assert(retry&&connect&&firstByte&&idle&&attempts,'all rows render with their Chinese labels');
+ assert(retry.querySelector('.group-input').value==='3','the count shows the typed number');
  assert([...retry.querySelectorAll('option')].map(o=>o.textContent).join('/')==='次/无限','retry units are translated');
- assert(timeout.querySelector('.unit-input').value==='5','300000 ms shows as 5');
- assert(timeout.querySelector('.unit-select').value==='minutes','the largest fitting unit is selected');
- assert([...timeout.querySelectorAll('option')].map(o=>o.textContent).join('/')==='分钟/秒/停用','timeout units are translated');
+ // The three timeouts are typed in seconds: the unit is fixed text, not a one-entry menu.
+ assert(connect.querySelector('.group-input').value==='10','10000 ms shows as 10');
+ assert(firstByte.querySelector('.group-input').value==='60','60000 ms shows as 60');
+ assert(idle.querySelector('.group-input').value==='60','60000 ms shows as 60');
+ for (const row of [connect,firstByte,idle]) {
+  assert(!row.querySelector('select'),'a single unit is not a dropdown');
+  assert(row.querySelector('span.group-unit')?.textContent==='秒','the fixed unit reads seconds');
+ }
+ const notes=()=>[...document.querySelectorAll('.set-note')].map(n=>n.textContent);
+ assert(notes().some(n=>n.startsWith('断连不设时限')),'the disconnect note is shown');
+ assert(notes().includes('按当前设置，单次请求最长等待约 2.3 分钟。'),'estimate: 2 x (10 + 60) s = 2.3 minutes, got '+notes().join('|'));
  // Picking "无限" saves the string at once and the number field goes empty.
- setSelect(retry.querySelector('.unit-select'),'unlimited');
+ setSelect(retry.querySelector('.group-unit'),'unlimited');
  await wait(300);
- assert(retry.querySelector('.unit-input').disabled===true,'unlimited disables the number');
- // Seconds keep the effective value: 5 minutes retype as 300; typing 90 and leaving saves 90000 ms.
- setSelect(timeout.querySelector('.unit-select'),'seconds');
- await wait(150);
- assert(timeout.querySelector('.unit-input').value==='300','changing the unit keeps the effective value');
- typeAndLeave(timeout.querySelector('.unit-input'),'90');
+ assert(retry.querySelector('.group-input').disabled===true,'unlimited disables the number');
+ // Typing 90 seconds and leaving saves 90000 ms, and the estimate follows: 2 x (10 + 90) s = 3.3 minutes.
+ typeAndLeave(firstByte.querySelector('.group-input'),'90');
+ await wait(400);
+ assert(notes().includes('按当前设置，单次请求最长等待约 3.3 分钟。'),'estimate follows the new value, got '+notes().join('|'));
+ // 0 is out of range (there is no "no limit"): the box restores and nothing is saved.
+ const idleInput=idle.querySelector('.group-input');
+ idleInput.focus();idleInput.value='0';idleInput.dispatchEvent(new Event('input',{bubbles:true}));
+ await wait(100);
+ assert(idleInput.classList.contains('invalid'),'an out-of-range value turns the box red while typing');
+ idleInput.blur();
  await wait(300);
- // "停用" saves 0.
- setSelect(timeout.querySelector('.unit-select'),'disabled');
- await wait(300);
- assert(timeout.querySelector('.unit-input').value==='','disabled shows no number');
+ assert(rowStarting('静默超时').querySelector('.group-input').value==='60','an out-of-range value is restored');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 }catch(error){document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,
@@ -126,8 +172,7 @@ try {
 			expect(page.text).toContain('id="ready">passed');
 			expect(saved).toEqual([
 				{ id: "retryMaxRetries", value: "unlimited" },
-				{ id: "httpIdleTimeoutMs", value: 90000 },
-				{ id: "httpIdleTimeoutMs", value: 0 },
+				{ id: "network.firstByteTimeoutMs", value: 90000 },
 			]);
 		} finally {
 			await browser.shutdown();

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { MAX_KEEP_ALIVE_SECONDS, MIN_KEEP_ALIVE_SECONDS } from "../../platform/process/http-dispatcher.ts";
 import { stripJsonComments } from "../../utils/json.ts";
 import { normalizePath } from "../../utils/paths.ts";
 
@@ -219,6 +220,10 @@ const ProviderConfigSchema = Type.Object({
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
+	/** Seconds an idle connection to this provider stays open (1–600). Omitted = the default (DEFAULT_KEEP_ALIVE_SECONDS). */
+	keepAliveSeconds: Type.Optional(Type.Integer({ minimum: MIN_KEEP_ALIVE_SECONDS, maximum: MAX_KEEP_ALIVE_SECONDS })),
+	/** Which address family to connect with. Omitted = the default (DEFAULT_IP_FAMILY). */
+	ipFamily: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("ipv4"), Type.Literal("ipv6")])),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
 });

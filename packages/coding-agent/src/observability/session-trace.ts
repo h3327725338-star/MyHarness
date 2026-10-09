@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@myharness/agent-core";
 import type { ProviderResponse, ProviderResponseMetadata } from "@myharness/ai";
-import type { AssistantMessage, Model } from "@myharness/ai/compat";
+import { type AssistantMessage, getProviderFailure, type Model } from "@myharness/ai/compat";
 import {
 	classifyToolStatus,
 	getRuntimeTraceOptionsFromEnvironment,
@@ -16,6 +16,33 @@ import {
  * lifecycle here lets AgentSession coordinate a run without owning the trace
  * writer's queueing, scope, and unfinished-tool bookkeeping.
  */
+/**
+ * One line per attempt for the network log: which attempt, how it ended and what the client measured. A field that was
+ * not measured stays unset; nothing is filled in by guessing.
+ */
+export function describeRequestAttempt(
+	message: AssistantMessage,
+	attempt?: { number: number; contextTokens?: number },
+): Record<string, unknown> {
+	const failure = getProviderFailure(message);
+	const timing = message.diagnostics?.find((item) => item.type === "request_timing")?.details;
+	const reportedInput = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
+	return {
+		attempt: attempt?.number,
+		category: failure?.category,
+		causeCode: failure?.causeCode,
+		causeMessage: failure?.causeMessage,
+		headersMs: timing?.headersMs,
+		firstChunkMs: timing?.firstChunkMs,
+		firstTextMs: timing?.firstTextMs,
+		maxIdleGapMs: timing?.maxIdleGapMs,
+		totalMs: timing?.totalMs,
+		// The provider's own count when it reported one; otherwise the session's estimate of what was sent.
+		inputTokens: reportedInput > 0 ? reportedInput : attempt?.contextTokens,
+		inputTokensEstimated: reportedInput > 0 ? false : attempt?.contextTokens !== undefined ? true : undefined,
+	};
+}
+
 export class AgentSessionTraceCoordinator {
 	private readonly runtimeTrace: RuntimeTrace;
 	private readonly cwd: string;
@@ -58,7 +85,12 @@ export class AgentSessionTraceCoordinator {
 		this.queue(() => this.runtimeTrace.record(scope, type, data));
 	}
 
-	recordAgentEvent(event: AgentEvent, willRetry: boolean | undefined, model: Model<any> | undefined): void {
+	recordAgentEvent(
+		event: AgentEvent,
+		willRetry: boolean | undefined,
+		model: Model<any> | undefined,
+		attempt?: { number: number; contextTokens?: number },
+	): void {
 		if (event.type === "agent_start") {
 			if (!this.activeRun) {
 				this.activeRun = this.createRunScope();
@@ -106,6 +138,7 @@ export class AgentSessionTraceCoordinator {
 				durationMs: request ? Date.now() - request.startedAt : undefined,
 				error: message.errorMessage,
 				usage: message.usage,
+				network: describeRequestAttempt(message, attempt),
 			});
 			return;
 		}

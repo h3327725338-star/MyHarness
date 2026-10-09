@@ -168,7 +168,8 @@ function classify(raw: string): ErrorExplanation {
 	if (has(/ETIMEDOUT|timed? ?out|timeout/iu)) {
 		return {
 			cause: "网络请求超时：在规定时间内没有收到模型服务的响应",
-			advice: "检查网络和代理是否稳定；如果模型需要长时间思考，可以在 /settings → HTTP idle timeout 中调大超时。",
+			advice:
+				"检查网络和代理是否稳定；如果模型需要长时间思考，可以在设置 → 网络与 Shell → 超时与重试中调大首包超时或静默超时。",
 		};
 	}
 	if (

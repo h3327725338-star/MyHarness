@@ -11,7 +11,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `exec.ts` | `execCommand()`：给扩展和自定义工具用的通用命令执行（超时、取消、输出收集） |
-| `http-dispatcher.ts` | 全局 HTTP 分发器：空闲超时选项、代理设置；`configureHttpDispatcher()` 在 `web.ts` 启动时调用 |
+| `http-dispatcher.ts` | 全局 HTTP 分发器：建连 / 首包 / 静默三个独立时限（`NetworkTimeouts`）、代理设置；`configureHttpDispatcher()` 在 `web.ts` 启动时调用。另有按 Provider 的分发器：`getProviderDispatcher()` 基于 `EnvHttpProxyAgent`，按 models.json 的 `keepAliveSeconds` / `ipFamily`（默认值常量 `DEFAULT_KEEP_ALIVE_SECONDS`、`DEFAULT_IP_FAMILY`）生成并缓存，由 `ModelRuntime` 通过 `@myharness/ai` 的 `setProviderDispatcherResolver()` 注册给模型请求使用 |
 | `output-guard.ts` | 接管/恢复 `stdout`，保证 print/json 模式输出干净，以及原始写入与背压 |
 
 ### 依赖
@@ -23,5 +23,5 @@
 
 - 需要新的子进程或输出接管能力时加在这里，不要在工具或命令里再写一套。
 - `output-guard.ts` 影响 `--mode json` 的输出格式；改动后跑 `stdout-cleanliness.test.ts` 和 `print-mode.test.ts`。
-- HTTP 空闲超时的可选值同时被 Settings 和界面使用，修改时同步 `config/settings` 与 `docs/settings.md`。
-- 相关测试：`exec.test.ts`、`http-dispatcher.test.ts`、`stdout-cleanliness.test.ts`。
+- 三个网络时限的默认值和范围同时被 Settings 和界面使用，修改时同步 `config/settings`、`modes/web/routes-settings.ts` 与 `docs/settings.md`。
+- 相关测试：`exec.test.ts`、`http-dispatcher.test.ts`、`provider-connection.test.ts`（Provider 保活时间 / IP 协议）、`stdout-cleanliness.test.ts`。

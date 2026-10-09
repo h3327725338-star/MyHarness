@@ -1,7 +1,7 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
-import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitField, useDelayedBusy } from "./ui.js";
+import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
@@ -30,7 +30,7 @@ export const NAV = [
 	{ id: "shortcuts", label: N_("Keyboard shortcuts"), icon: "gear" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent", Network: "network", Shell: "network", Safety: "safety", Notifications: "safety", Display: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent", Network: "network", "Timeouts & retries": "network", Shell: "network", Safety: "safety", Notifications: "safety", Terminal: "terminal" };
 
 export function sectionOf(item) {
 	if (item.id.startsWith("codeIntelligence.")) return "code";
@@ -47,7 +47,7 @@ const PAGE_NOTE = {
 	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
-	safety: N_("What MyHarness may load and run, and what it tells you about."),
+	safety: N_("What MyHarness may load and run, and how it notifies you."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
 };
 
@@ -106,8 +106,8 @@ function TokensField({ item, onApply }) {
 		} else if (tokens !== item.value) onApply(item.id, tokens);
 	};
 	return html`<span class="tokens-field">
+		<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t("{unit} tokens", { unit: item.unit })} label=${serverText(item.label)} placeholder=${t("Model limit")} invalid=${invalid} />
 		${item.value != null ? html`<span class="tokens-exact dim" title=${t("tokens")}>${t("{n} tokens", { n: fmtTokens(Number(item.value)) })}</span>` : null}
-		<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t("{unit} tokens", { unit: item.unit })} label=${serverText(item.label)} placeholder=${t("Model limit")} invalid=${invalid} width=${190} />
 	</span>`;
 }
 
@@ -126,7 +126,7 @@ function UnitNumberField({ item, onApply }) {
 			toast(t("Enter a number from {min} to {max}.", { min: item.min, max: item.max }), "warning", 4000);
 		} else if (Number(text) !== item.value) onApply(item.id, Number(text));
 	};
-	return html`<${UnitField} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t(item.unit)} label=${serverText(item.label)} invalid=${!inRange(draft)} width=${120} />`;
+	return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t(item.unit)} label=${serverText(item.label)} invalid=${!inRange(draft)} />`;
 }
 
 /**
@@ -172,9 +172,10 @@ function NumberUnitField({ item, onApply }) {
 		setUnit(next);
 		setDraft(stored === undefined ? "" : String(Math.round(stored / (nu.multiplier ?? 1))));
 	};
-	return html`<span class=${`unit-field ${invalid ? "invalid" : ""} ${fixed ? "disabled" : ""}`} style=${{ width: 170 }}>
-		<input class="unit-input mono" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} disabled=${fixed} value=${fixed ? "" : draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${(e) => commit(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), commit(e.currentTarget.value))} />
-		<select class="unit-select" aria-label=${t("Unit")} value=${unit} onChange=${(e) => changeUnit(e.target.value)}>${units.map((u) => html`<option key=${u.value} value=${u.value}>${serverText(u.label)}</option>`)}</select>
+	// A row with one unit (seconds) shows it as plain text instead of a one-entry menu.
+	if (units.length === 1) return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${serverText(active?.label ?? "")} label=${serverText(item.label)} invalid=${invalid} inputMode="numeric" />`;
+	return html`<${UnitGroup} value=${fixed ? "" : draft} onInput=${setDraft} onCommit=${commit} label=${serverText(item.label)} invalid=${invalid} disabled=${fixed} inputMode="numeric">
+		<select class="select group-unit" aria-label=${t("Unit")} value=${unit} onChange=${(e) => changeUnit(e.target.value)}>${units.map((u) => html`<option key=${u.value} value=${u.value}>${serverText(u.label)}</option>`)}</select>
 	<//>`;
 }
 
@@ -199,18 +200,7 @@ function InlineNumberField({ item, onApply }) {
 			toast(t("Enter a whole number from {min} to {max}.", { min, max }), "warning", 4000);
 		} else if (Number(text) !== value.maxTasks) onApply(item.id, { ...value, maxTasks: Number(text) });
 	};
-	return html`<input
-		class="field num"
-		type="number"
-		min=${min}
-		max=${max}
-		step="1"
-		aria-label=${t("Max sub-agents per call")}
-		value=${draft}
-		onInput=${(e) => setDraft(e.target.value)}
-		onBlur=${() => commit(draft)}
-		onKeyDown=${(e) => e.key === "Enter" && e.target.blur()}
-	/><span class="dim">(${min}–${max})</span>`;
+	return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${`${min}–${max}`} label=${t("Max sub-agents per call")} placeholder=${t("Max sub-agents per call")} invalid=${draft.trim() !== "" && !inRange(draft)} inputMode="numeric" />`;
 }
 
 function SettingControl({ item, models, onApply }) {
@@ -238,9 +228,11 @@ function SettingControl({ item, models, onApply }) {
 			// maxTasks is owned by the inline field alone: the other controls on this row must not resend a stale copy of it.
 			const rest = { ...v };
 			delete rest.maxTasks;
-			return html`<${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
+			return html`<div class="mref">
+				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
+				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}</div>
 				${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}
-				${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}`;
+			</div>`;
 		}
 		default:
 			return null;
@@ -295,7 +287,6 @@ const SHORT_DESCRIPTION = {
 	shellCommandPrefix: N_("Prefix for every bash command."),
 	defaultProjectTrust: N_("For projects with no saved decision."),
 	popupNotifications: N_("Notify on completion, failure or stop."),
-	showCacheMissNotices: N_("Warn about costly cache misses."),
 };
 const describe = (item) => {
 	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
@@ -315,6 +306,26 @@ function SettingRow({ item, models, off, before }) {
 function GroupSwitch({ item }) {
 	const [saving, save] = useSaving();
 	return html`<span class="row"><${Saving} shown=${saving} /><${Toggle} checked=${!!item.value} label=${serverText(item.label)} onChange=${(v) => save(item.id, v)} /></span>`;
+}
+
+const TIMEOUTS_SECTION = "Timeouts & retries";
+
+/** Longest wait for one request: attempts × (connect + the longer of the first-byte and stream-idle limits), in ms. */
+export function worstCaseWaitMs(items) {
+	const value = (id) => Number(items.find((item) => item.id === id)?.value);
+	const total = value("retry.networkMaxAttempts") * (value("network.connectTimeoutMs") + Math.max(value("network.firstByteTimeoutMs"), value("network.streamIdleTimeoutMs")));
+	return Number.isFinite(total) ? total : null;
+}
+
+/** The two read-only lines under the timeout rows: what a disconnect does, and the longest wait the numbers above add up to. */
+function TimeoutNotes({ items }) {
+	const total = worstCaseWaitMs(items);
+	const minutes = total == null ? null : total / 60_000;
+	const estimate = minutes == null ? null : total < 60_000 ? t("By the current settings, one request waits up to about {seconds} seconds at most.", { seconds: Math.round(total / 1000) }) : t("By the current settings, one request waits up to about {minutes} minutes at most.", { minutes: String(Math.round(minutes * 10) / 10) });
+	return html`<div class="set-notes">
+		<p class="set-note">${t("A dropped connection has no time limit; it is handled by the retry rules. Output that was already shown is never resent from the start.")}</p>
+		${estimate ? html`<p class="set-note" role="status">${estimate}</p>` : null}
+	</div>`;
 }
 
 /** The settings of one page, one card per server section; a group with its own switch (web search) gets its own card. */
@@ -342,6 +353,7 @@ function SettingsList({ items, models }) {
 		// A page with a single group needs no group title: the page title says it.
 		return html`<${Card} key=${card.key} title=${card.items.some((item) => ["steeringMode", "followUpMode"].includes(item.id)) ? t("Message delivery") : cards.length > 1 ? serverText(card.section) : undefined}>
 			${card.items.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`)}
+			${card.section === TIMEOUTS_SECTION ? html`<${TimeoutNotes} items=${card.items} />` : null}
 		<//>`;
 	});
 }
@@ -498,7 +510,7 @@ function Appearance({ conversation = false }) {
 			<${Row} label=${t("Display mode")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
 			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
-			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><select class="field" aria-label=${t("Color theme")} value=${view.colorTheme} onChange=${(e) => set({ colorTheme: e.target.value })}>${COLOR_THEMES.map((theme) => html`<option value=${theme.value}>${t(theme.label)}</option>`)}</select><//>
+			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><select class="select" aria-label=${t("Color theme")} value=${view.colorTheme} onChange=${(e) => set({ colorTheme: e.target.value })}>${COLOR_THEMES.map((theme) => html`<option value=${theme.value}>${t(theme.label)}</option>`)}</select><//>
 		<//>` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
@@ -568,11 +580,7 @@ function Safety({ items, models }) {
 		<${Card} title=${t("Notifications")}>
 			<${BrowserNotificationSetting} />
 			${bySection("Notifications").map(row)}
-		<//>
-		${[
-			["Safety", t("Warnings")],
-			["Display", t("Notices")],
-		].map(([section, title]) => (bySection(section).length ? html`<${Card} key=${section} title=${title}>${bySection(section).map(row)}<//>` : null))}`;
+		<//>`;
 }
 
 /**

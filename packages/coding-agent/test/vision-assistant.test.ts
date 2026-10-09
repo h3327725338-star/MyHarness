@@ -54,7 +54,7 @@ function createHarness(
 			options.visionTestStatus ? { status: options.visionTestStatus, testedAt: 1 } : undefined,
 		setVisionAssistantSettings: vi.fn(),
 		getProviderRetrySettings: () => ({ enabled: true, maxRetries: 0, maxRetryDelayMs: 0 }),
-		getHttpIdleTimeoutMs: () => 0,
+		getNetworkTimeouts: () => ({ connectTimeoutMs: 10_000, firstByteTimeoutMs: 60_000, streamIdleTimeoutMs: 60_000 }),
 	} as unknown as SettingsManager;
 	const modelRuntime = {
 		isProviderEnabled: () => options.providerEnabled ?? true,

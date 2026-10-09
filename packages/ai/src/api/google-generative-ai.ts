@@ -24,6 +24,7 @@ import type {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
+import { recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildGoogleHttpOptions } from "./google-http-options.ts";
 import type { GoogleThinkingLevel } from "./google-shared.ts";
@@ -282,6 +283,10 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			if (!options?.signal?.aborted)
+				recordProviderFailure(output, error, {
+					headersReceived: output.content.length > 0 || output.responseId !== undefined,
+				});
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

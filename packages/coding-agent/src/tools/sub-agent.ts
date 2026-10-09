@@ -1181,13 +1181,21 @@ async function runExploreTask(options: {
 				stderr = truncateSubAgentOutput(stderr + data.toString());
 			});
 			child.on("error", (error) => {
+				// A failed spawn (ENOENT: no node/global myharness on PATH, EACCES...) must say which command
+				// could not be started instead of leaking Node's raw errno text as a mysterious runtime_error.
+				const code = (error as NodeJS.ErrnoException).code;
+				const cause =
+					code === "ENOENT"
+						? `Cannot start the sub-agent worker: the command "${invocation.command}" was not found`
+						: `Cannot start the sub-agent worker ("${invocation.command}")`;
+				const wrapped = new Error(`${cause}: ${error.message}`, { cause: error });
 				if (stopKind) {
 					stopFinished = true;
 					stopConfirmed = true;
 					finishStop();
 					return;
 				}
-				settle(() => reject(error));
+				settle(() => reject(wrapped));
 			});
 			child.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);

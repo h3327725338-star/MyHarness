@@ -254,6 +254,76 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 }
 
 /**
+ * Model channels sometimes serialize an object/array parameter as a JSON *string* (a very common slip on tools
+ * whose payload is a few KB of JSON). TypeBox's `Value.Convert` only coerces primitives, so the call then fails
+ * with a "must be object" schema error and a whole tool round is lost. Against the schema, parse such a string
+ * back exactly where the schema expects an object or array - plain string arguments are never touched, and a
+ * string that does not parse stays as it is so the real validation error still surfaces.
+ */
+function schemaAcceptsKind(schema: JsonSchemaObject | undefined, kind: "object" | "array"): boolean {
+	if (!schema) return false;
+	if (getSchemaTypes(schema).includes(kind)) return true;
+	return [...(schema.anyOf ?? []), ...(schema.oneOf ?? []), ...(schema.allOf ?? [])].some((member) =>
+		schemaAcceptsKind(member, kind),
+	);
+}
+
+function parseJsonContainer(text: string): unknown | undefined {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return undefined;
+	}
+}
+
+/** The parsed container must actually be the kind this schema position wants, or the string is left alone. */
+function parsedFitsSchema(parsed: unknown, schema: JsonSchemaObject | undefined): boolean {
+	if (!schema) return false;
+	for (const kind of getSchemaTypes(schema)) {
+		if (kind === "object" && typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return true;
+		if (kind === "array" && Array.isArray(parsed)) return true;
+	}
+	return [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].some((member) => parsedFitsSchema(parsed, member));
+}
+
+function repairStringifiedContainers(value: unknown, schema: JsonSchemaObject | undefined): unknown {
+	if (
+		typeof value === "string" &&
+		schema &&
+		(schemaAcceptsKind(schema, "object") || schemaAcceptsKind(schema, "array"))
+	) {
+		const parsed = parseJsonContainer(value);
+		return parsed !== undefined && parsedFitsSchema(parsed, schema)
+			? repairStringifiedContainers(parsed, schema)
+			: value;
+	}
+	if (Array.isArray(value)) {
+		const itemSchema = schema?.items;
+		for (let index = 0; index < value.length; index++) {
+			const forItem =
+				itemSchema === undefined
+					? undefined
+					: Array.isArray(itemSchema)
+						? (itemSchema[index] ?? itemSchema[itemSchema.length - 1])
+						: itemSchema;
+			value[index] = repairStringifiedContainers(value[index], forItem);
+		}
+		return value;
+	}
+	if (value && typeof value === "object") {
+		const record = value as Record<string, unknown>;
+		const properties = schema?.properties ?? {};
+		for (const key of Object.keys(record)) {
+			if (properties[key]) record[key] = repairStringifiedContainers(record[key], properties[key]);
+		}
+		return record;
+	}
+	return value;
+}
+
+/**
  * Finds a tool by name and validates the tool call arguments against its TypeBox schema
  * @param tools Array of tool definitions
  * @param toolCall The tool call from the LLM
@@ -277,6 +347,9 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 	const args = structuredClone(toolCall.arguments);
+	// Repair stringified containers before Value.Convert: the repair is schema-driven and leaves genuine strings
+	// alone, while Convert would already wrap a loose string into a one-element array and hide the real shape.
+	repairStringifiedContainers(args, tool.parameters as unknown as JsonSchemaObject);
 	Value.Convert(tool.parameters, args);
 
 	const validator = getValidator(tool.parameters);

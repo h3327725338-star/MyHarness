@@ -15,7 +15,7 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 ## Web 专属快捷键与代码智能状态
 
-Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式与无新数据时的 HTTP 空闲超时提供说明；**自动重试次数**和 **HTTP 空闲超时**都是自由输入的数字加可选单位（次数：次／无限；超时：秒／分钟／停用，停用即不超时），不再限死在固定选项里；超时实际存储值仍是毫秒，上限为定时器能可靠等待的约 24.8 天（`2147483647` ms），更长请选停用。
+Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**是自由输入的数字加可选单位（次／无限）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连、首包、静默，单位秒，存储仍是毫秒）加“同一模型最多尝试次数”，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
 
 代码智能页把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
@@ -449,7 +449,8 @@ Project `.myharness/settings.json`:
 | `retry.enabled` | boolean | `true` | 启用 agent-level automatic retry，用于 transient errors |
 | `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络的“自动重试次数”行可填任意整数或选无限） |
 | `retry.baseDelayMs` | number | `2000` | agent-level exponential backoff 的 base delay（2s、4s、8s；逐次翻倍，单次最长 60s，保证大次数或不限次数时重试间隔不会无限增长） |
-| `retry.provider.timeoutMs` | number | `300000`（由 `httpIdleTimeoutMs` 提供） | Provider/SDK request timeout，单位为 milliseconds；显式设置后覆盖全局 HTTP idle timeout |
+| `retry.networkMaxAttempts` | number | `2` | 网络失败（建连、首包、静默、断连）时，同一模型最多尝试几次，**含第一次**，范围 1–20；达到次数后切换到备用模型（`fallbackModel`），没有备用模型则结束。HTTP 类错误（429、过载等）不受影响，仍用 `retry.maxRetries` |
+| ~~`retry.provider.timeoutMs`~~ | - | - | 已移除并被忽略：它是第二个整请求超时，会和首包超时叠加成两处各管一半。首包时限只有 `network.firstByteTimeoutMs` 一处 |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK 额外 retry 次数；未设置时 MyHarness 对支持该选项的内置 adapter 只发起一次请求 |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | 失败前允许的最大 server-requested delay（60s） |
 
@@ -457,7 +458,7 @@ Project `.myharness/settings.json`:
 
 除非明确需要 provider-level retries，否则建议将 `retry.provider.maxRetries` 保持为 `0`。设置为大于 `0` 的值后，SDK/provider retries 可能会在 MyHarness 感知到之前处理 out-of-usage-limit errors；某些情况下这会让 agent 一直阻塞到 Provider quota reset。
 
-Google Generative AI 和 Vertex adapter 会把 `timeoutMs` 与 `maxRetries` 显式传给 Google SDK，并覆盖 SDK 默认的隐式 retry；`maxRetries` 表示额外重试次数，不是总请求次数。Agent-level retry（`retry.maxRetries`）是另一层独立机制。
+Google Generative AI 和 Vertex adapter 会把 `maxRetries` 显式传给 Google SDK，并覆盖 SDK 默认的隐式 retry；`maxRetries` 表示额外重试次数，不是总请求次数。这两个 adapter 不再传 `timeoutMs`：Google SDK 的 `httpOptions.timeout` 覆盖整个请求（含流式读取），会把长回答在中途截断，它们的首包和静默限制只由全局 HTTP 分发器负责。Agent-level retry（`retry.maxRetries`）是另一层独立机制。
 
 Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）、服务端错误（500、502、503、504）、网关/CDN 回源故障（520、521、522、523、524、525、527、530，常见形式是 `520 status code (no body)`）、Bad Gateway / Gateway Timeout，以及连接重置、超时、DNS 临时失败（`ECONNRESET`、`ETIMEDOUT`、`EAI_AGAIN`）等网络中断。额度/余额耗尽不会重试。分类规则在 `packages/ai/src/utils/retry.ts`。
 
@@ -484,13 +485,34 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
     "maxRetries": 3,
     "baseDelayMs": 2000,
     "provider": {
-      "timeoutMs": 3600000,
       "maxRetries": 0,
       "maxRetryDelayMs": 60000
     }
   }
 }
 ```
+
+#### 网络超时与网络失败重试
+
+原来的单个 `httpIdleTimeoutMs` 同时管着三种性质不同的等待，现在拆成互相独立的设置（上表 `network.*`、`retry.networkMaxAttempts`；Web 设置 → 网络与 Shell → “超时与重试”）：
+
+| 失败 | 触发 | 分类（`ProviderErrorCategory`） | 错误码（沿 `error.cause` 链查找） |
+| --- | --- | --- | --- |
+| 建连超时 | 建立 TCP / TLS 超过 `connectTimeoutMs` | `connect_timeout` | `UND_ERR_CONNECT_TIMEOUT` |
+| 无法连接 | 端口无监听、DNS 失败、证书错误等 | `connect_failed` | `ECONNREFUSED`、`ENOTFOUND`、`EAI_AGAIN`、证书类等 |
+| 首包超时 | 请求发出后超过 `firstByteTimeoutMs` 还没有响应头 | `first_byte_timeout` | `UND_ERR_HEADERS_TIMEOUT` |
+| 静默超时 | 响应头之后两段数据间隔超过 `streamIdleTimeoutMs` | `stream_idle_timeout` | `UND_ERR_BODY_TIMEOUT` |
+| 断连 | 对端关闭连接（没有时限，是事件） | `disconnect` | `UND_ERR_SOCKET`、`ECONNRESET` 等 |
+| 限流 / 过载 | HTTP 429 / 503 / 529 | `rate_limited` / `upstream_overloaded` | 状态码或错误体 `type`，不是网络错误 |
+| 其他 | 以上都不是 | `other` | - |
+
+- 分类只看 `error.cause` 链里的 `code`（以及 AggregateError 的子错误），**不看错误文字**。两个例外：SDK 自己的超时（`APIConnectionTimeoutError` / `AbortError`）没有错误码，响应头未到按首包超时，已到按静默超时；OpenAI 与 Anthropic SDK 会把文字里带 “timed out” 的 fetch 错误替换成没有 `cause` 的 `APIConnectionTimeoutError`，所以这两个 SDK 的 adapter 用 `captureFetchErrors()` 保留原始 fetch 错误再分类，否则建连超时和首包超时会混成一类。分类结果记录在失败消息的 `provider_failure` diagnostic（`packages/ai/src/utils/provider-failure.ts`），后端重试逻辑和界面共用同一份枚举。
+- 首包时限只在一处生效：undici `headersTimeout`；OpenAI / Anthropic 系列 SDK 的请求计时器在响应头到达时就会停止，所以把同一个 `firstByteTimeoutMs` 传给它们（`providers/runtime/request-timeouts.ts`），两处是同一个数。Google / Vertex / Mistral / Bedrock 的 SDK 计时器会覆盖整个流，所以不传，只由分发器限制。SDK 层没有整请求超时。
+- 网络失败有自己的次数上限 `retry.networkMaxAttempts`（含第一次，默认 2）。**还没有任何输出**时：等 1.5 秒后在同一模型上重试；达到上限后交给备用模型（沿用 `fallbackModel`，没有新建切换机制）；没有备用模型则结束。**已经有输出**（文字、思考或工具调用）后发生静默超时 / 断连：不自动从头重发，保留已显示内容，任务以 `terminalReason: "output-interrupted"` 结束，界面标“已中断”并给“重试”按钮（从当前状态继续，不重做已完成的步骤）。429、过载等 HTTP 错误沿用 `retry.maxRetries` 与指数退避，不受影响。
+- 单次请求（单个模型）最长等待 ≈ `retry.networkMaxAttempts × (connectTimeoutMs + max(firstByteTimeoutMs, streamIdleTimeoutMs))`；设置页的只读行按当前数值显示这个估算。
+- 每次尝试在 trace 的 `model-response` 事件里带一份 `network` 记录：尝试序号、分类、`cause.code`、`cause.message`、到响应头的时间、最长静默间隔、总耗时、输入 Token（供应商没报时用会话估算并标 `inputTokensEstimated`）；测不到的字段留空。最长静默间隔目前只有 `openai-completions` 适配器测量，其他适配器为空。
+- Web 的 Commit 信息生成与测试副本命名（`routes-git.ts`）也走同一套时限和次数上限，再回到备用模型（`completeWithNetworkPolicy`）。
+- 旧键 `httpIdleTimeoutMs` 和 `retry.provider.timeoutMs` 被忽略，读取时在日志里提示一次，不会自动换算成新值（旧数值同时管三种等待，没有可靠的换算）。默认值（10 秒 / 60 秒 / 60 秒 / 2 次）只是起点，之后按 trace 里的真实数据调整。
 
 ### Message Delivery
 
@@ -499,7 +521,10 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 | `steeringMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Steering messages 的发送方式 |
 | `followUpMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Follow-up messages 的发送方式 |
 | `transport` | string | `"auto"` | 支持多种 transports 的 Providers 使用的 preferred transport：`"sse"`、`"websocket"`、`"websocket-cached"` 或 `"auto"` |
-| `httpIdleTimeoutMs` | number | `300000` | HTTP header/body idle timeout，单位为 milliseconds；也用于有显式 stream idle timeout 的 Providers。设置为 `0` 可关闭；上限 `2147483647`（约 24.8 天，JS 定时器能可靠等待的最大值）。Web 设置 → 网络里按秒或分钟自由输入，无固定档位 |
+| `network.connectTimeoutMs` | number | `10000` | 建连超时：TCP 连接加 TLS 握手，只在新建连接时生效（undici `connect.timeout`，`UND_ERR_CONNECT_TIMEOUT`）。1000–3600000 ms |
+| `network.firstByteTimeoutMs` | number | `60000` | 首包超时：请求发出后到收到响应头（undici `headersTimeout`，`UND_ERR_HEADERS_TIMEOUT`）。同一个值也作为 OpenAI / Anthropic SDK 的请求时限。1000–3600000 ms |
+| `network.streamIdleTimeoutMs` | number | `60000` | 静默超时：响应头之后两段数据之间允许的最长间隔，每收到一段重新计时，总时长不限（undici `bodyTimeout`，`UND_ERR_BODY_TIMEOUT`）。1000–3600000 ms |
+| ~~`httpIdleTimeoutMs`~~ | - | - | 已移除并被忽略：旧的单一数值同时管三种不同的等待。读取设置时检测到该键只在日志里提示一次，**不会**自动换算成新键；新键没填就用上面的默认值 |
 | `websocketConnectTimeoutMs` | number | - | 支持 WebSocket transports 的 Providers 使用的 WebSocket connect/open handshake timeout，单位为 milliseconds。未设置时使用 SDK default。设置为 `0` 可关闭 |
 
 ### Terminal & Images

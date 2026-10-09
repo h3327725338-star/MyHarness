@@ -6,6 +6,13 @@
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@myharness/ai";
 import { ProviderSettingsUseCase } from "../../application/use-cases/provider-settings.ts";
+import {
+	DEFAULT_IP_FAMILY,
+	DEFAULT_KEEP_ALIVE_SECONDS,
+	IP_FAMILIES,
+	MAX_KEEP_ALIVE_SECONDS,
+	MIN_KEEP_ALIVE_SECONDS,
+} from "../../platform/process/http-dispatcher.ts";
 import { modelsJsonProviderLacksBaseUrl } from "../../providers/models/composer.ts";
 import type { ModelsJsonProvider } from "../../providers/models/config.ts";
 import {
@@ -380,6 +387,14 @@ export function registerProviderRoutes(
 		return {
 			path: runtime().getModelsConfigPath() ?? null,
 			apiTypes: [...CUSTOM_PROVIDER_API_TYPES],
+			/** Per-provider connection settings: what applies when a provider does not set them, and the allowed range. */
+			connectionDefaults: {
+				keepAliveSeconds: DEFAULT_KEEP_ALIVE_SECONDS,
+				keepAliveMin: MIN_KEEP_ALIVE_SECONDS,
+				keepAliveMax: MAX_KEEP_ALIVE_SECONDS,
+				ipFamily: DEFAULT_IP_FAMILY,
+				ipFamilies: [...IP_FAMILIES],
+			},
 			providers: entries.map((entry) => ({ id: entry.id, config: redactProvider(entry.config) })),
 			hiddenPlaceholder: HIDDEN,
 		};

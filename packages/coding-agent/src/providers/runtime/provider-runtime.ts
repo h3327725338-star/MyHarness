@@ -29,8 +29,10 @@ import {
 	type ProviderHeaders,
 	type SimpleStreamOptions,
 	type StreamOptions,
+	setProviderDispatcherResolver,
 } from "@myharness/ai";
 import { getAgentDir } from "../../config.ts";
+import { getProviderDispatcher } from "../../platform/process/http-dispatcher.ts";
 import type { ProviderCredentialOverview, StoredApiKeyInfo } from "../credentials/api-key-collection.ts";
 import { ProviderCredentialManager, sameApiKeyCredential } from "../credentials/manager.ts";
 import type { RuntimeCredentials } from "../credentials/runtime.ts";
@@ -172,6 +174,16 @@ export class ModelRuntime implements Models {
 		this.catalogModels = createModels({ credentials: this.credentials, modelsStore });
 		this.activeProviderIds = new Set(config.getProviderIds());
 		this.rebuildProviders();
+		// Model requests of a provider defined in models.json go through its own dispatcher (keep-alive time, IP family);
+		// the resolver reads `this.config`, so a reload of models.json applies from the next request on.
+		if (modelsPath) {
+			setProviderDispatcherResolver((providerId) => {
+				const provider = this.config.getProvider(providerId);
+				return provider
+					? getProviderDispatcher({ keepAliveSeconds: provider.keepAliveSeconds, ipFamily: provider.ipFamily })
+					: undefined;
+			});
+		}
 	}
 
 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {

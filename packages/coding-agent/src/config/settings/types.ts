@@ -18,9 +18,17 @@ export interface BranchSummarySettings {
 }
 
 export interface ProviderRetrySettings {
-	timeoutMs?: number; // SDK/provider request timeout in milliseconds
+	/** Ignored: the first-byte limit is `network.firstByteTimeoutMs`. Read only to log that it has no effect. */
+	timeoutMs?: number;
 	maxRetries?: number; // SDK/provider retry attempts
 	maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
+}
+
+/** The three independent request time limits, in milliseconds (see platform/process/http-dispatcher.ts). */
+export interface NetworkSettings {
+	connectTimeoutMs?: number; // default: 10000 - TCP + TLS handshake of a new connection
+	firstByteTimeoutMs?: number; // default: 60000 - request sent until the response headers arrive
+	streamIdleTimeoutMs?: number; // default: 60000 - longest gap between two pieces of data after the headers
 }
 
 export interface RetrySettings {
@@ -28,6 +36,11 @@ export interface RetrySettings {
 	/** Extra attempts after a failed request; `"unlimited"` (stored in settings.json) retries until it succeeds or the user cancels. */
 	maxRetries?: number | "unlimited"; // default: 3
 	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s, capped at 60s)
+	/**
+	 * Attempts per model (the first included) for a network failure (connect, first byte, stream idle, dropped connection)
+	 * before the fallback model takes over. Independent of `maxRetries`. default: 2
+	 */
+	networkMaxAttempts?: number;
 	provider?: ProviderRetrySettings;
 }
 
@@ -284,7 +297,9 @@ export interface Settings {
 	usageRanking?: UsageRankingSettings; // Global-only usage counts for adaptive menu ordering
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for MyHarness-managed HTTP clients
-	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
+	/** Removed: replaced by `network.*`. Never read as a value; seeing it only logs a notice. */
+	httpIdleTimeoutMs?: number;
+	network?: NetworkSettings; // Request time limits
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	webShutdownGraceSeconds?: number; // Web UI: seconds to wait after the last browser page disconnects before the server exits
 	worktreeShutdownGraceSeconds?: number; // Independent test-copy service exit delay

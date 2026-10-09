@@ -1,4 +1,3 @@
-import { HTTP_IDLE_TIMEOUT_CHOICES } from "../platform/process/http-dispatcher.ts";
 import type { SlashSurface } from "./slash-commands.ts";
 
 /** How a row of the `/settings` menu is operated. */
@@ -139,16 +138,8 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 		],
 		choiceDescription: "选择模型请求的连接方式。",
 	},
-	{
-		id: "http-idle-timeout",
-		label: "HTTP idle timeout",
-		description: "设置连接空闲时限",
-		kind: "select",
-		choices: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => ({ value: String(choice.timeoutMs), label: choice.label })),
-		choiceDescription: "连接在指定时间内没有数据时自动断开。",
-	},
+	{ id: "network-timeouts", label: "Timeouts & retries", description: "连接、首包与静默时限", kind: "submenu" },
 	{ id: "hide-thinking", label: "Collapse transcript", description: "折叠思考和工具输出", kind: "toggle" },
-	{ id: "cache-miss-notices", label: "Cache miss notices", description: "提示缓存复用失败", kind: "toggle" },
 	{ id: "collapse-changelog", label: "Collapse changelog", description: "精简更新日志", kind: "toggle" },
 	{ id: "quiet-startup", label: "Quiet startup", description: "隐藏启动详情", kind: "toggle" },
 	{ id: "install-telemetry", label: "Install telemetry", description: "发送匿名版本统计", kind: "toggle" },
@@ -176,7 +167,6 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 		],
 		choiceDescription: "该兼容设置当前不会触发操作。",
 	},
-	{ id: "warnings", label: "Warnings", description: "管理费用相关警告", kind: "submenu" },
 	{ id: "thinking", label: "Thinking level", description: "调整模型思考强度", kind: "submenu" },
 	// Browser appearance and runtime settings.
 	{

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SettingsManager } from "../src/config/settings/index.ts";
-import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/platform/process/http-dispatcher.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRemovedSettingNotices, SettingsManager } from "../src/config/settings/index.ts";
+import { DEFAULT_NETWORK_TIMEOUTS } from "../src/platform/process/http-dispatcher.ts";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -790,26 +790,85 @@ describe("SettingsManager", () => {
 		});
 	});
 
-	describe("httpIdleTimeoutMs", () => {
-		it("should default to 5 minutes", () => {
+	describe("network timeouts", () => {
+		it("defaults to 10s connect, 60s first byte, 60s stream idle and 2 attempts per model", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getHttpIdleTimeoutMs()).toBe(DEFAULT_HTTP_IDLE_TIMEOUT_MS);
+			expect(manager.getNetworkTimeouts()).toEqual({
+				connectTimeoutMs: 10_000,
+				firstByteTimeoutMs: 60_000,
+				streamIdleTimeoutMs: 60_000,
+			});
+			expect(manager.getNetworkTimeouts()).toEqual(DEFAULT_NETWORK_TIMEOUTS);
+			expect(manager.getNetworkMaxAttempts()).toBe(2);
 		});
 
-		it("should use merged global and project settings", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 300000 }));
-			writeFileSync(join(projectDir, ".myharness", "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 0 }));
+		it("reads each limit independently from merged global and project settings", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					network: { connectTimeoutMs: 5000, firstByteTimeoutMs: 90_000 },
+					retry: { networkMaxAttempts: 3 },
+				}),
+			);
+			writeFileSync(
+				join(projectDir, ".myharness", "settings.json"),
+				JSON.stringify({ network: { firstByteTimeoutMs: 120_000 } }),
+			);
 
 			const manager = SettingsManager.create(projectDir, agentDir);
 
-			expect(manager.getHttpIdleTimeoutMs()).toBe(0);
+			expect(manager.getNetworkTimeouts()).toEqual({
+				connectTimeoutMs: 5000,
+				firstByteTimeoutMs: 120_000,
+				streamIdleTimeoutMs: 60_000,
+			});
+			expect(manager.getNetworkMaxAttempts()).toBe(3);
 		});
 
-		it("should reject invalid timeout values", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: -1 }));
+		it("falls back to the default for an invalid stored value instead of failing", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					network: { connectTimeoutMs: -1, streamIdleTimeoutMs: "soon" },
+					retry: { networkMaxAttempts: 0 },
+				}),
+			);
 			const manager = SettingsManager.create(projectDir, agentDir);
 
-			expect(() => manager.getHttpIdleTimeoutMs()).toThrow("Invalid httpIdleTimeoutMs setting");
+			expect(manager.getNetworkTimeouts()).toEqual(DEFAULT_NETWORK_TIMEOUTS);
+			expect(manager.getNetworkMaxAttempts()).toBe(2);
+		});
+
+		it("rejects invalid values when saving", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(() => manager.setNetworkTimeout("connectTimeoutMs", 0)).toThrow("Invalid network.connectTimeoutMs");
+			expect(() => manager.setNetworkMaxAttempts(0)).toThrow("Invalid retry.networkMaxAttempts");
+			manager.setNetworkTimeout("streamIdleTimeoutMs", 30_000);
+			manager.setNetworkMaxAttempts(4);
+			expect(manager.getNetworkTimeouts().streamIdleTimeoutMs).toBe(30_000);
+			expect(manager.getNetworkMaxAttempts()).toBe(4);
+		});
+
+		it("ignores the removed httpIdleTimeoutMs and retry.provider.timeoutMs, reports each once, and never maps them", () => {
+			resetRemovedSettingNotices();
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			try {
+				writeFileSync(
+					join(agentDir, "settings.json"),
+					JSON.stringify({ httpIdleTimeoutMs: 15_000, retry: { provider: { timeoutMs: 20_000 } } }),
+				);
+
+				const manager = SettingsManager.create(projectDir, agentDir);
+				SettingsManager.create(projectDir, agentDir);
+
+				expect(manager.getNetworkTimeouts()).toEqual(DEFAULT_NETWORK_TIMEOUTS);
+				expect(manager.getNetworkMaxAttempts()).toBe(2);
+				const messages = warn.mock.calls.map((call) => String(call[0]));
+				expect(messages.filter((message) => message.includes("httpIdleTimeoutMs"))).toHaveLength(1);
+				expect(messages.filter((message) => message.includes("retry.provider.timeoutMs"))).toHaveLength(1);
+			} finally {
+				warn.mockRestore();
+			}
 		});
 	});
 

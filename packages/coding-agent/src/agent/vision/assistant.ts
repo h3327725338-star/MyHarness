@@ -6,6 +6,7 @@ import { contentText } from "@myharness/ai";
 import type { ImageContent, Model, TextContent } from "@myharness/ai/compat";
 import type { SettingsManager, VisionAssistantSettings } from "../../config/settings/index.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
+import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { type MainModelRef, resolveAssistantModel } from "../runtime/assistant-model.ts";
 import type { CustomMessage } from "../runtime/messages.ts";
@@ -973,7 +974,6 @@ export class VisionAssistantManager {
 		);
 		try {
 			const retry = this.options.settingsManager.getProviderRetrySettings();
-			const configuredIdleTimeout = this.options.settingsManager.getHttpIdleTimeoutMs();
 			const prompt = contextText
 				? `The current task and related text are as follows:\n\n${contextText}\n\nPlease analyze the ${images.length} image(s) provided below.`
 				: `Please analyze the ${images.length} image(s) provided below.`;
@@ -992,10 +992,7 @@ export class VisionAssistantManager {
 				{
 					reasoning: settings.thinkingLevel === "off" ? undefined : settings.thinkingLevel,
 					signal: controller.signal,
-					timeoutMs:
-						configuredIdleTimeout === 0
-							? VISION_ASSISTANT_TIMEOUT_MS
-							: Math.min(configuredIdleTimeout, VISION_ASSISTANT_TIMEOUT_MS),
+					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,
 					maxRetryDelayMs: retry.maxRetryDelayMs,
 					maxTokens: 16_384,

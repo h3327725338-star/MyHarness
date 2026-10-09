@@ -26,6 +26,7 @@ import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } fr
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { withProviderDispatcher } from "../utils/provider-dispatcher.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 
 export interface MyHarnessMessagesOptions extends StreamOptions {
@@ -381,17 +382,20 @@ export const stream: StreamFunction<"myharness-messages", MyHarnessMessagesOptio
 				payload = nextPayload;
 			}
 
-			const response = await fetch(url, {
-				method: "POST",
-				headers: {
-					authorization: `Bearer ${apiKey}`,
-					accept: "text/event-stream",
-					"content-type": "application/json",
-					...providerHeadersToRecord(options?.headers),
-				},
-				body: JSON.stringify(payload),
-				signal: options?.signal,
-			});
+			const response = await fetch(
+				url,
+				withProviderDispatcher(model.provider, {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${apiKey}`,
+						accept: "text/event-stream",
+						"content-type": "application/json",
+						...providerHeadersToRecord(options?.headers),
+					},
+					body: JSON.stringify(payload),
+					signal: options?.signal,
+				}),
+			);
 
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 

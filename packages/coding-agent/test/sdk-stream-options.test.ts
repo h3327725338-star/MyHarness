@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/runtime/sdk.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
+import { DEFAULT_NETWORK_TIMEOUTS } from "../src/platform/process/http-dispatcher.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
 
@@ -76,7 +77,7 @@ describe("createAgentSession stream options", () => {
 
 	async function captureStreamOptions(
 		api: Api,
-		settings: { httpIdleTimeoutMs?: number; websocketConnectTimeoutMs?: number },
+		settings: { network?: { firstByteTimeoutMs?: number }; websocketConnectTimeoutMs?: number },
 		requestOptions: SimpleStreamOptions = {},
 		extensionSource?: string,
 	): Promise<SimpleStreamOptions | undefined> {
@@ -123,20 +124,37 @@ describe("createAgentSession stream options", () => {
 		}
 	}
 
-	it("forwards httpIdleTimeoutMs as timeoutMs for OpenAI Responses", async () => {
-		const options = await captureStreamOptions("openai-responses", { httpIdleTimeoutMs: 1234 });
+	it("forwards the first-byte timeout as timeoutMs for OpenAI Responses", async () => {
+		const options = await captureStreamOptions("openai-responses", { network: { firstByteTimeoutMs: 1234 } });
 
 		expect(options?.timeoutMs).toBe(1234);
 	});
 
-	it("defaults timeoutMs from httpIdleTimeoutMs for all providers", async () => {
-		const options = await captureStreamOptions("openai-completions", { httpIdleTimeoutMs: 1234 });
-
-		expect(options?.timeoutMs).toBe(1234);
+	it("forwards the first-byte timeout as timeoutMs for the other SDKs whose timer stops at the response headers", async () => {
+		for (const api of ["openai-completions", "azure-openai-responses", "anthropic-messages"] as const) {
+			const options = await captureStreamOptions(api, { network: { firstByteTimeoutMs: 1234 } });
+			expect(options?.timeoutMs, api).toBe(1234);
+		}
 	});
 
-	it("lets request timeoutMs override httpIdleTimeoutMs for OpenAI Responses", async () => {
-		const options = await captureStreamOptions("openai-responses", { httpIdleTimeoutMs: 1234 }, { timeoutMs: 0 });
+	it("uses the default first-byte timeout when nothing is configured", async () => {
+		const options = await captureStreamOptions("openai-completions", {});
+
+		expect(options?.timeoutMs).toBe(DEFAULT_NETWORK_TIMEOUTS.firstByteTimeoutMs);
+	});
+
+	it("passes no SDK timer to a provider whose SDK timer would cover the whole stream", async () => {
+		const options = await captureStreamOptions("google-generative-ai", { network: { firstByteTimeoutMs: 1234 } });
+
+		expect(options?.timeoutMs).toBeUndefined();
+	});
+
+	it("lets request timeoutMs override the first-byte timeout for OpenAI Responses", async () => {
+		const options = await captureStreamOptions(
+			"openai-responses",
+			{ network: { firstByteTimeoutMs: 1234 } },
+			{ timeoutMs: 0 },
+		);
 
 		expect(options?.timeoutMs).toBe(0);
 	});

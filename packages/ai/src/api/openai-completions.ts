@@ -38,10 +38,11 @@ import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { beginRequestTiming } from "./request-timing.ts";
+import { AttemptTimer, beginRequestTiming } from "./request-timing.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -235,12 +236,23 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			timestamp: Date.now(),
 		};
 
+		let headersReceived = false;
+		const fetchErrors = captureFetchErrors(model.provider);
+		const attemptTimer = new AttemptTimer();
 		try {
 			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				compat,
+				fetchErrors.fetch,
+			);
 			let params = buildParams(model, context, options, compat, cacheRetention);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -256,6 +268,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				.create(params, requestOptions)
 				.withResponse();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			headersReceived = true;
+			attemptTimer.markHeaders();
 			stream.push({ type: "start", partial: output });
 
 			interface StreamingToolCallBlock extends ToolCall {
@@ -376,6 +390,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			};
 
 			for await (const chunk of openaiStream) {
+				attemptTimer.markChunk();
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
@@ -414,6 +429,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					) {
 						const block = ensureTextBlock();
 						block.text += choice.delta.content;
+						attemptTimer.markText();
 						stream.push({
 							type: "text_delta",
 							contentIndex: getContentIndex(block),
@@ -499,6 +515,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			}
 
 			finishRequestTiming();
+			attemptTimer.record(output);
 			for (const block of blocks) {
 				finishBlock(block);
 			}
@@ -527,6 +544,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			if (!options?.signal?.aborted) recordProviderFailure(output, fetchErrors.error ?? error, { headersReceived });
+			attemptTimer.record(output);
 			// Some providers via OpenRouter give additional information in this field.
 			// normalizeProviderError already stringifies the parsed body (error.error)
 			// into errorMessage, so only append the raw metadata when it is not already
@@ -569,6 +588,7 @@ function createClient(
 	optionsHeaders?: ProviderHeaders,
 	sessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+	fetch?: FetchErrorCapture["fetch"],
 ) {
 	const headers: ProviderHeaders = { ...model.headers };
 	if (model.provider === "github-copilot") {
@@ -602,6 +622,7 @@ function createClient(
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: headers,
+		...(fetch ? { fetch } : {}),
 	});
 }
 

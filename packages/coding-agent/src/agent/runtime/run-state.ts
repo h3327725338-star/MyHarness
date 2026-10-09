@@ -50,6 +50,8 @@ export type RunTerminalReason =
 	| "runtime-replaced"
 	| "reset-during-run"
 	| "interrupted"
+	/** A network failure after output started: the output is kept and nothing is resent automatically. */
+	| "output-interrupted"
 	| (string & {});
 
 /** JSON-safe snapshot consumed by SDK, JSON, and UI hosts. */

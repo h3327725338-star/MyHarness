@@ -58,7 +58,7 @@ function sessionInfo(id: string, name?: string): SessionInfo {
 
 function settingsManager() {
 	return {
-		getHttpIdleTimeoutMs: () => 30_000,
+		getNetworkTimeouts: () => ({ connectTimeoutMs: 10_000, firstByteTimeoutMs: 30_000, streamIdleTimeoutMs: 60_000 }),
 		getProviderRetrySettings: () => ({ maxRetries: 0, maxRetryDelayMs: 0 }),
 	};
 }

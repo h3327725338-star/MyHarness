@@ -34,6 +34,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
@@ -508,6 +509,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			timestamp: Date.now(),
 		};
 
+		const fetchErrors = captureFetchErrors(model.provider);
+
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -539,6 +542,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					options?.headers,
 					copilotDynamicHeaders,
 					cacheSessionId,
+					fetchErrors.fetch,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -761,6 +765,10 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			if (!options?.signal?.aborted)
+				recordProviderFailure(output, fetchErrors.error ?? error, {
+					headersReceived: output.content.length > 0 || output.responseId !== undefined,
+				});
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -848,6 +856,7 @@ function createClient(
 	optionsHeaders?: ProviderHeaders,
 	dynamicHeaders?: Record<string, string>,
 	sessionId?: string,
+	fetch?: FetchErrorCapture["fetch"],
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models have interleaved thinking built in, so skip the beta header.
 	const needsInterleavedBeta = interleavedThinking && model.compat?.forceAdaptiveThinking !== true;
@@ -866,6 +875,7 @@ function createClient(
 			authToken: apiKey ?? null,
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
+			...(fetch ? { fetch } : {}),
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
@@ -888,6 +898,7 @@ function createClient(
 			authToken: apiKey,
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
+			...(fetch ? { fetch } : {}),
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
@@ -922,6 +933,7 @@ function createClient(
 		authToken: null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
+		...(fetch ? { fetch } : {}),
 		defaultHeaders,
 	});
 

@@ -34,6 +34,7 @@ const SLOT_DEFAULTS = () => ({
 	codeIntelligenceInstallation: null,
 	compaction: null,
 	retry: null,
+	fallbackTo: null,
 	recovery: null,
 	completion: false,
 	memoryMaintenance: null,
@@ -1071,10 +1072,11 @@ function connectEvents() {
 		if (!d.success && d.finalError && !reported) toast(t("Retry failed after {attempt} attempts: {finalError}", { attempt: d.attempt, finalError: serverText(d.finalError, t("unknown error")) }), "error");
 	});
 	on("model_fallback_start", (d) => {
-		set({ retry: null });
+		set({ retry: null, fallbackTo: d.to });
 		toast(t("The main model {from} kept failing; switched to the fallback model {to} to continue.\n{reason}", { from: d.from, to: d.to, reason: serverText(d.reason) }), "warning", 9000);
 	});
 	on("model_fallback_end", (d) => {
+		set({ fallbackTo: null });
 		if (d.success) toast(t("The fallback model {to} finished this task. The next task uses the main model {from} first.", { from: d.from, to: d.to }), "info", 6000);
 		else if (d.errorMessage) {
 			fallbackFailureShown = true;

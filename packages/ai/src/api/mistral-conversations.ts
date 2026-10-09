@@ -24,6 +24,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
@@ -96,6 +97,10 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			if (!options?.signal?.aborted)
+				recordProviderFailure(output, error, {
+					headersReceived: output.content.length > 0 || output.responseId !== undefined,
+				});
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

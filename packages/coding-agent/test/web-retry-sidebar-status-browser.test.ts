@@ -7,7 +7,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"keeps retry progress, shows a one-line cancel button and hides the time while a chat runs",
+	"keeps retry progress on one line with expandable error details, shows a one-line cancel button and hides the time while a chat runs",
 	async () => {
 		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
 		if (!artifacts) throw new Error("MYHARNESS_ARTIFACTS_DIR is required");
@@ -50,10 +50,11 @@ try {
  set({snap,queue:{steering:[],followUp:[]}});
  set({retry:{attempt:2,maxAttempts:3,delayMs:60000,at:Date.now(),errorMessage:'x'.repeat(200)}});
  render(h(Composer),document.getElementById('app'));await wait(150);
- const strip=[...document.querySelectorAll('.strip')].find(n=>n.querySelector('button')&&n.textContent.includes('Provider'));
+ const strip=document.querySelector('.strip-retry');
  if(!strip) throw Error('retry strip missing');
- const btn=strip.querySelector('button'), msg=strip.querySelector('span:last-of-type')||[...strip.querySelectorAll('span')].find(s=>s.textContent.length>10);
+ const btn=strip.querySelector('.link-btn'), main=strip.querySelector('.strip-main');
  const cs=getComputedStyle(btn);
+ if(btn.textContent.trim()!=='取消重试') throw Error('cancel button label');
  if(cs.whiteSpace!=='nowrap'||cs.flexShrink==='1'&&getComputedStyle(btn).flexGrow!=='0') throw Error('cancel button can wrap');
  if(!cs.borderTopWidth.startsWith('1')&&parseFloat(cs.borderTopWidth)<1) throw Error('cancel button has no frame');
  if(cs.backgroundColor==='rgba(0, 0, 0, 0)'||cs.backgroundColor==='transparent') throw Error('cancel button has no soft surface');
@@ -61,9 +62,34 @@ try {
  const br=btn.getBoundingClientRect(), sr=strip.getBoundingClientRect();
  if(br.height>=sr.height||br.height<18) throw Error('cancel button is not a compact single line');
  if(Math.abs(br.top+br.height/2-(sr.top+sr.height/2))>2) throw Error('cancel button is not vertically centered');
- const mcs=getComputedStyle(msg);
- if(mcs.whiteSpace!=='nowrap') throw Error('strip text can wrap and squeeze the button');
- if(msg.scrollWidth<=msg.clientWidth) throw Error('long text should ellipsize, not push the button');
+ // One line: countdown, attempt count and a short cause — no ellipsis, no long error text; the full error is the tooltip.
+ const status=strip.querySelector('.strip-status'), reason=strip.querySelector('.strip-reason');
+ if(!status.textContent.endsWith('秒后重试 2/3')) throw Error('status text: '+status.textContent);
+ if(reason.textContent!=='请求失败') throw Error('reason text: '+reason.textContent);
+ if(status.scrollWidth>status.clientWidth||reason.scrollWidth>reason.clientWidth) throw Error('status line is truncated');
+ if(strip.textContent.includes('xxxx')) throw Error('long error leaks into the one-line status');
+ if(main.title!=='x'.repeat(200)) throw Error('full error missing from tooltip');
+ if(br.left-main.getBoundingClientRect().right<6) throw Error('cancel button has no gap from the text');
+ const oneLine=sr.height;
+ main.click();await wait(100);
+ const detailText=strip.querySelector('.strip-detail-text');
+ if(!detailText||detailText.textContent!=='x'.repeat(200)||main.getAttribute('aria-expanded')!=='true') throw Error('click does not open the error details');
+ if(Math.abs(btn.getBoundingClientRect().height-br.height)>1) throw Error('cancel button deforms when details open');
+ main.click();await wait(100);
+ if(strip.querySelector('.strip-detail-text')||strip.getBoundingClientRect().height!==oneLine) throw Error('details did not close');
+ // The category from the backend names the cause; the text guess is only the fallback for an unclassified error.
+ for (const [category,label] of [['connect_timeout','建连超时'],['connect_failed','无法连接'],['first_byte_timeout','首包超时'],['stream_idle_timeout','静默超时'],['disconnect','连接断开'],['rate_limited','请求限流'],['upstream_overloaded','上游过载'],['other','请求失败']]) {
+  set({retry:{attempt:2,maxAttempts:2,delayMs:2000,at:Date.now(),errorMessage:'Request timed out.',errorCategory:category}});
+  await wait(120);
+  const s=document.querySelector('.strip-retry');
+  if(s.querySelector('.strip-reason').textContent!==(category==='other'?'请求超时':label)) throw Error('reason for '+category+': '+s.querySelector('.strip-reason').textContent);
+  if(!s.querySelector('.strip-status').textContent.endsWith('秒后重试 2/2')) throw Error('status for '+category+': '+s.querySelector('.strip-status').textContent);
+ }
+ // After the cap the strip names the fallback model it switched to.
+ set({retry:null,fallbackTo:'backup/backup-model'});
+ await wait(120);
+ if(!document.querySelector('.strip')?.textContent.includes('已切换到 backup/backup-model')) throw Error('fallback strip missing: '+document.body.textContent);
+ set({fallbackTo:null});
  set({retry:null});
  // 2) Sidebar: a running chat shows only the spinning ring — no time text — and the time comes back after it stops.
  const path='C:/test/chat.jsonl';

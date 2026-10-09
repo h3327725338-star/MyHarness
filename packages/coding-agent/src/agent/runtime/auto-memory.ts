@@ -8,6 +8,7 @@ import type { AutoMemorySettings, SettingsManager } from "../../config/settings/
 import { getAgentDir } from "../../config.ts";
 import { runGitSync } from "../../git/repository/command.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
+import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import { assertDirectPath } from "../../session/artifacts/store.ts";
 import {
 	archiveMemoryFile,
@@ -717,7 +718,6 @@ export class AutoMemoryManager {
 		const timeout = setTimeout(() => abortController.abort(), AUTO_MEMORY_TIMEOUT_MS);
 		try {
 			const retry = this.options.settingsManager.getProviderRetrySettings();
-			const configuredIdleTimeout = this.options.settingsManager.getHttpIdleTimeoutMs();
 			const response = await runtime.completeSimple(
 				model,
 				{
@@ -733,7 +733,7 @@ export class AutoMemoryManager {
 				{
 					reasoning: parameters.settings.thinkingLevel === "off" ? undefined : parameters.settings.thinkingLevel,
 					signal: abortController.signal,
-					timeoutMs: configuredIdleTimeout === 0 ? AUTO_MEMORY_TIMEOUT_MS : configuredIdleTimeout,
+					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,
 					maxRetryDelayMs: retry.maxRetryDelayMs,
 					maxTokens: 8192,

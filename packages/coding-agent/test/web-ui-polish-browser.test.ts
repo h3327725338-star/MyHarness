@@ -71,19 +71,6 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				progress: [],
 			}));
 			server.route("GET", "/api/stats", () => ({}));
-			server.route("GET", "/api/sessions/tree", () => ({
-				rows: [
-					{
-						id: "u",
-						kind: "user",
-						depth: 6,
-						onPath: true,
-						isLeaf: false,
-						childCount: 1,
-						text: "A long message for the branch tree",
-					},
-				],
-			}));
 			server.route("GET", "/hold", async () => {
 				await new Promise((r) => setTimeout(r, 12000));
 				return {};
@@ -134,12 +121,17 @@ try {
  if(document.querySelector('.git-result')!==card||card.getAttribute('role')!=='alert'||!card.textContent.includes('hook failed')||document.querySelector('.action')?.closest('.git-result')!==card) throw Error('failed repair escaped Commit');
  render(h(SettingsModal,{}),app); await wait(150);
  if(document.querySelector('.settings-body').textContent.includes('任务运行中')) throw Error('appearance contains scheduling');
- const checkRows=()=>{for(const row of document.querySelectorAll('.set-row')) {
+ const checkRows=()=>{const rights=new Set();for(const row of document.querySelectorAll('.set-row')) {
   const text=row.querySelector('.set-text'),control=row.querySelector('.set-control');
-  if(control.getBoundingClientRect().left<text.getBoundingClientRect().right-1) throw Error('control overlaps text');
+  const box=control.getBoundingClientRect();
+  if(box.left<text.getBoundingClientRect().right-1) throw Error('control overlaps text');
+  if(box.width<199||box.width>221) throw Error('control column is not 200-220px: '+box.width);
+  rights.add(Math.round(box.right));
+  for(const field of control.querySelectorAll('.select:not(.model-ref-effort),.field,.input-group,.segmented')) if(Math.abs(field.getBoundingClientRect().height-32)>1) throw Error('control is not 32px tall: '+field.className);
   const desc=row.querySelector('.set-desc');
   if(desc && (desc.scrollWidth>desc.clientWidth+1||getComputedStyle(desc).textOverflow==='ellipsis')) throw Error('description clipped: '+desc.textContent);
- }};
+ }
+ if(rights.size>1) throw Error('control columns do not share one right edge: '+[...rights]);};
  checkRows();
  for(const section of ['conversation','search','network']) {setView({settingsSection:section});await wait(100);checkRows();}
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
@@ -172,13 +164,14 @@ try {
  }
  checkRows();
  render(null,app);app.style.width='340px';
- set({resources:{tools:[{name:'read',description:'Long English description',active:true}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
+ set({resources:{tools:[{name:'read',description:'Long English description',active:true},{name:'workflow',description:'Long English workflow description',active:true},{name:'ultracode',description:'Long English ultracode description',active:true}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
  render(h(ContextPanel,{}),app);await wait(150);
- for(const head of document.querySelectorAll('.ctx-head')) if(head.textContent.includes('分支')||head.textContent.includes('工具')) head.click();await wait(100);
- if(document.querySelector('.tree-node .link-btn')) throw Error('blue branch links');
- for(const button of document.querySelectorAll('.tree-action')) if(getComputedStyle(button).whiteSpace!=='nowrap'||getComputedStyle(button).opacity!=='1') throw Error('branch button hidden or wraps');
- const desc=document.querySelector('.res-desc');
- if(!desc.textContent.includes('读取并解析')||desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error('tool localization');
+ for(const head of document.querySelectorAll('.ctx-head')) if(head.textContent.includes('工具')) head.click();await wait(100);
+ if([...document.querySelectorAll('.ctx-head')].some((head)=>head.textContent.includes('分支'))) throw Error('branch section still rendered');
+ const descs=[...document.querySelectorAll('.res-desc')];
+ if(!descs[0].textContent.includes('读取并解析')) throw Error('tool localization');
+ if(!descs[1].textContent.includes('分阶段只读探索，用于多模块并行排查与验证')||!descs[2].textContent.includes('高风险深度排查，结合反例检查与失败路径校验')) throw Error('workflow/ultracode localization');
+ for(const desc of descs) if(desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error('tool description truncated');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

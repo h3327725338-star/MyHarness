@@ -1,50 +1,43 @@
 import { EventEmitter } from "node:events";
 import * as undici from "undici";
 
-export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
-
 /**
- * The largest idle timeout the JS/undici timers wait for reliably (int32 milliseconds, about 24.8 days). Anything
- * longer is meant to be expressed as "disabled" (0), never as a bigger number.
+ * The three request time limits of the global HTTP dispatcher, each independent of the others (undici options):
+ * - connect: TCP + TLS handshake of a new connection (`connect.timeout`, UND_ERR_CONNECT_TIMEOUT);
+ * - first byte: request sent until the response headers arrive (`headersTimeout`, UND_ERR_HEADERS_TIMEOUT);
+ * - stream idle: longest gap between two pieces of response body once the headers arrived, restarted by every piece, so the
+ *   total length of a stream is not limited (`bodyTimeout`, UND_ERR_BODY_TIMEOUT).
+ * A dropped connection is not a limit but an event (UND_ERR_SOCKET).
  */
-export const MAX_HTTP_IDLE_TIMEOUT_MS = 2_147_483_647;
+export interface NetworkTimeouts {
+	connectTimeoutMs: number;
+	firstByteTimeoutMs: number;
+	streamIdleTimeoutMs: number;
+}
 
-export const HTTP_IDLE_TIMEOUT_CHOICES = [
-	{ label: "30 sec", timeoutMs: 30_000 },
-	{ label: "1 min", timeoutMs: 60_000 },
-	{ label: "2 min", timeoutMs: 120_000 },
-	{ label: "5 min", timeoutMs: 300_000 },
-	{ label: "disabled", timeoutMs: 0 },
-] as const;
+export const DEFAULT_NETWORK_TIMEOUTS: Readonly<NetworkTimeouts> = {
+	connectTimeoutMs: 10_000,
+	firstByteTimeoutMs: 60_000,
+	streamIdleTimeoutMs: 60_000,
+};
+
+/** Every limit is 1 second to 1 hour: zero would disable it in undici, which would bring the hung-request problem back. */
+export const MIN_NETWORK_TIMEOUT_MS = 1_000;
+export const MAX_NETWORK_TIMEOUT_MS = 3_600_000;
+
+export function parseNetworkTimeoutMs(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+	const timeoutMs = Math.floor(value);
+	return timeoutMs >= MIN_NETWORK_TIMEOUT_MS && timeoutMs <= MAX_NETWORK_TIMEOUT_MS ? timeoutMs : undefined;
+}
+
+/** Worst case for one model: every attempt waits out a connect, then the longer of first byte and stream idle. */
+export function worstCaseRequestWaitMs(timeouts: NetworkTimeouts, attempts: number): number {
+	return attempts * (timeouts.connectTimeoutMs + Math.max(timeouts.firstByteTimeoutMs, timeouts.streamIdleTimeoutMs));
+}
 
 const originalGlobalFetch = globalThis.fetch;
 let installedGlobalFetch: typeof globalThis.fetch | undefined;
-
-export function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (trimmed.toLowerCase() === "disabled") {
-			return 0;
-		}
-		if (trimmed.length === 0) {
-			return undefined;
-		}
-		return parseHttpIdleTimeoutMs(Number(trimmed));
-	}
-
-	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-		return undefined;
-	}
-	return Math.floor(value);
-}
-
-export function formatHttpIdleTimeoutMs(timeoutMs: number): string {
-	const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.timeoutMs === timeoutMs);
-	if (choice) {
-		return choice.label;
-	}
-	return `${timeoutMs / 1000} sec`;
-}
 
 export function applyHttpProxySettings(httpProxy: string | undefined): void {
 	const proxy = httpProxy?.trim();
@@ -82,20 +75,102 @@ function createUndiciOriginDispatcher(origin: string | URL, options: object): un
 	);
 }
 
-export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TIMEOUT_MS): void {
-	const normalizedTimeoutMs = parseHttpIdleTimeoutMs(timeoutMs);
-	if (normalizedTimeoutMs === undefined) {
-		throw new Error(`Invalid HTTP idle timeout: ${String(timeoutMs)}`);
+/** How a provider's connections resolve addresses: both families (the OS default), IPv4 only or IPv6 only. */
+export type IpFamily = "auto" | "ipv4" | "ipv6";
+export const IP_FAMILIES: readonly IpFamily[] = ["auto", "ipv4", "ipv6"];
+
+/**
+ * Defaults of the two per-provider connection settings (models.json `keepAliveSeconds` / `ipFamily`), used when a
+ * provider does not set them. Measured on 2026-10-09 against the qwen host (token-plan.cn-beijing.maas.aliyuncs.com): IPv6
+ * handshakes were slow or timed out (automatic mode failed 3 of 20), IPv4 never failed; with IPv4 and a 120 s keep-alive time
+ * no connection was closed by the server or re-opened at idle gaps up to 115 s (shorter times re-opened every connection
+ * past their limit). Reports: data/.../artifacts/temporary/keepalive-ipfamily/REPORT.md.
+ */
+export const DEFAULT_KEEP_ALIVE_SECONDS = 120;
+export const DEFAULT_IP_FAMILY: IpFamily = "ipv4";
+export const MIN_KEEP_ALIVE_SECONDS = 1;
+export const MAX_KEEP_ALIVE_SECONDS = 600;
+/** Server `Keep-Alive: timeout=N` hints are honored up to this long; undici's own default, stated here so it stays. */
+const KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
+
+export interface ProviderConnectionSettings {
+	keepAliveSeconds?: number;
+	ipFamily?: IpFamily;
+}
+
+/** A whole number of seconds from 1 to 600, or undefined. */
+export function parseKeepAliveSeconds(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+	return value >= MIN_KEEP_ALIVE_SECONDS && value <= MAX_KEEP_ALIVE_SECONDS ? value : undefined;
+}
+
+export function parseIpFamily(value: unknown): IpFamily | undefined {
+	return typeof value === "string" && (IP_FAMILIES as readonly string[]).includes(value)
+		? (value as IpFamily)
+		: undefined;
+}
+
+let currentTimeouts: NetworkTimeouts = DEFAULT_NETWORK_TIMEOUTS;
+
+/** Options of the EnvHttpProxyAgent for one provider: the shared time limits plus its keep-alive time and IP family. */
+export function providerDispatcherOptions(
+	settings: ProviderConnectionSettings = {},
+	timeouts: NetworkTimeouts = currentTimeouts,
+): undici.EnvHttpProxyAgent.Options {
+	const keepAliveSeconds = parseKeepAliveSeconds(settings.keepAliveSeconds) ?? DEFAULT_KEEP_ALIVE_SECONDS;
+	const ipFamily = parseIpFamily(settings.ipFamily) ?? DEFAULT_IP_FAMILY;
+	return {
+		...baseDispatcherOptions(timeouts),
+		keepAliveTimeout: keepAliveSeconds * 1000,
+		keepAliveMaxTimeout: KEEP_ALIVE_MAX_TIMEOUT_MS,
+		connect: {
+			timeout: timeouts.connectTimeoutMs,
+			...(ipFamily === "auto" ? {} : { family: ipFamily === "ipv4" ? 4 : 6 }),
+		},
+	};
+}
+
+function baseDispatcherOptions(timeouts: NetworkTimeouts): undici.EnvHttpProxyAgent.Options {
+	return {
+		allowH2: false,
+		bodyTimeout: timeouts.streamIdleTimeoutMs,
+		headersTimeout: timeouts.firstByteTimeoutMs,
+		connect: { timeout: timeouts.connectTimeoutMs },
+		clientFactory: createUndiciClient,
+		factory: createUndiciOriginDispatcher,
+	};
+}
+
+const providerDispatchers = new Map<string, undici.Dispatcher>();
+
+/**
+ * The dispatcher for model requests of a provider with these settings. One dispatcher per distinct setting (and per time
+ * limits in force), created on first use and reused afterwards, so connections are reused between requests. A changed
+ * setting or time limit yields a new dispatcher; the old one is left to finish its requests and idle out.
+ */
+export function getProviderDispatcher(settings: ProviderConnectionSettings = {}): undici.Dispatcher {
+	const keepAliveSeconds = parseKeepAliveSeconds(settings.keepAliveSeconds) ?? DEFAULT_KEEP_ALIVE_SECONDS;
+	const ipFamily = parseIpFamily(settings.ipFamily) ?? DEFAULT_IP_FAMILY;
+	const key = `${keepAliveSeconds}|${ipFamily}`;
+	let dispatcher = providerDispatchers.get(key);
+	if (!dispatcher) {
+		dispatcher = withUndiciErrorListener(
+			new undici.EnvHttpProxyAgent(providerDispatcherOptions({ keepAliveSeconds, ipFamily })),
+		);
+		providerDispatchers.set(key, dispatcher);
 	}
-	const dispatcher = withUndiciErrorListener(
-		new undici.EnvHttpProxyAgent({
-			allowH2: false,
-			bodyTimeout: normalizedTimeoutMs,
-			headersTimeout: normalizedTimeoutMs,
-			clientFactory: createUndiciClient,
-			factory: createUndiciOriginDispatcher,
-		}),
-	);
+	return dispatcher;
+}
+
+export function configureHttpDispatcher(timeouts: NetworkTimeouts = DEFAULT_NETWORK_TIMEOUTS): void {
+	for (const [name, value] of Object.entries(timeouts)) {
+		if (parseNetworkTimeoutMs(value) === undefined)
+			throw new Error(`Invalid network timeout ${name}: ${String(value)}`);
+	}
+	currentTimeouts = { ...timeouts };
+	// Provider dispatchers carry the time limits too: the next request builds them again with the new limits.
+	providerDispatchers.clear();
+	const dispatcher = withUndiciErrorListener(new undici.EnvHttpProxyAgent(baseDispatcherOptions(timeouts)));
 	undici.setGlobalDispatcher(dispatcher);
 	// Keep fetch and the dispatcher on the same undici implementation. Node 26.0's
 	// bundled fetch can otherwise consume compressed responses through npm undici's

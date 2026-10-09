@@ -1,6 +1,7 @@
 import { type Api, type AssistantMessage, type Context, contentText, type Model } from "@myharness/ai";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
+import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import { sessionEntryToContextMessages } from "../../session/projection/index.ts";
 import type { SessionInfo } from "../../session/types.ts";
@@ -24,10 +25,7 @@ export const CONVERSATION_TITLE_MAX_OUTPUT_TOKENS = 512;
 const CONVERSATION_TITLE_SYSTEM_PROMPT = loadSystemPrompt("tasks/conversation-title.md");
 
 export type ConversationTitleModelRuntime = Pick<ModelRuntime, "completeSimple" | "getModel">;
-export type ConversationTitleSettingsManager = Pick<
-	SettingsManager,
-	"getHttpIdleTimeoutMs" | "getProviderRetrySettings"
->;
+export type ConversationTitleSettingsManager = Pick<SettingsManager, "getNetworkTimeouts" | "getProviderRetrySettings">;
 
 export type ConversationTitleResult =
 	| { status: "renamed"; title: string; usedFallback?: boolean }
@@ -220,11 +218,12 @@ function buildFallbackTitle(conversationText: string): string {
 	return "未命名会话";
 }
 
-function getTitleRequestTimeout(settingsManager: ConversationTitleSettingsManager): number {
-	const configuredTimeout = settingsManager.getHttpIdleTimeoutMs();
-	return configuredTimeout > 0
-		? Math.min(configuredTimeout, CONVERSATION_TITLE_TIMEOUT_MS)
-		: CONVERSATION_TITLE_TIMEOUT_MS;
+function getTitleRequestTimeout(
+	model: Model<Api>,
+	settingsManager: ConversationTitleSettingsManager,
+): number | undefined {
+	const timeoutMs = sdkFirstByteTimeoutMs(model, settingsManager);
+	return timeoutMs === undefined ? undefined : Math.min(timeoutMs, CONVERSATION_TITLE_TIMEOUT_MS);
 }
 
 function getAbortMessage(signal: AbortSignal | undefined): Error {
@@ -278,7 +277,7 @@ export async function generateConversationTitle(
 		};
 		const response: AssistantMessage = await options.modelRuntime.completeSimple(model, context, {
 			signal: controller.signal,
-			timeoutMs: getTitleRequestTimeout(options.settingsManager),
+			timeoutMs: getTitleRequestTimeout(model, options.settingsManager),
 			maxRetries: options.maxRetries ?? retry.maxRetries,
 			maxRetryDelayMs: retry.maxRetryDelayMs,
 			maxTokens: CONVERSATION_TITLE_MAX_OUTPUT_TOKENS,

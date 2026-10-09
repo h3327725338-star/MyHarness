@@ -107,10 +107,10 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 .btn, .env-chip, .status-pill, .badge, .tab, .nav-btn, .segmented button, .menu-item, .pop-item, .suggest-item, .cp-row, .palette-item, .crumb, .fp-place, .settings-nav button, .multi-opt, .chip-toggle, .marker-text, .group-head, .action-row, .summary-head, .change-head, .change-file, .tree-row, .term-item, .ws-row, .gitbar { line-height: 16px; }
 /* The rows of the file tree, the file list and the chat list hold single lines of text in a fixed-height row: an 18px line
    box (not 16px) leaves the descenders room, the row height itself does not change. */
-.tree-row, .ws-row, .chat-row, .cfile, .tree-node, .term-item, .fp-row { line-height: 18px; }
+.tree-row, .ws-row, .chat-row, .cfile, .term-item, .fp-row { line-height: 18px; }
 /* Rows that unfold or select something on click are not text to select: a quick second click would highlight the name
    of the folder, file or chat instead of only unfolding it. Fields inside them stay editable. */
-.tree-row, .tree-node, .ws-row, .chat-row, .cfile, .cfiles-toggle, .term-item, .nav-btn, .side-section, .ctx-head, .action-row, .summary-head, .group-head, .change-head, .change-file, .tab, .fp-row, .menu-item, .pop-item, .cp-row, .palette-item, .settings-nav button { user-select: none; -webkit-user-select: none; }
+.tree-row, .ws-row, .chat-row, .cfile, .cfiles-toggle, .term-item, .nav-btn, .side-section, .ctx-head, .action-row, .summary-head, .group-head, .change-head, .change-file, .tab, .fp-row, .menu-item, .pop-item, .cp-row, .palette-item, .settings-nav button { user-select: none; -webkit-user-select: none; }
 .chat-row .title-edit, .chat-row input, .tree-row input, .ws-row input { user-select: text; -webkit-user-select: text; }
 /* Added / removed line counts beside an icon or a label: their box is cut to the digits themselves, so the digits'
    own middle (not the taller line box around them) sits on the centre line of what they stand next to. */

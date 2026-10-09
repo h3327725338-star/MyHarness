@@ -441,6 +441,21 @@ export function UnitField({ value, onInput, onCommit, onKeyDown, unit, label, pl
 	</span>`;
 }
 
+/**
+ * A number and its unit as two equally tall boxes side by side (settings rows): the number is typed in the left box;
+ * the unit is the right box — plain text for a fixed unit, or `children` (a `select.group-unit`) to pick one.
+ */
+export function UnitGroup({ value, onInput, onCommit, unit, label, placeholder, invalid, disabled, inputMode = "decimal", children }) {
+	return html`<span class="input-group">
+		<input class=${`field group-input mono ${invalid ? "invalid" : ""}`} inputmode=${inputMode} autocomplete="off" spellcheck="false" aria-label=${label} aria-invalid=${invalid ? "true" : undefined} placeholder=${placeholder} disabled=${disabled}
+			value=${value} onInput=${(event) => onInput?.(event.target.value)} onBlur=${(event) => onCommit?.(event.target.value)}
+			onKeyDown=${(event) => {
+				if (event.key === "Enter" && onCommit) (event.preventDefault(), onCommit(event.target.value));
+			}} />
+		${children || html`<span class="group-unit" aria-hidden="true">${unit}</span>`}
+	</span>`;
+}
+
 export function Segmented({ value, options, onChange }) {
 	return html`<div class="segmented" role="tablist">${options.map(
 		(option) => html`<button role="tab" aria-selected=${value === option.value} class=${value === option.value ? "on" : ""} onClick=${() => onChange(option.value)} title=${option.title || ""}>${option.icon ? html`<${Icon} name=${option.icon} size=${14} />` : null}${option.label}</button>`,

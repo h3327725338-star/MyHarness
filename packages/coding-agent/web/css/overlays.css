@@ -52,38 +52,60 @@
 .set-card-head { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .set-card-toggle { display: flex; align-items: center; gap: 8px; text-align: left; color: var(--text); }
 .set-card-head strong { font-size: 13px; font-weight: 650; }
+.set-notes { padding: 8px 14px 10px; border-top: 1px solid var(--border-soft, var(--border)); }
+.set-note { margin: 2px 0; font-size: var(--fs-sm); color: var(--text-3); white-space: normal; }
 .set-card-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; margin-top: 1px; }
 .set-card-body { padding: 0 16px; }
 .set-card-body.col, .set-card-body.pf-fields { padding: 14px 16px; }
 .set-card-body.col { gap: 10px; }
-/* A row is one compact line, and every row is the same height whatever its control is: 28px for the control, 2px above
-   and below it, and the 1px line that separates it from the row before (the first row keeps that line, unseen, so its
-   content sits exactly where it does in every other row). */
-.set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 16px; min-height: 33px; padding: 2px 0; border-top: 1px solid var(--border); }
+/* Every row has the same two columns: the name with its short note on the left, and one fixed-width column of controls on
+   the right (--set-control-w). Whatever the control is — list, field, number with unit, segmented control, switch — it
+   is --h-control tall and ends on the column's right edge; a switch sits at that edge, a field fills the column. */
+.set-row { --set-control-w: 208px; display: grid; grid-template-columns: minmax(0, 1fr) var(--set-control-w); align-items: center; column-gap: 24px; min-height: 52px; padding: 10px 0; border-top: 1px solid var(--border); }
 .set-card-body > .set-row:first-child { border-top-color: transparent; }
-.set-row.stack { grid-template-columns: minmax(0, 1fr) auto; }
+.set-row.stack { grid-template-columns: minmax(0, 1fr) var(--set-control-w); }
 .set-row.off .set-text, .set-row.off .set-control { opacity: 0.55; }
-/* Name and concise description stay inline; controls remain in the right-hand column. */
-.set-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.set-label { flex: none; font-size: 13px; color: var(--text); white-space: nowrap; }
-.set-text > .set-desc { flex: 1 1 0; min-width: 0; max-width: none; font-size: var(--fs-xs); white-space: normal; overflow-wrap: anywhere; }
+/* Name above, short note below. */
+.set-text { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.set-label { font-size: 13px; line-height: 18px; color: var(--text); overflow-wrap: anywhere; }
+.set-text > .set-desc { max-width: none; font-size: var(--fs-xs); line-height: 16px; white-space: normal; overflow-wrap: anywhere; }
 .set-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; max-width: 520px; line-height: 1.45; }
-.set-control { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
-.set-row.stack .set-control { justify-content: flex-start; }
-/* Under its name the control starts where the name starts: the place kept for "saving" comes after it. */
-.set-row.stack .saving { order: 1; }
-/* Every control of a row ends on the row's right edge, is the compact height (that of the segmented and the multi-choice
-   control) and uses the type size of the row's name, so name and value share one baseline. A list of choices is at least
-   one common width, so short lists also start on one line; a longer one grows to its content, within bounds. A typed
-   text gets a fixed comfortable width. */
-.set-control .select, .set-control .field, .set-control .unit-field { height: var(--h-control-sm); font-size: 13px; }
-.set-control .unit-input { font-size: 13px; }
-.set-control > .select { width: auto; min-width: 136px; max-width: 280px; }
-.set-control > .field.wide { width: 240px; }
-.set-control > .model-ref { width: fit-content; min-width: 176px; max-width: 340px; }
-.field.num { width: 96px; } .field.wide { width: 260px; }
-.tokens-field { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.set-control { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: var(--set-control-w); min-width: 0; }
+.set-row.stack .set-control { justify-content: flex-end; }
+/* "Saving" sits in the gap before the column, so it never takes room from the control. */
+.set-control > .saving { position: absolute; right: 100%; top: 50%; margin: -7px 8px 0 0; }
+.set-row.stack .saving { order: 0; }
+.set-control .select, .set-control .field, .set-control .segmented { height: var(--h-control); font-size: 13px; }
+.set-control > .select, .set-control > .field, .set-control > .model-ref, .set-control > .segmented, .set-control > .input-group, .set-control > .tokens-field, .set-control > .mref { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
+.set-control > .toggle { margin-left: auto; }
+.set-control .segmented { display: flex; box-sizing: border-box; }
+.set-control .segmented button { flex: 1 1 0; justify-content: center; min-width: 0; height: calc(var(--h-control) - 8px); padding: 0 6px; white-space: nowrap; }
+/* A list of options that can each be on: two columns of equal boxes that fill the column. */
+.set-control .multi { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; border: 0; background: none; overflow: visible; }
+.set-control .multi-opt { min-width: 0; height: var(--h-control); padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); }
+.set-control .multi-opt:first-child { border-left: 1px solid var(--border-strong); }
+.set-control .multi-opt:hover { border-color: var(--text-4); }
+.set-control .multi-opt.on { border-color: var(--accent-line); background: var(--accent-soft); }
+.set-control .multi-opt:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.set-card-body > .row.set-desc { padding: 2px 0 12px; }
+/* A number and its unit: two boxes of the same height and look, the number on the left, a compact unit on the right. */
+.input-group { display: flex; align-items: stretch; gap: 6px; min-width: 0; }
+.input-group > .group-input { flex: 1 1 0; width: 0; min-width: 0; text-align: left; font-variant-numeric: tabular-nums; }
+.input-group > .group-input.invalid { border-color: var(--danger); }
+.input-group > .group-unit { flex: none; box-sizing: border-box; width: 88px; height: var(--h-control); font-size: 13px; }
+.input-group > span.group-unit { display: inline-flex; align-items: center; justify-content: center; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-inset); color: var(--text-3); white-space: nowrap; user-select: none; }
+.input-group > select.group-unit { padding-left: 10px; padding-right: 26px; background-position: right 9px center; text-overflow: ellipsis; }
+.tokens-field { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
+.tokens-field > .input-group { width: 100%; }
 .tokens-exact { font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* A model choice with its own switch and an optional number: the picker takes what the switch leaves, the number is a second line. */
+.mref { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mref-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mref-main > .model-ref { flex: 1 1 0; width: auto; min-width: 0; }
+.mref-main > .toggle { flex: none; }
+.set-control .model-ref { height: var(--h-control); }
+.set-control .model-ref .select { height: var(--h-control); }
+.set-control .model-ref-effort { max-width: 76px; }
 /* Room kept for "saving": it only fills for a save that really takes long, so nothing shifts when it appears. */
 .saving { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
@@ -102,7 +124,7 @@
 .multi-box { width: 14px; height: 14px; border-radius: var(--r-xs); border: 1.5px solid var(--border-strong); display: grid; place-items: center; flex: none; }
 .multi-opt.on .multi-box { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 /* Project trust: the folder on the left of a row like any other (its icon centred on the path, not on its baseline). */
-.trust-path { align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); }
+.set-text.trust-path { flex-direction: row; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); }
 .about-kv { padding: 14px 0 6px; }
 .about-note { padding: 0 0 14px; max-width: none; }
 
@@ -181,6 +203,7 @@
 .field-name { font-weight: 550; color: var(--text-2); }
 .pf-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .pf-hint { font-size: var(--fs-xs); white-space: normal; line-height: 1.45; }
+.pf-problem { color: var(--danger); }
 .pf-model { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-panel); }
 .pf-model-head { gap: 8px; min-height: 38px; padding: 0 6px 0 10px; }
 .pf-model-body { gap: 14px; padding: 12px 12px 14px; border-top: 1px solid var(--border); }

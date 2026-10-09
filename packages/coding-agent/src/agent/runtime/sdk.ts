@@ -12,6 +12,7 @@ import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribu
 import { formatNoModelsAvailableMessage } from "../../providers/runtime/auth-guidance.ts";
 import { ModelRuntime } from "../../providers/runtime/index.ts";
 import { findInitialModel } from "../../providers/runtime/model-resolver.ts";
+import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import { readSessionBridgeDescriptor } from "../../session/bridge/descriptor.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { ModeStateStore } from "../../session/mode-state.ts";
@@ -353,11 +354,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFunction: async (model, context, options) => {
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
-			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
-			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
-			// Use max int32 to effectively disable the timeout.
-			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
+			// The SDK timer is only a first-byte limit (same value as the dispatcher's headersTimeout); the connect and
+			// stream-idle limits live in the dispatcher.
+			const timeoutMs = options?.timeoutMs ?? sdkFirstByteTimeoutMs(model, settingsManager);
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;

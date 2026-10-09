@@ -164,6 +164,15 @@ Set `api` at provider level (default for all models) or model level (override pe
 
 For providers with `models`, custom provider configs need an `api` value and a `baseUrl` at either provider or model level. A provider entry without a `baseUrl` is not an error: it is kept as an unfinished provider whose models are not offered and which cannot be enabled until the Base URL is filled in (the Web UI shows it as "No Base URL").
 
+`keepAliveSeconds` and `ipFamily` (both optional, per provider, written by the Web UI provider form) tune how model requests to this provider connect:
+
+| Field | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `keepAliveSeconds` | whole number, 1–600 | `120` (`DEFAULT_KEEP_ALIVE_SECONDS`) | How long an idle connection is kept open for the next request. Longer saves TLS handshakes; if the server closes first the next request can fail, so lower it when that happens. A `Keep-Alive: timeout=N` header from the server takes precedence (undici behaviour). |
+| `ipFamily` | `"auto"`, `"ipv4"`, `"ipv6"` | `"ipv4"` (`DEFAULT_IP_FAMILY`) | Which address family to connect with. A forced family that does not work on the current network makes requests fail; use `"auto"` on an IPv6-only network. |
+
+A missing field means the default; a value written to the file (including `"auto"`) is used as written. Entries without the fields load as before. The defaults apply to every provider defined in `models.json`; built-in providers without an entry keep the global dispatcher. Out-of-range or unknown values make the file invalid. Changes apply to the next request after `models.json` is reloaded (saving in the Web UI does that); the connect / first-byte / stream-idle time limits stay the global `network` settings. The settings take effect for the `openai-completions`, `openai-responses`, `azure-openai-responses`, `anthropic-messages` and `myharness-messages` APIs; `google-generative-ai`, `google-vertex`, `mistral-conversations` and `bedrock-converse-stream` use their SDK's own HTTP client and ignore them.
+
 `authMode` (optional, written by the Web UI provider form) records how the provider authenticates: `"apiKey"` uses the key saved in the credential store and leaves an `apiKey` that is also written in `models.json` unused; `"config"` uses the `apiKey` written in `models.json` even when a key is saved as well (when `models.json` holds no key, the saved key is still used). Without `authMode` the previous behaviour applies: a saved key first, then the `apiKey` in `models.json`.
 
  `apiKey` is not required to load the file: models become available when auth is configured through `auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.

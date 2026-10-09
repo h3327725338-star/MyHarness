@@ -29,6 +29,7 @@ import {
 	cleanupSessionResources,
 	isContextOverflow,
 	isRetryableAssistantError,
+	type ProviderErrorCategory,
 	streamSimple,
 } from "@myharness/ai/compat";
 import type { ResourceExtensionPaths, ResourceLoader } from "../../application/resource-loader.ts";
@@ -78,6 +79,12 @@ import { ModelRegistry } from "../../providers/models/registry.ts";
 import { ProviderRecoveryCoordinator } from "../../providers/recovery/coordinator.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import { ModelFallbackCoordinator, type ModelFallbackEvent } from "../../providers/recovery/fallback.ts";
+import {
+	MAX_RETRY_BACKOFF_MS,
+	planRetry,
+	type RetryPlan,
+	retryBackoffDelayMs,
+} from "../../providers/recovery/network-retry.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "../../providers/runtime/auth-guidance.ts";
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import {
@@ -193,7 +200,15 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 			budget?: ContextBudgetSnapshot;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number | null; delayMs: number; errorMessage: string }
+	| {
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number | null;
+			delayMs: number;
+			errorMessage: string;
+			/** Why the request failed, from the provider layer's classification; absent when it recorded none. */
+			errorCategory?: ProviderErrorCategory;
+	  }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| {
 			/**
@@ -363,16 +378,9 @@ type AgentOperation = {
 // AgentSession Class
 // ============================================================================
 
-/**
- * Cap of the exponential backoff between automatic retries. With a large or unlimited attempt count the doubling
- * delay would otherwise grow past what any timer can wait (and past any useful recovery window).
- */
-export const MAX_RETRY_BACKOFF_MS = 60_000;
-
-/** The wait before retry `attempt` (1-based): `baseDelayMs` doubled per attempt, never longer than the cap. */
-export function retryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
-	return Math.min(baseDelayMs * 2 ** (attempt - 1), MAX_RETRY_BACKOFF_MS);
-}
+// The shared backoff now lives in providers/recovery/network-retry.ts, where one-shot completions use the exact same
+// budgets as this retry loop. Re-exported so existing importers keep resolving them from this module.
+export { MAX_RETRY_BACKOFF_MS, retryBackoffDelayMs };
 
 /** The attempt count as shown to the user: an unlimited budget reads as "∞". */
 function retryAttemptsShown(maxRetries: number): number | string {
@@ -430,6 +438,8 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	/** Network-failure retries already made on the current model (see providers/recovery/network-retry.ts). */
+	private _networkAttempts = 0;
 
 	// Provider recovery is a stateful coordinator owned by this session;
 	// AgentSession only decides when to call it.
@@ -766,7 +776,10 @@ export class AgentSession {
 	}
 
 	private _recordAgentRuntimeEvent(event: AgentEvent, willRetry?: boolean): void {
-		this._traceCoordinator.recordAgentEvent(event, willRetry, this.agent.state.model);
+		this._traceCoordinator.recordAgentEvent(event, willRetry, this.agent.state.model, {
+			number: this._retryAttempt + this._networkAttempts + 1,
+			contextTokens: event.type === "turn_end" ? (this.getContextUsage()?.tokens ?? undefined) : undefined,
+		});
 	}
 
 	private async _finishRuntimeTrace(): Promise<void> {
@@ -1189,14 +1202,14 @@ export class AgentSession {
 
 				// Reset retry counter immediately on successful assistant response
 				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
+				if (assistantMsg.stopReason !== "error" && this._retryAttempt + this._networkAttempts > 0) {
 					this._setRunState("running", "重试成功，继续执行");
 					this._emit({
 						type: "auto_retry_end",
 						success: true,
-						attempt: this._retryAttempt,
+						attempt: this._retryAttempt + this._networkAttempts,
 					});
-					this._retryAttempt = 0;
+					this._resetRetryCounters();
 				}
 			}
 		}
@@ -1236,18 +1249,34 @@ export class AgentSession {
 	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
-		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled || this._retryAttempt >= settings.maxRetries) {
-			return false;
-		}
-
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				return this._isRetryableError(message as AssistantMessage);
+				const plan = this._planRetryFor(message as AssistantMessage);
+				return plan.kind === "network" || plan.kind === "standard";
 			}
 		}
 		return false;
+	}
+
+	/** One decision for every kind of failed request: retry (and how), stop as interrupted, or give up on this model. */
+	private _planRetryFor(message: AssistantMessage): RetryPlan {
+		const settings = this.settingsManager.getRetrySettings();
+		return planRetry({
+			message,
+			retryEnabled: settings.enabled,
+			overflow: isContextOverflow(message, this.effectiveContextWindow),
+			standardRetryable: isRetryableAssistantError(message),
+			standardAttempts: this._retryAttempt,
+			standardMax: settings.maxRetries,
+			networkAttempts: this._networkAttempts,
+			networkMaxAttempts: this.settingsManager.getNetworkMaxAttempts(),
+		});
+	}
+
+	private _resetRetryCounters(): void {
+		this._retryAttempt = 0;
+		this._networkAttempts = 0;
 	}
 
 	/** Find the last assistant message in agent state (including aborted ones) */
@@ -1456,7 +1485,7 @@ export class AgentSession {
 
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
-		return this._retryAttempt;
+		return this._retryAttempt + this._networkAttempts;
 	}
 
 	/**
@@ -1794,10 +1823,28 @@ export class AgentSession {
 			return false;
 		}
 
-		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
+		const retryPlan = this._planRetryFor(msg);
+		if (
+			(retryPlan.kind === "network" || retryPlan.kind === "standard") &&
+			(await this._prepareRetry(msg, retryPlan))
+		) {
 			return true;
 		}
 		if (this._runStateTracker.terminal?.reason === "user-cancelled") {
+			return false;
+		}
+		// The connection failed after output started: keep what was shown, never resend it on this or the fallback model,
+		// and let the person decide (the "Retry" button continues the task from its current state).
+		if (retryPlan.kind === "interrupted") {
+			const error = explainProviderError(msg.errorMessage ?? "连接中断");
+			this._setRunState("failed", "已中断：输出过程中连接断开", { error });
+			this._runStateTracker.terminal = {
+				state: "failed",
+				activity: "已中断：输出过程中连接断开",
+				error,
+				reason: "output-interrupted",
+			};
+			this._resetRetryCounters();
 			return false;
 		}
 
@@ -1817,7 +1864,7 @@ export class AgentSession {
 			const fallback = await this._modelFallback.handleFailure(msg, this._retryAttempt);
 			if (fallback?.kind === "switched") {
 				// The fallback model gets its own retry and recovery budget.
-				this._retryAttempt = 0;
+				this._resetRetryCounters();
 				this._providerRecovery.resetForRun();
 				// Remove the failed turn from agent state (it stays in the session for history), as a retry does.
 				const messages = this.agent.state.messages;
@@ -1842,17 +1889,17 @@ export class AgentSession {
 			return false;
 		}
 
-		if (msg.stopReason === "error" && this._retryAttempt > 0) {
+		if (msg.stopReason === "error" && this._retryAttempt + this._networkAttempts > 0) {
 			this._setRunState("failed", "重试失败，任务结束", {
 				error: this._fallbackFailure ?? explainProviderError(msg.errorMessage ?? "重试失败"),
 			});
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
-				attempt: this._retryAttempt,
+				attempt: this._retryAttempt + this._networkAttempts,
 				finalError: msg.errorMessage,
 			});
-			this._retryAttempt = 0;
+			this._resetRetryCounters();
 		}
 
 		if (await this._checkCompaction(msg)) {
@@ -3102,55 +3149,55 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Check if an error is retryable (overloaded, rate limit, server errors).
-	 * Context overflow errors are NOT retryable (handled by compaction instead).
-	 */
-	private _isRetryableError(message: AssistantMessage): boolean {
-		// Context overflow is handled by compaction, not retry.
-		if (isContextOverflow(message, this.effectiveContextWindow)) return false;
-		return isRetryableAssistantError(message);
-	}
-
-	/**
 	 * Prepare a retryable error for continuation with exponential backoff.
 	 * @returns true if the caller should continue the agent, false otherwise
 	 */
-	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
+	private async _prepareRetry(message: AssistantMessage, plan: RetryPlan): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
+		if (!settings.enabled || (plan.kind !== "network" && plan.kind !== "standard")) {
 			return false;
 		}
 
-		this._retryAttempt++;
-
-		if (this._retryAttempt > settings.maxRetries) {
-			// Preserve the completed attempt count so post-run handling can emit the final failure.
-			this._retryAttempt--;
-			return false;
+		// Network failures have their own budget and a short fixed pause; the rest keep the exponential backoff.
+		let delayMs: number;
+		let attemptShown: number;
+		let maxAttemptsShown: number | string;
+		let maxAttempts: number | null;
+		if (plan.kind === "network") {
+			this._networkAttempts++;
+			delayMs = plan.delayMs;
+			// Counted like the setting: the first attempt included, so the retry about to run is attempt 2 of N.
+			attemptShown = this._networkAttempts + 1;
+			maxAttempts = this.settingsManager.getNetworkMaxAttempts();
+			maxAttemptsShown = maxAttempts;
+		} else {
+			this._retryAttempt++;
+			delayMs = retryBackoffDelayMs(settings.baseDelayMs, this._retryAttempt);
+			attemptShown = this._retryAttempt;
+			maxAttemptsShown = retryAttemptsShown(settings.maxRetries);
+			maxAttempts = Number.isFinite(settings.maxRetries) ? settings.maxRetries : null;
 		}
-
-		const delayMs = retryBackoffDelayMs(settings.baseDelayMs, this._retryAttempt);
-		const maxAttemptsShown = retryAttemptsShown(settings.maxRetries);
 		// Publish the cancellable state before notifying listeners. A listener may
 		// call abortRetry() synchronously from the auto_retry_start event.
 		const retryController = new AbortController();
 		this._retryAbortController = retryController;
 		const operationId = this._beginOperation("retry", retryController);
 
-		this._setRunState("recovering", `正在重试 (${this._retryAttempt}/${maxAttemptsShown})`, {
+		this._setRunState("recovering", `正在重试 (${attemptShown}/${maxAttemptsShown})`, {
 			detail: message.errorMessage || "未知错误",
 		});
 		this._emit({
 			type: "auto_retry_start",
-			attempt: this._retryAttempt,
-			maxAttempts: Number.isFinite(settings.maxRetries) ? settings.maxRetries : null,
+			attempt: attemptShown,
+			maxAttempts,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
+			...(plan.kind === "network" ? { errorCategory: plan.category } : {}),
 		});
 		const traceScope = this._traceCoordinator.activeScope;
 		if (traceScope) {
 			this._recordRuntimeTrace(traceScope, "retry", {
-				attempt: this._retryAttempt,
+				attempt: attemptShown,
 				maxAttempts: maxAttemptsShown,
 				delayMs,
 				status: "scheduled",
@@ -3168,8 +3215,8 @@ export class AgentSession {
 			await sleep(delayMs, retryController.signal);
 		} catch {
 			// Aborted during sleep - emit end event so UI can clean up
-			const attempt = this._retryAttempt;
-			this._retryAttempt = 0;
+			const attempt = this._retryAttempt + this._networkAttempts;
+			this._resetRetryCounters();
 			this._setRunState("cancelled", "重试已取消");
 			this._runStateTracker.terminal = {
 				state: "cancelled",
