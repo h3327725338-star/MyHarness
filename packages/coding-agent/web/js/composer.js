@@ -18,6 +18,8 @@ import { retryReason } from "./retry-reason.js";
 
 import { drafts, registerRestartDraft } from "./restart-state.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
+import { clipLine, formatQuotes, quoteFromSelection } from "./quote-text.js";
+import { clearQuoteHighlights, paintQuotes } from "./quote-highlight.js";
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -353,9 +355,18 @@ export function Composer() {
 	}, [editorInsert?.nonce]);
 	useEffect(() => {
 		if (!quoteInsert?.text) return;
-		setQuotes((prev) => [...prev, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: quoteInsert.text }]);
+		const quote = quoteFromSelection(quoteInsert.text, { note: quoteInsert.note, hint: quoteInsert.hint });
+		if (quote) setQuotes((prev) => [...prev, quote]);
+		// A file picked with the quote goes through the same attachment pipeline as one picked in the input.
+		if (quoteInsert.files?.length) importFiles.current(quoteInsert.files);
 		setTimeout(() => area.current?.focus(), 0);
 	}, [quoteInsert?.nonce]);
+	// A mounted quote keeps its fragment painted in the conversation; removing the card, sending it away or opening
+	// another chat takes the feedback away again.
+	useEffect(() => {
+		paintQuotes(quotes);
+	}, [quotes, sessionId]);
+	useEffect(() => () => clearQuoteHighlights(), []);
 	// More than three lines: an icon in the card's corner opens the same card as a large, centred editor.
 	const [tall, setTall] = useState(false);
 	const [expanded, setExpanded] = useState(false);
@@ -536,14 +547,9 @@ export function Composer() {
 		};
 	}, []);
 
-const quotePreview = (text) => {
-	const firstLine = String(text || "").trim().split("\n")[0] || "";
-	return firstLine.length > 28 ? `${firstLine.slice(0, 28)}…` : firstLine;
-};
-
-	const send = async (mode) => {
+const send = async (mode) => {
 		if (state.restarting || !state.connected) return;
-		const quotePrefix = quotes.map((q) => q.text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n\n");
+		const quotePrefix = formatQuotes(quotes);
 		const body = quotePrefix ? (text ? `${quotePrefix}\n\n${text}` : quotePrefix) : text;
 		const references = images.filter((item) => item.path);
 		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${body ? `\n\n${body}` : ""}` : body;
@@ -640,7 +646,15 @@ const quotePreview = (text) => {
 						: null}
 				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
-				${quotes.length ? html`<div class="quote-shelf">${quotes.map((q, i) => html`<div class="quote-pill" key=${q.id} title=${q.text}><span class="quote-pill-icon"><${Icon} name="quote" size=${12} /></span><span class="quote-pill-text truncate">${quotePreview(q.text)}</span><button class="quote-pill-x" aria-label=${t("Remove quote")} title=${t("Remove quote")} onClick=${() => setQuotes(quotes.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
+				${quotes.length ? html`<div class="quote-shelf">${quotes.map((q, i) => html`<div
+					class="quote-card"
+					key=${q.id}
+					title=${q.note ? `${q.note}\n\n${q.text}` : q.text}
+				>
+					<button class="quote-card-x" aria-label=${t("Remove quote")} title=${t("Remove quote")} onClick=${() => setQuotes(quotes.filter((_, j) => j !== i))}><${Icon} name="x" size=${10} /></button>
+					<span class="quote-card-src"><${Icon} name="quote" size=${11} /><span class="truncate">${clipLine(q.text, 44)}</span></span>
+					${q.note ? html`<span class="quote-card-note truncate">${q.note}</span>` : null}
+				</div>`)}</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
 				${loadingFiles ? html`<div class="branch-note dim" role="status"><${Spinner} />${t("Loading files…")}</div>` : null}
 				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}

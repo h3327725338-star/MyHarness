@@ -77,10 +77,11 @@ export const actions = {
 		set({ editorInsert: { text, replace, nonce: Date.now() } });
 	},
 
-	addQuote(text) {
+	/** Mount a saved quote above the input: the passage, the reader's note, any file picked with it, where it was picked. */
+	addQuote(text, { note = "", files = [], hint = 0 } = {}) {
 		const trimmed = String(text || "").trim();
 		if (!trimmed) return;
-		set({ quoteInsert: { text: trimmed, nonce: Date.now() } });
+		set({ quoteInsert: { text: trimmed, note, files, hint, nonce: Date.now() } });
 	},
 
 	async send(text, { images, mode } = {}) {

@@ -5,7 +5,7 @@
 // panel.
 import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
 import { api, loadGitStatus, setView, useStore } from "./store.js";
-import { actions, openCommand } from "./actions.js";
+import { actions } from "./actions.js";
 import { PanelBody } from "./command-panel.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { DiffView, languageFor } from "./diff.js";
@@ -185,9 +185,7 @@ export function ChangesPanel() {
 export function GitBar({ gitStatus, active }) {
 	const [more, setMore] = useState(false);
 	const closeMore = useCallback(() => setMore(false), []);
-	const snap = useStore((s) => s.snap);
 	const gitTask = useStore((s) => s.gitTask);
-	const checkpoint = snap?.checkpoint && snap.checkpoint.status === "created" ? snap.checkpoint : null;
 	if (!gitStatus) return null;
 	if (!gitStatus.gitAvailable) return html`<div class="gitbar dim"><${Icon} name="gitBranch" size=${14} />${t("Git is not available on this computer.")}</div>`;
 	if (!gitStatus.isRepository) {
@@ -203,7 +201,6 @@ export function GitBar({ gitStatus, active }) {
 			${gitStatus.integrationEnabled ? null : html`<span class="badge" title=${t("MyHarness does not create task checkpoints while Git integration is off")}>${t("integration off")}</span>`}
 		</span>
 		<span class="grow" />
-		${checkpoint ? html`<button class="btn sm" disabled=${busy} onClick=${() => openCommand("undo")} title=${t("Keep or undo this task's changes")}>${t("Undo task")}</button>` : null}
 		<button class="btn sm" disabled=${busy} onClick=${commitChanges} title=${t("Commit the task's changes locally")}>${t("Commit")}</button>
 		<button class="btn sm" disabled=${busy} onClick=${pushChanges} title=${t("Push commits to the upstream and verify CI")}>${t("Push")}</button>
 		<button class="icon-btn sm" title=${t("More Git actions")} aria-label=${t("More Git actions")} data-git-menu-trigger aria-expanded=${more} onClick=${() => setMore((value) => !value)}><${Icon} name="more" size=${15} /></button>

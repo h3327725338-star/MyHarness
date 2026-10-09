@@ -97,23 +97,39 @@
 .thumb-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text-2); }
 .thumb-x:hover { color: var(--danger); }
 
-/* Quoted text pills above composer input */
-.quote-shelf { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
-.quote-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 300px; padding: 0 4px 0 8px; background: var(--bg-base); border: 1px solid var(--border-strong); border-radius: var(--r-md); font-size: var(--fs-xs); color: var(--text-2); transition: border-color var(--t-fast), color var(--t-fast); }
-.quote-pill:hover { border-color: var(--border-focus); color: var(--text); }
-.quote-pill-icon { display: inline-flex; align-items: center; color: var(--accent); flex: none; }
-.quote-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-sans); }
-.quote-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 50%; background: transparent; color: var(--text-3); cursor: pointer; padding: 0; margin-left: 2px; flex: none; transition: background var(--t-fast), color var(--t-fast); }
-.quote-pill-x:hover { background: var(--surface-hover); color: var(--danger); }
+/* Quote cards mounted above the input: one per passage picked in the conversation, each removable on its own. */
+.quote-shelf { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0 8px; }
+.quote-card { position: relative; display: flex; flex-direction: column; gap: 3px; width: 216px; max-width: 44%; padding: 7px 26px 7px 9px; background: var(--bg-inset); border: 1px solid var(--border-strong); border-left: 2px solid var(--accent-line); border-radius: var(--r-md); font-size: var(--fs-xs); color: var(--text-2); transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); animation: quote-card-in var(--t-base) var(--ease) both; }
+.quote-card:hover { border-color: var(--border-focus); color: var(--text); }
+.quote-card-src { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.quote-card-src > svg { flex: none; color: var(--accent); }
+.quote-card-note { color: var(--text); font-weight: 500; }
+.quote-card-x { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; display: grid; place-items: center; border: none; border-radius: 50%; background: transparent; color: var(--text-3); cursor: pointer; padding: 0; transition: background var(--t-fast), color var(--t-fast); }
+.quote-card-x:hover { background: var(--surface-hover); color: var(--danger); }
+@keyframes quote-card-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
 
-/* Floating quote toolbar on text selection */
-.floating-quote-bar { position: fixed; z-index: 210; display: flex; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; transform: translate(-50%, -100%); animation: quote-bar-in var(--t-fast) var(--ease) both; pointer-events: auto; }
-.floating-quote-bar.flipped { transform: translate(-50%, 0); animation: quote-bar-in-flipped var(--t-fast) var(--ease) both; }
-@keyframes quote-bar-in { from { opacity: 0; transform: translate(-50%, -85%) scale(0.96); } to { opacity: 1; transform: translate(-50%, -100%) scale(1); } }
-@keyframes quote-bar-in-flipped { from { opacity: 0; transform: translate(-50%, -15%) scale(0.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+/* The "Quote" bubble on a selection in the conversation, and the annotation box it opens (both follow the passage). */
+.floating-quote-bar { position: fixed; z-index: 210; display: flex; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px; pointer-events: auto; }
+.floating-quote-bar.down { animation: quote-pop-down var(--t-fast) var(--ease) both; }
+.floating-quote-bar.up { transform: translateY(-100%); animation: quote-pop-up var(--t-fast) var(--ease) both; }
+@keyframes quote-pop-down { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes quote-pop-up { from { opacity: 0; transform: translateY(calc(-100% + 4px)) scale(0.97); } to { opacity: 1; transform: translateY(-100%); } }
 .floating-quote-btn { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: var(--r-sm); border: none; background: transparent; color: var(--text); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; user-select: none; transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast); }
 .floating-quote-btn:hover { background: var(--surface-hover); color: var(--accent); }
 .floating-quote-btn:active { transform: scale(0.96); }
+
+.quote-note-card { position: fixed; z-index: 212; display: flex; flex-direction: column; gap: 6px; width: 320px; max-width: calc(100vw - 24px); padding: 9px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); }
+.quote-note-card.down { animation: quote-pop-down var(--t-base) var(--ease) both; }
+.quote-note-card.up { transform: translateY(-100%); animation: quote-pop-up var(--t-base) var(--ease) both; }
+.quote-note-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--accent); }
+.quote-note-head > svg { flex: none; }
+.quote-note-head .grow { color: var(--text-2); font-weight: 500; }
+.quote-note-src { padding: 6px 8px; border-left: 2px solid var(--accent-line); border-radius: var(--r-xs); background: var(--bg-inset); color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; max-height: 60px; overflow: hidden; }
+.quote-note-input { resize: none; min-height: 58px; font-size: var(--fs-sm); line-height: 1.5; }
+.quote-note-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quote-note-file { display: inline-flex; align-items: center; gap: 4px; max-width: 110px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-3); font-size: var(--fs-xs); }
+.quote-note-file > svg { flex: none; }
+.quote-note-keys { font-size: var(--fs-xs); color: var(--text-4); }
 
 /* Where the task runs (folder, branch, worktree, trust): small chips just above the input card. */
 .composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }

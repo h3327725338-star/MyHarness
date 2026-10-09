@@ -17,7 +17,16 @@ export const expandedKey = (mode) => (chatModeOf(mode) === "general" ? "expanded
  */
 export function draftToServer({ text = "", images = [], quotes = [] } = {}) {
 	const attachments = images.map((item) => (item.path ? { kind: "file", name: item.name, path: item.path } : { kind: "image", name: item.name, mimeType: item.mimeType, data: item.data }));
-	const savedQuotes = Array.isArray(quotes) ? quotes.filter((q) => q && typeof q.text === "string" && q.text.trim()).map((q) => ({ id: q.id, text: q.text })) : [];
+	const savedQuotes = Array.isArray(quotes)
+		? quotes
+				.filter((q) => q && typeof q.text === "string" && q.text.trim())
+				.map((q) => ({
+					id: q.id,
+					text: q.text,
+					...(typeof q.note === "string" && q.note.trim() ? { note: q.note } : {}),
+					...(Number.isFinite(q.hint) && q.hint ? { hint: q.hint } : {}),
+				}))
+		: [];
 	return savedQuotes.length ? { text, attachments, quotes: savedQuotes } : { text, attachments };
 }
 
@@ -39,7 +48,12 @@ export function draftFromServer(draft) {
 		for (const item of draft.quotes) {
 			if (!item || typeof item !== "object") continue;
 			if (typeof item.text === "string" && item.text.trim()) {
-				quotes.push({ id: item.id || `q-${Math.random().toString(36).slice(2, 8)}`, text: item.text });
+				quotes.push({
+					id: item.id || `q-${Math.random().toString(36).slice(2, 8)}`,
+					text: item.text,
+					...(typeof item.note === "string" && item.note.trim() ? { note: item.note } : {}),
+					...(Number.isFinite(item.hint) && item.hint ? { hint: item.hint } : {}),
+				});
 			}
 		}
 		if (quotes.length) result.quotes = quotes;

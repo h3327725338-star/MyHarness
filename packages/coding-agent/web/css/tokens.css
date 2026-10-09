@@ -74,6 +74,9 @@
 	--on-accent: #0f1622;
 	/* Selected text: a clearly visible blue tint that keeps the text's own colours readable. */
 	--selection-bg: rgba(121, 168, 245, 0.38);
+	/* A passage picked from the conversation and quoted into the input card. */
+	--quote-hl-bg: rgba(121, 168, 245, 0.28);
+	--quote-hl-edge: rgba(121, 168, 245, 0.5);
 	/* The one dropdown chevron (the same 12px stroke chevron as the Chevron component), for native selects. */
 	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a9090' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
@@ -135,6 +138,9 @@
 	--accent-line: rgba(44, 102, 214, 0.4);
 	--on-accent: #ffffff;
 	--selection-bg: rgba(44, 102, 214, 0.26);
+	/* A passage picked from the conversation and quoted into the input card. */
+	--quote-hl-bg: rgba(44, 102, 214, 0.18);
+	--quote-hl-edge: rgba(44, 102, 214, 0.36);
 	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666b6b' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
 	--ok: #257450;
@@ -202,6 +208,8 @@
 	--accent-line: rgba(167, 192, 128, 0.45);
 	--on-accent: #202b22;
 	--selection-bg: rgba(167, 192, 128, 0.3);
+	--quote-hl-bg: rgba(167, 192, 128, 0.26);
+	--quote-hl-edge: rgba(167, 192, 128, 0.46);
 	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a5aaa3' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 	--ok: #b2ce95;
 	--warn: #dbbc7f;
@@ -255,6 +263,8 @@
 	--accent-line: rgba(212, 174, 130, 0.45);
 	--on-accent: #2c2118;
 	--selection-bg: rgba(212, 174, 130, 0.3);
+	--quote-hl-bg: rgba(212, 174, 130, 0.26);
+	--quote-hl-edge: rgba(212, 174, 130, 0.46);
 	--chev-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23b0a89f' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
 	--ok: #b2ce95;
