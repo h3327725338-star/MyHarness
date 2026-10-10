@@ -7,7 +7,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"keeps retry progress on one line with expandable error details, shows a one-line cancel button and hides the time while a chat runs",
+	"keeps retry progress on one line with expandable error details, shows a one-line cancel button and keeps the time visible while the status ring turns at the head of the row",
 	async () => {
 		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
 		if (!artifacts) throw new Error("MYHARNESS_ARTIFACTS_DIR is required");
@@ -91,18 +91,26 @@ try {
  if(!document.querySelector('.strip')?.textContent.includes('已切换到 backup/backup-model')) throw Error('fallback strip missing: '+document.body.textContent);
  set({fallbackTo:null});
  set({retry:null});
- // 2) Sidebar: a running chat shows only the spinning ring — no time text — and the time comes back after it stops.
+ // 2) Sidebar: the running ring sits at the head of the row, the time stays visible the whole time, and a naming that
+ //    runs next to the task breathes inside the very same head slot (never a second ring beside the time).
  const path='C:/test/chat.jsonl';
  const slot={mode:'coding',slot:'one',sessionFile:path,sessionId:'chat',cwd:'C:/test',name:'测试对话',hasContent:true,unbound:true,active:false,completion:false};
- set({workspaces:{list:[],sessions:{},unbound:[{id:'chat',path,name:'测试对话',messageCount:2,modified:Date.now()-60000}],archived:[],errors:{},loaded:true},slots:[{...slot,active:true}]});
+ set({workspaces:{list:[],sessions:{},unbound:[{id:'chat',path,name:'测试对话',messageCount:2,modified:Date.now()-60000}],archived:[],errors:{},loaded:true},slots:[{...slot,active:true,conversationNaming:{phase:'processing',retries:0}}]});
  render(h(Sidebar,{}),document.getElementById('app'));await wait(150);
  let row=document.querySelector('.chat-row');
- if(row.querySelector('.when')) throw Error('time still shown while the chat runs');
- if(!row.querySelector('.slot-status svg.spinner')) throw Error('no working ring while the chat runs');
- set({slots:[{...slot,active:false}]});await wait(150);
+ if(!row.querySelector('.when')) throw Error('time hidden while the chat runs');
+ if(!row.querySelector('.chat-ind .ind-ring svg.spinner')) throw Error('no working ring at the head while the chat runs');
+ if(!row.querySelector('.chat-ind .ind-dot')) throw Error('no breathing dot while naming runs next to the task');
+ // Naming ends on its own: the dot fades out of the slot, the ring keeps turning, the time never moved.
+ set({slots:[{...slot,active:true}]});await wait(300);
  row=document.querySelector('.chat-row');
- if(row.querySelector('.slot-status svg.spinner')) throw Error('ring still shown after the run ended');
- if(!row.querySelector('.when')) throw Error('time did not come back after the run ended');
+ if(row.querySelector('.chat-ind .ind-dot')) throw Error('naming dot still shown after naming ended');
+ if(!row.querySelector('.chat-ind .ind-ring svg.spinner')) throw Error('ring lost when only naming ended');
+ // The run ends too: the ring stops and fades out; the time was there all along.
+ set({slots:[{...slot}]});await wait(300);
+ row=document.querySelector('.chat-row');
+ if(row.querySelector('.chat-ind .ind-ring')) throw Error('ring still shown after the run ended');
+ if(!row.querySelector('.when')) throw Error('time missing after the run ended');
  // 3) The outcome banner's Retry: it must not re-send the original task (which restarts the work), but a continue
  //    instruction that picks the task up from its current state.
  window.fetch=async(url,init)=>{if(init?.method==='POST')sent.push({path:String(url),body:init.body??''});return new Response('{}',{status:200,headers:{'content-type':'application/json'}});};

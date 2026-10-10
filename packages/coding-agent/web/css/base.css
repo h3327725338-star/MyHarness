@@ -188,10 +188,13 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 :root[data-motion="off"] .spinner { animation: none; }
+/* The naming dot keeps breathing's resting look without motion: a plain accent dot, not a frozen mid-pulse one. */
+:root[data-motion="off"] .ind-dot { animation: none; }
 :root[data-motion="off"] .shimmer-text { animation: none; background: none; color: var(--text-2); -webkit-text-fill-color: currentColor; }
 @media (prefers-reduced-motion: reduce) {
 	:root:not([data-motion="on"]) *, :root:not([data-motion="on"]) *::before, :root:not([data-motion="on"]) *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 	:root:not([data-motion="on"]) .spinner { animation: none; }
+	:root:not([data-motion="on"]) .ind-dot { animation: none; }
 	:root:not([data-motion="on"]) .shimmer-text { animation: none; background: none; color: var(--text-2); -webkit-text-fill-color: currentColor; }
 }
 

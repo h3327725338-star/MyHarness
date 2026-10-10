@@ -1,5 +1,5 @@
-// Sidebar: workspaces and their chats. Rows use fixed status/time slots so titles never shift.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, motionEnabled, useHeightGlide, useRetainedRows } from "./ui.js";
+// Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
 import { ARCHIVED_KEY, GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -24,15 +24,42 @@ function hasUnread(slot, currentFile) {
 }
 
 /**
- * Fixed-size status marker of a chat, right of the title: a ring while it works, a blue dot for an unread result,
- * nothing once the result has been read.
+ * The one status slot of a chat, at the head of the row (never beside the time): a rotating ring while the task runs,
+ * a breathing dot while the title is being named — concentric in the same slot when both go on at once — a plain dot
+ * for a waiting question or an unread result, and a clickable mark to retry a failed naming. Every glyph fades in and
+ * out on its own (usePresence), so a state that ends leaves smoothly while the title stays put. Colours come only
+ * from the theme tokens (--accent, --accent-line, --border-strong), so all three schemes restyle it on the spot.
  */
-function chatStatus(slot, currentFile) {
-	if (!slot) return null;
-	if (slot.waiting) return html`<span class="dot warn" title=${t("Waiting for you")} />`;
-	if (slot.active || slot.completion) return html`<${Spinner} title=${t("Running")} />`;
-	if (hasUnread(slot, currentFile)) return html`<span class="dot accent" title=${t("Unread result")} />`;
-	return null;
+function ChatIndicator({ slot, currentFile, onRetry }) {
+	const busy = !!(slot && (slot.active || slot.completion));
+	const naming = slot?.conversationNaming;
+	const failed = naming?.phase === "failed";
+	const namingActive = !!naming && !failed;
+	// A waiting question outranks the ring (the task is paused on the user); naming and unread yield to anything stronger.
+	const waiting = !!slot?.waiting;
+	const unread = !!slot && !waiting && !naming && !busy && hasUnread(slot, currentFile);
+	// The naming hint (progress, retry count, error) stays readable while the dot fades out after the last update.
+	const hint = useRef("");
+	if (naming) {
+		const label = failed ? t("Title failed") : naming.phase === "retrying" ? t("Title retry {count}/3", { count: naming.retries }) : t("Naming…");
+		hint.current = failed ? `${t("Automatic naming failed after 3 retries. Click to retry.")} ${naming.error ? serverText(naming.error) : ""}` : `${label}${naming.error ? ` — ${serverText(naming.error)}` : ""}`;
+	}
+	const ring = usePresence(busy && !waiting, 220);
+	// The middle of the slot holds exactly one glyph: a waiting question outranks naming, and naming outranks unread.
+	// A failed naming keeps its retry button only while the row is otherwise quiet: while the task runs the ring takes
+	// the slot alone (naming cannot run during a task anyway, and the button reappears when the run ends), and a
+	// waiting question outranks it too.
+	const dot = usePresence(namingActive && !waiting, 220);
+	const retry = usePresence(!!failed && !waiting && !busy, 220);
+	const warn = usePresence(waiting, 220);
+	const mark = usePresence(unread, 220);
+	return html`<span class="chat-ind">
+		${ring.mounted ? html`<span class=${`ind-ring ${ring.shown ? "" : "leaving"}`}><${Spinner} size=${14} title=${t("Running")} /></span>` : null}
+		${dot.mounted ? html`<span class=${`ind-dot ${dot.shown ? "" : "leaving"}`} title=${hint.current} />` : null}
+		${retry.mounted ? html`<button class=${`ind-retry ${retry.shown ? "" : "leaving"}`} title=${hint.current} aria-label=${hint.current} onClick=${(e) => { e.stopPropagation(); onRetry(); }} onDblClick=${(e) => e.stopPropagation()}><${Icon} name="refresh" size=${11} /></button>` : null}
+		${warn.mounted ? html`<span class=${`dot warn ind-warn ${warn.shown ? "" : "leaving"}`} title=${t("Waiting for you")} />` : null}
+		${mark.mounted ? html`<span class=${`dot accent ind-unread ${mark.shown ? "" : "leaving"}`} title=${t("Unread result")} />` : null}
+	</span>`;
 }
 
 const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
@@ -46,9 +73,6 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const unnamed = !info.name && (info.messageCount === 0 || (info.unsaved && !info.firstMessage));
 	const title = fresh || unnamed ? t("New chat") : chatTitle(info);
 	const busy = !!(slot && (slot.active || slot.completion));
-	const naming = slot?.conversationNaming;
-	const namingLabel = naming?.phase === "failed" ? t("Title failed") : naming?.phase === "retrying" ? t("Title retry {count}/3", { count: naming.retries }) : t("Naming…");
-	const namingHint = naming?.phase === "failed" ? `${t("Automatic naming failed after 3 retries. Click to retry.")} ${naming.error ? serverText(naming.error) : ""}` : `${namingLabel}${naming?.error ? ` — ${serverText(naming.error)}` : ""}`;
 	// An edit ends once, whichever way: Enter saves, Escape keeps the name as it was. The box that closes also loses the
 	// focus, and that must neither save what was typed after Escape nor save a second time after Enter.
 	const ended = useRef(true);
@@ -70,11 +94,9 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 		${editing
 			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
-			: html`<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
-				${naming ? (naming.phase === "failed"
-						? html`<button class="naming-status" title=${namingHint} aria-label=${namingHint} onClick=${(e) => { e.stopPropagation(); actions.retryConversationNaming(info.path); }}><${Icon} name="refresh" size=${13} /></button>`
-						: html`<span class="naming-status"><${Spinner} title=${namingHint} /></span>`) : null}
-				<span class="slot-end">${fresh ? null : html`${busy ? null : html`<span class="when">${relTime(info.modified)}</span>`}
+			: html`<${ChatIndicator} slot=${slot} currentFile=${currentFile} onRetry=${() => actions.retryConversationNaming(info.path)} />
+				<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
+				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
 							${(close) => html`
@@ -85,8 +107,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 								<${MenuSep} />
 								<${MenuItem} icon="trash" label=${t("Delete")} danger disabled=${busy} onClick=${() => (close(), actions.deleteSession(info.path, title))} />`}
 						<//>
-					</span>`}</span>
-				<span class="slot-status">${chatStatus(slot, currentFile)}</span>`}
+					</span>`}</span>`}
 	</div>`;
 });
 

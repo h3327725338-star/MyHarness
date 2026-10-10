@@ -7,7 +7,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"shows unobtrusive naming progress and a keyboard-accessible failure retry in the sidebar",
+	"shows the naming state as one breathing dot at the head of the sidebar row (concentric with the running ring) and a keyboard-accessible failure retry",
 	async () => {
 		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
 		if (!artifacts) throw new Error("MYHARNESS_ARTIFACTS_DIR is required");
@@ -45,26 +45,48 @@ try {
  set({workspaces:{list:[],sessions:{},unbound:[{id:'chat',path,name:'测试对话',messageCount:2,modified:Date.now()}],archived:[],errors:{},loaded:true},slots:[{...slot,conversationNaming:{phase:'processing',retries:0}}]});
  const noText=n=>![...n.childNodes].some(x=>x.nodeType===3&&x.textContent.trim());
  render(h(Sidebar,{}),document.getElementById('app'));await wait(150);
- let el=document.querySelector('.naming-status');
- if(!el) throw Error('naming shows no indicator');
- if(el.tagName==='BUTTON') throw Error('naming in progress is still a button');
- if(!el.querySelector('svg.spinner')) throw Error('naming progress has no working ring');
- if(!noText(el)) throw Error('naming ring carries inline text');
- if(!el.querySelector('svg.spinner title')?.textContent.includes('命名中')) throw Error('missing naming tooltip');
- set({slots:[{...slot,conversationNaming:{phase:'retrying',retries:2,error:'No available conversation naming model. Check the assistant model settings.'}}]});await wait(50);
- el=document.querySelector('.naming-status');
- const tip=el?.querySelector('svg.spinner title')?.textContent||'';
+ let dot=document.querySelector('.chat-ind .ind-dot');
+ if(!dot) throw Error('naming shows no breathing dot');
+ if(dot.tagName==='BUTTON') throw Error('naming in progress is still a button');
+ if(!noText(dot)) throw Error('naming dot carries inline text');
+ if(!dot.getAttribute('title')?.includes('命名中')) throw Error('missing naming tooltip');
+ if(document.querySelector('.chat-ind .ind-ring')) throw Error('naming alone shows a running ring');
+ set({slots:[{...slot,conversationNaming:{phase:'retrying',retries:2,error:'No available conversation naming model. Check the assistant model settings.'}}]});await wait(150);
+ dot=document.querySelector('.chat-ind .ind-dot');
+ const tip=dot?.getAttribute('title')||'';
  if(!tip.includes('命名重试 2/3')||!tip.includes('命名模型不可用')) throw Error('missing localized retry information in tooltip');
- if(!noText(el)) throw Error('retry ring carries inline text');
- set({slots:[{...slot,conversationNaming:{phase:'failed',retries:3,error:'No available conversation naming model. Check the assistant model settings.'}}]});await wait(50);
- el=document.querySelector('.naming-status');
- if(el?.tagName!=='BUTTON'||el.disabled||!el.getAttribute('aria-label').includes('点击重新尝试')) throw Error('failure retry is inaccessible');
- if(!noText(el)) throw Error('failed naming still shows inline text');
- if(el.className.includes('warn')) throw Error('failed naming is colored as a warning');
- if(getComputedStyle(el).opacity!=='1'||el.getBoundingClientRect().width<12) throw Error('failure retry is invisible');
- el.focus();el.click();await wait(100);
- set({slots:[{...slot,conversationNaming:null}]});await wait(50);
- if(document.querySelector('.naming-status')) throw Error('success did not clear status');
+ if(!noText(dot)) throw Error('retry dot carries inline text');
+ set({slots:[{...slot,conversationNaming:{phase:'failed',retries:3,error:'No available conversation naming model. Check the assistant model settings.'}}]});await wait(300);
+ if(document.querySelector('.chat-ind .ind-dot')) throw Error('failed naming still shows the breathing dot');
+ const btn=document.querySelector('.chat-ind .ind-retry');
+ if(!btn||btn.tagName!=='BUTTON'||btn.disabled||!btn.getAttribute('aria-label').includes('点击重新尝试')) throw Error('failure retry is inaccessible');
+ if(!noText(btn)) throw Error('failed naming still shows inline text');
+ if(btn.className.includes('warn')) throw Error('failed naming is colored as a warning');
+ if(getComputedStyle(btn).opacity!=='1'||btn.getBoundingClientRect().width<12) throw Error('failure retry is invisible');
+ btn.focus();btn.click();await wait(100);
+ set({slots:[{...slot,conversationNaming:null}]});await wait(300);
+ if(document.querySelector('.chat-ind .ind-retry')||document.querySelector('.chat-ind .ind-dot')) throw Error('success did not clear status');
+ // Both at once: the outer ring turns for the task while the inner dot breathes for the naming, in one shared slot,
+ // concentric, at the head of the row (before the title), and the update time stays visible at the end of the row.
+ set({slots:[{...slot,active:true,conversationNaming:{phase:'processing',retries:0}}]});await wait(150);
+ const row=document.querySelector('.chat-row');
+ const ringEl=row.querySelector('.chat-ind .ind-ring svg.spinner');
+ const dotEl=row.querySelector('.chat-ind .ind-dot');
+ if(!ringEl) throw Error('no outer ring while the task runs');
+ if(!dotEl) throw Error('no inner dot while naming runs at the same time');
+ if(!row.querySelector('.when')) throw Error('time crowded out while both states show');
+ const rc=ringEl.getBoundingClientRect(), dc=dotEl.getBoundingClientRect(), tc=row.querySelector('.title').getBoundingClientRect(), wc=row.querySelector('.when').getBoundingClientRect();
+ if(Math.abs(rc.left+rc.width/2-(dc.left+dc.width/2))>1.5||Math.abs(rc.top+rc.height/2-(dc.top+dc.height/2))>1.5) throw Error('inner dot is not concentric with the outer ring');
+ if(dc.right>rc.right||dc.left<rc.left) throw Error('the dot does not sit inside the ring');
+ if(ringEl.closest('.chat-ind').getBoundingClientRect().right>tc.left) throw Error('the indicator is not at the head of the row, before the title');
+ if(wc.left<tc.right) throw Error('the time does not stay at the end of the row');
+ // A failed naming while the task runs: the ring keeps the slot alone (naming cannot process during a run anyway);
+ // once the row is quiet again the clickable retry takes its place.
+ set({slots:[{...slot,active:true,conversationNaming:{phase:'failed',retries:3}}]});await wait(300);
+ if(document.querySelector('.chat-ind .ind-retry')) throw Error('retry button crowds the ring while the task runs');
+ if(!document.querySelector('.chat-ind .ind-ring svg.spinner')) throw Error('ring lost on failed naming while running');
+ set({slots:[{...slot,conversationNaming:{phase:'failed',retries:3}}]});await wait(300);
+ if(!document.querySelector('.chat-ind .ind-retry')) throw Error('retry button did not come back when the run ended');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,
