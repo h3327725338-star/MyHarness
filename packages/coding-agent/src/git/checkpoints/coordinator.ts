@@ -30,7 +30,7 @@ function getBashCommand(args: unknown): string | undefined {
 	return typeof command === "string" ? command : undefined;
 }
 
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "symbols"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "symbols", "memory_search", "memory_get"]);
 
 function classifyTool(
 	toolName: string,

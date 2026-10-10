@@ -26,6 +26,8 @@ import type { CustomMessage } from "./messages.ts";
 
 export type MemoryScope = "global" | "workspace" | "session" | "project";
 export type MemoryType = "user" | "feedback" | "project" | "reference";
+/** Sort weight of a memory: high 1.3, normal 1.0, low 0.7. A missing field means normal. */
+export type MemoryImportance = "high" | "normal" | "low";
 
 export interface MemoryEntry {
 	id: string;
@@ -37,6 +39,10 @@ export interface MemoryEntry {
 	createdAt: string;
 	updatedAt: string;
 	filePath: string;
+	/** Optional frontmatter field; absent in older files and kept absent when they are rewritten. */
+	importance?: MemoryImportance;
+	/** Optional frontmatter field: phrases the user really says. A match recalls the memory directly. */
+	triggers?: string[];
 	workspaceId?: string;
 	sessionId?: string;
 	sourceEntryId?: string;
@@ -52,6 +58,8 @@ export interface MemoryOperation {
 	name?: string;
 	description?: string;
 	content?: string;
+	importance?: MemoryImportance;
+	triggers?: string[];
 }
 
 interface MemoryState {
@@ -112,7 +120,15 @@ export type AutoMemoryModelRunner = (options: {
 	task: string;
 }) => Promise<string>;
 
-const MEMORY_BODY_MAX_BYTES = 4 * 1024;
+// 8KB so the resident user profile fits in one entry; ordinary entries are still asked to stay short.
+const MEMORY_BODY_MAX_BYTES = 8 * 1024;
+const MEMORY_TRIGGER_MAX_COUNT = 6;
+const MEMORY_TRIGGER_MAX_BYTES = 60;
+const MAX_DIRECT_TRIGGER_MEMORIES = 3;
+const MEMORY_IMPORTANCE_WEIGHT: Record<MemoryImportance, number> = { high: 1.3, normal: 1, low: 0.7 };
+const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
+/** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
+export const MEMORY_PROFILE_ID = "global/用户画像";
 const RECALL_TURN_MAX_BYTES = 20 * 1024;
 const EXTRACTION_TRANSCRIPT_MAX_BYTES = 24 * 1024;
 const EXTRACTION_MANIFEST_MAX_BYTES = 16 * 1024;
@@ -208,8 +224,35 @@ function slugify(value: string): string {
 	return slug || `memory-${randomUUID().slice(0, 8)}`;
 }
 
-function isSafeMemoryId(id: string): boolean {
+export function isSafeMemoryId(id: string): boolean {
 	return /^(global|workspace|session|project)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
+}
+
+function readImportance(value: unknown): MemoryImportance | undefined {
+	return typeof value === "string" && MEMORY_IMPORTANCES.has(value as MemoryImportance)
+		? (value as MemoryImportance)
+		: undefined;
+}
+
+/**
+ * Trigger phrases from a frontmatter value or a model operation: collapse whitespace, cut each to the byte limit,
+ * drop empty or repeated ones and keep the first six. Oversized input is trimmed, never rejected.
+ */
+function normalizeTriggers(value: unknown, clean: (text: string) => string = (text) => text): string[] {
+	const items = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+	const triggers: string[] = [];
+	for (const item of items) {
+		if (typeof item !== "string") continue;
+		let text: string;
+		try {
+			text = truncateUtf8(clean(item.replace(/\s+/g, " ")), MEMORY_TRIGGER_MAX_BYTES);
+		} catch {
+			continue; // A trigger carrying a secret is dropped; the rest of the memory is still valid.
+		}
+		if (text && !triggers.includes(text)) triggers.push(text);
+		if (triggers.length >= MEMORY_TRIGGER_MAX_COUNT) break;
+	}
+	return triggers;
 }
 
 function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEntry | undefined {
@@ -231,6 +274,8 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 		) {
 			return undefined;
 		}
+		// importance and triggers are optional: a file without them (or with unusable values) is still a valid memory.
+		const triggers = normalizeTriggers(parsed.frontmatter.triggers);
 		return {
 			id,
 			name: name.trim(),
@@ -243,6 +288,8 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 			updatedAt:
 				typeof parsed.frontmatter.updatedAt === "string" ? parsed.frontmatter.updatedAt : new Date(0).toISOString(),
 			filePath,
+			importance: readImportance(parsed.frontmatter.importance),
+			triggers: triggers.length > 0 ? triggers : undefined,
 			workspaceId: typeof parsed.frontmatter.workspaceId === "string" ? parsed.frontmatter.workspaceId : undefined,
 			sessionId: typeof parsed.frontmatter.sessionId === "string" ? parsed.frontmatter.sessionId : undefined,
 			sourceEntryId:
@@ -270,13 +317,32 @@ function scanMemoryDirectory(directory: string, scope: MemoryScope): MemoryEntry
 	return entries;
 }
 
+/**
+ * Read the active memories visible to one conversation: global, its workspace and its own. Read-only; archive/,
+ * pending/ and other workspaces or conversations are never scanned. Newest first.
+ */
+export function readMemoryEntries(directories: {
+	globalDir: string;
+	projectDir: string;
+	sessionDir: string;
+}): MemoryEntry[] {
+	return [
+		...scanMemoryDirectory(directories.globalDir, "global"),
+		...scanMemoryDirectory(directories.projectDir, "workspace"),
+		...scanMemoryDirectory(directories.sessionDir, "session"),
+	].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 function serializeMemory(entry: MemoryEntry): string {
+	// Every optional field must be listed here: this writer is a whitelist, so anything left out is erased on update.
 	const frontmatter = stringifyYaml({
 		id: entry.id,
 		name: entry.name,
 		description: entry.description,
 		type: entry.type,
 		scope: entry.scope,
+		importance: entry.importance,
+		triggers: entry.triggers?.length ? entry.triggers : undefined,
 		workspaceId: entry.workspaceId,
 		sessionId: entry.sessionId,
 		sourceEntryId: entry.sourceEntryId,
@@ -364,10 +430,20 @@ export function parseMemorySelection(output: string): string[] | undefined {
 }
 
 function formatManifest(entries: MemoryEntry[]): string {
-	const rows: Array<Record<string, string>> = [];
+	const rows: Array<Record<string, unknown>> = [];
 	let bytes = 2;
-	for (const { id, name, description, type, scope, updatedAt } of entries) {
-		const row = { id, name, description, type, scope, updatedAt };
+	for (const { id, name, description, type, scope, updatedAt, importance, triggers } of entries) {
+		// Show existing annotations so the memory model keeps them instead of rewriting or duplicating the entry.
+		const row = {
+			id,
+			name,
+			description,
+			type,
+			scope,
+			updatedAt,
+			...(importance ? { importance } : {}),
+			...(triggers?.length ? { triggers } : {}),
+		};
 		const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
 		if (rows.length > 0 && bytes + rowBytes > EXTRACTION_MANIFEST_MAX_BYTES) break;
 		rows.push(row);
@@ -388,37 +464,142 @@ function lexicalTerms(value: string): Set<string> {
 	return terms;
 }
 
-function lexicalSelection(query: string, entries: MemoryEntry[]): MemoryEntry[] {
-	const terms = lexicalTerms(query);
-	if (terms.size === 0) return [];
+/** Whether this is the resident user profile, which is sent every turn rather than ranked against the query. */
+export function isMemoryProfile(entry: Pick<MemoryEntry, "id" | "scope">): boolean {
+	return entry.scope === "global" && entry.id === MEMORY_PROFILE_ID;
+}
+
+function importanceWeight(entry: MemoryEntry): number {
+	return MEMORY_IMPORTANCE_WEIGHT[entry.importance ?? "normal"];
+}
+
+function memoryFingerprint(entry: MemoryEntry): string {
+	return `${entry.scope}:${entry.content.replace(/\s+/g, " ").trim().toLowerCase()}`;
+}
+
+/** TF-IDF relevance of every entry that shares a term with the query, times its importance weight, best first. */
+function rankLexically(queryTerms: Set<string>, entries: MemoryEntry[]): Array<{ entry: MemoryEntry; score: number }> {
+	if (queryTerms.size === 0) return [];
 	const documents = entries.map((entry) => ({
 		entry,
 		terms: lexicalTerms(`${entry.name}\n${entry.description}\n${entry.content}`),
 	}));
 	const frequencies = new Map<string, number>();
 	for (const document of documents) {
-		for (const term of terms) if (document.terms.has(term)) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+		for (const term of queryTerms)
+			if (document.terms.has(term)) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
 	}
-	const ranked = documents
+	return documents
 		.map(({ entry, terms: documentTerms }) => {
 			let score = 0;
-			for (const term of terms) {
+			for (const term of queryTerms) {
 				if (documentTerms.has(term)) score += Math.log(1 + entries.length / (frequencies.get(term) ?? 1));
 			}
-			return { entry, score: score / Math.sqrt(Math.max(1, documentTerms.size)) };
+			return { entry, score: (score / Math.sqrt(Math.max(1, documentTerms.size))) * importanceWeight(entry) };
 		})
 		.filter(({ score }) => score > 0)
 		.sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt));
-	const best = ranked[0]?.score ?? 0;
+}
+
+function compactForMatch(text: string): string {
+	return text
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+/**
+ * How many of an entry's trigger phrases the query matches. A Chinese phrase matches when the whole phrase is
+ * contained in the query or enough of its two-character groups are; a Latin phrase matches when every one of its
+ * words is a whole word of the query, so a short abbreviation does not fire inside an unrelated word.
+ */
+function countTriggerHits(entry: MemoryEntry, queryCompact: string, queryTerms: Set<string>): number {
+	let hits = 0;
+	for (const trigger of entry.triggers ?? []) {
+		const triggerTerms = lexicalTerms(trigger);
+		if (triggerTerms.size === 0) continue;
+		if (!/\p{Script=Han}/u.test(trigger)) {
+			if ([...triggerTerms].every((term) => queryTerms.has(term))) hits++;
+			continue;
+		}
+		const compact = compactForMatch(trigger);
+		if (compact.length >= 2 && queryCompact.includes(compact)) {
+			hits++;
+			continue;
+		}
+		let overlap = 0;
+		for (const term of triggerTerms) if (queryTerms.has(term)) overlap++;
+		if (overlap >= Math.max(2, Math.ceil(triggerTerms.size / 2))) hits++;
+	}
+	return hits;
+}
+
+export interface MemorySelection {
+	entry: MemoryEntry;
+	/** Lexical relevance times the importance weight; 0 when only a trigger phrase matched. */
+	score: number;
+	via: "trigger" | "lexical";
+	/** How many of the entry's trigger phrases the query matched. */
+	triggerHits: number;
+}
+
+export interface MemorySelectionOptions {
+	/** Keep at most this many results. Automatic recall keeps them all and is bounded by its byte budget instead. */
+	limit?: number;
+	/** Only consider memories of this scope. */
+	scope?: MemoryScope;
+}
+
+/**
+ * The one ranking used both by automatic recall and by the memory_search tool; it only reads its arguments.
+ *
+ * 1. Trigger route: entries whose trigger phrases match the query come first, most matches first, at most three,
+ *    and are exempt from the relative-score cut of the second step.
+ * 2. Lexical route: the existing TF-IDF relevance, multiplied by the importance weight (high 1.3, normal 1, low 0.7),
+ *    keeping entries within half of the best weighted score.
+ * 3. Entries with the same body are listed once. The resident profile is skipped here: it is sent every turn.
+ */
+export function selectMemoriesForQuery(
+	query: string,
+	entries: readonly MemoryEntry[],
+	options: MemorySelectionOptions = {},
+): MemorySelection[] {
+	const pool = entries.filter((entry) => !isMemoryProfile(entry) && (!options.scope || entry.scope === options.scope));
+	const queryTerms = lexicalTerms(query);
+	const queryCompact = compactForMatch(query);
+	const lexical = rankLexically(queryTerms, pool);
+	const lexicalScores = new Map(lexical.map(({ entry, score }) => [entry, score]));
+	const selected: MemorySelection[] = [];
 	const seen = new Set<string>();
-	return ranked
-		.filter(({ entry, score }) => {
-			const key = `${entry.scope}:${entry.content.replace(/\s+/g, " ").trim().toLowerCase()}`;
-			if (score < best * 0.5 || seen.has(key)) return false;
-			seen.add(key);
-			return true;
-		})
-		.map(({ entry }) => entry);
+	const take = (selection: MemorySelection): boolean => {
+		const key = memoryFingerprint(selection.entry);
+		if (seen.has(key)) return false;
+		seen.add(key);
+		selected.push(selection);
+		return true;
+	};
+
+	const direct = pool
+		.map((entry) => ({ entry, hits: countTriggerHits(entry, queryCompact, queryTerms) }))
+		.filter(({ hits }) => hits > 0)
+		.sort(
+			(a, b) =>
+				b.hits - a.hits ||
+				importanceWeight(b.entry) - importanceWeight(a.entry) ||
+				b.entry.updatedAt.localeCompare(a.entry.updatedAt),
+		);
+	let directCount = 0;
+	for (const { entry, hits } of direct) {
+		if (directCount >= MAX_DIRECT_TRIGGER_MEMORIES) break;
+		if (take({ entry, score: lexicalScores.get(entry) ?? 0, via: "trigger", triggerHits: hits })) directCount++;
+	}
+
+	const best = lexical[0]?.score ?? 0;
+	for (const { entry, score } of lexical) {
+		if (score < best * 0.5) continue;
+		take({ entry, score, via: "lexical", triggerHits: 0 });
+	}
+	return options.limit === undefined ? selected : selected.slice(0, Math.max(0, options.limit));
 }
 
 function formatTranscript(entries: SessionEntry[], lastEntryId?: string): { text: string; lastEntryId?: string } {
@@ -756,11 +937,7 @@ export class AutoMemoryManager {
 	}
 
 	private loadEntries(): MemoryEntry[] {
-		return [
-			...scanMemoryDirectory(this.paths.globalDir, "global"),
-			...scanMemoryDirectory(this.paths.projectDir, "workspace"),
-			...scanMemoryDirectory(this.paths.sessionDir, "session"),
-		].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		return readMemoryEntries(this.paths);
 	}
 
 	async recall(query: string): Promise<CustomMessage | undefined> {
@@ -779,8 +956,19 @@ export class AutoMemoryManager {
 
 		// Recall must never delay sending the user's message. The selected model is
 		// still used for background extraction and consolidation; retrieval itself
-		// is a bounded local operation.
-		const selected = lexicalSelection(truncateUtf8(query, 12 * 1024), candidates);
+		// is a bounded local operation that only reads. The resident user profile, when it exists, goes
+		// first on every turn; the query only ranks the other memories.
+		let selected: MemoryEntry[];
+		try {
+			const profile = candidates.find(isMemoryProfile);
+			selected = [
+				...(profile ? [profile] : []),
+				...selectMemoriesForQuery(truncateUtf8(query, 12 * 1024), candidates).map(({ entry }) => entry),
+			];
+		} catch (error) {
+			this.reportError("recall", error);
+			return undefined;
+		}
 		if (selected.length === 0) return undefined;
 
 		const sections: string[] = [];
@@ -891,7 +1079,8 @@ export class AutoMemoryManager {
 					if (!allowDelete) continue;
 					if (!operation.id || !isSafeMemoryId(operation.id)) continue;
 					const target = existing.get(operation.id);
-					if (!target) continue;
+					// The resident profile is rewritten by the consolidator, never retired by a model.
+					if (!target || isMemoryProfile(target)) continue;
 					await archiveMemoryFile(target.filePath, "consolidated");
 					await fs.promises.unlink(target.filePath);
 					existing.delete(operation.id);
@@ -924,6 +1113,8 @@ export class AutoMemoryManager {
 					let suffix = 2;
 					while (existing.has(id)) id = `${base}-${suffix++}`;
 				}
+				// Only the consolidator maintains the resident profile; extraction must not stack turn-by-turn notes on it.
+				if (!allowDelete && isMemoryProfile({ id, scope })) continue;
 				const previous = existing.get(id);
 				const now = new Date().toISOString();
 				let name: string;
@@ -937,11 +1128,18 @@ export class AutoMemoryManager {
 					continue;
 				}
 				if (!name || !description || !content) continue;
+				// An update that omits the annotations keeps the stored ones, including hand-written values; an empty
+				// trigger list never clears them either.
+				const importance = readImportance(operation.importance) ?? previous?.importance;
+				const operationTriggers = normalizeTriggers(operation.triggers, sanitizeMemoryText);
+				const triggers = operationTriggers.length > 0 ? operationTriggers : previous?.triggers;
 				if (
 					previous?.content === content &&
 					previous.name === name &&
 					previous.description === description &&
-					previous.type === operation.type
+					previous.type === operation.type &&
+					previous.importance === importance &&
+					(previous.triggers ?? []).join("\n") === (triggers ?? []).join("\n")
 				)
 					continue;
 				if (
@@ -970,6 +1168,8 @@ export class AutoMemoryManager {
 					createdAt: previous?.createdAt ?? now,
 					updatedAt: now,
 					filePath,
+					importance,
+					triggers,
 					workspaceId: scope === "global" ? undefined : this.paths.workspaceId,
 					sessionId: scope === "session" ? this.paths.sessionId : undefined,
 					sourceEntryId: sourceEntryId ?? previous?.sourceEntryId,
@@ -1038,7 +1238,7 @@ export class AutoMemoryManager {
 			settings,
 			systemPrompt: MEMORY_EXTRACTOR_PROMPT,
 			task: [
-				`Current project root: ${this.paths.projectRoot}\nWorkspace ID: ${this.paths.workspaceId}\nSession ID: ${this.paths.sessionId}`,
+				`Current project root: ${this.paths.projectRoot}\nWorkspace ID: ${this.paths.workspaceId}\nSession ID: ${this.paths.sessionId}\nResident user profile entry ID (never create or modify it): ${MEMORY_PROFILE_ID}`,
 				`Existing memory list:\n${formatManifest(existing)}`,
 				`New conversation since last extraction:\n${transcript.text}`,
 			].join("\n\n"),
@@ -1068,7 +1268,7 @@ export class AutoMemoryManager {
 		const batches: MemoryEntry[][] = [[]];
 		let bytes = 0;
 		const format = (entry: MemoryEntry) =>
-			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}\nContent:\n${entry.content}`;
+			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
 		for (const entry of entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
 			const chunkBytes = Buffer.byteLength(format(entry), "utf8");
 			if (batches.at(-1)!.length > 0 && bytes + chunkBytes > CONSOLIDATION_INPUT_MAX_BYTES) {
@@ -1085,7 +1285,7 @@ export class AutoMemoryManager {
 				cwd: this.options.cwd,
 				settings,
 				systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-				task: `Please consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+				task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
 			});
 			this.assertActive();
 			const operations = parseMemoryOperations(output);

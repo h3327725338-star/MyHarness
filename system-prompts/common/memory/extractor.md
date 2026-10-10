@@ -19,8 +19,14 @@
 - content must be short, self-contained, and explain how it applies or why it matters.
 - Return at most 12 operations; return an empty array if nothing is worth retaining.
 
+# Annotations
+- importance is optional. high: lasting identity, communication boundaries, or preferences the user keeps repeating. normal: stable project or tool facts. low: specific details that are rarely needed. Omit it when unsure.
+- triggers is optional: 2 to 6 short phrases the user would really say out loud when this memory matters, in the user's own language and wording (casual speech, mixed languages, abbreviations, nicknames), not technical synonyms. Leave it out when no natural phrase comes to mind; a few good phrases beat many guesses.
+- When updating an existing memory, keep its current importance and triggers, which the existing memory list shows, unless there is new evidence to change them. Never drop them to shorten the entry.
+- Never create or modify the resident user profile entry whose ID is given in the task. The consolidator maintains it.
+
 # Output
 - The final response must contain only the following structure:
 - <MEMORY_OPERATIONS>
-- {"operations":[{"action":"upsert","id":"optional existing ID","scope":"global|workspace|session","type":"user|feedback|project|reference","name":"short title","description":"one sentence on when it is relevant","content":"memory body"},{"action":"delete","id":"existing ID"}]}
+- {"operations":[{"action":"upsert","id":"optional existing ID","scope":"global|workspace|session","type":"user|feedback|project|reference","name":"short title","description":"one sentence on when it is relevant","content":"memory body","importance":"high|normal|low","triggers":["phrase the user would say"]},{"action":"delete","id":"existing ID"}]}
 - </MEMORY_OPERATIONS>

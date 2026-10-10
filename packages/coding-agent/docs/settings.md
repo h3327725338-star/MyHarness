@@ -178,7 +178,13 @@ Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Mod
 
 选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
 
-Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 200 条；本地词项稀有度和文本长度参与排序，按相对相关性筛选并在同层去重。仍使用 20 KB 作为异常保护，不是精确 Token 预算，也不是语义向量检索。每次模型请求过滤旧轮次的 recall message，仅保留当前 user message 后的 recall，磁盘对话历史不改写。更新使用乐观冲突检测，已有内容变化后重新提取；相同内容不重复归档。新记忆记录提取来源的 Workspace、Session 和末条 Entry ID。这是批次来源，不是逐句证据标注；目前没有专用历史搜索工具。Automatic memory 只适用于 persisted sessions；`--no-session` 不读写 long-term memory。
+Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 200 条；本地词项稀有度和文本长度参与排序，按相对相关性筛选并在同层去重。仍使用 20 KB 作为异常保护，不是精确 Token 预算，也不是语义向量检索。
+
+记忆文件的 frontmatter 另有两个可选字段，缺失时按默认处理，旧文件无需迁移：`importance`（`high` / `normal` / `low`，排序乘子 1.3 / 1.0 / 0.7，缺失按 `normal`）和 `triggers`（2–6 条用户真实会说的口语短语，单条最多 60 字节）。当前消息命中某条记忆的 trigger（整句包含，或中文双字组重叠，英文要求整词命中）时，该记忆直接入选，按命中条数排序、最多 3 条，不受相对相关性筛选限制；其余记忆仍走上面的词项排序，得分乘以 `importance` 乘子。排序是只读的本地函数（`selectMemoriesForQuery`），Recall 与 `memory_search` 共用，不写任何文件，也没有使用计数或时间衰减。抽取和整理时模型看得到已有的 `importance` 与 `triggers`；更新条目时省略它们（或给空数组）会保留原值，用户手写的标注不会被抹掉。
+
+Global 层可以有一条固定的常驻画像 `global/用户画像`（`type: user`、`importance: high`，六节：称呼与身份背景、沟通与语言偏好、工作与授权习惯、长期环境与工具事实、正在推进的事、被纠正过的行为与教训）。它只由整理器整篇重写；抽取器对它的写入会被忽略，模型的删除操作也会被忽略；整理器不会凭空创建它，文件需先存在。存在时它每轮都放在 recall message 的最前面，不参与普通排序，因此不会重复注入。单条记忆正文上限为 8 KB（读取与写入一致），画像整篇也必须在这个上限内。
+
+主对话模型还有两个只读工具 `memory_search` 和 `memory_get`（Coding 与 General 都可用，子智能体不可用；Auto Memory 关闭或会话不持久化时只返回一句说明）。`memory_search` 不带 `query` 时列出记忆目录（`id | name | description | importance | type | scope | updatedAt`，按更新时间倒序，超出 16 KB 时截断并标注），带 `query` 时用与 Recall 相同的排序返回摘要，不含全文；`memory_get` 按 id 取全文（一次最多 5 个），未找到的 id 返回说明而不报错，不返回 `archive/` 下的归档版本。每次模型请求过滤旧轮次的 recall message，仅保留当前 user message 后的 recall，磁盘对话历史不改写。更新使用乐观冲突检测，已有内容变化后重新提取；相同内容不重复归档。新记忆记录提取来源的 Workspace、Session 和末条 Entry ID。这是批次来源，不是逐句证据标注；没有专用的对话历史搜索工具（记忆工具只查长期记忆，不查历史对话）。Automatic memory 只适用于 persisted sessions；`--no-session` 不读写 long-term memory。
 
 Memory Markdown files 是 source of truth：
 

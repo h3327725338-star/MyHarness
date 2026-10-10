@@ -44,6 +44,10 @@
 | `session-bash.ts` | `SessionBashRunner`：一个会话里用户直接执行的命令。同一时间只跑一条，完整输出落盘，结果写入会话；Agent 正在运行时先排队，等本轮结束再写入 |
 | `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：按 shell 序列段（管道、`&&`、`;`）逐段用只读允许列表 + 危险选项/拒绝列表判定，诊断重定向（`2>/dev/null`）与临时路径写入不影响判定，可选的模型裁决；拦截结果带 `[read-only-guard]` 标记和具体原因，不计入连续工具失败 |
 
+### memory/ — 记忆工具
+
+`search.ts`：`memory_search`（无 `query` 列记忆目录，有 `query` 用 `agent/runtime/auto-memory.ts` 的 `selectMemoriesForQuery()` 返回摘要）和 `memory_get`（按 id 取全文，未找到只返回说明）。两个工具只读、`executionMode: "parallel"`；读取通过可注入的 `MemoryToolOperations`，`createSessionMemoryOperations()` 按会话的 Data root / Workspace / Conversation 读取，Auto Memory 关闭或会话不持久化时返回“未启用”说明。子智能体按 `agent/runtime/role.ts` 白名单不会拿到它们。
+
 ### github/
 
 `tool.ts`：`github` 工具，使用已连接的 GitHub 账号（`providers/credentials/account-connections.ts`）调用 GitHub API。
@@ -79,7 +83,7 @@
 
 ### 依赖
 
-- 依赖：`system-prompts/loader`（工具说明文案）、`utils`、`symbols/*`（`symbols` 工具）、`workflow`（登记）、`agent/delegation`、`agent/runtime`（`role.ts`、`messages.ts`）、`extensions`（`session-tool-registry.ts` 用 runner、wrapper 和工具类型）、`observability/runtime-trace.ts`、`providers/credentials`（GitHub 连接）、`session/manager`（结果落盘位置）、`config/settings`（Web Search 设置）；`presentation/` 额外依赖 `modes/interactive` 的主题与组件、`@myharness/tui`。
+- 依赖：`system-prompts/loader`（工具说明文案）、`utils`、`symbols/*`（`symbols` 工具）、`agent/runtime/auto-memory.ts`（记忆工具的读取与排序）、`session/memory`（记忆路径）、`workflow`（登记）、`agent/delegation`、`agent/runtime`（`role.ts`、`messages.ts`）、`extensions`（`session-tool-registry.ts` 用 runner、wrapper 和工具类型）、`observability/runtime-trace.ts`、`providers/credentials`（GitHub 连接）、`session/manager`（结果落盘位置）、`config/settings`（Web Search 设置）；`presentation/` 额外依赖 `modes/interactive` 的主题与组件、`@myharness/tui`。
 - 被依赖：`agent/runtime`、`extensions`、`workflow`、`modes/*`、`exports/html`、`symbols/runtime`、`context`。
 
 ## 维护
@@ -89,4 +93,4 @@
 - 工具名、参数名、结果的 `details` 结构会被写进 Session 并被界面和导出解析，不要随意改；确需改动时用 `prepareArguments` 兼容旧输入。
 - Shell 执行、输出截断、结果落盘各只有一份实现，新工具复用它们。
 - Web Search 的搜索规划（搜什么、读哪些页）由 Agent 决定；工具只负责并发、缓存、取消、超时和逐项诊断。任何下载都必须先过 `url.ts` 的检查。
-- 相关测试：`tools.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`tool-execution-*.test.ts`。
+- 相关测试：`tools.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`memory-intelligence.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`tool-execution-*.test.ts`。

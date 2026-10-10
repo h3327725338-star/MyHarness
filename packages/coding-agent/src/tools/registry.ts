@@ -62,6 +62,18 @@ export {
 	type WriteToolOptions,
 } from "./files/write.ts";
 export {
+	createMemoryGetTool,
+	createMemoryGetToolDefinition,
+	createMemorySearchTool,
+	createMemorySearchToolDefinition,
+	createSessionMemoryOperations,
+	type MemoryGetToolInput,
+	type MemorySearchToolInput,
+	type MemoryToolDetails,
+	type MemoryToolOperations,
+	type MemoryToolOptions,
+} from "./memory/search.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -152,6 +164,13 @@ import {
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./files/ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./files/read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./files/write.ts";
+import {
+	createMemoryGetTool,
+	createMemoryGetToolDefinition,
+	createMemorySearchTool,
+	createMemorySearchToolDefinition,
+	type MemoryToolOptions,
+} from "./memory/search.ts";
 import { createPwshTool, createPwshToolDefinition, type PwshToolOptions } from "./shell/pwsh.ts";
 import { createSubAgentTool, createSubAgentToolDefinition, type SubAgentToolOptions } from "./sub-agent.ts";
 import { createSymbolsTool, createSymbolsToolDefinition, type SymbolsToolOptions } from "./symbols.ts";
@@ -180,6 +199,8 @@ export type ToolName =
 	| "workflow"
 	| "ultracode"
 	| "github"
+	| "memory_search"
+	| "memory_get"
 	| "web_search"
 	| "web_fetch";
 export const allToolNames: Set<ToolName> = new Set([
@@ -196,6 +217,8 @@ export const allToolNames: Set<ToolName> = new Set([
 	"workflow",
 	"ultracode",
 	"github",
+	"memory_search",
+	"memory_get",
 	"web_search",
 	"web_fetch",
 ]);
@@ -214,6 +237,7 @@ export interface ToolsOptions {
 	workflow?: WorkflowToolOptions;
 	ultracode?: UltracodeToolOptions;
 	github?: GitHubToolOptions;
+	memory?: MemoryToolOptions;
 	webSearch?: WebSearchToolOptions;
 }
 
@@ -245,6 +269,10 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWorkflowToolDefinition(cwd, options?.workflow);
 		case "ultracode":
 			return createUltracodeToolDefinition(cwd, options?.ultracode);
+		case "memory_search":
+			return createMemorySearchToolDefinition(cwd, options?.memory);
+		case "memory_get":
+			return createMemoryGetToolDefinition(cwd, options?.memory);
 		case "web_search":
 			return createWebSearchToolDefinition(cwd, options?.webSearch);
 		case "web_fetch":
@@ -282,6 +310,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createWorkflowTool(cwd, options?.workflow);
 		case "ultracode":
 			return createUltracodeTool(cwd, options?.ultracode);
+		case "memory_search":
+			return createMemorySearchTool(cwd, options?.memory);
+		case "memory_get":
+			return createMemoryGetTool(cwd, options?.memory);
 		case "web_search":
 			return createWebSearchTool(cwd, options?.webSearch);
 		case "web_fetch":
@@ -325,6 +357,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		workflow: createWorkflowToolDefinition(cwd, options?.workflow),
 		ultracode: createUltracodeToolDefinition(cwd, options?.ultracode),
 		github: createGitHubToolDefinition(cwd, options?.github),
+		memory_search: createMemorySearchToolDefinition(cwd, options?.memory),
+		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
 	};
@@ -363,6 +397,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		workflow: createWorkflowTool(cwd, options?.workflow),
 		ultracode: createUltracodeTool(cwd, options?.ultracode),
 		github: createGitHubTool(cwd, options?.github),
+		memory_search: createMemorySearchTool(cwd, options?.memory),
+		memory_get: createMemoryGetTool(cwd, options?.memory),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
 	};

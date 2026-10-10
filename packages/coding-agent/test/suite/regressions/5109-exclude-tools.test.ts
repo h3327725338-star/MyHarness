@@ -55,6 +55,8 @@ describe("regression #5109: exclude tools", () => {
 				"dynamic_tool",
 				"edit",
 				"github",
+				"memory_get",
+				"memory_search",
 				"pwsh",
 				"symbols",
 				"write",
