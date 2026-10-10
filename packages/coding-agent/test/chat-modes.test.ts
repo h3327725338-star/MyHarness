@@ -1,18 +1,43 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
 import { ModeStateStore } from "../src/session/mode-state.ts";
 import { buildSystemPrompt } from "../src/system-prompts/composer/index.ts";
 
-const root = process.env.MYHARNESS_ARTIFACTS_DIR!;
+// The fixtures below need a writable artifacts root. This file owns its own
+// temporary root so it passes under a plain `npm test`, and restores whatever
+// values the environment had before.
+const originalEnv = {
+	MYHARNESS_ARTIFACTS_DIR: process.env.MYHARNESS_ARTIFACTS_DIR,
+	MYHARNESS_TEMP_DIR: process.env.MYHARNESS_TEMP_DIR,
+};
+let fixtureRoot = "";
+
 function fixture(name: string): string {
+	const root = process.env.MYHARNESS_ARTIFACTS_DIR;
 	if (!root) throw new Error("MYHARNESS_ARTIFACTS_DIR is required for isolated fixtures");
 	const path = join(root, "tests", `chat-modes-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 	mkdirSync(path, { recursive: true });
 	return path;
 }
+
+beforeAll(() => {
+	fixtureRoot = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "chat-modes-artifacts-"));
+	mkdirSync(join(fixtureRoot, "temp"), { recursive: true });
+	process.env.MYHARNESS_ARTIFACTS_DIR = fixtureRoot;
+	process.env.MYHARNESS_TEMP_DIR = join(fixtureRoot, "temp");
+});
+
+afterAll(() => {
+	for (const [key, value] of Object.entries(originalEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+	if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 describe("chat modes", () => {
 	it("defaults old sessions to Coding and preserves General through new and fork", () => {

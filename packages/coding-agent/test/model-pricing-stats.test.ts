@@ -30,8 +30,10 @@ const model = {
 		tiers: [{ inputTokensAbove: 10000, input: 3, output: 4, cacheRead: 0.2, cacheWrite: 1 }],
 	},
 } as Model<Api>;
+// Every session entry carries a stable id (SessionEntryBase); the statistics aggregate deduplicates
+// replayed snapshots by id, so fixtures without ids would be merged into a single entry.
 const entries = (...messages: AssistantMessage[]) =>
-	messages.map((item) => ({ type: "message", message: item })) as SessionEntry[];
+	messages.map((item, index) => ({ type: "message", id: `message-${index}`, message: item })) as SessionEntry[];
 
 describe("custom model pricing in session statistics", () => {
 	it("uses the persisted compaction currency, not the current model pricing", () => {
@@ -39,6 +41,7 @@ describe("custom model pricing in session statistics", () => {
 		usage.cost.total = 0.14346072;
 		const compact = {
 			type: "compaction",
+			id: "compaction-0",
 			usage,
 			usageSource: { provider: "summary", model: "compact", currency: "CNY" },
 		} as SessionEntry;
@@ -51,8 +54,9 @@ describe("custom model pricing in session statistics", () => {
 	it("keeps USD and CNY compactions separate", () => {
 		const usage = message(5000).usage;
 		usage.cost.total = 0.2;
-		const entries = ["CNY", "USD"].map((currency) => ({
+		const entries = ["CNY", "USD"].map((currency, index) => ({
 			type: "compaction",
+			id: `compaction-${index}`,
 			usage,
 			usageSource: { provider: "summary", model: "compact", currency },
 		})) as SessionEntry[];

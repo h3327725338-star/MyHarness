@@ -1,7 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@myharness/ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/agent/runtime/agent-session.ts";
 import {
 	CONVERSATION_NAMING_INTERVAL_MS,
@@ -12,6 +13,30 @@ import {
 } from "../src/agent/runtime/conversation-naming.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
+
+// The reload fixture below needs a writable temporary root. This file owns its
+// own roots so it passes under a plain `npm test`, and restores whatever values
+// the environment had before.
+const originalEnv = {
+	MYHARNESS_ARTIFACTS_DIR: process.env.MYHARNESS_ARTIFACTS_DIR,
+	MYHARNESS_TEMP_DIR: process.env.MYHARNESS_TEMP_DIR,
+};
+let fixtureRoot = "";
+
+beforeAll(() => {
+	fixtureRoot = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "conversation-naming-artifacts-"));
+	mkdirSync(join(fixtureRoot, "temp"), { recursive: true });
+	process.env.MYHARNESS_ARTIFACTS_DIR = fixtureRoot;
+	process.env.MYHARNESS_TEMP_DIR = join(fixtureRoot, "temp");
+});
+
+afterAll(() => {
+	for (const [key, value] of Object.entries(originalEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+	if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 function reply(text = "answer", stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
 	return {

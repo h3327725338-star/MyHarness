@@ -43,6 +43,10 @@ function createRepository(): { project: string; storageRoot: string } {
 	expect(
 		setLocalGitIdentity(project, { name: "MyHarness Workspace Test", email: "workspace@example.invalid" }).ok,
 	).toBe(true);
+	// A user-global core.hooksPath makes every commit in this repository pay
+	// ~1.3s of external hook process startup; these tests exercise change
+	// detection, not hooks, so keep the fixture repositories hook-free.
+	expect(runGit(project, ["config", "core.hooksPath", ""]).ok).toBe(true);
 	expect(createInitialGitBaseline(project).ok).toBe(true);
 	return { project, storageRoot };
 }

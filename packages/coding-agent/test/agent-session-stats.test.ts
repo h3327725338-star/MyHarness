@@ -203,15 +203,30 @@ describe("AgentSession.getSessionStats", () => {
 		const { session, sessionManager } = await createSession();
 
 		try {
-			const firstKeptEntryId = sessionManager.appendMessage(createUserMessage("hello", 1));
-			sessionManager.appendCompaction("summary", firstKeptEntryId, 100, undefined, false, {
+			const compactionUsage: Usage = {
 				input: 10,
 				output: 20,
 				cacheRead: 30,
 				cacheWrite: 40,
 				totalTokens: 100,
 				cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
-			});
+			};
+			const firstKeptEntryId = sessionManager.appendMessage(createUserMessage("hello", 1));
+			sessionManager.appendCompaction(
+				"summary",
+				firstKeptEntryId,
+				100,
+				undefined,
+				false,
+				compactionUsage,
+				// The real compaction flow also records the billing source (see
+				// session-compaction.ts). Without a currency the statistics code
+				// deliberately keeps this cost out of the USD totals.
+				undefined,
+				false,
+				undefined,
+				{ provider: model.provider, model: model.id, currency: model.cost.currency ?? "USD" },
+			);
 			syncAgentMessages(session, sessionManager);
 
 			const stats = session.getSessionStats();

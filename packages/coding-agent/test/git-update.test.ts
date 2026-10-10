@@ -30,6 +30,15 @@ function initGitRepo(repoDir: string): void {
 	git(["init", "--initial-branch=main"], repoDir);
 	git(["config", "--local", "user.email", "test@test.com"], repoDir);
 	git(["config", "--local", "user.name", "Test"], repoDir);
+	// A user-global core.hooksPath makes every commit here pay ~1.3s of external
+	// hook process startup, which is pure noise for these update tests. An empty
+	// local value overrides the global one, so the fixture repos stay hook-free.
+	git(["config", "--local", "core.hooksPath", ""], repoDir);
+}
+
+// Applies the same empty hooks path to a cloned working copy.
+function neutralizeHooks(repoDir: string): void {
+	git(["config", "--local", "core.hooksPath", ""], repoDir);
 }
 
 // Helper to create a commit with a file
@@ -116,6 +125,7 @@ describe("DefaultPackageManager git update", () => {
 		// Clone to installed directory (simulating what install() does)
 		mkdirSync(join(agentDir, "git", "github.com", "test"), { recursive: true });
 		git(["clone", remoteDir, installedDir], tempDir);
+		neutralizeHooks(installedDir);
 		git(["config", "--local", "user.email", "test@test.com"], installedDir);
 		git(["config", "--local", "user.name", "Test"], installedDir);
 
@@ -132,6 +142,7 @@ describe("DefaultPackageManager git update", () => {
 
 			mkdirSync(join(agentDir, "git", "github.com", "test"), { recursive: true });
 			git(["clone", remoteDir, installedDir], tempDir);
+			neutralizeHooks(installedDir);
 			settingsManager.setPackages([gitSource]);
 
 			const executedCommands: string[] = [];
@@ -304,6 +315,7 @@ describe("DefaultPackageManager git update", () => {
 			// Install with pinned ref from the start - full clone to ensure commit is available
 			mkdirSync(join(agentDir, "git", "github.com", "test"), { recursive: true });
 			git(["clone", remoteDir, installedDir], tempDir);
+			neutralizeHooks(installedDir);
 			git(["checkout", initialCommit], installedDir);
 			git(["config", "--local", "user.email", "test@test.com"], installedDir);
 			git(["config", "--local", "user.name", "Test"], installedDir);
@@ -331,6 +343,7 @@ describe("DefaultPackageManager git update", () => {
 
 			mkdirSync(join(agentDir, "git", "github.com", "test"), { recursive: true });
 			git(["clone", remoteDir, installedDir], tempDir);
+			neutralizeHooks(installedDir);
 			git(["checkout", "v1"], installedDir);
 			expect(getCurrentCommit(installedDir)).toBe(v1Commit);
 
@@ -358,6 +371,7 @@ describe("DefaultPackageManager git update", () => {
 
 			mkdirSync(join(agentDir, "git", "github.com", "test"), { recursive: true });
 			git(["clone", remoteDir, installedDir], tempDir);
+			neutralizeHooks(installedDir);
 			git(["checkout", "v1"], installedDir);
 			expect(getCurrentCommit(installedDir)).toBe(taggedCommit);
 

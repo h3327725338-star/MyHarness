@@ -2,10 +2,16 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
 const cliPath = resolve(__dirname, "../src/web.ts");
+// The real launcher runs `node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts`
+// (web-runtime.ps1). Plain node without the loader resolves @myharness/* to the stale compiled
+// packages/ai/dist and fails at module load. The child here runs with cwd set to a temporary project,
+// so the loader is pinned to an absolute file URL (a bare or "./" specifier would resolve against that cwd).
+const devLoaderHref = pathToFileURL(resolve(__dirname, "../../../scripts/dev-fast-loader.mjs")).href;
 
 const tempDirs: string[] = [];
 
@@ -54,7 +60,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	);
 
 	return await new Promise((resolvePromise, reject) => {
-		const child = spawn(process.execPath, [cliPath, ...args], {
+		const child = spawn(process.execPath, ["--import", devLoaderHref, cliPath, ...args], {
 			cwd: projectDir,
 			env: {
 				...process.env,

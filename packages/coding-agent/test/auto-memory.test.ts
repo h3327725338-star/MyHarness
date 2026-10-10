@@ -448,11 +448,19 @@ describe("auto memory", () => {
 			const job = join(paths.sessionDir, "maintenance.json");
 			expect(existsSync(job)).toBe(true);
 			first.dispose();
-			resumed = new AutoMemoryManager(options);
+			const resumedManager = new AutoMemoryManager(options);
+			resumed = resumedManager;
 			await vi.advanceTimersByTimeAsync(1500);
 			await vi.waitFor(() => expect(existsSync(job)).toBe(false));
 			expect(modelRunner).toHaveBeenCalledOnce();
-			expect(resumed.getMaintenanceStatus().phase).toBe("idle");
+			// The manager only marks the queue idle after the job file unlink has
+			// finished, so wait for that state change instead of reading it inline:
+			// `existsSync(job)` (which can already be false) and `phase === "idle"`
+			// are two separate moments in the same promise continuation.
+			await vi.waitFor(() => expect(resumedManager.getMaintenanceStatus().phase).toBe("idle"), {
+				timeout: 15000,
+				interval: 10,
+			});
 		} finally {
 			first?.dispose();
 			resumed?.dispose();

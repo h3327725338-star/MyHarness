@@ -90,8 +90,10 @@ describe("Phase 0 compatibility contracts", () => {
 		expect(loader).toContain('path.join(repoRoot, "system-prompts")');
 		expect(loader).toContain('path.resolve(moduleDir, "../system-prompts")');
 
-		expect(existsSync(resolve(repositoryRoot, "system-prompts/global/core.md"))).toBe(true);
-		expect(existsSync(resolve(repositoryRoot, "system-prompts/global/output-language.md"))).toBe(true);
+		// Built-in prompts live under system-prompts/common/; the loader keeps the logical
+		// resource names ("global/core.md") and resolves them under `common`.
+		expect(existsSync(resolve(repositoryRoot, "system-prompts/common/global/core.md"))).toBe(true);
+		expect(existsSync(resolve(repositoryRoot, "system-prompts/common/global/output-language.md"))).toBe(true);
 
 		const promptComposition = readRepositoryFile("packages/coding-agent/src/system-prompts/composer/index.ts");
 		expect(promptComposition).toContain('loadSystemPrompt("global/core.md")');
