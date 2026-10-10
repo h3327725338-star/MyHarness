@@ -211,7 +211,7 @@ Agent 正在运行时发送消息有三种行为，直接映射 MyHarness 真实
 | --- | --- | --- | --- |
 | **Steer** | 设置里选它（默认）后按 Enter / 发送 | 在当前运行的下一个模型步骤前送达，不会打断正在执行的工具 | `AgentSession.prompt(..., { streamingBehavior: "steer" })` |
 | **Queue** | `Alt+Enter`，或设置里选它后按 Enter / 发送 | 等当前运行完全结束后再送达 | `streamingBehavior: "followUp"` |
-| **Interrupt** | 设置里选它后按 Enter / 发送 | 立即中止当前运行，然后发送新消息 | `AgentSession.abort()` → `waitForIdle()` → `prompt()` |
+| **Interrupt** | 设置里选它后按 Enter / 发送 | 立即中止当前运行，然后发送新消息；主 Agent 已答完、任务只在等后台子智能体时没有运行可中止，改按 Steer 送达，不取消子智能体 | `AgentSession.abort()` → `waitForIdle()` → `prompt()`（等子智能体时：`streamingBehavior: "steer"`，由 `WebHost.submit` 用 `isWaitingForBackground` 判断） |
 | **Stop** | 停止按钮，或输入框为空时按 Esc | 中止当前运行 | `AgentSession.abort()` |
 
 排队中的消息显示在 Composer 上方，可一键放回输入框。
@@ -236,7 +236,7 @@ MyHarness 核心没有内置的工具权限系统；审批来自 Extension 通�
 * `/commit` 仅对明确报告的提交前 hook 失败自动修复并重试，最多 3 轮修复（首次提交加最多 3 次重试）；达到上限仍失败、修复失败或其他错误时停止，在正文结果卡片显示原因（`Details` 保留完整 Git 输出）；`/push` 的 CI 失败保留 “Ask the agent to fix CI” 手动入口。
 * 最终回复不会因 Auto Memory 整理而被延迟显示。
 * 主任务以取消、失败、超时或中断结束，或者你按了停止时，它派生的一切一起结束：后台 Explore 批次被中止，它们的卡片立刻变成“已取消”（没有转圈，也没有 “running in the background”），运行中的 workflow 被终止。
-* 主任务**正常完成**时分两种：没有后台 Explore 批次（`agent` 工具的 `run_in_background: true`）在运行，直接结算；还有批次没回来，任务**不结算、也不取消它们**——运行状态保持“进行中”（`waiting`，活动文字“等待子智能体”），批次完成后它的结果以 `background-explore-complete` 消息交给主 Agent，主 Agent 再跑一轮综合，这时才结算（`_emitAgentSettled`）。主 Agent 此时还在连续调用工具（没有停下）时，结果不等它停下：在当前这一轮的工具调用结束后、下一次请求模型之前就送达（作为 steering 消息排队，`AgentSession` 的 `deliverResult`）。多个批次要全部回来；等待期间又启动的新批次也一并等。批次失败、超时或只有部分结果时，结果同样交回。等待前主 Agent 的“已派出，等结果”照常显示，之后会再出现综合后的最终回复。等待期间发新消息沿用运行中发送消息的现有方式（插话、排队、打断）；按停止则任务和所有后台批次立即取消。等待本身没有额外的时间上限，只受子智能体自己的单任务时限、卡死看门狗和轮次上限约束。该逻辑只覆盖 `agent` 工具的后台批次；workflow / ultracode 的后台控制不变。
+* 主任务**正常完成**时分两种：没有后台 Explore 批次（`agent` 工具的 `run_in_background: true`）在运行，直接结算；还有批次没回来，任务**不结算、也不取消它们**——运行状态保持“进行中”（`waiting`，活动文字“等待子智能体”），批次完成后它的结果以 `background-explore-complete` 消息交给主 Agent，主 Agent 再跑一轮综合，这时才结算（`_emitAgentSettled`）。主 Agent 此时还在连续调用工具（没有停下）时，结果不等它停下：在当前这一轮的工具调用结束后、下一次请求模型之前就送达（作为 steering 消息排队，`AgentSession` 的 `deliverResult`）。多个批次要全部回来；等待期间又启动的新批次也一并等。批次失败、超时或只有部分结果时，结果同样交回。等待前主 Agent 的“已派出，等结果”照常显示，之后会再出现综合后的最终回复。等待期间发新消息沿用运行中发送消息的现有方式（插话、排队、打断），后台批次都不会被取消：此时没有模型运行可打断，所以“打断”按插话送达（`AgentSession.isWaitingForBackground`），主 Agent 回答新消息后继续等；只有主 Agent 正在回答时的“打断”，以及停止按钮，才会让任务和所有后台批次立即取消。等待本身没有额外的时间上限，只受子智能体自己的单任务时限、卡死看门狗和轮次上限约束。该逻辑只覆盖 `agent` 工具的后台批次；workflow / ultracode 的后台控制不变。
 * TUI 专用的 Extension 能力（`custom()` 组件、自定义 editor/footer/header）在 Web 中无效；`setStatus`、`setWidget`（字符串数组）、`setWorkingMessage`、`setTitle`、`notify` 与对话方法有效。
 * Terminal 面板的交互式终端只在 Web UI 里有：它是用户自己的 Shell，Agent 的 `bash`/`pwsh` 工具仍然每条命令单独执行，不使用这个终端。
 * “这一轮改了什么”的数据只在本次服务进程里记录（最近 12 轮）；重启后历史 Chat 仍能看到步骤，但 Changes → This task 不含旧任务。`Working tree` 范围永远读取真实的 Git 状态。

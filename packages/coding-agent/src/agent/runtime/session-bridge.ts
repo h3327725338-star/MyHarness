@@ -39,6 +39,8 @@ export interface BridgeFlags {
 	isRetrying: boolean;
 	isBashRunning: boolean;
 	backgroundTasks: number;
+	/** Absent when the owner is an older version. */
+	waitingForBackground?: boolean;
 	run: RunStateSnapshot;
 	steering: string[];
 	followUp: string[];
@@ -80,6 +82,7 @@ function buildFlags(session: AgentSession): BridgeFlags {
 		isRetrying: session.isRetrying,
 		isBashRunning: session.isBashRunning,
 		backgroundTasks: session.backgroundTaskCount,
+		waitingForBackground: session.isWaitingForBackground,
 		run: session.getRunStateSnapshot(),
 		steering: [...session.getSteeringMessages()],
 		followUp: [...session.getFollowUpMessages()],

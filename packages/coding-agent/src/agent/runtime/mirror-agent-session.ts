@@ -122,6 +122,10 @@ export class MirrorAgentSession extends AgentSession {
 		return this.flags?.backgroundTasks ?? 0;
 	}
 
+	override get isWaitingForBackground(): boolean {
+		return this.flags?.waitingForBackground ?? false;
+	}
+
 	override getRunStateSnapshot(): RunStateSnapshot {
 		return this.flags?.run ?? NO_RUN;
 	}

@@ -29,6 +29,8 @@ import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
 import { showPopupNotification } from "../src/utils/popup-notification.ts";
+import { startBackgroundBatch } from "./suite/background-batch.ts";
+import { getMessageText, type Harness } from "./suite/harness.ts";
 
 // A task that ends may show the system popup (see WebHost.announceTaskEnd); the tests only record that it would.
 vi.mock("../src/utils/popup-notification.ts", async (importOriginal) => {
@@ -1161,6 +1163,68 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(await texts(other.slot)).toEqual(["fast answer"]);
 		const slots = (await fx.get("/api/slots")).slots;
 		expect(slots.map((s: any) => s.slot).sort()).toEqual([first.slot, other.slot].sort());
+	});
+
+	it("sends a message in Interrupt mode to a task that only waits for its sub-agents without cancelling them", async () => {
+		const assistantTexts = (session: { messages: unknown[] }) =>
+			session.messages
+				.filter((message) => (message as { role?: string }).role === "assistant")
+				.map((message) => getMessageText(message));
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const session = fx.hub.get(first.slot)!.session;
+		const batch = startBackgroundBatch({ session, tempDir: fx.project } as unknown as Harness);
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxText("已派出，等结果")]),
+			fauxAssistantMessage([fauxText("子智能体还在跑")]),
+			fauxAssistantMessage([fauxText("综合好了")]),
+		]);
+		await fx.post("/api/prompt", { text: "go" }, first.slot);
+		await vi.waitFor(() => expect(session.getRunStateSnapshot().activity).toBe("等待子智能体"));
+
+		await fx.post("/api/prompt", { text: "子智能体还在跑吗？", mode: "interrupt" }, first.slot);
+		await vi.waitFor(() => expect(assistantTexts(session)).toContain("子智能体还在跑"));
+		// The main agent answered the new message; the sub-agent batch was neither stopped nor settled as cancelled.
+		expect(batch.aborted()).toBe(0);
+		expect(session.backgroundTaskCount).toBe(1);
+		expect(session.getRunStateSnapshot().activity).toBe("等待子智能体");
+		expect(fx.events.some((entry) => entry.event === "run_finished" && entry.data.outcome === "cancelled")).toBe(
+			false,
+		);
+
+		await batch.finish("completed", "结果");
+		await fx.waitFor("run_finished", (data) => data.slot === first.slot);
+		expect(assistantTexts(session)).toEqual(["已派出，等结果", "子智能体还在跑", "综合好了"]);
+		expect(batch.aborted()).toBe(0);
+		expect(session.isIdle).toBe(true);
+	});
+
+	it("still stops the sub-agents when Interrupt mode stops a run whose main agent is answering", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const session = fx.hub.get(first.slot)!.session;
+		const batch = startBackgroundBatch({ session, tempDir: fx.project } as unknown as Harness);
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("还在回答")]);
+			},
+			fauxAssistantMessage([fauxText("新回答")]),
+		]);
+		void fx.post("/api/prompt", { text: "go" }, first.slot);
+		await fx.waitFor("agent_start", (data) => data.slot === first.slot);
+		expect(session.isWaitingForBackground).toBe(false);
+
+		const interrupted = fx.post("/api/prompt", { text: "换个问题", mode: "interrupt" }, first.slot);
+		await vi.waitFor(() => expect(batch.aborted()).toBe(1));
+		release();
+		await interrupted;
+		await vi.waitFor(() => expect(session.isIdle).toBe(true));
+		expect(session.backgroundTaskCount).toBe(0);
 	});
 
 	it("keeps a finished session unread per session until the browser reports it seen", async () => {

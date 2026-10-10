@@ -481,6 +481,7 @@ export class AgentSession {
 	private _abortRequested = false;
 	/** Wakes the final answer's wait for background Explore batches (see _holdForBackgroundExplore). */
 	private _wakeBackgroundWait: (() => void) | undefined;
+	private _holdingForBackground = false;
 
 	// Hot-rebuild state: last error encountered while reloading model configuration
 	private _lastReloadError?: string;
@@ -1979,16 +1980,21 @@ export class AgentSession {
 	 */
 	private async _holdForBackgroundExplore(): Promise<"none" | "continue" | "stopped"> {
 		if (this._backgroundWork.runningExploreCount === 0) return "none";
-		while (
-			!this._disposed &&
-			!this._abortRequested &&
-			this._backgroundWork.runningExploreCount > 0 &&
-			!this.agent.hasQueuedMessages()
-		) {
-			this._setRunState("waiting", "等待子智能体");
-			await new Promise<void>((resolve) => {
-				this._wakeBackgroundWait = resolve;
-			});
+		this._holdingForBackground = true;
+		try {
+			while (
+				!this._disposed &&
+				!this._abortRequested &&
+				this._backgroundWork.runningExploreCount > 0 &&
+				!this.agent.hasQueuedMessages()
+			) {
+				this._setRunState("waiting", "等待子智能体");
+				await new Promise<void>((resolve) => {
+					this._wakeBackgroundWait = resolve;
+				});
+			}
+		} finally {
+			this._holdingForBackground = false;
 		}
 		if (this._abortRequested) return "stopped";
 		return !this._disposed && this.agent.hasQueuedMessages() ? "continue" : "none";
@@ -2343,6 +2349,14 @@ export class AgentSession {
 	/** Number of background Explore batches that are still running. */
 	get backgroundTaskCount(): number {
 		return this._backgroundWork.runningExploreCount;
+	}
+
+	/**
+	 * The main agent has given its answer and only waits for background Explore batches to report back. There is no
+	 * model run to interrupt: a new message must be queued (steer), because abort() would cancel those batches.
+	 */
+	get isWaitingForBackground(): boolean {
+		return this._holdingForBackground;
 	}
 
 	/**

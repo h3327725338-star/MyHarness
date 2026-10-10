@@ -1396,15 +1396,16 @@ export class WebHost {
 	): Promise<void> {
 		const session = this.session;
 		const mode = options.mode ?? "auto";
-		if (mode === "interrupt") {
+		// A task that only waits for its background sub-agents has no run to interrupt, and stopping it would cancel them.
+		const interrupt = mode === "interrupt" && !session.isWaitingForBackground;
+		if (interrupt) {
 			await session.abort();
 			await session.waitForIdle();
 			await this.waitForCompletion();
 		}
 		const running = session.isStreaming || session.isCompacting;
 		if (!running && this.completionPromise) await this.completionPromise;
-		const streamingBehavior =
-			running && mode !== "interrupt" ? (mode === "followUp" ? "followUp" : "steer") : undefined;
+		const streamingBehavior = running && !interrupt ? (mode === "followUp" ? "followUp" : "steer") : undefined;
 		await new Promise<void>((resolve, reject) => {
 			let acknowledged = false;
 			const promptPromise = session.prompt(text, {

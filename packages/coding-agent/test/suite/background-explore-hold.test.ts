@@ -209,6 +209,34 @@ describe("the task waits for its background Explore batches", () => {
 		expect(settledCount(harness)).toBe(1);
 	});
 
+	it("handles a steering message sent while waiting and keeps waiting for the batch", async () => {
+		const harness = await harnessWith({
+			responses: [
+				fauxAssistantMessage("已派出"),
+				fauxAssistantMessage("子智能体还在跑"),
+				fauxAssistantMessage("综合好了"),
+			],
+		});
+		const batch = startBackgroundBatch(harness);
+
+		const prompt = harness.session.prompt("go");
+		await untilWaiting(harness);
+
+		await harness.session.prompt("子智能体还在跑吗？", { streamingBehavior: "steer" });
+		await vi.waitFor(() => expect(getAssistantTexts(harness)).toContain("子智能体还在跑"));
+		await untilWaiting(harness);
+		expect(batch.aborted()).toBe(0);
+		expect(harness.session.backgroundTaskCount).toBe(1);
+		expect(settledCount(harness)).toBe(0);
+
+		await batch.finish("completed", "结果");
+		await prompt;
+
+		expect(getAssistantTexts(harness)).toEqual(["已派出", "子智能体还在跑", "综合好了"]);
+		expect(batch.aborted()).toBe(0);
+		expect(settledCount(harness)).toBe(1);
+	});
+
 	it("does not hang when the session is disposed while waiting", async () => {
 		const harness = await harnessWith({ responses: [fauxAssistantMessage("已派出")] });
 		const batch = startBackgroundBatch(harness);
