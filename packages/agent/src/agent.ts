@@ -121,6 +121,7 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	toolAbortGraceMs?: number;
 }
 
 class PendingMessageQueue {
@@ -211,6 +212,8 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	/** Milliseconds a running tool gets to finish after abort before the loop abandons it (default 20000). */
+	public toolAbortGraceMs?: number;
 
 	constructor(options: AgentOptions) {
 		this._state = createMutableAgentState(options.initialState);
@@ -233,6 +236,7 @@ export class Agent {
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.toolAbortGraceMs = options.toolAbortGraceMs;
 	}
 
 	/**
@@ -454,6 +458,7 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			toolAbortGraceMs: this.toolAbortGraceMs,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn:

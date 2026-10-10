@@ -14,6 +14,12 @@ export {
 	type WorkflowToolOptions,
 } from "../workflow/tool.ts";
 export {
+	type ApplyPatchToolDetails,
+	type ApplyPatchToolInput,
+	createApplyPatchTool,
+	createApplyPatchToolDefinition,
+} from "./files/apply-patch.ts";
+export {
 	createEditTool,
 	createEditToolDefinition,
 	type EditOperations,
@@ -62,6 +68,23 @@ export {
 	type WriteToolOptions,
 } from "./files/write.ts";
 export {
+	type AskUserQuestionAnswer,
+	type AskUserQuestionToolDetails,
+	type AskUserQuestionToolInput,
+	createAskUserQuestionTool,
+	createAskUserQuestionToolDefinition,
+	NO_INTERACTIVE_UI_CODE,
+} from "./interaction/ask-user-question.ts";
+export {
+	createTodoWriteTool,
+	createTodoWriteToolDefinition,
+	type TodoWriteCounts,
+	type TodoWriteItem,
+	type TodoWriteStatus,
+	type TodoWriteToolDetails,
+	type TodoWriteToolInput,
+} from "./interaction/todo-write.ts";
+export {
 	createMemoryGetTool,
 	createMemoryGetToolDefinition,
 	createMemorySearchTool,
@@ -84,6 +107,18 @@ export {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "./shell/bash.ts";
+export {
+	createJobKillTool,
+	createJobKillToolDefinition,
+	createJobListTool,
+	createJobListToolDefinition,
+	createJobOutputTool,
+	createJobOutputToolDefinition,
+	type JobKillToolInput,
+	type JobListToolInput,
+	type JobOutputToolInput,
+	type JobToolDetails,
+} from "./shell/job-tools.ts";
 export {
 	createLocalPwshOperations,
 	createPwshTool,
@@ -145,6 +180,7 @@ export {
 
 import type { AgentTool } from "@myharness/agent-core";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
+import { createApplyPatchTool, createApplyPatchToolDefinition } from "./files/apply-patch.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./files/edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./files/find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./files/grep.ts";
@@ -164,6 +200,8 @@ import {
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./files/ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./files/read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./files/write.ts";
+import { createAskUserQuestionTool, createAskUserQuestionToolDefinition } from "./interaction/ask-user-question.ts";
+import { createTodoWriteTool, createTodoWriteToolDefinition } from "./interaction/todo-write.ts";
 import {
 	createMemoryGetTool,
 	createMemoryGetToolDefinition,
@@ -171,6 +209,14 @@ import {
 	createMemorySearchToolDefinition,
 	type MemoryToolOptions,
 } from "./memory/search.ts";
+import {
+	createJobKillTool,
+	createJobKillToolDefinition,
+	createJobListTool,
+	createJobListToolDefinition,
+	createJobOutputTool,
+	createJobOutputToolDefinition,
+} from "./shell/job-tools.ts";
 import { createPwshTool, createPwshToolDefinition, type PwshToolOptions } from "./shell/pwsh.ts";
 import { createSubAgentTool, createSubAgentToolDefinition, type SubAgentToolOptions } from "./sub-agent.ts";
 import { createSymbolsTool, createSymbolsToolDefinition, type SymbolsToolOptions } from "./symbols.ts";
@@ -189,8 +235,12 @@ export type ToolName =
 	| "read"
 	| "bash"
 	| "pwsh"
+	| "job_list"
+	| "job_output"
+	| "job_kill"
 	| "edit"
 	| "write"
+	| "apply_patch"
 	| "grep"
 	| "find"
 	| "ls"
@@ -201,14 +251,20 @@ export type ToolName =
 	| "github"
 	| "memory_search"
 	| "memory_get"
+	| "ask_user_question"
+	| "todo_write"
 	| "web_search"
 	| "web_fetch";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
 	"pwsh",
+	"job_list",
+	"job_output",
+	"job_kill",
 	"edit",
 	"write",
+	"apply_patch",
 	"grep",
 	"find",
 	"ls",
@@ -219,6 +275,8 @@ export const allToolNames: Set<ToolName> = new Set([
 	"github",
 	"memory_search",
 	"memory_get",
+	"ask_user_question",
+	"todo_write",
 	"web_search",
 	"web_fetch",
 ]);
@@ -251,10 +309,18 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createBashToolDefinition(cwd, options?.bash);
 		case "pwsh":
 			return createPwshToolDefinition(cwd, options?.pwsh);
+		case "job_list":
+			return createJobListToolDefinition(cwd);
+		case "job_output":
+			return createJobOutputToolDefinition(cwd);
+		case "job_kill":
+			return createJobKillToolDefinition(cwd);
 		case "edit":
 			return createEditToolDefinition(cwd, options?.edit);
 		case "write":
 			return createWriteToolDefinition(cwd, options?.write);
+		case "apply_patch":
+			return createApplyPatchToolDefinition(cwd);
 		case "grep":
 			return createGrepToolDefinition(cwd, options?.grep);
 		case "find":
@@ -273,6 +339,10 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createMemorySearchToolDefinition(cwd, options?.memory);
 		case "memory_get":
 			return createMemoryGetToolDefinition(cwd, options?.memory);
+		case "ask_user_question":
+			return createAskUserQuestionToolDefinition();
+		case "todo_write":
+			return createTodoWriteToolDefinition();
 		case "web_search":
 			return createWebSearchToolDefinition(cwd, options?.webSearch);
 		case "web_fetch":
@@ -292,10 +362,18 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createBashTool(cwd, options?.bash);
 		case "pwsh":
 			return createPwshTool(cwd, options?.pwsh);
+		case "job_list":
+			return createJobListTool(cwd);
+		case "job_output":
+			return createJobOutputTool(cwd);
+		case "job_kill":
+			return createJobKillTool(cwd);
 		case "edit":
 			return createEditTool(cwd, options?.edit);
 		case "write":
 			return createWriteTool(cwd, options?.write);
+		case "apply_patch":
+			return createApplyPatchTool(cwd);
 		case "grep":
 			return createGrepTool(cwd, options?.grep);
 		case "find":
@@ -314,6 +392,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createMemorySearchTool(cwd, options?.memory);
 		case "memory_get":
 			return createMemoryGetTool(cwd, options?.memory);
+		case "ask_user_question":
+			return createAskUserQuestionTool();
+		case "todo_write":
+			return createTodoWriteTool();
 		case "web_search":
 			return createWebSearchTool(cwd, options?.webSearch);
 		case "web_fetch":
@@ -347,8 +429,12 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
 		pwsh: createPwshToolDefinition(cwd, options?.pwsh),
+		job_list: createJobListToolDefinition(cwd),
+		job_output: createJobOutputToolDefinition(cwd),
+		job_kill: createJobKillToolDefinition(cwd),
 		edit: createEditToolDefinition(cwd, options?.edit),
 		write: createWriteToolDefinition(cwd, options?.write),
+		apply_patch: createApplyPatchToolDefinition(cwd),
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
@@ -359,6 +445,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		github: createGitHubToolDefinition(cwd, options?.github),
 		memory_search: createMemorySearchToolDefinition(cwd, options?.memory),
 		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
+		ask_user_question: createAskUserQuestionToolDefinition(),
+		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
 	};
@@ -387,8 +475,12 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
 		pwsh: createPwshTool(cwd, options?.pwsh),
+		job_list: createJobListTool(cwd),
+		job_output: createJobOutputTool(cwd),
+		job_kill: createJobKillTool(cwd),
 		edit: createEditTool(cwd, options?.edit),
 		write: createWriteTool(cwd, options?.write),
+		apply_patch: createApplyPatchTool(cwd),
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
@@ -399,6 +491,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		github: createGitHubTool(cwd, options?.github),
 		memory_search: createMemorySearchTool(cwd, options?.memory),
 		memory_get: createMemoryGetTool(cwd, options?.memory),
+		ask_user_question: createAskUserQuestionTool(),
+		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
 	};

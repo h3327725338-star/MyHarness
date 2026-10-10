@@ -30,9 +30,28 @@ function getBashCommand(args: unknown): string | undefined {
 	return typeof command === "string" ? command : undefined;
 }
 
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "symbols", "memory_search", "memory_get"]);
+/**
+ * Tools that never change workspace files, so they never open a checkpoint. todo_write keeps its list in the
+ * conversation, and the job tools only inspect or stop background jobs. apply_patch is deliberately not listed: it can
+ * add, move and delete files anywhere, so it takes the scan checkpoint like any other unknown tool.
+ */
+const NON_MUTATING_TOOLS = new Set([
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"symbols",
+	"memory_search",
+	"memory_get",
+	"ask_user_question",
+	"todo_write",
+	"job_list",
+	"job_output",
+	"job_kill",
+]);
 
-function classifyTool(
+/** Exported for tests only; production code reaches it through prepareForTool. */
+export function classifyTool(
 	toolName: string,
 	args: unknown,
 ): { requiresCheckpoint: boolean; checkpointToolName?: GitCheckpointToolName; mutationPath?: string } {
@@ -49,7 +68,7 @@ function classifyTool(
 			checkpointToolName: "bash",
 		};
 	}
-	if (READ_ONLY_TOOLS.has(toolName)) return { requiresCheckpoint: false };
+	if (NON_MUTATING_TOOLS.has(toolName)) return { requiresCheckpoint: false };
 	return { requiresCheckpoint: true, checkpointToolName: "scan" };
 }
 

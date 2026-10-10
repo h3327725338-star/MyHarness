@@ -13,6 +13,7 @@ import { resolveReadPathAsync } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { discardTemporaryToolOutput, FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "../truncate.ts";
+import { type FileReadState, recordFileReadState, resolveFileStateScope, statFileReadState } from "./read-state.ts";
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "File path to read (relative or absolute)" }),
@@ -94,6 +95,25 @@ function validateReadRange(offset: number | undefined, limit: number | undefined
 	}
 }
 
+/**
+ * Split content the way the truncation helper counts lines, so the "of N" and
+ * "N more lines" notices cannot disagree with the limits that produced them: a
+ * trailing newline ends the last line instead of opening an empty extra one, and
+ * empty content has no lines. This mirrors the private counting helper in
+ * truncate.ts, which is not exported, and it matches what the streaming reader
+ * already reports for the same file.
+ */
+function splitLinesForCounting(content: string): string[] {
+	if (content.length === 0) {
+		return [];
+	}
+	const lines = content.split("\n");
+	if (content.endsWith("\n")) {
+		lines.pop();
+	}
+	return lines;
+}
+
 function prepareTextRead(
 	textContent: string,
 	path: string,
@@ -101,12 +121,15 @@ function prepareTextRead(
 	limit: number | undefined,
 ): { outputText: string; details?: ReadToolDetails; fullTextOutput?: string } {
 	validateReadRange(offset, limit);
-	const allLines = textContent.split("\n");
-	const totalFileLines = allLines.length;
+	const countedLines = splitLinesForCounting(textContent);
+	// An empty file still has one (empty) line to slice, exactly as before; only its
+	// counted total is zero, which is what the notices and the offset bound use.
+	const allLines = textContent.length === 0 ? [""] : countedLines;
+	const totalFileLines = countedLines.length;
 	const startLine = offset ? Math.max(0, offset - 1) : 0;
 	const startLineDisplay = startLine + 1;
 	if (startLine >= allLines.length) {
-		throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
+		throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total)`);
 	}
 	let selectedContent: string;
 	let userLimitedLines: number | undefined;
@@ -122,7 +145,7 @@ function prepareTextRead(
 	if (truncation.firstLineExceedsLimit) {
 		const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
 		return {
-			outputText: `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`,
+			outputText: `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' "${path}" | head -c ${DEFAULT_MAX_BYTES}]`,
 			details: { truncation },
 			fullTextOutput,
 		};
@@ -256,7 +279,7 @@ async function readTextRangeFromFile(
 		: undefined;
 	if (truncation.firstLineExceedsLimit) {
 		return {
-			outputText: `[Line ${startLine + 1} is ${formatSize(firstSelectedLineBytes)}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLine + 1}p' ${displayPath} | head -c ${DEFAULT_MAX_BYTES}]`,
+			outputText: `[Line ${startLine + 1} is ${formatSize(firstSelectedLineBytes)}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLine + 1}p' "${displayPath}" | head -c ${DEFAULT_MAX_BYTES}]`,
 			details: { truncation, ...(outputDetails ?? {}) },
 		};
 	}
@@ -309,7 +332,7 @@ export function createReadToolDefinition(
 			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
 			signal?: AbortSignal,
 			_onUpdate?,
-			_ctx?,
+			ctx?,
 		) {
 			return new Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }>(
 				(resolve, reject) => {
@@ -399,6 +422,15 @@ export function createReadToolDefinition(
 								return;
 							}
 							signal?.removeEventListener("abort", onAbort);
+							// Remember the shape of the file the model was just shown, so edit and write can
+							// tell "never read" and "changed since the read" apart from a guess. Only the local
+							// filesystem can be stat'ed here: a custom operation set (for example SSH) may serve a
+							// path this process cannot see, and an unreadable state simply means the file stays
+							// untracked. This covers the text, image and converted-document branches alike.
+							if (ops === defaultReadOperations) {
+								const readState: FileReadState | undefined = await statFileReadState(absolutePath);
+								if (readState) recordFileReadState(absolutePath, readState, resolveFileStateScope(ctx));
+							}
 							const result = { content, details };
 							if (fullTextOutput !== undefined) {
 								Object.assign(result, { [FULL_TEXT_OUTPUT]: fullTextOutput });

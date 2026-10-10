@@ -10,6 +10,7 @@ import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { countLineChanges } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { committedAfterCancel, type FileMutationDetails } from "./mutation-result.ts";
+import { assertFileWasReadBefore, recordFileStateAfterMutation, resolveFileStateScope } from "./read-state.ts";
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "File path to write (relative or absolute)" }),
@@ -81,7 +82,7 @@ export function createWriteToolDefinition(
 		name: "write",
 		label: "write",
 		description:
-			"Writes content to a file. Creates the file if it does not exist and overwrites it if it does. Automatically creates parent directories.",
+			"Writes content to a file. Creates the file if it does not exist and overwrites it if it does. Automatically creates parent directories. Overwriting an existing file requires reading it first: an unread file, or one that changed since it was read, is refused.",
 		promptSnippet: loadSystemPrompt("tools/write/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/write/guidelines.md"),
 		parameters: writeSchema,
@@ -90,10 +91,15 @@ export function createWriteToolDefinition(
 			{ path, content }: { path: string; content: string },
 			signal?: AbortSignal,
 			onUpdate?,
-			_ctx?,
+			ctx?,
 		) {
 			const absolutePath = resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
+			// The read state gate compares the file's timestamp and size, which only the local
+			// filesystem can report; a custom operation set (for example SSH) is left to its own
+			// host for that, as it already is for the line counts below.
+			const localFileSystem = ops === defaultWriteOperations;
+			const scope = resolveFileStateScope(ctx);
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
 				// mutation queue while an in-flight filesystem operation may still finish.
@@ -104,9 +110,15 @@ export function createWriteToolDefinition(
 				};
 
 				throwIfAborted();
+				// An existing file must have been read, and must not have changed since. A target
+				// that does not exist yet is a creation and is always allowed.
+				if (localFileSystem) {
+					await assertFileWasReadBefore(absolutePath, "write", path, scope);
+					throwIfAborted();
+				}
 				// What the file holds now, to tell afterwards how many lines the write added and removed. Only for the
 				// local file system: a custom operation set (for example SSH) cannot be read from here.
-				const before = ops === defaultWriteOperations ? await readBeforeWrite(absolutePath) : undefined;
+				const before = localFileSystem ? await readBeforeWrite(absolutePath) : undefined;
 				throwIfAborted();
 				// Create parent directories if needed.
 				await ops.mkdir(dir);
@@ -117,10 +129,18 @@ export function createWriteToolDefinition(
 				throwIfAborted();
 				// Write the file contents without splitting the atomic mutation for presentation.
 				await ops.writeFile(absolutePath, content);
+				// The write is ours: remember the new shape so the next edit or write of this file
+				// in the same Session is not reported as an external modification.
+				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 
 				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
 				return {
-					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+					content: [
+						{
+							type: "text",
+							text: `Successfully wrote ${Buffer.byteLength(content, "utf-8")} bytes to ${path}`,
+						},
+					],
 					details: Object.keys(details).length > 0 ? details : undefined,
 				};
 			});

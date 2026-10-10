@@ -749,7 +749,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 	it("runs a prompt through the real Agent loop, streams events and reports the file change with a diff", async () => {
 		const fx = await start();
 		writeFileSync(join(fx.project, "notes.txt"), "alpha\n");
+		// Read first: edit and write refuse an existing file this Session has not read.
 		fx.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("read", { path: "notes.txt" })], { stopReason: "toolUse" }),
 			fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\n" })], {
 				stopReason: "toolUse",
 			}),
@@ -782,6 +784,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 			"assistant",
 			"toolResult",
 			"assistant",
+			"toolResult",
+			"assistant",
 			"runChanges",
 		]);
 		const card = transcript.items.at(-1);
@@ -797,7 +801,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 
 		// While the task ran, the context use and the session's totals were pushed to the page.
 		const usage = fx.events.filter((entry) => entry.event === "usage").at(-1)?.data as any;
-		expect(usage.stats).toMatchObject({ userMessages: 1, assistantMessages: 2, toolCalls: 1 });
+		expect(usage.stats).toMatchObject({ userMessages: 1, assistantMessages: 3, toolCalls: 2 });
 		expect(usage.stats.latestRequest.timing.requestMs).toBeGreaterThanOrEqual(0);
 		expect(usage.stats.timing.toolMs.value).toBeGreaterThanOrEqual(0);
 		const entries = fx.hub.get((await fx.get("/api/state")).slot)!.session.sessionManager.getEntries();
@@ -865,8 +869,10 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const cards = async () =>
 			(await fx.get("/api/transcript")).items.filter((item: any) => item.kind === "runChanges");
 
+		// Read first: edit and write refuse an existing file this Session has not read.
 		await run(
 			[
+				fauxAssistantMessage([fauxToolCall("read", { path: "notes.txt" })], { stopReason: "toolUse" }),
 				fauxAssistantMessage([fauxToolCall("write", { path: "notes.txt", content: "alpha\nbeta\n" })], {
 					stopReason: "toolUse",
 				}),

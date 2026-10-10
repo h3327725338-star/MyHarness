@@ -5,6 +5,7 @@
 import type { AgentMessage } from "@myharness/agent-core";
 import { contentText, type Message } from "@myharness/ai";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
+import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
 
 // ============================================================================
 // File Operation Tracking
@@ -38,6 +39,12 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 
 		const args = block.arguments as Record<string, unknown> | undefined;
 		if (!args) continue;
+
+		// apply_patch names its files inside the patch text, not in a path argument.
+		if (block.name === "apply_patch") {
+			for (const path of applyPatchPaths(args.patch)) fileOps.edited.add(path);
+			continue;
+		}
 
 		const path = typeof args.path === "string" ? args.path : undefined;
 		if (!path) continue;

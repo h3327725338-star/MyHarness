@@ -262,6 +262,27 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 }
 
 /**
+ * Cut a string to at most `maxChars` UTF-16 code units without splitting a surrogate pair.
+ *
+ * Character-count truncation counts code units, so a plain `slice(0, n)` can end exactly on
+ * the high surrogate of an emoji or a rare CJK ideograph; the dangling half reaches the model
+ * as a replacement character (乱码). This keeps the same counting semantics (never more than
+ * `maxChars` code units, and only one unit less in the surrogate case) and just drops the
+ * incomplete character.
+ */
+export function cutAtCharBoundary(text: string, maxChars: number): string {
+	if (maxChars <= 0) {
+		return "";
+	}
+	if (text.length <= maxChars) {
+		return text;
+	}
+	const lastKept = text.charCodeAt(maxChars - 1);
+	const isHighSurrogate = lastKept >= 0xd800 && lastKept <= 0xdbff;
+	return text.slice(0, isHighSurrogate ? maxChars - 1 : maxChars);
+}
+
+/**
  * Truncate a single line to max characters, adding [truncated] suffix.
  * Used for grep match lines.
  */
@@ -272,5 +293,5 @@ export function truncateLine(
 	if (line.length <= maxChars) {
 		return { text: line, wasTruncated: false };
 	}
-	return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
+	return { text: `${cutAtCharBoundary(line, maxChars)}... [truncated]`, wasTruncated: true };
 }

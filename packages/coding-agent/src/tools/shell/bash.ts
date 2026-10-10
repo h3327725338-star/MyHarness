@@ -18,6 +18,16 @@ import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { OutputAccumulator } from "../output-accumulator.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
+import { backgroundJobManager } from "./job-manager.ts";
+import { resolveSessionScope } from "./session-scope.ts";
+import {
+	buildBashProbeSuffix,
+	resolvePreservedSpawnTarget,
+	splitProbeBlock,
+	stripProbeFromPartialOutput,
+	truncateProbeFromFullOutputFile,
+	updateSessionFromProbeText,
+} from "./shell-session.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -50,6 +60,18 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(
 		Type.Number({ description: "Timeout in seconds (optional; defaults to 90 seconds when unset)" }),
 	),
+	run_in_background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Start the command as a background job and return a taskId immediately (defaults to false). Background jobs ignore the per-call timeout; query them with job_output/job_list and terminate them with job_kill.",
+		}),
+	),
+	preserve_state: Type.Optional(
+		Type.Boolean({
+			description:
+				"Keep cwd and exported environment across calls in this session (defaults to false, the historical stateless behavior). When true, cd/export effects of this command apply to later preserve_state calls. For background jobs the recorded state is used at spawn time but not captured.",
+		}),
+	),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -58,6 +80,8 @@ export interface BashToolDetails {
 	exitCode?: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Present when run_in_background was used: the id accepted by job_output/job_kill. */
+	taskId?: string;
 }
 
 /**
@@ -80,6 +104,8 @@ export interface BashOperations {
 			signal?: AbortSignal;
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
+			/** Called with the child pid right after a successful spawn (used by background jobs). */
+			onSpawn?: (pid: number) => void;
 		},
 	) => Promise<{ exitCode: number | null }>;
 }
@@ -92,7 +118,7 @@ export interface BashOperations {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
-		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+		exec: async (command, cwd, { onData, signal, timeout, env, onSpawn }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
 				throw new Error("aborted");
@@ -142,6 +168,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				child.stdin?.end(command);
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
+			if (child.pid) onSpawn?.(child.pid);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			let terminationPromise: Promise<boolean> | undefined;
@@ -238,18 +265,63 @@ export function createBashToolDefinition(
 		// message must execute one at a time. Read-only tools keep their default
 		// parallelism.
 		executionMode: "sequential" as const,
-		description: `Executes a Bash command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds.`,
+		description: `Executes a Bash command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds. Set run_in_background to true to launch the command as a background job that returns a taskId immediately (query it with job_output/job_list and stop it with job_kill; background jobs ignore the per-call timeout). Set preserve_state to true to carry cwd and exported environment changes across preserve_state calls in this session.`,
 		promptSnippet: loadSystemPrompt("tools/bash/snippet.md"),
 		parameters: bashSchema,
 		async execute(
 			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
+			{
+				command,
+				timeout,
+				run_in_background,
+				preserve_state,
+			}: {
+				command: string;
+				timeout?: number;
+				run_in_background?: boolean;
+				preserve_state?: boolean;
+			},
 			signal?: AbortSignal,
 			onUpdate?,
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+			// preserve_state: spawn from the recorded cwd/env and append the marked probe
+			// block. Default (absent/false) keeps the historical stateless path untouched.
+			const sessionKey = resolveSessionScope(_ctx, cwd);
+			const stateKey = resolveSessionScope(_ctx, cwd, "bash:");
+			const keepState = preserve_state === true;
+			const spawnTarget = keepState
+				? resolvePreservedSpawnTarget(stateKey, spawnContext.cwd, spawnContext.env)
+				: { cwd: spawnContext.cwd, env: spawnContext.env };
+
+			if (run_in_background === true) {
+				// Background jobs do not receive the foreground call's AbortSignal: they
+				// must outlive the tool call. They are bounded by the manager's global
+				// runtime cap, job_kill, and parent-shutdown detached-child termination.
+				// preserve_state with a background job only *consumes* recorded state.
+				const job = backgroundJobManager.start({
+					sessionKey,
+					toolName: "bash",
+					command: resolvedCommand,
+					cwd: spawnTarget.cwd,
+					run: (handlers) =>
+						ops.exec(spawnContext.command, spawnTarget.cwd, {
+							onData: handlers.onData,
+							signal: handlers.signal,
+							env: spawnTarget.env,
+							onSpawn: handlers.onSpawn,
+						}),
+				});
+				const text =
+					`Started background job ${job.taskId} (bash, cwd=${job.cwd}). It keeps running after this call. ` +
+					`Use job_output {"taskId": "${job.taskId}"} for incremental output, job_list for all jobs, ` +
+					`and job_kill {"taskId": "${job.taskId}"} to terminate it. Full log: ${job.logPath}`;
+				return { content: [{ type: "text", text }], details: { taskId: job.taskId } };
+			}
+
+			const execCommand = keepState ? `${spawnContext.command}${buildBashProbeSuffix()}` : spawnContext.command;
 			const output = new OutputAccumulator({ tempFilePrefix: "myharness-bash" });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
@@ -261,8 +333,9 @@ export function createBashToolDefinition(
 				updateDirty = false;
 				lastUpdateAt = Date.now();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
+				const text = keepState ? stripProbeFromPartialOutput(snapshot.content || "") : snapshot.content || "";
 				onUpdate({
-					content: [{ type: "text", text: snapshot.content || "" }],
+					content: [{ type: "text", text }],
 					details: {
 						truncation: snapshot.truncation.truncated ? snapshot.truncation : undefined,
 						fullOutputPath: snapshot.fullOutputPath,
@@ -339,15 +412,18 @@ export function createBashToolDefinition(
 			try {
 				let exitCode: number | null;
 				try {
-					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
+					const result = await ops.exec(execCommand, spawnTarget.cwd, {
 						onData: handleData,
 						signal,
 						timeout: timeout ?? DEFAULT_TIMEOUT_SECONDS,
-						env: spawnContext.env,
+						env: spawnTarget.env,
 					});
 					exitCode = result.exitCode;
 				} catch (err) {
 					const snapshot = await finishOutput();
+					if (keepState && snapshot.fullOutputPath) {
+						await truncateProbeFromFullOutputFile(snapshot.fullOutputPath);
+					}
 					const { text } = formatOutput(snapshot, "");
 					if (err instanceof Error && err.message === "aborted") {
 						const abortError = new Error(appendStatus(text, "Command aborted"));
@@ -366,7 +442,26 @@ export function createBashToolDefinition(
 					throw err;
 				}
 
-				const snapshot = await finishOutput();
+				const rawSnapshot = await finishOutput();
+				// Parse + strip the state probe; a failed parse silently keeps the old
+				// record and the raw text (no error, no state update).
+				let snapshot = rawSnapshot;
+				if (keepState) {
+					if (exitCode === 0) {
+						const updated = updateSessionFromProbeText(stateKey, "bash", rawSnapshot.content, spawnTarget.env);
+						if (updated) snapshot = { ...rawSnapshot, content: updated.output };
+						else {
+							const split = splitProbeBlock(rawSnapshot.content);
+							if (split) snapshot = { ...rawSnapshot, content: split.output };
+						}
+					} else {
+						const split = splitProbeBlock(rawSnapshot.content);
+						if (split) snapshot = { ...rawSnapshot, content: split.output };
+					}
+					if (snapshot.fullOutputPath) {
+						await truncateProbeFromFullOutputFile(snapshot.fullOutputPath);
+					}
+				}
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0 && exitCode !== null) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));

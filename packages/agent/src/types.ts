@@ -275,6 +275,19 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	toolExecution?: ToolExecutionMode;
 
 	/**
+	 * How many milliseconds a running tool gets to finish after the abort signal fires.
+	 *
+	 * If the tool is still running when the grace period ends, the loop stops waiting for it and
+	 * records an error tool result (`details.errorCode: "TOOL_ABORT_TIMEOUT"`); the tool's late
+	 * result or error is discarded. A tool that finishes within the grace period keeps its own result.
+	 * `Infinity` disables the fallback (the loop waits for the tool indefinitely). Negative or NaN
+	 * values fall back to the default.
+	 *
+	 * Default: 20000
+	 */
+	toolAbortGraceMs?: number;
+
+	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
@@ -397,7 +410,14 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * Must return an object that matches `TParameters`.
 	 */
 	prepareArguments?: (args: unknown) => Static<TParameters>;
-	/** Execute the tool call. Throw on failure instead of encoding errors in `content`. */
+	/**
+	 * Execute the tool call. Throw on failure instead of encoding errors in `content`.
+	 *
+	 * Cancellation: tools should honor `signal` and stop promptly. A tool that ignores the
+	 * cancellation is abandoned after the abort grace period (`AgentLoopConfig.toolAbortGraceMs`,
+	 * default 20s): the loop records a `TOOL_ABORT_TIMEOUT` error result and discards whatever the
+	 * tool later returns or throws.
+	 */
 	execute: (
 		toolCallId: string,
 		params: Static<TParameters>,

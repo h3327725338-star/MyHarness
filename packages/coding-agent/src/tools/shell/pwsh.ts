@@ -19,11 +19,24 @@ import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { OutputAccumulator } from "../output-accumulator.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
+import { backgroundJobManager } from "./job-manager.ts";
+import { resolveSessionScope } from "./session-scope.ts";
+import {
+	buildPwshProbeSuffix,
+	resolvePreservedSpawnTarget,
+	splitProbeBlock,
+	stripProbeFromPartialOutput,
+	truncateProbeFromFullOutputFile,
+	updateSessionFromProbeText,
+} from "./shell-session.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 // 未显式指定 timeout 时应用的默认超时（1.5 分钟），与 bash 工具保持一致。
 const DEFAULT_TIMEOUT_SECONDS = 90;
+// 与 bash 工具一致：命令 shell 已经退出后，最多再短暂收集继承 stdout/stderr 的
+// 后台进程输出，不能让持续输出的后台任务把 pwsh Tool 一直拖到产品 timeout。
+const MAX_POST_EXIT_DRAIN_MS = 1_000;
 
 // Windows CreateProcess 命令行总长上限约 32767 字符。超过阈值时把命令原样写入
 // 临时 .ps1 脚本文件再以 -File 执行，避免超长命令行触发 ENAMETOOLONG。
@@ -74,6 +87,18 @@ const pwshSchema = Type.Object({
 	timeout: Type.Optional(
 		Type.Number({ description: "Timeout in seconds (optional; defaults to 90 seconds when unset)" }),
 	),
+	run_in_background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Start the command as a background job and return a taskId immediately (defaults to false). Background jobs ignore the per-call timeout; query them with job_output/job_list and terminate them with job_kill.",
+		}),
+	),
+	preserve_state: Type.Optional(
+		Type.Boolean({
+			description:
+				"Keep cwd and environment-variable changes across calls in this session (defaults to false, the historical stateless behavior). When true, Set-Location and $env changes apply to later preserve_state calls. For background jobs the recorded state is used at spawn time but not captured.",
+		}),
+	),
 });
 
 export type PwshToolInput = Static<typeof pwshSchema>;
@@ -82,6 +107,8 @@ export interface PwshToolDetails {
 	exitCode?: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Present when run_in_background was used: the id accepted by job_output/job_kill. */
+	taskId?: string;
 }
 
 /**
@@ -104,6 +131,8 @@ export interface PwshOperations {
 			signal?: AbortSignal;
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
+			/** Called with the child pid right after a successful spawn (used by background jobs). */
+			onSpawn?: (pid: number) => void;
 		},
 	) => Promise<{ exitCode: number | null }>;
 }
@@ -113,7 +142,7 @@ export interface PwshOperations {
  */
 export function createLocalPwshOperations(options?: { shellPath?: string }): PwshOperations {
 	return {
-		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+		exec: async (command, cwd, { onData, signal, timeout, env, onSpawn }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
 				throw new Error("aborted");
@@ -162,6 +191,7 @@ export function createLocalPwshOperations(options?: { shellPath?: string }): Pws
 				throw error;
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
+			if (child.pid) onSpawn?.(child.pid);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			let terminationPromise: Promise<boolean> | undefined;
@@ -189,7 +219,9 @@ export function createLocalPwshOperations(options?: { shellPath?: string }): Pws
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
 				}
-				const exitCode = await waitForChildProcess(child);
+				const exitCode = await waitForChildProcess(child, {
+					maxPostExitDrainMs: MAX_POST_EXIT_DRAIN_MS,
+				});
 				if (terminationPromise && !(await terminationPromise)) {
 					throw new Error("process tree did not terminate within the cancellation deadline");
 				}
@@ -252,18 +284,63 @@ export function createPwshToolDefinition(
 		// one assistant message must execute one at a time to keep the Git
 		// checkpoint baseline linear.
 		executionMode: "sequential" as const,
-		description: `Executes a PowerShell command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds.`,
+		description: `Executes a PowerShell command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds. Set run_in_background to true to launch the command as a background job that returns a taskId immediately (query it with job_output/job_list and stop it with job_kill; background jobs ignore the per-call timeout). Set preserve_state to true to carry cwd and environment changes across preserve_state calls in this session.`,
 		promptSnippet: loadSystemPrompt("tools/pwsh/snippet.md"),
 		parameters: pwshSchema,
 		async execute(
 			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
+			{
+				command,
+				timeout,
+				run_in_background,
+				preserve_state,
+			}: {
+				command: string;
+				timeout?: number;
+				run_in_background?: boolean;
+				preserve_state?: boolean;
+			},
 			signal?: AbortSignal,
 			onUpdate?,
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+			// preserve_state: spawn from the recorded cwd/env and append the marked probe
+			// block. Default (absent/false) keeps the historical stateless path untouched.
+			const sessionKey = resolveSessionScope(_ctx, cwd);
+			const stateKey = resolveSessionScope(_ctx, cwd, "pwsh:");
+			const keepState = preserve_state === true;
+			const spawnTarget = keepState
+				? resolvePreservedSpawnTarget(stateKey, spawnContext.cwd, spawnContext.env)
+				: { cwd: spawnContext.cwd, env: spawnContext.env };
+
+			if (run_in_background === true) {
+				// Background jobs do not receive the foreground call's AbortSignal: they
+				// must outlive the tool call. They are bounded by the manager's global
+				// runtime cap, job_kill, and parent-shutdown detached-child termination.
+				// preserve_state with a background job only *consumes* recorded state.
+				const job = backgroundJobManager.start({
+					sessionKey,
+					toolName: "pwsh",
+					command: resolvedCommand,
+					cwd: spawnTarget.cwd,
+					run: (handlers) =>
+						ops.exec(spawnContext.command, spawnTarget.cwd, {
+							onData: handlers.onData,
+							signal: handlers.signal,
+							env: spawnTarget.env,
+							onSpawn: handlers.onSpawn,
+						}),
+				});
+				const text =
+					`Started background job ${job.taskId} (pwsh, cwd=${job.cwd}). It keeps running after this call. ` +
+					`Use job_output {"taskId": "${job.taskId}"} for incremental output, job_list for all jobs, ` +
+					`and job_kill {"taskId": "${job.taskId}"} to terminate it. Full log: ${job.logPath}`;
+				return { content: [{ type: "text", text }], details: { taskId: job.taskId } };
+			}
+
+			const execCommand = keepState ? `${spawnContext.command}${buildPwshProbeSuffix()}` : spawnContext.command;
 			const output = new OutputAccumulator({ tempFilePrefix: "myharness-pwsh" });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
@@ -275,8 +352,9 @@ export function createPwshToolDefinition(
 				updateDirty = false;
 				lastUpdateAt = Date.now();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
+				const text = keepState ? stripProbeFromPartialOutput(snapshot.content || "") : snapshot.content || "";
 				onUpdate({
-					content: [{ type: "text", text: snapshot.content || "" }],
+					content: [{ type: "text", text }],
 					details: {
 						truncation: snapshot.truncation.truncated ? snapshot.truncation : undefined,
 						fullOutputPath: snapshot.fullOutputPath,
@@ -353,15 +431,18 @@ export function createPwshToolDefinition(
 			try {
 				let exitCode: number | null;
 				try {
-					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
+					const result = await ops.exec(execCommand, spawnTarget.cwd, {
 						onData: handleData,
 						signal,
 						timeout: timeout ?? DEFAULT_TIMEOUT_SECONDS,
-						env: spawnContext.env,
+						env: spawnTarget.env,
 					});
 					exitCode = result.exitCode;
 				} catch (err) {
 					const snapshot = await finishOutput();
+					if (keepState && snapshot.fullOutputPath) {
+						await truncateProbeFromFullOutputFile(snapshot.fullOutputPath);
+					}
 					const { text } = formatOutput(snapshot, "");
 					if (err instanceof Error && err.message === "aborted") {
 						const abortError = new Error(appendStatus(text, "Command aborted"));
@@ -380,7 +461,26 @@ export function createPwshToolDefinition(
 					throw err;
 				}
 
-				const snapshot = await finishOutput();
+				const rawSnapshot = await finishOutput();
+				// Parse + strip the state probe; a failed parse silently keeps the old
+				// record and the raw text (no error, no state update).
+				let snapshot = rawSnapshot;
+				if (keepState) {
+					if (exitCode === 0) {
+						const updated = updateSessionFromProbeText(stateKey, "pwsh", rawSnapshot.content, spawnTarget.env);
+						if (updated) snapshot = { ...rawSnapshot, content: updated.output };
+						else {
+							const split = splitProbeBlock(rawSnapshot.content);
+							if (split) snapshot = { ...rawSnapshot, content: split.output };
+						}
+					} else {
+						const split = splitProbeBlock(rawSnapshot.content);
+						if (split) snapshot = { ...rawSnapshot, content: split.output };
+					}
+					if (snapshot.fullOutputPath) {
+						await truncateProbeFromFullOutputFile(snapshot.fullOutputPath);
+					}
+				}
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0 && exitCode !== null) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));

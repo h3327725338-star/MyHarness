@@ -21,7 +21,7 @@ Agent Core 不负责：
 
 1. 读取 `packages/agent/src/index.ts`、`agent.ts`、`agent-loop.ts` 及调用方。
 2. 检查 `AgentOptions`、`AgentState`、event union、`streamFunction`、`convertToLlm` 和 `transformContext` 的兼容性。
-3. 保留取消、队列模式、tool execution、错误 stop reason 和 session ID 语义。
+3. 保留取消、队列模式、tool execution（含取消宽限期 `toolAbortGraceMs`）、错误 stop reason 和 session ID 语义。
 4. 需要持久化时只通过 session/harness contract 连接；不要在 Agent Core 直接写产品 JSONL、SQLite 或 TUI。
 5. 公共导出变化要同步 package exports、README、SDK/Agent 文档和相关测试。
 

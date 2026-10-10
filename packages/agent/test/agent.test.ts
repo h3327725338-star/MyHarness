@@ -106,6 +106,15 @@ describe("Agent", () => {
 		expect(agent.state.thinkingLevel).toBe("low");
 	});
 
+	it("should configure toolAbortGraceMs on Agent instance", () => {
+		const agent = new Agent({
+			streamFunction: unusedStreamFunction,
+			toolAbortGraceMs: 5000,
+		});
+
+		expect(agent.toolAbortGraceMs).toBe(5000);
+	});
+
 	it("should subscribe to events", () => {
 		const agent = new Agent({ streamFunction: unusedStreamFunction });
 

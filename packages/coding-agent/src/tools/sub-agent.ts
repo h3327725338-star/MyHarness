@@ -58,7 +58,14 @@ const NO_PROGRESS_TURN_THRESHOLD = 3;
 const PARTIAL_SUMMARY_CAP = 12 * 1024;
 const MAX_STRUCTURED_ITEMS = 24;
 
-const SUB_AGENT_TASKS_DESCRIPTION = "Independent exploration tasks to run in parallel";
+/**
+ * `maxItems` stays at the protocol hard cap, so the shape of the tool never changes with a setting; the description
+ * names the cap this call actually accepts (`subAgent.maxTasks`, default 3) so the model does not write 4..18 tasks
+ * and then collide with the runtime check for nothing.
+ */
+function subAgentTasksDescription(advertisedMaxTasks: number): string {
+	return `Independent exploration tasks to run in parallel; this call accepts at most ${advertisedMaxTasks} (the schema cap ${MAX_EXPLORE_TASKS} is the protocol hard limit) - split more directions into separate agent calls`;
+}
 const SUB_AGENT_BACKGROUND_DESCRIPTION =
 	"Preferred. Run the Explore tasks in the background and keep working on independent steps while they run; results arrive automatically. Omit only when you have nothing else to do until the results are in.";
 
@@ -90,10 +97,10 @@ function createSubAgentTaskItemSchema(mode: SubAgentMode) {
 	});
 }
 
-function createSubAgentSchemaBody(mode: SubAgentMode) {
+function createSubAgentSchemaBody(mode: SubAgentMode, advertisedMaxTasks: number) {
 	return {
 		tasks: Type.Array(createSubAgentTaskItemSchema(mode), {
-			description: SUB_AGENT_TASKS_DESCRIPTION,
+			description: subAgentTasksDescription(advertisedMaxTasks),
 			minItems: 1,
 			maxItems: MAX_EXPLORE_TASKS,
 		}),
@@ -101,16 +108,16 @@ function createSubAgentSchemaBody(mode: SubAgentMode) {
 	};
 }
 
-const subAgentSchema = Type.Object(createSubAgentSchemaBody("read-only"));
+const subAgentSchema = Type.Object(createSubAgentSchemaBody("read-only", SETTINGS_DEFAULTS.defaultSubAgentMaxTasks));
 
 /**
- * The read-only schema object is returned unchanged so the default mode keeps
- * the historical tool protocol byte-for-byte; only the read-write variant
- * re-describes the task prompt field.
+ * The `tasks` array keeps the protocol hard cap (`maxItems`), while its description and the tool prompt name the cap
+ * this session actually accepts, so a model never writes more tasks than `subAgent.maxTasks` and then collides with
+ * the runtime check. Only description strings differ from the historical shape; field names, types and constraints
+ * are unchanged.
  */
-function createSubAgentSchema(mode: SubAgentMode): typeof subAgentSchema {
-	if (mode !== "read-write") return subAgentSchema;
-	return Type.Object(createSubAgentSchemaBody(mode)) as typeof subAgentSchema;
+function createSubAgentSchema(mode: SubAgentMode, advertisedMaxTasks: number): typeof subAgentSchema {
+	return Type.Object(createSubAgentSchemaBody(mode, advertisedMaxTasks)) as typeof subAgentSchema;
 }
 
 export type SubAgentToolInput = Static<typeof subAgentSchema>;
@@ -471,25 +478,161 @@ function waitForProcessStop(pid: number | undefined): Promise<boolean> {
 const EXPLORE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore.md");
 const EXPLORE_WRITE_SYSTEM_PROMPT = loadSystemPrompt("roles/explore-write.md");
 
+/** The Explore report the task prompt asks for ends with a `## Completion checklist` section. */
+const COMPLETION_CHECKLIST_PATTERN = /^#{1,6}\s*Completion checklist\s*$/im;
+/** Text longer than this is never a lone acknowledgement: real acknowledgements are short sign-offs. */
+const ACKNOWLEDGEMENT_MAX_LENGTH = 200;
+const ACKNOWLEDGEMENT_PUNCT_OR_SPACE_PATTERN = /[。.!！,，、~～—\-_\s]+/y;
+const ACKNOWLEDGEMENT_WORD_PATTERN =
+	/(?:好的|收到|明白|了解|没问题|嗯|行|知道了|谢谢|ok(?:ay)?|got\s+it|yes|thanks|thank\s+you|thx|acknowledged|sure|roger)/iy;
+
+/**
+ * A turn that is nothing but an acknowledgement of a steering reminder carries no report content.
+ * Checks linearly without backtracking, capped at 200 characters.
+ */
+function isAcknowledgementOnly(text: string): boolean {
+	if (text.length > ACKNOWLEDGEMENT_MAX_LENGTH) return false;
+
+	let index = 0;
+	let wordCount = 0;
+	const len = text.length;
+
+	while (index < len) {
+		ACKNOWLEDGEMENT_PUNCT_OR_SPACE_PATTERN.lastIndex = index;
+		const punctMatch = ACKNOWLEDGEMENT_PUNCT_OR_SPACE_PATTERN.exec(text);
+		if (punctMatch) {
+			index = ACKNOWLEDGEMENT_PUNCT_OR_SPACE_PATTERN.lastIndex;
+			if (index >= len) break;
+		}
+
+		ACKNOWLEDGEMENT_WORD_PATTERN.lastIndex = index;
+		const wordMatch = ACKNOWLEDGEMENT_WORD_PATTERN.exec(text);
+		if (!wordMatch) {
+			return false;
+		}
+		index = ACKNOWLEDGEMENT_WORD_PATTERN.lastIndex;
+		wordCount++;
+	}
+
+	return wordCount > 0;
+}
+
+/** A turn that is nothing but an acknowledgement of a steering reminder carries no report content. */
+const ACKNOWLEDGEMENT_ONLY_PATTERN = {
+	test(text: string): boolean {
+		return isAcknowledgementOnly(text);
+	},
+};
+/** Below this many UTF-8 bytes a tool-call-free turn reads as a remark rather than as a report body. */
+const REPORT_CANDIDATE_MIN_BYTES = 96;
+/** A short closing turn only loses to an earlier turn that carries this multiple of its content. */
+const REPORT_DOMINANCE_RATIO = 8;
+const REPORT_SHORT_CLOSING_BYTES = 512;
+
+function reportCandidateBytes(text: string): number {
+	return Buffer.byteLength(text, "utf8");
+}
+
+/** A candidate that is an acknowledgement or too short to be the report the Main Agent asked for. */
+function isRemarkLikeCandidate(text: string): boolean {
+	return ACKNOWLEDGEMENT_ONLY_PATTERN.test(text) || reportCandidateBytes(text) < REPORT_CANDIDATE_MIN_BYTES;
+}
+
+/** The `## Completion checklist` tail the Explore prompt requires at the end of a real report. */
+function hasCompletionChecklist(text: string): boolean {
+	return COMPLETION_CHECKLIST_PATTERN.test(text);
+}
+
+/**
+ * Pick the report among the tool-call-free assistant turns that carry text (newest last). The newest turn normally
+ * wins - it is the final answer - but a trailing turn must never erase the report above it when it only
+ * acknowledges a steering reminder ("好的，收到") or is a short sign-off while an earlier turn carries the report the
+ * Explore prompt asks for. `## Completion checklist` is the strongest report signal; a missing checklist stays the
+ * report's own problem, because `evaluateExploreReportCompleteness` still decides the partial / `incomplete_answer`
+ * verdict from whichever text this function selects. These rules only choose the text, never the verdict.
+ */
+export function pickReportCandidate(candidates: readonly string[]): string {
+	if (candidates.length === 0) return "";
+	const newest = candidates[candidates.length - 1];
+	// A trailing turn with the checklist is the real final report: it wins outright.
+	if (candidates.length === 1 || hasCompletionChecklist(newest)) return newest;
+
+	// Nothing but an acknowledgement: it carries no report, so hand back the newest earlier turn that does.
+	if (ACKNOWLEDGEMENT_ONLY_PATTERN.test(newest)) {
+		for (let index = candidates.length - 2; index >= 0; index--) {
+			if (hasCompletionChecklist(candidates[index])) return candidates[index];
+		}
+		for (let index = candidates.length - 2; index >= 0; index--) {
+			if (!isRemarkLikeCandidate(candidates[index])) return candidates[index];
+		}
+		return candidates[candidates.length - 2];
+	}
+
+	// A short closing sign-off loses to the checklist report above it (tasks without Questions never match here,
+	// because no turn declares a checklist and the newest turn keeps its historical priority).
+	if (reportCandidateBytes(newest) <= REPORT_SHORT_CLOSING_BYTES) {
+		for (let index = candidates.length - 2; index >= 0; index--) {
+			const candidate = candidates[index];
+			if (!hasCompletionChecklist(candidate)) continue;
+			if (reportCandidateBytes(candidate) < REPORT_DOMINANCE_RATIO * reportCandidateBytes(newest)) continue;
+			return candidate;
+		}
+	}
+	return newest;
+}
+
 /**
  * The task report is the last assistant message that carries no tool call: a message with a tool call is a remark
  * made in the middle of the run, never the final answer. The delegated worker repeats every message in its closing
- * `agent_end` event, so a copy of such a remark can arrive after the real report and must not replace it. Only when
- * every assistant message carries a tool call (a run stopped half-way) does the last one stand in.
+ * `agent_end` event, so a copy of such a remark can arrive after the real report and must not replace it. A trailing
+ * tool-call-free message with empty text (for example a thinking-only turn after a steering reminder) must not erase
+ * the real report either, so empty candidates are skipped, not adopted. Only when no assistant message carries usable
+ * text at all does the last one stand in.
  */
 export function getFinalAssistantText(messages: Message[]): string {
 	let lastAssistant: Message | undefined;
-	for (let index = messages.length - 1; index >= 0; index--) {
+	const candidates: string[] = [];
+	for (let index = 0; index < messages.length; index++) {
 		const message = messages[index];
 		if (message.role !== "assistant") continue;
-		lastAssistant ??= message;
-		if (!assistantContainsToolCall(message)) return assistantText(message);
+		lastAssistant = message;
+		if (assistantContainsToolCall(message)) continue;
+		const text = assistantText(message);
+		if (text !== "") candidates.push(text);
 	}
+	if (candidates.length > 0) return pickReportCandidate(candidates);
 	return lastAssistant ? assistantText(lastAssistant) : "";
 }
 
+/** Keep the head of a string within `maxBytes` without ever cutting inside a UTF-8 codepoint. */
+function sliceUtf8Head(content: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const buffer = Buffer.from(content, "utf8");
+	if (buffer.length <= maxBytes) return content;
+	let end = maxBytes;
+	// 0b10xxxxxx marks a continuation byte: step back until the slice ends on a codepoint boundary.
+	while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
+	return buffer.subarray(0, end).toString("utf8");
+}
+
+/**
+ * Head truncation that never blanks out a non-empty input. `truncateHead` drops the whole content when the first
+ * line alone exceeds `maxBytes` (`firstLineExceedsLimit`), which used to erase the report body silently. Fall back
+ * to a UTF-8-safe byte slice of the head plus an explicit truncation marker, sized so the result stays within the
+ * same `maxBytes` budget the main Agent already assumes.
+ */
+export function truncateHeadKeepingContent(content: string, options: { maxBytes: number; maxLines: number }): string {
+	if (content === "") return "";
+	const result = truncateHead(content, options);
+	if (result.content !== "") return result.content;
+	// The first line alone is over the byte cap: slice raw bytes and say so, keeping the total under the cap.
+	const marker = `\n\n[正文首行超过 ${Math.floor(options.maxBytes / 1024)}KB 显示上限，已按字节截断；完整正文见落盘文件]`;
+	const partial = sliceUtf8Head(content, Math.max(0, options.maxBytes - Buffer.byteLength(marker, "utf8")));
+	return `${partial}${marker}`;
+}
+
 export function truncateSubAgentOutput(output: string): string {
-	return truncateHead(output, { maxBytes: PER_TASK_OUTPUT_CAP, maxLines: 500 }).content;
+	return truncateHeadKeepingContent(output, { maxBytes: PER_TASK_OUTPUT_CAP, maxLines: 500 });
 }
 
 function truncateDisplay(value: string, maxLength = 80): string {
@@ -721,7 +864,7 @@ function formatTaskReport(result: ExploreTaskResult, full = false): string {
 		(status === "failed" || status === "timeout" || status === "cancelled"
 			? (result.error ?? "Unknown sub-agent error")
 			: "");
-	const visibleBody = full ? body : truncateHead(body, { maxBytes: 6 * 1024, maxLines: 160 }).content;
+	const visibleBody = full ? body : truncateHeadKeepingContent(body, { maxBytes: 6 * 1024, maxLines: 160 });
 	const diagnostics = result.diagnostics
 		? `诊断：重复操作 ${result.diagnostics.repeatedOperations} 次，连续工具错误 ${result.diagnostics.consecutiveToolErrors} 次，无进展轮次 ${result.diagnostics.noProgressTurns} 次\n`
 		: "";
@@ -759,7 +902,7 @@ function formatFinalResult(results: ExploreTaskResult[], full = false): string {
 		formatItems("Unresolved Scope", unresolved),
 		sections.join("\n\n---\n\n"),
 	].join("\n\n");
-	return full ? formatted : truncateHead(formatted, { maxBytes: 48 * 1024, maxLines: 1_200 }).content;
+	return full ? formatted : truncateHeadKeepingContent(formatted, { maxBytes: 48 * 1024, maxLines: 1_200 });
 }
 
 function collectTranscriptEvidence(result: ExploreTaskResult, cwd: string): void {
@@ -1355,7 +1498,9 @@ async function runExploreTask(options: {
 		const errorMessage =
 			messages.length === 0
 				? `子 Agent 进程未产生任何事件（退出码 ${exitCode}），任务没有真正开始${stderrText ? `；进程输出：${stderrText}` : ""}`
-				: childErrorMessage;
+				: exitCode === 0 && output === "" && !stderrText && !childError
+					? "子 Agent 正常结束但没有产出最终报告正文（最后几条 assistant 消息均无文本，可能是收敛提醒后的空回复或 thinking-only 消息）；已保留工具证据与覆盖清单，建议重派该任务并要求在最终回复正文直接给出答案"
+					: childErrorMessage;
 		if (hasUsefulResult(currentResult)) {
 			currentResult.status = "partial";
 			finalizePartialResult(
@@ -1405,7 +1550,13 @@ async function runExploreTask(options: {
 		return currentResult;
 	}
 	currentResult.status = "completed";
-	currentResult.output = output;
+	// Never hand the main Agent a completed task with an empty body: if extraction produced no
+	// text at all, replace the missing report with an explicit diagnostic that names the failure
+	// and the remedy. A truncated body plus a pointer beats a silently empty one.
+	currentResult.output =
+		output !== ""
+			? output
+			: "[诊断] 子 Agent 标记为已完成，但最终报告正文为空（未能从任何无工具调用的 assistant 消息中提取到文本）；上方证据/覆盖清单来自工具事件对账，建议重派该任务或在任务中明确要求“必须在最终回复正文直接给出答案”，或检查本次 Explore 的落盘文件。";
 	currentResult.stopReason = "completed";
 	currentResult.goal ??= currentResult.prompt;
 	Object.defineProperty(currentResult, "fullOutput", {
@@ -1805,7 +1956,7 @@ export function createSubAgentToolDefinition(
 					]
 				: []),
 		],
-		parameters: createSubAgentSchema(mode),
+		parameters: createSubAgentSchema(mode, advertisedMaxTasks),
 		// Each call already runs its tasks in parallel, capped by the configured subAgent.maxTasks. Serializing
 		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema keeps
 		// MAX_EXPLORE_TASKS as the protocol hard cap; execute enforces the live configured value below it.
@@ -1814,7 +1965,9 @@ export function createSubAgentToolDefinition(
 			const settings = options?.getSettings?.() ?? { enabled: false };
 			const maxTasks = resolveExploreMaxTasks(settings);
 			if (params.tasks.length < 1 || params.tasks.length > maxTasks) {
-				throw new Error(`Agent requires between 1 and ${maxTasks} Explore tasks.`);
+				throw new Error(
+					`Agent requires between 1 and ${maxTasks} Explore tasks (the schema cap ${MAX_EXPLORE_TASKS} is the protocol hard limit). Please split into separate agent calls of at most ${maxTasks} tasks each.`,
+				);
 			}
 			if (!settings.enabled) throw new Error("Sub Agent is disabled in /settings.");
 			if (!settings.provider || !settings.model || !settings.thinkingLevel) {

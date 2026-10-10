@@ -164,6 +164,7 @@ export const zhCN = {
 	"Read text, images and documents.": "读取并解析文本、图片及各类文档",
 	"Run Bash commands.": "运行 Bash 命令",
 	"Run PowerShell commands.": "运行 PowerShell 命令",
+	"background jobs": "后台任务",
 	"Replace exact text in a file.": "精确替换文件文本",
 	"Create or rewrite a file.": "创建或完整重写文件",
 	"Search file contents.": "搜索文件内容",

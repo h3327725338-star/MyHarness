@@ -1007,6 +1007,13 @@ let bashCommandCount = 0;
 export default function (pi) {
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
+    const input = event.input && typeof event.input === "object" ? event.input : {};
+    if (input.run_in_background === true || input.preserve_state === true) {
+      return {
+        block: true,
+        reason: READ_ONLY_GUARD_BLOCK_MARKER + " 子智能体会话禁止使用 run_in_background 或 preserve_state 参数。",
+      };
+    }
     const command = typeof event.input.command === "string" ? event.input.command : "";
     bashCommandCount += 1;
     if (typeof maxBashCommands === "number" && bashCommandCount > maxBashCommands) {

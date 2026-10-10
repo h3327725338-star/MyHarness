@@ -697,7 +697,7 @@ async function executeToolCallsSequential(
 				isError: preparation.isError,
 			};
 		} else {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, config, signal, emit);
 			finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -761,7 +761,7 @@ async function executeToolCallsParallel(
 		}
 
 		finalizedCalls.push(async () => {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, config, signal, emit);
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -904,36 +904,113 @@ async function prepareToolCall(
 	}
 }
 
+const DEFAULT_TOOL_ABORT_GRACE_MS = 20_000;
+/** Largest delay setTimeout accepts; larger values would fire immediately. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const TOOL_ABORT_TIMEOUT_CODE = "TOOL_ABORT_TIMEOUT";
+const TOOL_ABANDONED = Symbol("toolAbandoned");
+
+/** Normalize `toolAbortGraceMs`: undefined, NaN and negative/non-finite-negative values use the default. */
+function resolveToolAbortGraceMs(value: number | undefined): number {
+	if (value === Infinity) return Infinity;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return DEFAULT_TOOL_ABORT_GRACE_MS;
+	return Math.min(value, MAX_TIMER_DELAY_MS);
+}
+
+/**
+ * Wait for a tool execution, but stop waiting once the abort signal has been
+ * fired for `graceMs`. The tool's own outcome wins if it settles first (including
+ * inside the grace period). When abandoned, the tool promise keeps a handler
+ * attached so a later rejection is never reported as unhandled, and its late
+ * outcome is ignored. The timer and abort listener are always released.
+ */
+function waitForToolWithAbortGrace<T>(
+	execution: PromiseLike<T>,
+	signal: AbortSignal,
+	graceMs: number,
+	onAbandon: () => void,
+): Promise<T | typeof TOOL_ABANDONED> {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const cleanup = () => {
+			settled = true;
+			if (timer !== undefined) clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+		};
+		const onAbort = () => {
+			if (settled || timer !== undefined) return;
+			timer = setTimeout(() => {
+				if (settled) return;
+				cleanup();
+				onAbandon();
+				resolve(TOOL_ABANDONED);
+			}, graceMs);
+		};
+		Promise.resolve(execution).then(
+			(value) => {
+				if (settled) return;
+				cleanup();
+				resolve(value);
+			},
+			(error) => {
+				if (settled) return;
+				cleanup();
+				reject(error);
+			},
+		);
+		if (signal.aborted) {
+			onAbort();
+		} else {
+			signal.addEventListener("abort", onAbort, { once: true });
+		}
+	});
+}
+
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
+	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
+	const graceMs = resolveToolAbortGraceMs(config.toolAbortGraceMs);
 
 	try {
-		const result = await prepared.tool.execute(
-			prepared.toolCall.id,
-			prepared.args as never,
-			signal,
-			(partialResult) => {
-				if (!acceptingUpdates) return;
-				updateEvents.push(
-					Promise.resolve(
-						emit({
-							type: "tool_execution_update",
-							toolCallId: prepared.toolCall.id,
-							toolName: prepared.toolCall.name,
-							args: prepared.toolCall.arguments,
-							partialResult,
-						}),
-					),
-				);
-			},
-		);
+		const execution = prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, (partialResult) => {
+			if (!acceptingUpdates) return;
+			updateEvents.push(
+				Promise.resolve(
+					emit({
+						type: "tool_execution_update",
+						toolCallId: prepared.toolCall.id,
+						toolName: prepared.toolCall.name,
+						args: prepared.toolCall.arguments,
+						partialResult,
+					}),
+				),
+			);
+		});
+		// Without a signal or with an infinite grace period there is nothing to race:
+		// keep the plain await so behavior matches the pre-grace implementation.
+		const result =
+			signal && graceMs !== Infinity
+				? await waitForToolWithAbortGrace(execution, signal, graceMs, () => {
+						acceptingUpdates = false;
+					})
+				: await execution;
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
+		if (result === TOOL_ABANDONED) {
+			return {
+				result: createErrorToolResult(
+					`Operation aborted: tool "${prepared.toolCall.name}" did not stop within ${graceMs / 1000}s of the cancellation; its result was discarded.`,
+					{ code: TOOL_ABORT_TIMEOUT_CODE },
+				),
+				isError: true,
+			};
+		}
 		return { result, isError: false };
 	} catch (error) {
 		acceptingUpdates = false;

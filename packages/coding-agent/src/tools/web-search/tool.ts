@@ -5,6 +5,7 @@ import { SETTINGS_DEFAULTS, WEB_SEARCH_SETTING_RANGES } from "../../config/setti
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
+import { cutAtCharBoundary } from "../truncate.ts";
 import { WEB_SEARCH_ENGINES } from "./engines/index.ts";
 import { selectExcerpts } from "./excerpts.ts";
 import {
@@ -213,8 +214,12 @@ function formatFetchResponse(response: WebFetchResponse): { preview: string; ful
 		const header = pageHeader(page, "");
 		const body = page.markdown ?? "";
 		fullSections.push(`${header}\n\n${body}`);
+		// Preview cut is by character count; keep it surrogate-pair safe so an emoji at the
+		// budget boundary does not reach the model as half a character.
 		sections.push(
-			`${header}\n\n${body.slice(0, perPage)}${body.length > perPage ? "\n\n[preview truncated; full Markdown is saved]" : ""}`,
+			`${header}\n\n${cutAtCharBoundary(body, perPage)}${
+				body.length > perPage ? "\n\n[preview truncated; full Markdown is saved]" : ""
+			}`,
 		);
 	}
 	const diagnostics = formatFailures(response.failures);

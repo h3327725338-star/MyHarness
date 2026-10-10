@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { RunState, RunStateSnapshot } from "../agent/runtime/run-state.ts";
 import { RUN_STATE_LABELS } from "../agent/runtime/run-state.ts";
+import { applyPatchPaths } from "../tools/files/apply-patch-parser.ts";
 import { spawnProcess } from "./child-process.ts";
 
 /** How the reminder is presented on the desktop. */
@@ -140,6 +141,9 @@ export function summarizeRunWork(messages: readonly AgentMessage[]): RunWorkSumm
 				case "edit":
 				case "write":
 					if (typeof args.path === "string" && args.path) edited.add(args.path);
+					break;
+				case "apply_patch":
+					for (const path of applyPatchPaths(args.patch)) edited.add(path);
 					break;
 				case "read":
 					work.read += 1;

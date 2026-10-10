@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionContext } from "../src/extensions/runtime/types.ts";
 import { createEditToolDefinition } from "../src/tools/files/edit.ts";
+import { createReadToolDefinition } from "../src/tools/files/read.ts";
 
 const tempDirs: string[] = [];
 
@@ -75,6 +76,9 @@ describe("edit tool prepareArguments", () => {
 		const dir = await createTempDir();
 		const filePath = join(dir, "legacy.txt");
 		await writeFile(filePath, "before\n", "utf8");
+
+		const readDefinition = createReadToolDefinition(dir);
+		await readDefinition.execute("read-1", { path: "legacy.txt" }, undefined, undefined, {} as ExtensionContext);
 
 		const definition = createEditToolDefinition(dir);
 		const prepared = definition.prepareArguments!({

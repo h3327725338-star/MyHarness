@@ -32,7 +32,10 @@
 
 - `edit-diff.ts`：编辑的匹配、换行符保持、diff 生成；
 - `file-mutation-queue.ts`：同一文件的写操作排队；
-- `mutation-result.ts`：取消到达时文件其实已写入的情况标记。
+- `mutation-result.ts`：取消到达时文件其实已写入的情况标记；
+- `read-state.ts`：记录文件读取状态（修改时间与大小），在 `edit`/`write` 修改已存在文件前执行“先读后改”与过期检测（按 Session 隔离、LRU 上限 1000）。
+- `apply-patch.ts`：`apply_patch` 工具，一次补丁原子地增、删、改、移动多个文件。先在内存里算出全部结果，任何一处对不上都不写盘；写盘失败时回滚已写入的文件。这是可选工具，不在默认工具集合中，`agent` 子智能体的角色白名单也不包含它。
+- `apply-patch-parser.ts`：补丁格式的纯解析，不读写磁盘。
 
 ### shell/ — Shell 工具
 
@@ -42,11 +45,22 @@
 | `pwsh.ts` | `pwsh` 工具（Windows PowerShell） |
 | `executor.ts` | `executeBashWithOperations()`：用户直接执行命令（`!命令`）时用的流式执行 |
 | `session-bash.ts` | `SessionBashRunner`：一个会话里用户直接执行的命令。同一时间只跑一条，完整输出落盘，结果写入会话；Agent 正在运行时先排队，等本轮结束再写入 |
+| `job-manager.ts` | `BackgroundJobManager`：后台 shell 任务表、日志写临时文件、增量字节游标读取、进程树终止、单任务日志上限（64MB）、会话并发上限（8 个）、最近 100 个任务淘汰并清理对应日志文件 |
+| `job-tools.ts` | `job_list`、`job_output`、`job_kill` 三个内置工具的定义与创建 |
+| `session-scope.ts` | 会话所有权作用域解析：优先读取 `ctx.sessionManager.getSessionId()`，退回 cwd，隔离不同会话的任务和状态 |
+| `shell-session.ts` | `preserve_state` 状态保持机制：尾部探针构建、探针解析与输出剥离、环境变量差分、跨进程调用状态注入 |
 | `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：按 shell 序列段（管道、`&&`、`;`）逐段用只读允许列表 + 危险选项/拒绝列表判定，诊断重定向（`2>/dev/null`）与临时路径写入不影响判定，可选的模型裁决；拦截结果带 `[read-only-guard]` 标记和具体原因，不计入连续工具失败 |
 
 ### memory/ — 记忆工具
 
 `search.ts`：`memory_search`（无 `query` 列记忆目录，有 `query` 用 `agent/runtime/auto-memory.ts` 的 `selectMemoriesForQuery()` 返回摘要）和 `memory_get`（按 id 取全文，未找到只返回说明）。两个工具只读、`executionMode: "parallel"`；读取通过可注入的 `MemoryToolOperations`，`createSessionMemoryOperations()` 按会话的 Data root / Workspace / Conversation 读取，Auto Memory 关闭或会话不持久化时返回“未启用”说明。子智能体按 `agent/runtime/role.ts` 白名单不会拿到它们。
+
+### interaction/ — 交互工具
+
+- `ask-user-question.ts`：`ask_user_question`。通过 `ctx.ui.select` / `ctx.ui.input` 向用户提 1–4 个问题并按顺序收集回答：有选项时单选，默认附加“其他（自己输入）”（`allowOther: false` 时去掉）；无选项时自由输入。用户关闭弹窗时不编造答案，停止继续提问，并在结果里告诉模型用户没有回答。没有可交互界面（SDK、子智能体、无头运行）时抛出 `code: "NO_INTERACTIVE_UI"`。
+- `todo-write.ts`：`todo_write`。每次传入整张待办清单并整张替换，最多 50 项，最多一项 `in_progress`，内容不能为空或重复。不落盘：清单就在对话记录的工具调用与结果里。
+
+两个工具都是 `executionMode: "sequential"`，只对主智能体默认启用；子智能体白名单（`agent/runtime/role.ts`）不包含它们。
 
 ### github/
 
@@ -92,5 +106,6 @@
 - 执行文件不能导入 `presentation/`、`modes/interactive` 或 `@myharness/tui`。
 - 工具名、参数名、结果的 `details` 结构会被写进 Session 并被界面和导出解析，不要随意改；确需改动时用 `prepareArguments` 兼容旧输入。
 - Shell 执行、输出截断、结果落盘各只有一份实现，新工具复用它们。
+- 文件写操作（`edit`、`write`）修改已存在文件时要求“先读后改”，改前校验读取状态与文件是否过期，写后刷新状态；非本地文件系统（自定义 operations）跳过校验。`apply_patch` 的 Update 与 Delete 同样执行这一检查（它只使用本地文件系统）。
 - Web Search 的搜索规划（搜什么、读哪些页）由 Agent 决定；工具只负责并发、缓存、取消、超时和逐项诊断。任何下载都必须先过 `url.ts` 的检查。
-- 相关测试：`tools.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`memory-intelligence.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`tool-execution-*.test.ts`。
+- 相关测试：`tools.test.ts`、`read-state.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`memory-intelligence.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`tool-execution-*.test.ts`、`ask-user-and-todo-tools.test.ts`。

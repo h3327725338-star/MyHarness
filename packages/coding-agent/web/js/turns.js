@@ -34,6 +34,17 @@ function countPatch(patch) {
 	return { add, del };
 }
 
+/** The files one patch names (added, deleted, updated or moved to), in patch order, without repeats. */
+function patchPaths(patch) {
+	const paths = [];
+	for (const line of String(patch || "").split(/\r?\n/)) {
+		const match = /^\*\*\* (?:Add File|Delete File|Update File|Move to): (.+)$/.exec(line);
+		const file = match?.[1].trim();
+		if (file && !paths.includes(file)) paths.push(file);
+	}
+	return paths;
+}
+
 /** Classify one tool call and produce human wording. */
 export function describeAction(call, result, run, cwd) {
 	const args = (call.args && typeof call.args === "object" ? call.args : run?.args) || {};
@@ -42,6 +53,7 @@ export function describeAction(call, result, run, cwd) {
 	let target = "";
 	let detail = "";
 	let path;
+	let paths;
 	let extra;
 	let web;
 	switch (name) {
@@ -78,6 +90,21 @@ export function describeAction(call, result, run, cwd) {
 			target = clip(firstLine(str(args.command)), 120);
 			detail = name === "pwsh" ? "PowerShell" : "";
 			break;
+		case "job_list":
+			kind = "list";
+			target = t("background jobs");
+			detail = "job_list";
+			break;
+		case "job_output":
+			kind = "run";
+			target = str(args.taskId || "");
+			detail = "job_output";
+			break;
+		case "job_kill":
+			kind = "run";
+			target = str(args.taskId || "");
+			detail = "job_kill";
+			break;
 		case "edit": {
 			kind = "edit";
 			path = str(args.path || args.file_path);
@@ -87,6 +114,21 @@ export function describeAction(call, result, run, cwd) {
 			if (patch) {
 				const c = countPatch(patch);
 				extra = { additions: c.add, deletions: c.del };
+			}
+			break;
+		}
+		case "apply_patch": {
+			// One patch can touch several files: the step names all of them and counts the lines of every file.
+			kind = "edit";
+			paths = patchPaths(args.patch);
+			path = paths.length === 1 ? paths[0] : undefined;
+			target = paths.map((file) => shortPath(file, cwd)).join(" · ");
+			const details = result ? result.details : run?.partialDetails;
+			if (Array.isArray(details?.files)) {
+				extra = {
+					additions: details.files.reduce((sum, file) => sum + (file.linesAdded || 0), 0),
+					deletions: details.files.reduce((sum, file) => sum + (file.linesRemoved || 0), 0),
+				};
 			}
 			break;
 		}
@@ -120,6 +162,18 @@ export function describeAction(call, result, run, cwd) {
 			target = clip(firstLine(str(args.task || args.title || args.goal || name)), 120);
 			detail = name;
 			break;
+		case "ask_user_question": {
+			const first = Array.isArray(args.questions) ? args.questions[0] : undefined;
+			target = clip(firstLine(str(first?.question)), 120);
+			detail = name;
+			break;
+		}
+		case "todo_write": {
+			const todos = Array.isArray(args.todos) ? args.todos : [];
+			target = `${todos.filter((item) => item?.status === "completed").length}/${todos.length}`;
+			detail = name;
+			break;
+		}
 		case "github":
 			kind = "github";
 			target = `${str(args.method || "GET")} ${str(args.path || args.url || args.query || "")}`.trim();
@@ -138,7 +192,7 @@ export function describeAction(call, result, run, cwd) {
 	const [ing, past, base] = (TENSES[kind] || TENSES.tool).map((word) => t(word));
 	const phase = !result && (kind === "edit" || kind === "write") ? (run?.status === "running" ? "applying" : "generating") : undefined;
 	const verb = phase === "generating" ? t("Preparing changes") : phase === "applying" ? t("Applying changes") : status === "running" || status === "pending" ? ing : shell === "cancelled" ? t("Stopped") : shell === "timeout" ? t("Timed out: {action}", { action: base }) : isError ? t("Failed to {action}", { action: base }) : past;
-	return { kind, verb, target, detail, path, extra, phase, web, status, isError: !!isError };
+	return { kind, verb, target, detail, path, paths, extra, phase, web, status, isError: !!isError };
 }
 
 /**
@@ -198,8 +252,8 @@ export function groupLabel(kind, actions) {
 		case "run":
 			return pick(N_("Running {commands}"), N_("Ran {commands}"), { commands: count(n, "command") });
 		case "edit":
-			if (running) return t(actions.some((a) => a.phase === "applying") ? "Applying changes to {files}" : "Preparing changes for {files}", { files: count(distinct(actions.map((a) => a.path)), "file") });
-			return pick(N_("Editing {files}"), N_("Edited {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
+			if (running) return t(actions.some((a) => a.phase === "applying") ? "Applying changes to {files}" : "Preparing changes for {files}", { files: count(distinct(actions.flatMap((a) => a.paths ?? [a.path])), "file") });
+			return pick(N_("Editing {files}"), N_("Edited {files}"), { files: count(distinct(actions.flatMap((a) => a.paths ?? [a.path])), "file") });
 		case "write":
 			if (running) return t(actions.some((a) => a.phase === "applying") ? "Applying changes to {files}" : "Preparing changes for {files}", { files: count(distinct(actions.map((a) => a.path)), "file") });
 			return pick(N_("Writing {files}"), N_("Wrote {files}"), { files: count(distinct(actions.map((a) => a.path)), "file") });
@@ -393,7 +447,9 @@ export function stepStats(steps) {
 		if (action.type !== "action") continue;
 		stats.actions++;
 		if (action.isError) stats.failedActions++;
-		if ((action.kind === "edit" || action.kind === "write") && !action.isError && action.status === "done" && action.path) files.add(action.path);
+		if ((action.kind === "edit" || action.kind === "write") && !action.isError && action.status === "done") {
+			for (const file of action.paths ?? [action.path]) if (file) files.add(file);
+		}
 		if (action.kind === "run") stats.commands++;
 		if (action.kind === "read") stats.reads++;
 	}

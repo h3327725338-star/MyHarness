@@ -189,16 +189,18 @@ export function createGrepToolDefinition(
 
 						const args: string[] = ["--json", "--line-number", "--color=never", "--hidden"];
 						if (ignoreCase) args.push("--ignore-case");
-						// A leading dash is often a command-line-looking literal (for example
-						// "--pre=C:\path"). Passing it as a regex makes Windows backslashes
-						// form invalid escapes such as \U. The "--" separator already prevents
-						// option injection; fixed-string mode preserves the intended search text.
-						if (literal || pattern.startsWith("-")) args.push("--fixed-strings");
+						// Only an explicit `literal` request switches to fixed-string search.
+						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
 						if (usePatternFile) {
 							args.push("-f", path.join(patternDir!, "pattern.txt"), "--", searchPath);
 						} else {
-							args.push("--", pattern, searchPath);
+							// `-e <pattern>` binds the pattern to the option, so a leading dash can never be
+							// parsed as a ripgrep option (no `--pre=` style injection), and `--` ends option
+							// parsing before the search path. The pattern keeps its regex semantics; a genuinely
+							// invalid regex now surfaces as ripgrep's own error instead of being silently
+							// reinterpreted as a literal string.
+							args.push("-e", pattern, "--", searchPath);
 						}
 
 						const child = spawn(rgPath, args, {

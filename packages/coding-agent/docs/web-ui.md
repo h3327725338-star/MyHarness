@@ -260,7 +260,7 @@ packages/coding-agent/
 │   ├── host.ts                    WebHost：订阅 AgentSession 事件、完成阶段、快照、prompt 提交
 │   ├── lifecycle.ts               WebLifecycle：最后一个页面断开后的宽限倒计时（web-mode.ts 接线，http-server.ts 提供连接数）
 │   ├── dialogs.ts                 Extension UI 对话桥（ExtensionUIContext 的 Web 实现）
-│   ├── changes.ts                 ChangeTracker：edit/write 快照 + checkpoint → 逐文件 diff
+│   ├── changes.ts                 ChangeTracker：edit/write/apply_patch 快照 + checkpoint → 逐文件 diff
 │   ├── folder-dialog.ts           系统文件夹选择窗口（添加 Workspace）
 │   ├── generation-speed.ts        模型输出速度（t/s）：只用 Provider 报告的输出 Token 和真实到达时间；每次请求从 detecting 开始
 │   ├── request-cache.ts           每次模型请求的缓存命中率：Provider 报告的 cache read / write；只在回复结束时才报告的 Provider 回复期间用上一次请求预估（`estimated`），状态与速度相同

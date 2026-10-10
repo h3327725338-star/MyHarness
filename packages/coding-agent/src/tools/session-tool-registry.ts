@@ -174,12 +174,17 @@ export class SessionToolRegistry {
 					"read",
 					"bash",
 					"pwsh",
+					"job_list",
+					"job_output",
+					"job_kill",
 					"edit",
 					"write",
 					"symbols",
 					"github",
 					"memory_search",
 					"memory_get",
+					"ask_user_question",
+					"todo_write",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
 				];
 		return this.withSubAgentTools(requested ?? defaultActiveToolNames, settings.getSubAgentSettings().enabled);
@@ -310,7 +315,7 @@ export class SessionToolRegistry {
 						return await persisted.execute(...args);
 					} finally {
 						const scope = artifactScope(sessionManager);
-						if (scope && ["write", "edit", "bash", "pwsh"].includes(tool.name)) {
+						if (scope && ["write", "edit", "apply_patch", "bash", "pwsh"].includes(tool.name)) {
 							try {
 								refreshArtifactIndexesIfChanged(scope);
 							} catch (error) {

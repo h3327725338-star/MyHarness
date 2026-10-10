@@ -324,6 +324,82 @@ function repairStringifiedContainers(value: unknown, schema: JsonSchemaObject | 
 }
 
 /**
+ * Semantic string coercion (ZCode-style semanticBoolean/semanticNumber).
+ *
+ * Model channels sometimes emit the *words* of a boolean ("yes", "no", "TRUE ") or a
+ * quoted number ("42") for a field the tool schema declared as boolean/number/integer.
+ * TypeBox `Value.Convert` already maps a few exact spellings ("true"/"false"/"1"/"0",
+ * numeric strings), so this pass only adds the explicitly accepted semantic spellings
+ * and case/whitespace tolerance, running BEFORE Convert with the same schema.
+ *
+ * Strictness is deliberate: only fields whose schema declares exactly one of these
+ * scalar types are touched (a union with "string" stays a string); unexpected words
+ * like "on" are NOT coerced so they still surface as a real validation error instead
+ * of silently becoming `false`.
+ */
+const SEMANTIC_BOOLEAN_TRUE = new Set(["true", "1", "yes"]);
+const SEMANTIC_BOOLEAN_FALSE = new Set(["false", "0", "no"]);
+// Pure decimal number only: rejects hex ("0x10"), underscores ("12_000"), binary literals and trailing junk.
+const PURE_DECIMAL_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+const NO_SEMANTIC_COERCION = Symbol("noSemanticCoercion");
+
+function semanticCoerceString(value: string, schemaTypes: string[]): unknown {
+	if (schemaTypes.length !== 1) {
+		return NO_SEMANTIC_COERCION;
+	}
+	const schemaType = schemaTypes[0];
+	if (schemaType === "boolean") {
+		const normalized = value.trim().toLowerCase();
+		if (SEMANTIC_BOOLEAN_TRUE.has(normalized)) {
+			return true;
+		}
+		if (SEMANTIC_BOOLEAN_FALSE.has(normalized)) {
+			return false;
+		}
+		return NO_SEMANTIC_COERCION;
+	}
+	if (schemaType === "number" || schemaType === "integer") {
+		const trimmed = value.trim();
+		if (PURE_DECIMAL_PATTERN.test(trimmed)) {
+			const parsed = Number(trimmed);
+			if (Number.isFinite(parsed)) {
+				return parsed;
+			}
+		}
+	}
+	return NO_SEMANTIC_COERCION;
+}
+
+/**
+ * Walks the *declared* schema shape (object properties only, no array-item guessing) and
+ * replaces strings that the schema type explicitly accepts with their semantic value.
+ */
+function applySemanticStringCoercion(value: unknown, schema: JsonSchemaObject | undefined): void {
+	if (!schema?.properties || value === null || typeof value !== "object" || Array.isArray(value)) {
+		return;
+	}
+	const record = value as Record<string, unknown>;
+	for (const key of Object.keys(record)) {
+		const propertySchema = schema.properties[key];
+		if (!propertySchema) {
+			continue;
+		}
+		const propertyValue = record[key];
+		if (typeof propertyValue === "string") {
+			const coerced = semanticCoerceString(propertyValue, getSchemaTypes(propertySchema));
+			if (coerced !== NO_SEMANTIC_COERCION) {
+				record[key] = coerced;
+			}
+			continue;
+		}
+		if (propertyValue !== null && typeof propertyValue === "object" && !Array.isArray(propertyValue)) {
+			applySemanticStringCoercion(propertyValue, propertySchema);
+		}
+	}
+}
+
+/**
  * Finds a tool by name and validates the tool call arguments against its TypeBox schema
  * @param tools Array of tool definitions
  * @param toolCall The tool call from the LLM
@@ -350,9 +426,19 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 	// Repair stringified containers before Value.Convert: the repair is schema-driven and leaves genuine strings
 	// alone, while Convert would already wrap a loose string into a one-element array and hide the real shape.
 	repairStringifiedContainers(args, tool.parameters as unknown as JsonSchemaObject);
+	const isTypeBoxSchema =
+		typeof tool.parameters === "object" &&
+		tool.parameters !== null &&
+		("~kind" in tool.parameters || Object.getOwnPropertySymbols(tool.parameters).includes(TYPEBOX_KIND));
+	// Semantic coercion only for TypeBox-declared schemas: plain JSON schemas keep their
+	// existing AJV-style strictness (e.g. "1" for a boolean stays a rejected string).
+	if (isTypeBoxSchema) {
+		applySemanticStringCoercion(args, tool.parameters as unknown as JsonSchemaObject);
+	}
 	Value.Convert(tool.parameters, args);
 
 	const validator = getValidator(tool.parameters);
+	// 该判断在 TypeBox 1.x 下恒为真（标记是 "~kind" 字符串键，不是 Symbol），保持原样是为了不改变既有工具的参数校验路径；如需修复应作为单独决定。
 	if (!Object.getOwnPropertySymbols(tool.parameters).includes(TYPEBOX_KIND)) {
 		const coerced = coerceWithJsonSchema(args, tool.parameters as JsonSchemaObject);
 		if (coerced !== args) {

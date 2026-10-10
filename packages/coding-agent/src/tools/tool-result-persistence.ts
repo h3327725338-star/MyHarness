@@ -26,13 +26,74 @@ function getTextContent(result: AgentToolResult<any>): string {
 		.join("\n");
 }
 
-function replaceTextContent(result: AgentToolResult<any>, text: string): AgentToolResult<any> {
-	const firstTextIndex = result.content.findIndex((part) => part.type === "text");
-	const images = result.content.filter((part) => part.type !== "text");
-	if (firstTextIndex < 0) return result;
+/**
+ * Length of the text `preview` shares with the original joined text. The preview is a
+ * head truncation of that text (optionally with a notice appended), so everything up to this
+ * offset still carries the original wording; from here on the preview is new text.
+ */
+function sharedPrefixLength(original: string, preview: string): number {
+	if (original === preview) return original.length;
+	if (preview.length >= original.length && preview.startsWith(original)) return original.length;
+	const max = Math.min(original.length, preview.length);
+	let index = 0;
+	while (index < max && original.charCodeAt(index) === preview.charCodeAt(index)) {
+		index++;
+	}
+	return index;
+}
 
-	const content: typeof result.content = [...images];
-	content.splice(Math.min(firstTextIndex, content.length), 0, { type: "text", text });
+/**
+ * Write the bounded preview back into the result without collapsing its blocks.
+ *
+ * Only the text that is over the limit is replaced: every text block that still fits inside
+ * the preview is kept verbatim, the block the limit lands in keeps just its remaining head,
+ * and non-text blocks (images) stay exactly where they were, so the block order never
+ * changes. The previous version folded *all* text into the first text slot and re-queued the
+ * other blocks behind it, so a "several images + several text blocks" result lost its text
+ * structure (and, once the joined text exceeded the limit, every caption past the cut),
+ * instead of showing the model which note belonged to which image.
+ */
+function replaceTextContent(result: AgentToolResult<any>, text: string): AgentToolResult<any> {
+	const originalText = getTextContent(result);
+	const keptLength = sharedPrefixLength(originalText, text);
+	// Whatever the preview adds beyond the retained original text (the saved-output notice,
+	// or the whole preview when even the first line did not fit) has to stay visible.
+	const notice = text.slice(keptLength);
+
+	const content: typeof result.content = [];
+	let cursor = 0;
+	let consumed = false;
+	let lastTextIndex = -1;
+	for (const part of result.content) {
+		if (part.type !== "text") {
+			content.push(part);
+			continue;
+		}
+		const blockEnd = cursor + part.text.length;
+		if (consumed || keptLength <= cursor) {
+			// This block's text is past the limit; it survives in the persisted full output.
+			consumed = true;
+			continue;
+		}
+		if (keptLength >= blockEnd) {
+			content.push(part);
+		} else {
+			content.push({ type: "text", text: text.slice(cursor, keptLength) });
+			consumed = true;
+		}
+		lastTextIndex = content.length - 1;
+		// Blocks are joined with a single newline when measuring, so skip that separator.
+		cursor = blockEnd + 1;
+	}
+
+	if (notice) {
+		if (lastTextIndex < 0) {
+			content.push({ type: "text", text: notice });
+		} else {
+			const last = content[lastTextIndex] as Extract<(typeof result.content)[number], { type: "text" }>;
+			content[lastTextIndex] = { type: "text", text: `${last.text}${notice}` };
+		}
+	}
 	return { ...result, content };
 }
 

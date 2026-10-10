@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { createEditToolDefinition } from "../src/tools/files/edit.ts";
+import { createReadTool } from "../src/tools/files/read.ts";
 import { createWriteToolDefinition } from "../src/tools/files/write.ts";
 
 it("reports the validated edit patch before the write settles", async () => {
@@ -40,6 +41,7 @@ it("reports local write counts while the old contents are still on disk", async 
 	try {
 		const path = join(root, "progress.txt");
 		await writeFile(path, "before\n");
+		await createReadTool(root).execute("read", { path });
 		let oldContents: Promise<string> | undefined;
 		const update = vi.fn(() => {
 			oldContents = readFile(path, "utf8");

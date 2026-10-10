@@ -24,6 +24,9 @@ const MAX_CARD_PATCH_CHARS_PER_RUN = 1_000_000;
 
 export type ChangeScope = "session" | "run" | "worktree";
 
+/** Tools whose file changes are observed from their own calls: the before/after content of each file they name. */
+export type FileMutationTool = "edit" | "write" | "apply_patch";
+
 export interface FileChangeSummary {
 	path: string;
 	status: ReviewChangeStatus;
@@ -53,8 +56,8 @@ export interface RunChangeRecord {
 	git?: GitTaskChangeSummary;
 	checkpointId?: string;
 	checkpointStatus?: string;
-	/** Tool-level file operations observed during the run (edit/write), independent of final detection. */
-	toolFileOps: Array<{ path: string; tool: "edit" | "write"; ok: boolean }>;
+	/** Tool-level file operations observed during the run (edit/write/apply_patch), independent of final detection. */
+	toolFileOps: Array<{ path: string; tool: FileMutationTool; ok: boolean }>;
 	bashRuns: number;
 }
 
@@ -153,7 +156,7 @@ export class ChangeTracker {
 	private readonly snapshots = new Map<number, Map<string, Snapshot>>();
 	private readonly snapshotBytes = new Map<number, number>();
 	private readonly checkpoints = new Map<number, GitCheckpoint>();
-	private readonly pendingBefore = new Map<string, { runId: number; rel: string }>();
+	private readonly pendingBefore = new Map<string, { runId: number; rels: string[] }>();
 
 	constructor(cwd: string) {
 		this.cwd = cwd;
@@ -214,30 +217,42 @@ export class ChangeTracker {
 	}
 
 	/** Capture the file's content before an edit/write executes (first touch per run wins). */
-	captureBefore(runId: number, toolCallId: string, tool: "edit" | "write", args: { path?: unknown }): void {
-		if (typeof args?.path !== "string") return;
-		const absolute = path.resolve(this.cwd, args.path);
-		const rel = toRelative(this.cwd, absolute);
-		if (!rel) return;
-		this.pendingBefore.set(toolCallId, { runId, rel });
-		const snapshots = this.snapshots.get(runId);
-		if (!snapshots || snapshots.has(rel)) return;
-		const read = readTextIfSmall(absolute);
-		if (read.tooLarge) return;
-		const size = read.text ? Buffer.byteLength(read.text) : 0;
-		const total = (this.snapshotBytes.get(runId) ?? 0) + size;
-		if (total > MAX_SNAPSHOT_BYTES_PER_RUN) return;
-		this.snapshotBytes.set(runId, total);
-		snapshots.set(rel, { before: read.text, binary: read.binary });
+	captureBefore(runId: number, toolCallId: string, tool: FileMutationTool, args: { path?: unknown }): void {
 		void tool;
+		if (typeof args?.path !== "string") return;
+		this.captureBeforePaths(runId, toolCallId, [args.path]);
 	}
 
-	recordToolOp(runId: number, toolCallId: string, tool: "edit" | "write", ok: boolean): void {
+	/**
+	 * Capture the content of every file one tool call is about to change, e.g. both ends of an apply_patch move. A file
+	 * that several calls touch keeps the content from before the first of them.
+	 */
+	captureBeforePaths(runId: number, toolCallId: string, paths: readonly string[]): void {
+		const rels: string[] = [];
+		for (const candidate of paths) {
+			const absolute = path.resolve(this.cwd, candidate);
+			const rel = toRelative(this.cwd, absolute);
+			if (!rel) continue;
+			rels.push(rel);
+			const snapshots = this.snapshots.get(runId);
+			if (!snapshots || snapshots.has(rel)) continue;
+			const read = readTextIfSmall(absolute);
+			if (read.tooLarge) continue;
+			const size = read.text ? Buffer.byteLength(read.text) : 0;
+			const total = (this.snapshotBytes.get(runId) ?? 0) + size;
+			if (total > MAX_SNAPSHOT_BYTES_PER_RUN) continue;
+			this.snapshotBytes.set(runId, total);
+			snapshots.set(rel, { before: read.text, binary: read.binary });
+		}
+		if (rels.length > 0) this.pendingBefore.set(toolCallId, { runId, rels });
+	}
+
+	recordToolOp(runId: number, toolCallId: string, tool: FileMutationTool, ok: boolean): void {
 		const pending = this.pendingBefore.get(toolCallId);
 		this.pendingBefore.delete(toolCallId);
 		const record = this.runs.get(runId);
 		if (!record || !pending) return;
-		record.toolFileOps.push({ path: pending.rel, tool, ok });
+		for (const rel of pending.rels) record.toolFileOps.push({ path: rel, tool, ok });
 	}
 
 	recordBash(runId: number): void {
@@ -260,7 +275,7 @@ export class ChangeTracker {
 			record.git = detection.git;
 			this.mergeToolChanges(runId, record);
 		} else {
-			// Fall back to observed edit/write operations so the run still reports real file writes.
+			// Fall back to observed edit/write/apply_patch operations so the run still reports real file writes.
 			record.reliability = "indeterminate";
 			record.reason = "Final change detection was unavailable; showing files touched by edit/write only.";
 			this.mergeToolChanges(runId, record);
@@ -274,7 +289,7 @@ export class ChangeTracker {
 	}
 
 	/**
-	 * edit/write calls are observed directly (before/after content). Final change detection does not
+	 * edit/write/apply_patch calls are observed directly (before/after content). Final change detection does not
 	 * cover them when Git integration is off and no shell command ran, so add the net effect here.
 	 */
 	private mergeToolChanges(runId: number, record: RunChangeRecord): void {

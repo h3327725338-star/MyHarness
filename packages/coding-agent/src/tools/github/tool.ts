@@ -3,6 +3,7 @@ import { AccountConnections } from "../../providers/credentials/account-connecti
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
+import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
 import { truncateHead } from "../truncate.ts";
 
 const schema = Type.Object({
@@ -48,18 +49,21 @@ export function createGitHubToolDefinition(
 		parameters: schema,
 		async execute(_id, { path, method = "GET", body }, signal) {
 			const result = await connections.api(path, method, body, signal ?? new AbortController().signal);
-			const output = truncateHead(JSON.stringify(result, null, 2));
-			return {
-				content: [
-					{
-						type: "text",
-						text:
-							output.content +
-							(output.truncated ? "\n[Output truncated; use pagination or a narrower query.]" : ""),
-					},
-				],
+			const fullText = JSON.stringify(result, null, 2);
+			const output = truncateHead(fullText);
+			const text =
+				output.content + (output.truncated ? "\n[Output truncated; use pagination or a narrower query.]" : "");
+			const toolResult: { content: Array<{ type: "text"; text: string }>; details: Record<string, never> } = {
+				content: [{ type: "text", text }],
 				details: {},
 			};
+			// Same contract as grep/find/web: when the preview is cut, hand the *complete*
+			// JSON to the persistence wrapper so the model gets a path to the full output
+			// instead of losing the tail forever.
+			if (output.truncated) {
+				Object.assign(toolResult, { [FULL_TEXT_OUTPUT]: fullText });
+			}
+			return toolResult;
 		},
 	};
 }

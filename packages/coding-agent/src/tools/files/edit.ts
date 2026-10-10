@@ -19,6 +19,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { committedAfterCancel } from "./mutation-result.ts";
+import { assertFileWasReadBefore, recordFileStateAfterMutation, resolveFileStateScope } from "./read-state.ts";
 
 const replaceEditSchema = Type.Object(
 	{
@@ -125,14 +126,20 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edits a single file with exact text replacement. Each edits[].oldText must match a unique, non-overlapping region in the original file. If two changes affect the same code block or adjacent lines, merge them into one edit and do not generate overlapping edits. Do not include large amounts of unchanged content just to connect distant changes.",
+			"Edits a single file with exact text replacement. Each edits[].oldText must match a unique, non-overlapping region in the original file. If two changes affect the same code block or adjacent lines, merge them into one edit and do not generate overlapping edits. Do not include large amounts of unchanged content just to connect distant changes. Read the file with the read tool before editing it: an unread file, or one that changed since it was read, is refused.",
 		promptSnippet: loadSystemPrompt("tools/edit/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/edit/guidelines.md"),
 		parameters: editSchema,
 		prepareArguments: prepareEditArguments,
-		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, _ctx?) {
+		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
 			const { path, edits } = validateEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);
+			// The read state gate compares the file's timestamp and size, which only the local
+			// filesystem can report. A custom operation set (for example SSH) may serve a file
+			// this process cannot stat, so the gate applies to the default operations only, the
+			// same way the write tool counts lines only for them.
+			const localFileSystem = ops === defaultEditOperations;
+			const scope = resolveFileStateScope(ctx);
 
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
@@ -153,6 +160,12 @@ export function createEditToolDefinition(
 					const errorMessage =
 						error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
 					throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
+				}
+				throwIfAborted();
+
+				// Refuse to edit a file the model has not looked at, or that moved since it did.
+				if (localFileSystem) {
+					await assertFileWasReadBefore(absolutePath, "edit", path, scope);
 				}
 				throwIfAborted();
 
@@ -178,6 +191,9 @@ export function createEditToolDefinition(
 				});
 				throwIfAborted();
 				await ops.writeFile(absolutePath, finalContent);
+				// The change is ours: remember its shape so the next edit of this file in the same
+				// Session is not reported as an external modification.
+				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 				const mutation = committedAfterCancel(signal);
 				return {
 					content: [

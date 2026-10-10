@@ -31,6 +31,8 @@ import {
 } from "../../git/repository/workspace-changes.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
+import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
+import { resolveToCwd } from "../../tools/path-utils.ts";
 import {
 	describeTaskNotification,
 	popupKindForRunState,
@@ -1024,6 +1026,14 @@ export class WebHost {
 		if (runId === undefined) return;
 		if (toolName === "edit" || toolName === "write") {
 			this.tracker.captureBefore(runId, toolCallId, toolName, (args ?? {}) as { path?: unknown });
+		} else if (toolName === "apply_patch") {
+			const { patch } = (args ?? {}) as { patch?: unknown };
+			// Resolve the patch paths the way the tool does (a leading "@" is dropped, "~" expands).
+			this.tracker.captureBeforePaths(
+				runId,
+				toolCallId,
+				applyPatchPaths(patch).map((p) => resolveToCwd(p, this.cwd)),
+			);
 		} else if (toolName === "bash" || toolName === "pwsh") {
 			this.tracker.recordBash(runId);
 		}
@@ -1032,7 +1042,7 @@ export class WebHost {
 	private onToolEnd(toolCallId: string, toolName: string, isError: boolean): void {
 		const runId = this.currentRunId;
 		if (runId === undefined) return;
-		if (toolName === "edit" || toolName === "write") {
+		if (toolName === "edit" || toolName === "write" || toolName === "apply_patch") {
 			this.tracker.recordToolOp(runId, toolCallId, toolName, !isError);
 		}
 	}

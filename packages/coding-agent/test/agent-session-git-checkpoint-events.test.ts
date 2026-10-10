@@ -17,7 +17,7 @@ import {
 	setLocalGitIdentity,
 } from "../src/git/repository/integration.ts";
 import { collectFinalWorkspaceChanges } from "../src/git/repository/workspace-changes.ts";
-import { createHarness, type Harness } from "./suite/harness.ts";
+import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
 
 describe("AgentSession Git checkpoint lifecycle events", () => {
 	const harnesses: Harness[] = [];
@@ -363,6 +363,8 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 					fauxToolCall("bash", { command: "git add -- initial.txt && git commit -m 'agent commit'" }),
 					{ stopReason: "toolUse" },
 				),
+				// Read first: bash changed initial.txt, and edit refuses an existing file this Session has not read.
+				fauxAssistantMessage(fauxToolCall("read", { path: "initial.txt" }), { stopReason: "toolUse" }),
 				fauxAssistantMessage(
 					fauxToolCall("edit", {
 						path: "initial.txt",
@@ -377,6 +379,8 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			expect(runGit(harness.tempDir, ["rev-parse", "HEAD"]).stdout).not.toBe(originalHead);
 			expect(harness.eventsOfType("git_checkpoint_start")).toHaveLength(1);
 			expect(harness.eventsOfType("git_checkpoint_end")[0]).toMatchObject({ ok: true });
+			// The edit after the commit landed: later writes are not locked out by the earlier commit.
+			expect(readFileSync(join(harness.tempDir, "initial.txt"), "utf8")).toBe("agent continued\n");
 		});
 	});
 
@@ -424,7 +428,9 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			writeFileSync(join(harness.tempDir, "scratch", "a.txt"), "a\n", "utf8");
 			writeFileSync(join(harness.tempDir, "scratch", "b.txt"), "b\n", "utf8");
 
+			// Read first: edit refuses an existing file this Session has not read.
 			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("read", { path: "initial.txt" }), { stopReason: "toolUse" }),
 				fauxAssistantMessage(
 					fauxToolCall("edit", { path: "initial.txt", edits: [{ oldText: "initial\n", newText: "changed\n" }] }),
 					{ stopReason: "toolUse" },
@@ -453,7 +459,9 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			mkdirSync(join(harness.tempDir, "sub"));
 			expect(runGit(join(harness.tempDir, "sub"), ["init"]).ok).toBe(true);
 
+			// Read first: edit refuses an existing file this Session has not read.
 			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("read", { path: "initial.txt" }), { stopReason: "toolUse" }),
 				fauxAssistantMessage(
 					fauxToolCall("edit", { path: "initial.txt", edits: [{ oldText: "initial\n", newText: "changed\n" }] }),
 					{ stopReason: "toolUse" },
@@ -512,7 +520,9 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 				const reservedPath = `\\\\?\\${join(harness.tempDir, "nul")}`;
 				writeFileSync(reservedPath, "");
 
+				// Read first: edit refuses an existing file this Session has not read.
 				harness.setResponses([
+					fauxAssistantMessage(fauxToolCall("read", { path: "initial.txt" }), { stopReason: "toolUse" }),
 					fauxAssistantMessage(
 						fauxToolCall("edit", {
 							path: "initial.txt",
@@ -550,7 +560,9 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			expect(createInitialGitBaseline(harness.tempDir).ok).toBe(true);
 
 			// 任务 A：产生修改 → 创建 checkpoint A。
+			// Read first: edit refuses an existing file this Session has not read.
 			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("read", { path: "a.txt" }), { stopReason: "toolUse" }),
 				fauxAssistantMessage(
 					fauxToolCall("edit", {
 						path: "a.txt",
@@ -576,7 +588,9 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			expect(readFileSync(join(harness.tempDir, "a.txt"), "utf8")).toBe("changed a\n");
 
 			// 任务 B：第一次修改必须创建全新的 checkpoint B，而不是复用 checkpoint A。
+			// Read first: edit refuses an existing file this Session has not read.
 			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("read", { path: "b.txt" }), { stopReason: "toolUse" }),
 				fauxAssistantMessage(
 					fauxToolCall("edit", {
 						path: "b.txt",
@@ -666,6 +680,36 @@ describe("AgentSession Git checkpoint lifecycle events", () => {
 			// session 当前 checkpoint B 保持原样（created），不被隐式关闭。
 			expect(harness.session.getGitCheckpoint()?.id).toBe(checkpointB?.id);
 			expect(harness.session.getGitCheckpoint()?.status).toBe("created");
+		});
+	});
+
+	it("read-before-edit gate: an edit of an existing file that was never read is refused and the refusal reaches the model", async () => {
+		await withTemporaryAgentDirectory(async (harness) => {
+			writeFileSync(join(harness.tempDir, "unread.txt"), "original\n", "utf8");
+
+			// No read call comes before this edit, so the gate must refuse it.
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("edit", {
+						path: "unread.txt",
+						edits: [{ oldText: "original\n", newText: "changed\n" }],
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+			await harness.session.prompt("edit without reading first");
+
+			// The refused edit leaves the file as it was.
+			expect(readFileSync(join(harness.tempDir, "unread.txt"), "utf8")).toBe("original\n");
+			// The model receives the refusal as an error result of that edit call.
+			expect(toolErrors(harness)).toEqual([expect.objectContaining({ toolName: "edit" })]);
+			const editResult = harness.session.messages.find(
+				(message) => message.role === "toolResult" && message.toolName === "edit",
+			);
+			expect(editResult).toMatchObject({ isError: true });
+			expect(getMessageText(editResult)).toContain("the file was not read in this Session");
+			expect(getMessageText(editResult)).toContain("Read it with the read tool first");
 		});
 	});
 });

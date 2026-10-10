@@ -563,6 +563,45 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 
 `npmCommand` 用于所有 npm package-manager operations，包括 install、uninstall，以及 git packages 内部的 dependency install。User-scoped npm packages 安装到 `~/.myharness/agent/npm/`；project-scoped npm packages 安装到 `.myharness/npm/`。请按 process 实际启动所需的形式填写 argv-style entries。配置 `npmCommand` 后，git package dependency installs 使用 plain `install`，避免在 wrappers 或 alternate package managers 中传入 npm-specific flags。
 
+#### 后台任务与会话状态管理（Background Jobs & Shell State）
+
+`bash` 与 `pwsh` 工具内建支持后台运行（`run_in_background`）与跨轮次状态保持（`preserve_state`），并配套 `job_list`、`job_output`、`job_kill` 三个作业管理工具。这些均为 shell tool 的内建能力，默认启用，无需在 `settings.json` 中额外配置。
+
+- **后台运行与作业管理**：
+  - `bash` / `pwsh` 传入 `run_in_background: true` 时，命令在后台异步执行并立即返回分配的 `taskId`（形如 `job-xxxxxxxx`）。
+  - `job_list`：列出当前会话的所有后台作业及其运行状态（`running`、`completed`、`failed`、`killed`、`timed_out`）、退出码与命令。
+  - `job_output`：只接收 `taskId`，返回指定后台作业自上次调用以来的增量输出，每次调用最多返回 50KB（未读完时会提示再次调用以继续获取后续内容）。无 `tail` 或 `follow` 参数。
+  - `job_kill`：接收 `taskId`，终止后台作业及其完整子进程树（Windows 上利用 `taskkill /F /T /PID`，POSIX 上利用进程组 `SIGKILL`），并确认进程已终结。
+  - **保护策略与生命周期**：
+    - 单会话并发上限：每会话最多同时运行 8 个后台作业，超出时拒绝启动；历史完成作业保留最多 100 条记录，超限时自动淘汰并物理删除最早终结作业的日志。
+    - 运行时间上限：后台任务不受前台单次调用的超时限制，但受全局 24 小时硬上限约束，超时后状态变为 `timed_out`。
+    - 磁盘日志保护：输出实时流式写入系统临时目录的磁盘日志文件，单个作业累积输出上限为 64MB，超出部分停止写入并标记 `logTruncated: true`。
+    - 退出清理：进程退出时（`process` exit 钩子），同步杀死所有存活的后台子进程树，并同步删除所有任务的临时日志文件。
+    - 派生子代理拦截：只读与读写模式的派生子代理（subagent sessions）均禁止调用 `run_in_background`，由 guard 严格拦截；子代理工具白名单中不包含 `job_*` 工具。
+
+- **跨轮次状态保持（Preserve State）**：
+  - `bash` / `pwsh` 传入 `preserve_state: true` 时，该命令执行后的工作目录变更（`cd` / `Set-Location`）与环境变量（`export` / `$env:VAR`）将保存在会话级状态存储中，自动注入该会话后续携带 `preserve_state: true` 的命令中。后台任务在启动时读取已保存状态，但不回写状态。
+  - 只有退出码为 0 的成功执行才会更新会话状态；非零退出码命令不破坏已有状态，且状态探针输出会被自动剥离，不污染返回值。
+  - 派生子代理禁止调用 `preserve_state: true`。
+
+### 提问与待办工具（Ask User & Todo）
+
+`ask_user_question` 与 `todo_write` 对主智能体默认启用，无需在 `settings.json` 中额外配置；子智能体不可用。
+
+- **`ask_user_question`**：模型需要用户做选择或补充无法推断的关键信息时，在界面弹出选择框或输入框。一次最多 4 个问题，每题 2 到 6 个选项，默认附加“其他（自己输入）”。用户关闭弹窗时，工具返回“用户没有回答”，不会编造答案；没有可交互界面（SDK 或无头运行）时直接报错 `NO_INTERACTIVE_UI`。
+- **`todo_write`**：每次传入完整清单并整张替换，最多 50 项，同一时间只能有一项 `in_progress`。清单只保存在对话记录的工具调用中，不写入单独的文件。
+
+### 可选文件工具（apply_patch）
+
+`apply_patch` 是可选的内置工具，默认不启用，不在默认工具集合中。它用一段补丁文本一次新增、删除、修改、移动多个文件：补丁要么全部写入，要么一个文件都不写。
+
+启用方式与 `grep`、`find`、`ls` 相同：把 `apply_patch` 写进显式工具白名单。CLI 使用 `--tools`（或 `-t`），SDK 使用 `tools` 选项。白名单会替换默认集合，所以要把仍需要的工具一起列上，例如 `--tools read,bash,edit,write,apply_patch`。`--exclude-tools`（`-xt`）仍可排除它。子智能体不会获得 `apply_patch`。
+
+- 修改或删除已存在的文件前，必须先用 `read` 读取。没读过的文件，或读后被外部改过的文件，会被拒绝，规则与 `edit`、`write` 相同。新增文件不需要先读。
+- 补丁里任何一处对不上，都不写任何文件；错误信息会指出是哪个文件的哪一块。
+- 写入过程中出错时，已写入的文件会尽量恢复到修改前的内容；返回的错误信息会列出已恢复、无法恢复和未写入的文件。
+- 修改已存在的文件时保持原文件的换行风格（CRLF）和 BOM。
+
 ### Sessions
 
 | Setting | Type | Default | 说明 |

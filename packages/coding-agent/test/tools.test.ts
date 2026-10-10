@@ -12,6 +12,7 @@ import {
 	createWriteTool,
 } from "../src/index.ts";
 import { computeEditsDiff } from "../src/tools/files/edit-diff.ts";
+import { clearFileReadStates } from "../src/tools/files/read-state.ts";
 import {
 	type BashOperations,
 	createBashTool,
@@ -77,6 +78,7 @@ describe("Coding Agent Tools", () => {
 	let testDir: string;
 
 	beforeEach(() => {
+		clearFileReadStates();
 		// Create a unique temporary directory for each test
 		testDir = join(tmpdir(), `coding-agent-test-${Date.now()}`);
 		mkdirSync(testDir, { recursive: true });
@@ -300,6 +302,7 @@ describe("Coding Agent Tools", () => {
 		it("should report the lines an overwrite really added and removed", async () => {
 			const testFile = join(testDir, "write-overwrite.txt");
 			writeFileSync(testFile, "one\ntwo\nthree\nfour\n");
+			await readTool.execute("test-call-read-3b", { path: testFile });
 
 			const result = await writeTool.execute("test-call-3b", {
 				path: testFile,
@@ -318,6 +321,7 @@ describe("Coding Agent Tools", () => {
 		it("should give no line count for a file that cannot be read as text", async () => {
 			const testFile = join(testDir, "write-binary.bin");
 			writeFileSync(testFile, Buffer.from([0, 1, 2, 3]));
+			await readTool.execute("test-call-read-3d", { path: testFile });
 
 			const result = await writeTool.execute("test-call-3d", { path: testFile, content: "text now" });
 
@@ -340,6 +344,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "Hello, world!";
 			writeFileSync(testFile, originalContent);
+			await readTool.execute("test-read-5", { path: testFile });
 
 			const result = await editTool.execute("test-call-5", {
 				path: testFile,
@@ -363,6 +368,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "Hello, world!";
 			writeFileSync(testFile, originalContent);
+			await readTool.execute("test-read-6", { path: testFile });
 
 			await expect(
 				editTool.execute("test-call-6", {
@@ -387,6 +393,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "foo foo foo";
 			writeFileSync(testFile, originalContent);
+			await readTool.execute("test-read-7", { path: testFile });
 
 			await expect(
 				editTool.execute("test-call-7", {
@@ -399,6 +406,7 @@ describe("Coding Agent Tools", () => {
 		it("should replace multiple disjoint regions in one call", async () => {
 			const testFile = join(testDir, "edit-multi.txt");
 			writeFileSync(testFile, "alpha\nbeta\ngamma\ndelta\n");
+			await readTool.execute("test-read-8", { path: testFile });
 
 			const result = await editTool.execute("test-call-8", {
 				path: testFile,
@@ -418,6 +426,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "edit-multi-large-gap.txt");
 			const lines = Array.from({ length: 600 }, (_, i) => `line ${String(i + 1).padStart(3, "0")}`);
 			writeFileSync(testFile, `${lines.join("\n")}\n`);
+			await readTool.execute("test-read-8b", { path: testFile });
 
 			const result = await editTool.execute("test-call-8b", {
 				path: testFile,
@@ -440,6 +449,7 @@ describe("Coding Agent Tools", () => {
 		it("should match edits against the original file, not incrementally", async () => {
 			const testFile = join(testDir, "edit-multi-original.txt");
 			writeFileSync(testFile, "foo\nbar\nbaz\n");
+			await readTool.execute("test-read-9", { path: testFile });
 
 			await editTool.execute("test-call-9", {
 				path: testFile,
@@ -483,6 +493,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "edit-no-partial.txt");
 			const originalContent = "alpha\nbeta\ngamma\n";
 			writeFileSync(testFile, originalContent);
+			await readTool.execute("test-read-13", { path: testFile });
 
 			await expect(
 				editTool.execute("test-call-13", {
@@ -500,6 +511,7 @@ describe("Coding Agent Tools", () => {
 		it("should include EACCES for read-only files", async () => {
 			const testFile = join(testDir, "edit-readonly.txt");
 			writeFileSync(testFile, "hello\n");
+			await readTool.execute("test-read-14", { path: testFile });
 			chmodSync(testFile, 0o444);
 
 			await expect(
@@ -1006,7 +1018,7 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "target\n");
 
 			const result = await grepTool.execute("test-call-grep-injection", {
-				pattern: `--pre=${payload}`,
+				pattern: `--pre=${payload.replace(/\\/g, "/")}`,
 				path: testDir,
 			});
 
@@ -1103,6 +1115,7 @@ describe("edit tool fuzzy matching", () => {
 	let testDir: string;
 
 	beforeEach(() => {
+		clearFileReadStates();
 		testDir = join(tmpdir(), `coding-agent-fuzzy-test-${Date.now()}`);
 		mkdirSync(testDir, { recursive: true });
 	});
@@ -1115,6 +1128,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "trailing-ws.txt");
 		// File has trailing spaces on lines
 		writeFileSync(testFile, "line one   \nline two  \nline three\n");
+		await readTool.execute("test-read-f1", { path: testFile });
 
 		// oldText without trailing whitespace should still match
 		const result = await editTool.execute("test-fuzzy-1", {
@@ -1130,6 +1144,7 @@ describe("edit tool fuzzy matching", () => {
 	it("should match fullwidth punctuation in Chinese text", async () => {
 		const testFile = join(testDir, "chinese-punctuation.txt");
 		writeFileSync(testFile, "你好，世界\n你好（世界）\n");
+		await readTool.execute("test-read-fcn", { path: testFile });
 
 		const result = await editTool.execute("test-fuzzy-chinese", {
 			path: testFile,
@@ -1144,6 +1159,7 @@ describe("edit tool fuzzy matching", () => {
 	it("should match compatibility-equivalent Unicode forms", async () => {
 		const testFile = join(testDir, "unicode-compatibility.txt");
 		writeFileSync(testFile, "ＡＢＣ１２３\ncafe\u0301\n");
+		await readTool.execute("test-read-fu", { path: testFile });
 
 		const result = await editTool.execute("test-fuzzy-unicode", {
 			path: testFile,
@@ -1159,6 +1175,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "smart-quotes.txt");
 		// File has smart/curly single quotes (U+2018, U+2019)
 		writeFileSync(testFile, "console.log(\u2018hello\u2019);\n");
+		await readTool.execute("test-read-f2", { path: testFile });
 
 		// oldText with ASCII quotes should match
 		const result = await editTool.execute("test-fuzzy-2", {
@@ -1175,6 +1192,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "smart-double-quotes.txt");
 		// File has smart/curly double quotes (U+201C, U+201D)
 		writeFileSync(testFile, "const msg = \u201CHello World\u201D;\n");
+		await readTool.execute("test-read-f3", { path: testFile });
 
 		// oldText with ASCII quotes should match
 		const result = await editTool.execute("test-fuzzy-3", {
@@ -1191,6 +1209,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "unicode-dashes.txt");
 		// File has en-dash (U+2013) and em-dash (U+2014)
 		writeFileSync(testFile, "range: 1\u20135\nbreak\u2014here\n");
+		await readTool.execute("test-read-f4", { path: testFile });
 
 		// oldText with ASCII hyphens should match
 		const result = await editTool.execute("test-fuzzy-4", {
@@ -1207,6 +1226,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "nbsp.txt");
 		// File has non-breaking space (U+00A0)
 		writeFileSync(testFile, "hello\u00A0world\n");
+		await readTool.execute("test-read-f5", { path: testFile });
 
 		// oldText with regular space should match
 		const result = await editTool.execute("test-fuzzy-5", {
@@ -1223,6 +1243,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "exact-preferred.txt");
 		// File has both exact and fuzzy-matchable content
 		writeFileSync(testFile, "const x = 'exact';\nconst y = 'other';\n");
+		await readTool.execute("test-read-f6", { path: testFile });
 
 		const result = await editTool.execute("test-fuzzy-6", {
 			path: testFile,
@@ -1237,6 +1258,7 @@ describe("edit tool fuzzy matching", () => {
 	it("should still fail when text is not found even with fuzzy matching", async () => {
 		const testFile = join(testDir, "no-match.txt");
 		writeFileSync(testFile, "completely different content\n");
+		await readTool.execute("test-read-f7", { path: testFile });
 
 		await expect(
 			editTool.execute("test-fuzzy-7", {
@@ -1250,6 +1272,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "fuzzy-dups.txt");
 		// Two lines that are identical after trailing whitespace is stripped
 		writeFileSync(testFile, "hello world   \nhello world\n");
+		await readTool.execute("test-read-f8", { path: testFile });
 
 		await expect(
 			editTool.execute("test-fuzzy-8", {
@@ -1262,6 +1285,7 @@ describe("edit tool fuzzy matching", () => {
 	it("should support fuzzy matching in multi-edit mode", async () => {
 		const testFile = join(testDir, "fuzzy-multi.txt");
 		writeFileSync(testFile, "console.log(\u2018hello\u2019);\nhello\u00A0world\n");
+		await readTool.execute("test-read-f9", { path: testFile });
 
 		await editTool.execute("test-fuzzy-9", {
 			path: testFile,
@@ -1278,6 +1302,7 @@ describe("edit tool fuzzy matching", () => {
 		const testFile = join(testDir, "fuzzy-preserve-duplicate-line.txt");
 		const originalContent = ["replace me\u0020\u0020\u0020", "after\u0020\u0020\u0020", ""].join("\n");
 		writeFileSync(testFile, originalContent);
+		await readTool.execute("test-read-fdup", { path: testFile });
 
 		const result = await editTool.execute("test-fuzzy-preserve-duplicate-line", {
 			path: testFile,
@@ -1302,6 +1327,7 @@ describe("edit tool fuzzy matching", () => {
 			"",
 		].join("\n");
 		writeFileSync(testFile, originalContent);
+		await readTool.execute("test-read-fmulti", { path: testFile });
 
 		const result = await editTool.execute("test-fuzzy-preserve-multi", {
 			path: testFile,
@@ -1330,6 +1356,7 @@ describe("edit tool CRLF handling", () => {
 	let testDir: string;
 
 	beforeEach(() => {
+		clearFileReadStates();
 		testDir = join(tmpdir(), `coding-agent-crlf-test-${Date.now()}`);
 		mkdirSync(testDir, { recursive: true });
 	});
@@ -1342,6 +1369,7 @@ describe("edit tool CRLF handling", () => {
 		const testFile = join(testDir, "crlf-test.txt");
 
 		writeFileSync(testFile, "line one\r\nline two\r\nline three\r\n");
+		await readTool.execute("test-read-crlf1", { path: testFile });
 
 		const result = await editTool.execute("test-crlf-1", {
 			path: testFile,
@@ -1354,6 +1382,7 @@ describe("edit tool CRLF handling", () => {
 	it("should preserve CRLF line endings after edit", async () => {
 		const testFile = join(testDir, "crlf-preserve.txt");
 		writeFileSync(testFile, "first\r\nsecond\r\nthird\r\n");
+		await readTool.execute("test-read-crlf2", { path: testFile });
 
 		await editTool.execute("test-crlf-2", {
 			path: testFile,
@@ -1367,6 +1396,7 @@ describe("edit tool CRLF handling", () => {
 	it("should preserve LF line endings for LF files", async () => {
 		const testFile = join(testDir, "lf-preserve.txt");
 		writeFileSync(testFile, "first\nsecond\nthird\n");
+		await readTool.execute("test-read-lf1", { path: testFile });
 
 		await editTool.execute("test-lf-1", {
 			path: testFile,
@@ -1381,6 +1411,7 @@ describe("edit tool CRLF handling", () => {
 		const testFile = join(testDir, "mixed-endings.txt");
 
 		writeFileSync(testFile, "hello\r\nworld\r\n---\r\nhello\nworld\n");
+		await readTool.execute("test-read-crlfdup", { path: testFile });
 
 		await expect(
 			editTool.execute("test-crlf-dup", {
@@ -1393,6 +1424,7 @@ describe("edit tool CRLF handling", () => {
 	it("should preserve UTF-8 BOM after edit", async () => {
 		const testFile = join(testDir, "bom-test.txt");
 		writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\n");
+		await readTool.execute("test-read-bom", { path: testFile });
 
 		await editTool.execute("test-bom", {
 			path: testFile,
@@ -1406,6 +1438,7 @@ describe("edit tool CRLF handling", () => {
 	it("should preserve CRLF line endings and BOM in multi-edit mode", async () => {
 		const testFile = join(testDir, "bom-crlf-multi.txt");
 		writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\nfourth\r\n");
+		await readTool.execute("test-read-crlfmulti", { path: testFile });
 
 		await editTool.execute("test-crlf-multi", {
 			path: testFile,

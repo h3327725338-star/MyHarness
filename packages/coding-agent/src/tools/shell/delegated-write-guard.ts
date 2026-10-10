@@ -372,6 +372,9 @@ export function evaluateDelegatedWriteToolCall(
 	}
 	const args = (input ?? {}) as Record<string, unknown>;
 	if (normalized === "bash" || normalized === "pwsh") {
+		if (args.run_in_background === true || args.preserve_state === true) {
+			return "子智能体会话禁止使用 run_in_background 或 preserve_state 参数";
+		}
 		const command = typeof args.command === "string" ? args.command : "";
 		return describeShellBlock(command, root);
 	}

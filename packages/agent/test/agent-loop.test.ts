@@ -1760,4 +1760,868 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(events.some((event) => event.type === "tool_execution_start")).toBe(true);
 		expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 	});
+
+	describe("tool abort grace timeout fallback", () => {
+		it("abandons a tool that ignores abort signal after grace period expires", async () => {
+			const emptyParams = Type.Object({});
+			const hangingTool: AgentTool<typeof emptyParams> = {
+				name: "hanging",
+				label: "Hanging",
+				description: "Ignores abort and hangs forever",
+				parameters: emptyParams,
+				execute: async (_toolCallId, _args, _signal, _onUpdate) => {
+					return new Promise(() => {}); // never resolves
+				},
+			};
+
+			const context: AgentContext = {
+				systemPrompt: "",
+				messages: [],
+				tools: [hangingTool],
+			};
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 50,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run hanging")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-1", name: "hanging", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			const events: AgentEvent[] = [];
+			for await (const event of stream) {
+				events.push(event);
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			expect(events.some((e) => e.type === "agent_end")).toBe(true);
+
+			const endEvent = events.find((e) => e.type === "tool_execution_end");
+			expect(endEvent).toBeDefined();
+			if (endEvent && endEvent.type === "tool_execution_end") {
+				expect(endEvent.isError).toBe(true);
+				expect(endEvent.result.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+				expect(endEvent.result.content[0]).toEqual({
+					type: "text",
+					text: 'Operation aborted: tool "hanging" did not stop within 0.05s of the cancellation; its result was discarded.',
+				});
+			}
+
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(true);
+				expect(toolResultMessage.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+				expect(toolResultMessage.content[0]).toEqual({
+					type: "text",
+					text: 'Operation aborted: tool "hanging" did not stop within 0.05s of the cancellation; its result was discarded.',
+				});
+			}
+		});
+
+		it("preserves tool's own result when it promptly responds to abort signal", async () => {
+			const emptyParams = Type.Object({});
+			const responsiveTool: AgentTool<typeof emptyParams> = {
+				name: "responsive",
+				label: "Responsive",
+				description: "Stops promptly when aborted",
+				parameters: emptyParams,
+				execute: async (_toolCallId, _args, signal) => {
+					return new Promise((resolve) => {
+						if (signal?.aborted) {
+							resolve({
+								content: [{ type: "text", text: "cancelled cleanly by tool" }],
+								details: { cleanStop: true },
+							});
+							return;
+						}
+						signal?.addEventListener(
+							"abort",
+							() => {
+								resolve({
+									content: [{ type: "text", text: "cancelled cleanly by tool" }],
+									details: { cleanStop: true },
+								});
+							},
+							{ once: true },
+						);
+					});
+				},
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [responsiveTool] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 100,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run responsive")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-resp", name: "responsive", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			for await (const event of stream) {
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(false);
+				expect(toolResultMessage.content[0]).toEqual({
+					type: "text",
+					text: "cancelled cleanly by tool",
+				});
+				expect(toolResultMessage.details).toEqual({ cleanStop: true });
+			}
+		});
+
+		it("uses tool's actual outcome when it finishes within the grace period", async () => {
+			const emptyParams = Type.Object({});
+			const slowCompletingTool: AgentTool<typeof emptyParams> = {
+				name: "slow_completing",
+				label: "Slow Completing",
+				description: "Finishes slightly after abort but within grace period",
+				parameters: emptyParams,
+				execute: async (_toolCallId, _args, signal) => {
+					return new Promise((resolve) => {
+						signal?.addEventListener(
+							"abort",
+							() => {
+								setTimeout(() => {
+									resolve({
+										content: [{ type: "text", text: "finished within grace window" }],
+										details: { saved: true },
+									});
+								}, 20);
+							},
+							{ once: true },
+						);
+					});
+				},
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [slowCompletingTool] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 80,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop(
+				[createUserMessage("run slow completing")],
+				context,
+				config,
+				controller.signal,
+				() => {
+					const mockStream = new MockAssistantStream();
+					queueMicrotask(() => {
+						if (callIndex === 0) {
+							mockStream.push({
+								type: "done",
+								reason: "toolUse",
+								message: createAssistantMessage(
+									[{ type: "toolCall", id: "call-grace", name: "slow_completing", arguments: {} }],
+									"toolUse",
+								),
+							});
+						} else {
+							mockStream.push({
+								type: "done",
+								reason: "stop",
+								message: createAssistantMessage([{ type: "text", text: "done" }]),
+							});
+						}
+						callIndex++;
+					});
+					return mockStream;
+				},
+			);
+
+			for await (const event of stream) {
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(false);
+				expect(toolResultMessage.content[0]).toEqual({
+					type: "text",
+					text: "finished within grace window",
+				});
+				expect(toolResultMessage.details).toEqual({ saved: true });
+			}
+		});
+
+		it("prevents unhandled rejection and ignores late updates/results when tool settles after being abandoned", async () => {
+			const emptyParams = Type.Object({});
+			let triggerLateSettle: (() => void) | undefined;
+			let triggerLateReject: (() => void) | undefined;
+			let lateUpdateFn: ((update: any) => void) | undefined;
+
+			const unhandledRejections: unknown[] = [];
+			const onUnhandled = (reason: unknown) => {
+				unhandledRejections.push(reason);
+			};
+			process.on("unhandledRejection", onUnhandled);
+
+			try {
+				const lateTool: AgentTool<typeof emptyParams> = {
+					name: "late_tool",
+					label: "Late Tool",
+					description: "Settles and emits updates long after grace period expires",
+					parameters: emptyParams,
+					execute: async (_toolCallId, _args, _signal, onUpdate) => {
+						lateUpdateFn = onUpdate;
+						return new Promise((resolve) => {
+							triggerLateSettle = () => {
+								resolve({
+									content: [{ type: "text", text: "too late" }],
+									details: {},
+								});
+							};
+						});
+					},
+				};
+
+				const context: AgentContext = { systemPrompt: "", messages: [], tools: [lateTool] };
+				const config: AgentLoopConfig = {
+					model: createModel(),
+					convertToLlm: identityConverter,
+					toolAbortGraceMs: 30,
+				};
+
+				const controller = new AbortController();
+				let callIndex1 = 0;
+				const stream = agentLoop([createUserMessage("run late")], context, config, controller.signal, () => {
+					const mockStream = new MockAssistantStream();
+					queueMicrotask(() => {
+						if (callIndex1 === 0) {
+							mockStream.push({
+								type: "done",
+								reason: "toolUse",
+								message: createAssistantMessage(
+									[{ type: "toolCall", id: "call-late", name: "late_tool", arguments: {} }],
+									"toolUse",
+								),
+							});
+						} else {
+							mockStream.push({
+								type: "done",
+								reason: "stop",
+								message: createAssistantMessage([{ type: "text", text: "done" }]),
+							});
+						}
+						callIndex1++;
+					});
+					return mockStream;
+				});
+
+				const events: AgentEvent[] = [];
+				for await (const event of stream) {
+					events.push(event);
+					if (event.type === "tool_execution_start") {
+						controller.abort();
+					}
+				}
+
+				const messages = await stream.result();
+				const eventCountAtEnd = events.length;
+
+				// Late update attempt after abandonment should be ignored
+				lateUpdateFn?.({ content: [{ type: "text", text: "ghost update" }] });
+
+				// Late resolve attempt should be ignored
+				triggerLateSettle?.();
+
+				// Give microtasks and timers a moment to settle
+				await new Promise((r) => setTimeout(r, 20));
+
+				expect(events.length).toBe(eventCountAtEnd);
+				expect(events.some((e) => e.type === "tool_execution_update")).toBe(false);
+
+				const toolResultMessage = messages.find((m) => m.role === "toolResult");
+				expect(toolResultMessage).toBeDefined();
+				if (toolResultMessage && toolResultMessage.role === "toolResult") {
+					expect(toolResultMessage.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+				}
+
+				// Late rejection test with another tool instance
+				const lateRejectTool: AgentTool<typeof emptyParams> = {
+					name: "late_reject_tool",
+					label: "Late Reject Tool",
+					description: "Rejects after abandonment",
+					parameters: emptyParams,
+					execute: async () => {
+						return new Promise((_resolve, reject) => {
+							triggerLateReject = () => {
+								reject(new Error("late failure after timeout"));
+							};
+						});
+					},
+				};
+
+				const rejectContext: AgentContext = { systemPrompt: "", messages: [], tools: [lateRejectTool] };
+				const rejectController = new AbortController();
+				let callIndex2 = 0;
+				const rejectStream = agentLoop(
+					[createUserMessage("run late reject")],
+					rejectContext,
+					config,
+					rejectController.signal,
+					() => {
+						const mockStream = new MockAssistantStream();
+						queueMicrotask(() => {
+							if (callIndex2 === 0) {
+								mockStream.push({
+									type: "done",
+									reason: "toolUse",
+									message: createAssistantMessage(
+										[{ type: "toolCall", id: "call-late-reject", name: "late_reject_tool", arguments: {} }],
+										"toolUse",
+									),
+								});
+							} else {
+								mockStream.push({
+									type: "done",
+									reason: "stop",
+									message: createAssistantMessage([{ type: "text", text: "done" }]),
+								});
+							}
+							callIndex2++;
+						});
+						return mockStream;
+					},
+				);
+
+				for await (const event of rejectStream) {
+					if (event.type === "tool_execution_start") {
+						rejectController.abort();
+					}
+				}
+				await rejectStream.result();
+
+				// Fire late rejection
+				triggerLateReject?.();
+
+				await new Promise((r) => setTimeout(r, 30));
+				expect(unhandledRejections).toEqual([]);
+			} finally {
+				process.off("unhandledRejection", onUnhandled);
+			}
+		});
+
+		it("preserves completed tool results while timing out hung tool in parallel batch", async () => {
+			const emptyParams = Type.Object({});
+			const normalTool: AgentTool<typeof emptyParams> = {
+				name: "normal_tool",
+				label: "Normal Tool",
+				description: "Completes quickly",
+				parameters: emptyParams,
+				execute: async () => {
+					await new Promise((r) => setTimeout(r, 10));
+					return {
+						content: [{ type: "text", text: "normal tool succeeded" }],
+						details: { status: "ok" },
+					};
+				},
+			};
+			const hangingTool: AgentTool<typeof emptyParams> = {
+				name: "hanging_parallel",
+				label: "Hanging Parallel",
+				description: "Hangs indefinitely",
+				parameters: emptyParams,
+				execute: async () => new Promise(() => {}),
+			};
+
+			const context: AgentContext = {
+				systemPrompt: "",
+				messages: [],
+				tools: [normalTool, hangingTool],
+			};
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolExecution: "parallel",
+				toolAbortGraceMs: 50,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run parallel batch")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[
+									{ type: "toolCall", id: "call-norm", name: "normal_tool", arguments: {} },
+									{ type: "toolCall", id: "call-hang", name: "hanging_parallel", arguments: {} },
+								],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			let aborted = false;
+			for await (const event of stream) {
+				if (event.type === "tool_execution_start" && !aborted) {
+					aborted = true;
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			const toolResults = messages.filter((m) => m.role === "toolResult");
+			expect(toolResults.length).toBe(2);
+
+			// Source order preserved: call-norm first, call-hang second
+			expect(toolResults[0].toolCallId).toBe("call-norm");
+			expect(toolResults[0].isError).toBe(false);
+			expect(toolResults[0].content[0]).toEqual({ type: "text", text: "normal tool succeeded" });
+
+			expect(toolResults[1].toolCallId).toBe("call-hang");
+			expect(toolResults[1].isError).toBe(true);
+			expect(toolResults[1].details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+		});
+
+		it("waits indefinitely when toolAbortGraceMs is set to Infinity", async () => {
+			const emptyParams = Type.Object({});
+			let toolFinished = false;
+			const delayedTool: AgentTool<typeof emptyParams> = {
+				name: "delayed_tool",
+				label: "Delayed Tool",
+				description: "Finishes after a delay even if aborted",
+				parameters: emptyParams,
+				execute: async () => {
+					await new Promise((r) => setTimeout(r, 60));
+					toolFinished = true;
+					return {
+						content: [{ type: "text", text: "finally finished" }],
+						details: { waited: true },
+					};
+				},
+			};
+
+			const context: AgentContext = {
+				systemPrompt: "",
+				messages: [],
+				tools: [delayedTool],
+			};
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: Infinity,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run infinity")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-inf", name: "delayed_tool", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			for await (const event of stream) {
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			expect(toolFinished).toBe(true);
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(false);
+				expect(toolResultMessage.content[0]).toEqual({ type: "text", text: "finally finished" });
+			}
+		});
+
+		it("falls back to default 20s grace period for negative or NaN toolAbortGraceMs", async () => {
+			const emptyParams = Type.Object({});
+			const quickTool: AgentTool<typeof emptyParams> = {
+				name: "quick_tool",
+				label: "Quick Tool",
+				description: "Finishes in 15ms",
+				parameters: emptyParams,
+				execute: async () => {
+					await new Promise((r) => setTimeout(r, 15));
+					return {
+						content: [{ type: "text", text: "completed safely" }],
+						details: {},
+					};
+				},
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [quickTool] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: -50,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run quick")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-quick", name: "quick_tool", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			for await (const event of stream) {
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(false);
+				expect(toolResultMessage.content[0]).toEqual({ type: "text", text: "completed safely" });
+			}
+		});
+
+		it("ignores late onUpdate while agent loop is still active after tool is abandoned", async () => {
+			const emptyParams = Type.Object({});
+			let lateUpdateFn: ((update: any) => void) | undefined;
+
+			const abandonedTool: AgentTool<typeof emptyParams> = {
+				name: "abandoned_tool",
+				label: "Abandoned Tool",
+				description: "Hangs until abandoned",
+				parameters: emptyParams,
+				execute: async (_toolCallId, _args, _signal, onUpdate) => {
+					lateUpdateFn = onUpdate;
+					return new Promise(() => {});
+				},
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [abandonedTool] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 30,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			let releaseTurn2: (() => void) | undefined;
+			const turn2Gate = new Promise<void>((resolve) => {
+				releaseTurn2 = resolve;
+			});
+
+			const stream = agentLoop([createUserMessage("run abandoned")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				const turnIndex = callIndex++;
+				if (turnIndex === 0) {
+					queueMicrotask(() => {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-abandon", name: "abandoned_tool", arguments: {} }],
+								"toolUse",
+							),
+						});
+					});
+				} else {
+					void turn2Gate.then(() => {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					});
+				}
+				return mockStream;
+			});
+
+			const events: AgentEvent[] = [];
+			let invokedLateUpdate = false;
+
+			for await (const event of stream) {
+				events.push(event);
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				} else if (
+					event.type === "turn_end" &&
+					event.toolResults.some((tr) => (tr.details as any)?.errorCode === "TOOL_ABORT_TIMEOUT")
+				) {
+					invokedLateUpdate = true;
+					lateUpdateFn?.({
+						content: [{ type: "text", text: "late partial update" }],
+						details: { lateGhost: true },
+					});
+					await new Promise((r) => setTimeout(r, 30));
+					releaseTurn2?.();
+				}
+			}
+
+			const messages = await stream.result();
+			expect(invokedLateUpdate).toBe(true);
+			expect(
+				events.some(
+					(e) => e.type === "tool_execution_update" && (e.partialResult as any)?.details?.lateGhost === true,
+				),
+			).toBe(false);
+
+			const toolResult = messages.find((m) => m.role === "toolResult");
+			expect(toolResult).toBeDefined();
+			if (toolResult && toolResult.role === "toolResult") {
+				expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+			}
+		});
+
+		it("emits tool_execution_update when onUpdate is called within the grace window before abandonment", async () => {
+			const emptyParams = Type.Object({});
+			const toolWithGraceUpdate: AgentTool<typeof emptyParams> = {
+				name: "grace_update_tool",
+				label: "Grace Update Tool",
+				description: "Emits update after abort signal but within grace period before settling",
+				parameters: emptyParams,
+				execute: async (_toolCallId, _args, signal, onUpdate) => {
+					return new Promise((resolve) => {
+						signal?.addEventListener(
+							"abort",
+							() => {
+								setTimeout(() => {
+									onUpdate?.({
+										content: [{ type: "text", text: "valid update inside grace window" }],
+										details: { progress: 50 },
+									});
+									setTimeout(() => {
+										resolve({
+											content: [{ type: "text", text: "finished within grace" }],
+											details: { complete: true },
+										});
+									}, 15);
+								}, 10);
+							},
+							{ once: true },
+						);
+					});
+				},
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [toolWithGraceUpdate] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 80,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run grace update")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-grace-up", name: "grace_update_tool", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			const events: AgentEvent[] = [];
+			for await (const event of stream) {
+				events.push(event);
+				if (event.type === "tool_execution_start") {
+					controller.abort();
+				}
+			}
+
+			const messages = await stream.result();
+			const updateEvents = events.filter((e) => e.type === "tool_execution_update");
+			expect(updateEvents.length).toBe(1);
+			expect(updateEvents[0].toolCallId).toBe("call-grace-up");
+			expect((updateEvents[0] as any).partialResult?.details).toEqual({ progress: 50 });
+
+			const toolResult = messages.find((m) => m.role === "toolResult");
+			expect(toolResult).toBeDefined();
+			if (toolResult && toolResult.role === "toolResult") {
+				expect(toolResult.isError).toBe(false);
+				expect(toolResult.details).toEqual({ complete: true });
+			}
+		});
+
+		it("supports synchronously returning tools without throwing TypeError when signal is provided", async () => {
+			const emptyParams = Type.Object({});
+			const syncTool: AgentTool<typeof emptyParams> = {
+				name: "sync_tool",
+				label: "Sync Tool",
+				description: "Returns result synchronously without returning a Promise",
+				parameters: emptyParams,
+				execute: ((_toolCallId: string, _args: unknown) => {
+					return {
+						content: [{ type: "text", text: "synchronous result" }],
+						details: { sync: true },
+					};
+				}) as never,
+			};
+
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [syncTool] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolAbortGraceMs: 1000,
+			};
+
+			const controller = new AbortController();
+			let callIndex = 0;
+			const stream = agentLoop([createUserMessage("run sync")], context, config, controller.signal, () => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						mockStream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								[{ type: "toolCall", id: "call-sync", name: "sync_tool", arguments: {} }],
+								"toolUse",
+							),
+						});
+					} else {
+						mockStream.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					}
+					callIndex++;
+				});
+				return mockStream;
+			});
+
+			const messages = await stream.result();
+			const toolResultMessage = messages.find((m) => m.role === "toolResult");
+			expect(toolResultMessage).toBeDefined();
+			if (toolResultMessage && toolResultMessage.role === "toolResult") {
+				expect(toolResultMessage.isError).toBe(false);
+				expect(toolResultMessage.content[0]).toEqual({ type: "text", text: "synchronous result" });
+				expect(toolResultMessage.details).toEqual({ sync: true });
+			}
+		});
+	});
 });

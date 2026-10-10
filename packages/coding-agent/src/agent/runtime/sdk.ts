@@ -280,12 +280,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					"read",
 					"bash",
 					"pwsh",
+					"job_list",
+					"job_output",
+					"job_kill",
 					"edit",
 					"write",
 					"symbols",
 					"github",
 					"memory_search",
 					"memory_get",
+					"ask_user_question",
+					"todo_write",
 					...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
 				] as ToolName[])
 			: (restrictToolNamesForRole(agentRole, undefined) as ToolName[]);
