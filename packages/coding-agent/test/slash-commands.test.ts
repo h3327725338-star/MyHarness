@@ -24,6 +24,7 @@ describe("BUILTIN_SLASH_COMMANDS", () => {
 			{ name: "undo", description: "保留或撤销当前任务检查点记录的修改" },
 			{ name: "workflow", description: "运行多智能体工作流", argumentHint: "任务" },
 			{ name: "ultracode", description: "全面处理复杂任务", argumentHint: "任务" },
+			{ name: "reload", description: "重启本地服务", surfaces: ["web"] },
 		]);
 	});
 

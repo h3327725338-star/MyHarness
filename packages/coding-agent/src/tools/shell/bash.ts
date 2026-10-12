@@ -19,6 +19,7 @@ import { OutputAccumulator } from "../output-accumulator.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
 import { backgroundJobManager } from "./job-manager.ts";
+import { findBashNullDeviceRedirect } from "./null-redirect-guard.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import {
 	buildBashProbeSuffix,
@@ -265,7 +266,7 @@ export function createBashToolDefinition(
 		// message must execute one at a time. Read-only tools keep their default
 		// parallelism.
 		executionMode: "sequential" as const,
-		description: `Executes a Bash command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds. Set run_in_background to true to launch the command as a background job that returns a taskId immediately (query it with job_output/job_list and stop it with job_kill; background jobs ignore the per-call timeout). Set preserve_state to true to carry cwd and exported environment changes across preserve_state calls in this session.`,
+		description: `Executes a Bash command in the current working directory and returns stdout and stderr. Output is capped at the standard line/byte preview limits; when truncated, the full output is saved to a file when possible. A timeout can be specified in seconds and defaults to 90 seconds. Set run_in_background to true to launch the command as a background job that returns a taskId immediately (query it with job_output/job_list and stop it with job_kill; background jobs ignore the per-call timeout). Set preserve_state to true to carry cwd and exported environment changes across preserve_state calls in this session. In bash, discard output with >/dev/null or 2>/dev/null; never use cmd-style >nul (bash has no nul device and would create a real file named nul).`,
 		promptSnippet: loadSystemPrompt("tools/bash/snippet.md"),
 		parameters: bashSchema,
 		async execute(
@@ -286,6 +287,12 @@ export function createBashToolDefinition(
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+			const nullRedirect = findBashNullDeviceRedirect(resolvedCommand);
+			if (nullRedirect) {
+				throw new Error(
+					`命令里有 cmd 风格的重定向 \`${nullRedirect}\`，但这里是 bash：bash 没有 nul 空设备，跑起来会在当前目录建出一个真文件（还会弄坏 Git）。请改用 >/dev/null（丢弃 stdout）或 2>/dev/null（丢弃 stderr）。`,
+				);
+			}
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
 			// preserve_state: spawn from the recorded cwd/env and append the marked probe
 			// block. Default (absent/false) keeps the historical stateless path untouched.

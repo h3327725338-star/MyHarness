@@ -192,6 +192,8 @@ export type AgentSessionEvent =
 			ok: boolean;
 			checkpointId?: string;
 			error?: string;
+			cwd?: string;
+			trigger?: string;
 	  }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow"; budget?: ContextBudgetSnapshot }
 	| { type: "entry_appended"; entry: SessionEntry }
@@ -419,6 +421,12 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
+	/**
+	 * When the current run last delivered a final (non-error) assistant answer.
+	 * A user message consumed after this point starts a new user round for the
+	 * live timer, even when it mechanically continues the same run.
+	 */
+	private _finalAnswerDeliveredAt: number | undefined;
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	private readonly _backgroundWork: SessionBackgroundWork;
@@ -1189,6 +1197,17 @@ export class AgentSession {
 			onRunStart?.();
 		}
 
+		// Record when the run delivers a final answer, so a user message consumed
+		// afterwards can restart the live-timer baseline as a new user round.
+		if (event.type === "agent_end") {
+			const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant") as
+				| AssistantMessage
+				| undefined;
+			if (lastAssistant && lastAssistant.stopReason !== "error" && lastAssistant.stopReason !== "aborted") {
+				this._finalAnswerDeliveredAt = Date.now();
+			}
+		}
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1199,12 +1218,19 @@ export class AgentSession {
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
 					this._emitQueueUpdate();
+					// Mid-run steering continues the current task: keep the timer baseline.
+					// Steering consumed after the final answer is a new user round: restart it.
+					if (this._finalAnswerDeliveredAt !== undefined) {
+						this._runStateTracker.setTurnBaseline();
+					}
 				} else {
 					// Check follow-up queue
 					const followUpIndex = this._followUpMessages.indexOf(messageText);
 					if (followUpIndex !== -1) {
 						this._followUpMessages.splice(followUpIndex, 1);
 						this._emitQueueUpdate();
+						// A follow-up runs after the previous work: it always starts a new user round.
+						this._runStateTracker.setTurnBaseline();
 					}
 				}
 			}
@@ -1770,6 +1796,7 @@ export class AgentSession {
 		this._isAgentRunActive = true;
 		const operationId = this._beginOperation("agent-run");
 		this._runStateTracker.beginRun();
+		this._finalAnswerDeliveredAt = undefined;
 		this._lastAssistantMessage = undefined;
 		const inputMessages = Array.isArray(messages) ? messages : [messages];
 		this.agent.state.systemPrompt = this._getTurnSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);

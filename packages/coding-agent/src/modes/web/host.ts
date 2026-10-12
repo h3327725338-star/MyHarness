@@ -910,6 +910,8 @@ export class WebHost {
 					ok: event.ok,
 					checkpointId: event.checkpointId,
 					error: event.error,
+					cwd: event.cwd,
+					trigger: event.trigger,
 				});
 				return;
 			case "sub_agent_progress":

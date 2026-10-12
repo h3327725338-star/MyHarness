@@ -47,6 +47,8 @@ export const zhCN = {
 	"Restore this memory? The current version will be archived.": "恢复这条记忆？当前版本会先保存在归档里。",
 	"Restart service": "重启服务",
 	"Restart service?": "重启服务？",
+	"The service is already restarting.": "服务正在重启中。",
+	"Stop the running task before restarting the service.": "请先等当前任务结束，再重启服务。",
 	"Sending will be temporarily unavailable. Your current draft will be kept.": "重启期间暂时无法发送消息，当前草稿会保留。",
 	"Requesting service restart": "正在请求重启服务",
 	"Waiting for the service to reconnect": "等待服务重新连接",
@@ -503,6 +505,8 @@ export const zhCN = {
 	"Git integration is on and the initial version was created.": "Git 集成已开启，初始版本已创建。",
 	"Git integration is on.": "Git 集成已开启。",
 	"Git checkpoint was not created. The agent continues, but this task cannot be undone with Undo.\n{error}": "Git 检查点没有创建成功。智能体会继续工作，但这个任务将无法用“撤销”还原。\n{error}",
+	"Trigger: {tool}": "触发：{tool}",
+	"Workspace: {path}": "工作区：{path}",
 
 	// ---- Command panel
 	"Search…": "搜索…",
@@ -1885,6 +1889,7 @@ export const serverTextEn = {
 		["保留或撤销当前任务检查点记录的修改", "Keep or undo the changes recorded by the current task checkpoint"],
 		["运行多智能体工作流", "Run a multi-agent workflow"],
 		["全面处理复杂任务", "Handle a complex task end to end"],
+		["重启本地服务", "Restart the local service"],
 		["任务", "task"],
 		// The /settings menu (src/startup/settings-menu.ts): Web menu definition
 		["管理模型服务和密钥", "Manage model services and keys"],

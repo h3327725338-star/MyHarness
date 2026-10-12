@@ -381,7 +381,7 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 		return () => clearInterval(timer);
 	}, [live]);
 	if (!steps.length && !live) return null;
-	const elapsed = live ? now - (snapRun?.startedAt || turn.startedAt || now) : duration;
+	const elapsed = live ? now - (snapRun?.turnStartedAt || snapRun?.startedAt || turn.startedAt || now) : duration;
 	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${summary.icon} size=${14} class=${`c-${summary.outcome}`} />`;
 	const label = live ? currentActivity(turn, snapRun) : summary.label;
 	const head = html`<span class="summary-ico">${icon}</span>

@@ -128,6 +128,10 @@ export function clip(text, n) {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
+export const firstNonBlankLine = (text) => String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
+/** The line of Git's output that says what went wrong: Git's own `warning:` and `hint:` lines come first but are not the cause. */
+export const reasonLine = (text) => String(text || "").split("\n").map((line) => line.trim()).find((line) => line && !/^(warning|hint):/i.test(line)) || firstNonBlankLine(text);
+
 /**
  * What a finished task did, as the server summarised it from the run's tool calls (the `work` of a task notification):
  * "Edited 2 files (a.ts, b.ts) · ran 3 commands · read 5 files". Empty when the task used no tools worth naming.

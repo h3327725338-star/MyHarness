@@ -4,6 +4,7 @@ import { type AgentRole, getAgentRolePrompt } from "../../agent/runtime/role.ts"
 import { filterContextFilesForAgentRole, filterContextForAgentRole } from "../../context/context-policy.ts";
 import type { ChatMode } from "../../session/types.ts";
 import { formatSkillsForPrompt, type Skill } from "../../skills/loader/index.ts";
+import { BUILTIN_SLASH_COMMANDS } from "../../startup/slash-commands.ts";
 import { loadSystemPrompt } from "../loader/index.ts";
 
 export type { AgentRole } from "../../agent/runtime/role.ts";
@@ -86,6 +87,21 @@ function formatAvailableTools(tools: string[], toolSnippets: Record<string, stri
 	return visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n");
 }
 
+/** The real slash commands, rendered from the single builtin registry so the model never invents one. */
+export function formatSlashCommandsForPrompt(): string {
+	const lines = BUILTIN_SLASH_COMMANDS.map((command) => {
+		const aliases = command.aliases?.length
+			? ` (alias ${command.aliases.map((alias) => `/${alias}`).join(", ")})`
+			: "";
+		return `- /${command.name}${aliases}: ${command.description}`;
+	});
+	return [
+		"The user types these in the Web composer; they are the only slash commands that exist.",
+		...lines,
+		"Only ever recommend a slash command from this list. If no command does what the user needs (for example restarting the service, which lives behind the Restart service button in the Session panel), say so plainly instead of inventing one such as /restart or /models.",
+	].join("\n");
+}
+
 /** Only active tools contribute routing instructions, in the original fixed order. */
 export function buildToolRoutingPolicy(tools: readonly string[]): string {
 	const active = new Set(tools);
@@ -147,6 +163,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		GLOBAL_CORE_POLICY,
 		`<available_tools>\n${formatAvailableTools(tools, toolSnippets)}\n</available_tools>`,
 		buildToolRoutingPolicy(tools),
+		`<available_slash_commands>\n${formatSlashCommandsForPrompt()}\n</available_slash_commands>`,
 	];
 	if (guidelines.length > 0)
 		sections.push(

@@ -14,7 +14,7 @@ import {
 
 export type GitCheckpointLifecycleEvent =
 	| { type: "git_checkpoint_start" }
-	| { type: "git_checkpoint_end"; ok: boolean; checkpointId?: string; error?: string };
+	| { type: "git_checkpoint_end"; ok: boolean; checkpointId?: string; error?: string; cwd?: string; trigger?: string };
 
 function getMutationPath(toolName: string, args: unknown): string | undefined {
 	if (toolName !== "edit" && toolName !== "write") return undefined;
@@ -101,7 +101,7 @@ export class AgentSessionGitCheckpointCoordinator {
 		this.host = host;
 	}
 
-	async prepare(): Promise<void> {
+	async prepare(trigger?: string): Promise<void> {
 		if (this.checkpoint?.status === "created") return;
 		if (this.creationFailure !== undefined) return;
 		if (this.preparationPromise) {
@@ -109,7 +109,7 @@ export class AgentSessionGitCheckpointCoordinator {
 			return;
 		}
 		if (this.host.isDelegated || !this.host.isEnabled()) return;
-		const preparation = this.create();
+		const preparation = this.create(trigger);
 		this.preparationPromise = preparation;
 		try {
 			await preparation;
@@ -121,7 +121,7 @@ export class AgentSessionGitCheckpointCoordinator {
 	async prepareForTool(event: Extract<AgentEvent, { type: "tool_execution_start" }>): Promise<void> {
 		const tool = classifyTool(event.toolName, event.args);
 		if (!tool.requiresCheckpoint || !tool.checkpointToolName) return;
-		await this.prepare();
+		await this.prepare(event.toolName);
 		const checkpoint = this.checkpoint;
 		if (!checkpoint) return;
 		if (tool.mutationPath && !isPathInsideRepository(checkpoint, tool.mutationPath)) return;
@@ -161,7 +161,7 @@ export class AgentSessionGitCheckpointCoordinator {
 		this.creationFailure = undefined;
 	}
 
-	private async create(): Promise<void> {
+	private async create(trigger?: string): Promise<void> {
 		this.checkpoint = undefined;
 		this.host.onEvent({ type: "git_checkpoint_start" });
 		this.host.onActivity("正在创建 Git 检查点");
@@ -179,14 +179,25 @@ export class AgentSessionGitCheckpointCoordinator {
 		}
 		if (result.ok && result.checkpoint) {
 			this.checkpoint = result.checkpoint;
-			this.host.onEvent({ type: "git_checkpoint_end", ok: true, checkpointId: result.checkpoint.id });
+			this.host.onEvent({
+				type: "git_checkpoint_end",
+				ok: true,
+				checkpointId: result.checkpoint.id,
+				cwd: this.host.cwd,
+			});
 			this.host.onActivity("Git 检查点已创建");
 			return;
 		}
 		const failure = result.error ?? "未知错误";
 		const diagnosis = describeGitPathFailure(failure);
 		this.creationFailure = [failure, ...(diagnosis ? [diagnosis] : [])].join("\n");
-		this.host.onEvent({ type: "git_checkpoint_end", ok: false, error: this.creationFailure });
+		this.host.onEvent({
+			type: "git_checkpoint_end",
+			ok: false,
+			error: this.creationFailure,
+			cwd: this.host.cwd,
+			trigger,
+		});
 		this.host.onActivity("Git 检查点创建失败，继续执行");
 	}
 }

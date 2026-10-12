@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { createSyntheticSourceInfo } from "../src/extensions/contracts/source-info.ts";
+import { BUILTIN_SLASH_COMMANDS } from "../src/startup/slash-commands.ts";
 import {
 	applyAgentRoleBoundary,
 	buildSystemPrompt,
 	buildToolRoutingPolicy,
+	formatSlashCommandsForPrompt,
 	GLOBAL_CORE_POLICY,
 	OUTPUT_LANGUAGE_POLICY,
 } from "../src/system-prompts/composer/index.ts";
@@ -239,6 +241,20 @@ describe("buildSystemPrompt", () => {
 			expect(withRead).toContain("<available_skills>");
 			expect(withRead).toContain("<name>my-skill</name>");
 			expect(withoutRead).not.toContain("<available_skills>");
+		});
+	});
+
+	describe("slash command grounding", () => {
+		test("injects the real command list with a no-invention rule", () => {
+			const prompt = buildSystemPrompt({ contextFiles: [], skills: [], cwd: "/project" });
+			expect(prompt).toContain("<available_slash_commands>");
+			expect(prompt).toContain("- /model:");
+			// Every registered builtin command is listed, so the model only recommends real ones.
+			for (const command of BUILTIN_SLASH_COMMANDS) {
+				expect(prompt).toContain(`- /${command.name}`);
+			}
+			expect(prompt).toContain("Only ever recommend a slash command from this list");
+			expect(formatSlashCommandsForPrompt()).toContain("- /settings (alias /setting):");
 		});
 	});
 });

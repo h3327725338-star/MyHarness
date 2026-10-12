@@ -18,6 +18,7 @@ export const BUILTIN_COMMAND_KINDS = {
 	compact: "action",
 	commit: "action",
 	push: "action",
+	reload: "action",
 	workflow: "prompt",
 	ultracode: "prompt",
 };

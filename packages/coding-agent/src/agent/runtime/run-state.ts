@@ -63,6 +63,12 @@ export interface RunStateSnapshot {
 	detail?: string;
 	/** Wall-clock time of the current or most recent run's first agent_start. */
 	startedAt?: number;
+	/**
+	 * Display baseline for the live timer: the run start, or the start of the
+	 * latest user round within the run (a queued message consumed after the
+	 * previous turn's final answer). Mid-run steering keeps the run start.
+	 */
+	turnStartedAt?: number;
 	/** Wall-clock time of the last real activity (token, tool event, retry, ...). */
 	lastActivityAt: number;
 	/** Final error message when the current or most recent run failed/timed out. */
@@ -201,6 +207,7 @@ export class RunStateTracker {
 	private _state: RunState = "idle";
 	private _runId = 0;
 	private _startedAt: number | undefined;
+	private _turnStartedAt: number | undefined;
 	private _lastActivityAt = Date.now();
 	private _activity = "";
 	private _detail: string | undefined;
@@ -224,6 +231,7 @@ export class RunStateTracker {
 			activity: this._activity,
 			detail: this._detail,
 			startedAt: this._startedAt,
+			turnStartedAt: this._turnStartedAt,
 			lastActivityAt: this._lastActivityAt,
 			error: this._error,
 			terminalReason: this._terminalReason,
@@ -235,9 +243,20 @@ export class RunStateTracker {
 	beginRun(): void {
 		this._runId += 1;
 		this._startedAt = Date.now();
+		this._turnStartedAt = this._startedAt;
 		this._terminalReason = undefined;
 		this.terminal = undefined;
 		this._error = undefined;
+	}
+
+	/**
+	 * Move the live-timer baseline to a new user round inside the current run.
+	 * The run-level startedAt is intentionally untouched.
+	 */
+	setTurnBaseline(now: number = Date.now()): void {
+		if (this._host.isDisposed()) return;
+		this._turnStartedAt = now;
+		this._host.onChange(this.snapshot());
 	}
 
 	setError(error: string | undefined): void {

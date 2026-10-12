@@ -47,6 +47,19 @@ const COMMAND_ACTIONS = {
 	// Like the terminal's /commit and /push: nothing has to be chosen, so they start at once (progress and result show above the input).
 	commit: () => commitChanges(),
 	push: () => pushChanges(),
+	// Same as the Session panel's Restart service button, but typed: identical confirm dialog, phases and draft handoff.
+	reload: () => {
+		if (state.restarting) {
+			toast(t("The service is already restarting."), "warning");
+			return;
+		}
+		if (state.snap?.active) {
+			toast(t("Stop the running task before restarting the service."), "warning");
+			return;
+		}
+		// Dynamic import: service-restart.js imports confirmDialog from here, so a static import would cycle.
+		void import("./service-restart.js").then((module) => module.restartService());
+	},
 };
 
 /** The registry entry for a typed command name (or alias), reading the shared registry delivered by /api/resources. */

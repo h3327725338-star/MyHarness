@@ -4,7 +4,7 @@
 // custom entries, so earlier results remain visible after later operations and after reloading the chat.
 import { activeSlotId, api, inSlot, loadGitStatus, post, set, state, toast } from "./store.js";
 import { serverText, t } from "./i18n.js";
-import { clip, plural } from "./util.js";
+import { clip, plural, reasonLine } from "./util.js";
 
 let sequence = 0;
 
@@ -23,8 +23,6 @@ function show(slot, result) {
 }
 
 const firstLine = (text) => String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
-/** The line of Git's output that says what went wrong: Git's own `warning:` and `hint:` lines come first but are not the cause. */
-const reasonLine = (text) => String(text || "").split("\n").map((line) => line.trim()).find((line) => line && !/^(warning|hint):/i.test(line)) || firstLine(text);
 
 /**
  * Runs one operation as a Git task of the chat on screen: the strip shows it at once (the server's own progress

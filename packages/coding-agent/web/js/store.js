@@ -2,7 +2,7 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { chatTitle, clip, fmtDuration, loadPrefs, plural, savePrefs, taskWorkLine, uid } from "./util.js";
+import { chatTitle, clip, fmtDuration, loadPrefs, plural, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
@@ -1251,7 +1251,10 @@ function connectEvents() {
 	});
 	on("run_finished", (d, slot) => {
 		state.runs = { ...state.runs, [d.runId]: d };
-		state.snap = state.snap ? { ...state.snap, lastRun: d, active: false } : state.snap;
+		// Drop the finished run's timer baseline (keep state/activity shape for the status pill):
+		// the next live turn falls back to its own fresh timestamp until the new run_state arrives.
+		const run = state.snap?.run ? { ...state.snap.run, startedAt: undefined, turnStartedAt: undefined } : state.snap?.run;
+		state.snap = state.snap ? { ...state.snap, lastRun: d, active: false, run } : state.snap;
 		emit();
 		notifyFinished(d, slot);
 		refreshSoon(slot);
@@ -1349,7 +1352,16 @@ function connectEvents() {
 	});
 	on("provider_recovery", (d) => set({ recovery: d }));
 	on("git_checkpoint", (d, slot) => {
-		if (d.phase === "end" && !d.ok) toast(t("Git checkpoint was not created. The agent continues, but this task cannot be undone with Undo.\n{error}", { error: d.error || "" }), "warning", 9000);
+		if (d.phase === "end" && !d.ok) {
+			// Headline first: the line that says what went wrong (warnings bury it), then where and what
+			// triggered it; the full output (including any path diagnosis) stays available by scrolling.
+			const reason = reasonLine(d.error);
+			const trigger = d.trigger ? t("Trigger: {tool}", { tool: d.trigger }) : "";
+			const where = d.cwd ? t("Workspace: {path}", { path: d.cwd }) : "";
+			const rest = d.error && d.error !== reason ? d.error : "";
+			const detail = [reason, trigger, where, rest].filter(Boolean).join("\n\n");
+			toast(t("Git checkpoint was not created. The agent continues, but this task cannot be undone with Undo.\n{error}", { error: detail }), "warning", 9000);
+		}
 		if (d.phase === "end") loadSnapshot(slot);
 	});
 	on("git_task", (d) => set({ gitTask: d.active ? d : null }));
