@@ -1,12 +1,5 @@
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
-import {
-	type CodeIndexRefreshSummary,
-	type CodeSearchMatch,
-	getCodeLanguage,
-	type IndexedCodeReference,
-	type IndexedCodeSymbol,
-} from "../symbols/index/code-index.ts";
 import type { CodeIntelligenceRoutingOptions } from "../symbols/index/router/types.ts";
 import type { CodeIntelligenceRuntimeStatus } from "../symbols/runtime/types.ts";
 import type {
@@ -23,12 +16,9 @@ import type {
 	HoverResult,
 	ImplementationsResult,
 	IntelligenceResultMeta,
-	IntelligenceSource,
 	ReferencesResult,
 	ResolvedSymbolResult,
 	ResultCompleteness,
-	SymbolQuery,
-	SymbolSearchResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
@@ -39,7 +29,6 @@ import {
 	createSymbolsToolRuntime,
 	requireAdvancedRouter,
 	type SymbolsCodeIntelligenceServices,
-	type SymbolsIndexPort,
 } from "./symbols-runtime.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -99,14 +88,11 @@ const validCodeSymbolKinds = new Set([
 ]);
 
 type SymbolsOperation =
-	| "find_symbol"
+	| "file_symbols"
 	| "find_definition"
 	| "find_references"
-	| "file_symbols"
 	| "find_implementations"
 	| "diagnostics"
-	| "search_code"
-	| "code_map"
 	| "workspace_symbols"
 	| "resolve_symbol"
 	| "hover"
@@ -125,21 +111,12 @@ const positionTargetSchema = Type.Object({
 	}),
 });
 
-const namePathTargetSchema = Type.Object({
-	type: Type.Literal("name_path"),
-	namePath: nonEmptyString,
-	path: Type.Optional(Type.String({ minLength: 1 })),
-});
-
 const symbolIdTargetSchema = Type.Object({
 	type: Type.Literal("symbol_id"),
 	symbolId: nonEmptyString,
 });
 
-const targetSchema = Type.Union([positionTargetSchema, namePathTargetSchema, symbolIdTargetSchema]);
 const preciseTargetSchema = Type.Union([positionTargetSchema, symbolIdTargetSchema]);
-const routingModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("semantic"), Type.Literal("lightweight")]);
-const lightweightRoutingModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("lightweight")]);
 const optionalPathSchema = Type.Optional(
 	Type.String({ minLength: 1, description: "Workspace-relative path or directory" }),
 );
@@ -149,13 +126,9 @@ const optionalLimitSchema = Type.Optional(
 const maxCharsSchema = Type.Optional(Type.Integer({ minimum: MIN_OUTPUT_MAX_CHARS, maximum: MAX_OUTPUT_MAX_CHARS }));
 const kindsSchema = Type.Optional(Type.Array(codeSymbolKindSchema, { minItems: 1, maxItems: 20 }));
 const semanticRoutingProperties = {
-	mode: Type.Optional(routingModeSchema),
 	language: Type.Optional(Type.String({ minLength: 1 })),
 	definitionId: Type.Optional(Type.String({ minLength: 1 })),
 	timeoutMs: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 600_000 })),
-};
-const lightweightRoutingProperties = {
-	mode: Type.Optional(lightweightRoutingModeSchema),
 };
 
 /**
@@ -164,75 +137,6 @@ const lightweightRoutingProperties = {
  * parameter list.
  */
 const symbolsOperationSchemas = [
-	Type.Object(
-		{
-			operation: Type.Literal("find_symbol"),
-			query: nonEmptyQuery,
-			namePath: Type.Optional(nonEmptyString),
-			path: optionalPathSchema,
-			kinds: kindsSchema,
-			...lightweightRoutingProperties,
-			exact: Type.Optional(Type.Boolean()),
-			limit: optionalLimitSchema,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("find_symbol"),
-			query: Type.Optional(nonEmptyQuery),
-			namePath: nonEmptyString,
-			path: optionalPathSchema,
-			kinds: kindsSchema,
-			...lightweightRoutingProperties,
-			exact: Type.Optional(Type.Boolean()),
-			limit: optionalLimitSchema,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("find_definition"),
-			query: nonEmptyQuery,
-			path: optionalPathSchema,
-			...lightweightRoutingProperties,
-			limit: optionalLimitSchema,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("find_definition"),
-			target: targetSchema,
-			...semanticRoutingProperties,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("find_references"),
-			query: nonEmptyQuery,
-			path: optionalPathSchema,
-			...lightweightRoutingProperties,
-			limit: optionalLimitSchema,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("find_references"),
-			target: targetSchema,
-			...semanticRoutingProperties,
-			includeDeclaration: Type.Optional(Type.Boolean()),
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
 	Type.Object(
 		{
 			operation: Type.Literal("file_symbols"),
@@ -244,8 +148,27 @@ const symbolsOperationSchemas = [
 	),
 	Type.Object(
 		{
+			operation: Type.Literal("find_definition"),
+			target: preciseTargetSchema,
+			...semanticRoutingProperties,
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("find_references"),
+			target: preciseTargetSchema,
+			...semanticRoutingProperties,
+			includeDeclaration: Type.Optional(Type.Boolean()),
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
 			operation: Type.Literal("find_implementations"),
-			target: targetSchema,
+			target: preciseTargetSchema,
 			...semanticRoutingProperties,
 			maxChars: maxCharsSchema,
 		},
@@ -256,27 +179,6 @@ const symbolsOperationSchemas = [
 			operation: Type.Literal("diagnostics"),
 			path: nonEmptyString,
 			...semanticRoutingProperties,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("search_code"),
-			query: nonEmptyQuery,
-			path: optionalPathSchema,
-			regex: Type.Optional(Type.Boolean()),
-			ignoreCase: Type.Optional(Type.Boolean()),
-			limit: optionalLimitSchema,
-			maxChars: maxCharsSchema,
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			operation: Type.Literal("code_map"),
-			path: optionalPathSchema,
-			limit: optionalLimitSchema,
 			maxChars: maxCharsSchema,
 		},
 		{ additionalProperties: false },
@@ -368,18 +270,14 @@ const symbolsSchema = Type.Unsafe<SymbolsToolInput>({
 	anyOf: symbolsOperationSchemas,
 });
 
-export type SymbolsToolTarget = Static<typeof targetSchema>;
+export type SymbolsToolTarget = Static<typeof preciseTargetSchema>;
 
 export interface SymbolsToolDetails {
 	operation: SymbolsToolInput["operation"];
-	source?: IntelligenceSource;
+	source?: IntelligenceResultMeta["source"];
 	completeness?: ResultCompleteness;
 	fallback?: IntelligenceResultMeta["fallback"];
 	warnings?: string[];
-	legacyCompatibility?: boolean;
-	refresh?: CodeIndexRefreshSummary;
-	fileCount?: number;
-	symbolCount?: number;
 	outputTruncated?: boolean;
 	semanticConfigured?: boolean;
 	semanticEnabled?: boolean;
@@ -403,11 +301,7 @@ export class SymbolsToolInputError extends Error {
 	}
 }
 
-const LEGACY_COMPATIBILITY_WARNING =
-	"legacy query matching is lexical/name-based and does not provide precise semantic target identity";
-
 type DomainResult =
-	| SymbolSearchResult
 	| DefinitionResult
 	| ReferencesResult
 	| FileSymbolsResult
@@ -483,7 +377,7 @@ function validateTimeout(value: unknown, operation: string): void {
 	}
 }
 
-function validateTarget(value: unknown, operation: string): SymbolTarget {
+function validateTarget(value: unknown, operation: string): Extract<SymbolTarget, { type: "position" | "symbol_id" }> {
 	const target = recordOf(value);
 	if (target.type === "position") {
 		const path = requireNonEmpty(target.path, operation, "target.path");
@@ -499,23 +393,10 @@ function validateTarget(value: unknown, operation: string): SymbolTarget {
 			position: { line: position.line as number, character: position.character as number },
 		};
 	}
-	if (target.type === "name_path") {
-		const namePath = requireNonEmpty(target.namePath, operation, "target.namePath");
-		const path = nonEmpty(target.path, operation, "target.path");
-		return path ? { type: "name_path", namePath, path } : { type: "name_path", namePath };
-	}
 	if (target.type === "symbol_id") {
 		return { type: "symbol_id", symbolId: requireNonEmpty(target.symbolId, operation, "target.symbolId") };
 	}
 	throw new SymbolsToolInputError(operation, `${operation} target has an unsupported type`);
-}
-
-function validatePreciseSemanticTarget(value: unknown, operation: string): SymbolTarget {
-	const target = validateTarget(value, operation);
-	if (target.type === "name_path") {
-		throw new SymbolsToolInputError(operation, `${operation} requires a position or symbol_id target`);
-	}
-	return target;
 }
 
 function validateCommonTypes(args: Record<string, unknown>, operation: SymbolsOperation): void {
@@ -523,9 +404,6 @@ function validateCommonTypes(args: Record<string, unknown>, operation: SymbolsOp
 	const unsupported = Object.keys(args).filter((key) => args[key] !== undefined && !allowed.has(key));
 	if (unsupported.length > 0) {
 		throw new SymbolsToolInputError(operation, `${operation} does not accept: ${unsupported.join(", ")}`);
-	}
-	if (args.mode !== undefined && args.mode !== "auto" && args.mode !== "semantic" && args.mode !== "lightweight") {
-		throw new SymbolsToolInputError(operation, `${operation} mode must be auto, semantic, or lightweight`);
 	}
 	if (args.language !== undefined) requireNonEmpty(args.language, operation, "language");
 	if (args.definitionId !== undefined) requireNonEmpty(args.definitionId, operation, "definitionId");
@@ -542,9 +420,6 @@ function validateCommonTypes(args: Record<string, unknown>, operation: SymbolsOp
 			throw new SymbolsToolInputError(operation, `${operation} kinds must be a non-empty array of symbol kinds`);
 		}
 	}
-	validateBoolean(args.exact, operation, "exact");
-	validateBoolean(args.regex, operation, "regex");
-	validateBoolean(args.ignoreCase, operation, "ignoreCase");
 	validateBoolean(args.includeDeclaration, operation, "includeDeclaration");
 }
 
@@ -552,14 +427,11 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 	const args = recordOf(input);
 	const operation = args.operation;
 	if (
-		operation !== "find_symbol" &&
+		operation !== "file_symbols" &&
 		operation !== "find_definition" &&
 		operation !== "find_references" &&
-		operation !== "file_symbols" &&
 		operation !== "find_implementations" &&
 		operation !== "diagnostics" &&
-		operation !== "search_code" &&
-		operation !== "code_map" &&
 		operation !== "workspace_symbols" &&
 		operation !== "resolve_symbol" &&
 		operation !== "hover" &&
@@ -577,11 +449,8 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 
 	if (operation === "workspace_symbols") {
 		requireNonEmpty(args.query, operation, "query");
-		if (hasValue(args, "target") || hasValue(args, "namePath")) {
-			throw new SymbolsToolInputError(
-				operation,
-				"workspace_symbols accepts query and routing options, not target or namePath",
-			);
+		if (hasValue(args, "target")) {
+			throw new SymbolsToolInputError(operation, "workspace_symbols accepts query and routing options, not target");
 		}
 		return input;
 	}
@@ -608,20 +477,7 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 				`${operation} accepts target and routing options, not query or top-level path`,
 			);
 		}
-		validatePreciseSemanticTarget(args.target, operation);
-		return input;
-	}
-
-	if (operation === "find_symbol") {
-		if (hasValue(args, "target")) {
-			throw new SymbolsToolInputError(operation, "find_symbol does not accept target; use query or namePath");
-		}
-		const query = nonEmpty(args.query, operation, "query");
-		const namePath = nonEmpty(args.namePath, operation, "namePath");
-		if (!query && !namePath) throw new SymbolsToolInputError(operation, "find_symbol requires query or namePath");
-		if (args.includeDeclaration !== undefined) {
-			throw new SymbolsToolInputError(operation, "find_symbol does not accept includeDeclaration");
-		}
+		validateTarget(args.target, operation);
 		return input;
 	}
 
@@ -632,31 +488,6 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 				operation,
 				"file_symbols accepts path and routing options, not query or target",
 			);
-		}
-		return input;
-	}
-
-	if (operation === "search_code") {
-		requireNonEmpty(args.query, operation, "query");
-		if (
-			hasValue(args, "target") ||
-			args.mode !== undefined ||
-			args.language !== undefined ||
-			args.definitionId !== undefined ||
-			args.timeoutMs !== undefined
-		) {
-			throw new SymbolsToolInputError(
-				operation,
-				"search_code is textual and does not accept Code Intelligence routing options",
-			);
-		}
-		return input;
-	}
-
-	if (operation === "code_map") {
-		nonEmpty(args.path, operation, "path");
-		if (hasValue(args, "target") || hasValue(args, "query")) {
-			throw new SymbolsToolInputError(operation, "code_map accepts only an optional path, limit, and maxChars");
 		}
 		return input;
 	}
@@ -687,35 +518,12 @@ function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 		return input;
 	}
 
-	const hasTarget = hasValue(args, "target");
-	const hasQuery = hasValue(args, "query");
-	if (hasTarget && hasQuery) throw new SymbolsToolInputError(operation, "target and query cannot be used together");
-	if (hasTarget) {
-		if (hasValue(args, "path"))
-			throw new SymbolsToolInputError(operation, "target carries its own path; top-level path is not allowed");
-		if (hasValue(args, "limit"))
-			throw new SymbolsToolInputError(operation, "limit is only supported by the legacy query compatibility path");
-		validateTarget(args.target, operation);
-		if (operation === "find_definition" && args.includeDeclaration !== undefined) {
-			throw new SymbolsToolInputError(operation, "find_definition does not accept includeDeclaration");
-		}
-		return input;
-	}
-
-	requireNonEmpty(args.query, operation, "query");
-	if (
-		args.mode === "semantic" ||
-		args.language !== undefined ||
-		args.definitionId !== undefined ||
-		args.timeoutMs !== undefined
-	) {
-		throw new SymbolsToolInputError(
-			operation,
-			"legacy query matching only supports the lightweight compatibility path; provide a precise target for routing",
-		);
-	}
-	if (args.includeDeclaration !== undefined) {
-		throw new SymbolsToolInputError(operation, "includeDeclaration requires a precise target");
+	if (!hasValue(args, "target")) throw new SymbolsToolInputError(operation, `${operation} requires target`);
+	if (hasValue(args, "path"))
+		throw new SymbolsToolInputError(operation, "target carries its own path; top-level path is not allowed");
+	validateTarget(args.target, operation);
+	if (operation === "find_definition" && args.includeDeclaration !== undefined) {
+		throw new SymbolsToolInputError(operation, "find_definition does not accept includeDeclaration");
 	}
 	return input;
 }
@@ -733,7 +541,6 @@ function routingOptions(
 		if (value !== undefined && allowed.has(key)) options[key] = value;
 	};
 
-	copyIfAllowed("mode", raw.mode);
 	copyIfAllowed("language", raw.language);
 	copyIfAllowed("definitionId", raw.definitionId);
 	copyIfAllowed("timeoutMs", raw.timeoutMs);
@@ -747,20 +554,6 @@ function routingOptions(
 	return options as CodeIntelligenceRoutingOptions;
 }
 
-function formatLegacySymbol(symbol: IndexedCodeSymbol): string {
-	const parent = symbol.parentName ? ` in ${symbol.parentName}` : "";
-	const exported = symbol.exported ? " exported" : "";
-	return `${symbol.path}:${symbol.line} ${symbol.kind} ${symbol.name}${parent}${exported} — ${symbol.signature}`;
-}
-
-function formatLegacyReference(reference: IndexedCodeReference): string {
-	return `${reference.path}:${reference.line} ${reference.referenceKind} ${reference.target} — ${reference.text}`;
-}
-
-function formatSearchMatch(match: CodeSearchMatch): string {
-	return `${match.path}:${match.line}: ${match.text}`;
-}
-
 function positionText(symbol: CodeSymbol): { text: string; precision: string } {
 	if (symbol.selectionRange) {
 		return {
@@ -772,7 +565,7 @@ function positionText(symbol: CodeSymbol): { text: string; precision: string } {
 	return { text: symbol.path, precision: "unknown" };
 }
 
-function symbolTargetHint(symbol: CodeSymbol, supportsSymbolIds: boolean): string {
+function symbolTargetHint(symbol: CodeSymbol, supportsSymbolIds: boolean): string | undefined {
 	if (supportsSymbolIds) {
 		return JSON.stringify({ type: "symbol_id", symbolId: symbol.id });
 	}
@@ -783,7 +576,7 @@ function symbolTargetHint(symbol: CodeSymbol, supportsSymbolIds: boolean): strin
 			position: symbol.selectionRange.start,
 		});
 	}
-	return JSON.stringify({ type: "name_path", path: symbol.path, namePath: symbol.namePath });
+	return undefined;
 }
 
 function formatRange(
@@ -796,7 +589,8 @@ function formatRange(
 function formatCodeSymbol(symbol: CodeSymbol, indent = "", supportsSymbolIds = false): string {
 	const position = positionText(symbol);
 	const signature = symbol.signature ? ` — ${symbol.signature}` : "";
-	return `${indent}${position.text} ${symbol.kind} ${symbol.namePath} [${symbol.language}] precision=${position.precision}${signature} target=${symbolTargetHint(symbol, supportsSymbolIds)}`;
+	const target = symbolTargetHint(symbol, supportsSymbolIds);
+	return `${indent}${position.text} ${symbol.kind} ${symbol.namePath} [${symbol.language}] precision=${position.precision}${signature}${target ? ` target=${target}` : ""}`;
 }
 
 function formatSymbolTree(node: CodeSymbolTreeNode, depth = 0, supportsSymbolIds = false): string[] {
@@ -869,11 +663,10 @@ function formatStatus(status: CodeIntelligenceRuntimeStatus): string[] {
 }
 
 function metaHeader(details: SymbolsToolDetails): string {
-	const source = details.source ?? "lightweight";
+	const source = details.source ?? "semantic";
 	const completeness = details.completeness ?? "complete";
 	const parts = [`source=${source}`, `completeness=${completeness}`];
 	if (details.fallback) parts.push(`fallback=${details.fallback.reason}`);
-	if (details.legacyCompatibility) parts.push("legacy_compatibility=true");
 	return `[${parts.join(" ")}]`;
 }
 
@@ -921,8 +714,6 @@ function renderDomainResult(
 	let lines: string[];
 	if (operation === "file_symbols") {
 		lines = (result as FileSymbolsResult).items.flatMap((node) => formatSymbolTree(node, 0, supportsSymbolIds));
-	} else if (operation === "find_symbol") {
-		lines = (result as SymbolSearchResult).items.map((symbol) => formatCodeSymbol(symbol, "", supportsSymbolIds));
 	} else if (operation === "find_definition") {
 		lines = (result as DefinitionResult).items.map((symbol) => formatCodeSymbol(symbol, "", supportsSymbolIds));
 	} else if (operation === "find_implementations") {
@@ -952,27 +743,6 @@ function renderDomainResult(
 	};
 }
 
-function directDetails(
-	operation: SymbolsOperation,
-	refresh: CodeIndexRefreshSummary,
-	index: SymbolsIndexPort,
-	options?: { legacyCompatibility?: boolean },
-): SymbolsToolDetails {
-	const stats = index.getStats();
-	const warnings = refresh.limited ? ["lightweight index refresh was limited; results may be incomplete"] : [];
-	if (options?.legacyCompatibility) warnings.push(LEGACY_COMPATIBILITY_WARNING);
-	return {
-		operation,
-		source: "lightweight",
-		completeness: refresh.limited || options?.legacyCompatibility ? "partial" : "complete",
-		warnings,
-		legacyCompatibility: options?.legacyCompatibility,
-		refresh,
-		fileCount: stats.fileCount,
-		symbolCount: stats.symbolCount,
-	};
-}
-
 function requireQuery(operation: SymbolsOperation, value: unknown): string {
 	return requireNonEmpty(value, operation, "query");
 }
@@ -986,7 +756,7 @@ export function createSymbolsToolDefinition(
 		name: "symbols",
 		label: "symbols",
 		description:
-			"Structured queries for project code symbols, definitions, references, implementations, call relationships, type hierarchies, file structure, and diagnostics; also supports explicit text search. The operation selects a closed, operation-specific parameter set: do not combine parameters from different operations. Semantic results state their source and completeness; lightweight lexical results are only leads.",
+			"Structured queries for project code symbols, definitions, references, implementations, call relationships, type hierarchies, file structure, and diagnostics. The operation selects a closed, operation-specific parameter set: do not combine parameters from different operations. Semantic results state their source and completeness.",
 		promptSnippet: loadSystemPrompt("tools/symbols/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/symbols/guidelines.md"),
 		parameters: symbolsSchema,
@@ -1039,7 +809,7 @@ export function createSymbolsToolDefinition(
 				operation === "supertypes" ||
 				operation === "subtypes"
 			) {
-				const target = validatePreciseSemanticTarget(args.target, operation);
+				const target = validateTarget(args.target, operation);
 				const advancedRouter = requireAdvancedRouter(runtime.router, operation);
 				const result =
 					operation === "hover"
@@ -1052,24 +822,6 @@ export function createSymbolsToolDefinition(
 									? await advancedRouter.supertypes(target, routingOptions(args, signal))
 									: await advancedRouter.subtypes(target, routingOptions(args, signal));
 				const rendered = renderDomainResult(operation, result, supportsSymbolIds);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "find_symbol") {
-				const query = nonEmpty(args.query, operation, "query");
-				const namePath = nonEmpty(args.namePath, operation, "namePath");
-				const symbolQuery: SymbolQuery = {
-					query,
-					namePath,
-					path: nonEmpty(args.path, operation, "path"),
-					kinds: args.kinds as CodeSymbolKind[] | undefined,
-					exact: args.exact,
-					limit: args.limit,
-				};
-				const rendered = renderDomainResult(
-					operation,
-					await runtime.router.findSymbol(symbolQuery, routingOptions(args, signal)),
-					supportsSymbolIds,
-				);
 				text = rendered.text;
 				details = rendered.details;
 			} else if (operation === "file_symbols") {
@@ -1103,62 +855,16 @@ export function createSymbolsToolDefinition(
 				);
 				text = rendered.text;
 				details = rendered.details;
-			} else if (operation === "find_definition" || operation === "find_references") {
-				const raw = recordOf(args);
-				if (hasValue(raw, "target")) {
-					const target = validateTarget(raw.target, operation);
-					const result =
-						operation === "find_definition"
-							? await runtime.router.findDefinition(target, routingOptions(args, signal))
-							: await runtime.router.findReferences(target, routingOptions(args, signal));
-					const rendered = renderDomainResult(operation, result, supportsSymbolIds);
-					text = rendered.text;
-					details = rendered.details;
-				} else {
-					const query = requireQuery(operation, raw.query);
-					const refresh = await runtime.index.ensureFresh(signal);
-					const queryOptions = {
-						path: nonEmpty(raw.path, operation, "path"),
-						limit: raw.limit as number | undefined,
-						signal,
-						skipRefresh: true,
-					};
-					const output =
-						operation === "find_definition"
-							? (await runtime.index.findDefinition(query, queryOptions)).map(formatLegacySymbol)
-							: (await runtime.index.findReferences(query, queryOptions)).map(formatLegacyReference);
-					details = directDetails(operation, refresh, runtime.index, { legacyCompatibility: true });
-					text = composeOutput(details, output, "No matching legacy symbols or references found");
-				}
-			} else if (operation === "search_code") {
-				const query = requireQuery(operation, args.query);
-				const refresh = await runtime.index.ensureFresh(signal);
-				const output = (
-					await runtime.index.searchCode(query, {
-						path: nonEmpty(args.path, operation, "path"),
-						limit: args.limit,
-						regex: args.regex,
-						ignoreCase: args.ignoreCase,
-						signal,
-						skipRefresh: true,
-					})
-				).map(formatSearchMatch);
-				details = directDetails(operation, refresh, runtime.index);
-				text = composeOutput(details, output, "No textual matches found");
 			} else {
-				const refresh = await runtime.index.ensureFresh(signal);
-				const output = (
-					await runtime.index.getCodeMap(nonEmpty(args.path, operation, "path"), {
-						limit: args.limit,
-						signal,
-						skipRefresh: true,
-					})
-				).flatMap((entry) => [
-					`${entry.path} (${getCodeLanguage(entry.path) ?? entry.language})`,
-					...entry.symbols.map((symbol) => `  ${formatLegacySymbol(symbol)}`),
-				]);
-				details = directDetails(operation, refresh, runtime.index);
-				text = composeOutput(details, output, "No code map entries found");
+				const raw = recordOf(args);
+				const target = validateTarget(raw.target, operation);
+				const result =
+					operation === "find_definition"
+						? await runtime.router.findDefinition(target, routingOptions(args, signal))
+						: await runtime.router.findReferences(target, routingOptions(args, signal));
+				const rendered = renderDomainResult(operation, result, supportsSymbolIds);
+				text = rendered.text;
+				details = rendered.details;
 			}
 
 			const finalized = finalizeOutput(text, maxChars);
@@ -1175,5 +881,5 @@ export function createSymbolsTool(cwd: string, options?: SymbolsToolOptions): Ag
 	return wrapToolDefinition(createSymbolsToolDefinition(cwd, options));
 }
 
-export type { SymbolsCodeIntelligenceServices, SymbolsIndexPort } from "./symbols-runtime.ts";
+export type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
 export { SymbolsToolConfigurationError } from "./symbols-runtime.ts";

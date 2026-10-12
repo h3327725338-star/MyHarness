@@ -839,10 +839,11 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getCodeIntelligenceSettings(): CodeIntelligenceSettings & { enabled: boolean } {
+	getCodeIntelligenceSettings(): CodeIntelligenceSettings & { symbolsEnabled: boolean } {
 		const settings = this.settings.codeIntelligence;
 		return {
-			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.codeIntelligenceEnabled,
+			// The deprecated `enabled` key is ignored: an old engine-mode value is never read and never migrated.
+			symbolsEnabled: settings?.symbolsEnabled ?? SETTINGS_DEFAULTS.codeIntelligenceSymbolsEnabled,
 			disabledLanguages: [...(settings?.disabledLanguages ?? [])],
 			servers: settings?.servers === undefined ? undefined : structuredClone(settings.servers),
 		};

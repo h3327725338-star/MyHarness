@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 
-import { getCodeLanguage } from "../index/code-index.ts";
+import { getCodeLanguage } from "../language.ts";
 import { LspResponseError } from "../lsp/errors.ts";
 import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type { ManagedLanguageServer } from "../lsp/language-server/types.ts";

@@ -2,9 +2,11 @@
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
 import { attempt, loadResources, loadStats, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
+import { exportReadOnly } from "./export-mode.js";
 import { restartService } from "./service-restart.js";
 import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-usage.js";
-import { N_, t } from "./i18n.js";
+import { N_, isZh, t } from "./i18n.js";
+import { zhToolDescription } from "./locales/zh-CN-tools.js";
 import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.js";
 
 const TOOL_DESCRIPTIONS = {
@@ -24,7 +26,15 @@ const TOOL_DESCRIPTIONS = {
 	workflow: N_("Staged read-only exploration for parallel multi-module investigation and verification."),
 	ultracode: N_("Deep high-risk investigation with counterexample and failure-path checks."),
 };
-export const toolDescription = (tool) => TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
+export const toolDescription = (tool) => {
+	// Chinese mode prefers the display-only table keyed by tool name (locales/zh-CN-tools.js); a miss keeps the
+	// original behaviour below byte for byte, and English mode never looks at that table at all.
+	if (isZh()) {
+		const chinese = zhToolDescription(tool);
+		if (chinese) return chinese;
+	}
+	return TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
+};
 
 function Section({ title, count, children, defaultOpen = true, action }) {
 	const [open, setOpen] = useState(defaultOpen);
@@ -105,7 +115,7 @@ export function ContextPanel() {
 					<span aria-hidden="true"></span><span class="session-cumulative">${t("Cumulative speed")} ${fmtSpeed(stats.speed)} · ${t("Cumulative cache hit")} <${CacheValue} session=${sessionCache(stats)} /></span>
 					<span>${t("Cost")}</span><span>${cost !== "—" && (stats.usageEstimated || stats.costIncomplete) ? "≈ " : ""}${cost}</span>` : null}
 			</div>
-			<div class="ctx-actions"><button class="btn sm" onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
+			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
 		${snap.checkpoint ? html`<${Section} title=${t("Git checkpoint")}><div class="kv"><span>${t("Status")}</span><span>${t(snap.checkpoint.status)}</span><span>${t("Created")}</span><span>${fmtDateTime(Date.parse(snap.checkpoint.createdAt))}</span><span>${t("Shell used")}</span><span>${snap.checkpoint.hadBash ? t("yes — external effects cannot be undone") : t("no")}</span></div><//>` : null}
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>

@@ -10,7 +10,7 @@ const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
 	"renders migrated image settings, semantic download progress, branch buttons, Git counts and user Markdown",
 	async () => {
-		const root = mkdtempSync(join(tmpdir(), "myharness-ui-polish-"));
+		const root = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR || tmpdir(), "myharness-ui-polish-"));
 		const server = new WebHttpServer();
 		const browser = new LocalBrowser({
 			kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind,
@@ -48,14 +48,20 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			{
 				id: "webShutdownGraceSeconds",
 				section: "Network",
-				label: "Web UI exit delay",
+				label: "Web UI exit delay (seconds)",
 				type: "number",
 				value: 10,
 				min: 0,
 				max: 3600,
 				unit: "seconds",
 			},
-			{ id: "codeIntelligence.enabled", section: "Tools", label: "Code Intelligence", type: "boolean", value: true },
+			{
+				id: "codeIntelligence.symbolsEnabled",
+				section: "Tools",
+				label: "Code Intelligence",
+				type: "boolean",
+				value: true,
+			},
 			{ id: "blockImages", section: "Images", label: "Block images", type: "boolean", value: false },
 		];
 		try {
@@ -124,16 +130,21 @@ try {
  const checkRows=()=>{const rights=new Set();for(const row of document.querySelectorAll('.set-row')) {
   const text=row.querySelector('.set-text'),control=row.querySelector('.set-control');
   const box=control.getBoundingClientRect();
-  if(box.left<text.getBoundingClientRect().right-1) throw Error('control overlaps text');
-  if(box.width<199||box.width>221) throw Error('control column is not 200-220px: '+box.width);
+  const wide=row.classList.contains('wide');
+  if(!wide&&box.left<text.getBoundingClientRect().right-1) throw Error('control overlaps text');
+  if(box.width<(wide?479:199)||box.width>(wide?580:221)) throw Error((wide?'wide ':'')+'control column has an unexpected width: '+box.width);
   rights.add(Math.round(box.right));
-  for(const field of control.querySelectorAll('.select:not(.model-ref-effort),.field,.input-group,.segmented')) if(Math.abs(field.getBoundingClientRect().height-32)>1) throw Error('control is not 32px tall: '+field.className);
+  for(const field of control.querySelectorAll('.select:not(.model-ref-effort),.select-like,.field,.input-group,.segmented')) if(Math.abs(field.getBoundingClientRect().height-32)>1) throw Error('control is not 32px tall: '+field.className);
   const desc=row.querySelector('.set-desc');
   if(desc && (desc.scrollWidth>desc.clientWidth+1||getComputedStyle(desc).textOverflow==='ellipsis')) throw Error('description clipped: '+desc.textContent);
  }
  if(rights.size>1) throw Error('control columns do not share one right edge: '+[...rights]);};
  checkRows();
  for(const section of ['conversation','search','network']) {setView({settingsSection:section});await wait(100);checkRows();}
+ setView({settingsSection:'search'});await wait(100);
+ (document.querySelector('.set-multiselect-btn') || document.querySelector('.select-like'))?.click();await wait(100);
+ if(!document.body?.textContent?.includes('Brave 搜索 API')) throw Error('Brave Search API option is not translated in Chinese');
+ (document.querySelector('.set-multiselect-btn') || document.querySelector('.select-like'))?.click();await wait(100);
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
  if(document.querySelector('.settings-nav').textContent.includes('工具调用')) throw Error('empty tools page still in the navigation');
  if([...document.querySelectorAll('.settings-nav button')].filter(b=>b.querySelector('svg')?.innerHTML.startsWith('<path d="M14.7 6.3')).length!==1) throw Error('wrench icon not used exactly once');
@@ -141,13 +152,16 @@ try {
  if(!document.querySelector('.settings-body').textContent.includes('禁止发送图片')||document.querySelector('.set-card-toggle')) throw Error('images not flat in Agent');
  setView({settingsSection:'code'});await wait(150);
  if(!document.querySelector('.settings-nav .on')?.textContent.includes('代码智能')) throw Error('missing code navigation');
- if(!document.querySelector('.settings-body').textContent.includes('Semantic')||!document.querySelector('.settings-body').textContent.includes('TypeScript')||!document.querySelector('.settings-body').textContent.includes('未下载')) throw Error('missing language manager');
+ if(!document.querySelector('.settings-body').textContent.includes('启用 symbols 工具')||!document.querySelector('.settings-body').textContent.includes('TypeScript')||!document.querySelector('.settings-body').textContent.includes('未下载')) throw Error('missing language manager');
  set({codeIntelligenceInstallation:{modules:[{id:'typescript',label:'TypeScript',languages:['typescript'],status:'installing'}],progress:[{id:'typescript',percent:35,remainingSeconds:12}]}});await wait(100);
  if(document.querySelector('progress')?.value!==35||!document.querySelector('.settings-body').textContent.includes('12 秒')) throw Error('download progress not live');
- set({codeIntelligenceInstallation:{progress:[],modules:[
+ const threeModules={progress:[],modules:[
   {id:'java',label:'Java',languages:['java'],serverKey:'jdtls',sharedComponents:['temurin-jre-21'],status:'installed',enabled:true},
   {id:'python',label:'Python',languages:['python'],serverKey:'pyright',sharedComponents:[],status:'unavailable',reason:'release-metadata-missing',message:'Code Intelligence module "python" has no published artifact size; release metadata is not available yet'},
-  {id:'swift',label:'Swift',languages:['swift'],serverKey:'sourcekit-lsp',sharedComponents:[],status:'unavailable',reason:'external-prerequisites',notes:'Windows SourceKit-LSP needs the official Swift toolchain and its prerequisites; MyHarness does not download it automatically.',message:'x'}]}});await wait(150);
+  {id:'swift',label:'Swift',languages:['swift'],serverKey:'sourcekit-lsp',sharedComponents:[],status:'unavailable',reason:'external-prerequisites',notes:'Windows SourceKit-LSP needs the official Swift toolchain and its prerequisites; MyHarness does not download it automatically.',message:'x'}]};
+ // The panel re-polls this endpoint every second and a poll replaces pushed data, so the endpoint must keep answering with the pushed state.
+ const realFetch=window.fetch;window.fetch=(url,init)=>String(url).includes('/api/code-intelligence/modules')?Promise.resolve(new Response(JSON.stringify(threeModules),{headers:{'content-type':'application/json'}})):realFetch(url,init);
+ set({codeIntelligenceInstallation:threeModules});await wait(150);
  {const heads=[...document.querySelectorAll('.lang-head')];
   if(heads.length!==3||document.querySelector('.lang-body')) throw Error('language modules not folded');
   if(!heads[0].textContent.includes('启用')||!heads[1].textContent.includes('暂未发布')) throw Error('folded line lacks name or state: '+heads.map(h=>h.textContent).join('|'));
@@ -164,7 +178,7 @@ try {
  }
  checkRows();
  render(null,app);app.style.width='340px';
- set({resources:{tools:[{name:'read',description:'Long English description',active:true},{name:'workflow',description:'Long English workflow description',active:true},{name:'ultracode',description:'Long English ultracode description',active:true}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
+ set({resources:{tools:[{name:'read',description:'Long English description',active:true},{name:'workflow',description:'Long English workflow description',active:true},{name:'ultracode',description:'Long English ultracode description',active:true},{name:'job_list',description:'Lists background jobs that are still running and their status.',active:true},{name:'apply_patch',description:'Apply a multi-file patch.',active:false},{name:'ask_user_question',description:'Ask the user a question and wait for the answer.',active:true},{name:'acme_widget',description:'Third-party widget bridge from the acme extension',active:true,extension:true,source:'acme/widget'}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
  render(h(ContextPanel,{}),app);await wait(150);
  for(const head of document.querySelectorAll('.ctx-head')) if(head.textContent.includes('工具')) head.click();await wait(100);
  if([...document.querySelectorAll('.ctx-head')].some((head)=>head.textContent.includes('分支'))) throw Error('branch section still rendered');
@@ -172,6 +186,13 @@ try {
  if(!descs[0].textContent.includes('读取并解析')) throw Error('tool localization');
  if(!descs[1].textContent.includes('分阶段只读探索，用于多模块并行排查与验证')||!descs[2].textContent.includes('高风险深度排查，结合反例检查与失败路径校验')) throw Error('workflow/ultracode localization');
  for(const desc of descs) if(desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error('tool description truncated');
+ const descOf=(name)=>{const row=[...document.querySelectorAll('.res-row')].find((r)=>r.querySelector('.mono')?.textContent.includes(name)); if(!row) throw Error('missing tool row '+name); return row.querySelector('.res-desc');};
+ for(const [name,sentence] of [['job_list','列出后台任务及其运行状态'],['apply_patch','用补丁一次性修改多个文件'],['ask_user_question','向用户提问并等待选择或回答']]) {
+  const desc=descOf(name);
+  if(desc.textContent!==sentence) throw Error(name+' is not the Chinese one-liner: '+desc.textContent);
+  if(desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error(name+' truncated or overflowing: '+desc.textContent);
+ }
+ {const ext=descOf('acme_widget'); if(ext.textContent!=='Third-party widget bridge from the acme extension') throw Error('extension tool was localized: '+ext.textContent);}
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

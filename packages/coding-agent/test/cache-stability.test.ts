@@ -139,7 +139,7 @@ describe("prompt cache stability", () => {
 		it("keeps the delegated agent within its read-only role", () => {
 			const delegatedPrompt = getAgentRolePrompt("delegated");
 			expect(delegatedPrompt).toContain("read-only sub-Agent delegated by the Main Agent");
-			expect(delegatedPrompt).toContain("including symbols");
+			expect(delegatedPrompt).toContain("read-only investigation capabilities actually provided by the runtime");
 		});
 	});
 

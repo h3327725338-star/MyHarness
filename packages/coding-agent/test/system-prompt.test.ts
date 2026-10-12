@@ -7,6 +7,7 @@ import {
 	GLOBAL_CORE_POLICY,
 	OUTPUT_LANGUAGE_POLICY,
 } from "../src/system-prompts/composer/index.ts";
+import { loadSystemPrompt, loadSystemPromptLines } from "../src/system-prompts/loader/index.ts";
 
 describe("buildSystemPrompt", () => {
 	describe("shared core and role isolation", () => {
@@ -31,7 +32,7 @@ describe("buildSystemPrompt", () => {
 			expect(main).toContain("Main Agent working directly with the user");
 			expect(main).toContain("Stop and confirm if the target is unclear");
 			expect(delegated).toContain("read-only sub-Agent delegated by the Main Agent");
-			expect(delegated).toContain("including symbols");
+			expect(delegated).toContain("read-only investigation capabilities actually provided by the runtime");
 			expect(main).not.toContain("<commit_authorization>");
 		});
 
@@ -70,6 +71,51 @@ describe("buildSystemPrompt", () => {
 	});
 
 	describe("dynamic tool routing", () => {
+		test("omits symbols from complete main, delegated, and Explore prompts when it is off by default", () => {
+			const common = { contextFiles: [], skills: [], cwd: "/project" };
+			const delegatedTools = ["read", "grep", "find", "ls", "bash"];
+			const delegatedSnippets = Object.fromEntries(
+				delegatedTools.map((name) => [name, loadSystemPrompt(`tools/${name}/snippet.md`)]),
+			);
+			const prompts = [
+				buildSystemPrompt(common),
+				buildSystemPrompt({
+					...common,
+					agentRole: "delegated",
+					selectedTools: delegatedTools,
+					toolSnippets: delegatedSnippets,
+				}),
+				buildSystemPrompt({
+					...common,
+					agentRole: "delegated",
+					selectedTools: delegatedTools,
+					toolSnippets: delegatedSnippets,
+					appendSystemPrompt: loadSystemPrompt("roles/explore.md"),
+				}),
+			];
+
+			for (const prompt of prompts) expect(prompt.toLowerCase()).not.toContain("symbols");
+		});
+
+		test("includes the symbols tool text only when it is active and has no retired index wording", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["read", "symbols"],
+				toolSnippets: {
+					read: loadSystemPrompt("tools/read/snippet.md"),
+					symbols: loadSystemPrompt("tools/symbols/snippet.md"),
+				},
+				promptGuidelines: loadSystemPromptLines("tools/symbols/guidelines.md"),
+				contextFiles: [],
+				skills: [],
+				cwd: "/project",
+			});
+
+			expect(prompt.toLowerCase()).toContain("symbols");
+			expect(prompt).toContain("Query code symbols and relationships");
+			expect(prompt.toLowerCase()).not.toContain("lightweight");
+			expect(prompt.toLowerCase()).not.toContain("lexical");
+		});
+
 		test("mentions only active specialized tools", () => {
 			const symbolsOnly = buildToolRoutingPolicy(["read", "grep", "symbols"]);
 			expect(symbolsOnly).toContain("Prefer symbols");

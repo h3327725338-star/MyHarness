@@ -25,8 +25,10 @@ release.
 - Workspace records and product sessions use the JSONL/JSON storage under the
   current project `data/workspaces/` tree. SQLite is a separate backend and is
   not the confirmed default Coding Agent storage path.
-- The lightweight Symbols index is part of the source tree and does not need a
-  language-server download.
+- The Symbols capability uses semantic language-server services only. The
+  `symbols` tool is disabled by default and controlled by
+  `codeIntelligence.symbolsEnabled`; optional Windows modules are managed per
+  language. Plain-text search remains available through `grep`, `find` and `ls`.
 - The repository can build and run targeted source CLI smoke tests with a
   synthetic local Provider fixture; that does not prove any external Provider
   or OAuth integration.
@@ -53,12 +55,10 @@ release.
 
 ## Currently unavailable or not verified
 
-- The heavyweight Windows Code Intelligence archives are not in the source
-  checkout. `runtime-manifest.json` has `published: false` and no artifact
-  `sizeBytes` or `sha256`, so the installer correctly refuses those downloads.
-- Real Windows language-server startup E2E is therefore not claimed. The
-  manager, checksum/recovery paths and mock-server tests are available, but a
-  published release asset is still required for the real asset path.
+- Windows Code Intelligence archives are not stored in the source checkout.
+  `runtime-manifest.json` marks the release as published and provides exact
+  artifact sizes and SHA-256 values. Asset reachability and real language-server
+  startup have not been verified in this status snapshot.
 - A real Provider-backed first conversation cannot be verified without a user
   supplied Provider/model and credential. No credential is stored in this
   repository.
@@ -80,9 +80,9 @@ release.
 
 - MyHarness-owned contributions use Apache-2.0; inherited and third-party
   material keeps its own notices and terms.
-- Code Intelligence defaults to a lightweight source index, with heavyweight
-  Windows modules installed per language only when a published, checksummed
-  manifest is available.
+- Code Intelligence exposes semantic/LSP navigation only. The Symbols tool is
+  opt-in and defaults off; language-server modules remain optional and are
+  installed per language using the checked-in runtime manifest.
 - Runtime modules and Code Intelligence workspace data are kept outside the
   source checkout and outside project Session data.
 - The public repository is served from a separate one-commit orphan history;

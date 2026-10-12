@@ -147,7 +147,6 @@ export {
 	createSymbolsTool,
 	createSymbolsToolDefinition,
 	type SymbolsCodeIntelligenceServices,
-	type SymbolsIndexPort,
 	SymbolsToolConfigurationError,
 	type SymbolsToolDetails,
 	type SymbolsToolInput,

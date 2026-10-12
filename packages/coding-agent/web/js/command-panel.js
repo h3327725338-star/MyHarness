@@ -1307,10 +1307,10 @@ function Screen({ build, ctx, entry, onMeta, arg }) {
 
 export function CommandPanel() {
 	const cmd = useStore((s) => s.view.cmd);
-	// A closed panel stays on screen (inert) for the length of its fade, so it leaves the way it came.
+	// A closed panel stays on screen (inert) for the length of its close motion (dialog-out, --t-close), so it leaves the way it came.
 	const last = useRef(cmd);
 	if (cmd) last.current = cmd;
-	const { mounted } = usePresence(!!cmd, 160);
+	const { mounted } = usePresence(!!cmd, 110);
 	const shown = cmd || (mounted ? last.current : null);
 	return shown ? html`<${PanelBody} key=${shown.nonce} cmd=${shown} leaving=${!cmd} />` : null;
 }
@@ -1370,7 +1370,7 @@ export function PanelBody({ cmd, leaving, onClose = closeCommand }) {
 	const top = stack[stack.length - 1];
 	const heading = stack.map((e) => metas[e.id]?.title).filter(Boolean);
 	const meta = metas[top.id] || {};
-	return html`<div class=${`cp fade-in ${ready ? "ready" : ""} ${leaving ? "leaving" : ""}`} data-size=${meta.size || "lg"} ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")} inert=${!!leaving}>
+	return html`<div class=${`cp ${ready ? "ready" : ""} ${leaving ? "closing" : ""}`} data-size=${meta.size || "lg"} ref=${panel} role="dialog" aria-label=${heading.join(" › ") || t("Command")} inert=${!!leaving}>
 		<div class="cp-head">
 			${stack.length > 1 ? html`<button class="icon-btn sm" onClick=${ctx.pop} title=${`${t("Back")} (←)`} aria-label=${t("Back")}><${Icon} name="arrowLeft" size=${14} /></button>` : html`<${Icon} name="bolt" size=${13} class="c-dim" />`}
 			<span class="cp-title truncate">${heading.map((part, i) => html`${i ? html`<span class="cp-sep">›</span>` : null}<span class=${i === heading.length - 1 ? "cur" : "dim"}>${part}</span>`)}</span>

@@ -137,7 +137,7 @@ export const SETTINGS_MENU_SETTING: Readonly<Record<string, string>> = {
 	"popup-notifications": "popupNotifications",
 	"auto-memory": "autoMemory",
 	"sub-agent": "subAgent",
-	"code-intelligence": "codeIntelligence.enabled",
+	"code-intelligence": "codeIntelligence.symbolsEnabled",
 	"vision-assistant": "visionAssistant",
 	"fallback-model": "fallbackModel",
 	"compact-model": "compactionModel",
@@ -191,12 +191,13 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 	const installationState = () => {
 		const disabled = new Set((settings().getCodeIntelligenceSettings().disabledLanguages ?? []).map(languageKey));
 		const runtime = host.runtimeHost.services.codeIntelligence?.getStatus?.();
-		const configured = settings().getCodeIntelligenceSettings().enabled !== false;
+		// The saved switch value; the runtime adopted its own value when it was built, so the two can differ until restart.
+		const symbolsEnabled = settings().getCodeIntelligenceSettings().symbolsEnabled;
 		return {
 			runtime: runtime ?? null,
-			configuredMode: configured ? "semantic" : "lightweight",
-			activeMode: runtime?.semanticConfigured ? "semantic" : "lightweight",
-			restartRequired: runtime !== undefined && configured !== runtime.semanticEnabled,
+			symbolsEnabled,
+			runtimeSymbolsEnabled: runtime?.semanticEnabled ?? null,
+			restartRequired: runtime !== undefined && symbolsEnabled !== runtime.semanticEnabled,
 			// A module is on while any of its languages is not switched off.
 			modules: installation()
 				.getModuleStatuses()
@@ -293,7 +294,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "contextWindowMain",
 				section: "Agent",
-				label: "Main context window cap",
+				label: "Main context window cap (K tokens)",
 				description: "Optional cap for the main session. Empty uses the model's window.",
 				type: "tokens",
 				value: context.main ?? null,
@@ -303,7 +304,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "contextWindowSubAgent",
 				section: "Agent",
-				label: "Sub-agent context window cap",
+				label: "Sub-agent context window cap (K tokens)",
 				description: "Optional cap for sub-agents. Empty uses the model's window.",
 				type: "tokens",
 				value: context.subagent ?? null,
@@ -481,12 +482,12 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				value: web.useBrowserCookies,
 			},
 			{
-				id: "codeIntelligence.enabled",
+				id: "codeIntelligence.symbolsEnabled",
 				section: "Tools",
 				label: "Code Intelligence",
-				description: "Semantic code navigation (the lightweight index stays available when off).",
+				description: "Give the model the symbols tool (semantic code navigation). Applies after a restart.",
 				type: "boolean",
-				value: code.enabled,
+				value: code.symbolsEnabled,
 			},
 			// Images
 			{
@@ -534,7 +535,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "network.connectTimeoutMs",
 				section: "Timeouts & retries",
-				label: "Connect timeout",
+				label: "Connect timeout (seconds)",
 				description:
 					"Longest time to set up a connection, TLS handshake included. Only applies when a new connection is opened.",
 				type: "numberUnit",
@@ -547,7 +548,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "network.firstByteTimeoutMs",
 				section: "Timeouts & retries",
-				label: "First-byte timeout",
+				label: "First-byte timeout (seconds)",
 				description:
 					"Longest wait after a request is sent until the server starts to answer (the response headers).",
 				type: "numberUnit",
@@ -560,7 +561,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "network.streamIdleTimeoutMs",
 				section: "Timeouts & retries",
-				label: "Stream idle timeout",
+				label: "Stream idle timeout (seconds)",
 				description:
 					"Longest gap between two pieces of data once the answer has started. It restarts with every piece, so the total length is not limited.",
 				type: "numberUnit",
@@ -573,7 +574,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "retry.networkMaxAttempts",
 				section: "Timeouts & retries",
-				label: "Attempts per model (first included)",
+				label: "Attempts per model (times, first included)",
 				description: "After this many failed attempts, the fallback model takes over.",
 				type: "number",
 				value: s.getNetworkMaxAttempts(),
@@ -584,7 +585,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "webShutdownGraceSeconds",
 				section: "Network",
-				label: "Web UI exit delay",
+				label: "Web UI exit delay (seconds)",
 				description:
 					"After the last browser page of this Web UI closes, MyHarness waits this long before it stops the local server. Reloading or reopening the page within that time keeps it running. Applies the next time the last page closes.",
 				type: "number",
@@ -597,7 +598,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "worktreeShutdownGraceSeconds",
 				section: "Network",
-				label: "Copy tab exit delay",
+				label: "Copy tab exit delay (seconds)",
 				description:
 					"After the last copy tab closes, exit after this delay. Reopening cancels; at least 5 seconds protects reloads.",
 				type: "number",
@@ -969,9 +970,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				session.refreshToolsAfterSettingsChange();
 				return;
 			}
-			case "codeIntelligence.enabled": {
+			case "codeIntelligence.symbolsEnabled": {
 				const current = s.getCodeIntelligenceSettings();
-				s.setCodeIntelligenceSettings({ ...current, enabled: boolValue(value, id) });
+				s.setCodeIntelligenceSettings({ ...current, symbolsEnabled: boolValue(value, id) });
 				return;
 			}
 			case "autoResizeImages":
@@ -1270,6 +1271,15 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		if (!Array.isArray(names) || names.some((name) => typeof name !== "string"))
 			throw new HttpError(400, "names must be a string array");
 		if (host.session.isStreaming) throw new HttpError(409, "Cannot change tools while the agent is running.");
+		// A built-in tool the settings have switched off does not exist for this session, so asking for it is
+		// refused rather than silently dropped: the response then says why instead of appearing to succeed.
+		// Every other tool name answers true here, so this only ever fires for the switched-off one.
+		const unavailable = (names as string[]).filter((name) => !host.session.isBuiltinEnabled(name));
+		if (unavailable.length > 0)
+			throw new HttpError(
+				400,
+				`${unavailable.join(", ")} is turned off in the settings (Code Intelligence); it is not available to the model. Restart to apply the switch.`,
+			);
 		host.session.setActiveToolsByName(names as string[]);
 		return { ok: true, active: host.session.getActiveToolNames() };
 	});

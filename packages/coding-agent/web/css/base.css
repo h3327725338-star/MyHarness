@@ -70,6 +70,7 @@ svg { display: block; flex: none; }
 .btn.primary:hover:not(:disabled), .btn.primary:active:not(:disabled) { background: var(--accent-strong); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-strong)); }
 .btn.danger.solid { background: var(--danger); color: var(--on-danger); border-color: transparent; }
+/* #000 is deliberate: a mix toward pure black reads the same in both schemes, so this hover/press shade needs no themed token. */
 .btn.danger.solid:hover:not(:disabled), .btn.danger.solid:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 86%, #000); }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
@@ -80,10 +81,14 @@ svg { display: block; flex: none; }
 .field, .select {
 	height: var(--h-control); padding: 0 10px; border-radius: var(--r-md);
 	border: 1px solid var(--border-strong); background: var(--bg-inset); color: var(--text); min-width: 0;
+	font-size: var(--fs-body);
 	transition: border-color var(--t-fast);
 }
-.field:hover:not(:focus):not(:disabled), .select:hover:not(:focus):not(:disabled) { border-color: var(--text-4); }
+.field:hover:not(:focus):not(:disabled), .select:hover:not(:focus):not(:disabled) { border-color: var(--border-hover); }
 .field:focus, .select:focus { border-color: var(--border-focus); outline: none; }
+/* A value the field cannot save: the frame turns red, and keeps a red ring while focused. */
+.field.invalid { border-color: var(--danger); }
+.field.invalid:focus { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 .field.sm, .select.sm { height: var(--h-control-sm); font-size: var(--fs-sm); }
 .btn:disabled, .icon-btn:disabled, .field:disabled, .select:disabled, .toggle:disabled { opacity: var(--disabled-opacity); cursor: default; }
 /* Number fields read from the left like every other field; the step buttons keep their own space at the right edge. */
@@ -118,7 +123,7 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 	.counts > span { text-box: trim-both cap alphabetic; }
 }
 
-.kbd { font: 500 10.5px/1 var(--font-ui); padding: 2px 5px; border-radius: var(--r-xs); border: 1px solid var(--border-strong); color: var(--text-3); background: var(--bg-inset); }
+.kbd { font: 500 var(--fs-mini)/1 var(--font-ui); padding: 2px 5px; border-radius: var(--r-xs); border: 1px solid var(--border-strong); color: var(--text-3); background: var(--bg-inset); }
 
 .badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); background: var(--surface-active); color: var(--text-2); white-space: nowrap; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
@@ -129,7 +134,8 @@ textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vert
 /* The one switch (Toggle in ui.js). In a row that is itself the control (the command panel) the same shape only shows
    the state: a span with `.on`, without hover or focus of its own. */
 .toggle { display: inline-block; width: 30px; height: 18px; border-radius: var(--r-pill); background: var(--border-strong); position: relative; flex: none; transition: background var(--t-base) var(--ease); }
-.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform var(--t-base) var(--ease); box-shadow: 0 1px 2px rgba(0,0,0,.35); }
+/* The #fff knob is deliberate: pure white sits above the track in both schemes, so it needs no themed token; the shadow uses the shared black-base --shadow-toggle. */
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform var(--t-base) var(--ease); box-shadow: var(--shadow-toggle); }
 .toggle[aria-checked="true"], .toggle.on { background: var(--accent); }
 .toggle[aria-checked="true"]::after, .toggle.on::after { transform: translateX(12px); }
 button.toggle:hover:not(:disabled) { background: var(--text-4); }
@@ -157,6 +163,16 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 /* For elements that are placed with a transform or must not move while they appear. */
 @keyframes fade-only { from { opacity: 0; } to { opacity: 1; } }
 
+/* The one motion of the dialog family (Modal and Overlay in ui.js, the command panel, the palette, the folder picker):
+   the scrim fades in over --t-base and out over --t-close; the dialog itself rises in over --t-pop (a light 8 px slide
+   plus a 1.5% scale) and leaves over --t-close with a 4 px drop. Durations and easing are tokens (tokens.css); every
+   dialog references these four keyframes and nothing else. The global motion-off / reduced-motion rules in this file
+   stop the slide and the scale, leaving at most a blink of a fade. */
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scrim-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes dialog-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(4px) scale(0.99); } }
+
 /* The one expand/collapse motion (Collapse in ui.js, the Workspace rows and every other foldable area): the height
    follows a grid row going 0fr <-> 1fr, the content fades, and a folded area is not hit-testable. The one column is
    exactly as wide as the place the area sits in, so a long line inside (a path, a command) is cut or scrolls there
@@ -174,7 +190,7 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 
 /* A number with a fixed unit after it: one field look, the unit is inside at the right and cannot be edited. */
 .unit-field { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--bg-inset); cursor: text; min-width: 0; transition: border-color var(--t-fast); }
-.unit-field:hover:not(:focus-within):not(.invalid):not(.disabled) { border-color: var(--text-4); }
+.unit-field:hover:not(:focus-within):not(.invalid):not(.disabled) { border-color: var(--border-hover); }
 .unit-field:focus-within { border-color: var(--border-focus); }
 .unit-field.invalid { border-color: var(--danger); }
 .unit-field.disabled { opacity: var(--disabled-opacity); cursor: default; }
@@ -204,3 +220,37 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .empty { color: var(--text-3); padding: 24px 16px; text-align: center; font-size: var(--fs-md); }
 .empty-icon { margin: 0 auto 8px; color: var(--text-4); }
 .empty-hint { margin-top: 4px; font-size: var(--fs-sm); }
+
+/* The trigger of the self-drawn Select (web/js/select.js): the look of `.select` on a button, with the shared
+   `--chev-img` chevron drawn as its own ::after so it can turn 180 degrees while the list is open. The width shrinks
+   to the content (W30); text that does not fit is cut with the shared ellipsis and kept whole in the button's title. */
+.select-like {
+	position: relative; display: inline-flex; align-items: center;
+	height: var(--h-control); padding: 0 30px 0 10px; border-radius: var(--r-md);
+	border: 1px solid var(--border-strong); background: var(--bg-inset); color: var(--text); min-width: 0;
+	flex: 0 1 auto; width: auto; max-width: 100%; text-align: left;
+	font-size: var(--fs-body);
+	transition: border-color var(--t-fast);
+}
+.select-like:hover:not(:focus):not(:disabled) { border-color: var(--border-hover); }
+.select-like:focus { border-color: var(--border-focus); outline: none; }
+.select-like:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.select-like.sm { height: var(--h-control-sm); font-size: var(--fs-sm); }
+.select-like.fill { flex: 1 1 auto; width: 100%; }
+.select-like::after { content: ""; position: absolute; right: 10px; top: 50%; margin-top: -6px; width: 12px; height: 12px; background: var(--chev-img) no-repeat center / 12px 12px; transition: transform var(--t-fast) var(--ease); }
+.select-like[aria-expanded="true"]::after { transform: rotate(180deg); }
+.select-value { min-width: 0; }
+.select-placeholder { color: var(--text-3); }
+
+/* The Select panel: never narrower than the trigger (its min-width is set when opening), never wider than min(420 px,
+   viewport − 16 px); the option list itself scrolls at 280 px. Rows keep the shared `.pop-item` look, long labels wrap
+   instead of pushing the panel open, and grouped lists head each block with `.pop-head`. */
+.popover.select-pop { max-width: min(420px, calc(100vw - 16px)); }
+.select-pop .pop-scroll { max-height: 280px; overflow-y: auto; }
+.select-opt { white-space: normal; }
+.select-opt-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.select-opt-hint { flex: 0 0 auto; max-width: 14em; text-align: right; overflow-wrap: anywhere; }
+/* The keyboard highlight reads exactly like a hovered row (same pair as `.pop-item:hover`); when the highlight lands on
+   the current value, the selected-row look stays. */
+.select-opt.hi { background: var(--surface-hover); color: var(--text); }
+.select-opt.hi.active { background: var(--surface-select); }

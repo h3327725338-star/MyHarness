@@ -17,7 +17,7 @@ import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from
 import { type AppMode, resolveProjectTrusted } from "./application/project-trust.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
-import { ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.ts";
+import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getDataDir, VERSION } from "./config.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -29,6 +29,7 @@ import { resolveCliModel, resolveModelScope, type ScopedModel } from "./provider
 import { getMissingSessionCwdIssue, MissingSessionCwdError } from "./session/manager/cwd.ts";
 import { assertValidSessionId, SessionManager, setMirrorSessionsAllowed } from "./session/manager/index.ts";
 import { type Args, parseArgs } from "./startup/args.ts";
+import { scheduleDeferredStartupMaintenance } from "./startup/deferred-maintenance.ts";
 import { processFileArguments } from "./startup/file-processor.ts";
 import { renderWebStartupHelp } from "./startup/help.ts";
 import { buildInitialMessage } from "./startup/initial-message.ts";
@@ -692,6 +693,9 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	printTimings();
+	if (appMode === "web") {
+		scheduleDeferredStartupMaintenance({ dataRoot: getDataDir(cwd) });
+	}
 	const { runWebMode } = await import("./modes/web/web-mode.ts");
 	const exitCode = await runWebMode(runtime, webBootstrap!, {
 		initialMessage,

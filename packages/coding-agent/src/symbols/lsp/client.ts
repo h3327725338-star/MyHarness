@@ -11,7 +11,7 @@
  * - 状态机（created → starting → started → initialized → shutting_down → closed；failed）
  *
  * 不负责：子进程 spawn / 流 / kill（属于 LspProcess）；
- * 不依赖 CodeSymbolIndex / legacy adapter / symbols tool / AgentSession。
+ * 不依赖 symbols tool / AgentSession。
  */
 
 import {

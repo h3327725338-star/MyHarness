@@ -10,7 +10,7 @@ export interface SymbolStoreRecord {
 }
 
 export interface SymbolStoreReplaceOptions {
-	readonly source: IntelligenceSource;
+	readonly source: IntelligenceSource | "lightweight";
 	readonly workspaceRoot?: string;
 	readonly definitionId?: string;
 	/** Partial results are conservative and never remove older file records. */
@@ -18,7 +18,7 @@ export interface SymbolStoreReplaceOptions {
 }
 
 export interface SymbolStoreUpsertOptions {
-	readonly source: IntelligenceSource;
+	readonly source: IntelligenceSource | "lightweight";
 	readonly workspaceRoot?: string;
 	readonly definitionId?: string;
 }
@@ -36,7 +36,7 @@ export interface SymbolStoreApi {
 	resolve(symbolId: string): SymbolStoreRecord;
 	get(symbolId: string): SymbolStoreRecord | undefined;
 	findCandidates(options?: {
-		readonly source?: IntelligenceSource;
+		readonly source?: IntelligenceSource | "lightweight";
 		readonly path?: string;
 		readonly namePath?: string;
 	}): readonly SymbolStoreRecord[];

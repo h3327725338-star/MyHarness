@@ -3,6 +3,7 @@
 // opening, switching or saving a provider never contacts the endpoint. The JSON view is an optional advanced editor over
 // the same data.
 import { html, useEffect, useRef, useState, Collapse, Icon, Segmented, Spinner, Toggle, UnitGroup } from "./ui.js";
+import { Select } from "./select.js";
 import { post } from "./store.js";
 import { effortName, fmtTokens } from "./util.js";
 import { N_, t } from "./i18n.js";
@@ -176,7 +177,7 @@ function Pricing({ value, onChange }) {
 	const row = (rates, change) => html`<div class="pf-two">${PRICE_FIELDS.map(([key, label]) => html`<${Field} key=${key} label=${`${t(label)} (${value.currency === "CNY" ? "¥" : "$"}/1M)`}><input class="field mono" type="number" min="0" step="any" value=${rates[key]} onInput=${(e) => change({ ...rates, [key]: e.target.value })} /><//>`)}</div>`;
 	return html`<div class="col pf-pricing">
 		<div class="row"><strong class="grow">${t("Custom pricing")}</strong><${Toggle} checked=${!!value} label=${t("Custom pricing")} onChange=${(enabled) => onChange(enabled ? { ...emptyRates(), currency: "USD", tiers: [] } : null)} /></div>
-		${value ? html`<${Field} label=${t("Currency")} hint=${t("Prices per 1M tokens. Currency changes do not convert rates.")}><select class="select" value=${value.currency || "USD"} onChange=${(e) => update({ currency: e.target.value })}><option value="USD">USD ($)</option><option value="CNY">CNY (¥)</option></select><//>
+		${value ? html`<${Field} label=${t("Currency")} hint=${t("Prices per 1M tokens. Currency changes do not convert rates.")}><${Select} value=${value.currency || "USD"} ariaLabel=${t("Currency")} onChange=${(next) => update({ currency: next })} options=${[{ value: "USD", label: "USD ($)" }, { value: "CNY", label: "CNY (¥)" }]} /><//>
 			${row(value, onChange)}
 			${(value.tiers || []).map((tier, index) => html`<div class="col pf-pricing" key=${index}>
 				<div class="row"><strong class="grow">${t("Long-context tier")} ${index + 1}</strong><button class="icon-btn sm" title=${t("Remove tier")} aria-label=${t("Remove tier")} onClick=${() => update({ tiers: value.tiers.filter((_, i) => i !== index) })}><${Icon} name="trash" size=${14} /></button></div>
@@ -440,16 +441,13 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 						<${Field} label=${t("Name")}><input class="field" autofocus=${isNew} placeholder=${t("e.g. My Gateway")} value=${draft.name} onInput=${(e) => patch({ name: e.target.value, ...(idTouched ? {} : { id: slugify(e.target.value) }) })} /><//>
 						<${Field} label=${t("Provider ID")} hint=${isNew ? t("Unique lowercase name used in settings.") : t("The ID cannot change after creation.")}><input class="field mono" disabled=${!isNew} placeholder="my-gateway" value=${draft.id} onInput=${(e) => (setIdTouched(true), patch({ id: e.target.value }))} /><//>
 					</div>
-					<${Field} label=${t("API format")}><select class="select" value=${draft.api} onChange=${(e) => patch({ api: e.target.value })}>${types.map((type) => html`<option key=${type} value=${type} selected=${draft.api === type}>${API_LABELS[type] ? t(API_LABELS[type]) : type}</option>`)}</select><//>
+					<${Field} label=${t("API format")}><${Select} value=${draft.api} ariaLabel=${t("API format")} onChange=${(next) => patch({ api: next })} options=${types.map((type) => ({ value: type, label: API_LABELS[type] ? t(API_LABELS[type]) : type }))} /><//>
 					<${Field} label=${t("Base URL")} hint=${draft.baseUrl.trim() ? undefined : t("Not filled in yet. The provider can be saved, but stays off until it has a Base URL.")}><input class="field mono example-placeholder" placeholder=${BASE_URL_EXAMPLE} aria-label=${t("Base URL")} value=${draft.baseUrl} onInput=${(e) => patch({ baseUrl: e.target.value })} /><//>
 					<${Field} label=${t("Keep-alive time")} hint=${html`${t("An idle connection closes after this time. A longer time saves handshakes; if the server closes first, requests fail, so shorten it when that happens.")}${keepAliveProblem ? html`<span class="pf-problem" role="alert"> ${keepAliveProblem}</span>` : null}`}>
 						<${UnitGroup} value=${draft.keepAlive} onInput=${(v) => patch({ keepAlive: v })} unit=${t("seconds")} label=${t("Keep-alive time")} placeholder=${defaults?.keepAliveSeconds === undefined ? "" : String(defaults.keepAliveSeconds)} invalid=${!!keepAliveProblem} inputMode="numeric" />
 					<//>
 					<${Field} label=${t("IP protocol")} hint=${t("Forces one address type. If the chosen type does not work on this network, requests fail outright; switch back to Auto then.")}>
-						<select class="select" value=${draft.ipFamily} onChange=${(e) => patch({ ipFamily: e.target.value })}>
-							${draft.ipFamily === "" ? html`<option value="" hidden selected>${ipFamilyLabel(defaults?.ipFamily ?? "auto", defaults?.ipFamily)}</option>` : null}
-							${ipFamilies.map((family) => html`<option key=${family} value=${family} selected=${draft.ipFamily === family}>${ipFamilyLabel(family, defaults?.ipFamily)}</option>`)}
-						</select>
+						<${Select} value=${draft.ipFamily} ariaLabel=${t("IP protocol")} placeholder=${ipFamilyLabel(defaults?.ipFamily ?? "auto", defaults?.ipFamily)} onChange=${(next) => patch({ ipFamily: next })} options=${ipFamilies.map((family) => ({ value: family, label: ipFamilyLabel(family, defaults?.ipFamily) }))} />
 					<//>
 					<div class="col field-label"><span class="field-name">${t("Authentication")}</span>
 						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} /></div>

@@ -332,7 +332,6 @@ function checkManifest(entries, findings) {
 		return;
 	}
 
-	if (manifest.defaultMode !== "lightweight") addFinding(findings, "Code Intelligence default is not lightweight", entry.path, "", 0);
 	const artifacts = [
 		...(manifest.modules ?? []).map((module) => module.artifact),
 		...(manifest.sharedComponents ?? []).map((component) => component.artifact),

@@ -1,4 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// actions.js reaches the store and browser-only modules; mock those two like web-export-replay-unit.test.ts does.
+vi.mock("../web/js/ui.js", () => ({
+	html: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+		type: "vnode",
+		strings: Array.from(strings),
+		values,
+	}),
+	Icon: (props?: { name?: string; size?: number }) => ({ type: "icon", name: props?.name, size: props?.size }),
+}));
+
+vi.mock("/vendor/preact-hooks.js", () => ({
+	useLayoutEffect: () => {},
+	useRef: (init: unknown) => ({ current: init }),
+	useState: (init: unknown) => [init, () => {}],
+}));
 
 // The Web UI is plain ES modules served as-is; its pure logic modules are testable directly.
 // They are loaded through a computed URL because they are browser modules, not TypeScript.
@@ -27,6 +43,7 @@ const {
 } = await import(new URL("util.js", webDir).href);
 const { byUsage, rankSearch, searchTier } = await import(new URL("search.js", webDir).href);
 const { createSseWatchdog, isDeadStream } = await import(new URL("sse-watchdog.js", webDir).href);
+const { exportTooLargeMessage } = await import(new URL("actions.js", webDir).href);
 
 const assistant = (blocks: unknown[], extra: Record<string, unknown> = {}) => ({
 	kind: "assistant",
@@ -234,6 +251,18 @@ describe("Web UI: blank chats left behind", () => {
 		const old = [{ id: "a" }, { id: "b" }, { id: "c" }];
 		const current = [{ id: "a" }, { id: "c" }, { id: "d" }];
 		expect(reconcileRows(old, current, "id").map((row: any) => row.id)).toEqual(["a", "b", "c", "d"]);
+	});
+});
+
+describe("Web UI: bookmark labels in the transcript wire", () => {
+	it("ignores label items so they never open a turn or change the turn list", () => {
+		const user = { kind: "user", ts: 1, text: "task", images: [] };
+		const reply = assistant([{ type: "text", text: "task done" }]);
+		const label = { kind: "label", id: "l1", ts: 3, targetId: "a", label: "keep" };
+		const plain = buildTurns([user, reply], { toolRuns: {} });
+		const withLabel = buildTurns([label, user, reply, label], { toolRuns: {} });
+		expect(withLabel).toHaveLength(plain.length);
+		expect(withLabel[0].items).toHaveLength(plain[0].items.length);
 	});
 });
 
@@ -1405,5 +1434,730 @@ describe("SSE reconnect watchdog", () => {
 		dog.revive();
 		timers.advance(10_000);
 		expect(rebuilds).toBe(1);
+	});
+});
+
+describe("Web UI: export too large (413) message", () => {
+	const tooLarge = { code: "export_too_large", bytes: 33_554_432, limit: 31_457_280 };
+
+	it("shows the size and the limit in MiB with one decimal, in English and Chinese", async () => {
+		const { setLang } = await import(new URL("lang.js", webDir).href);
+		const previous = (await import(new URL("lang.js", webDir).href)).getLang();
+		try {
+			setLang("en");
+			expect(exportTooLargeMessage(413, tooLarge)).toBe(
+				"This conversation is too large to export (32.0 MiB, limit 30.0 MiB). Start a new chat and export that one, or copy the conversation's .jsonl file from the data folder.",
+			);
+			setLang("zh-CN");
+			expect(exportTooLargeMessage(413, tooLarge)).toBe(
+				"这段对话太大，无法导出（32.0 MiB，上限 30.0 MiB）。请新开一个对话再导出，或从数据目录里直接复制该对话的 .jsonl 文件。",
+			);
+		} finally {
+			setLang(previous);
+		}
+	});
+
+	it("leaves every other failure to the existing wording", () => {
+		expect(exportTooLargeMessage(500, tooLarge)).toBeNull();
+		expect(exportTooLargeMessage(413, { error: "boom" })).toBeNull();
+		expect(exportTooLargeMessage(413, { ...tooLarge, bytes: "32 MiB" })).toBeNull();
+		expect(exportTooLargeMessage(413, { ...tooLarge, limit: Number.NaN })).toBeNull();
+		expect(exportTooLargeMessage(413, undefined)).toBeNull();
+		expect(exportTooLargeMessage(413, "not json")).toBeNull();
+	});
+});
+
+describe("Web UI: actions.js closeCommand", () => {
+	let origDoc: unknown;
+	let origMatchMedia: unknown;
+	let focusMock: ReturnType<typeof vi.fn>;
+	let querySelectorMock: ReturnType<typeof vi.fn>;
+	let setViewSpy: ReturnType<typeof vi.spyOn>;
+	let store: {
+		state: { view: Record<string, unknown> };
+		setView: (patch: Record<string, unknown>) => void;
+	};
+	let actions: {
+		closeCommand: () => void;
+	};
+
+	beforeAll(async () => {
+		store = await import(new URL("store.js", webDir).href);
+		actions = await import(new URL("actions.js", webDir).href);
+	});
+
+	beforeEach(() => {
+		origDoc = (globalThis as Record<string, unknown>).document;
+		origMatchMedia = (globalThis as Record<string, unknown>).matchMedia;
+		focusMock = vi.fn();
+		querySelectorMock = vi.fn((sel: string) => (sel === ".composer-input" ? { focus: focusMock } : null));
+		(globalThis as Record<string, unknown>).document = {
+			documentElement: { dataset: {}, style: { getPropertyValue: () => "", setProperty: vi.fn() } },
+			querySelector: querySelectorMock,
+		};
+		(globalThis as Record<string, unknown>).matchMedia = vi.fn().mockReturnValue({ matches: false });
+		setViewSpy = vi.spyOn(store, "setView");
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		setViewSpy.mockRestore();
+		if (origDoc === undefined) {
+			delete (globalThis as Record<string, unknown>).document;
+		} else {
+			(globalThis as Record<string, unknown>).document = origDoc;
+		}
+		if (origMatchMedia === undefined) {
+			delete (globalThis as Record<string, unknown>).matchMedia;
+		} else {
+			(globalThis as Record<string, unknown>).matchMedia = origMatchMedia;
+		}
+		store.state.view.cmd = null;
+	});
+
+	it("clears command palette and restores focus to composer input when command palette is open", () => {
+		store.state.view.cmd = { name: "test-cmd", arg: "hello" };
+
+		actions.closeCommand();
+
+		expect(setViewSpy).toHaveBeenCalledTimes(1);
+		expect(setViewSpy).toHaveBeenCalledWith({ cmd: null });
+		expect(store.state.view.cmd).toBeNull();
+		expect(querySelectorMock).not.toHaveBeenCalled();
+
+		vi.runAllTimers();
+
+		expect(querySelectorMock).toHaveBeenCalledWith(".composer-input");
+		expect(focusMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does nothing and does not throw when command palette is null", () => {
+		store.state.view.cmd = null;
+
+		expect(() => actions.closeCommand()).not.toThrow();
+		expect(setViewSpy).not.toHaveBeenCalled();
+
+		vi.runAllTimers();
+
+		expect(querySelectorMock).not.toHaveBeenCalled();
+		expect(focusMock).not.toHaveBeenCalled();
+	});
+
+	it("does nothing and does not throw when command palette is undefined", () => {
+		store.state.view.cmd = undefined;
+
+		expect(() => actions.closeCommand()).not.toThrow();
+		expect(setViewSpy).not.toHaveBeenCalled();
+
+		vi.runAllTimers();
+
+		expect(querySelectorMock).not.toHaveBeenCalled();
+		expect(focusMock).not.toHaveBeenCalled();
+	});
+
+	it("does not throw when composer-input element is not found on document", () => {
+		store.state.view.cmd = { name: "test-cmd", arg: "" };
+		querySelectorMock.mockReturnValue(null);
+
+		actions.closeCommand();
+
+		expect(setViewSpy).toHaveBeenCalledWith({ cmd: null });
+		expect(() => vi.runAllTimers()).not.toThrow();
+		expect(querySelectorMock).toHaveBeenCalledWith(".composer-input");
+	});
+});
+
+describe("Web UI: store.js first-screen ordering of the unbound and archived lists", () => {
+	let bootStore: any;
+	let calls: string[];
+	let snapPayload: () => unknown;
+
+	const freshLists = () => ({
+		list: [],
+		loaded: false,
+		currentPath: null,
+		currentSessionFile: null,
+		sessions: {},
+		unbound: undefined,
+		archived: undefined,
+		errors: {},
+		loading: false,
+	});
+
+	beforeAll(async () => {
+		bootStore = await import(new URL("store.js", webDir).href);
+	});
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		// No requestIdleCallback in Node: the deferred loads take the fallback timer path.
+		delete (globalThis as Record<string, unknown>).requestIdleCallback;
+		calls = [];
+		snapPayload = () => ({
+			slot: "t1",
+			mode: "coding",
+			session: { id: "t1", file: "C:/p/t1.jsonl", persisted: true, name: "Bound chat" },
+			workspace: { id: "w", rootPath: "C:/p" },
+			flags: {},
+			queue: { steering: [], followUp: [] },
+			dialogs: [],
+			surface: { widgets: {}, statuses: {} },
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (path: string) => {
+				const key = String(path);
+				calls.push(key);
+				const url = new URL(key, "http://127.0.0.1");
+				const pathname = url.pathname;
+				let data: unknown = {};
+				if (pathname === "/api/state") data = snapPayload();
+				else if (pathname === "/api/transcript") data = { items: [] };
+				else if (pathname === "/api/workspaces")
+					data = { workspaces: [], currentPath: "C:/p", currentSessionFile: "C:/p/t1.jsonl" };
+				else if (pathname === "/api/sessions/unbound") data = { sessions: [] };
+				else if (pathname === "/api/sessions/archived") data = { sessions: [] };
+				else if (pathname === "/api/workspaces/sessions") data = { sessions: [] };
+				return {
+					ok: true,
+					status: 200,
+					async text() {
+						return JSON.stringify(data);
+					},
+				};
+			}),
+		);
+		for (const mode of ["coding", "general"]) {
+			bootStore.state.view.chatMode = mode;
+			bootStore.state.workspaces = freshLists();
+		}
+		bootStore.state.view.chatMode = "coding";
+		bootStore.state.view.expanded = undefined;
+		bootStore.state.view.expandedGeneral = undefined;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	const unboundCalls = () => calls.filter((c) => c.startsWith("/api/sessions/unbound"));
+	const archivedCalls = () => calls.filter((c) => c.startsWith("/api/sessions/archived"));
+
+	it("asks for the unbound list with the open General group and defers the archived one to a quiet page", async () => {
+		await bootStore.refreshSlot("t1"); // the chat on screen is read and bound to a workspace
+		bootStore.state.view.expanded = {}; // General is open (nothing stored means open)
+		await bootStore.loadWorkspaces("coding", "t1");
+		expect(unboundCalls().length).toBe(1); // content of the open group is needed now: no waiting
+		expect(archivedCalls().length).toBe(0);
+		await vi.advanceTimersByTimeAsync(2_400);
+		expect(archivedCalls().length).toBe(0);
+		await vi.advanceTimersByTimeAsync(300);
+		expect(archivedCalls().length).toBe(1);
+	});
+
+	it("defers both lists when the General group is collapsed, then loads each exactly once", async () => {
+		await bootStore.refreshSlot("t1");
+		bootStore.state.view.expanded = { "<general>": false };
+		await bootStore.loadWorkspaces("coding", "t1");
+		expect(unboundCalls().length).toBe(0);
+		expect(archivedCalls().length).toBe(0);
+		await bootStore.loadWorkspaces("coding", "t1"); // a second workspace load while the first still waits joins it
+		await vi.advanceTimersByTimeAsync(2_600);
+		expect(unboundCalls().length).toBe(1);
+		expect(archivedCalls().length).toBe(1);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(unboundCalls().length).toBe(1);
+		expect(archivedCalls().length).toBe(1);
+	});
+
+	it("loads the unbound list at once when the chat on screen belongs to no workspace", async () => {
+		snapPayload = () => ({
+			slot: "t1",
+			mode: "coding",
+			session: { id: "t1", file: "C:/fixture/u1.jsonl", persisted: true, name: "Unbound chat" },
+			workspace: null,
+			flags: {},
+			queue: { steering: [], followUp: [] },
+			dialogs: [],
+			surface: { widgets: {}, statuses: {} },
+		});
+		await bootStore.refreshSlot("t1");
+		bootStore.state.view.expanded = { "<general>": false }; // collapsed, but the chat on screen lives in that list
+		await bootStore.loadWorkspaces("coding", "t1");
+		expect(unboundCalls().length).toBe(1);
+		expect(archivedCalls().length).toBe(0);
+		await vi.advanceTimersByTimeAsync(2_600);
+		expect(archivedCalls().length).toBe(1);
+	});
+
+	it("does not ask again on idle for a list the user already loaded by opening the group", async () => {
+		await bootStore.refreshSlot("t1");
+		bootStore.state.view.expanded = { "<general>": false };
+		await bootStore.loadWorkspaces("coding", "t1");
+		await bootStore.loadUnbound("coding"); // the sidebar's expand path read the list
+		expect(unboundCalls().length).toBe(1);
+		await vi.advanceTimersByTimeAsync(2_600);
+		expect(unboundCalls().length).toBe(1);
+		expect(archivedCalls().length).toBe(1);
+	});
+});
+
+describe("Web UI: applyAppearance writes <html> only when a value changed", () => {
+	let store: any;
+	let lang: any;
+	let root: any;
+	let writes: string[];
+	let savedView: Record<string, unknown>;
+	let savedLang: string;
+
+	// Minimal documentElement stub with DOM-like read-back: an unset dataset key reads
+	// `undefined`, a key written as "" reads "" (the attribute exists), like a real browser.
+	const freshRoot = () => {
+		writes = [];
+		const attrs: Record<string, string> = {};
+		const vars: Record<string, string> = {};
+		let langValue = "";
+		return {
+			get lang() {
+				return langValue;
+			},
+			set lang(v: string) {
+				writes.push("lang");
+				langValue = String(v);
+			},
+			dataset: new Proxy(
+				{},
+				{
+					get: (_t, k: string) => (k in attrs ? attrs[k] : undefined),
+					set: (_t, k: string, v: unknown) => {
+						writes.push(`data-${k}`);
+						attrs[k] = String(v);
+						return true;
+					},
+				},
+			),
+			style: {
+				getPropertyValue: (name: string) => vars[name] ?? "",
+				setProperty: (name: string, v: string) => {
+					writes.push(name);
+					vars[name] = String(v);
+				},
+			},
+		};
+	};
+
+	beforeAll(async () => {
+		store = await import(new URL("store.js", webDir).href);
+		lang = await import(new URL("lang.js", webDir).href);
+	});
+
+	beforeEach(() => {
+		savedView = {
+			theme: store.state.view.theme,
+			colorThemes: { ...store.state.view.colorThemes },
+			chatMode: store.state.view.chatMode,
+			motion: store.state.view.motion,
+			readWidth: store.state.view.readWidth,
+			sidebarW: store.state.view.sidebarW,
+			panelW: store.state.view.panelW,
+			lang: store.state.view.lang,
+		};
+		savedLang = lang.getLang();
+		store.state.view.theme = "dark";
+		store.state.view.colorThemes = { coding: "classic", general: "classic" };
+		store.state.view.chatMode = "coding";
+		store.state.view.motion = "system";
+		store.state.view.readWidth = "auto";
+		store.state.view.sidebarW = 272;
+		store.state.view.panelW = 560;
+		store.state.view.lang = "en";
+		root = freshRoot();
+		vi.stubGlobal("document", { documentElement: root });
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
+	});
+
+	afterEach(() => {
+		Object.assign(store.state.view, { ...savedView, colorThemes: { ...(savedView.colorThemes as object) } });
+		lang.setLang(savedLang);
+		vi.unstubAllGlobals();
+	});
+
+	it("writes every appearance value once, then writes nothing when called again unchanged", () => {
+		store.applyAppearance();
+		expect(writes.length).toBeGreaterThan(0);
+		writes = [];
+		store.applyAppearance();
+		expect(writes).toEqual([]);
+	});
+
+	it("writes exactly the one value that changed", () => {
+		store.applyAppearance();
+		writes = [];
+		store.state.view.sidebarW = 300;
+		store.applyAppearance();
+		expect(writes).toEqual(["--sidebar-w"]);
+		writes = [];
+		store.state.view.lang = "zh-CN";
+		store.applyAppearance();
+		expect(writes).toEqual(["lang"]);
+	});
+
+	it("keeps the system-motion empty-string shape: writes it once, then skips it", () => {
+		store.applyAppearance(); // motion=system writes data-motion=""
+		expect(root.dataset.motion).toBe("");
+		writes = [];
+		store.applyAppearance();
+		expect(writes).toEqual([]);
+		store.state.view.motion = "off";
+		store.applyAppearance();
+		expect(writes).toEqual(["data-motion"]);
+		expect(root.dataset.motion).toBe("off");
+		writes = [];
+		store.state.view.motion = "system";
+		store.applyAppearance();
+		expect(writes).toEqual(["data-motion"]);
+		expect(root.dataset.motion).toBe("");
+	});
+
+	it("setLang does not touch documentElement.lang when the language is unchanged", () => {
+		store.applyAppearance();
+		writes = [];
+		lang.setLang("en");
+		expect(writes).toEqual([]);
+		lang.setLang("zh-CN");
+		expect(writes).toEqual(["lang"]);
+		expect(root.lang).toBe("zh-CN");
+	});
+});
+
+describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)", () => {
+	let cacheStore: any;
+	let turnsLib: {
+		buildTurns: (...a: unknown[]) => unknown[];
+		cachedTurns: (...a: unknown[]) => unknown[] | null;
+		turnsProbe: { builds: number };
+	};
+
+	beforeAll(async () => {
+		cacheStore = await import(new URL("store.js", webDir).href);
+		turnsLib = await import(new URL("turns.js", webDir).href);
+	});
+
+	const user = { kind: "user", id: "cu-1", ts: 1, text: "task", images: [] };
+	const reply = assistant([{ type: "text", text: "done" }]);
+
+	// Mirrors the Transcript useMemo body exactly: hit the bag cache first, build and store on a miss.
+	const computeTurns = (slot: string, items: unknown[], toolRuns: unknown, cwd: string) => {
+		const cached = turnsLib.cachedTurns(cacheStore.getTurnsCache(slot), items, toolRuns, cwd);
+		if (cached) return cached;
+		const built = turnsLib.buildTurns(items, { cwd, toolRuns });
+		cacheStore.setTurnsCache({ items, toolRuns, cwd, turns: built }, slot);
+		return built;
+	};
+
+	it("① a second call with the same references serves the cache without running buildTurns", () => {
+		const items = [user, reply];
+		const toolRuns = {};
+		const buildsBefore = turnsLib.turnsProbe.builds;
+		const first = computeTurns("cache-s1", items, toolRuns, "/w");
+		const second = computeTurns("cache-s1", items, toolRuns, "/w");
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(1);
+		expect(second).toBe(first);
+	});
+
+	it("② a changed items/toolRuns reference (or cwd) rebuilds and refreshes the cache", () => {
+		const items = [user, reply];
+		const toolRuns = {};
+		const buildsBefore = turnsLib.turnsProbe.builds;
+		const first = computeTurns("cache-s2", items, toolRuns, "/w");
+		const grown = [...items, assistant([{ type: "text", text: "more" }])];
+		const afterItems = computeTurns("cache-s2", grown, toolRuns, "/w");
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(2);
+		expect(afterItems).not.toBe(first);
+		const servedAgain = computeTurns("cache-s2", grown, toolRuns, "/w");
+		expect(servedAgain).toBe(afterItems);
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(2);
+		const afterRuns = computeTurns("cache-s2", grown, { t1: { status: "running" } }, "/w");
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(3);
+		const afterCwd = computeTurns("cache-s2", grown, { t1: { status: "running" } }, "/other");
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(4);
+		expect(afterCwd).not.toBe(afterRuns);
+	});
+
+	it("② items reference change alone misses even when the array content is identical", () => {
+		const items = [user, reply];
+		const toolRuns = {};
+		computeTurns("cache-s3", items, toolRuns, "/w");
+		const buildsBefore = turnsLib.turnsProbe.builds;
+		expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-s3"), [...items], toolRuns, "/w")).toBeNull();
+		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(0);
+		expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-s3"), items, toolRuns, "/w")).not.toBeNull();
+	});
+
+	it("③ exceeding the cap evicts the least recently used sessions first", () => {
+		const cap = cacheStore.TURNS_CACHE_MAX as number;
+		expect(cap).toBe(8);
+		// Start from a clean cap: drop the entries the earlier cases in this block left behind.
+		for (const slot of ["cache-s1", "cache-s2", "cache-s3"]) cacheStore.setTurnsCache(null, slot);
+		const items = [user, reply];
+		for (let i = 1; i <= cap + 1; i += 1) {
+			const slot = `cache-lru-s${i}`;
+			cacheStore.setTurnsCache({ items, toolRuns: {}, cwd: "/w", turns: [slot] }, slot);
+		}
+		// The oldest (s1) lost its entry; everything newer still has it. One entry per session, never the active session's fresh write.
+		expect(cacheStore.getTurnsCache("cache-lru-s1")).toBeNull();
+		for (let i = 2; i <= cap + 1; i += 1) expect(cacheStore.getTurnsCache(`cache-lru-s${i}`)).not.toBeNull();
+		// Touch s2 so it becomes the most recent, then add another session: s3 is the new oldest and must lose its entry.
+		cacheStore.getTurnsCache("cache-lru-s2");
+		cacheStore.setTurnsCache({ items, toolRuns: {}, cwd: "/w", turns: ["extra"] }, "cache-lru-extra");
+		expect(cacheStore.getTurnsCache("cache-lru-s3")).toBeNull();
+		expect(cacheStore.getTurnsCache("cache-lru-s2")).not.toBeNull();
+		expect(cacheStore.getTurnsCache("cache-lru-extra")).not.toBeNull();
+		// Writing null clears one session's entry without touching the cap.
+		cacheStore.setTurnsCache(null, "cache-lru-s4");
+		expect(cacheStore.getTurnsCache("cache-lru-s4")).toBeNull();
+	});
+});
+
+describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTranscript, W175)", () => {
+	let pageStore: {
+		loadTranscript: (slot: string, options?: { limit?: number }) => Promise<unknown>;
+		refreshSlot: (slot: string, options?: { full?: boolean }) => Promise<void>;
+		fetchMoreTranscript: (slot: string) => Promise<string>;
+		appendStreamedItem: (item: unknown, slot?: string) => void;
+		inSlot: <T>(slot: string, run: () => T) => T;
+		state: Record<string, unknown>;
+		TRANSCRIPT_FIRST_PAGE: number;
+	};
+	let fetchCalls: { url: string; slot: string | null }[];
+	let handler: ((url: string) => unknown | Promise<unknown>) | null;
+	let realFetch: unknown;
+
+	const tItem = (id: string) => ({ kind: "user", id, ts: 1, text: `msg ${id}`, images: [] });
+	const range = (from: number, to: number) => {
+		const out: ReturnType<typeof tItem>[] = [];
+		for (let i = from; i < to; i += 1) out.push(tItem(`w175-${i}`));
+		return out;
+	};
+	const bagState = (slot: string) =>
+		pageStore.inSlot(slot, () => ({
+			items: pageStore.state.items as { id?: string }[],
+			hasMore: pageStore.state.transcriptHasMore as boolean,
+			cursor: pageStore.state.transcriptCursor as string | null,
+			fetching: pageStore.state.transcriptFetching as boolean,
+		}));
+
+	beforeAll(async () => {
+		pageStore = await import(new URL("store.js", webDir).href);
+	});
+
+	beforeEach(() => {
+		fetchCalls = [];
+		handler = null;
+		realFetch = globalThis.fetch;
+		globalThis.fetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
+			fetchCalls.push({ url: String(url), slot: init?.headers?.["x-myharness-slot"] ?? null });
+			if (!handler) throw new Error("no fetch handler");
+			const body = await handler(String(url));
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as typeof fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = realFetch as typeof fetch;
+		handler = null;
+	});
+
+	it("① the first screen passes limit=400 and keeps the paging cursor", async () => {
+		expect(pageStore.TRANSCRIPT_FIRST_PAGE).toBe(400);
+		handler = (url: string) => {
+			expect(url).toBe("/api/transcript?limit=400");
+			return { items: range(60, 100), hasMore: true, nextCursor: "w175-60" };
+		};
+		await pageStore.loadTranscript("page-s1", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		expect(fetchCalls).toEqual([{ url: "/api/transcript?limit=400", slot: "page-s1" }]);
+		const bag = bagState("page-s1");
+		expect(bag.items.map((entry) => entry.id)).toEqual(range(60, 100).map((entry) => entry.id));
+		expect(bag.hasMore).toBe(true);
+		expect(bag.cursor).toBe("w175-60");
+		expect(bag.fetching).toBe(false);
+	});
+
+	it("② the default load stays full (no query) and reads as complete", async () => {
+		handler = (url: string) => {
+			expect(url).toBe("/api/transcript");
+			return { items: range(0, 10) };
+		};
+		await pageStore.loadTranscript("page-s2");
+		const bag = bagState("page-s2");
+		expect(bag.items).toHaveLength(10);
+		expect(bag.hasMore).toBe(false);
+		expect(bag.cursor).toBeNull();
+	});
+
+	it("③ an old server (no paging fields) reads as complete even when limit was sent", async () => {
+		handler = () => ({ items: range(0, 5) });
+		await pageStore.loadTranscript("page-s3", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		const bag = bagState("page-s3");
+		expect(bag.items).toHaveLength(5);
+		expect(bag.hasMore).toBe(false);
+		expect(bag.cursor).toBeNull();
+	});
+
+	it("④ fetch-more prepends with dedupe, merges tool runs and moves the cursor", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s4", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		handler = (url: string) => {
+			expect(url).toBe("/api/transcript?limit=400&before=w175-60");
+			// Five entries overlap the window head (a tolerant server resent the boundary); the rest is older.
+			return {
+				items: [
+					...range(60, 65),
+					...range(20, 60),
+					{
+						kind: "toolResult",
+						id: "w175-t1",
+						ts: 1,
+						toolCallId: "c-old",
+						toolName: "ls",
+						text: "x",
+						images: [],
+						isError: false,
+					},
+				],
+				hasMore: true,
+				nextCursor: "w175-60",
+			};
+		};
+		const result = await pageStore.fetchMoreTranscript("page-s4");
+		expect(result).toBe("ok");
+		const bag = bagState("page-s4");
+		const ids = bag.items.map((entry) => entry.id);
+		expect(ids).toHaveLength(40 + 40 + 1);
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(ids.slice(0, 40)).toEqual(range(20, 60).map((entry) => entry.id));
+		expect(ids.slice(-40)).toEqual(range(60, 100).map((entry) => entry.id));
+		expect(bag.hasMore).toBe(true);
+		expect(bag.cursor).toBe("w175-60");
+		const runs = pageStore.inSlot("page-s4", () => pageStore.state.toolRuns as Record<string, { status: string }>);
+		expect(runs["c-old"]).toMatchObject({ status: "done" });
+		// The server-sent tool run must not overwrite a newer live state for the same call id.
+		handler = () => ({ items: range(0, 20), hasMore: false, nextCursor: null });
+		await pageStore.fetchMoreTranscript("page-s4");
+		expect(bagState("page-s4").hasMore).toBe(false);
+		expect(bagState("page-s4").cursor).toBeNull();
+		const callsBefore = fetchCalls.length;
+		expect(await pageStore.fetchMoreTranscript("page-s4")).toBe("done");
+		expect(fetchCalls.length).toBe(callsBefore);
+	});
+
+	it("⑤ a reload in flight drops the older page as stale", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s5", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		let release!: (body: unknown) => void;
+		handler = () =>
+			new Promise<unknown>((resolve) => {
+				release = resolve;
+			});
+		const fetching = pageStore.fetchMoreTranscript("page-s5");
+		handler = () => ({ items: range(0, 100) });
+		await pageStore.loadTranscript("page-s5");
+		release({ items: range(20, 60), hasMore: true, nextCursor: "w175-20" });
+		expect(await fetching).toBe("stale");
+		const bag = bagState("page-s5");
+		expect(bag.items.map((entry) => entry.id)).toEqual(range(0, 100).map((entry) => entry.id));
+		expect(bag.hasMore).toBe(false);
+	});
+
+	it("⑥ a second fetch-more while one is in flight sends no second request", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s6", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		let release!: (body: unknown) => void;
+		handler = () =>
+			new Promise<unknown>((resolve) => {
+				release = resolve;
+			});
+		const first = pageStore.fetchMoreTranscript("page-s6");
+		expect(await pageStore.fetchMoreTranscript("page-s6")).toBe("fetching");
+		expect(fetchCalls.filter((call) => call.url.includes("before="))).toHaveLength(1);
+		release({ items: range(20, 60), hasMore: false, nextCursor: null });
+		expect(await first).toBe("ok");
+		expect(bagState("page-s6").items).toHaveLength(80);
+	});
+
+	it("⑦ a fully duplicated page falls back to one full reload", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s7", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		handler = (url: string) =>
+			url.includes("before=")
+				? { items: range(60, 100), hasMore: true, nextCursor: "w175-60" }
+				: { items: range(0, 100) };
+		expect(await pageStore.fetchMoreTranscript("page-s7")).toBe("refreshed");
+		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		const bag = bagState("page-s7");
+		expect(bag.items).toHaveLength(100);
+		expect(bag.hasMore).toBe(false);
+	});
+
+	it("⑧ two failures in a row for one cursor fall back to one full reload", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s8", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		let failures = 0;
+		handler = (url: string) => {
+			if (url.includes("before=") && failures < 2) {
+				failures += 1;
+				throw new Error("network down");
+			}
+			return { items: range(0, 100) };
+		};
+		expect(await pageStore.fetchMoreTranscript("page-s8")).toBe("error");
+		expect(bagState("page-s8").hasMore).toBe(true);
+		expect(await pageStore.fetchMoreTranscript("page-s8")).toBe("refreshed");
+		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(bagState("page-s8").items).toHaveLength(100);
+		expect(bagState("page-s8").hasMore).toBe(false);
+	});
+
+	it("⑨ streamed output during a fetch drops the page for a full reload", async () => {
+		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
+		await pageStore.loadTranscript("page-s9", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
+		let release!: (body: unknown) => void;
+		handler = (url: string) =>
+			url.includes("before=")
+				? new Promise<unknown>((resolve) => {
+						release = resolve;
+					})
+				: { items: range(0, 101) };
+		const fetching = pageStore.fetchMoreTranscript("page-s9");
+		pageStore.appendStreamedItem(tItem("w175-live"), "page-s9");
+		release({ items: range(20, 60), hasMore: false, nextCursor: null });
+		expect(await fetching).toBe("refreshed");
+		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(bagState("page-s9").items).toHaveLength(101);
+	});
+
+	it("⑩ refreshSlot pages by default and loads fully when asked", async () => {
+		const seen: string[] = [];
+		handler = (url: string) => {
+			seen.push(url);
+			if (url.startsWith("/api/transcript")) return { items: range(0, 3), hasMore: false, nextCursor: null };
+			return {
+				slot: "page-s10",
+				flags: {},
+				session: {},
+				thinking: {},
+				queue: { steering: [], followUp: [] },
+				dialogs: [],
+				surface: {},
+			};
+		};
+		await pageStore.refreshSlot("page-s10");
+		expect(seen).toContain("/api/transcript?limit=400");
+		seen.length = 0;
+		await pageStore.refreshSlot("page-s10b", { full: true });
+		expect(seen).toContain("/api/transcript");
+		expect(seen.some((url) => url.includes("limit="))).toBe(false);
 	});
 });

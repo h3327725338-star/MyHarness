@@ -464,6 +464,37 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("code intelligence", () => {
+		it("defaults the symbols switch to off", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getCodeIntelligenceSettings().symbolsEnabled).toBe(false);
+			expect(SettingsManager.inMemory({}).getCodeIntelligenceSettings().symbolsEnabled).toBe(false);
+		});
+
+		it("ignores the deprecated enabled key without failing or migrating it to on", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ codeIntelligence: { enabled: true, disabledLanguages: ["go"], unknownKey: 1 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			const settings = manager.getCodeIntelligenceSettings();
+			expect(settings.symbolsEnabled).toBe(false);
+			expect(settings.disabledLanguages).toEqual(["go"]);
+			expect(manager.getErrors()).toEqual([]);
+		});
+
+		it("persists the new key and drops the deprecated one from the file", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ codeIntelligence: { enabled: true } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setCodeIntelligenceSettings({ ...manager.getCodeIntelligenceSettings(), symbolsEnabled: true });
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).codeIntelligence;
+			expect(saved).toEqual({ symbolsEnabled: true, disabledLanguages: [] });
+			expect(SettingsManager.create(projectDir, agentDir).getCodeIntelligenceSettings().symbolsEnabled).toBe(true);
+		});
+	});
+
 	describe("usage ranking", () => {
 		it("persists slash-command and settings-item usage globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

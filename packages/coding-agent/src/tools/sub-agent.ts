@@ -18,7 +18,11 @@ import {
 	finalizeDelegatedWorktree,
 	prepareDelegatedWorktree,
 } from "../agent/delegation/worktree-sandbox.ts";
-import { DELEGATED_TOOL_NAMES, DELEGATED_WRITE_TOOL_NAMES } from "../agent/runtime/role.ts";
+import {
+	DELEGATED_TOOL_NAMES,
+	DELEGATED_WRITE_TOOL_NAMES,
+	withoutDisabledBuiltinTools,
+} from "../agent/runtime/role.ts";
 import { SETTINGS_DEFAULTS, SUB_AGENT_SETTING_RANGES } from "../config/settings/defaults.ts";
 import type { SubAgentMode } from "../config/settings/types.ts";
 import { getAgentDir } from "../config.ts";
@@ -187,6 +191,12 @@ export interface SubAgentRuntimeSettings {
 	/** Sub-agent capability mode; anything other than "read-write" keeps the read-only runtime. */
 	mode?: SubAgentMode;
 	enabled: boolean;
+	/**
+	 * `codeIntelligence.symbolsEnabled` of the session that dispatches the workers. Off means the tool does
+	 * not exist at all, so it is left out of the child's `--tools` list. `undefined` keeps the historical
+	 * list (used by callers that have no settings manager).
+	 */
+	symbolsEnabled?: boolean;
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
@@ -213,6 +223,7 @@ export type ResolvedSubAgentRuntimeSettings = Required<
 		SubAgentRuntimeSettings,
 		| "mode"
 		| "chatMode"
+		| "symbolsEnabled"
 		| "contextWindow"
 		| "taskTimeoutMs"
 		| "totalRuntimeLimitMs"
@@ -443,6 +454,7 @@ export function resolveSubAgentRuntimeSettings(
 	return {
 		mode: settings.mode === "read-write" ? "read-write" : "read-only",
 		chatMode: settings.chatMode,
+		symbolsEnabled: settings.symbolsEnabled,
 		provider: settings.provider ?? "",
 		model: settings.model ?? "",
 		thinkingLevel: settings.thinkingLevel ?? "off",
@@ -1017,6 +1029,8 @@ async function runExploreTask(options: {
 	chatMode?: "coding" | "general";
 	/** Capability mode of this task; "read-write" workers run in their own worktree. */
 	mode?: SubAgentMode;
+	/** `codeIntelligence.symbolsEnabled` of the dispatching session; false keeps symbols out of `--tools`. */
+	symbolsEnabled?: boolean;
 	traceContext?: RuntimeTraceChildContext;
 }): Promise<ExploreTaskResult> {
 	const eventState = createDelegatedEventState();
@@ -1577,8 +1591,17 @@ export function buildSubAgentArgs(options: {
 	systemPromptPath: string;
 	guardPath: string;
 	mode?: SubAgentMode;
+	/** `codeIntelligence.symbolsEnabled`; false leaves symbols out of the worker's `--tools`. */
+	symbolsEnabled?: boolean;
 }): string[] {
-	const toolNames = options.mode === "read-write" ? DELEGATED_WRITE_TOOL_NAMES : DELEGATED_TOOL_NAMES;
+	// The worker builds its own session in its own process, so it reads the saved switch itself. This list
+	// is what its role boundary receives as the requested tools, so dropping the name here is what keeps a
+	// switched-off symbols tool out of the worker.
+	const isConfigured = (name: string): boolean => (name === "symbols" ? options.symbolsEnabled !== false : true);
+	const toolNames = withoutDisabledBuiltinTools(
+		options.mode === "read-write" ? DELEGATED_WRITE_TOOL_NAMES : DELEGATED_TOOL_NAMES,
+		isConfigured,
+	);
 	return [
 		"--internal-delegated-worker",
 		"--no-session",
@@ -1771,6 +1794,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						model: options.settings.model,
 						chatMode: options.settings.chatMode,
 						mode,
+						symbolsEnabled: options.settings.symbolsEnabled,
 						thinkingLevel: options.settings.thinkingLevel,
 						contextWindow: options.settings.contextWindow,
 						description: task.description,

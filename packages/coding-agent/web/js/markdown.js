@@ -5,6 +5,7 @@ import { t } from "./i18n.js";
 import { looseStrong } from "./util.js";
 import { localLinkPath } from "./local-file-links.js";
 import { linkifyLocalFiles, openLocalFile, showLocalFileMenu } from "./local-files.js";
+import { exportReadOnly } from "./export-mode.js";
 import { activeSlotId } from "./store.js";
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -28,12 +29,13 @@ function getEngine() {
 				return `<div class="code-block"><div class="code-head"><span class="code-lang">${esc(language || "text")}</span><button class="code-copy" type="button">${esc(t("Copy"))}</button></div><pre><code class="hljs">${highlight(text, language)}</code></pre></div>`;
 			},
 			codespan({ text }) {
-				return `<code>${text}</code>`;
+				return `<code>${esc(text)}</code>`;
 			},
 			link({ href, title, tokens }) {
 				const inner = this.parser.parseInline(tokens);
 				const local = localLinkPath(href);
-				if (local) return `<a href="#" data-local-path="${esc(local)}" title="${esc(local)}">${inner}</a>`;
+				// A read-only export copy cannot open local files, so a local-path link degrades to its plain text (D-18).
+				if (local) return exportReadOnly() ? inner : `<a href="#" data-local-path="${esc(local)}" title="${esc(local)}">${inner}</a>`;
 				if (!SAFE_LINK.test(href || "")) return inner;
 				const external = /^https?:/i.test(href);
 				return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ""}${external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${inner}</a>`;
@@ -72,6 +74,78 @@ export function highlight(code, language) {
 }
 
 const cache = new Map();
+// W110-BEGIN: wrapPatchBlocks (extracted verbatim by data/webui-2026-10-11/perf/W110-repro.mjs; keep self-contained)
+const PATCH_BEGIN = /^\*\*\*\s*Begin Patch\s*$/;
+const PATCH_END = /^\*\*\*\s*End Patch\s*$/;
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const fenceLine = (line) => FENCE_LINE.exec(line.endsWith("\r") ? line.slice(0, -1) : line);
+
+/**
+ * Wrap `*** Begin Patch … *** End Patch` regions in a ```diff fence so marked renders them as one diff code
+ * block instead of bare paragraphs and list items. Only a marker at column 0 starts or ends a block (an
+ * indented marker inside a list is left alone); markers already inside a fenced code block are ignored, and
+ * inline code never matches because the whole line must be exactly the marker. Block lines are kept verbatim
+ * and the fence is one backtick longer than the longest backtick run inside. Without an End marker (a reply
+ * still streaming, or truncated) everything from Begin to the end of the text is wrapped, unless the text
+ * runs more than 4000 lines past Begin, in which case the Begin is left as ordinary text.
+ */
+export function wrapPatchBlocks(text) {
+	const lines = String(text).split("\n");
+	const out = [];
+	let fence = null; // { char, length } of the fenced code block we are inside, or null
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i];
+		const stripped = line.endsWith("\r") ? line.slice(0, -1) : line;
+		if (fence) {
+			out.push(line);
+			const match = fenceLine(line);
+			if (match && match[1][0] === fence.char && match[1].length >= fence.length && match[2].trim() === "") fence = null;
+			i++;
+			continue;
+		}
+		const match = fenceLine(line);
+		if (match && (match[1][0] !== "`" || !match[2].includes("`"))) {
+			fence = { char: match[1][0], length: match[1].length };
+			out.push(line);
+			i++;
+			continue;
+		}
+		if (!PATCH_BEGIN.test(stripped)) {
+			out.push(line);
+			i++;
+			continue;
+		}
+		// The patch body is verbatim content: scan for End without tracking fences inside.
+		let end = -1;
+		const limit = Math.min(lines.length, i + 1 + 4000);
+		for (let j = i + 1; j < limit; j++) {
+			const candidate = lines[j].endsWith("\r") ? lines[j].slice(0, -1) : lines[j];
+			if (PATCH_END.test(candidate)) {
+				end = j;
+				break;
+			}
+		}
+		if (end === -1 && limit < lines.length) {
+			out.push(line);
+			i++;
+			continue;
+		}
+		const last = end === -1 ? lines.length - 1 : end;
+		let longest = 0;
+		for (let j = i; j <= last; j++) {
+			const runs = lines[j].match(/`+/g);
+			if (runs) for (const run of runs) longest = Math.max(longest, run.length);
+		}
+		const fenceStr = "`".repeat(Math.max(3, longest + 1));
+		out.push(`${fenceStr}diff`);
+		for (let j = i; j <= last; j++) out.push(lines[j]);
+		out.push(fenceStr);
+		i = last + 1;
+	}
+	return out.join("\n");
+}
+// W110-END
 export function renderMarkdown(text, { breaks = false } = {}) {
 	const key = `${breaks ? "breaks" : "normal"}\0${text}`;
 	const hit = cache.get(key);
@@ -79,7 +153,7 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 	const md = getEngine();
 	let out;
 	try {
-		out = md ? md.parse(text, { breaks }) : `<pre>${esc(text)}</pre>`;
+		out = md ? md.parse(wrapPatchBlocks(text), { breaks }) : `<pre>${esc(text)}</pre>`;
 	} catch {
 		out = `<pre>${esc(text)}</pre>`;
 	}

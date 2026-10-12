@@ -1,7 +1,7 @@
 // The branch chip above the input and its popover: search the local branches, switch, create and delete them, and move
 // this chat into an isolated copy of the repository (a Git worktree) or back to the main copy. Every action calls the
 // server's Git routes (routes-git.ts), which use Git's own rules; nothing here decides what Git allows.
-import { html, useEffect, useMemo, useRef, useState, Chevron, Collapse, COLLAPSE_MS, Icon, Popover, Spinner, Toggle, usePresence } from "./ui.js";
+import { html, useEffect, useMemo, useRef, useState, Chevron, Collapse, COLLAPSE_MS, Icon, Popover, Spinner, Toggle } from "./ui.js";
 import { api, attempt, loadGitStatus, post, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
@@ -14,8 +14,6 @@ function copyBranchName() {
 	const two = (n) => String(n).padStart(2, "0");
 	return `task-${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
 }
-
-const POP_EXIT_MS = 160;
 
 export function BranchChip({ gitStatus }) {
 	const anchor = useRef(null);
@@ -41,7 +39,26 @@ export function BranchChip({ gitStatus }) {
 		branchSource.load().catch(() => {});
 	}, [branchSource, gitStatus]);
 	const [open, setOpen] = useState(false);
-	const { mounted } = usePresence(open, POP_EXIT_MS);
+	// The shared Popover hands the keyboard back when its open prop flips, but the exit animation keeps this menu
+	// mounted through the fade, so its search input is still the focus at that moment and the restore is skipped.
+	// Watch for the popover actually leaving the page and hand the keyboard back then (and only if focus was lost to
+	// the body, so a control the user clicked during the closing keeps it).
+	useEffect(() => {
+		const host = anchor.current;
+		if (!host) return undefined;
+		const observer = new MutationObserver((records) => {
+			for (const record of records) {
+				for (const node of record.removedNodes) {
+					if (node instanceof HTMLElement && node.classList.contains("branch-pop")) {
+						const active = document.activeElement;
+						if (!active || active === document.body) host.querySelector("button")?.focus({ preventScroll: true });
+					}
+				}
+			}
+		});
+		observer.observe(host, { childList: true });
+		return () => observer.disconnect();
+	}, []);
 	const linked = !!gitStatus.linkedWorktree;
 	const branch = gitStatus.branch || t("detached HEAD");
 	return html`<span ref=${anchor} class="branch-anchor">
@@ -52,7 +69,7 @@ export function BranchChip({ gitStatus }) {
 			${linked ? html`<span class="wt-tag">${t("worktree")}</span>` : null}
 			<${Chevron} />
 		</button>
-		<${Popover} anchor=${anchor} open=${mounted} exitMs=${0} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class=${`branch-pop ${open ? "" : "leaving"}`}>
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class="branch-pop">
 			<${BranchMenu} key=${slot} gitStatus=${gitStatus} branchSource=${branchSource} slot=${slot} close=${() => setOpen(false)} />
 		<//>
 	</span>`;

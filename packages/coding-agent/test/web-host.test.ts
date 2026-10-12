@@ -568,18 +568,55 @@ describe("Web host (real runtime with a faux provider)", () => {
 		};
 	}
 
-	it("compares code intelligence selection with the live runtime instead of treating a saved setting as active", async () => {
+	it("compares the saved code intelligence switch with the live runtime instead of treating a saved setting as active", async () => {
 		const fx = await start();
 		const before = await fx.get("/api/code-intelligence/modules");
 		expect(before.restartRequired).toBe(false);
-		const selected = !before.runtime.semanticEnabled;
-		await fx.post("/api/settings", { id: "codeIntelligence.enabled", value: selected });
+		const item = (await fx.get("/api/settings")).items.find((i: any) => i.id === "codeIntelligence.symbolsEnabled");
+		expect(item?.type).toBe("boolean");
+		expect(item?.value).toBe(before.symbolsEnabled);
+		const selected = !before.symbolsEnabled;
+		await fx.post("/api/settings", { id: "codeIntelligence.symbolsEnabled", value: selected });
 		const pending = await fx.get("/api/code-intelligence/modules");
-		expect(pending.configuredMode).toBe(selected ? "semantic" : "lightweight");
-		expect(pending.activeMode).toBe(before.activeMode);
+		expect(pending.symbolsEnabled).toBe(selected);
+		expect(pending.runtimeSymbolsEnabled).toBe(before.runtimeSymbolsEnabled);
 		expect(pending.restartRequired).toBe(true);
-		await fx.post("/api/settings", { id: "codeIntelligence.enabled", value: before.runtime.semanticEnabled });
+		await fx.post("/api/settings", { id: "codeIntelligence.symbolsEnabled", value: before.runtimeSymbolsEnabled });
 		expect((await fx.get("/api/code-intelligence/modules")).restartRequired).toBe(false);
+	});
+
+	it("hides symbols from GET /api/resources and refuses to activate it while the switch is off", async () => {
+		const fx = await start();
+		const resources = await fx.get("/api/resources");
+		expect(resources.tools.map((tool: any) => tool.name)).not.toContain("symbols");
+		const activeNames = resources.tools.filter((tool: any) => tool.active).map((tool: any) => tool.name);
+		// The activation request is refused outright, not silently accepted.
+		await expect(fx.post("/api/tools/active", { names: [...activeNames, "symbols"] })).rejects.toThrow(/400/);
+		expect((await fx.get("/api/resources")).tools.map((tool: any) => tool.name)).not.toContain("symbols");
+		expect(
+			((await fx.get("/api/context")).topTools as Array<{ name: string }>).map((tool) => tool.name),
+		).not.toContain("symbols");
+	});
+
+	it("gives a new session the symbols tool once the switch is saved as on", async () => {
+		const fx = await start();
+		expect((await fx.get("/api/resources")).tools.map((tool: any) => tool.name)).not.toContain("symbols");
+		await fx.post("/api/settings", { id: "codeIntelligence.symbolsEnabled", value: true });
+		// Restart-after-effect: the running session does not gain the tool from a settings change.
+		expect((await fx.get("/api/resources")).tools.map((tool: any) => tool.name)).not.toContain("symbols");
+		// A brand-new session reads the saved value. The chat must be dirty first, otherwise
+		// POST /api/sessions/new reuses this untouched empty slot instead of creating a session.
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("dirty")])]);
+		await fx.post("/api/prompt", { text: "dirty the chat" });
+		await fx.waitFor("run_finished");
+		const fresh = await fx.post("/api/sessions/new", {});
+		expect(fresh.created).toBe(true);
+		const resources = await fx.get("/api/resources", fresh.slot);
+		expect(resources.tools.map((tool: any) => tool.name)).toContain("symbols");
+		expect(resources.tools.find((tool: any) => tool.name === "symbols")?.active).toBe(true);
+		const activeNames = resources.tools.filter((tool: any) => tool.active).map((tool: any) => tool.name);
+		const updated = await fx.post("/api/tools/active", { names: activeNames }, fresh.slot);
+		expect(updated.active).toContain("symbols");
 	});
 
 	it("archives and restores a saved chat, then physically deletes it and resets the active view", async () => {
@@ -1813,5 +1850,59 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const end = await fx.waitFor("bash_end", (data) => data.id === started.id);
 		expect(end.output).toContain("web-ui-shell");
 		expect(end.exitCode).toBe(0);
+	});
+
+	it("exports sessions to standalone HTML via GET and POST with slot header, filename and Content-Type", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const slot1 = initial.slot;
+		const owner1 = fx.hub.get(slot1)!;
+		owner1.session.sessionManager.appendSessionInfo("Chat One Export");
+
+		// 1. GET without slot header (uses primary/default slot)
+		const getRes = await fetch(`http://127.0.0.1:${fx.port}/api/sessions/export`, {
+			headers: { "x-myharness-web": "1" },
+		});
+		expect(getRes.status).toBe(200);
+		expect(getRes.headers.get("content-type")).toBe("text/html; charset=utf-8");
+		const getDisp = getRes.headers.get("content-disposition");
+		expect(getDisp).toContain('attachment; filename="');
+		expect(getDisp).toContain("Chat_One_Export.html");
+		const getHtml = await getRes.text();
+		expect(getHtml).toContain("<!doctype html>");
+		expect(getHtml).toContain("Chat One Export");
+
+		// 2. Open a second chat with a different name to test slot routing
+		const opened = await fx.post("/api/sessions/new", {}, slot1);
+		const slot2 = opened.slot;
+		const owner2 = fx.hub.get(slot2)!;
+		owner2.session.sessionManager.appendSessionInfo("Chat Two Slot Test");
+
+		// 3. POST with body prefs and slot header
+		const postRes = await fetch(`http://127.0.0.1:${fx.port}/api/sessions/export`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-myharness-web": "1",
+				"x-myharness-slot": slot2,
+			},
+			body: JSON.stringify({
+				prefs: {
+					theme: "light",
+					colorTheme: "forest",
+					lang: "zh-CN",
+				},
+			}),
+		});
+		expect(postRes.status).toBe(200);
+		expect(postRes.headers.get("content-type")).toBe("text/html; charset=utf-8");
+		const postDisp = postRes.headers.get("content-disposition");
+		expect(postDisp).toContain('attachment; filename="');
+		expect(postDisp).toContain("Chat_Two_Slot_Test.html");
+		const postHtml = await postRes.text();
+		expect(postHtml).toContain("Chat Two Slot Test");
+		expect(postHtml).toContain('"theme":"light"');
+		expect(postHtml).toContain('"colorTheme":"forest"');
+		expect(postHtml).toContain('"lang":"zh-CN"');
 	});
 });

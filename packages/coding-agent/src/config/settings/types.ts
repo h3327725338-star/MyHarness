@@ -214,7 +214,14 @@ export interface LanguageServerConfiguration {
 
 /** Settings consumed by the default CodeIntelligenceRuntime factory. */
 export interface CodeIntelligenceSettings {
+	/**
+	 * Old engine-mode switch (semantic on/off). Superseded by `symbolsEnabled`: it is **ignored** when read, never
+	 * migrated and never written back. Kept in the type only so existing settings files still type-check.
+	 * @deprecated Use `symbolsEnabled`. Reading or writing this key has no effect.
+	 */
 	enabled?: boolean;
+	/** Whether the symbols tool is available at all; off by default. Takes effect after a restart. */
+	symbolsEnabled?: boolean;
 	disabledLanguages?: string[];
 	servers?: Record<string, LanguageServerConfiguration>;
 }

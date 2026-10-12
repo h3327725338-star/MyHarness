@@ -3,6 +3,7 @@ import type { Message, TextContent } from "@myharness/ai";
 import {
 	closeSync,
 	createReadStream,
+	type Dir,
 	type Dirent,
 	existsSync,
 	fstatSync,
@@ -18,7 +19,7 @@ import {
 	statSync,
 	unlinkSync,
 } from "fs";
-import { readdir, stat } from "fs/promises";
+import { lstat as lstatAsync, opendir, readdir, rmdir as rmdirAsync, stat } from "fs/promises";
 import { basename, dirname, join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { getDataDir, getWorkspaceSessionsDir, parseSessionDataPath } from "../../../config/paths/index.ts";
@@ -415,6 +416,178 @@ export function cleanupEmptySessionDirectories(
 			if (removeEmptyDirectoryTree(sessionDir)) removed.push(sessionDir);
 		}
 	}
+	return removed;
+}
+
+export interface EmptySessionCleanupAsyncOptions {
+	minAgeMs?: number;
+	nowMs?: number;
+	signal?: AbortSignal;
+	yieldToEventLoop?: () => Promise<void> | void;
+	batchSize?: number;
+}
+
+async function inspectEmptyDirectoryTreeAsync(
+	directory: string,
+	newestMtime: { value: number },
+	onItem?: () => Promise<void>,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	if (signal?.aborted) return false;
+	let directoryStats: Stats;
+	try {
+		directoryStats = await lstatAsync(directory);
+	} catch {
+		return false;
+	}
+	if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) return false;
+	newestMtime.value = Math.max(newestMtime.value, directoryStats.mtimeMs);
+
+	let dirHandle: Dir;
+	try {
+		dirHandle = await opendir(directory);
+	} catch {
+		return false;
+	}
+	try {
+		for await (const entry of dirHandle) {
+			if (signal?.aborted) return false;
+			if (onItem) await onItem();
+			const childPath = join(directory, entry.name);
+			let childStats: Stats;
+			try {
+				childStats = await lstatAsync(childPath);
+			} catch {
+				return false;
+			}
+			if (childStats.isSymbolicLink()) return false;
+			if (!childStats.isDirectory()) return false;
+			if (entry.name.toLowerCase().endsWith(".lock")) return false;
+			if (!(await inspectEmptyDirectoryTreeAsync(childPath, newestMtime, onItem, signal))) return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function removeEmptyDirectoryTreeAsync(directory: string): Promise<boolean> {
+	let dirHandle: Dir;
+	try {
+		dirHandle = await opendir(directory);
+	} catch {
+		return false;
+	}
+	try {
+		for await (const entry of dirHandle) {
+			const childPath = join(directory, entry.name);
+			if (!(await removeEmptyDirectoryTreeAsync(childPath))) return false;
+		}
+	} catch {
+		return false;
+	}
+	try {
+		await rmdirAsync(directory);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Async version of cleanupEmptySessionDirectories.
+ *
+ * Scans workspace and session directories with opendir and yields to the
+ * event loop every batchSize items (default 256). Respects AbortSignal.
+ */
+export async function cleanupEmptySessionDirectoriesAsync(
+	dataRoot: string,
+	options: EmptySessionCleanupAsyncOptions = {},
+): Promise<string[]> {
+	const removed: string[] = [];
+	const workspacesDir = join(resolve(dataRoot), "workspaces");
+	const minAgeMs = Math.max(0, options.minAgeMs ?? 10 * 60 * 1000);
+	const nowMs = options.nowMs ?? Date.now();
+	const signal = options.signal;
+	const batchSize = Math.max(1, options.batchSize ?? 256);
+	const yieldFn = options.yieldToEventLoop ?? (() => new Promise<void>((r) => setImmediate(r)));
+
+	if (signal?.aborted) return removed;
+
+	let itemsProcessed = 0;
+	const checkYield = async (): Promise<void> => {
+		itemsProcessed++;
+		if (itemsProcessed % batchSize === 0) {
+			await yieldFn();
+		}
+	};
+
+	try {
+		const stats = await lstatAsync(workspacesDir);
+		if (stats.isSymbolicLink() || !stats.isDirectory()) return removed;
+	} catch {
+		return removed;
+	}
+
+	let workspacesHandle: Dir;
+	try {
+		workspacesHandle = await opendir(workspacesDir);
+	} catch {
+		return removed;
+	}
+
+	try {
+		for await (const workspaceEntry of workspacesHandle) {
+			if (signal?.aborted) return removed;
+			await checkYield();
+			if (signal?.aborted) return removed;
+
+			if (!workspaceEntry.isDirectory() || !SAFE_SESSION_DIRECTORY_NAME.test(workspaceEntry.name)) continue;
+			const workspaceDir = join(workspacesDir, workspaceEntry.name);
+			try {
+				const stats = await lstatAsync(workspaceDir);
+				if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
+			} catch {
+				continue;
+			}
+
+			const sessionsDir = join(workspaceDir, "sessions");
+			try {
+				const stats = await lstatAsync(sessionsDir);
+				if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
+			} catch {
+				continue;
+			}
+
+			let sessionsHandle: Dir;
+			try {
+				sessionsHandle = await opendir(sessionsDir);
+			} catch {
+				continue;
+			}
+
+			try {
+				for await (const sessionEntry of sessionsHandle) {
+					if (signal?.aborted) return removed;
+					await checkYield();
+					if (signal?.aborted) return removed;
+
+					if (!sessionEntry.isDirectory() || !SAFE_SESSION_DIRECTORY_NAME.test(sessionEntry.name)) continue;
+					const sessionDir = join(sessionsDir, sessionEntry.name);
+					const newestMtime = { value: 0 };
+					if (!(await inspectEmptyDirectoryTreeAsync(sessionDir, newestMtime, checkYield, signal))) continue;
+					if (signal?.aborted) return removed;
+					if (nowMs - newestMtime.value < minAgeMs) continue;
+					if (await removeEmptyDirectoryTreeAsync(sessionDir)) {
+						removed.push(sessionDir);
+					}
+				}
+			} catch {}
+		}
+	} catch {
+		return removed;
+	}
+
 	return removed;
 }
 

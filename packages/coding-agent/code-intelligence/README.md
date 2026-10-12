@@ -1,8 +1,9 @@
 # MyHarness Code Intelligence modules
 
-The default `symbols` capability is the lightweight source index shipped with
-MyHarness. It does not download a language server. Windows x64 users can open
-`/settings` → `Code Intelligence` and install semantic support per language.
+The `symbols` capability provides semantic/LSP navigation when enabled. It is
+disabled by default and controlled by `codeIntelligence.symbolsEnabled`; changes
+take effect after a runtime restart. Windows x64 users can open `/settings` →
+`Code Intelligence` and install language-server support per language.
 
 - `runtime-manifest.json` is the checked-in install contract. It lists language
   modules, shared dependencies, versions, expected archive paths, release URL

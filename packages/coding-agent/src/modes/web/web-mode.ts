@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import { getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
@@ -85,6 +86,10 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	server.route("GET", "/api/worktree-service", () =>
 		copyIdentity ? { ...serviceIdentity(), token: copyIdentity.token } : {},
 	);
+	// Process start time (not "now"): the launcher compares it against the newest
+	// backend source mtime to decide wake-vs-restart, so files changed while the
+	// process was still loading must count as newer than the running code.
+	const startedAtMs = Math.round(performance.timeOrigin);
 	server.route("GET", "/api/boot", () => ({
 		instanceId,
 		worktreeService: serviceIdentity(),
@@ -92,6 +97,7 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 		detail: detail ?? null,
 		version: VERSION,
 		dialogs: dialogs.requests,
+		startedAtMs,
 	}));
 	server.route("POST", "/api/ui/respond", ({ body }) => {
 		const payload = (body ?? {}) as { id?: unknown; value?: unknown };
@@ -126,6 +132,14 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	if (preferred !== 0 && address.port !== preferred) {
 		console.error(`Port ${preferred} is in use; the Web UI is listening on ${address.port} instead.`);
 	}
+	// Wake channel for the dev-web.ps1 launcher: an explicit request to open the
+	// browser on the already running instance. It fires even when the process
+	// itself started with --no-open; the launcher skips calling it in that case.
+	// The x-myharness-web header is enforced by checkOrigin, same as /api/shutdown.
+	server.route("POST", "/api/wake", () => {
+		openBrowser(url);
+		return { ok: true };
+	});
 	console.error(`MyHarness Web UI: ${url}`);
 	if (options.openBrowser) openBrowser(url);
 

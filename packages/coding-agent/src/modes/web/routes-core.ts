@@ -50,7 +50,10 @@ async function toImageContent(host: WebHost, raw: unknown): Promise<ImageContent
 
 export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("GET", "/api/state", () => host.snapshot());
-	server.route("GET", "/api/transcript", () => host.transcript());
+	// Optional `limit` (newest items) and `before` (item-id cursor) page the transcript; without them the response is unchanged.
+	server.route("GET", "/api/transcript", ({ url }) =>
+		host.transcript({ limit: url.searchParams.get("limit"), before: url.searchParams.get("before") }),
+	);
 
 	server.route("POST", "/api/prompt", async ({ body }) => {
 		const payload = asObject(body);

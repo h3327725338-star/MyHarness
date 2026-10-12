@@ -507,3 +507,222 @@ tell('passed');
 	},
 	180000,
 );
+
+/**
+ * W152: pasting (Ctrl+V) inside the annotation box joins the box's own file list exactly like the paperclip does,
+ * a plain-text paste stays untouched for the browser, and the compact box holds its numbers in both locales.
+ * Checked in a real browser: the clipboard event, the measured layout and the two languages only exist where Chrome
+ * runs the CSS.
+ */
+it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
+	"pasting files in the quote box feeds its own attachment chips, plain text stays pasted, the compact box fits its numbers",
+	async () => {
+		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
+		const base = artifacts ? join(artifacts, "tests") : tmpdir();
+		mkdirSync(base, { recursive: true });
+		const root = mkdtempSync(join(base, "quote-paste-"));
+		const server = new WebHttpServer();
+		const browser = new LocalBrowser({
+			kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind,
+			rootDir: join(root, "browser"),
+		});
+		try {
+			for (const dir of ["js", "vendor", "css"])
+				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
+			server.mount({
+				prefix: "/markdown/",
+				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
+			});
+			server.route("POST", "/api/prompt", () => ({ ok: true }));
+			server.route("POST", "/api/files/upload", () => ({
+				name: "note-file.txt",
+				path: "C:/session/uploads/note-file.txt",
+			}));
+			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
+			server.route("POST", "/api/modes/state", () => ({
+				state: { lastSessionFile: null, model: null, drafts: {} },
+			}));
+			server.route("GET", "/api/modes/state", () => ({
+				coding: { lastSessionFile: null, model: null, drafts: {} },
+				general: { lastSessionFile: null, model: null, drafts: {} },
+			}));
+			server.route("GET", "/api/resources", () => ({
+				commands: [],
+				tools: [],
+				skills: [],
+				prompts: [],
+				extensions: [],
+				contextFiles: [],
+			}));
+			server.route("GET", "/api/git/status", () => ({ gitAvailable: false, isRepository: false }));
+			server.route("GET", "/api/stats", () => ({}));
+			server.mount({ prefix: "/test/", directory: root });
+
+			writeFileSync(
+				join(root, "paste.js"),
+				`
+import {h,render} from '/vendor/preact.js';
+import {Transcript} from '/js/transcript.js';
+import {Composer} from '/js/composer.js';
+import {FloatingQuoteToolbar} from '/js/quote-toolbar.js';
+import {set} from '/js/store.js';
+import {setLang} from '/js/lang.js';
+const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+const check=(c,m)=>{if(!c) throw Error(m);};
+const tell=(m)=>document.body.insertAdjacentHTML('beforeend','<p id="ready">'+m+'</p>');
+window.addEventListener('error',e=>tell('uncaught: '+(e.message||String(e.error))));
+window.addEventListener('unhandledrejection',e=>tell('rejected: '+(e.reason&&e.reason.message||String(e.reason))));
+const snap={session:{id:'test',file:'C:/t/test.jsonl',persisted:true,name:null},cwd:'C:/t',flags:{},active:false,
+ model:{id:'m',label:'M',input:['text'],contextWindow:8000,maxTokens:1000},thinking:{supported:false},trust:{trusted:true,requiresTrust:false},
+ context:{budget:{activeTokens:120,effectiveWindow:8000,percent:2}},queue:{steering:[],followUp:[]},dialogs:[],surface:{widgets:{},statuses:{}}};
+set({connected:true,everConnected:true,models:[],slots:[],activeSlot:'s1',gitStatus:null,dialogs:[],queue:{steering:[],followUp:[]},runs:{},toolRuns:{},userBash:{},userBashOrder:[],
+ surface:{widgets:{},statuses:{}},resources:{commands:[],tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},modeState:{coding:{drafts:{}},general:{drafts:{}}},
+ items:[{kind:'user',id:'u1',ts:1,text:'alpha beta gamma delta epsilon zeta',images:[]},
+        {kind:'user',id:'u2',ts:2,text:'one more line about theta and iota',images:[]},
+        {kind:'assistant',ts:3,blocks:[{type:'text',text:'the answer speaks about kappa lambda mu'}],stopReason:'stop',final:true}],snap:{...snap}});
+const app=document.getElementById('app');
+app.innerHTML='<div id="th"></div>';
+render(h(Transcript,{}),document.getElementById('th'));
+render(h(Composer,{}),document.getElementById('ch'));
+render(h(FloatingQuoteToolbar,{}),document.getElementById('qh'));
+await wait(250);
+check(!!document.querySelector('.transcript .user-text'),'the conversation did not render');
+check(!!document.querySelector('.transcript .final'),'the Agent answer did not render');
+
+function selectText(container,needle){
+ const walker=document.createTreeWalker(container,NodeFilter.SHOW_TEXT);
+ for(let node=walker.nextNode();node;node=walker.nextNode()){
+  const at=node.nodeValue.indexOf(needle);
+  if(at>=0){const r=document.createRange();r.setStart(node,at);r.setEnd(node,at+needle.length);
+   const s=getSelection();s.removeAllRanges();s.addRange(r);return r;}
+ }
+ throw Error('text not found: '+needle);
+}
+const release=()=>document.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+async function pick(needle){
+ selectText(document.querySelector('.transcript'),needle);
+ await release();await wait(90);
+ const bar=document.querySelector('.floating-quote-bar');
+ check(bar,'no Quote bubble for a selection in the message body: '+needle);
+ bar.querySelector('.floating-quote-btn').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));
+ await wait(90);
+ const card=document.querySelector('.quote-note-card');
+ check(card,'clicking Quote does not open the in-place annotation box for: '+needle);
+ return card;
+}
+const PNG_B64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const pngBytes=()=>Uint8Array.from(atob(PNG_B64),function(c){return c.charCodeAt(0);});
+async function pasteInto(el,file){
+ const dt=new DataTransfer();
+ dt.items.add(file);
+ const ev=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt});
+ if(!ev.clipboardData) Object.defineProperty(ev,'clipboardData',{value:dt,configurable:true});
+ return el.dispatchEvent(ev);
+}
+const saveQuote=(card)=>card.querySelector('.quote-note-foot .btn.primary');
+const thumbs=()=>document.querySelectorAll('.composer .attachments .thumb').length;
+const boxFiles=(card)=>card.querySelectorAll('.quote-note-file').length;
+
+try {
+// 1) a pasted image is taken over: one chip here, the note text and the box untouched; saving mounts it into the
+//    main input's attachment list together with the quote card.
+const card1=await pick('beta gamma');
+const area1=card1.querySelector('.quote-note-input');
+area1.focus();
+const returned1=await pasteInto(area1,new File([pngBytes()],'pasted-shot.png',{type:'image/png'}));
+check(returned1===false,'a pasted image was not taken over by the annotation box');
+await wait(80);
+check(boxFiles(card1)===1,'the pasted image did not turn into a chip: '+boxFiles(card1)+' chips');
+check(card1.querySelector('.quote-note-input').value==='','pasting an image polluted the note text');
+check(!!document.querySelector('.quote-note-card'),'pasting an image closed the box');
+check(card1.contains(document.activeElement),'pasting an image moved the caret out of the box');
+check(thumbs()===0,'the pasted image reached the input attachments before saving');
+saveQuote(card1).click();
+await wait(350);
+check(!document.querySelector('.quote-note-card'),'Save quote did not close the box');
+check(thumbs()===1,'the pasted image never joined the main input attachment list: '+thumbs()+' thumbs');
+check(document.querySelectorAll('.quote-card').length===1,'the saved quote card is missing');
+
+// 2) a plain-text paste is not taken over: the event is not prevented and no chip appears.
+const card2=await pick('delta epsilon');
+const dt2=new DataTransfer();
+try{dt2.setData('text/plain','clipboard words');}catch(e){}
+const ev2=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt2});
+if(!ev2.clipboardData) Object.defineProperty(ev2,'clipboardData',{value:dt2,configurable:true});
+const returned2=card2.querySelector('.quote-note-input').dispatchEvent(ev2);
+check(returned2===true,'a plain-text paste was swallowed by the annotation box');
+check(boxFiles(card2)===0,'a plain-text paste created an attachment chip');
+card2.querySelector('.quote-note-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+await wait(120);
+check(!document.querySelector('.quote-note-card'),'Escape did not close the box after the text paste');
+
+// 3) a pasted non-image file: chip here, and on save the composer's upload pipeline takes it (as the paperclip does).
+const card3=await pick('epsilon zeta');
+const area3=card3.querySelector('.quote-note-input');
+area3.focus();
+const returned3=await pasteInto(area3,new File(['hello world'],'a.txt',{type:'text/plain'}));
+check(returned3===false,'a pasted file was not taken over by the annotation box');
+await wait(60);
+check(boxFiles(card3)===1,'the pasted file did not turn into a chip: '+boxFiles(card3)+' chips');
+saveQuote(card3).click();
+await wait(400);
+check(!!document.querySelector('.composer .file-attachment'),'the pasted file did not go through the upload pipeline');
+check(thumbs()===2,'the pasted file was not mounted beside the pasted image: '+thumbs()+' thumbs');
+
+// 4) Escape drops the pasted file exactly like a paperclip pick: the box closes and the attachments stay untouched.
+const card4=await pick('theta');
+const area4=card4.querySelector('.quote-note-input');
+area4.focus();
+await pasteInto(area4,new File([pngBytes()],'later.png',{type:'image/png'}));
+await wait(60);
+check(boxFiles(card4)===1,'a second paste produced no chip: '+boxFiles(card4));
+document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+await wait(150);
+check(!document.querySelector('.quote-note-card'),'Escape left the box open');
+check(!document.querySelector('.quote-note-file'),'an attachment chip survived the closed box');
+check(thumbs()===2,'a cancelled paste still reached the input attachments: '+thumbs()+' thumbs');
+
+// 5) the compact numbers hold in both languages: narrow box, one-line hint, roomy enough note field, no overflow.
+for (const lang of ['en','zh-CN']) {
+ setLang(lang);
+ const card=await pick('alpha beta');
+ const box=card.getBoundingClientRect();
+ check(box.width>0&&box.width<=320,'the box is wider than 320px in '+lang+': '+box.width);
+ check(box.height>0&&box.height<=190,'the box is taller than 190px in '+lang+': '+box.height);
+ const keys=card.querySelector('.quote-note-keys');
+ check(keys.scrollWidth<=keys.clientWidth,'the key hint overflows its line in '+lang+': '+keys.scrollWidth+' > '+keys.clientWidth);
+ const keysH=keys.getBoundingClientRect().height;
+ check(keysH>0&&keysH<=20,'the key hint is not a single line in '+lang+': '+keysH+'px');
+ const area=card.querySelector('.quote-note-input');
+ check(area.getBoundingClientRect().height>=40,'the note field is shorter than 40px in '+lang+': '+area.getBoundingClientRect().height);
+ check(card.scrollWidth<=card.clientWidth,'the box overflows horizontally in '+lang);
+ area.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+ await wait(150);
+ setLang('en');
+ check(!document.querySelector('.quote-note-card'),'the geometry box stayed open in '+lang);
+}
+tell('passed');
+} catch(e) { tell('failed: '+((e&&e.message)||String(e))); }
+`,
+			);
+			writeFileSync(
+				join(root, "index.html"),
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><link rel="stylesheet" href="/css/composer.css"><link rel="stylesheet" href="/css/overlays.css"><div class="app"><main class="main"><div id="app"></div><div id="ch"></div><div id="qh"></div></main></div><script src="/markdown/marked.min.js"></script><script type="module" src="/test/paste.js"></script>',
+			);
+			server.setIndexFile(join(root, "index.html"));
+			const { port } = await server.listen(0);
+			const page = await browser.solveChallenge({
+				url: `http://127.0.0.1:${port}/`,
+				readySelector: "#ready",
+				label: "Quote paste test",
+				isSolved: (p) => p.text.includes('id="ready">'),
+			});
+			expect(page.text).toContain('id="ready">passed');
+		} finally {
+			await browser.shutdown();
+			await server.close();
+			rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+		}
+	},
+	180000,
+);

@@ -1,6 +1,6 @@
 // Folder picker for "Add workspace". It behaves like the Windows folder dialog: a Quick access / This PC pane, an address
 // bar with clickable path segments, back / forward / up, a list you can walk with the keyboard, and "New folder".
-import { html, useCallback, useEffect, useMemo, useRef, useState, Icon, Modal, Spinner } from "./ui.js";
+import { html, useCallback, useEffect, useMemo, useRef, useState, Icon, Modal, Overlay, Spinner, motionEnabled } from "./ui.js";
 import { api, post, state, useStore } from "./store.js";
 import { t } from "./i18n.js";
 
@@ -151,11 +151,23 @@ export function FolderPicker({ onClose, onPick, title, subtitle, confirmLabel, i
 		}
 	};
 
+	// Exit wiring: a close asked for by the dialog itself (Cancel, ×, scrim click, Esc) leaves with the dialog family's
+	// motion: Overlay keeps it on screen for the length of its close animation (inert, clicks pass through), then the
+	// caller is told to unmount it. Picking a folder and confirming closes through the caller's own onPick path, which
+	// unmounts at once. The linger is sized to --t-close, the same as Overlay's own.
+	const [visible, setVisible] = useState(true);
+	const exitTimer = useRef(0);
+	useEffect(() => () => clearTimeout(exitTimer.current), []);
+	const beginClose = () => {
+		if (!visible) return;
+		setVisible(false);
+		exitTimer.current = setTimeout(onClose, motionEnabled() ? 110 : 0);
+	};
 	const segments = crumbs(pathNow);
 	const atThisPc = pathNow === "" && data;
-	return html`<${Modal} title=${title} subtitle=${subtitle} onClose=${onClose} width=${780} class="fp-modal"
+	const dialog = html`<${Modal} title=${title} subtitle=${subtitle} onClose=${beginClose} width=${780} class="fp-modal"
 		footer=${html`<div class="fp-target grow truncate" title=${target}><span class="dim">${t("Folder")}:</span> <span class="mono">${target || t("Choose a folder")}</span></div>
-			<button class="btn" onClick=${onClose}>${t("Cancel")}</button>
+			<button class="btn" onClick=${beginClose}>${t("Cancel")}</button>
 			<button class="btn primary" disabled=${!target} onClick=${confirm}>${confirmLabel}</button>`}>
 		<div class="fp">
 			<div class="fp-bar">
@@ -205,4 +217,5 @@ export function FolderPicker({ onClose, onPick, title, subtitle, confirmLabel, i
 			</div>
 		</div>
 	<//>`;
+	return html`<${Overlay} show=${visible}>${dialog}<//>`;
 }

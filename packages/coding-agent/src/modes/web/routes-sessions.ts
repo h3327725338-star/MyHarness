@@ -1,9 +1,7 @@
 /** Web API routes for Workspaces, Sessions, session tree navigation and export. */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
 	generateConversationTitle,
 	normalizeConversationTitle,
@@ -11,6 +9,8 @@ import {
 } from "../../agent/runtime/conversation-title.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { getDataDir } from "../../config/paths/index.ts";
+import { buildReplayHtml } from "../../exports/html/replay/build.ts";
+import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
@@ -24,7 +24,7 @@ import {
 } from "../../session/types.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
 import type { WebHost } from "./host.ts";
-import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { HttpError, type RequestContext, type WebHttpServer } from "./http-server.ts";
 import type { WebHostHub } from "./hub.ts";
 
 function asObject(body: unknown): Record<string, unknown> {
@@ -493,23 +493,46 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		return { cancelled: result.cancelled, selectedText: result.selectedText ?? null };
 	});
 
-	server.route("GET", "/api/sessions/export", async ({ res }) => {
-		const directory = mkdtempSync(join(tmpdir(), "myharness-export-"));
-		try {
-			const file = join(directory, "session.html");
-			await host.session.exportToHtml(file);
-			const html = readFileSync(file);
-			const name = `${(host.session.sessionName ?? host.session.sessionId).replace(/[^\w.-]+/g, "_").slice(0, 60) || "session"}.html`;
-			res.writeHead(200, {
-				"content-type": "text/html; charset=utf-8",
-				"content-disposition": `attachment; filename="${name}"`,
-				"content-length": html.length,
-			});
-			res.end(html);
-		} finally {
-			rmSync(directory, { recursive: true, force: true });
+	const handleExport = async ({ res, body }: RequestContext) => {
+		let prefs: Record<string, unknown> | undefined;
+		if (body && typeof body === "object" && !Array.isArray(body)) {
+			const value = (body as Record<string, unknown>).prefs;
+			if (value && typeof value === "object" && !Array.isArray(value)) prefs = value as Record<string, unknown>;
 		}
-	});
+
+		let html: string;
+		try {
+			html = await buildReplayHtml({
+				sessionManager: host.session.sessionManager,
+				sessionFile: host.session.sessionFile ?? undefined,
+				prefs,
+				name: host.session.sessionName ?? undefined,
+			});
+		} catch (error) {
+			if (!(error instanceof ReplayExportTooLargeError)) throw error;
+			const text = JSON.stringify(buildExportTooLargeBody(error));
+			res.writeHead(413, {
+				"content-type": "application/json; charset=utf-8",
+				"cache-control": "no-store",
+				"content-length": Buffer.byteLength(text),
+			});
+			res.end(text);
+			return;
+		}
+
+		const rawName = host.session.sessionName ?? host.session.sessionId;
+		const name = `${rawName.replace(/[^\w.-]+/g, "_").slice(0, 60) || "session"}.html`;
+		const buffer = Buffer.from(html, "utf8");
+		res.writeHead(200, {
+			"content-type": "text/html; charset=utf-8",
+			"content-disposition": `attachment; filename="${name}"`,
+			"content-length": buffer.length,
+		});
+		res.end(buffer);
+	};
+
+	server.route("GET", "/api/sessions/export", handleExport);
+	server.route("POST", "/api/sessions/export", handleExport);
 
 	server.route("GET", "/api/sessions/stats", () => host.usage().stats);
 	server.route("POST", "/api/sessions/touched", ({ body }) => {

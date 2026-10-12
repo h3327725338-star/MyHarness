@@ -4,11 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getWorkspacesPath, validateWorkspacePath, WorkspaceStore } from "../src/application/workspace-store.ts";
 import { getWorkspaceMetadataPath, getWorkspaceRegistryPath } from "../src/config/paths/index.ts";
+import { cancelWorkspaceMetadataReconciles } from "../src/data/workspace-reconcile.ts";
 
 describe("WorkspaceStore", () => {
 	const cleanups: Array<() => void> = [];
 
 	afterEach(() => {
+		// W197: drop any deferred reconcile pass before the fixture roots are removed.
+		cancelWorkspaceMetadataReconciles();
 		while (cleanups.length > 0) {
 			cleanups.pop()?.();
 		}
@@ -250,6 +253,10 @@ describe("WorkspaceStore", () => {
 
 			const store = WorkspaceStore.create(agentDir, dataRoot);
 			expect(store.list().map((workspace) => workspace.workspaceId)).toEqual([workspaceId]);
+			// W197: create() no longer reconciles synchronously; the explicit
+			// immediate pass owns the same repair semantics.
+			expect(existsSync(getWorkspaceMetadataPath(dataRoot, workspaceId))).toBe(false);
+			store.reconcileMetadataNow();
 			expect(existsSync(getWorkspaceMetadataPath(dataRoot, workspaceId))).toBe(true);
 			expect(store.getConsistencyIssues()).toEqual(
 				expect.arrayContaining([expect.objectContaining({ code: "missing_metadata", status: "repaired" })]),
@@ -278,6 +285,8 @@ describe("WorkspaceStore", () => {
 
 			const store = WorkspaceStore.create(agentDir, dataRoot);
 			expect(store.list()).toHaveLength(1);
+			// W197: the issue surfaces via the deferred pass or the explicit immediate pass.
+			store.reconcileMetadataNow();
 			expect(store.getConsistencyIssues()).toEqual(
 				expect.arrayContaining([expect.objectContaining({ code: "missing_root", status: "unresolved" })]),
 			);

@@ -16,7 +16,7 @@
 
 ## Tools、workflow、symbols
 
-新增工具遵守 execution/presentation 分层；workflow 继续保持 read-only investigation contract；symbols 后端通过统一 API/router 接入，并公开 lightweight/semantic/runtime source。
+新增工具遵守 execution/presentation 分层；workflow 继续保持 read-only investigation contract；symbols 只保留 semantic/LSP/runtime source，并通过统一 API/router 接入；纯文本检索使用 `grep`、`find`、`ls`。
 
 ## UI 与平台
 

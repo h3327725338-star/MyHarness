@@ -2,6 +2,7 @@
 // one place (connection, current API key, models); managing several API keys is its own sub-view, and deleting the
 // provider sits apart at the bottom. Opening or switching providers only reads what is saved: no endpoint is contacted.
 import { html, useEffect, useRef, useState, Icon, Spinner, Toggle } from "./ui.js";
+import { Select } from "./select.js";
 import { api, attempt, loadModels, loadProviders, post, setView, toast, useStore } from "./store.js";
 import { confirmDialog, inputDialog } from "./actions.js";
 import { clip } from "./util.js";
@@ -85,6 +86,8 @@ function KeyManager({ provider, onBack }) {
 	const [busy, setBusy] = useState(false);
 	// The active key being deleted while others exist: which one takes over.
 	const [replacing, setReplacing] = useState(null);
+	// The replacement picked in the row's Select, per key being deleted; unset means the first other key.
+	const [repChoice, setRepChoice] = useState({});
 	const login = useStore((s) => s.loginEvent);
 	const c = provider.credentials;
 	const keys = c?.apiKeys || [];
@@ -122,8 +125,8 @@ function KeyManager({ provider, onBack }) {
 				</div>
 				${replacing === k.id ? html`<div class="key-replace row">
 					<span class="dim">${t("This key is in use. Switch to:")}</span>
-					<select class="select sm" id=${`rep-${k.id}`}>${keys.filter((o) => o.id !== k.id).map((o) => html`<option key=${o.id} value=${o.id}>${serverText(o.label)}${o.suffix ? ` ••••${o.suffix}` : ""}</option>`)}</select>
-					<button class="btn sm danger" onClick=${() => remove(k, document.getElementById(`rep-${k.id}`)?.value)}>${t("Delete API key")}</button>
+					<${Select} id=${`rep-${k.id}`} size="sm" value=${repChoice[k.id] ?? keys.filter((o) => o.id !== k.id)[0]?.id ?? ""} onChange=${(next) => setRepChoice((current) => ({ ...current, [k.id]: next }))} options=${keys.filter((o) => o.id !== k.id).map((o) => ({ value: o.id, label: `${serverText(o.label)}${o.suffix ? ` ••••${o.suffix}` : ""}` }))} />
+					<button class="btn sm danger" onClick=${() => remove(k, repChoice[k.id] ?? keys.filter((o) => o.id !== k.id)[0]?.id)}>${t("Delete API key")}</button>
 					<button class="btn sm ghost" onClick=${() => setReplacing(null)}>${t("Cancel")}</button>
 				</div>` : null}`)}
 				${c?.hasOAuth ? html`<div class=${`key-row ${c.active?.type === "oauth" ? "active" : ""}`}><span class=${`dot ${c.active?.type === "oauth" ? "ok" : ""}`} /><span class="grow">${t("OAuth login")}</span>${c.active?.type === "oauth" ? html`<span class="badge ok">${t("in use")}</span>` : html`<button class="btn sm" disabled=${busy} onClick=${() => act(() => post("/api/providers/oauth/activate", { id: provider.id }))}>${t("Use this login")}</button>`}</div>` : null}
@@ -160,7 +163,15 @@ function LoginNotice() {
 function ProviderDetail({ provider, entry, apiTypes, defaults, onSaved, onDirty, onDeleted }) {
 	const [sub, setSub] = useState("main");
 	const [busy, setBusy] = useState("");
-	useEffect(() => setSub("main"), [provider.id]);
+	// Reset to the main view only when the provider id really changes under this instance: on mount the state is
+	// already "main", and a mount-time setSub("main") lands in the window between the DOM appearing and this
+	// effect flushing (the effect runs late under load), where it would undo a "Manage API keys" click already made.
+	const lastProviderId = useRef(provider.id);
+	useEffect(() => {
+		if (lastProviderId.current === provider.id) return;
+		lastProviderId.current = provider.id;
+		setSub("main");
+	}, [provider.id]);
 	if (sub === "keys") return html`<${KeyManager} provider=${provider} onBack=${() => setSub("main")} />`;
 	const setEnabled = async (enabled) => {
 		setBusy("enabled");

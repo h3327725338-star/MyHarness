@@ -28,8 +28,6 @@ import {
 	type DataFrameworkSessionMigrationResult,
 	migrateSessionsToDataFramework,
 } from "./session/migrations/data-framework.ts";
-import { cleanupEmptySessionDirectories } from "./session/storage/jsonl/index.ts";
-import { cleanupStaleAtomicWriteTemps } from "./utils/atomic-write.ts";
 
 const MIGRATION_GUIDE_URL =
 	"https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
@@ -419,7 +417,6 @@ export function runMigrations(cwd: string): {
 	const migratedAuthProviders = migrateAuthToAuthJson();
 	migrateSessionsFromAgentRoot();
 	const dataRoot = getDataDir(cwd);
-	cleanupStaleAtomicWriteTemps(dataRoot);
 	const projectLegacyRoot = getSessionsDir(cwd);
 	const legacySourceRoots = [projectLegacyRoot, join(getAgentDir(), "sessions")].filter(
 		(sourceRoot, index, roots) =>
@@ -431,7 +428,6 @@ export function runMigrations(cwd: string): {
 	const dataFrameworkSessionMigration = mergeDataFrameworkMigrationResults(sourceResults);
 	const workspaceRegistryMigration = migrateWorkspaceRegistry(dataRoot, { agentDir: getAgentDir() });
 	removeRetiredLegacySessionRoot(projectLegacyRoot, sourceResults[0]!);
-	cleanupEmptySessionDirectories(dataRoot);
 	migrateToolsToBin();
 	const deprecationWarnings = migrateExtensionSystem(cwd);
 	return {

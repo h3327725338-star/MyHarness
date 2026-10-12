@@ -1,10 +1,11 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
 import { attempt, dismissToast, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
+import { ExportHeaderDownload, exportReadOnly } from "./export-mode.js";
 import { ChangesPanel } from "./panel-changes.js";
 import { FilesPanel } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
@@ -13,6 +14,7 @@ import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
 import { FloatingQuoteToolbar } from "./quote-toolbar.js";
+import { ImageLightboxHost } from "./lightbox.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
@@ -73,14 +75,16 @@ function Header() {
 		if (save && next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
 	};
 	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
-	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
+	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	return html`<header class="main-header">
 		${!sidebarOpen ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
-			? html`<input class="field title-input" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
+			? html`<input class="field title-input" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { ended.current = false; setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
 		${copy ? html`<span class="badge truncate" title=${`${copy.name}\n${copy.path}`}>${t("Copy")} · ${copy.name}</span>` : null}
 		<span class="grow" />
+		${exportReadOnly() ? html`<span class="export-top-badge" role="status"><${Icon} name="lock" size=${13} />${t("Read-only copy")}</span>` : null}
+		${exportReadOnly() && !sidebarOpen ? html`<${ExportHeaderDownload} />` : null}
 		<${StatusPill} />
 		${tabBtn("changes", "fileDiff", t("Changes"), changeCount ? String(changeCount) : "")}
 		${tabBtn("files", "folder", t("Files"))}
@@ -144,6 +148,40 @@ function InputModal({ dialog }) {
 	<//>`;
 }
 
+/**
+ * Each overlay subscribes to the single view (or boot) field that shows it, so opening or closing a dialog re-renders
+ * only this host and not the whole App tree (W203: the settings close used to re-render the root once per store change
+ * the whole `view` object was read at the root).
+ */
+function SettingsOverlayHost() {
+	const open = useStore((s) => s.view.settingsOpen);
+	return html`<${Overlay} show=${!!open}>${open ? html`<${SettingsModal} />` : null}<//>`;
+}
+
+function ProviderEditorOverlayHost() {
+	const editor = useStore((s) => s.view.providerEditor);
+	return html`<${Overlay} show=${!!editor}>${editor ? html`<${ProviderEditorHost} key=${editor.id ?? ""} id=${editor.id} />` : null}<//>`;
+}
+
+function PaletteOverlayHost() {
+	const open = useStore((s) => s.view.palette);
+	return html`<${Overlay} show=${!!open}>${open ? html`<${CommandPalette} />` : null}<//>`;
+}
+
+function DialogOverlayHost() {
+	const dialog = useStore((s) => s.view.dialog);
+	const type = dialog?.type;
+	return html`<${Overlay} show=${type === "git-setup"}>${type === "git-setup" ? html`<${GitSetupDialog} />` : null}<//>
+		<${Overlay} show=${type === "confirm"}>${type === "confirm" ? html`<${ConfirmModal} dialog=${dialog} />` : null}<//>
+		<${Overlay} show=${type === "input"}>${type === "input" ? html`<${InputModal} dialog=${dialog} />` : null}<//>`;
+}
+
+function BootDialogHost() {
+	const dialogs = useStore((s) => s.boot.dialogs);
+	if (!dialogs?.length) return null;
+	return html`<${BootDialogs} dialogs=${dialogs} />`;
+}
+
 /** Startup / no-session dialogs (e.g. Project Trust) that arrive before the app is ready. */
 function BootDialogs({ dialogs }) {
 	const answer = (id, value) => attempt(() => post("/api/ui/respond", { id, value }));
@@ -160,6 +198,9 @@ function useShortcuts() {
 			const key = eventShortcut(e);
 			const item = SHORTCUTS.find((item) => shortcutFor(item.id, state.view.shortcuts) === key);
 			if (!item) return;
+			// Read-only export copies ignore the shortcuts whose actions do not exist there (D-18): no new chat,
+			// no settings panel, no composer focus. Palette/sidebar/filter stay available as pure view features.
+			if (exportReadOnly() && (item.id === "newChat" || item.id === "settings" || item.id === "focus")) return;
 			e.preventDefault();
 			e.stopPropagation();
 			if (e.repeat) return;
@@ -203,48 +244,52 @@ function useWidthClass(ref, deps, limits = [430, 620]) {
 }
 
 export function App() {
-	const boot = useStore((s) => s.boot);
+	// Only the fields the shell itself lays out or shows are read here; everything a dialog or overlay owns is read in
+	// that overlay's own host component, so a view change that concerns only a dialog leaves the App tree alone.
+	const bootPhase = useStore((s) => s.boot.phase);
+	const bootDetail = useStore((s) => s.boot.detail);
+	const worktreeService = useStore((s) => s.boot.worktreeService);
 	const snap = useStore((s) => s.snap);
-	const view = useStore((s) => s.view);
+	const panelOpen = useStore((s) => s.view.panelOpen);
+	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const connected = useStore((s) => s.connected);
 	const everConnected = useStore((s) => s.everConnected);
 	const restarting = useStore((s) => s.restarting);
 	const shutdown = useStore((s) => s.shutdown);
 	useShortcuts();
 	// The panel stays mounted while it slides out, and only turns "open" a frame after it is mounted, so both directions animate.
-	const panel = usePresence(view.panelOpen, 320);
+	const panel = usePresence(panelOpen, 320);
 	const mainRef = useRef(null);
-	useWidthClass(mainRef, [snap != null, view.panelOpen, view.sidebarOpen]);
+	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen]);
 	useEffect(() => {
-		const copy = boot.worktreeService;
+		const copy = worktreeService;
 		document.title = copy ? `[${t("Copy")}] ${clip(copy.name || "", 24)} · MyHarness` : `[${t("Main")}] ${snap?.session?.name ? `${clip(snap.session.name, 24)} · ` : ""}MyHarness`;
-	}, [snap?.session?.name, boot.worktreeService]);
+	}, [snap?.session?.name, worktreeService]);
 
 
 	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;
-	if ((!restarting && boot.phase !== "ready") || !snap) {
+	if ((!restarting && bootPhase !== "ready") || !snap) {
 		return html`<div class="splash"><div class="splash-card">
-			${boot.phase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${boot.detail}</div>` : html`<${Spinner} /><div>${boot.phase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
-		</div>${boot.dialogs?.length ? html`<${BootDialogs} dialogs=${boot.dialogs} />` : null}</div>`;
+			${bootPhase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${bootDetail}</div>` : html`<${Spinner} /><div>${bootPhase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
+		</div><${BootDialogHost} /></div>`;
 	}
-	const layoutClass = `app ${view.sidebarOpen ? "" : "sidebar-collapsed"} ${panel.shown ? "panel-open" : ""}`;
+	const layoutClass = `app ${panel.shown ? "panel-open" : ""}`;
 	return html`<div class=${layoutClass}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
 			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />
-			<${Composer} />
+			${exportReadOnly() ? null : html`<${Composer} />`}
 			<${Toasts} />
-			<${FloatingQuoteToolbar} />
+			${exportReadOnly() ? null : html`<${FloatingQuoteToolbar} />`}
 		</main>
 		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}
-		<${Overlay} show=${!!view.settingsOpen}>${view.settingsOpen ? html`<${SettingsModal} />` : null}<//>
-		<${Overlay} show=${!!view.providerEditor}>${view.providerEditor ? html`<${ProviderEditorHost} key=${view.providerEditor.id ?? ""} id=${view.providerEditor.id} />` : null}<//>
-		<${Overlay} show=${!!view.palette}>${view.palette ? html`<${CommandPalette} />` : null}<//>
-		<${Overlay} show=${view.dialog?.type === "git-setup"}>${view.dialog?.type === "git-setup" ? html`<${GitSetupDialog} />` : null}<//>
-		<${Overlay} show=${view.dialog?.type === "confirm"}>${view.dialog?.type === "confirm" ? html`<${ConfirmModal} dialog=${view.dialog} />` : null}<//>
-		<${Overlay} show=${view.dialog?.type === "input"}>${view.dialog?.type === "input" ? html`<${InputModal} dialog=${view.dialog} />` : null}<//>
+		<${SettingsOverlayHost} />
+		<${ProviderEditorOverlayHost} />
+		<${PaletteOverlayHost} />
+		<${DialogOverlayHost} />
+		<${ImageLightboxHost} />
 	</div>`;
 }
 

@@ -114,7 +114,6 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		const store = new SymbolStore({ workspaceRoot: environment.root });
 		const router = new CodeIntelligenceRouter({
 			workspaceRoot: environment.root,
-			lightweight: {} as never,
 			semantic: environment.backend,
 			symbolStore: store,
 		});
@@ -122,16 +121,15 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		const aliasTarget = `${aliasRoot}/SRC/TARGET.TS`;
 		const target = { type: "position" as const, path: aliasTarget, position: { line: 0, character: 14 } };
 
-		const fileSymbols = await router.fileSymbols(aliasTarget, { mode: "semantic", language: "typescript" });
-		const definition = await router.findDefinition(target, { mode: "semantic", language: "typescript" });
-		const references = await router.findReferences(target, { mode: "semantic", language: "typescript" });
-		const workspaceSymbols = await router.workspaceSymbols("Target", { mode: "semantic", language: "typescript" });
+		const fileSymbols = await router.fileSymbols(aliasTarget, { language: "typescript" });
+		const definition = await router.findDefinition(target, { language: "typescript" });
+		const references = await router.findReferences(target, { language: "typescript" });
+		const workspaceSymbols = await router.workspaceSymbols("Target", { language: "typescript" });
 		const filteredWorkspaceSymbols = await router.workspaceSymbols("Target", {
-			mode: "semantic",
 			language: "typescript",
 			path: `${aliasRoot}/SRC`,
 		});
-		const hover = await router.hover(target, { mode: "semantic", language: "typescript" });
+		const hover = await router.hover(target, { language: "typescript" });
 
 		expect(fileSymbols.items[0]?.symbol.path).toBe("SRC/TARGET.TS");
 		expect(definition.items[0]?.path).toBe("SRC/TARGET.TS");
@@ -147,11 +145,10 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		const store = new SymbolStore({ workspaceRoot: environment.root });
 		const router = new CodeIntelligenceRouter({
 			workspaceRoot: environment.root,
-			lightweight: {} as never,
 			semantic: environment.backend,
 			symbolStore: store,
 		});
-		const file = await router.fileSymbols("src/target.ts", { mode: "semantic", language: "typescript" });
+		const file = await router.fileSymbols("src/target.ts", { language: "typescript" });
 		const id = file.items[0]?.symbol.id;
 		expect(id).toBeDefined();
 		const resolved = await router.resolveSymbol(id!);

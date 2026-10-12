@@ -2,6 +2,8 @@
 // "Quote" bubble appears. It opens an annotation box right there: write what you mean, attach a file, press Enter to save.
 // Saving does not send anything - the quote is mounted as a card above the input, the fragment stays painted in the body,
 // and everything mounted is sent together with the message you finally submit (see composer.js).
+// Files pasted with Ctrl+V join the box's own file list exactly like paperclip picks: they reach the input's attachment
+// list only when "Save quote" runs them through the composer's import pipeline, and cancelling drops them the same way.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { actions } from "./actions.js";
 import { selectionHint } from "./quote-highlight.js";
@@ -15,8 +17,8 @@ const isQuotable = (el) => !!el?.closest?.(QUOTABLE) && !!el?.closest?.(".transc
 
 /** The bubble and the annotation box are placed inside the viewport, below the selection when there is room. */
 const BAR_W = 96;
-const CARD_W = 320;
-const CARD_H = 200;
+const CARD_W = 300;
+const CARD_H = 204;
 
 function place(rect, width, height) {
 	const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
@@ -168,6 +170,15 @@ export function FloatingQuoteToolbar() {
 
 	const pickedFiles = useMemo(() => files.map((file, i) => html`<span class="quote-note-file" key=${i}><${Icon} name="paperclip" size=${11} />${file.name}</span>`), [files]);
 
+	// Ctrl+V inside the box: clipboard files take the paperclip's path (chips show up here, the composer mounts them on save).
+	// Without files (plain or rich text) the event stays untouched so the browser pastes the text into the note box as usual.
+	const onPaste = (e) => {
+		const pasted = e.clipboardData?.files;
+		if (!pasted || pasted.length === 0) return;
+		e.preventDefault();
+		setFiles((prev) => [...prev, ...pasted]);
+	};
+
 	if (!bar && !draft) return null;
 
 	if (!draft)
@@ -190,6 +201,7 @@ export function FloatingQuoteToolbar() {
 		style=${{ top: `${draftPos.current.top}px`, left: `${draftPos.current.left}px` }}
 		role="dialog"
 		aria-label=${t("Quote note")}
+		onPaste=${onPaste}
 	>
 		<div class="quote-note-head">
 			<${Icon} name="quote" size=${12} />
@@ -200,7 +212,7 @@ export function FloatingQuoteToolbar() {
 		<textarea
 			ref=${area}
 			class="field quote-note-input"
-			rows="3"
+			rows="2"
 			value=${note}
 			placeholder=${t("Add a note about this passage (optional)")}
 			onInput=${(e) => setNote(e.target.value)}
@@ -223,6 +235,6 @@ export function FloatingQuoteToolbar() {
 				e.target.value = "";
 			}}
 		/>
-		<div class="quote-note-keys dim">${t("Enter saves the quote · Shift+Enter starts a new line · Esc cancels")}</div>
+		<div class="quote-note-keys dim">${t("Enter saves · Shift+Enter new line · Esc cancels")}</div>
 	</div>`;
 }

@@ -22,16 +22,23 @@ describe("SettingsManager project override APIs", () => {
 	it("persists project code intelligence overrides through the project scope", async () => {
 		const cwd = createTempDir("myharness-project-override-cwd-");
 		const agentDir = createTempDir("myharness-project-override-agent-");
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ codeIntelligence: { enabled: true } }));
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ codeIntelligence: { enabled: true, disabledLanguages: ["go"] } }),
+		);
 		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 
-		expect(settingsManager.getCodeIntelligenceSettings().enabled).toBe(true);
-		settingsManager.setProjectCodeIntelligenceSettings({ enabled: false });
+		// The deprecated global `enabled: true` is ignored: the saved switch is off, the other fields still apply.
+		expect(settingsManager.getCodeIntelligenceSettings().symbolsEnabled).toBe(false);
+		settingsManager.setProjectCodeIntelligenceSettings({
+			...settingsManager.getCodeIntelligenceSettings(),
+			symbolsEnabled: true,
+		});
 		await settingsManager.flush();
 
 		const projectFile = JSON.parse(readFileSync(join(cwd, ".myharness", "settings.json"), "utf-8"));
-		expect(projectFile).toEqual({ codeIntelligence: { enabled: false } });
-		expect(settingsManager.getCodeIntelligenceSettings().enabled).toBe(false);
+		expect(projectFile).toEqual({ codeIntelligence: { symbolsEnabled: true, disabledLanguages: ["go"] } });
+		expect(settingsManager.getCodeIntelligenceSettings().symbolsEnabled).toBe(true);
 		// Global file is untouched.
 		const globalFile = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
 		expect(globalFile.codeIntelligence?.enabled).toBe(true);
@@ -42,16 +49,20 @@ describe("SettingsManager project override APIs", () => {
 		const agentDir = createTempDir("myharness-project-override-agent-");
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ codeIntelligence: { enabled: true } }));
 		mkdirSync(join(cwd, ".myharness"), { recursive: true });
-		writeFileSync(join(cwd, ".myharness", "settings.json"), JSON.stringify({ codeIntelligence: { enabled: false } }));
+		writeFileSync(
+			join(cwd, ".myharness", "settings.json"),
+			JSON.stringify({ codeIntelligence: { symbolsEnabled: false, disabledLanguages: ["ts"] } }),
+		);
 		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 
-		expect(settingsManager.getCodeIntelligenceSettings().enabled).toBe(false);
+		expect(settingsManager.getCodeIntelligenceSettings().symbolsEnabled).toBe(false);
 		settingsManager.resetProjectSettings(["codeIntelligence"]);
 		await settingsManager.flush();
 
 		const projectFile = JSON.parse(readFileSync(join(cwd, ".myharness", "settings.json"), "utf-8"));
 		expect(projectFile.codeIntelligence).toBeUndefined();
-		expect(settingsManager.getCodeIntelligenceSettings().enabled).toBe(true);
+		// Back to the global value: its deprecated `enabled: true` is ignored, so the switch stays off.
+		expect(settingsManager.getCodeIntelligenceSettings().symbolsEnabled).toBe(false);
 	});
 
 	it("resetProjectSettings refuses to write when the project is untrusted", () => {

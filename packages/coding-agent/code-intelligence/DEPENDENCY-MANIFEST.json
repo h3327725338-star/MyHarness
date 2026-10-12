@@ -6,13 +6,11 @@
   "platform": {
     "os": "Windows",
     "architecture": "x64",
-    "defaultMode": "lightweight",
     "optionalInstall": "per-language",
     "offlineAtRuntime": true,
     "globalInstallation": "none"
   },
   "sourceRuntime": {
-    "lightweightIndex": "packages/coding-agent/src/symbols/index",
     "languageServers": "not stored in the source checkout",
     "releaseManifest": "runtime-manifest.json"
   },

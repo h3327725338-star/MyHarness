@@ -315,6 +315,10 @@ Write-Note "手动 Provider 模式：仓库不加载上游 Provider catalog，�
 # ---------------------------------------------------------------------------
 Write-Head "启动 MyHarness 开发模式"
 
+# --restart 是 dev-web.ps1 的自有参数（强制重启）：--console 路径直达本脚本时若不剥掉，
+# 服务端会把它当未知参数而启动失败，所以转发前先过滤。
+$args = @($args | Where-Object { $_ -ne "--restart" })
+
 $entryScript = Join-Path $Root "web-source.ps1"
 if (-not (Test-Path -LiteralPath $entryScript)) {
 	Write-Fail "找不到 $entryScript（项目自带的开发入口）。"

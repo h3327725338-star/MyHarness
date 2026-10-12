@@ -14,6 +14,7 @@ import { getAgentDir } from "../config.ts";
 import type { ChatMode } from "../session/types.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../utils/paths.ts";
+import { noteWorkspaceMetadataSaved, scheduleWorkspaceMetadataReconcile } from "./workspace-reconcile.ts";
 
 const LEGACY_WORKSPACES_FILE_VERSION = 1;
 const WORKSPACES_FILE_VERSION = 2;
@@ -213,6 +214,67 @@ function readWorkspaceFile(
 	}
 }
 
+interface WorkspaceRegistrySnapshotRecord {
+	workspaces: Workspace[];
+	migrated: boolean;
+}
+
+/**
+ * Process-local memo of an already-parsed registry. Repeated
+ * `WorkspaceStore.create()` calls (migrations, session storage, and the web
+ * boot path each construct a store) otherwise re-canonicalize every
+ * `rootPath` through `pathIdentityKey`, which is O(workspace count)
+ * filesystem calls per construction. Validation is a single statSync of the
+ * registry file itself: any rewrite changes mtime/size and forces a re-parse.
+ */
+const workspaceRegistryParseCache = new Map<string, { stamp: string; snapshot: WorkspaceRegistrySnapshotRecord }>();
+
+function workspaceRegistryStamp(path: string): string | undefined {
+	try {
+		const stats = statSync(path);
+		return `${stats.mtimeMs}|${stats.size}`;
+	} catch {
+		return undefined;
+	}
+}
+
+function cloneWorkspace(workspace: Workspace): Workspace {
+	return { ...workspace, modes: [...(workspace.modes ?? ["coding"])] };
+}
+
+function readCachedWorkspaceRegistry(path: string): WorkspaceRegistrySnapshotRecord | undefined {
+	const entry = workspaceRegistryParseCache.get(path);
+	if (!entry) return undefined;
+	const stamp = workspaceRegistryStamp(path);
+	if (stamp === undefined || entry.stamp !== stamp) {
+		workspaceRegistryParseCache.delete(path);
+		return undefined;
+	}
+	return { migrated: entry.snapshot.migrated, workspaces: entry.snapshot.workspaces.map(cloneWorkspace) };
+}
+
+function rememberWorkspaceRegistry(path: string, snapshot: WorkspaceRegistrySnapshotRecord): void {
+	const stamp = workspaceRegistryStamp(path);
+	if (stamp === undefined) return;
+	workspaceRegistryParseCache.set(path, {
+		stamp,
+		snapshot: { migrated: snapshot.migrated, workspaces: snapshot.workspaces.map(cloneWorkspace) },
+	});
+}
+
+/** Stable content signature used to coalesce duplicate deferred reconcile passes. */
+function workspaceRegistrySignature(workspaces: readonly Workspace[]): string {
+	return JSON.stringify(
+		workspaces.map((workspace) => [
+			workspace.workspaceId,
+			workspace.name,
+			workspace.rootPath,
+			workspace.createdAt,
+			workspace.modes ?? ["coding"],
+		]),
+	);
+}
+
 function readWorkspaceMetadata(path: string): Workspace | undefined {
 	try {
 		if (!existsSync(path)) return undefined;
@@ -294,18 +356,26 @@ export class WorkspaceStore {
 		let registryReadable = false;
 
 		if (resolvedDataRoot) {
-			const current = readWorkspaceFile(filePath);
-			if (current.readable) {
+			const cached = readCachedWorkspaceRegistry(filePath);
+			if (cached) {
 				registryReadable = true;
-				workspaces = current.workspaces;
-				migrated = current.migrated;
+				workspaces = cached.workspaces;
+				migrated = cached.migrated;
 			} else {
-				workspaces = readWorkspaceMetadataTree(resolvedDataRoot);
-				if (workspaces.length > 0) migrated = true;
-				if (workspaces.length === 0) {
-					const legacy = readWorkspaceFile(legacyFilePath);
-					workspaces = legacy.workspaces;
-					migrated = legacy.readable;
+				const current = readWorkspaceFile(filePath);
+				if (current.readable) {
+					registryReadable = true;
+					workspaces = current.workspaces;
+					migrated = current.migrated;
+					rememberWorkspaceRegistry(filePath, { workspaces, migrated });
+				} else {
+					workspaces = readWorkspaceMetadataTree(resolvedDataRoot);
+					if (workspaces.length > 0) migrated = true;
+					if (workspaces.length === 0) {
+						const legacy = readWorkspaceFile(legacyFilePath);
+						workspaces = legacy.workspaces;
+						migrated = legacy.readable;
+					}
 				}
 			}
 		} else {
@@ -313,7 +383,7 @@ export class WorkspaceStore {
 		}
 
 		const store = new WorkspaceStore(filePath, resolvedDataRoot, workspaces);
-		if (resolvedDataRoot && registryReadable) store.reconcileMetadata();
+		if (resolvedDataRoot && registryReadable) store.scheduleMetadataReconcile();
 		if (resolvedDataRoot && migrated && workspaces.length > 0) {
 			try {
 				store.save();
@@ -330,14 +400,49 @@ export class WorkspaceStore {
 			.map((workspace) => ({ ...workspace, modes: [...(workspace.modes ?? ["coding"])] }));
 	}
 
-	/** Issues found while checking the registry against its per-Workspace metadata. */
+	/**
+	 * Issues found while checking the registry against its per-Workspace metadata.
+	 * Metadata reconciliation is deferred off `create()` (W197): until the scheduled
+	 * pass completes this list may be empty even when drift exists on disk. Final
+	 * results are equivalent; use `reconcileMetadataNow()` when a caller needs the
+	 * reconciliation to complete synchronously.
+	 */
 	getConsistencyIssues(): readonly WorkspaceConsistencyIssue[] {
 		return this.consistencyIssues.map((issue) => ({ ...issue }));
 	}
 
-	private reconcileMetadata(): void {
+	/** Reconcile the registry against per-Workspace metadata immediately (synchronous). */
+	reconcileMetadataNow(): void {
+		this.consistencyIssues.push(...this.reconcileRange(0, this.workspaces.length));
+	}
+
+	private scheduleMetadataReconcile(): void {
 		if (!this.dataRoot) return;
-		for (const workspace of this.workspaces) {
+		const dataRoot = this.dataRoot;
+		// Reconcile the registry snapshot captured here, never the live list: an
+		// unpersisted add() must not have its metadata written ahead of the registry
+		// (the crash-order rule save() documents).
+		const workspaces = [...this.workspaces];
+		scheduleWorkspaceMetadataReconcile({
+			dataRoot,
+			signature: workspaceRegistrySignature(workspaces),
+			workspaces,
+			runShard: (start, end) => this.reconcileRange(start, end, workspaces),
+			attach: (issues) => {
+				this.consistencyIssues.push(...issues.map((issue) => ({ ...issue })));
+			},
+		});
+	}
+
+	/** Checks and repairs the registry records in [start, end) against their metadata files. */
+	private reconcileRange(
+		start: number,
+		end: number,
+		source: readonly Workspace[] = this.workspaces,
+	): WorkspaceConsistencyIssue[] {
+		const issues: WorkspaceConsistencyIssue[] = [];
+		if (!this.dataRoot) return issues;
+		for (const workspace of source.slice(start, end)) {
 			const metadataPath = getWorkspaceMetadataPath(this.dataRoot, workspace.workspaceId);
 			let metadata: Workspace | undefined;
 			let metadataExists = false;
@@ -349,7 +454,7 @@ export class WorkspaceStore {
 			}
 
 			if (!existsSync(workspace.rootPath)) {
-				this.consistencyIssues.push({
+				issues.push({
 					workspaceId: workspace.workspaceId,
 					code: "missing_root",
 					path: workspace.rootPath,
@@ -376,7 +481,7 @@ export class WorkspaceStore {
 					version: WORKSPACE_METADATA_VERSION,
 					workspace: serializeWorkspace(workspace),
 				} satisfies WorkspaceMetadataFile);
-				this.consistencyIssues.push({
+				issues.push({
 					workspaceId: workspace.workspaceId,
 					code,
 					path: metadataPath,
@@ -384,7 +489,7 @@ export class WorkspaceStore {
 					message: `Workspace metadata was repaired from the authoritative registry: ${metadataPath}`,
 				});
 			} catch (error) {
-				this.consistencyIssues.push({
+				issues.push({
 					workspaceId: workspace.workspaceId,
 					code: "metadata_repair_failed",
 					path: metadataPath,
@@ -393,6 +498,7 @@ export class WorkspaceStore {
 				});
 			}
 		}
+		return issues;
 	}
 
 	/**
@@ -631,10 +737,10 @@ export class WorkspaceStore {
 		}
 
 		// Commit the registry first. It is the authoritative record on restart;
-		// reconcileMetadata() can then recreate any per-Workspace metadata that is
-		// missing if the process stops during the following writes. Writing
-		// metadata first would leave newly-created metadata orphaned behind an old
-		// registry after a crash.
+		// the deferred metadata reconciliation (or reconcileMetadataNow()) can then
+		// recreate any per-Workspace metadata that is missing if the process stops
+		// during the following writes. Writing metadata first would leave
+		// newly-created metadata orphaned behind an old registry after a crash.
 		writeJsonAtomically(getWorkspaceRegistryPath(this.dataRoot), {
 			version: WORKSPACES_FILE_VERSION,
 			workspaces: this.workspaces.map(serializeWorkspace),
@@ -645,6 +751,9 @@ export class WorkspaceStore {
 				workspace: serializeWorkspace(workspace),
 			} satisfies WorkspaceMetadataFile);
 		}
+		// Registry and metadata are consistent by construction after this point.
+		noteWorkspaceMetadataSaved(this.dataRoot);
+		rememberWorkspaceRegistry(this.filePath, { workspaces: this.workspaces, migrated: false });
 	}
 }
 

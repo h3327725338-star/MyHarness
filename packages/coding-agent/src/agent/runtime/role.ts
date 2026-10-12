@@ -16,8 +16,32 @@ export const DELEGATED_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "symb
  */
 export const DELEGATED_WRITE_TOOL_NAMES = [...DELEGATED_TOOL_NAMES, "edit", "write", "pwsh"] as const;
 
-const delegatedToolNameSet = new Set<string>(DELEGATED_TOOL_NAMES);
-const delegatedWriteToolNameSet = new Set<string>(DELEGATED_WRITE_TOOL_NAMES);
+/**
+ * Built-in tools a settings switch can take away completely. A tool listed here that the saved settings
+ * have switched off must not survive any tool boundary: it is not registered, not active, not whitelisted
+ * for a delegated worker, and therefore never named in a system prompt.
+ */
+const GATED_BUILTIN_TOOL_NAMES: readonly string[] = ["symbols"];
+
+/** Whether this built-in tool is one a settings switch can take away entirely (currently only `symbols`). */
+export function isGatedBuiltinToolName(toolName: string): boolean {
+	return GATED_BUILTIN_TOOL_NAMES.includes(toolName);
+}
+
+/**
+ * Remove the built-in tools the saved settings have switched off.
+ *
+ * @param isConfigured answers whether one gated tool exists; callers pass
+ *   `settingsManager.getCodeIntelligenceSettings().symbolsEnabled` for `symbols`. Without an answer the
+ *   list is kept as it is, so a caller that has no settings manager behaves like an earlier build.
+ */
+export function withoutDisabledBuiltinTools(
+	toolNames: readonly string[],
+	isConfigured: (name: string) => boolean = () => true,
+): string[] {
+	return toolNames.filter((name) => !GATED_BUILTIN_TOOL_NAMES.includes(name) || isConfigured(name));
+}
+
 const MAIN_ROLE_POLICY = loadSystemPrompt("roles/main.md");
 const DELEGATED_ROLE_POLICY = loadSystemPrompt("roles/delegated.md");
 const DELEGATED_WRITE_ROLE_POLICY = loadSystemPrompt("roles/delegated-write.md");
@@ -83,15 +107,25 @@ export function getAgentRolePrompt(agentRole: AgentRole): string {
 	return MAIN_ROLE_POLICY;
 }
 
-/** Apply the runtime tool boundary for each role. */
+/**
+ * Apply the runtime tool boundary for each role.
+ *
+ * `isBuiltinConfigured` lets a caller drop the built-in tools its settings have switched off (see
+ * {@link withoutDisabledBuiltinTools}); delegated sessions and workers pass the saved settings here, so a
+ * switched-off tool is not part of their whitelist either. Omitting it keeps every gated tool allowed.
+ */
 export function restrictToolNamesForRole(
 	agentRole: AgentRole,
 	requestedToolNames: readonly string[] | undefined,
+	isBuiltinConfigured: (name: string) => boolean = () => true,
 ): string[] | undefined {
 	if (agentRole === "main") {
-		return requestedToolNames === undefined ? undefined : [...requestedToolNames];
+		return requestedToolNames === undefined
+			? undefined
+			: withoutDisabledBuiltinTools([...requestedToolNames], isBuiltinConfigured);
 	}
-	const allowed = delegatedCapabilities === "read-write" ? delegatedWriteToolNameSet : delegatedToolNameSet;
-	if (requestedToolNames === undefined) return [...getDelegatedToolNames()];
-	return requestedToolNames.filter((name) => allowed.has(name));
+	const allowed = withoutDisabledBuiltinTools([...getDelegatedToolNames(delegatedCapabilities)], isBuiltinConfigured);
+	const allowedSet = new Set(allowed);
+	if (requestedToolNames === undefined) return allowed;
+	return requestedToolNames.filter((name) => allowedSet.has(name));
 }

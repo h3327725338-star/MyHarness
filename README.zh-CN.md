@@ -14,7 +14,7 @@ MyHarness 是一个面向项目目录的 Web AI 编程协作工具，处于 Earl
 - **入口**：默认启动本机浏览器 **Web UI**（`myharness`，只监听 loopback）；也提供 Node.js SDK 供进程内集成。终端 TUI、Print 和 JSON 用户模式已移除，Web Terminal 面板保留。
 - **项目上下文**：支持 project trust、`AGENTS.md` / `CLAUDE.md` context files、Workspace 与 Session 管理、Git 集成和 context compaction。
 - **可扩展**：支持 TypeScript extensions、skills、prompt templates、themes、custom Provider 和 MyHarness packages。
-- **Code Intelligence**：源码中提供 lightweight Symbols index。语义 language-server 模块仍是可选能力，只有在发布并提供校验值的 runtime manifest 后才会可用。
+- **Code Intelligence**：Symbols 语义导航通过可选的 Windows language-server 模块按语言安装。`symbols` 工具默认关闭，可通过 `codeIntelligence.symbolsEnabled` 启用；修改后需重启生效。
 - **可选工作流**：可按配置启用 Explore sub-agent、`/workflow`、`/ultracode` 和 Web Search；Web Search 需要兼容的外部服务。
 
 源码和当前状态文档会明确区分“已经实现的 contract”“已经加载的运行时配置”和“依赖机器、凭据或外部服务的验证结果”。当前 checkout 不内置默认 Provider/model catalog。

@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { LightweightBackendError } from "../../../src/symbols/index/lightweight/errors.ts";
-import type { LightweightBackendApi } from "../../../src/symbols/index/lightweight/types.ts";
 import { CodeIntelligenceRouterError } from "../../../src/symbols/index/router/errors.ts";
 import { CodeIntelligenceRouter } from "../../../src/symbols/index/router/router.ts";
 import {
@@ -11,6 +9,7 @@ import {
 } from "../../../src/symbols/lsp/language-server/errors.ts";
 import { SemanticBackendError, SemanticCapabilityUnsupportedError } from "../../../src/symbols/semantic/errors.ts";
 import type { SemanticBackendApi } from "../../../src/symbols/semantic/types.ts";
+import { SymbolStore } from "../../../src/symbols/store/store.ts";
 import type {
 	CodeSymbol,
 	DefinitionResult,
@@ -20,45 +19,31 @@ import type {
 	IntelligenceResult,
 	IntelligenceResultMeta,
 	ReferencesResult,
-	SymbolSearchResult,
 } from "../../../src/symbols/types.ts";
 
 const root = process.cwd();
 
-function result<T>(
-	source: "semantic" | "lightweight",
-	items: T[] = [],
-	metaOverrides: Partial<IntelligenceResultMeta> = {},
-): IntelligenceResult<T> {
+function result<T>(items: T[] = [], metaOverrides: Partial<IntelligenceResultMeta> = {}): IntelligenceResult<T> {
 	return {
 		items,
-		meta: { source, completeness: "complete", ...metaOverrides },
-	};
-}
-
-function createLightweight(): LightweightBackendApi {
-	return {
-		findSymbol: vi.fn(async (): Promise<SymbolSearchResult> => result<CodeSymbol>("lightweight")),
-		fileSymbols: vi.fn(async (): Promise<FileSymbolsResult> => result<never>("lightweight")),
-		findDefinition: vi.fn(async (): Promise<DefinitionResult> => result<CodeSymbol>("lightweight")),
-		findReferences: vi.fn(async (): Promise<ReferencesResult> => result<never>("lightweight")),
+		meta: { source: "semantic", completeness: "complete", ...metaOverrides },
 	};
 }
 
 function createSemantic(): SemanticBackendApi {
 	return {
-		fileSymbols: vi.fn(async (): Promise<FileSymbolsResult> => result<never>("semantic")),
-		findDefinition: vi.fn(async (): Promise<DefinitionResult> => result<CodeSymbol>("semantic")),
-		findReferences: vi.fn(async (): Promise<ReferencesResult> => result<never>("semantic")),
-		findImplementations: vi.fn(async (): Promise<ImplementationsResult> => result<never>("semantic")),
-		getDiagnostics: vi.fn(async (): Promise<DiagnosticsResult> => result<never>("semantic")),
+		fileSymbols: vi.fn(async (): Promise<FileSymbolsResult> => result<never>()),
+		findDefinition: vi.fn(async (): Promise<DefinitionResult> => result<CodeSymbol>()),
+		findReferences: vi.fn(async (): Promise<ReferencesResult> => result<never>()),
+		findImplementations: vi.fn(async (): Promise<ImplementationsResult> => result<never>()),
+		getDiagnostics: vi.fn(async (): Promise<DiagnosticsResult> => result<never>()),
 		closeDocument: vi.fn(async () => undefined),
 		dispose: vi.fn(async () => undefined),
 	};
 }
 
-function createRouter(lightweight = createLightweight(), semantic?: SemanticBackendApi): CodeIntelligenceRouter {
-	return new CodeIntelligenceRouter({ workspaceRoot: root, lightweight, semantic });
+function createRouter(semantic?: SemanticBackendApi, symbolStore?: SymbolStore): CodeIntelligenceRouter {
+	return new CodeIntelligenceRouter({ workspaceRoot: root, semantic, symbolStore });
 }
 
 function positionTarget() {
@@ -69,243 +54,187 @@ function namePathTarget() {
 	return { type: "name_path" as const, namePath: "A/run", path: "src/a.ts" };
 }
 
-describe("CodeIntelligenceRouter routing policy", () => {
-	it("routes intrinsic findSymbol directly to lightweight without fallback metadata", async () => {
-		const lightweight = createLightweight();
-		const semantic = createSemantic();
-		const router = createRouter(lightweight, semantic);
-
-		const result = await router.findSymbol({ query: "run" });
-
-		expect(result.meta.source).toBe("lightweight");
-		expect(result.meta.fallback).toBeUndefined();
-		expect(lightweight.findSymbol).toHaveBeenCalledOnce();
-		expect(semantic.fileSymbols).not.toHaveBeenCalled();
-	});
-
+describe("CodeIntelligenceRouter routing policy (semantic-only)", () => {
 	it("uses semantic for fileSymbols success, including empty and partial results", async () => {
-		const lightweight = createLightweight();
 		const semantic = createSemantic();
 		const semanticFileSymbols = vi.mocked(semantic.fileSymbols);
 		semanticFileSymbols
-			.mockResolvedValueOnce(result<never>("semantic"))
-			.mockResolvedValueOnce(result<never>("semantic", [], { completeness: "partial", warnings: ["limited"] }));
-		const router = createRouter(lightweight, semantic);
+			.mockResolvedValueOnce(result<never>())
+			.mockResolvedValueOnce(result<never>([], { completeness: "partial", warnings: ["limited"] }));
+		const router = createRouter(semantic);
 
 		const empty = await router.fileSymbols("src/a.ts");
 		const partial = await router.fileSymbols("src/a.ts");
 
 		expect(empty.meta.source).toBe("semantic");
 		expect(empty.meta.completeness).toBe("complete");
+		expect(empty.meta.fallback).toBeUndefined();
 		expect(partial.meta.source).toBe("semantic");
 		expect(partial.meta.completeness).toBe("partial");
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
+		expect(partial.meta.fallback).toBeUndefined();
+		expect(semanticFileSymbols).toHaveBeenCalledTimes(2);
 	});
 
-	it("falls back when semantic is not configured and preserves lightweight metadata immutably", async () => {
-		const lightweight = createLightweight();
-		const original = Object.freeze({
-			items: Object.freeze([]),
-			meta: Object.freeze({
-				source: "lightweight" as const,
-				completeness: "partial" as const,
-				warnings: ["index limited"],
-			}),
+	it("throws semantic_backend_unavailable when semantic backend is not configured", async () => {
+		const router = createRouter(undefined);
+
+		await expect(router.fileSymbols("src/a.ts")).rejects.toThrow(CodeIntelligenceRouterError);
+		await expect(router.fileSymbols("src/a.ts")).rejects.toMatchObject({
+			code: "semantic_backend_unavailable",
 		});
-		vi.mocked(lightweight.fileSymbols).mockResolvedValue(original as unknown as FileSymbolsResult);
-		const router = createRouter(lightweight);
-
-		const routed = await router.fileSymbols("src/a.ts");
-
-		expect(routed.meta.source).toBe("lightweight");
-		expect(routed.meta.fallback?.reason).toBe("semantic_not_configured");
-		expect(routed.meta.warnings).toEqual(["index limited"]);
-		expect(original.meta).not.toHaveProperty("fallback");
-		expect(routed.meta).not.toBe(original.meta);
 	});
 
 	it.each([
-		[
-			"capability unsupported",
-			new SemanticCapabilityUnsupportedError("documentSymbol"),
-			"semantic_capability_unsupported",
-		],
+		["capability unsupported", new SemanticCapabilityUnsupportedError("documentSymbol")],
 		[
 			"no server registered",
 			new SemanticBackendError("server_unavailable", "wrapped", {
 				cause: new NoLanguageServerRegisteredError("typescript"),
 			}),
-			"semantic_server_unavailable",
 		],
 		[
 			"unavailable executable",
 			new SemanticBackendError("server_unavailable", "wrapped", {
-				cause: new LanguageServerUnavailableError("ts", root, "secret command path"),
+				cause: new LanguageServerUnavailableError("ts", root, "command not found"),
 			}),
-			"semantic_server_unavailable",
 		],
-	] as const)("uses safe fallback classification for %s", async (_label, failure, reason) => {
-		const lightweight = createLightweight();
+		["lsp initialize error", new LanguageServerInitializeError("ts", root, new Error("initialize"))],
+		["lsp start error", new LanguageServerStartError("ts", root, new Error("EACCES"))],
+		["request failed", new SemanticBackendError("request_failed", "timeout")],
+		["invalid server response", new SemanticBackendError("invalid_server_response", "bad protocol")],
+	] as const)("propagates original semantic backend error for %s without fallback", async (_label, failure) => {
 		const semantic = createSemantic();
 		vi.mocked(semantic.fileSymbols).mockRejectedValue(failure);
-		const router = createRouter(lightweight, semantic);
-
-		const routed = await router.fileSymbols("src/a.ts");
-
-		expect(routed.meta.fallback?.reason).toBe(reason);
-		expect(routed.meta.fallback?.message).not.toContain("secret command path");
-		expect(lightweight.fileSymbols).toHaveBeenCalledOnce();
-	});
-
-	it.each([
-		new LanguageServerInitializeError("ts", root, new Error("initialize")),
-		new LanguageServerStartError("ts", root, new Error("EACCES")),
-		new SemanticBackendError("request_failed", "timeout"),
-		new SemanticBackendError("invalid_server_response", "bad protocol"),
-		new SemanticBackendError("server_unavailable", "message says not found"),
-	])("does not fallback for semantic correctness failures", async (failure) => {
-		const lightweight = createLightweight();
-		const semantic = createSemantic();
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(failure);
-		const router = createRouter(lightweight, semantic);
+		const router = createRouter(semantic);
 
 		await expect(router.fileSymbols("src/a.ts")).rejects.toBe(failure);
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
 	});
 
-	it("does not fallback when definitionId explicitly selects a semantic server", async () => {
-		const lightweight = createLightweight();
+	it("routes position targets directly to semantic backend", async () => {
 		const semantic = createSemantic();
-		const failure = new SemanticBackendError("server_unavailable", "wrapped", {
-			cause: new NoLanguageServerRegisteredError("typescript"),
-		});
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(failure);
-		const router = createRouter(lightweight, semantic);
-
-		await expect(router.fileSymbols("src/a.ts", { definitionId: "server-x" })).rejects.toBe(failure);
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
-	});
-
-	it("does not classify server_unavailable without an eligible cause", async () => {
-		const lightweight = createLightweight();
-		const semantic = createSemantic();
-		const failure = new SemanticBackendError("server_unavailable", "no server registered in message");
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(failure);
-		const router = createRouter(lightweight, semantic);
-
-		await expect(router.fileSymbols("src/a.ts")).rejects.toBe(failure);
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
-	});
-
-	it("preserves both causes when the safe fallback fails", async () => {
-		const lightweight = createLightweight();
-		const semantic = createSemantic();
-		const primary = new SemanticBackendError("server_unavailable", "primary", {
-			cause: new NoLanguageServerRegisteredError("typescript"),
-		});
-		const fallback = new LightweightBackendError("invalid_query", "fallback failed");
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(primary);
-		vi.mocked(lightweight.fileSymbols).mockRejectedValue(fallback);
-		const router = createRouter(lightweight, semantic);
-
-		const error = await router.fileSymbols("src/a.ts").catch((cause) => cause);
-
-		expect(error).toBeInstanceOf(CodeIntelligenceRouterError);
-		expect(error).toMatchObject({ code: "fallback_failed", primaryCause: primary, fallbackCause: fallback });
-	});
-
-	it("routes target capabilities without lexical position fallback", async () => {
-		const lightweight = createLightweight();
-		const semantic = createSemantic();
-		const router = createRouter(lightweight, semantic);
+		const router = createRouter(semantic);
 
 		await router.findDefinition(positionTarget());
 		await router.findReferences(positionTarget());
-		await router.findDefinition(namePathTarget());
-		await router.findReferences(namePathTarget());
+		await router.findImplementations(positionTarget());
 
 		expect(semantic.findDefinition).toHaveBeenCalledOnce();
 		expect(semantic.findReferences).toHaveBeenCalledOnce();
-		expect(lightweight.findDefinition).toHaveBeenCalledOnce();
-		expect(lightweight.findReferences).toHaveBeenCalledOnce();
+		expect(semantic.findImplementations).toHaveBeenCalledOnce();
 	});
 
-	it("rejects unsupported targets and never fakes implementations", async () => {
-		const lightweight = createLightweight();
+	it("routes getDiagnostics directly to semantic backend", async () => {
 		const semantic = createSemantic();
-		const router = createRouter(lightweight, semantic);
+		const router = createRouter(semantic);
+
+		await router.getDiagnostics("src/a.ts");
+		expect(semantic.getDiagnostics).toHaveBeenCalledOnce();
+	});
+
+	it("rejects name_path target as unsupported_target", async () => {
+		const semantic = createSemantic();
+		const router = createRouter(semantic);
+
+		await expect(router.findDefinition(namePathTarget())).rejects.toMatchObject({
+			code: "unsupported_target",
+		});
+		await expect(router.findReferences(namePathTarget())).rejects.toMatchObject({
+			code: "unsupported_target",
+		});
+		await expect(router.findImplementations(namePathTarget())).rejects.toMatchObject({
+			code: "unsupported_target",
+		});
+	});
+
+	it("rejects symbol_id target when symbolStore is not configured", async () => {
+		const semantic = createSemantic();
+		const router = createRouter(semantic);
 
 		await expect(router.findDefinition({ type: "symbol_id", symbolId: "opaque" })).rejects.toMatchObject({
 			code: "unsupported_target",
 		});
-		await expect(router.findImplementations(namePathTarget())).rejects.toMatchObject({ code: "unsupported_target" });
-		await router.findImplementations(positionTarget());
-		expect(lightweight.findDefinition).not.toHaveBeenCalled();
 	});
 
-	it("enforces forced modes and diagnostics ownership", async () => {
-		const lightweight = createLightweight();
+	it("resolves symbol_id target via symbolStore and calls semantic backend", async () => {
 		const semantic = createSemantic();
-		const router = createRouter(lightweight, semantic);
+		const store = new SymbolStore();
+		const dummySymbol: CodeSymbol = {
+			id: "sym-1",
+			name: "run",
+			kind: "method",
+			language: "typescript",
+			path: "src/a.ts",
+			namePath: "A/run",
+			selectionRange: {
+				start: { line: 0, character: 2 },
+				end: { line: 0, character: 5 },
+			},
+		};
+		store.upsert(dummySymbol, { source: "semantic" });
 
-		await expect(router.findSymbol({}, { mode: "semantic" })).rejects.toMatchObject({
-			code: "unsupported_operation",
+		vi.mocked(semantic.fileSymbols).mockResolvedValue({
+			items: [{ symbol: dummySymbol, children: [] }],
+			meta: { source: "semantic", completeness: "complete" },
 		});
-		await expect(router.findDefinition(namePathTarget(), { mode: "semantic" })).rejects.toMatchObject({
-			code: "unsupported_target",
-		});
-		await expect(router.findDefinition(positionTarget(), { mode: "lightweight" })).rejects.toMatchObject({
-			code: "unsupported_target",
-		});
-		await expect(router.getDiagnostics("src/a.ts", { mode: "lightweight" })).rejects.toMatchObject({
-			code: "unsupported_operation",
-		});
-		await expect(router.findSymbol({}, { mode: "lightweight", definitionId: "server-x" })).rejects.toMatchObject({
-			code: "invalid_routing_options",
+
+		const router = createRouter(semantic, store);
+
+		await router.findDefinition({ type: "symbol_id", symbolId: "sym-1" });
+
+		expect(semantic.findDefinition).toHaveBeenCalledWith(
+			{
+				type: "position",
+				path: "src/a.ts",
+				position: { line: 0, character: 2 },
+			},
+			expect.anything(),
+		);
+	});
+
+	it("rejects symbol_id target when symbolId is unknown in store", async () => {
+		const semantic = createSemantic();
+		const store = new SymbolStore();
+		const router = createRouter(semantic, store);
+
+		await expect(router.findDefinition({ type: "symbol_id", symbolId: "unknown-id" })).rejects.toMatchObject({
+			code: "unknown_symbol_id",
 		});
 	});
 
-	it("short-circuits an aborted semantic query before lightweight fallback", async () => {
-		const lightweight = createLightweight();
+	it("short-circuits an aborted semantic query", async () => {
 		const semantic = createSemantic();
 		const controller = new AbortController();
 		controller.abort();
-		const failure = new SemanticBackendError("server_unavailable", "aborted", {
-			cause: new NoLanguageServerRegisteredError("typescript"),
-		});
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(failure);
-		const router = createRouter(lightweight, semantic);
+		const router = createRouter(semantic);
 
-		await expect(router.fileSymbols("src/a.ts", { signal: controller.signal })).rejects.toBe(failure);
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
+		await expect(router.fileSymbols("src/a.ts", { signal: controller.signal })).rejects.toMatchObject({
+			name: "AbortError",
+		});
+		expect(semantic.fileSymbols).not.toHaveBeenCalled();
 	});
 
 	it("keeps 100 concurrent semantic calls on the semantic backend", async () => {
-		const lightweight = createLightweight();
 		const semantic = createSemantic();
-		const router = createRouter(lightweight, semantic);
+		const router = createRouter(semantic);
 
 		const results = await Promise.all(Array.from({ length: 100 }, () => router.fileSymbols("src/a.ts")));
 
 		expect(results.every((value) => value.meta.source === "semantic")).toBe(true);
+		expect(results.every((value) => value.meta.fallback === undefined)).toBe(true);
 		expect(semantic.fileSymbols).toHaveBeenCalledTimes(100);
-		expect(lightweight.fileSymbols).not.toHaveBeenCalled();
 	});
 
-	it("keeps 100 concurrent unavailable calls consistently on lightweight fallback", async () => {
-		const lightweight = createLightweight();
+	it("propagates failures consistently across 100 concurrent calls", async () => {
 		const semantic = createSemantic();
-		vi.mocked(semantic.fileSymbols).mockRejectedValue(
-			new SemanticBackendError("server_unavailable", "wrapped", {
-				cause: new LanguageServerUnavailableError("ts", root, "unavailable"),
-			}),
+		const error = new SemanticBackendError("server_unavailable", "failed");
+		vi.mocked(semantic.fileSymbols).mockRejectedValue(error);
+		const router = createRouter(semantic);
+
+		const outcomes = await Promise.allSettled(Array.from({ length: 100 }, () => router.fileSymbols("src/a.ts")));
+
+		expect(outcomes.every((o) => o.status === "rejected" && (o as PromiseRejectedResult).reason === error)).toBe(
+			true,
 		);
-		const router = createRouter(lightweight, semantic);
-
-		const results = await Promise.all(Array.from({ length: 100 }, () => router.fileSymbols("src/a.ts")));
-
-		expect(results.every((value) => value.meta.source === "lightweight")).toBe(true);
-		expect(results.every((value) => value.meta.fallback?.reason === "semantic_server_unavailable")).toBe(true);
-		expect(lightweight.fileSymbols).toHaveBeenCalledTimes(100);
+		expect(semantic.fileSymbols).toHaveBeenCalledTimes(100);
 	});
 });

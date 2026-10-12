@@ -132,6 +132,7 @@ import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager, type MemoryMaintenanceSta
 import type { CustomMessage } from "./messages.ts";
 import {
 	type AgentRole,
+	isGatedBuiltinToolName,
 	isNestedDispatchToolName,
 	NESTED_DISPATCH_REJECT_MARKER,
 	restrictToolNamesForRole,
@@ -559,11 +560,21 @@ export class AgentSession {
 			isDisposed: () => this._disposed,
 			onChange: (state) => this._emit({ type: "run_state_changed", state }),
 		});
+		// The settings gate for the built-in tools a switch can take away (currently `symbols`): read once
+		// here, so switching it does not touch a running session and only takes effect for a new one.
+		const isBuiltinConfigured = (name: string): boolean =>
+			!isGatedBuiltinToolName(name) || this.settingsManager.getCodeIntelligenceSettings().symbolsEnabled;
 		const initialActiveToolNames =
 			config.initialActiveToolNames ??
-			(this._agentRole === "main" ? undefined : restrictToolNamesForRole(this._agentRole, undefined));
-		const allowedToolNames = restrictToolNamesForRole(this._agentRole, config.allowedToolNames);
-		this._initialActiveToolNames = restrictToolNamesForRole(this._agentRole, initialActiveToolNames);
+			(this._agentRole === "main"
+				? undefined
+				: restrictToolNamesForRole(this._agentRole, undefined, isBuiltinConfigured));
+		const allowedToolNames = restrictToolNamesForRole(this._agentRole, config.allowedToolNames, isBuiltinConfigured);
+		this._initialActiveToolNames = restrictToolNamesForRole(
+			this._agentRole,
+			initialActiveToolNames,
+			isBuiltinConfigured,
+		);
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		this._traceCoordinator = new AgentSessionTraceCoordinator({
 			cwd: config.cwd,
@@ -1530,6 +1541,15 @@ export class AgentSession {
 		return this._tools.getAllTools();
 	}
 
+	/**
+	 * Whether a built-in tool controlled by a settings switch (currently only `symbols`) exists in this
+	 * session. Answers from the value saved when the session was built: the switch takes effect after a
+	 * restart, so saving a new value does not change an existing session.
+	 */
+	isBuiltinEnabled(toolName: string): boolean {
+		return this._tools.isBuiltinEnabled(toolName);
+	}
+
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._tools.getDefinition(name);
 	}
@@ -1658,6 +1678,9 @@ export class AgentSession {
 		return {
 			...settings,
 			chatMode: this.sessionManager.getMode(),
+			// Workers must not get a tool this session's settings switched off; they read the value saved at
+			// session start (restart-after-effect), never a live re-read.
+			symbolsEnabled: this._tools.isBuiltinEnabled("symbols"),
 			provider: resolved?.provider,
 			model: resolved?.model,
 			thinkingLevel: resolved?.thinkingLevel,

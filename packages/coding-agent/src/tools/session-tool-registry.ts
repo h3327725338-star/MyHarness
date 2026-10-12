@@ -9,6 +9,7 @@
 
 import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
+import { isGatedBuiltinToolName, withoutDisabledBuiltinTools } from "../agent/runtime/role.ts";
 import type { SettingsManager } from "../config/settings/index.ts";
 import type { ToolDefinition, ToolInfo } from "../extensions/compat/types.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "../extensions/contracts/source-info.ts";
@@ -72,11 +73,16 @@ export class SessionToolRegistry {
 	private _webSearchService?: WebSearchService;
 	private _tools: Map<string, AgentTool> = new Map();
 	private _definitions: Map<string, ToolDefinitionEntry> = new Map();
+	/** `codeIntelligence.symbolsEnabled` as this session found it; the switch takes effect after a restart. */
+	private readonly _symbolsEnabled: boolean;
 
 	constructor(options: SessionToolRegistryOptions) {
 		this._options = options;
 		this._allowedToolNames = options.allowedToolNames ? new Set(options.allowedToolNames) : undefined;
 		this._excludedToolNames = options.excludedToolNames ? new Set(options.excludedToolNames) : undefined;
+		// Taken once, when this session's registry is built: `codeIntelligence.symbolsEnabled` is a
+		// restart-after-effect switch, so a settings change later must not add or remove the tool here.
+		this._symbolsEnabled = options.settingsManager.getCodeIntelligenceSettings().symbolsEnabled;
 	}
 
 	private artifactEnvironment(): NodeJS.ProcessEnv {
@@ -89,6 +95,23 @@ export class SessionToolRegistry {
 	/** Whether the allow/deny lists let this tool be exposed. */
 	isAllowed(name: string): boolean {
 		return (!this._allowedToolNames || this._allowedToolNames.has(name)) && !this._excludedToolNames?.has(name);
+	}
+
+	/**
+	 * Whether a built-in tool exists at all under the current settings. `symbols` is registered only while
+	 * `codeIntelligence.symbolsEnabled` is on; a built-in that answers false here is absent from the
+	 * registry, so it is not in the sidebar list, cannot be switched on, is not handed to the model, and
+	 * contributes nothing to the system prompt. The value is read from the settings each time the registry
+	 * is built, so switching it needs a new session or a restart.
+	 */
+	isBuiltinEnabled(name: string): boolean {
+		if (!isGatedBuiltinToolName(name)) return true;
+		return this._symbolsEnabled;
+	}
+
+	/** Drop the built-in tools the settings have switched off (see {@link isBuiltinEnabled}). */
+	withoutDisabledBuiltins(toolNames: readonly string[]): string[] {
+		return withoutDisabledBuiltinTools(toolNames, (name) => this.isBuiltinEnabled(name));
 	}
 
 	has(name: string): boolean {
@@ -170,7 +193,7 @@ export class SessionToolRegistry {
 		const settings = this._options.settingsManager;
 		const defaultActiveToolNames = this._options.baseToolsOverride
 			? Object.keys(this._options.baseToolsOverride)
-			: [
+			: this.withoutDisabledBuiltins([
 					"read",
 					"bash",
 					"pwsh",
@@ -186,7 +209,7 @@ export class SessionToolRegistry {
 					"ask_user_question",
 					"todo_write",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
-				];
+				]);
 		return this.withSubAgentTools(requested ?? defaultActiveToolNames, settings.getSubAgentSettings().enabled);
 	}
 
@@ -266,8 +289,14 @@ export class SessionToolRegistry {
 		const { sessionManager, settingsManager } = this._options;
 		const webSearchEnabled = settingsManager.getWebSearchSettings().enabled;
 		const isAllowedToolName = (name: string): boolean => this.isAllowed(name);
+		// A caller-provided base tools override hands in its own tool instances; the settings gate applies
+		// to the built-in set this registry creates itself.
+		const isBuiltinEnabledTool = (name: string): boolean =>
+			this._options.baseToolsOverride !== undefined || this.isBuiltinEnabled(name);
 		const isAllowedBuiltInTool = (name: string): boolean =>
-			isAllowedToolName(name) && (webSearchEnabled || (name !== "web_search" && name !== "web_fetch"));
+			isAllowedToolName(name) &&
+			isBuiltinEnabledTool(name) &&
+			(webSearchEnabled || (name !== "web_search" && name !== "web_fetch"));
 
 		const registeredTools = this._options.includeExtensionTools ? runner.getAllRegisteredTools() : [];
 		const allCustomTools = [

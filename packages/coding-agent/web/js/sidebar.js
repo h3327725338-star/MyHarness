@@ -1,5 +1,5 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
+import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
 import { ARCHIVED_KEY, GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
@@ -10,6 +10,7 @@ import { isLeftBlank, orderChats } from "./chat-order.js";
 import { shortcutFor } from "./shortcuts.js";
 import { chatModeOf, draftHasContent, expandedKey } from "./chat-modes.js";
 import { ModeSwitch, ModeTasks } from "./mode-switch.js";
+import { ExportSidebarFoot, exportReadOnly } from "./export-mode.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
@@ -92,7 +93,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const open = () => !editing && !current && actions.openSession(info.path);
 	return html`<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}>
 		${editing
-			? html`<input class="field title-edit" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
+			? html`<input class="field title-edit" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: html`<${ChatIndicator} slot=${slot} currentFile=${currentFile} onRetry=${() => actions.retryConversationNaming(info.path)} />
 				<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
@@ -112,13 +113,31 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 });
 
 /**
+ * The chats one workspace group lists: pinned, then running, then most recent activity first (see chat-order.js);
+ * an archived chat is never pinned on top. A blank chat that was left behind is not listed (see isLeftBlank); the
+ * archive lists what was archived on purpose. Shared by Workspace (rendering) and WorkspaceList (height estimates),
+ * so the estimate and the rows always agree.
+ */
+function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, currentFile, drafts }) {
+	const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
+	const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: !!currentFile && pathKey(info.path) === pathKey(currentFile), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
+	if (!filter) return all;
+	const q = filter.toLowerCase();
+	return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
+}
+
+/**
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
+ * `showAll`/`onShowAll` make the "show more" state controlled (the virtualized list owns it, because the height
+ * estimate must know it); without them the group keeps that state itself (the General and Archived groups).
  */
-function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title }) {
+function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title, showAll: controlledShowAll = undefined, onShowAll = undefined }) {
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
-	const [showAll, setShowAll] = useState(false);
+	const [innerShowAll, setInnerShowAll] = useState(false);
+	const showAll = controlledShowAll ?? innerShowAll;
+	const setShowAll = onShowAll ?? setInnerShowAll;
 	const glide = useHeightGlide();
 	const [editing, setEditing] = useState(false);
 	const [alias, setAlias] = useState("");
@@ -130,15 +149,8 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	useEffect(() => {
 		if (showing) setRendered(true);
 	}, [showing]);
-	// Pinned, then running, then most recent activity first (see chat-order.js); an archived chat is never pinned on top.
-	// A blank chat that was left behind is not listed (see isLeftBlank); the archive lists what was archived on purpose.
-	const list = useMemo(() => {
-		const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
-		const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: !!currentFile && pathKey(info.path) === pathKey(currentFile), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
-		if (!filter) return all;
-		const q = filter.toLowerCase();
-		return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
-	}, [sessions, filter, slotsByFile, archived, currentFile, drafts]);
+	// Pinned, then running, then most recent activity first (see selectWorkspaceChats).
+	const list = useMemo(() => selectWorkspaceChats(sessions, { filter, slotsByFile, archived, currentFile, drafts }), [sessions, filter, slotsByFile, archived, currentFile, drafts]);
 	if (filter && !list.length) return null;
 	const shown = showAll || filter ? list : list.slice(0, 12);
 	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
@@ -155,11 +167,11 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 		<div class=${`ws-row ${showing ? "open" : ""} ${isCurrent ? "current" : ""}`} onClick=${toggle} role="button" tabindex="0" aria-expanded=${showing} title=${title ?? (general ? t("Chats that belong to no workspace") : workspace.rootPath)} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<${Icon} name="chevronRight" size=${13} class="chev" />
 			${general ? null : html`<${Icon} name="folder" size=${15} class="ws-folder" />`}
-			${editing ? html`<input class="field title-edit" autofocus aria-label=${t("Rename")} value=${alias} onInput=${(e) => setAlias(e.target.value)} onClick=${(e) => e.stopPropagation()} onKeyDown=${(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); saveAlias(); } else if (e.key === "Escape") setEditing(false); }} />` : html`<span class="name truncate">${workspace.name}</span>`}
+			${editing ? html`<input class="field title-edit" autofocus ref=${autofocusOnMount} aria-label=${t("Rename")} value=${alias} onInput=${(e) => setAlias(e.target.value)} onClick=${(e) => e.stopPropagation()} onKeyDown=${(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); saveAlias(); } else if (e.key === "Escape") setEditing(false); }} />` : html`<span class="name truncate">${workspace.name}</span>`}
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
-				${!archived ? html`<button class="icon-btn sm" title=${general ? t("New chat without a workspace") : t("New chat in this workspace")} aria-label=${general ? t("New chat without a workspace") : t("New chat in this workspace")} onClick=${create}><${Icon} name="plus" size=${15} /></button>` : null}
+				${!archived ? html`<button class="icon-btn sm" data-export-offline="true" title=${general ? t("New chat without a workspace") : t("New chat in this workspace")} aria-label=${general ? t("New chat without a workspace") : t("New chat in this workspace")} onClick=${create}><${Icon} name="plus" size=${15} /></button>` : null}
 				${!archived ? html`<${Menu} align="end" trigger=${({ toggle: tg }) => html`<button class="icon-btn sm" aria-label=${t("Workspace actions")} onClick=${tg}><${Icon} name="more" size=${15} /></button>`} width=${200}>
 					${(close) => html`
 						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), create())} />
@@ -222,10 +234,129 @@ function ChatRows({ items, renderRow }) {
 	return html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.has(info.path)} renderRow=${renderRow} />`)}</div>`;
 }
 
-/** The Workspaces of a mode: one that is added grows in, one that is removed folds away. */
-function WorkspaceList({ list, renderGroup }) {
-	const { rows, present, initial } = useRetainedRows(list, "id");
-	return rows.map((w) => html`<${ListSlot} key=${w.id} present=${present.has(w.id)} initial=${initial.has(w.id)}>${renderGroup(w)}<//>`);
+/** How many groups stay mounted past each edge of the visible area (about a screen each way). */
+const WINDOW_OVERSCAN = 20;
+
+/** Fallback sizes before the first measure (must match --h-row / .side-note / .side-more). */
+const FALLBACK_ROW_H = 34;
+const FALLBACK_NOTE_H = 26;
+const FALLBACK_MORE_H = 28;
+
+/**
+ * The Workspaces of a mode: one that is added grows in, one that is removed folds away. Only the groups around the
+ * visible area are mounted (about a screen past each edge); the rest is empty space of the same height, so the scroll
+ * bar behaves as if everything were there. Filtering still matches every chat, but only the window renders.
+ * Heights come from the same selection the groups render (see selectWorkspaceChats), measured once against the live
+ * styles; while a group folds away after being removed the list renders whole, so the exit keeps its motion.
+ */
+function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, currentWorkspaceId, filter, slotsByFile, currentFile, drafts }) {
+	const { rows: retained, present, initial } = useRetainedRows(list, "id");
+	// The "show more" state lives here (not in each group), because the height estimate must know it.
+	const [showAllMap, setShowAllMap] = useState({});
+	const setShowAll = useCallback((id, value) => setShowAllMap((map) => (map[id] === value ? map : { ...map, [id]: value })), []);
+	const [metrics, setMetrics] = useState({ row: FALLBACK_ROW_H, note: FALLBACK_NOTE_H, more: FALLBACK_MORE_H });
+	const box = useRef(null);
+	const listTop = useRef(0);
+	// Groups that have been on screen before are shown at once when scrolled back to; only a group that newly
+	// arrives in the list grows in (a removed group that comes back grows in too, as before).
+	const everRendered = useRef(new Set());
+	const [{ start, end }, setRange] = useState({ start: 0, end: 60 });
+	const heights = useMemo(() => list.map((w) => {
+		const sessions = sessionsOf(w.rootPath);
+		const chats = selectWorkspaceChats(sessions, { filter, slotsByFile, archived: false, currentFile, drafts });
+		if (filter && !chats.length) return 0;
+		const stored = expanded[w.rootPath];
+		const showing = (stored === undefined ? w.id === currentWorkspaceId : !!stored) || !!filter;
+		if (!showing) return metrics.row;
+		const shown = showAllMap[w.id] || filter ? chats.length : Math.min(12, chats.length);
+		const note = errors[w.rootPath] || sessions === undefined || !chats.length ? metrics.note : 0;
+		const more = !filter && chats.length > shown ? metrics.more : 0;
+		return metrics.row + note + shown * metrics.row + more;
+	}), [list, sessionsOf, errors, expanded, currentWorkspaceId, filter, slotsByFile, currentFile, drafts, showAllMap, metrics]);
+	const virtualize = retained.length === list.length;
+	const updateRange = useCallback(() => {
+		const el = box.current;
+		const scroller = el?.closest(".sidebar-scroll");
+		if (!el || !scroller) return;
+		const top = scroller.scrollTop - listTop.current;
+		const bottom = top + scroller.clientHeight;
+		let y = 0;
+		let first = list.length;
+		let last = 0;
+		for (let i = 0; i < heights.length; i += 1) {
+			const next = y + heights[i];
+			if (next > top && y < bottom) {
+				if (i < first) first = i;
+				last = i + 1;
+			}
+			y = next;
+		}
+		if (first > last) {
+			first = 0;
+			last = 0;
+		}
+		const next = { start: Math.max(0, first - WINDOW_OVERSCAN), end: Math.min(list.length, last + WINDOW_OVERSCAN) };
+		setRange((prev) => (prev.start === next.start && prev.end === next.end ? prev : next));
+	}, [heights, list.length]);
+	useLayoutEffect(() => {
+		const el = box.current;
+		if (!el) return undefined;
+		const scroller = el.closest(".sidebar-scroll");
+		if (!scroller) return undefined;
+		const cssRow = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--h-row"));
+		const probe = document.createElement("div");
+		probe.setAttribute("aria-hidden", "true");
+		probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;";
+		probe.innerHTML = `<div class="dim side-note">x</div><button class="link-btn side-more" tabindex="-1">x</button>`;
+		el.appendChild(probe);
+		const note = probe.children[0]?.offsetHeight || FALLBACK_NOTE_H;
+		const more = probe.children[1]?.offsetHeight || FALLBACK_MORE_H;
+		probe.remove();
+		// Keep the old object when nothing changed: `metrics` feeds `heights` -> `updateRange` -> this effect, so a fresh
+		// object on every run would re-render forever.
+		const row = Number.isFinite(cssRow) && cssRow > 0 ? cssRow : FALLBACK_ROW_H;
+		setMetrics((prev) => (prev.row === row && prev.note === note && prev.more === more ? prev : { row, note, more }));
+		let top = 0;
+		for (let node = el; node && node !== scroller; node = node.offsetParent) top += node.offsetTop;
+		listTop.current = top;
+		let frame = 0;
+		const onScroll = () => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				updateRange();
+			});
+		};
+		updateRange();
+		scroller.addEventListener("scroll", onScroll, { passive: true });
+		const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onScroll);
+		resize?.observe(scroller);
+		return () => {
+			scroller.removeEventListener("scroll", onScroll);
+			resize?.disconnect();
+			if (frame) cancelAnimationFrame(frame);
+		};
+	}, [updateRange]);
+	useLayoutEffect(() => {
+		updateRange();
+	}, [updateRange]);
+	if (!virtualize) {
+		return html`<div ref=${box}>${retained.map((w) => html`<${ListSlot} key=${w.id} present=${present.has(w.id)} initial=${initial.has(w.id)}>${renderGroup(w, { showAll: !!showAllMap[w.id], setShowAll: (value) => setShowAll(w.id, value) })}<//>`)}</div>`;
+	}
+	let topPad = 0;
+	let bottomPad = 0;
+	for (let i = 0; i < start; i += 1) topPad += heights[i];
+	for (let i = end; i < heights.length; i += 1) bottomPad += heights[i];
+	const seen = everRendered.current;
+	return html`<div ref=${box}>
+		${topPad > 0 ? html`<div style=${`height:${topPad}px`} aria-hidden="true" />` : null}
+		${list.slice(start, end).map((w) => {
+			const shown = initial.has(w.id) || seen.has(w.id);
+			seen.add(w.id);
+			return html`<${ListSlot} key=${w.id} present=${present.has(w.id)} initial=${shown}>${renderGroup(w, { showAll: !!showAllMap[w.id], setShowAll: (value) => setShowAll(w.id, value) })}<//>`;
+		})}
+		${bottomPad > 0 ? html`<div style=${`height:${bottomPad}px`} aria-hidden="true" />` : null}
+	</div>`;
 }
 
 function AddWorkspaceDialog({ onClose }) {
@@ -270,6 +401,7 @@ export function Sidebar() {
 		if (result.unsupported) setAdding(true);
 	};
 	const searchRef = useRef(null);
+	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const slotsByFile = useMemo(() => new Map(slots.filter((s) => s.sessionFile).map((s) => [pathKey(s.sessionFile), s])), [slots]);
 	// Workspaces that hold at least one chat with an unread result (matched by the folder the chat runs in).
 	const unreadRoots = new Set(slots.filter((s) => !s.unbound && hasUnread(s, currentFile)).map((s) => pathKey(s.cwd)));
@@ -299,32 +431,40 @@ export function Sidebar() {
 	}, [slots, ws, activeSlot]);
 	const archivedChats = useMemo(() => ws.archived?.map((info) => ({ ...info, archived: true })), [ws.archived]);
 	const unboundChats = useMemo(() => (ws.unbound === undefined ? undefined : [...unsaved.unbound, ...ws.unbound]), [unsaved, ws.unbound]);
+	// The chats one workspace group lists: the saved ones, plus an open chat that is not saved yet. Shared by the
+	// rendered group and the virtualized list's height estimates, so both always agree.
+	const sessionsOf = useCallback((rootPath) => {
+		const saved = ws.sessions[rootPath];
+		const extra = unsaved.byRoot.get(pathKey(rootPath));
+		return saved && extra ? [...extra, ...saved] : saved;
+	}, [ws.sessions, unsaved]);
 	const onWidth = (w) => {
 		state.view = { ...state.view, sidebarW: w };
 		document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
 	};
-	return html`<aside class="sidebar" aria-label=${t("Workspaces and chats")}>
+	return html`<aside class=${`sidebar${sidebarOpen ? "" : " is-collapsed"}`} aria-label=${t("Workspaces and chats")}>
 		<div class="sidebar-top">
 			<div class="brand"><${ModeSwitch} /><span class="grow">MyHarness</span>
 				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
 			<${ModeTasks} />
-			<button class="nav-btn primary-nav" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
+			<button class="nav-btn primary-nav" data-export-offline="true" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
 			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll" key=${mode}>
-			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
-			<${WorkspaceList} list=${ws.list} renderGroup=${(w) => {
+			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" data-export-offline="true" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
+			<${WorkspaceList} list=${ws.list} sessionsOf=${sessionsOf} errors=${ws.errors} expanded=${expanded} currentWorkspaceId=${currentWorkspace} filter=${filter} slotsByFile=${slotsByFile} currentFile=${shownFile} drafts=${drafts} renderGroup=${(w, control) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
-				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${ws.sessions[w.rootPath] && unsaved.byRoot.has(pathKey(w.rootPath)) ? [...unsaved.byRoot.get(pathKey(w.rootPath)), ...ws.sessions[w.rootPath]] : ws.sessions[w.rootPath]} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} />`;
+				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${sessionsOf(w.rootPath)} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} showAll=${control.showAll} onShowAll=${control.setShowAll} />`;
 			}} />
 			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
 			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
 			${archivedChats?.length ? html`<${Workspace} archived workspace=${{ rootPath: ARCHIVED_KEY, name: t("Archived chats") }} title=${t("Chats you archived, restore them here")} error=${ws.errors[ARCHIVED_KEY]} isCurrent=${false} open=${!!expanded[ARCHIVED_KEY]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
 		</div>
+		${exportReadOnly() ? html`<${ExportSidebarFoot} />` : null}
 		<div class="sidebar-foot">
-			<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>
+			${exportReadOnly() ? null : html`<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>`}
 			<span class=${`conn ${connected ? "on" : "off"}`} title=${connected ? t("Connected to the local MyHarness server") : t("Disconnected — retrying")}><span class=${`dot ${connected ? "ok" : "danger"}`} /></span>
 		</div>
 		<${Resizer} side="right" min=${200} max=${460} getValue=${() => state.view.sidebarW} onChange=${onWidth} onEnd=${() => setView({ sidebarW: state.view.sidebarW })} />

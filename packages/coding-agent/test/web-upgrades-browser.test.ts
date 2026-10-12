@@ -41,7 +41,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 					},
 					{ id: "autoMemory", section: "Assistants", label: "Auto Memory", type: "boolean", value: false },
 					{
-						id: "codeIntelligence.enabled",
+						id: "codeIntelligence.symbolsEnabled",
 						section: "Tools",
 						label: "Code Intelligence",
 						type: "boolean",

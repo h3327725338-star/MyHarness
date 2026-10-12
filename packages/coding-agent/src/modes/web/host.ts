@@ -64,6 +64,63 @@ const TASK_NOTICE_ANSWER_MS = 2500;
 
 export type RunOutcome = "completed" | "partial" | "failed" | "cancelled";
 
+/** Optional query for GET /api/transcript pagination; raw strings straight from the URL (W172). */
+export interface TranscriptQuery {
+	limit?: string | null;
+	before?: string | null;
+}
+
+export interface TranscriptPage {
+	items: WireItem[];
+	hasMore: boolean;
+	nextCursor: string | null;
+}
+
+/** Lenient `limit` parsing: anything that is not an integer number falls back to "no limit"; values below 1 clamp to 1. */
+function parseTranscriptLimit(raw: string): number | undefined {
+	const n = Number(raw);
+	if (!Number.isInteger(n)) return undefined;
+	return n < 1 ? 1 : n;
+}
+
+/**
+ * Cut the tail out of a projected transcript for `limit` / `before` paging (W172).
+ * Rules:
+ * - `before` is a cursor: an item id (== session entry id, never a timestamp). The window holds only items strictly older than it;
+ *   an unknown cursor is tolerated and keeps the whole range.
+ * - `limit` caps the window size; the window is aligned forward to the oldest `user` item so a page never starts mid-turn
+ *   (web/js/turns.js buildTurns pairs toolCall↔toolResult only within one items array and treats a page head before the
+ *   first user item as an orphaned turn). If the window holds no user item it is returned unchanged: alignment never empties a page.
+ * - `nextCursor` is the id of the oldest returned item; `hasMore` says older items were left out and a `before` fetch can continue.
+ */
+export function paginateTranscriptItems(
+	items: readonly WireItem[],
+	limitRaw?: string,
+	beforeRaw?: string,
+): TranscriptPage {
+	let end = items.length;
+	if (beforeRaw !== undefined) {
+		const idx = items.findIndex((item) => item.id === beforeRaw);
+		if (idx >= 0) end = idx;
+	}
+	let start = 0;
+	const limit = limitRaw !== undefined ? parseTranscriptLimit(limitRaw) : undefined;
+	if (limit !== undefined && end > limit) start = end - limit;
+	if (start > 0) {
+		const firstUser = items.slice(start, end).findIndex((item) => item.kind === "user");
+		if (firstUser > 0) start += firstUser;
+	}
+	const page = items.slice(start, end);
+	return { items: page, hasMore: start > 0, nextCursor: start > 0 ? (page[0]?.id ?? null) : null };
+}
+
+export type TranscriptResponse = {
+	items: WireItem[];
+	leafId: string | null;
+	hasMore?: boolean;
+	nextCursor?: string | null;
+};
+
 export interface RunFinishedPayload {
 	runId: number;
 	outcome: RunOutcome;
@@ -1309,9 +1366,17 @@ export class WebHost {
 		}
 	}
 
-	transcript(): { items: WireItem[]; leafId: string | null } {
+	transcript(query: TranscriptQuery = {}): TranscriptResponse {
 		const manager = this.session.sessionManager;
-		return { items: entriesToWire(manager.getBranch()), leafId: manager.getLeafId() };
+		const items = entriesToWire(manager.getBranch());
+		const leafId = manager.getLeafId();
+		// Without pagination parameters the response stays exactly as it always was: byte-identical for old clients,
+		// the HTML export and the existing tests. An empty query value counts as absent.
+		const limitRaw = typeof query.limit === "string" && query.limit.trim() ? query.limit.trim() : undefined;
+		const beforeRaw = typeof query.before === "string" && query.before.trim() ? query.before.trim() : undefined;
+		if (limitRaw === undefined && beforeRaw === undefined) return { items, leafId };
+		const page = paginateTranscriptItems(items, limitRaw, beforeRaw);
+		return { items: page.items, leafId, hasMore: page.hasMore, nextCursor: page.nextCursor };
 	}
 
 	snapshot() {

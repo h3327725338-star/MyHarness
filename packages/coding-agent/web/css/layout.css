@@ -1,8 +1,9 @@
 /* The sidebar and the right-hand panel are grid tracks that animate open and closed; the main area is the track between them,
    so the conversation reflows in the same frames. The one row is exactly as tall as the window (never as tall as its
    content): whatever a column holds scrolls inside that column and cannot make the other columns taller. */
-.app { --panel-width: min(var(--panel-w), max(340px, calc(100vw - var(--sidebar-current, var(--sidebar-w)) - 520px))); display: grid; grid-template-columns: var(--sidebar-current, var(--sidebar-w)) minmax(0, 1fr) var(--panel-current, 0px); grid-template-rows: minmax(0, 1fr); height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
-.app.sidebar-collapsed { --sidebar-current: 0px; }
+.app { --panel-width: min(var(--panel-w), max(340px, calc(100vw - var(--sidebar-w) - 520px))); display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--panel-current, 0px); grid-template-rows: minmax(0, 1fr); height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
+.app:has(> .sidebar.is-collapsed) { grid-template-columns: 0px minmax(0, 1fr) var(--panel-current, 0px); }
+.app:has(> .sidebar.is-collapsed).panel-open { --panel-current: calc(min(var(--panel-w), max(340px, calc(100vw - 520px))) + 6px); }
 .app.panel-open { --panel-current: calc(var(--panel-width) + 6px); }
 /* Dragging an edge follows the pointer directly. */
 .app:has(.resizer.dragging) { transition: none; }
@@ -11,9 +12,9 @@
 .sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--bg-app); position: relative; transition: opacity var(--t-slow) var(--ease), visibility 0s linear 0s; }
 /* The content keeps its width while the column narrows, so it slides out instead of re-wrapping. */
 .sidebar > :not(.resizer) { min-width: var(--sidebar-w); }
-.app.sidebar-collapsed .sidebar { visibility: hidden; opacity: 0; transition: opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
+.sidebar.is-collapsed { visibility: hidden; opacity: 0; transition: opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
 .sidebar-top { padding: 10px var(--pad-side) 6px; display: flex; flex-direction: column; gap: 4px; }
-.brand { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px 6px; font-weight: 650; letter-spacing: 0.01em; font-size: 14px; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px 6px; font-weight: 650; letter-spacing: 0.01em; font-size: var(--fs-title-xs); }
 .nav-btn { display: flex; align-items: center; gap: 8px; height: var(--h-row); padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); width: 100%; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast); }
 .nav-btn:hover { background: var(--surface-hover); color: var(--text); }
 .nav-btn.primary-nav { color: var(--text); font-weight: 550; }
@@ -74,6 +75,13 @@
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */
 .conn { display: grid; place-items: center; width: var(--h-icon-sm); height: var(--h-icon-sm); margin-right: 4px; flex: none; }
+/* Export pages only: the read-only area between the scrolling list and the settings foot. A fixed block (it never
+   scrolls away), stacked vertically: badge, full-width download button, two ellipsized lines — so even at the 200px
+   minimum column width nothing overflows and the button is never squeezed out. Colors are theme tokens only. */
+.export-side-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px var(--pad-side) 6px; border-top: 1px solid var(--border); min-width: 0; }
+.export-side-badge { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; color: var(--warn); font-weight: 600; font-size: var(--fs-xs); white-space: nowrap; }
+.export-side-foot .export-side-download { width: 100%; min-width: 0; }
+.export-side-line { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-3); }
 
 /* Resizers */
 .resizer { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
@@ -83,12 +91,25 @@
 
 /* Main panel: lifted surface */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease); }
-.app.sidebar-collapsed .main { margin-left: 6px; }
+.sidebar.is-collapsed + .main { margin-left: 6px; }
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 
 .main-header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; flex: none; border-bottom: 1px solid transparent; }
 .main-header.scrolled, .app.panel-open .main-header { border-bottom-color: var(--border); }
-.title-btn { max-width: 46%; padding: 0 6px; height: var(--h-control-sm); border-radius: var(--r-md); font-weight: 600; font-size: 14px; text-align: left; }
+.export-top-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 9px;
+	border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
+	border-radius: var(--r-pill);
+	background: var(--warn-soft);
+	color: var(--warn);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	white-space: nowrap;
+}
+.title-btn { max-width: 46%; padding: 0 6px; height: var(--h-control-sm); border-radius: var(--r-md); font-weight: 600; font-size: var(--fs-title-xs); text-align: left; }
 .title-btn:hover { background: var(--surface-hover); }
 
 /* Right inspector panel. It keeps its own width while its track grows or shrinks, and slides and fades in the same time, so it
@@ -96,6 +117,9 @@
 .panel-slot { display: flex; min-width: 0; min-height: 0; }
 .panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; box-shadow: var(--shadow-panel); opacity: 0; transform: translateX(28px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
 .app.panel-open .panel { opacity: 1; transform: none; }
+/* While the sidebar is collapsed the panel takes the room it leaves: the width override lives on the panel itself,
+   so opening or closing the sidebar never touches a custom property on .app (that would restyle the whole tree). */
+.sidebar.is-collapsed ~ .panel-slot .panel { --panel-width: min(var(--panel-w), max(340px, calc(100vw - 520px))); }
 .panel-tabs { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 var(--pad-panel); flex: none; border-bottom: 1px solid var(--border); }
 .tab { display: inline-flex; align-items: center; gap: 6px; height: var(--h-control-sm); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); font-weight: 500; position: relative; transition: background var(--t-fast), color var(--t-fast), gap var(--t-slow) var(--ease), padding var(--t-slow) var(--ease); }
 /* The label of a tab folds away into its icon (and unfolds again) as the panel narrows or widens: its width and opacity
@@ -133,15 +157,15 @@
 
 /* Coding / General switch (top-left of the sidebar): an oval with both mode colours always visible; the knob sits on the
    mode on screen. Each side carries the marker of its mode's tasks (see mode-switch.js). */
-.mode-switch { position: relative; flex: none; display: grid; grid-template-columns: 1fr 1fr; width: 60px; height: 32px; padding: 0; border-radius: var(--r-pill); border: 1px solid var(--border-strong); background: var(--bg-inset); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .16); overflow: visible; cursor: pointer; transition: border-color var(--t-fast); view-transition-name: mode-switch; }
-.mode-switch:hover { border-color: var(--text-4); }
+.mode-switch { position: relative; flex: none; display: grid; grid-template-columns: 1fr 1fr; width: 60px; height: 32px; padding: 0; border-radius: var(--r-pill); border: 1px solid var(--border-strong); background: var(--bg-inset); box-shadow: var(--shadow-mode-well); overflow: visible; cursor: pointer; transition: border-color var(--t-fast); view-transition-name: mode-switch; }
+.mode-switch:hover { border-color: var(--border-hover); }
 .mode-switch:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 .mode-side { position: relative; display: grid; place-items: center; height: 100%; transition: color var(--t-base) var(--ease); }
 .mode-side > svg { width: 13px; height: 13px; transition: opacity 160ms ease; }
 .mode-side.coding { border-radius: var(--r-pill) 0 0 var(--r-pill); background: color-mix(in srgb, var(--mode-coding) 10%, transparent); color: var(--mode-coding); }
 .mode-side.general { border-radius: 0 var(--r-pill) var(--r-pill) 0; background: color-mix(in srgb, var(--mode-general) 10%, transparent); color: var(--mode-general); }
 .mode-switch.coding .mode-side.coding > svg, .mode-switch.general .mode-side.general > svg { opacity: 0; }
-.mode-knob { position: absolute; z-index: 1; top: 2px; left: 2px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mode-coding); color: var(--mode-on); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 2px 4px rgba(0, 0, 0, .22); transition: background 520ms ease, color 160ms ease; pointer-events: none; }
+.mode-knob { position: absolute; z-index: 1; top: 2px; left: 2px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mode-coding); color: var(--mode-on); box-shadow: var(--shadow-mode-knob); transition: background var(--t-morph) var(--ease), color var(--t-base) var(--ease); pointer-events: none; }
 .mode-switch.general .mode-knob { transform: translateX(28px); background: var(--mode-general); }
 .mode-morph-icon { display: block; }
 .mode-signal { position: absolute; z-index: 2; top: -5px; display: grid; place-items: center; pointer-events: none; }

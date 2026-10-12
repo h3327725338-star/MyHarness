@@ -93,7 +93,6 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			"memory_search",
 			"pwsh",
 			"read",
-			"symbols",
 			"todo_write",
 			"ultracode",
 			"workflow",

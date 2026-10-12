@@ -62,7 +62,6 @@ describe("regression #5109: exclude tools", () => {
 				"memory_get",
 				"memory_search",
 				"pwsh",
-				"symbols",
 				"todo_write",
 				"write",
 			]);

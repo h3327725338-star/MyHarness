@@ -152,6 +152,10 @@ describe("GitPushUseCase", () => {
 			runGitOrThrow(workRoot, ["init"]);
 			runGitOrThrow(workRoot, ["config", "user.name", "MyHarness Test"]);
 			runGitOrThrow(workRoot, ["config", "user.email", "test@example.invalid"]);
+			// A user-global core.hooksPath makes every commit here pay ~1.3s of external
+			// hook process startup, which is pure noise for this push test. An empty
+			// local value overrides the global one, so the fixture repository stays hook-free.
+			runGitOrThrow(workRoot, ["config", "core.hooksPath", ""]);
 			writeFileSync(join(workRoot, "README.md"), "initial\n");
 			runGitOrThrow(workRoot, ["add", "README.md"]);
 			runGitOrThrow(workRoot, ["commit", "-m", "initial"]);

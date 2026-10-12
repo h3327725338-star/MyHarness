@@ -2,13 +2,12 @@
   "schemaVersion": 1,
   "product": "myharness",
   "platform": "win32-x64",
-  "defaultMode": "lightweight",
   "releaseVersion": "0.4.0",
   "releaseTag": "code-intelligence-v0.4.0",
   "myharnessVersionRange": ">=0.80.10 <0.81.0",
   "published": true,
   "releaseManifestUrlTemplate": "https://github.com/h3327725338-star/MyHarness/releases/download/{releaseTag}/code-intelligence-manifest.json",
-  "description": "Optional Windows language-server modules. The lightweight source index is part of MyHarness and needs no download.",
+  "description": "Optional Windows language-server modules for semantic Symbols navigation. The symbols tool is disabled by default and is enabled through codeIntelligence.symbolsEnabled.",
   "modules": [
     {
       "id": "javascript-typescript",

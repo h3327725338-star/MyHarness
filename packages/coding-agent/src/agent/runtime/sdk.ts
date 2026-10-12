@@ -37,7 +37,7 @@ import { AgentSession } from "./agent-session.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { convertToLlm } from "./messages.ts";
 import { MirrorAgentSession } from "./mirror-agent-session.ts";
-import { restrictToolNamesForRole } from "./role.ts";
+import { isGatedBuiltinToolName, restrictToolNamesForRole, withoutDisabledBuiltinTools } from "./role.ts";
 import { SessionBridgeClient } from "./session-bridge.ts";
 
 export interface CreateAgentSessionOptions {
@@ -274,37 +274,43 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const agentRole = resourceLoader.getAgentRole?.() ?? "main";
+	/** The settings gate `symbols` lives in the session tool registry; here it only picks the default list. */
+	const isBuiltinConfigured = (name: string): boolean =>
+		!isGatedBuiltinToolName(name) || settingsManager.getCodeIntelligenceSettings().symbolsEnabled;
 	const defaultActiveToolNames: ToolName[] =
 		agentRole === "main"
-			? ([
-					"read",
-					"bash",
-					"pwsh",
-					"job_list",
-					"job_output",
-					"job_kill",
-					"edit",
-					"write",
-					"symbols",
-					"github",
-					"memory_search",
-					"memory_get",
-					"ask_user_question",
-					"todo_write",
-					...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
-				] as ToolName[])
-			: (restrictToolNamesForRole(agentRole, undefined) as ToolName[]);
+			? (withoutDisabledBuiltinTools(
+					[
+						"read",
+						"bash",
+						"pwsh",
+						"job_list",
+						"job_output",
+						"job_kill",
+						"edit",
+						"write",
+						"symbols",
+						"github",
+						"memory_search",
+						"memory_get",
+						"ask_user_question",
+						"todo_write",
+						...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
+					],
+					isBuiltinConfigured,
+				) as ToolName[])
+			: (restrictToolNamesForRole(agentRole, undefined, isBuiltinConfigured) as ToolName[]);
 	const requestedToolNames =
 		options.tools ??
 		(options.noTools === "all" || (agentRole !== "main" && options.noTools === "builtin") ? [] : undefined);
-	const allowedToolNames = restrictToolNamesForRole(agentRole, requestedToolNames);
+	const allowedToolNames = restrictToolNamesForRole(agentRole, requestedToolNames, isBuiltinConfigured);
 	const excludedToolNames = options.excludeTools;
 	const excludedToolNameSet = excludedToolNames ? new Set(excludedToolNames) : undefined;
 	const requestedInitialToolNames: string[] = (
 		options.tools ? [...options.tools] : options.noTools ? [] : defaultActiveToolNames
 	).filter((name) => !excludedToolNameSet?.has(name));
 	const initialActiveToolNames =
-		restrictToolNamesForRole(agentRole, requestedInitialToolNames) ?? requestedInitialToolNames;
+		restrictToolNamesForRole(agentRole, requestedInitialToolNames, isBuiltinConfigured) ?? requestedInitialToolNames;
 
 	let agent: Agent;
 

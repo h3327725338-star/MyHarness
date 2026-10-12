@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LightweightCodeIntelligenceBackend } from "../../../src/symbols/index/lightweight/backend.ts";
 import { CodeIntelligenceRouter } from "../../../src/symbols/index/router/router.ts";
 import { LspRequestAbortedError } from "../../../src/symbols/lsp/errors.ts";
 import { LanguageServerManager } from "../../../src/symbols/lsp/language-server/manager.ts";
@@ -24,7 +23,6 @@ interface Environment {
 	readonly agentDir: string;
 	readonly manager: LanguageServerManager;
 	readonly semantic: LspSemanticBackend;
-	readonly lightweight: LightweightCodeIntelligenceBackend;
 	readonly router: CodeIntelligenceRouter;
 }
 
@@ -85,9 +83,8 @@ async function createEnvironment(
 	}
 	const manager = new LanguageServerManager({ registry });
 	const semantic = new LspSemanticBackend({ manager });
-	const lightweight = new LightweightCodeIntelligenceBackend({ workspaceRoot: root, agentDir });
-	const router = new CodeIntelligenceRouter({ workspaceRoot: root, semantic, lightweight });
-	const environment = { root, agentDir, manager, semantic, lightweight, router };
+	const router = new CodeIntelligenceRouter({ workspaceRoot: root, semantic });
+	const environment = { root, agentDir, manager, semantic, router };
 	environments.add(environment);
 	return environment;
 }
@@ -133,42 +130,32 @@ describe("CodeIntelligenceRouter real semantic integration", () => {
 		const result = await environment.router.fileSymbols("src/target.ts");
 
 		expect(result).toEqual({ items: [], meta: { source: "semantic", completeness: "complete" } });
-		expect(environment.lightweight).toBeDefined();
 		expect(environment.semantic.getSessions()).toHaveLength(1);
 		expect(environment.manager.getServers()).toMatchObject([
 			{ definitionId: "phase6-fixture", state: "ready", clientState: "initialized" },
 		]);
 	});
 
-	it.each([
-		["unsupported-document-symbol", "semantic_capability_unsupported"],
-		["unsupported-position", "semantic_position_encoding_unsupported"],
-	] as const)("falls back only for safe semantic capability failure: %s", async (scenario, reason) => {
-		const environment = await createEnvironment({ scenario });
-		const lightweight = vi.spyOn(environment.lightweight, "fileSymbols");
+	it.each([["unsupported-document-symbol"], ["unsupported-position"]] as const)(
+		"throws original semantic error without fallback for unsupported capability: %s",
+		async (scenario) => {
+			const environment = await createEnvironment({ scenario });
 
-		const result = await environment.router.fileSymbols("src/target.ts");
+			const error = await environment.router.fileSymbols("src/target.ts").catch((cause: unknown) => cause);
+			expect(error).toBeInstanceOf(SemanticBackendError);
+		},
+	);
 
-		expect(result.meta.source).toBe("lightweight");
-		expect(result.meta.fallback).toMatchObject({ reason });
-		expect(result.items.length).toBeGreaterThan(0);
-		expect(lightweight).toHaveBeenCalledOnce();
-	});
-
-	it("falls back for a real no-server acquisition failure", async () => {
+	it("throws semantic server_unavailable without fallback for a real no-server acquisition failure", async () => {
 		const environment = await createEnvironment({ registerServer: false });
-		const lightweight = vi.spyOn(environment.lightweight, "fileSymbols");
 
-		const result = await environment.router.fileSymbols("src/target.ts");
-
-		expect(result.meta.fallback?.reason).toBe("semantic_server_unavailable");
-		expect(result.meta.source).toBe("lightweight");
-		expect(lightweight).toHaveBeenCalledOnce();
+		const error = await environment.router.fileSymbols("src/target.ts").catch((cause: unknown) => cause);
+		expect(error).toBeInstanceOf(SemanticBackendError);
+		expect((error as SemanticBackendError).code).toBe("server_unavailable");
 	});
 
 	it("does not fall back after a real language-server initialize failure", async () => {
 		const environment = await createEnvironment({ fixture: MOCK_LSP_FIXTURE, scenario: "init-error" });
-		const lightweight = vi.spyOn(environment.lightweight, "fileSymbols");
 
 		const error = await environment.router.fileSymbols("src/target.ts").catch((cause: unknown) => cause);
 
@@ -177,7 +164,6 @@ describe("CodeIntelligenceRouter real semantic integration", () => {
 		expect(hasCause(error, (cause) => cause instanceof Error && cause.name === "LanguageServerInitializeError")).toBe(
 			true,
 		);
-		expect(lightweight).not.toHaveBeenCalled();
 	});
 
 	it("does not fall back on a real aborted semantic request", async () => {
@@ -185,7 +171,6 @@ describe("CodeIntelligenceRouter real semantic integration", () => {
 			scenario: "timeout-once",
 			clientOptions: { defaultRequestTimeoutMs: 1_000 },
 		});
-		const lightweight = vi.spyOn(environment.lightweight, "fileSymbols");
 		const controller = new AbortController();
 		const request = environment.router.fileSymbols("src/target.ts", { signal: controller.signal });
 
@@ -198,7 +183,6 @@ describe("CodeIntelligenceRouter real semantic integration", () => {
 
 		expect(error).toBeInstanceOf(SemanticBackendError);
 		expect(hasCause(error, (cause) => cause instanceof LspRequestAbortedError)).toBe(true);
-		expect(lightweight).not.toHaveBeenCalled();
 	});
 
 	it("disposes the real backend and manager without retained sessions or servers", async () => {

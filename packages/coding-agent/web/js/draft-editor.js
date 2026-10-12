@@ -3,7 +3,7 @@
 // The browser only edits the page by itself during IME composition; every other edit (typing, Enter, delete keys,
 // paste, cut, undo) is applied to the raw text here and the drawing is redrawn, so the two can never disagree.
 import { html, useEffect, useLayoutEffect, useRef } from "./ui.js";
-import { deletionRange, lineAt, renderDraft } from "./draft-markdown.js";
+import { deletionRange, draftLines, lineAt, renderDraft } from "./draft-markdown.js";
 
 /** The raw text of the drawing: one line per top-level block (a line the browser merged during IME stays one line). */
 function readText(root) {
@@ -82,7 +82,9 @@ function placeCaret(root, offset) {
 	range.collapse(true);
 	sel.removeAllRanges();
 	sel.addRange(range);
-	// Keep the caret in view inside the scrolling input after a redraw.
+	// Keep the caret in view inside the scrolling input after a redraw. A single line at the top can never
+	// scroll the caret out of view, so the two rect reads below are skipped then (they are the per-key cost).
+	if (root.children.length === 1 && root.scrollTop === 0) return;
 	const line = (node.nodeType === 1 ? node : node.parentElement)?.closest(".dline");
 	if (line) {
 		const box = root.getBoundingClientRect();
@@ -92,13 +94,17 @@ function placeCaret(root, offset) {
 	}
 }
 
+/** The five escapes draft-markdown.js uses, back to characters (for the append fast path, without touching innerHTML). */
+const UNESC = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+const unesc = (s) => String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m) => UNESC[m] ?? m);
+
 /**
  * Controlled by `value`; reports `onChange(text, caret)` and `onSelect(caret)`. `apiRef` gets `focus()`, `setCaret(pos)`
  * and `element`, which the composer uses where a textarea's focus() / setSelectionRange() were used before.
  */
 export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, placeholder, apiRef, class: cls }) {
 	const root = useRef(null);
-	const st = useRef({ text: null, caret: 0, composing: false, undo: [], redo: [], lastKind: "", lastAt: 0 });
+	const st = useRef({ text: null, caret: 0, composing: false, undo: [], redo: [], lastKind: "", lastAt: 0, rows: null });
 	const props = useRef({});
 	props.current = { onChange, onSelect, onKeyDown, onPaste };
 
@@ -106,7 +112,42 @@ export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, pla
 		const el = root.current;
 		const s = st.current;
 		const focused = document.activeElement === el;
-		el.innerHTML = renderDraft(text, focused ? lineAt(text, caret) : -1);
+		const activeLine = focused ? lineAt(text, caret) : -1;
+		// Only the lines whose text changed are rebuilt; appending to a plain line edits its text node in place,
+		// so typing a normal line costs no innerHTML write at all. `rows` mirrors the lines draw() left behind
+		// (without the active mark, which is synced separately below); it is dropped whenever the browser edits
+		// the page by itself (IME composition), falling back to a full rebuild for that one draw.
+		const lines = draftLines(text);
+		if (!s.rows) {
+			el.innerHTML = renderDraft(text, activeLine);
+		} else {
+			const old = s.rows;
+			// Fewer lines than before: drop the tail first, so the indexes below stay aligned.
+			while (el.children.length > lines.length) el.lastElementChild.remove();
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				const prev = old[i];
+				const node = el.children[i];
+				if (!node || !prev || prev.cls !== line.cls || prev.html !== line.html) {
+					const onlyText = node?.childNodes.length === 1 && node.firstChild.nodeType === 3;
+					const appendable = node && prev && prev.cls === line.cls && prev.html !== line.html && !line.html.includes("<") && !prev.html.includes("<") && onlyText;
+					if (appendable && line.html.startsWith(prev.html)) {
+						node.firstChild.appendData(unesc(line.html.slice(prev.html.length)));
+					} else if (appendable && line.html !== "" && prev.html.startsWith(line.html)) {
+						node.firstChild.deleteData(unesc(line.html).length, unesc(prev.html).length - unesc(line.html).length);
+					} else {
+						const fresh = document.createElement("div");
+						fresh.className = `dline${line.cls ? ` ${line.cls}` : ""}`;
+						fresh.innerHTML = line.html || "<br>";
+						if (node) node.replaceWith(fresh);
+						else el.append(fresh);
+					}
+				}
+			}
+			// The caret's line may have moved without any line changing text: sync the mark on every line.
+			for (let i = 0; i < el.children.length; i++) el.children[i].classList.toggle("active", i === activeLine);
+		}
+		s.rows = lines;
 		if (text) el.removeAttribute("data-empty");
 		else el.setAttribute("data-empty", "");
 		s.text = text;
@@ -231,6 +272,8 @@ export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, pla
 		const before = (event) => live.current.onBeforeInput(event);
 		const start = () => {
 			st.current.composing = true;
+			// The browser edits the page by itself from here: the row cache no longer mirrors the DOM.
+			st.current.rows = null;
 			// Hide the placeholder before the browser paints uncommitted IME text.
 			el.removeAttribute("data-empty");
 		};

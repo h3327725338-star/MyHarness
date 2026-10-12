@@ -1,13 +1,23 @@
-import { post, toast, activeSlotId } from "./store.js";
+import { post, toast, activeSlotId, subscribe } from "./store.js";
 import { t } from "./i18n.js";
-import { pathCandidates } from "./local-file-links.js";
+import { isLocalAutolinkBlocked, pathCandidates } from "./local-file-links.js";
 
 export const localFileAction = (path, action, handler, slot) => post("/api/files/local", { path, action, handler }, slot);
 export const openLocalFile = (path, slot) => localFileAction(path, "open", undefined, slot).catch((error) => toast(error.message, "error"));
 let closeMenu;
+// A dismissed menu stays mounted for --t-close (composer.css) so it fades out instead of vanishing; opening a new menu drops every fading one at once.
+const MENU_EXIT_MS = 110;
+let exiting = null;
+const dropExiting = () => {
+	if (!exiting) return;
+	clearTimeout(exiting.timer);
+	exiting.menu.remove();
+	exiting = null;
+};
 export async function showLocalFileMenu(event, path, slot) {
 	event.preventDefault();
 	closeMenu?.();
+	dropExiting();
 	const focus = event.target.closest?.("[data-local-path]") || event.target;
 	const menu = document.createElement("div");
 	menu.className = "local-file-menu";
@@ -31,17 +41,40 @@ export async function showLocalFileMenu(event, path, slot) {
 	menu.append(status);
 	document.body.append(menu);
 	let closed = false;
-	const dismiss = () => {
-		closed = true;
-		closeSubmenu();
-		menu.remove();
+	// Listeners stop the moment closing starts, so a fade-out can never trigger a second dismiss or eat a click.
+	const detach = () => {
 		document.removeEventListener("pointerdown", outside, true);
 		window.removeEventListener("keydown", keys, true);
 		window.removeEventListener("scroll", scroll, true);
 		window.removeEventListener("resize", dismiss);
-		clearInterval(chatCheck);
+		window.removeEventListener("blur", checkAlive);
+		window.removeEventListener("focus", checkAlive);
+		document.removeEventListener("visibilitychange", checkAlive);
+		unsubscribe();
+		observer?.disconnect();
 		if (focus?.isConnected) focus.focus?.({ preventScroll: true });
-		if (closeMenu === dismiss) closeMenu = undefined;
+	};
+	const dismiss = () => {
+		if (closed) return;
+		closed = true;
+		closeSubmenu();
+		detach();
+		if (closeMenu === dismissNow) closeMenu = undefined;
+		menu.classList.add("closing");
+		const timer = setTimeout(() => {
+			menu.remove();
+			if (exiting?.timer === timer) exiting = null;
+		}, MENU_EXIT_MS);
+		exiting = { menu, timer };
+	};
+	// A menu replaced by a newer one leaves at once: two context menus must never stack.
+	const dismissNow = () => {
+		if (closed) return;
+		closed = true;
+		closeSubmenu();
+		detach();
+		if (closeMenu === dismissNow) closeMenu = undefined;
+		menu.remove();
 	};
 	const outside = (e) => { if (!contains(e.target)) dismiss(); };
 	const scroll = (e) => { if (!contains(e.target)) dismiss(); };
@@ -66,12 +99,28 @@ export async function showLocalFileMenu(event, path, slot) {
 		const index = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (current + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
 		buttons[index]?.focus();
 	};
-	const chatCheck = setInterval(() => { if (!focus?.isConnected || activeSlotId() !== slot) dismiss(); }, 200);
-	closeMenu = dismiss;
+	// Event-driven stand-in for the old 200ms poll: whenever a moment arrives where the outcome could
+	// have changed (focus returned to the window, the tab became visible, the DOM moved, the store
+	// emitted), the same isConnected/activeSlot check runs; a mere window blur never dismisses.
+	const checkAlive = () => { if (!focus?.isConnected || activeSlotId() !== slot) dismiss(); };
+	const unsubscribe = subscribe(checkAlive);
+	let observer = null;
+	if (typeof MutationObserver !== "undefined" && focus && typeof focus.isConnected === "boolean") {
+		try {
+			observer = new MutationObserver(checkAlive);
+			observer.observe(document.body, { childList: true, subtree: true });
+		} catch {
+			observer = null;
+		}
+	}
+	closeMenu = dismissNow;
 	document.addEventListener("pointerdown", outside, true);
 	window.addEventListener("keydown", keys, true);
 	window.addEventListener("scroll", scroll, true);
 	window.addEventListener("resize", dismiss);
+	window.addEventListener("blur", checkAlive);
+	window.addEventListener("focus", checkAlive);
+	document.addEventListener("visibilitychange", checkAlive);
 	const add = (label, run, panel = menu) => {
 		const button = document.createElement("button");
 		button.className = "local-file-menu-item";
@@ -159,7 +208,8 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 		const node = walker.currentNode;
 		if (!node.textContent || node.parentElement?.closest("a, pre, button, .code-head")) continue;
 		const code = node.parentElement?.closest("code");
-		const candidates = code && node.textContent === code.textContent ? [{ start: 0, end: node.textContent.length, path: node.textContent }] : pathCandidates(node.textContent);
+		const raw = code && node.textContent === code.textContent ? [{ start: 0, end: node.textContent.length, path: node.textContent }] : pathCandidates(node.textContent);
+		const candidates = raw.filter((candidate) => !isLocalAutolinkBlocked(candidate.path));
 		if (candidates.length) jobs.push({ node, text: node.textContent, candidates });
 	}
 	const resolved = new Map();

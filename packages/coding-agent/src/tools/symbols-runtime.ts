@@ -1,45 +1,15 @@
-import {
-	type CodeIndexRefreshSummary,
-	type CodeIndexStats,
-	type CodeMapEntry,
-	type CodeQueryOptions,
-	type CodeSearchMatch,
-	type CodeSearchOptions,
-	CodeSymbolIndex,
-	type IndexedCodeReference,
-	type IndexedCodeSymbol,
-} from "../symbols/index/code-index.ts";
-import { LightweightCodeIntelligenceBackend } from "../symbols/index/lightweight/backend.ts";
 import { CodeIntelligenceRouterError } from "../symbols/index/router/errors.ts";
-import { CodeIntelligenceRouter } from "../symbols/index/router/router.ts";
 import type { CodeIntelligenceRouterAdvancedApi, CodeIntelligenceRouterApi } from "../symbols/index/router/types.ts";
 import { InvalidWorkspaceRootError } from "../symbols/lsp/language-server/errors.ts";
 import { getWorkspaceIdentity, normalizeWorkspaceRoot } from "../symbols/lsp/language-server/manager.ts";
 import { normalizeWorkspaceRoot as normalizeWindowsWorkspaceRoot } from "../symbols/path-semantics.ts";
 import type { CodeIntelligenceInstallationManager } from "../symbols/runtime/installation.ts";
+import { CodeIntelligenceRuntime } from "../symbols/runtime/runtime.ts";
 import type { CodeIntelligenceRuntimeStatus } from "../symbols/runtime/types.ts";
-
-/**
- * The deliberately small index surface used by the symbols tool.
- *
- * Keeping this port smaller than CodeSymbolIndex lets callers provide a shared
- * index without coupling the tool to the index's storage implementation.
- */
-export interface SymbolsIndexPort {
-	ensureFresh(signal?: AbortSignal): Promise<CodeIndexRefreshSummary>;
-	findSymbol(name: string, options?: CodeQueryOptions): Promise<IndexedCodeSymbol[]>;
-	findDefinition(name: string, options?: CodeQueryOptions): Promise<IndexedCodeSymbol[]>;
-	findReferences(name: string, options?: CodeQueryOptions): Promise<IndexedCodeReference[]>;
-	listFileSymbols(path: string, options?: CodeQueryOptions): Promise<IndexedCodeSymbol[]>;
-	searchCode(pattern: string, options?: CodeSearchOptions): Promise<CodeSearchMatch[]>;
-	getCodeMap(path?: string, options?: CodeQueryOptions): Promise<CodeMapEntry[]>;
-	getStats(): CodeIndexStats;
-}
 
 export interface SymbolsCodeIntelligenceServices {
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
-	readonly index: SymbolsIndexPort;
 	readonly getStatus?: () => CodeIntelligenceRuntimeStatus;
 	readonly hasSymbolId?: (symbolId: string) => boolean;
 	readonly supportsSymbolIds?: boolean;
@@ -50,7 +20,6 @@ export interface SymbolsCodeIntelligenceServices {
 export interface SymbolsToolRuntime {
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
-	readonly index: SymbolsIndexPort;
 	readonly getStatus: () => CodeIntelligenceRuntimeStatus;
 	readonly hasSymbolId: (symbolId: string) => boolean;
 	readonly supportsSymbolIds: boolean;
@@ -79,43 +48,52 @@ export class SymbolsToolConfigurationError extends Error {
 	}
 }
 
-/**
- * Built-in tools are sometimes registered before a caller has materialized a
- * test or virtual workspace. Keep that long-standing registry behavior while
- * still constructing the normal runtime immediately for real directories.
- */
-class DeferredDefaultRouter implements CodeIntelligenceRouterAdvancedApi {
-	private router: CodeIntelligenceRouter | undefined;
-	private readonly workspaceRoot: string;
-	private readonly index: SymbolsIndexPort;
-	private readonly agentDir: string | undefined;
+export class LazyCodeIntelligenceRuntime {
+	private runtime: CodeIntelligenceRuntime | undefined;
+	readonly workspaceRoot: string;
+	readonly agentDir: string | undefined;
 
-	constructor(workspaceRoot: string, index: SymbolsIndexPort, agentDir: string | undefined) {
+	constructor(workspaceRoot: string, agentDir?: string) {
 		this.workspaceRoot = workspaceRoot;
-		this.index = index;
 		this.agentDir = agentDir;
 	}
 
-	private getRouter(): CodeIntelligenceRouter {
-		if (!this.router) {
-			const lightweight = new LightweightCodeIntelligenceBackend({
-				workspaceRoot: normalizeWorkspaceRoot(this.workspaceRoot),
-				index: this.index,
-				agentDir: this.agentDir,
-			});
-			this.router = new CodeIntelligenceRouter({
-				workspaceRoot: this.workspaceRoot,
-				lightweight,
-				semantic: undefined,
-			});
-		}
-		return this.router;
+	hasInstance(): boolean {
+		return this.runtime !== undefined;
 	}
 
-	findSymbol(
-		...args: Parameters<CodeIntelligenceRouterApi["findSymbol"]>
-	): ReturnType<CodeIntelligenceRouterApi["findSymbol"]> {
-		return this.getRouter().findSymbol(...args);
+	getRuntime(): CodeIntelligenceRuntime {
+		if (!this.runtime) {
+			this.runtime = new CodeIntelligenceRuntime({
+				workspaceRoot: normalizeWorkspaceRoot(this.workspaceRoot),
+				agentDir: this.agentDir,
+			});
+		}
+		return this.runtime;
+	}
+
+	async dispose(): Promise<void> {
+		if (this.runtime) {
+			await this.runtime.dispose();
+			this.runtime = undefined;
+		}
+	}
+}
+
+/**
+ * Built-in tools are sometimes registered before a caller has materialized a
+ * test or virtual workspace. Keep that long-standing registry behavior while
+ * still constructing the normal runtime lazily on demand.
+ */
+class DeferredDefaultRouter implements CodeIntelligenceRouterAdvancedApi {
+	private readonly lazy: LazyCodeIntelligenceRuntime;
+
+	constructor(lazy: LazyCodeIntelligenceRuntime) {
+		this.lazy = lazy;
+	}
+
+	private getRouter(): CodeIntelligenceRouterAdvancedApi {
+		return this.lazy.getRuntime().router;
 	}
 
 	fileSymbols(
@@ -214,9 +192,9 @@ export function requireAdvancedRouter(
 /**
  * Resolve the one runtime owned by a symbols tool definition.
  *
- * The default path intentionally creates exactly one index and passes that
- * same object to the lightweight backend and router. Injected services are
- * returned by identity and remain owned by the caller.
+ * Injected services are returned by identity and remain owned by the caller.
+ * When not injected, construction of the underlying semantic runtime is deferred
+ * until actually accessed.
  */
 export function createSymbolsToolRuntime(
 	cwd: string,
@@ -245,7 +223,6 @@ export function createSymbolsToolRuntime(
 		return {
 			workspaceRoot,
 			router: injected.router,
-			index: injected.index,
 			getStatus:
 				injected.getStatus ??
 				(() => ({
@@ -261,45 +238,29 @@ export function createSymbolsToolRuntime(
 	}
 
 	let workspaceRoot: string;
-	let canConstructRouter = true;
 	try {
 		workspaceRoot = normalizeWorkspaceRoot(cwd);
 	} catch (error) {
 		if (!(error instanceof InvalidWorkspaceRootError)) throw error;
 		workspaceRoot = normalizeWindowsWorkspaceRoot(cwd);
-		canConstructRouter = false;
 	}
-	const index = new CodeSymbolIndex({ cwd: workspaceRoot, agentDir: options?.agentDir });
-	if (!canConstructRouter) {
-		return {
-			workspaceRoot,
-			router: new DeferredDefaultRouter(workspaceRoot, index, options?.agentDir),
-			index,
-			getStatus: () => ({
-				workspaceRoot,
-				semanticConfigured: false,
-				semanticEnabled: false,
-				symbolStoreEntryCount: 0,
-				languageServers: [],
-			}),
-			hasSymbolId: () => false,
-			supportsSymbolIds: false,
-		};
-	}
-	const lightweight = new LightweightCodeIntelligenceBackend({ workspaceRoot, index, agentDir: options?.agentDir });
-	const router = new CodeIntelligenceRouter({ workspaceRoot, lightweight, semantic: undefined });
+	const lazy = new LazyCodeIntelligenceRuntime(workspaceRoot, options?.agentDir);
+	const router = new DeferredDefaultRouter(lazy);
 	return {
 		workspaceRoot,
 		router,
-		index,
-		getStatus: () => ({
-			workspaceRoot,
-			semanticConfigured: false,
-			semanticEnabled: false,
-			symbolStoreEntryCount: 0,
-			languageServers: [],
-		}),
-		hasSymbolId: () => false,
-		supportsSymbolIds: false,
+		getStatus: () =>
+			lazy.hasInstance()
+				? lazy.getRuntime().getStatus()
+				: {
+						workspaceRoot,
+						semanticConfigured: false,
+						semanticEnabled: false,
+						symbolStoreEntryCount: 0,
+						languageServers: [],
+					},
+		hasSymbolId: (symbolId: string) =>
+			lazy.hasInstance() ? lazy.getRuntime().services.hasSymbolId(symbolId) : false,
+		supportsSymbolIds: true,
 	};
 }

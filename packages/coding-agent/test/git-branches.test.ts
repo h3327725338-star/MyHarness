@@ -29,6 +29,10 @@ function createRepository(): { root: string; tempRoot: string } {
 	runGit(root, ["init", "-b", "main"]);
 	runGit(root, ["config", "user.name", "MyHarness Test"]);
 	runGit(root, ["config", "user.email", "myharness-test@example.invalid"]);
+	// A user-global core.hooksPath makes every commit here pay ~1.3s of external
+	// hook process startup, which is pure noise for these branch tests. An empty
+	// local value overrides the global one, so the fixture repository stays hook-free.
+	runGit(root, ["config", "core.hooksPath", ""]);
 	runGit(root, ["add", "."]);
 	runGit(root, ["commit", "-m", "initial"]);
 	return { root, tempRoot };

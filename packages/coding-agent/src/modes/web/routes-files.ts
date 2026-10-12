@@ -1,7 +1,18 @@
 /** Web API routes for the workspace file browser and for change/diff review. */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	realpathSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -16,6 +27,12 @@ import {
 } from "../../session/artifacts/store.ts";
 import { listMemoryFiles, migrateLegacyMemories, restoreMemoryArchive } from "../../session/memory/store.ts";
 import type { RunChangeCardFile } from "./changes.ts";
+import {
+	getCachedWorktreeChangesSync,
+	invalidateWorktreeCache,
+	setCachedWorktreeChanges,
+	WORKTREE_CACHE_TTL_MS,
+} from "./changes-stats.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -141,22 +158,67 @@ function fuzzyScore(query: string, target: string): number {
 	return score - t.length * 0.05;
 }
 
-/** Maps items with at most `limit` calls running at once, keeping the input order. */
-async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let next = 0;
-	const worker = async (): Promise<void> => {
-		while (next < items.length) {
-			const index = next++;
-			results[index] = await fn(items[index]);
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-	return results;
+// First-block size and cumulative window for GET /api/tool-output (chunked read of saved tool output).
+const TOOL_OUTPUT_DEFAULT_CHUNK = 512 * 1024;
+const TOOL_OUTPUT_MAX_TOTAL = 4 * 1024 * 1024;
+
+/**
+ * Length of the incomplete UTF-8 sequence at the end of `data` (0 when the last character is complete).
+ * Used to cut a byte block back to a character boundary so the next block decodes cleanly. Only the
+ * final 1..4 bytes are inspected: a lead byte is any byte that is not a `10xxxxxx` continuation.
+ */
+function utf8IncompleteTailBytes(data: Buffer): number {
+	if (data.length === 0) return 0;
+	let index = data.length - 1;
+	let continuation = 0;
+	while (index >= 0 && (data[index]! & 0xc0) === 0x80) {
+		index -= 1;
+		continuation += 1;
+		if (continuation > 3) return 0;
+	}
+	if (index < 0) return 0;
+	const lead = data[index]!;
+	let needed: number;
+	if ((lead & 0x80) === 0x00) return 0;
+	else if ((lead & 0xe0) === 0xc0) needed = 2;
+	else if ((lead & 0xf0) === 0xe0) needed = 3;
+	else if ((lead & 0xf8) === 0xf0) needed = 4;
+	else return 0;
+	return continuation + 1 < needed ? continuation + 1 : 0;
 }
 
 export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
-	const root = () => path.resolve(host.session.sessionManager.getCwd());
+	const currentCwd = () =>
+		typeof host.cwd === "string"
+			? host.cwd
+			: host.session?.sessionManager?.getCwd
+				? host.session.sessionManager.getCwd()
+				: "";
+	const root = () => path.resolve(currentCwd());
+
+	if (server && typeof server.route === "function") {
+		const originalRoute = server.route.bind(server);
+		server.route = (method, pattern, handler) => {
+			if (method === "POST" && pattern.startsWith("/api/git/")) {
+				return originalRoute(method, pattern, async (ctx) => {
+					try {
+						return await handler(ctx);
+					} finally {
+						const cwd = currentCwd();
+						invalidateWorktreeCache(cwd);
+						// /api/git/task/abort only signals the running task; it settles in the
+						// background after the handler returns. Invalidate once more after the
+						// cache TTL so a list fetched in between cannot survive the abort.
+						if (pattern === "/api/git/task/abort" && cwd) {
+							const timer = setTimeout(() => invalidateWorktreeCache(cwd), WORKTREE_CACHE_TTL_MS);
+							timer.unref?.();
+						}
+					}
+				});
+			}
+			return originalRoute(method, pattern, handler);
+		};
+	}
 
 	server.route("POST", "/api/files/local", async ({ body }) => {
 		const payload = body as { path?: unknown; action?: unknown; handler?: unknown } | null;
@@ -428,9 +490,34 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!allowed) throw new HttpError(403, "Only saved tool output can be read here");
 		const stat = statSync(real);
 		if (!stat.isFile()) throw new HttpError(400, "Not a file");
-		const buffer = readFileSync(real);
-		const limit = 4 * 1024 * 1024;
-		return { size: stat.size, truncated: buffer.length > limit, text: buffer.subarray(0, limit).toString("utf8") };
+		// Chunked first-block read: `limit` bytes from `offset` (512 KB default), opened and read at the
+		// offset instead of readFileSync on the whole file. The cumulative window stays 4 MB. A block that
+		// ends inside a UTF-8 sequence is cut back to the character boundary and `nextOffset` follows it,
+		// so every caller resumes on clean text. Out-of-range offsets answer with an empty block, no throw.
+		const size = stat.size;
+		const offsetParam = Number(url.searchParams.get("offset"));
+		const offset = Number.isFinite(offsetParam) && offsetParam > 0 ? Math.floor(offsetParam) : 0;
+		const limitParam = Number(url.searchParams.get("limit"));
+		const limit = Math.min(
+			Number.isFinite(limitParam) && limitParam > 0 ? Math.floor(limitParam) : TOOL_OUTPUT_DEFAULT_CHUNK,
+			TOOL_OUTPUT_DEFAULT_CHUNK,
+		);
+		const window = Math.min(size, TOOL_OUTPUT_MAX_TOTAL);
+		if (offset >= size) return { size, truncated: false, nextOffset: size, text: "" };
+		if (offset >= window) return { size, truncated: true, nextOffset: window, text: "" };
+		const end = Math.min(offset + limit, window);
+		const chunk = Buffer.allocUnsafe(end - offset);
+		let bytesRead = 0;
+		const fd = openSync(real, "r");
+		try {
+			bytesRead = readSync(fd, chunk, 0, chunk.length, offset);
+		} finally {
+			closeSync(fd);
+		}
+		const reached = offset + bytesRead;
+		const cut = reached >= size ? 0 : utf8IncompleteTailBytes(chunk.subarray(0, bytesRead));
+		const nextOffset = reached - cut;
+		return { size, truncated: nextOffset < size, nextOffset, text: chunk.toString("utf8", 0, bytesRead - cut) };
 	});
 
 	// ---- Changes / Diff ---------------------------------------------------------
@@ -443,15 +530,21 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		}
 		const checkpoint = host.session.getGitCheckpoint();
 		if (scope === "worktree") {
-			const listed = await host.tracker.listWorktreeChanges();
+			const cwd = currentCwd();
+			const fresh = url.searchParams.get("fresh") === "1";
+			const cached = fresh ? undefined : getCachedWorktreeChangesSync(cwd);
+			if (cached?.files) {
+				return { scope, files: cached.files, total: cached.changes.length, error: cached.error ?? null };
+			}
+			const listed = await host.tracker.listWorktreeChanges(fresh ? { forceRefresh: true } : undefined);
 			const root = listed.repositoryRoot;
-			const files = root
-				? await mapLimited(
-						listed.changes.slice(0, 300),
-						8,
-						async (change) => (await host.tracker.diffForWorktreeFile(root, change)).summary,
-					)
-				: [];
+			const files = root ? await host.tracker.batchWorktreeStats(root, listed.changes.slice(0, 300)) : [];
+			setCachedWorktreeChanges(cwd, {
+				repositoryRoot: listed.repositoryRoot,
+				changes: listed.changes,
+				files,
+				error: listed.error,
+			});
 			return { scope, files, total: listed.changes.length, error: listed.error ?? null };
 		}
 		const runParam = url.searchParams.get("runId");
@@ -487,10 +580,22 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			return { summary, history: diffs.get(file) ?? [] };
 		}
 		if (scope === "worktree") {
-			const listed = await host.tracker.listWorktreeChanges();
-			const change = listed.changes.find((candidate) => candidate.path === file);
-			if (!change || !listed.repositoryRoot) throw new HttpError(404, "No such change");
-			return host.tracker.diffForWorktreeFile(listed.repositoryRoot, change);
+			const cwd = currentCwd();
+			const fresh = url.searchParams.get("fresh") === "1";
+			let cached = fresh ? undefined : getCachedWorktreeChangesSync(cwd);
+			if (!cached) {
+				const freshListed = await host.tracker.listWorktreeChanges(fresh ? { forceRefresh: true } : undefined);
+				cached = setCachedWorktreeChanges(cwd, freshListed);
+			}
+			let change = cached.changesByPath.get(file);
+			if (!change && cached.repositoryRoot) {
+				invalidateWorktreeCache(cwd);
+				const freshListed = await host.tracker.listWorktreeChanges({ forceRefresh: true });
+				cached = setCachedWorktreeChanges(cwd, freshListed);
+				change = cached.changesByPath.get(file);
+			}
+			if (!change || !cached.repositoryRoot) throw new HttpError(404, "No such change");
+			return host.tracker.diffForWorktreeFile(cached.repositoryRoot, change);
 		}
 		const runParam = url.searchParams.get("runId");
 		const runId = runParam ? Number(runParam) : host.tracker.latestRunId();

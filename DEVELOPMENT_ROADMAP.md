@@ -48,7 +48,7 @@
 
 目标：保持工具执行 contract、presentation、symbols backend 和 TUI 展示层解耦。
 
-验收条件：工具结果可脱敏、可持久化；symbols 明确 lightweight/semantic/runtime source；TUI component 遵守 render/invalidate/focus/overlay contract，并有对应终端测试。
+验收条件：工具结果可脱敏、可持久化；symbols 明确 semantic/LSP/runtime source；纯文本检索使用 grep/find/ls；TUI component 遵守 render/invalidate/focus/overlay contract，并有对应终端测试。
 
 ## 每项后续开发都必须留下的记录
 

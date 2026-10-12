@@ -12,164 +12,65 @@ import type { SymbolStoreApi, SymbolStoreRecord } from "../../store/types.ts";
 import type {
 	CallHierarchyResult,
 	CodeSymbol,
+	CodeSymbolTreeNode,
 	DefinitionResult,
 	DiagnosticsResult,
 	FileSymbolsResult,
 	HoverResult,
 	ImplementationsResult,
-	IntelligenceResult,
+	IntelligenceSource,
 	ReferencesResult,
 	ResolvedSymbolResult,
-	SymbolQuery,
-	SymbolSearchResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
 } from "../../types.ts";
-import type { LightweightBackendApi, LightweightQueryOptions } from "../lightweight/types.ts";
 import { CodeIntelligenceRouterError } from "./errors.ts";
-import {
-	backendForTarget,
-	classifyFileSymbolsFallback,
-	classifyWorkspaceSymbolsFallback,
-	type FallbackDecision,
-	isAbortError,
-	normalizeRoutingMode,
-	type RouterBackend,
-	type RouterOperation,
-} from "./policy.ts";
+import { backendForTarget, type RouterBackend, type RouterOperation } from "./policy.ts";
 import type {
 	CodeIntelligenceRouterAdvancedApi,
 	CodeIntelligenceRouterOptions,
 	CodeIntelligenceRoutingOptions,
 } from "./types.ts";
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-	if (signal?.aborted) throw new DOMException("The operation was aborted", "AbortError");
-}
-
-function cloneWithFallback<T>(result: IntelligenceResult<T>, decision: FallbackDecision): IntelligenceResult<T> {
-	return {
-		items: [...result.items],
-		meta: {
-			...result.meta,
-			source: "lightweight",
-			warnings: result.meta.warnings === undefined ? undefined : [...result.meta.warnings],
-			fallback: { reason: decision.reason, message: decision.message },
-		},
-	};
-}
-
 export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi {
 	readonly workspaceRoot: string;
-	private readonly lightweight: LightweightBackendApi;
 	private readonly semantic: SemanticBackendApi | undefined;
 	private readonly symbolStore: SymbolStoreApi | undefined;
 
 	constructor(options: CodeIntelligenceRouterOptions) {
 		this.workspaceRoot = normalizeWorkspaceRoot(options.workspaceRoot);
-		this.lightweight = options.lightweight;
 		this.semantic = options.semantic;
 		this.symbolStore = options.symbolStore;
 	}
 
-	async findSymbol(query: SymbolQuery, options: CodeIntelligenceRoutingOptions = {}): Promise<SymbolSearchResult> {
-		const normalized = this.normalizeOptions(options, "find_symbol");
-		if (normalized.mode === "semantic") {
-			throw this.error(
-				"unsupported_operation",
-				"semantic backend does not support workspace symbol search",
-				"find_symbol",
-			);
-		}
-		this.requireLightweightCompatibleOptions(normalized, "find_symbol");
-		const result = await this.lightweight.findSymbol(query, this.lightweightOptions(normalized));
-		this.observeSymbols(result.items, result.meta.source, normalized);
-		return result;
-	}
-
 	async fileSymbols(filePath: string, options: CodeIntelligenceRoutingOptions = {}): Promise<FileSymbolsResult> {
-		const normalized = this.normalizeOptions(options, "file_symbols");
-		if (normalized.mode === "lightweight") {
-			this.requireLightweightCompatibleOptions(normalized, "file_symbols");
-			const result = await this.lightweight.fileSymbols(filePath, this.lightweightOptions(normalized));
-			this.observeFileSymbols(filePath, result);
-			return result;
-		}
-
-		if (normalized.mode === "semantic") {
-			const result = await this.requireSemantic("file_symbols").fileSymbols(
-				filePath,
-				this.semanticOptions(normalized),
-			);
-			this.observeFileSymbols(filePath, result);
-			return result;
-		}
-		if (!this.semantic) {
-			if (normalized.definitionId !== undefined) throw this.semanticUnavailable("file_symbols");
-			return this.runFallback(filePath, normalized, this.semanticUnavailable("file_symbols"), {
-				reason: "semantic_not_configured",
-				message: "semantic backend is not configured",
-			});
-		}
-
-		try {
-			const result = await this.semantic.fileSymbols(filePath, this.semanticOptions(normalized));
-			this.observeFileSymbols(filePath, result);
-			return result;
-		} catch (cause) {
-			const decision = classifyFileSymbolsFallback(cause, normalized.definitionId, normalized.signal);
-			if (!decision) throw cause;
-			return this.runFallback(filePath, normalized, cause, decision);
-		}
+		options.signal?.throwIfAborted();
+		const result = await this.requireSemantic("file_symbols").fileSymbols(filePath, this.semanticOptions(options));
+		this.observeFileSymbols(filePath, result);
+		return result;
 	}
 
 	async workspaceSymbols(
 		query: string,
 		options: CodeIntelligenceRoutingOptions = {},
 	): Promise<WorkspaceSymbolsResult> {
-		const normalized = this.normalizeOptions(options, "workspace_symbols");
-		if (normalized.mode === "lightweight") {
-			const result = await this.lightweight.findSymbol(
-				{
-					query,
-					path: normalized.path,
-					kinds: normalized.kinds ? [...normalized.kinds] : undefined,
-					limit: normalized.limit,
-				},
-				this.lightweightOptions(normalized),
-			);
-			this.observeSymbols(result.items, result.meta.source, normalized);
-			return result;
-		}
-		if (!this.semantic) {
-			if (normalized.mode === "semantic") throw this.semanticUnavailable("workspace_symbols");
-			return this.runWorkspaceFallback(query, normalized, this.semanticUnavailable("workspace_symbols"), {
-				reason: "semantic_not_configured",
-				message: "semantic backend is not configured",
-			});
-		}
-		try {
-			const result = await this.requireAdvancedSemantic("workspace_symbols").workspaceSymbols(
-				query,
-				this.semanticOptions({
-					...normalized,
-					limit: normalized.limit,
-				}),
-			);
-			const filtered = this.filterWorkspaceSymbols(result, normalized);
-			this.observeSymbols(filtered.items, filtered.meta.source, normalized);
-			return filtered;
-		} catch (cause) {
-			const decision = classifyWorkspaceSymbolsFallback(cause, normalized.signal);
-			if (!decision || normalized.mode === "semantic") throw cause;
-			return this.runWorkspaceFallback(query, normalized, cause, decision);
-		}
+		options.signal?.throwIfAborted();
+		const result = await this.requireAdvancedSemantic("workspace_symbols").workspaceSymbols(
+			query,
+			this.semanticOptions({
+				...options,
+				limit: options.limit,
+			}),
+		);
+		const filtered = this.filterWorkspaceSymbols(result, options);
+		this.observeSymbols(filtered.items, filtered.meta.source, options);
+		return filtered;
 	}
 
 	async resolveSymbol(symbolId: string, options: CodeIntelligenceRoutingOptions = {}): Promise<ResolvedSymbolResult> {
-		const normalized = this.normalizeOptions(options, "resolve_symbol");
-		const resolved = await this.resolveStoredSymbol(symbolId, normalized, "resolve_symbol");
+		options.signal?.throwIfAborted();
+		const resolved = await this.resolveStoredSymbol(symbolId, options, "resolve_symbol");
 		return {
 			items: [resolved.symbol],
 			meta: {
@@ -181,8 +82,8 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 	}
 
 	async hover(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<HoverResult> {
-		return this.routeAdvancedTarget("hover", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("hover").hover(position, this.semanticOptions(normalized)),
+		return this.routeAdvancedTarget("hover", target, options, (position, opts) =>
+			this.requireAdvancedSemantic("hover").hover(position, this.semanticOptions(opts)),
 		);
 	}
 
@@ -190,13 +91,13 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		target: SymbolTarget,
 		options: CodeIntelligenceRoutingOptions = {},
 	): Promise<CallHierarchyResult> {
-		const result = await this.routeAdvancedTarget("incoming_calls", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("incoming_calls").incomingCalls(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("incoming_calls", target, options, (position, opts) =>
+			this.requireAdvancedSemantic("incoming_calls").incomingCalls(position, this.semanticOptions(opts)),
 		);
 		this.observeSymbols(
 			result.items.map((edge) => edge.symbol),
 			result.meta.source,
-			this.normalizeOptions(options, "incoming_calls"),
+			options,
 		);
 		return result;
 	}
@@ -205,30 +106,30 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		target: SymbolTarget,
 		options: CodeIntelligenceRoutingOptions = {},
 	): Promise<CallHierarchyResult> {
-		const result = await this.routeAdvancedTarget("outgoing_calls", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("outgoing_calls").outgoingCalls(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("outgoing_calls", target, options, (position, opts) =>
+			this.requireAdvancedSemantic("outgoing_calls").outgoingCalls(position, this.semanticOptions(opts)),
 		);
 		this.observeSymbols(
 			result.items.map((edge) => edge.symbol),
 			result.meta.source,
-			this.normalizeOptions(options, "outgoing_calls"),
+			options,
 		);
 		return result;
 	}
 
 	async supertypes(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<TypeHierarchyResult> {
-		const result = await this.routeAdvancedTarget("supertypes", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("supertypes").supertypes(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("supertypes", target, options, (position, opts) =>
+			this.requireAdvancedSemantic("supertypes").supertypes(position, this.semanticOptions(opts)),
 		);
-		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "supertypes"));
+		this.observeSymbols(result.items, result.meta.source, options);
 		return result;
 	}
 
 	async subtypes(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<TypeHierarchyResult> {
-		const result = await this.routeAdvancedTarget("subtypes", target, options, (position, normalized) =>
-			this.requireAdvancedSemantic("subtypes").subtypes(position, this.semanticOptions(normalized)),
+		const result = await this.routeAdvancedTarget("subtypes", target, options, (position, opts) =>
+			this.requireAdvancedSemantic("subtypes").subtypes(position, this.semanticOptions(opts)),
 		);
-		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "subtypes"));
+		this.observeSymbols(result.items, result.meta.source, options);
 		return result;
 	}
 
@@ -237,26 +138,16 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			"find_definition",
 			target,
 			options,
-			(backend, normalized, effectiveTarget) =>
-				backend === "semantic"
-					? this.requireSemantic("find_definition").findDefinition(
-							effectiveTarget,
-							this.semanticOptions(normalized),
-						)
-					: this.lightweight.findDefinition(effectiveTarget, this.lightweightOptions(normalized)),
+			(_backend, opts, effectiveTarget) =>
+				this.requireSemantic("find_definition").findDefinition(effectiveTarget, this.semanticOptions(opts)),
 		);
-		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "find_definition"));
+		this.observeSymbols(result.items, result.meta.source, options);
 		return result;
 	}
 
 	async findReferences(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<ReferencesResult> {
-		return this.routeTargetOperation("find_references", target, options, (backend, normalized, effectiveTarget) =>
-			backend === "semantic"
-				? this.requireSemantic("find_references").findReferences(
-						effectiveTarget,
-						this.semanticReferencesOptions(normalized),
-					)
-				: this.lightweight.findReferences(effectiveTarget, this.lightweightOptions(normalized)),
+		return this.routeTargetOperation("find_references", target, options, (_backend, opts, effectiveTarget) =>
+			this.requireSemantic("find_references").findReferences(effectiveTarget, this.semanticReferencesOptions(opts)),
 		);
 	}
 
@@ -268,30 +159,19 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			"find_implementations",
 			target,
 			options,
-			(backend, normalized, effectiveTarget) =>
-				backend === "semantic"
-					? this.requireSemantic("find_implementations").findImplementations(
-							effectiveTarget,
-							this.semanticOptions(normalized),
-						)
-					: Promise.reject(
-							this.error(
-								"unsupported_operation",
-								"lightweight backend does not provide implementation semantics",
-								"find_implementations",
-							),
-						),
+			(_backend, opts, effectiveTarget) =>
+				this.requireSemantic("find_implementations").findImplementations(
+					effectiveTarget,
+					this.semanticOptions(opts),
+				),
 		);
-		this.observeSymbols(result.items, result.meta.source, this.normalizeOptions(options, "find_implementations"));
+		this.observeSymbols(result.items, result.meta.source, options);
 		return result;
 	}
 
 	async getDiagnostics(filePath: string, options: CodeIntelligenceRoutingOptions = {}): Promise<DiagnosticsResult> {
-		const normalized = this.normalizeOptions(options, "diagnostics");
-		if (normalized.mode === "lightweight") {
-			throw this.error("unsupported_operation", "lightweight backend does not provide diagnostics", "diagnostics");
-		}
-		return this.requireSemantic("diagnostics").getDiagnostics(filePath, this.semanticOptions(normalized));
+		options.signal?.throwIfAborted();
+		return this.requireSemantic("diagnostics").getDiagnostics(filePath, this.semanticOptions(options));
 	}
 
 	private async routeTargetOperation<T>(
@@ -304,7 +184,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			target: SymbolTarget,
 		) => Promise<T>,
 	): Promise<T> {
-		const normalized = this.normalizeOptions(options, operation);
+		options.signal?.throwIfAborted();
 		let effectiveTarget = target;
 		let backend = backendForTarget(operation, target);
 		if (target.type === "symbol_id") {
@@ -315,27 +195,14 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 					operation,
 				);
 			}
-			const resolved = await this.resolveStoredSymbol(target.symbolId, normalized, operation);
+			const resolved = await this.resolveStoredSymbol(target.symbolId, options, operation);
 			effectiveTarget = resolved.target;
 			backend = resolved.backend;
 		}
 		if (backend === "unsupported") {
 			throw this.error("unsupported_target", `${operation} does not support target type ${target.type}`, operation);
 		}
-		if (normalized.mode === "semantic" && backend === "lightweight") {
-			throw this.error("unsupported_target", `semantic mode does not support target type ${target.type}`, operation);
-		}
-		if (normalized.mode === "lightweight" && backend === "semantic") {
-			throw this.error(
-				"unsupported_target",
-				`lightweight mode does not support target type ${target.type}`,
-				operation,
-			);
-		}
-		if (backend === "lightweight") {
-			this.requireLightweightCompatibleOptions(normalized, operation);
-		}
-		return call(backend, normalized, effectiveTarget);
+		return call(backend, options, effectiveTarget);
 	}
 
 	private async routeAdvancedTarget<T>(
@@ -347,38 +214,9 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			options: CodeIntelligenceRoutingOptions,
 		) => Promise<T>,
 	): Promise<T> {
-		const normalized = this.normalizeOptions(options, operation);
-		if (normalized.mode === "lightweight") {
-			throw this.error("unsupported_operation", `${operation} requires the semantic backend`, operation);
-		}
-		const position = await this.resolvePrecisePosition(target, normalized, operation);
-		return call(position, normalized);
-	}
-
-	private normalizeOptions(
-		options: CodeIntelligenceRoutingOptions,
-		operation: string,
-	): CodeIntelligenceRoutingOptions & { readonly mode: "auto" | "semantic" | "lightweight" } {
-		try {
-			return { ...options, mode: normalizeRoutingMode(options.mode) };
-		} catch (cause) {
-			throw this.error(
-				"invalid_routing_options",
-				"routing mode must be auto, semantic, or lightweight",
-				operation,
-				cause,
-			);
-		}
-	}
-
-	private requireLightweightCompatibleOptions(options: CodeIntelligenceRoutingOptions, operation: string): void {
-		if (options.definitionId !== undefined) {
-			throw this.error(
-				"invalid_routing_options",
-				"definitionId requires a semantic-capable routing path",
-				operation,
-			);
-		}
+		options.signal?.throwIfAborted();
+		const position = await this.resolvePrecisePosition(target, options, operation);
+		return call(position, options);
 	}
 
 	private requireSemantic(operation: string): SemanticBackendApi {
@@ -419,13 +257,9 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		};
 	}
 
-	private lightweightOptions(options: CodeIntelligenceRoutingOptions): LightweightQueryOptions {
-		return { signal: options.signal, limit: options.limit };
-	}
-
 	private observeSymbols(
 		symbols: readonly CodeSymbol[],
-		source: "semantic" | "lightweight",
+		source: IntelligenceSource | "lightweight",
 		options: CodeIntelligenceRoutingOptions,
 	): void {
 		if (!this.symbolStore || symbols.length === 0) return;
@@ -451,38 +285,8 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		});
 	}
 
-	private flattenTree(node: import("../../types.ts").CodeSymbolTreeNode): CodeSymbol[] {
+	private flattenTree(node: CodeSymbolTreeNode): CodeSymbol[] {
 		return [node.symbol, ...node.children.flatMap((child) => this.flattenTree(child))];
-	}
-
-	private async runWorkspaceFallback(
-		query: string,
-		options: CodeIntelligenceRoutingOptions,
-		primaryCause: unknown,
-		decision: FallbackDecision,
-	): Promise<WorkspaceSymbolsResult> {
-		if (options.signal?.aborted) throwIfAborted(options.signal);
-		if (isAbortError(primaryCause)) throw primaryCause;
-		try {
-			const result = await this.lightweight.findSymbol(
-				{ query, path: options.path, kinds: options.kinds ? [...options.kinds] : undefined, limit: options.limit },
-				this.lightweightOptions(options),
-			);
-			throwIfAborted(options.signal);
-			const output = cloneWithFallback(result, decision);
-			this.observeSymbols(output.items, output.meta.source, options);
-			return output;
-		} catch (fallbackCause) {
-			if (options.signal?.aborted || isAbortError(fallbackCause)) throw fallbackCause;
-			throw this.error(
-				"fallback_failed",
-				"workspace symbol fallback failed after the primary semantic failure",
-				"workspace_symbols",
-				primaryCause,
-				primaryCause,
-				fallbackCause,
-			);
-		}
 	}
 
 	private async resolvePrecisePosition(
@@ -491,44 +295,22 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		operation: string,
 	): Promise<Extract<SymbolTarget, { type: "position" }>> {
 		if (target.type === "position") return target;
-		const resolved =
-			target.type === "symbol_id"
-				? await this.resolveStoredSymbol(target.symbolId, options, operation)
-				: await this.resolveNamePath(target, options, operation);
-		if (!resolved.symbol.selectionRange) {
-			throw this.error(
-				"unsupported_target",
-				`${operation} requires a precise selection range; this symbol only has line-level precision`,
-				operation,
-			);
+		if (target.type === "symbol_id") {
+			const resolved = await this.resolveStoredSymbol(target.symbolId, options, operation);
+			if (!resolved.symbol.selectionRange) {
+				throw this.error(
+					"unsupported_target",
+					`${operation} requires a precise selection range; this symbol only has line-level precision`,
+					operation,
+				);
+			}
+			return {
+				type: "position",
+				path: resolved.symbol.path,
+				position: resolved.symbol.selectionRange.start,
+			};
 		}
-		return {
-			type: "position",
-			path: resolved.symbol.path,
-			position: resolved.symbol.selectionRange.start,
-		};
-	}
-
-	private async resolveNamePath(
-		target: Extract<SymbolTarget, { type: "name_path" }>,
-		options: CodeIntelligenceRoutingOptions,
-		operation: string,
-	): Promise<{
-		symbol: CodeSymbol;
-		source: "semantic" | "lightweight";
-		completeness: "complete" | "partial";
-		warnings: string[];
-		target: SymbolTarget;
-		backend: Exclude<RouterBackend, "unsupported">;
-	}> {
-		if (!this.symbolStore)
-			throw this.error("symbol_id_resolution_unavailable", "symbol store is not configured", operation);
-		const candidates = this.symbolStore.findCandidates({ path: target.path, namePath: target.namePath });
-		if (candidates.length === 0)
-			throw this.error("unknown_symbol_id", `no current symbol matches name_path ${target.namePath}`, operation);
-		if (candidates.length > 1)
-			throw this.error("ambiguous_target", `name_path ${target.namePath} matches multiple symbols`, operation);
-		return this.resolveStoredSymbol(candidates[0].symbol.id, options, operation);
+		throw this.error("unsupported_target", `${operation} does not support target type ${target.type}`, operation);
 	}
 
 	private async resolveStoredSymbol(
@@ -537,7 +319,7 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		operation: string,
 	): Promise<{
 		symbol: CodeSymbol;
-		source: "semantic" | "lightweight";
+		source: "semantic";
 		completeness: "complete" | "partial";
 		warnings: string[];
 		target: SymbolTarget;
@@ -554,21 +336,11 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			}
 			throw cause;
 		}
-		const backend = record.source === "semantic" ? "semantic" : "lightweight";
-		if (options.mode === "semantic" && backend === "lightweight") {
-			throw this.error("unsupported_target", "semantic mode cannot use a lightweight-only symbol_id", operation);
-		}
-		if (options.mode === "lightweight" && backend === "semantic") {
-			throw this.error("unsupported_target", "lightweight mode cannot use a semantic symbol_id", operation);
-		}
 		let result: FileSymbolsResult;
 		try {
-			result =
-				backend === "semantic"
-					? await this.requireSemantic(operation).fileSymbols(record.symbol.path, {
-							...this.semanticOptions(options),
-						})
-					: await this.lightweight.fileSymbols(record.symbol.path, this.lightweightOptions(options));
+			result = await this.requireSemantic(operation).fileSymbols(record.symbol.path, {
+				...this.semanticOptions(options),
+			});
 		} catch (cause) {
 			if (
 				cause instanceof SemanticBackendError &&
@@ -602,46 +374,24 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		});
 		return {
 			symbol: current,
-			source: result.meta.source,
+			source: "semantic",
 			completeness: result.meta.completeness,
 			warnings: result.meta.warnings ? [...result.meta.warnings] : [],
-			target:
-				result.meta.source === "semantic" && current.selectionRange
-					? { type: "position", path: current.path, position: current.selectionRange.start }
-					: { type: "name_path", path: current.path, namePath: current.namePath },
-			backend,
+			target: {
+				type: "position",
+				path: current.path,
+				position: current.selectionRange?.start ??
+					current.bodyRange?.start ?? {
+						line: current.line ?? 0,
+						character: 0,
+					},
+			},
+			backend: "semantic",
 		};
 	}
 
 	private semanticUnavailable(operation: string): CodeIntelligenceRouterError {
 		return this.error("semantic_backend_unavailable", "semantic backend is not configured", operation);
-	}
-
-	private async runFallback<T>(
-		filePath: string,
-		options: CodeIntelligenceRoutingOptions,
-		primaryCause: unknown,
-		decision: FallbackDecision,
-	): Promise<IntelligenceResult<T>> {
-		if (options.signal?.aborted) throwIfAborted(options.signal);
-		if (isAbortError(primaryCause)) throw primaryCause;
-		try {
-			const result = await this.lightweight.fileSymbols(filePath, this.lightweightOptions(options));
-			throwIfAborted(options.signal);
-			const output = cloneWithFallback(result as IntelligenceResult<T>, decision);
-			this.observeFileSymbols(filePath, output as FileSymbolsResult);
-			return output;
-		} catch (fallbackCause) {
-			if (options.signal?.aborted || isAbortError(fallbackCause)) throw fallbackCause;
-			throw this.error(
-				"fallback_failed",
-				"semantic fallback failed after the primary semantic failure",
-				"file_symbols",
-				primaryCause,
-				primaryCause,
-				fallbackCause,
-			);
-		}
 	}
 
 	private filterWorkspaceSymbols(

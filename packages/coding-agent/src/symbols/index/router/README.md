@@ -1,37 +1,43 @@
 # Code Intelligence Router
 
-`CodeIntelligenceRouter` binds one normalized workspace root and routes unified
-Code Intelligence domain queries to injected backends. It owns routing policy
-only:
+`CodeIntelligenceRouter` binds one normalized workspace root and routes Symbols
+queries to the injected semantic/LSP backend. It owns routing policy and
+Symbol Store coordination only:
 
-- `LspSemanticBackend` owns semantic sessions, document synchronization, and
-  the injected `LanguageServerManager` owns server lifecycle.
-- `LightweightCodeIntelligenceBackend` owns the `CodeSymbolIndex` adapter and
-  converts legacy symbols and references into the unified domain.
-- The router does not construct a manager, semantic backend, or `LspClient`.
-- The router has no global singleton, result cache, health cooldown, ranking, or
+- `LspSemanticBackend` owns document synchronization, diagnostics and conversion
+  from LSP responses to the semantic domain model.
+- `LanguageServerManager` owns language-server selection, process lifetime,
+  workspace isolation and crash replacement.
+- `SymbolStore` owns observed `symbol_id` records used to resolve later queries.
+- The router does not construct a manager, semantic backend or `LspClient`, and
+  it has no lexical fallback, result cache, health cooldown, ranking or
   cross-backend fusion.
 
-## Routing matrix
+## Routing policy
 
-| Operation | `auto` | `semantic` | `lightweight` |
-| --- | --- | --- | --- |
-| `findSymbol` | lightweight | unsupported | lightweight |
-| `fileSymbols` | semantic, safe fallback only | semantic | lightweight |
-| `findDefinition(position)` | semantic | semantic | unsupported |
-| `findDefinition(name_path)` | lightweight | unsupported | lightweight |
-| `findDefinition(symbol_id)` | unsupported | unsupported | unsupported |
-| `findReferences(position)` | semantic | semantic | unsupported |
-| `findReferences(name_path)` | lightweight | unsupported | lightweight |
-| `findReferences(symbol_id)` | unsupported | unsupported | unsupported |
-| `findImplementations(position)` | semantic | semantic | unsupported |
-| `findImplementations(name_path/symbol_id)` | unsupported | unsupported | unsupported |
-| `getDiagnostics` | semantic | semantic | unsupported |
+There is one query backend: `semantic`. The router does not expose an `auto`
+or fallback mode. Unsupported targets and unavailable semantic services return
+structured router/backend errors instead of lexical results.
 
-Position targets never fall back to lexical names. Lightweight references are
-explicitly lexical and do not claim target identity. A real fallback is only
-used for `auto` `fileSymbols` when semantic is not configured, document symbols
-are unsupported, the server is genuinely unavailable, or the position encoding
-is unsupported. Semantic empty and partial results, initialize/start/request/
-timeout/abort/synchronization/protocol/conversion errors, and explicit
-`definitionId` failures remain errors.
+| Operation | Accepted input | Backend / behavior |
+| --- | --- | --- |
+| `fileSymbols` | workspace-relative file path | semantic document symbols |
+| `workspaceSymbols` | query, with optional path/kind filters | semantic workspace symbols |
+| `resolveSymbol` | stored `symbol_id` | refreshes semantic file symbols and resolves through Symbol Store |
+| `hover` | position or stored `symbol_id` | semantic hover at a precise position |
+| `findDefinition` | position or stored `symbol_id` | semantic definition |
+| `findReferences` | position or stored `symbol_id` | semantic references |
+| `findImplementations` | position or stored `symbol_id` | semantic implementations |
+| `diagnostics` | workspace-relative file path | semantic diagnostics |
+| `incomingCalls` | position or stored `symbol_id` | semantic call hierarchy |
+| `outgoingCalls` | position or stored `symbol_id` | semantic call hierarchy |
+| `supertypes` | position or stored `symbol_id` | semantic type hierarchy |
+| `subtypes` | position or stored `symbol_id` | semantic type hierarchy |
+
+Name-based targets are not part of the Symbols tool contract. A stored
+`symbol_id` is resolved against the current semantic file symbols before a
+position-based operation runs; stale or unresolvable IDs remain errors.
+
+The semantic backend's empty or partial result is preserved as such. Initialize,
+start, request, timeout, abort, synchronization, protocol and conversion errors
+remain structured errors and are never silently replaced with lexical output.

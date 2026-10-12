@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	closeSync,
+	type Dir,
 	type Dirent,
 	fsyncSync,
 	lstatSync,
@@ -11,7 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { lstat, open as openAsync, rename, unlink } from "node:fs/promises";
+import { lstat, open as openAsync, opendir, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 type WriteOptions = {
@@ -33,6 +34,12 @@ export interface AtomicTempCleanupOptions {
 	nowMs?: number;
 	/** Injectable liveness check for deterministic recovery tests. */
 	isProcessAlive?: (pid: number) => boolean;
+}
+
+export interface AtomicTempCleanupAsyncOptions extends AtomicTempCleanupOptions {
+	signal?: AbortSignal;
+	yieldToEventLoop?: () => Promise<void> | void;
+	batchSize?: number;
 }
 
 export interface AtomicTempCleanupResult {
@@ -59,6 +66,58 @@ function defaultIsProcessAlive(pid: number): boolean {
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+export function isRootEligibleForScan(stats: Stats): boolean {
+	return !stats.isSymbolicLink() && stats.isDirectory();
+}
+
+export interface AtomicTempCandidate {
+	name: string;
+	directory: string;
+	resolvedRoot: string;
+	mtimeMs: number;
+	nowMs: number;
+	minAgeMs: number;
+	isProcessAlive: (pid: number) => boolean;
+}
+
+export type AtomicTempEvaluation =
+	| { status: "not_temp" }
+	| { status: "ignored" }
+	| { status: "tooNew"; filePath: string }
+	| { status: "active"; filePath: string }
+	| { status: "eligible"; filePath: string; targetPath: string };
+
+export function evaluateAtomicTempCandidate(candidate: AtomicTempCandidate): AtomicTempEvaluation {
+	const match = ATOMIC_TEMP_NAME.exec(candidate.name);
+	if (!match) return { status: "not_temp" };
+
+	const pid = Number(match[2]);
+	const targetPath = join(candidate.directory, match[1]!);
+	const filePath = join(candidate.directory, candidate.name);
+
+	if (!Number.isSafeInteger(pid) || pid <= 0 || !isPathInside(candidate.resolvedRoot, targetPath)) {
+		return { status: "ignored" };
+	}
+
+	const ageMs = candidate.nowMs - candidate.mtimeMs;
+	if (ageMs < candidate.minAgeMs) {
+		return { status: "tooNew", filePath };
+	}
+
+	if (candidate.isProcessAlive(pid)) {
+		return { status: "active", filePath };
+	}
+
+	return { status: "eligible", filePath, targetPath };
+}
+
+export function isAtomicTargetReclaimable(targetStats: Stats | undefined, errorCode?: string): boolean {
+	if (errorCode === "ENOENT") return true;
+	if (!targetStats) return false;
+	if (targetStats.isSymbolicLink() || targetStats.isDirectory()) return false;
+	return true;
 }
 
 /**
@@ -91,7 +150,7 @@ export function cleanupStaleAtomicWriteTemps(
 	} catch {
 		return result;
 	}
-	if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return result;
+	if (!isRootEligibleForScan(rootStats)) return result;
 
 	const visit = (directory: string): void => {
 		let entries: Dirent[];
@@ -127,36 +186,43 @@ export function cleanupStaleAtomicWriteTemps(
 			const match = ATOMIC_TEMP_NAME.exec(entry.name);
 			if (!match) continue;
 			result.scanned++;
-			const pid = Number(match[2]);
-			const targetPath = join(directory, match[1]!);
-			if (!Number.isSafeInteger(pid) || pid <= 0 || !isPathInside(resolvedRoot, targetPath)) {
+
+			const evaluation = evaluateAtomicTempCandidate({
+				name: entry.name,
+				directory,
+				resolvedRoot,
+				mtimeMs: stats.mtimeMs,
+				nowMs,
+				minAgeMs,
+				isProcessAlive,
+			});
+
+			if (evaluation.status === "ignored") {
 				result.ignored++;
 				continue;
 			}
-
-			const ageMs = nowMs - stats.mtimeMs;
-			if (ageMs < minAgeMs) {
-				result.tooNew.push(filePath);
+			if (evaluation.status === "tooNew") {
+				result.tooNew.push(evaluation.filePath);
 				continue;
 			}
-			if (isProcessAlive(pid)) {
-				result.active.push(filePath);
+			if (evaluation.status === "active") {
+				result.active.push(evaluation.filePath);
 				continue;
 			}
+			if (evaluation.status !== "eligible") continue;
 
+			const targetPath = evaluation.targetPath;
 			try {
 				const targetStats = lstatSync(targetPath);
-				if (targetStats.isSymbolicLink() || targetStats.isDirectory()) {
+				if (!isAtomicTargetReclaimable(targetStats)) {
 					result.ignored++;
 					continue;
 				}
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				if (!isAtomicTargetReclaimable(undefined, (error as NodeJS.ErrnoException).code)) {
 					result.ignored++;
 					continue;
 				}
-				// A temp for a target that was never installed is still safe to reclaim
-				// once its owner is gone and the grace period has elapsed.
 			}
 
 			try {
@@ -169,6 +235,156 @@ export function cleanupStaleAtomicWriteTemps(
 	};
 
 	visit(resolvedRoot);
+	return result;
+}
+
+/**
+ * Async version of cleanupStaleAtomicWriteTemps.
+ *
+ * Traverses using fs.promises.opendir with Dirent-level filtering, only
+ * lstat-ing files whose names match ATOMIC_TEMP_NAME. Yields to the event
+ * loop every batchSize items (default 256), and supports aborting via AbortSignal.
+ */
+export async function cleanupStaleAtomicWriteTempsAsync(
+	root: string,
+	options: AtomicTempCleanupAsyncOptions = {},
+): Promise<AtomicTempCleanupResult> {
+	const result: AtomicTempCleanupResult = {
+		scanned: 0,
+		removed: [],
+		active: [],
+		tooNew: [],
+		ignored: 0,
+		errors: [],
+	};
+	const resolvedRoot = resolve(root);
+	const minAgeMs = Math.max(0, options.minAgeMs ?? 10 * 60 * 1000);
+	const nowMs = options.nowMs ?? Date.now();
+	const isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
+	const signal = options.signal;
+	const batchSize = Math.max(1, options.batchSize ?? 256);
+	const yieldFn = options.yieldToEventLoop ?? (() => new Promise<void>((r) => setImmediate(r)));
+
+	if (signal?.aborted) return result;
+
+	let rootStats: Stats;
+	try {
+		rootStats = await lstat(resolvedRoot);
+	} catch {
+		return result;
+	}
+	if (!isRootEligibleForScan(rootStats)) return result;
+
+	let itemsProcessed = 0;
+
+	const visit = async (directory: string): Promise<void> => {
+		if (signal?.aborted) return;
+
+		let dirHandle: Dir;
+		try {
+			dirHandle = await opendir(directory);
+		} catch (error) {
+			result.errors.push(`${directory}: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+
+		try {
+			for await (const entry of dirHandle) {
+				if (signal?.aborted) return;
+
+				itemsProcessed++;
+				if (itemsProcessed % batchSize === 0) {
+					await yieldFn();
+					if (signal?.aborted) return;
+				}
+
+				if (entry.isSymbolicLink()) {
+					result.ignored++;
+					continue;
+				}
+				if (entry.isDirectory()) {
+					const childDir = join(directory, entry.name);
+					await visit(childDir);
+					continue;
+				}
+				if (!entry.isFile()) {
+					result.ignored++;
+					continue;
+				}
+
+				// Only lstat when filename matches ATOMIC_TEMP_NAME!
+				if (!ATOMIC_TEMP_NAME.test(entry.name)) continue;
+
+				const filePath = join(directory, entry.name);
+				let stats: Stats;
+				try {
+					stats = await lstat(filePath);
+				} catch {
+					result.ignored++;
+					continue;
+				}
+
+				if (stats.isSymbolicLink()) {
+					result.ignored++;
+					continue;
+				}
+				if (!stats.isFile()) {
+					result.ignored++;
+					continue;
+				}
+
+				result.scanned++;
+				const evaluation = evaluateAtomicTempCandidate({
+					name: entry.name,
+					directory,
+					resolvedRoot,
+					mtimeMs: stats.mtimeMs,
+					nowMs,
+					minAgeMs,
+					isProcessAlive,
+				});
+
+				if (evaluation.status === "ignored") {
+					result.ignored++;
+					continue;
+				}
+				if (evaluation.status === "tooNew") {
+					result.tooNew.push(evaluation.filePath);
+					continue;
+				}
+				if (evaluation.status === "active") {
+					result.active.push(evaluation.filePath);
+					continue;
+				}
+				if (evaluation.status !== "eligible") continue;
+
+				const targetPath = evaluation.targetPath;
+				try {
+					const targetStats = await lstat(targetPath);
+					if (!isAtomicTargetReclaimable(targetStats)) {
+						result.ignored++;
+						continue;
+					}
+				} catch (error) {
+					if (!isAtomicTargetReclaimable(undefined, (error as NodeJS.ErrnoException).code)) {
+						result.ignored++;
+						continue;
+					}
+				}
+
+				try {
+					await unlink(filePath);
+					result.removed.push(filePath);
+				} catch (error) {
+					result.errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+		} catch (error) {
+			result.errors.push(`${directory}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	};
+
+	await visit(resolvedRoot);
 	return result;
 }
 

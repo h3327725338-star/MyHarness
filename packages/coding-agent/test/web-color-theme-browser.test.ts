@@ -35,34 +35,46 @@ import {h,render} from '/vendor/preact.js';
 import {SettingsModal} from '/js/overlays-settings.js';
 import {set,setView,state} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const pickSelect=async(triggerSelector,optionText)=>{const trigger=document.querySelector(triggerSelector);if(!trigger)throw Error('select trigger missing: '+triggerSelector);trigger.click();await wait(350);const options=[...document.querySelectorAll('.popover.select-pop:not(.closing) [role=option]')];const hit=options.find(el=>el.textContent.trim()===optionText);if(!hit)throw Error('select option missing: '+optionText);hit.click();await wait(200);};
 const palette=()=>getComputedStyle(document.documentElement).getPropertyValue('--bg-panel').trim();
 const checkSwitch=(coding,general)=>{
  const css=getComputedStyle(document.documentElement);
  if(css.getPropertyValue('--mode-coding').trim()!==coding||css.getPropertyValue('--mode-general').trim()!==general) throw Error('switch colors do not match saved schemes');
 };
+const newTokens=['--r-2xs','--border-soft','--border-hover','--fs-body','--fs-mini','--fs-title-xs','--fs-title-sm','--ease-out','--t-pop','--t-close','--t-morph','--shadow-toggle','--shadow-mode-well','--shadow-mode-knob'];
+const checkNewTokens=(label)=>{const css=getComputedStyle(document.documentElement);const empty=newTokens.filter(n=>!css.getPropertyValue(n).trim());if(empty.length)throw Error('empty new tokens under '+label+': '+empty.join(','));};
 try {
  const prefs=JSON.parse(localStorage.getItem('myharness.web.prefs')||'{}');
  if(prefs.colorThemes?.coding==='forest' && prefs.colorThemes?.general==='amber') {
   if(document.documentElement.dataset.colorTheme!=='forest'||state.view.colorTheme!=='forest'||palette()!=='#292e2b') throw Error('reload lost Coding theme');
   checkSwitch('#a7c080','#d4ae82');
+  checkNewTokens('dark forest (reload)');
   setView({chatMode:'general'});await wait(30);checkSwitch('#a7c080','#d4ae82');if(palette()!=='#302b28'||state.view.colorTheme!=='amber') throw Error('reload lost General theme');
+  checkNewTokens('dark amber (reload)');
  } else {
   set({settings:{items:[]}});
   setView({theme:'dark',chatMode:'coding',lang:'zh-CN',motion:'off',settingsSection:'appearance'});
   render(h(SettingsModal,{}),document.getElementById('app'));await wait(200);
-  let select=document.querySelector('select[aria-label="配色主题"]');
-  if(!select||[...select.options].map(o=>o.textContent).join('|')!=='经典炭黑|静谧森林|暖夜琥珀') throw Error('missing theme choices');
+  const names={classic:'经典炭黑',forest:'静谧森林',amber:'暖夜琥珀'};
+  let trigger=document.querySelector('button.select-like[aria-label="配色主题"]');
+  if(!trigger) throw Error('missing theme trigger');
+  trigger.click();await wait(350);
+  const choices=[...document.querySelectorAll('.popover.select-pop:not(.closing) [role=option]')].map(o=>o.textContent.trim()).join('|');
+  trigger.click();await wait(250);
+  if(choices!=='经典炭黑|静谧森林|暖夜琥珀') throw Error('missing theme choices');
   const rows=[...document.querySelectorAll('.set-row')];
   if(!rows.at(-1).textContent.includes('配色主题')||!rows.at(-2).textContent.includes('阅读宽度')) throw Error('wrong placement');
   for(const [scheme,color] of [['classic','#1c1d1d'],['forest','#292e2b'],['amber','#302b28']]) {
-   select=document.querySelector('select[aria-label="配色主题"]');select.value=scheme;select.dispatchEvent(new Event('change',{bubbles:true}));await wait(50);
+   await pickSelect('button.select-like[aria-label="配色主题"]',names[scheme]);await wait(50);
    if(palette()!==color||JSON.parse(localStorage.getItem('myharness.web.prefs')).colorThemes.coding!==scheme) throw Error('theme not applied/persisted '+scheme);
+   checkNewTokens('dark '+scheme);
    const accent={classic:'#79a8f5',forest:'#a7c080',amber:'#d4ae82'}[scheme];checkSwitch(accent,'#79a8f5');
    setView({chatMode:'general'});await wait(30);checkSwitch(accent,'#79a8f5');if(palette()!=='#1c1d1d'||state.view.colorTheme!=='classic') throw Error('Coding modified General');
    setView({chatMode:'coding'});await wait(30);if(palette()!==color||state.view.colorTheme!==scheme) throw Error('Coding theme not restored');
   }
   setView({chatMode:'general',colorTheme:'forest'});await wait(30);checkSwitch('#d4ae82','#a7c080');
   setView({theme:'light'});await wait(30);checkSwitch('#2c66d6','#2c66d6');if(palette()!=='#fbfbfa') throw Error('light palette changed');
+  checkNewTokens('light');
   setView({theme:'dark',chatMode:'general',colorTheme:'amber'});
   setView({chatMode:'coding',colorTheme:'forest'});location.reload();await new Promise(()=>{});
  }

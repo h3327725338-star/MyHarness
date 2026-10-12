@@ -25,11 +25,12 @@ support the target file's language, the result is partial with a warning.
 
 ## Scope
 
-The first semantic backend supports document symbols, definitions, references,
-implementations, diagnostics, and `didOpen`/`didChange`/`didClose`. It uses the
-workspace file on disk as the document source of truth, supports UTF-16
-positions, and uses a whole-document replacement edit for incremental sync.
+The semantic backend supports document symbols, definitions, references,
+implementations, diagnostics, workspace symbols, hover, call hierarchy, type
+hierarchy, and `didOpen`/`didChange`/`didClose`. It uses the workspace file on
+disk as the document source of truth, supports UTF-16 positions, and uses a
+whole-document replacement edit for incremental sync.
 
-Semantic failures are structured errors. The backend does not fall back to the
-lightweight index, modify the Symbols tool, implement hover or workspace
-symbols, or provide a persistent semantic cache.
+Semantic failures are structured errors. The backend does not fall back to a
+lexical index or modify the Symbols tool, and it does not provide a persistent
+semantic cache.

@@ -53,7 +53,7 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 
 | 路径 | 职责 |
 | --- | --- |
-| `startup/` | Web 启动参数、帮助、文件与初始消息输入、浏览器命令和设置表 |
+| `startup/` | Web 启动参数、帮助、文件与初始消息输入、浏览器命令、设置表与延迟启动维护（`deferred-maintenance.ts`：延后清理原子写临时文件与空会话目录） |
 | `agent/runtime/` | Agent 生命周期、运行时服务与 SDK、会话桥 |
 | `agent/delegation/` | 内部委托 worker、事件解析 |
 | `session/` | Session 格式、JSONL、投影、持久化、锁与 migration；`artifacts/` 管理对话产出、来源保留及可重建的工作区/全局引用索引；`memory/` 管理 Data 内三层长期记忆的存储、归档、索引、恢复和旧目录迁移 |
@@ -64,10 +64,10 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 | `tools/` | 工具执行 contract、权限、取消和结果 |
 | `extensions/` | contracts、API entry、loader、runtime 与包管理 |
 | `git/` | Git 原语、checkpoint、Worktree 和提交/推送流程 |
-| `symbols/` | 代码索引、语义查询、语言服务器与模块安装 |
+| `symbols/` | Semantic/LSP 代码导航、符号存储、语言服务器与模块安装 |
 | `system-prompts/` | 产品 prompt 组合与 loader；静态资源在仓库根同名目录 |
 | `modes/web/` | HTTP/SSE、WebHost、页面交互桥接与真实 Shell Terminal |
-| `exports/` | HTML / JSONL 数据导出，不是终端输出模式 |
+| `exports/` | HTML / JSONL 数据导出，不是终端输出模式；Web 的 HTML 导出走 `html/replay/` 自包含离线回放，旧模板与 CLI `--export` 保留 |
 | `platform/` | HTTP dispatcher 与进程执行等平台能力 |
 | `web/`（package 根） | 浏览器页面、样式、前端状态和交互 |
 

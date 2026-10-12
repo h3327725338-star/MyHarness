@@ -1,3 +1,13 @@
+/**
+ * SCOPE NOTE (W128 / M-1): this file tests the OLD CLI export template chain
+ * (`src/exports/html/template.js`, used by `--export`). The current Web
+ * "Export HTML" uses the standalone replay builder (`src/exports/html/replay/
+ * build.ts`); its security coverage lives in
+ * `test/web-export-replay-security-browser.test.ts` (browser payloads and unit
+ * assertions) and `test/export-replay-build.test.ts` (assembly/escaping).
+ * Nothing in this file exercises the replay chain — do not read a green run
+ * here as coverage of the new export.
+ */
 import { readFileSync } from "fs";
 import { describe, expect, it } from "vitest";
 

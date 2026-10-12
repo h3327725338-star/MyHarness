@@ -10,18 +10,13 @@ import type {
 	ImplementationsResult,
 	ReferencesResult,
 	ResolvedSymbolResult,
-	SymbolQuery,
-	SymbolSearchResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
 } from "../../types.ts";
-import type { LightweightBackendApi, LightweightQueryOptions } from "../lightweight/types.ts";
 
-export type CodeIntelligenceRoutingMode = "auto" | "semantic" | "lightweight";
-
-export interface CodeIntelligenceRoutingOptions extends LightweightQueryOptions {
-	readonly mode?: CodeIntelligenceRoutingMode;
+export interface CodeIntelligenceRoutingOptions {
+	readonly signal?: AbortSignal;
 	readonly language?: string;
 	readonly definitionId?: string;
 	readonly timeoutMs?: number;
@@ -33,13 +28,11 @@ export interface CodeIntelligenceRoutingOptions extends LightweightQueryOptions 
 
 export interface CodeIntelligenceRouterOptions {
 	readonly workspaceRoot: string;
-	readonly lightweight: LightweightBackendApi;
 	readonly semantic?: SemanticBackendApi;
 	readonly symbolStore?: SymbolStoreApi;
 }
 
 export interface CodeIntelligenceRouterApi {
-	findSymbol(query: SymbolQuery, options?: CodeIntelligenceRoutingOptions): Promise<SymbolSearchResult>;
 	fileSymbols(filePath: string, options?: CodeIntelligenceRoutingOptions): Promise<FileSymbolsResult>;
 	findDefinition(target: SymbolTarget, options?: CodeIntelligenceRoutingOptions): Promise<DefinitionResult>;
 	findReferences(target: SymbolTarget, options?: CodeIntelligenceRoutingOptions): Promise<ReferencesResult>;

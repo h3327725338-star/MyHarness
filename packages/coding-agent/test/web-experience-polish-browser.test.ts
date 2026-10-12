@@ -82,7 +82,7 @@ import {h,render} from '/vendor/preact.js';
 import {Sidebar} from '/js/sidebar.js';
 import {Toasts} from '/js/app.js';
 import {Icon,Fold,Modal,Overlay} from '/js/ui.js';
-import {dismissToast,loadWorkspaces,set,setView,state,toast} from '/js/store.js';
+import {dismissToast,loadArchived,loadWorkspaces,set,setView,state,toast} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const must=(ok,message)=>{ if(!ok) throw Error(message); };
 const side=document.getElementById('side');
@@ -118,7 +118,7 @@ try {
  must(seen.has('opening:No workspaces'),'the note did not fold in');
 
  // 2. A Workspace that is added grows in and the note folds away; the arrow of a closed group points right.
- await loadWorkspaces(); await wait(500);
+ await loadWorkspaces(); await loadArchived(); await wait(500);
  const proj=side.querySelector('.ws-row[title="C:/fixture/proj"]');
  must(proj,'the new Workspace did not appear');
  must(seen.has('closing:No workspaces'),'the note did not fold away');

@@ -14,6 +14,14 @@ import { runGit, runGitSync } from "../../git/repository/command.ts";
 import { inspectGitRepositoryAsync } from "../../git/repository/integration.ts";
 import type { ReviewChange, ReviewChangeStatus } from "../../git/repository/review-types.ts";
 import type { ChangeDetectionResult, GitTaskChangeSummary } from "../../git/repository/workspace-changes.ts";
+import {
+	batchWorktreeStats,
+	getCachedWorktreeChangesSync,
+	invalidateWorktreeCache,
+	setCachedWorktreeChanges,
+} from "./changes-stats.ts";
+
+export { batchWorktreeStats, invalidateWorktreeCache };
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES_PER_RUN = 64 * 1024 * 1024;
@@ -425,21 +433,45 @@ export class ChangeTracker {
 	// Working tree (all uncommitted changes versus HEAD)
 	// ---------------------------------------------------------------------
 
+	invalidateWorktreeCache(): void {
+		invalidateWorktreeCache(this.cwd);
+	}
+
+	async batchWorktreeStats(repositoryRoot: string, changes: readonly ReviewChange[]): Promise<FileChangeSummary[]> {
+		return batchWorktreeStats(repositoryRoot, this.cwd, changes, (root, change) =>
+			this.diffForWorktreeFile(root, change),
+		);
+	}
+
 	// The working-tree view runs Git asynchronously: a large or slow repository must not stall the Web server.
-	async listWorktreeChanges(): Promise<{ repositoryRoot?: string; changes: ReviewChange[]; error?: string }> {
+	async listWorktreeChanges(options?: {
+		forceRefresh?: boolean;
+	}): Promise<{ repositoryRoot?: string; changes: ReviewChange[]; error?: string }> {
+		if (!options?.forceRefresh) {
+			const cached = getCachedWorktreeChangesSync(this.cwd);
+			if (cached) {
+				return { repositoryRoot: cached.repositoryRoot, changes: cached.changes, error: cached.error };
+			}
+		}
 		const state = await inspectGitRepositoryAsync(this.cwd);
 		if (!state.isRepository || !state.root) {
-			return {
+			const result = {
 				changes: [],
 				error: state.gitAvailable ? "The workspace is not a Git repository." : "Git is not available.",
 			};
+			setCachedWorktreeChanges(this.cwd, result);
+			return result;
 		}
 		const result = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
 			cwd: state.root,
 			timeoutMs: 30_000,
 			env: { GIT_OPTIONAL_LOCKS: "0" },
 		});
-		if (!result.ok) return { repositoryRoot: state.root, changes: [], error: result.stderr || result.error };
+		if (!result.ok) {
+			const errResult = { repositoryRoot: state.root, changes: [], error: result.stderr || result.error };
+			setCachedWorktreeChanges(this.cwd, errResult);
+			return errResult;
+		}
 		const changes: ReviewChange[] = [];
 		const fields = result.stdout.split("\u0000");
 		for (let index = 0; index < fields.length; index++) {
@@ -463,7 +495,9 @@ export class ChangeTracker {
 			const oldRel = oldPath ? toRelative(this.cwd, path.join(state.root, oldPath)) : undefined;
 			changes.push({ path: file, status, ...(oldRel ? { oldPath: oldRel } : {}) });
 		}
-		return { repositoryRoot: state.root, changes };
+		const data = { repositoryRoot: state.root, changes };
+		setCachedWorktreeChanges(this.cwd, data);
+		return data;
 	}
 
 	async diffForWorktreeFile(

@@ -211,14 +211,14 @@ export type SymbolTarget =
 // 结果元数据
 // =============================================================================
 
-/** 查询来源：语义后端（LSP）或轻量后端（词法）。 */
-export type IntelligenceSource = "semantic" | "lightweight";
+/** 查询来源：语义后端（LSP）。 */
+export type IntelligenceSource = "semantic";
 
 /** 结果完整性：complete 表示该来源下结果完整，partial 表示受限制截断。 */
 export type ResultCompleteness = "complete" | "partial";
 
 export interface IntelligenceResultMeta {
-	source: IntelligenceSource;
+	source: IntelligenceSource | "lightweight";
 	completeness: ResultCompleteness;
 
 	/** 仅当结果来自降级路径时存在（例如 semantic backend 不可用后使用 lexical） */

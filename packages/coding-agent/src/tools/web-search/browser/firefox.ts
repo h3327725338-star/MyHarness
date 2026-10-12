@@ -532,8 +532,10 @@ export class LocalBrowser implements BrowserTransport {
 	}
 
 	private async runChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage> {
-		const session = await this.ensureSession({ headless: false, signal });
-		const releaseForeground = keepChallengeForeground(session.child.pid);
+		// Browser E2E runs have nobody to solve anything: keep their window hidden and never pull it to the front.
+		const unattended = process.env.MYHARNESS_TARGETED_BROWSER_E2E === "1";
+		const session = await this.ensureSession({ headless: unattended, signal });
+		const releaseForeground = unattended ? () => {} : keepChallengeForeground(session.child.pid);
 		try {
 			const opened = await this.withAbort(
 				session.bridge.command<PageSnapshot>(

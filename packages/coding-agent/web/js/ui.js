@@ -11,8 +11,16 @@ export { Component, Fragment, createContext, h, render, useCallback, useContext,
 
 // The browser honours `autofocus` only until the page has focused something once, so a search box that appears later
 // (palette, model search, rename fields) would not get the keyboard. Focus elements that arrive with `autofocus` ourselves.
-if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
-	new MutationObserver((records) => {
+// The scan is reference-counted and attached lazily (W205): the floating layers below (Modal/Overlay/Popover) hold it
+// while they are mounted/open and the inline rename boxes focus themselves through `autofocusOnMount`, so streaming,
+// typing and scrolling run with no observer watching the document at all.
+let autofocusScanHolders = 0;
+let autofocusScanObserver = null;
+export function acquireAutofocusScan() {
+	if (typeof MutationObserver === "undefined" || typeof document === "undefined") return;
+	autofocusScanHolders += 1;
+	if (autofocusScanObserver) return;
+	autofocusScanObserver = new MutationObserver((records) => {
 		for (const record of records) {
 			for (const node of record.addedNodes) {
 				if (node.nodeType !== 1) continue;
@@ -20,7 +28,38 @@ if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") 
 				if (target && target !== document.activeElement && target.isConnected) return target.focus({ preventScroll: true });
 			}
 		}
-	}).observe(document.documentElement, { childList: true, subtree: true });
+	});
+	autofocusScanObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
+export function releaseAutofocusScan() {
+	if (autofocusScanHolders > 0) autofocusScanHolders -= 1;
+	if (autofocusScanHolders === 0 && autofocusScanObserver) {
+		autofocusScanObserver.disconnect();
+		autofocusScanObserver = null;
+	}
+}
+/** How many open layers hold the scan (zero while the page idles). */
+export function autofocusScanCount() {
+	return autofocusScanHolders;
+}
+/** Holds the autofocus scan for as long as `active` (a floating layer mounted or open). */
+export function useAutofocusScan(active = true) {
+	useEffect(() => {
+		if (!active) return undefined;
+		acquireAutofocusScan();
+		return () => releaseAutofocusScan();
+	}, [active]);
+}
+/**
+ * Ref for inline `[autofocus]` fields that mount outside any layer (the rename boxes, the ask-dialog fields): the lazy
+ * scan attaches in an effect, after this very insert, so these focus themselves instead - next microtask, once the node
+ * is in the document and nobody else holds the keyboard.
+ */
+export function autofocusOnMount(el) {
+	if (!el) return;
+	queueMicrotask(() => {
+		if (el.isConnected && el !== document.activeElement) el.focus({ preventScroll: true });
+	});
 }
 
 /** Set by the inline command panel: a Modal inside it is drawn in place (no scrim) and closing it goes back one level. */
@@ -72,12 +111,23 @@ export function useKey(handler, deps = []) {
  * Anchored popover with fixed positioning (not clipped by overflow:hidden ancestors).
  * placement: "top" | "bottom"; align: "start" | "end".
  */
-export function Popover({ anchor, open, onClose, placement = "bottom", align = "start", width, minWidth, maxHeight = 420, children, class: cls, exitMs = 120 }) {
+export function Popover({ anchor, open, onClose, placement = "bottom", align = "start", width, minWidth, maxHeight = 420, children, class: cls, exitMs = 110 }) {
 	const ref = useRef(null);
 	// A closed popover fades out where it is (not clickable) instead of vanishing; `exitMs` 0 is for callers that animate it themselves.
 	const presence = usePresence(open, exitMs);
 	const mounted = exitMs ? presence.mounted : open;
 	const [style, setStyle] = useState({ visibility: "hidden" });
+	// The side the popover really ended up on (the placement can flip below), written as data-placement so CSS slides it in from the anchor's edge.
+	const [side, setSide] = useState(placement);
+	// A popover mounts its whole content in the commit that opens it, before the scan below can attach: focus its
+	// `autofocus` field here (the branch/model search boxes, the effort slider). Later inserts (the new-branch form)
+	// arrive while the popover is open, where the held scan still catches them.
+	useAutofocusScan(open);
+	useLayoutEffect(() => {
+		if (!open) return undefined;
+		ref.current?.querySelector("[autofocus]")?.focus({ preventScroll: true });
+		return undefined;
+	}, [open]);
 	const place = () => {
 		if (!anchor.current || !ref.current) return;
 		const a = anchor.current.getBoundingClientRect();
@@ -91,6 +141,8 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
 		const next = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" };
 		setStyle((old) => old.top === next.top && old.left === next.left && old.visibility === next.visibility ? old : next);
+		const landed = top < a.top ? "top" : "bottom";
+		setSide((old) => (old === landed ? old : landed));
 	};
 	useLayoutEffect(() => {
 		if (!open) return undefined;
@@ -129,7 +181,7 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [open]);
 	if (!mounted) return null;
-	return html`<div ref=${ref} class=${`popover ${cls || ""} ${open ? "" : "closing"}`} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
+	return html`<div ref=${ref} class=${`popover ${cls || ""} ${open ? "" : "closing"}`} data-placement=${side} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
 }
 
 export function MenuItem({ icon, label, hint, onClick, danger, disabled, active, sub }) {
@@ -158,6 +210,8 @@ export function Menu({ trigger, placement = "bottom", align = "start", width, ch
 export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true, focusInput = true }) {
 	const ref = useRef(null);
 	const inline = useContext(InlineFrame);
+	// Fields the dialog adds after it mounted (a new model row, the folder picker's address edit) still need the scan.
+	useAutofocusScan(true);
 	useEffect(() => {
 		if (inline) {
 			(focusInput ? ref.current?.querySelector("[autofocus], input, textarea, select") : ref.current)?.focus?.({ preventScroll: true });
@@ -165,7 +219,7 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		}
 		const onKey = (event) => {
 			// A dialog that is fading out (Overlay, inert) no longer answers the keyboard.
-			if (event.key === "Escape" && !ref.current?.closest("[inert]")) {
+			if (event.key === "Escape" && !ref.current?.closest("[inert]") && !ref.current?.querySelector("[data-esc-owner]")) {
 				event.stopPropagation();
 				onClose?.();
 			}
@@ -177,8 +231,10 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		return () => {
 			window.removeEventListener("keydown", onKey, true);
 			// Hand the keyboard back to what had it, unless the focus has already moved on (the dialog may fade out first).
+			// The decision is read now, while the dialog is still in the tree, but focus() itself waits for the next frame:
+			// inside the unmount commit it would add a style/layout pass on top of the commit removing the dialog (W203).
 			const active = document.activeElement;
-			if (!active || active === document.body || ref.current?.contains(active)) previous?.focus?.();
+			if (!active || active === document.body || ref.current?.contains(active)) requestAnimationFrame(() => previous?.focus?.());
 		};
 	}, []);
 	if (inline) {
@@ -189,7 +245,7 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		</div>`;
 	}
 	return html`<div class="scrim" onMouseDown=${(event) => closeOnScrim && event.target === event.currentTarget && onClose?.()}>
-		<div class=${`modal ${cls || ""}`} style=${{ width: `${width}px` }} ref=${ref} tabindex="-1" role="dialog" aria-modal="true" aria-label=${title}>
+		<div class=${`modal ${cls || ""}`} style=${{ width: `min(${width}px, calc(100vw - 48px))` }} ref=${ref} tabindex="-1" role="dialog" aria-modal="true" aria-label=${title}>
 			<div class="modal-head">
 				<div class="col grow"><div class="modal-title truncate">${title}</div>${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}</div>
 				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>` : null}
@@ -382,13 +438,24 @@ export function ListSlot({ present, initial, children }) {
 /**
  * Keeps an overlay (a dialog, the command palette) mounted while it fades out, so it leaves the way it came in. While it
  * leaves it ignores the pointer, the keyboard and assistive technology (`inert`) and shows what it showed, because the
- * caller's state is already gone. Without motion it leaves at once. The fade is `.overlay-host.closing` in overlays.css.
+ * caller's state is already gone. Without motion it leaves at once. The motion is `.overlay-host.closing` in overlays.css
+ * (scrim-out / dialog-out over --t-close, which is what this linger is sized for).
  */
 export function Overlay({ show, children }) {
-	const { mounted } = usePresence(show, motionEnabled() ? 150 : 0);
+	const { mounted } = usePresence(show, motionEnabled() ? 110 : 0);
 	const last = useRef(null);
 	const round = useRef(0);
 	const was = useRef(false);
+	const host = useRef(null);
+	// The layer holds the scan while it is shown (fields added later keep working) and, because its content mounts in
+	// the same commit the scan attaches in, focuses the layer's own `autofocus` field directly (the command palette's
+	// search box lives right under the Overlay, with no Modal in between).
+	useAutofocusScan(show);
+	useLayoutEffect(() => {
+		if (!show) return undefined;
+		host.current?.querySelector("[autofocus]")?.focus({ preventScroll: true });
+		return undefined;
+	}, [show]);
 	if (show) {
 		last.current = children;
 		// An overlay that opens again while the old one still fades out is a new one: it starts from scratch.
@@ -396,7 +463,7 @@ export function Overlay({ show, children }) {
 	}
 	was.current = show;
 	if (!mounted) return null;
-	return html`<div key=${round.current} class=${`overlay-host ${show ? "" : "closing"}`} inert=${!show}>${last.current}</div>`;
+	return html`<div key=${round.current} ref=${host} class=${`overlay-host ${show ? "" : "closing"}`} inert=${!show}>${last.current}</div>`;
 }
 
 /**

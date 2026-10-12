@@ -49,6 +49,10 @@ describe("Git pass-through for the normal Coding Agent", () => {
 					email: "git-pass-through@example.invalid",
 				}).ok,
 			).toBe(true);
+			// A user-global core.hooksPath makes every commit in this repository pay
+			// ~1.3s of external hook process startup; these tests exercise the
+			// pass-through contract, not hooks, so keep the fixture repository hook-free.
+			expect(runGit(harness.tempDir, ["config", "core.hooksPath", ""]).ok).toBe(true);
 			expect(createInitialGitBaseline(harness.tempDir).ok).toBe(true);
 			await callback(harness, harness.tempDir);
 		} finally {

@@ -1,11 +1,12 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
-import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner } from "./ui.js";
+import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner, usePresence } from "./ui.js";
 import { api, attempt, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { DraftEditor } from "./draft-editor.js";
 import { BranchChip } from "./branch-menu.js";
+import { openImageLightbox } from "./lightbox.js";
 
 import { ContextMeter } from "./context-usage.js";
 import { EffortPicker, ModelMenu } from "./model-menu.js";
@@ -93,8 +94,8 @@ function DialogBar({ dialog }) {
 			: dialog.kind === "select"
 				? html`<div class="dialog-options">${dialog.options.map((option, i) => html`<button class=${`btn sm ${pick === i ? "kbd-sel" : ""}`} tabindex="-1" key=${option} onClick=${() => answer(option)} onMouseMove=${() => setPick(i)}>${i < 9 ? html`<span class="dim">${i + 1}</span> ` : null}${option}</button>`)}<button class=${`btn sm ghost ${pick === dialog.options.length ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(undefined)} onMouseMove=${() => setPick(dialog.options.length)}>${t("Cancel")}</button></div><div class="dialog-keys dim">${t("↑/↓ choose · Enter answer · 1-9 pick · Esc cancel · Alt+A focus here")}</div>`
 				: dialog.kind === "input"
-					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field sm grow" autofocus value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
-					: html`<div class="dialog-editor"><textarea class="field" rows="6" autofocus value=${value} onInput=${(e) => setValue(e.target.value)} /><div class="dialog-actions"><button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" onClick=${() => answer(value)}>${t("Submit")}</button></div></div>`}
+					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field sm grow" autofocus ref=${autofocusOnMount} value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
+					: html`<div class="dialog-editor"><textarea class="field" rows="6" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} /><div class="dialog-actions"><button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" onClick=${() => answer(value)}>${t("Submit")}</button></div></div>`}
 	</div>`;
 }
 
@@ -372,14 +373,24 @@ export function Composer() {
 	const [expanded, setExpanded] = useState(false);
 	const [closing, setClosing] = useState(false);
 	const ghost = useRef(0);
+	const lineHeights = useRef(new Map());
+	const editorElement = area.current?.element;
 	useLayoutEffect(() => {
-		const el = area.current?.element;
+		const el = editorElement ?? area.current?.element;
 		if (!el) return undefined;
 		// Lines as seen on screen: a long line that wraps counts once per row, a heading once.
+		// A row's line height comes from its style, so it is measured once per style and then reused;
+		// the observer is mounted once and re-measures only when the input's size actually changes.
 		const measure = () => {
 			let lines = 0;
 			for (const line of el.children) {
-				const lineHeight = Number.parseFloat(getComputedStyle(line).lineHeight) || 20;
+				// The caret mark does not change the style: keep it out of the cache key.
+				const key = line.className.replace(" active", "");
+				let lineHeight = lineHeights.current.get(key);
+				if (lineHeight === undefined) {
+					lineHeight = Number.parseFloat(getComputedStyle(line).lineHeight) || 20;
+					lineHeights.current.set(key, lineHeight);
+				}
 				lines += Math.max(1, Math.round(line.offsetHeight / lineHeight));
 			}
 			setTall(lines > 3);
@@ -389,7 +400,7 @@ export function Composer() {
 		const observer = new ResizeObserver(measure);
 		observer.observe(el);
 		return () => observer.disconnect();
-	}, [text]);
+	}, [editorElement]);
 	const expand = () => {
 		ghost.current = card.current?.offsetHeight || 0;
 		setExpanded(true);
@@ -429,6 +440,11 @@ export function Composer() {
 		if (dismissed && dismissed !== tokenKey) setDismissed("");
 	}, [tokenKey]);
 	const menuOpen = !!token && suggestions.length > 0 && dismissed !== tokenKey;
+	// Closing keeps the list mounted for the shared pop-out (same --t-close window as Popover in ui.js), so it fades instead of vanishing.
+	const suggestPresence = usePresence(menuOpen, 110);
+	// The token can already be gone by the time the list fades; rows frozen from the last open list avoid a collapse mid-animation.
+	const lastSuggestItems = useRef([]);
+	if (menuOpen) lastSuggestItems.current = suggestions;
 	const card = useRef(null);
 	const suggestList = useRef(null);
 	useEffect(() => {
@@ -449,8 +465,10 @@ export function Composer() {
 		// Scroll only the candidates, never the editor or its ancestors (scrollIntoView did both).
 		const top = row.offsetTop;
 		const bottom = top + row.offsetHeight;
-		if (top < list.scrollTop) list.scrollTop = top;
-		else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+		const scrolled = list.scrollTop;
+		const shown = list.clientHeight;
+		if (top < scrolled) list.scrollTop = top;
+		else if (bottom > scrolled + shown) list.scrollTop = bottom - shown;
 	}, [sel, menuOpen, suggestions.length]);
 
 	const history = useMemo(() => items.filter((i) => i.kind === "user" && i.text).map((i) => i.text), [items]);
@@ -644,7 +662,7 @@ const send = async (mode) => {
 					: tall
 						? html`<button class="icon-btn sm composer-expand fade-in" onClick=${expand} title=${t("Expand the editor")} aria-label=${t("Expand the editor")}><${Icon} name="maximize" size=${14} /></button>`
 						: null}
-				${menuOpen ? html`<div class="suggest" role="listbox" ref=${suggestList}>${suggestions.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
+				${suggestPresence.mounted ? html`<div class=${`suggest ${menuOpen ? "" : "closing"}`} role="listbox" ref=${suggestList}>${lastSuggestItems.current.map((item, i) => html`<button key=${item.key} role="option" aria-selected=${i === sel} class=${`suggest-item ${i === sel ? "sel" : ""}`} onMouseMove=${(e) => i !== sel && pointerMoved(e) && setSel(i)} onMouseDown=${(e) => (e.preventDefault(), confirmSuggestion(item))}>
 					${item.icon ? html`<${Icon} name=${item.icon} size=${14} />` : null}<span class="mono">${item.label}</span>${item.tag ? html`<span class="badge">${item.tag}</span>` : null}${item.hint ? html`<span class="dim truncate">${item.hint}</span>` : null}</button>`)}</div>` : null}
 				${quotes.length ? html`<div class="quote-shelf">${quotes.map((q, i) => html`<div
 					class="quote-card"
@@ -655,7 +673,13 @@ const send = async (mode) => {
 					<span class="quote-card-src"><${Icon} name="quote" size=${11} /><span class="truncate">${clipLine(q.text, 44)}</span></span>
 					${q.note ? html`<span class="quote-card-note truncate">${q.note}</span>` : null}
 				</div>`)}</div>` : null}
-				${images.length ? html`<div class="attachments">${images.map((img, i) => html`<div class="thumb" key=${i}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${() => setImages(images.filter((_, j) => j !== i))}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
+				${images.length ? html`<div class="attachments">${images.map((img, i) => {
+					// Only an image opens the preview: a file chip (it has a path) stays exactly as it was. The × removes, never previews (stopPropagation here, guard in the thumb handlers).
+					const zoomable = !img.path;
+					const open = (e) => { if (e.target.closest(".thumb-x")) return; openImageLightbox(img.url, img.name); };
+					const onKey = (e) => { if (e.target.closest(".thumb-x")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(img.url, img.name); } };
+					return html`<div class="thumb" key=${i} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name: img.name }) : undefined} onClick=${zoomable ? open : undefined} onKeyDown=${zoomable ? onKey : undefined}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${(e) => { e.stopPropagation(); setImages(images.filter((_, j) => j !== i)); }}><${Icon} name="x" size=${11} /></button></div>`;
+				})}</div>` : null}
 				${loadingFiles ? html`<div class="branch-note dim" role="status"><${Spinner} />${t("Loading files…")}</div>` : null}
 				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}
 					onChange=${(value, at) => (setText(slashStart(value)), setCaret(at))}

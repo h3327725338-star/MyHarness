@@ -82,17 +82,16 @@ After a configured model is available, start MyHarness and type a request:
 Summarize this repository and tell me how to run its checks.
 ```
 
-By default, MyHarness gives the model seven built-in tools:
+By default, MyHarness gives the model these built-in tools:
 
 - `read` - read files
 - `bash` - run shell commands
 - `pwsh` - run PowerShell commands
 - `edit` - patch files
 - `write` - create or overwrite files
-- `symbols` - query source symbols and definitions
 - `github` - use the configured GitHub integration
 
-Additional built-in tools (`grep`, `find`, `ls`) are available through tool options. The `agent`, `workflow`, and `ultracode` tools are optional and disabled by default. MyHarness runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
+Additional built-in tools (`grep`, `find`, `ls`) are available through tool options. The `symbols` tool is disabled by default; enable `codeIntelligence.symbolsEnabled` in Settings and restart the runtime to make semantic source navigation available. The `agent`, `workflow`, and `ultracode` tools are optional and disabled by default. MyHarness runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
 
 ## Give MyHarness project instructions
 

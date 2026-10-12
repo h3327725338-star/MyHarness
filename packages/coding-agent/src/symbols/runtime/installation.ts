@@ -57,7 +57,6 @@ export interface CodeIntelligenceManifest {
 	readonly schemaVersion: number;
 	readonly product: string;
 	readonly platform: string;
-	readonly defaultMode: "lightweight";
 	readonly releaseVersion: string;
 	readonly releaseTag: string;
 	readonly myharnessVersionRange?: string;
@@ -149,7 +148,6 @@ const EMPTY_MANIFEST: CodeIntelligenceManifest = Object.freeze({
 	schemaVersion: 1,
 	product: "myharness",
 	platform: "win32-x64",
-	defaultMode: "lightweight",
 	releaseVersion: "0.0.0",
 	releaseTag: "",
 	published: false,
@@ -197,8 +195,8 @@ export function readCodeIntelligenceManifest(
 			const value = JSON.parse(readFileSync(candidate, "utf8")) as CodeIntelligenceManifest;
 			return normalizeManifest(value);
 		} catch {
-			// A source checkout can run without copied package assets. Lightweight
-			// indexing remains available in that case.
+			// A source checkout can run without copied package assets; fall back to
+			// the empty manifest.
 		}
 	}
 	return EMPTY_MANIFEST;

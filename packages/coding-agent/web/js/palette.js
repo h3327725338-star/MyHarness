@@ -5,6 +5,7 @@ import { actions, openCommand } from "./actions.js";
 import { chatTitle, debounce, relTime } from "./util.js";
 import { rankSearch } from "./search.js";
 import { serverText, t } from "./i18n.js";
+import { exportReadOnly } from "./export-mode.js";
 
 import { shortcutFor } from "./shortcuts.js";
 
@@ -48,23 +49,31 @@ export function CommandPalette() {
 			close();
 			fn();
 		};
+		// Read-only export copies list only the purely client-side commands: everything that writes to the
+		// server, opens settings or exports again is dropped, and language/theme stay fixed to the exported
+		// view (D-18). Remaining groups render only when they have entries, so no empty group can appear.
+		const readOnly = exportReadOnly();
 		const cmds = [
-			{ label: t("New chat"), icon: "edit", hint: shortcutFor("newChat", state.view.shortcuts), run: run(() => actions.newChat()) },
+			...(readOnly ? [] : [{ label: t("New chat"), icon: "edit", hint: shortcutFor("newChat", state.view.shortcuts), run: run(() => actions.newChat()) }]),
 			{ label: t("Toggle sidebar"), icon: "sidebar", hint: shortcutFor("sidebar", state.view.shortcuts), run: run(() => setView({ sidebarOpen: !state.view.sidebarOpen })) },
-			{ label: t("Compact context"), icon: "layers", run: run(() => actions.compact()) },
-			{ label: t("Commit changes"), icon: "gitCommit", run: run(() => actions.submit("/commit")) },
-			{ label: t("Push to upstream"), icon: "gitBranch", run: run(() => actions.submit("/push")) },
-			{ label: t("Undo or keep task changes"), icon: "undo", run: run(() => openCommand("undo")) },
-			{ label: t("Git tools & worktrees"), icon: "gitBranch", run: run(() => openCommand("git")) },
-			{ label: t("Switch model"), icon: "cpu", run: run(() => openCommand("model")) },
-			{ label: t("Settings"), icon: "gear", hint: shortcutFor("settings", state.view.shortcuts), run: run(() => setView({ settingsOpen: true })) },
-			{ label: t("Providers & API keys"), icon: "key", run: run(() => setView({ settingsOpen: true, settingsSection: "providers" })) },
-			{ label: t("Export chat as HTML"), icon: "download", run: run(() => actions.exportSession()) },
-			{ label: t("Theme: dark"), icon: "eye", run: run(() => setView({ theme: "dark" })) },
-			{ label: t("Theme: light"), icon: "eye", run: run(() => setView({ theme: "light" })) },
-			{ label: t("Theme: follow system"), icon: "eye", run: run(() => setView({ theme: "system" })) },
-			{ label: t("Language: English"), icon: "globe", run: run(() => setView({ lang: "en" })) },
-			{ label: t("Language: 简体中文"), icon: "globe", run: run(() => setView({ lang: "zh-CN" })) },
+			...(readOnly
+				? []
+				: [
+						{ label: t("Compact context"), icon: "layers", run: run(() => actions.compact()) },
+						{ label: t("Commit changes"), icon: "gitCommit", run: run(() => actions.submit("/commit")) },
+						{ label: t("Push to upstream"), icon: "gitBranch", run: run(() => actions.submit("/push")) },
+						{ label: t("Undo or keep task changes"), icon: "undo", run: run(() => openCommand("undo")) },
+						{ label: t("Git tools & worktrees"), icon: "gitBranch", run: run(() => openCommand("git")) },
+						{ label: t("Switch model"), icon: "cpu", run: run(() => openCommand("model")) },
+						{ label: t("Settings"), icon: "gear", hint: shortcutFor("settings", state.view.shortcuts), run: run(() => setView({ settingsOpen: true })) },
+						{ label: t("Providers & API keys"), icon: "key", run: run(() => setView({ settingsOpen: true, settingsSection: "providers" })) },
+						{ label: t("Export chat as HTML"), icon: "download", run: run(() => actions.exportSession()) },
+						{ label: t("Theme: dark"), icon: "eye", run: run(() => setView({ theme: "dark" })) },
+						{ label: t("Theme: light"), icon: "eye", run: run(() => setView({ theme: "light" })) },
+						{ label: t("Theme: follow system"), icon: "eye", run: run(() => setView({ theme: "system" })) },
+						{ label: t("Language: English"), icon: "globe", run: run(() => setView({ lang: "en" })) },
+						{ label: t("Language: 简体中文"), icon: "globe", run: run(() => setView({ lang: "zh-CN" })) },
+					]),
 		];
 		// Every group is searched by the same rule: relevance first (exact name > prefix > part of the name >
 		// description), then usage, then the list's own order.

@@ -85,6 +85,7 @@ import {setLang} from '/js/lang.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const check=(ok,msg)=>{if(!ok)throw Error(msg)};
 const until=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await wait(50)}throw Error('timed out waiting for UI')};
+const pickSelect=async(triggerSelector,optionText)=>{const trigger=document.querySelector(triggerSelector);check(trigger,'select trigger missing: '+triggerSelector);trigger.click();await until(()=>document.querySelector('.popover.select-pop:not(.closing) [role=option]'));const options=[...document.querySelectorAll('.popover.select-pop:not(.closing) [role=option]')];const hit=options.find(el=>el.textContent.includes(optionText));check(hit,'select option missing: '+optionText);hit.click();await wait(120);};
 try {
  setView({motion:'on',lang:'zh-CN'}); setLang('zh-CN');
  // Send 只在页面已连上服务端事件流时可用；本测试直接渲染组件而不连事件流，所以要手动进入 connected 态。
@@ -216,7 +217,7 @@ try {
  document.querySelector('.pf-model-toggle').click();await wait(400);
  document.querySelector('.pf-pricing .toggle').click();await wait(100);
  check(document.querySelector('.pf-pricing').textContent.includes('($/1M)'),'USD unit missing');
- const currency=document.querySelector('.pf-pricing select');currency.value='CNY';currency.dispatchEvent(new Event('change',{bubbles:true}));await wait(100);
+ await pickSelect('.pf-pricing .select-like','CNY');await wait(100);
  check(document.querySelector('.pf-pricing').textContent.includes('(¥/1M)'),'CNY unit not updated');
  const add=[...document.querySelectorAll('.pf-pricing button')].find(el=>el.textContent.includes('添加计价阶梯'));check(add&&!add.classList.contains('ghost')&&add.querySelector('svg'),'tier button missing');add.click();await wait(100);
  check(document.querySelectorAll('.pf-pricing input[type=number]').length===9,'tier fields missing');

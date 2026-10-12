@@ -1,5 +1,3 @@
-import type { SymbolsIndexPort } from "../../tools/symbols-runtime.ts";
-import type { CodeSymbolIndex } from "../index/code-index.ts";
 import type { CodeIntelligenceRouterApi } from "../index/router/types.ts";
 import type { LanguageServerManager, LanguageServerStatusSnapshot } from "../lsp/language-server/index.ts";
 import type { SemanticBackendApi } from "../semantic/types.ts";
@@ -17,7 +15,6 @@ export interface CodeIntelligenceRuntimeStatus {
 export interface CodeIntelligenceRuntimeServices {
 	readonly workspaceRoot: string;
 	readonly router: CodeIntelligenceRouterApi;
-	readonly index: SymbolsIndexPort & CodeSymbolIndex;
 	readonly symbolStore: SymbolStoreApi;
 	readonly semantic?: SemanticBackendApi;
 	readonly languageServerManager: LanguageServerManager;

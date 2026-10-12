@@ -1,4 +1,18 @@
+    /* Standalone export stylesheet (offline single file).
+       Keep this file self-contained: no @import, no url() references, no
+       references to the main site's tokens.css. The THEME_VARS / BODY_BG /
+       CONTAINER_BG / INFO_BG placeholders below are injected at export time
+       by src/exports/html/index.ts (single-occurrence string replace, so
+       this comment must not repeat the placeholder text); the two fallback
+       colors above them are only used when an injection is missing. Corner
+       radii in this file are 3px (controls/inline code) and 4px
+       (cards/messages), which roughly map to the main site's --r-xs
+       (4px, web/css/tokens.css). */
+
     :root {
+      /* Fallback colors for injected theme vars (values unchanged, names only). */
+      --export-success-fallback: #22c55e;
+      --export-warning-fallback: #e8a838;
       {{THEME_VARS}}
       --body-bg: {{BODY_BG}};
       --container-bg: {{CONTAINER_BG}};
@@ -399,9 +413,9 @@
     }
 
     .copy-link-btn.copied {
-      background: var(--success, #22c55e);
+      background: var(--success, var(--export-success-fallback));
       color: white;
-      border-color: var(--success, #22c55e);
+      border-color: var(--success, var(--export-success-fallback));
     }
 
     /* Highlight effect for deep-linked messages */
@@ -764,7 +778,7 @@
     }
 
     .tool-param-required {
-      color: var(--warning, #e8a838);
+      color: var(--warning, var(--export-warning-fallback));
       font-size: 10px;
     }
 

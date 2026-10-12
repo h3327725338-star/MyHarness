@@ -8,26 +8,25 @@ import { createAgentSession } from "../src/agent/runtime/sdk.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import type { ToolDefinition } from "../src/extensions/runtime/types.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
-import type {
-	CodeIndexRefreshSummary,
-	CodeMapEntry,
-	CodeSearchMatch,
-	IndexedCodeReference,
-	IndexedCodeSymbol,
-} from "../src/symbols/index/code-index.ts";
 import type { CodeIntelligenceRouterApi } from "../src/symbols/index/router/types.ts";
 import type {
+	CallHierarchyResult,
+	CodeCallEdge,
 	CodeSymbol,
 	DefinitionResult,
 	DiagnosticsResult,
 	FileSymbolsResult,
+	HoverResult,
 	ImplementationsResult,
 	IntelligenceResult,
 	ReferencesResult,
+	ResolvedSymbolResult,
 	SymbolSearchResult,
+	TypeHierarchyResult,
+	WorkspaceSymbolsResult,
 } from "../src/symbols/types.ts";
-import { createSymbolsToolDefinition, type SymbolsToolDetails, type SymbolsToolInput } from "../src/tools/symbols.ts";
-import type { SymbolsCodeIntelligenceServices, SymbolsIndexPort } from "../src/tools/symbols-runtime.ts";
+import { createSymbolsToolDefinition, type SymbolsToolInput } from "../src/tools/symbols.ts";
+import type { SymbolsCodeIntelligenceServices } from "../src/tools/symbols-runtime.ts";
 
 const projects = new Set<string>();
 
@@ -44,40 +43,6 @@ async function createProject(): Promise<string> {
 	return project;
 }
 
-const refresh: CodeIndexRefreshSummary = {
-	added: 1,
-	updated: 0,
-	removed: 0,
-	unchanged: 0,
-	skipped: 0,
-	limited: false,
-	fileCount: 1,
-	symbolCount: 2,
-};
-
-const legacySymbol: IndexedCodeSymbol = {
-	id: "legacy-symbol",
-	path: "src/service.ts",
-	language: "typescript",
-	kind: "class",
-	name: "UserService",
-	line: 1,
-	endLine: 3,
-	signature: "export class UserService",
-	exported: true,
-	hash: "hash",
-	updatedAt: 1,
-};
-
-const legacyReference: IndexedCodeReference = {
-	source: "src/service.ts",
-	target: "UserService",
-	path: "src/service.ts",
-	line: 1,
-	text: "export class UserService",
-	referenceKind: "definition",
-};
-
 const semanticSymbol: CodeSymbol = {
 	id: "semantic-symbol",
 	name: "load",
@@ -92,29 +57,23 @@ const semanticSymbol: CodeSymbol = {
 	signature: "load()",
 };
 
-function result<T>(source: "semantic" | "lightweight", items: T[] = []): IntelligenceResult<T> {
+function result<T>(source: "semantic", items: T[] = []): IntelligenceResult<T> {
 	return { items, meta: { source, completeness: "complete" } };
 }
 
-function createIndex(): SymbolsIndexPort & { ensureFresh: ReturnType<typeof vi.fn> } {
-	const codeMap: CodeMapEntry[] = [{ path: "src/service.ts", language: "typescript", symbols: [legacySymbol] }];
-	return {
-		ensureFresh: vi.fn(async () => refresh),
-		findSymbol: vi.fn(async () => [legacySymbol]),
-		findDefinition: vi.fn(async () => [legacySymbol]),
-		findReferences: vi.fn(async () => [legacyReference]),
-		listFileSymbols: vi.fn(async () => [legacySymbol]),
-		searchCode: vi.fn(
-			async (): Promise<CodeSearchMatch[]> => [{ path: "src/service.ts", line: 1, text: "UserService" }],
-		),
-		getCodeMap: vi.fn(async () => codeMap),
-		getStats: vi.fn(() => ({ fileCount: 1, symbolCount: 1, storagePath: "memory" })),
-	};
-}
+const callEdge: CodeCallEdge = {
+	symbol: semanticSymbol,
+	callSites: [{ path: "src/service.ts", line: 4 }],
+};
 
+/**
+ * The fake semantic router implements the full CodeIntelligenceRouterApi. The
+ * findSymbol member only exists because the router interface still declares it
+ * (removed in W14); the tool contract no longer offers that operation.
+ */
 function createRouter(): CodeIntelligenceRouterApi & Record<string, ReturnType<typeof vi.fn>> {
 	return {
-		findSymbol: vi.fn(async (): Promise<SymbolSearchResult> => result("lightweight", [semanticSymbol])),
+		findSymbol: vi.fn(async (): Promise<SymbolSearchResult> => result("semantic", [semanticSymbol])),
 		fileSymbols: vi.fn(
 			async (): Promise<FileSymbolsResult> => result("semantic", [{ symbol: semanticSymbol, children: [] }]),
 		),
@@ -129,11 +88,21 @@ function createRouter(): CodeIntelligenceRouterApi & Record<string, ReturnType<t
 					{ location: { path: "src/service.ts", line: 1 }, severity: "warning", message: "test" },
 				]),
 		),
+		workspaceSymbols: vi.fn(async (): Promise<WorkspaceSymbolsResult> => result("semantic", [semanticSymbol])),
+		resolveSymbol: vi.fn(async (): Promise<ResolvedSymbolResult> => result("semantic", [semanticSymbol])),
+		hover: vi.fn(
+			async (): Promise<HoverResult> =>
+				result("semantic", [{ contents: [{ kind: "markdown", value: "hover docs" }] }]),
+		),
+		incomingCalls: vi.fn(async (): Promise<CallHierarchyResult> => result("semantic", [callEdge])),
+		outgoingCalls: vi.fn(async (): Promise<CallHierarchyResult> => result("semantic", [callEdge])),
+		supertypes: vi.fn(async (): Promise<TypeHierarchyResult> => result("semantic", [semanticSymbol])),
+		subtypes: vi.fn(async (): Promise<TypeHierarchyResult> => result("semantic", [semanticSymbol])),
 	};
 }
 
-function services(project: string, index = createIndex(), router = createRouter()): SymbolsCodeIntelligenceServices {
-	return { workspaceRoot: project, index, router };
+function services(project: string, router = createRouter()): SymbolsCodeIntelligenceServices {
+	return { workspaceRoot: project, router };
 }
 
 async function execute(definition: ToolDefinition<any, any>, input: Partial<SymbolsToolInput>, signal?: AbortSignal) {
@@ -145,33 +114,93 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 }
 
 describe("Symbols Tool V2", () => {
-	it("keeps legacy query operations on the shared index and out of the router", async () => {
+	it("rejects the removed lightweight-index operations with the unknown-operation validation error", async () => {
 		const project = await createProject();
-		const index = createIndex();
+		const definition = createSymbolsToolDefinition(project);
+
+		for (const input of [
+			{ operation: "find_symbol", query: "load" },
+			{ operation: "search_code", query: "load" },
+			{ operation: "code_map", path: "src" },
+		]) {
+			await expect(execute(definition, input as never)).rejects.toMatchObject({
+				code: "invalid_arguments",
+				name: "SymbolsToolInputError",
+				operation: String((input as { operation: string }).operation),
+				message: expect.stringContaining("must be supported"),
+			});
+		}
+	});
+
+	it("rejects removed argument variants with invalid_arguments instead of crashing", async () => {
+		const project = await createProject();
+		const definition = createSymbolsToolDefinition(project);
+
+		for (const input of [
+			{ operation: "find_definition", target: { type: "name_path", namePath: "UserService/load" } },
+			{ operation: "find_definition", query: "load" },
+			{
+				operation: "find_references",
+				target: { type: "position", path: "src/service.ts", position: { line: 1, character: 2 } },
+				mode: "semantic",
+			},
+		]) {
+			await expect(execute(definition, input as never)).rejects.toMatchObject({ code: "invalid_arguments" });
+		}
+	});
+
+	it("executes all thirteen language-service operations on the router", async () => {
+		const project = await createProject();
 		const router = createRouter();
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
-
-		const definitionResult = await execute(definition, { operation: "find_definition", query: "UserService" });
-		const referenceResult = await execute(definition, {
-			operation: "find_references",
-			query: "UserService",
+		const definition = createSymbolsToolDefinition(project, {
+			codeIntelligence: {
+				workspaceRoot: project,
+				router,
+				supportsSymbolIds: true,
+				getStatus: () => ({
+					workspaceRoot: project,
+					semanticConfigured: true,
+					semanticEnabled: true,
+					symbolStoreEntryCount: 0,
+					languageServers: [],
+				}),
+			},
 		});
+		const position = { type: "position" as const, path: "src/service.ts", position: { line: 1, character: 2 } };
+		const cases: Array<{ args: Partial<SymbolsToolInput>; routerMethod: string }> = [
+			{ args: { operation: "file_symbols", path: "src/service.ts" }, routerMethod: "fileSymbols" },
+			{ args: { operation: "find_definition", target: position }, routerMethod: "findDefinition" },
+			{ args: { operation: "find_references", target: position }, routerMethod: "findReferences" },
+			{ args: { operation: "find_implementations", target: position }, routerMethod: "findImplementations" },
+			{ args: { operation: "diagnostics", path: "src/service.ts" }, routerMethod: "getDiagnostics" },
+			{ args: { operation: "workspace_symbols", query: "load" }, routerMethod: "workspaceSymbols" },
+			{
+				args: { operation: "resolve_symbol", target: { type: "symbol_id", symbolId: "semantic-symbol" } },
+				routerMethod: "resolveSymbol",
+			},
+			{ args: { operation: "hover", target: position }, routerMethod: "hover" },
+			{ args: { operation: "incoming_calls", target: position }, routerMethod: "incomingCalls" },
+			{ args: { operation: "outgoing_calls", target: position }, routerMethod: "outgoingCalls" },
+			{ args: { operation: "supertypes", target: position }, routerMethod: "supertypes" },
+			{ args: { operation: "subtypes", target: position }, routerMethod: "subtypes" },
+		];
 
-		expect(index.ensureFresh).toHaveBeenCalledTimes(2);
-		expect(index.findDefinition).toHaveBeenCalledWith("UserService", expect.objectContaining({ skipRefresh: true }));
-		expect(index.findReferences).toHaveBeenCalledWith("UserService", expect.objectContaining({ skipRefresh: true }));
-		expect(router.findDefinition).not.toHaveBeenCalled();
-		expect(router.findReferences).not.toHaveBeenCalled();
-		expect(textOf(definitionResult)).toContain("legacy_compatibility=true");
-		expect(textOf(definitionResult)).toContain("lexical/name-based");
-		expect((referenceResult.details as SymbolsToolDetails | undefined)?.legacyCompatibility).toBe(true);
+		for (const { args, routerMethod } of cases) {
+			const output = await execute(definition, args);
+			expect(textOf(output)).toContain("[source=semantic completeness=complete]");
+			expect(router[routerMethod]).toHaveBeenCalledTimes(1);
+		}
+
+		const statusOutput = await execute(definition, { operation: "status" });
+		expect(textOf(statusOutput)).toContain("semantic_runtime=enabled");
+
+		expect(router.findSymbol).not.toHaveBeenCalled();
 	});
 
 	it("routes structured targets and forwards routing options and abort signal", async () => {
 		const project = await createProject();
-		const index = createIndex();
 		const router = createRouter();
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
+		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, router) });
 		const controller = new AbortController();
 
 		await execute(
@@ -179,7 +208,6 @@ describe("Symbols Tool V2", () => {
 			{
 				operation: "find_references",
 				target: { type: "position", path: "src/service.ts", position: { line: 1, character: 2 } },
-				mode: "semantic",
 				language: "typescript",
 				definitionId: "ts-server",
 				timeoutMs: 1000,
@@ -191,7 +219,6 @@ describe("Symbols Tool V2", () => {
 		expect(router.findReferences).toHaveBeenCalledWith(
 			{ type: "position", path: "src/service.ts", position: { line: 1, character: 2 } },
 			expect.objectContaining({
-				mode: "semantic",
 				language: "typescript",
 				definitionId: "ts-server",
 				timeoutMs: 1000,
@@ -199,19 +226,18 @@ describe("Symbols Tool V2", () => {
 				signal: controller.signal,
 			}),
 		);
-		expect(index.ensureFresh).not.toHaveBeenCalled();
+		expect(vi.mocked(router.findReferences).mock.calls[0]?.[1]).not.toHaveProperty("mode");
 	});
 
-	it("rejects ambiguous targets, invalid positions, and irrelevant textual routing options", async () => {
+	it("rejects ambiguous targets and invalid positions", async () => {
 		const project = await createProject();
 		const definition = createSymbolsToolDefinition(project);
 
 		await expect(
 			execute(definition, {
 				operation: "find_definition",
-				query: "load",
 				target: { type: "name_path", namePath: "UserService/load" },
-			}),
+			} as never),
 		).rejects.toMatchObject({ code: "invalid_arguments", operation: "find_definition" });
 		await expect(
 			execute(definition, {
@@ -219,82 +245,57 @@ describe("Symbols Tool V2", () => {
 				target: { type: "position", path: "src/service.ts", position: { line: 1 } },
 			} as never),
 		).rejects.toMatchObject({ code: "invalid_arguments" });
-		await expect(
-			execute(definition, { operation: "search_code", query: "load", mode: "semantic" } as never),
-		).rejects.toMatchObject({ code: "invalid_arguments", operation: "search_code" });
 	});
 
-	it("preserves metadata and emits reusable 0-based position or name_path hints", async () => {
+	it("preserves metadata and emits reusable 0-based position targets", async () => {
 		const project = await createProject();
-		const index = createIndex();
 		const router = createRouter();
-		vi.mocked(router.findSymbol).mockResolvedValueOnce({
-			items: [semanticSymbol],
+		vi.mocked(router.fileSymbols).mockResolvedValueOnce({
+			items: [{ symbol: semanticSymbol, children: [] }],
 			meta: { source: "semantic", completeness: "partial", warnings: ["semantic limited"] },
 		});
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
-		const semanticResult = await execute(definition, { operation: "find_symbol", query: "load" });
-		const semanticText = textOf(semanticResult);
+		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, router) });
+		const semanticText = textOf(await execute(definition, { operation: "file_symbols", path: "src/service.ts" }));
 
 		expect(semanticText).toContain("source=semantic completeness=partial");
 		expect(semanticText).toContain('"line":1,"character":2');
 		expect(semanticText).toContain("semantic limited");
-		expect(index.ensureFresh).not.toHaveBeenCalled();
 
-		vi.mocked(router.findSymbol).mockResolvedValueOnce({
-			items: [{ ...semanticSymbol, selectionRange: undefined }],
-			meta: { source: "lightweight", completeness: "complete" },
+		vi.mocked(router.fileSymbols).mockResolvedValueOnce({
+			items: [{ symbol: { ...semanticSymbol, selectionRange: undefined, line: 12 }, children: [] }],
+			meta: { source: "semantic", completeness: "complete" },
 		});
-		const lightweightText = textOf(await execute(definition, { operation: "find_symbol", query: "load" }));
-		expect(lightweightText).toContain('"type":"name_path"');
-		expect(lightweightText).not.toContain('"character":0');
+		const lineOnlyText = textOf(await execute(definition, { operation: "file_symbols", path: "src/service.ts" }));
+		expect(lineOnlyText).toContain("precision=line-only");
+		expect(lineOnlyText).not.toContain('"character"');
+		expect(lineOnlyText).not.toContain("target=");
 	});
 
-	it("keeps direct text and map operations on the same index", async () => {
+	it("does not inject unrelated options into semantic file-symbol routing", async () => {
 		const project = await createProject();
-		const index = createIndex();
 		const router = createRouter();
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
-
-		const search = await execute(definition, { operation: "search_code", query: "UserService" });
-		const map = await execute(definition, { operation: "code_map", path: "src" });
-
-		expect(index.searchCode).toHaveBeenCalledTimes(1);
-		expect(index.getCodeMap).toHaveBeenCalledTimes(1);
-		expect(index.ensureFresh).toHaveBeenCalledTimes(2);
-		expect(router.findSymbol).not.toHaveBeenCalled();
-		expect(textOf(search)).toContain("src/service.ts:1:");
-		expect(textOf(map)).toContain("src/service.ts (typescript)");
-	});
-
-	it("does not inject text-search options into semantic file-symbol routing", async () => {
-		const project = await createProject();
-		const index = createIndex();
-		const router = createRouter();
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
+		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, router) });
 
 		await execute(definition, { operation: "file_symbols", path: "src/service.ts" });
-		await execute(definition, { operation: "search_code", query: "UserService", limit: 20 });
-		await execute(definition, { operation: "code_map", path: "src", limit: 20 });
+		await execute(definition, { operation: "workspace_symbols", query: "UserService", path: "src", limit: 20 });
 
 		const fileRoutingOptions = vi.mocked(router.fileSymbols).mock.calls[0]?.[1];
 		expect(fileRoutingOptions).not.toHaveProperty("limit");
 		expect(fileRoutingOptions).not.toHaveProperty("path");
-		expect(vi.mocked(index.searchCode).mock.calls[0]?.[1]).not.toHaveProperty("mode");
-		expect(vi.mocked(index.searchCode).mock.calls[0]?.[1]).not.toHaveProperty("timeoutMs");
-		expect(vi.mocked(index.getCodeMap).mock.calls[0]?.[1]).not.toHaveProperty("mode");
-		expect(vi.mocked(index.getCodeMap).mock.calls[0]?.[1]).not.toHaveProperty("timeoutMs");
+		expect(fileRoutingOptions).not.toHaveProperty("mode");
+		const workspaceRoutingOptions = vi.mocked(router.workspaceSymbols!).mock.calls[0]?.[1];
+		expect(workspaceRoutingOptions).toMatchObject({ path: "src", limit: 20 });
+		expect(workspaceRoutingOptions).not.toHaveProperty("mode");
 	});
 
 	it("fails fast for cross-workspace injected services", async () => {
 		const project = await createProject();
 		const otherProject = await createProject();
-		const index = createIndex();
 		const router = createRouter();
 
 		let error: unknown;
 		try {
-			createSymbolsToolDefinition(project, { codeIntelligence: services(otherProject, index, router) });
+			createSymbolsToolDefinition(project, { codeIntelligence: services(otherProject, router) });
 		} catch (caught) {
 			error = caught;
 		}
@@ -303,15 +304,16 @@ describe("Symbols Tool V2", () => {
 
 	it("does not split a surrogate pair when presentation output is capped", async () => {
 		const project = await createProject();
-		const index = createIndex();
 		const router = createRouter();
 		const longSymbol = { ...semanticSymbol, signature: "😀".repeat(800) };
-		vi.mocked(router.findSymbol).mockResolvedValue({
-			items: [longSymbol],
+		vi.mocked(router.fileSymbols).mockResolvedValue({
+			items: [{ symbol: longSymbol, children: [] }],
 			meta: { source: "semantic", completeness: "complete" },
 		});
-		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, index, router) });
-		const output = textOf(await execute(definition, { operation: "find_symbol", query: "load", maxChars: 1_000 }));
+		const definition = createSymbolsToolDefinition(project, { codeIntelligence: services(project, router) });
+		const output = textOf(
+			await execute(definition, { operation: "file_symbols", path: "src/service.ts", maxChars: 1_000 }),
+		);
 
 		expect(output.length).toBeLessThanOrEqual(1_000);
 		expect(output).toContain("Tool output truncated for presentation.");
@@ -322,7 +324,7 @@ describe("Symbols Tool V2", () => {
 		const project = await createProject();
 		const router = createRouter();
 		const definition = createSymbolsToolDefinition(project, {
-			codeIntelligence: services(project, createIndex(), router),
+			codeIntelligence: services(project, router),
 		});
 
 		await execute(definition, {
@@ -340,10 +342,15 @@ describe("Symbols Tool V2", () => {
 		const project = await createProject();
 		const agentDir = join(project, "agent");
 		await mkdir(agentDir, { recursive: true });
-		const index = createIndex();
 		const router = createRouter();
-		const codeIntelligence = services(project, index, router);
+		const codeIntelligence = services(project, router);
 		const settingsManager = SettingsManager.create(project, agentDir);
+		// This test is about the symbols tool itself, so the session must have the tool registered;
+		// codeIntelligence.symbolsEnabled is off by default and gates registration.
+		settingsManager.setCodeIntelligenceSettings({
+			...settingsManager.getCodeIntelligenceSettings(),
+			symbolsEnabled: true,
+		});
 		const { session } = await createAgentSession({
 			cwd: project,
 			agentDir,
@@ -358,9 +365,8 @@ describe("Symbols Tool V2", () => {
 		await session.reload();
 		const after = session.getToolDefinition("symbols");
 		expect(after).toBeDefined();
-		await execute(after!, { operation: "find_symbol", query: "load" });
-		expect(router.findSymbol).toHaveBeenCalledTimes(1);
-		expect(index.ensureFresh).not.toHaveBeenCalled();
+		await execute(after!, { operation: "file_symbols", path: "src/service.ts" });
+		expect(router.fileSymbols).toHaveBeenCalledTimes(1);
 		expect(session.getActiveToolNames()).toContain("symbols");
 		expect(session.getAllTools().find((tool) => tool.name === "symbols")?.promptGuidelines).toHaveLength(8);
 		session.dispose();

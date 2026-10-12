@@ -139,7 +139,7 @@ try {
  render(h(Composer),document.getElementById('app')); await wait(70);
  const menu=document.querySelector('.suggest');
  if(!menu) throw Error('slash menu missing');
- if(getComputedStyle(menu).animationName!=='suggest-open') throw Error('slash entrance missing');
+ if(getComputedStyle(menu).animationName!=='pop-in') throw Error('slash entrance missing');
  const editor=document.querySelector('.composer-input');
  if(menu.getBoundingClientRect().bottom>editor.getBoundingClientRect().top) throw Error('slash covers editor');
  const card=document.querySelector('.composer'); card.classList.add('expanded'); await wait(300);

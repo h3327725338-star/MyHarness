@@ -1,10 +1,11 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { GENERAL_KEY, activateSlot, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
+import { GENERAL_KEY, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
-import { normPath } from "./util.js";
+import { loadPrefs, normPath } from "./util.js";
 import { serverText, t } from "./i18n.js";
+import { getFetch } from "./export-mode.js";
 
 let dialogResolver = null;
 
@@ -71,6 +72,24 @@ export function closeCommand() {
 	if (!state.view.cmd) return;
 	setView({ cmd: null });
 	setTimeout(() => document.querySelector(".composer-input")?.focus(), 0);
+}
+
+/**
+ * The message when an export is refused because the conversation is too large: the server answers HTTP 413 with
+ * `{ code: "export_too_large", bytes, limit }` (see W26b). Sizes are shown in MiB with one decimal so the user sees
+ * the size and the limit instead of a bare failure. Returns null for anything else so other failures keep their
+ * existing wording.
+ */
+export function exportTooLargeMessage(status, body) {
+	if (status !== 413 || body?.code !== "export_too_large") return null;
+	const size = body.bytes;
+	const limit = body.limit;
+	if (typeof size !== "number" || typeof limit !== "number" || !Number.isFinite(size) || !Number.isFinite(limit)) return null;
+	const mib = (bytes) => (bytes / 1024 / 1024).toFixed(1);
+	return t("This conversation is too large to export ({size} MiB, limit {limit} MiB). Start a new chat and export that one, or copy the conversation's .jsonl file from the data folder.", {
+		size: mib(size),
+		limit: mib(limit),
+	});
 }
 
 export const actions = {
@@ -339,12 +358,65 @@ export const actions = {
 	},
 
 	async exportSession() {
-		const a = document.createElement("a");
-		a.href = "/api/sessions/export";
-		a.download = "";
-		document.body.appendChild(a);
-		a.click();
-		a.remove();
+		try {
+			const view = state.view || {};
+			const prefs = {
+				...loadPrefs(),
+				chatMode: view.chatMode,
+				theme: view.theme,
+				colorThemes: view.colorThemes,
+				colorTheme: view.colorTheme,
+				motion: view.motion,
+				readWidth: view.readWidth,
+				lang: view.lang,
+				sidebarW: view.sidebarW,
+				panelW: view.panelW,
+			};
+			const headers = {
+				"content-type": "application/json",
+				"x-myharness-web": "1",
+			};
+			const slot = activeSlotId();
+			if (slot) headers["x-myharness-slot"] = slot;
+			const fetchFn = getFetch ? getFetch() : fetch;
+			const res = await fetchFn("/api/sessions/export", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ prefs }),
+			});
+			if (!res.ok) {
+				const text = await res.text();
+				let body;
+				try {
+					body = JSON.parse(text);
+				} catch {
+					body = undefined;
+				}
+				const tooLarge = exportTooLargeMessage(res.status, body);
+				if (tooLarge) {
+					toast(tooLarge, "error", 9000);
+					return;
+				}
+				const msg = body?.error || text;
+				throw new Error(msg || t("Request failed ({status})", { status: res.status }));
+			}
+
+			const disp = res.headers.get("content-disposition") || "";
+			const match = disp.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+			const defaultName = `${(state.snap?.session?.name || "session").replace(/[^\w.-]+/g, "_")}.html`;
+			const filename = match ? decodeURIComponent(match[1].trim()) : defaultName;
+			const blob = await res.blob();
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = filename;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 2000);
+		} catch (error) {
+			toast(serverText(error?.message, t("The operation failed.")), "error", 9000);
+		}
 	},
 
 	async shutdown() {

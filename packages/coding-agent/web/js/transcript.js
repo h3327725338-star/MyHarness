@@ -1,16 +1,18 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
-import { api, useStore, setView } from "./store.js";
+import { activeSlotId, api, fetchMoreTranscript, getTurnsCache, setTurnsCache, setView, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
+import { buildTurns, cachedTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
 import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
+import { openImageLightbox } from "./lightbox.js";
+import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 
@@ -20,23 +22,100 @@ function Ansi({ text }) {
 	return html`${segments.map((seg, i) => (Object.keys(seg.style).length ? html`<span key=${i} style=${seg.style}>${seg.text}</span>` : seg.text))}`;
 }
 
+// "Show all" of a large text used to paste the whole thing into one <pre> in a single synchronous
+// render (a 1 MB output measured 590-860 ms of blocked main thread on a 2026-10-12 lab run). The
+// expanded text is therefore appended in blocks: the first block renders immediately, the rest is
+// appended through requestIdleCallback — one block per idle slot, with a plain setTimeout as the
+// backstop because idle callbacks are throttled to a standstill while the page is hidden. Collapsing
+// the card or unmounting the component stops the chain and drops every pending callback.
+// Blocks are separate child nodes of the <pre> and never rewritten: setting `textContent` again with
+// the longer string made the browser lay out the whole block again each time (~70 ms for the last
+// 100 KB of a 1 MB pre, measured in isolation 2026-10-12), which would put every append back over
+// the long-task budget. Appending one node at the end keeps the cost at the new block only.
+const SHOW_ALL_CHUNK = 100 * 1024;
+
+/** The first `pos` characters of `text` as stable 100 KB blocks — one `Ansi` child per block. */
+function ChunkedAnsi({ text, pos }) {
+	const blocks = [];
+	for (let start = 0; start < pos; start += SHOW_ALL_CHUNK) blocks.push(html`<${Ansi} key=${start} text=${text.slice(start, Math.min(start + SHOW_ALL_CHUNK, pos))} />`);
+	return blocks;
+}
+
+function useChunkedShowAll(text) {
+	const [pos, setPos] = useState(0);
+	const posRef = useRef(0);
+	const textRef = useRef(text);
+	textRef.current = text;
+	const handles = useRef([]);
+	const clearPending = () => {
+		for (const handle of handles.current) {
+			if (handle.idle !== undefined && typeof cancelIdleCallback === "function") cancelIdleCallback(handle.idle);
+			clearTimeout(handle.timeout);
+		}
+		handles.current = [];
+	};
+	useEffect(() => () => clearPending(), []);
+	const scheduleNext = () => {
+		const handle = { timeout: undefined, idle: undefined, done: false };
+		const run = () => {
+			if (handle.done) return;
+			handle.done = true;
+			appendBlock();
+		};
+		if (typeof requestIdleCallback === "function") handle.idle = requestIdleCallback(run, { timeout: 100 });
+		handle.timeout = setTimeout(run, 100);
+		handles.current.push(handle);
+	};
+	const appendBlock = () => {
+		clearPending();
+		const full = textRef.current.length;
+		posRef.current = Math.min(posRef.current + SHOW_ALL_CHUNK, full);
+		setPos(posRef.current);
+		if (posRef.current < full) scheduleNext();
+	};
+	const expand = () => {
+		clearPending();
+		const full = textRef.current.length;
+		posRef.current = Math.min(SHOW_ALL_CHUNK, full);
+		setPos(posRef.current);
+		if (posRef.current < full) scheduleNext();
+	};
+	const collapse = () => {
+		clearPending();
+		posRef.current = 0;
+		setPos(0);
+	};
+	return { expanded: pos > 0, pos, expand, collapse };
+}
+
 function Output({ text, max = 20_000, tail = false }) {
-	const [all, setAll] = useState(false);
 	const glide = useHeightGlide();
-	const shown = !all && text.length > max ? (tail ? text.slice(-max) : text.slice(0, max)) : text;
-	return html`<div class="raw-block" ref=${glide.ref}><pre class="raw-pre"><${Ansi} text=${shown} /></pre>
-		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => setAll(!all))}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
+	const show = useChunkedShowAll(text);
+	const inner = show.expanded
+		? html`<${ChunkedAnsi} text=${text} pos=${show.pos} />`
+		: html`<${Ansi} text=${text.length > max ? (tail ? text.slice(-max) : text.slice(0, max)) : text} />`;
+	return html`<div class="raw-block" ref=${glide.ref}><pre class="raw-pre">${inner}</pre>
+		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => (show.expanded ? show.collapse() : show.expand()))}>${show.expanded ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
 const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
+// Above this size running the text through the markdown parser is itself the long task: the block
+// stays a plain <pre> (still appended in chunks by the same "show all" mechanism).
+const MARKDOWN_PLAIN_LIMIT = 200 * 1024;
 
 /** Text read from a Markdown file renders like the chat; everything else stays plain/code output. */
 function MarkdownOutput({ text, max = 60_000 }) {
-	const [all, setAll] = useState(false);
 	const glide = useHeightGlide();
-	const shown = !all && text.length > max ? text.slice(0, max) : text;
-	return html`<div class="raw-block raw-md" ref=${glide.ref}><${Markdown} text=${shown} />
-		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => setAll(!all))}>${all ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
+	const show = useChunkedShowAll(text);
+	const plain = text.length > MARKDOWN_PLAIN_LIMIT;
+	const shown = show.expanded ? text.slice(0, show.pos) : text.length > max ? text.slice(0, max) : text;
+	const body = !plain
+		? html`<${Markdown} text=${shown} />`
+		: show.expanded
+			? html`<pre class="raw-pre"><${ChunkedAnsi} text=${text} pos=${show.pos} /></pre>`
+			: html`<pre class="raw-pre"><${Ansi} text=${shown} /></pre>`;
+	return html`<div class="raw-block raw-md" ref=${glide.ref}>${body}
+		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => (show.expanded ? show.collapse() : show.expand()))}>${show.expanded ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
 function RawDetails({ step }) {
@@ -45,6 +124,8 @@ function RawDetails({ step }) {
 	const [showDetails, setShowDetails] = useState(false);
 	const output = result?.text ?? run?.partial ?? "";
 	const exitCode = details?.exitCode;
+	// The server replaces oversized details with { truncatedDetails, originalChars }; show a quiet note instead of the raw fields.
+	const originalChars = typeof details?.originalChars === "number" && Number.isFinite(details.originalChars) ? details.originalChars : undefined;
 	return html`<div class="raw">
 		<div class="raw-meta">
 			<span class="raw-key">${t("tool")}</span><code>${call.name}</code>
@@ -61,13 +142,24 @@ function RawDetails({ step }) {
 				<div class="raw-label">${result ? (result.isError ? t("Error output") : t("Result")) : t("Output so far")}</div>
 				${step.kind === "read" && result && !result.isError && MARKDOWN_PATH.test(step.path || "") ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}
 			</div>` : null}
-			${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => html`<img key=${i} src=${`data:${img.mimeType};base64,${img.data}`} alt=${t("tool image")} />`)}</div>` : null}
-			${details && Object.keys(details).length ? html`<div class="raw-extra">
-				<button class="raw-extra-head" aria-expanded=${showDetails} title=${showDetails ? t("Hide result details") : t("Show result details")} onClick=${() => setShowDetails(!showDetails)}>
-					<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="raw-extra-title">${t("Result details")}</span><span class="grow" /><span class="raw-extra-hint">${showDetails ? t("Hide") : t("Show")}</span>
-				</button>
-				<${Collapse} open=${showDetails}><pre class="raw-pre">${formatData(details)}</pre><//>
-			</div>` : null}
+			${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => {
+				const src = `data:${img.mimeType};base64,${img.data}`;
+				const name = t("tool image");
+				const zoomable = src.startsWith("data:") || src.startsWith("blob:"); // the page CSP only allows these two
+				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
+			})}</div>` : null}
+			${details && Object.keys(details).length
+				? details.truncatedDetails === true
+					? html`<div class="raw-note">${originalChars !== undefined
+							? t("Result details are too large to show ({chars} characters). The full content is kept in the session JSONL file.", { chars: originalChars.toLocaleString(getLang()) })
+							: t("Result details are too large to show. The full content is kept in the session JSONL file.")}</div>`
+					: html`<div class="raw-extra">
+						<button class="raw-extra-head" aria-expanded=${showDetails} title=${showDetails ? t("Hide result details") : t("Show result details")} onClick=${() => setShowDetails(!showDetails)}>
+							<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="raw-extra-title">${t("Result details")}</span><span class="grow" /><span class="raw-extra-hint">${showDetails ? t("Hide") : t("Show")}</span>
+						</button>
+						<${Collapse} open=${showDetails}><pre class="raw-pre">${formatData(details)}</pre><//>
+					</div>`
+				: null}
 		</div>
 	</div>`;
 }
@@ -331,10 +423,10 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${interrupted ? t("Interrupted") : titles[outcome] ? t(titles[outcome]) : outcome}</strong></div>
 		${interrupted ? html`<div class="banner-error">${blurb}${error ? html`<br />${clip(serverText(error, ""), 300)}` : null}</div>` : error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
-		<div class="banner-actions">
+		${!exportReadOnly() ? html`<div class="banner-actions">
 			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry()}>${t("Retry")}</button>` : null}
 			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => openCommand("git")}>${t("Undo or commit")}</button>` : null}
-		</div>
+		</div>` : null}
 	</div>`;
 }
 
@@ -344,7 +436,12 @@ function UserMessage({ item, turn }) {
 		<div class="user-bubble" title=${new Date(item.ts).toLocaleString(getLang())}>
 			${item.command ? html`<div class="chip-line"><span class="badge accent">/${item.command.name}</span></div>` : null}
 			${item.skill ? html`<div class="chip-line"><span class="badge accent">${t("skill: {name}", { name: item.skill.name })}</span></div>` : null}
-			${item.images?.length ? html`<div class="user-images">${item.images.map((img, i) => html`<img key=${i} src=${`data:${img.mimeType};base64,${img.data}`} alt=${t("attached image")} />`)}</div>` : null}
+			${item.images?.length ? html`<div class="user-images">${item.images.map((img, i) => {
+				const src = `data:${img.mimeType};base64,${img.data}`;
+				const name = t("attached image");
+				const zoomable = src.startsWith("data:") || src.startsWith("blob:"); // the page CSP only allows these two
+				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
+			})}</div>` : null}
 			${item.text ? html`<${Markdown} text=${item.text} class="user-text" breaks=${true} />` : null}
 		</div>
 		<div class="msg-actions">
@@ -544,6 +641,11 @@ function Welcome({ snap, models }) {
 }
 
 // ---- Transcript container ------------------------------------------------------------------------
+// Turn mounting arrives in chunks: the first frame paints only the newest turns, then one batch per
+// animation frame is appended above until the whole window is mounted. The reader sees content sooner
+// and no single frame carries the full mount.
+const CHUNK_FIRST = 20;
+const CHUNK_NEXT = 20;
 export function Transcript() {
 	const items = useStore((s) => s.items);
 	const gitTask = useStore((s) => s.gitTask);
@@ -559,11 +661,21 @@ export function Transcript() {
 	const cwd = snap?.cwd || "";
 	const active = !!snap?.active || !!snap?.flags?.completion;
 	const prevTurns = useRef(null);
+	const turnsSlot = activeSlotId();
 	const turns = useMemo(() => {
+		// Cross-session cache: when this bag's last build still describes exactly these references, reuse the very
+		// same turn objects (skipping buildTurns and the sameTurn pass). Mount chunking stays as it is: reusing the
+		// objects does not spare the DOM insert, and a full-window first commit measured 3x slower to first paint.
+		const cached = cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd);
+		if (cached) {
+			prevTurns.current = cached;
+			return cached;
+		}
 		const built = buildTurns(items, { cwd, toolRuns }, prevTurns.current);
+		setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
 		prevTurns.current = built;
 		return built;
-	}, [items, toolRuns, cwd]);
+	}, [items, toolRuns, cwd, turnsSlot]);
 
 	// Scroll behaviour: follow new output only while the reader is at the bottom.
 	const scroller = useRef(null);
@@ -576,19 +688,43 @@ export function Transcript() {
 	const lastTop = useRef(0);
 	const programmatic = useRef(false);
 	const holdPlace = useRef(false);
-	const onScroll = () => {
+	// At most one real scroll per frame: toBottom only schedules, the frame callback does one read plus one write.
+	const bottomFrame = useRef(0);
+	// The ResizeObserver reports the mounted content height; while pinned we scroll to that cached number instead
+	// of re-reading scrollHeight. The scroller keeps its own padding, so the cached height is never below the real
+	// maximum scroll position and the assignment clamps exactly onto the bottom (sub-pixel rounding aside).
+	const contentHeight = useRef(0);
+	const roActive = useRef(false);
+	// Scroll events arrive faster than frames and re-measuring per event reads the same layout repeatedly.
+	// One coalesced measurement per animation frame reads each geometry property once, and the header class is
+	// written only when the boolean actually flips (toggling it every event invalidates styles for nothing).
+	const measureFrame = useRef(0);
+	const headerRef = useRef(null);
+	const headerScrolled = useRef(false);
+	const measureScroll = () => {
+		measureFrame.current = 0;
 		const el = scroller.current;
-		const distance = Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop);
+		if (!el) return;
+		const top = el.scrollTop;
+		const distance = Math.max(0, el.scrollHeight - el.clientHeight - top);
 		const near = distance <= 10;
 		// Size changes and scroll anchoring are not reader intent.
-		if (!programmatic.current && Date.now() - lastInteract.current < 500 && el.scrollTop < lastTop.current - 2 && distance > 72) stick.current = false;
+		if (!programmatic.current && Date.now() - lastInteract.current < 500 && top < lastTop.current - 2 && distance > 72) stick.current = false;
 		if (near && !holdPlace.current) { stick.current = true; programmatic.current = false; }
-		lastTop.current = el.scrollTop;
+		lastTop.current = top;
 		const show = !stick.current && distance > 72;
 		setAway((prev) => (prev === show ? prev : show));
-		const header = document.querySelector(".main-header");
-		header?.classList.toggle("scrolled", el.scrollTop > 4);
+		if (!headerRef.current || !headerRef.current.isConnected) headerRef.current = document.querySelector(".main-header");
+		const scrolled = top > 4;
+		if (scrolled !== headerScrolled.current) {
+			headerScrolled.current = scrolled;
+			headerRef.current?.classList.toggle("scrolled", scrolled);
+		}
 	};
+	const scheduleMeasure = () => {
+		if (!measureFrame.current) measureFrame.current = requestAnimationFrame(measureScroll);
+	};
+	const onScroll = () => scheduleMeasure();
 	const noteInteraction = (event) => {
 		if (event.type === "wheel" || event.type === "keydown" || event.target === scroller.current) holdPlace.current = false;
 		const scrollInput = event.type === "wheel" ? event.deltaY < 0
@@ -608,34 +744,71 @@ export function Transcript() {
 		holdPlace.current = row.getAttribute("aria-expanded") !== "true";
 		if (holdPlace.current) stick.current = false;
 	};
+	const flushBottom = () => {
+		bottomFrame.current = 0;
+		const el = scroller.current;
+		if (!el || !stick.current) { programmatic.current = false; return; }
+		el.scrollTop = el.scrollHeight;
+		lastTop.current = el.scrollTop;
+		programmatic.current = false;
+	};
 	const toBottom = (smooth = false) => {
 		const el = scroller.current;
 		if (!el) return;
 		programmatic.current = true;
 		setAway(false);
-		if (smooth) return el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-		el.scrollTop = el.scrollHeight;
+		if (smooth) { cancelAnimationFrame(bottomFrame.current); bottomFrame.current = 0; return el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); }
+		if (!bottomFrame.current) bottomFrame.current = requestAnimationFrame(flushBottom);
+	};
+	// ResizeObserver fires after layout but before paint: scrolling to the cached height here follows new
+	// output in the same frame it grows, with one write and no scrollHeight read. The height is at or above the
+	// real maximum scroll position (see contentHeight), so the browser clamps the write exactly onto the bottom.
+	const followToBottom = () => {
+		const el = scroller.current;
+		if (!el) return;
+		if (!contentHeight.current) { toBottom(); return; }
+		el.scrollTop = contentHeight.current;
 		lastTop.current = el.scrollTop;
-		programmatic.current = false;
 	};
 	useLayoutEffect(() => {
-		if (stick.current && Date.now() - lastInteract.current > 500) toBottom();
+		// Without a ResizeObserver (or before its first callback) the item signal still has to drive the follow.
+		if (!roActive.current && stick.current && Date.now() - lastInteract.current > 500) toBottom();
 	}, [items, order, userBash, toolRuns]);
 	useEffect(() => {
 		if (!content.current || typeof ResizeObserver === "undefined") return undefined;
-		const ro = new ResizeObserver(() => {
-			if (stick.current) toBottom();
-			onScroll();
+		roActive.current = true;
+		const ro = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				if (entry.target !== content.current) continue;
+				const box = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize;
+				const height = box && typeof box.blockSize === "number" ? box.blockSize : entry.contentRect.height;
+				if (height > 0) contentHeight.current = height;
+			}
+			if (stick.current) followToBottom();
+			else scheduleMeasure();
 		});
 		ro.observe(content.current);
 		ro.observe(scroller.current);
-		return () => ro.disconnect();
+		return () => {
+			roActive.current = false;
+			ro.disconnect();
+		};
 	}, []);
 	const session = snap?.session?.id;
 	useLayoutEffect(() => {
 		stick.current = true;
+		// The cached height belongs to the previous session; the first follow after a switch reads once.
+		contentHeight.current = 0;
 		toBottom();
 	}, [session]);
+	useEffect(() => () => {
+		cancelAnimationFrame(bottomFrame.current);
+		bottomFrame.current = 0;
+		cancelAnimationFrame(measureFrame.current);
+		measureFrame.current = 0;
+		cancelAnimationFrame(chunkFrame.current);
+		chunkFrame.current = 0;
+	}, []);
 
 	const repairing = turns.some((turn) => turn.standalone?.kind === "gitRepair");
 	const lastTurnIndex = (() => {
@@ -645,8 +818,77 @@ export function Transcript() {
 	// Long sessions: render the most recent turns and let the reader load earlier ones on demand.
 	const [limit, setLimit] = useState(60);
 	const hidden = Math.max(0, turns.length - limit);
+	// A paged transcript still has older items on the server once everything in memory is shown.
+	const transcriptHasMore = useStore((s) => s.transcriptHasMore);
+	const transcriptFetching = useStore((s) => s.transcriptFetching);
+	const showEarlier = hidden > 0 || transcriptHasMore;
 	const shown = hidden ? turns.slice(hidden) : turns;
+	// How many of `shown` are mounted so far: mounting starts with the newest CHUNK_FIRST turns and grows
+	// by CHUNK_NEXT per animation frame. When another session is shown (the new bag arrives with a new session
+	// id in the same commit) chunking restarts from the first batch; while one session keeps streaming the
+	// batch count only grows, so the transcript never collapses back. Derived during render on purpose: the
+	// first commit after a switch already shows 20, never a stale full mount.
+	const [batches, setBatches] = useState(1);
+	const batchSession = useRef(session);
+	const switched = batchSession.current !== session;
+	if (switched) batchSession.current = session;
+	const liveBatches = switched ? 1 : batches;
+	const mounted = liveBatches <= 1 ? Math.min(shown.length, CHUNK_FIRST) : Math.min(shown.length, CHUNK_FIRST + (liveBatches - 1) * CHUNK_NEXT);
+	const rendered = mounted >= shown.length ? shown : shown.slice(shown.length - mounted);
+	const renderedStart = hidden + (shown.length - rendered.length);
+	const chunkFrame = useRef(0);
+	const chunkHeightBefore = useRef(0);
+	const cancelChunks = () => {
+		cancelAnimationFrame(chunkFrame.current);
+		chunkFrame.current = 0;
+	};
+	useLayoutEffect(() => {
+		// A switch renders batch 1 from derived state; sync the counter before paint so later frames keep counting up.
+		if (switched && batches !== 1) setBatches(1);
+	});
+	useEffect(() => {
+		if (rendered.length >= shown.length) return undefined;
+		chunkFrame.current = requestAnimationFrame(() => {
+			chunkFrame.current = 0;
+			// Older turns mount above what is already on screen; the height taken before the commit lets the
+			// layout effect below shift the scroll by exactly the growth, so the newest message does not move.
+			chunkHeightBefore.current = scroller.current?.scrollHeight || 0;
+			setBatches(liveBatches + 1);
+		});
+		return cancelChunks;
+	}, [rendered.length, shown.length, liveBatches]);
+	useLayoutEffect(() => {
+		if (chunkHeightBefore.current && scroller.current) {
+			scroller.current.scrollTop += scroller.current.scrollHeight - chunkHeightBefore.current;
+			chunkHeightBefore.current = 0;
+		}
+	}, [rendered.length]);
 	const heightBefore = useRef(0);
+	// "Show earlier" first shows what is already in memory; once that runs out on a paged transcript it fetches
+	// the next older page from the server and then shows a further window of it. The scroll anchor is taken before
+	// the fetch (older turns mount above) and applied when the limit grows, so the reader keeps their place.
+	const showEarlierNow = () => {
+		cancelChunks();
+		setBatches(Number.MAX_SAFE_INTEGER);
+		heightBefore.current = scroller.current?.scrollHeight || 0;
+		stick.current = false;
+		setLimit((shown) => shown + 60);
+	};
+	const showEarlierClick = () => {
+		if (hidden > 0 || !transcriptHasMore || transcriptFetching) {
+			if (hidden > 0) showEarlierNow();
+			return;
+		}
+		const slot = turnsSlot;
+		heightBefore.current = scroller.current?.scrollHeight || 0;
+		stick.current = false;
+		fetchMoreTranscript(slot).then((result) => {
+			if (result !== "ok") return;
+			cancelChunks();
+			setBatches(Number.MAX_SAFE_INTEGER);
+			setLimit((shown) => shown + 60);
+		});
+	};
 	useLayoutEffect(() => {
 		if (heightBefore.current && scroller.current) {
 			scroller.current.scrollTop += scroller.current.scrollHeight - heightBefore.current;
@@ -663,9 +905,9 @@ export function Transcript() {
 		<div class="transcript" ref=${scroller} onScroll=${onScroll} onWheel=${noteInteraction} onClickCapture=${holdOnOpen} onMouseDown=${noteInteraction} onKeyDown=${noteInteraction}>
 			<div class="transcript-inner" ref=${content}>
 				${empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
-				${hidden ? html`<button class="btn sm ghost earlier" onClick=${() => { heightBefore.current = scroller.current?.scrollHeight || 0; stick.current = false; setLimit(limit + 60); }}>${t("Show earlier messages ({hidden} hidden)", { hidden })}</button>` : null}
-				${shown.map((turn, i) => {
-					const index = hidden + i;
+				${showEarlier ? html`<button class="btn sm ghost earlier" disabled=${!hidden && transcriptFetching} onClick=${showEarlierClick}>${hidden ? t("Show earlier messages ({hidden} hidden)", { hidden }) : transcriptFetching ? t("Loading…") : t("Show more")}</button>` : null}
+				${rendered.map((turn, i) => {
+					const index = renderedStart + i;
 					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
 					const isLast = index === lastTurnIndex;
 					// A manual compaction runs after the last turn ended: that turn keeps its finished look.

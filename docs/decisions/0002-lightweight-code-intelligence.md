@@ -1,6 +1,6 @@
 # ADR 0002: Keep Code Intelligence lightweight by default
 
-- Status: accepted, release assets built and awaiting upload
+- Status: Superseded by [ADR 0003](0003-remove-lightweight-code-intelligence.md)
 - Date: 2026-09-20
 
 ## Context

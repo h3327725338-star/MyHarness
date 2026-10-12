@@ -1,6 +1,4 @@
 import type { SettingsManager } from "../../config/settings/index.ts";
-import { CodeSymbolIndex } from "../index/code-index.ts";
-import { LightweightCodeIntelligenceBackend } from "../index/lightweight/backend.ts";
 import { CodeIntelligenceRouter } from "../index/router/router.ts";
 import { LanguageServerManager, normalizeWorkspaceRoot } from "../lsp/language-server/manager.ts";
 import { LanguageServerRegistry } from "../lsp/language-server/registry.ts";
@@ -19,7 +17,6 @@ export interface CodeIntelligenceRuntimeOptions {
 	readonly registry?: LanguageServerRegistry;
 	readonly installationManager?: CodeIntelligenceInstallationManager;
 	readonly languageServerManager?: LanguageServerManager;
-	readonly index?: CodeSymbolIndex;
 	readonly symbolStore?: SymbolStoreApi;
 	readonly semanticEnabled?: boolean;
 	readonly maxSymbolStoreEntries?: number;
@@ -28,11 +25,9 @@ export interface CodeIntelligenceRuntimeOptions {
 /** One workspace-scoped owner for every Code Intelligence component. */
 export class CodeIntelligenceRuntime {
 	readonly workspaceRoot: string;
-	readonly index: CodeSymbolIndex;
 	readonly symbolStore: SymbolStoreApi;
 	readonly registry: LanguageServerRegistry;
 	readonly languageServerManager: LanguageServerManager;
-	readonly lightweight: LightweightCodeIntelligenceBackend;
 	readonly semantic: LspSemanticBackend | undefined;
 	readonly installationManager: CodeIntelligenceInstallationManager;
 	readonly router: CodeIntelligenceRouter;
@@ -43,12 +38,11 @@ export class CodeIntelligenceRuntime {
 
 	constructor(options: CodeIntelligenceRuntimeOptions) {
 		this.workspaceRoot = normalizeWorkspaceRoot(options.workspaceRoot);
-		this.index = options.index ?? new CodeSymbolIndex({ cwd: this.workspaceRoot, agentDir: options.agentDir });
 		this.symbolStore =
 			options.symbolStore ??
 			new SymbolStore({ workspaceRoot: this.workspaceRoot, maxEntries: options.maxSymbolStoreEntries });
-		const settings = options.settingsManager?.getCodeIntelligenceSettings() ?? { enabled: true };
-		this.semanticEnabled = options.semanticEnabled ?? settings.enabled;
+		const settings = options.settingsManager?.getCodeIntelligenceSettings() ?? { symbolsEnabled: true };
+		this.semanticEnabled = options.semanticEnabled ?? settings.symbolsEnabled;
 		this.installationManager =
 			options.installationManager ?? new CodeIntelligenceInstallationManager({ agentDir: options.agentDir });
 		const workspaceDataRoot = this.installationManager.getWorkspaceDataRoot(this.workspaceRoot);
@@ -61,24 +55,18 @@ export class CodeIntelligenceRuntime {
 			(configuredServers ? createBuiltInLanguageServerRegistry(settings) : new LanguageServerRegistry());
 		this.registry = registry;
 		this.languageServerManager = options.languageServerManager ?? new LanguageServerManager({ registry });
-		this.lightweight = new LightweightCodeIntelligenceBackend({
-			workspaceRoot: this.workspaceRoot,
-			index: this.index,
-		});
 		this.semantic =
 			this.semanticEnabled && registry.size > 0
 				? new LspSemanticBackend({ manager: this.languageServerManager })
 				: undefined;
 		this.router = new CodeIntelligenceRouter({
 			workspaceRoot: this.workspaceRoot,
-			lightweight: this.lightweight,
 			semantic: this.semantic,
 			symbolStore: this.symbolStore,
 		});
 		this.servicesValue = Object.freeze({
 			workspaceRoot: this.workspaceRoot,
 			router: this.router,
-			index: this.index as CodeIntelligenceRuntimeServices["index"],
 			symbolStore: this.symbolStore,
 			semantic: this.semantic,
 			languageServerManager: this.languageServerManager,

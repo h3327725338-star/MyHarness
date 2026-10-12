@@ -49,66 +49,61 @@ describe("Symbols operation-specific tool schema", () => {
 		const definition = createSymbolsToolDefinition(process.cwd());
 		const actual = operationProperties(definition);
 		const expected: Record<string, string[]> = {
-			find_symbol: ["operation", "query", "namePath", "path", "kinds", "mode", "exact", "limit", "maxChars"],
-			find_definition: [
-				"operation",
-				"query",
-				"path",
-				"target",
-				"mode",
-				"language",
-				"definitionId",
-				"timeoutMs",
-				"limit",
-				"maxChars",
-			],
+			file_symbols: ["operation", "path", "language", "definitionId", "timeoutMs", "maxChars"],
+			find_definition: ["operation", "target", "language", "definitionId", "timeoutMs", "maxChars"],
 			find_references: [
 				"operation",
-				"query",
-				"path",
 				"target",
-				"mode",
 				"language",
 				"definitionId",
 				"timeoutMs",
 				"includeDeclaration",
-				"limit",
 				"maxChars",
 			],
-			file_symbols: ["operation", "path", "mode", "language", "definitionId", "timeoutMs", "maxChars"],
-			find_implementations: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "maxChars"],
-			diagnostics: ["operation", "path", "mode", "language", "definitionId", "timeoutMs", "maxChars"],
-			search_code: ["operation", "query", "path", "regex", "ignoreCase", "limit", "maxChars"],
-			code_map: ["operation", "path", "limit", "maxChars"],
+			find_implementations: ["operation", "target", "language", "definitionId", "timeoutMs", "maxChars"],
+			diagnostics: ["operation", "path", "language", "definitionId", "timeoutMs", "maxChars"],
 			workspace_symbols: [
 				"operation",
 				"query",
 				"path",
 				"kinds",
-				"mode",
 				"language",
 				"definitionId",
 				"timeoutMs",
 				"limit",
 				"maxChars",
 			],
-			resolve_symbol: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "maxChars"],
-			hover: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "maxChars"],
-			incoming_calls: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
-			outgoing_calls: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
-			supertypes: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
-			subtypes: ["operation", "target", "mode", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
+			resolve_symbol: ["operation", "target", "language", "definitionId", "timeoutMs", "maxChars"],
+			hover: ["operation", "target", "language", "definitionId", "timeoutMs", "maxChars"],
+			incoming_calls: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
+			outgoing_calls: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
+			supertypes: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
+			subtypes: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
 			status: ["operation", "maxChars"],
 		};
 
+		// The tool contract is language-service (LSP) only: exactly these 13 operations.
 		expect([...actual.keys()].sort()).toEqual(Object.keys(expected).sort());
+		expect(actual.size).toBe(13);
 		for (const [operation, properties] of Object.entries(expected)) {
 			expect([...actual.get(operation)!].sort()).toEqual([...properties].sort());
 		}
 	});
 
+	it("keeps the model-visible definition free of lightweight-index vocabulary", () => {
+		const definition = createSymbolsToolDefinition(process.cwd());
+		const serialized = JSON.stringify(definition.parameters);
+		const description = definition.description;
+		for (const forbidden of ["lightweight", "name_path", "search_code", "code_map", "find_symbol", '"mode"']) {
+			expect(serialized.includes(forbidden)).toBe(false);
+			expect(description.includes(forbidden)).toBe(false);
+		}
+		expect(serialized.includes("namePath")).toBe(false);
+	});
+
 	it("accepts legal calls and rejects the previously polluted operation combinations before execution", () => {
 		const definition = createSymbolsToolDefinition(process.cwd());
+		const positionTarget = { type: "position", path: "src/a.ts", position: { line: 1, character: 2 } };
 
 		expect(
 			validate(definition, { operation: "file_symbols", path: "packages/coding-agent/src/tools/symbols.ts" }),
@@ -117,24 +112,41 @@ describe("Symbols operation-specific tool schema", () => {
 			operation: "workspace_symbols",
 			query: "commit",
 		});
-		expect(validate(definition, { operation: "search_code", query: "commit", limit: 20 })).toEqual({
-			operation: "search_code",
-			query: "commit",
+		expect(validate(definition, { operation: "find_definition", target: positionTarget })).toEqual({
+			operation: "find_definition",
+			target: positionTarget,
+		});
+		expect(
+			validate(definition, {
+				operation: "find_references",
+				target: { type: "symbol_id", symbolId: "sym-1" },
+				includeDeclaration: true,
+			}),
+		).toEqual({
+			operation: "find_references",
+			target: { type: "symbol_id", symbolId: "sym-1" },
+			includeDeclaration: true,
+		});
+		expect(validate(definition, { operation: "incoming_calls", target: positionTarget, limit: 20 })).toEqual({
+			operation: "incoming_calls",
+			target: positionTarget,
 			limit: 20,
 		});
-		expect(validate(definition, { operation: "code_map", path: ".", limit: 20 })).toEqual({
-			operation: "code_map",
-			path: ".",
-			limit: 20,
-		});
+		expect(validate(definition, { operation: "status" })).toEqual({ operation: "status" });
 
 		for (const arguments_ of [
 			{ operation: "workspace_symbols", query: "commit", exact: true },
 			{ operation: "workspace_symbols", query: "commit", includeDeclaration: true },
 			{ operation: "file_symbols", path: "src/a.ts", limit: 20 },
-			{ operation: "search_code", query: "commit", mode: "auto" },
-			{ operation: "code_map", path: ".", mode: "auto" },
-			{ operation: "code_map", path: ".", timeoutMs: 1000 },
+			{ operation: "find_definition", query: "commit" },
+			{ operation: "find_references", query: "commit" },
+			{ operation: "find_definition", target: positionTarget, mode: "semantic" },
+			{ operation: "hover", target: { type: "name_path", namePath: "A/run" } },
+			{ operation: "find_implementations", target: { type: "name_path", namePath: "A/run" } },
+			{ operation: "resolve_symbol", target: positionTarget },
+			{ operation: "find_symbol", query: "commit" },
+			{ operation: "search_code", query: "commit" },
+			{ operation: "code_map", path: "." },
 		]) {
 			expect(() => validate(definition, arguments_)).toThrow('Validation failed for tool "symbols"');
 		}

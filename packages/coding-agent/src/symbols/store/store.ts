@@ -56,6 +56,11 @@ function sameObservedSymbol(left: CodeSymbol, right: CodeSymbol, workspaceRoot: 
 	return symbolIdentity(left, workspaceRoot) === symbolIdentity(right, workspaceRoot);
 }
 
+function normalizeSource(source: unknown): IntelligenceSource {
+	if (source === "semantic" || source === "lightweight") return "semantic";
+	return "semantic";
+}
+
 function cloneSymbol(symbol: CodeSymbol): CodeSymbol {
 	return structuredClone(symbol);
 }
@@ -104,9 +109,10 @@ export class SymbolStore implements SymbolStoreApi {
 			}
 		}
 		if (!existing && this.entries.size >= this.maxEntries) this.evictOldest();
+		const source = normalizeSource(options.source);
 		const record: SymbolStoreRecord = Object.freeze({
 			symbol: Object.freeze(cloneSymbol(symbol)),
-			source: options.source,
+			source,
 			workspaceIdentity: workspaceIdentity(options.workspaceRoot ?? this.workspaceRoot),
 			observedGeneration: ++this.generation,
 			lastSeen: Date.now(),
@@ -125,12 +131,13 @@ export class SymbolStore implements SymbolStoreApi {
 		const workspaceRoot = options.workspaceRoot ?? this.workspaceRoot;
 		assertSymbolPathInsideWorkspace(path, workspaceRoot);
 		const normalized = workspacePathIdentity(path, workspaceRoot);
+		const source = normalizeSource(options.source);
 		const records = symbols.map((symbol) => this.upsert(symbol, options));
 		if (options.completeness === "complete") {
 			const keep = new Set(symbols.map((symbol) => symbol.id));
 			for (const [id, record] of this.entries) {
 				if (
-					record.source === options.source &&
+					record.source === source &&
 					workspacePathIdentity(record.symbol.path, workspaceRoot) === normalized &&
 					!keep.has(id)
 				) {
@@ -159,13 +166,18 @@ export class SymbolStore implements SymbolStoreApi {
 	}
 
 	findCandidates(
-		options: { readonly source?: IntelligenceSource; readonly path?: string; readonly namePath?: string } = {},
+		options: {
+			readonly source?: IntelligenceSource | "lightweight";
+			readonly path?: string;
+			readonly namePath?: string;
+		} = {},
 	): readonly SymbolStoreRecord[] {
 		this.ensureAvailable();
 		const path = options.path === undefined ? undefined : workspacePathIdentity(options.path, this.workspaceRoot);
+		const expectedSource = options.source === undefined ? undefined : normalizeSource(options.source);
 		return Object.freeze(
 			[...this.entries.values()]
-				.filter((record) => options.source === undefined || record.source === options.source)
+				.filter((record) => expectedSource === undefined || record.source === expectedSource)
 				.filter(
 					(record) => path === undefined || workspacePathIdentity(record.symbol.path, this.workspaceRoot) === path,
 				)

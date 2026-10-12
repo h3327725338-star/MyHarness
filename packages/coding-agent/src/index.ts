@@ -390,8 +390,7 @@ export {
 	type SlashCommandInvocation,
 	type SlashSurface,
 } from "./startup/slash-commands.ts";
-// Code Intelligence 统一数据模型（第 2 阶段）：供未来 Lightweight / Semantic Backend
-// 与 Symbol Store 共用。旧索引格式类型以 IndexedCodeSymbol / IndexedCodeReference 导出。
+// Code Intelligence 统一数据模型（第 2 阶段）：供 Semantic Backend 与 Symbol Store 共用。
 export {
 	buildNamePath,
 	type CodeDiagnostic,
@@ -403,8 +402,6 @@ export {
 	type CodeSymbol,
 	type CodeSymbolKind,
 	type CodeSymbolTreeNode,
-	convertLegacySymbol,
-	convertLegacySymbols,
 	createSymbolId,
 	type DefinitionResult,
 	type DiagnosticSeverity,
@@ -415,7 +412,6 @@ export {
 	type IntelligenceResult,
 	type IntelligenceResultMeta,
 	type IntelligenceSource,
-	type LegacyConversionOptions,
 	NAMEPATH_SEPARATOR,
 	normalizeSymbolPath,
 	type ParsedNamePath,
@@ -429,21 +425,7 @@ export {
 	type SymbolTarget,
 	type SymbolVisibility,
 } from "./symbols/api.ts";
-export {
-	type CodeIndexOptions,
-	type CodeIndexRefreshSummary,
-	type CodeIndexStats,
-	type CodeMapEntry,
-	type CodeSearchMatch,
-	type CodeSearchOptions,
-	CodeSymbolIndex,
-	getCodeIndexPath,
-	getCodeLanguage,
-	type IndexedCodeReference,
-	type IndexedCodeSymbol,
-	type IndexedCodeSymbolKind,
-	parseCodeSymbols,
-} from "./symbols/index/code-index.ts";
+export { getCodeLanguage } from "./symbols/language.ts";
 export type { ThemeResource } from "./themes/loader/theme-resource.ts";
 export type { BusinessToolDefinition } from "./tools/contracts/index.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./tools/files/edit-diff.ts";
@@ -545,7 +527,6 @@ export {
 	type SubAgentToolOptions,
 	type SubAgentToolTrace,
 	type SymbolsCodeIntelligenceServices,
-	type SymbolsIndexPort,
 	SymbolsToolConfigurationError,
 	type SymbolsToolDetails,
 	type SymbolsToolInput,

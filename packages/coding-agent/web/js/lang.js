@@ -15,5 +15,6 @@ export const isZh = () => current === "zh-CN";
 
 export function setLang(value) {
 	current = normalizeLang(value);
-	if (typeof document !== "undefined") document.documentElement.lang = current;
+	if (typeof document !== "undefined" && document.documentElement.lang !== current)
+		document.documentElement.lang = current;
 }

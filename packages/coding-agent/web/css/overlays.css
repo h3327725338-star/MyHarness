@@ -1,11 +1,12 @@
-.scrim { position: fixed; inset: 0; z-index: 200; background: var(--scrim); display: grid; place-items: center; padding: 24px; animation: fade-in var(--t-fast) var(--ease); }
+.scrim { position: fixed; inset: 0; z-index: 200; background: var(--scrim); display: grid; place-items: center; padding: 24px; animation: scrim-in var(--t-base) var(--ease-out); }
 .scrim.top { align-items: start; padding-top: 12vh; }
 /* An overlay that is closing (Overlay in ui.js) fades out where it is and lets every click through. */
 .overlay-host { display: contents; }
-.overlay-host.closing > .scrim { animation: fade-only-out var(--t-base) var(--ease) both; pointer-events: none; }
-.modal { max-width: min(100%, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-pop); animation: fade-in var(--t-base) var(--ease); }
+.overlay-host.closing > .scrim { animation: scrim-out var(--t-close) var(--ease-out) both; pointer-events: none; }
+.overlay-host.closing > .scrim > .modal, .overlay-host.closing > .scrim > .palette { animation: dialog-out var(--t-close) var(--ease-out) both; }
+.modal { max-width: min(100%, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-pop); animation: dialog-in var(--t-pop) var(--ease-out); }
 .modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; flex: none; }
-.modal-title { font-size: 15px; font-weight: 650; }
+.modal-title { font-size: var(--fs-title-sm); font-weight: 650; }
 .modal-sub { font-size: var(--fs-sm); margin-top: 2px; white-space: normal; }
 .modal-body { padding: 4px 16px 16px; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); flex: none; }
@@ -28,7 +29,7 @@
 .lang-item { border-top: 1px solid var(--border); }
 .lang-item:first-child { border-top-color: transparent; }
 .lang-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; text-align: left; color: var(--text); }
-.lang-name { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; }
+.lang-name { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body); font-weight: 500; }
 .lang-state { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
 .lang-state.on { color: var(--ok); }
 .lang-state.busy { color: var(--accent); }
@@ -47,12 +48,12 @@
 .settings-body { padding: 0 14px 24px 24px; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .settings-title { display: flex; flex-direction: column; gap: 2px; padding: 16px 0 14px; }
 .settings-title h2 { margin: 0; font-size: 17px; font-weight: 650; }
-.set-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); margin-bottom: 14px; }
+.set-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); margin-bottom: 12px; }
 .stack > .set-card { margin-bottom: 0; }
 .set-card-head { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .set-card-toggle { display: flex; align-items: center; gap: 8px; text-align: left; color: var(--text); }
-.set-card-head strong { font-size: 13px; font-weight: 650; }
-.set-notes { padding: 8px 14px 10px; border-top: 1px solid var(--border-soft, var(--border)); }
+.set-card-head strong { font-size: var(--fs-body); font-weight: 650; }
+.set-notes { padding: 8px 14px 10px; border-top: 1px solid var(--border-soft); }
 .set-note { margin: 2px 0; font-size: var(--fs-sm); color: var(--text-3); white-space: normal; }
 .set-card-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; margin-top: 1px; }
 .set-card-body { padding: 0 16px; }
@@ -60,14 +61,16 @@
 .set-card-body.col { gap: 10px; }
 /* Every row has the same two columns: the name with its short note on the left, and one fixed-width column of controls on
    the right (--set-control-w). Whatever the control is — list, field, number with unit, segmented control, switch — it
-   is --h-control tall and ends on the column's right edge; a switch sits at that edge, a field fills the column. */
-.set-row { --set-control-w: 208px; display: grid; grid-template-columns: minmax(0, 1fr) var(--set-control-w); align-items: center; column-gap: 24px; min-height: 52px; padding: 10px 0; border-top: 1px solid var(--border); }
+   is --h-control tall and ends on the column's right edge; a switch sits at that edge. Inside that column each control type
+   takes the width it needs: a pure number keeps the fixed narrow --set-num-w right-aligned, a dropdown is as wide as its
+   content, and text fields, model pickers and segmented controls still fill the column. */
+.set-row { --set-control-w: 208px; --set-num-w: 80px; display: grid; grid-template-columns: minmax(0, 1fr) var(--set-control-w); align-items: center; column-gap: 16px; min-height: 46px; padding: 7px 0; border-top: 1px solid var(--border); }
 .set-card-body > .set-row:first-child { border-top-color: transparent; }
 .set-row.stack { grid-template-columns: minmax(0, 1fr) var(--set-control-w); }
 .set-row.off .set-text, .set-row.off .set-control { opacity: 0.55; }
 /* Name above, short note below. */
 .set-text { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
-.set-label { font-size: 13px; line-height: 18px; color: var(--text); overflow-wrap: anywhere; }
+.set-label { font-size: var(--fs-body); line-height: 18px; color: var(--text); overflow-wrap: anywhere; }
 .set-text > .set-desc { max-width: none; font-size: var(--fs-xs); line-height: 16px; white-space: normal; overflow-wrap: anywhere; }
 .set-desc { font-size: var(--fs-sm); color: var(--text-3); white-space: normal; max-width: 520px; line-height: 1.45; }
 .set-control { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: var(--set-control-w); min-width: 0; }
@@ -75,62 +78,94 @@
 /* "Saving" sits in the gap before the column, so it never takes room from the control. */
 .set-control > .saving { position: absolute; right: 100%; top: 50%; margin: -7px 8px 0 0; }
 .set-row.stack .saving { order: 0; }
-.set-control .select, .set-control .field, .set-control .segmented { height: var(--h-control); font-size: 13px; }
-.set-control > .select, .set-control > .field, .set-control > .model-ref, .set-control > .segmented, .set-control > .input-group, .set-control > .tokens-field, .set-control > .mref { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
+.set-control .select, .set-control .field, .set-control .segmented { height: var(--h-control); font-size: var(--fs-body); }
+/* The self-drawn Select trigger is a button (inherits the 13.5px body size), so it needs the same 13px as .select. */
+.set-control .select-like { height: var(--h-control); font-size: var(--fs-body); }
+/* The right-column contract, by control type: a dropdown is only as wide as its content; a pure number keeps one narrow
+   width in every row so the boxes line up on the right; everything that carries text (fields, model pickers, segmented,
+   unit groups) still fills the column. */
+.set-control > .select { flex: 0 1 auto; width: auto; min-width: 0; max-width: 100%; }
+.set-control > .select-like { flex: 0 1 auto; width: auto; min-width: 0; max-width: 100%; }
+.set-control > .field.num, .set-control > input[type="number"] { flex: none; width: var(--set-num-w); min-width: 0; text-align: right; }
+.set-control > .field, .set-control > .model-ref, .set-control > .segmented, .set-control > .input-group, .set-control > .mref, .set-control > .set-multiselect { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
+/* The shortcut editors all share one width: the longest key string plus the field padding ("Ctrl+Alt+Shift+K"). */
+.set-control > [data-shortcut-editor] { flex: none; width: 120px; min-width: 0; }
 .set-control > .toggle { margin-left: auto; }
 .set-control .segmented { display: flex; box-sizing: border-box; }
 .set-control .segmented button { flex: 1 1 0; justify-content: center; min-width: 0; height: calc(var(--h-control) - 8px); padding: 0 6px; white-space: nowrap; }
-/* A list of options that can each be on: two columns of equal boxes that fill the column. */
-.set-control .multi { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; border: 0; background: none; overflow: visible; }
-.set-control .multi-opt { min-width: 0; height: var(--h-control); padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); }
-.set-control .multi-opt:first-child { border-left: 1px solid var(--border-strong); }
-.set-control .multi-opt:hover { border-color: var(--text-4); }
-.set-control .multi-opt.on { border-color: var(--accent-line); background: var(--accent-soft); }
-.set-control .multi-opt:last-child:nth-child(odd) { grid-column: 1 / -1; }
+/* Searchable Multi-Select */
+.set-multiselect { position: relative; display: flex; align-items: center; width: 100%; min-width: 0; }
+.set-multiselect-btn { width: 100%; height: var(--h-control); min-width: 0; display: inline-flex; align-items: center; justify-content: flex-start; text-align: left; padding: 0 28px 0 8px; cursor: pointer; }
+/* The tags collapsed state wraps: the button keeps --h-control as a floor and grows line by line, so long selections
+   reach over two or three rows instead of scrolling sideways. The chevron sticks to the top line when there are many. */
+.set-multiselect-btn.tags { padding: 4px 28px 4px 6px; height: auto; min-height: var(--h-control); align-items: flex-start; background-position: right 10px top 9px; }
+.set-multiselect-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.set-multiselect-tag { height: 22px; padding: 0 6px; display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; border-radius: var(--r-xs); background: var(--surface-active); border: 1px solid var(--border); color: var(--text); flex: none; max-width: 160px; }
+.set-multiselect-tag-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* fullTagNames (search engines): no 160px cap, the name is always shown in full. Long model ids keep the cap above. */
+.set-multiselect-tags-full .set-multiselect-tag { max-width: 100%; height: auto; min-height: 22px; }
+.set-multiselect-tags-full .set-multiselect-tag-label { white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: clip; }
+.set-multiselect-tag-remove { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; padding: 0; margin: 0; border: 0; background: none; color: var(--text-3); cursor: pointer; border-radius: var(--r-xs); flex: none; }
+.set-multiselect-tag-remove:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+/* The last chip cannot be removed when allowEmpty is false: its × is disabled but keeps its aria-label. */
+.set-multiselect-tag-remove:disabled { opacity: 0.35; cursor: default; }
+.set-multiselect-placeholder { color: var(--text-3); font-size: var(--fs-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-multiselect-summary { min-width: 0; font-size: var(--fs-body); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-card-body > .row.set-desc { padding: 2px 0 12px; }
 /* A number and its unit: two boxes of the same height and look, the number on the left, a compact unit on the right. */
 .input-group { display: flex; align-items: stretch; gap: 6px; min-width: 0; }
 .input-group > .group-input { flex: 1 1 0; width: 0; min-width: 0; text-align: left; font-variant-numeric: tabular-nums; }
 .input-group > .group-input.invalid { border-color: var(--danger); }
-.input-group > .group-unit { flex: none; box-sizing: border-box; width: 88px; height: var(--h-control); font-size: 13px; }
+.input-group > .group-unit { flex: none; box-sizing: border-box; width: 88px; height: var(--h-control); font-size: var(--fs-body); }
 .input-group > span.group-unit { display: inline-flex; align-items: center; justify-content: center; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-inset); color: var(--text-3); white-space: nowrap; user-select: none; }
 .input-group > select.group-unit { padding-left: 10px; padding-right: 26px; background-position: right 9px center; text-overflow: ellipsis; }
-.tokens-field { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
-.tokens-field > .input-group { width: 100%; }
-.tokens-exact { font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.input-group > .select-like.group-unit { padding-left: 10px; padding-right: 26px; font-size: var(--fs-body); }
+.input-group > .select-like.group-unit::after { right: 9px; }
 /* A model choice with its own switch, an optional mode list and an optional number: one line, the picker takes what the others leave. */
 .mref { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mref-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mref-main > .model-ref { flex: 1 1 0; width: auto; min-width: 0; }
 .mref-main > .toggle { flex: none; }
-.mref-main > .mref-mode { flex: none; width: 118px; }
-.mref-main > .input-group { flex: none; width: 92px; gap: 4px; }
-.mref-main > .input-group > .group-input { flex: none; width: 40px; padding-left: 6px; padding-right: 6px; text-align: center; }
-.mref-main > .input-group > .group-unit { width: 48px; padding: 0 4px; }
-/* A row whose control needs more than one short column (model, effort, mode, number and switch on a single line) widens that column;
-   in a modal too narrow for that, the control takes its own line under the text instead of being squeezed. */
-.set-row.wide { --set-control-w: 480px; }
-@media (max-width: 900px) { .set-row.wide { grid-template-columns: minmax(0, 1fr); row-gap: 8px; --set-control-w: 100%; } }
-.set-control .model-ref { height: var(--h-control); }
+/* The mode dropdown only takes the width of its longest option ("Read & write"); the inline number keeps the one narrow
+   width every pure number in the settings uses, so the model picker gets the rest of the row. */
+.mref-main > .mref-mode { flex: none; width: auto; min-width: 0; max-width: 100%; }
+/* The mode Select keeps its title on a wrapper (select.js draws its own title), so the layout rule targets the wrapper. */
+.mref-main > span:has(> .select-like.mref-mode) { flex: none; display: inline-flex; min-width: 0; max-width: 100%; }
+.mref-main > span > .select-like.mref-mode { flex: none; width: auto; min-width: 0; max-width: 100%; }
+.mref-main > .field.num { flex: none; width: var(--set-num-w); min-width: 0; text-align: right; }
+/* Model-reference rows stack: name and note on top, the control on its own line filling the card's content width below,
+   so model, effort, mode, number and switch keep one line with room for a long ID. */
+.set-row.wide { grid-template-columns: minmax(0, 1fr); row-gap: 6px; --set-control-w: 100%; }
+.set-control .model-ref { min-height: var(--h-control); height: auto; }
 .set-control .model-ref .select { height: var(--h-control); }
-.set-control .model-ref-effort { max-width: 76px; }
+.set-control .model-ref .model-ref-btn { height: auto; min-height: var(--h-control); white-space: normal; }
+.set-control .model-ref > .picker-anchor:not(.model-ref-effort-anchor) { flex: 1 1 auto; min-width: 0; }
+.set-control .model-ref-effort-anchor { flex: none; min-width: 0; max-width: 76px; }
+.set-control .model-ref-effort { flex: none; max-width: 76px; }
+.set-control .model-ref-text { display: block; flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+/* Keep the row contract on narrow desktops without squeezing the label to a few characters. */
+@media (max-width: 760px) {
+	.settings { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+	.settings-nav { flex-direction: row; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--border); padding: 6px 8px; }
+	.settings-nav button { padding: 0 8px; }
+	.settings-body { min-height: 0; padding: 14px 16px; }
+	.set-row:not(.wide) { --set-control-w: min(208px, 50%); grid-template-columns: minmax(0, 1fr) var(--set-control-w); column-gap: 12px; }
+	.set-row:not(.wide) > .set-control { width: 100%; }
+	.mref { flex-wrap: wrap; }
+	.mref > .mref-main { flex: 1 0 100%; }
+}
 /* Room kept for "saving": it only fills for a save that really takes long, so nothing shifts when it appears. */
 .saving { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip-toggle { height: var(--h-control-sm); padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--border-strong); color: var(--text-2); font-size: var(--fs-sm); transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast); }
-.chip-toggle:hover { border-color: var(--text-4); color: var(--text); }
+.chip-toggle:hover { border-color: var(--border-hover); color: var(--text); }
 .chip-toggle.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 /* "Unconfirmed": small and outlined, so a chip keeps its height and the group keeps its rhythm. */
-.chip-toggle .badge.unconfirmed { height: 16px; padding: 0 5px; margin-right: -4px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-3); font-size: 10.5px; line-height: 1; }
+.chip-toggle .badge.unconfirmed { height: 16px; padding: 0 5px; margin-right: -4px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-3); font-size: var(--fs-mini); line-height: 1; }
 .chip-toggle.on .badge.unconfirmed { border-color: var(--accent-line); color: var(--accent); }
-/* Multi-select: one joined control, each option with its own check box. */
-.multi { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); overflow: hidden; }
-.multi-opt { display: inline-flex; align-items: center; gap: 7px; height: calc(var(--h-control-sm) - 2px); padding: 0 12px 0 10px; color: var(--text-3); font-size: var(--fs-sm); border-left: 1px solid var(--border); transition: background var(--t-fast), color var(--t-fast); }
-.multi-opt:first-child { border-left: 0; }
-.multi-opt:hover { background: var(--surface-hover); color: var(--text); }
-.multi-opt.on { background: var(--accent-soft); color: var(--text); }
+/* Checkbox box indicator */
 .multi-box { width: 14px; height: 14px; border-radius: var(--r-xs); border: 1.5px solid var(--border-strong); display: grid; place-items: center; flex: none; }
-.multi-opt.on .multi-box { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.multi-box.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 /* Project trust: the folder on the left of a row like any other (its icon centred on the path, not on its baseline). */
 .set-text.trust-path { flex-direction: row; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); }
 .about-kv { padding: 14px 0 6px; }
@@ -158,14 +193,19 @@
 .key-replace { flex-wrap: wrap; padding: 0 0 10px 17px; }
 .key-replace > .dim { flex: 1 0 100%; }
 .key-replace > .select { flex: 1 1 0; min-width: 120px; max-width: 240px; }
+.key-replace > .select-like { flex: 1 1 0; min-width: 120px; max-width: 240px; }
 .key-add { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; gap: 8px; }
 
 /* Palette */
-.palette { width: 600px; max-width: 100%; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden; animation: fade-in var(--t-base) var(--ease); }
+.palette { width: 600px; max-width: 100%; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden; animation: dialog-in var(--t-pop) var(--ease-out); }
+/* The command panel (CommandPanel in command-panel.js): same dialog motion as .modal and .palette; the old rules for
+   its entrance utility and .cp.leaving live in composer.css and no longer match (the class names changed here). */
+.cp { animation: dialog-in var(--t-pop) var(--ease-out) both; }
+.cp.closing { animation: dialog-out var(--t-close) var(--ease-out) both; pointer-events: none; }
 .palette-input { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 38px; border-bottom: 1px solid var(--border); color: var(--text-3); }
 .palette-input input { flex: 1; background: none; border: 0; outline: none; color: var(--text); font-size: var(--fs-md); }
 .palette-list { max-height: 50vh; overflow-y: auto; padding: 3px; }
-.palette-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); text-align: left; font-size: 13px; }
+.palette-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border-radius: var(--r-xs); color: var(--text-2); text-align: left; font-size: var(--fs-body); }
 .palette-item > svg { color: var(--text-3); flex: none; }
 .palette-item .dim { font-size: var(--fs-xs); max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-item.sel { background: var(--surface-select); color: var(--text); }
@@ -233,3 +273,49 @@
 .k-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); font-size: var(--fs-sm); pointer-events: none; }
 .personal-prompt { width: 100%; min-height: 180px; }
 .personal-foot { padding-top: 6px; }
+/* Personalization cards (W155): the body inside these cards carries the whole gap itself, so the Card's generic
+   .set-card-body wrapper adds none on top (the old double padding left one side with 33px of border + padding). The
+   selectors are scoped through :has(> .personal-body), which only personal cards render — every other page's
+   .set-card / .set-card-body keeps the global values. */
+.set-card-body:has(> .personal-body) { padding: 0; }
+.set-card:has(.personal-body) { margin-bottom: 10px; }
+.personal-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+/* Each prompt box has its maximize button inside the top-right corner of the field; the text keeps clear of it. */
+.personal-expand { position: relative; }
+.personal-expand > .personal-prompt { padding-right: 32px; }
+.personal-expand-btn { position: absolute; top: 6px; right: 6px; }
+
+/* Image lightbox (ImageLightboxHost in lightbox.js): a fullscreen dark scrim above every other overlay, the image
+   centered inside 90% of the viewport, a round close button pinned to the image's top-right corner. The ".open" class
+   follows usePresence: the scrim fades in while the image settles from a slight scale, and both linger for the exit
+   transition before the host unmounts. Local variables only: shared tokens stay in tokens.css. */
+.lightbox-scrim { --lightbox-scrim: rgba(0, 0, 0, 0.82); --lightbox-frame: rgba(255, 255, 255, 0.14); position: fixed; inset: 0; z-index: 600; display: grid; place-items: center; padding: 5vh 5vw; background: var(--lightbox-scrim); opacity: 0; transition: opacity 170ms ease-out; overflow: hidden; }
+.lightbox-scrim.open { opacity: 1; }
+.lightbox-dialog { position: relative; max-width: 90vw; max-height: 90vh; display: grid; place-items: center; }
+.lightbox-img { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: var(--r-lg); border: 1px solid var(--lightbox-frame); box-shadow: var(--shadow-pop), 0 24px 80px rgba(0, 0, 0, 0.55); background: rgba(255, 255, 255, 0.03); transform: scale(0.96); transition: transform 170ms ease-out; }
+.lightbox-scrim.open .lightbox-img { transform: none; }
+.lightbox-close { position: absolute; top: -18px; right: -18px; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(28, 29, 29, 0.88); border: 1px solid var(--lightbox-frame); color: var(--text); box-shadow: var(--shadow-pop); backdrop-filter: blur(6px); transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+.lightbox-close:hover { background: rgba(58, 60, 60, 0.95); transform: scale(1.06); }
+.lightbox-close:active { transform: scale(0.96); }
+.lightbox-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; border-radius: 50%; }
+@media (prefers-reduced-motion: reduce) {
+	.lightbox-img { transform: none; }
+}
+
+/* Personal prompt fullscreen editor (PersonalFullscreen in overlays-settings.js): a scrim above the settings dialog
+   and the quote card (z-index 220: under the popover menu's 500 and the image lightbox's 600) with one dialog that
+   opens the prompt box in the matching chat mode. The ".open" class follows usePresence: the dialog settles up 8px
+   with the scrim on the way in (--t-pop), and on the way out only fades (--t-close) with no displacement and nothing
+   clickable. With "reduce motion" or the motion switch on off the settle is gone and only the instant fade stays. */
+.personal-fullscreen-scrim { position: fixed; inset: 0; z-index: 220; display: grid; place-items: center; padding: 24px; background: var(--scrim); opacity: 0; transition: opacity var(--t-close) var(--ease-out); pointer-events: none; }
+.personal-fullscreen-scrim.open { opacity: 1; pointer-events: auto; transition-duration: var(--t-pop); }
+.personal-fullscreen-dialog { width: min(1100px, calc(100vw - 48px)); height: min(820px, calc(100vh - 64px)); display: flex; flex-direction: column; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); opacity: 0; transform: translateY(8px); transition: opacity var(--t-pop) var(--ease-out), transform var(--t-pop) var(--ease-out); }
+.personal-fullscreen-scrim.open .personal-fullscreen-dialog { opacity: 1; transform: none; }
+.personal-fullscreen-scrim.closing .personal-fullscreen-dialog { opacity: 0; transform: none; transition: opacity var(--t-close) var(--ease-out); }
+.personal-fullscreen-head { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.personal-fullscreen-head strong { font-size: var(--fs-body); font-weight: 650; }
+.personal-fullscreen-textarea { flex: 1; min-height: 0; resize: none; border: 0; border-radius: 0 0 var(--r-lg) var(--r-lg); }
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-motion="on"]) .personal-fullscreen-dialog { transform: none; }
+}
+:root[data-motion="off"] .personal-fullscreen-dialog { transform: none; }

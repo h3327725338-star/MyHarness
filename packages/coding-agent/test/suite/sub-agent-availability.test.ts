@@ -109,6 +109,9 @@ describe("sub-agent tool availability", () => {
 		};
 		const delegated = await createHarness({
 			resourceLoader,
+			// The boundary being checked here is the delegated whitelist (read-only worker), which contains
+			// symbols; keep the tool registered so the assertion covers the full whitelist.
+			settings: { codeIntelligence: { symbolsEnabled: true } },
 			allowedToolNames: ["read", "bash", "edit", "write", "symbols", "agent", "workflow", "ultracode", "custom"],
 			initialActiveToolNames: [
 				"read",

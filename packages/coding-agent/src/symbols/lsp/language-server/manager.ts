@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { win32 as windowsPath } from "node:path";
 
-import { getCodeLanguage } from "../../index/code-index.ts";
+import { getCodeLanguage } from "../../language.ts";
 import { getWorkspaceIdentity, normalizeWorkspaceRoot as normalizeWindowsWorkspaceRoot } from "../../path-semantics.ts";
 import { LspClient, type LspInitializeOptions } from "../client.ts";
 import { LspProcessError } from "../errors.ts";

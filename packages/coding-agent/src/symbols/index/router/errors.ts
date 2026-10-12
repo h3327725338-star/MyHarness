@@ -1,11 +1,8 @@
 export type CodeIntelligenceRouterErrorCode =
 	| "semantic_backend_unavailable"
-	| "lightweight_backend_unavailable"
 	| "unsupported_operation"
 	| "unsupported_target"
 	| "invalid_routing_options"
-	| "fallback_not_safe"
-	| "fallback_failed"
 	| "symbol_id_resolution_unavailable"
 	| "unknown_symbol_id"
 	| "stale_symbol_id"

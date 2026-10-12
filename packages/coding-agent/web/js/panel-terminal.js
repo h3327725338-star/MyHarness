@@ -4,6 +4,7 @@ import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spin
 import { api, setView, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { openTerminalView } from "./terminal-session.js";
+import { Select } from "./select.js";
 import { ansiSegments, clip, fmtDuration, shellOutcome, stripAnsi } from "./util.js";
 import { t, N_, tNodes } from "./i18n.js";
 
@@ -118,6 +119,33 @@ function CommandLog({ entries }) {
 		setInput("");
 		await actions.runShell(command, !inContext);
 	};
+	// /api/tool-output answers with a first block (512 KB by default) plus { truncated, nextOffset };
+	// the full text is therefore assembled block by block and "Show more" pulls the next block.
+	const loadFull = async (entry) => {
+		try {
+			const data = await api(`/api/tool-output?path=${encodeURIComponent(entry.fullOutputPath)}`);
+			const nextOffset = Number.isFinite(data.nextOffset) ? data.nextOffset : 0;
+			setFull((f) => ({ ...f, [entry.id]: { text: data.text ?? "", nextOffset, truncated: data.truncated === true && nextOffset > 0 && nextOffset < data.size, busy: false } }));
+		} catch (e) { toast(e.message, "error"); }
+	};
+	const loadMore = async (entry) => {
+		const current = full[entry.id];
+		if (!current || current.busy || !current.truncated) return;
+		setFull((f) => ({ ...f, [entry.id]: { ...current, busy: true } }));
+		try {
+			const data = await api(`/api/tool-output?path=${encodeURIComponent(entry.fullOutputPath)}&offset=${current.nextOffset}`);
+			setFull((f) => {
+				const prev = f[entry.id] || current;
+				const chunk = typeof data.text === "string" ? data.text : "";
+				const nextOffset = Number.isFinite(data.nextOffset) ? data.nextOffset : prev.nextOffset;
+				const truncated = data.truncated === true && chunk.length > 0 && nextOffset > prev.nextOffset;
+				return { ...f, [entry.id]: { text: prev.text + chunk, nextOffset, truncated, busy: false } };
+			});
+		} catch (e) {
+			toast(e.message, "error");
+			setFull((f) => ({ ...f, [entry.id]: { ...(f[entry.id] ?? current), busy: false } }));
+		}
+	};
 	const duration = (e) => (e.startedAt ? (e.endedAt || (statusOf(e) === "running" ? now : e.startedAt)) - e.startedAt : 0);
 	const st = selected ? statusOf(selected) : null;
 	const [badgeClass, badgeKey] = st ? STATUS_BADGE[st] || ["", st] : ["", ""];
@@ -151,9 +179,10 @@ function CommandLog({ entries }) {
 					${st === "running" && selected.source === "you" ? html`<button class="btn sm danger" onClick=${actions.abortShell}>${t("Stop")}</button>` : null}
 					${st === "running" && selected.source === "agent" ? html`<button class="btn sm danger" onClick=${actions.stop} title=${t("The agent's command runs inside its task; stopping cancels the whole task")}>${t("Stop task")}</button>` : null}
 				</div>
-				${selected.truncated ? html`<div class="notice warn"><span>${selected.fullOutputPath ? tNodes("Output was truncated; the complete output is saved at {path}.", { path: html`<code>${selected.fullOutputPath}</code>` }) : t("Output was truncated.")}</span>${selected.fullOutputPath && !full[selected.id] ? html`<button class="link-btn" onClick=${async () => { try { const data = await api(`/api/tool-output?path=${encodeURIComponent(selected.fullOutputPath)}`); setFull((f) => ({ ...f, [selected.id]: data.text })); } catch (e) { toast(e.message, "error"); } }}>${t("Load full output")}</button>` : null}</div>` : null}
+				${selected.truncated ? html`<div class="notice warn"><span>${selected.fullOutputPath ? tNodes("Output was truncated; the complete output is saved at {path}.", { path: html`<code>${selected.fullOutputPath}</code>` }) : t("Output was truncated.")}</span>${selected.fullOutputPath && !full[selected.id] ? html`<button class="link-btn" onClick=${() => loadFull(selected)}>${t("Load full output")}</button>` : null}</div>` : null}
 			</div>
-			<${Output} text=${full[selected.id] ?? (selected.output || "")} wrap=${wrap} follow=${st === "running"} />
+			<${Output} text=${full[selected.id]?.text ?? (selected.output || "")} wrap=${wrap} follow=${st === "running"} />
+			${full[selected.id]?.truncated ? html`<div class="term-more"><button class="link-btn" disabled=${!!full[selected.id]?.busy} onClick=${() => loadMore(selected)}>${t("Show more")}</button></div>` : null}
 		</div>` : null}
 		<form class="term-input" onSubmit=${(e) => (e.preventDefault(), run())}>
 			<span class="mono dim">$</span>
@@ -235,7 +264,7 @@ export function TerminalPanel() {
 	const live = !!shell;
 	return html`<div class="terminal-panel">
 		<div class="panel-toolbar">
-			${newShell ? html`<select class="select sm" value=${newShell.id} aria-label=${t("Shell")} title=${t("Shell")} onChange=${(e) => setView({ termShell: e.target.value })}>${shells.map((option) => html`<option key=${option.id} value=${option.id}>${option.name}</option>`)}</select>
+			${newShell ? html`<span class="shell-pick" title=${t("Shell")}><${Select} value=${newShell.id} ariaLabel=${t("Shell")} size="sm" onChange=${(next) => setView({ termShell: next })} options=${shells.map((option) => ({ value: option.id, label: option.name }))} /></span>
 				<button class="icon-btn sm" title=${t("New terminal")} aria-label=${t("New terminal")} onClick=${addTab}><${Icon} name="plus" size=${15} /></button>` : null}
 			<span class="grow" />
 			${live ? html`<button class="icon-btn sm" title=${t("Restart the shell")} aria-label=${t("Restart the shell")} onClick=${() => (control.current?.restart(), control.current?.focus())}><${Icon} name="refresh" size=${15} /></button>

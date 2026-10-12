@@ -1,9 +1,11 @@
+import assert from "node:assert";
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	EventStream,
 	type Message,
 	type Model,
+	type ToolResultMessage,
 	type UserMessage,
 } from "@myharness/ai";
 import { Type } from "typebox";
@@ -120,6 +122,16 @@ function toolCallMessage(id: string, name: string): AssistantMessage {
 	return createAssistantMessage([{ type: "toolCall", id, name, arguments: {} }], "toolUse");
 }
 
+/**
+ * Hard-narrow a message to a tool result. Throws when the message is missing or has the
+ * wrong role, so a lookup failure fails the test instead of silently skipping the assertions
+ * that follow (a conditional `if` around the core assertions would pass vacuously).
+ */
+function assertToolResult(message: AgentMessage | undefined, id: string): asserts message is ToolResultMessage {
+	assert(message !== undefined, `expected a tool result message for tool call ${id}, found none`);
+	assert(message.role === "toolResult", `expected role "toolResult" for tool call ${id}, found ${message.role}`);
+}
+
 describe("tool abort grace gaps", () => {
 	it("applies the abort grace fallback on the sequential execution path", async () => {
 		const context: AgentContext = { systemPrompt: "", messages: [], tools: [hangingTool("hangs_sequential")] };
@@ -149,14 +161,14 @@ describe("tool abort grace gaps", () => {
 		expect(events.some((e) => e.type === "agent_end")).toBe(true);
 		const toolResults = messages.filter((m) => m.role === "toolResult");
 		expect(toolResults).toHaveLength(1);
-		expect(toolResults[0]).toMatchObject({ toolCallId: "call-seq", isError: true });
-		if (toolResults[0] && toolResults[0].role === "toolResult") {
-			expect(toolResults[0].details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
-			expect(toolResults[0].content[0]).toEqual({
-				type: "text",
-				text: 'Operation aborted: tool "hangs_sequential" did not stop within 0.05s of the cancellation; its result was discarded.',
-			});
-		}
+		const toolResult = toolResults[0];
+		assertToolResult(toolResult, "call-seq");
+		expect(toolResult).toMatchObject({ toolCallId: "call-seq", isError: true });
+		expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+		expect(toolResult.content[0]).toEqual({
+			type: "text",
+			text: 'Operation aborted: tool "hangs_sequential" did not stop within 0.05s of the cancellation; its result was discarded.',
+		});
 	});
 
 	it("abandons immediately when toolAbortGraceMs is 0", async () => {
@@ -182,17 +194,15 @@ describe("tool abort grace gaps", () => {
 
 		const messages = await stream.result();
 		const toolResult = messages.find((m) => m.role === "toolResult");
-		expect(toolResult).toBeDefined();
-		if (toolResult && toolResult.role === "toolResult") {
-			expect(toolResult.isError).toBe(true);
-			expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
-			// 0 is a legal "give up the moment the cancellation lands" value, not a broken input
-			// that silently falls back to the 20s default.
-			expect(toolResult.content[0]).toEqual({
-				type: "text",
-				text: 'Operation aborted: tool "hangs_zero_grace" did not stop within 0s of the cancellation; its result was discarded.',
-			});
-		}
+		assertToolResult(toolResult, "call-zero");
+		expect(toolResult.isError).toBe(true);
+		expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+		// 0 is a legal "give up the moment the cancellation lands" value, not a broken input
+		// that silently falls back to the 20s default.
+		expect(toolResult.content[0]).toEqual({
+			type: "text",
+			text: 'Operation aborted: tool "hangs_zero_grace" did not stop within 0s of the cancellation; its result was discarded.',
+		});
 	});
 
 	it("keeps the plain cancellation result when the signal is already aborted before the tool starts", async () => {
@@ -249,15 +259,14 @@ describe("tool abort grace gaps", () => {
 
 		expect(executed).toBe(false);
 		const toolResult = messages.find((m) => m.role === "toolResult");
-		expect(toolResult).toBeDefined();
-		if (toolResult && toolResult.role === "toolResult") {
-			expect(toolResult.isError).toBe(true);
-			expect(toolResult.content[0]).toEqual({ type: "text", text: "Operation aborted" });
-			expect(JSON.stringify(toolResult.details ?? {})).not.toContain("TOOL_ABORT_TIMEOUT");
-		}
+		assertToolResult(toolResult, "call-pre");
+		expect(toolResult.isError).toBe(true);
+		expect(toolResult.content[0]).toEqual({ type: "text", text: "Operation aborted" });
+		expect(JSON.stringify(toolResult.details ?? {})).not.toContain("TOOL_ABORT_TIMEOUT");
 		const endEvent = events.find((e) => e.type === "tool_execution_end");
-		expect(endEvent).toBeDefined();
-		if (endEvent && endEvent.type === "tool_execution_end") expect(endEvent.isError).toBe(true);
+		assert(endEvent !== undefined, "expected a tool_execution_end event");
+		assert(endEvent.type === "tool_execution_end", `expected type "tool_execution_end", found ${endEvent.type}`);
+		expect(endEvent.isError).toBe(true);
 	});
 
 	it("clears the grace timer once the tool settles inside the grace period", async () => {
@@ -318,11 +327,9 @@ describe("tool abort grace gaps", () => {
 			const messages = await stream.result();
 
 			const toolResult = messages.find((m) => m.role === "toolResult");
-			expect(toolResult).toBeDefined();
-			if (toolResult && toolResult.role === "toolResult") {
-				expect(toolResult.isError).toBe(false);
-				expect(toolResult.details).toEqual({ clean: true });
-			}
+			assertToolResult(toolResult, "call-timer");
+			expect(toolResult.isError).toBe(false);
+			expect(toolResult.details).toEqual({ clean: true });
 
 			// The grace timer was armed for this run and must have been released when the tool
 			// settled: an un-cleared 5s timer would keep the process and the test suite waiting.
@@ -353,15 +360,13 @@ describe("tool abort grace gaps", () => {
 		await prompt;
 
 		const toolResult = agent.state.messages.find((m) => m.role === "toolResult");
-		expect(toolResult).toBeDefined();
-		if (toolResult && toolResult.role === "toolResult") {
-			expect(toolResult.isError).toBe(true);
-			expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
-			// The number configured on `Agent` reached the loop: 0.06s, not the 20s default.
-			expect(toolResult.content[0]).toEqual({
-				type: "text",
-				text: 'Operation aborted: tool "agent_hangs" did not stop within 0.06s of the cancellation; its result was discarded.',
-			});
-		}
+		assertToolResult(toolResult, "call-agent");
+		expect(toolResult.isError).toBe(true);
+		expect(toolResult.details).toEqual({ errorCode: "TOOL_ABORT_TIMEOUT" });
+		// The number configured on `Agent` reached the loop: 0.06s, not the 20s default.
+		expect(toolResult.content[0]).toEqual({
+			type: "text",
+			text: 'Operation aborted: tool "agent_hangs" did not stop within 0.06s of the cancellation; its result was discarded.',
+		});
 	});
 });

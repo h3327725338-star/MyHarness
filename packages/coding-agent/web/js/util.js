@@ -244,6 +244,8 @@ export function ansiSegments(text) {
 // ---- Preferences (localStorage, best-effort) ---------------------------------------------
 const PREF_KEY = "myharness.web.prefs";
 export function loadPrefs() {
+	const exportedPrefs = globalThis.__MYHARNESS_EXPORT__?.prefs;
+	if (exportedPrefs && typeof exportedPrefs === "object") return exportedPrefs;
 	try {
 		return JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {};
 	} catch {

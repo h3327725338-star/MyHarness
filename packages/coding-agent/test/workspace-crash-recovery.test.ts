@@ -14,6 +14,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { getWorkspaceMetadataPath, getWorkspaceRegistryPath } from "../src/config/paths/index.ts";
+import { cancelWorkspaceMetadataReconciles } from "../src/data/workspace-reconcile.ts";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { cleanupStaleAtomicWriteTemps } from "../src/utils/atomic-write.ts";
 
@@ -32,6 +33,9 @@ interface Fixture {
 const cleanupRoots: string[] = [];
 
 afterEach(() => {
+	// W197: drop any deferred reconcile pass before the fixture roots are removed,
+	// so a late pass cannot recreate directories the test already cleaned.
+	cancelWorkspaceMetadataReconciles();
 	for (const root of cleanupRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -264,11 +268,15 @@ describe("WorkspaceStore crash recovery matrix", () => {
 		expect(seeded.ok).toBe(true);
 		const repairedMetadata = getWorkspaceMetadataPath(reconcileData, seeded.workspace!.workspaceId);
 		writeFileSync(repairedMetadata, "{broken", "utf8");
+		// W197: create() schedules the pass instead of reconciling synchronously;
+		// the explicit immediate pass owns the repaired-issue assertion.
 		const first = WorkspaceStore.create(reconcileAgent, reconcileData);
+		first.reconcileMetadataNow();
 		expect(first.getConsistencyIssues()).toEqual(
 			expect.arrayContaining([expect.objectContaining({ status: "repaired" })]),
 		);
 		const second = WorkspaceStore.create(reconcileAgent, reconcileData);
+		second.reconcileMetadataNow();
 		expect(second.getConsistencyIssues()).toHaveLength(0);
 		assertRegistryMetadataConsistency(reconcileData);
 	}, 120_000);

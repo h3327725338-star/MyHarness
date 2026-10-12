@@ -211,7 +211,6 @@ function catalogStatus(status: CodeIntelligenceRuntimeStatus): Record<string, un
 			storePath: installationManager.storeDir,
 			manifestVersion: installationManager.manifest.releaseVersion,
 			published: installationManager.manifest.published,
-			defaultMode: installationManager.manifest.defaultMode,
 		},
 		dataRoot: persistentDataRoot,
 		globalLanguageServerFallback: false,
@@ -266,7 +265,7 @@ const bootstrapTool = createSymbolsToolDefinition(pluginRoot);
 const tool = {
 	name: "symbols",
 	description:
-		"Use for code structure and semantic navigation: workspace/file symbols, definitions, references, implementations, hover/type information, diagnostics, callers/callees, type hierarchies, and code maps. Call status first when backend availability matters. Use read to inspect source text, search_code only for plain-text matching, and do not treat lightweight/fallback results as semantic proof. Project operations require workspaceRoot unless the host supplied a root during MCP initialize.",
+		"Use for code structure and semantic navigation: workspace/file symbols, definitions, references, implementations, hover/type information, diagnostics, callers/callees, type hierarchies, and file structure. Call status first when backend availability matters. Semantic results state their source and completeness. Project operations require workspaceRoot unless the host supplied a root during MCP initialize.",
 	annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 	inputSchema: augmentSchema(bootstrapTool.parameters),
 };

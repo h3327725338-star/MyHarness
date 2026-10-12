@@ -10,10 +10,15 @@
 	--fs-read: 15.5px;
 	--lh-read: 1.72;
 	--fs-code: 12.5px;
+	--fs-body: 13px;
+	--fs-mini: 10.5px;
+	--fs-title-xs: 14px;
+	--fs-title-sm: 15px;
 
 	/* Corners, by what they round: xs marks and rows of a menu, sm rows of a list and icon buttons, md controls,
 	   menus and blocks inside a surface, lg cards and the two window surfaces, xl dialogs and the input card. A pill
 	   (badge, chip, switch) is round whatever its height. */
+	--r-2xs: 2px;
 	--r-xs: 4px;
 	--r-sm: 6px;
 	--r-md: 8px;
@@ -37,9 +42,19 @@
 	--read-w: 780px;
 
 	--ease: cubic-bezier(0.2, 0, 0, 1);
+	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 	--t-fast: 90ms;
 	--t-base: 160ms;
 	--t-slow: 260ms;
+	--t-pop: 180ms;
+	--t-close: 110ms;
+	--t-morph: 520ms;
+
+	/* Shadows whose black/white base colour works on both schemes, so they live here once: the toggle knob, the mode
+	   switch well and its knob. */
+	--shadow-toggle: 0 1px 2px rgba(0, 0, 0, 0.35);
+	--shadow-mode-well: inset 0 1px 3px rgba(0, 0, 0, 0.16);
+	--shadow-mode-knob: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 2px 4px rgba(0, 0, 0, 0.22);
 
 	--orange: #e0a04a;
 	--green: #55b982;
@@ -58,7 +73,9 @@
 	--surface-active: #313333;
 	--surface-select: #2c3036;
 	--border: #303333;
+	--border-soft: #303333;
 	--border-strong: #454949;
+	--border-hover: #6f7676;
 	--border-focus: #5f7fb3;
 
 	--text: #e3e5e5;
@@ -123,7 +140,9 @@
 	--surface-active: #e4e7e6;
 	--surface-select: #e6ecf6;
 	--border: #dfe2e1;
+	--border-soft: #dfe2e1;
 	--border-strong: #bcc1c0;
+	--border-hover: #808888;
 	--border-focus: #6f93cf;
 
 	--text: #1d2020;
@@ -195,7 +214,9 @@
 	--surface-active: #454c46;
 	--surface-select: #3b4438;
 	--border: #464c47;
+	--border-soft: #464c47;
 	--border-strong: #626a63;
+	--border-hover: #8a918a;
 	--border-focus: #a7c080;
 	--text: #e3e4df;
 	--text-2: #bfc3bd;
@@ -222,6 +243,8 @@
 	--user-border: #4c5749;
 	--code-bg: #242825;
 	--inline-code-bg: #3c423e;
+	--shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+	--shadow-panel: -6px 0 24px rgba(0, 0, 0, 0.18);
 	--scrim: rgba(15, 22, 18, 0.65);
 	--diff-add-bg: rgba(167, 192, 128, 0.12);
 	--diff-add-gutter: rgba(167, 192, 128, 0.2);
@@ -248,7 +271,9 @@
 	--surface-active: #4e443c;
 	--surface-select: #493c30;
 	--border: #4e4640;
+	--border-soft: #4e4640;
 	--border-strong: #70655b;
+	--border-hover: #999087;
 	--border-focus: #d4ae82;
 
 	--text: #e6e3df;
@@ -279,6 +304,8 @@
 	--user-border: #5d4e40;
 	--code-bg: #292522;
 	--inline-code-bg: #453d37;
+	--shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+	--shadow-panel: -6px 0 24px rgba(0, 0, 0, 0.18);
 	--scrim: rgba(22, 17, 14, 0.65);
 	--diff-add-bg: rgba(167, 192, 128, 0.12);
 	--diff-add-gutter: rgba(167, 192, 128, 0.2);

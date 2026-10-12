@@ -21,6 +21,10 @@ function createRepository(): { repoDir: string; commit: string } {
 	expect(
 		setLocalGitIdentity(repoDir, { name: "Worktree Sandbox Test", email: "worktree-sandbox@example.invalid" }).ok,
 	).toBe(true);
+	// A user-global core.hooksPath makes every commit in this repository pay
+	// ~1.3s of external hook process startup; these tests exercise the sandbox,
+	// not hooks, so keep the fixture repositories hook-free.
+	expect(runGit(repoDir, ["config", "core.hooksPath", ""]).ok).toBe(true);
 	expect(createInitialGitBaseline(repoDir).ok).toBe(true);
 	const commit = runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim();
 	return { repoDir, commit };
@@ -120,6 +124,9 @@ describe("delegated worktree sandbox", () => {
 			writeFileSync(join(repoDir, ".gitignore"), "ignored.log\n", "utf8");
 			expect(initializeGitRepository(repoDir).ok).toBe(true);
 			expect(setLocalGitIdentity(repoDir, { name: "Sandbox Test", email: "sandbox@example.invalid" }).ok).toBe(true);
+			// Same empty hooks path as createRepository: a user-global core.hooksPath
+			// would otherwise make every commit here pay ~1.3s of hook startup noise.
+			expect(runGit(repoDir, ["config", "core.hooksPath", ""]).ok).toBe(true);
 			expect(createInitialGitBaseline(repoDir).ok).toBe(true);
 			const commit = runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim();
 			// Uncommitted work: a modified file, a deleted one, a new untracked one (also inside a new directory), and an ignored one.
@@ -213,6 +220,8 @@ describe("delegated worktree sandbox", () => {
 			writeFileSync(join(repoDir, "was-dir", "x.txt"), "x\n", "utf8");
 			expect(initializeGitRepository(repoDir).ok).toBe(true);
 			expect(setLocalGitIdentity(repoDir, { name: "Sandbox Test", email: "sandbox@example.invalid" }).ok).toBe(true);
+			// Same empty hooks path as createRepository (see above).
+			expect(runGit(repoDir, ["config", "core.hooksPath", ""]).ok).toBe(true);
 			expect(createInitialGitBaseline(repoDir).ok).toBe(true);
 			rmSync(join(repoDir, "was-file"));
 			mkdirSync(join(repoDir, "was-file"));

@@ -280,11 +280,24 @@ function textFromBlocks(blocks) {
 		.join("");
 }
 
+/** Probe for tests and lab scripts: every real build counts here, so a cache hit that skips the build is visible. */
+export const turnsProbe = { builds: 0 };
+
+/**
+ * Turns cache hit check (the cache entry itself lives in the session bag, see store.js). A cached build still
+ * describes exactly these items only while every source reference is unchanged: the same items array, the same
+ * toolRuns object, the same cwd. Returns the cached turns on a hit, null when the caller must build.
+ */
+export function cachedTurns(cache, items, toolRuns, cwd) {
+	return cache && cache.items === items && cache.toolRuns === toolRuns && cache.cwd === cwd ? cache.turns : null;
+}
+
 /**
  * Build turns from wire items.
  * ctx: { cwd, toolRuns, running, lastKey }
  */
 export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
+	turnsProbe.builds += 1;
 	const results = new Map();
 	for (const item of items) if (item.kind === "toolResult") results.set(item.toolCallId, item);
 
@@ -310,6 +323,8 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 	};
 
 	items.forEach((item, index) => {
+		// Bookmark labels are projected for the HTML export only; the transcript has nothing to draw for them.
+		if (item.kind === "label") return;
 		if (item.kind === "custom" && item.customType === "git-commit-repair" && !item.display) {
 			turn = null;
 			repair = { kind: "gitRepair", id: item.id || item.ts || index, ts: item.ts, items: [] };

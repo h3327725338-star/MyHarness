@@ -2,7 +2,7 @@
 #
 # 目标：从快捷方式启动 Web 模式后，不留下可见的 CMD / PowerShell 控制台窗口。
 #   * 服务进程（web-runtime.ps1 -> node）以“无窗口”方式在后台运行，输出写入日志文件。
-#   * 本脚本只负责：每次都先让已在运行的旧实例退出（保证运行的是当前源码），再启动服务、等待它就绪，失败时弹出错误对话框。
+#   * 本脚本只负责：已有就绪实例且后端源码没变时直接唤醒它（打开浏览器后退出），否则先让旧实例退出（保证运行的是当前源码）再启动服务、等待它就绪，失败时弹出错误对话框。
 #   * 服务由页面里的“退出 MyHarness”或 POST /api/shutdown 正常结束；结束时整棵进程树随之退出。
 #   * 需要看控制台输出时，用 `dev-web.cmd --console`（保留原来的可见窗口方式）。
 #   * 启动超过约 1 秒仍未就绪时，显示一个小的进度窗口；进度来自 web-runtime.ps1 / 服务端日志里真实出现的阶段，
@@ -10,7 +10,7 @@
 #   * 日志由子进程以 UTF-8 写入，读取时必须显式指定 UTF-8，否则 PowerShell 5.1 会按系统 ANSI 代码页
 #     （中文系统为 GBK）解码，错误对话框里的中文就会变成乱码。
 #
-# 参数：其余参数原样转发给 MyHarness（例如 --port 7878、--no-open）。
+# 参数：其余参数原样转发给 MyHarness（例如 --port 7878、--no-open）；--restart 只由本脚本消费（强制重启），不转发。
 
 $ErrorActionPreference = "Stop"
 
@@ -281,14 +281,19 @@ for ($i = 0; $i -lt $forward.Count; $i++) {
 	}
 }
 $noOpen = $forward -contains "--no-open"
+$forceRestart = $forward -contains "--restart"
+# --restart is a launcher-only flag: force Stop + restart even when the sources are unchanged.
+# It must not reach the server (unknown option there), so it is stripped from the forwarded args.
+if ($forceRestart) { $forward = @($forward | Where-Object { $_ -ne "--restart" }) }
 
-# 服务是否已经能应答：直接问 /api/boot（不走代理，0.4 秒超时），不依赖日志文件。
-function Test-WebReady([int]$Port) {
+# 服务是否已经能应答：直接问 /api/boot（不走代理，0.15 秒超时），不依赖日志文件。
+# 就绪时一次只要约 1ms，所以启动分支先问它，再判断端口占用。
+function Test-WebReady([int]$Port, [int]$TimeoutMs = 150) {
 	try {
 		$request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/api/boot")
 		$request.Proxy = $null
-		$request.Timeout = 400
-		$request.ReadWriteTimeout = 400
+		$request.Timeout = $TimeoutMs
+		$request.ReadWriteTimeout = $TimeoutMs
 		$response = $request.GetResponse()
 		try {
 			$reader = New-Object System.IO.StreamReader($response.GetResponseStream())
@@ -302,12 +307,101 @@ function Test-WebReady([int]$Port) {
 	}
 }
 
-function Test-ExistingInstance([int]$Port) {
-	return (Test-WebReady $Port)
+function Test-ExistingInstance([int]$Port, [int]$TimeoutMs = 150) {
+	return (Test-WebReady $Port $TimeoutMs)
 }
 
-# 每次启动都必须运行当前源码，所以不复用已在运行的实例：先让它正常退出，再启动新的。
-# （复用会让浏览器连上按旧代码启动的后端，看不到最新改动。）
+# 已有就绪实例且后端源码没变时直接唤醒它（W157）：读它启动时刻的 startedAtMs，
+# 对比后端在启动时会加载的文件的最大 mtime。取不到、扫失败、没就绪就返回 $null，
+# 调用方一律退回现有的关停再重启。
+function Get-BootStartedAtMs([int]$Port, [int]$TimeoutMs = 150) {
+	try {
+		$request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/api/boot")
+		$request.Proxy = $null
+		$request.Timeout = $TimeoutMs
+		$request.ReadWriteTimeout = $TimeoutMs
+		$response = $request.GetResponse()
+		try {
+			$text = (New-Object System.IO.StreamReader($response.GetResponseStream())).ReadToEnd()
+		} finally {
+			$response.Close()
+		}
+		if ($text -notmatch '"phase"\s*:\s*"ready"') { return $null }
+		if ($text -match '"startedAtMs"\s*:\s*(\d+)') { return [long]$Matches[1] }
+		return $null
+	} catch {
+		return $null
+	}
+}
+
+# 后端在启动时会加载的文件里最新的修改时间（毫秒时间戳）。失败返回 $null 保守重启。
+# 只扫后端加载范围：packages/*/src、packages/*/package.json、根 package.json、tsconfig*.json、
+# scripts/dev-fast-loader.mjs、system-prompts。不扫 web/（前端每次请求都从磁盘读，不需要重启）。
+function Get-BackendMaxMtimeMs([string]$RepoRoot) {
+	try {
+		$probe = Get-Command node -ErrorAction Stop
+		$scan = @(
+			'const fs=require("fs");',
+			'const path=require("path");',
+			'const root=process.argv[1];',
+			'let max=0;',
+			'function touch(p){try{const s=fs.statSync(p,{throwIfNoEntry:false});if(s&&s.isFile()&&s.mtimeMs>max)max=s.mtimeMs;}catch(e){}}',
+			'function walk(d){let es;try{es=fs.readdirSync(d,{withFileTypes:true});}catch(e){return;}for(const e of es){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else touch(p);}}',
+			'for(const pkg of fs.readdirSync(path.join(root,"packages"),{withFileTypes:true})){if(!pkg.isDirectory())continue;const pd=path.join(root,"packages",pkg.name);walk(path.join(pd,"src"));touch(path.join(pd,"package.json"));}',
+			'touch(path.join(root,"package.json"));',
+			'for(const f of fs.readdirSync(root)){if(/^tsconfig.*\.json$/.test(f))touch(path.join(root,f));}',
+			'touch(path.join(root,"scripts","dev-fast-loader.mjs"));',
+			'walk(path.join(root,"system-prompts"));',
+			'console.log(Math.floor(max));'
+		) -join [Environment]::NewLine
+		# PowerShell 5.1 strips the double quotes of an external command's argument,
+		# so node would see require(fs) instead of require("fs"); escape them first.
+		$scan = $scan.Replace('"', '\"')
+		$output = & $probe.Source -e $scan $RepoRoot 2>$null
+		$maxMtime = 0
+		if ($output -match '(\d+)') { [long]::TryParse($Matches[1], [ref]$maxMtime) | Out-Null }
+		if ($maxMtime -le 0) { return $null }
+		return $maxMtime
+	} catch {
+		return $null
+	}
+}
+
+function Invoke-InstanceWake([int]$Port) {
+	try {
+		$response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/wake" -Method Post -Headers @{ "x-myharness-web" = "1" } -UseBasicParsing -TimeoutSec 3
+		return ($response.StatusCode -eq 200 -and $response.Content -match '"ok"\s*:\s*true')
+	} catch {
+		return $false
+	}
+}
+
+# 端口上有没有别的程序在监听：只做一次 TCP 连接（0.15 秒超时），不问 HTTP。
+# 只在 Test-WebReady 不就绪时调用；Get-NetTCPConnection 首次调用要加载模块（约 1 秒），
+# 不能放在每次启动的必经之路上，只在确实需要 PID 的 taskkill 兜底里用。
+function Test-PortBusy([int]$Port) {
+	$client = $null
+	try {
+		$client = New-Object System.Net.Sockets.TcpClient
+		$async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+		if (-not $async.AsyncWaitHandle.WaitOne(150)) { return $false }
+		try {
+			$client.EndConnect($async)
+		} catch {
+			return $false
+		}
+		return $true
+	} catch {
+		return $false
+	} finally {
+		if ($client) { $client.Close() }
+	}
+}
+
+# 每次启动都必须运行当前源码：源码变了就不能复用已在运行的实例，先让它正常退出再启动新的。
+# （复用会让浏览器连上按旧代码启动的后端，看不到最新改动；源码没变时走上面的唤醒快路。）
+# 注意：本函数首次调用要加载网络模块（约 1 秒），只允许在需要 PID 的 taskkill 兜底里调用，
+# 不得出现在每次启动的必经之路上；普通的“端口空不空”判断用 Test-PortBusy。
 function Get-PortListener([int]$Port) {
 	Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
 }
@@ -315,10 +409,10 @@ function Get-PortListener([int]$Port) {
 function Wait-PortFree([int]$Port, [int]$Seconds) {
 	$until = (Get-Date).AddSeconds($Seconds)
 	while ((Get-Date) -lt $until) {
-		if (-not (Get-PortListener $Port)) { return $true }
+		if (-not (Test-PortBusy $Port)) { return $true }
 		Start-Sleep -Milliseconds 200
 	}
-	return -not (Get-PortListener $Port)
+	return -not (Test-PortBusy $Port)
 }
 
 function Stop-ExistingInstance([int]$Port) {
@@ -337,13 +431,55 @@ function Stop-ExistingInstance([int]$Port) {
 	return $false
 }
 
-if ($port -ne 0 -and (Get-PortListener $port)) {
-	if (-not (Test-ExistingInstance $port)) {
+# 已有实例时只做一次新鲜度判断（W163）：读它的 startedAtMs，对比后端加载范围的
+# 最大 mtime。返回 wake（没变，打开浏览器）、keep（--no-open 且没变，静默退出）、
+# restart（变了、判不准或 --restart）。普通拉起、--no-open、二次确认三条路共用。
+function Get-InstanceDecision([int]$Port, [int]$ProbeTimeoutMs) {
+	$clock = [System.Diagnostics.Stopwatch]::StartNew()
+	$budgetMs = 3000
+	try {
+		if (-not $forceRestart) {
+			$startedAtMs = Get-BootStartedAtMs $Port $ProbeTimeoutMs
+			if ($startedAtMs -and $clock.ElapsedMilliseconds -lt $budgetMs) {
+				$maxMtime = Get-BackendMaxMtimeMs $Root
+				if ($maxMtime -and $maxMtime -le $startedAtMs -and $clock.ElapsedMilliseconds -lt $budgetMs) {
+					if ($noOpen) { return "keep" }
+					return "wake"
+				}
+			}
+		}
+	} catch {
+	}
+	return "restart"
+}
+
+# 分支顺序：先问 /api/boot（就绪时约 1ms）→ 不就绪再判端口占用 → 空闲直接启动。
+# 有就绪实例走上面的新鲜度判断（没变唤醒或静默留、变了关停再起）；端口忙但短超时内
+# 问不出 /api/boot 时再给一次长超时确认（实例可能正忙），仍没回答才报“被其他程序占用”。
+$existingPort = 0
+$probeTimeoutMs = 150
+if ($port -ne 0 -and (Test-ExistingInstance $port)) {
+	$existingPort = $port
+} elseif ($port -ne 0 -and (Test-PortBusy $port)) {
+	# 第二次确认：实例正忙（重请求）时 /api/boot 可能错过 150ms 探测，但 TCP 还通。
+	# 用 2000ms 再问一次，回答了就按已有就绪实例处理；仍然没回答才报占用。
+	if (Test-ExistingInstance $port 2000) {
+		$existingPort = $port
+		$probeTimeoutMs = 2000
+	} else {
 		Show-Error "端口 $port 已被其他程序占用，MyHarness 无法启动。请关闭该程序，或用 --port 指定其他端口。"
 		exit 1
 	}
-	if (-not (Stop-ExistingInstance $port)) {
-		Show-Error "无法结束端口 $port 上正在运行的旧 MyHarness，已取消启动，避免打开旧版本。"
+}
+if ($existingPort -ne 0) {
+	$decision = Get-InstanceDecision $existingPort $probeTimeoutMs
+	if ($decision -eq "wake") {
+		if (Invoke-InstanceWake $existingPort) { exit 0 }
+	} elseif ($decision -eq "keep") {
+		exit 0
+	}
+	if (-not (Stop-ExistingInstance $existingPort)) {
+		Show-Error "无法结束端口 $existingPort 上正在运行的旧 MyHarness，已取消启动，避免打开旧版本。"
 		exit 1
 	}
 }
@@ -363,7 +499,7 @@ try {
 
 # 等待服务打印 “MyHarness Web UI: <url>”（首次运行可能先执行 npm install，所以超时较长）。
 # 超过 SplashDelayMilliseconds 仍未就绪才显示进度窗口，快速启动时不闪窗。
-$SplashDelayMilliseconds = 1000
+$SplashDelayMilliseconds = 300
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
 $ready = $false
@@ -376,7 +512,7 @@ while ((Get-Date) -lt $deadline) {
 		break
 	}
 	# 日志读不到（被占用、被缓冲）时不能因此一直等下去：服务端口已经能应答就算就绪。
-	if ($port -ne 0 -and ($clock.ElapsedMilliseconds - $lastProbe) -ge 100) {
+	if ($port -ne 0 -and ($clock.ElapsedMilliseconds - $lastProbe) -ge 250) {
 		$lastProbe = $clock.ElapsedMilliseconds
 		if (Test-WebReady $port) {
 			$ready = $true

@@ -27,6 +27,11 @@ function createRepository(): { root: string; agentDir: string; manager: GitWorkt
 	runGit(root, ["init", "-b", "main"]);
 	runGit(root, ["config", "user.name", "MyHarness Test"]);
 	runGit(root, ["config", "user.email", "myharness-test@example.invalid"]);
+	// A user-global core.hooksPath makes every commit here pay ~1.3s of external
+	// hook process startup, which is pure noise for these worktree tests. An empty
+	// local value overrides the global one; linked worktrees inherit it from the
+	// main repository config, so every fixture worktree stays hook-free.
+	runGit(root, ["config", "core.hooksPath", ""]);
 	runGit(root, ["add", "."]);
 	runGit(root, ["commit", "-m", "initial"]);
 	return { root, agentDir, manager: new GitWorktreeManager(agentDir) };

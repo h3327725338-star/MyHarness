@@ -365,3 +365,5 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 	writeFileSync(outputPath, html, "utf8");
 	return outputPath;
 }
+
+export { type BuildReplayHtmlOptions, buildReplayHtml } from "./replay/build.ts";

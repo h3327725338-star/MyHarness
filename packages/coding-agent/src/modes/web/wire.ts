@@ -10,11 +10,18 @@ import type { AgentMessage } from "@myharness/agent-core";
 import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
-import type { SessionEntry } from "../../session/types.ts";
+import type { SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { parseExpandedBuiltinPromptCommand } from "../../startup/slash-commands.ts";
 
 /** Tool result details larger than this are replaced by a marker to keep payloads bounded. */
 const MAX_DETAILS_JSON_CHARS = 400_000;
+
+/**
+ * Details blocks whose serialized-size bound stays under this cap skip the JSON round trip in sanitizeDetails.
+ * Chosen well below MAX_DETAILS_JSON_CHARS (measured transcripts have ~99% of details blocks under 4KB) so the
+ * size scan early-exits cheaply on the rare large blocks instead of scanning them twice.
+ */
+const FAST_DETAILS_MAX_CHARS = 64_000;
 
 /**
  * Custom entry that keeps a finished task's change card (the files it changed, with their diffs) in the session, so
@@ -70,6 +77,7 @@ export type WireItem =
 			/** The user picked a built-in prompt command such as /workflow. */
 			command?: { name: string; task: string };
 			skill?: { name: string; location: string; content: string };
+			timing?: SessionMessageTiming;
 	  }
 	| {
 			kind: "assistant";
@@ -81,6 +89,7 @@ export type WireItem =
 			provider: string;
 			model: string;
 			usage?: WireUsage;
+			timing?: SessionMessageTiming;
 	  }
 	| {
 			kind: "toolResult";
@@ -92,6 +101,7 @@ export type WireItem =
 			images: WireImage[];
 			isError: boolean;
 			details?: unknown;
+			timing?: SessionMessageTiming;
 	  }
 	| {
 			kind: "bash";
@@ -105,6 +115,7 @@ export type WireItem =
 			truncated: boolean;
 			fullOutputPath?: string;
 			excludeFromContext?: boolean;
+			timing?: SessionMessageTiming;
 	  }
 	| {
 			kind: "custom";
@@ -115,9 +126,35 @@ export type WireItem =
 			images: WireImage[];
 			display: boolean;
 			details?: unknown;
+			timing?: SessionMessageTiming;
 	  }
-	| { kind: "compaction"; id?: string; ts: number; summary: string; tokensBefore: number }
-	| { kind: "branchSummary"; id?: string; ts: number; summary: string; fromId: string }
+	| {
+			kind: "compaction";
+			id?: string;
+			ts: number;
+			summary: string;
+			tokensBefore: number;
+			firstKeptEntryId?: string;
+			usageSource?: { provider: string; model: string; currency: "USD" | "CNY" };
+			usage?: WireUsage;
+			details?: unknown;
+	  }
+	| {
+			kind: "branchSummary";
+			id?: string;
+			ts: number;
+			summary: string;
+			fromId: string;
+			usage?: WireUsage;
+			details?: unknown;
+	  }
+	| {
+			kind: "label";
+			id?: string;
+			ts: number;
+			targetId: string;
+			label?: string;
+	  }
 	| {
 			kind: "reload";
 			id?: string;
@@ -168,11 +205,83 @@ function contentParts(content: unknown): { text: string; images: WireImage[] } {
 	return { text: texts.join(""), images };
 }
 
-export function sanitizeDetails(details: unknown): unknown {
+/**
+ * Upper bound on the JSON.stringify output length of a JSON-round-trip-stable value, or undefined when the value
+ * is not fast-path eligible: non-plain objects (Date, Map, class instances — anything that could carry toJSON),
+ * undefined/function/symbol/bigint members, -0/NaN/Infinity, shared or cyclic references (second visit), sparse
+ * arrays, arrays with extra own keys, or a bound that would exceed the remaining budget. Strings count 6 escaped
+ * characters per UTF-16 unit (the worst case, "\u0000"), so the bound never undercounts and callers may treat
+ * "within budget" as proof that the slow path would not truncate.
+ */
+function stableJsonSizeUpperBound(value: unknown, budget: number, seen: Set<object>): number | undefined {
+	switch (typeof value) {
+		case "string": {
+			const size = 2 + value.length * 6;
+			return size <= budget ? size : undefined;
+		}
+		case "number": {
+			// -0 serializes as "0" (not round-trip stable); any other finite double serializes in at most 25 chars.
+			if (!Number.isFinite(value) || Object.is(value, -0)) return undefined;
+			return 25 <= budget ? 25 : undefined;
+		}
+		case "boolean":
+			return 5 <= budget ? 5 : undefined;
+		case "object": {
+			if (value === null) return 4 <= budget ? 4 : undefined;
+			if (seen.has(value)) return undefined; // shared or cyclic: the slow path reproduces the old copy exactly.
+			seen.add(value);
+			let total = 2; // brackets, plus one over-counted comma per member: keeps the bound safe.
+			if (Array.isArray(value)) {
+				// Holes and extra own keys disappear only through the JSON round trip, so they stay on the slow path.
+				if (Object.keys(value).length !== value.length) return undefined;
+				const elements = value as unknown[];
+				for (let i = 0; i < elements.length; i += 1) {
+					total += 1;
+					const element = stableJsonSizeUpperBound(elements[i], budget - total, seen);
+					if (element === undefined) return undefined;
+					total += element;
+					if (total > budget) return undefined;
+				}
+				return total;
+			}
+			const proto = Object.getPrototypeOf(value);
+			if (proto !== Object.prototype && proto !== null) return undefined;
+			const record = value as Record<string, unknown>;
+			for (const key of Object.keys(record)) {
+				total += 3 + key.length * 6; // quoted key + colon
+				total += 1; // comma
+				if (total > budget) return undefined;
+				const property = stableJsonSizeUpperBound(record[key], budget - total, seen);
+				if (property === undefined) return undefined;
+				total += property;
+				if (total > budget) return undefined;
+			}
+			return total;
+		}
+		default:
+			// undefined/function/symbol/bigint: the round trip drops or rejects them; not fast-path material.
+			return undefined;
+	}
+}
+
+export function sanitizeDetails(details: unknown, charLimit: number = MAX_DETAILS_JSON_CHARS): unknown {
 	if (details === undefined || details === null) return undefined;
+	// Fast path (W171): transcripts project the same details blocks over and over and ~99% are small, plain JSON.
+	// When the size bound proves the serialized text stays within charLimit, the slow path could only rebuild an
+	// equal copy, so return the original reference. This is safe because every caller stores the result into a
+	// freshly built wire item and never mutates it in place (messageToWire, entriesToWire, the host SSE calls;
+	// browsers receive independent JSON.parse copies over HTTP). Anything the bound rejects — or a scan that
+	// throws (deep recursion, a getter error) — falls through to the unchanged slow path below.
+	try {
+		if (stableJsonSizeUpperBound(details, Math.min(charLimit, FAST_DETAILS_MAX_CHARS), new Set()) !== undefined) {
+			return details;
+		}
+	} catch {
+		// Not eligible after all; the slow path reproduces the previous behavior exactly.
+	}
 	try {
 		const text = JSON.stringify(details);
-		if (text.length > MAX_DETAILS_JSON_CHARS) {
+		if (text.length > charLimit) {
 			return { truncatedDetails: true, originalChars: text.length };
 		}
 		return JSON.parse(text);
@@ -188,8 +297,9 @@ function wireUsage(usage: {
 	cacheWrite: number;
 	reasoning?: number;
 	totalTokens: number;
-	cost?: { total: number };
+	cost?: number | { total: number };
 }): WireUsage {
+	const cost = typeof usage.cost === "number" ? usage.cost : (usage.cost?.total ?? 0);
 	return {
 		input: usage.input,
 		output: usage.output,
@@ -197,20 +307,24 @@ function wireUsage(usage: {
 		cacheWrite: usage.cacheWrite,
 		...(usage.reasoning !== undefined ? { reasoning: usage.reasoning } : {}),
 		totalTokens: usage.totalTokens,
-		cost: usage.cost?.total ?? 0,
+		cost,
 	};
 }
 
 /** Project one AgentMessage into a wire item. Returns undefined for messages with no visible form. */
-export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: number } = {}): WireItem | undefined {
+export function messageToWire(
+	message: AgentMessage,
+	meta: { id?: string; ts?: number; timing?: SessionMessageTiming; detailsCharLimit?: number } = {},
+): WireItem | undefined {
 	const ts = meta.ts ?? (typeof message.timestamp === "number" ? message.timestamp : Date.now());
+	const timingProp = meta.timing ? { timing: meta.timing } : {};
 	switch (message.role) {
 		case "user": {
 			const { text, images } = contentParts(message.content);
 			const builtin = parseExpandedBuiltinPromptCommand(text);
 			const skill = builtin ? undefined : parseSkillBlock(text);
 			if (builtin) {
-				return { kind: "user", id: meta.id, ts, text: builtin.task, images, command: builtin };
+				return { kind: "user", id: meta.id, ts, text: builtin.task, images, command: builtin, ...timingProp };
 			}
 			if (skill) {
 				return {
@@ -220,9 +334,10 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 					text: skill.userMessage ?? "",
 					images,
 					skill: { name: skill.name, location: skill.location, content: skill.content },
+					...timingProp,
 				};
 			}
-			return { kind: "user", id: meta.id, ts, text, images };
+			return { kind: "user", id: meta.id, ts, text, images, ...timingProp };
 		}
 		case "assistant": {
 			const blocks: WireAssistantBlock[] = [];
@@ -258,6 +373,7 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 				provider: message.provider,
 				model: message.model,
 				...(message.usage ? { usage: wireUsage(message.usage) } : {}),
+				...timingProp,
 			};
 		}
 		case "toolResult": {
@@ -271,7 +387,8 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 				text,
 				images,
 				isError: message.isError,
-				details: sanitizeDetails(message.details),
+				details: sanitizeDetails(message.details, meta.detailsCharLimit),
+				...timingProp,
 			};
 		}
 		case "bashExecution":
@@ -287,6 +404,7 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 				truncated: message.truncated,
 				...(message.fullOutputPath ? { fullOutputPath: message.fullOutputPath } : {}),
 				...(message.excludeFromContext ? { excludeFromContext: true } : {}),
+				...timingProp,
 			};
 		case "custom": {
 			const { text, images } = contentParts(message.content);
@@ -298,7 +416,8 @@ export function messageToWire(message: AgentMessage, meta: { id?: string; ts?: n
 				text,
 				images,
 				display: message.display,
-				details: sanitizeDetails(message.details),
+				details: sanitizeDetails(message.details, meta.detailsCharLimit),
+				...timingProp,
 			};
 		}
 		case "compactionSummary":
@@ -341,14 +460,24 @@ export function runChangesToWire(id: string, ts: number, data: unknown): WireIte
 	return { kind: "runChanges", id, ts, runId: Number(card.runId) || 0, files };
 }
 
+export interface EntriesToWireOptions {
+	detailsCharLimit?: number;
+}
+
 /** Project a persisted session branch into wire items (compaction entries become markers, not replayed history). */
-export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
+export function entriesToWire(entries: readonly SessionEntry[], options: EntriesToWireOptions = {}): WireItem[] {
+	const charLimit = options.detailsCharLimit ?? MAX_DETAILS_JSON_CHARS;
 	const items: WireItem[] = [];
 	for (const entry of entries) {
 		const ts = Date.parse(entry.timestamp) || Date.now();
 		switch (entry.type) {
 			case "message": {
-				const wire = messageToWire(entry.message, { id: entry.id, ts });
+				const wire = messageToWire(entry.message, {
+					id: entry.id,
+					ts,
+					timing: entry.timing,
+					detailsCharLimit: charLimit,
+				});
 				if (wire) items.push(wire);
 				break;
 			}
@@ -358,11 +487,22 @@ export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 						kind: "gitStatus",
 						id: entry.id,
 						ts,
-						result: sanitizeDetails(entry.data) as Record<string, unknown>,
+						result: sanitizeDetails(entry.data, charLimit) as Record<string, unknown>,
 					});
 				else if (entry.customType === RUN_CHANGES_ENTRY) {
 					const card = runChangesToWire(entry.id, ts, entry.data);
 					if (card) items.push(card);
+				} else {
+					items.push({
+						kind: "custom",
+						id: entry.id,
+						ts,
+						customType: entry.customType,
+						text: typeof entry.data === "string" ? entry.data : "",
+						images: [],
+						display: false,
+						details: sanitizeDetails(entry.data, charLimit),
+					});
 				}
 				break;
 			case "custom_message": {
@@ -375,7 +515,7 @@ export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 					text,
 					images,
 					display: entry.display,
-					details: sanitizeDetails(entry.details),
+					details: sanitizeDetails(entry.details, charLimit),
 				});
 				break;
 			}
@@ -386,12 +526,33 @@ export function entriesToWire(entries: readonly SessionEntry[]): WireItem[] {
 					ts,
 					summary: entry.summary,
 					tokensBefore: entry.tokensBefore,
+					...(entry.firstKeptEntryId ? { firstKeptEntryId: entry.firstKeptEntryId } : {}),
+					...(entry.usageSource ? { usageSource: entry.usageSource } : {}),
+					...(entry.usage ? { usage: wireUsage(entry.usage) } : {}),
+					...(entry.details !== undefined ? { details: sanitizeDetails(entry.details, charLimit) } : {}),
 				});
 				break;
 			case "branch_summary":
 				if (entry.summary) {
-					items.push({ kind: "branchSummary", id: entry.id, ts, summary: entry.summary, fromId: entry.fromId });
+					items.push({
+						kind: "branchSummary",
+						id: entry.id,
+						ts,
+						summary: entry.summary,
+						fromId: entry.fromId,
+						...(entry.usage ? { usage: wireUsage(entry.usage) } : {}),
+						...(entry.details !== undefined ? { details: sanitizeDetails(entry.details, charLimit) } : {}),
+					});
 				}
+				break;
+			case "label":
+				items.push({
+					kind: "label",
+					id: entry.id,
+					ts,
+					targetId: entry.targetId,
+					...(entry.label !== undefined ? { label: entry.label } : {}),
+				});
 				break;
 			default:
 				break;

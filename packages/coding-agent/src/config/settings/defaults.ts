@@ -66,7 +66,7 @@ export const SETTINGS_DEFAULTS = {
 	outputPad: 1,
 	autocompleteMaxVisible: 5,
 	codeBlockIndent: "  ",
-	codeIntelligenceEnabled: true,
+	codeIntelligenceSymbolsEnabled: false,
 	// Zero disables the delegated Explore wall-clock deadline.
 	defaultSubAgentTaskTimeoutMs: 0,
 	// Ten minutes without a meaningful tool/result change is a stall. Zero disables it.

@@ -22,8 +22,16 @@ export function collectSessionChanges(entries: readonly SessionEntry[]): {
 		const wire = runChangesToWire(entry.id, Date.parse(entry.timestamp), entry.data);
 		if (wire?.kind !== "runChanges") continue;
 		const card = entry.data as { files: RunChangeCardFile[] };
+		const cardFilesByPath = new Map<string, RunChangeCardFile>();
+		if (Array.isArray(card.files)) {
+			for (const candidate of card.files) {
+				if (candidate?.path && !cardFilesByPath.has(candidate.path)) {
+					cardFilesByPath.set(candidate.path, candidate);
+				}
+			}
+		}
 		for (const file of wire.files) {
-			const saved = card.files.find((candidate) => candidate?.path === file.path);
+			const saved = cardFilesByPath.get(file.path);
 			if (!saved) continue;
 			const summary: FileChangeSummary = {
 				path: file.path,

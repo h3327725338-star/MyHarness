@@ -38,7 +38,6 @@ function manifest(
 		schemaVersion: 1,
 		product: "myharness",
 		platform: "win32-x64",
-		defaultMode: "lightweight",
 		releaseVersion: "test",
 		releaseTag: "test",
 		published: true,

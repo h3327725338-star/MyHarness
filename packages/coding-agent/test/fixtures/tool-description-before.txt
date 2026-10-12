@@ -1,0 +1,18 @@
+const TOOL_DESCRIPTIONS = {
+	agent: N_("Delegate tasks to sub-agents."),
+	read: N_("Read text, images and documents."),
+	bash: N_("Run Bash commands."),
+	pwsh: N_("Run PowerShell commands."),
+	edit: N_("Replace exact text in a file."),
+	write: N_("Create or rewrite a file."),
+	grep: N_("Search file contents."),
+	find: N_("Find files by name."),
+	ls: N_("List files and folders."),
+	symbols: N_("Find code symbols and references."),
+	github: N_("Access connected GitHub resources."),
+	web_search: N_("Search the web and read results."),
+	web_fetch: N_("Read web pages and documents."),
+	workflow: N_("Staged read-only exploration for parallel multi-module investigation and verification."),
+	ultracode: N_("Deep high-risk investigation with counterexample and failure-path checks."),
+};
+export const toolDescription = (tool) => TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;

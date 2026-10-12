@@ -1,13 +1,14 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@myharness/agent-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../src/session/manager/index.ts";
 import { createGrepTool } from "../src/tools/files/grep.ts";
 import { createLsTool } from "../src/tools/files/ls.ts";
 import { wrapToolWithResultPersistence } from "../src/tools/tool-result-persistence.ts";
 import { GREP_MAX_LINE_LENGTH } from "../src/tools/truncate.ts";
+import { getToolPath } from "../src/utils/tools-manager.ts";
 
 /**
  * Gap coverage for the T03 tool hardening (gaps B4-B6 and the `literal` half of item 6 in
@@ -35,6 +36,12 @@ function textOf(result: AgentToolResult<any>): string {
 		.map((part: any) => part.text)
 		.join("\n");
 }
+
+/**
+ * Where a usable `rg` already is (managed bin or PATH); null when there is none. `getToolPath`
+ * never downloads, and these tests must not download either: with no rg the grep case is skipped.
+ */
+const foundRg = getToolPath("rg");
 
 describe("tool hardening gaps", () => {
 	it("keeps the bounded preview and no durable reference when the full output cannot be persisted", async () => {
@@ -69,29 +76,64 @@ describe("tool hardening gaps", () => {
 		expect(text).not.toContain("完整输出已保存");
 		expect(result.details?.fullOutputPath).toBeUndefined();
 		expect(text.length).toBeLessThan(60 * 1024);
+		// The preview must be a real truncation of the ~60KB input, not the untouched full
+		// text (which would exceed the limit on its own) and not an empty placeholder.
+		expect(text.length).toBeLessThan(60010 / 2);
+		expect(text).toContain("head line");
+		// The input holds 6000 "tail line" occurrences; a real truncation keeps the head but
+		// cuts the tail, while an uncut passthrough would show all 6000 and a failure that
+		// skipped reading would show none.
+		const tailCount = text.split("tail line").length - 1;
+		expect(tailCount).toBeGreaterThan(0);
+		expect(tailCount).toBeLessThan(6000);
 		expect(result.content.some((part: any) => part.type === "text")).toBe(true);
 	});
 
-	it("persists the uncut match lines when an overlong grep line is truncated", async () => {
+	// Without an already installed `rg` the grep tool cannot run; skipping (never downloading)
+	// keeps an environment gap distinguishable from a regression in the truncation branch itself.
+	it.runIf(foundRg !== null)("persists the uncut match lines when an overlong grep line is truncated", async () => {
 		const testDir = await createSessionDir();
 		const marker = "NEEDLE";
 		const longLine = `${marker}${"".padEnd(GREP_MAX_LINE_LENGTH + 500, "x")}`;
 		await writeFile(join(testDir, "long-lines.txt"), `${longLine}\nshort ${marker} line\n`, "utf8");
 
-		const sessionManager = SessionManager.create(testDir, join(testDir, "sessions"));
-		const grepTool = wrapToolWithResultPersistence(createGrepTool(testDir), sessionManager);
+		// `ensureTool("rg", true)` downloads ripgrep into `getAgentDir()/bin` when it finds no
+		// rg; point the agent directory at this test's own temp dir so nothing can be written
+		// to the real user directory, and put the rg found above on PATH so no download is
+		// needed at all. The tools manager reads the directory once at module load, so the
+		// grep tool is re-imported after the redirect.
+		const previousAgentDir = process.env.MYHARNESS_CODING_AGENT_DIR;
+		const previousPath = process.env.PATH;
+		process.env.MYHARNESS_CODING_AGENT_DIR = join(testDir, "agent");
+		if (foundRg && isAbsolute(foundRg)) process.env.PATH = `${dirname(foundRg)}${delimiter}${previousPath ?? ""}`;
+		vi.resetModules();
+		try {
+			const { createGrepTool: createIsolatedGrepTool } = await import("../src/tools/files/grep.ts");
+			const { SessionManager: IsolatedSessionManager } = await import("../src/session/manager/index.ts");
+			const { wrapToolWithResultPersistence: wrapIsolated } = await import(
+				"../src/tools/tool-result-persistence.ts"
+			);
+			const sessionManager = IsolatedSessionManager.create(testDir, join(testDir, "sessions"));
+			const grepTool = wrapIsolated(createIsolatedGrepTool(testDir), sessionManager);
 
-		const result = await grepTool.execute("call-b5", { pattern: marker, path: testDir });
-		const preview = textOf(result);
+			const result = await grepTool.execute("call-b5", { pattern: marker, path: testDir });
+			const preview = textOf(result);
 
-		// The preview shows the cut; the persisted sidecar keeps the whole line, which is the
-		// only way the model can still see what fell past GREP_MAX_LINE_LENGTH.
-		expect(preview).toContain(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars`);
-		const fullOutputPath = result.details?.fullOutputPath as string | undefined;
-		expect(fullOutputPath).toBeDefined();
-		const fullText = await readFile(fullOutputPath!, "utf8");
-		expect(fullText).toContain(longLine);
-		expect(fullText.length).toBeGreaterThan(preview.length);
+			// The preview shows the cut; the persisted sidecar keeps the whole line, which is the
+			// only way the model can still see what fell past GREP_MAX_LINE_LENGTH.
+			expect(preview).toContain(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars`);
+			const fullOutputPath = result.details?.fullOutputPath as string | undefined;
+			expect(fullOutputPath).toBeDefined();
+			const fullText = await readFile(fullOutputPath!, "utf8");
+			expect(fullText).toContain(longLine);
+			expect(fullText.length).toBeGreaterThan(preview.length);
+		} finally {
+			if (previousAgentDir === undefined) delete process.env.MYHARNESS_CODING_AGENT_DIR;
+			else process.env.MYHARNESS_CODING_AGENT_DIR = previousAgentDir;
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+			vi.resetModules();
+		}
 	});
 
 	it("matches a dash-leading pattern literally when literal is requested", async () => {

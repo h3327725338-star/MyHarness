@@ -519,10 +519,33 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 Specify which built-in tools to enable:
 
 - Built-in tool names: `read`, `bash`, `pwsh`, `edit`, `write`, `grep`, `find`, `ls`, `symbols`, `agent`, `workflow`, `ultracode`. The `agent`, `workflow`, and `ultracode` tools are active only when **Sub Agent** is enabled in global settings and the explicit tool allowlist permits them.
-- Default built-ins: `read`, `bash`, `pwsh`, `edit`, `write`, `symbols`
+- Default built-ins: `read`, `bash`, `pwsh`, `edit`, `write`; `symbols` is opt-in through `codeIntelligence.symbolsEnabled` and is disabled by default. Enabling or disabling it takes effect after the runtime restarts.
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
+
+#### Symbols public API compatibility
+
+The legacy Symbols implementation and adapter are no longer part of the SDK. The following public exports were removed as a breaking change:
+
+- `CodeSymbolIndex`
+- `getCodeIndexPath`
+- `parseCodeSymbols`
+- `IndexedCodeSymbol`
+- `IndexedCodeReference`
+- `IndexedCodeSymbolKind`
+- `CodeIndexOptions`
+- `CodeIndexRefreshSummary`
+- `CodeIndexStats`
+- `CodeMapEntry`
+- `CodeSearchMatch`
+- `CodeSearchOptions`
+- `convertLegacySymbol`
+- `convertLegacySymbols`
+- `LegacyConversionOptions`
+- `SymbolsIndexPort`
+
+`getCodeLanguage` remains public and is now exported from `symbols/language.ts`. The remaining Symbols API is semantic/LSP-only; plain-text search should use `grep`, `find`, or `ls`.
 
 The `edit` tool returns `details.diff` for MyHarness's structured change display and `details.patch` as a standard unified patch for SDK consumers.
 

@@ -15,9 +15,9 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 ## Web 专属快捷键与代码智能状态
 
-Web 设置新增 Keyboard shortcuts 页面，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**是自由输入的数字加可选单位（次／无限）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连、首包、静默，单位秒，存储仍是毫秒）加“同一模型最多尝试次数”，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
+Web 设置新增 Keyboard shortcuts 页面，输入框统一为 120px 宽度，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
 
-代码智能页把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
+代码智能页通过 `codeIntelligence.symbolsEnabled` 控制 Symbols 工具，默认关闭；关闭时工具不会注册，也不会出现在模型可用工具、活动工具或提示词中。开关修改后需重启运行时生效。旧 `codeIntelligence.enabled` 字段仅作为 deprecated 类型兼容保留，读取时忽略、不迁移且不再写出；`disabledLanguages` 和 `servers` 仍用于语言模块配置。页面把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
 ## Popup notifications（任务结束提醒）
 
@@ -128,6 +128,7 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
 | `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
+| `codeIntelligence` | object | `{ "symbolsEnabled": false }` | Semantic/LSP Symbols 配置。`symbolsEnabled` 默认关闭，打开或关闭后需重启运行时；`disabledLanguages` 和 `servers` 保留用于语言模块管理。旧 `enabled` 字段仅作 deprecated 兼容读取类型，实际读取时忽略、不迁移且不再写出。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
 
 Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
@@ -400,8 +401,8 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `httpProxy` | string | - | 作为 `HTTP_PROXY` 和 `HTTPS_PROXY` 应用的 HTTP proxy URL。仅适用于 global setting。 |
-| `worktreeShutdownGraceSeconds` | number | 首次沿用主退出值 | 管理启动的副本在最后一个标签页断开后等待多少秒退出；范围 0–3600，实际至少 5 秒保护刷新。与主设置独立保存，不影响主服务。 |
-| `webShutdownGraceSeconds` | number | `10` | Web UI在最后一个浏览器页面断开后等待多少秒再退出；期间刷新或重新打开页面会取消退出。Web UI 设置范围为 0–3600 秒，为保护页面刷新与 SSE 重连，实际等待至少 5 秒（包括配置为 0 时）；配置超过 5 秒时按配置等待。宽限到期时若仍有任务在运行，倒计时推迟到任务停下才触发，不会中断进行中的工作。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
+| `worktreeShutdownGraceSeconds` | number | 首次沿用主退出值 | 管理启动的副本在最后一个标签页断开后等待多少秒退出（Web 标题带 `(seconds)`）；范围 0–3600，实际至少 5 秒保护刷新。与主设置独立保存，不影响主服务。 |
+| `webShutdownGraceSeconds` | number | `10` | Web UI在最后一个浏览器页面断开后等待多少秒再退出（Web 标题带 `(seconds)`）；期间刷新或重新打开页面会取消退出。Web UI 设置范围为 0–3600 秒，为保护页面刷新与 SSE 重连，实际等待至少 5 秒（包括配置为 0 时）；配置超过 5 秒时按配置等待。宽限到期时若仍有任务在运行，倒计时推迟到任务停下才触发，不会中断进行中的工作。仅适用于 global setting，下一次倒计时开始时生效。见 [Web UI](web-ui.md)。 |
 
 ```json
 {
@@ -456,9 +457,9 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `retry.enabled` | boolean | `true` | 启用 agent-level automatic retry，用于 transient errors |
-| `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络的“自动重试次数”行可填任意整数或选无限） |
+| `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络的“自动重试次数”行为紧凑下拉，可选 0（不重试）、1–20 或无限，超出标准范围的已保存整数仍作为额外选项保留） |
 | `retry.baseDelayMs` | number | `2000` | agent-level exponential backoff 的 base delay（2s、4s、8s；逐次翻倍，单次最长 60s，保证大次数或不限次数时重试间隔不会无限增长） |
-| `retry.networkMaxAttempts` | number | `2` | 网络失败（建连、首包、静默、断连）时，同一模型最多尝试几次，**含第一次**，范围 1–20；达到次数后切换到备用模型（`fallbackModel`），没有备用模型则结束。HTTP 类错误（429、过载等）不受影响，仍用 `retry.maxRetries` |
+| `retry.networkMaxAttempts` | number | `2` | 网络失败（建连、首包、静默、断连）时，同一模型最多尝试几次，**含第一次**，范围 1–20（Web 标题为“同一模型最多尝试次数（次，含第一次）”，`Attempts per model (times, first included)`）；达到次数后切换到备用模型（`fallbackModel`），没有备用模型则结束。HTTP 类错误（429、过载等）不受影响，仍用 `retry.maxRetries` |
 | ~~`retry.provider.timeoutMs`~~ | - | - | 已移除并被忽略：它是第二个整请求超时，会和首包超时叠加成两处各管一半。首包时限只有 `network.firstByteTimeoutMs` 一处 |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK 额外 retry 次数；未设置时 MyHarness 对支持该选项的内置 adapter 只发起一次请求 |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | 失败前允许的最大 server-requested delay（60s） |
@@ -530,9 +531,9 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 | `steeringMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Steering messages 的发送方式 |
 | `followUpMode` | `"all"\|"one-at-a-time"` | `"one-at-a-time"` | Follow-up messages 的发送方式 |
 | `transport` | string | `"auto"` | 支持多种 transports 的 Providers 使用的 preferred transport：`"sse"`、`"websocket"`、`"websocket-cached"` 或 `"auto"` |
-| `network.connectTimeoutMs` | number | `10000` | 建连超时：TCP 连接加 TLS 握手，只在新建连接时生效（undici `connect.timeout`，`UND_ERR_CONNECT_TIMEOUT`）。1000–3600000 ms |
-| `network.firstByteTimeoutMs` | number | `60000` | 首包超时：请求发出后到收到响应头（undici `headersTimeout`，`UND_ERR_HEADERS_TIMEOUT`）。同一个值也作为 OpenAI / Anthropic SDK 的请求时限。1000–3600000 ms |
-| `network.streamIdleTimeoutMs` | number | `60000` | 静默超时：响应头之后两段数据之间允许的最长间隔，每收到一段重新计时，总时长不限（undici `bodyTimeout`，`UND_ERR_BODY_TIMEOUT`）。1000–3600000 ms |
+| `network.connectTimeoutMs` | number | `10000` | 建连超时（Web 标题带 `(seconds)`）：TCP 连接加 TLS 握手，只在新建连接时生效（undici `connect.timeout`，`UND_ERR_CONNECT_TIMEOUT`）。1000–3600000 ms |
+| `network.firstByteTimeoutMs` | number | `60000` | 首包超时（Web 标题带 `(seconds)`）：请求发出后到收到响应头（undici `headersTimeout`，`UND_ERR_HEADERS_TIMEOUT`）。同一个值也作为 OpenAI / Anthropic SDK 的请求时限。1000–3600000 ms |
+| `network.streamIdleTimeoutMs` | number | `60000` | 静默超时（Web 标题带 `(seconds)`）：响应头之后两段数据之间允许的最长间隔，每收到一段重新计时，总时长不限（undici `bodyTimeout`，`UND_ERR_BODY_TIMEOUT`）。1000–3600000 ms |
 | ~~`httpIdleTimeoutMs`~~ | - | - | 已移除并被忽略：旧的单一数值同时管三种不同的等待。读取设置时检测到该键只在日志里提示一次，**不会**自动换算成新键；新键没填就用上面的默认值 |
 | `websocketConnectTimeoutMs` | number | - | 支持 WebSocket transports 的 Providers 使用的 WebSocket connect/open handshake timeout，单位为 milliseconds。未设置时使用 SDK default。设置为 `0` 可关闭 |
 
@@ -618,7 +619,7 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
-| `enabledModels` | string[] | - | Ctrl+P cycling 使用的 model patterns（格式与 `--models` CLI flag 相同） |
+| `enabledModels` | string[] | - | Ctrl+P cycling 使用的 model patterns（格式与 `--models` CLI flag 相同；Web 设置中为可搜索多选标签下拉“模型切换范围”，支持自定义通配符录入，空选表示全部模型） |
 
 ```json
 {

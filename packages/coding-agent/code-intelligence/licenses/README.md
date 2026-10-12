@@ -1,10 +1,9 @@
 # MyHarness Code Intelligence license record
 
 These notices cover the optional Windows Code Intelligence modules described by
-`../runtime-manifest.json`. The source checkout keeps only the lightweight index,
-the installer metadata, and this license record; language-server archives are
-published separately and are installed only after their release manifest has an
-exact byte size and SHA-256.
+`../runtime-manifest.json`. The source checkout keeps the installer metadata and
+this license record; language-server archives are published separately and are
+installed only after their release manifest has an exact byte size and SHA-256.
 
 - npm language servers and their transitive dependencies are represented by the
   package-specific notices retained here and in the release archives.

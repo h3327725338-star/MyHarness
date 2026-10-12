@@ -1,11 +1,11 @@
 // Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
-import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy } from "./ui.js";
+import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy, motionEnabled, usePresence } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
-import { clip, fmtTokens, storedToUnitValue, tokensToUnit, unitToTokens, unitValueToStored } from "./util.js";
+import { clip, storedToUnitValue, tokensToUnit, unitToTokens, unitValueToStored } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
@@ -14,6 +14,8 @@ import { notificationPermission, requestNotificationPermission } from "./notific
 import { ProvidersPage } from "./providers-page.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
+import { SearchableMultiSelect } from "./settings-multiselect.js";
+import { Select } from "./select.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -67,25 +69,50 @@ function Card({ title, description, action, children, collapsible = false }) {
 	</section>`;
 }
 
-/** Several options that can each be on or off (at least one stays on). */
-function MultiSelect({ options, value, onChange, label }) {
-	const set = new Set(value || []);
-	return html`<div class="multi" role="group" aria-label=${label}>${options.map((o) => {
-		const on = set.has(o.value);
-		return html`<button key=${o.value} type="button" class=${`multi-opt ${on ? "on" : ""}`} aria-pressed=${on} onClick=${() => {
-			const next = new Set(set);
-			if (on) next.delete(o.value);
-			else next.add(o.value);
-			if (!next.size) return toast(t("Select at least one."), "warning", 2500);
-			onChange(options.map((x) => x.value).filter((v) => next.has(v)));
-		}}><span class="multi-box">${on ? html`<${Icon} name="check" size=${11} sw=${2.4} />` : null}</span>${serverText(o.label)}</button>`;
-	})}</div>`;
+function EnabledModelsField({ item, models, onApply }) {
+	const currentModels = models || state.models;
+	useEffect(() => {
+		if (!currentModels) loadModels();
+	}, [currentModels]);
+	const modelOptions = useMemo(() => {
+		if (!currentModels?.providers) return [];
+		const list = [];
+		for (const provider of currentModels.providers) {
+			for (const model of provider.models) {
+				const fullId = model.id.startsWith(`${provider.id}/`) ? model.id : `${provider.id}/${model.id}`;
+				list.push({
+					value: fullId,
+					label: fullId,
+					hint: model.name && model.name !== model.id ? model.name : provider.name || provider.id,
+				});
+			}
+		}
+		return list;
+	}, [currentModels]);
+	const selectedValues = useMemo(() => {
+		if (!item.value || typeof item.value !== "string") return [];
+		return item.value
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}, [item.value]);
+	return html`<${SearchableMultiSelect}
+		ariaLabel=${serverText(item.label)}
+		options=${modelOptions}
+		value=${selectedValues}
+		mode="tags"
+		allowCustom=${true}
+		allowEmpty=${true}
+		fullTagNames=${true}
+		placeholder=${t("All models")}
+		searchPlaceholder=${t("Search models…")}
+		onChange=${(next) => onApply(item.id, next.join(", "))}
+	/>`;
 }
 
 /**
- * A token count typed in a unit ("256 | K tokens"): only the number is edited, the unit is a fixed suffix. What is saved is
- * the exact token count (256 K = 262,144 tokens), shown next to the field so the number behind the unit is never hidden;
- * an empty field clears the cap.
+ * A token count typed as a plain narrow number: the unit (K = 1024) is part of the row's label, not a box after the field.
+ * What is saved is the exact token count (256 K = 262,144 tokens); an empty field clears the cap.
  */
 function TokensField({ item, onApply }) {
 	const unitSize = item.unitSize || 1024;
@@ -105,13 +132,12 @@ function TokensField({ item, onApply }) {
 			toast(t("Enter a positive number of {unit}.", { unit: item.unit }), "warning", 4000);
 		} else if (tokens !== item.value) onApply(item.id, tokens);
 	};
-	return html`<span class="tokens-field">
-		<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t("{unit} tokens", { unit: item.unit })} label=${serverText(item.label)} placeholder=${t("Model limit")} invalid=${invalid} />
-		${item.value != null ? html`<span class="tokens-exact dim" title=${t("tokens")}>${t("{n} tokens", { n: fmtTokens(Number(item.value)) })}</span>` : null}
-	</span>`;
+	return html`<input class=${`field num ${invalid ? "invalid" : ""}`} inputmode="decimal" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} aria-invalid=${invalid ? "true" : undefined} placeholder=${t("Model limit")} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
+		if (event.key === "Enter") (event.preventDefault(), commit(event.target.value));
+	}} />`;
 }
 
-/** A whole number with a fixed unit after it ("10 | seconds"); the range comes from the setting. */
+/** A whole number with a fixed unit after it; the unit is part of the row label and the range comes from the setting. */
 function UnitNumberField({ item, onApply }) {
 	const shown = String(item.value ?? "");
 	const [draft, setDraft] = useState(shown);
@@ -120,13 +146,28 @@ function UnitNumberField({ item, onApply }) {
 		const value = Number(text);
 		return text.trim() !== "" && Number.isFinite(value) && value >= (item.min ?? -Infinity) && value <= (item.max ?? Infinity);
 	};
+	const invalid = draft.trim() !== "" && !inRange(draft);
 	const commit = (text) => {
 		if (!inRange(text)) {
 			setDraft(shown);
 			toast(t("Enter a number from {min} to {max}.", { min: item.min, max: item.max }), "warning", 4000);
 		} else if (Number(text) !== item.value) onApply(item.id, Number(text));
 	};
-	return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${t(item.unit)} label=${serverText(item.label)} invalid=${!inRange(draft)} />`;
+	return html`<input class=${`field num mono ${invalid ? "invalid" : ""}`} inputmode="numeric" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} aria-invalid=${invalid ? "true" : undefined} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
+		if (event.key === "Enter") (event.preventDefault(), commit(event.target.value));
+	}} />`;
+}
+
+const RETRY_MAX_OPTIONS = Array.from({ length: 21 }, (_, value) => ({ value, label: value === 0 ? "0 (no retries)" : String(value) }));
+
+function RetryMaxRetriesField({ item, onApply }) {
+	const options = [...RETRY_MAX_OPTIONS];
+	if (Number.isInteger(item.value) && !options.some((option) => option.value === item.value)) {
+		options.push({ value: item.value, label: String(item.value) });
+		options.sort((a, b) => a.value - b.value);
+	}
+	options.push({ value: "unlimited", label: "Unlimited" });
+	return html`<${Select} ariaLabel=${serverText(item.label)} value=${String(item.value)} onChange=${(next) => onApply(item.id, next === "unlimited" ? "unlimited" : Number(next))} options=${options.map((option) => ({ value: String(option.value), label: serverText(option.label) }))} />`;
 }
 
 /**
@@ -172,16 +213,19 @@ function NumberUnitField({ item, onApply }) {
 		setUnit(next);
 		setDraft(stored === undefined ? "" : String(Math.round(stored / (nu.multiplier ?? 1))));
 	};
-	// A row with one unit (seconds) shows it as plain text instead of a one-entry menu.
-	if (units.length === 1) return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${serverText(active?.label ?? "")} label=${serverText(item.label)} invalid=${invalid} inputMode="numeric" />`;
+	// A row with one unit keeps the unit in its label and only renders the narrow number field.
+	if (units.length === 1) return html`<input class=${`field num mono ${invalid ? "invalid" : ""}`} inputmode="numeric" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} aria-invalid=${invalid ? "true" : undefined} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
+		if (event.key === "Enter") (event.preventDefault(), commit(event.target.value));
+	}} />`;
+
 	return html`<${UnitGroup} value=${fixed ? "" : draft} onInput=${setDraft} onCommit=${commit} label=${serverText(item.label)} invalid=${invalid} disabled=${fixed} inputMode="numeric">
-		<select class="select group-unit" aria-label=${t("Unit")} value=${unit} onChange=${(e) => changeUnit(e.target.value)}>${units.map((u) => html`<option key=${u.value} value=${u.value}>${serverText(u.label)}</option>`)}</select>
+		<${Select} class="group-unit" ariaLabel=${t("Unit")} value=${unit} onChange=${changeUnit} options=${units.map((u) => ({ value: u.value, label: serverText(u.label) }))} fitContent=${false} />
 	<//>`;
 }
 
 /**
- * The inline whole-number box on a modelRef row (the sub-agent cap): a small number field with the allowed range
- * spelled out next to it ("1–18"). Out-of-range or fractional input is restored with a toast; a valid change saves.
+ * The inline whole-number box on a modelRef row (the sub-agent cap): one narrow number field; the allowed range lives in
+ * the row's description instead of a box after it. Out-of-range or fractional input is restored with a toast; a valid change saves.
  */
 function InlineNumberField({ item, onApply }) {
 	const value = item.value || {};
@@ -200,7 +244,10 @@ function InlineNumberField({ item, onApply }) {
 			toast(t("Enter a whole number from {min} to {max}.", { min, max }), "warning", 4000);
 		} else if (Number(text) !== value.maxTasks) onApply(item.id, { ...value, maxTasks: Number(text) });
 	};
-	return html`<${UnitGroup} value=${draft} onInput=${setDraft} onCommit=${commit} unit=${`${min}–${max}`} label=${t("Max sub-agents per call")} placeholder=${t("Max sub-agents per call")} invalid=${draft.trim() !== "" && !inRange(draft)} inputMode="numeric" />`;
+	const invalid = draft.trim() !== "" && !inRange(draft);
+	return html`<input class=${`field num ${invalid ? "invalid" : ""}`} inputmode="numeric" autocomplete="off" spellcheck="false" aria-label=${t("Max sub-agents per call")} title=${t("Max sub-agents per call")} aria-invalid=${invalid ? "true" : undefined} placeholder=${t("Max sub-agents per call")} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
+		if (event.key === "Enter") (event.preventDefault(), commit(event.target.value));
+	}} />`;
 }
 
 function SettingControl({ item, models, onApply }) {
@@ -210,18 +257,32 @@ function SettingControl({ item, models, onApply }) {
 		case "boolean":
 			return html`<${Toggle} checked=${!!item.value} label=${serverText(item.label)} onChange=${(v) => onApply(item.id, v)} />`;
 		case "enum":
-			return html`<select class="select" aria-label=${serverText(item.label)} value=${String(item.value)} onChange=${(e) => onApply(item.id, e.target.value)}>${item.options.map((o) => html`<option key=${o.value} value=${o.value}>${serverText(o.label)}</option>`)}</select>`;
+			return html`<${Select} ariaLabel=${serverText(item.label)} value=${String(item.value)} onChange=${(next) => onApply(item.id, next)} options=${item.options.map((o) => ({ value: o.value, label: serverText(o.label) }))} />`;
 		case "number":
 			if (item.unit) return html`<${UnitNumberField} item=${item} onApply=${onApply} />`;
 			return html`<input class="field num" type="number" aria-label=${serverText(item.label)} min=${item.min} max=${item.max} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => String(draft) !== String(item.value) && onApply(item.id, Number(draft))} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
 		case "numberUnit":
+			if (item.id === "retryMaxRetries") return html`<${RetryMaxRetriesField} item=${item} onApply=${onApply} />`;
 			return html`<${NumberUnitField} item=${item} onApply=${onApply} />`;
+
 		case "tokens":
 			return html`<${TokensField} item=${item} onApply=${onApply} />`;
 		case "text":
+			if (item.id === "enabledModels") return html`<${EnabledModelsField} item=${item} models=${models} onApply=${onApply} />`;
 			return html`<input class="field wide" aria-label=${serverText(item.label)} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => draft !== item.value && onApply(item.id, draft)} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
 		case "multi":
-			return html`<${MultiSelect} label=${serverText(item.label)} options=${item.options} value=${item.value} onChange=${(next) => onApply(item.id, next)} />`;
+			return html`<${SearchableMultiSelect}
+				ariaLabel=${serverText(item.label)}
+				options=${item.options || []}
+				value=${item.value || []}
+				mode="tags"
+				fullTagNames=${true}
+				allowCustom=${false}
+				allowEmpty=${false}
+				placeholder=${t("Select…")}
+				searchPlaceholder=${t("Search…")}
+				onChange=${(next) => onApply(item.id, next)}
+			/>`;
 		case "modelRef": {
 			const v = item.value || {};
 			const hasEnable = item.note === "enabled";
@@ -229,10 +290,10 @@ function SettingControl({ item, models, onApply }) {
 			const rest = { ...v };
 			delete rest.maxTasks;
 			const modeSelect = item.modeSelect
-				? html`<select class="select mref-mode" aria-label=${t("Sub-agent mode")} title=${t("Sub-agent mode")} value=${v.mode === "read-write" ? "read-write" : "read-only"} onChange=${(e) => onApply(item.id, { ...rest, mode: e.target.value })}>${item.modeSelect.options.map((o) => html`<option key=${o.value} value=${o.value}>${serverText(o.label)}</option>`)}</select>`
+				? html`<span title=${t("Sub-agent mode")}><${Select} class="mref-mode" ariaLabel=${t("Sub-agent mode")} value=${v.mode === "read-write" ? "read-write" : "read-only"} onChange=${(next) => onApply(item.id, { ...rest, mode: next })} options=${item.modeSelect.options.map((o) => ({ value: o.value, label: serverText(o.label) }))} /></span>`
 				: null;
 			return html`<div class="mref">
-				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
+				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} showId label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
 				${modeSelect}${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}</div>
 			</div>`;
 		}
@@ -282,7 +343,6 @@ const SHORT_DESCRIPTION = {
 	"webSearch.browserFallback": N_("Use a browser when blocked; checks may open a window."),
 	"webSearch.browser": N_("Auto: first installed browser."),
 	"webSearch.useBrowserCookies": N_("Copy login cookies once, even while your browser is open."),
-	"codeIntelligence.enabled": N_("Off: lightweight index only."),
 	webShutdownGraceSeconds: N_("Last tab closes: exit after delay; reopen cancels. Next close."),
 	shellPath: N_("Executable for bash."),
 	shellCommandPrefix: N_("Prefix for every bash command."),
@@ -290,8 +350,11 @@ const SHORT_DESCRIPTION = {
 	popupNotifications: N_("Notify on completion, failure or stop."),
 };
 const describe = (item) => {
-	if (item.id === "subAgent")
-		return t(item.value && item.value.mode === "read-write" ? "Writable, limited to their own worktrees." : "Delegate read-only investigation.");
+	if (item.id === "subAgent") {
+		// The inline number box no longer spells out its range; the description carries it, taken from the item's own bounds.
+		const bounds = { min: item.inlineNumber?.min ?? 1, max: item.inlineNumber?.max ?? 18 };
+		return t(item.value && item.value.mode === "read-write" ? "Writable, limited to their own worktrees. Concurrent tasks: {min}–{max}." : "Delegate read-only investigation. Concurrent tasks: {min}–{max}.", bounds);
+	}
 	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
 	const text = item.section === "Terminal" ? String(item.description || "").replace(/^Terminal UI: /, "") : item.description;
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
@@ -300,7 +363,7 @@ const describe = (item) => {
 /** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
-	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off} wide=${item.type === "modelRef" && !!(item.modeSelect || item.inlineNumber)}>
+	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off} wide=${item.type === "modelRef" || (item.type === "multi" && item.id === "webSearch.engines")}>
 		${before || (item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
@@ -457,7 +520,7 @@ function CodeIntelligence({ items }) {
 	const [error, setError] = useState("");
 	const [pending, setPending] = useState([]);
 	const [openId, setOpenId] = useState("");
-	const enabled = !!items.find((item) => item.id === "codeIntelligence.enabled")?.value;
+	const enabled = !!items.find((item) => item.id === "codeIntelligence.symbolsEnabled")?.value;
 	const [saving, save] = useSaving();
 	const refresh = () => api("/api/code-intelligence/modules").then(setData).catch((e) => setError(e.message));
 	useEffect(() => {
@@ -480,16 +543,16 @@ function CodeIntelligence({ items }) {
 		try { setData(await post("/api/code-intelligence/language", { id, enabled: on })); }
 		catch (e) { setError(e.message); await refresh(); }
 	};
-	return html`<${Card} title=${t("Engine")}>
-		<${Row} label=${t("Code Intelligence")} description=${t("Engine changes and installed modules apply after restart.")}><${Saving} shown=${saving} /><${Segmented} value=${enabled ? "semantic" : "lightweight"} options=${[{ value: "lightweight", label: "Lightweight" }, { value: "semantic", label: "Semantic" }]} onChange=${(value) => save("codeIntelligence.enabled", value === "semantic")} /><//>
-		<div class="row set-desc">${t("Active engine")}: ${data?.activeMode ?? t("Detecting…")}${data?.runtime?.semanticEnabled && !data?.runtime?.semanticConfigured ? t("Semantic unavailable; using lightweight fallback") : ""}${data?.restartRequired ? html`<span class="c-warn">${t("Configuration changed; restart required")}</span><button class="btn sm" onClick=${async () => {
+	return html`<${Card} title=${t("Code Intelligence")}>
+		<${Row} label=${t("Enable symbols tool")} description=${t("The model can use the symbols tool only while this is on. Changes apply after restart.")}><${Saving} shown=${saving} /><${Toggle} checked=${enabled} label=${t("Code Intelligence")} onChange=${(value) => save("codeIntelligence.symbolsEnabled", value)} /><//>
+		${data?.restartRequired ? html`<div class="row set-desc"><span class="c-warn">${t("Configuration changed; restart required")}</span><button class="btn sm" onClick=${async () => {
 			if (!await confirmDialog({ title: t("Restart the local service?"), message: t("Idle sessions will be saved. This page reconnects after the service restarts."), confirmLabel: t("Restart") })) return;
 			const result = await attempt(() => post("/api/restart"));
 			if (result) {
 				const timer = setInterval(async () => { try { const boot = await api("/api/boot"); if (boot.phase === "ready") { clearInterval(timer); location.reload(); } } catch {} }, 1000);
 				setTimeout(() => clearInterval(timer), 60000);
 			}
-		}}>${t("Restart now")}</button>` : null}</div>
+		}}>${t("Restart now")}</button></div>` : null}
 	<//>${error ? html`<div class="notice danger">${error}</div>` : null}
 	${enabled ? html`<${Card} title=${t("Language modules")}>
 		${!data && !error ? html`<${Spinner} />` : data?.modules.map((module) => html`<${LanguageModule} key=${module.id} module=${module}
@@ -513,7 +576,7 @@ function Appearance({ conversation = false }) {
 			<${Row} label=${t("Display mode")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
 			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
-			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><select class="select" aria-label=${t("Color theme")} value=${view.colorTheme} onChange=${(e) => set({ colorTheme: e.target.value })}>${COLOR_THEMES.map((theme) => html`<option value=${theme.value}>${t(theme.label)}</option>`)}</select><//>
+			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><${Select} ariaLabel=${t("Color theme")} value=${view.colorTheme} onChange=${(next) => set({ colorTheme: next })} options=${COLOR_THEMES.map((theme) => ({ value: theme.value, label: t(theme.label) }))} /><//>
 		<//>` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
@@ -587,10 +650,94 @@ function Safety({ items, models }) {
 }
 
 /**
+ * The large editing window behind a personal prompt box: a scrim above the settings dialog (the image lightbox and
+ * popovers stay on top of it), one title row with the minimize button, and a textarea that fills the rest. Both boxes
+ * render the same `value` prop and write the same state, so they stay in sync live; undo history is per textarea and
+ * does not cross between them, which is how browsers always have kept it. Escape closes only this window: while it
+ * is open the dialog carries [data-esc-owner] and the settings Modal leaves the key to it (see `Modal` in ui.js);
+ * a second Escape then closes the settings dialog as usual. Opening focuses the large box and copies the caret and
+ * selection from the small one; closing hands the keyboard back to the button that opened it. Tab stays inside the
+ * dialog (its only stops are the minimize button and the editor). A scrim click also closes it. While a pending IME
+ * composition is alive, Escape belongs to the composition and never closes the window.
+ */
+function PersonalFullscreen({ open, title, value, caret, anchor, placeholder, onInput, onClose }) {
+	const { mounted, shown } = usePresence(open, motionEnabled() ? 110 : 0);
+	const last = useRef(null);
+	if (open) last.current = { title, value, caret, anchor, placeholder, onInput };
+	const scrim = useRef(null);
+	const big = useRef(null);
+	const closeBtn = useRef(null);
+	useEffect(() => {
+		if (!open) return undefined;
+		const view = last.current;
+		if (view && big.current) {
+			big.current.focus({ preventScroll: true });
+			try {
+				big.current.setSelectionRange(view.caret.start, view.caret.end);
+			} catch {
+				/* a range the browser cannot place just leaves the caret where the focus put it */
+			}
+		}
+		const onKey = (event) => {
+			if (event.key !== "Escape" || event.isComposing) return;
+			event.stopPropagation();
+			onClose();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			// Hand the keyboard back to the button that opened the editor (unless the focus already moved).
+			const active = document.activeElement;
+			if (view && (!active || active === document.body || scrim.current?.contains(active))) view.anchor?.focus?.({ preventScroll: true });
+		};
+	}, [open]);
+	if (!mounted || !last.current) return null;
+	const view = last.current;
+	return html`<div
+		ref=${scrim}
+		class=${`personal-fullscreen-scrim ${shown ? "open" : open ? "" : "closing"}`}
+		onMouseDown=${(event) => event.target === event.currentTarget && onClose()}
+	>
+		<div
+			class="personal-fullscreen-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-label=${view.title}
+			data-esc-owner=${open ? "true" : undefined}
+			onKeyDown=${(event) => {
+				if (event.key !== "Tab") return;
+				const nodes = [closeBtn.current, big.current].filter(Boolean);
+				if (nodes.length < 2) return;
+				event.preventDefault();
+				const i = nodes.indexOf(document.activeElement);
+				const next = event.shiftKey ? (i <= 0 ? nodes.length - 1 : i - 1) : i >= nodes.length - 1 || i < 0 ? 0 : i + 1;
+				nodes[next]?.focus();
+			}}
+		>
+			<div class="personal-fullscreen-head">
+				<strong class="grow">${view.title}</strong>
+				<button type="button" ref=${closeBtn} class="icon-btn sm personal-fullscreen-close" title=${t("Exit fullscreen (Esc)")} aria-label=${t("Exit fullscreen (Esc)")} onClick=${onClose}>
+					<${Icon} name="minimize" size=${14} />
+				</button>
+			</div>
+			<textarea
+				ref=${big}
+				class="field personal-prompt personal-fullscreen-textarea"
+				value=${view.value}
+				placeholder=${view.placeholder}
+				aria-label=${view.title}
+				onInput=${(e) => view.onInput(e.target.value)}
+			/>
+		</div>
+	</div>`;
+}
+
+/**
  * The two global personal prompts (`/api/modes/personal-prompt`): one per chat mode, saved together, no character
  * limit. Each mode receives only its own text, injected with the highest priority; a request that is already running
  * keeps the text it started with. Saved elsewhere (another tab), both are read again unless this page holds unsaved
- * edits. The two cards fold open and shut with the standard Collapse motion and start folded.
+ * edits. The two cards fold open and shut with the standard Collapse motion and start folded. Each box carries a
+ * maximize button that opens the same draft in `PersonalFullscreen` above.
  */
 function Personalization() {
 	const nonce = useStore((s) => s.modePreferencesNonce);
@@ -598,6 +745,15 @@ function Personalization() {
 	const [value, setValue] = useState({ coding: "", general: "" });
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [fullscreen, setFullscreen] = useState(null); // null | "coding" | "general"
+	const texts = useRef({});
+	const expanders = useRef({});
+	const caret = useRef({ start: 0, end: 0 });
+	const openFullscreen = (mode) => {
+		const src = texts.current[mode];
+		caret.current = { start: src?.selectionStart ?? 0, end: src?.selectionEnd ?? src?.selectionStart ?? 0 };
+		setFullscreen(mode);
+	};
 	const edits = useRef({ saved: null, value: { coding: "", general: "" } });
 	edits.current = { saved, value };
 	useEffect(() => {
@@ -627,19 +783,36 @@ function Personalization() {
 		if (ok) setSaved({ coding: value.coding, general: value.general });
 	};
 	const card = (mode, title, description) => html`<${Card} key=${mode} title=${t(title)} collapsible>
-		<div class="set-card-body col">
+		<div class="personal-body">
 			<div class="set-desc">${t(description)}</div>
 			${saved === null && !error
 				? html`<${Spinner} />`
-				: html`<textarea
-						class="field personal-prompt"
-						rows="10"
-						value=${value[mode]}
-						disabled=${saved === null}
-						placeholder=${t("For example: how you like answers, what you do, what to keep in mind.")}
-						aria-label=${t(title)}
-						onInput=${(e) => setValue({ ...value, [mode]: e.target.value })}
-					/>`}
+				: html`<div class="personal-expand">
+						<textarea
+							class="field personal-prompt"
+							rows="10"
+							ref=${(el) => {
+								texts.current[mode] = el;
+							}}
+							value=${value[mode]}
+							disabled=${saved === null}
+							placeholder=${t("For example: how you like answers, what you do, what to keep in mind.")}
+							aria-label=${t(title)}
+							onInput=${(e) => setValue({ ...value, [mode]: e.target.value })}
+						/>
+						<button
+							type="button"
+							class="icon-btn sm personal-expand-btn"
+							title=${t("Edit fullscreen")}
+							aria-label=${t("Edit fullscreen")}
+							ref=${(el) => {
+								expanders.current[mode] = el;
+							}}
+							onClick=${() => openFullscreen(mode)}
+						>
+							<${Icon} name="maximize" size=${14} />
+						</button>
+					</div>`}
 		</div>
 	<//>`;
 	return html`
@@ -650,7 +823,19 @@ function Personalization() {
 			<span class="dim grow">${t("Each chat gets only its own mode's prompt, with the highest priority. No character limit.")}</span>
 			${dirty ? html`<button class="btn" disabled=${busy} onClick=${() => setValue(saved)}>${t("Discard changes")}</button>` : null}
 			<button class="btn primary" disabled=${busy || !dirty} onClick=${save}>${t("Save")}</button>
-		</div>`;
+		</div>
+		<${PersonalFullscreen}
+			open=${fullscreen !== null}
+			title=${t(fullscreen === "general" ? "General mode global personal prompt" : "Coding mode global personal prompt")}
+			value=${fullscreen === null ? "" : value[fullscreen]}
+			caret=${caret.current}
+			anchor=${fullscreen === null ? null : expanders.current[fullscreen]}
+			placeholder=${t("For example: how you like answers, what you do, what to keep in mind.")}
+			onInput=${(text) => {
+				if (fullscreen !== null) setValue({ ...value, [fullscreen]: text });
+			}}
+			onClose=${() => setFullscreen(null)}
+		/>`;
 }
 
 function About() {
@@ -691,7 +876,7 @@ export function SettingsModal() {
 	const items = useMemo(() => (settings?.items || []).filter((item) => sectionOf(item) === section), [settings, section]);
 	const close = () => setView({ settingsOpen: false });
 	const current = NAV.find((n) => n.id === section) || NAV[0];
-	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${980} class="settings-modal" focusInput=${false}>
+	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${900} class="settings-modal" focusInput=${false}>
 		<div class="settings">
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>

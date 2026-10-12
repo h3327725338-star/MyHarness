@@ -199,7 +199,7 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 	},
 	{
 		id: "web-exit-delay",
-		label: "Web UI exit delay",
+		label: "Web UI exit delay (seconds)",
 		description: "最后一个页面关闭后服务等待的秒数",
 		kind: "submenu",
 		surfaces: ["web"],

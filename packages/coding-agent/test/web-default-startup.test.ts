@@ -2,7 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { startWebBootstrap } from "../src/modes/web/web-mode.ts";
+import { openBrowser } from "../src/utils/open-browser.ts";
+
+vi.mock("../src/utils/open-browser.ts", () => ({ openBrowser: vi.fn() }));
+
+const openBrowserMock = vi.mocked(openBrowser);
 
 it("starts default Web without console input using isolated state", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "myharness-web-default-test-"));
@@ -53,3 +59,45 @@ it("starts default Web without console input using isolated state", async () => 
 		rmSync(dir, { recursive: true, force: true });
 	}
 }, 60000);
+
+it("reports the process start time in /api/boot for the launcher's wake check", async () => {
+	openBrowserMock.mockClear();
+	const before = Date.now();
+	const bootstrap = await startWebBootstrap({ port: 0, openBrowser: false });
+	try {
+		expect(openBrowserMock).not.toHaveBeenCalled();
+		const response = await fetch(`${bootstrap.url}api/boot`);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { startedAtMs?: unknown; phase?: unknown; version?: unknown };
+		expect(body.phase).toBe("starting");
+		expect(body.version).toBeTruthy();
+		expect(typeof body.startedAtMs).toBe("number");
+		const startedAtMs = body.startedAtMs as number;
+		expect(Number.isInteger(startedAtMs)).toBe(true);
+		expect(startedAtMs).toBeLessThanOrEqual(Date.now());
+		expect(startedAtMs).toBeGreaterThan(before - 60_000);
+	} finally {
+		await bootstrap.server.close();
+	}
+});
+
+it("opens the browser on POST /api/wake and rejects requests without the Web header", async () => {
+	openBrowserMock.mockClear();
+	const bootstrap = await startWebBootstrap({ port: 0, openBrowser: false });
+	try {
+		const noHeader = await fetch(`${bootstrap.url}api/wake`, { method: "POST", body: "{}" });
+		expect(noHeader.status).toBe(403);
+		expect(openBrowserMock).not.toHaveBeenCalled();
+		const wake = await fetch(`${bootstrap.url}api/wake`, {
+			method: "POST",
+			headers: { "content-type": "application/json", origin: bootstrap.url.slice(0, -1), "x-myharness-web": "1" },
+			body: "{}",
+		});
+		expect(wake.status).toBe(200);
+		expect(await wake.json()).toEqual({ ok: true });
+		expect(openBrowserMock).toHaveBeenCalledTimes(1);
+		expect(openBrowserMock).toHaveBeenCalledWith(bootstrap.url);
+	} finally {
+		await bootstrap.server.close();
+	}
+});

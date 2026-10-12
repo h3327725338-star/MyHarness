@@ -10,6 +10,7 @@ import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
 import { createSseWatchdog, isDeadStream } from "./sse-watchdog.js";
+import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.js";
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
@@ -45,6 +46,13 @@ const SLOT_DEFAULTS = () => ({
 	currentRunId: undefined,
 	// Session totals shown in the Session panel (messages, tool calls, tokens, cost); pushed by the server as they change.
 	stats: null,
+	// Transcript paging (W175): the first screen only downloads the newest page (`TRANSCRIPT_FIRST_PAGE` items).
+	// `transcriptHasMore` says older items remain server-side, `transcriptCursor` is the id of the oldest loaded
+	// item (the `before` cursor for the next page), `transcriptFetching` marks an older page in flight. Full
+	// transcripts (old servers, explicit refreshes) carry none of this and read as complete.
+	transcriptHasMore: false,
+	transcriptCursor: null,
+	transcriptFetching: false,
 });
 const SLOT_KEYS = Object.keys(SLOT_DEFAULTS());
 const bags = new Map();
@@ -55,10 +63,59 @@ function bagOf(slot) {
 	const id = slot ?? "_none";
 	let bag = bags.get(id);
 	if (!bag) {
-		bag = { ...SLOT_DEFAULTS(), loaded: false };
+		bag = {
+			...SLOT_DEFAULTS(),
+			loaded: false,
+			turnsCache: null,
+			// Transcript paging guards (not subscribed state): a sequence number invalidating in-flight older
+			// pages, a flag marking streamed output that arrived while one was in flight, and the failures of
+			// the current cursor (two in a row fall back to a full transcript load).
+			transcriptSeq: 0,
+			streamedDuringFetch: false,
+			fetchFailures: 0,
+		};
 		bags.set(id, bag);
 	}
 	return bag;
+}
+
+// Cross-session turns cache: each bag keeps the last buildTurns result `{ items, toolRuns, cwd, turns }`, so switching
+// back to a session already shown can reuse the exact turn objects instead of rebuilding and re-diffing them. A hit
+// requires all three source references to be unchanged; any SSE event or transcript reload that writes a new items
+// or toolRuns value invalidates the entry by itself, so nothing can serve stale turns. The bag holds only references
+// (the turn objects outlived the last render anyway), so one cached session costs one array of pointers. When more
+// than TURNS_CACHE_MAX sessions hold a cache, the least recently used ones lose it.
+export const TURNS_CACHE_MAX = 8;
+const turnsCacheLru = new Map(); // slot ids holding a cache, least recently used first (Map keeps insertion order)
+
+export function getTurnsCache(slot = activeSlot) {
+	const bag = slot ? bags.get(slot) : undefined;
+	const cache = bag?.turnsCache;
+	if (cache) {
+		turnsCacheLru.delete(slot);
+		turnsCacheLru.set(slot, true);
+	}
+	return cache || null;
+}
+
+export function setTurnsCache(cache, slot = activeSlot) {
+	if (!slot) return;
+	const bag = bagOf(slot);
+	turnsCacheLru.delete(slot);
+	if (!cache) {
+		bag.turnsCache = null;
+		return;
+	}
+	bag.turnsCache = cache;
+	turnsCacheLru.set(slot, true);
+	while (turnsCacheLru.size > TURNS_CACHE_MAX) {
+		const oldest = turnsCacheLru.keys().next().value;
+		turnsCacheLru.delete(oldest);
+		if (oldest !== slot) {
+			const old = bags.get(oldest);
+			if (old) old.turnsCache = null;
+		}
+	}
 }
 
 /** Apply `fn` with state accessors bound to one session's bag (used for events of sessions that are not on screen). */
@@ -227,16 +284,27 @@ export function applyAppearance() {
 	setLang(state.view.lang);
 	const mode = state.view.theme;
 	const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-	root.dataset.theme = dark ? "dark" : "light";
+	setDataset(root, "theme", dark ? "dark" : "light");
 	state.view.colorTheme = colorThemeOf(state.view.colorThemes[state.view.chatMode]);
-	root.dataset.colorTheme = state.view.colorTheme;
-	root.dataset.codingColorTheme = colorThemeOf(state.view.colorThemes.coding);
-	root.dataset.generalColorTheme = colorThemeOf(state.view.colorThemes.general);
-	root.dataset.motion = state.view.motion === "system" ? "" : state.view.motion;
-	root.dataset.chatMode = state.view.chatMode;
-	root.style.setProperty("--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
-	root.style.setProperty("--sidebar-w", `${state.view.sidebarW}px`);
-	root.style.setProperty("--panel-w", `${state.view.panelW}px`);
+	setDataset(root, "colorTheme", state.view.colorTheme);
+	setDataset(root, "codingColorTheme", colorThemeOf(state.view.colorThemes.coding));
+	setDataset(root, "generalColorTheme", colorThemeOf(state.view.colorThemes.general));
+	setDataset(root, "motion", state.view.motion === "system" ? "" : state.view.motion);
+	setDataset(root, "chatMode", state.view.chatMode);
+	setCssVar(root, "--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
+	setCssVar(root, "--sidebar-w", `${state.view.sidebarW}px`);
+	setCssVar(root, "--panel-w", `${state.view.panelW}px`);
+}
+
+// Every setView() funnels through applyAppearance(), so each write below first reads the live DOM value and skips
+// when it already matches: Blink does not skip same-value dataset/setAttribute/style writes, and each one restyles
+// the whole document (about 60ms on a heavy transcript).
+function setDataset(root, key, value) {
+	if (root.dataset[key] !== value) root.dataset[key] = value;
+}
+
+function setCssVar(root, name, value) {
+	if (root.style.getPropertyValue(name) !== value) root.style.setProperty(name, value);
 }
 
 /** Subscribe a component to a derived slice of state. Re-renders only when the selected value changes. */
@@ -274,9 +342,9 @@ export async function api(path, options = {}) {
 	}
 	let res;
 	try {
-		res = await fetch(path, init);
+		res = await getFetch()(path, init);
 	} catch (error) {
-		const err = new Error(t("Cannot reach the MyHarness server."));
+		const err = new Error(exportReadOnly() ? t("This is a read-only copy: the conversation cannot be changed.") : t("Cannot reach the MyHarness server."));
 		err.cause = error;
 		throw err;
 	}
@@ -290,7 +358,8 @@ export async function api(path, options = {}) {
 		}
 	}
 	if (!res.ok) {
-		const err = new Error(serverText(data?.error, t("Request failed ({status})", { status: res.status })));
+		const message = exportReadOnly() && init.method !== "GET" && init.method !== "HEAD" ? t("This is a read-only copy: the conversation cannot be changed.") : serverText(data?.error, t("Request failed ({status})", { status: res.status }));
+		const err = new Error(message);
 		err.status = res.status;
 		if (res.status === 410 && slot && !state.restarting) recoverLostSlot(slot);
 		throw err;
@@ -397,24 +466,119 @@ export async function chooseThinkingLevel(level) {
 	return choice.done;
 }
 
-export async function loadTranscript(slot = targetSlot ?? activeSlot) {
-	const data = await api("/api/transcript", { slot: slot ?? "" });
+export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } = {}) {
+	const data = await api(limit ? `/api/transcript?limit=${limit}` : "/api/transcript", { slot: slot ?? "" });
 	const toolRuns = {};
 	for (const item of data.items) {
 		if (item.kind === "toolResult") toolRuns[item.toolCallId] = { status: item.isError ? "error" : "done", endedAt: item.ts };
 	}
-	runFor(slot, () => {
+	const key = slot ?? activeSlot;
+	const bag = bagOf(key);
+	// A transcript reload replaces the whole window: an older page still in flight must be dropped when it lands.
+	bag.transcriptSeq += 1;
+	bag.streamedDuringFetch = false;
+	bag.transcriptFetching = false;
+	bag.fetchFailures = 0;
+	runFor(key, () => {
 		state.items = data.items;
 		state.toolRuns = toolRuns;
 		state.runs = {};
+		// Old servers answer without paging fields: that is a complete transcript.
+		state.transcriptHasMore = data.hasMore === true;
+		state.transcriptCursor = data.nextCursor ?? null;
+		emit();
+	});
+	return data;
+}
+
+// How many transcript items the first screen downloads: the newest page only (W175). About twice the 60-turn
+// display cap in items, so "Show earlier" usually finds more in memory before asking the server for older pages.
+export const TRANSCRIPT_FIRST_PAGE = 400;
+
+/** Load one session's snapshot and transcript into its bag. The first load pages (`TRANSCRIPT_FIRST_PAGE`); an explicit refresh takes the full transcript. */
+export async function refreshSlot(slot = activeSlot, { full = false } = {}) {
+	await Promise.all([loadSnapshot(slot), loadTranscript(slot, full ? {} : { limit: TRANSCRIPT_FIRST_PAGE })]);
+	bagOf(slot).loaded = true;
+}
+
+/**
+ * Append one streamed item to the tail of a session's transcript, marking that output arrived while an older
+ * page may be in flight. Appends and older pages touch opposite ends of the window and could merge, but a stream
+ * may also rewrite history (compaction); when the page lands it is dropped and the transcript reloads fully.
+ */
+export function appendStreamedItem(item, slot = targetSlot ?? activeSlot) {
+	const bag = slot ? bags.get(slot) : undefined;
+	if (bag?.transcriptFetching) bag.streamedDuringFetch = true;
+	runFor(slot, () => {
+		state.items = [...state.items, item];
 		emit();
 	});
 }
 
-/** Load one session's snapshot and transcript into its bag. */
-export async function refreshSlot(slot = activeSlot) {
-	await Promise.all([loadSnapshot(slot), loadTranscript(slot)]);
-	bagOf(slot).loaded = true;
+/**
+ * Prepend the next older transcript page (`before` the oldest loaded item). Returns "ok" (older items arrived),
+ * "done" (nothing older), "fetching" (a page is already in flight), "stale" (superseded while in flight, dropped),
+ * "refreshed" (streamed output landed meanwhile, so the page was dropped for a full reload) or "error".
+ * Any uncertainty falls back to a full `loadTranscript`: a page that arrives empty or fully duplicated means the
+ * cursor no longer matches the server's branch, and two failures in a row for one cursor reload fully once.
+ */
+export async function fetchMoreTranscript(slot = activeSlot) {
+	const bag = slot ? bags.get(slot) : undefined;
+	if (!bag || !bag.transcriptHasMore || !bag.transcriptCursor) return "done";
+	if (bag.transcriptFetching) return "fetching";
+	const seq = bag.transcriptSeq + 1;
+	bag.transcriptSeq = seq;
+	bag.transcriptFetching = true;
+	bag.streamedDuringFetch = false;
+	runFor(slot, () => emit());
+	const cursor = bag.transcriptCursor;
+	let data;
+	try {
+		data = await api(`/api/transcript?limit=${TRANSCRIPT_FIRST_PAGE}&before=${encodeURIComponent(cursor)}`, { slot });
+	} catch (error) {
+		if (!bags.has(slot) || bag.transcriptSeq !== seq) return "stale";
+		bag.transcriptFetching = false;
+		bag.fetchFailures += 1;
+		if (bag.fetchFailures >= 2) {
+			runFor(slot, () => emit());
+			await attempt(() => loadTranscript(slot), { quiet: true });
+			return "refreshed";
+		}
+		runFor(slot, () => emit());
+		toast(serverText(error.message || String(error), t("The operation failed.")), "error", 9000);
+		return "error";
+	}
+	if (!bags.has(slot) || bag.transcriptSeq !== seq) return "stale";
+	bag.transcriptFetching = false;
+	if (bag.streamedDuringFetch || data.hasMore === undefined) {
+		// Streamed output rewrote the tail while the page was in flight, or an old server ignored the paging
+		// query: either way this page cannot be trusted against the window, so reload fully instead.
+		runFor(slot, () => emit());
+		await attempt(() => loadTranscript(slot), { quiet: true });
+		return "refreshed";
+	}
+	const seen = new Set();
+	for (const entry of bag.items) if (entry.id) seen.add(entry.id);
+	const older = data.items.filter((entry) => !entry.id || !seen.has(entry.id));
+	if (older.length === 0) {
+		// The whole page duplicates the window (the cursor vanished from the server's branch): reload fully once.
+		runFor(slot, () => emit());
+		await attempt(() => loadTranscript(slot), { quiet: true });
+		return "refreshed";
+	}
+	bag.fetchFailures = 0;
+	const toolRuns = { ...bag.toolRuns };
+	for (const item of older) {
+		if (item.kind === "toolResult" && !toolRuns[item.toolCallId]) toolRuns[item.toolCallId] = { status: item.isError ? "error" : "done", endedAt: item.ts };
+	}
+	runFor(slot, () => {
+		state.items = [...older, ...state.items];
+		state.toolRuns = toolRuns;
+		state.transcriptHasMore = data.hasMore === true;
+		state.transcriptCursor = data.nextCursor === undefined ? (older[0]?.id ?? null) : data.nextCursor;
+		emit();
+	});
+	return "ok";
 }
 
 // A finished session shows a blue "unread" marker in the sidebar until the user looks at it. Looking at it means: it is
@@ -453,7 +617,14 @@ export async function loadWorkspaces(mode = uiMode(), slot) {
 	const expanded = state.view[expandedKey(mode)] || {};
 	const targets = new Set(Object.keys(expanded).filter((key) => expanded[key]));
 	if (current) targets.add(current.rootPath);
-	await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== ARCHIVED_KEY).map((root) => loadSessions(root, mode)).concat([loadUnbound(mode), loadArchived(mode)]));
+	const aux = scheduleAuxLists(mode, slot);
+	try {
+		await Promise.all([...targets.values()].filter((root) => root !== GENERAL_KEY && root !== ARCHIVED_KEY).map((root) => loadSessions(root, mode)).concat(aux.loads));
+	} finally {
+		// The first screen is served only now: the slow lists may start asking for their quiet moment.
+		// A quiet main thread happens while the requests above are still in flight, so arming earlier would let them race.
+		aux.arm();
+	}
 }
 
 export async function loadArchived(mode = uiMode()) {
@@ -469,6 +640,69 @@ export const GENERAL_KEY = "<general>";
 
 /** Key of the "Archived" group: archived chats hide from their groups and are restored from this sidebar entry. */
 export const ARCHIVED_KEY = "<archived>";
+
+// The unbound and the archived list are the two slowest requests the page ever makes: on the server each one reads
+// every saved chat file from disk. They used to start with the rest of the sidebar's data and made the first screen
+// wait behind them, competing with the transcript, the state and the workspace list for the same server. They are
+// not what the first screen is about: a chat that is open and belongs to no workspace still shows from its slot,
+// the General group reads "Loading…" until its list is there, and the Archived group only exists once something
+// was archived. So loadWorkspaces asks for the two after the page has caught its breath, except when the answer is
+// needed now: the General group is open (its chats are about to be shown) or the chat on screen belongs to no
+// workspace (its list is the unbound one).
+
+/**
+ * The chat lists `loadWorkspaces` fills after the workspace list: the unbound ones, and the archived ones. The ones
+ * the first screen can wait for are armed only after its requests are done: a quiet main thread is not enough, the
+ * page is just as quiet while it waits on the network, and then the two slow scans would start on the busy server.
+ */
+function scheduleAuxLists(mode, slot) {
+	const loads = [];
+	const armers = [];
+	const generalOpen = (state.view[expandedKey(mode)] || {})[GENERAL_KEY] !== false;
+	const chatSlot = slot ?? activeSlot;
+	const snap = bags.get(chatSlot)?.snap;
+	const currentUnbound = !!snap && chatModeOf(snap.mode) === mode && !snap.workspace?.rootPath;
+	if (generalOpen || currentUnbound) loads.push(loadUnbound(mode));
+	else armers.push(() => idleListLoad(mode, "unbound", loadUnbound, chatSlot));
+	armers.push(() => idleListLoad(mode, "archived", loadArchived, chatSlot));
+	return { loads, arm: () => { for (const arm of armers) arm(); } };
+}
+
+/** A deferred list load waiting for a quiet page, by `${mode}\n${kind}`; a second request for the same list joins it. */
+const idleListLoads = new Set();
+/** Longest a deferred list waits when the page never goes quiet (the browser runs the deadline itself, or the fallback timer does). */
+const idleListDeadlineMs = 2500;
+/** Longest a deferred list also waits for the chat on screen to be read; after this it goes ahead on its own. */
+const idleListChatWaitMs = 10_000;
+/**
+ * Ask for one chat list once the page goes quiet; when the browser has no idle callback, after the same deadline.
+ * The current chat's snapshot and transcript are asked for with the very same `Promise.all` that used to start these
+ * two lists; a quiet main thread does not mean those finished, so hold back until the chat on screen is loaded (or
+ * the wait deadline passes). A list that arrived in the meantime (a group opened, a refresh) is not asked for twice.
+ */
+function idleListLoad(mode, kind, load, chatSlot) {
+	const key = `${mode}\n${kind}`;
+	if (idleListLoads.has(key)) return;
+	idleListLoads.add(key);
+	const deadline = Date.now() + idleListDeadlineMs * 4;
+	const arm = () => {
+		if (typeof requestIdleCallback === "function") requestIdleCallback(tryRun, { timeout: idleListDeadlineMs });
+		else setTimeout(tryRun, idleListDeadlineMs);
+	};
+	const tryRun = () => {
+		if (listsByMode[mode][kind] !== undefined) {
+			idleListLoads.delete(key);
+			return;
+		}
+		if (!bags.get(chatSlot)?.loaded && Date.now() < deadline) {
+			setTimeout(tryRun, 200);
+			return;
+		}
+		idleListLoads.delete(key);
+		load(mode);
+	};
+	arm();
+}
 
 /** Why a chat list could not be loaded, in words the sidebar can show instead of an endless "Loading…". */
 function listFailure(error) {
@@ -598,6 +832,7 @@ export async function loadGitStatus() {
 
 export async function restoreAfterRestart(snap, boot) {
 	bags.clear();
+	turnsCacheLru.clear();
 	activeSlot = snap.slot;
 	state.activeSlot = snap.slot;
 	setChatMode(snap.mode);
@@ -605,9 +840,9 @@ export async function restoreAfterRestart(snap, boot) {
 	await refreshAll();
 }
 
-export async function refreshAll() {
+export async function refreshAll({ full = true } = {}) {
 	for (const [id, bag] of bags) if (id !== activeSlot) bag.loaded = false;
-	await Promise.all([refreshSlot(activeSlot), loadWorkspaces(), loadSlots()]);
+	await Promise.all([refreshSlot(activeSlot, { full }), loadWorkspaces(), loadSlots()]);
 }
 
 // ---- Coding / General ------------------------------------------------------------------------------
@@ -819,6 +1054,7 @@ function recoverLostSlot(slot) {
 	if (recovering.has(slot)) return;
 	const file = bags.get(slot)?.snap?.session?.file;
 	bags.delete(slot);
+	turnsCacheLru.delete(slot);
 	if (activeSlot !== slot) return;
 	recovering.add(slot);
 	(async () => {
@@ -900,7 +1136,8 @@ async function initialLoad() {
 	state.activeSlot = slot;
 	setChatMode(mode);
 	applyAppearance();
-	await refreshAll();
+	// The first screen pages the transcript like a cold switch; an explicit refresh later takes it fully.
+	await refreshAll({ full: false });
 	rememberChat(slot);
 	if (view) toast(t("Service restarted successfully."), "info", 3500);
 }
@@ -948,7 +1185,12 @@ export async function boot() {
 
 function connectEvents() {
 	if (source) return;
-	source = new EventSource("/api/events");
+	const EventSourceFactory = getEventSourceFactory();
+	try {
+		source = exportReadOnly() ? EventSourceFactory("/api/events") : new EventSourceFactory("/api/events");
+	} catch {
+		source = new EventSourceFactory("/api/events");
+	}
 	source.onopen = async () => {
 		const reconnect = state.everConnected;
 		set({ connected: true, everConnected: true });
@@ -1019,8 +1261,7 @@ function connectEvents() {
 	on("message_start", (d) => {
 		const item = d.liveId ? { ...d.item, liveId: d.liveId } : d.item;
 		if (!item) return;
-		state.items = [...state.items, item];
-		emit();
+		appendStreamedItem(item);
 	});
 	on("message_update", (d) => {
 		const index = findLive(d.liveId);
@@ -1056,11 +1297,9 @@ function connectEvents() {
 	on("tool_end", (d) => {
 		const run = state.toolRuns[d.toolCallId] || {};
 		state.toolRuns = { ...state.toolRuns, [d.toolCallId]: { ...run, status: d.isError ? "error" : "done", endedAt: d.ts, partial: undefined } };
-		state.items = [
-			...state.items,
+		appendStreamedItem(
 			{ kind: "toolResult", ts: d.ts, toolCallId: d.toolCallId, toolName: d.toolName, text: d.text, images: d.images, isError: d.isError, details: d.details, live: true },
-		];
-		emit();
+		);
 	});
 	on("entry_appended", (d) => attachEntryId(d));
 	on("sub_agent_progress", (d) => {
@@ -1129,10 +1368,10 @@ function connectEvents() {
 		state.gitStatus = undefined;
 		state.stats = null;
 		if (slot === activeSlot) state.view = { ...state.view, selectedTerminal: null };
-		await attempt(async () => {
-			await refreshSlot(slot);
-			if (slot === activeSlot) await loadWorkspaces();
-		}, { quiet: true });
+	await attempt(async () => {
+		await refreshSlot(slot, { full: true });
+		if (slot === activeSlot) await loadWorkspaces();
+	}, { quiet: true });
 		if (slot === activeSlot) {
 			loadResources();
 			loadGitStatus();
@@ -1223,8 +1462,7 @@ function attachEntryId(d) {
 	}
 	// Not seen yet (e.g. compaction marker): append it.
 	if (item.kind === "gitStatus" || item.kind === "runChanges" || item.kind === "compaction" || item.kind === "branchSummary") {
-		state.items = [...items, { ...item, id: d.id }];
-		emit();
+		appendStreamedItem({ ...item, id: d.id });
 	}
 }
 

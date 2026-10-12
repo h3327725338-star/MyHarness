@@ -40,7 +40,7 @@ export function modelRefLabel(models, ref) {
  * - onPick({ provider, model }), onPickMain()
  * - disabled: rows can be looked at but not chosen
  */
-export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, disabled, footer }) {
+export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, disabled, footer, fullText = false }) {
 	const [query, setQuery] = useState("");
 	const rows = useMemo(() => {
 		const list = searchModels(models?.providers, query).map(({ provider, model }) => ({ key: keyOf(provider.id, model.id), provider, model }));
@@ -85,14 +85,14 @@ export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, di
 				const hover = (e) => row.key !== hiRow?.key && pointerMoved(e) && setHi(row.key);
 				if (row.main) {
 					return html`<button key="main" role="option" aria-selected=${on} class=${cls} disabled=${disabled} onMouseMove=${hover} onClick=${() => pickRow(row)} title=${t("Same model and thinking effort as the main chat")}>
-						<span class="truncate grow">${t("Use the main model")}</span>
+						<span class=${`${fullText ? "model-menu-full-text" : "truncate"} grow`}>${t("Use the main model")}</span>
 						${on ? html`<${Icon} name="check" size=${13} class="model-row-check" />` : null}
 					</button>`;
 				}
 				const m = row.model;
 				return html`<button key=${row.key} role="option" aria-selected=${on} class=${cls} disabled=${disabled} onMouseMove=${hover} onClick=${() => pickRow(row)} title=${`${row.provider.id}/${m.id}`}>
-					<span class="truncate model-row-name">${m.name || m.id}</span>
-					${multiProvider ? html`<span class="truncate grow model-row-sub">${row.provider.name || row.provider.id}</span>` : html`<span class="grow" />`}
+					<span class=${`${fullText ? "model-menu-full-text" : "truncate"} model-row-name`}>${m.name || m.id}</span>
+					${multiProvider ? html`<span class=${`${fullText ? "model-menu-full-text" : "truncate"} grow model-row-sub`}>${row.provider.name || row.provider.id}</span>` : html`<span class="grow" />`}
 					${on ? html`<${Icon} name="check" size=${13} class="model-row-check" />` : null}
 				</button>`;
 			})}
@@ -201,7 +201,7 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
 	const [open, setOpen] = useState(false);
 	if (levels.length < 2) return null;
 	const text = value ? effortName(value) : t("Default");
-	return html`<span ref=${anchor} class="picker-anchor">
+	return html`<span ref=${anchor} class=${`picker-anchor ${cls.split(" ").includes("model-ref-effort") ? "model-ref-effort-anchor" : ""}`}>
 		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
 			<span class="truncate chip-text">${text}</span>${cls.split(" ").includes("select") ? null : html`<${Chevron} />`}
 		</button>
@@ -215,19 +215,20 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
  * The model of a helper-model setting, with its effort next to it. `value` is { provider, model, thinkingLevel };
  * choosing "Use the main model" clears all three, so the model and its effort are both inherited.
  */
-export function ModelRefPicker({ models, value, onChange, disabled, label }) {
+export function ModelRefPicker({ models, value, onChange, disabled, label, showId = false }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const v = value || {};
-	const text = modelRefName(models, v);
+	const text = showId && v.model ? v.model : modelRefName(models, v);
+	const title = v.model || text;
 	const levels = modelEfforts(findModel(models, v.provider, v.model));
 	return html`<span class="model-ref">
 		<span ref=${anchor} class="picker-anchor grow">
-			<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="listbox" aria-expanded=${open} aria-label=${label} title=${text} onClick=${() => setOpen(!open)}>
-				<span class="truncate grow">${text}</span>
+			<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="listbox" aria-expanded=${open} aria-label=${label} title=${title} onClick=${() => setOpen(!open)}>
+				<span class="model-ref-text">${text}</span>
 			</button>
-			<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${300} maxHeight=${360} class="model-pop">
-				<${ModelMenu} models=${models} selected=${v} mainOption
+			<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${360} maxHeight=${360} class="model-pop model-ref-pop">
+				<${ModelMenu} models=${models} selected=${v} mainOption fullText
 					onPickMain=${() => (setOpen(false), onChange({ provider: undefined, model: undefined, thinkingLevel: undefined }))}
 					onPick=${(ref) => (setOpen(false), onChange({ ...ref, thinkingLevel: undefined }))} />
 			<//>

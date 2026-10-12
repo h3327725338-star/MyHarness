@@ -7,6 +7,7 @@ rem a dialog if it cannot start. Quit it with "Quit MyHarness" in the page.
 rem
 rem   dev-web.cmd --console   old behaviour: run inside this visible window (for debugging)
 rem   dev-web.cmd --port 7878 --no-open   other arguments are forwarded to MyHarness
+rem   dev-web.cmd --restart   stop the running instance and start fresh even when the sources are unchanged
 rem
 rem Frontend files (packages\coding-agent\web) are served from disk with no cache:
 rem refresh the browser page to see changes. Backend (src\) changes need a restart.
