@@ -918,7 +918,6 @@ function worktreesScreen(ctx) {
 /** Copy deletion is never a branch deletion or a merge; force is offered only after a recognised dirty-copy refusal. */
 function deleteCopyScreen(ctx, worktree, slot, reload) {
 	const [error, setError] = useState(null);
-	const [forceConfirm, setForceConfirm] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const request = useRef(false);
 	const alive = useRef(true);
@@ -930,7 +929,7 @@ function deleteCopyScreen(ctx, worktree, slot, reload) {
 	const remove = async (force = false) => {
 		// A ref closes the synchronous double-click window before the state update is rendered.
 		if (request.current || state.snap?.active || worktree.isMain || worktree.current) return;
-		if (force && (!forceConfirm || !error?.canForce)) return;
+		if (force && !error?.canForce) return;
 		request.current = true;
 		setBusy(true);
 		try {
@@ -941,7 +940,6 @@ function deleteCopyScreen(ctx, worktree, slot, reload) {
 			if (alive.current) {
 				setError((previous) => ({ ...failure, revision: (previous?.revision || 0) + 1 }));
 				// Permission/unknown/protected failures return to safe retry, never retain a force action.
-				setForceConfirm(force && !!failure.canForce);
 			}
 			return;
 		} finally {
@@ -965,13 +963,12 @@ function deleteCopyScreen(ctx, worktree, slot, reload) {
 			<div class="dim pre-wrap">${worktree.path}</div>
 			${error ? html`<div class="c-danger" role="alert">${error.message}</div><details key=${error.revision}><summary>${t("Error details")}</summary><pre class="git-lines">${error.detail}</pre></details>` : null}
 			${error?.canForce ? html`<div class="c-danger">${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
-			${forceConfirm ? html`<strong class="c-danger">${t("Confirm force deletion of this copy and all uncommitted changes inside it?")}</strong>` : null}
 		</div>`,
 		rows: [
 			{ key: "cancel", label: t("Cancel"), disabled: busy, onEnter: (c) => c.pop() },
 			// A different action key on each failure/force step restores the default highlight to Cancel.
 			error?.canForce
-				? { key: `${forceConfirm ? "confirm-force" : "prepare-force"}:${error.revision}`, label: t("Force delete copy"), icon: "trash", danger: true, chevron: !forceConfirm, disabled, onEnter: () => { if (disabled || request.current) return; return forceConfirm ? remove(true) : setForceConfirm(true); } }
+				? { key: `force:${error.revision}`, label: t("Force delete copy"), icon: "trash", danger: true, disabled, onEnter: () => { if (disabled || request.current) return; return remove(true); } }
 				: { key: error ? `retry:${error.revision}` : "delete", label: error ? t("Retry delete") : t("Delete copy"), danger: true, disabled, onEnter: () => remove() },
 		],
 	};

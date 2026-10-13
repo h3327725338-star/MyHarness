@@ -102,7 +102,6 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [autoName, setAutoName] = useState(false);
 	const [deletingCopy, setDeletingCopy] = useState(null);
 	const [copyFailure, setCopyFailure] = useState(null);
-	const [forceCopy, setForceCopy] = useState(false);
 	const [targetCopy, setTargetCopy] = useState(null);
 	const deletionPanel = useRef(null);
 	const copyDeletionPanel = useRef(null);
@@ -160,7 +159,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		if (!deletingCopy) return;
 		copyDeletionPanel.current?.scrollIntoView({ block: "nearest" });
 		copyDeletionPanel.current?.querySelector(".branch-delete-cancel")?.focus({ preventScroll: true });
-	}, [deletingCopy, copyFailure, forceCopy]);
+	}, [deletingCopy, copyFailure]);
 
 	const branches = useMemo(() => rankSearch(data?.branches || [], query, { names: (b) => [b.name] }), [data, query]);
 	const exact = branches.some((b) => b.name === query.trim());
@@ -328,7 +327,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 
 	const deleteCopy = async (force = false) => {
 		if (!deletingCopy || deletingCopy.isMain || deletingCopy.current || running || busy || deletePending.current) return;
-		if (force && (!forceCopy || !copyFailure?.canForce)) return;
+		if (force && !copyFailure?.canForce) return;
 		deletePending.current = true;
 		setBusy(`delete:${deletingCopy.path}`);
 		const err = await tryPost("/api/git/worktrees/delete", { path: deletingCopy.path, ...(force ? { force: true } : {}) });
@@ -338,11 +337,9 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			const failure = { ...err, ...explainDeleteFailure(err, "copy", force) };
 			setCopyFailure(failure);
 			// Unknown, permission, locked and busy errors do NOT mean dirty; force cannot be offered for them.
-			setForceCopy(force && !!failure.canForce);
 			toast(failure.message, "error", 9000);
 			return;
 		}
-		setForceCopy(false);
 		setCopyFailure(null);
 		setDeletingCopy(null);
 		setTargetCopy(null);
@@ -465,7 +462,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 				<button class="icon-btn sm" disabled=${disabled} title=${t("Enter to edit")} aria-label=${t("Enter to edit")} onClick=${() => enterCopy(w.path)}><${Icon} name="arrowRight" size=${13} /></button>
 				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}>${busy === `start:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="play" size=${13} />`}</button>
 				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>
-				<button class="icon-btn sm" disabled=${disabled || w.current} title=${t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => { setDeletingCopy(w); setForceCopy(false); setCopyFailure(null); }}><${Icon} name="trash" size=${13} /></button>` : null}
+				<button class="icon-btn sm" disabled=${disabled || w.current} title=${t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => { setDeletingCopy(w); setCopyFailure(null); }}><${Icon} name="trash" size=${13} /></button>` : null}
 				</div>
 			</div>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
 			</div>
@@ -473,8 +470,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 				<div>${t("Delete copy “{name}”? Its folder will be deleted, not its branch. This does not merge changes into main.", { name: deletingCopy.displayName || deletingCopy.branch || deletingCopy.path.split(/[\\/]/).pop() })}</div>
 				${copyFailure ? html`<div class="c-danger" role="alert">${copyFailure.message}</div><details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${copyFailure.detail}</div></details>` : null}
 				${copyFailure?.canForce ? html`<div>${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
-				${forceCopy ? html`<div>${t("Confirm force deletion of this copy and all uncommitted changes inside it?")}</div>` : null}
-				<div class="branch-form">${copyFailure?.canForce ? html`<button class="btn sm danger solid" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => forceCopy ? deleteCopy(true) : setForceCopy(true)}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Force delete copy")}</button>` : html`<button class="btn sm danger" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => deleteCopy()}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : copyFailure ? t("Retry delete") : t("Delete")}</button>`}<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${() => { setDeletingCopy(null); setForceCopy(false); setCopyFailure(null); }}>${t("Cancel")}</button></div>
+				<div class="branch-form">${copyFailure?.canForce ? html`<button class="btn sm danger solid" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => deleteCopy(true)}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Force delete copy")}</button>` : html`<button class="btn sm danger" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => deleteCopy()}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : copyFailure ? t("Retry delete") : t("Delete")}</button>`}<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${() => { setDeletingCopy(null); setCopyFailure(null); }}>${t("Cancel")}</button></div>
 			</div>` : null}
 			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
 			<//>
