@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -59,6 +59,7 @@ function fixture() {
 		change,
 		entry,
 		runner,
+		dataRoot: options.dataRoot,
 		fail: () => {
 			fail = true;
 		},
@@ -117,4 +118,30 @@ it("retains due work after failure and skips consolidation when there are no cha
 	expect(await m.runConsolidation(true)).toBe(false);
 	expect(f.state().pendingChanges).toBe(1);
 	expect(m.getMaintenanceStatus().phase).toBe("warning");
+});
+
+it("sweeps due work in other workspaces without opening them", async () => {
+	const f = fixture();
+	const m = f.create();
+	const otherDir = join(f.dataRoot, "workspaces", "other", "memory");
+	mkdirSync(otherDir, { recursive: true });
+	writeFileSync(
+		join(otherDir, "other-note.md"),
+		"---\nid: workspace/other-note\nname: Other note\ndescription: test\ntype: project\nscope: workspace\nworkspaceId: other\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\n\nbody-other\n",
+	);
+	// 先让本工作区落一次账，再手工给另一个工作区记一笔到期的账（5 条马上整）。
+	await m.runConsolidation();
+	const statePath = join(f.dataRoot, "memory/state.json");
+	const state = JSON.parse(readFileSync(statePath, "utf8"));
+	state.consolidation.other = {
+		sessionIds: [],
+		pendingChanges: 5,
+		pendingSince: new Date(Date.now() - 1000).toISOString(),
+		revision: 0,
+	};
+	writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+	await m.runConsolidation();
+	const after = JSON.parse(readFileSync(statePath, "utf8"));
+	expect(after.consolidation.other.pendingChanges).toBe(0);
+	expect(f.runner).toHaveBeenCalled();
 });

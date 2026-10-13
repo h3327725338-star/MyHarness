@@ -21,7 +21,7 @@
 - Keep only what is stable, applies across projects, and is useful on nearly every turn. Project details stay in ordinary memories, which are recalled when relevant.
 - When a preference or fact changes, overwrite the old statement in place; never keep two contradicting statements.
 - Remove expired ongoing efforts from section 5, or move them into an ordinary memory.
-- Keep the whole profile within 8KB. Ordinary memories still need to stay short.
+- Keep the whole profile within 10KB (body only, headers excluded). Ordinary memories still need to stay short.
 
 # Output
 - The final response must contain only the following structure:

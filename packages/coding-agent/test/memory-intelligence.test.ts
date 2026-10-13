@@ -366,32 +366,32 @@ describe("memory annotations and recall", () => {
 		expect(rewritten).toContain("importance: high");
 	});
 
-	it("truncates bodies at 8KB on both the read and the write side", async () => {
+	it("truncates bodies at 10KB on both the read and the write side", async () => {
 		const huge = "长".repeat(6000); // 18,000 bytes
 		writeMemory({ id: "global/huge", name: "Huge", body: huge });
 		const readSide = readMemoryEntries(paths()).find((item) => item.id === "global/huge");
-		expect(Buffer.byteLength(readSide?.content ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
-		expect(Buffer.byteLength(readSide?.content ?? "", "utf8")).toBeGreaterThan(7 * 1024);
+		expect(Buffer.byteLength(readSide?.content ?? "", "utf8")).toBeLessThanOrEqual(10 * 1024);
+		expect(Buffer.byteLength(readSide?.content ?? "", "utf8")).toBeGreaterThan(9 * 1024);
 
 		const profileBody = "画".repeat(2600); // 7,800 bytes: a full profile fits whole.
 		writeMemory({ id: MEMORY_PROFILE_ID, name: "用户画像", type: "user", body: profileBody });
 		const profile = readMemoryEntries(paths()).find(isMemoryProfile);
 		expect(profile?.content).toBe(profileBody);
 
-		const written8k = "宽".repeat(6000);
+		const written10k = "宽".repeat(6000);
 		const writer = manager({
 			modelRunner: async ({ systemPrompt }) =>
 				systemPrompt.includes("Memory consolidation task")
 					? '<MEMORY_OPERATIONS>{"operations":[]}</MEMORY_OPERATIONS>'
-					: `<MEMORY_OPERATIONS>{"operations":[{"action":"upsert","scope":"global","type":"feedback","name":"Written","description":"写入侧","content":"${written8k}"}]}</MEMORY_OPERATIONS>`,
+					: `<MEMORY_OPERATIONS>{"operations":[{"action":"upsert","scope":"global","type":"feedback","name":"Written","description":"写入侧","content":"${written10k}"}]}</MEMORY_OPERATIONS>`,
 		});
 		await writer.runExtraction(userEntries("写一条很长的记忆"));
 		const written = readMemoryEntries(paths()).find((item) => item.id === "global/written");
 		const raw = readFileSync(written?.filePath ?? "", "utf8")
 			.split("\n---\n")[1]
 			.trim();
-		expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(8 * 1024);
-		expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(7 * 1024);
+		expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(10 * 1024);
+		expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(9 * 1024);
 	});
 
 	it("degrades silently when memory cannot be read, and writes nothing while recalling", async () => {

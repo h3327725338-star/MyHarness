@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { contentText } from "@myharness/ai";
 import { stringify as stringifyYaml } from "yaml";
-import { getDataDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
+import { getDataDir, getWorkspaceDir, getWorkspacesDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import type { AutoMemorySettings, SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import { runGitSync } from "../../git/repository/command.ts";
@@ -120,8 +120,8 @@ export type AutoMemoryModelRunner = (options: {
 	task: string;
 }) => Promise<string>;
 
-// 8KB so the resident user profile fits in one entry; ordinary entries are still asked to stay short.
-const MEMORY_BODY_MAX_BYTES = 8 * 1024;
+// 10KB 只算正文（标题摘要等头不计），常驻画像整篇也按这个来；普通条目仍要求写短。
+const MEMORY_BODY_MAX_BYTES = 10 * 1024;
 const MEMORY_TRIGGER_MAX_COUNT = 6;
 const MEMORY_TRIGGER_MAX_BYTES = 60;
 const MAX_DIRECT_TRIGGER_MEMORIES = 3;
@@ -131,7 +131,8 @@ const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
 export const MEMORY_PROFILE_ID = "global/用户画像";
 const RECALL_TURN_MAX_BYTES = 20 * 1024;
 // 维护记忆 Agent 的输入不设上限：提取时的聊天全文、已有记忆清单、整理时的整批记忆全部送给模型，
-// 只有输出侧保留上限（单次模型输出 maxTokens、单条记忆正文 8KB）。主聊天的召回仍保留 20KB 保护，不在此列。
+// 维护记忆 Agent 的输入不设上限：提取时的聊天全文、已有记忆清单、整理时的整批记忆全部送给模型，
+// 输出侧不设条数上限（单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文）。主聊天的召回仍保留 20KB 卡片保护（规矩头不计），不在此列。
 const MAX_RECALLED_MEMORIES = 5;
 const CONSOLIDATION_MIN_CHANGES = 5;
 const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
@@ -403,7 +404,7 @@ export function parseMemoryOperations(output: string): MemoryOperation[] | undef
 			try {
 				const parsed = JSON.parse(candidate) as { operations?: unknown };
 				if (!Array.isArray(parsed.operations)) continue;
-				return parsed.operations.slice(0, 20).filter((value): value is MemoryOperation => {
+				return parsed.operations.filter((value): value is MemoryOperation => {
 					if (!value || typeof value !== "object") return false;
 					const operation = value as Partial<MemoryOperation>;
 					return operation.action === "upsert" || operation.action === "delete";
@@ -766,16 +767,21 @@ export class AutoMemoryManager {
 		this.consolidationTimer.unref?.();
 	}
 
-	/** Run saved due work, or explicitly review all memories visible to this conversation. */
+	/** Run saved due work, or explicitly review all memories visible to this conversation.
+	 * 软件开着时，任一存活聊天还会顺带清扫其他到期工作区（含 unbound），不为此新建 runtime。 */
 	runConsolidation(force = false): Promise<boolean> {
 		const settings = this.getSettings();
 		if (this.disposed || !settings) return Promise.resolve(false);
 		const result = this.backgroundQueue.then(async () => {
 			try {
 				await this.initializeConsolidationState();
-				if (!force && !this.consolidationDue()) return true;
+				const ownDue = force || this.consolidationDue();
+				// 软件开着时，有任意聊天存活就顺带清扫其他到期工作区；未点开聊天的会话私密笔记仍等本人点开。
+				const othersDue = !force && this.listSweepWorkspaceIds().some((id) => this.consolidationDueFor(id));
+				if (!ownDue && !othersDue) return true;
 				this.setMaintenanceStatus({ phase: "processing" });
-				await this.consolidate(settings);
+				if (ownDue) await this.consolidate(settings);
+				if (!force) await this.sweepDueWorkspaces(settings);
 				this.setMaintenanceStatus({ phase: "idle" });
 				return true;
 			} catch (error) {
@@ -789,13 +795,112 @@ export class AutoMemoryManager {
 	}
 
 	private consolidationDue(): boolean {
-		const value = readState(this.paths.statePath).consolidation[this.paths.workspaceId];
+		return this.consolidationDueFor(this.paths.workspaceId);
+	}
+
+	private consolidationDueFor(workspaceId: string): boolean {
+		const value = readState(this.paths.statePath).consolidation[workspaceId];
 		return (
 			!!value &&
 			(value.pendingChanges ?? 0) > 0 &&
 			((value.pendingChanges ?? 0) >= CONSOLIDATION_MIN_CHANGES ||
 				Date.now() - Date.parse(value.pendingSince ?? "") >= CONSOLIDATION_INTERVAL_MS)
 		);
+	}
+
+	/** 其他到期没人管的工作区（含 unbound）：只要软件开着、有任意聊天存活，就顺带清扫，不为此新建 runtime。 */
+	private listSweepWorkspaceIds(): string[] {
+		const seen = new Set<string>();
+		try {
+			for (const key of Object.keys(readState(this.paths.statePath).consolidation)) {
+				if (key && key !== this.paths.workspaceId) seen.add(key);
+			}
+		} catch {
+			// state 读取失败不挡本工作区；顺带清扫下次再试。
+		}
+		try {
+			const workspacesDir = getWorkspacesDir(this.paths.dataRoot);
+			if (fs.existsSync(workspacesDir)) {
+				for (const item of fs.readdirSync(workspacesDir, { withFileTypes: true })) {
+					if (!item.isDirectory() || !item.name || item.name === this.paths.workspaceId) continue;
+					if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(item.name)) continue;
+					seen.add(item.name);
+				}
+			}
+		} catch {
+			// 顺带清扫是尽力而为；失败留到下次 30 秒检查。
+		}
+		return [...seen];
+	}
+
+	/** 顺带清扫其他到期工作区的全局+工作区共享部分。未点开聊天的会话私密笔记仍等本人点开（防串味）。 */
+	private async sweepDueWorkspaces(
+		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
+	): Promise<void> {
+		for (const workspaceId of this.listSweepWorkspaceIds()) {
+			if (this.disposed) return;
+			try {
+				if (!this.consolidationDueFor(workspaceId)) continue;
+				await this.consolidateSweptWorkspace(workspaceId, settings);
+			} catch (error) {
+				this.reportError("consolidate", error);
+			}
+		}
+	}
+
+	private async consolidateSweptWorkspace(
+		workspaceId: string,
+		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
+	): Promise<void> {
+		this.assertActive();
+		const dataRoot = this.paths.dataRoot;
+		if (!fs.existsSync(getWorkspaceDir(dataRoot, workspaceId))) return;
+		const sweptPaths = getMemoryPaths({ dataRoot, workspaceId, sessionId: "sweep" });
+		const revision = readState(this.paths.statePath).consolidation[workspaceId]?.revision ?? 0;
+		const loadSwept = () =>
+			readMemoryEntries({
+				globalDir: sweptPaths.globalDir,
+				projectDir: sweptPaths.workspaceDir,
+				sessionDir: sweptPaths.sessionDir,
+			});
+		const batch = loadSwept();
+		if (batch.length === 0) return;
+		const snapshot = loadSwept();
+		const format = (entry: MemoryEntry) =>
+			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
+		const output = await this.runModel({
+			cwd: this.options.cwd,
+			settings,
+			systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
+			task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+		});
+		this.assertActive();
+		const operations = parseMemoryOperations(output);
+		if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+		const ids = new Set(batch.map((entry) => entry.id));
+		await this.applyOperations(
+			operations.filter((operation) => !!operation.id && ids.has(operation.id)),
+			true,
+			snapshot,
+			undefined,
+			{
+				workspaceId,
+				globalDir: sweptPaths.globalDir,
+				projectDir: sweptPaths.workspaceDir,
+				sessionDir: sweptPaths.sessionDir,
+			},
+		);
+		await this.withLock(async () => {
+			const state = readState(this.paths.statePath);
+			const value = state.consolidation[workspaceId];
+			if (value && (value.revision ?? 0) === revision) {
+				value.lastAt = new Date().toISOString();
+				value.sessionIds = [];
+				value.pendingChanges = 0;
+				value.pendingSince = undefined;
+				await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
+			}
+		});
 	}
 
 	private async initializeConsolidationState(): Promise<void> {
@@ -951,7 +1056,7 @@ export class AutoMemoryManager {
 			const profile = candidates.find(isMemoryProfile);
 			selected = [
 				...(profile ? [profile] : []),
-				...selectMemoriesForQuery(truncateUtf8(query, 12 * 1024), candidates).map(({ entry }) => entry),
+				...selectMemoriesForQuery(query, candidates).map(({ entry }) => entry),
 			];
 		} catch (error) {
 			this.reportError("recall", error);
@@ -960,7 +1065,7 @@ export class AutoMemoryManager {
 		if (selected.length === 0) return undefined;
 
 		const sections: string[] = [];
-		let turnBytes = Buffer.byteLength(MEMORY_CONTEXT_RULES, "utf8");
+		let turnBytes = 0; // 20KB 只算卡片，规矩头白送不占额度。
 		for (const entry of selected) {
 			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
 			const sectionBytes = Buffer.byteLength(section, "utf8");
@@ -1045,10 +1150,28 @@ export class AutoMemoryManager {
 		allowDelete: boolean,
 		snapshot?: MemoryEntry[],
 		sourceEntryId?: string,
+		scopeContext?: {
+			workspaceId: string;
+			sessionId?: string;
+			globalDir: string;
+			projectDir: string;
+			sessionDir: string;
+		},
 	): Promise<void> {
 		this.assertActive();
+		const ctxWorkspaceId = scopeContext ? scopeContext.workspaceId : this.paths.workspaceId;
+		const ctxSessionId = scopeContext ? scopeContext.sessionId : this.paths.sessionId;
 		await this.withLock(async () => {
-			const existing = new Map(this.loadEntries().map((entry) => [entry.id, entry]));
+			const existing = new Map(
+				(scopeContext
+					? readMemoryEntries({
+							globalDir: scopeContext.globalDir,
+							projectDir: scopeContext.projectDir,
+							sessionDir: scopeContext.sessionDir,
+						})
+					: this.loadEntries()
+				).map((entry) => [entry.id, entry]),
+			);
 			let changedCount = 0;
 			if (snapshot) {
 				if (existing.size !== snapshot.length)
@@ -1061,7 +1184,7 @@ export class AutoMemoryManager {
 						throw new Error("Memory changed during maintenance; retry with fresh context");
 				}
 			}
-			for (const operation of operations.slice(0, 20)) {
+			for (const operation of operations) {
 				this.assertActive();
 				if (operation.action === "delete") {
 					if (!allowDelete) continue;
@@ -1139,8 +1262,13 @@ export class AutoMemoryManager {
 					)
 				)
 					continue;
-				const directory =
-					scope === "global"
+				const directory = scopeContext
+					? scope === "global"
+						? scopeContext.globalDir
+						: scope === "session"
+							? scopeContext.sessionDir
+							: scopeContext.projectDir
+					: scope === "global"
 						? this.paths.globalDir
 						: scope === "session"
 							? this.paths.sessionDir
@@ -1158,11 +1286,11 @@ export class AutoMemoryManager {
 					filePath,
 					importance,
 					triggers,
-					workspaceId: scope === "global" ? undefined : this.paths.workspaceId,
-					sessionId: scope === "session" ? this.paths.sessionId : undefined,
+					workspaceId: scope === "global" ? undefined : ctxWorkspaceId,
+					sessionId: scope === "session" ? ctxSessionId : undefined,
 					sourceEntryId: sourceEntryId ?? previous?.sourceEntryId,
-					sourceWorkspaceId: sourceEntryId ? this.paths.workspaceId : previous?.sourceWorkspaceId,
-					sourceSessionId: sourceEntryId ? this.paths.sessionId : previous?.sourceSessionId,
+					sourceWorkspaceId: sourceEntryId ? ctxWorkspaceId : previous?.sourceWorkspaceId,
+					sourceSessionId: sourceEntryId ? ctxSessionId : previous?.sourceSessionId,
 				};
 				this.assertActive();
 				if (previous) await archiveMemoryFile(previous.filePath, "updated");
@@ -1173,11 +1301,11 @@ export class AutoMemoryManager {
 			}
 			if (!allowDelete && changedCount > 0) {
 				const state = readState(this.paths.statePath);
-				const value = state.consolidation[this.paths.workspaceId] ?? { sessionIds: [] };
+				const value = state.consolidation[ctxWorkspaceId] ?? { sessionIds: [] };
 				value.pendingChanges = (value.pendingChanges ?? 0) + changedCount;
 				value.pendingSince ??= new Date().toISOString();
 				value.revision = (value.revision ?? 0) + 1;
-				state.consolidation[this.paths.workspaceId] = value;
+				state.consolidation[ctxWorkspaceId] = value;
 				await writeMemoryFile(this.paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
 			}
 			await this.writeIndex();
@@ -1234,7 +1362,7 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const operations = parseMemoryOperations(output);
 		if (operations === undefined) throw new Error("Auto Memory 返回了无效的操作格式");
-		await this.applyOperations(operations.slice(0, 12), false, existing, transcript.lastEntryId);
+		await this.applyOperations(operations, false, existing, transcript.lastEntryId);
 		this.assertActive();
 		const { shouldConsolidate } = await this.updateState(transcript.lastEntryId);
 		if (shouldConsolidate) {

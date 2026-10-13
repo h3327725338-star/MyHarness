@@ -17,7 +17,7 @@
 - Distinguish explicitly user-approved decisions from proposals and assistant inferences. Do not record assistant plans as completed facts.
 - Preserve necessary workspace/conversation scope, time conditions, and evidence sources when compressing content. Do not lose constraints merely to be brief.
 - content must be short, self-contained, and explain how it applies or why it matters.
-- Return at most 12 operations; return an empty array if nothing is worth retaining.
+- Return as many operations as needed; do not truncate the list. Return an empty array if nothing is worth retaining.
 
 # Annotations
 - importance is optional. high: lasting identity, communication boundaries, or preferences the user keeps repeating. normal: stable project or tool facts. low: specific details that are rarely needed. Omit it when unsure.
