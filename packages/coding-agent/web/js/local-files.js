@@ -2,6 +2,27 @@ import { post, toast, activeSlotId, subscribe } from "./store.js";
 import { t } from "./i18n.js";
 import { isLocalAutolinkBlocked, pathCandidates } from "./local-file-links.js";
 
+/**
+ * `unbound/memory/...` is shorthand for `data/workspaces/unbound/memory/...`.
+ * The backend resolves relative paths against the workspace root (C:/myharness),
+ * where `unbound/...` does not exist, so try the data-dir prefix as a fallback.
+ * Display text stays `unbound/...`; only the link target becomes the absolute path.
+ */
+function fallbackResolvePaths(path) {
+	if (/^unbound[\\/]/i.test(path)) return [`data/workspaces/${path.replace(/\\/g, "/")}`];
+	return [];
+}
+
+function targetFor(candidatePath, resolved) {
+	const direct = resolved.get(candidatePath);
+	if (direct) return direct;
+	for (const fallback of fallbackResolvePaths(candidatePath)) {
+		const hit = resolved.get(fallback);
+		if (hit) return hit;
+	}
+	return undefined;
+}
+
 export const localFileAction = (path, action, handler, slot) => post("/api/files/local", { path, action, handler }, slot);
 export const openLocalFile = (path, slot) => localFileAction(path, "open", undefined, slot).catch((error) => toast(error.message, "error"));
 let closeMenu;
@@ -208,32 +229,83 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 		const node = walker.currentNode;
 		if (!node.textContent || node.parentElement?.closest("a, pre, button, .code-head")) continue;
 		const code = node.parentElement?.closest("code");
-		const raw = code && node.textContent === code.textContent ? [{ start: 0, end: node.textContent.length, path: node.textContent }] : pathCandidates(node.textContent);
-		const candidates = raw.filter((candidate) => !isLocalAutolinkBlocked(candidate.path));
-		if (candidates.length) jobs.push({ node, text: node.textContent, candidates });
+		if (code && node.textContent === code.textContent) {
+			// Inline code: the whole `` `...` `` may be a path with spaces (e.g. `C:/My Dir/a.txt`),
+			// so keep it as a candidate first; if it does not exist, fall back to paths inside it
+			// (e.g. `` `C:/a/b/ 42张` `` links only `C:/a/b/`, `42张` stays outside the link).
+			const text = node.textContent;
+			if (!text.trim()) continue;
+			const inner = pathCandidates(text);
+			const whole = { start: 0, end: text.length, path: text };
+			const seen = new Set([`${whole.start}:${whole.end}:${whole.path}`]);
+			const raw = [whole];
+			for (const item of inner) {
+				const key = `${item.start}:${item.end}:${item.path}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				raw.push(item);
+			}
+			const candidates = raw.filter((candidate) => {
+				const check = candidate === whole ? candidate.path.trim() : candidate.path;
+				return check && !isLocalAutolinkBlocked(check);
+			});
+			if (candidates.length) jobs.push({ node, text, candidates, whole: true });
+			continue;
+		}
+		const candidates = pathCandidates(node.textContent).filter((candidate) => !isLocalAutolinkBlocked(candidate.path));
+		if (candidates.length) jobs.push({ node, text: node.textContent, candidates, whole: false });
+	}
+	const wanted = new Set();
+	for (const job of jobs) {
+		for (const candidate of job.candidates) {
+			wanted.add(candidate.path);
+			if (job.whole && job.candidates[0] === candidate) wanted.add(candidate.path.trim());
+			for (const fallback of fallbackResolvePaths(candidate.path)) wanted.add(fallback);
+		}
 	}
 	const resolved = new Map();
 	let index = 0;
-	const paths = [...new Set(jobs.flatMap((job) => job.candidates.map((candidate) => candidate.path)))].slice(0, 150);
+	const paths = [...wanted].slice(0, 150);
+	const resolveOne = async (path) => {
+		try { resolved.set(path, await localFileAction(path, "resolve", undefined, slot)); } catch { /* Nonexistent paths stay ordinary text. */ }
+		if (path !== path.trim()) {
+			try {
+				const trimmed = path.trim();
+				if (trimmed && !resolved.has(trimmed)) resolved.set(trimmed, await localFileAction(trimmed, "resolve", undefined, slot));
+			} catch { /* trimmed variant also missing */ }
+		}
+	};
 	await Promise.all(Array.from({ length: Math.min(4, paths.length) }, async () => {
 		while (index < paths.length && isCurrent() && activeSlotId() === slot) {
 			const path = paths[index++];
-			try { resolved.set(path, await localFileAction(path, "resolve", undefined, slot)); } catch { /* Nonexistent paths stay ordinary text. */ }
+			await resolveOne(path);
 		}
 	}));
 	if (!isCurrent() || activeSlotId() !== slot) return;
-	for (const { node, text, candidates } of jobs) {
+	for (const { node, text, candidates, whole } of jobs) {
 		if (!node.isConnected || node.textContent !== text) continue;
+		let render = candidates;
+		if (whole && candidates.length > 1) {
+			// Prefer the whole `` `...` `` when it really exists (paths with spaces);
+			// otherwise link only the paths inside it so trailing `42张 +` stays out.
+			const first = candidates[0];
+			const wholeTarget = targetFor(first.path, resolved) || targetFor(first.path.trim(), resolved);
+			if (wholeTarget) render = [first];
+			else render = candidates.slice(1);
+		}
 		const fragment = document.createDocumentFragment();
 		let offset = 0;
 		let found = false;
-		for (const candidate of candidates) {
-			const target = resolved.get(candidate.path);
+		for (const candidate of render) {
+			const target = targetFor(candidate.path, resolved) || targetFor(candidate.path.trim(), resolved);
 			if (!target) continue;
+			// Skip overlapping candidates left by whole+inner lists.
+			if (candidate.start < offset || candidate.end > text.length || candidate.start >= candidate.end) continue;
 			found = true;
 			fragment.append(document.createTextNode(text.slice(offset, candidate.start)));
 			const link = document.createElement("a");
 			link.href = "#";
+			link.className = "path-code";
 			link.dataset.localPath = target.path;
 			link.title = target.path;
 			link.textContent = text.slice(candidate.start, candidate.end);
@@ -241,5 +313,14 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 			offset = candidate.end;
 		}
 		if (found) { fragment.append(document.createTextNode(text.slice(offset))); node.replaceWith(fragment); }
+	}
+	// Paths that cannot be resolved (e.g. model-abbreviated `518d9582.../memory/`) stay plain
+	// code, but keep the full text on hover so a wrapped path is still readable.
+	for (const code of root.querySelectorAll?.("code") || []) {
+		if (code.querySelector?.("a[data-local-path]")) continue;
+		const text = code.textContent || "";
+		if (text.length > 512 || text.length < 3) continue;
+		if (!/[\\/:]/.test(text) || !/[\\/]/.test(text)) continue;
+		if (!code.title) code.title = text;
 	}
 }

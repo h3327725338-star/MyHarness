@@ -167,6 +167,17 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .md blockquote > :last-child { margin-bottom: 0; }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
 .md code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: var(--r-xs); font-size: 0.92em; }
+/* Local-path autolinks keep the inline-code look: bare `C:/...` or `unbound/memory/` in text
+   renders as the same dark rounded badge, not a blue underline link. Explicit `[text](path)`
+   links have no .path-code class and keep their blue style. */
+.md a[data-local-path].path-code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: var(--r-xs); font-size: 0.92em; font-family: var(--font-mono); color: inherit; text-decoration: none; cursor: pointer; overflow-wrap: anywhere; white-space: normal; transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease); }
+.md a[data-local-path].path-code:hover { background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--border-strong); text-decoration: none; }
+/* Links inside inline code inherit the badge instead of turning blue. */
+.md code a[data-local-path] { color: inherit; text-decoration: none; background: none; padding: 0; font: inherit; cursor: pointer; }
+.md code:has(a[data-local-path]) { cursor: pointer; transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease); }
+.md code:has(a[data-local-path]):hover { background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--border-strong); }
+/* Full paths wrap, never ellipsis-cut (the screenshot `...` is model text, not CSS). */
+.md code, .md a[data-local-path].path-code { overflow-wrap: anywhere; word-break: break-word; white-space: normal; max-width: 100%; }
 .code-block { margin: 0 0 0.95em; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
 .code-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; font-size: var(--fs-xs); color: var(--text-3); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--code-bg) 60%, var(--bg-raised)); }
 .code-copy { color: var(--text-3); font-size: var(--fs-xs); padding: 1px 6px; border-radius: var(--r-xs); } .code-copy:hover { background: var(--surface-hover); color: var(--text); }
