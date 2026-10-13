@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
 import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
-import { ARCHIVED_KEY, GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -130,7 +130,7 @@ function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, current
  * A workspace and its chats, or (`general`) the "General" group: the chats that belong to no workspace. General is only
  * a place in the sidebar. It has no folder and is not a workspace; the chats keep the storage they already have.
  * `showAll`/`onShowAll` make the "show more" state controlled (the virtualized list owns it, because the height
- * estimate must know it); without them the group keeps that state itself (the General and Archived groups).
+ * estimate must know it); without them the group keeps that state itself (the General group).
  */
 function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title, showAll: controlledShowAll = undefined, onShowAll = undefined }) {
 	const showing = open || !!filter;
@@ -429,7 +429,6 @@ export function Sidebar() {
 		const unbound = slots.filter((slot) => slot.unbound && listable(slot) && !listed.has(pathKey(slot.sessionFile))).map(row);
 		return { byRoot, unbound };
 	}, [slots, ws, activeSlot]);
-	const archivedChats = useMemo(() => ws.archived?.map((info) => ({ ...info, archived: true })), [ws.archived]);
 	const unboundChats = useMemo(() => (ws.unbound === undefined ? undefined : [...unsaved.unbound, ...ws.unbound]), [unsaved, ws.unbound]);
 	// The chats one workspace group lists: the saved ones, plus an open chat that is not saved yet. Shared by the
 	// rendered group and the virtualized list's height estimates, so both always agree.
@@ -460,7 +459,6 @@ export function Sidebar() {
 			}} />
 			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
 			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
-			${archivedChats?.length ? html`<${Workspace} archived workspace=${{ rootPath: ARCHIVED_KEY, name: t("Archived chats") }} title=${t("Chats you archived, restore them here")} error=${ws.errors[ARCHIVED_KEY]} isCurrent=${false} open=${!!expanded[ARCHIVED_KEY]} sessions=${archivedChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
 		</div>
 		${exportReadOnly() ? html`<${ExportSidebarFoot} />` : null}
 		<div class="sidebar-foot">
