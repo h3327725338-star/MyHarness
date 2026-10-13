@@ -32,8 +32,8 @@ import {
 	type SubAgentToolTrace,
 } from "../src/tools/sub-agent.ts";
 import { INVESTIGATION_TOOL_PROFILES } from "../src/ultracode/profile.ts";
-import { createInvestigationToolDefinition } from "../src/workflow/engine.ts";
 import { pathIdentityKey } from "../src/utils/paths.ts";
+import { createInvestigationToolDefinition } from "../src/workflow/engine.ts";
 
 function trace(toolName: string, status: "completed" | "failed"): SubAgentToolTrace {
 	return { toolCallId: `call-${toolName}`, toolName, args: {}, status };

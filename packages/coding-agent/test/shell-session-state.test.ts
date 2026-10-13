@@ -10,7 +10,6 @@ import {
 	WRITE_GUARD_BLOCK_MARKER,
 } from "../src/tools/shell/delegated-write-guard.ts";
 import { createPwshToolDefinition } from "../src/tools/shell/pwsh.ts";
-import { pathIdentityKey } from "../src/utils/paths.ts";
 import {
 	createReadOnlyGuardExtensionSource,
 	READ_ONLY_GUARD_BLOCK_MARKER,
@@ -24,6 +23,7 @@ import {
 	stripProbeFromPartialOutput,
 } from "../src/tools/shell/shell-session.ts";
 import { terminateProcessTree, waitForChildProcess } from "../src/utils/child-process.ts";
+import { pathIdentityKey } from "../src/utils/paths.ts";
 
 function makeSessionCtx(sessionId: string) {
 	return {

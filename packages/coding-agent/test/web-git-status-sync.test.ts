@@ -14,7 +14,8 @@ it("ignores obsolete Git status responses independently for each Chat", async ()
 	const context = vm.createContext({
 		targetSlot: null,
 		activeSlot: "a",
-		workspaceKey: (snap) => snap?.cwd?.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(),
+		workspaceKey: (snap: { cwd?: string } | null | undefined) =>
+			snap?.cwd?.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(),
 		bagOf: () => ({ snap: null }),
 		bags: new Map(),
 		workspaceGitStatus: new Map(),
