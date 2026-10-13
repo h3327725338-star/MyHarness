@@ -141,6 +141,69 @@ const AUTO_MEMORY_TIMEOUT_MS = 15 * 60 * 1000;
 const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
 
+// 记忆维护本地日志：只追加、不改业务，排查“记忆维护需要检查”用。
+// 落盘位置：<data>/workspaces/<workspaceId>/sessions/<sessionId>/memory/maintenance.log（JSONL，一行一条）。
+const MAINTENANCE_LOG_FILE = "maintenance.log";
+const MAINTENANCE_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const MAINTENANCE_LOG_PREVIEW_CHARS = 2000;
+
+function truncateLogPreview(value: string, maxChars = MAINTENANCE_LOG_PREVIEW_CHARS): string {
+	if (value.length <= maxChars) return value;
+	return `${value.slice(0, maxChars)}…[truncated ${value.length - maxChars} chars]`;
+}
+
+function describeMaintenanceError(error: unknown): Record<string, unknown> {
+	if (error instanceof Error) {
+		const withStatus = error as Error & { status?: unknown; statusCode?: unknown; code?: unknown; cause?: unknown };
+		return {
+			errorName: error.name,
+			errorMessage: error.message,
+			errorStack: error.stack ?? String(error),
+			...(withStatus.code !== undefined ? { errorCode: String(withStatus.code) } : {}),
+			...(withStatus.status !== undefined ? { httpStatus: String(withStatus.status) } : {}),
+			...(withStatus.statusCode !== undefined ? { httpStatusCode: String(withStatus.statusCode) } : {}),
+			...(withStatus.cause instanceof Error
+				? { causeMessage: withStatus.cause.message, causeStack: withStatus.cause.stack }
+				: withStatus.cause !== undefined
+					? { causeMessage: String(withStatus.cause) }
+					: {}),
+		};
+	}
+	return { errorName: typeof error, errorMessage: String(error), errorStack: String(error) };
+}
+
+export function getAutoMemoryMaintenanceLogPath(sessionDir: string): string {
+	return path.join(sessionDir, MAINTENANCE_LOG_FILE);
+}
+
+function appendMaintenanceLogLine(logPath: string, entry: Record<string, unknown>): void {
+	try {
+		assertDirectPath(logPath);
+		fs.mkdirSync(path.dirname(logPath), { recursive: true });
+		try {
+			const stat = fs.statSync(logPath);
+			if (stat.size > MAINTENANCE_LOG_MAX_BYTES) {
+				const rotated = `${logPath}.1`;
+				try {
+					if (fs.existsSync(rotated)) fs.unlinkSync(rotated);
+				} catch {
+					// 轮转清理失败不挡本次写入。
+				}
+				try {
+					fs.renameSync(logPath, rotated);
+				} catch {
+					// 轮转失败就继续往原文件追加，避免丢掉本次现场。
+				}
+			}
+		} catch {
+			// 新文件没有 stat 很正常，直接追加即可。
+		}
+		fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
+	} catch {
+		// 日志本身永远不能打断记忆维护。
+	}
+}
+
 const MEMORY_CONTEXT_RULES = loadSystemPrompt("memory/recalled-context.md");
 
 export const AUTO_MEMORY_SYSTEM_PROMPT = loadSystemPrompt("session/auto-memory.md");
@@ -648,34 +711,48 @@ export class AutoMemoryManager {
 	async retryMaintenance(): Promise<boolean> {
 		if (this.disposed) return false;
 		if (!fs.existsSync(this.maintenancePath)) {
+			this.logMaintenance("retry-noop", { reason: "no maintenance.json" });
 			this.setMaintenanceStatus({ phase: "idle" });
 			return false;
 		}
-		const job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
-		if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string")
-			throw new Error("Invalid memory maintenance job");
-		job.attempts = 0;
-		await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
-		this.setMaintenanceStatus({ phase: "pending" });
-		this.scheduleMaintenance();
-		return true;
+		try {
+			const job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
+			if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string")
+				throw new Error("Invalid memory maintenance job");
+			job.attempts = 0;
+			await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
+			this.logMaintenance("retry", { jobId: job.id, entriesCount: job.entries.length, attemptsResetTo: 0 });
+			this.setMaintenanceStatus({ phase: "pending" });
+			this.scheduleMaintenance();
+			return true;
+		} catch (error) {
+			this.logMaintenance("retry-error", { ...describeMaintenanceError(error) });
+			throw error;
+		}
 	}
 
 	/** Dismiss a stuck job: move it into the session archive and go idle. Nothing is permanently deleted. Returns the archive file name, or null when there was no job. */
 	async dismissMaintenance(): Promise<string | null> {
 		if (!fs.existsSync(this.maintenancePath)) {
+			this.logMaintenance("dismiss-noop", { reason: "no maintenance.json" });
 			this.setMaintenanceStatus({ phase: "idle" });
 			return null;
 		}
-		const archiveDir = path.join(this.paths.sessionDir, "archive");
-		assertDirectPath(archiveDir);
-		await fs.promises.mkdir(archiveDir, { recursive: true });
-		const name = `maintenance-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`;
-		const target = path.join(archiveDir, name);
-		assertDirectPath(target);
-		await fs.promises.rename(this.maintenancePath, target);
-		this.setMaintenanceStatus({ phase: "idle" });
-		return name;
+		try {
+			const archiveDir = path.join(this.paths.sessionDir, "archive");
+			assertDirectPath(archiveDir);
+			await fs.promises.mkdir(archiveDir, { recursive: true });
+			const name = `maintenance-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`;
+			const target = path.join(archiveDir, name);
+			assertDirectPath(target);
+			await fs.promises.rename(this.maintenancePath, target);
+			this.logMaintenance("dismiss", { archivedFile: name });
+			this.setMaintenanceStatus({ phase: "idle" });
+			return name;
+		} catch (error) {
+			this.logMaintenance("dismiss-error", { ...describeMaintenanceError(error) });
+			throw error;
+		}
 	}
 
 	private setMaintenanceStatus(status: MemoryMaintenanceStatus): void {
@@ -689,6 +766,25 @@ export class AutoMemoryManager {
 
 	private get maintenancePath(): string {
 		return path.join(this.paths.sessionDir, "maintenance.json");
+	}
+
+	private get maintenanceLogPath(): string {
+		return getAutoMemoryMaintenanceLogPath(this.paths.sessionDir);
+	}
+
+	/** 本地结构化日志：只追加写 maintenance.log，失败静默，绝不抛错。 */
+	private logMaintenance(stage: string, details: Record<string, unknown> = {}): void {
+		try {
+			appendMaintenanceLogLine(this.maintenanceLogPath, {
+				ts: new Date().toISOString(),
+				sessionId: this.options.sessionId,
+				workspaceId: this.paths.workspaceId,
+				stage,
+				...details,
+			});
+		} catch {
+			// 日志失败不影响主流程。
+		}
 	}
 
 	/** Persist work before returning; model work is debounced and never awaited by the chat. */
@@ -706,17 +802,30 @@ export class AutoMemoryManager {
 			return [{ ...entry, message: { ...entry.message, content: [{ type: "text", text }] } }];
 		});
 		const queued = this.maintenanceEnqueue.then(async () => {
-			this.assertActive();
-			const cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
-			const start = cursor ? snapshot.findIndex((entry) => entry.id === cursor) + 1 : 0;
-			const delta = snapshot.slice(Math.max(0, start));
-			if (delta.length === 0) return;
-			await writeMemoryFile(
-				this.maintenancePath,
-				JSON.stringify({ version: 1, id: randomUUID(), entries: delta, attempts: 0 }),
-			);
-			this.setMaintenanceStatus({ phase: "pending" });
-			this.scheduleMaintenance();
+			try {
+				this.assertActive();
+				const cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
+				const start = cursor ? snapshot.findIndex((entry) => entry.id === cursor) + 1 : 0;
+				const delta = snapshot.slice(Math.max(0, start));
+				if (delta.length === 0) {
+					this.logMaintenance("enqueue-noop", { snapshotCount: snapshot.length, cursor });
+					return;
+				}
+				const jobId = randomUUID();
+				await writeMemoryFile(
+					this.maintenancePath,
+					JSON.stringify({ version: 1, id: jobId, entries: delta, attempts: 0 }),
+				);
+				this.logMaintenance("enqueue", { jobId, deltaCount: delta.length, snapshotCount: snapshot.length, cursor });
+				this.setMaintenanceStatus({ phase: "pending" });
+				this.scheduleMaintenance();
+			} catch (error) {
+				this.logMaintenance("enqueue-error", {
+					snapshotCount: snapshot.length,
+					...describeMaintenanceError(error),
+				});
+				throw error;
+			}
 		});
 		this.maintenanceEnqueue = queued.catch(() => undefined);
 		return queued;
@@ -728,6 +837,7 @@ export class AutoMemoryManager {
 		this.maintenanceTimer = setTimeout(() => {
 			this.maintenanceTimer = undefined;
 			void this.processMaintenance().catch((error) => {
+				this.logMaintenance("maintenance-timer-error", { ...describeMaintenanceError(error) });
 				if (!this.disposed) this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
 			});
 		}, delay);
@@ -751,14 +861,35 @@ export class AutoMemoryManager {
 	private async processMaintenanceJob(): Promise<void> {
 		await this.maintenanceEnqueue;
 		assertDirectPath(this.maintenancePath);
-		if (!fs.existsSync(this.maintenancePath)) return;
-		const job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
-		if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string")
+		if (!fs.existsSync(this.maintenancePath)) {
+			this.logMaintenance("maintenance-noop", { reason: "no maintenance.json" });
+			return;
+		}
+		let job: MemoryMaintenanceJob;
+		try {
+			job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
+		} catch (error) {
+			this.logMaintenance("maintenance-read-error", { ...describeMaintenanceError(error) });
+			throw error;
+		}
+		if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string") {
+			this.logMaintenance("maintenance-invalid-job", { jobId: (job as { id?: unknown }).id });
 			throw new Error("Invalid memory maintenance job");
+		}
 		if (job.attempts >= 3) {
+			this.logMaintenance("maintenance-paused", {
+				jobId: job.id,
+				attempts: job.attempts,
+				entriesCount: job.entries.length,
+			});
 			this.setMaintenanceStatus({ phase: "warning", error: "Memory maintenance paused after repeated failures" });
 			return;
 		}
+		this.logMaintenance("maintenance-start", {
+			jobId: job.id,
+			attempts: job.attempts,
+			entriesCount: job.entries.length,
+		});
 		this.setMaintenanceStatus({ phase: "processing" });
 		const ok = await this.runExtraction(job.entries);
 		if (this.disposed) return;
@@ -767,20 +898,29 @@ export class AutoMemoryManager {
 			this.assertActive();
 			const current = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
 			if (current.id !== job.id) {
+				this.logMaintenance("maintenance-superseded", { jobId: job.id, currentJobId: current.id });
 				this.scheduleMaintenance();
 				return;
 			}
 			if (ok) {
 				const cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
 				if (formatTranscript(job.entries, cursor).text) {
+					this.logMaintenance("maintenance-reschedule", { jobId: job.id, reason: "new entries arrived" });
 					this.scheduleMaintenance();
 					return;
 				}
 				await fs.promises.unlink(this.maintenancePath);
+				this.logMaintenance("maintenance-done", { jobId: job.id, result: "ok" });
 				if (this.maintenanceStatus.phase !== "warning") this.setMaintenanceStatus({ phase: "idle" });
 			} else {
 				job.attempts++;
 				await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
+				this.logMaintenance("maintenance-done", {
+					jobId: job.id,
+					result: "failed",
+					attempts: job.attempts,
+					nextDelayMs: job.attempts < 3 ? 30_000 * job.attempts : 0,
+				});
 				this.setMaintenanceStatus({
 					phase: job.attempts >= 3 ? "warning" : "pending",
 					error: job.attempts >= 3 ? "Memory maintenance failed; saved work will be retained" : undefined,
@@ -813,13 +953,19 @@ export class AutoMemoryManager {
 				const ownDue = force || this.consolidationDue();
 				// 软件开着时，有任意聊天存活就顺带清扫其他到期工作区；未点开聊天的会话私密笔记仍等本人点开。
 				const othersDue = !force && this.listSweepWorkspaceIds().some((id) => this.consolidationDueFor(id));
-				if (!ownDue && !othersDue) return true;
+				if (!ownDue && !othersDue) {
+					this.logMaintenance("consolidation-noop", { force });
+					return true;
+				}
+				this.logMaintenance("consolidation-start", { force, ownDue, othersDue });
 				this.setMaintenanceStatus({ phase: "processing" });
 				if (ownDue) await this.consolidate(settings);
 				if (!force) await this.sweepDueWorkspaces(settings);
+				this.logMaintenance("consolidation-done", { force, result: "ok" });
 				this.setMaintenanceStatus({ phase: "idle" });
 				return true;
 			} catch (error) {
+				this.logMaintenance("consolidation-done", { force, result: "failed", ...describeMaintenanceError(error) });
 				this.reportError("consolidate", error);
 				if (!this.disposed) this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
 				return false;
@@ -876,8 +1022,15 @@ export class AutoMemoryManager {
 			if (this.disposed) return;
 			try {
 				if (!this.consolidationDueFor(workspaceId)) continue;
+				this.logMaintenance("sweep-start", { sweptWorkspaceId: workspaceId });
 				await this.consolidateSweptWorkspace(workspaceId, settings);
+				this.logMaintenance("sweep-done", { sweptWorkspaceId: workspaceId, result: "ok" });
 			} catch (error) {
+				this.logMaintenance("sweep-done", {
+					sweptWorkspaceId: workspaceId,
+					result: "failed",
+					...describeMaintenanceError(error),
+				});
 				this.reportError("consolidate", error);
 			}
 		}
@@ -899,7 +1052,15 @@ export class AutoMemoryManager {
 				sessionDir: sweptPaths.sessionDir,
 			});
 		const all = loadSwept();
-		if (all.length === 0) return;
+		if (all.length === 0) {
+			this.logMaintenance("sweep-noop", { sweptWorkspaceId: workspaceId });
+			return;
+		}
+		this.logMaintenance("sweep-consolidate-start", {
+			sweptWorkspaceId: workspaceId,
+			entriesCount: all.length,
+			revision,
+		});
 		const sortedSwept = [...all].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
@@ -915,7 +1076,15 @@ export class AutoMemoryManager {
 			});
 			this.assertActive();
 			const operations = parseMemoryOperations(output);
-			if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+			if (operations === undefined) {
+				this.logMaintenance("sweep-parse-failure", {
+					sweptWorkspaceId: workspaceId,
+					batchSize: batch.length,
+					outputLength: output.length,
+					outputPreview: truncateLogPreview(output),
+				});
+				throw new Error("Auto Memory 整理器返回了无效的操作格式");
+			}
 			const ids = new Set(batch.map((entry) => entry.id));
 			await this.applyOperations(
 				operations.filter((operation) => !!operation.id && ids.has(operation.id)),
@@ -997,6 +1166,7 @@ export class AutoMemoryManager {
 	}
 
 	private reportError(operation: "recall" | "extract" | "consolidate", error: unknown): void {
+		this.logMaintenance("error", { operation, ...describeMaintenanceError(error) });
 		const normalized = error instanceof Error ? error : new Error(String(error));
 		const key = `${operation}:${normalized.message}`;
 		if (this.reportedErrors.has(key)) return;
@@ -1012,10 +1182,34 @@ export class AutoMemoryManager {
 
 	private async runModel(parameters: Parameters<AutoMemoryModelRunner>[0]): Promise<string> {
 		this.assertActive();
+		this.logMaintenance("model-request", {
+			provider: parameters.settings.provider,
+			model: parameters.settings.model,
+			thinkingLevel: parameters.settings.thinkingLevel,
+			systemPromptLength: parameters.systemPrompt.length,
+			taskLength: parameters.task.length,
+			taskPreview: truncateLogPreview(parameters.task),
+			customRunner: Boolean(this.options.modelRunner),
+		});
 		if (this.options.modelRunner) {
-			const output = await this.options.modelRunner(parameters);
-			this.assertActive();
-			return output;
+			try {
+				const output = await this.options.modelRunner(parameters);
+				this.assertActive();
+				this.logMaintenance("model-response", {
+					provider: parameters.settings.provider,
+					model: parameters.settings.model,
+					outputLength: output.length,
+					outputPreview: truncateLogPreview(output),
+				});
+				return output;
+			} catch (error) {
+				this.logMaintenance("model-error", {
+					provider: parameters.settings.provider,
+					model: parameters.settings.model,
+					...describeMaintenanceError(error),
+				});
+				throw error;
+			}
 		}
 		const runtime = this.options.modelRuntime;
 		if (!runtime) {
@@ -1055,14 +1249,49 @@ export class AutoMemoryManager {
 			);
 			this.assertActive();
 			if (response.stopReason === "aborted") {
+				this.logMaintenance("model-error", {
+					provider: parameters.settings.provider,
+					model: parameters.settings.model,
+					stopReason: response.stopReason,
+					errorMessage: "Auto Memory 请求超时或被取消",
+				});
 				throw new Error("Auto Memory 请求超时或被取消");
 			}
 			if (response.stopReason === "error") {
+				this.logMaintenance("model-error", {
+					provider: parameters.settings.provider,
+					model: parameters.settings.model,
+					stopReason: response.stopReason,
+					errorMessage: response.errorMessage || "Auto Memory 模型请求失败",
+				});
 				throw new Error(response.errorMessage || "Auto Memory 模型请求失败");
 			}
 			const output = contentText(response.content, "\n").trim();
-			if (!output) throw new Error("Auto Memory 模型没有返回内容");
+			if (!output) {
+				this.logMaintenance("model-error", {
+					provider: parameters.settings.provider,
+					model: parameters.settings.model,
+					stopReason: response.stopReason,
+					errorMessage: "Auto Memory 模型没有返回内容",
+				});
+				throw new Error("Auto Memory 模型没有返回内容");
+			}
+			this.logMaintenance("model-response", {
+				provider: parameters.settings.provider,
+				model: parameters.settings.model,
+				stopReason: response.stopReason,
+				outputLength: output.length,
+				outputPreview: truncateLogPreview(output),
+			});
 			return output;
+		} catch (error) {
+			// completeSimple 本身抛错（如鉴权/超时/限流/断网）：记下完整堆栈与上下文。
+			this.logMaintenance("model-error", {
+				provider: parameters.settings.provider,
+				model: parameters.settings.model,
+				...describeMaintenanceError(error),
+			});
+			throw error;
 		} finally {
 			clearTimeout(timeout);
 			this.disposeController.signal.removeEventListener("abort", onDispose);
@@ -1389,6 +1618,7 @@ export class AutoMemoryManager {
 		let cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
 		let shouldConsolidate = false;
 		let didWork = false;
+		this.logMaintenance("extract-start", { totalEntries: entries.length, cursor });
 		for (let start = 0; start < entries.length; start += EXTRACT_CHUNK_ENTRIES) {
 			this.assertActive();
 			const chunk = entries.slice(start, start + EXTRACT_CHUNK_ENTRIES);
@@ -1396,6 +1626,15 @@ export class AutoMemoryManager {
 			if (!transcript.text || !transcript.lastEntryId) continue;
 			didWork = true;
 			const existing = this.loadEntries();
+			this.logMaintenance("extract-chunk-start", {
+				chunkIndex: Math.floor(start / EXTRACT_CHUNK_ENTRIES),
+				chunkSize: chunk.length,
+				transcriptLength: transcript.text.length,
+				transcriptPreview: truncateLogPreview(transcript.text),
+				existingCount: existing.length,
+				cursor,
+				lastEntryId: transcript.lastEntryId,
+			});
 			const output = await this.runModel({
 				cwd: this.options.cwd,
 				settings,
@@ -1408,18 +1647,51 @@ export class AutoMemoryManager {
 			});
 			this.assertActive();
 			const operations = parseMemoryOperations(output);
-			if (operations === undefined) throw new Error("Auto Memory 返回了无效的操作格式");
-			await this.applyOperations(operations, false, existing, transcript.lastEntryId);
+			if (operations === undefined) {
+				this.logMaintenance("extract-parse-failure", {
+					chunkIndex: Math.floor(start / EXTRACT_CHUNK_ENTRIES),
+					outputLength: output.length,
+					outputPreview: truncateLogPreview(output),
+					lastEntryId: transcript.lastEntryId,
+				});
+				throw new Error("Auto Memory 返回了无效的操作格式");
+			}
+			this.logMaintenance("extract-parse-success", {
+				chunkIndex: Math.floor(start / EXTRACT_CHUNK_ENTRIES),
+				operationCount: operations.length,
+				lastEntryId: transcript.lastEntryId,
+			});
+			try {
+				await this.applyOperations(operations, false, existing, transcript.lastEntryId);
+				this.logMaintenance("extract-apply-success", {
+					chunkIndex: Math.floor(start / EXTRACT_CHUNK_ENTRIES),
+					operationCount: operations.length,
+					lastEntryId: transcript.lastEntryId,
+				});
+			} catch (error) {
+				this.logMaintenance("extract-apply-error", {
+					chunkIndex: Math.floor(start / EXTRACT_CHUNK_ENTRIES),
+					operationCount: operations.length,
+					lastEntryId: transcript.lastEntryId,
+					...describeMaintenanceError(error),
+				});
+				throw error;
+			}
 			this.assertActive();
 			const updated = await this.updateState(transcript.lastEntryId);
 			cursor = transcript.lastEntryId;
 			if (updated.shouldConsolidate) shouldConsolidate = true;
 		}
-		if (!didWork) return;
+		if (!didWork) {
+			this.logMaintenance("extract-noop", { totalEntries: entries.length });
+			return;
+		}
+		this.logMaintenance("extract-done", { totalEntries: entries.length, shouldConsolidate });
 		if (shouldConsolidate) {
 			try {
 				await this.consolidate(settings);
 			} catch (error) {
+				this.logMaintenance("extract-consolidate-error", { ...describeMaintenanceError(error) });
 				this.reportError("consolidate", error);
 				this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
 			}
@@ -1432,6 +1704,7 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
+		this.logMaintenance("consolidate-start", { entriesCount: entries.length, revision });
 		// 稳定性切块：按 20 张一批独立存，成一批落一批，坏一批只记那一批的错继续往下走，
 		// 最后有错再抛出来变黄并保留 pending，下次定时器接着整。
 		const sorted = entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -1442,8 +1715,15 @@ export class AutoMemoryManager {
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
 		let firstError: unknown;
-		for (const batch of batches) {
+		for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+			const batch = batches[batchIndex];
 			if (batch.length === 0) continue;
+			this.logMaintenance("consolidate-batch-start", {
+				batchIndex,
+				batchCount: batches.length,
+				batchSize: batch.length,
+				batchIds: batch.map((entry) => entry.id),
+			});
 			try {
 				const snapshot = this.loadEntries();
 				const output = await this.runModel({
@@ -1454,19 +1734,55 @@ export class AutoMemoryManager {
 				});
 				this.assertActive();
 				const operations = parseMemoryOperations(output);
-				if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+				if (operations === undefined) {
+					this.logMaintenance("consolidate-parse-failure", {
+						batchIndex,
+						batchSize: batch.length,
+						outputLength: output.length,
+						outputPreview: truncateLogPreview(output),
+					});
+					throw new Error("Auto Memory 整理器返回了无效的操作格式");
+				}
 				const ids = new Set(batch.map((entry) => entry.id));
-				await this.applyOperations(
-					operations.filter((operation) => !!operation.id && ids.has(operation.id)),
-					true,
-					snapshot,
-				);
+				const filtered = operations.filter((operation) => !!operation.id && ids.has(operation.id));
+				try {
+					await this.applyOperations(filtered, true, snapshot);
+					this.logMaintenance("consolidate-batch-done", {
+						batchIndex,
+						batchSize: batch.length,
+						operationCount: operations.length,
+						appliedCount: filtered.length,
+						result: "ok",
+					});
+				} catch (error) {
+					this.logMaintenance("consolidate-batch-done", {
+						batchIndex,
+						batchSize: batch.length,
+						operationCount: operations.length,
+						result: "failed",
+						...describeMaintenanceError(error),
+					});
+					throw error;
+				}
 			} catch (error) {
 				this.reportError("consolidate", error);
 				if (firstError === undefined) firstError = error;
 			}
 		}
-		if (firstError !== undefined) throw firstError;
+		if (firstError !== undefined) {
+			this.logMaintenance("consolidate-done", {
+				entriesCount: entries.length,
+				batchCount: batches.length,
+				result: "failed",
+				...describeMaintenanceError(firstError),
+			});
+			throw firstError;
+		}
+		this.logMaintenance("consolidate-done", {
+			entriesCount: entries.length,
+			batchCount: batches.length,
+			result: "ok",
+		});
 		await this.withLock(async () => {
 			const state = readState(this.paths.statePath);
 			const value = state.consolidation[this.paths.workspaceId];
