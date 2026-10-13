@@ -20,7 +20,7 @@
 
 ## UI 与平台
 
-新的 interactive mode 或 UI 先复用 `packages/tui` contract；平台适配留在 `platform`/`bun`/TUI native 边界。Windows、Bun、真实终端和外部服务要分别验证。
+新的 Web UI 或运行模式先复用现有 Web mode（`src/modes/web/`）与浏览器前端（包根 `web/`）的契约；平台适配留在 `platform`/`bun` 边界。Windows、Bun 和外部服务要分别验证。
 
 ## 完成条件
 

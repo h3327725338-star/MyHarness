@@ -23,6 +23,6 @@
 
 - `packages/ai/test/system-prompt-format.test.ts` 检查全部 59 个内置正文资源的英文与标题/列表板块格式，不检查根目录的维护文档，也不限制动态注入的项目文件、技能或用户内容。
 - 静态核对只能证明文件和 loader/composer 的关系；不能证明外部 Provider 已收到新 Prompt。
-- 测试通过只能证明测试覆盖的 loader/composer 行为；不能替代真实 CLI、OAuth 或模型请求验证。
+- 测试通过只能证明测试覆盖的 loader/composer 行为；不能替代真实 Web 启动、OAuth 或模型请求验证。
 - `MYHARNESS_SYSTEM_PROMPT_DIR` 是替代目录，不是缺失文件的回退目录；文档和测试都应保持这一点。
 - 可由机器判断的仓库开发和 CI 约束应由 workflow、脚本和测试执行，不能只依赖本目录中的 Prompt 文本。

@@ -74,7 +74,7 @@ This is progressive disclosure: only descriptions are always in context, full in
 
 When skill commands are enabled and skills are installed, they appear as named entries in command completion. Arguments entered after a selected skill are appended to the skill content as plain arguments.
 
-Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
+Toggle skill commands via Settings in the Web UI or in `settings.json`:
 
 ```json
 {

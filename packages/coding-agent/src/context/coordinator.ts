@@ -37,8 +37,14 @@ export interface AgentSessionContextHost {
 
 /**
  * Coordinates the canonical context budget used by prompts, compaction and UI.
- * The session still decides when to call it; this object owns the cached
- * provider projection and concurrent budget-check gate.
+ *
+ * Intent: single source of truth for "how full is the context" (`ContextBudgetSnapshot`).
+ * Boundary: owns the cached provider projection and the concurrent budget-check gate;
+ * it never runs compaction itself. The session decides when to call `ensure()`/`build*()`
+ * and performs the actual compaction via `SessionCompactionRunner`.
+ * Contract: `ensure()` throws `ContextBudgetBlockedError` when the request must not reach
+ * the provider; `remember()`/`resetAfterCompaction()` bracket a successful compaction so the
+ * next check does not repeat work. Credentials and extension veto stay with `AgentSession`.
  */
 export class AgentSessionContextCoordinator {
 	private providerEstimate:

@@ -4,7 +4,7 @@
 
 ### 职责
 
-模型能调用的内置工具都在这里：每个工具的参数 schema、执行、结果结构，以及（单独放的）终端展示。工具的执行不依赖任何界面。
+模型能调用的内置工具都在这里：每个工具的参数 schema、执行、结果结构。工具的执行不依赖任何界面；对外公开的工具定义见 `presentation/public.ts`。
 
 ### 顶层文件
 
@@ -20,7 +20,6 @@
 | `sub-agent.ts` | `agent` 工具：启动只读的 Explore 子进程（前台或后台批次），通过 NDJSON stdin 下发任务与“收敛提醒” steering 消息，收集结果、超时与停滞检测；只有 stall watchdog、墙钟超时、`maxTurns` 和取消会真正终止任务，重复操作/连续工具失败/无新信息只注入提醒；带 `questions` 的任务要求逐项回答并附 `## Completion checklist`，缺失即记为 `partial`（`stopReason: "incomplete_answer"`）；`runExploreBatch()` 也被 `workflow/` 使用 |
 | `symbols.ts` | `symbols` 工具：符号、定义、引用、诊断等查询 |
 | `symbols-runtime.ts` | `symbols` 工具需要的运行时端口：索引、路由、安装状态 |
-| `render-utils.ts` | 旧路径的兼容 re-export（实际在 `presentation/render-utils.ts`） |
 
 ### contracts/
 
@@ -49,6 +48,8 @@
 | `job-tools.ts` | `job_list`、`job_output`、`job_kill` 三个内置工具的定义与创建 |
 | `session-scope.ts` | 会话所有权作用域解析：优先读取 `ctx.sessionManager.getSessionId()`，退回 cwd，隔离不同会话的任务和状态 |
 | `shell-session.ts` | `preserve_state` 状态保持机制：尾部探针构建、探针解析与输出剥离、环境变量差分、跨进程调用状态注入 |
+| `delegated-write-guard.ts` | 读写型子智能体的落笔边界：文件/Glob 参数与 shell（可执行文件、内联代码、`cd`、重定向、变量路径）必须留在任务 worktree 内；`agent`/`workflow`/`ultracode` 及同类派发工具一律拦截，标记 `[delegated-write-guard]` |
+| `null-redirect-guard.ts` | `findBashNullDeviceRedirect()`：bash 里 `>nul` 会建出真文件并破坏 Git，属引号感知的纯扫描，不执行命令 |
 | `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：按 shell 序列段（管道、`&&`、`;`）逐段用只读允许列表 + 危险选项/拒绝列表判定，诊断重定向（`2>/dev/null`）与临时路径写入不影响判定，可选的模型裁决；拦截结果带 `[read-only-guard]` 标记和具体原因，不计入连续工具失败 |
 
 ### memory/ — 记忆工具
@@ -87,23 +88,23 @@
 | `cache.ts` | 会话范围的搜索缓存 |
 | `errors.ts`、`types.ts` | 错误与结果类型 |
 
-### presentation/ — 终端展示
+### presentation/ — 对外公开的工具定义
 
-每个内置工具一个渲染器（`bash.ts`、`edit.ts`、`read.ts` …），`index.ts` 的 `getBuiltinToolRenderer()` 按名字取渲染器，`public.ts` 把“执行契约 + 渲染器”合成对外公开的工具定义，`render-utils.ts` 是共用的展示小工具。
+`public.ts` 只导出执行契约用的工具定义工厂（不含终端渲染器）。各内置工具的终端展示由上层按需组合，不在本目录维护。
 
 ### 对外接口
 
-`src/index.ts` 导出 `tools/registry.ts`、`tools/contracts`、`tools/presentation/public.ts`、`tools/files/edit-diff.ts`。
+`src/index.ts` 导出 `tools/registry.ts`、`tools/contracts`、`tools/presentation/public.ts`（对外公开的工具定义出口）、`tools/files/edit-diff.ts`。
 
 ### 依赖
 
-- 依赖：`system-prompts/loader`（工具说明文案）、`utils`、`symbols/*`（`symbols` 工具）、`agent/runtime/auto-memory.ts`（记忆工具的读取与排序）、`session/memory`（记忆路径）、`workflow`（登记）、`agent/delegation`、`agent/runtime`（`role.ts`、`messages.ts`）、`extensions`（`session-tool-registry.ts` 用 runner、wrapper 和工具类型）、`observability/runtime-trace.ts`、`providers/credentials`（GitHub 连接）、`session/manager`（结果落盘位置）、`config/settings`（Web Search 设置）；`presentation/` 额外依赖 `modes/interactive` 的主题与组件、`@myharness/tui`。
-- 被依赖：`agent/runtime`、`extensions`、`workflow`、`modes/*`、`exports/html`、`symbols/runtime`、`context`。
+- 依赖：`system-prompts/loader`（工具说明文案）、`utils`、`symbols/*`（`symbols` 工具）、`agent/runtime/auto-memory.ts`（记忆工具的读取与排序）、`session/memory`（记忆路径）、`workflow`（登记）、`agent/delegation`、`agent/runtime`（`role.ts`、`messages.ts`）、`extensions`（`session-tool-registry.ts` 用 runner、wrapper 和工具类型）、`observability/runtime-trace.ts`、`providers/credentials`（GitHub 连接）、`session/manager`（结果落盘位置）、`config/settings`（Web Search 设置）。
+- 被依赖：`agent/runtime`、`extensions`、`workflow`、`modes/web`、`exports/html`、`symbols/runtime`、`context`。
 
 ## 维护
 
-- 新增工具：写执行文件（放到合适的子目录）→ 在 `registry.ts` 登记名字和工厂 → 在 `presentation/` 加渲染器 → 在根目录 `system-prompts/tools/<名字>/` 加提示片段。
-- 执行文件不能导入 `presentation/`、`modes/interactive` 或 `@myharness/tui`。
+- 新增工具：写执行文件（放到合适的子目录）→ 在 `registry.ts` 登记名字和工厂 → 对外公开的定义经 `presentation/public.ts` 转出 → 在仓库根 `system-prompts/common/tools/<名字>/` 加提示片段。
+- 执行文件不能导入 `presentation/`（展示出口只转出定义，不被执行文件反向依赖）。
 - 工具名、参数名、结果的 `details` 结构会被写进 Session 并被界面和导出解析，不要随意改；确需改动时用 `prepareArguments` 兼容旧输入。
 - Shell 执行、输出截断、结果落盘各只有一份实现，新工具复用它们。
 - 文件写操作（`edit`、`write`）修改已存在文件时要求“先读后改”，改前校验读取状态与文件是否过期，写后刷新状态；非本地文件系统（自定义 operations）跳过校验。`apply_patch` 的 Update 与 Delete 同样执行这一检查（它只使用本地文件系统）。

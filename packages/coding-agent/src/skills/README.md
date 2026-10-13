@@ -27,6 +27,6 @@
 ## 维护
 
 - 本目录只发现、解析和展开。项目级 Skill 是否加载由 `application/resource-loader.ts` 按 Project Trust 决定。
-- Skill 名称校验和同名冲突的优先级是已有行为，改动前看 `skills.test.ts` 和 `regressions/2781-skill-collision-precedence.test.ts`。
+- Skill 名称校验和同名冲突的优先级是已有行为，改动前看 `skills.test.ts`（旧 `regressions/2781-skill-collision-precedence.test.ts` 已删除）。
 - `/skill:名称` 的展开在 `invocation.ts`，由 `AgentSession` 在提交、steer、follow-up 时调用。展开后的 `<skill …>` 块格式被界面和 HTML 导出解析，不能随意改。`parseSkillBlock` 仍从 `agent/runtime/agent-session.ts` 和 `src/index.ts` 导出，保持原有导入路径可用。
-- 用户文档：`docs/skills.md`。相关测试：`skills.test.ts`、`sdk-skills.test.ts`。
+- 用户文档：`packages/coding-agent/docs/skills.md`。相关测试：`skills.test.ts`、`sdk-skills.test.ts`、`export-html-skill-block.test.ts`（导出侧解析）。

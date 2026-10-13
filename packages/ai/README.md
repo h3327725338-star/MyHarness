@@ -389,17 +389,7 @@ const credential = {
 
 ### Environment Variables
 
-An explicitly configured Provider can resolve these conventional env vars in Node.js; in browsers pass `apiKey` explicitly:
-
-| Provider | Environment Variable(s) |
-|----------|------------------------|
-| Anthropic | `ANTHROPIC_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` |
-| Google Gemini | `GEMINI_API_KEY` |
-| OpenRouter | `OPENROUTER_API_KEY` |
-| xAI | `XAI_API_KEY` |
-
-The full per-provider mapping lives in `src/env-api-keys.ts`. Custom providers declare their own env vars through `envApiKeyAuth()` or a custom `ApiKeyAuth`. The legacy per-provider env mapping (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) is retained on the compat entrypoint via `getEnvApiKey()`.
+This tree ships no built-in Provider-to-environment-variable map. A manually configured Provider declares its own env vars through `envApiKeyAuth()` or a custom `ApiKeyAuth`; in browsers pass `apiKey` explicitly. `src/env-api-keys.ts` only exposes `findEnvKeys()`/`getEnvApiKey()` compatibility stubs that return `undefined`, and the compat entrypoint's `getEnvApiKey()` likewise resolves no key.
 
 ## Tools
 
@@ -1068,6 +1058,9 @@ interface OpenAICompletionsCompat {
   thinkingFormat?: 'openai' | 'openrouter' | 'deepseek' | 'together' | 'zai' | 'qwen' | 'chat-template' | 'qwen-chat-template' | 'string-thinking' | 'ant-ling'; // Format for reasoning param: 'openai' uses reasoning_effort, 'openrouter' uses reasoning: { effort }, 'deepseek' uses thinking: { type } plus reasoning_effort when supported, 'together' uses reasoning: { enabled } plus reasoning_effort when supported, 'zai' uses thinking: { type }, 'qwen' uses enable_thinking, 'chat-template' uses configurable chat_template_kwargs, 'qwen-chat-template' uses chat_template_kwargs.enable_thinking and preserve_thinking, 'string-thinking' uses top-level thinking, 'ant-ling' uses reasoning: { effort } only for mapped efforts (default: openai)
   chatTemplateKwargs?: Record<string, string | number | boolean | null | { '$var': 'thinking.enabled' | 'thinking.effort'; omitWhenOff?: boolean }>; // chat_template_kwargs values; use $var for myharness-controlled thinking values
   cacheControlFormat?: 'anthropic';  // Anthropic-style cache_control on system prompt, last tool, and last user/assistant text content
+  zaiToolStream?: boolean; // Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas (default: false)
+  deferredToolsMode?: 'kimi'; // Provider-specific deferred tool serialization mode
+  supportsLongCacheRetention?: boolean; // Whether provider supports long prompt cache retention (default: true)
   openRouterRouting?: OpenRouterRouting; // OpenRouter routing preferences (default: {})
   vercelGatewayRouting?: VercelGatewayRouting; // Vercel AI Gateway routing preferences (default: {})
 }

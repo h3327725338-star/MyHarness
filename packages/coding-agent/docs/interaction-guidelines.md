@@ -4,7 +4,7 @@
 
 ## 适用范围
 
-MyHarness 当前的产品 UI 是 TypeScript/ESM 的终端 TUI：`InteractiveMode` 负责产品页面和流程，`packages/tui` 负责终端渲染、键盘输入、焦点、overlay 和可复用组件。因此本文件把 Windows 桌面应用的语义映射到终端等价物；它不声称终端组件具有浏览器 DOM 或原生 WinUI 的 ARIA role。
+MyHarness 当前的产品 UI 是本机浏览器 Web UI，交互见 [Web UI](web-ui.md)；旧终端组件不属于当前产品。
 
 新增或修改交互时，先确认数据语义，再选择下表中的模式。相同语义必须使用相同模式；只有数据关系、提交时机或风险不同，才允许使用不同模式。
 
@@ -75,7 +75,7 @@ MyHarness 当前的产品 UI 是 TypeScript/ESM 的终端 TUI：`InteractiveMode
 
 ## Keyboard、Focus 和 Accessibility
 
-终端 TUI 的等价键盘 contract：
+Web UI 的等价键盘 contract：
 
 - 列表使用 Up/Down 移动，Enter 和 Space 激活当前项；Tab 顺序仅在组件明确支持时使用；
 - Esc 在子页、输入页和确认页表示取消/返回，不提交草稿；
@@ -85,7 +85,7 @@ MyHarness 当前的产品 UI 是 TypeScript/ESM 的终端 TUI：`InteractiveMode
 - disabled 项不得响应 Enter/Space，也不得仅靠颜色表达不可用；
 - 渲染行必须遵守传入宽度，长状态或错误应截断/换行而不破坏操作提示。
 
-这些规则对应 WAI-ARIA APG 中 switch、checkbox、radio、combobox、dialog 和 keyboard interface 的核心行为；在终端中实现的是相同的键盘、焦点、提交和取消语义，而不是复制 DOM role。
+这些规则对应 WAI-ARIA APG 中 switch、checkbox、radio、combobox、dialog 和 keyboard interface 的核心行为；在 Web UI 中实现的是相同的键盘、焦点、提交和取消语义。
 
 ## 允许偏离的场景
 

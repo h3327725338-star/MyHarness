@@ -12,7 +12,9 @@
 | --- | --- |
 | `types.ts` | 会话文件头、全部条目类型（消息、模型切换、Thinking 切换、压缩、分支摘要、自定义条目、标签、会话信息）、树节点、`SessionInfo`、诊断类型、`CURRENT_SESSION_VERSION` |
 | `manager/index.ts` | `SessionManager`：创建/打开/继续/fork/导入会话；追加条目；分支与叶子指针；写锁；未绑定会话（`isUnbound()`、`listUnbound()`、`createLike()`）；会话列表 |
-| `manager/cwd.ts` | 会话记录的工作目录不存在时的检查与提示 |
+| `manager/cwd.ts` | 会话记录的工作目录不存在时的检查与提示（`getMissingSessionCwdIssue` 只读检查、`assertSessionCwdExists` 不存在时抛 `MissingSessionCwdError`） |
+| `mode-state.ts` | `ModeStateStore`：coding/general 两套本地偏好（上次会话、默认模型、草稿、个人提示），带锁读写 `chat-mode-state.json`，不是第二套 Settings |
+| `artifacts/store.ts` | 会话 `artifacts/`（reports/tests/temporary）的创建、按会话列举、派生索引刷新、删除聊天后的孤儿标记；读写前拒绝 symlink/junction |
 | `projection/index.ts` | 从条目树到上下文：`buildSessionContext()`、`buildContextEntries()`、`getLatestCompactionEntry()`、环检测 |
 | `storage/jsonl/index.ts` | JSONL 的解析与容错、文件头读取、追加与重写、会话目录与元数据、列表扫描、搬迁 |
 | `storage/jsonl/file-operations.ts` | `deleteSessionFile()`，删除聊天时保留独立 memory 目录 |

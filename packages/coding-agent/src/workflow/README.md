@@ -16,11 +16,11 @@
 ### 依赖
 
 - 依赖：`tools/sub-agent.ts`、`tools/contracts`、`tools/tool-definition-wrapper.ts`、`tools/tool-result-persistence.ts`、`ultracode/profile.ts`、`observability/runtime-trace.ts`。
-- 被依赖：`tools/registry.ts`（登记工具）、`tools/presentation/workflow.ts`（展示）、`agent/runtime`（保存运行期控制句柄）、`modes/interactive`。
+- 被依赖：`tools/registry.ts`（登记工具）、`tools/presentation/public.ts`（展示出口，经由 `workflow/tool.ts` 转出引擎定义）、`agent/runtime`（保存运行期控制句柄）、`modes/web`。
 
 ## 维护
 
 - 子任务必须保持只读：不能修改文件，也不能再创建子 Agent。这个约束由 `tools/sub-agent.ts` 的工具白名单和 `tools/shell/read-only-guard.ts` 执行，改引擎时不要绕开。
-- 执行和展示分开：进度的数据结构在 `engine.ts`，怎么画在 `tools/presentation/workflow.ts`。
+- 执行和展示分开：进度的数据结构在 `engine.ts`；展示出口在 `tools/presentation/public.ts`（转出本引擎的工具定义），具体前端渲染在 `web/` 与 `modes/web`。
 - 主任务结束或被取消时，`AgentSession` 会通过 `WorkflowToolControls.killWorkflow()` 结束仍在运行的 workflow；新增控制能力时保持这条取消路径。
 - 相关测试：`workflow.test.ts`、`sub-agent.test.ts`、`test/suite/background-task-cascade.test.ts`。

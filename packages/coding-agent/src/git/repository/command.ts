@@ -130,6 +130,15 @@ function createImmediateFileFailure(
 	};
 }
 
+/**
+ * Run Git asynchronously and capture output. Never throws on Git failure: check `result.ok`.
+ *
+ * Preconditions: `git` on PATH. Timeouts/aborts kill the whole process tree.
+ * Postcondition: `failureKind`/`error` are set exactly when `ok` is false; credentials in URLs are redacted.
+ *
+ * @param args Git argv without the leading `git`.
+ * @param options cwd/timeout/signal/env/stdio; default timeout is `DEFAULT_GIT_TIMEOUT_MS`.
+ */
 export function runGit(args: string[], options: GitCommandOptions = {}): Promise<GitCommandResult> {
 	if (options.signal?.aborted) {
 		return Promise.resolve(createImmediateFailure(args, "cancelled", "was cancelled"));
@@ -576,6 +585,10 @@ export function runGitToFile(
 	});
 }
 
+/**
+ * Run Git synchronously for metadata/text output (bounded by `MAX_SYNC_GIT_OUTPUT_BYTES`).
+ * Binary/larger output must use `runGitToFile()`. Never throws on Git failure: check `result.ok`.
+ */
 export function runGitSync(
 	args: string[],
 	options: Omit<GitCommandOptions, "signal" | "stdio"> & { input?: string } = {},
@@ -621,6 +634,7 @@ export function runGitSync(
 	};
 }
 
+/** Thrown only by the `*Checked` variants; carries the original argv plus the full result. */
 export class GitCommandError extends Error {
 	readonly args: string[];
 	readonly result: GitCommandResult;
@@ -633,12 +647,14 @@ export class GitCommandError extends Error {
 	}
 }
 
+/** Like `runGit`, but throws `GitCommandError` when `ok` is false. Use it for must-succeed flows. */
 export async function runGitChecked(args: string[], options: GitCommandOptions = {}): Promise<GitCommandResult> {
 	const result = await runGit(args, options);
 	if (!result.ok) throw new GitCommandError(args, result);
 	return result;
 }
 
+/** Like `runGitSync`, but throws `GitCommandError` when `ok` is false. Use it for must-succeed flows. */
 export function runGitSyncChecked(
 	args: string[],
 	options: Omit<GitCommandOptions, "signal" | "stdio"> = {},

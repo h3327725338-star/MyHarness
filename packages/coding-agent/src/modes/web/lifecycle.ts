@@ -1,5 +1,7 @@
 /**
- * Web UI server lifetime. The server exits once the last browser page has been
+ * Web UI server lifetime (transport-only coordination).
+ *
+ * Intent: the server owns exit timing, never task semantics. It exits once the last browser page has been
  * disconnected for the grace period; a page that reconnects in time (reload,
  * F5, a quickly reopened tab) cancels the countdown. The connection count comes
  * from the real SSE connections, so a crashed or force-closed browser is

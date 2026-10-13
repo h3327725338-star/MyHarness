@@ -129,7 +129,7 @@ The mode can be set globally via `toolExecution` in the agent config, or per-too
 
 When execution is cancelled while tools are running, running tools receive the abort signal. If a tool does not finish within `toolAbortGraceMs` (default: 20000ms), the loop stops waiting, records an error tool result with `details.errorCode: "TOOL_ABORT_TIMEOUT"`, and discards any later outcome from the abandoned tool. Pass `toolAbortGraceMs: Infinity` to wait indefinitely.
 
-The `beforeToolCall` hook runs after `tool_execution_start` and validated argument parsing. It can block execution. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
+The `beforeToolCall` hook runs after validated argument parsing and before `tool_execution_start`. It can block execution. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
 
 Tools can also return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
 

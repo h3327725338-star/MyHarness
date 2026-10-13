@@ -29,24 +29,24 @@
 | `utils.ts` | 对话序列化、文件操作清单、工具执行记录与用户锚点的延续信息、摘要系统提示 |
 | `session-compaction.ts` | `SessionCompactionRunner`：一个会话的一次压缩怎么做——选压缩模型与 Thinking 档位、准备切分、让扩展否决或替换、生成并写入检查点、重建上下文和预算、通知扩展。手动和自动压缩共用 |
 | `tree-navigation.ts` | `navigateSessionTree()`：在会话树里把叶子移到另一个条目，需要时对离开的分支生成摘要 |
-| `index.ts` | 出口 |
+| `index.ts` | 出口：只重导出 `branch-summarization.ts`、`compaction.ts`、`utils.ts`。`session-compaction.ts` 与 `tree-navigation.ts` 是会话生命周期协调模块，由 `AgentSession` 直接导入，不经此出口 |
 
 `session-compaction.ts` 和 `tree-navigation.ts` 不导入扩展或 Provider：询问扩展、取凭证、查压缩模型都通过各自的 Host 回调，由 `AgentSession` 提供。压缩何时运行、如何取消、向前端发什么事件仍由 `AgentSession` 决定。
 
 ### 对外接口
 
-`src/index.ts` 导出 `context/compact`、`context-items.ts`、`file-diff.ts`、`file-presentation.ts`。`extensions/api-entry.ts` 也向扩展提供压缩相关函数。
+`src/index.ts` 导出 `context/compact`（即 `index.ts` 的三个纯函数模块）、`context-items.ts`、`file-diff.ts`、`file-presentation.ts`。`extensions/api-entry.ts` 只重导出其中的 `serializeConversation` 给扩展用；会话级协调（`SessionCompactionRunner`、`navigateSessionTree()`、`AgentSessionContextCoordinator`）不进公共导出，由 `AgentSession` 持有。
 
 ### 依赖
 
 - 依赖：`agent/runtime`（`messages.ts`、`role.ts`）、`session`（类型、projection、manager 类型）、`config/settings`、`git/repository/integration.ts`（差异）、`tools`（路径和截断工具）、`system-prompts/loader`。
-- 被依赖：`agent/runtime`、`application`、`session/projection`（`compact/utils.ts`）、`system-prompts/composer`、`modes/*`、`extensions`、`config/settings`、`cli`。
+- 被依赖：`agent/runtime`（预算协调、压缩执行、树导航）、`application`（项目上下文与角色过滤）、`session/projection`（`compact/utils.ts`）、`system-prompts/composer`（角色过滤）、`modes/web`（用量明细与窗口解析）、`extensions`（`api-entry.ts` 的 `serializeConversation`、`runtime/types.ts` 的压缩类型）、`config/settings`（窗口设置类型与规范化）、`startup/args`（窗口参数解析）。
 
 ## 维护
 
 - 所有“当前占了多少、还剩多少”的展示和判断都以 `ContextBudgetSnapshot` 为准，不要在界面里另算一套。
 - 压缩会写入 Session 的 `compaction` 条目并改变下一次请求可见的历史；改切分规则或摘要内容前，先看 `docs/compaction.md` 和压缩相关测试。
-- 压缩/摘要逻辑不依赖具体界面；不要导入 `modes/interactive`。
+- 压缩/摘要逻辑不依赖具体界面；不要导入 `modes/*`。
 - `AGENTS.md`/`CLAUDE.md` 不受 Project Trust 限制（除非 `--no-context-files`）；角色过滤由 `context-policy.ts` 和 composer 执行。
 - `session/projection` 依赖 `compact/utils.ts`，这两处有相互引用，改动时避免引入运行时的初始化顺序问题。
 - 相关测试：`compaction*.test.ts`、`context-budget.test.ts`、`context-window.test.ts`、`context-policy.test.ts`、`context-items.test.ts`、`file-diff.test.ts`、`file-presentation.test.ts`、`agent-session-compact*.test.ts`、`agent-session-context-*.test.ts`、`branch-summary-extensions.test.ts`。

@@ -20,7 +20,7 @@
 
 ## 维护
 
-- 本目录不依赖 `modes/interactive` 的 `Theme` 类；资源到终端主题的转换由界面一侧完成。
+- 本目录不依赖任何界面侧的 `Theme` 类；Web 外观由 `web/` + `modes/web` 负责，本目录只做主题 JSON 资源的加载校验。
 - 新增颜色键时要提供回退值，旧主题文件不能因此加载失败。
 - 项目级主题是否加载由 `application/resource-loader.ts` 按 Project Trust 决定。
-- 用户文档：`docs/themes.md`。相关测试：`theme-picker.test.ts`、`theme-detection.test.ts`、`theme-export.test.ts`。
+- 用户文档：`packages/coding-agent/docs/themes.md`。相关测试：`web-mode-theme.test.ts`、`web-color-theme-*.test.ts`（旧 `theme-picker/detection/export` 单测已删除）。

@@ -51,7 +51,7 @@ Additional session commands (resume, fork, clone, tree, export, share, etc.) may
 
 ## Resuming and Deleting Sessions
 
-`MyHarness -r` opens an interactive session picker at startup.
+`MyHarness -r` opens the Web session list at startup.
 
 In the picker you can:
 

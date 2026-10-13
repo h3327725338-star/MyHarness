@@ -1,3 +1,13 @@
+/**
+ * Cwd-bound service assembly (infrastructure only, no task lifecycle).
+ *
+ * Intent: build one coherent `AgentSessionServices` set (Settings, ModelRuntime,
+ * ResourceLoader, Code Intelligence) for an effective cwd. Services are recreated on
+ * every cwd switch; `AgentSession` is created separately via `createAgentSessionFromServices()`
+ * so model/tool/session options resolve against the target cwd first.
+ * Boundary: owns creation/disposal of owned resources only; injected services are not owned.
+ * Diagnostics are returned, never printed: the app layer decides how to surface them.
+ */
 import { join } from "node:path";
 import type { ThinkingLevel } from "@myharness/agent-core";
 import type { Model } from "@myharness/ai";

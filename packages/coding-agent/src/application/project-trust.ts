@@ -9,6 +9,12 @@ import { CONFIG_DIR_NAME } from "../config.ts";
 import type { LoadExtensionsResult, ProjectTrustContext } from "../extensions/compat/types.ts";
 import { emitProjectTrustEvent } from "../extensions/runtime/runner.ts";
 
+/**
+ * Product surface that asks the trust question. Only the Web UI remains: bootstrap starts
+ * the HTTP server first so Project Trust can be answered in the browser, then the runtime
+ * is created for the trusted cwd. Extension `project_trust` handlers run before the stored
+ * decision or the browser prompt and may decide without user interaction.
+ */
 export type AppMode = "web";
 
 export interface ResolveProjectTrustedOptions {

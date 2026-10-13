@@ -14,7 +14,7 @@
 
 - 不能把 historical 文档或旧路径重新当作当前 Prompt 文件。
 - 不能把 `/commit`、工具 schema、压缩 user message 或 Extension 自定义 Prompt 偷换成固定 system 文本。
-- 不能把静态文件存在写成 Provider 请求、CLI 启动或跨平台打包已经成功。
+- 不能把静态文件存在写成 Provider 请求、Web 启动或跨平台打包已经成功。
 
 ## 验收要求
 

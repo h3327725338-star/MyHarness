@@ -14,7 +14,6 @@
 | 文本与解析 | `frontmatter.ts`、`json.ts`（去注释）、`html.ts`（实体解码）、`ansi.ts`（去 ANSI）、`syntax-highlight.ts`、`changelog.ts` |
 | 图片 | `image-resize.ts` / `image-resize-core.ts` / `image-resize-worker.ts`、`image-convert.ts`、`image-process.ts`、`exif-orientation.ts`、`mime.ts`、`photon.ts`、`jxl-decode-worker.ts` |
 | 输入文件 | `file-preprocess.ts`（富文档转文本/页图）、`input-image-attachments.ts` |
-| 剪贴板 | `clipboard.ts`、`clipboard-image.ts`、`clipboard-native.ts` |
 | 桌面集成 | `open-browser.ts`、`popup-notification.ts`（任务结束弹窗的内容与命令） |
 | 自身信息 | `myharness-invocation.ts`（如何再次启动自己）、`myharness-user-agent.ts` |
 | 外部工具 | `tools-manager.ts`（`fd`、`rg` 等的定位与下载） |
@@ -33,4 +32,4 @@
 - `git.ts`、`git-command.ts` 是兼容入口，新代码直接从 `git/repository/` 导入。
 - `image-resize-worker.ts` 和 `jxl-decode-worker.ts` 是独立 worker 入口，被 `build:binary` 单独列为编译入口；改名要同步 `package.json`。
 - 原子写、进程树终止是多处依赖的安全基础，改动需要跑 `atomic-write-recovery.test.ts`、`bash-close-hang-windows.test.ts` 等。
-- 相关测试：`paths.test.ts`、`shell-command-lexer.test.ts`、`frontmatter.test.ts`、`clipboard*.test.ts`、`image-*.test.ts`、`file-preprocess.test.ts`、`popup-notification.test.ts`、`syntax-highlight.test.ts`、`changelog.test.ts`、`source-changes.test.ts`。
+- 相关测试：`paths.test.ts`、`shell-command-lexer.test.ts`、`frontmatter.test.ts`、`image-*.test.ts`、`file-preprocess.test.ts`、`popup-notification.test.ts`、`syntax-highlight.test.ts`、`changelog.test.ts`、`source-changes.test.ts`。

@@ -16,6 +16,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `model-resolver.ts` | 模型引用解析：`--model`/`--models` 的模式匹配、初始模型选择、从 Session 恢复模型 |
 | `session-model.ts` | `SessionModelController`：一个会话当前用哪个模型和 Thinking 档位。负责切换、循环（`--models` 范围或全部可用模型）、Provider 配置变更后的校正、热重载 Provider 配置 |
 | `request-auth.ts` | 压缩与分支摘要请求的凭证解析；没有 API Key 时给出用户指引 |
+| `request-timeouts.ts` | `sdkFirstByteTimeoutMs()`：按 Provider API 类型决定交给 SDK 的首字节超时（只有首字节计时的 SDK 才给，其他的留给 dispatcher 超时，避免长流被误杀） |
 | `auth-guidance.ts` | “没有模型 / 没有 API Key”时给用户的提示文案 |
 | `attribution.ts` | 合并 Provider 归因请求头 |
 | `balance-tracker.ts` | 支持余额接口的 Provider 的余额查询与轮询 |
@@ -33,6 +34,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `thinking-probe.ts` | 用真实的最小请求探测 Thinking Effort |
 | `store.ts` | 模型缓存（`models-store.json`） |
 | `disabled.ts` | Provider 启用/禁用策略 |
+| `index.ts` | models/ 出口 |
 | `registry.ts` | `ModelRegistry`：给扩展和部分界面用的兼容门面 |
 | `usage-ranking.ts` | 按使用次数排序模型 |
 
@@ -46,6 +48,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `api-key-collection.ts` | 一个 Provider 多个 API Key 的存储契约 |
 | `value-resolution.ts` | 配置值解析：字面量、环境变量、`!命令` |
 | `account-connections.ts` | `AccountConnections`：GitHub Connect（设备码登录），存 `account-connections.json` |
+| `index.ts` | credentials/ 出口 |
 | `web-search-keys.ts` | `WebSearchApiKeys`：搜索引擎 API Key 的独立私有文件 |
 
 ### recovery/ — Provider 故障恢复
@@ -53,9 +56,11 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | 文件 | 内容 |
 | --- | --- |
 | `policy.ts` | 哪些失败可恢复、恢复预算、恢复时发给模型的内部消息 |
+| `network-retry.ts` | `completeWithNetworkPolicy()`：一次性补全（提交信息等）复用主 Agent 同一套重试/退避/fallback 预算；有可见输出后不再自动重发 |
+| `index.ts` | recovery/ 出口 |
 | `coordinator.ts` | `ProviderRecoveryCoordinator`：本地任务在 Provider 会话失败后继续或重建会话，次数有上限 |
 | `fallback.ts` | `ModelFallbackCoordinator`：主模型重试和恢复都用完后，把当前任务交给 `fallbackModel` 设置的备用模型继续；备用模型也失败时给出主、备两边的原因；任务结束后切回主模型 |
-| `error-explanation.ts` | 把模型请求的原始错误（如 `520 status code (no body)`）翻译成中文原因和处理建议，供终端、Web UI、print mode 和任务结束状态显示；不影响重试判断 |
+| `error-explanation.ts` | 把模型请求的原始错误（如 `520 status code (no body)`）翻译成中文原因和处理建议，供 Web UI 和任务结束状态显示；不影响重试判断 |
 
 ### 对外接口
 
@@ -64,7 +69,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 ### 依赖
 
 - 依赖：`@myharness/ai`、`config/settings`、`src/config.ts`、`utils`、`observability/telemetry.ts`、`agent/runtime/defaults.ts`、`session/manager`（类型，`session-model.ts` 记录模型与 Thinking 变更）、`startup/args.ts`（类型）。
-- 被依赖：`agent/runtime`、`agent/vision`、`cli`、`modes/*`、`extensions/runtime`、`git/ci`、`tools/github`、`main.ts`。
+- 被依赖：`agent/runtime`、`agent/vision`、`modes/web`、`extensions/runtime`、`git/ci`、`tools`、`main.ts`。
 
 ## 维护
 

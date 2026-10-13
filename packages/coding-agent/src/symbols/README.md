@@ -66,7 +66,7 @@
 ### 依赖
 
 - 依赖：`config/settings`、`src/config.ts`、`utils/shell.ts`、`tools/symbols-runtime.ts`（服务接口类型）。
-- 被依赖：`tools/symbols.ts`、`tools/symbols-runtime.ts`、`agent/runtime/services.ts`、`modes/interactive`（安装状态界面）。
+- 被依赖：`tools/symbols.ts`、`tools/symbols-runtime.ts`、`agent/runtime/services.ts`、`modes/web`（安装状态界面）。
 
 ## 维护
 
@@ -75,4 +75,4 @@
 - 不假设机器上装了任何语言服务器。没有大小和 SHA-256 的归档一律拒绝下载。
 - 路径处理统一走 `path-semantics.ts`，不要在各处自己拼 URI 或比较路径。
 - 本目录和 `tools/symbols-runtime.ts` 之间存在已知的静态循环引用（类型层面），改动时注意不要变成运行时初始化问题。
-- 相关测试：`test/code-intelligence/`（lsp、language-server、semantic、router、runtime-manager、集成）、`symbols-tool-*.test.ts`。真实语言服务器的端到端验证需要已发布的归档，静态测试不能替代。
+- 相关测试：`test/code-intelligence/`（lsp、language-server、semantic、router、runtime-manager、集成）、`symbols-tool-*.test.ts`、`workflow.test.ts`（调查工具侧的 symbols 门控）。真实语言服务器的端到端验证需要已发布的归档，静态测试不能替代。

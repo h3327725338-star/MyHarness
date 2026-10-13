@@ -46,9 +46,9 @@
 
 ## 维护
 
-- 新增设置项：改 `types.ts`、`defaults.ts`、`manager.ts` 的 getter/setter；若改名或改结构，在 `migrations.ts` 加迁移。同步 `docs/settings.md`，需要出现在菜单里时再改 `startup/settings-menu.ts`。
+- 新增设置项：改 `types.ts`、`defaults.ts`、`manager.ts` 的 getter/setter；若改名或改结构，在 `migrations.ts` 加迁移。同步 `packages/coding-agent/docs/settings.md`，需要出现在菜单里时再改 `startup/settings-menu.ts`。
 - 项目设置受 Project Trust 控制：不受信任时不读取、不写入。不要绕过 `settings-access.ts`。
 - 写入必须走 `SettingsStorage`（文件锁 + 原子替换），不要在别处直接写 `settings.json`。
-- 路径函数是数据布局的唯一来源；改动会影响已有用户数据，需要配套迁移（见 `session/migrations/`、`data/`）并同步 `docs/STORAGE.md`。
+- 路径函数是数据布局的唯一来源；改动会影响已有用户数据，需要配套迁移（见 `session/migrations/`、`data/`）并同步仓库根 `docs/STORAGE.md`。
 - API Key、OAuth Token 不属于 Settings，放在 `providers/credentials/`。
 - 相关测试：`settings-manager*.test.ts`、`settings-project-override.test.ts`、`trust-manager.test.ts`、`config.test.ts`、`paths.test.ts`、`phase6-config-architecture.test.ts`。

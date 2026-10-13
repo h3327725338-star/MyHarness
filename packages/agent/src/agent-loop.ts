@@ -102,6 +102,15 @@ export function agentLoopContinue(
 	return stream;
 }
 
+/**
+ * Run a new-prompt loop: append `prompts` to a context copy, stream turns, execute
+ * tools, and drain steering/follow-up queues until idle.
+ *
+ * Contract: works in `AgentMessage` throughout and converts to LLM messages only
+ * at the provider boundary; returns only messages created by this call and never
+ * mutates the caller's arrays; `convertToLlm`/`shouldStopAfterTurn`/queue hooks
+ * must not throw (throwing aborts without the normal `agent_end` sequence).
+ */
 export async function runAgentLoop(
 	prompts: AgentMessage[],
 	context: AgentContext,
@@ -127,6 +136,13 @@ export async function runAgentLoop(
 	return newMessages;
 }
 
+/**
+ * Resume from existing context without adding a prompt (retry path).
+ *
+ * Contract: last context message must project to `user`/`toolResult` via
+ * `convertToLlm`; returns only messages created by this call; otherwise the
+ * same loop, event, and no-throw hook contracts as `runAgentLoop` apply.
+ */
 export async function runAgentLoopContinue(
 	context: AgentContext,
 	config: AgentLoopConfig,

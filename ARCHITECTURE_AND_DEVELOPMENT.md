@@ -67,7 +67,7 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 | `symbols/` | Semantic/LSP 代码导航、符号存储、语言服务器与模块安装 |
 | `system-prompts/` | 产品 prompt 组合与 loader；静态资源在仓库根同名目录 |
 | `modes/web/` | HTTP/SSE、WebHost、页面交互桥接与真实 Shell Terminal |
-| `exports/` | HTML / JSONL 数据导出，不是终端输出模式；Web 的 HTML 导出走 `html/replay/` 自包含离线回放，旧模板与 CLI `--export` 保留 |
+| `exports/` | HTML / JSONL 数据导出，不是终端输出模式；Web 的 HTML 导出走 `html/replay/` 自包含离线回放，旧模板与 Web 启动参数 `--export` 保留 |
 | `platform/` | HTTP dispatcher 与进程执行等平台能力 |
 | `web/`（package 根） | 浏览器页面、样式、前端状态和交互 |
 

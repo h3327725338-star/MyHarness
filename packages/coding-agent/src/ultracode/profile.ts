@@ -10,7 +10,15 @@ export interface InvestigationToolProfile {
 	promptGuidelines: string[];
 }
 
-/** Profiles are data; the execution engine is shared by Workflow and Ultracode. */
+/**
+ * Profiles are data; the execution engine is shared by Workflow and Ultracode.
+ *
+ * `promptSnippet` / `promptGuidelines` are loaded from the repo-root
+ * `system-prompts/common/tools/<workflow|ultracode>/` Markdown files via the
+ * logical IDs `tools/<kind>/snippet.md` and `tools/<kind>/guidelines.md`.
+ * `minPhases` is the only sequencing difference enforced by the engine
+ * (`workflow` >= 1, `ultracode` >= 2); sub-tasks stay read-only.
+ */
 export const INVESTIGATION_TOOL_PROFILES: Record<InvestigationToolKind, InvestigationToolProfile> = {
 	workflow: {
 		label: "Workflow",

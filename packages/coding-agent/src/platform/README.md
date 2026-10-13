@@ -17,11 +17,11 @@
 ### 依赖
 
 - 依赖：`utils/child-process.ts`、`utils/shell.ts`、`undici`。
-- 被依赖：`web.ts`、`main.ts`、`config/settings`、`extensions`、`modes/*`、`package-manager-cli.ts`。
+- 被依赖：`web.ts`、`main.ts`、`config/settings`、`extensions`（含 `extensions/packages/package-manager.ts`）、`modes/*`（现仅 `modes/web`）。
 
 ## 维护
 
 - 需要新的子进程或输出接管能力时加在这里，不要在工具或命令里再写一套。
-- `output-guard.ts` 影响 `--mode json` 的输出格式；改动后跑 `stdout-cleanliness.test.ts` 和 `print-mode.test.ts`。
-- 三个网络时限的默认值和范围同时被 Settings 和界面使用，修改时同步 `config/settings`、`modes/web/routes-settings.ts` 与 `docs/settings.md`。
+- `output-guard.ts` 影响 `--mode json` 的输出格式；改动后跑 `stdout-cleanliness.test.ts`（旧 `print-mode.test.ts` 已删除）。
+- 三个网络时限的默认值和范围同时被 Settings 和界面使用，修改时同步 `config/settings`、`modes/web/routes-settings.ts` 与 `packages/coding-agent/docs/settings.md`。
 - 相关测试：`exec.test.ts`、`http-dispatcher.test.ts`、`provider-connection.test.ts`（Provider 保活时间 / IP 协议）、`stdout-cleanliness.test.ts`。

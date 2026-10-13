@@ -82,7 +82,7 @@
 | Agent 项目规则、文档路由或开发入口 | `AGENTS.md`、`DOCUMENTATION_INDEX.md`、对应专题维护手册 |
 | package export、公共类型、Provider/API contract | 对应包的 README、`docs/index.md`、维护手册、架构手册 |
 | Agent 生命周期、Session JSONL、migration、持久化 | Agent/Coding Agent 维护手册、session 文档、相关测试 |
-| CLI、命令、配置、路径、启动方式 | Coding Agent `usage.md`、`settings.md`、`development.md`、Windows 文档 |
+| Web 启动命令、配置、路径、启动方式 | Coding Agent `usage.md`、`settings.md`、`development.md`、Windows 文档 |
 | Prompt 文件或加载顺序 | `system-prompts/README.md`、AI loader、Coding Agent composer |
 | 脚本、CI、发布、锁文件 | `scripts/README.md`、`docs/maintenance/github-automation.md`、根 `package.json` |
 | License、第三方或继承代码 | `LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`、对应源码 notice |

@@ -11,7 +11,13 @@ export interface WorkspaceSessionUseCaseHost {
 	switchWorkspace: (cwd: string) => Promise<{ cancelled: boolean }>;
 }
 
-/** Session and workspace flows used by the workspace management surface. */
+/**
+ * Session and workspace flows used by the workspace management surface.
+ *
+ * Cross-domain coordination: lists/deletes `session` files and drives replacement via the
+ * host's `AgentSessionRuntime` callbacks (`newSession`/`switchWorkspace`). Never touches
+ * `AgentSession` internals or frontend code directly.
+ */
 export class WorkspaceSessionUseCase {
 	private readonly host: WorkspaceSessionUseCaseHost;
 

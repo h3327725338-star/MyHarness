@@ -25,4 +25,4 @@
 - 项目级模板是否加载由 `application/resource-loader.ts` 按 Project Trust 决定，本目录不判断信任。
 - 保留每个模板的 `sourceInfo` 和诊断，界面靠它们显示来源与冲突。
 - 系统提示的内容与组装在 `system-prompts/`，不要合并到这里。
-- 用户文档：`docs/prompt-templates.md`。相关测试：`prompt-templates.test.ts`。
+- 用户文档：`packages/coding-agent/docs/prompt-templates.md`。相关测试：`prompt-templates.test.ts`。

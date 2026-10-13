@@ -13,6 +13,8 @@
 | `usage-totals.ts` | 用量与费用累计 |
 | `session-stats.ts` | `collectSessionUsageStats()`：统计一个会话全部条目（含已被压缩掉的历史）的消息数、工具调用数、Token 和费用 |
 | `cache-stats.ts` | Prompt 缓存未命中的检测与浪费估算 |
+| `request-timing.ts` | `RequestTimingTracker`：模型请求的耗时分段统计 |
+| `usage-measurements.ts` | `Measurement` / `CacheMeasurements`：`measureCache()`、`sumCache()`，供 `session-stats.ts` 汇总缓存命中 |
 | `diagnostic-sanitizer.ts` | 诊断文本脱敏（API Key、Token、Cookie 等），支持流式 |
 | `telemetry.ts` | 安装遥测开关 |
 | `timings.ts` | 启动耗时打点（`MYHARNESS_TIMING=1`） |
@@ -20,7 +22,7 @@
 ### 依赖
 
 - 依赖：`session/types.ts`、`config/settings`。
-- 被依赖：`agent/runtime`、`application`、`extensions/loader`、`modes/interactive`、`providers/runtime`、`tools`、`workflow`、`main.ts`。
+- 被依赖：`agent/runtime`、`application`、`extensions/loader`、`modes/web`、`providers/runtime`、`tools`、`workflow`、`main.ts`。
 
 ## 维护
 

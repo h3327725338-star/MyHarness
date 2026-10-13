@@ -30,7 +30,7 @@
 
 ### 依赖
 
-- 依赖：`agent/runtime`、`application`（用例、WorkspaceStore）、`cli`（命令表、设置菜单）、`config`、`context`（用量明细）、`extensions`（UI 契约）、`git/*`、`providers/*`、`session/*`、`skills/loader`、`utils`；可选依赖 `@lydell/node-pty`（终端）。
+- 依赖：`agent/runtime`、`application`（用例、WorkspaceStore）、`startup`（命令表、设置菜单）、`config`、`context`（用量明细）、`extensions`（UI 契约）、`git/*`（检查点、用例、工作区变更）、`providers/*`、`session/*`、`skills/loader`、`utils`；可选依赖 `@lydell/node-pty`（终端）。
 - 被依赖：`modes/index.ts`。
 
 ## 维护
@@ -40,5 +40,5 @@
 - `wire.ts` 只投影已有数据，不发明字段；前端不伪造后端没有返回的状态。
 - 新增 SSE 事件：在 `host.ts` 转发，在 `web/js/store.js` 消费。
 - 服务只接受回环连接并检查请求来源；凭证不离开服务端，浏览器只拿到标签和末四位。改 `http-server.ts` 或 Provider 路由时保持这些限制。
-- `host.ts` 的任务收尾流程与 `InteractiveMode` 对应，改其中一个时检查另一个。
+- `host.ts` 是唯一的会话宿主：任务收尾（变更检测、检查点结算、Auto Memory）只在这里与 `AgentSession` 衔接，改收尾语义时同时检查 `AgentSession` 的事件顺序（`agent_end` → 收尾 → `agent_settled`）与扩展事件。
 - 相关测试：`web-*.test.ts`（HTTP 安全、wire/changes/dialogs、前端纯逻辑、真实 runtime 的 HTTP/SSE 集成、终端、生命周期）。浏览器里的渲染与交互需要实际运行验证。

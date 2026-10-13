@@ -283,6 +283,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 	}
 
+	/**
+	 * Bootstrap pass for the trust decision: load with project settings forced untrusted so
+	 * project-local extensions/packages stay out while user/global/CLI extensions remain.
+	 * The caller asks `resolveProjectTrusted()` with this result, then calls `reload()` for
+	 * the final trusted set. Does not touch skills/prompts/themes/context files.
+	 */
 	async loadProjectTrustExtensions(): Promise<LoadExtensionsResult> {
 		// Force untrusted project settings for the bootstrap pass. This keeps project-local
 		// extensions/packages out while still loading user/global and temporary CLI extensions.
@@ -291,6 +297,15 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return this.loadCurrentExtensionSet({ includeInlineFactories: true });
 	}
 
+	/**
+	 * Reload the full resource set for the current trust state.
+	 *
+	 * Lifecycle: optionally run the untrusted bootstrap + `resolveProjectTrust` first, then
+	 * resolve packages, load the final extension set (reusing the bootstrap result), and
+	 * refresh skills/prompts/themes/`AGENTS.md`/`SYSTEM.md` with role filtering and overrides.
+	 * Trust boundary: project-level resources load only when the settings manager reports
+	 * trusted; `AGENTS.md`/`CLAUDE.md` are exempt unless `noContextFiles`.
+	 */
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
 		resetTimings("extensions");
 

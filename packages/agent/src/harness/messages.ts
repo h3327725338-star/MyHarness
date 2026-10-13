@@ -121,6 +121,14 @@ export function createCustomMessage(
 	};
 }
 
+/**
+ * Harness boundary from persisted `AgentMessage` to provider `Message`.
+ *
+ * Intent: harness custom messages (`bashExecution`, `custom`, `branchSummary`,
+ * `compactionSummary`) are projected to `user` messages so the model sees plain
+ * transcript text; standard `user`/`assistant`/`toolResult` pass through untouched.
+ * Messages flagged `excludeFromContext` and unknown custom roles are dropped.
+ */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages
 		.map((m): Message | undefined => {

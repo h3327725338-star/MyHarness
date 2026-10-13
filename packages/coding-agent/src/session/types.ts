@@ -11,6 +11,12 @@ export function getChatMode(value: { mode?: unknown } | null | undefined): ChatM
 	return value?.mode === "general" ? "general" : "coding";
 }
 
+/**
+ * First line of a Session JSONL file. Authoritative identity for resume/listing.
+ *
+ * Only `SessionManager` and `storage/jsonl` write it; readers must tolerate legacy
+ * headers without `mode`/`workspaceId`.
+ */
 export interface SessionHeader {
 	type: "session";
 	version?: number;
@@ -24,12 +30,17 @@ export interface SessionHeader {
 	parentSession?: string;
 }
 
+/** Options for starting a fresh Session; `id` must pass `assertValidSessionId`. */
 export interface NewSessionOptions {
 	mode?: ChatMode;
 	id?: string;
 	parentSession?: string;
 }
 
+/**
+ * Common shape of every append-only tree entry. `parentId` links the branch tree;
+ * `null` means a root. Entries are never edited in place — branching only moves the leaf.
+ */
 export interface SessionEntryBase {
 	type: string;
 	id: string;
@@ -47,6 +58,7 @@ export interface SessionMessageTiming {
 	toolMs?: number;
 }
 
+/** One persisted agent message. `timing` is product metadata, never sent to the model. */
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
@@ -54,17 +66,24 @@ export interface SessionMessageEntry extends SessionEntryBase {
 	timing?: SessionMessageTiming;
 }
 
+/** Thinking-level switch on the active branch; later entries inherit it until the next switch. */
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
 	type: "thinking_level_change";
 	thinkingLevel: string;
 }
 
+/** Model switch on the active branch; later entries inherit it until the next switch. */
 export interface ModelChangeEntry extends SessionEntryBase {
 	type: "model_change";
 	provider: string;
 	modelId: string;
 }
 
+/**
+ * Compaction checkpoint. `firstKeptEntryId` is the first pre-checkpoint entry that stays
+ * visible; `replacementHistory` (when present) replaces the whole pre-checkpoint context.
+ * `details`/`usage` are diagnostics, never the billing source unless `usageSource` says so.
+ */
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	/** Actual billing source at request time; absent in legacy or extension-owned records. */
@@ -78,6 +97,7 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	replacementHistory?: AgentMessage[];
 }
 
+/** Summary of an abandoned branch path; kept for navigation, not for model context by itself. */
 export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
 	type: "branch_summary";
 	fromId: string;
@@ -87,23 +107,30 @@ export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
 	fromHook?: boolean;
 }
 
+/** Extension-owned entry. Unknown `customType` values must be preserved and ignored by projection. */
 export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
 	customType: string;
 	data?: T;
 }
 
+/** Bookmark marker for `targetId`. An absent/empty `label` clears the bookmark. */
 export interface LabelEntry extends SessionEntryBase {
 	type: "label";
 	targetId: string;
 	label: string | undefined;
 }
 
+/** Display name record. The latest non-empty `name` wins; empty names clear the title. */
 export interface SessionInfoEntry extends SessionEntryBase {
 	type: "session_info";
 	name?: string;
 }
 
+/**
+ * Extension message that may enter model context. `display` controls TUI visibility only;
+ * `excludeFromContext` keeps it persisted but out of the LLM context.
+ */
 export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 	type: "custom_message";
 	customType: string;
@@ -150,6 +177,7 @@ export interface SessionMetadataDiagnostic {
 	timestamp: string;
 }
 
+/** One tree node with resolved bookmark label; `children` are sorted oldest-first by `getTree()`. */
 export interface SessionTreeNode {
 	entry: SessionEntry;
 	children: SessionTreeNode[];
@@ -157,6 +185,7 @@ export interface SessionTreeNode {
 	labelTimestamp?: string;
 }
 
+/** Resolved runtime context for one leaf: model messages plus the effective thinking/model state. */
 export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel: string;

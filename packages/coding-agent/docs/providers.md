@@ -22,7 +22,7 @@
 
 ### Environment Variables 或 Auth File
 
-在 interactive mode 中，打开 `/settings` → **Providers**，选择一个已配置或注册的 Provider，然后管理它的 **API Keys**。Enabled Providers 和 saved-but-disabled Providers 会分组显示。一个 Provider 可以保存多个带名称的 keys，但该 Provider 下的所有 models 只使用手动选中的 current key；MyHarness 不会自动 rotate 或 fail over。Values 会以 plain text 保存在 `~/.myharness/agent/auth.json` 中，因此不要分享这个 file。legacy `vision-auth.json` 中已有的 entries 会被导入，但旧 file 不会删除。
+在 Web UI 中，打开 Settings → **Providers**，选择一个已配置或注册的 Provider，然后管理它的 **API Keys**。Enabled Providers 和 saved-but-disabled Providers 会分组显示。一个 Provider 可以保存多个带名称的 keys，但该 Provider 下的所有 models 只使用手动选中的 current key；MyHarness 不会自动 rotate 或 fail over。Values 会以 plain text 保存在 `~/.myharness/agent/auth.json` 中，因此不要分享这个 file。legacy `vision-auth.json` 中已有的 entries 会被导入，但旧 file 不会删除。
 
 可以通过 environment variable 设置 credentials。下面的 mapping 只会在对应的 configured、custom 或 extension Provider 已存在时生效；它本身不会创建 Provider。
 

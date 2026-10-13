@@ -30,7 +30,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `index.ts` | 用 jiti 加载扩展模块；`discoverAndLoadExtensions()`、`loadExtensionsCached()`、`createExtensionRuntime()` |
+| `index.ts` | 用 jiti 加载扩展模块；`discoverAndLoadExtensions()`、`loadExtensions()` / `loadExtensionsCached()`、`loadExtensionFromFactory()`、`createExtensionRuntime()`、`clearExtensionCache()`（实现见文件内，`resource-set.ts` 只调其中与缓存相关的三个） |
 | `resource-set.ts` | `ExtensionResourceLoader`：把已启用的路径和内联工厂变成一个 `LoadExtensionsResult` |
 
 ### packages/
@@ -59,7 +59,7 @@
 ### 依赖
 
 - 依赖：`agent/runtime/messages.ts`、`startup/slash-commands.ts`、`context/compact`、`session`（manager、类型）、`system-prompts/composer`、`tools`、`providers/models/registry.ts`、`platform/process/exec.ts`、`git/repository`（包管理拉取 Git 源）；不依赖终端 UI。
-- 被依赖：`application`（ResourceLoader）、`agent/runtime`、`cli`、`modes/*`、`tools/contracts`、`prompts`/`skills`/`themes` 的 loader（只用 `contracts`）。
+- 被依赖：`application`（ResourceLoader、Project Trust）、`agent/runtime`（会话装配与事件转发）、`modes/web`（对话框与信任 UI）、`tools`（工具契约与注册）、`prompts`/`skills`/`themes` 的 loader（只用 `contracts`）、`startup`（信任上下文与命令来源）、`exports/html`（工具类型）、`main.ts`。不依赖终端 UI。
 
 ## 维护
 

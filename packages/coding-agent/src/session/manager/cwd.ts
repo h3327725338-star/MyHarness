@@ -11,6 +11,12 @@ interface SessionCwdSource {
 	getSessionFile(): string | undefined;
 }
 
+/** Pure check: a stored session cwd that no longer exists. Never throws, never touches disk beyond `existsSync`.
+ *
+ * @param sessionManager Read source (`getCwd()` + optional `getSessionFile()`).
+ * @param fallbackCwd cwd to continue in when the stored one is gone.
+ * @returns Issue descriptor, or `undefined` when there is nothing to report (no file, empty cwd, or cwd exists).
+ */
 export function getMissingSessionCwdIssue(
 	sessionManager: SessionCwdSource,
 	fallbackCwd: string,
@@ -32,15 +38,18 @@ export function getMissingSessionCwdIssue(
 	};
 }
 
+/** One-line user-facing message for a missing session cwd. Pure string formatting, no side effects. */
 export function formatMissingSessionCwdError(issue: SessionCwdIssue): string {
 	const sessionFile = issue.sessionFile ? `\nSession file: ${issue.sessionFile}` : "";
 	return `Stored session working directory does not exist: ${issue.sessionCwd}${sessionFile}\nCurrent working directory: ${issue.fallbackCwd}`;
 }
 
+/** Short prompt variant for cwd selection UI. Pure string formatting, no side effects. */
 export function formatMissingSessionCwdPrompt(issue: SessionCwdIssue): string {
 	return `cwd from session file does not exist\n${issue.sessionCwd}\n\ncontinue in current cwd\n${issue.fallbackCwd}`;
 }
 
+/** Error carrying the cwd issue for callers that must stop resume and ask the user where to continue. */
 export class MissingSessionCwdError extends Error {
 	readonly issue: SessionCwdIssue;
 
@@ -51,6 +60,13 @@ export class MissingSessionCwdError extends Error {
 	}
 }
 
+/**
+ * Throw `MissingSessionCwdError` when the stored session cwd is gone.
+ *
+ * @param sessionManager Read source; no state is mutated.
+ * @param fallbackCwd Reported as the alternative cwd inside the error.
+ * @throws {MissingSessionCwdError} Only when `getMissingSessionCwdIssue()` finds an issue.
+ */
 export function assertSessionCwdExists(sessionManager: SessionCwdSource, fallbackCwd: string): void {
 	const issue = getMissingSessionCwdIssue(sessionManager, fallbackCwd);
 	if (issue) {

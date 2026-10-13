@@ -29,7 +29,10 @@
 
 ### commits/
 
-`message.ts`：根据真实 `git diff` 生成 conventional commits 风格的提交信息，不编造改动。
+| 文件 | 内容 |
+| --- | --- |
+| `message.ts` | 根据真实 `git diff` 生成 conventional commits 风格的提交信息，不编造改动 |
+| `ai-message.ts` | 大 diff 的分批概括与跨文件核对：按 token 预算切分、分组摘要再合并，引用必须可回溯到 diff 片段；只产出标题与正文，不写作者归因 |
 
 ### local-repositories/
 
@@ -37,7 +40,11 @@
 
 ### worktrees/
 
-`manager.ts`：`GitWorktreeManager`。列出、创建、合并、删除 Worktree。`remove()` 默认安全删除，调用方可以显式传 `force: true` 使用 `git worktree remove --force` 丢弃未提交内容；两种删除都只删除副本、保留分支，不跳过主副本保护。同步失败优先保留 Git 的 `stderr` 真正原因供界面解释。分支是否被副本占用仍由 Git 拒绝，分支 `-D` 也不能绕过，副本与分支须分别操作。
+| 文件 | 内容 |
+| --- | --- |
+| `manager.ts` | `GitWorktreeManager`。列出、创建、合并、删除 Worktree。`remove()` 默认安全删除，调用方可以显式传 `force: true` 使用 `git worktree remove --force` 丢弃未提交内容；两种删除都只删除副本、保留分支，不跳过主副本保护。同步失败优先保留 Git 的 `stderr` 真正原因供界面解释。分支是否被副本占用仍由 Git 拒绝，分支 `-D` 也不能绕过，副本与分支须分别操作。 |
+| `display-name.ts` | `WorktreeDisplayNames`：worktree 展示别名（`agentDir/worktrees/names/`），纯展示元数据，不改分支、目录或 Git 身份 |
+| `index.ts` | worktrees/ 出口（转出 `manager.ts`） |
 
 ### ci/
 
@@ -49,7 +56,7 @@
 ### 依赖
 
 - 依赖：`utils`（子进程、路径、Shell 词法）、`src/config.ts`、`providers/credentials/account-connections.ts`（CI 查询用 GitHub 连接）。
-- 被依赖：`application/use-cases`、`agent/runtime`（检查点协调器、Auto Memory 取仓库根）、`context/file-diff.ts`、`extensions/packages`、`modes/interactive`、`modes/web`。
+- 被依赖：`application/use-cases`、`agent/runtime`（检查点协调器、Auto Memory 取仓库根）、`context/file-diff.ts`、`extensions/packages`、`modes/web`。
 
 ## 维护
 

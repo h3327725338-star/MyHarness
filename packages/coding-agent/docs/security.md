@@ -31,7 +31,7 @@ entry point when contributors or coding agents work on this checkout. That repos
 rule is not a second runtime `system-prompts/` tree; product static prompts and project
 context continue to use their existing loaders.
 
-Non-interactive modes (`-p` and `--mode json`) do not show a trust prompt. Without an applicable saved trust decision, `defaultProjectTrust: "ask"` and `"never"` ignore such resources, while `"always"` trusts them. Use `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
+Headless SDK/delegated workers do not show a trust prompt. Without an applicable saved trust decision, `defaultProjectTrust: "ask"` and `"never"` ignore such resources, while `"always"` trusts them. Use `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
 ## No Built-in Sandbox
 

@@ -1,3 +1,13 @@
+/**
+ * Background conversation naming (lifecycle-adjacent, never on the task critical path).
+ *
+ * Intent: throttle and retry title generation for settled assistant replies only.
+ * Boundary: runs only when the host reports idle, writes `conversation-naming` custom
+ * entries, and never mutates user/assistant history. User- or extension-written titles
+ * stay protected (`conversationNamingWork()` returns undefined for them).
+ * Contract: `refresh()`/`retry()` schedule work, `dispose()` cancels it; hosts observe
+ * progress via the `onStatus` callback.
+ */
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { AgentSession } from "./agent-session.ts";
 import { resolveAssistantModel } from "./assistant-model.ts";

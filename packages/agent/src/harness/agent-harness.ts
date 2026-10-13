@@ -163,6 +163,17 @@ interface AgentHarnessTurnState<
 	activeTools: TTool[];
 }
 
+/**
+ * Orchestration over the low-level agent loop: session persistence, per-turn
+ * snapshots, save points, operation locking, and extension-facing events.
+ *
+ * Boundaries: each turn snapshots persisted messages, resources, system prompt,
+ * model, thinking level, tools, and stream options; provider transport stays with
+ * `Models.streamSimple`, tool/queue/session writes flush at save points, and
+ * structural ops (`prompt`/`compact`/`navigateTree`) require idle phase while
+ * `steer`/`followUp`/`nextTurn`/config setters are turn-safe. Failures surface
+ * as `AgentHarnessError` with the subsystem cause preserved.
+ */
 export class AgentHarness<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,

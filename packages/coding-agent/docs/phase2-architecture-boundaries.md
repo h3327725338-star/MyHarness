@@ -5,8 +5,8 @@ Phase 2 将 Extension 的共享契约和旧 API 兼容逻辑分开，同时切�
 ## Contracts
 
 - `src/extensions/contracts/` 只包含执行工具契约、事件路由端口、UI 原语端口和注册记录。
-- `ToolDefinition` 的执行契约不包含 renderer、TUI、Theme 或具体 Session 实现。
-- TUI renderer context 仍属于 `tools/presentation/`；旧的富 `ToolDefinition` 形状由兼容类型保留。
+- `ToolDefinition` 的执行契约不包含展示层渲染器或具体 Session 实现。
+- 工具展示文本仍属于 `tools/presentation/`；旧的富 `ToolDefinition` 形状由兼容类型保留。
 
 ## Compat 与 API Entry
 

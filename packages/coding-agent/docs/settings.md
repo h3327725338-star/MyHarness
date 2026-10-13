@@ -17,7 +17,7 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 ## Web 专属快捷键与代码智能状态
 
-Web 设置新增 Keyboard shortcuts 页面，输入框统一为 120px 宽度，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
+Web 设置新增 Keyboard shortcuts 页面，输入框统一为 120px 宽度，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改旧终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
 
 代码智能页通过 `codeIntelligence.symbolsEnabled` 控制 Symbols 工具，默认关闭；关闭时工具不会注册，也不会出现在模型可用工具、活动工具或提示词中。开关修改后需重启运行时生效。旧 `codeIntelligence.enabled` 字段仅作为 deprecated 类型兼容保留，读取时忽略、不迁移且不再写出；`disabledLanguages` 和 `servers` 仍用于语言模块配置。页面把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
@@ -474,7 +474,7 @@ Google Generative AI 和 Vertex adapter 会把 `maxRetries` 显式传给 Google 
 
 Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）、服务端错误（500、502、503、504）、网关/CDN 回源故障（520、521、522、523、524、525、527、530，常见形式是 `520 status code (no body)`）、Bad Gateway / Gateway Timeout，以及连接重置、超时、DNS 临时失败（`ECONNRESET`、`ETIMEDOUT`、`EAI_AGAIN`）等网络中断。额度/余额耗尽不会重试。分类规则在 `packages/ai/src/utils/retry.ts`。
 
-模型请求失败时，界面不会只显示原始状态码：终端、Web UI、print mode 和任务结束状态都会显示一段中文说明，先写原因（例如“模型服务提供商的网关与后端服务器之间连接异常（HTTP 520），并且没有返回任何错误说明”、网络超时、认证失效、额度不足），再写可以怎么处理，最后附上原始错误供排查。说明文案在 `src/providers/recovery/error-explanation.ts`，只影响显示，不影响是否重试。
+模型请求失败时，Web UI 和任务结束状态都会显示一段中文说明，先写原因（例如“模型服务提供商的网关与后端服务器之间连接异常（HTTP 520），并且没有返回任何错误说明”、网络超时、认证失效、额度不足），再写可以怎么处理，最后附上原始错误供排查。说明文案在 `src/providers/recovery/error-explanation.ts`，只影响显示，不影响是否重试。
 
 #### fallbackModel（Fallback Model）
 

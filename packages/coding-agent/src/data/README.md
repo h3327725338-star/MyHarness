@@ -10,6 +10,7 @@
 | --- | --- |
 | `workspace-store.ts` | `WorkspaceStore`：读写 `data/workspaces/registry.json` 和每个 Workspace 的 `metadata/workspace.json`；路径规范化、稳定 ID、增删、搬迁、一致性检查；`resolveWorkspaceDataContext()` / `findWorkspaceDataContext()` 把工作目录映射到 Workspace 数据目录 |
 | `workspace-registry-migration.ts` | `migrateWorkspaceRegistry()`：把旧位置的 Workspace 记录迁入当前布局，带 marker 和归档 |
+| `workspace-reconcile.ts` | 启动后分片后台核对 registry 与 `metadata/workspace.json`（可取消、不抛错、timer 带 `unref()`，写修复走原子写） |
 
 ### 对外接口
 
@@ -26,5 +27,5 @@
 - 移除 Workspace 只删登记记录，不删它下面的 Session 数据。
 - 列出或读取 Session 不应顺带登记 Workspace；只有显式的添加动作才写 registry。
 - 写入使用原子替换；迁移必须可重入、可恢复（marker + 归档），不能在失败时丢数据。
-- 数据布局变化要同步 `docs/STORAGE.md` 和架构手册的持久化表。
+- 数据布局变化要同步仓库根 `docs/STORAGE.md` 和架构手册的持久化表。
 - 相关测试：`workspace-store.test.ts`、`workspace-registry-migration.test.ts`、`workspace-crash-recovery.test.ts`、`session-unbound.test.ts`。

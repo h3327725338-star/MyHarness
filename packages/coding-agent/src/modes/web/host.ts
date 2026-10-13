@@ -1,10 +1,11 @@
 /**
- * WebHost: the Web UI counterpart of InteractiveMode's session plumbing.
+ * WebHost: the Web UI session host and sole `AgentSession` plumbing owner.
  *
- * It owns no Agent logic. It subscribes to the same AgentSession events the TUI
- * uses, forwards them to browsers, and runs the same post-run completion steps
- * (final change detection, Git checkpoint lifecycle, Auto Memory) through the
- * existing runtime functions.
+ * Lifecycle contract: it owns no Agent logic. It subscribes to `AgentSession` events,
+ * forwards them to browsers, and runs the post-run completion steps (final change
+ * detection, Git checkpoint lifecycle, Auto Memory) through the existing runtime
+ * functions. `AgentSession` owns the task order (`agent_end` -> completion ->
+ * `agent_settled`); this host only reacts to those events and never reimplements them.
  */
 
 import { basename } from "node:path";
@@ -531,7 +532,7 @@ export class WebHost {
 	}
 
 	/**
-	 * Same policy as InteractiveMode.notifyPendingGitCheckpoints: checkpoints without changes are closed;
+	 * Startup checkpoint recovery policy: checkpoints without changes are closed;
 	 * the newest one that still has changes stays available for an explicit Undo / Commit.
 	 */
 	private async recoverStartupCheckpoint(generation: number): Promise<void> {
@@ -1252,7 +1253,7 @@ export class WebHost {
 		}
 	}
 
-	/** Same policy as InteractiveMode.settleFailedTaskGitCheckpoint, minus the TUI status text. */
+	/** Failed-task checkpoint policy: close changeless checkpoints, keep the newest one with changes for explicit Undo/Commit. No UI text lives here. */
 	async settleFailedCheckpoint(checkpoint: GitCheckpoint | undefined): Promise<void> {
 		if (!checkpoint || checkpoint.status !== "created") return;
 		let hasChanges = true;

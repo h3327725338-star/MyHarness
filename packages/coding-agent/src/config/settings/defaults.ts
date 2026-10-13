@@ -66,6 +66,7 @@ export const SETTINGS_DEFAULTS = {
 	outputPad: 1,
 	autocompleteMaxVisible: 5,
 	codeBlockIndent: "  ",
+	/** `symbols` tool gate: off by default, takes effect after runtime restart (see session-tool-registry). */
 	codeIntelligenceSymbolsEnabled: false,
 	// Zero disables the delegated Explore wall-clock deadline.
 	defaultSubAgentTaskTimeoutMs: 0,

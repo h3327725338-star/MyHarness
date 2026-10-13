@@ -80,9 +80,19 @@ export function estimateContextTokens(messages: AgentMessage[]): {
 	}
 	return { tokens: trailingTokens, usageTokens: 0, trailingTokens, lastUsageIndex: null };
 }
+/**
+ * Compaction trigger: enabled, known window, usage at or above 90% of the window.
+ * Pure threshold check; the caller decides when to call `prepareCompaction`.
+ */
 export function shouldCompact(tokens: number, window: number, settings: CompactionSettings): boolean {
 	return settings.enabled && window > 0 && tokens >= Math.floor(window * 0.9);
 }
+/**
+ * Pure preparation: snapshot branch messages plus token estimate for summarization.
+ *
+ * Contract: returns `undefined` (not an error) when the branch projects to no
+ * messages; otherwise `firstKeptEntryId` anchors the tail kept after the summary.
+ */
 export function prepareCompaction(
 	entries: SessionTreeEntry[],
 	settings: CompactionSettings,
@@ -99,6 +109,14 @@ export function prepareCompaction(
 			: undefined,
 	);
 }
+/**
+ * Summarize `preparation.messagesToSummarize` and return session-ready history.
+ *
+ * Boundary: OpenAI/Azure Responses models use the remote Codex path (checkpoint
+ * history), all others use the local Codex path (text summary); failures are
+ * returned as `Result` errors and never thrown, and the caller persists
+ * `replacementHistory`/`summary` as a compaction entry.
+ */
 export async function compact(
 	preparation: CompactionPreparation,
 	models: Models,

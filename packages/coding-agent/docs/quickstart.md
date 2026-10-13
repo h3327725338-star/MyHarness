@@ -123,11 +123,11 @@ myharness @README.md "Summarize this"
 myharness @src/app.ts @src/app.test.ts "Review these together"
 ```
 
-Images or text can be pasted with Ctrl+V (Alt+V on Windows); images can also be dragged into supported terminals.
+Images or text can be pasted with Ctrl+V; images can also be dragged into the Web UI composer or viewport.
 
 ### Run shell commands
 
-In interactive mode:
+In the Web UI composer:
 
 ```text
 !npm run lint
@@ -137,7 +137,7 @@ The command output is sent to the model. Use `!!command` to run a command withou
 
 ### Switch models
 
-Use `/model` or Ctrl+T to choose a model. Use `/effort` to change the thinking level. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Ctrl+O toggles transcript details, including the latest thinking block and full tool output.
+Use `/model` to choose a model. Use `/effort` to change the thinking level. Model cycling follows the configured model scope; see [Web UI](web-ui.md) and Keyboard shortcuts for the current keys.
 
 ### Continue later
 
@@ -153,18 +153,9 @@ myharness --session-id <id>   # Open or create the exact project session ID
 
 Inside MyHarness, use `/new` to start a new session. Extensions may provide additional session management commands.
 
-### Non-interactive mode
+### One-shot use
 
-For one-shot prompts:
-
-```bash
-myharness -p "Summarize this codebase"
-cat README.md | myharness -p "Summarize this text"
-myharness -p @screenshot.png "What's in this image?"
-myharness -p @report.pdf "Summarize the text, charts, and page layout"
-```
-
-Use SDK subscriptions for in-process events. Public terminal print, JSON and RPC modes are removed.
+There is no terminal print mode: start the Web UI and send the prompt there, or use the SDK for in-process automation. Public terminal print, JSON and RPC modes are removed.
 
 Local `@file` input can preprocess modern Office documents, PDF pages, SVG and design/image formats, and video keyframes. A directory input discovers those supported formats recursively and continues past individual failures. Audio and legacy DOC/XLS/PPT files are not processed.
 

@@ -1,4 +1,12 @@
-/** Runtime entry made available to loaded extensions, independent of terminal UI. */
+/**
+ * Runtime entry made available to loaded extensions, independent of any UI.
+ *
+ * Boundary: leaf-level re-exports only (messages, config, compact serialization, session
+ * manager, tool factories, frontmatter/shell helpers, compat tool predicates). It never
+ * imports `src/index.ts` or the loader, so `loader/index.ts` can bundle it for extensions
+ * without creating a loader -> facade -> loader cycle. The full event/context surface stays
+ * in `runtime/types.ts`.
+ */
 export { convertToLlm } from "../agent/runtime/messages.ts";
 export { CONFIG_DIR_NAME, getAgentDir, VERSION } from "../config.ts";
 export { serializeConversation } from "../context/compact/index.ts";

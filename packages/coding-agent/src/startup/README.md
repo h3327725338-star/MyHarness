@@ -5,6 +5,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `args.ts` | Web 服务启动参数；公开 `Args` 和 `parseArgs` |
+| `deferred-maintenance.ts` | `scheduleDeferredStartupMaintenance()`：启动后延期的后台维护（可取消、不阻塞退出），由 `startup-deferred-maintenance.test.ts` 验证 |
 | `help.ts` | Web 启动帮助；由 `web-startup-help.test.ts` 验证 |
 | `file-processor.ts` | `@file` 文本、图片和富文档输入 |
 | `initial-message.ts` | 合并初始消息和附件；SDK 输入兼容保留 |

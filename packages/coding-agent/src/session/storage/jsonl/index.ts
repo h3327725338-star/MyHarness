@@ -265,11 +265,13 @@ function readSessionHeaderForDiscovery(filePath: string): SessionHeader | null {
 	}
 }
 
+/** Tolerantly read `header.cwd`; `undefined` when absent or not a string (legacy/foreign headers). */
 export function getSessionHeaderCwd(header: SessionHeader): string | undefined {
 	const cwd = (header as { cwd?: unknown }).cwd;
 	return typeof cwd === "string" ? cwd : undefined;
 }
 
+/** Tolerantly read `header.workspaceId`; `undefined` when absent/empty (legacy sessions). */
 export function getSessionHeaderWorkspaceId(header: SessionHeader): string | undefined {
 	const workspaceId = (header as { workspaceId?: unknown }).workspaceId;
 	return typeof workspaceId === "string" && workspaceId.length > 0 ? workspaceId : undefined;
@@ -292,12 +294,14 @@ export function getDefaultSessionDirPath(cwd: string): string {
 	return getWorkspaceSessionsDir(context.dataRoot, context.workspace.workspaceId);
 }
 
+/** Default Workspace session container for `cwd`, creating it. Resolves Workspace from Data config. */
 export function getDefaultSessionDir(cwd: string): string {
 	const sessionDir = getDefaultSessionDirPath(cwd);
 	if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
 	return sessionDir;
 }
 
+/** Create `sessionDir` (including parents) when missing. No-op for empty paths. */
 export function ensureSessionDirectory(sessionDir: string): void {
 	if (sessionDir && !existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
 }
@@ -606,10 +610,12 @@ export function writeSessionMetadata(path: string, metadata: SessionMetadata): v
 	writeFileAtomicallySync(path, `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
+/** Existence check only; no read or lock is taken. */
 export function sessionFileExists(filePath: string): boolean {
 	return existsSync(filePath);
 }
 
+/** File size in bytes. Throws when the file is missing (caller must check `sessionFileExists` first). */
 export function sessionFileSize(filePath: string): number {
 	return statSync(filePath).size;
 }
@@ -1056,10 +1062,18 @@ export async function listAllSessions(
 	}
 }
 
+/**
+ * Atomically replace the whole Session file with `entries` (migration/repair path).
+ * Precondition: `entries[0]` is the session header. Side effect: durable file rewrite.
+ */
 export function rewriteSessionFile(filePath: string, entries: FileEntry[]): void {
 	writeFileAtomicallySync(filePath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
 }
 
+/**
+ * Durably write `entries` to a new (`"wx"`, fails when present) or existing (`"w"`) Session file.
+ * Caller owns locking/lease decisions; see `SessionManager.acquireWriterLock`.
+ */
 export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "wx" | "w" = "wx"): void {
 	const content = entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
 	if (flag === "wx") {
@@ -1069,6 +1083,7 @@ export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "
 	}
 }
 
+/** Durably append one entry. Caller must hold the writer lease; no fsync ordering beyond the single write. */
 export function appendSessionEntry(filePath: string, entry: FileEntry): void {
 	writeFileDurablySync(filePath, `${JSON.stringify(entry)}\n`, { flag: "a" });
 }
@@ -1171,6 +1186,12 @@ export interface RelocateSessionFileOptions {
 	flushed: boolean;
 }
 
+/**
+ * Move a Session file to a relocated cwd: write `targetFile` fully, then remove the source.
+ * Same-file moves only rewrite. Throws when the target already exists unexpectedly.
+ *
+ * @returns `{ flushed: true }` on success; `warning` when the move succeeded but the old file survived.
+ */
 export function relocateSessionFile(options: RelocateSessionFileOptions): { flushed: boolean; warning?: string } {
 	const sourceResolved = resolvePath(options.sourceFile);
 	const targetResolved = resolvePath(options.targetFile);

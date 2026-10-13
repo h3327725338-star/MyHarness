@@ -57,6 +57,13 @@ function deriveSessionContextState(pathEntries: readonly SessionTreeEntry[]): Om
 	return { thinkingLevel, model, activeToolNames };
 }
 
+/**
+ * Default compaction projection: keep the latest compaction entry plus its tail.
+ *
+ * Intent: pre-compaction history is replaced by the summary; when the entry
+ * carries `replacementHistory`/`retainedTail` only post-compaction entries follow,
+ * otherwise entries from `firstKeptEntryId` onward are kept. Pure, no I/O.
+ */
 export function defaultContextEntryTransform(pathEntries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
 	let compaction: CompactionEntry | null = null;
 	for (const entry of pathEntries) {
@@ -140,6 +147,14 @@ export function sessionEntryToContextMessages(
 	return [];
 }
 
+/**
+ * Project a persisted branch into model context plus derived runtime state.
+ *
+ * Boundary: runtime state (thinking level, model, active tools) is reduced from
+ * the full branch, while messages come from the compaction-aware entry sequence;
+ * `custom` entries are omitted unless an `entryProjector` handles their type,
+ * and `entryTransforms` run stacked after the default compaction transform.
+ */
 export function buildSessionContext(
 	pathEntries: readonly SessionTreeEntry[],
 	options: SessionContextBuildOptions = {},
@@ -152,6 +167,13 @@ export function buildSessionContext(
 	return { ...state, messages };
 }
 
+/**
+ * Durable transcript tree plus leaf cursor; no LLM knowledge.
+ *
+ * Contract: all appends allocate `id`/`parentId`/`timestamp` from storage and
+ * advance the leaf; `moveTo()` persists the leaf move; `buildContext()` never
+ * mutates stored entries and only projects the active branch.
+ */
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
 	private contextBuildOptions: SessionContextBuildOptions;

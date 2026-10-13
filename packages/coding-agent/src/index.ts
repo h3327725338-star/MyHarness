@@ -557,7 +557,7 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./tools/registry.ts";
-// Clipboard utilities
+// Text and image helpers (no clipboard module; clipboard code was removed from utils/)
 
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { convertToPng } from "./utils/image-convert.ts";

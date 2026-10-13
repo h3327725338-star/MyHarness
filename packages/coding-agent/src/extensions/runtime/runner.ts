@@ -1,5 +1,13 @@
 /**
- * Extension runner - executes extensions and manages their lifecycle.
+ * Extension runner - dispatches lifecycle events to extensions and owns ctx validity.
+ *
+ * Intent: single fan-out point for extension events (`emit*`); handler errors become
+ * diagnostics via `emitError`, `session_before_*` handlers may cancel the operation.
+ * Boundary: never implements Agent/Session/Git/Provider rules. Core capabilities arrive via
+ * `bindCore()`/`bindCommandContext()`/`setUIContext()` from `AgentSession`/`WebHost`; after
+ * `invalidate()` (reload or session replacement) every captured ctx/Runner accessor throws,
+ * and post-replacement work must use the ctx passed to `withSession`. `message_end` and
+ * `tool_result` replacements are the only mutating contracts and are returned explicitly.
  */
 
 import type { AgentMessage } from "@myharness/agent-core";

@@ -67,7 +67,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 
 主聊天顺序为：当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → 当前工具规则 → General 个性化内容（有配置时）→ 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 工作目录 → 当前模型 → 回复语言 → 角色边界。
 
-扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`、`agent/runtime/agent-session.ts` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
+扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/agent/runtime/agent-session.ts`、`modes/web/` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
 
 - `{{variable}}` 是纯文本替换，不执行代码，也不递归解释变量值。保留模板内原有变量名。
 - 正文不 trim；文件末尾一个换行作为文本文件终止符移除，CRLF 统一为 LF。
@@ -85,11 +85,11 @@ system prompt，后者作为 composer 的追加内容。
 
 ## 注入链路与保留内容
 
-主链路：CLI/SDK → ResourceLoader 加载用户自定义与项目上下文 → AgentSession `_rebuildSystemPrompt` 收集有效工具 → `buildSystemPrompt` → `before_agent_start` 扩展变换 → `_getTurnSystemPrompt` 重施角色及 commit 边界 → Agent state → agent-loop 的 `Context.systemPrompt` → ModelRuntime / provider stream → adapter 组包 → SDK HTTP 请求。`onPayload` 扩展仍可按原接口变换最终请求。
+主链路：Web 启动命令/SDK → ResourceLoader 加载用户自定义与项目上下文 → AgentSession `_rebuildSystemPrompt` 收集有效工具 → `buildSystemPrompt` → `before_agent_start` 扩展变换 → `_getTurnSystemPrompt` 重施角色及 commit 边界 → Agent state → agent-loop 的 `Context.systemPrompt` → ModelRuntime / provider stream → adapter 组包 → SDK HTTP 请求。`onPayload` 扩展仍可按原接口变换最终请求。
 
 请求映射：OpenAI Completions/Responses 使用原来的 system/developer 角色判断；Anthropic 使用 system text blocks；Google Generative AI/Vertex 使用 systemInstruction；Bedrock 使用 system text 与缓存块；Mistral 在 messages 首部插入 system。Kimi 延迟工具的 system 消息只有动态工具 schema，没有固定自然语言正文。
 
-独立链路：压缩及分支摘要 → 各自的摘要执行器；记忆/标题/视觉探测/视觉转录 → ModelRuntime.completeSimple；shell 审查扩展 → 自己的 chat/completions 请求；Explore → 临时 append 文件 → 子进程 CLI → 同一主组合入口。通用 AgentHarness 的默认/自定义 systemPrompt → 自身 turn context → agent-loop；不会自动套用编程会话全局规则。
+独立链路：压缩及分支摘要 → 各自的摘要执行器；记忆/标题/视觉探测/视觉转录 → ModelRuntime.completeSimple；shell 审查扩展 → 自己的 chat/completions 请求；Explore → 临时 append 文件 → 子进程内部 delegated worker（`--internal-delegated-worker`）→ 同一主组合入口。通用 AgentHarness 的默认/自定义 systemPrompt → 自身 turn context → agent-loop；不会自动套用编程会话全局规则。
 
 代码仍生成工具集合、schema、技能列表与 XML 转义、项目文件路径及正文、cwd、模型/provider 名称、对话和运行状态。这些是实际运行时数据；上述系统字段周围的固定自然语言模板已外置。
 
@@ -104,4 +104,4 @@ system prompt，后者作为 composer 的追加内容。
 - 这些测试文件的存在只能证明测试入口和覆盖意图；本次文档核对没有把它们的历史记录写成新的测试通过结论。
 - 历史终端 smoke 曾验证本地 Provider、429 恢复、read 工具与会话续接；对应终端测试脚本已随旧入口移除，这不是当前 Web 启动的验证结果。
 - `npm run build:offline`、全仓只读 Biome 检查、`node scripts/run-checks-parallel.mjs`（typecheck、浏览器打包、模型数据、依赖及锁文件等）通过。Biome 仅报告原有文件的两条 info；新增 HTTP 测试曾有类型错误，已修正并复验通过。
-- 仓库外的安装目录副本与实际编译的 Bun Loader 均验证了相邻 Prompt 资源加载。完整 Bun CLI 跨平台发行构建、云端模型响应及浏览器运行时文件读取未验证。
+- 仓库外的安装目录副本与实际编译的 Bun Loader 均验证了相邻 Prompt 资源加载。完整 Bun 二进制跨平台发行构建、云端模型响应及浏览器运行时文件读取未验证。

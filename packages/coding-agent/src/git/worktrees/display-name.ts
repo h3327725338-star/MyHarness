@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, join } from "node:path";
 import { pathIdentityKey } from "../../utils/paths.ts";
 
+/**
+ * Stable filename key for a worktree path (sha256 of the identity key, 24 hex chars).
+ * Pure function; no fs access. Different path spellings of the same directory share one id.
+ */
 export function worktreeId(path: string): string {
 	return createHash("sha256").update(pathIdentityKey(path)).digest("hex").slice(0, 24);
 }
@@ -14,6 +18,7 @@ export class WorktreeDisplayNames {
 		this.agentDir = agentDir;
 	}
 
+	/** Read the stored alias, or `undefined` when none was set. Never throws for missing files. */
 	get(path: string): string | undefined {
 		const file = this.file(path);
 		if (!existsSync(file)) return undefined;
@@ -21,10 +26,16 @@ export class WorktreeDisplayNames {
 		return typeof data.name === "string" ? data.name : undefined;
 	}
 
+	/** Display label: stored alias, else branch, else directory name. Pure read, no mutation. */
 	label(worktree: { path: string; branch?: string }): string {
 		return this.get(worktree.path) ?? worktree.branch ?? basename(worktree.path);
 	}
 
+	/**
+	 * Store a display alias (1-80 chars after whitespace normalization).
+	 * @throws {Error} When the normalized name is empty or longer than 80 characters.
+	 * @returns The normalized name that was stored.
+	 */
 	set(path: string, value: string): string {
 		const name = value
 			.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")

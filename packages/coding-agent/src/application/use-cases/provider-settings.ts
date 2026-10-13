@@ -2,7 +2,13 @@ import type { Model } from "@myharness/ai/compat";
 import type { AgentSession } from "../../agent/runtime/agent-session.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 
-/** Provider/account settings workflow shared by settings UI and other hosts. */
+/**
+ * Provider/account settings workflow shared by settings UI and other hosts.
+ *
+ * Cross-domain coordination: syncs `config/settings` (enabled providers) with the live
+ * `AgentSession` model (switches away before disabling the active provider). Host
+ * capabilities arrive via `ProviderSettingsUseCaseHost`; no frontend imports here.
+ */
 export class ProviderSettingsUseCase {
 	private readonly host: ProviderSettingsUseCaseHost;
 

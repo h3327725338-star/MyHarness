@@ -1,5 +1,7 @@
 # Phase 0：MyHarness 架构重构不可变基线
 
+> 历史快照说明：本文记录 Phase 0 开始时的仓库状态（`InteractiveMode`、print/`--mode`、`packages/tui`、`dev.cmd`、`src/cli.ts` 均为当时架构）。当前产品唯一入口是本机浏览器 Web UI（`src/web.ts` → `src/main.ts` → Web mode），终端 TUI/print/JSON/RPC 已移除；阅读时以当前源码为准。
+
 本文是正式架构重构前的兼容性基线。它记录当前仓库真实源码、现有测试和已执行的安全验证，不是后续阶段的实现计划。后续修改必须先以源码和测试重新核对本文；如果实现与本文不一致，应先判断是有意变更还是回归。
 
 ## 快照信息

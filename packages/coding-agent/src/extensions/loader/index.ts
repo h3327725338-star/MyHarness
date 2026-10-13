@@ -1,6 +1,13 @@
 /**
- * Extension loader - loads TypeScript extension modules using jiti.
+ * Extension loader - discovers and loads TypeScript extension modules using jiti.
  *
+ * Lifecycle: discovery (`discoverExtensionsInDir`/`resolveExtensionEntries`) -> module import
+ * (`loadExtensionModule` with cache) -> factory call (`createExtensionAPI`) -> `LoadExtensionsResult`.
+ * Boundary: depends only on the leaf-level `api-entry.ts`, never on `src/index.ts`, so the
+ * loader cannot cycle back into itself. Provider registration is queued on the runtime and
+ * flushed later by `ExtensionRunner.bindCore()` / `services.ts`.
+ * Contract: failed modules become `errors` entries, never thrown; inline factories and cached
+ * loads keep the same `Extension` shape.
  */
 
 import * as fs from "node:fs";

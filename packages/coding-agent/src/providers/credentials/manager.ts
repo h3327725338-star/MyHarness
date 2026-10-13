@@ -16,6 +16,7 @@ export interface ProviderCredentialManagerOptions {
 	visionAuthPath?: string;
 }
 
+/** Key equality for dedupe/migration: same secret plus same env mapping. Pure comparison. */
 export function sameApiKeyCredential(left: ApiKeyCredential, right: ApiKeyCredential): boolean {
 	return left.key === right.key && JSON.stringify(left.env ?? {}) === JSON.stringify(right.env ?? {});
 }
@@ -67,6 +68,7 @@ export class ProviderCredentialManager {
 		return this.main;
 	}
 
+	/** Reload persisted stores from disk; in-memory runtime API-key overrides are preserved. */
 	reload(): void {
 		this.main.reload();
 		this.legacyVision.reload();

@@ -151,7 +151,7 @@ interface CustomMessage {
   role: "custom";
   customType: string;            // Extension identifier
   content: string | (TextContent | ImageContent)[];
-  display: boolean;              // Show in TUI
+  display: boolean;              // Show in Web UI
   details?: any;                 // Extension-specific metadata
   timestamp: number;
 }
@@ -286,7 +286,7 @@ Extension-injected messages that DO participate in LLM context.
 
 Fields:
 - `content`: String or `(TextContent | ImageContent)[]` (same as UserMessage)
-- `display`: `true` = show in TUI with distinct styling, `false` = hidden
+- `display`: `true` = show in Web UI with distinct styling, `false` = hidden
 - `details`: Optional extension-specific metadata (not sent to LLM)
 
 ### LabelEntry
@@ -332,7 +332,7 @@ Entries form a tree:
    - Includes the compaction entry first
    - Then includes entries from `firstKeptEntryId` to the compaction
    - Then entries after compaction are included
-3. Preserves non-message entries in the selected range so interactive mode can render them
+3. Preserves non-message entries in the selected range so Web UI can render them
 
 `buildSessionContext()` builds on that entry list to produce the message list for the LLM:
 

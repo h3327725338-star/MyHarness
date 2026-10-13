@@ -1,3 +1,14 @@
+/**
+ * Session replacement lifecycle: owns the current `AgentSession` plus its cwd-bound services.
+ *
+ * Intent: exactly one authoritative runtime at a time. Replacement (new/resume/fork/import/
+ * workspace switch/relocate) prepares the next runtime first and only then invalidates the
+ * current one; factory or rebind failure leaves the old runtime authoritative.
+ * Boundary: this class owns ordering, rollback, and disposal. It never implements Agent,
+ * Session file format, Git, or Provider rules; those stay in `AgentSession`, `SessionManager`,
+ * use-cases, and `services.ts`. Hosts observe via `setRebindSession`/`setBeforeSessionInvalidate`
+ * and `session_shutdown` / `session_before_*` extension events.
+ */
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";

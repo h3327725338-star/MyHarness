@@ -81,11 +81,11 @@
 ## 修改规则
 
 - 只修改完成当前任务所必须的内容，不顺手重构无关区域。
-- 不创建承载任意业务的万能目录，也不把业务逻辑塞进 utils/ 或具体 TUI component。
+- 不创建承载任意业务的万能目录，也不把业务逻辑塞进 utils/ 或具体展示组件。
 - Agent 生命周期放 agent/runtime/；Session 格式和 persistence 放 session/；Context/Compact 放 context/；Git 原语放 git/；Provider runtime、Model 和 credential 放 providers/；Tool 放 tools/；Extension 放 extensions/。
 - 产品页面放 coding-agent 的 web/；Web 服务与交互桥接放 src/modes/web/，不得重新引入已移出的终端组件包。
-- Tool execution contract 与 presentation 分开；底层业务逻辑不要依赖具体 TUI 展示。
-- Application use case 用于跨领域业务流程，不用于替代底层领域模块，也不导入具体 TUI。
+- Tool execution contract 与 presentation 分开；底层业务逻辑不要依赖具体展示组件。
+- Application use case 用于跨领域业务流程，不用于替代底层领域模块，也不导入具体展示组件。
 - 通过正式 contract、runtime 或 API entry 连接模块，不要为了方便直接依赖不稳定的内部实现。
 - 不为了减少代码量破坏已有抽象、错误处理、取消、恢复或持久化语义。
 - 不重复实现已经存在的能力。

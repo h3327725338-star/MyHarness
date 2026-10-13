@@ -556,6 +556,13 @@ class ModelsImpl implements MutableModels {
 	}
 }
 
+/**
+ * Create an empty provider collection; the caller registers providers.
+ *
+ * Boundary: reads are sync last-known lists, freshness comes from explicit
+ * `refresh()`; auth resolves per request through the owning provider so
+ * expiring credentials refresh, with explicit request auth winning per field.
+ */
 export function createModels(options?: CreateModelsOptions): MutableModels {
 	return new ModelsImpl(options);
 }
@@ -666,6 +673,13 @@ export function hasApi<TApi extends Api>(model: Model<Api>, api: TApi): model is
 	return model.api === api;
 }
 
+/**
+ * Price one request's usage from the model's per-million-token rates.
+ *
+ * Contract: tier selection uses this request's total input only, not session
+ * totals; `output` already includes reasoning tokens; Anthropic 1h cache writes
+ * bill at 2x base input. Mutates and returns `usage.cost`.
+ */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 	let rates: ModelCostRates = model.cost;

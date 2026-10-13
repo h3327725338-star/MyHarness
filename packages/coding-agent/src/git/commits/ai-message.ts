@@ -12,7 +12,14 @@ export interface CommitMessageContext {
 	history: string;
 }
 
-/** Read the complete selected working-tree delta, including files absent from HEAD. Never silently omit a large diff. */
+/**
+ * Read the complete selected working-tree delta, including files absent from HEAD. Never silently omit a large diff.
+ *
+ * @param repositoryRoot Repository root the Git commands run in.
+ * @param paths Literal file filters (`[]` means the whole delta).
+ * @param signal Optional abort signal for the underlying Git reads.
+ * @throws {Error} When the diff, untracked-file list, or history cannot be read.
+ */
 export async function readCommitMessageContext(
 	repositoryRoot: string,
 	paths: string[],
@@ -46,6 +53,7 @@ export async function readCommitMessageContext(
 	return { paths, diff: delta, history: history.stdout.slice(0, 20_000) };
 }
 
+/** One-shot model-call knobs for commit analysis. `signal` aborts between batches; `onProgress` is UI-only. */
 export interface CommitAnalysisOptions {
 	contextWindow?: number;
 	maxOutputTokens?: number;
@@ -333,6 +341,17 @@ async function describeInBatches(
 	throw new Error("Commit description generation did not complete.");
 }
 
+/**
+ * Turn a `CommitMessageContext` into a validated `{ title, body, full }` commit message.
+ *
+ * The model only summarizes evidence from `context` (batched under its context window); every
+ * feature must cite a diff part, otherwise this throws and no commit is created.
+ *
+ * @param context Raw diff + history from `readCommitMessageContext`.
+ * @param complete Model call `(systemPrompt, jsonInput) => jsonString`.
+ * @param options Budget/progress/abort knobs.
+ * @throws {Error} On oversized windows, invalid model JSON, missing evidence, or generated attribution text.
+ */
 export async function generateAICommitMessage(
 	context: CommitMessageContext,
 	complete: (systemPrompt: string, input: string) => Promise<string>,

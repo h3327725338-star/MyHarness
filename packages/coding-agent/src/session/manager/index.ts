@@ -448,6 +448,7 @@ export class SessionManager {
 		}
 	}
 
+	/** Effective chat mode; legacy headers without `mode` read as `coding`. Pure read. */
 	getMode(): ChatMode {
 		return getChatMode(this.getHeader());
 	}
@@ -568,6 +569,7 @@ export class SessionManager {
 		}
 	}
 
+	/** Whether this manager writes to disk. In-memory managers keep everything in `fileEntries`. */
 	isPersisted(): boolean {
 		return this.persist;
 	}
@@ -580,6 +582,7 @@ export class SessionManager {
 		return this.sessionDir;
 	}
 
+	/** Stable Data Framework Workspace id, or `undefined` for legacy/custom-dir sessions. */
 	getWorkspaceId(): string | undefined {
 		return this.workspaceId;
 	}
@@ -598,6 +601,7 @@ export class SessionManager {
 		);
 	}
 
+	/** Explicit Data root override (SDK/tests), or `undefined` when resolved from cwd. */
 	getDataRoot(): string | undefined {
 		return this.dataRoot;
 	}

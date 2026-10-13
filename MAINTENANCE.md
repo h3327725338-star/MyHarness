@@ -62,12 +62,12 @@ Linux/macOS runner。
 
 ## 公共 contract 的维护重点
 
-- Agent Core：`AgentOptions`、Agent event、stream function、tool execution、取消和队列语义必须保持兼容；Agent Core 不依赖具体 TUI。
+- Agent Core：`AgentOptions`、Agent event、stream function、tool execution、取消和队列语义必须保持兼容；Agent Core 不依赖具体展示组件。
 - AI：Provider 必须声明 auth；`Models` 负责 Provider 注册、auth resolution、model refresh 和 stream delegation。不要把“API implementation 存在”写成“Provider 已注册”。
 - Coding Agent：`ModelRuntime` 组合 `models.json`、模型 store、credential 和 extension provider；公共出口保持通过 `src/index.ts` 或声明的 package exports。
 - Session：格式、版本、migration、JSONL 容错和 projection 必须一起检查；不要让 UI 直接写 Session 文件。
 - SQLite：schema 变更必须有 migration、materialized state 更新和 `packages/agent/test/harness` 覆盖。
-- Web UI：浏览器前端在 `packages/coding-agent/web/`，HTTP/SSE 与交互桥接在 `src/modes/web/`；展示层不能反向承载业务状态。原 CLI/TUI 源码归档不属于当前 workspace。
+- Web UI：浏览器前端在 `packages/coding-agent/web/`，HTTP/SSE 与交互桥接在 `src/modes/web/`；展示层不能反向承载业务状态。终端 CLI/TUI 已移出本仓库，不属于当前 workspace。
 - Prompt：固定文本在仓库 `system-prompts/`，组合逻辑在 Coding Agent composer；用户项目的 `SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、`CLAUDE.md` 和 skills 仍由各自 loader 管理。仓库自身的开发规则、CI 和维护流程只放在根 `AGENTS.md` 与仓库文档中。
 
 ## 敏感数据和发布

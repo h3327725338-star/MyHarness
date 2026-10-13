@@ -1,6 +1,9 @@
 /**
- * Web UI mode: serves the local browser UI for the same AgentSessionRuntime the
- * TUI uses. The server binds to loopback only and is single-user.
+ * Web UI mode: serves the local browser UI for one `AgentSessionRuntime`.
+ *
+ * Lifecycle boundary: the server binds to loopback only and is single-user. It owns
+ * transport and shutdown timing only; Agent/Session/Git/Provider rules stay in their
+ * domains and are reached via `AgentSessionRuntime` and `application/use-cases`.
  */
 
 import { spawn } from "node:child_process";
