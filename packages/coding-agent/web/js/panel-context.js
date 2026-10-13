@@ -7,7 +7,7 @@ import { restartService } from "./service-restart.js";
 import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-usage.js";
 import { N_, isZh, t } from "./i18n.js";
 import { zhToolDescription } from "./locales/zh-CN-tools.js";
-import { basename, clip, fmtCost, fmtDateTime, fmtTokens, plural } from "./util.js";
+import { basename, clip, fmtCost, fmtTokens, plural } from "./util.js";
 
 const TOOL_DESCRIPTIONS = {
 	agent: N_("Delegate tasks to sub-agents."),
@@ -117,7 +117,6 @@ export function ContextPanel() {
 			</div>
 			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
-		${snap.checkpoint ? html`<${Section} title=${t("Git checkpoint")}><div class="kv"><span>${t("Status")}</span><span>${t(snap.checkpoint.status)}</span><span>${t("Created")}</span><span>${fmtDateTime(Date.parse(snap.checkpoint.createdAt))}</span><span>${t("Shell used")}</span><span>${snap.checkpoint.hadBash ? t("yes — external effects cannot be undone") : t("no")}</span></div><//>` : null}
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => html`<div class="res-row" key=${tool.name}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><${Toggle} checked=${tool.active} label=${tool.name} disabled=${snap.active} onChange=${(v) => toggleTool(tool.name, v)} /></div>`)}
 		<//>
