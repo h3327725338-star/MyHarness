@@ -250,6 +250,16 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 .status-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--fs-sm); background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .status-pill.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
 .status-pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.status-pill.memory-warn { gap: 0; height: 28px; padding: 0 4px 0 11px; border: 1px solid transparent; border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.status-pill.memory-warn .mem-left { display: inline-flex; align-items: center; gap: 7px; padding-right: 2px; }
+.status-pill.memory-warn .mem-dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; box-shadow: 0 0 0 4px var(--warn-soft); flex: none; }
+.status-pill.memory-warn .mem-divider { width: 1px; height: 16px; background: currentColor; opacity: 0.35; margin: 0 6px 0 10px; flex: none; }
+.status-pill.memory-warn .mem-btn { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: var(--r-pill); border: 0; cursor: pointer; font-size: var(--fs-sm); line-height: 1; white-space: nowrap; }
+.status-pill.memory-warn .mem-btn.retry { background: var(--warn); color: var(--bg-app); font-weight: 600; }
+.status-pill.memory-warn .mem-btn.retry:hover { filter: brightness(1.08); }
+.status-pill.memory-warn .mem-btn.dismiss { background: transparent; color: inherit; padding: 0 8px; }
+.status-pill.memory-warn .mem-btn.dismiss:hover { background: var(--warn-soft); }
+.status-pill.memory-warn .mem-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .status-pill.danger { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
 button.status-pill { cursor: pointer; }
 .tab-badge { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
