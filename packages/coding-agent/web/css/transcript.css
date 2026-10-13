@@ -60,7 +60,14 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .group-head:disabled { cursor: default; }
 .group-label { font-size: var(--fs-body); }
 .group-body { margin-left: 18px; }
-.thinking-text { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
+/* Thinking card owns its layout/paint: streaming reflow stays inside the card and never forces the outer transcript to re-layout. layout paint (not content) so intrinsic height still grows while streaming. */
+.thinking { contain: layout paint; }
+.thinking-text { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; contain: layout paint; }
+/* Streaming container + plain-text tail (JS adds div.thinking-stream / div.thinking-tail): tail inherits body size/line-height so incoming chars do not shift metrics. */
+.thinking-stream { display: flex; flex-direction: column; min-width: 0; }
+.thinking-tail { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.6; font-size: inherit; color: inherit; margin: 0; }
+/* Monospace inside thinking keeps one fixed box so toggling between body and code text does not jump size. */
+.thinking-text .md code, .thinking-text code, .thinking-text pre { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; font-variant-ligatures: none; }
 .action { border-radius: var(--r-sm); }
 .action-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 1px 4px; border-radius: var(--r-sm); cursor: pointer; color: var(--text-2); font-size: var(--fs-body); }
 .action-row:hover { background: var(--surface-hover); }

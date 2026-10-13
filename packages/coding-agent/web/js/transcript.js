@@ -294,9 +294,69 @@ function splitThinking(text) {
 	return match ? { title: match[1].trim(), body: text.slice(match[0].length).trim() } : { title: "", body: (text || "").trim() };
 }
 
+/** High-frequency thinking text, merged to at most one commit per animation frame while live. The server sends the cumulative full text on every message_update, so keeping only the newest value in latestRef is lossless. When live becomes false (final state) the newest value is synced immediately for one full-fidelity calibration. Unmount cancels the pending frame. */
+export function useRafBufferedText(liveText, live) {
+	const [buffered, setBuffered] = useState(liveText);
+	const latestRef = useRef(liveText);
+	const rafRef = useRef(0);
+	latestRef.current = liveText;
+	useEffect(() => {
+		if (!live) {
+			if (rafRef.current) {
+				cancelAnimationFrame(rafRef.current);
+				rafRef.current = 0;
+			}
+			if (buffered !== latestRef.current) setBuffered(latestRef.current);
+			return undefined;
+		}
+		if (buffered === latestRef.current) return undefined;
+		if (!rafRef.current) {
+			rafRef.current = requestAnimationFrame(() => {
+				rafRef.current = 0;
+				setBuffered(latestRef.current);
+			});
+		}
+		return undefined;
+	}, [liveText, live]);
+	useEffect(() => () => {
+		if (rafRef.current) cancelAnimationFrame(rafRef.current);
+	}, []);
+	return buffered;
+}
+
+/** Split text into a markdown-safe stable part and a plain-text tail at the last blank line. When the stable part holds an unclosed ``` or ~~~ fence, the boundary steps back to the previous blank line until the fences close (or stable is empty), so stable never contains an unclosed code block. Pure function for unit tests. */
+export function splitStableTail(text) {
+	const s = text || "";
+	if (!s) return { stable: "", tail: "" };
+	const hasUnclosedFence = (part) => ((part.match(/```/g) || []).length % 2 === 1) || ((part.match(/~~~/g) || []).length % 2 === 1);
+	let idx = s.lastIndexOf("\n\n");
+	if (idx === -1) return { stable: "", tail: s };
+	let stable = s.slice(0, idx);
+	let tail = s.slice(idx + 2);
+	while (stable && hasUnclosedFence(stable)) {
+		const prev = stable.lastIndexOf("\n\n");
+		if (prev === -1) return { stable: "", tail: s };
+		stable = s.slice(0, prev);
+		tail = s.slice(prev + 2);
+	}
+	return { stable, tail };
+}
+
+/** Stable part, rendered as Markdown. Props are only text, so Preact skips re-parsing while it is unchanged. */
+const ThinkingStable = memo(function ThinkingStable({ text }) {
+	return html`<${Markdown} text=${text} />`;
+});
+
+/** Tail part, plain text only (no marked parsing), so unclosed bold markers and lists never flicker. Whitespace is left to CSS. */
+function ThinkingTail({ text }) {
+	return html`<div class="thinking-tail">${text}</div>`;
+}
+
 function Thinking({ step }) {
 	const [open, setOpen] = useState(false);
-	const { title, body } = useMemo(() => splitThinking(step.text), [step.text]);
+	const buffered = useRafBufferedText(step.text, step.live);
+	const { title, body } = useMemo(() => splitThinking(buffered), [buffered]);
+	const { stable, tail } = useMemo(() => splitStableTail(body), [body]);
 	const has = !!(title || body);
 	const label = step.live ? (title ? clip(title, 90) : t("Thinking…")) : has ? (title ? clip(title, 90) : t("Reasoning")) : t("Reasoning (not exposed by the model)");
 	return html`<div class="thinking">
@@ -306,7 +366,7 @@ function Thinking({ step }) {
 			<span class="grow" />
 			${body ? html`<${Fold} />` : null}
 		</button>
-		<${Collapse} open=${open && !!body}><div class="thinking-text"><${Markdown} text=${body} /></div><//>
+		<${Collapse} open=${open && !!body}><div class="thinking-text">${step.live ? html`<div class="thinking-stream">${stable ? html`<${ThinkingStable} text=${stable} />` : null}${tail ? html`<${ThinkingTail} text=${tail} />` : null}</div>` : html`<${Markdown} text=${body} />`}</div><//>
 	</div>`;
 }
 
