@@ -1,3 +1,4 @@
+import { deleteBranchAsync, listLocalBranchesAsync } from "../../git/repository/branches.ts";
 import {
 	type GitWorktree,
 	type GitWorktreeActionResult,
@@ -53,6 +54,30 @@ export class GitWorktreeUseCase {
 			return { ok: false, error: "不能删除当前正在使用的 Worktree，请先进入 main 或其他 Worktree。" };
 		}
 		return new GitWorktreeManager(this.host.getAgentDir()).remove(repositoryRoot, worktree.path, force);
+	}
+
+	/** Explicitly confirmed cascade: preflight every target before discarding any files. */
+	async deleteBranchAndCopies(repositoryRoot: string, branch: string): Promise<GitWorktreeUseCaseActionResult> {
+		const blocked = this.requireIdle();
+		if (blocked) return blocked;
+		const branches = await listLocalBranchesAsync(repositoryRoot);
+		if (!branches.ok) return { ok: false, error: branches.error };
+		const selected = branches.branches.find((item) => item.name === branch);
+		if (!selected) return { ok: false, error: `Branch "${branch}" does not exist.` };
+		if (selected.current) return { ok: false, error: "The current branch cannot be deleted." };
+		const listing = this.list(repositoryRoot);
+		if (!listing.ok || !listing.worktrees) return { ok: false, error: listing.error ?? "Cannot list worktrees." };
+		const copies = listing.worktrees.filter((item) => item.branch === branch);
+		for (const copy of copies) {
+			if (copy.isMain) return { ok: false, error: "The main worktree cannot be deleted." };
+			if (this.isCurrentWorkspace(copy.path)) return { ok: false, error: "The current Worktree cannot be deleted." };
+			if (copy.locked) return { ok: false, error: "The worktree is locked." };
+		}
+		for (const copy of copies) {
+			const removed = this.delete(repositoryRoot, copy, true);
+			if (!removed.ok) return removed;
+		}
+		return deleteBranchAsync(repositoryRoot, branch, true);
 	}
 
 	async enter(worktree: GitWorktree): Promise<GitWorktreeUseCaseActionResult> {

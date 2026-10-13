@@ -169,6 +169,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			identity,
 			head,
 			linkedWorktree,
+			copyName: linkedWorktree && state.root ? copyNames().label({ path: state.root, branch: state.branch }) : null,
 			checkpoint: checkpoint
 				? {
 						id: checkpoint.id,
@@ -672,11 +673,16 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/git/branches/delete", async ({ body }) => {
 		requireIdle("delete a branch");
 		requireTrusted();
-		const result = await deleteBranchAsync(
-			await branchRootOrThrow(),
-			branchName(body),
-			asObject(body).force === true,
-		);
+		const payload = asObject(body);
+		const root = await branchRootOrThrow();
+		const name = branchName(body);
+		// A separate explicit flag keeps existing branch-only callers safe.
+		if (payload.deleteWorktrees === true && payload.force !== true)
+			throw new HttpError(400, "Deleting a branch and its copies requires explicit force confirmation.");
+		const result =
+			payload.deleteWorktrees === true
+				? await worktreeCase.deleteBranchAndCopies(root, name)
+				: await deleteBranchAsync(root, name, payload.force === true);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the branch.");
 		return { ok: true };
 	});

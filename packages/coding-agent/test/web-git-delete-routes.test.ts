@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	deleteBranch: vi.fn(),
 	listWorktrees: vi.fn(),
 	deleteWorktree: vi.fn(),
+	cascade: vi.fn(),
 }));
 
 vi.mock("../src/git/repository/integration.ts", async (importOriginal) => ({
@@ -26,6 +27,7 @@ vi.mock("../src/application/use-cases/git-worktree.ts", () => ({
 	GitWorktreeUseCase: class {
 		list = mocks.listWorktrees;
 		delete = mocks.deleteWorktree;
+		deleteBranchAndCopies = mocks.cascade;
 	},
 }));
 
@@ -90,9 +92,33 @@ beforeEach(() => {
 	mocks.listWorktrees.mockReturnValue({ ok: true, repositoryRoot, worktrees: [worktree] });
 	mocks.deleteBranch.mockResolvedValue({ ok: true });
 	mocks.deleteWorktree.mockReturnValue({ ok: true });
+	mocks.cascade.mockResolvedValue({ ok: true });
 });
 
 describe("Git deletion routes", () => {
+	it("requires explicit force and cascade flags, then uses the cascade use case", async () => {
+		const { post } = createHarness();
+		await expect(post("/api/git/branches/delete", { name: branchName, deleteWorktrees: true })).rejects.toMatchObject(
+			{ status: 400 },
+		);
+		expect(mocks.cascade).not.toHaveBeenCalled();
+		await expect(
+			post("/api/git/branches/delete", { name: branchName, force: true, deleteWorktrees: true }),
+		).resolves.toEqual({ ok: true });
+		expect(mocks.cascade).toHaveBeenCalledExactlyOnceWith(repositoryRoot, branchName);
+		expect(mocks.deleteBranch).not.toHaveBeenCalled();
+	});
+
+	it.each([{ trusted: false }, { completionActive: true }, { isStreaming: true }, { isCompacting: true }])(
+		"guards cascade deletion (%j)",
+		async (options) => {
+			const { post } = createHarness(options);
+			await expect(
+				post("/api/git/branches/delete", { name: branchName, force: true, deleteWorktrees: true }),
+			).rejects.toMatchObject({ status: options.trusted === false ? 403 : 409 });
+			expect(mocks.cascade).not.toHaveBeenCalled();
+		},
+	);
 	describe.each([
 		{ label: "safe deletion without force", payload: {}, expectedForce: false },
 		{ label: "safe deletion with force: false", payload: { force: false }, expectedForce: false },

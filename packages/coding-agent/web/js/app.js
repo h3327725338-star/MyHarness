@@ -15,6 +15,7 @@ import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
 import { FloatingQuoteToolbar } from "./quote-toolbar.js";
 import { ImageLightboxHost } from "./lightbox.js";
+import { useWorkspaceTitle } from "./workspace-title.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
@@ -248,7 +249,6 @@ export function App() {
 	// that overlay's own host component, so a view change that concerns only a dialog leaves the App tree alone.
 	const bootPhase = useStore((s) => s.boot.phase);
 	const bootDetail = useStore((s) => s.boot.detail);
-	const worktreeService = useStore((s) => s.boot.worktreeService);
 	const snap = useStore((s) => s.snap);
 	const panelOpen = useStore((s) => s.view.panelOpen);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
@@ -261,10 +261,7 @@ export function App() {
 	const panel = usePresence(panelOpen, 320);
 	const mainRef = useRef(null);
 	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen]);
-	useEffect(() => {
-		const copy = worktreeService;
-		document.title = copy ? `[${t("Copy")}] ${clip(copy.name || "", 24)} · MyHarness` : `[${t("Main")}] ${snap?.session?.name ? `${clip(snap.session.name, 24)} · ` : ""}MyHarness`;
-	}, [snap?.session?.name, worktreeService]);
+	useWorkspaceTitle();
 
 
 	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;

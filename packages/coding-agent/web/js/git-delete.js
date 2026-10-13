@@ -16,9 +16,7 @@ export function explainDeleteFailure(error, kind, force = false) {
 		return {
 			canForce: true,
 			occupied: true,
-			message: force
-				? t("Force delete also failed because a copy is still using this branch. Neither the branch nor the copy was deleted. Click 'Go to the copy', delete the copy there, then come back to delete the branch.")
-				: t("A copy is still using this branch. Even force delete cannot skip this restriction. Click 'Go to the copy', delete that copy in the copy section, then come back to delete the branch."),
+			message: t("This branch is used by an isolated copy. Force deletion will also destroy its Worktree copies and permanently discard all uncommitted changes inside them."),
 			worktreePath: /(?:used by worktree|checked out) at ['"](.+)['"]/i.exec(detail)?.[1],
 		};
 	}

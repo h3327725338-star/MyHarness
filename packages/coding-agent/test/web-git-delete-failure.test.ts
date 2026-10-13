@@ -17,12 +17,10 @@ describe.each(["zh-CN", "en"])("Git deletion explanations (%s)", (language) => {
 			for (const result of [safe, forced]) {
 				expect(result).toMatchObject({ canForce: true, occupied: true, worktreePath: "C:/副本目录/task-copy" });
 				expect(result.message).not.toContain("error:");
-				expect(result.message).toContain(language === "en" ? "Go to the copy" : "去对应副本");
+				expect(result.message).toContain(language === "en" ? "permanently discard" : "永久丢失");
 			}
-			expect(safe.message).toContain(language === "en" ? "Even force delete cannot" : "强制删除也不能");
-			expect(forced.message).toContain(
-				language === "en" ? "Neither the branch nor the copy" : "分支和副本都没被删除",
-			);
+			expect(safe.message).toBe(forced.message);
+			expect(safe.message).toContain("Worktree");
 		},
 	);
 

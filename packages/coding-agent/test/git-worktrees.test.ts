@@ -16,7 +16,7 @@ function runGit(cwd: string, args: string[]) {
 }
 
 function createRepository(): { root: string; agentDir: string; manager: GitWorktreeManager } {
-	const tempRoot = mkdtempSync(join(tmpdir(), "myharness-worktrees-"));
+	const tempRoot = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "myharness-worktrees-"));
 	tempRoots.push(tempRoot);
 	const root = join(tempRoot, "repo with spaces");
 	const agentDir = join(tempRoot, "agent data");
@@ -44,6 +44,44 @@ afterEach(() => {
 });
 
 describe("GitWorktreeManager", () => {
+	it("cascades dirty copy removal before deleting its branch, retaining other branches and files", async () => {
+		const { root, agentDir, manager } = createRepository();
+		const copy = manager.createBranch(root, "cascade-target").worktree!;
+		writeFileSync(join(copy.path, "shared.txt"), "uncommitted\n");
+		writeFileSync(join(copy.path, "new.txt"), "untracked\n");
+		const other = manager.createBranch(root, "keep-copy").worktree!;
+		const useCase = new GitWorktreeUseCase({
+			getAgentDir: () => agentDir,
+			getCurrentCwd: () => root,
+			isSessionIdle: () => true,
+			switchWorkspace: async () => ({ cancelled: false }),
+		});
+		expect(await useCase.deleteBranchAndCopies(root, "cascade-target")).toMatchObject({ ok: true });
+		expect(existsSync(copy.path)).toBe(false);
+		expect(manager.list(root).worktrees?.some((w) => w.path === copy.path)).toBe(false);
+		expect(runGit(root, ["branch", "--list", "cascade-target"]).stdout).toBe("");
+		expect(existsSync(other.path)).toBe(true);
+		expect(readFileSync(join(root, "shared.txt"), "utf8").trim()).toBe("base");
+	});
+
+	it("does not remove protected or locked copies, or delete their branches", async () => {
+		const { root, agentDir, manager } = createRepository();
+		const copy = manager.createBranch(root, "protected-copy").worktree!;
+		let cwd = copy.path;
+		const useCase = new GitWorktreeUseCase({
+			getAgentDir: () => agentDir,
+			getCurrentCwd: () => cwd,
+			isSessionIdle: () => true,
+			switchWorkspace: async () => ({ cancelled: false }),
+		});
+		expect((await useCase.deleteBranchAndCopies(root, "protected-copy")).ok).toBe(false);
+		cwd = root;
+		runGit(root, ["worktree", "lock", copy.path]);
+		expect((await useCase.deleteBranchAndCopies(root, "protected-copy")).ok).toBe(false);
+		expect((await useCase.deleteBranchAndCopies(root, "main")).ok).toBe(false);
+		expect(existsSync(copy.path)).toBe(true);
+		expect(runGit(root, ["branch", "--list", "protected-copy"]).stdout).toContain("protected-copy");
+	});
 	it("async listing matches synchronous metadata and yields to the event loop", async () => {
 		const { root, manager } = createRepository();
 		const expected = manager.list(root);
