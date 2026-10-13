@@ -52,23 +52,26 @@ describe("sub agent", () => {
 			getSettings: () => ({ enabled: false }),
 		});
 
-		// No configured cap: the default of 3 applies before the enabled check.
-		await expect(
-			tool.execute(
-				"test-call",
-				{
-					tasks: Array.from({ length: 4 }, (_, index) => ({
-						description: `Task ${index + 1}`,
-						prompt: "Inspect one independent area.",
-					})),
-				},
-				undefined,
-				undefined,
-				undefined as any,
-			),
-		).rejects.toThrow("between 1 and 3");
+		// No configured cap: the default of 3 applies before the enabled check, returning batch guidance.
+		const overDefault = await tool.execute(
+			"test-call",
+			{
+				tasks: Array.from({ length: 4 }, (_, index) => ({
+					description: `Task ${index + 1}`,
+					prompt: "Inspect one independent area.",
+				})),
+			},
+			undefined,
+			undefined,
+			undefined as any,
+		);
+		const overDefaultText = overDefault.content.map((item) => (item.type === "text" ? item.text : "")).join("\n");
+		expect(overDefaultText).toContain("当前单次最多派发 3");
+		expect(overDefaultText).toContain("收到 4");
+		expect(overDefaultText).toContain("分批");
+		expect(overDefault.details).toMatchObject({ completed: 0, total: 4 });
 
-		// A configured cap of 2 rejects a third task.
+		// A configured cap of 2 returns guidance for a third task instead of throwing.
 		const capped = createSubAgentToolDefinition(process.cwd(), {
 			getSettings: () => ({
 				enabled: true,
@@ -78,20 +81,22 @@ describe("sub agent", () => {
 				maxTasks: 2,
 			}),
 		});
-		await expect(
-			capped.execute(
-				"test-call",
-				{
-					tasks: Array.from({ length: 3 }, (_, index) => ({
-						description: `Task ${index + 1}`,
-						prompt: "Inspect one independent area.",
-					})),
-				},
-				undefined,
-				undefined,
-				undefined as any,
-			),
-		).rejects.toThrow("between 1 and 2");
+		const overCapped = await capped.execute(
+			"test-call",
+			{
+				tasks: Array.from({ length: 3 }, (_, index) => ({
+					description: `Task ${index + 1}`,
+					prompt: "Inspect one independent area.",
+				})),
+			},
+			undefined,
+			undefined,
+			undefined as any,
+		);
+		const overCappedText = overCapped.content.map((item) => (item.type === "text" ? item.text : "")).join("\n");
+		expect(overCappedText).toContain("当前单次最多派发 2");
+		expect(overCappedText).toContain("收到 3");
+		expect(overCapped.details).toMatchObject({ completed: 0, total: 3 });
 	});
 
 	it("clamps the task cap to the protocol range of 1 to 18", () => {
@@ -712,7 +717,7 @@ describe("sub agent", () => {
 			}),
 		});
 		expect(tool.parameters.properties).toHaveProperty("run_in_background");
-		expect((tool.parameters.properties.tasks as unknown as { maxItems: number }).maxItems).toBe(18);
+		expect((tool.parameters.properties.tasks as unknown as { maxItems: number }).maxItems).toBe(3);
 	});
 
 	describe("report completeness evaluation", () => {

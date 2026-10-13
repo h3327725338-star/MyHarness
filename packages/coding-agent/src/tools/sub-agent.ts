@@ -43,8 +43,6 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { FULL_TEXT_OUTPUT } from "./tool-result-persistence.ts";
 import { truncateHead } from "./truncate.ts";
 
-/** Protocol hard cap for Explore tasks; the user-configurable cap (`subAgent.maxTasks`, default 3) is enforced per call. */
-const MAX_EXPLORE_TASKS = SUB_AGENT_SETTING_RANGES.maxTasks.max;
 const PER_TASK_OUTPUT_CAP = 20 * 1024;
 const SUB_AGENT_STOP_TIMEOUT_MS = 5_000;
 /** Zero means delegated Explore tasks have no wall-clock deadline by default. */
@@ -63,12 +61,11 @@ const PARTIAL_SUMMARY_CAP = 12 * 1024;
 const MAX_STRUCTURED_ITEMS = 24;
 
 /**
- * `maxItems` stays at the protocol hard cap, so the shape of the tool never changes with a setting; the description
- * names the cap this call actually accepts (`subAgent.maxTasks`, default 3) so the model does not write 4..18 tasks
- * and then collide with the runtime check for nothing.
+ * `maxItems` is bound to the live `subAgent.maxTasks` value, so the schema itself enforces the current cap;
+ * the description names the same cap so the model plans at most N tasks and splits the rest into later batches.
  */
 function subAgentTasksDescription(advertisedMaxTasks: number): string {
-	return `Independent exploration tasks to run in parallel; this call accepts at most ${advertisedMaxTasks} (the schema cap ${MAX_EXPLORE_TASKS} is the protocol hard limit) - split more directions into separate agent calls`;
+	return `Independent exploration tasks to run in parallel; this call accepts at most ${advertisedMaxTasks} - split more directions into separate agent calls of at most ${advertisedMaxTasks} each, keeping every direction without merging or dropping`;
 }
 const SUB_AGENT_BACKGROUND_DESCRIPTION =
 	"Preferred. Run the Explore tasks in the background and keep working on independent steps while they run; results arrive automatically. Omit only when you have nothing else to do until the results are in.";
@@ -106,7 +103,7 @@ function createSubAgentSchemaBody(mode: SubAgentMode, advertisedMaxTasks: number
 		tasks: Type.Array(createSubAgentTaskItemSchema(mode), {
 			description: subAgentTasksDescription(advertisedMaxTasks),
 			minItems: 1,
-			maxItems: MAX_EXPLORE_TASKS,
+			maxItems: advertisedMaxTasks,
 		}),
 		run_in_background: Type.Optional(Type.Boolean({ description: SUB_AGENT_BACKGROUND_DESCRIPTION })),
 	};
@@ -115,10 +112,9 @@ function createSubAgentSchemaBody(mode: SubAgentMode, advertisedMaxTasks: number
 const subAgentSchema = Type.Object(createSubAgentSchemaBody("read-only", SETTINGS_DEFAULTS.defaultSubAgentMaxTasks));
 
 /**
- * The `tasks` array keeps the protocol hard cap (`maxItems`), while its description and the tool prompt name the cap
- * this session actually accepts, so a model never writes more tasks than `subAgent.maxTasks` and then collides with
- * the runtime check. Only description strings differ from the historical shape; field names, types and constraints
- * are unchanged.
+ * The `tasks` array binds `maxItems` to the live `subAgent.maxTasks` value, while its description and the tool
+ * prompt name the same cap, so a model never plans more tasks than the current setting in one call and instead
+ * advances in batches. Field names and types are unchanged; only the cap value follows the setting.
  */
 function createSubAgentSchema(mode: SubAgentMode, advertisedMaxTasks: number): typeof subAgentSchema {
 	return Type.Object(createSubAgentSchemaBody(mode, advertisedMaxTasks)) as typeof subAgentSchema;
@@ -1974,6 +1970,7 @@ export function createSubAgentToolDefinition(
 		promptSnippet: loadSystemPrompt("tools/agent/snippet.md", promptVariables),
 		promptGuidelines: [
 			...loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
+			`当前允许的最大子智能体并发/派发上限为 ${advertisedMaxTasks}，单次派发任务严禁超过该数量；如需更多方向，必须保留全部方向并分批推进，每批至多 ${advertisedMaxTasks} 个，首批完成后根据回执再派下一批，全程任何时刻活动子任务数不超过 ${advertisedMaxTasks}，严禁合并或丢弃任务。`,
 			...(mode === "read-write"
 				? [
 						"Read-write Explore sub-agents edit only inside their own Git worktree, never commit, push, merge or stage, and never start further sub-agents; their result reports the worktree path, branch and changed files. Each worktree starts as a snapshot of the current workspace (HEAD plus its uncommitted changes): refer to files by paths relative to the project root, because absolute paths of your own workspace are not readable from a worktree.",
@@ -1982,16 +1979,35 @@ export function createSubAgentToolDefinition(
 		],
 		parameters: createSubAgentSchema(mode, advertisedMaxTasks),
 		// Each call already runs its tasks in parallel, capped by the configured subAgent.maxTasks. Serializing
-		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema keeps
-		// MAX_EXPLORE_TASKS as the protocol hard cap; execute enforces the live configured value below it.
+		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema binds
+		// maxItems to the live configured value; execute re-checks it and returns batch guidance without running.
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const settings = options?.getSettings?.() ?? { enabled: false };
 			const maxTasks = resolveExploreMaxTasks(settings);
-			if (params.tasks.length < 1 || params.tasks.length > maxTasks) {
-				throw new Error(
-					`Agent requires between 1 and ${maxTasks} Explore tasks (the schema cap ${MAX_EXPLORE_TASKS} is the protocol hard limit). Please split into separate agent calls of at most ${maxTasks} tasks each.`,
-				);
+			if (params.tasks.length < 1) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `当前单次至少派发 1 个子智能体，本次收到 0 个，未执行任何任务。请按原需求重构为 1 到 ${maxTasks} 个任务后重新提交。`,
+						},
+					],
+					details: { completed: 0, total: 0, results: [] } as SubAgentToolDetails,
+				};
+			}
+			if (params.tasks.length > maxTasks) {
+				const received = params.tasks.length;
+				const batches = Math.ceil(received / maxTasks);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `当前单次最多派发 ${maxTasks} 个子智能体，本次收到 ${received} 个，已拦截未执行。请保留全部 ${received} 个方向，不合并、不丢弃，按原顺序分成 ${batches} 批、每批至多 ${maxTasks} 个的 agent 调用分批推进，首批完成后根据结果回执再派下一批，全程活动子任务数不超过 ${maxTasks}。`,
+						},
+					],
+					details: { completed: 0, total: received, results: [] } as SubAgentToolDetails,
+				};
 			}
 			if (!settings.enabled) throw new Error("Sub Agent is disabled in /settings.");
 			if (!settings.provider || !settings.model || !settings.thinkingLevel) {

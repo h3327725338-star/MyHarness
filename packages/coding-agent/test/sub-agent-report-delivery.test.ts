@@ -374,7 +374,7 @@ describe("P6: no report body must come back as an explicit diagnosis, never blan
 });
 
 describe("C1-C3: the advertised task cap matches the runtime cap", () => {
-	it("names the live cap in the tasks description while keeping the protocol hard cap", () => {
+	it("names the live cap in the tasks description with a dynamic schema cap", () => {
 		const tasksSchemaOf = (maxTasks?: number) => {
 			const definition = createSubAgentToolDefinition(process.cwd(), {
 				getSettings: () => ({ enabled: true, provider: "p", model: "m", thinkingLevel: "off", maxTasks }),
@@ -386,12 +386,12 @@ describe("C1-C3: the advertised task cap matches the runtime cap", () => {
 			};
 		};
 		const defaulted = tasksSchemaOf();
-		expect(defaulted.maxItems).toBe(18);
+		expect(defaulted.maxItems).toBe(3);
 		expect(defaulted.minItems).toBe(1);
-		// maxItems 18 is only the protocol ceiling; the model must read the cap this call actually enforces.
+		// maxItems follows the live subAgent.maxTasks value; the model must read the cap this call enforces.
 		expect(defaulted.description).toContain("at most 3");
 		const capped = tasksSchemaOf(7);
-		expect(capped.maxItems).toBe(18);
+		expect(capped.maxItems).toBe(7);
 		expect(capped.description).toContain("at most 7");
 		expect(capped.description).toContain("separate agent calls");
 	});
@@ -404,13 +404,13 @@ describe("C1-C3: the advertised task cap matches the runtime cap", () => {
 				prompt: "Inspect one independent area.",
 			})),
 		};
-		await expect(tool.execute("call-too-many", tooMany, undefined, undefined)).rejects.toThrow(
-			"Agent requires between 1 and 3 Explore tasks",
-		);
-		await expect(tool.execute("call-too-many", tooMany, undefined, undefined)).rejects.toThrow(/schema cap 18/);
-		await expect(tool.execute("call-too-many", tooMany, undefined, undefined)).rejects.toThrow(
-			/separate agent calls of at most 3 tasks/,
-		);
+		const result = await tool.execute("call-too-many", tooMany, undefined, undefined);
+		const text = result.content.map((item) => (item.type === "text" ? item.text : "")).join("\n");
+		expect(text).toContain("当前单次最多派发 3");
+		expect(text).toContain("收到 4");
+		expect(text).toContain("分批");
+		expect(text).toContain("不超过 3");
+		expect(result.details).toMatchObject({ completed: 0, total: 4 });
 	});
 
 	it("changes only description strings between modes and keeps every schema constraint", () => {
@@ -434,10 +434,15 @@ describe("C1-C3: the advertised task cap matches the runtime cap", () => {
 			}
 			return value;
 		};
-		expect(stripDescriptions(JSON.parse(readWrite))).toEqual(stripDescriptions(JSON.parse(readOnly)));
+		const parsedReadOnly = JSON.parse(readOnly);
+		const parsedReadWrite = JSON.parse(readWrite);
+		// maxItems follows the live cap in both modes, so it must match after stripping descriptions.
+		expect(parsedReadOnly.properties.tasks.maxItems).toBe(5);
+		expect(parsedReadWrite.properties.tasks.maxItems).toBe(5);
+		expect(stripDescriptions(parsedReadWrite)).toEqual(stripDescriptions(parsedReadOnly));
 		expect(readWrite).not.toBe(readOnly);
 		expect(readOnly).toContain("at most 5");
-		expect(readOnly).toContain('"maxItems":18');
+		expect(readOnly).toContain('"maxItems":5');
 	}, 30_000);
 });
 
