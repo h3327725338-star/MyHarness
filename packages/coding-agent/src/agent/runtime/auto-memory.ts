@@ -130,13 +130,12 @@ const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
 /** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
 export const MEMORY_PROFILE_ID = "global/用户画像";
 const RECALL_TURN_MAX_BYTES = 20 * 1024;
-const EXTRACTION_TRANSCRIPT_MAX_BYTES = 24 * 1024;
-const EXTRACTION_MANIFEST_MAX_BYTES = 16 * 1024;
-const CONSOLIDATION_INPUT_MAX_BYTES = 60 * 1024;
+// 维护记忆 Agent 的输入不设上限：提取时的聊天全文、已有记忆清单、整理时的整批记忆全部送给模型，
+// 只有输出侧保留上限（单次模型输出 maxTokens、单条记忆正文 8KB）。主聊天的召回仍保留 20KB 保护，不在此列。
 const MAX_RECALLED_MEMORIES = 5;
 const CONSOLIDATION_MIN_CHANGES = 5;
 const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
-const AUTO_MEMORY_TIMEOUT_MS = 5 * 60 * 1000;
+const AUTO_MEMORY_TIMEOUT_MS = 15 * 60 * 1000;
 const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
 
@@ -430,8 +429,8 @@ export function parseMemorySelection(output: string): string[] | undefined {
 }
 
 function formatManifest(entries: MemoryEntry[]): string {
+	// 输入不设上限：已有记忆清单全部送给提取器，不再按 16KB 截断。
 	const rows: Array<Record<string, unknown>> = [];
-	let bytes = 2;
 	for (const { id, name, description, type, scope, updatedAt, importance, triggers } of entries) {
 		// Show existing annotations so the memory model keeps them instead of rewriting or duplicating the entry.
 		const row = {
@@ -444,10 +443,7 @@ function formatManifest(entries: MemoryEntry[]): string {
 			...(importance ? { importance } : {}),
 			...(triggers?.length ? { triggers } : {}),
 		};
-		const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
-		if (rows.length > 0 && bytes + rowBytes > EXTRACTION_MANIFEST_MAX_BYTES) break;
 		rows.push(row);
-		bytes += rowBytes;
 	}
 	return JSON.stringify(rows, null, 2);
 }
@@ -613,16 +609,8 @@ function formatTranscript(entries: SessionEntry[], lastEntryId?: string): { text
 	});
 	if (candidates.length === 0) return { text: "", lastEntryId };
 
-	const selected: typeof candidates = [];
-	let bytes = 0;
-	for (const candidate of candidates) {
-		const item = { ...candidate, text: truncateUtf8(candidate.text, EXTRACTION_TRANSCRIPT_MAX_BYTES) };
-		const formatted = `${item.role === "user" ? "User" : "Main AI"}:\n${item.text}\n`;
-		const itemBytes = Buffer.byteLength(formatted, "utf8");
-		if (selected.length > 0 && bytes + itemBytes > EXTRACTION_TRANSCRIPT_MAX_BYTES) break;
-		selected.push(item);
-		bytes += itemBytes;
-	}
+	// 输入不设上限：本轮新增聊天全文都送给提取器，不再按 24KB 截断。输出侧仍保留上限。
+	const selected = candidates;
 	return {
 		text: selected.map((item) => `${item.role === "user" ? "User" : "Main AI"}:\n${item.text}`).join("\n\n"),
 		lastEntryId: selected.at(-1)?.id,
@@ -1265,18 +1253,12 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
+		// 输入不设上限：整理时一批处理全部可见记忆，不再按 60KB 切分多批。
 		const batches: MemoryEntry[][] = [[]];
-		let bytes = 0;
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
 		for (const entry of entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
-			const chunkBytes = Buffer.byteLength(format(entry), "utf8");
-			if (batches.at(-1)!.length > 0 && bytes + chunkBytes > CONSOLIDATION_INPUT_MAX_BYTES) {
-				batches.push([]);
-				bytes = 0;
-			}
 			batches.at(-1)!.push(entry);
-			bytes += chunkBytes;
 		}
 		for (const batch of batches) {
 			if (batch.length === 0) continue;
