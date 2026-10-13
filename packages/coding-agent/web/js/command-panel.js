@@ -6,6 +6,7 @@ import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadMode
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoTaskChanges } from "./git-flow.js";
+import { explainDeleteFailure } from "./git-delete.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
 import { serverText, t } from "./i18n.js";
@@ -873,7 +874,9 @@ function useLoaded(loader, deps = []) {
 }
 
 function worktreesScreen(ctx) {
-	const { data, error, reload } = useLoaded(() => api("/api/git/worktrees"));
+	// The list and any deletion opened from it belong to this Chat, even if the visible Chat changes later.
+	const slot = useRef(state.activeSlot ?? "").current;
+	const { data, error, reload } = useLoaded(() => api("/api/git/worktrees", { slot }));
 	const busy = !!state.snap?.active;
 	return {
 		title: t("Worktrees"),
@@ -895,7 +898,7 @@ function worktreesScreen(ctx) {
 							...(!w.isMain
 								? [
 										{ key: "combine", label: t("Combine into main"), disabled: busy, onEnter: async (cc) => { const r = await attempt(() => post("/api/git/worktrees/combine", { branch: w.branch })); if (r) { toast(r.message || (r.status === "merged" ? t("Merged into main and removed.") : r.error || r.status), r.ok ? "info" : "error", 8000); reload(); cc.pop(); } } },
-										{ key: "delete", label: t("Delete"), danger: true, disabled: w.current || busy, onEnter: async (cc) => { if (await attempt(() => post("/api/git/worktrees/delete", { path: w.path }))) { reload(); cc.pop(); } } },
+										{ key: "delete", label: t("Delete copy"), danger: true, chevron: true, disabled: w.current || !!state.snap?.active, onEnter: (cc) => cc.push((ccc) => deleteCopyScreen(ccc, w, slot, reload)) },
 									]
 								: []),
 						],
@@ -908,6 +911,68 @@ function worktreesScreen(ctx) {
 				chevron: true,
 				onEnter: (c) => c.push(() => inputScreen({ title: t("Create worktree"), label: t("Branch name"), placeholder: t("branch name"), submitLabel: t("Create"), onSubmit: async (branch, cc) => { if (branch.trim() && (await attempt(() => post("/api/git/worktrees/create", { branch, newBranch: true }), { success: t("Worktree created") }))) { reload(); cc.pop(); } } })),
 			},
+		],
+	};
+}
+
+/** Copy deletion is never a branch deletion or a merge; force is offered only after a recognised dirty-copy refusal. */
+function deleteCopyScreen(ctx, worktree, slot, reload) {
+	const [error, setError] = useState(null);
+	const [forceConfirm, setForceConfirm] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const request = useRef(false);
+	const alive = useRef(true);
+	useEffect(() => {
+		alive.current = true;
+		return () => { alive.current = false; };
+	}, []);
+	const disabled = busy || !!state.snap?.active || worktree.isMain || worktree.current;
+	const remove = async (force = false) => {
+		// A ref closes the synchronous double-click window before the state update is rendered.
+		if (request.current || state.snap?.active || worktree.isMain || worktree.current) return;
+		if (force && (!forceConfirm || !error?.canForce)) return;
+		request.current = true;
+		setBusy(true);
+		try {
+			await post("/api/git/worktrees/delete", { path: worktree.path, ...(force ? { force: true } : {}) }, slot);
+		} catch (e) {
+			const cause = { detail: e.rawMessage || e.message || String(e), status: e.status };
+			const failure = { ...cause, ...explainDeleteFailure(cause, "copy", force) };
+			if (alive.current) {
+				setError((previous) => ({ ...failure, revision: (previous?.revision || 0) + 1 }));
+				// Permission/unknown/protected failures return to safe retry, never retain a force action.
+				setForceConfirm(force && !!failure.canForce);
+			}
+			return;
+		} finally {
+			request.current = false;
+			if (alive.current) setBusy(false);
+		}
+		toast(t("Copy deleted"), "info", 3500);
+		reload();
+		if (alive.current) {
+			// Leave both the confirmation and the detail of the copy that no longer exists.
+			ctx.pop();
+			ctx.pop();
+		}
+	};
+	return {
+		title: t("Delete copy?"),
+		subtitle: t("Delete copy “{name}”? Its folder will be deleted, not its branch. This does not merge changes into main.", { name: worktree.displayName || worktree.branch || worktree.path.split(/[\\/]/).pop() }),
+		filterable: false,
+		initial: 0,
+		body: html`<div class="cp-body">
+			<div class="dim pre-wrap">${worktree.path}</div>
+			${error ? html`<div class="c-danger" role="alert">${error.message}</div><details key=${error.revision}><summary>${t("Error details")}</summary><pre class="git-lines">${error.detail}</pre></details>` : null}
+			${error?.canForce ? html`<div class="c-danger">${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
+			${forceConfirm ? html`<strong class="c-danger">${t("Confirm force deletion of this copy and all uncommitted changes inside it?")}</strong>` : null}
+		</div>`,
+		rows: [
+			{ key: "cancel", label: t("Cancel"), disabled: busy, onEnter: (c) => c.pop() },
+			// A different action key on each failure/force step restores the default highlight to Cancel.
+			error?.canForce
+				? { key: `${forceConfirm ? "confirm-force" : "prepare-force"}:${error.revision}`, label: t("Force delete copy"), icon: "trash", danger: true, chevron: !forceConfirm, disabled, onEnter: () => { if (disabled || request.current) return; return forceConfirm ? remove(true) : setForceConfirm(true); } }
+				: { key: error ? `retry:${error.revision}` : "delete", label: error ? t("Retry delete") : t("Delete copy"), danger: true, disabled, onEnter: () => remove() },
 		],
 	};
 }

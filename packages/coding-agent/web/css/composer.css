@@ -197,6 +197,10 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-del:hover { color: var(--danger); }
 .branch-confirm { flex: none; height: 20px; padding: 0 7px; border-radius: var(--r-pill); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-xs); font-weight: 600; animation: fade-in var(--t-fast) var(--ease) both; }
 .branch-note { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--fs-xs); }
+.branch-delete-panel { flex-direction: column; align-items: stretch; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.branch-delete-panel .branch-form { flex-wrap: wrap; padding: 0; }
+.branch-delete-details summary { cursor: pointer; color: var(--text-3); }
+.branch-delete-details .pre-wrap { max-height: 120px; overflow-y: auto; margin-top: 4px; }
 .branch-foot { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 3px; }
 .branch-new { color: var(--text-2); }
 .branch-new.hi { background: var(--surface-hover); color: var(--text); }
@@ -213,7 +217,8 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
 .branch-copy { color: var(--text-2); }
 .branch-copy-actions { display: flex; flex: none; opacity: 0; }
-.branch-copy:hover .branch-copy-actions, .branch-copy:focus-within .branch-copy-actions { opacity: 1; }
+.branch-copy:hover .branch-copy-actions, .branch-copy:focus-within .branch-copy-actions, .branch-copy-target .branch-copy-actions { opacity: 1; }
+.branch-copy-target { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
 .branch-copy-actions .icon-btn { flex: none; }
 .branch-copy-info { flex: 1; min-width: 0; gap: 2px; }
 .branch-copy > svg { flex: none; }

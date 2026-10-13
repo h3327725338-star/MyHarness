@@ -46,13 +46,13 @@ export class GitWorktreeUseCase {
 		return new GitWorktreeManager(this.host.getAgentDir()).createBranch(repositoryRoot, branchName, "main");
 	}
 
-	delete(repositoryRoot: string, worktree: GitWorktree): GitWorktreeUseCaseActionResult {
+	delete(repositoryRoot: string, worktree: GitWorktree, force = false): GitWorktreeUseCaseActionResult {
 		const blocked = this.requireIdle();
 		if (blocked) return blocked;
 		if (this.isCurrentWorkspace(worktree.path)) {
 			return { ok: false, error: "不能删除当前正在使用的 Worktree，请先进入 main 或其他 Worktree。" };
 		}
-		return new GitWorktreeManager(this.host.getAgentDir()).remove(repositoryRoot, worktree.path);
+		return new GitWorktreeManager(this.host.getAgentDir()).remove(repositoryRoot, worktree.path, force);
 	}
 
 	async enter(worktree: GitWorktree): Promise<GitWorktreeUseCaseActionResult> {

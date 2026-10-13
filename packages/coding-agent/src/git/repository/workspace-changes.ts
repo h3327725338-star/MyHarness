@@ -515,6 +515,22 @@ export async function collectFinalWorkspaceChanges(
 		}
 
 		const head = collectGitCheckpointHeadChanges(checkpoint);
+		// 外部分支切换防护：任务窗口外 HEAD 移到了基线历史之外的提交（例如用户在界面切到
+		// 另一个分支，整个工作区内容被替换），此时 workingChanges 是两个分支的内容差，
+		// 不是本轮编辑，不得归属。本轮自己提交的后代（headCommit 是其祖先）不受影响。
+		const finalHead = current.observation.headCommit;
+		if (finalHead && checkpoint.headCommit && finalHead !== checkpoint.headCommit) {
+			const lineage = runGitSync(["merge-base", "--is-ancestor", checkpoint.headCommit, finalHead], {
+				cwd: checkpoint.repositoryRoot,
+			});
+			if (lineage.exitCode === 1) {
+				return {
+					status: "indeterminate",
+					changes: [],
+					reason: "检测到任务窗口外发生了分支切换（HEAD 移出本轮历史），工作区差异不计入本轮编辑。",
+				};
+			}
+		}
 		if (!head.changes) {
 			return {
 				status: "indeterminate",

@@ -66,6 +66,23 @@ export function FilesPanel() {
 		loadStatus();
 		Object.keys(expanded).filter((d) => expanded[d]).forEach((d) => loadDir(d));
 	}, [lastRunId]);
+	// A branch switch, copy delete or branch delete rewrites files on disk; reload the tree and the open file.
+	useEffect(() => {
+		const onGitChanged = () => {
+			loadStatus();
+			Object.keys(expanded).filter((d) => expanded[d]).forEach((d) => loadDir(d));
+			if (viewing?.path) {
+				api(`/api/files/read?path=${encodeURIComponent(viewing.path)}`)
+					.then(setFile)
+					.catch(() => {
+						setViewing(null);
+						setFile(null);
+					});
+			}
+		};
+		window.addEventListener("myharness:git-changed", onGitChanged);
+		return () => window.removeEventListener("myharness:git-changed", onGitChanged);
+	}, [expanded, viewing]);
 	useEffect(() => {
 		if (!query.trim()) {
 			setResults(null);

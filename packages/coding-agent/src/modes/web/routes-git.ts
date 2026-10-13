@@ -618,9 +618,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	server.route("POST", "/api/git/worktrees/delete", ({ body }) => {
+		requireIdle("delete a worktree");
+		requireTrusted();
 		const root = repositoryRootOrThrow();
 		const worktree = findWorktree(root, String(asObject(body).path ?? ""));
-		const result = worktreeCase.delete(root, worktree);
+		const result = worktreeCase.delete(root, worktree, asObject(body).force === true);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the worktree.");
 		return { ok: true };
 	});
@@ -670,7 +672,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/git/branches/delete", async ({ body }) => {
 		requireIdle("delete a branch");
 		requireTrusted();
-		const result = await deleteBranchAsync(await branchRootOrThrow(), branchName(body));
+		const result = await deleteBranchAsync(
+			await branchRootOrThrow(),
+			branchName(body),
+			asObject(body).force === true,
+		);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the branch.");
 		return { ok: true };
 	});

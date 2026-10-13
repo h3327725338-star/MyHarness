@@ -15,6 +15,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 		let branchRequests = 0;
 		let worktreeRequests = 0;
 		let copyDeleteRequests = 0;
+		let copyDeleteForceRequests = 0;
 		let copyDeleted = false;
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
@@ -49,11 +50,17 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				branchRequests,
 				worktreeRequests,
 				copyDeleteRequests,
+				copyDeleteForceRequests,
 			}));
 			server.route("POST", "/api/git/worktrees/delete", ({ body }) => {
-				expect(body).toMatchObject({ path: "C:/copies/task-fix" });
+				const payload = body as { path?: unknown; force?: unknown };
+				expect(payload).toMatchObject({ path: "C:/copies/task-fix" });
+				if (payload.force === true) copyDeleteForceRequests++;
 				copyDeleteRequests++;
-				if (copyDeleteRequests === 1) throw new Error("Copy has uncommitted changes");
+				if (copyDeleteRequests === 1)
+					throw new Error(
+						"删除 Worktree 失败：git worktree remove failed: fatal: 'C:/copies/task-fix' contains modified or untracked files, use --force to delete it",
+					);
 				copyDeleted = true;
 				return { ok: true };
 			});
@@ -168,7 +175,12 @@ try {
  await wait(100);
  await until(()=>!document.querySelector('[aria-label="删除副本？"] button').disabled);
  check(document.querySelectorAll('.branch-copy').length===2&&document.querySelector('[aria-label="删除副本？"]'),'failed deletion removes copy or loses confirmation');
- document.querySelector('[aria-label="删除副本？"] button').click();await until(()=>document.querySelectorAll('.branch-copy').length===1);
+ check(document.body.textContent.includes('安全删除被拒绝'),'safe delete failure shows no plain-language explanation');
+ const forceButton=[...document.querySelectorAll('[aria-label="删除副本？"] button')].find(b=>b.textContent.includes('强制删除'));check(forceButton,'failed copy deletion does not offer force retry');
+ forceButton.click();await until(()=>document.querySelector('[aria-label="删除副本？"]').textContent.includes('确认强制删除这个副本'));
+ check((await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===1,'copy force confirmation writes before the user confirms');
+ document.querySelector('[aria-label="删除副本？"] .danger').click();await until(()=>document.querySelectorAll('.branch-copy').length===1);
+ check((await(await fetch('/api/test/request-counts')).json()).copyDeleteForceRequests===1,'force copy delete did not send force flag');
  check(!document.querySelector('[aria-label="删除副本？"]')&&document.querySelector('.branch-copy').textContent.includes('detached'),'successful deletion not refreshed');
  document.querySelector('.branch-wt-row .toggle').click();await wait(400);
  check(document.querySelector('[aria-label="副本使用的分支"]'),'creation form missing');

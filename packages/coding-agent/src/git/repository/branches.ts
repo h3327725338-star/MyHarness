@@ -2,7 +2,7 @@
  * Local branches: list, switch, create and delete. Every call is asynchronous (a
  * spawned `git`), so a server can keep answering other requests while Git works.
  * Branch rules stay Git's own: switching keeps or refuses local changes exactly
- * as `git switch` does, and deleting uses the safe `git branch -d`.
+ * as `git switch` does, and deleting uses the safe `git branch -d` unless the caller asks for a forced `-D`.
  */
 
 import type { GitCommandResult } from "./command.ts";
@@ -108,9 +108,13 @@ export async function createBranchAsync(repositoryRoot: string, name: string): P
 	return result.ok ? { ok: true } : { ok: false, error: failure(result) };
 }
 
-/** `git branch -d`: Git refuses a branch that is checked out or not merged, and the branch stays. */
-export async function deleteBranchAsync(repositoryRoot: string, name: string): Promise<GitBranchActionResult> {
+/** `git branch -d`: Git refuses a branch that is checked out or not merged, and the branch stays. `force` switches to `-D`, which drops unmerged commits on purpose. */
+export async function deleteBranchAsync(
+	repositoryRoot: string,
+	name: string,
+	force = false,
+): Promise<GitBranchActionResult> {
 	if (!(await existingBranch(repositoryRoot, name))) return { ok: false, error: `Branch "${name}" does not exist.` };
-	const result = await runGitAsync(repositoryRoot, ["branch", "-d", name]);
+	const result = await runGitAsync(repositoryRoot, ["branch", force ? "-D" : "-d", name]);
 	return result.ok ? { ok: true } : { ok: false, error: failure(result) };
 }

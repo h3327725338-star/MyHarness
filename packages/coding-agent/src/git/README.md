@@ -12,7 +12,7 @@
 | --- | --- |
 | `command.ts` | `runGit()` / `runGitSync()` / `runGitChecked()`：统一的 Git 子进程执行、超时、失败分类 |
 | `integration.ts` | 仓库检查、身份（user.name/email）、状态预览、初始化、初始基线提交、按路径提交 |
-| `branches.ts` | 本地分支：列出、切换（`git switch`）、新建并切换（`git switch -c`）、安全删除（`git branch -d`），全部异步 |
+| `branches.ts` | 本地分支：列出、切换（`git switch`）、新建并切换（`git switch -c`）、安全删除（`git branch -d`，调用方可显式要求强删 `-D`），全部异步 |
 | `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹 |
 | `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行） |
 | `failure-diagnosis.ts` | 把因具体路径导致的 Git 失败翻译成可读原因（如 Windows 保留名） |
@@ -37,7 +37,7 @@
 
 ### worktrees/
 
-`manager.ts`：`GitWorktreeManager`。列出、创建、合并、删除 Worktree。
+`manager.ts`：`GitWorktreeManager`。列出、创建、合并、删除 Worktree。`remove()` 默认安全删除，调用方可以显式传 `force: true` 使用 `git worktree remove --force` 丢弃未提交内容；两种删除都只删除副本、保留分支，不跳过主副本保护。同步失败优先保留 Git 的 `stderr` 真正原因供界面解释。分支是否被副本占用仍由 Git 拒绝，分支 `-D` 也不能绕过，副本与分支须分别操作。
 
 ### ci/
 

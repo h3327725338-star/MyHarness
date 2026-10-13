@@ -364,6 +364,25 @@ describe("collectFinalWorkspaceChanges (Final ChangeSet)", () => {
 		expect(runGit(project, ["status", "--porcelain"]).stdout).toBe("");
 	});
 
+	it("does not attribute an external branch switch to the task", async () => {
+		const { project, storageRoot } = createRepository();
+		writeFileSync(path.join(project, "main-only.txt"), "main moves on\n", "utf8");
+		expect(runGit(project, ["add", "--", "main-only.txt"]).ok).toBe(true);
+		expect(runGit(project, ["commit", "-m", "main moves on"]).ok).toBe(true);
+		const checkpoint = (
+			await createGitCheckpoint({ cwd: project, sessionId: "session-external-switch", storageRoot })
+		).checkpoint!;
+		// 用户在任务窗口外切到本轮历史之外的分支：工作区内容被整体替换（复现旧快照分支切换）。
+		expect(runGit(project, ["switch", "-c", "old-side", "HEAD~1"]).ok).toBe(true);
+
+		const detection = await collectFinalWorkspaceChanges({ cwd: project, checkpoint });
+		expect(detection).toMatchObject({
+			status: "indeterminate",
+			changes: [],
+			reason: expect.stringContaining("分支切换"),
+		});
+	});
+
 	it("represents an index-only Agent git add as a known Git task state", async () => {
 		const { project, storageRoot } = createRepository();
 		const checkpoint = (await createGitCheckpoint({ cwd: project, sessionId: "session-index-only", storageRoot }))

@@ -115,6 +115,122 @@ describe("GitWorktreeManager", () => {
 		expect(runGit(root, ["branch", "--list", "feature/existing"]).stdout).toContain("feature/existing");
 	});
 
+	it("refusing a dirty Worktree preserves its files, branch and launcher until a forced copy-only removal", () => {
+		const { root, manager } = createRepository();
+		runGit(root, ["branch", "feature/dirty"]);
+		const created = manager.createFromBranch(root, "feature/dirty");
+		expect(created.ok).toBe(true);
+		const worktreePath = created.worktree?.path;
+		expect(worktreePath).toBeTruthy();
+		if (!worktreePath || !created.worktree) throw new Error("Worktree was not created");
+		writeFileSync(join(worktreePath, "shared.txt"), "tracked work\n", "utf8");
+		writeFileSync(join(worktreePath, "scratch.txt"), "scratch\n", "utf8");
+		const originalCommit = runGit(root, ["rev-parse", "refs/heads/feature/dirty"]).stdout;
+		const launcher = manager.createLauncher(created.worktree);
+		expect(launcher.ok).toBe(true);
+		if (!launcher.launcherPath) throw new Error("Launcher was not created");
+
+		const refused = manager.remove(root, worktreePath);
+		expect(refused.ok).toBe(false);
+		// The UI matches this reason to explain the refusal in plain words; a bare "failed" hides it.
+		expect(refused.error).toMatch(/modified or untracked|use --force/i);
+		expect(readFileSync(join(worktreePath, "shared.txt"), "utf8")).toBe("tracked work\n");
+		expect(readFileSync(join(worktreePath, "scratch.txt"), "utf8")).toBe("scratch\n");
+		expect(existsSync(launcher.launcherPath)).toBe(true);
+		expect(runGit(root, ["rev-parse", "refs/heads/feature/dirty"]).stdout).toBe(originalCommit);
+		expect(manager.list(root).worktrees?.some((worktree) => worktree.branch === "feature/dirty")).toBe(true);
+
+		const forced = manager.remove(root, worktreePath, true);
+		expect(forced.ok).toBe(true);
+		expect(existsSync(worktreePath)).toBe(false);
+		expect(existsSync(launcher.launcherPath)).toBe(false);
+		expect(runGit(root, ["rev-parse", "refs/heads/feature/dirty"]).stdout).toBe(originalCommit);
+		expect(readFileSync(join(root, "shared.txt"), "utf8").replaceAll("\r\n", "\n")).toBe("base\n");
+		expect(existsSync(join(root, "scratch.txt"))).toBe(false);
+	});
+
+	it.each(["root", "subdirectory"] as const)(
+		"force does not bypass the use-case protection for the current Worktree %s",
+		(location) => {
+			const { root, agentDir, manager } = createRepository();
+			const created = manager.createBranch(root, "feature/current");
+			expect(created.ok).toBe(true);
+			if (!created.worktree) throw new Error("Worktree was not created");
+			const worktree = created.worktree;
+			const cwd = location === "root" ? worktree.path : join(worktree.path, "nested");
+			mkdirSync(cwd, { recursive: true });
+			writeFileSync(join(worktree.path, "scratch.txt"), "current work\n", "utf8");
+			const originalCommit = runGit(root, ["rev-parse", "refs/heads/feature/current"]).stdout;
+			const useCase = new GitWorktreeUseCase({
+				getAgentDir: () => agentDir,
+				getCurrentCwd: () => cwd,
+				isSessionIdle: () => true,
+				switchWorkspace: async () => ({ cancelled: false }),
+			});
+
+			for (const force of [false, true]) {
+				const refused = useCase.delete(root, worktree, force);
+				expect(refused.ok).toBe(false);
+				expect(refused.error).toMatch(/当前正在使用的 Worktree/);
+				expect(readFileSync(join(worktree.path, "scratch.txt"), "utf8")).toBe("current work\n");
+				expect(runGit(root, ["rev-parse", "refs/heads/feature/current"]).stdout).toBe(originalCommit);
+				expect(manager.list(root).worktrees?.some((copy) => copy.branch === "feature/current")).toBe(true);
+			}
+		},
+	);
+
+	it("force does not bypass the use-case running-session protection", () => {
+		const { root, agentDir, manager } = createRepository();
+		const created = manager.createBranch(root, "feature/running");
+		expect(created.ok).toBe(true);
+		if (!created.worktree) throw new Error("Worktree was not created");
+		const worktree = created.worktree;
+		writeFileSync(join(worktree.path, "scratch.txt"), "running work\n", "utf8");
+		const originalCommit = runGit(root, ["rev-parse", "refs/heads/feature/running"]).stdout;
+		const useCase = new GitWorktreeUseCase({
+			getAgentDir: () => agentDir,
+			getCurrentCwd: () => root,
+			isSessionIdle: () => false,
+			switchWorkspace: async () => ({ cancelled: false }),
+		});
+
+		for (const force of [false, true]) {
+			const refused = useCase.delete(root, worktree, force);
+			expect(refused.ok).toBe(false);
+			expect(refused.error).toMatch(/当前会话正在运行/);
+			expect(readFileSync(join(worktree.path, "scratch.txt"), "utf8")).toBe("running work\n");
+			expect(runGit(root, ["rev-parse", "refs/heads/feature/running"]).stdout).toBe(originalCommit);
+			expect(manager.list(root).worktrees?.some((copy) => copy.branch === "feature/running")).toBe(true);
+		}
+	});
+
+	it("force does not bypass main Worktree protection even when the session is idle in another copy", () => {
+		const { root, agentDir, manager } = createRepository();
+		const created = manager.createBranch(root, "feature/other");
+		expect(created.ok).toBe(true);
+		if (!created.worktree) throw new Error("Worktree was not created");
+		const cwd = created.worktree.path;
+		const main = manager.list(root).main;
+		if (!main) throw new Error("Main Worktree was not found");
+		const originalCommit = runGit(root, ["rev-parse", "refs/heads/main"]).stdout;
+		const useCase = new GitWorktreeUseCase({
+			getAgentDir: () => agentDir,
+			getCurrentCwd: () => cwd,
+			isSessionIdle: () => true,
+			switchWorkspace: async () => ({ cancelled: false }),
+		});
+
+		for (const force of [false, true]) {
+			const refused = useCase.delete(root, main, force);
+			expect(refused.ok).toBe(false);
+			expect(refused.error).toMatch(/不能删除 main 主 Worktree/);
+			expect(readFileSync(join(root, "shared.txt"), "utf8").replaceAll("\r\n", "\n")).toBe("base\n");
+			expect(runGit(root, ["rev-parse", "refs/heads/main"]).stdout).toBe(originalCommit);
+			expect(manager.list(root).main?.path).toBe(main.path);
+			expect(existsSync(cwd)).toBe(true);
+		}
+	});
+
 	it("keeps the real conflict state and does not clean the source Worktree", () => {
 		const { root, manager } = createRepository();
 		const created = manager.createBranch(root, "feature/conflict");

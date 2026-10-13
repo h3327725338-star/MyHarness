@@ -360,6 +360,8 @@ export async function api(path, options = {}) {
 	if (!res.ok) {
 		const message = exportReadOnly() && init.method !== "GET" && init.method !== "HEAD" ? t("This is a read-only copy: the conversation cannot be changed.") : serverText(data?.error, t("Request failed ({status})", { status: res.status }));
 		const err = new Error(message);
+		// Keep the server cause for action-specific explanations and collapsed details (including non-English paths).
+		err.rawMessage = typeof data?.error === "string" ? data.error : message;
 		err.status = res.status;
 		if (res.status === 410 && slot && !state.restarting) recoverLostSlot(slot);
 		throw err;

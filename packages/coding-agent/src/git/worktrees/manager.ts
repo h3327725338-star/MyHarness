@@ -55,7 +55,9 @@ interface ParsedWorktree {
 }
 
 function formatGitFailure(result: GitCommandResult): string {
-	return result.error || result.stderr.trim() || result.stdout.trim() || "Git 命令执行失败";
+	// runGitSync only puts "git <args> failed" into error and keeps Git's real reason in stderr;
+	// prefer stderr so the message (and the UI's plain-language explanation) names the actual cause.
+	return result.stderr.trim() || result.error || result.stdout.trim() || "Git 命令执行失败";
 }
 
 function pathsEqual(a: string, b: string): boolean {
@@ -188,14 +190,15 @@ export class GitWorktreeManager {
 		return this.addWorktree(repositoryRoot, normalizedBranch, normalizedBase);
 	}
 
-	remove(repositoryRoot: string, worktreePath: string): GitWorktreeActionResult {
+	remove(repositoryRoot: string, worktreePath: string, force = false): GitWorktreeActionResult {
 		const listing = this.list(repositoryRoot);
 		if (!listing.ok || !listing.worktrees) return { ok: false, error: listing.error ?? "无法读取 Worktree。" };
 		const worktree = listing.worktrees.find((candidate) => pathsEqual(candidate.path, worktreePath));
 		if (!worktree) return { ok: false, error: "选中的 Worktree 已不存在。" };
 		if (worktree.isMain) return { ok: false, error: "不能删除 main 主 Worktree。" };
 
-		const result = runGitSync(["worktree", "remove", worktree.path], {
+		// `git worktree remove` 默认拒脏副本；force 是用户在确认文案里明确要求的丢弃。
+		const result = runGitSync(["worktree", "remove", ...(force ? ["--force"] : []), worktree.path], {
 			cwd: listing.main?.path,
 			timeoutMs: WORKTREE_TIMEOUT_MS,
 		});
