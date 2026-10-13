@@ -6,8 +6,7 @@
 // list only when "Save quote" runs them through the composer's import pipeline, and cancelling drops them the same way.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { actions } from "./actions.js";
-import { selectionHint } from "./quote-highlight.js";
-import { clipLine } from "./quote-text.js";
+import { clearDraftPreview, selectionHint, setDraftPreview } from "./quote-highlight.js";
 import { t } from "./i18n.js";
 
 /** Where a selection may be quoted: the conversation's own message text, and nothing else on the page. */
@@ -15,17 +14,55 @@ const QUOTABLE = ".transcript .user-text, .transcript .final";
 
 const isQuotable = (el) => !!el?.closest?.(QUOTABLE) && !!el?.closest?.(".transcript");
 
-/** The bubble and the annotation box are placed inside the viewport, below the selection when there is room. */
+/** The bubble sits at the mouse release point, up-right in the blank; the box hugs the passage end. Both stay in view. */
 const BAR_W = 96;
-const CARD_W = 300;
-const CARD_H = 204;
+const BAR_H = 30;
+const CARD_W = 264;
+const CARD_H = 120;
+const EDGE = 12;
+
+function clampX(x, width) {
+	if (width >= window.innerWidth - EDGE * 2) return EDGE;
+	return Math.max(EDGE, Math.min(window.innerWidth - width - EDGE, x));
+}
+
+/** Bubble: first try the blank up-right of the release point, so the next line is never covered. */
+function placeBubbleAtPoint(x, y, width = BAR_W, height = BAR_H) {
+	let left = x + 12;
+	if (left + width > window.innerWidth - EDGE) left = x - width - 12;
+	left = clampX(left, width);
+	// The mouse lifts near the text baseline: lift 24px to clear the line itself, then sit above it.
+	const aboveTop = y - 24;
+	if (aboveTop - height >= EDGE) return { left, top: aboveTop, up: true };
+	return { left, top: y + 14, up: false };
+}
+
+/** Box: first try below the passage end (more room), flip above near the bottom edge. */
+function placeCardAtPoint(x, y, width = CARD_W, height = CARD_H) {
+	let left = x - 20;
+	if (left + width > window.innerWidth - EDGE) left = window.innerWidth - width - EDGE;
+	left = clampX(left, width);
+	if (y + 14 + height <= window.innerHeight - EDGE) return { left, top: y + 14, up: false };
+	return { left, top: y - 24, up: true };
+}
+
+/** Last line box of a range: the end of the words, not the whole multi-line bounding box. */
+function endRectOf(range) {
+	try {
+		const list = range.getClientRects?.();
+		if (list?.length) return list[list.length - 1];
+	} catch {
+		// Fall through to the bounding box below.
+	}
+	return range.getBoundingClientRect();
+}
 
 function place(rect, width, height) {
-	const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-	const below = rect.bottom + 10;
-	const fitsBelow = below + height <= window.innerHeight - 12;
-	const above = rect.top - 10;
-	return { left, top: fitsBelow ? below : above, up: !fitsBelow };
+	const end = rect && rect.right !== undefined && rect.bottom !== undefined ? rect : null;
+	if (!end) return { left: EDGE, top: EDGE, up: false };
+	// Old callers pass a bounding rect: treat its right-bottom as the passage end.
+	if (width <= BAR_W + 8) return placeBubbleAtPoint(end.right, end.bottom, width, height);
+	return placeCardAtPoint(end.right, end.bottom, width, height);
 }
 
 export function FloatingQuoteToolbar() {
@@ -41,6 +78,9 @@ export function FloatingQuoteToolbar() {
 	// The selection the quote came from, kept for the box: it follows the text when the conversation scrolls.
 	const anchor = useRef(null);
 	const draftPos = useRef({ left: 0, top: 0, up: false });
+	// Where the mouse lifted: the bubble anchors here, not at the selection centre.
+	const release = useRef({ x: 0, y: 0, at: 0 });
+	const freshRelease = () => Date.now() - release.current.at < 600;
 
 	const close = () => {
 		setBar(null);
@@ -48,6 +88,7 @@ export function FloatingQuoteToolbar() {
 		setNote("");
 		setFiles([]);
 		anchor.current = null;
+		clearDraftPreview();
 	};
 
 	const updateSelection = () => {
@@ -81,15 +122,25 @@ export function FloatingQuoteToolbar() {
 			return;
 		}
 		anchor.current = range.cloneRange();
-		setBar(place(rect, BAR_W, 28));
+		if (freshRelease()) {
+			setBar(placeBubbleAtPoint(release.current.x, release.current.y));
+		} else {
+		const end = endRectOf(range);
+			setBar(placeBubbleAtPoint(end.right, end.bottom));
+		}
 	};
 
 	useEffect(() => {
 		const onMouseDown = (e) => {
 			if (barRef.current?.contains(e.target) || cardRef.current?.contains(e.target)) return;
+			// The box is abandoned when the mouse lands anywhere else: no preview text is shown,
+			// so the lit passage is the only reference and giving up is one click. Right-click
+			// (context menu) never abandons it; the file picker opens from inside the box anyway.
+			if (draft && e.button !== 2) close();
 			pressed.current = true;
 		};
-		const onMouseUp = () => {
+		const onMouseUp = (e) => {
+			if (e?.clientX !== undefined) release.current = { x: e.clientX, y: e.clientY, at: Date.now() };
 			pressed.current = false;
 			// One tick to let the selection settle.
 			setTimeout(updateSelection, 10);
@@ -106,8 +157,8 @@ export function FloatingQuoteToolbar() {
 					// The box belongs to the passage: it travels with the text instead of drifting off it.
 					const range = anchor.current;
 					if (range?.startContainer?.isConnected && range?.endContainer?.isConnected) {
-						const rect = range.getBoundingClientRect();
-						if (rect.width || rect.height) draftPos.current = place(rect, CARD_W, CARD_H);
+						const end = endRectOf(range);
+						if (end.width || end.height) draftPos.current = placeCardAtPoint(end.right, end.bottom);
 					}
 					return;
 				}
@@ -135,6 +186,8 @@ export function FloatingQuoteToolbar() {
 		};
 	}, [bar, draft]);
 
+	useEffect(() => () => clearDraftPreview(), []);
+
 	const openBox = (e) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -142,12 +195,20 @@ export function FloatingQuoteToolbar() {
 		const text = sel?.toString().trim();
 		if (!text) return close();
 		const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
-		draftPos.current = place(range.getBoundingClientRect(), CARD_W, CARD_H);
+		if (!range) return close();
+		if (freshRelease()) {
+			draftPos.current = placeCardAtPoint(release.current.x, release.current.y);
+		} else {
+			const end = endRectOf(range);
+			draftPos.current = placeCardAtPoint(end.right, end.bottom);
+		}
 		anchor.current = range;
 		// Remember where in the conversation it was picked: the same words can appear more than once.
 		const hint = selectionHint(range);
 		setDraft({ text, hint });
 		setBar(null);
+		// Light the passage now: the native selection is about to go away when the box takes focus.
+		setDraftPreview(text, hint);
 		sel?.removeAllRanges();
 		setNote("");
 		setFiles([]);
@@ -157,7 +218,14 @@ export function FloatingQuoteToolbar() {
 	const save = () => {
 		if (!draft) return;
 		actions.addQuote(draft.text, { note: note.trim(), files, hint: draft.hint });
-		close();
+		// Swap the draft light for the saved card's light without a gap: the composer paints
+		// the saved quote on the next tick, so the preview stays a moment longer.
+		setBar(null);
+		setDraft(null);
+		setNote("");
+		setFiles([]);
+		anchor.current = null;
+		setTimeout(() => clearDraftPreview(), 350);
 		setTimeout(() => document.querySelector(".composer-input")?.focus(), 0);
 	};
 
@@ -197,33 +265,26 @@ export function FloatingQuoteToolbar() {
 
 	return html`<div
 		ref=${cardRef}
-		class=${`quote-note-card ${draftPos.current.up ? "up" : "down"}`}
+		class=${`quote-note-card minimal ${draftPos.current.up ? "up" : "down"}`}
 		style=${{ top: `${draftPos.current.top}px`, left: `${draftPos.current.left}px` }}
 		role="dialog"
 		aria-label=${t("Quote note")}
 		onPaste=${onPaste}
 	>
-		<div class="quote-note-head">
-			<${Icon} name="quote" size=${12} />
-			<span class="grow truncate">${t("Quote")}</span>
-			<button class="icon-btn sm" onClick=${close} title=${t("Cancel")} aria-label=${t("Cancel")}><${Icon} name="x" size=${12} /></button>
-		</div>
-		<div class="quote-note-src">${clipLine(draft.text, 92)}</div>
 		<textarea
 			ref=${area}
-			class="field quote-note-input"
-			rows="2"
+			class="quote-note-input"
+			rows="3"
 			value=${note}
 			placeholder=${t("Add a note about this passage (optional)")}
 			onInput=${(e) => setNote(e.target.value)}
 			onKeyDown=${onKey}
 		></textarea>
-		<div class="quote-note-foot">
-			<button class="icon-btn sm" onClick=${() => fileInput.current?.click()} title=${t("Attach a file")} aria-label=${t("Attach a file")}><${Icon} name="paperclip" size=${13} /></button>
-			${pickedFiles}
+		${files.length ? html`<div class="quote-note-files">${pickedFiles}</div>` : null}
+		<div class="quote-note-bar">
+			<button class="icon-btn sm quote-tool" onClick=${() => fileInput.current?.click()} title=${t("Attach a file")} aria-label=${t("Attach a file")}><${Icon} name="paperclip" size=${11} /></button>
 			<span class="grow" />
-			<button class="btn sm ghost" onClick=${close}>${t("Cancel")}</button>
-			<button class="btn sm primary" onClick=${save}>${t("Save quote")}</button>
+			<button class="icon-btn sm quote-tool quote-note-save" onClick=${save} title=${t("Save quote")} aria-label=${t("Save quote")}><span class="quote-enter" aria-hidden="true">⏎</span></button>
 		</div>
 		<input
 			ref=${fileInput}
@@ -235,6 +296,5 @@ export function FloatingQuoteToolbar() {
 				e.target.value = "";
 			}}
 		/>
-		<div class="quote-note-keys dim">${t("Enter saves · Shift+Enter new line · Esc cancels")}</div>
 	</div>`;
 }

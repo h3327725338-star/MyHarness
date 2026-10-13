@@ -150,18 +150,22 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .floating-quote-btn:hover { background: var(--surface-hover); color: var(--accent); }
 .floating-quote-btn:active { transform: scale(0.96); }
 
-.quote-note-card { position: fixed; z-index: 212; display: flex; flex-direction: column; gap: 5px; width: 300px; max-width: calc(100vw - 24px); padding: 7px 8px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); }
+.quote-note-card { position: fixed; z-index: 212; display: flex; flex-direction: column; gap: 4px; width: 264px; max-width: calc(100vw - 24px); padding: 8px 8px 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
 .quote-note-card.down { animation: quote-pop-down var(--t-base) var(--ease) both; }
 .quote-note-card.up { transform: translateY(-100%); animation: quote-pop-up var(--t-base) var(--ease) both; }
-.quote-note-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--accent); }
-.quote-note-head > svg { flex: none; }
-.quote-note-head .grow { color: var(--text-2); font-weight: 500; }
-.quote-note-src { padding: 4px 7px; border-left: 2px solid var(--accent-line); border-radius: var(--r-xs); background: var(--bg-inset); color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: calc(3em + 8px); overflow: hidden; }
-.quote-note-input { resize: none; min-height: 42px; font-size: var(--fs-sm); line-height: 1.5; }
-.quote-note-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quote-note-input { width: 100%; box-sizing: border-box; resize: none; min-height: 56px; padding: 2px 0; border: none; background: transparent; color: var(--text); font-size: var(--fs-sm); line-height: 1.5; outline: none; box-shadow: none; font-family: inherit; }
+.quote-note-input:focus { border: none; outline: none; box-shadow: none; }
+.quote-note-input::placeholder { color: var(--text-4); }
+.quote-note-files { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .quote-note-file { display: inline-flex; align-items: center; gap: 4px; max-width: 110px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-3); font-size: var(--fs-xs); }
 .quote-note-file > svg { flex: none; }
-.quote-note-keys { font-size: var(--fs-xs); color: var(--text-3); }
+.quote-note-bar { display: flex; align-items: center; gap: 0; min-height: 22px; }
+.quote-note-bar .grow { flex: 1; }
+.quote-note-bar .icon-btn { color: var(--text-3); }
+.quote-note-bar .icon-btn.quote-tool { width: 20px; height: 20px; border-radius: var(--r-sm); }
+.quote-note-bar .icon-btn:hover { color: var(--text); }
+.quote-note-bar .quote-note-save:hover { color: var(--accent); }
+.quote-enter { font-size: 12px; line-height: 1; font-weight: 600; }
 
 /* Where the task runs (folder, branch, worktree, trust): small chips just above the input card. */
 .composer-env { display: flex; align-items: center; gap: 6px; padding: 0 4px; min-height: 22px; overflow: hidden; margin-bottom: -2px; }

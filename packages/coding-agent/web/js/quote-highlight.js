@@ -28,6 +28,10 @@ const painted = new Map();
 /** id -> how often a quote has been looked for without being found. */
 const misses = new Map();
 let wanted = [];
+/** Unsaved passage open in the inline box: painted the same way so the text stays lit while typing. */
+let previewWish = null;
+const DRAFT_ID = "__draft__";
+const effectiveWishes = () => (previewWish ? [...wanted, previewWish] : wanted);
 let root = null;
 let observer;
 let frame = 0;
@@ -223,7 +227,8 @@ function repaint(force) {
 		observer.observe(el, { childList: true, characterData: true, subtree: true });
 	}
 	const native = nativeHighlights();
-	const keep = new Set(wanted.map((wish) => wish.id));
+	const list = effectiveWishes();
+	const keep = new Set(list.map((wish) => wish.id));
 	const drop = (id) => {
 		if (native) return;
 		changeDom(() => unwrap(spansOf(el, id)));
@@ -235,14 +240,14 @@ function repaint(force) {
 			drop(id);
 		}
 	}
-	if (!wanted.length) {
+	if (!list.length) {
 		if (!native) changeDom(() => unwrap(spansOf(el)));
 		paintRegistry();
 		return;
 	}
 	let index;
 	changeDom(() => {
-		for (const wish of wanted) {
+		for (const wish of list) {
 			const entry = painted.get(wish.id);
 			if (entry && !force && isFresh(entry, wish)) continue;
 			drop(wish.id);
@@ -269,8 +274,9 @@ function repaint(force) {
 
 /** A re-render may have replaced the text a painted range pointed at: look only for what is no longer valid. */
 function verify() {
-	if (selfChange || !wanted.length) return;
-	if (wanted.every((wish) => {
+	const list = effectiveWishes();
+	if (selfChange || !list.length) return;
+	if (list.every((wish) => {
 		const entry = painted.get(wish.id);
 		return entry && isFresh(entry, wish);
 	}))
@@ -299,9 +305,29 @@ export function paintQuotes(quotes) {
 	repaint(true);
 }
 
+/** Light the passage open in the inline box, before it is saved: same colour, same finder, one extra wish. */
+export function setDraftPreview(text, hint) {
+	const needle = normalise(text);
+	if (!needle) {
+		previewWish = null;
+	} else {
+		previewWish = { id: DRAFT_ID, needle, hint: Number(hint) || 0 };
+	}
+	schedule(() => repaint(false));
+}
+
+/** The box closed without saving: take its light away, keep the saved cards as they are. */
+export function clearDraftPreview() {
+	if (!previewWish && !painted.has(DRAFT_ID)) return;
+	previewWish = null;
+	misses.delete(DRAFT_ID);
+	schedule(() => repaint(false));
+}
+
 /** Take the in-body feedback away (quote removed, chat switched, page left). */
 export function clearQuoteHighlights() {
 	wanted = [];
+	previewWish = null;
 	painted.clear();
 	misses.clear();
 	clearTimeout(retryTimer);
