@@ -181,7 +181,7 @@ describe("conversation title generation", () => {
 			title: "修复空响应导致的会话标题失败",
 			usedFallback: true,
 		});
-		expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 512 });
+		expect(completeSimple.mock.calls[0]?.[2]?.maxTokens).toBeUndefined();
 	});
 
 	it("keeps provider errors as failures instead of falling back", async () => {

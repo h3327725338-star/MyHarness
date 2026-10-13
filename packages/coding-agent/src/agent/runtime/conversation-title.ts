@@ -12,15 +12,13 @@ export const CONVERSATION_TITLE_CONTEXT_MAX_CHARS = 6000;
 /** Maximum persisted title length after model output is normalized. */
 export const CONVERSATION_TITLE_MAX_CHARS = 80;
 const CONVERSATION_TITLE_MAX_MESSAGE_CHARS = 1800;
-const CONVERSATION_TITLE_TIMEOUT_MS = 60_000;
+const CONVERSATION_TITLE_TIMEOUT_MS = 120_000;
 const CONVERSATION_TITLE_CONCURRENCY = 2;
 /**
- * Reasoning-capable providers may spend part of the response budget before
- * emitting the title. Keep the request bounded, but leave enough room for a
- * final text block instead of treating a truncated response as a provider
- * failure.
+ * Title requests intentionally carry no output-token cap so any model can
+ * finish a long thinking chain before emitting the final title line.
+ * The underlying Provider default applies when maxTokens is omitted.
  */
-export const CONVERSATION_TITLE_MAX_OUTPUT_TOKENS = 512;
 
 const CONVERSATION_TITLE_SYSTEM_PROMPT = loadSystemPrompt("tasks/conversation-title.md");
 
@@ -195,13 +193,33 @@ function extractStructuredTitle(rawText: string): string | undefined {
 	return undefined;
 }
 
+/**
+ * Remove generic thinking sections from model text without knowing which
+ * Provider or model produced them. Handles paired tags such as
+ * <think>…</think> / <thinking>…</thinking> / <thought>…</thought> /
+ * <reasoning>…</reasoning>, plus stray tag lines left by truncation.
+ */
+function stripThinkingSections(rawText: string): string {
+	return rawText
+		.replace(
+			/<(think|thinking|thought|thoughts|reasoning|reason|analysis|scratchpad|internal)[^>]*>[\s\S]*?<\/\1\s*>/gi,
+			"\n",
+		)
+		.replace(
+			/^\s*<\/?(think|thinking|thought|thoughts|reasoning|reason|analysis|scratchpad|internal)[^>]*>\s*$/gim,
+			"",
+		)
+		.replace(/^\s*<\/?(think|thinking|thought|thoughts|reasoning|reason)[^>]*>\s*/gim, "");
+}
+
 function normalizeGeneratedTitle(rawText: string): string {
-	const structured = extractStructuredTitle(rawText);
-	const candidates = structured === undefined ? rawText.split(/\r?\n/) : [structured];
+	const cleaned = stripThinkingSections(rawText);
+	const structured = extractStructuredTitle(cleaned);
+	const candidates = structured === undefined ? cleaned.split(/\r?\n/) : [structured];
 	for (const candidate of candidates) {
 		const trimmed = candidate.trim();
 		if (!trimmed || /^```/.test(trimmed)) continue;
-		if (/^(?:explanation|说明|reason|理由)\s*[:：]/i.test(trimmed)) continue;
+		if (/^(?:explanation|说明|reason|理由|thinking|thought|思考过程)\s*[:：]/i.test(trimmed)) continue;
 		const title = cleanGeneratedTitleCandidate(trimmed);
 		if (title && /[\p{L}\p{N}]/u.test(title) && !/^(?:\{.*\}|\[.*\])$/.test(title)) return title;
 	}
@@ -280,7 +298,6 @@ export async function generateConversationTitle(
 			timeoutMs: getTitleRequestTimeout(model, options.settingsManager),
 			maxRetries: options.maxRetries ?? retry.maxRetries,
 			maxRetryDelayMs: retry.maxRetryDelayMs,
-			maxTokens: CONVERSATION_TITLE_MAX_OUTPUT_TOKENS,
 			reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,
 		});
 
