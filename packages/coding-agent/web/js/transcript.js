@@ -5,7 +5,7 @@ import { activeSlotId, api, fetchMoreTranscript, getTurnsCache, setTurnsCache, s
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, cachedTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
+import { buildTurns, buildTurnsAsync, cachedTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
@@ -662,6 +662,7 @@ export function Transcript() {
 	const active = !!snap?.active || !!snap?.flags?.completion;
 	const prevTurns = useRef(null);
 	const turnsSlot = activeSlotId();
+	const [asyncTurns, setAsyncTurns] = useState(null);
 	const turns = useMemo(() => {
 		// Cross-session cache: when this bag's last build still describes exactly these references, reuse the very
 		// same turn objects (skipping buildTurns and the sameTurn pass). Mount chunking stays as it is: reusing the
@@ -671,10 +672,24 @@ export function Transcript() {
 			prevTurns.current = cached;
 			return cached;
 		}
+		if (items.length > 400) {
+			return asyncTurns?.slot === turnsSlot ? asyncTurns.turns : [];
+		}
 		const built = buildTurns(items, { cwd, toolRuns }, prevTurns.current);
 		setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
 		prevTurns.current = built;
 		return built;
+	}, [items, toolRuns, cwd, turnsSlot, asyncTurns]);
+	useEffect(() => {
+		if (items.length <= 400 || cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd)) return undefined;
+		let cancelled = false;
+		void buildTurnsAsync(items, { cwd, toolRuns }, prevTurns.current, () => cancelled).then((built) => {
+			if (cancelled || !built) return;
+			setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
+			prevTurns.current = built;
+			setAsyncTurns({ slot: turnsSlot, turns: built });
+		});
+		return () => { cancelled = true; };
 	}, [items, toolRuns, cwd, turnsSlot]);
 
 	// Scroll behaviour: follow new output only while the reader is at the bottom.

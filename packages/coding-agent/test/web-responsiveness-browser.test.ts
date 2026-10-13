@@ -95,7 +95,10 @@ it.skipIf(gated)(
 			server.route("GET", "/api/sessions/unbound", () => ({ sessions: [] }));
 			server.route("GET", "/api/sessions/archived", () => ({ sessions: [] }));
 			server.route("GET", "/api/resources", () => ({ commands: [] }));
-			server.route("GET", "/api/git/status", () => ({ gitAvailable: false }));
+			server.route("GET", "/api/git/status", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 300));
+				return { isRepository: true, branch: "main", root: "C:/fixture" };
+			});
 			server.route("GET", "/api/models", () => ({ models: [] }));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("GET", "/hold", async () => {
@@ -110,7 +113,7 @@ it.skipIf(gated)(
 			writeFileSync(
 				join(root, "test.js"),
 				`
-import {boot,state,setView,switchChatMode,activeSlotId} from '/js/store.js';
+import {boot,state,setView,switchChatMode,activeSlotId,loadGitStatus} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const must=(ok,message)=>{ if(!ok) throw Error(message); };
 const until=async(fn,ms=6000)=>{ const end=Date.now()+ms; while(Date.now()<end){ if(fn()) return; await wait(40); } throw Error('timed out waiting for the page'); };
@@ -122,7 +125,9 @@ try {
  // 1. Nothing is read for the other mode in the first moments: the page serves what is on screen first.
  must(!(await asked()).some(r=>r.includes('mode=general')),'the other mode was read before the page was idle');
  // 2. Once the page is up and idle, the other mode's Workspaces are read without any click (this read fails here).
+ await loadGitStatus();
  await wait(1700);
+ must(state.gitStatus?.branch==='main','initial Git status did not load');
  must((await asked()).filter(r=>r==='GET /api/workspaces?mode=general').length===1,'the other mode was not read ahead: '+JSON.stringify(await asked()));
  must(state.view.chatMode==='coding'&&!(await asked()).some(r=>r.startsWith('POST')),'reading ahead changed the page or opened something');
  // 3. The switch does not wait for lists that are still loading (the next General read takes two seconds): the knob
@@ -134,6 +139,7 @@ try {
  const took=performance.now()-t0;
  must(took<1000,'the switch waited for the lists: '+Math.round(took)+' ms');
  must(state.view.chatMode==='general'&&activeSlotId()==='g1','General is not on screen after the switch');
+ must(state.gitStatus?.branch==='main','same-workspace chat lost its branch while reconciliation was pending');
  must(!state.workspaces.loaded,'the lists were already loaded, so the test did not exercise the wait');
  must((await asked()).filter(r=>r==='GET /api/workspaces?mode=general').length===2,'the switch did not ask for the General lists: '+JSON.stringify(await asked()));
  // 4. The lists fill in when they arrive.

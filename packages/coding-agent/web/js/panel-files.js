@@ -1,12 +1,14 @@
 // Files panel: workspace tree and viewer, with rendered editing for Markdown only.
 import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, Collapse, VirtualRows } from "./ui.js";
-import { api, useStore } from "./store.js";
+import { api, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
 import { MarkdownEditor } from "./markdown-editor.js";
-import { basename, debounce, dirname, fmtBytes } from "./util.js";
+import { basename, dirname, fmtBytes } from "./util.js";
 import { t } from "./i18n.js";
+import { createReadCache } from "./scheduling.js";
+const fileReads = createReadCache();
 
 const ST = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 
@@ -25,6 +27,11 @@ const TreeRow = memo(function TreeRow({ entry, depth, expanded, onToggle, status
 export function FilesPanel() {
 	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
 	const sessionId = useStore((s) => s.snap?.session?.id);
+	const cwd = useStore((s) => s.snap?.cwd);
+	const slot = state.activeSlot;
+	const boundary = useRef({ cwd, slot });
+	boundary.current = { cwd, slot };
+	const previousCwd = useRef(cwd);
 	const [tree, setTree] = useState({}); // dir -> entries
 	const [expanded, setExpanded] = useState({ "": true });
 	const [statusMap, setStatusMap] = useState({});
@@ -38,30 +45,52 @@ export function FilesPanel() {
 
 	const loadDir = async (dir) => {
 		try {
-			const data = await api(`/api/files/list?dir=${encodeURIComponent(dir)}`);
-			setTree((t) => ({ ...t, [dir]: data.entries }));
+			const path = `/api/files/list?dir=${encodeURIComponent(dir)}`;
+			const key = `${cwd}\0${path}`;
+			const cached = fileReads.peek(key);
+			if (cached) setTree((t) => ({ ...t, [dir]: cached.entries }));
+			const data = await fileReads.load(key, () => api(path, { slot }));
+			if (boundary.current.cwd === cwd) setTree((t) => ({ ...t, [dir]: data.entries }));
 		} catch (e) {
-			setError(e.message);
+			if (boundary.current.cwd === cwd) setError(e.message);
 		}
 	};
 	const loadStatus = async () => {
 		try {
-			const wt = await api("/api/changes?scope=worktree");
-			setStatusMap(Object.fromEntries(wt.files.map((f) => [f.path, f.status])));
-			const run = await api("/api/changes?scope=run");
-			setTaskMap(Object.fromEntries((run.files || []).map((f) => [f.path, true])));
+			const read = (scope) => {
+				const key = `${cwd}\0${scope === "run" ? slot : ""}\0changes:${scope}`;
+				const apply = (data) => {
+					if (boundary.current.cwd !== cwd || (scope === "run" && boundary.current.slot !== slot)) return;
+					if (scope === "run") setTaskMap(Object.fromEntries((data.files || []).map((f) => [f.path, true])));
+					else setStatusMap(Object.fromEntries((data.files || []).map((f) => [f.path, f.status])));
+				};
+				const cached = fileReads.peek(key);
+				if (cached) apply(cached);
+				return fileReads.load(key, () => api(`/api/changes?scope=${scope}`, { slot })).then(apply);
+			};
+			await Promise.all([read("worktree"), read("run")]);
 		} catch {
 			// decorations are optional
 		}
 	};
 	useEffect(() => {
-		setTree({});
-		setExpanded({ "": true });
+		if (previousCwd.current !== cwd) {
+			previousCwd.current = cwd;
+			setTree({});
+			setExpanded({ "": true });
+			setStatusMap({});
+			setQuery("");
+			setResults(null);
+		} else {
+			Object.keys(expanded).filter((dir) => expanded[dir]).forEach(loadDir);
+		}
+		setTaskMap({});
+		setError("");
 		setViewing(null);
 		setFile(null);
 		loadDir("");
 		loadStatus();
-	}, [sessionId]);
+	}, [sessionId, cwd]);
 	useEffect(() => {
 		loadStatus();
 		Object.keys(expanded).filter((d) => expanded[d]).forEach((d) => loadDir(d));
@@ -82,33 +111,38 @@ export function FilesPanel() {
 		};
 		window.addEventListener("myharness:git-changed", onGitChanged);
 		return () => window.removeEventListener("myharness:git-changed", onGitChanged);
-	}, [expanded, viewing]);
+	}, [expanded, viewing, cwd, slot]);
 	useEffect(() => {
 		if (!query.trim()) {
 			setResults(null);
 			return undefined;
 		}
 		let cancelled = false;
-		const run = debounce(async () => {
+		const path = `/api/files/search?q=${encodeURIComponent(query)}&limit=60`;
+		const key = `${cwd}\0${path}`;
+		const cached = fileReads.peek(key);
+		if (cached) setResults(cached.files);
+		const timer = setTimeout(async () => {
 			try {
-				const data = await api(`/api/files/search?q=${encodeURIComponent(query)}&limit=60`);
+				const data = await fileReads.load(key, () => api(path, { slot }));
 				if (!cancelled) setResults(data.files);
 			} catch {
 				if (!cancelled) setResults([]);
 			}
 		}, 150);
-		run();
 		return () => {
 			cancelled = true;
+			clearTimeout(timer);
 		};
-	}, [query]);
+	}, [query, cwd, slot]);
 
 	const open = async (path, line) => {
 		setViewing({ path, line });
 		setFile(null);
 		setError("");
 		try {
-			setFile(await api(`/api/files/read?path=${encodeURIComponent(path)}`));
+			const data = await api(`/api/files/read?path=${encodeURIComponent(path)}`, { slot });
+			if (boundary.current.slot === slot) setFile(data);
 		} catch (e) {
 			setError(e.message);
 		}
@@ -174,7 +208,8 @@ function FileViewer({ viewing, file, error, onBack }) {
 	}, [file, lang]);
 	const targetRef = useRef(null);
 	useEffect(() => {
-		if (targetRef.current) targetRef.current.scrollIntoView({ block: "center" });
+		const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
+		return () => cancelAnimationFrame(frame);
 	}, [file, viewing.line]);
 	return html`<div class="file-viewer">
 		<div class="panel-toolbar">

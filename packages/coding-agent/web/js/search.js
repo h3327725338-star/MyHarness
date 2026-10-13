@@ -2,6 +2,8 @@
 // second. It is the same rule the terminal uses (packages/tui/src/fuzzy.ts `rankedFilter`); no DOM here, so it is tested
 // directly.
 
+import { yieldToMain } from "./scheduling.js";
+
 /** Characters of `query` appear in `text` in this order (not necessarily next to each other). */
 function inOrder(query, text) {
 	let at = 0;
@@ -46,6 +48,23 @@ export function rankSearch(items, query, { names, keywords, usage } = {}) {
 		const tier = searchTier(query, names ? names(item) : String(item), keywords ? keywords(item) : "");
 		if (tier >= 0) ranked.push({ item, tier, usage: (usage ? usage(item) : 0) || 0, index });
 	});
+	ranked.sort((a, b) => a.tier - b.tier || b.usage - a.usage || a.index - b.index);
+	return ranked.map((entry) => entry.item);
+}
+
+/** Same ranking contract, with bounded batches so large lists do not monopolize input handling. */
+export async function rankSearchAsync(items, query, { names, keywords, usage } = {}, cancelled = () => false) {
+	const ranked = [];
+	const list = items || [];
+	if (!String(query || "").trim()) return [...list];
+	await yieldToMain();
+	for (let index = 0; index < list.length; index++) {
+		if (index && index % 200 === 0) await yieldToMain();
+		if (cancelled()) return [];
+		const item = list[index];
+		const tier = searchTier(query, names ? names(item) : String(item), keywords ? keywords(item) : "");
+		if (tier >= 0) ranked.push({ item, tier, usage: (usage ? usage(item) : 0) || 0, index });
+	}
 	ranked.sort((a, b) => a.tier - b.tier || b.usage - a.usage || a.index - b.index);
 	return ranked.map((entry) => entry.item);
 }

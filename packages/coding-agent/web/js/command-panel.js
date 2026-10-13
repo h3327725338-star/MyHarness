@@ -1,7 +1,7 @@
 // Inline command panel: slash commands with several levels of choices (/settings, /model, /effort, /git …) open here, above the
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
-import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, UnitField, useDelayedBusy, usePresence } from "./ui.js";
+import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, UnitField, useDelayedBusy, usePresence, useDebouncedValue } from "./ui.js";
 import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
@@ -13,7 +13,7 @@ import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
 import { requestNotificationPermission } from "./notifications.js";
-import { rankSearch } from "./search.js";
+import { rankSearchAsync } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
 import { RUN_MODES } from "./run-modes.js";
 import { saveSetting } from "./settings-apply.js";
@@ -1233,6 +1233,8 @@ function Screen({ build, ctx, entry, onMeta, arg }) {
 	const filterable = plain && (spec.filterable ?? allRows.filter((row) => !row.group).length >= FILTER_MIN_ROWS);
 	// Filter text and selected row are remembered per level, so coming back from a deeper level lands where the user was.
 	const [filter, setFilter] = useState(entry.filter ?? spec.initialFilter ?? "");
+	const searchFilter = useDebouncedValue(filter);
+	const [matches, setMatches] = useState(null);
 	const [selKey, setSelKey] = useState(entry.selKey ?? allRows.find((row) => row.check && !row.group)?.key);
 	const [busyKey, setBusyKey] = useState(null);
 	// A row shows "working" only when what it does really takes a while: an instant change shows nothing but its result.
@@ -1243,16 +1245,20 @@ function Screen({ build, ctx, entry, onMeta, arg }) {
 	const filterRef = useRef(null);
 	const list = useRef(null);
 	const alive = useRef(true);
-	const rows = useMemo(() => {
-		if (!filter.trim() || !filterable) return allRows.filter((row) => !row.onlyFiltered);
-		// Relevance first (exact name > prefix > part of the name > description / keywords), usage second, then the
-		// order of the list: the same rule in every panel.
-		return rankSearch(allRows.filter((row) => !row.group), filter, {
+	// Rank stable row descriptors rather than callbacks: builders may recreate rows on every render.
+	const searchRows = JSON.stringify(allRows.map((row) => [row.key, row.group, row.label, row.names, row.desc, row.search, row.uses]));
+	useEffect(() => {
+		let cancelled = false;
+		if (!searchFilter.trim() || !filterable) { setMatches(null); return undefined; }
+		void rankSearchAsync(allRows.filter((row) => !row.group), searchFilter, {
 			names: (row) => [row.label, ...(row.names || [])],
 			keywords: (row) => `${row.desc || ""} ${row.search || ""}`,
 			usage: (row) => row.uses,
-		});
-	}, [spec.rows, filter, filterable]);
+		}, () => cancelled).then((rows) => { if (!cancelled) setMatches(rows.map((row) => row.key)); });
+		return () => { cancelled = true; };
+	}, [searchRows, searchFilter, filterable]);
+	const byKey = new Map(allRows.map((row) => [row.key, row]));
+	const rows = !searchFilter.trim() || !filterable || !matches ? allRows.filter((row) => !row.onlyFiltered) : matches.map((key) => byKey.get(key)).filter(Boolean);
 	const selectable = rows.map((row, i) => (row.group || row.disabled ? -1 : i)).filter((i) => i >= 0);
 	const found = rows.findIndex((row) => row.key === selKey);
 	const current = selectable.includes(found) ? found : (selectable[0] ?? -1);
@@ -1268,7 +1274,8 @@ function Screen({ build, ctx, entry, onMeta, arg }) {
 	useLayoutEffect(() => focusInput(), [filterable]);
 	// Keep the highlighted row in view, including when ↑/↓ wrap around from one end of the list to the other.
 	useLayoutEffect(() => {
-		list.current?.querySelector(".cp-row.sel")?.scrollIntoView({ block: "nearest" });
+		const frame = requestAnimationFrame(() => list.current?.querySelector(".cp-row.sel")?.scrollIntoView({ block: "nearest" }));
+		return () => cancelAnimationFrame(frame);
 	}, [current, rows.length]);
 	useEffect(() => {
 		entry.selKey = rows[current]?.key;

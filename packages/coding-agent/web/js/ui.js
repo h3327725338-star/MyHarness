@@ -86,6 +86,15 @@ export function memo(Fn, equal = shallowEqual) {
 	};
 }
 
+export function useDebouncedValue(value, delay = 150) {
+	const [settled, setSettled] = useState(value);
+	useEffect(() => {
+		const timer = setTimeout(() => setSettled(value), delay);
+		return () => clearTimeout(timer);
+	}, [value, delay]);
+	return settled;
+}
+
 export function useClickOutside(refs, onOutside, active = true) {
 	useEffect(() => {
 		if (!active) return undefined;
@@ -127,8 +136,12 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		if (!open) return undefined;
 		ref.current?.querySelector("[autofocus]")?.focus({ preventScroll: true });
 		return undefined;
-	}, [open]);
-	const place = () => {
+	}, [open, style.visibility]);
+	const readFrame = useRef(0);
+	const writeFrame = useRef(0);
+	const measure = (initial = false) => {
+		readFrame.current = 0;
+		cancelAnimationFrame(writeFrame.current);
 		if (!anchor.current || !ref.current) return;
 		const a = anchor.current.getBoundingClientRect();
 		// Layout dimensions exclude the entrance transform; measuring the animated rectangle makes the anchor drift.
@@ -140,22 +153,34 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		let left = align === "end" ? a.right - p.width : a.left;
 		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
 		const next = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" };
-		setStyle((old) => old.top === next.top && old.left === next.left && old.visibility === next.visibility ? old : next);
 		const landed = top < a.top ? "top" : "bottom";
-		setSide((old) => (old === landed ? old : landed));
+		const apply = () => {
+			writeFrame.current = 0;
+			setStyle((old) => old.top === next.top && old.left === next.left && old.visibility === next.visibility ? old : next);
+			setSide((old) => (old === landed ? old : landed));
+		};
+		if (initial) apply();
+		else writeFrame.current = requestAnimationFrame(apply);
+	};
+	const place = () => {
+		if (!readFrame.current) readFrame.current = requestAnimationFrame(() => measure());
 	};
 	useLayoutEffect(() => {
 		if (!open) return undefined;
-		place();
+		// Opening must position before focus: a visibility:hidden input cannot take the keyboard.
+		// Subsequent resize/scroll measurements and writes are isolated into separate frames.
+		measure(true);
 		// Content that loads after opening (a list, a chart) changes the size: keep the popover anchored.
-		if (typeof ResizeObserver === "undefined" || !ref.current) return undefined;
-		const observer = new ResizeObserver(place);
-		observer.observe(ref.current);
-		observer.observe(anchor.current);
+		const observer = typeof ResizeObserver !== "undefined" && ref.current ? new ResizeObserver(place) : null;
+		if (ref.current) observer?.observe(ref.current);
+		if (anchor.current) observer?.observe(anchor.current);
 		window.addEventListener("resize", place);
 		window.addEventListener("scroll", place, true);
 		return () => {
-			observer.disconnect();
+			observer?.disconnect();
+			cancelAnimationFrame(readFrame.current);
+			cancelAnimationFrame(writeFrame.current);
+			readFrame.current = writeFrame.current = 0;
 			window.removeEventListener("resize", place);
 			window.removeEventListener("scroll", place, true);
 		};

@@ -2,6 +2,8 @@
 
 MyHarness 使用 JSON settings files，project settings 会覆盖 global settings。
 
+运行时修改设置立即更新内存，并在从首个修改起固定 175ms 的窗口内合并同一 scope 的保存；文件写入使用异步锁重试和原子写入，保留并发修改的其他字段。`SettingsManager.flush()` 绕过等待窗口，等待实际文件同步完成；重读与已有服务退出流程使用该入口。旧同步 storage contract 保留，但锁被占用时立即报错，不再忙等。此缓冲仅适用于 Settings，Session JSONL 仍保持写成功后才更新内存的原有保证。
+
 | 位置 | Scope |
 |----------|-------|
 | `~/.myharness/agent/settings.json` | Global（所有 projects） |

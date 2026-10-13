@@ -56,6 +56,8 @@ const SLOT_DEFAULTS = () => ({
 });
 const SLOT_KEYS = Object.keys(SLOT_DEFAULTS());
 const bags = new Map();
+const workspaceGitStatus = new Map();
+const workspaceKey = (snap) => snap?.cwd?.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
 let activeSlot = null;
 let targetSlot = null;
 
@@ -413,7 +415,11 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 	const chosen = thinkingChoice.get(id);
 	if (chosen && snap.thinking) snap = { ...snap, thinking: { ...snap.thinking, level: chosen.level } };
 	runFor(id, () => {
+		const previousCwd = workspaceKey(state.snap);
 		state.snap = snap;
+		const cachedGit = workspaceGitStatus.get(workspaceKey(snap));
+		if (previousCwd !== workspaceKey(snap)) state.gitStatus = cachedGit;
+		else if (state.gitStatus === undefined && cachedGit !== undefined) state.gitStatus = cachedGit;
 		state.gitTask = snap.gitTask ?? null;
 		state.queue = snap.queue;
 		state.dialogs = snap.dialogs;
@@ -816,20 +822,33 @@ export async function loadStats() {
 }
 
 const gitStatusRequests = new Map();
+const workspaceGitRequests = new Map();
 export async function loadGitStatus() {
 	const slot = targetSlot ?? activeSlot;
 	const request = {};
+	const cwdKey = workspaceKey(bagOf(slot).snap);
 	gitStatusRequests.set(slot, request);
+	if (cwdKey) workspaceGitRequests.set(cwdKey, request);
 	let status = null;
 	try {
 		status = await api("/api/git/status", { slot });
 	} catch {
-		status = null;
+		// A transient failure is not evidence that the repository or branch disappeared.
+		if (gitStatusRequests.get(slot) === request) gitStatusRequests.delete(slot);
+		return;
 	}
 	// A slow pre-commit query must not overwrite a newer post-commit result.
 	if (gitStatusRequests.get(slot) !== request) return;
 	gitStatusRequests.delete(slot);
-	runFor(slot, () => set({ gitStatus: status }));
+	runFor(slot, () => {
+		const key = workspaceKey(state.snap);
+		if (cwdKey && (key !== cwdKey || workspaceGitRequests.get(key) !== request)) return;
+		if (!cwdKey && key && workspaceGitRequests.has(key)) return;
+		if (key) workspaceGitStatus.set(key, status);
+		// Every loaded Chat in this exact checkout shares its current branch.
+		for (const bag of bags.values()) if (key && workspaceKey(bag.snap) === key) bag.gitStatus = status;
+		set({ gitStatus: status });
+	});
 }
 
 export async function restoreAfterRestart(snap, boot) {
@@ -1041,7 +1060,7 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 	rememberChat(slot);
 	const bag = bagOf(slot);
 	if (!bag.resources) loadResources();
-	if (bag.gitStatus === undefined) loadGitStatus();
+	loadGitStatus();
 	// The sidebar already knows every workspace and chat; only fetch what it has never loaded.
 	const root = state.snap?.workspace?.rootPath;
 	if (!root) {
@@ -1379,7 +1398,6 @@ function connectEvents() {
 		state.compaction = null;
 		state.retry = null;
 		state.resources = null;
-		state.gitStatus = undefined;
 		state.stats = null;
 		if (slot === activeSlot) state.view = { ...state.view, selectedTerminal: null };
 	await attempt(async () => {

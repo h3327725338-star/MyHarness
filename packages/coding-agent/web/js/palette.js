@@ -1,9 +1,11 @@
 // Command palette (Ctrl+K): app actions, chats and workspace files in one keyboard-driven list.
-import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
+import { html, useEffect, useRef, useState, useDebouncedValue, Icon } from "./ui.js";
 import { api, loadResources, setView, state, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";
-import { chatTitle, debounce, relTime } from "./util.js";
-import { rankSearch } from "./search.js";
+import { chatTitle, relTime } from "./util.js";
+import { rankSearchAsync } from "./search.js";
+import { createReadCache } from "./scheduling.js";
+const fileSearchCache = createReadCache();
 import { serverText, t } from "./i18n.js";
 import { exportReadOnly } from "./export-mode.js";
 
@@ -14,6 +16,8 @@ export function CommandPalette() {
 	const snap = useStore((s) => s.snap);
 	const resources = useStore((s) => s.resources);
 	const [query, setQuery] = useState("");
+	const searchQuery = useDebouncedValue(query);
+	const [entries, setEntries] = useState([]);
 	const [sel, setSel] = useState(0);
 	const [files, setFiles] = useState([]);
 	const listRef = useRef(null);
@@ -24,26 +28,34 @@ export function CommandPalette() {
 	}, []);
 
 	useEffect(() => {
-		if (query.trim().length < 2) {
+		if (searchQuery.trim().length < 2) {
 			setFiles([]);
 			return undefined;
 		}
 		let cancelled = false;
-		const run = debounce(async () => {
+		const slot = state.activeSlot;
+		const path = `/api/files/search?q=${encodeURIComponent(searchQuery)}&limit=8`;
+		const key = `${snap?.cwd}\0${path}`;
+		const cached = fileSearchCache.peek(key);
+		if (cached) setFiles(cached.files);
+		const run = async () => {
 			try {
-				const data = await api(`/api/files/search?q=${encodeURIComponent(query)}&limit=8`);
+				const data = await fileSearchCache.load(key, () => api(path, { slot }));
 				if (!cancelled) setFiles(data.files);
 			} catch {
 				if (!cancelled) setFiles([]);
 			}
-		}, 150);
+		};
 		run();
 		return () => {
 			cancelled = true;
 		};
-	}, [query]);
+	}, [searchQuery, snap?.cwd, snap?.slot]);
 
-	const entries = useMemo(() => {
+	useEffect(() => {
+		let cancelled = false;
+		const query = searchQuery;
+		const build = async () => {
 		const list = [];
 		const run = (fn) => () => {
 			close();
@@ -77,12 +89,12 @@ export function CommandPalette() {
 		];
 		// Every group is searched by the same rule: relevance first (exact name > prefix > part of the name >
 		// description), then usage, then the list's own order.
-		for (const c of rankSearch(cmds, query, { names: (c) => c.label })) list.push({ ...c, group: t("Actions") });
+		for (const c of await rankSearchAsync(cmds, query, { names: (c) => c.label }, () => cancelled)) list.push({ ...c, group: t("Actions") });
 		// Slash commands come from the same registry as the composer's "/" menu (and the terminal UI), most used first;
 		// running one here is exactly typing it.
 		const describe = (c) => (c.source === "builtin" ? serverText(c.description) : c.description) || "";
 		const commands = (resources?.commands || []).filter((c) => query || c.source === "builtin");
-		for (const c of rankSearch(commands, query.replace(/^\//, ""), { names: (c) => [c.name, ...(c.aliases || [])], keywords: describe, usage: (c) => c.uses })) {
+		for (const c of await rankSearchAsync(commands, query.replace(/^\//, ""), { names: (c) => [c.name, ...(c.aliases || [])], keywords: describe, usage: (c) => c.uses }, () => cancelled)) {
 			const run = () => (close(), c.source === "builtin" ? actions.submit(`/${c.name}`) : actions.insertIntoComposer(`/${c.name} `, { replace: true }));
 			list.push({ label: `/${c.name}`, sub: describe(c), icon: "bolt", group: t("Commands"), run });
 		}
@@ -90,16 +102,20 @@ export function CommandPalette() {
 			const w = ws.list.find((x) => x.rootPath === root);
 			return sessions.filter((info) => query || info.current).map((info) => ({ info, title: chatTitle(info), workspace: w?.name || "" }));
 		});
-		for (const chat of rankSearch(chats, query, { names: (c) => c.title, keywords: (c) => c.workspace })) {
+		for (const chat of await rankSearchAsync(chats, query, { names: (c) => c.title, keywords: (c) => c.workspace }, () => cancelled)) {
 			list.push({ label: chat.title.slice(0, 90), sub: `${chat.workspace} · ${relTime(chat.info.modified)}`, icon: "chat", group: t("Chats"), run: () => (close(), actions.openSession(chat.info.path)) });
 		}
 		for (const file of files) list.push({ label: file, icon: "file", group: t("Files"), sub: t("Mention in the prompt (@)"), run: () => (close(), actions.insertIntoComposer(`@${file} `)) });
-		return list.slice(0, 40);
-	}, [query, ws, files, snap?.active, resources]);
+		if (!cancelled) setEntries(list.slice(0, 40));
+		};
+		void build();
+		return () => { cancelled = true; };
+	}, [searchQuery, ws, files, resources]);
 
 	useEffect(() => setSel(0), [query]);
 	useEffect(() => {
-		listRef.current?.querySelector(".sel")?.scrollIntoView({ block: "nearest" });
+		const frame = requestAnimationFrame(() => listRef.current?.querySelector(".sel")?.scrollIntoView({ block: "nearest" }));
+		return () => cancelAnimationFrame(frame);
 	}, [sel]);
 
 	const onKey = (e) => {

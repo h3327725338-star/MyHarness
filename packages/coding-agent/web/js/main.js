@@ -1,5 +1,5 @@
 import { Component, h, render } from "/vendor/preact.js";
-import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
+import { useLayoutEffect, useMemo, useRef, useState } from "/vendor/preact-hooks.js";
 import { App } from "./app.js";
 import { boot, state, subscribe, version } from "./store.js";
 import { t } from "./i18n.js";
@@ -42,7 +42,8 @@ function Root() {
 		return subscribe(update);
 	}, []);
 	// The language is part of the key: switching it rebuilds the interface so every text is drawn again in the new language.
-	return h(ErrorBoundary, null, h(App, { key: state.view.lang }));
+	const app = useMemo(() => h(App, { key: state.view.lang }), [state.view.lang]);
+	return h(ErrorBoundary, null, app);
 }
 
 render(h(Root, null), document.getElementById("app"));

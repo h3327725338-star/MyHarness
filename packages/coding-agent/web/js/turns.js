@@ -1,5 +1,6 @@
 // Transcript model: wire items -> turns, with tool calls translated into plain-language actions.
 // Three information layers: turn summary -> readable steps -> raw tool details.
+import { yieldToMain } from "./scheduling.js";
 import { N_, count, t } from "./i18n.js";
 import { basename, clip, firstLine, shellOutcome, shortPath } from "./util.js";
 
@@ -297,9 +298,31 @@ export function cachedTurns(cache, items, toolRuns, cwd) {
  * ctx: { cwd, toolRuns, running, lastKey }
  */
 export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
+	const work = buildTurnsWork(items, ctx, previous);
+	let next;
+	do { next = work.next(); } while (!next.done);
+	return next.value;
+}
+
+export async function buildTurnsAsync(items, ctx, previous, cancelled = () => false) {
+	const work = buildTurnsWork(items, ctx, previous);
+	await yieldToMain();
+	while (!cancelled()) {
+		const next = work.next();
+		if (next.done) return next.value;
+		await yieldToMain();
+	}
+	return null;
+}
+
+function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	turnsProbe.builds += 1;
 	const results = new Map();
-	for (const item of items) if (item.kind === "toolResult") results.set(item.toolCallId, item);
+	for (let index = 0; index < items.length; index++) {
+		if (index && index % 200 === 0) yield;
+		const item = items[index];
+		if (item.kind === "toolResult") results.set(item.toolCallId, item);
+	}
 
 	const turns = [];
 	let turn = null;
@@ -322,7 +345,7 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 		turns.push(turn);
 	};
 
-	items.forEach((item, index) => {
+	const addItem = (item, index) => {
 		// Bookmark labels are projected for the HTML export only; the transcript has nothing to draw for them.
 		if (item.kind === "label") return;
 		if (item.kind === "custom" && item.customType === "git-commit-repair" && !item.display) {
@@ -378,15 +401,23 @@ export function buildTurns(items, ctx = { toolRuns: {} }, previous) {
 		turn.items.push(item);
 		turn.endedAt = Math.max(turn.endedAt || 0, item.ts || 0);
 		if (item.kind === "assistant") turn.assistants.push(item);
-	});
+	};
+
+	for (let index = 0; index < items.length; index++) {
+		if (index && index % 200 === 0) yield;
+		addItem(items[index], index);
+	}
 
 	if (repair) repair.turns = buildTurns(repair.items, ctx);
 
+	let processed = 0;
 	for (const turn of turns) {
+		if (++processed % 20 === 0) yield;
 		if (turn.standalone) continue;
 		const list = turn.assistants;
 		const lastAssistant = list[list.length - 1];
 		for (let ai = 0; ai < list.length; ai++) {
+			if (ai && ai % 20 === 0) yield;
 			const message = list[ai];
 			const isLast = ai === list.length - 1;
 			const hasCalls = message.blocks.some((b) => b.type === "toolCall");

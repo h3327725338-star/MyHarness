@@ -205,6 +205,9 @@ export class SettingsManager {
 	private globalSettingsLoadError: Error | null = null; // Track if global settings file had parse errors
 	private projectSettingsLoadError: Error | null = null; // Track if project settings file had parse errors
 	private writeQueue: Promise<void> = Promise.resolve();
+	private pendingWrites = new Map<SettingsScope, () => Promise<void>>();
+	private writeTimer: ReturnType<typeof setTimeout> | undefined;
+	private writeRevision = { global: 0, project: 0 };
 	private errors: SettingsError[];
 
 	private constructor(
@@ -338,7 +341,7 @@ export class SettingsManager {
 	}
 
 	async reload(): Promise<void> {
-		await this.writeQueue;
+		await this.flush();
 		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
 		if (!globalLoad.error) {
 			this.globalSettings = globalLoad.settings;
@@ -408,18 +411,26 @@ export class SettingsManager {
 		this.modifiedProjectNestedFields.clear();
 	}
 
-	private enqueueWrite(scope: SettingsScope, task: () => void): void {
-		this.writeQueue = this.writeQueue
-			.then(() => {
-				if (scope === "project") {
-					assertProjectSettingsWritable(this.projectTrusted);
-				}
-				task();
-				this.clearModifiedScope(scope);
-			})
-			.catch((error) => {
-				this.recordError(scope, error);
-			});
+	private enqueueWrite(scope: SettingsScope, task: () => Promise<void>): void {
+		const revision = ++this.writeRevision[scope];
+		this.pendingWrites.set(scope, async () => {
+			if (scope === "project") assertProjectSettingsWritable(this.projectTrusted);
+			await task();
+			// A save that arrived while I/O was pending must retain its dirty fields.
+			if (revision === this.writeRevision[scope]) this.clearModifiedScope(scope);
+		});
+		// Fixed window from the first change, not a debounce that can postpone writes indefinitely.
+		if (!this.writeTimer) this.writeTimer = setTimeout(() => this.drainPendingWrites(), 175);
+	}
+
+	private drainPendingWrites(): void {
+		if (this.writeTimer) clearTimeout(this.writeTimer);
+		this.writeTimer = undefined;
+		const tasks = [...this.pendingWrites];
+		this.pendingWrites.clear();
+		for (const [scope, task] of tasks) {
+			this.writeQueue = this.writeQueue.then(task).catch((error) => this.recordError(scope, error));
+		}
 	}
 
 	private cloneModifiedNestedFields(source: Map<keyof Settings, Set<string>>): Map<keyof Settings, Set<string>> {
@@ -430,13 +441,14 @@ export class SettingsManager {
 		return snapshot;
 	}
 
-	private persistScopedSettings(
+	private async persistScopedSettings(
 		scope: SettingsScope,
 		snapshotSettings: Settings,
 		modifiedFields: Set<keyof Settings>,
 		modifiedNestedFields: Map<keyof Settings, Set<string>>,
-	): void {
-		this.storage.withLock(scope, (current) => {
+	): Promise<void> {
+		const write = this.storage.withLockAsync?.bind(this.storage) ?? this.storage.withLock.bind(this.storage);
+		await write(scope, (current) => {
 			const currentFileSettings = current ? migrateSettings(JSON.parse(current) as Record<string, unknown>) : {};
 			const mergedSettings: Settings = { ...currentFileSettings };
 			for (const field of modifiedFields) {
@@ -466,12 +478,13 @@ export class SettingsManager {
 			return;
 		}
 
+		if (this.modifiedFields.size === 0) return;
 		const snapshotGlobalSettings = structuredClone(this.globalSettings);
 		const modifiedFields = new Set(this.modifiedFields);
 		const modifiedNestedFields = this.cloneModifiedNestedFields(this.modifiedNestedFields);
 
 		this.enqueueWrite("global", () => {
-			this.persistScopedSettings("global", snapshotGlobalSettings, modifiedFields, modifiedNestedFields);
+			return this.persistScopedSettings("global", snapshotGlobalSettings, modifiedFields, modifiedNestedFields);
 		});
 	}
 
@@ -488,7 +501,7 @@ export class SettingsManager {
 		const modifiedFields = new Set(this.modifiedProjectFields);
 		const modifiedNestedFields = this.cloneModifiedNestedFields(this.modifiedProjectNestedFields);
 		this.enqueueWrite("project", () => {
-			this.persistScopedSettings("project", snapshotProjectSettings, modifiedFields, modifiedNestedFields);
+			return this.persistScopedSettings("project", snapshotProjectSettings, modifiedFields, modifiedNestedFields);
 		});
 	}
 
@@ -501,7 +514,10 @@ export class SettingsManager {
 	}
 
 	async flush(): Promise<void> {
-		await this.writeQueue;
+		do {
+			this.drainPendingWrites();
+			await this.writeQueue;
+		} while (this.pendingWrites.size);
 	}
 
 	drainErrors(): SettingsError[] {

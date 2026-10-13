@@ -1,4 +1,5 @@
 // Markdown rendering (marked + highlight.js, both vendored with the HTML export). Raw HTML is escaped, never rendered.
+import { yieldToMain } from "./scheduling.js";
 import { h } from "/vendor/preact.js";
 import { Component } from "/vendor/preact.js";
 import { t } from "./i18n.js";
@@ -162,14 +163,51 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 	return out;
 }
 
+export async function renderMarkdownAsync(text, { breaks = false } = {}, cancelled = () => false) {
+	const key = `${breaks ? "breaks" : "normal"}\0${text}`;
+	if (cache.has(key)) return cache.get(key);
+	await yieldToMain();
+	const md = getEngine();
+	if (!md) return `<pre>${esc(text)}</pre>`;
+	try {
+		const options = { ...md.defaults, breaks };
+		const tokens = md.lexer(wrapPatchBlocks(text), options);
+		const chunks = [];
+		for (const token of tokens) {
+			if (cancelled()) return null;
+			const batch = [token];
+			batch.links = tokens.links;
+			chunks.push(md.parser(batch, options));
+			await yieldToMain();
+		}
+		const out = chunks.join("");
+		cache.set(key, out);
+		if (cache.size > 300) cache.delete(cache.keys().next().value);
+		return out;
+	} catch { return `<pre>${esc(text)}</pre>`; }
+}
+
 /** Markdown block. A delegated click handles the code copy buttons; nothing in the text opens a panel. */
 export class Markdown extends Component {
 	root = null;
 	generation = 0;
 	slot = null;
-	componentDidMount() { this.linkify(); }
-	componentDidUpdate() { this.linkify(); }
-	componentWillUnmount() { this.generation++; }
+	parseGeneration = 0;
+	state = { parsed: null };
+	componentDidMount() { this.parseLarge(); this.linkify(); }
+	componentDidUpdate(previous) {
+		if (previous.text !== this.props.text || previous.breaks !== this.props.breaks) this.parseLarge();
+		this.linkify();
+	}
+	componentWillUnmount() { this.generation++; this.parseGeneration++; }
+	parseLarge() {
+		const generation = ++this.parseGeneration;
+		const { text = "", breaks = false } = this.props;
+		if (text.length < 16000) return;
+		void renderMarkdownAsync(text, { breaks }, () => generation !== this.parseGeneration).then((html) => {
+			if (generation === this.parseGeneration && html !== null) this.setState({ parsed: { text, breaks, html } });
+		});
+	}
 	linkify() {
 		const generation = ++this.generation;
 		this.slot = activeSlotId();
@@ -179,8 +217,8 @@ export class Markdown extends Component {
 		const link = event.target.closest?.("[data-local-path]");
 		if (link) void showLocalFileMenu(event, link.dataset.localPath, this.slot);
 	};
-	shouldComponentUpdate(next) {
-		return next.text !== this.props.text || next.class !== this.props.class || next.breaks !== this.props.breaks;
+	shouldComponentUpdate(next, state) {
+		return state !== this.state || next.text !== this.props.text || next.class !== this.props.class || next.breaks !== this.props.breaks;
 	}
 	onClick = (event) => {
 		const link = event.target.closest?.("[data-local-path]");
@@ -195,7 +233,9 @@ export class Markdown extends Component {
 		}
 	};
 	render({ text, class: cls, breaks = false }) {
-		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: renderMarkdown(text || "", { breaks }) }, onClick: this.onClick, onContextMenu: this.onContextMenu, ref: (node) => { this.root = node; } });
+		const parsed = this.state.parsed;
+		const content = (text || "").length < 16000 ? renderMarkdown(text || "", { breaks }) : parsed?.text === text && parsed.breaks === breaks ? parsed.html : `<pre>${esc(text || "")}</pre>`;
+		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: content }, onClick: this.onClick, onContextMenu: this.onContextMenu, ref: (node) => { this.root = node; } });
 	}
 }
 

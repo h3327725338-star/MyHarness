@@ -449,23 +449,6 @@ function statusHash(entries: readonly GitStatusEntry[], excludedPaths: readonly 
 	);
 }
 
-function getCheckpointObservation(repositoryRoot: string): {
-	observation?: GitCheckpointObservation;
-	error?: string;
-} {
-	const head = getHeadState(repositoryRoot);
-	const refs = getLocalRefs(repositoryRoot);
-	if (!refs.refs) return { error: refs.error ?? "无法读取 Git 本地 refs 状态。" };
-	return {
-		observation: {
-			headCommit: head.commit,
-			headRef: head.ref,
-			localRefs: refs.refs,
-			localRefsState: localRefsState(refs.refs),
-		},
-	};
-}
-
 function parseHeadChanges(value: string): GitCheckpointHeadChange[] {
 	const tokens = parseNulSeparated(value);
 	const changes: GitCheckpointHeadChange[] = [];
@@ -629,7 +612,7 @@ export function collectGitCheckpointLocalRefChanges(checkpoint: GitCheckpoint): 
 export async function observeGitCheckpointFinalState(
 	checkpoint: GitCheckpoint,
 ): Promise<{ observation?: GitCheckpointObservation; error?: string }> {
-	return getCheckpointObservation(checkpoint.repositoryRoot);
+	return getCheckpointObservationAsync(checkpoint.repositoryRoot);
 }
 
 export function collectGitCheckpointHeadChanges(checkpoint: GitCheckpoint): {
@@ -1109,7 +1092,11 @@ export function listGitCheckpoints(options: {
 }
 
 export async function createGitCheckpoint(options: GitCheckpointOptions): Promise<GitCheckpointCreateResult> {
-	const repository = getRepositoryRoot(options.cwd);
+	const rootResult = await runCheckpointGitAsync(options.cwd, ["rev-parse", "--show-toplevel"]);
+	const repository =
+		rootResult.ok && rootResult.stdout
+			? { root: resolveGitRepositoryRoot(options.cwd, rootResult.stdout), error: undefined, failureKind: undefined }
+			: { root: undefined, error: formatGitFailure(rootResult), failureKind: rootResult.failureKind };
 	if (!repository.root) {
 		return { ok: false, error: repository.error, failureKind: repository.failureKind };
 	}
@@ -1140,12 +1127,15 @@ export async function createGitCheckpoint(options: GitCheckpointOptions): Promis
 		cleanupGitCheckpoints({ storageRoot, sessionId: options.sessionId, now });
 		mkdirSync(storagePath, { recursive: true, mode: 0o700 });
 
-		const status = getStatus(repository.root);
-		if (status.output === undefined || !status.entries) throw new Error(status.error ?? "无法读取 Git 工作区状态。");
-		const observation = getCheckpointObservation(repository.root);
+		const [statusResult, observation] = await Promise.all([
+			runCheckpointGitAsync(repository.root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], true),
+			getCheckpointObservationAsync(repository.root),
+		]);
+		if (!statusResult.ok) throw new Error(formatGitFailure(statusResult));
+		const status = { entries: parseGitStatus(statusResult.stdout) };
 		if (!observation.observation) throw new Error(observation.error ?? "无法读取 Git checkpoint 基线。");
 		const head = { commit: observation.observation.headCommit, ref: observation.observation.headRef };
-		const indexTree = runCheckpointGit(repository.root, ["write-tree"]);
+		const indexTree = await runCheckpointGitAsync(repository.root, ["write-tree"]);
 		if (!indexTree.ok || !indexTree.stdout) throw new Error(formatGitFailure(indexTree));
 		const worktreeTreeResult = await createWorktreeTree(repository.root, head.commit, storagePath, excludedPaths);
 		if (!worktreeTreeResult.tree) throw new Error(worktreeTreeResult.error ?? "无法保存 Git 工作区检查点。");
@@ -1154,9 +1144,13 @@ export async function createGitCheckpoint(options: GitCheckpointOptions): Promis
 		if (!refs) throw new Error("无法保存 Git 本地 refs 状态。");
 		checkpointRef = `refs/myharness/checkpoints/${sanitizeSegment(options.sessionId)}/${id}/worktree`;
 		indexCheckpointRef = `refs/myharness/checkpoints/${sanitizeSegment(options.sessionId)}/${id}/index`;
-		const refResult = runCheckpointGit(repository.root, ["update-ref", checkpointRef, worktreeTree]);
+		const refResult = await runCheckpointGitAsync(repository.root, ["update-ref", checkpointRef, worktreeTree]);
 		if (!refResult.ok) throw new Error(formatGitFailure(refResult));
-		const indexRefResult = runCheckpointGit(repository.root, ["update-ref", indexCheckpointRef, indexTree.stdout]);
+		const indexRefResult = await runCheckpointGitAsync(repository.root, [
+			"update-ref",
+			indexCheckpointRef,
+			indexTree.stdout,
+		]);
 		if (!indexRefResult.ok) throw new Error(formatGitFailure(indexRefResult));
 
 		const checkpoint: GitCheckpoint = {
@@ -1185,7 +1179,13 @@ export async function createGitCheckpoint(options: GitCheckpointOptions): Promis
 		writeMetadata(checkpoint);
 		return { ok: true, checkpoint };
 	} catch (error) {
-		const referenceError = deleteCheckpointReferences(repository.root, { checkpointRef, indexCheckpointRef });
+		const errors: string[] = [];
+		for (const ref of [checkpointRef, indexCheckpointRef]) {
+			if (!ref) continue;
+			const result = await runCheckpointGitAsync(repository.root, ["update-ref", "-d", ref]);
+			if (!result.ok) errors.push(formatGitFailure(result));
+		}
+		const referenceError = errors.join("\n");
 		try {
 			rmSync(storagePath, { recursive: true, force: true });
 		} catch {
@@ -1217,6 +1217,21 @@ export function isPathInsideRepository(checkpoint: GitCheckpoint, mutationPath: 
 	} catch {
 		return false;
 	}
+}
+
+async function getCheckpointObservationAsync(
+	repositoryRoot: string,
+): Promise<{ observation?: GitCheckpointObservation; error?: string }> {
+	const [head, refs] = await Promise.all([getHeadStateAsync(repositoryRoot), getLocalRefsAsync(repositoryRoot)]);
+	if (!refs.refs) return { error: refs.error ?? "无法读取 Git 本地 refs 状态。" };
+	return {
+		observation: {
+			headCommit: head.commit,
+			headRef: head.ref,
+			localRefs: refs.refs,
+			localRefsState: localRefsState(refs.refs),
+		},
+	};
 }
 
 async function getHeadStateAsync(repositoryRoot: string): Promise<GitHeadState> {

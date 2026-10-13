@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../../config.ts";
-import { writeFileAtomicallySync } from "../../utils/atomic-write.ts";
+import { writeFileAtomically, writeFileAtomicallySync } from "../../utils/atomic-write.ts";
 import { getSettingsFilePaths } from "../paths/index.ts";
 import type { SettingsScope } from "./types.ts";
 
@@ -20,6 +21,7 @@ export interface SettingsStorage {
 	 * of their input (the shipped write callback only merges the passed content).
 	 */
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	withLockAsync?(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): Promise<void>;
 }
 
 /** File-backed Settings storage preserving the existing lock and atomic-write protocol. */
@@ -34,30 +36,39 @@ export class FileSettingsStorage implements SettingsStorage {
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
-		const maxAttempts = 10;
-		const delayMs = 20;
-		let lastError: unknown;
+		// The legacy synchronous entry must fail promptly rather than spin on the event loop.
+		// Runtime saves use withLockAsync below, which retries without blocking.
+		return lockfile.lockSync(path, { realpath: false });
+	}
 
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+	async withLockAsync(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): Promise<void> {
+		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
+		const read = async () => {
 			try {
-				return lockfile.lockSync(path, { realpath: false });
+				return await readFile(path, "utf-8");
 			} catch (error) {
-				const code =
-					typeof error === "object" && error !== null && "code" in error
-						? String((error as { code?: unknown }).code)
-						: undefined;
-				if (code !== "ELOCKED" || attempt === maxAttempts) {
-					throw error;
-				}
-				lastError = error;
-				const start = Date.now();
-				while (Date.now() - start < delayMs) {
-					// Sleep synchronously to avoid changing callers to async.
-				}
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+				throw error;
 			}
+		};
+		const initial = await read();
+		let probe: string | undefined;
+		if (initial === undefined) {
+			probe = fn(undefined);
+			if (probe === undefined) return;
+			await mkdir(dirname(path), { recursive: true });
 		}
-
-		throw (lastError as Error) ?? new Error("Failed to acquire settings lock");
+		const release = await lockfile.lock(path, {
+			realpath: false,
+			retries: { retries: 9, factor: 1, minTimeout: 20, maxTimeout: 20 },
+		});
+		try {
+			const current = await read();
+			const next = current === undefined && initial === undefined ? probe : fn(current);
+			if (next !== undefined) await writeFileAtomically(path, next);
+		} finally {
+			await release();
+		}
 	}
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
