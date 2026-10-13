@@ -232,7 +232,7 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 		if (code && node.textContent === code.textContent) {
 			// Inline code: the whole `` `...` `` may be a path with spaces (e.g. `C:/My Dir/a.txt`),
 			// so keep it as a candidate first; if it does not exist, fall back to paths inside it
-			// (e.g. `` `C:/a/b/ 42张` `` links only `C:/a/b/`, `42张` stays outside the link).
+			// (e.g. `` `C:/a/b/ 42<U+5F20>` `` links only `C:/a/b/`, `42<U+5F20>` stays outside the link).
 			const text = node.textContent;
 			if (!text.trim()) continue;
 			const inner = pathCandidates(text);
@@ -287,7 +287,7 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 		let render = candidates;
 		if (whole && candidates.length > 1) {
 			// Prefer the whole `` `...` `` when it really exists (paths with spaces);
-			// otherwise link only the paths inside it so trailing `42张 +` stays out.
+			// otherwise link only the paths inside it so trailing `42<U+5F20> +` stays out.
 			const first = candidates[0];
 			const wholeTarget = targetFor(first.path, resolved) || targetFor(first.path.trim(), resolved);
 			if (wholeTarget) render = [first];

@@ -9,6 +9,7 @@ import {
 	runGit,
 	setLocalGitIdentity,
 } from "../src/git/repository/integration.ts";
+import { pathIdentityKey } from "../src/utils/paths.ts";
 
 function createTemporaryDirectory(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), `${prefix}-`));
@@ -73,7 +74,7 @@ describe("delegated worktree sandbox", () => {
 		expect(handle.baseCommit).toBe(commit);
 		expect(handle.branchName).toMatch(/^myharness-subagent-[0-9a-f]{10}$/);
 		expect(existsSync(handle.worktreePath)).toBe(true);
-		expect(handle.worktreePath.startsWith(join(agentDir, "worktrees"))).toBe(true);
+		expect(pathIdentityKey(handle.worktreePath).startsWith(pathIdentityKey(join(agentDir, "worktrees")))).toBe(true);
 		// The worker sees exactly the committed state of the dispatching session.
 		// (core.autocrlf may rewrite line endings on checkout; compare content-insensitively.)
 		expect(readFileSync(join(handle.worktreePath, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("base\n");

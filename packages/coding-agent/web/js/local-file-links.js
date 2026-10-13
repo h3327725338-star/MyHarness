@@ -38,8 +38,8 @@ export function isLocalAutolinkBlocked(value) {
  * Trim characters that almost never belong to a local path tail.
  * Keeps "/\\:" so directory tails like `unbound/memory/` survive, but drops
  * operators (`+=`), ASCII/fullwidth punctuation and trailing Chinese quantifiers
- * like `42张` / `2张` that follow a path in chat text (e.g. "`C:/a/b/` 42张 + ...").
- * Pure Chinese directory names without a leading digit (e.g. `C:/用户/文档`)
+ * like `42<U+5F20>` / `2<U+5F20>` that follow a path in chat text (e.g. "`C:/a/b/` 42<U+5F20> + ...").
+ * Pure Chinese directory names without a leading digit (e.g. `C:/<Chinese path>`)
  * are preserved: only a trailing `<digits><quantifier>` suffix is removed.
  */
 export function cleanLocalPath(raw) {

@@ -139,7 +139,7 @@ export function ContextPanel() {
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => {
 				const needsAgent = isDelegatedChild(tool.name) && !agentActive;
 				const disabled = snap.active || needsAgent;
-				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("需先开启 agent 工具") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><span title=${needsAgent ? t("需先开启 agent 工具") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
+				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("Enable the agent tool first") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><span title=${needsAgent ? t("Enable the agent tool first") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
 			})}
 		<//>
 		<${Section} title=${t("Skills")} count=${resources?.skills.length} defaultOpen=${false}>
