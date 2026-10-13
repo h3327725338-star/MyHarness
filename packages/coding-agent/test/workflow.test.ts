@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeTrace, readRuntimeTrace } from "../src/observability/runtime-trace.ts";
 import type { ExploreBatchResult, ExploreTaskResult } from "../src/tools/sub-agent.ts";
+import { resolveExploreMaxTasks } from "../src/tools/sub-agent.ts";
 import {
 	createUltracodeToolDefinition,
 	createWorkflowToolDefinition,
@@ -541,7 +542,10 @@ describe("workflow tool", () => {
 		).rejects.toThrow("每个阶段至少需要 1 个任务");
 	});
 
-	it("allows more than six phases and more than five tasks per phase", async () => {
+	it("allows more than six phases when each phase stays within the task cap", async () => {
+		// 连锁 subAgent.maxTasks：默认上限由配置推导，单阶段任务数不得超过该上限。
+		// 此用例保留“7 个阶段照常放行”，但每阶段任务数收敛到上限内。
+		const maxTasks = resolveExploreMaxTasks(undefined);
 		const tool = createWorkflowToolDefinition(process.cwd(), {
 			getSettings: () => ({ enabled: true, provider: "openai", model: "gpt-test", thinkingLevel: "high" }),
 			runBatch: async (options): Promise<ExploreBatchResult> => {
@@ -557,10 +561,10 @@ describe("workflow tool", () => {
 		const result = await tool.execute(
 			"test-call",
 			{
-				name: "超限不再被拒",
+				name: "多阶段限额内放行",
 				phases: Array.from({ length: 7 }, (_, index) => ({
 					name: `阶段 ${index + 1}`,
-					tasks: Array.from({ length: 6 }, (__, taskIndex) => ({
+					tasks: Array.from({ length: maxTasks }, (__, taskIndex) => ({
 						description: `任务 ${taskIndex + 1}`,
 						prompt: `检查 ${taskIndex + 1}`,
 					})),
@@ -574,5 +578,133 @@ describe("workflow tool", () => {
 		expect(result.details.status).toBe("completed");
 		expect(result.details.phases).toHaveLength(7);
 		expect(result.details.phases.every((phase) => phase.status === "completed")).toBe(true);
+		for (const phase of result.details.phases) {
+			expect(phase.total).toBe(maxTasks);
+			expect(phase.completed).toBe(maxTasks);
+		}
+	});
+
+	it("returns guidance without throwing when a single phase exceeds the cap by one", async () => {
+		const maxTasks = resolveExploreMaxTasks(undefined);
+		const received = maxTasks + 1;
+		expect(received).toBeGreaterThan(maxTasks);
+		const phaseName = "超额调查";
+		const runBatch = vi.fn(async (options): Promise<ExploreBatchResult> => {
+			const results = options.tasks.map((task: { description: string; prompt: string }) =>
+				completedTask(task.description, task.prompt, "证据"),
+			);
+			const details = { completed: results.length, total: results.length, results };
+			options.onProgress?.(details);
+			return { text: "阶段摘要", fullText: "阶段完整证据", details };
+		});
+		const tool = createWorkflowToolDefinition(process.cwd(), {
+			getSettings: () => ({ enabled: true, provider: "openai", model: "gpt-test", thinkingLevel: "high" }),
+			runBatch,
+		});
+
+		// 超额时正常返回中文指引，不抛错：直接 await，不用 rejects。
+		const result = await tool.execute(
+			"test-call",
+			{
+				name: "超额拦截",
+				phases: [
+					{
+						name: phaseName,
+						tasks: Array.from({ length: received }, (_, index) => ({
+							description: `任务 ${index + 1}`,
+							prompt: `检查 ${index + 1}`,
+						})),
+					},
+				],
+			},
+			undefined,
+			undefined,
+			undefined as any,
+		);
+
+		const text = result.content.map((item) => (item.type === "text" ? item.text : "")).join("\n");
+		expect(text).toContain(`当前单阶段最多派发 ${maxTasks}`);
+		expect(text).toContain(`收到 ${received}`);
+		expect(text).toContain("拆分为后续阶段");
+		expect(text).toContain(phaseName);
+		// 已拦截未执行：批量执行器一次都没被调用，也不做 slice 丢弃断言。
+		expect(runBatch).not.toHaveBeenCalled();
+		expect(result.details).toBeDefined();
+		expect(JSON.stringify(result.details)).toContain(phaseName);
+		expect(JSON.stringify(result.details)).toContain(String(received));
+		const details = result.details as unknown as {
+			phases?: Array<{ name?: string; total?: number; completed?: number }>;
+			completed?: number;
+			total?: number;
+		};
+		if (Array.isArray(details.phases)) {
+			expect(details.phases).toHaveLength(1);
+			if (details.phases[0].total !== undefined) expect(details.phases[0].total).toBe(received);
+			if (details.phases[0].completed !== undefined) expect(details.phases[0].completed).toBe(0);
+		} else {
+			expect(details).toMatchObject({ completed: 0, total: received });
+		}
+	});
+
+	it("returns guidance without throwing when a single phase receives six tasks", async () => {
+		const maxTasks = resolveExploreMaxTasks(undefined);
+		const received = 6;
+		expect(received).toBeGreaterThan(maxTasks);
+		const phaseName = "六任务超额";
+		const runBatch = vi.fn(async (options): Promise<ExploreBatchResult> => {
+			const results = options.tasks.map((task: { description: string; prompt: string }) =>
+				completedTask(task.description, task.prompt, "证据"),
+			);
+			const details = { completed: results.length, total: results.length, results };
+			options.onProgress?.(details);
+			return { text: "阶段摘要", fullText: "阶段完整证据", details };
+		});
+		const tool = createWorkflowToolDefinition(process.cwd(), {
+			getSettings: () => ({ enabled: true, provider: "openai", model: "gpt-test", thinkingLevel: "high" }),
+			runBatch,
+		});
+
+		// 超额时正常返回中文指引，不抛错：直接 await，不用 rejects。
+		const result = await tool.execute(
+			"test-call",
+			{
+				name: "超额拦截",
+				phases: [
+					{
+						name: phaseName,
+						tasks: Array.from({ length: received }, (_, index) => ({
+							description: `任务 ${index + 1}`,
+							prompt: `检查 ${index + 1}`,
+						})),
+					},
+				],
+			},
+			undefined,
+			undefined,
+			undefined as any,
+		);
+
+		const text = result.content.map((item) => (item.type === "text" ? item.text : "")).join("\n");
+		expect(text).toContain(`当前单阶段最多派发 ${maxTasks}`);
+		expect(text).toContain(`收到 ${received}`);
+		expect(text).toContain("拆分为后续阶段");
+		expect(text).toContain(phaseName);
+		// 已拦截未执行：批量执行器一次都没被调用，也不做 slice 丢弃断言。
+		expect(runBatch).not.toHaveBeenCalled();
+		expect(result.details).toBeDefined();
+		expect(JSON.stringify(result.details)).toContain(phaseName);
+		expect(JSON.stringify(result.details)).toContain(String(received));
+		const details = result.details as unknown as {
+			phases?: Array<{ name?: string; total?: number; completed?: number }>;
+			completed?: number;
+			total?: number;
+		};
+		if (Array.isArray(details.phases)) {
+			expect(details.phases).toHaveLength(1);
+			if (details.phases[0].total !== undefined) expect(details.phases[0].total).toBe(received);
+			if (details.phases[0].completed !== undefined) expect(details.phases[0].completed).toBe(0);
+		} else {
+			expect(details).toMatchObject({ completed: 0, total: received });
+		}
 	});
 });

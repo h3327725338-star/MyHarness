@@ -12,6 +12,7 @@ import {
 	hasSuccessfulInvestigationEvidence,
 	type ResolvedSubAgentRuntimeSettings,
 	type RunExploreBatchOptions,
+	resolveExploreMaxTasks,
 	resolveSubAgentRuntimeSettings,
 	runExploreBatch,
 	type SubAgentRuntimeSettings,
@@ -47,7 +48,7 @@ function createInvestigationTaskSchema(mode: SubAgentMode) {
 	});
 }
 
-function createInvestigationPhaseSchema(mode: SubAgentMode) {
+function createInvestigationPhaseSchema(mode: SubAgentMode, maxTasks: number) {
 	return Type.Object({
 		name: Type.String({
 			description: 'Phase name, e.g. "Investigate", "Verify", "Cross-check"',
@@ -55,27 +56,28 @@ function createInvestigationPhaseSchema(mode: SubAgentMode) {
 		tasks: Type.Array(createInvestigationTaskSchema(mode), {
 			description:
 				mode === "read-write"
-					? "Explore tasks run in parallel within this phase"
-					: "Read-only Explore tasks run in parallel within this phase",
+					? `Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个`
+					: `Read-only Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个`,
 			minItems: 1,
+			maxItems: maxTasks,
 		}),
 	});
 }
 
-function createInvestigationSchema(minPhases: number, mode: SubAgentMode = "read-only") {
+function createInvestigationSchema(minPhases: number, mode: SubAgentMode = "read-only", maxTasks: number = resolveExploreMaxTasks()) {
 	return Type.Object({
 		name: Type.String({
 			description: "Short name for the workflow",
 		}),
-		phases: Type.Array(createInvestigationPhaseSchema(mode), {
+		phases: Type.Array(createInvestigationPhaseSchema(mode, maxTasks), {
 			description: "Phases executed in order; each phase may run multiple tasks in parallel",
 			minItems: minPhases,
 		}),
 	});
 }
 
-const workflowSchema = createInvestigationSchema(1);
-const ultracodeSchema = createInvestigationSchema(2);
+const workflowSchema = createInvestigationSchema(1, "read-only", resolveExploreMaxTasks());
+const ultracodeSchema = createInvestigationSchema(2, "read-only", resolveExploreMaxTasks());
 const WORKFLOW_DEADLINE_GRACE_MS = 30 * 1_000;
 const WORKFLOW_BATCH_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -278,17 +280,16 @@ function normalizeSubAgentMode(mode: SubAgentMode | undefined): SubAgentMode {
 }
 
 /**
- * The read-only schema object is returned unchanged so the default mode keeps
- * the historical tool protocol byte-for-byte; only read-write re-describes the
- * task fields that would otherwise tell the Main Agent edits are impossible.
+ * Schema is rebuilt on every createInvestigationToolDefinition call with the live
+ * subAgent.maxTasks cap so a settings change (via rebuildDelegationDefinitions)
+ * is immediately visible to the Main Agent; the static workflowSchema/ultracodeSchema
+ * objects below remain only for type-level Static<> exports.
  */
-function investigationSchemaFor<K extends InvestigationToolKind>(kind: K, mode: SubAgentMode): InvestigationSchema<K> {
-	if (mode !== "read-write") {
-		return (kind === "ultracode" ? ultracodeSchema : workflowSchema) as InvestigationSchema<K>;
-	}
+function investigationSchemaFor<K extends InvestigationToolKind>(kind: K, mode: SubAgentMode, maxTasks: number): InvestigationSchema<K> {
 	return createInvestigationSchema(
 		INVESTIGATION_TOOL_PROFILES[kind].minPhases,
-		"read-write",
+		mode,
+		maxTasks,
 	) as InvestigationSchema<K>;
 }
 
@@ -300,7 +301,8 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 	const profile = INVESTIGATION_TOOL_PROFILES[kind];
 	const settingsAtBuild = options?.getSettings?.();
 	const modeAtBuild = normalizeSubAgentMode(settingsAtBuild?.mode);
-	const parameters = investigationSchemaFor(kind, modeAtBuild);
+	const maxTasksAtBuild = resolveExploreMaxTasks(settingsAtBuild);
+	const parameters = investigationSchemaFor(kind, modeAtBuild, maxTasksAtBuild);
 	// Read-only profiles keep their historical wording verbatim; only the
 	// capability clauses change when the Sub Agent mode is read-write.
 	const description = withCapabilityWording(profile.description, modeAtBuild);
@@ -324,6 +326,7 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 			}
 
 			const settings = options?.getSettings?.() ?? { enabled: false };
+			const liveMaxTasks = resolveExploreMaxTasks(settings);
 			const parentTraceScope = options?.getTraceParentScope?.();
 			const workflowRunId = options?.trace?.createId("workflow");
 			const details: WorkflowToolDetails = {
@@ -340,6 +343,20 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 					results: [],
 				})),
 			};
+			const overLimitPhase = params.phases.find((phase) => phase.tasks.length > liveMaxTasks);
+			if (overLimitPhase) {
+				const received = overLimitPhase.tasks.length;
+				details.status = "failed";
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `当前单阶段最多派发 ${liveMaxTasks} 个子智能体，阶段‘${overLimitPhase.name}’本次收到 ${received} 个，已拦截未执行。请保留全部 ${received} 个方向，不合并、不丢弃，将超出部分精简或拆分为后续阶段顺序推进，每阶段至多 ${liveMaxTasks} 个，全程单阶段活动子任务数不超过 ${liveMaxTasks}。`,
+						},
+					],
+					details: cloneDetails(details),
+				};
+			}
 			const failPreflight = (message: string): never => {
 				details.status = "failed";
 				const failure = new Error(message) as Error & { details?: WorkflowToolDetails };
