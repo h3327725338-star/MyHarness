@@ -1102,6 +1102,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		await settings().flush();
 		const errors = settings().getErrors();
 		host.broadcast("settings_changed", { id });
+		// The `subAgent` switch also changes the session's active tools (agent/workflow/ultracode), so tell
+		// other tabs to refresh the right-panel tool list as well; the local tab refreshes it directly.
+		if (id === "subAgent") host.broadcast("resources_changed", {});
 		return { ok: true, errors: errors.map((entry) => ({ scope: entry.scope, message: entry.error.message })) };
 	});
 
@@ -1266,7 +1269,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		};
 	});
 
-	server.route("POST", "/api/tools/active", ({ body }) => {
+	server.route("POST", "/api/tools/active", async ({ body }) => {
 		const names = asObject(body).names;
 		if (!Array.isArray(names) || names.some((name) => typeof name !== "string"))
 			throw new HttpError(400, "names must be a string array");
@@ -1280,7 +1283,29 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				400,
 				`${unavailable.join(", ")} is turned off in the settings (Code Intelligence); it is not available to the model. Restart to apply the switch.`,
 			);
-		host.session.setActiveToolsByName(names as string[]);
+		// The right-panel `agent` switch mirrors the global `subAgent.enabled` switch 1:1. `workflow` and
+		// `ultracode` share the same sub-agent runtime (they call runExploreBatch), so they must never stay
+		// on while `agent` is off: strip them here as well (the UI also disables them, this is the
+		// server-side enforcement so the model can never be handed them while `agent` is off).
+		const requested = [...new Set(names as string[])];
+		const agentOn = requested.includes("agent");
+		const finalNames = agentOn ? requested : requested.filter((name) => name !== "workflow" && name !== "ultracode");
+		const s = settings();
+		const currentEnabled = s.getSubAgentSettings().enabled === true;
+		let settingsChanged = false;
+		// Only the `agent` switch writes back to `subAgent.enabled`; toggling `workflow`/`ultracode` alone
+		// never touches it (one-way decoupling). Turning `agent` on persists enabled=true but keeps the
+		// requested workflow/ultracode state as-is (unlock, don't force them on); turning it off persists
+		// enabled=false which also matches the stripped list above.
+		if (agentOn !== currentEnabled) {
+			const current = s.getSubAgentSettings();
+			s.setSubAgentSettings({ ...current, enabled: agentOn });
+			await s.flush();
+			settingsChanged = true;
+		}
+		host.session.setActiveToolsByName(finalNames);
+		host.broadcast("resources_changed", {});
+		if (settingsChanged) host.broadcast("settings_changed", { id: "subAgent" });
 		return { ok: true, active: host.session.getActiveToolNames() };
 	});
 

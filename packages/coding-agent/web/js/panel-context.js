@@ -1,6 +1,6 @@
 // Session panel: context budget, session stats, active tools and loaded resources.
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle, CopyButton } from "./ui.js";
-import { attempt, loadResources, loadStats, post, setView, state, useStore } from "./store.js";
+import { attempt, loadResources, loadSettings, loadStats, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { exportReadOnly } from "./export-mode.js";
 import { restartService } from "./service-restart.js";
@@ -84,12 +84,30 @@ export function ContextPanel() {
 	if (!snap) return null;
 	const tokenCount = (key) => formatSessionTokenCount(stats, key);
 	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
+	const agentActive = resources ? resources.tools.some((tool) => tool.name === "agent" && tool.active) : false;
+	const isDelegatedChild = (name) => name === "workflow" || name === "ultracode";
 	const toggleTool = async (name, on) => {
-		const active = new Set(resources.tools.filter((t) => t.active).map((t) => t.name));
-		if (on) active.add(name);
-		else active.delete(name);
-		await attempt(() => post("/api/tools/active", { names: [...active] }));
+		// workflow/ultracode share the sub-agent runtime with agent: they stay disabled while agent is off.
+		// The UI disables them (see below); this is the second guard for keyboard/scripts, and the server
+		// strips them again so the model can never receive them while agent is off.
+		if (isDelegatedChild(name) && !resources.tools.some((tool) => tool.name === "agent" && tool.active) && on) return;
+		const current = resources.tools.filter((t) => t.active).map((t) => t.name);
+		let names;
+		if (name === "agent" && !on) {
+			// Turning agent off cascades: workflow + ultracode go off together (and stay disabled until
+			// agent is back on). Turning agent on only adds agent; the two children stay as they were.
+			names = current.filter((entry) => entry !== "agent" && entry !== "workflow" && entry !== "ultracode");
+		} else {
+			const active = new Set(current);
+			if (on) active.add(name);
+			else active.delete(name);
+			names = [...active];
+		}
+		await attempt(() => post("/api/tools/active", { names }));
 		await loadResources();
+		// The agent switch mirrors subAgent.enabled 1:1, so refresh the settings list in this tab at once
+		// (other tabs follow via the settings_changed event).
+		if (name === "agent") loadSettings().catch(() => {});
 	};
 	return html`<div class="context-panel">
 		<div class="panel-toolbar">
@@ -118,7 +136,11 @@ export function ContextPanel() {
 			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
-			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => html`<div class="res-row" key=${tool.name}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><${Toggle} checked=${tool.active} label=${tool.name} disabled=${snap.active} onChange=${(v) => toggleTool(tool.name, v)} /></div>`)}
+			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => {
+				const needsAgent = isDelegatedChild(tool.name) && !agentActive;
+				const disabled = snap.active || needsAgent;
+				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("需先开启 agent 工具") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><span title=${needsAgent ? t("需先开启 agent 工具") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
+			})}
 		<//>
 		<${Section} title=${t("Skills")} count=${resources?.skills.length} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.skills.length ? resources.skills.map((skill) => html`<div class="res-row" key=${skill.name}><div class="col grow"><span class="mono">${skill.name}</span><span class="dim res-desc">${clip(skill.description, 120)}</span></div><button class="link-btn" onClick=${() => actions.insertIntoComposer(`/skill:${skill.name} `)}>${t("Use")}</button></div>`) : html`<div class="dim">${t("No skills loaded.")}</div>`}

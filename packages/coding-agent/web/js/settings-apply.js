@@ -5,7 +5,7 @@
 //     useDelayedBusy in ui.js), and then until it has finished;
 //   - the server's answer decides what stays: after the save the real settings are read again, so a failed save puts the
 //     old value back, and the failure is reported.
-import { attempt, emit, loadModels, loadSettings, loadSnapshot, post, set, state, toast } from "./store.js";
+import { attempt, emit, loadModels, loadResources, loadSettings, loadSnapshot, post, set, state, toast } from "./store.js";
 import { requestNotificationPermission } from "./notifications.js";
 import { t } from "./i18n.js";
 
@@ -38,6 +38,9 @@ export async function saveSetting(id, value) {
 	const result = await attempt(() => post("/api/settings", { id, value }));
 	await loadSettings();
 	await loadSnapshot();
+	// The subAgent switch also flips the right-panel agent/workflow/ultracode tools in this tab at once
+	// (other tabs follow via the settings_changed + resources_changed events).
+	if (id === "subAgent" || id.startsWith("subAgent")) loadResources().catch(() => {});
 	if (id === "webSearch.enabled" || id.startsWith("subAgent")) loadModels();
 	if (result?.errors?.length) toast(result.errors.map((e) => e.message).join("\n"), "error");
 	return result;

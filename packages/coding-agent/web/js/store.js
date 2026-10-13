@@ -1397,7 +1397,14 @@ function connectEvents() {
 		await attempt(() => loadSnapshot(slot), { quiet: true });
 		if (state.providers) loadProviders();
 	});
-	on("settings_changed", (d, slot) => attempt(() => loadSnapshot(slot), { quiet: true }));
+	on("settings_changed", (d, slot) => {
+		// The settings panel, the /settings panel and the right-panel `agent` switch share one source
+		// (subAgent.enabled <-> agent active). A change from any tab must refresh the other two at once.
+		attempt(() => loadSettings(), { quiet: true });
+		if (slot === activeSlot) loadResources().catch(() => {});
+		else state.resources = null;
+		attempt(() => loadSnapshot(slot), { quiet: true });
+	});
 	on("workspaces_changed", async (d, slot) => {
 		await attempt(() => loadSnapshot(slot), { quiet: true });
 		await attempt(() => loadWorkspaces(), { quiet: true });
