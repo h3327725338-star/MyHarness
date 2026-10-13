@@ -109,20 +109,24 @@ try {
  // The chat on screen is a blank one; "d" holds a draft, "t" is open with something typed in it.
  set({snap:{session:{file:'C:/fixture/a.jsonl',id:'a'}},modeState:draftOf('half-written'),slots:[{slot:'st',sessionFile:'C:/fixture/t.jsonl',sessionId:'t',unbound:true,hasContent:true}]});
 
- // 1. Workspaces that were not read yet are not reported as missing; an empty list that was read is.
+ // 1. No placeholder is shown for an empty Workspace list; the Default group sits directly below the section title.
  const first=loadWorkspaces();
  render(h(Sidebar),side); await wait(300);
  must(!side.textContent.includes('No workspaces'),'No workspaces was shown before the list was read');
  await first; await wait(300);
- must(side.textContent.includes('No workspaces'),'an empty list of Workspaces is not reported');
- must(seen.has('opening:No workspaces'),'the note did not fold in');
+ must(!side.textContent.includes('No workspaces'),'the empty Workspace placeholder was shown');
+ const section=side.querySelector('.side-section');
+ must(section&&section.textContent.includes('Workspaces'),'the Workspaces section title is missing');
+ const firstWs=side.querySelector('.sidebar-scroll .ws .ws-row');
+ must(firstWs,'the Default group did not appear');
+ must(firstWs.textContent.includes('Default'),'the Default group is not first below the Workspaces title');
+ must(!seen.has('opening:No workspaces'),'the removed placeholder folded in');
 
- // 2. A Workspace that is added grows in and the note folds away; the arrow of a closed group points right.
+ // 2. A Workspace that is added grows in; the arrow of a closed group points right.
  await loadWorkspaces(); await loadArchived(); await wait(500);
  const proj=side.querySelector('.ws-row[title="C:/fixture/proj"]');
  must(proj,'the new Workspace did not appear');
- must(seen.has('closing:No workspaces'),'the note did not fold away');
- must(!side.textContent.includes('No workspaces'),'the note stayed after a Workspace arrived');
+ must(!side.textContent.includes('No workspaces'),'the removed placeholder appeared after a Workspace arrived');
  must(seen.has('opening:C:/fixture/proj')||[...seen].some(key=>key.startsWith('opening:proj')),'the Workspace did not grow in');
  must(proj.getAttribute('aria-expanded')==='false' && angle(proj.querySelector('.chev'))===0,'closed group arrow is not pointing right: '+angle(proj.querySelector('.chev')));
  proj.click(); await wait(450);

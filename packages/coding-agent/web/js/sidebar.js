@@ -457,7 +457,6 @@ export function Sidebar() {
 				const stored = expanded[w.rootPath];
 				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${sessionsOf(w.rootPath)} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} showAll=${control.showAll} onShowAll=${control.setShowAll} />`;
 			}} />
-			<${FoldIn} content=${ws.loaded && !ws.list.length ? html`<div class="dim side-note">${t("No workspaces")}</div>` : null} />
 			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
 		</div>
 		${exportReadOnly() ? html`<${ExportSidebarFoot} />` : null}
