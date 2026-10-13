@@ -298,6 +298,19 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		await restoreMemoryArchive(artifactDataRoot(), payload.path);
 		return { ok: true };
 	});
+	server.route("POST", "/api/memory/maintenance-retry", async () => {
+		// Do not race a running task: the pill only shows these buttons while idle.
+		if (!host.session.isIdle || host.completionActive)
+			throw new HttpError(409, "Wait for the current task to finish");
+		const retried = await host.session.retryAutoMemoryMaintenance();
+		return { ok: true, retried, status: host.session.getAutoMemoryMaintenanceStatus() };
+	});
+	server.route("POST", "/api/memory/maintenance-dismiss", async () => {
+		if (!host.session.isIdle || host.completionActive)
+			throw new HttpError(409, "Wait for the current task to finish");
+		const archived = await host.session.dismissAutoMemoryMaintenance();
+		return { ok: true, archived, status: host.session.getAutoMemoryMaintenanceStatus() };
+	});
 
 	// Browser uploads retain their original bytes as session-owned context references.
 	server.route("POST", "/api/files/upload", async ({ body }) => {

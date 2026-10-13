@@ -38,6 +38,8 @@ export const zhCN = {
 	"Exit fullscreen (Esc)": "退出全屏 (Esc)",
 	"Discard changes": "放弃修改",
 	"Memory maintenance needs attention": "记忆维护需要检查",
+	"Retry memory maintenance": "重试记忆维护",
+	"Dismiss and archive pending memory": "忽略并归档待处理记忆",
 	"Memory runs in the background; you can keep working": "记忆在后台处理，不影响继续操作",
 	"Updating memory in background": "后台更新记忆",
 	"Memories": "记忆",

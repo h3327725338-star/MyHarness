@@ -42,7 +42,7 @@ function StatusPill() {
 		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} />${detail}</span>`;
 	}
 	if (completion) return html`<span class="status-pill" role="status"><${Spinner} />${t("Finishing up")}</span>`;
-	if (memory?.phase === "warning") return html`<span class="status-pill warn" role="status" title=${memory.error || t("Memory maintenance needs attention")}><${Icon} name="alertTriangle" size=${13} />${t("Memory maintenance needs attention")}</span>`;
+	if (memory?.phase === "warning") return html`<span class="status-pill warn" role="status" title=${memory.error || t("Memory maintenance needs attention")}><${Icon} name="alertTriangle" size=${13} />${t("Memory maintenance needs attention")}<button class="icon-btn sm" title=${t("Retry memory maintenance")} aria-label=${t("Retry memory maintenance")} onClick=${() => attempt(() => post("/api/memory/maintenance-retry", {}))}><${Icon} name="refresh" size=${13} /></button><button class="icon-btn sm" title=${t("Dismiss and archive pending memory")} aria-label=${t("Dismiss and archive pending memory")} onClick=${() => attempt(() => post("/api/memory/maintenance-dismiss", {}))}><${Icon} name="trash" size=${13} /></button></span>`;
 	if (memory?.phase === "processing" || memory?.phase === "pending") return html`<span class="status-pill" role="status" title=${t("Memory runs in the background; you can keep working")}><${Icon} name="clock" size=${13} />${t("Updating memory in background")}</span>`;
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {

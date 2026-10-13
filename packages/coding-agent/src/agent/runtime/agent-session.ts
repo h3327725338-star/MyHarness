@@ -1143,6 +1143,16 @@ export class AgentSession {
 		return this._autoMemory.getMaintenanceStatus();
 	}
 
+	/** Reset a paused memory-maintenance job and run it again soon. */
+	async retryAutoMemoryMaintenance(): Promise<boolean> {
+		return this._autoMemory.retryMaintenance();
+	}
+
+	/** Archive a stuck memory-maintenance job and clear the warning. Nothing is permanently deleted. */
+	async dismissAutoMemoryMaintenance(): Promise<string | null> {
+		return this._autoMemory.dismissMaintenance();
+	}
+
 	private async _prepareGitCheckpointToolMutation(
 		event: Extract<AgentEvent, { type: "tool_execution_start" }>,
 	): Promise<void> {

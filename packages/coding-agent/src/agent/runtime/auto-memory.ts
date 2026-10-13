@@ -643,6 +643,40 @@ export class AutoMemoryManager {
 		return { ...this.maintenanceStatus };
 	}
 
+	/** Retry a paused maintenance job: reset its attempts and run it again soon. Returns false when there is no job to retry. */
+	async retryMaintenance(): Promise<boolean> {
+		if (this.disposed) return false;
+		if (!fs.existsSync(this.maintenancePath)) {
+			this.setMaintenanceStatus({ phase: "idle" });
+			return false;
+		}
+		const job = JSON.parse(await fs.promises.readFile(this.maintenancePath, "utf8")) as MemoryMaintenanceJob;
+		if (job.version !== 1 || !Array.isArray(job.entries) || typeof job.id !== "string")
+			throw new Error("Invalid memory maintenance job");
+		job.attempts = 0;
+		await writeMemoryFile(this.maintenancePath, JSON.stringify(job));
+		this.setMaintenanceStatus({ phase: "pending" });
+		this.scheduleMaintenance();
+		return true;
+	}
+
+	/** Dismiss a stuck job: move it into the session archive and go idle. Nothing is permanently deleted. Returns the archive file name, or null when there was no job. */
+	async dismissMaintenance(): Promise<string | null> {
+		if (!fs.existsSync(this.maintenancePath)) {
+			this.setMaintenanceStatus({ phase: "idle" });
+			return null;
+		}
+		const archiveDir = path.join(this.paths.sessionDir, "archive");
+		assertDirectPath(archiveDir);
+		await fs.promises.mkdir(archiveDir, { recursive: true });
+		const name = `maintenance-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`;
+		const target = path.join(archiveDir, name);
+		assertDirectPath(target);
+		await fs.promises.rename(this.maintenancePath, target);
+		this.setMaintenanceStatus({ phase: "idle" });
+		return name;
+	}
+
 	private setMaintenanceStatus(status: MemoryMaintenanceStatus): void {
 		this.maintenanceStatus = status;
 		try {
