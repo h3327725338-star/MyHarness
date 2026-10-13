@@ -33,6 +33,7 @@ import {
 } from "../src/tools/sub-agent.ts";
 import { INVESTIGATION_TOOL_PROFILES } from "../src/ultracode/profile.ts";
 import { createInvestigationToolDefinition } from "../src/workflow/engine.ts";
+import { pathIdentityKey } from "../src/utils/paths.ts";
 
 function trace(toolName: string, status: "completed" | "failed"): SubAgentToolTrace {
 	return { toolCallId: `call-${toolName}`, toolName, args: {}, status };
@@ -525,7 +526,7 @@ describe("read-write batch end-to-end through the fake delegated worker", () => 
 		expect(dump.mode).toBe("read-write");
 		expect(dump.worktree).toBe(dump.cwd);
 		expect(dump.cwd).not.toBe(repoDir);
-		expect(dump.cwd.startsWith(join(agentDir, "worktrees"))).toBe(true);
+		expect(pathIdentityKey(dump.cwd).startsWith(pathIdentityKey(join(agentDir, "worktrees")))).toBe(true);
 
 		const task = result.details.results[0];
 		expect(task.status).toBe("completed");

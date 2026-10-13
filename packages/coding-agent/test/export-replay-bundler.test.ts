@@ -142,10 +142,11 @@ describe("W22 (a) 真实前端打包：重写可验证", () => {
 		expect(dangling).toEqual([]);
 	});
 
-	it("真实模块图无循环；人造循环按原型处理（a→b→a 可打包、同一裸名映射同一 data: URL）", () => {
+	it("真实模块图仅含已知懒加载环；人造循环按原型处理（a→b→a 可打包、同一裸名映射同一 data: URL）", () => {
 		const bundle = getRealBundle();
-		expect(bundle.stats.cycles).toEqual([]);
-		expect(findCycles(bundle.modules)).toEqual([]);
+		// actions.js 懒加载 service-restart.js（/reload），后者静态回引 actions.js，属已知预期环。
+		expect(bundle.stats.cycles).toEqual(["actions.js -> service-restart.js -> actions.js"]);
+		expect(findCycles(bundle.modules)).toEqual(["actions.js -> service-restart.js -> actions.js"]);
 
 		const dir = makeTempWebDir({
 			"js/main.js": 'import { x } from "./a.js";\nexport const y = x;',
@@ -174,6 +175,7 @@ describe("W22 (a) 真实前端打包：重写可验证", () => {
 			bareSeen.set(m.bare, m.rel);
 		}
 		expect(bundle.stats.dynamicRewrites).toEqual([
+			"js/actions.js -> ./service-restart.js",
 			"js/terminal-session.js -> /vendor/xterm.js",
 			"js/terminal-session.js -> /vendor/xterm-addon-fit.js",
 		]);

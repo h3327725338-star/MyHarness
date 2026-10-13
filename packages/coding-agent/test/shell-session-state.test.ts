@@ -10,6 +10,7 @@ import {
 	WRITE_GUARD_BLOCK_MARKER,
 } from "../src/tools/shell/delegated-write-guard.ts";
 import { createPwshToolDefinition } from "../src/tools/shell/pwsh.ts";
+import { pathIdentityKey } from "../src/utils/paths.ts";
 import {
 	createReadOnlyGuardExtensionSource,
 	READ_ONLY_GUARD_BLOCK_MARKER,
@@ -37,7 +38,7 @@ describe("shell session state and guard isolation", () => {
 	let subDir: string;
 
 	beforeEach(() => {
-		testDir = realpathSync(
+		testDir = realpathSync.native(
 			(() => {
 				const p = join(tmpdir(), `myharness-state-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 				mkdirSync(p, { recursive: true });
@@ -690,7 +691,11 @@ describe("shell session state and guard isolation", () => {
 
 		const text = (res.content[0] as { text: string }).text;
 		expect(text.toLowerCase()).not.toContain("subdir");
-		expect(text).toContain(testDir);
+		// Windows runners can spell the same directory with an 8.3 short name (RUNNER~1)
+		// in tmpdir() while pwsh reports the long name (runneradmin): compare canonical identities.
+		const locValue = (text.split(/\r?\n/).find((line) => line.includes("LOC=")) ?? "").split("LOC=")[1]?.trim() ?? "";
+		expect(locValue).not.toBe("");
+		expect(pathIdentityKey(locValue)).toBe(pathIdentityKey(testDir));
 	});
 
 	it("B8: filters bash internal noise environment variables from session overrides", async () => {
