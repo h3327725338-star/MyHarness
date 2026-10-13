@@ -133,6 +133,21 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .quote-shelf { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0 8px; }
 .quote-card { position: relative; display: flex; flex-direction: column; gap: 3px; width: 216px; max-width: 44%; padding: 7px 26px 7px 9px; background: var(--bg-inset); border: 1px solid var(--border-strong); border-left: 2px solid var(--accent-line); border-radius: var(--r-md); font-size: var(--fs-xs); color: var(--text-2); transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); animation: quote-card-in var(--t-base) var(--ease) both; }
 .quote-card:hover { border-color: var(--border-focus); color: var(--text); }
+.quote-card[role="button"] { cursor: pointer; }
+.quote-card[role="button"]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+/* Editing a saved card: centred window, transform + opacity only (GPU), fades/scales in. */
+.quote-edit-scrim { position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, 0.35); animation: quote-scrim-in var(--t-fast) var(--ease) both; }
+@keyframes quote-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.quote-edit-pop { position: fixed; z-index: 301; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 6px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-pop); will-change: transform, opacity; transition: transform var(--t-base) var(--ease), opacity var(--t-fast) var(--ease); }
+.quote-edit-src { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-2); font-size: var(--fs-xs); }
+.quote-edit-src > svg { flex: none; color: var(--accent); }
+.quote-edit-input { width: 100%; box-sizing: border-box; resize: none; min-height: 72px; padding: 2px 0; border: none; background: transparent; color: var(--text); font-size: var(--fs-sm); line-height: 1.5; outline: none; box-shadow: none; font-family: inherit; }
+.quote-edit-input:focus { border: none; outline: none; box-shadow: none; }
+.quote-edit-input::placeholder { color: var(--text-4); }
+.quote-edit-bar { display: flex; align-items: center; min-height: 22px; }
+.quote-edit-bar .grow { flex: 1; }
+.quote-edit-bar .quote-tool { width: 20px; height: 20px; border-radius: var(--r-sm); color: var(--text-3); }
+.quote-edit-bar .quote-tool:hover { color: var(--accent); }
 .quote-card-src { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .quote-card-src > svg { flex: none; color: var(--accent); }
 .quote-card-note { color: var(--text); font-weight: 500; }

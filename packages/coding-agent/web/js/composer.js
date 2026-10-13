@@ -291,6 +291,12 @@ export function Composer() {
 	const [caret, setCaret] = useState(0);
 	const [images, setImages] = useState([]);
 	const [quotes, setQuotes] = useState([]);
+	// Editing a saved quote card: popup grows from the clicked card to the screen centre.
+	const [editingId, setEditingId] = useState(null);
+	const [editNote, setEditNote] = useState("");
+	const [editFrom, setEditFrom] = useState(null);
+	const [editCentered, setEditCentered] = useState(false);
+	const editArea = useRef(null);
 	// What Enter does while the agent runs: the default chosen in Settings.
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
 	const [sending, setSending] = useState(false);
@@ -594,11 +600,8 @@ const send = async (mode) => {
 
 	const onKeyDown = (event) => {
 		if (event.isComposing || event.keyCode === 229) return;
-		if (event.key === "Backspace" && !text && quotes.length > 0) {
-			event.preventDefault();
-			setQuotes((prev) => prev.slice(0, -1));
-			return;
-		}
+		// Saved quote cards are only removed with the mouse on their own \u00d7: Backspace/Delete
+		// in an empty input must never eat a card, so there is intentionally no handler here.
 		if (menuOpen) {
 			if (event.key === "ArrowDown") return event.preventDefault(), setSel((sel + 1) % suggestions.length);
 			if (event.key === "ArrowUp") return event.preventDefault(), setSel((sel - 1 + suggestions.length) % suggestions.length);
@@ -637,6 +640,51 @@ const send = async (mode) => {
 		}
 	};
 
+	// A saved card pops in the screen centre; only its note is editable. The grow direction
+	// points back at the clicked card, but the window itself never travels across the screen:
+	// only transform + opacity animate (GPU), so there is no top/left/width layout judder.
+	const openEdit = (q, e) => {
+		const rect = e?.currentTarget?.closest?.(".quote-card")?.getBoundingClientRect();
+		if (rect) {
+			const cx = window.innerWidth / 2;
+			const cy = window.innerHeight / 2;
+			setEditFrom({ origin: `${rect.left + rect.width / 2 < cx ? "0%" : "100%"} ${rect.top + rect.height / 2 < cy ? "0%" : "100%"}` });
+		} else setEditFrom(null);
+		setEditingId(q.id);
+		setEditNote(q.note || "");
+		setEditCentered(false);
+		requestAnimationFrame(() => setEditCentered(true));
+		setTimeout(() => editArea.current?.focus(), 140);
+	};
+	const closeEdit = () => {
+		setEditingId(null);
+		setEditNote("");
+		setEditFrom(null);
+		setEditCentered(false);
+	};
+	const saveEdit = () => {
+		if (!editingId) return;
+		const next = editNote.trim();
+		setQuotes((prev) => prev.map((q) => (q.id === editingId ? { ...q, note: next } : q)));
+		closeEdit();
+		setTimeout(() => area.current?.focus(), 0);
+	};
+	const onEditKey = (e) => {
+		if (e.isComposing || e.keyCode === 229) return;
+		if (e.key === "Escape") return e.preventDefault(), e.stopPropagation(), closeEdit();
+		// Enter here only writes the note back to its card, never sends the message.
+		if (e.key === "Enter" && !e.shiftKey) return e.preventDefault(), e.stopPropagation(), saveEdit();
+	};
+	const editing = editingId ? quotes.find((q) => q.id === editingId) : null;
+	const editStyle = {
+		top: "50%",
+		left: "50%",
+		width: "min(420px, calc(100vw - 48px))",
+		transform: editCentered ? "translate(-50%, -50%) scale(1)" : "translate(-50%, -50%) scale(0.86)",
+		opacity: editCentered ? "1" : "0",
+		transformOrigin: editFrom?.origin || "50% 50%",
+	};
+
 	const canSend = !restarting && connected && (text.trim() || images.length || quotes.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0 && quotes.length === 0;
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
@@ -668,11 +716,34 @@ const send = async (mode) => {
 					class="quote-card"
 					key=${q.id}
 					title=${q.note ? `${q.note}\n\n${q.text}` : q.text}
+					role="button"
+					tabindex="0"
+					aria-label=${t("Edit quote note")}
+					onClick=${(e) => openEdit(q, e)}
+					onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openEdit(q, e); } }}
 				>
-					<button class="quote-card-x" aria-label=${t("Remove quote")} title=${t("Remove quote")} onClick=${() => setQuotes(quotes.filter((_, j) => j !== i))}><${Icon} name="x" size=${10} /></button>
+					<button class="quote-card-x" aria-label=${t("Remove quote")} title=${t("Remove quote")} onClick=${(e) => (e.stopPropagation(), setQuotes(quotes.filter((_, j) => j !== i)))}><${Icon} name="x" size=${10} /></button>
 					<span class="quote-card-src"><${Icon} name="quote" size=${11} /><span class="truncate">${clipLine(q.text, 44)}</span></span>
 					${q.note ? html`<span class="quote-card-note truncate">${q.note}</span>` : null}
 				</div>`)}</div>` : null}
+				${editing ? html`<div class="quote-edit-scrim" onMouseDown=${(e) => { if (e.target === e.currentTarget) closeEdit(); }}>
+					<div class="quote-edit-pop" style=${editStyle} role="dialog" aria-modal="true" aria-label=${t("Edit quote note")}>
+						<div class="quote-edit-src"><${Icon} name="quote" size=${11} /><span class="truncate">${clipLine(editing.text, 60)}</span></div>
+						<textarea
+							ref=${editArea}
+							class="quote-edit-input"
+							rows="3"
+							value=${editNote}
+							placeholder=${t("Add a note about this passage (optional)")}
+							onInput=${(e) => setEditNote(e.target.value)}
+							onKeyDown=${onEditKey}
+						></textarea>
+						<div class="quote-edit-bar">
+							<span class="grow" />
+							<button class="icon-btn sm quote-tool quote-note-save" onClick=${saveEdit} title=${t("Save quote")} aria-label=${t("Save quote")}><span class="quote-enter" aria-hidden="true">⏎</span></button>
+						</div>
+					</div>
+				</div>` : null}
 				${images.length ? html`<div class="attachments">${images.map((img, i) => {
 					// Only an image opens the preview: a file chip (it has a path) stays exactly as it was. The × removes, never previews (stopPropagation here, guard in the thumb handlers).
 					const zoomable = !img.path;
