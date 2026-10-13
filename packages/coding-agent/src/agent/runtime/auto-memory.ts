@@ -130,9 +130,10 @@ const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
 /** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
 export const MEMORY_PROFILE_ID = "global/用户画像";
 const RECALL_TURN_MAX_BYTES = 20 * 1024;
-// 维护记忆 Agent 的输入不设上限：提取时的聊天全文、已有记忆清单、整理时的整批记忆全部送给模型，
-// 维护记忆 Agent 的输入不设上限：提取时的聊天全文、已有记忆清单、整理时的整批记忆全部送给模型，
-// 输出侧不设条数上限（单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文）。主聊天的召回仍保留 20KB 卡片保护（规矩头不计），不在此列。
+// 稳定性切块：提取按 30 条聊天一切逐块推进、整理按 20 张记忆一批独立存，
+// 单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文。主聊天的召回仍保留 20KB 卡片保护（规矩头不计），不在此列。
+const EXTRACT_CHUNK_ENTRIES = 30;
+const CONSOLIDATION_BATCH_SIZE = 20;
 const MAX_RECALLED_MEMORIES = 5;
 const CONSOLIDATION_MIN_CHANGES = 5;
 const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
@@ -897,33 +898,38 @@ export class AutoMemoryManager {
 				projectDir: sweptPaths.workspaceDir,
 				sessionDir: sweptPaths.sessionDir,
 			});
-		const batch = loadSwept();
-		if (batch.length === 0) return;
-		const snapshot = loadSwept();
+		const all = loadSwept();
+		if (all.length === 0) return;
+		const sortedSwept = [...all].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
-		const output = await this.runModel({
-			cwd: this.options.cwd,
-			settings,
-			systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-			task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
-		});
-		this.assertActive();
-		const operations = parseMemoryOperations(output);
-		if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
-		const ids = new Set(batch.map((entry) => entry.id));
-		await this.applyOperations(
-			operations.filter((operation) => !!operation.id && ids.has(operation.id)),
-			true,
-			snapshot,
-			undefined,
-			{
-				workspaceId,
-				globalDir: sweptPaths.globalDir,
-				projectDir: sweptPaths.workspaceDir,
-				sessionDir: sweptPaths.sessionDir,
-			},
-		);
+		for (let start = 0; start < sortedSwept.length; start += CONSOLIDATION_BATCH_SIZE) {
+			this.assertActive();
+			const batch = sortedSwept.slice(start, start + CONSOLIDATION_BATCH_SIZE);
+			const snapshot = loadSwept();
+			const output = await this.runModel({
+				cwd: this.options.cwd,
+				settings,
+				systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
+				task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+			});
+			this.assertActive();
+			const operations = parseMemoryOperations(output);
+			if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+			const ids = new Set(batch.map((entry) => entry.id));
+			await this.applyOperations(
+				operations.filter((operation) => !!operation.id && ids.has(operation.id)),
+				true,
+				snapshot,
+				undefined,
+				{
+					workspaceId,
+					globalDir: sweptPaths.globalDir,
+					projectDir: sweptPaths.workspaceDir,
+					sessionDir: sweptPaths.sessionDir,
+				},
+			);
+		}
 		await this.withLock(async () => {
 			const state = readState(this.paths.statePath);
 			const value = state.consolidation[workspaceId];
@@ -1378,27 +1384,38 @@ export class AutoMemoryManager {
 		this.assertActive();
 		await migrateLegacyMemories(this.paths.dataRoot, this.options.agentDir);
 		await this.initializeConsolidationState();
-		const state = readState(this.paths.statePath);
-		const cursor = state.sessions[this.options.sessionId]?.lastEntryId;
-		const transcript = formatTranscript(entries, cursor);
-		if (!transcript.text || !transcript.lastEntryId) return;
-		const existing = this.loadEntries();
-		const output = await this.runModel({
-			cwd: this.options.cwd,
-			settings,
-			systemPrompt: MEMORY_EXTRACTOR_PROMPT,
-			task: [
-				`Current project root: ${this.paths.projectRoot}\nWorkspace ID: ${this.paths.workspaceId}\nSession ID: ${this.paths.sessionId}\nResident user profile entry ID (never create or modify it): ${MEMORY_PROFILE_ID}`,
-				`Existing memory list:\n${formatManifest(existing)}`,
-				`New conversation since last extraction:\n${transcript.text}`,
-			].join("\n\n"),
-		});
-		this.assertActive();
-		const operations = parseMemoryOperations(output);
-		if (operations === undefined) throw new Error("Auto Memory 返回了无效的操作格式");
-		await this.applyOperations(operations, false, existing, transcript.lastEntryId);
-		this.assertActive();
-		const { shouldConsolidate } = await this.updateState(transcript.lastEntryId);
+		// 切块推进：226 条这种大任务按 30 条一切，成一块就把游标往前推一块，
+		// 坏一块只抛那一块，已成的游标已落盘，下次重试从新游标往后接着记。
+		let cursor = readState(this.paths.statePath).sessions[this.options.sessionId]?.lastEntryId;
+		let shouldConsolidate = false;
+		let didWork = false;
+		for (let start = 0; start < entries.length; start += EXTRACT_CHUNK_ENTRIES) {
+			this.assertActive();
+			const chunk = entries.slice(start, start + EXTRACT_CHUNK_ENTRIES);
+			const transcript = formatTranscript(chunk, cursor);
+			if (!transcript.text || !transcript.lastEntryId) continue;
+			didWork = true;
+			const existing = this.loadEntries();
+			const output = await this.runModel({
+				cwd: this.options.cwd,
+				settings,
+				systemPrompt: MEMORY_EXTRACTOR_PROMPT,
+				task: [
+					`Current project root: ${this.paths.projectRoot}\nWorkspace ID: ${this.paths.workspaceId}\nSession ID: ${this.paths.sessionId}\nResident user profile entry ID (never create or modify it): ${MEMORY_PROFILE_ID}`,
+					`Existing memory list:\n${formatManifest(existing)}`,
+					`New conversation since last extraction:\n${transcript.text}`,
+				].join("\n\n"),
+			});
+			this.assertActive();
+			const operations = parseMemoryOperations(output);
+			if (operations === undefined) throw new Error("Auto Memory 返回了无效的操作格式");
+			await this.applyOperations(operations, false, existing, transcript.lastEntryId);
+			this.assertActive();
+			const updated = await this.updateState(transcript.lastEntryId);
+			cursor = transcript.lastEntryId;
+			if (updated.shouldConsolidate) shouldConsolidate = true;
+		}
+		if (!didWork) return;
 		if (shouldConsolidate) {
 			try {
 				await this.consolidate(settings);
@@ -1415,32 +1432,41 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
-		// 输入不设上限：整理时一批处理全部可见记忆，不再按 60KB 切分多批。
-		const batches: MemoryEntry[][] = [[]];
+		// 稳定性切块：按 20 张一批独立存，成一批落一批，坏一批只记那一批的错继续往下走，
+		// 最后有错再抛出来变黄并保留 pending，下次定时器接着整。
+		const sorted = entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		const batches: MemoryEntry[][] = [];
+		for (let start = 0; start < sorted.length; start += CONSOLIDATION_BATCH_SIZE) {
+			batches.push(sorted.slice(start, start + CONSOLIDATION_BATCH_SIZE));
+		}
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
-		for (const entry of entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
-			batches.at(-1)!.push(entry);
-		}
+		let firstError: unknown;
 		for (const batch of batches) {
 			if (batch.length === 0) continue;
-			const snapshot = this.loadEntries();
-			const output = await this.runModel({
-				cwd: this.options.cwd,
-				settings,
-				systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-				task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
-			});
-			this.assertActive();
-			const operations = parseMemoryOperations(output);
-			if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
-			const ids = new Set(batch.map((entry) => entry.id));
-			await this.applyOperations(
-				operations.filter((operation) => !!operation.id && ids.has(operation.id)),
-				true,
-				snapshot,
-			);
+			try {
+				const snapshot = this.loadEntries();
+				const output = await this.runModel({
+					cwd: this.options.cwd,
+					settings,
+					systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
+					task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+				});
+				this.assertActive();
+				const operations = parseMemoryOperations(output);
+				if (operations === undefined) throw new Error("Auto Memory 整理器返回了无效的操作格式");
+				const ids = new Set(batch.map((entry) => entry.id));
+				await this.applyOperations(
+					operations.filter((operation) => !!operation.id && ids.has(operation.id)),
+					true,
+					snapshot,
+				);
+			} catch (error) {
+				this.reportError("consolidate", error);
+				if (firstError === undefined) firstError = error;
+			}
 		}
+		if (firstError !== undefined) throw firstError;
 		await this.withLock(async () => {
 			const state = readState(this.paths.statePath);
 			const value = state.consolidation[this.paths.workspaceId];
