@@ -18,6 +18,10 @@ function copyBranchName() {
 
 const sameCopyPath = (a, b) => !!a && !!b && a.replaceAll("\\", "/").toLowerCase() === b.replaceAll("\\", "/").toLowerCase();
 
+/** Read-write sub-agent branches stay in their own worktree copies; hide them from the branch list to keep it quiet. */
+const SUBAGENT_BRANCH_PREFIX = "myharness-subagent-";
+const isSubagentBranch = (name) => typeof name === "string" && name.startsWith(SUBAGENT_BRANCH_PREFIX);
+
 export function BranchChip({ gitStatus }) {
 	const anchor = useRef(null);
 	const slot = useStore((s) => s.activeSlot);
@@ -161,7 +165,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		copyDeletionPanel.current?.querySelector(".branch-delete-cancel")?.focus({ preventScroll: true });
 	}, [deletingCopy, copyFailure]);
 
-	const branches = useMemo(() => rankSearch(data?.branches || [], query, { names: (b) => [b.name] }), [data, query]);
+	const branches = useMemo(() => rankSearch((data?.branches || []).filter((b) => b.current || !isSubagentBranch(b.name)), query, { names: (b) => [b.name] }), [data, query]);
 	const exact = branches.some((b) => b.name === query.trim());
 	// Rows the keyboard moves over: the branches, then "New branch".
 	const rows = data ? [...branches.map((b) => ({ kind: "branch", branch: b })), { kind: "new" }] : [];
