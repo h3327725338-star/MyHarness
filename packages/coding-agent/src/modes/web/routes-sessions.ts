@@ -246,8 +246,28 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	 * Where a General quick-created Workspace lands: the parent folder of the reference Workspace. The reference is
 	 * the current Workspace when it belongs to the requested mode, otherwise the first Workspace of that mode. It is
 	 * the "default Workspace's parent" the sidebar's quick-create dialog shows: the new folder becomes a sibling of
-	 * the existing Workspaces, never a child of the agent config dir or a random drive root.
+	 * the existing Workspaces, never a child of the agent config dir or a random drive root. With no Workspace at
+	 * all, the Desktop (then Documents, then home) is the base, so quick-create always has somewhere to go.
 	 */
+	const resolveUserBaseDir = (): string | undefined => {
+		const home = process.env.USERPROFILE ?? process.env.HOME ?? undefined;
+		const oneDrive = process.env.OneDrive ?? process.env.OneDriveConsumer ?? undefined;
+		for (const candidate of [
+			oneDrive ? join(oneDrive, "Desktop") : undefined,
+			home ? join(home, "Desktop") : undefined,
+			oneDrive ? join(oneDrive, "Documents") : undefined,
+			home ? join(home, "Documents") : undefined,
+			home,
+		]) {
+			if (!candidate) continue;
+			try {
+				if (statSync(candidate).isDirectory()) return candidate;
+			} catch {
+				// Missing or unreadable: try the next fallback.
+			}
+		}
+		return undefined;
+	};
 	const resolveCreateBase = (mode: ChatMode): { baseDir: string; referenceName: string; referencePath: string } => {
 		const list = host.workspaceStore.list(mode);
 		const current = host.workspace;
@@ -255,8 +275,11 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			...(current && (current.modes ?? ["coding"]).includes(mode) ? [current] : []),
 			...list.filter((workspace) => workspace.workspaceId !== current?.workspaceId),
 		];
-		if (ordered.length === 0)
-			throw new HttpError(404, "There is no workspace yet to decide where the new folder goes.");
+		if (ordered.length === 0) {
+			const fallback = resolveUserBaseDir();
+			if (!fallback) throw new HttpError(404, "There is no workspace yet to decide where the new folder goes.");
+			return { baseDir: fallback, referenceName: "", referencePath: "" };
+		}
 		// A workspace whose parent is gone (deleted folder, unplugged drive) is skipped, so one dead entry never
 		// bricks quick-create while a healthy sibling exists.
 		for (const reference of ordered) {

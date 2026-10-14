@@ -111,7 +111,12 @@ describe("AgentSessionRuntime characterization", () => {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			// Explicit isolated dataRoot: never touch the real data/workspaces/registry.json,
+			// so even a killed/interrupted run cannot leave sidebar residue.
+			sessionManager: SessionManager.create(tempDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			}),
 		});
 		await runtime.session.bindExtensions({});
 
@@ -255,7 +260,14 @@ describe("AgentSessionRuntime characterization", () => {
 		events.length = 0;
 		const otherDir = join(tmpdir(), `myharness-runtime-other-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(otherDir, { recursive: true });
-		const otherSession = SessionManager.create(otherDir);
+		cleanups.push(() => {
+			if (existsSync(otherDir)) {
+				rmSync(otherDir, { recursive: true, force: true });
+			}
+		});
+		const otherSession = SessionManager.create(otherDir, undefined, undefined, {
+			dataRoot: runtime.session.sessionManager.getDataRoot() ?? join(otherDir, "data"),
+		});
 		otherSession.appendMessage({ role: "user", content: [{ type: "text", text: "other" }], timestamp: Date.now() });
 		const otherSessionFile = otherSession.getSessionFile();
 		cancelReason = "resume";
@@ -544,10 +556,16 @@ describe("AgentSessionRuntime characterization", () => {
 		const otherRuntime = await createAgentSessionRuntime(createOtherRuntime, {
 			cwd: secondDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(secondDir),
+			sessionManager: SessionManager.create(secondDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			}),
 		});
 		cleanups.push(async () => {
 			await otherRuntime.dispose();
+			if (existsSync(secondDir)) {
+				rmSync(secondDir, { recursive: true, force: true });
+			}
 		});
 		await otherRuntime.session.prompt("other");
 		const otherSessionFile = otherRuntime.session.sessionFile!;
@@ -617,7 +635,10 @@ describe("AgentSessionRuntime characterization", () => {
 		const otherRuntime = await createAgentSessionRuntime(createOtherRuntime, {
 			cwd: otherDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(otherDir),
+			sessionManager: SessionManager.create(otherDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			}),
 		});
 		cleanups.push(async () => {
 			await otherRuntime.dispose();
