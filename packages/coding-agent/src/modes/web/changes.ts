@@ -67,6 +67,8 @@ export interface RunChangeRecord {
 	/** Tool-level file operations observed during the run (edit/write/apply_patch), independent of final detection. */
 	toolFileOps: Array<{ path: string; tool: FileMutationTool; ok: boolean }>;
 	bashRuns: number;
+	/** Shell calls that may have moved Git HEAD (git commit/merge/switch/...): HEAD progress is then treated as possibly own. */
+	gitHeadOps: number;
 }
 
 interface Snapshot {
@@ -190,6 +192,7 @@ export class ChangeTracker {
 			changes: [],
 			toolFileOps: [],
 			bashRuns: 0,
+			gitHeadOps: 0,
 		};
 		this.runs.set(runId, record);
 		this.snapshots.set(runId, new Map());
@@ -266,6 +269,11 @@ export class ChangeTracker {
 	recordBash(runId: number): void {
 		const record = this.runs.get(runId);
 		if (record) record.bashRuns += 1;
+	}
+
+	recordGitHeadOp(runId: number): void {
+		const record = this.runs.get(runId);
+		if (record) record.gitHeadOps += 1;
 	}
 
 	finishRun(

@@ -468,6 +468,15 @@ export interface GitTaskChangeSummary {
 	historyOnly: boolean;
 	historyNavigation: boolean;
 	taskCreatedHistory: boolean;
+	/** Commits that landed from outside this run's window (parallel session/user): excluded from `changes`, shown in the banner only. */
+	externalCommittedCount?: number;
+	externalCommittedFiles?: string[];
+}
+
+/** Shell 命令里是否可能移动 Git HEAD（commit/merge/switch 等）：命中即按“本轮可能自己提交过”保守处理。 */
+export function bashCommandMayMoveGitHead(command: unknown): boolean {
+	if (typeof command !== "string" || command.length === 0) return false;
+	return /\bgit(\.exe)?\b[^;&|()]*\b(commit|merge|rebase|cherry-pick|switch|checkout|pull|reset|revert)\b/i.test(command);
 }
 
 function mergeReviewChanges(primary: readonly ReviewChange[], secondary: readonly ReviewChange[]): ReviewChange[] {
@@ -491,6 +500,8 @@ export interface CollectFinalWorkspaceChangesOptions {
 	baselineFailureReason?: string;
 	/** 工具调用审计记录；仅在检测不可靠时用于保留已知的 edit/write 变化。 */
 	auditMutations?: readonly AutoReviewMutation[];
+	/** 本轮没有执行过会移动 HEAD 的 Git 操作（commit/merge/switch 等）时为 true：此时 HEAD 前进一律视为窗口外他人提交，不计入本轮。 */
+	excludeExternalCommits?: boolean;
 }
 
 /**
@@ -500,7 +511,7 @@ export interface CollectFinalWorkspaceChangesOptions {
 export async function collectFinalWorkspaceChanges(
 	options: CollectFinalWorkspaceChangesOptions,
 ): Promise<ChangeDetectionResult> {
-	const { cwd, checkpoint, baseline, baselineFailureReason, auditMutations } = options;
+	const { cwd, checkpoint, baseline, baselineFailureReason, auditMutations, excludeExternalCommits } = options;
 	if (checkpoint && checkpoint.status === "created") {
 		const workingChanges = await collectCheckpointChanges({ cwd, checkpoint });
 		const current = await observeGitCheckpointFinalState(checkpoint);
@@ -543,7 +554,21 @@ export async function collectFinalWorkspaceChanges(
 			const cwdPath = toCwdRelativePath(cwd, path.join(checkpoint.repositoryRoot, change.path));
 			if (cwdPath) committedChanges.push({ path: cwdPath, status: change.status });
 		}
-		const changes = mergeReviewChanges(workingChanges, committedChanges);
+		// 本轮提交 vs 窗口外他人提交：调用方确认本轮没有执行过会移动 HEAD 的 Git 操作时
+		//（read-only 调查、普通编辑但没 commit/switch），HEAD 前进一律视为并行窗口/用户在外部提交，
+		// 不计入本轮 changes，只在横幅提示；同时把 working 中与这些外部提交重叠的文件一并剔除，
+		// 避免并行提交的新文件经由 worktree diff 误归属（本轮自己的 bash 落盘文件不在外部集合里，不受影响）。
+		// 有过 Git 头操作或老调用方（未传参）沿用旧行为：全部计入，避免漏记本轮自己的提交。
+		let ownCommittedChanges = committedChanges;
+		let foreignCommittedChanges: ReviewChange[] = [];
+		let effectiveWorkingChanges = workingChanges;
+		if (excludeExternalCommits && committedChanges.length > 0) {
+			foreignCommittedChanges = committedChanges;
+			ownCommittedChanges = [];
+			const foreignPaths = new Set(foreignCommittedChanges.map((change) => pathCompareKey(change.path)));
+			effectiveWorkingChanges = workingChanges.filter((change) => !foreignPaths.has(pathCompareKey(change.path)));
+		}
+		const changes = mergeReviewChanges(effectiveWorkingChanges, ownCommittedChanges);
 		const pending = getGitCheckpointPendingTaskPaths(checkpoint);
 		if (!pending.paths) {
 			return {
@@ -578,6 +603,8 @@ export async function collectFinalWorkspaceChanges(
 			headRefChanged ||
 			localRefChanges.length > 0 ||
 			remoteSideEffects;
+		const externalCommittedCount = foreignCommittedChanges.length;
+		const externalCommittedFiles = foreignCommittedChanges.slice(0, 20).map((change) => change.path);
 		return {
 			status: "known",
 			changes,
@@ -586,7 +613,8 @@ export async function collectFinalWorkspaceChanges(
 			headRefChanged ||
 			localRefChanges.length > 0 ||
 			remoteSideEffects ||
-			externalSideEffectsUnknown
+			externalSideEffectsUnknown ||
+			externalCommittedCount > 0
 				? {
 						git: {
 							hasTaskChanges,
@@ -607,7 +635,10 @@ export async function collectFinalWorkspaceChanges(
 								!remoteSideEffects &&
 								!externalSideEffectsUnknown,
 							historyNavigation: false,
-							taskCreatedHistory: headChanged,
+							taskCreatedHistory: ownCommittedChanges.length > 0,
+							...(externalCommittedCount > 0
+								? { externalCommittedCount, externalCommittedFiles }
+								: {}),
 						},
 					}
 				: {}),

@@ -14,6 +14,7 @@ import {
 	setLocalGitIdentity,
 } from "../src/git/repository/integration.ts";
 import {
+	bashCommandMayMoveGitHead,
 	captureReviewStateFingerprint,
 	captureWorkspaceBaseline,
 	collectCheckpointChanges,
@@ -362,6 +363,55 @@ describe("collectFinalWorkspaceChanges (Final ChangeSet)", () => {
 		expect(detection.status).toBe("known");
 		expect(detection.changes).toEqual([{ path: "tracked.txt", status: "modified" }]);
 		expect(runGit(project, ["status", "--porcelain"]).stdout).toBe("");
+	});
+
+	it("excludes window-external commits from the run changes and reports them for the banner", async () => {
+		const { project, storageRoot } = createRepository();
+		writeFileSync(path.join(project, "tracked.txt"), "pre-task dirty change\n", "utf8");
+		const created = await createGitCheckpoint({
+			cwd: project,
+			sessionId: "session-external-commit",
+			storageRoot,
+		});
+		expect(created.ok, created.error).toBe(true);
+		const checkpoint = created.checkpoint!;
+		// 并行窗口把任务开始前就脏的内容顺手提交：本轮只读调查，没有动过 HEAD。
+		expect(runGit(project, ["add", "--", "tracked.txt"]).ok).toBe(true);
+		expect(runGit(project, ["commit", "-m", "external commit"]).ok).toBe(true);
+
+		const detection = await collectFinalWorkspaceChanges({ cwd: project, checkpoint, excludeExternalCommits: true });
+		expect(detection.status).toBe("known");
+		expect(detection.changes).toEqual([]);
+		expect(detection.git).toMatchObject({ externalCommittedCount: 1 });
+		expect(detection.git?.externalCommittedFiles).toContain("tracked.txt");
+	});
+
+	it("keeps window-external exclusion off by default so own commits still count", async () => {
+		const { project, storageRoot } = createRepository();
+		writeFileSync(path.join(project, "tracked.txt"), "pre-task dirty change\n", "utf8");
+		const created = await createGitCheckpoint({
+			cwd: project,
+			sessionId: "session-own-commit-default",
+			storageRoot,
+		});
+		expect(created.ok, created.error).toBe(true);
+		const checkpoint = created.checkpoint!;
+		expect(runGit(project, ["add", "--", "tracked.txt"]).ok).toBe(true);
+		expect(runGit(project, ["commit", "-m", "own commit"]).ok).toBe(true);
+
+		const detection = await collectFinalWorkspaceChanges({ cwd: project, checkpoint });
+		expect(detection.status).toBe("known");
+		expect(detection.changes).toEqual([{ path: "tracked.txt", status: "modified" }]);
+	});
+
+	it("detects shell commands that may move Git HEAD", () => {
+		expect(bashCommandMayMoveGitHead("git commit -m hi")).toBe(true);
+		expect(bashCommandMayMoveGitHead("git switch feature")).toBe(true);
+		expect(bashCommandMayMoveGitHead("git checkout main")).toBe(true);
+		expect(bashCommandMayMoveGitHead("ls -la")).toBe(false);
+		expect(bashCommandMayMoveGitHead("git log --oneline")).toBe(false);
+		expect(bashCommandMayMoveGitHead("git status --porcelain")).toBe(false);
+		expect(bashCommandMayMoveGitHead(undefined)).toBe(false);
 	});
 
 	it("does not attribute an external branch switch to the task", async () => {

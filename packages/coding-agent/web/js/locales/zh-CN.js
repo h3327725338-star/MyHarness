@@ -966,6 +966,7 @@ export const zhCN = {
 	"Show what the agent did": "查看智能体做了什么",
 	"The agent is paused until you answer the question above the input box.": "智能体已暂停，等你回答输入框上方的问题。",
 	"No files were changed": "没有改动任何文件",
+	"{files} committed outside this run (not counted)": "{files}在本轮之外被提交（未计入本轮）",
 	"{files} edited": "编辑了{files}",
 	"No file edits were recorded": "没有记录到文件编辑",
 	"{commands} ran (side effects outside the workspace cannot be ruled out)": "运行了{commands}（不能排除对 Workspace 之外的影响）",

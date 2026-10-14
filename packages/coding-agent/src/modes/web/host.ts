@@ -26,6 +26,7 @@ import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { hasGitCheckpointTaskChangesAsync, listGitCheckpoints } from "../../git/checkpoints/checkpoint.ts";
 import {
+	bashCommandMayMoveGitHead,
 	type ChangeDetectionResult,
 	captureWorkspaceBaseline,
 	collectFinalWorkspaceChanges,
@@ -193,6 +194,9 @@ export interface RunFinishedPayload {
 	uncommitted: boolean;
 	bashRuns: number;
 	toolFileOps: number;
+	/** Commits from outside this run's window: excluded from changeCount/card, shown in the banner only. */
+	externalCommitCount?: number;
+	externalCommitFiles?: string[];
 }
 
 /** What the sidebar needs to show about one open session (running, waiting, last outcome). */
@@ -1219,6 +1223,8 @@ export class WebHost {
 			);
 		} else if (toolName === "bash" || toolName === "pwsh") {
 			this.tracker.recordBash(runId);
+			const command = (args as { command?: unknown } | null | undefined)?.command;
+			if (bashCommandMayMoveGitHead(command)) this.tracker.recordGitHeadOp(runId);
 		}
 	}
 
@@ -1274,6 +1280,8 @@ export class WebHost {
 		const gitEnabled = session.settingsManager.getGitIntegrationSettings().enabled;
 		const checkpoint = session.getGitCheckpoint();
 		const turnHadBash = session.bashExecutionCount > this.bashCountAtRunStart;
+		// 本轮没跑过会动 HEAD 的 git 命令时，HEAD 前进视为窗口外他人提交：不计入本轮卡片，只横幅提示。
+		const excludeExternalCommits = runId === undefined ? false : (this.tracker.getRun(runId)?.gitHeadOps ?? 0) === 0;
 
 		let detection: ChangeDetectionResult | undefined;
 		try {
@@ -1282,6 +1290,7 @@ export class WebHost {
 				checkpoint,
 				baseline: gitEnabled || !turnHadBash ? undefined : await this.ensureBaseline(),
 				baselineFailureReason: turnHadBash ? this.baselineFailureReason : undefined,
+				excludeExternalCommits,
 			});
 		} catch (error) {
 			this.broadcast("notice", {
@@ -1299,6 +1308,7 @@ export class WebHost {
 				finalDetection = await collectFinalWorkspaceChanges({
 					cwd: this.cwd,
 					checkpoint: session.getGitCheckpoint(),
+					excludeExternalCommits,
 				});
 			} catch {
 				finalDetection = detection;
@@ -1410,6 +1420,7 @@ export class WebHost {
 				break;
 		}
 		const checkpoint = this.session.getGitCheckpoint();
+		const externalCommitCount = record?.git?.externalCommittedCount ?? 0;
 		return {
 			runId,
 			outcome,
@@ -1425,6 +1436,12 @@ export class WebHost {
 			uncommitted,
 			bashRuns: record?.bashRuns ?? 0,
 			toolFileOps: record?.toolFileOps.filter((op) => op.ok).length ?? 0,
+			...(externalCommitCount > 0
+				? {
+						externalCommitCount,
+						externalCommitFiles: record?.git?.externalCommittedFiles ?? [],
+					}
+				: {}),
 		};
 	}
 
