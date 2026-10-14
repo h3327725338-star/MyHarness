@@ -5,7 +5,7 @@ import { type Static, Type } from "typebox";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
-import { resolveToCwd } from "../path-utils.ts";
+import { assertLocalWorkspaceCwdAvailable, resolveToCwd } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import {
 	applyEditsToNormalizedContent,
@@ -133,6 +133,7 @@ export function createEditToolDefinition(
 		prepareArguments: prepareEditArguments,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
 			const { path, edits } = validateEditInput(input);
+			assertLocalWorkspaceCwdAvailable(cwd);
 			const absolutePath = resolveToCwd(path, cwd);
 			// The read state gate compares the file's timestamp and size, which only the local
 			// filesystem can report. A custom operation set (for example SSH) may serve a file

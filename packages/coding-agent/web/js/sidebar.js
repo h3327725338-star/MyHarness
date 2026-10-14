@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
-import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
-import { GENERAL_KEY, loadArchived, loadSessions, loadUnbound, setView, state, useStore } from "./store.js";
+import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Overlay, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
+import { GENERAL_KEY, api, loadArchived, loadSessions, loadUnbound, loadWorkspaces, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -168,6 +168,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 			<${Icon} name="chevronRight" size=${13} class="chev" />
 			${general ? null : html`<${Icon} name="folder" size=${15} class="ws-folder" />`}
 			${editing ? html`<input class="field title-edit" autofocus ref=${autofocusOnMount} aria-label=${t("Rename")} value=${alias} onInput=${(e) => setAlias(e.target.value)} onClick=${(e) => e.stopPropagation()} onKeyDown=${(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); saveAlias(); } else if (e.key === "Escape") setEditing(false); }} />` : html`<span class="name truncate">${workspace.name}</span>`}
+			${!general && !archived && workspace.missing ? html`<span class="ws-missing" title=${t("Local folder is missing")} aria-label=${t("Local folder is missing")} role="img"><${Icon} name="alertTriangle" size=${12} /></span>` : null}
 			${hasUnreadResult ? html`<span class="dot accent ws-unread" title=${t("Unread result")} />` : null}
 			<span class="grow" />
 			<span class="actions" onClick=${(e) => e.stopPropagation()}>
@@ -359,6 +360,125 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 	</div>`;
 }
 
+/** Local name check before any request: empty, blank, or Windows-illegal characters never reach the server. */
+function validateWorkspaceName(raw) {
+	const name = String(raw ?? "").trim();
+	if (!name) return { name: "", error: t("Please enter a workspace name.") };
+	if (name === "." || name === "..") return { name, error: t("That is not a valid folder name.") };
+	if (/[\\/:*?"<>|]/.test(name) || /[. ]$/.test(name))
+		return { name, error: t('The name cannot contain \\ / : * ? " < > | and cannot end with a space or dot.') };
+	if (name.length > 200) return { name, error: t("The name is too long.") };
+	return { name, error: "" };
+}
+
+/**
+ * General-only quick-create dialog: type a folder name, it becomes a real sub-folder of the default Workspace's
+ * parent and is registered as a Workspace. Reuses Modal/Overlay/field/notice tokens and motions only; creating
+ * never opens a chat or moves the focus to the composer.
+ */
+function NewWorkspaceDialog({ onClose }) {
+	const [value, setValue] = useState("");
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [baseDir, setBaseDir] = useState("");
+	const [baseLoading, setBaseLoading] = useState(true);
+	const [baseError, setBaseError] = useState("");
+	// Same linger as FolderPicker: the dialog fades out over --t-close before unmounting.
+	const [visible, setVisible] = useState(true);
+	const exitTimer = useRef(0);
+	useEffect(() => () => clearTimeout(exitTimer.current), []);
+	const beginClose = () => {
+		if (!visible) return;
+		setVisible(false);
+		exitTimer.current = setTimeout(onClose, motionEnabled() ? 110 : 0);
+	};
+	useEffect(() => {
+		let cancelled = false;
+		api("/api/workspaces/create-target?mode=general")
+			.then((result) => {
+				if (cancelled) return;
+				setBaseDir(result?.baseDir || "");
+				setBaseError("");
+			}).catch((e) => {
+				if (cancelled) return;
+				setBaseError(e?.message || t("The operation failed."));
+			})
+			.finally(() => {
+				if (!cancelled) setBaseLoading(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const submit = async () => {
+		if (busy || baseLoading || baseError) return;
+		const checked = validateWorkspaceName(value);
+		if (checked.error) {
+			setError(checked.error);
+			return;
+		}
+		setError("");
+		setBusy(true);
+		try {
+			const result = await post("/api/workspaces/create", { name: checked.name, mode: "general" });
+			if (result) {
+				await loadWorkspaces("general").catch(() => {});
+				beginClose();
+			}
+		} catch (e) {
+			// 409 (same name) stays inline so the folder is never overwritten; other failures stay inline too,
+			// keeping the typed name instead of losing it to a toast.
+			setError(e?.message || t("The operation failed."));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return html`<${Overlay} show=${visible}>
+		<${Modal} title=${t("New workspace")} subtitle=${t("Create a folder and add it as a workspace.")} onClose=${beginClose} width=${440}
+			footer=${html`<button class="btn" onClick=${beginClose}>${t("Cancel")}</button>
+				<button class="btn primary" disabled=${busy || baseLoading || !!baseError} onClick=${submit}>${busy ? t("Creating…") : t("Create")}</button>`}>
+			${baseLoading
+				? html`<div class="dim">${t("Loading…")}</div>`
+				: baseError
+					? html`<div class="notice danger">${baseError}</div>`
+					: html`<div class="dim">${t("New folders go under {dir}", { dir: baseDir })}<br /><span class="mono" style=${{ overflowWrap: "anywhere" }}>${baseDir}</span></div>`}
+			<label class="col field-label">${t("Workspace name")}
+				<input class="field ${error ? "invalid" : ""}" autofocus value=${value} placeholder=${t("My project")} aria-label=${t("Workspace name")} aria-invalid=${error ? "true" : undefined}
+					onInput=${(e) => {
+						setValue(e.target.value);
+						if (error) setError("");
+					}}
+					onKeyDown=${(e) => {
+						e.stopPropagation();
+						if (e.isComposing) return;
+						if (e.key === "Enter") {
+							e.preventDefault();
+							submit();
+						}
+					}} />
+			</label>
+			${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
+		<//>
+	<//>`;
+}
+
+/**
+ * The "+" beside WORKSPACE: in General it opens a small menu (quick-create vs pick-existing) anchored under the
+ * button; in Coding it stays the original one-click system folder window. The menu reuses the shared Popover/Menu
+ * motion (transform + opacity) and theme tokens, so all three color schemes restyle it with no hardcoded colors.
+ */
+function AddWorkspaceButton({ onPickExisting, onCreateNew }) {
+	const mode = useStore((s) => s.view.chatMode);
+	if (mode !== "general") {
+		return html`<button class="icon-btn sm" data-export-offline="true" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${onPickExisting}><${Icon} name="plus" size=${15} /></button>`;
+	}
+	return html`<${Menu} trigger=${({ toggle }) => html`<button class="icon-btn sm" data-export-offline="true" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${toggle}><${Icon} name="plus" size=${15} /></button>`} width=${250}>
+		${(close) => html`
+			<${MenuItem} icon="folderPlus" label=${t("New workspace")} sub=${t("Create a folder and add it")} onClick=${() => (close(), onCreateNew())} />
+			<${MenuItem} icon="folder" label=${t("Choose an existing folder")} sub=${t("Add a folder already on disk")} onClick=${() => (close(), onPickExisting())} />`}
+	<//>`;
+}
+
 function AddWorkspaceDialog({ onClose }) {
 	return html`<${FolderPicker} title=${t("Add workspace")} subtitle=${t("Pick a project folder. MyHarness keeps its chats in that folder's data/ directory.")} confirmLabel=${t("Add workspace")} onClose=${onClose}
 		onPick=${async (path) => {
@@ -395,7 +515,9 @@ export function Sidebar() {
 		return () => clearTimeout(timer);
 	}, [filterText]);
 	// "Add workspace" opens the system's folder window; the built-in folder list is only the fallback without one.
+	// In General the "+" first offers quick-create vs pick-existing; the pick path reuses this exact flow.
 	const [adding, setAdding] = useState(false);
+	const [creating, setCreating] = useState(false);
 	const addWorkspace = async () => {
 		const result = await actions.addWorkspaceFromDialog();
 		if (result.unsupported) setAdding(true);
@@ -451,7 +573,7 @@ export function Sidebar() {
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll" key=${mode}>
-			<div class="side-section"><span class="grow">${t("Workspaces")}</span><button class="icon-btn sm" data-export-offline="true" title=${t("Add workspace")} aria-label=${t("Add workspace")} onClick=${addWorkspace}><${Icon} name="plus" size=${15} /></button></div>
+			<div class="side-section"><span class="grow">${t("Workspaces")}</span><${AddWorkspaceButton} onPickExisting=${addWorkspace} onCreateNew=${() => setCreating(true)} /></div>
 			<${WorkspaceList} list=${ws.list} sessionsOf=${sessionsOf} errors=${ws.errors} expanded=${expanded} currentWorkspaceId=${currentWorkspace} filter=${filter} slotsByFile=${slotsByFile} currentFile=${shownFile} drafts=${drafts} renderGroup=${(w, control) => {
 				const isCurrent = w.id === currentWorkspace;
 				const stored = expanded[w.rootPath];
@@ -466,5 +588,6 @@ export function Sidebar() {
 		</div>
 		<${Resizer} side="right" min=${200} max=${460} getValue=${() => state.view.sidebarW} onChange=${onWidth} onEnd=${() => setView({ sidebarW: state.view.sidebarW })} />
 		${adding ? html`<${AddWorkspaceDialog} onClose=${() => setAdding(false)} />` : null}
+		${creating ? html`<${NewWorkspaceDialog} onClose=${() => setCreating(false)} />` : null}
 	</aside>`;
 }

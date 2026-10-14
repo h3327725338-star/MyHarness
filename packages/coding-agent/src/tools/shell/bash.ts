@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { access as fsAccess, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
@@ -16,6 +15,7 @@ import {
 } from "../../utils/shell.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { OutputAccumulator } from "../output-accumulator.ts";
+import { assertLocalWorkspaceCwdAvailable } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
 import { backgroundJobManager } from "./job-manager.ts";
@@ -125,11 +125,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				throw new Error("aborted");
 			}
 			const shellConfig = getShellConfig(options?.shellPath);
-			try {
-				await fsAccess(cwd, constants.F_OK);
-			} catch {
-				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
-			}
+			assertLocalWorkspaceCwdAvailable(cwd);
 
 			const commandFromStdin = shellConfig.commandTransport === "stdin";
 			let commandScriptDir: string | undefined;

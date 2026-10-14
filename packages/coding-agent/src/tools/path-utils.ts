@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 
@@ -25,6 +25,19 @@ function fileExists(filePath: string): boolean {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+/** Friendly guard for tools that need the workspace folder. Never exposes absolute paths. */
+export function assertLocalWorkspaceCwdAvailable(cwd: string): void {
+	let ok = false;
+	try {
+		ok = existsSync(cwd);
+	} catch {
+		ok = false;
+	}
+	if (!ok) {
+		throw new Error("当前工作区本地目录不存在或已被移除，无法执行本地操作，历史对话仍可查阅。");
 	}
 }
 

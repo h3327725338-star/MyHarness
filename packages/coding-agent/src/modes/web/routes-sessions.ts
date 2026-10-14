@@ -1,7 +1,8 @@
 /** Web API routes for Workspaces, Sessions, session tree navigation and export. */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
 	generateConversationTitle,
 	normalizeConversationTitle,
@@ -161,12 +162,22 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		return {
 			currentPath: cwd,
 			currentSessionFile: host.session.sessionFile ?? null,
-			workspaces: host.workspaceStore.list(mode).map((workspace) => ({
-				id: workspace.workspaceId,
-				name: workspace.name,
-				rootPath: workspace.rootPath,
-				current: current?.workspaceId === workspace.workspaceId,
-			})),
+			workspaces: host.workspaceStore.list(mode).map((workspace) => {
+				let missing = false;
+				try {
+					missing = !existsSync(workspace.rootPath);
+				} catch {
+					missing = false;
+				}
+				return {
+					id: workspace.workspaceId,
+					name: workspace.name,
+					rootPath: workspace.rootPath,
+					current: current?.workspaceId === workspace.workspaceId,
+					// The sidebar uses this for its weak missing-folder mark; no probing from the browser.
+					missing,
+				};
+			}),
 		};
 	});
 
@@ -232,6 +243,83 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	/**
+	 * Where a General quick-created Workspace lands: the parent folder of the reference Workspace. The reference is
+	 * the current Workspace when it belongs to the requested mode, otherwise the first Workspace of that mode. It is
+	 * the "default Workspace's parent" the sidebar's quick-create dialog shows: the new folder becomes a sibling of
+	 * the existing Workspaces, never a child of the agent config dir or a random drive root.
+	 */
+	const resolveCreateBase = (mode: ChatMode): { baseDir: string; referenceName: string; referencePath: string } => {
+		const list = host.workspaceStore.list(mode);
+		const current = host.workspace;
+		const ordered = [
+			...(current && (current.modes ?? ["coding"]).includes(mode) ? [current] : []),
+			...list.filter((workspace) => workspace.workspaceId !== current?.workspaceId),
+		];
+		if (ordered.length === 0)
+			throw new HttpError(404, "There is no workspace yet to decide where the new folder goes.");
+		// A workspace whose parent is gone (deleted folder, unplugged drive) is skipped, so one dead entry never
+		// bricks quick-create while a healthy sibling exists.
+		for (const reference of ordered) {
+			const baseDir = dirname(reference.rootPath);
+			try {
+				if (!statSync(baseDir).isDirectory()) continue;
+			} catch {
+				continue;
+			}
+			return { baseDir, referenceName: reference.name, referencePath: reference.rootPath };
+		}
+		throw new HttpError(404, "The parent folder of the existing workspace is not available.");
+	};
+
+	const INVALID_WORKSPACE_NAME = /[\\/:*?"<>|]/;
+	const validateNewWorkspaceName = (raw: unknown): string => {
+		if (typeof raw !== "string") throw new HttpError(400, '"name" must be a string');
+		const name = raw.trim();
+		if (!name) throw new HttpError(400, "Please enter a workspace name.");
+		if (name === "." || name === "..") throw new HttpError(400, "That is not a valid folder name.");
+		if (INVALID_WORKSPACE_NAME.test(name) || /[. ]$/.test(name))
+			throw new HttpError(400, 'The name cannot contain \\ / : * ? " < > | and cannot end with a space or dot.');
+		if (name.length > 200) throw new HttpError(400, "The name is too long.");
+		return name;
+	};
+
+	server.route("GET", "/api/workspaces/create-target", ({ url }) => {
+		const mode = requestMode(url.searchParams.get("mode"));
+		if (mode !== "general") throw new HttpError(400, "Quick-create is only available in General mode.");
+		return resolveCreateBase(mode);
+	});
+
+	/**
+	 * General-only quick-create: make a real sub-folder `<baseDir>/<name>` and register it as a Workspace. The parent
+	 * always comes from the server (see resolveCreateBase); the client never sends a path, so it cannot escape to an
+	 * arbitrary location. Validation runs before any disk write; an existing name returns 409 and never overwrites.
+	 */
+	server.route("POST", "/api/workspaces/create", ({ body }) => {
+		const payload = asObject(body);
+		const mode = requestMode(payload.mode);
+		if (mode !== "general") throw new HttpError(400, "Quick-create is only available in General mode.");
+		const name = validateNewWorkspaceName(payload.name);
+		const { baseDir } = resolveCreateBase(mode);
+		const created = join(baseDir, name);
+		if (existsSync(created)) throw new HttpError(409, "A file or folder with that name already exists.");
+		try {
+			mkdirSync(created);
+		} catch (error) {
+			throw new HttpError(403, error instanceof Error ? error.message : "Cannot create the folder");
+		}
+		const result = host.workspaceStore.add(created, host.session.sessionManager.getCwd(), true, mode);
+		if (!result.ok || !result.workspace) throw new HttpError(400, result.error ?? "Failed to add workspace");
+		host.broadcast("workspaces_changed", {});
+		return {
+			workspace: {
+				id: result.workspace.workspaceId,
+				name: result.workspace.name,
+				rootPath: result.workspace.rootPath,
+			},
+		};
+	});
+
+	/**
 	 * Only un-registers the Workspace. The folder, its project files and every chat stay exactly where they are; the
 	 * chats simply belong to no Workspace afterwards (see `SessionManager.isUnbound`). Open chats keep running.
 	 */
@@ -276,10 +364,23 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const cwdOverride =
 			typeof asObject(body).cwdOverride === "string" ? (asObject(body).cwdOverride as string) : undefined;
 		try {
+			// Missing folders never block: hub opens the history and names the workspace without paths.
 			return await hub.openSession(host, path, cwdOverride);
 		} catch (error) {
-			if (error instanceof MissingSessionCwdError) throw new HttpError(409, `${error.message}`);
 			if (error instanceof HttpError) throw error;
+			if (error instanceof MissingSessionCwdError) {
+				// Safety net if a strict path still throws: name the workspace, never expose paths.
+				const name = host.workspaceStore.getByPath(
+					error.issue.sessionCwd,
+					host.session.sessionManager.getMode(),
+				)?.name;
+				throw new HttpError(
+					400,
+					name
+						? `工作区 [${name}] 本地目录不存在或已被移除`
+						: "工作区本地目录不存在或已被移除，历史对话仍可查阅。",
+				);
+			}
 			throw new HttpError(500, error instanceof Error ? error.message : String(error));
 		}
 	});

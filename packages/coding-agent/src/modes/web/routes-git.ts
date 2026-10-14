@@ -41,6 +41,7 @@ import {
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import type { GitWorktree } from "../../git/worktrees/manager.ts";
 import { completeWithNetworkPolicy, failureOf } from "../../providers/recovery/network-retry.ts";
+import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { WorktreeLauncher } from "./worktree-launch.ts";
@@ -377,6 +378,13 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 					return generateAICommitMessage(
 						context,
 						async (systemPrompt, input) => {
+							// opencode 系模型要求带 x-opencode-session 头，主聊天经 sdk.ts 自动带上，一次性请求这里手动补上，否则 400 MissingSessionID。
+							const sessionId = host.session.sessionId;
+							const attributionHeaders = mergeProviderAttributionHeaders(
+								model,
+								host.session.settingsManager,
+								sessionId,
+							);
 							const response = await completeWithNetworkPolicy({
 								runtime: host.session.modelRuntime,
 								settings: host.session.settingsManager,
@@ -393,6 +401,8 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 									// failure).
 									signal: task.controller.signal,
 									maxTokens: Math.min(4096, model.maxTokens || 4096),
+									sessionId,
+									headers: attributionHeaders,
 								},
 							});
 							if (response.stopReason !== "stop") {
@@ -566,6 +576,9 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (worktree.isMain) throw new HttpError(400, "Select a test copy.");
 		const model = host.session.model;
 		if (!model) throw new HttpError(400, "Select a main Agent model first.");
+		// 与提交说明同理：opencode 模型缺 x-opencode-session 会 400，这里一并补上。
+		const sessionId = host.session.sessionId;
+		const attributionHeaders = mergeProviderAttributionHeaders(model, host.session.settingsManager, sessionId);
 		const response = await completeWithNetworkPolicy({
 			runtime: host.session.modelRuntime,
 			settings: host.session.settingsManager,
@@ -589,7 +602,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			// limits come from the network timeouts and the retries from the shared retry settings (a fixed wall-clock
 			// cap at or below the first-byte timeout would kill slow requests before any retry could classify them).
 			// The route itself has no cancel control, so it runs without an external signal.
-			options: { maxTokens: 512 },
+			options: { maxTokens: 512, sessionId, headers: attributionHeaders },
 		});
 		if (response.stopReason === "error" || response.stopReason === "aborted")
 			throw new HttpError(502, response.errorMessage ?? "Copy naming failed.");

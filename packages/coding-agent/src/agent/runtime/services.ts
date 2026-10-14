@@ -209,9 +209,25 @@ export async function createAgentSessionServices(
 	await modelRuntime.refresh({ allowNetwork: false });
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
-	const ownedCodeIntelligence = options.codeIntelligence
-		? undefined
-		: new CodeIntelligenceRuntime({ workspaceRoot: cwd, agentDir, settingsManager });
+	let ownedCodeIntelligence: CodeIntelligenceRuntime | undefined;
+	if (!options.codeIntelligence) {
+		try {
+			ownedCodeIntelligence = new CodeIntelligenceRuntime({ workspaceRoot: cwd, agentDir, settingsManager });
+		} catch (error) {
+			// A workspace whose folder was removed externally still opens for history viewing.
+			// Code Intelligence needs a real directory, so it stays off without blocking the session.
+			// No paths are exposed here; the UI names the workspace from its registry entry.
+			const code = (error as { code?: unknown })?.code;
+			if (code === "invalid_workspace_root") {
+				diagnostics.push({
+					type: "warning",
+					message: "当前工作区本地目录不存在或已被移除，代码智能已暂停，历史对话仍可查阅。",
+				});
+			} else {
+				throw error;
+			}
+		}
+	}
 	const codeIntelligence = options.codeIntelligence ?? ownedCodeIntelligence?.services;
 
 	return {

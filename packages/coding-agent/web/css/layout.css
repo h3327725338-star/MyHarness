@@ -39,6 +39,12 @@
 .ws-row .actions { display: flex; gap: 0; opacity: 0; transition: opacity var(--t-fast); }
 .ws-row:hover .actions, .ws-row:focus-within .actions { opacity: 1; }
 .ws-row .ws-unread { margin-left: -2px; }
+/* A workspace whose folder was removed: a weak low-saturation mark beside its name. Theme tokens only
+   (--warn adapts to all three schemes); transform + opacity over --t-base keeps the existing motion language. */
+.ws-missing { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; margin-left: 2px; color: var(--warn); opacity: 0.65; transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease); animation: fade-in var(--t-base) var(--ease); }
+.ws-missing:hover { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .ws-missing { animation: none; transition: none; } }
+:root[data-motion="off"] .ws-missing { animation: none; transition: none; }
 
 /* Session rows: a fixed status slot at the head and a fixed time slot at the end, so status changes never move the
    title and never crowd out the time. */

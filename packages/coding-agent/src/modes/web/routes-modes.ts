@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import { SessionManager } from "../../session/manager/index.ts";
 import { type ChatDraft, ModeStateStore } from "../../session/mode-state.ts";
 import type { ChatMode } from "../../session/types.ts";
@@ -65,13 +66,20 @@ export function registerModeRoutes(server: WebHttpServer, host: WebHost, hub: We
 	server.route("POST", "/api/modes/open", async ({ body }) => {
 		const selected = mode(object(body).mode);
 		const saved = store().get(selected);
-		let result: { slot: string; created: boolean };
+		let result: {
+			slot: string;
+			created: boolean;
+			cwdMissing?: boolean;
+			workspaceName?: string;
+			workspaceId?: string;
+		};
 		const live = saved.lastSessionFile ? hub.slotsShowing(saved.lastSessionFile)[0] : undefined;
 		if (live && live.session.sessionManager.getMode() === selected) {
 			result = { slot: live.slotId, created: false };
 		} else if (saved.lastSessionFile && existsSync(saved.lastSessionFile)) {
 			if (SessionManager.open(saved.lastSessionFile).getMode() !== selected)
 				throw new HttpError(409, "Saved chat mode does not match");
+			// Missing folders never block a mode switch: history still opens.
 			result = await hub.openSession(host, saved.lastSessionFile);
 		} else {
 			result = await hub.newSession(host, undefined, true, selected);
@@ -79,6 +87,22 @@ export function registerModeRoutes(server: WebHttpServer, host: WebHost, hub: We
 		const opened = hub.get(result.slot)!;
 		opened.session.sessionManager.ensureSaved();
 		store().update(selected, { lastSessionFile: opened.session.sessionFile ?? null });
+		// A live slot whose folder vanished still reports its workspace by name (no paths).
+		if (result.cwdMissing === undefined) {
+			try {
+				if (!existsSync(opened.cwd)) {
+					const workspace = opened.workspace;
+					result = {
+						...result,
+						cwdMissing: true,
+						workspaceName: workspace?.name ?? basename(opened.cwd),
+						...(workspace ? { workspaceId: workspace.workspaceId } : {}),
+					};
+				}
+			} catch {
+				/* Existence probe must never block a mode switch. */
+			}
+		}
 		return { ...result, mode: selected, state: store().get(selected) };
 	});
 	server.route("GET", "/api/modes/personal-prompt", () => store().getPersonalPrompts());

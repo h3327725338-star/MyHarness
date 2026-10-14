@@ -351,6 +351,8 @@ export class AgentSessionRuntime {
 			cwdOverride?: string;
 			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
+			/** Web UI passes true so a session whose folder was removed still opens for history viewing. */
+			allowMissingCwd?: boolean;
 		},
 	): Promise<{ cancelled: boolean }> {
 		const beforeResult = await this.emitBeforeSwitch("resume", sessionPath);
@@ -361,7 +363,7 @@ export class AgentSessionRuntime {
 
 		const previousSessionFile = this.session.sessionFile;
 		const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
-		assertSessionCwdExists(sessionManager, this.cwd);
+		if (!options?.allowMissingCwd) assertSessionCwdExists(sessionManager, this.cwd);
 		await this.replaceRuntime(
 			"resume",
 			sessionManager.getSessionFile(),
@@ -399,10 +401,10 @@ export class AgentSessionRuntime {
 	): Promise<{ cancelled: boolean }> {
 		const resolvedCwd = resolvePath(cwd);
 		if (!existsSync(resolvedCwd)) {
-			throw new Error(`Workspace directory does not exist: ${resolvedCwd}`);
+			throw new Error("工作区本地目录不存在或已被移除，历史对话仍可查阅。");
 		}
 		if (!statSync(resolvedCwd).isDirectory()) {
-			throw new Error(`Workspace path is not a directory: ${resolvedCwd}`);
+			throw new Error("工作区本地路径不是目录。");
 		}
 
 		const beforeResult = await this.emitBeforeSwitch("new");
@@ -851,8 +853,10 @@ export class AgentSessionRuntime {
 		sessionManager: SessionManager;
 		sessionStartEvent: SessionStartEvent;
 		projectTrustContext?: ProjectTrustContext;
+		/** Web UI passes true so history stays readable when the folder is gone. */
+		allowMissingCwd?: boolean;
 	}): Promise<AgentSessionRuntime> {
-		assertSessionCwdExists(options.sessionManager, this.cwd);
+		if (!options.allowMissingCwd) assertSessionCwdExists(options.sessionManager, this.cwd);
 		const result = await this.createRuntime({
 			cwd: options.sessionManager.getCwd(),
 			agentDir: this.services.agentDir,
@@ -912,9 +916,10 @@ export async function createAgentSessionRuntime(
 		agentDir: string;
 		sessionManager: SessionManager;
 		sessionStartEvent?: SessionStartEvent;
+		allowMissingCwd?: boolean;
 	},
 ): Promise<AgentSessionRuntime> {
-	assertSessionCwdExists(options.sessionManager, options.cwd);
+	if (!options.allowMissingCwd) assertSessionCwdExists(options.sessionManager, options.cwd);
 	const result = await createRuntime(options);
 	return new AgentSessionRuntime(
 		result.session,

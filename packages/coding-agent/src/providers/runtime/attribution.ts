@@ -17,7 +17,10 @@ function matchesHost(baseUrl: string, expectedHost: string): boolean {
 }
 
 function isOpenRouterModel(model: Model<Api>): boolean {
-	return model.provider === "openrouter" || model.baseUrl.includes(OPENROUTER_HOST);
+	return (
+		model?.provider === "openrouter" ||
+		(typeof model?.baseUrl === "string" && model.baseUrl.includes(OPENROUTER_HOST))
+	);
 }
 
 function isNvidiaNimModel(model: Model<Api>): boolean {
@@ -37,7 +40,12 @@ function getDefaultAttributionHeaders(
 	model: Model<Api>,
 	settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
-	if (!isInstallTelemetryEnabled(settingsManager)) {
+	try {
+		if (!isInstallTelemetryEnabled(settingsManager)) {
+			return undefined;
+		}
+	} catch {
+		// 测试 mock 或不完整 settings 不应炸掉一次性请求（如提交说明），默认头拿不到就跳过，会话头仍可单独加上。
 		return undefined;
 	}
 
@@ -66,6 +74,7 @@ function getDefaultAttributionHeaders(
 
 function getSessionHeaders(model: Model<Api>, sessionId: string | undefined): Record<string, string> | undefined {
 	if (!sessionId) return undefined;
+	if (!model) return undefined;
 	if (
 		model.provider !== "opencode" &&
 		model.provider !== "opencode-go" &&
@@ -82,9 +91,21 @@ export function mergeProviderAttributionHeaders(
 	sessionId: string | undefined,
 	...headerSources: Array<ProviderHeaders | undefined>
 ): ProviderHeaders | undefined {
+	let sessionPart: Record<string, string> | undefined;
+	let defaultPart: Record<string, string> | undefined;
+	try {
+		sessionPart = getSessionHeaders(model, sessionId);
+	} catch {
+		sessionPart = undefined;
+	}
+	try {
+		defaultPart = getDefaultAttributionHeaders(model, settingsManager);
+	} catch {
+		defaultPart = undefined;
+	}
 	const merged: ProviderHeaders = {
-		...getSessionHeaders(model, sessionId),
-		...getDefaultAttributionHeaders(model, settingsManager),
+		...sessionPart,
+		...defaultPart,
 	};
 
 	for (const headers of headerSources) {

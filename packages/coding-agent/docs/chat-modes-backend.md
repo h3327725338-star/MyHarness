@@ -19,6 +19,7 @@ Workspace 保存模式登记 `modes`，旧登记默认仅 Coding。同一物理�
 - `GET /api/workspaces?mode=general`：只返回该模式登记。省略模式时使用请求 slot 模式。
 - `GET /api/workspaces/sessions?path=...&mode=general`、`GET /api/sessions/unbound?mode=general`、`GET /api/sessions/archived?mode=general`：只返回该模式聊天。每个 summary 增加 `mode` 和 `blank`：Session 文件里除了创建时写入的模型和思考级别设置之外没有别的记录（没有消息、名称、标签、操作卡片等）时为 `true`。前端用它不再列出被留下的空白聊天（文件不删除，见 web-ui.md）。
 - `POST /api/workspaces/add|remove|rename` 接受可选 `mode`，用于匹配登记；默认请求 slot 模式。`remove` 仅取消该模式登记。重命名仍修改共享 Workspace 名称。明确删除产出仍是共享数据操作，需保留现有确认和运行中保护。
+- General 快捷新建（Coding 不可用）：`GET /api/workspaces/create-target?mode=general` 返回新建文件夹的上级目录（当前或首个 General Workspace 所在目录的父目录，父目录不可用时顺延下一个，全部不可用时 404）；`POST /api/workspaces/create` body `{ name, mode: "general" }` 在该目录下创建真实子文件夹并登记为 Workspace。名称校验（空/空白、\\ / : * ? " < > |、以空格或句点结尾）与重名（409，不覆盖）都在落盘前拦截。
 - `POST /api/sessions/clear` 仅清理指定 `mode` 的聊天（默认请求 slot 模式），不能误删另一侧。
 
 ## 模式导航与状态保存

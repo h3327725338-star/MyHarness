@@ -385,6 +385,17 @@ export function dismissToast(id) {
 	emit();
 }
 
+/** Lightweight notice when the opened chat's folder is gone. Names the workspace, never a path. */
+export function notifyMissingWorkspace(name) {
+	if (!name) return undefined;
+	return toast(t("Workspace [{name}] local directory is missing or has been removed", { name }), "warning", 6000);
+}
+
+export function maybeNotifyMissingResult(result) {
+	if (result?.cwdMissing && result?.workspaceName) return notifyMissingWorkspace(result.workspaceName);
+	return undefined;
+}
+
 /** Run an API action; surface failures as toasts. Returns the result or undefined. */
 export async function attempt(fn, { success, quiet } = {}) {
 	try {
@@ -1015,6 +1026,7 @@ export async function switchChatMode(target) {
 	if (!isLatestSwitch(seq)) return;
 	if (!state.slots.some((item) => item.slot === result.slot)) await loadSlots();
 	await activateSlot(result.slot, seq);
+	// The opened slot's snapshot carries the missing-folder flag; activateSlot toasts it by name.
 }
 
 // ---- Switching between sessions ------------------------------------------------------------------
@@ -1058,6 +1070,13 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 	} else show();
 	markActiveSeen();
 	rememberChat(slot);
+	// A folder removed externally never blocks the switch: name it once in a lightweight toast.
+	try {
+		const snap = bagOf(slot).snap;
+		if (snap?.cwdMissing && snap?.workspace?.name) notifyMissingWorkspace(snap.workspace.name);
+	} catch {
+		/* Toast must never break a session switch. */
+	}
 	const bag = bagOf(slot);
 	if (!bag.resources) loadResources();
 	loadGitStatus();
@@ -1159,6 +1178,12 @@ async function initialLoad() {
 	applyAppearance();
 	// The first screen pages the transcript like a cold switch; an explicit refresh later takes it fully.
 	await refreshAll({ full: false });
+	try {
+		const first = bagOf(slot).snap;
+		if (first?.cwdMissing && first?.workspace?.name) notifyMissingWorkspace(first.workspace.name);
+	} catch {
+		/* Toast must never break initial load. */
+	}
 	rememberChat(slot);
 	if (view) toast(t("Service restarted successfully."), "info", 3500);
 }

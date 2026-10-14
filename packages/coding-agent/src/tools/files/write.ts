@@ -5,7 +5,7 @@ import { type Static, Type } from "typebox";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
-import { resolveToCwd } from "../path-utils.ts";
+import { assertLocalWorkspaceCwdAvailable, resolveToCwd } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { countLineChanges } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
@@ -93,6 +93,7 @@ export function createWriteToolDefinition(
 			onUpdate?,
 			ctx?,
 		) {
+			assertLocalWorkspaceCwdAvailable(cwd);
 			const absolutePath = resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
 			// The read state gate compares the file's timestamp and size, which only the local

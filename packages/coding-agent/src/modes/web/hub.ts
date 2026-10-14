@@ -12,11 +12,13 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
 import { getDataDir } from "../../config.ts";
 import { ensureDefaultWorkingDir } from "../../data/workspace-store.ts";
+import { getMissingSessionCwdIssue } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import type { ChatMode } from "../../session/types.ts";
 import { pathIdentityKey, resolvePath } from "../../utils/paths.ts";
@@ -178,14 +180,18 @@ export class WebHostHub implements WebHostHubLink {
 			const deadline = Date.now() + RECLAIM_TIMEOUT_MS;
 			for (;;) {
 				try {
-					await host.runtimeHost.switchSession(path);
+					await host.runtimeHost.switchSession(path, { allowMissingCwd: true });
 					return;
 				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					if (/already active/i.test(message) && Date.now() < deadline && this.slots.has(host.slotId)) {
+					const raw = error instanceof Error ? error.message : String(error);
+					if (/already active/i.test(raw) && Date.now() < deadline && this.slots.has(host.slotId)) {
 						await new Promise((resolve) => setTimeout(resolve, RECLAIM_RETRY_MS));
 						continue;
 					}
+					// Never surface absolute session or workspace paths for a missing folder.
+					const message = /does not exist|MissingSessionCwd|Workspace directory/i.test(raw)
+						? "工作区本地目录不存在或已被移除，历史对话仍可查阅。"
+						: raw;
 					host.broadcast("notice", { id: `reclaim-${Date.now()}`, message, type: "error", ts: Date.now() });
 					return;
 				}
@@ -216,16 +222,38 @@ export class WebHostHub implements WebHostHubLink {
 		return this.all().find((host) => host.session.sessionFile && pathIdentityKey(host.session.sessionFile) === key);
 	}
 
-	/** Show an existing session. It keeps running in its own runtime if it already has one. */
-	async openSession(from: WebHost, path: string, cwdOverride?: string): Promise<{ slot: string; created: boolean }> {
+	/** Show an existing session. It keeps running in its own runtime if it already has one.
+	 *
+	 * A session whose folder was removed externally still opens: history stays readable,
+	 * the switch never throws, and the caller is told which workspace is missing by name
+	 * (never by absolute path) so it can show one lightweight toast.
+	 */
+	async openSession(
+		from: WebHost,
+		path: string,
+		cwdOverride?: string,
+	): Promise<{ slot: string; created: boolean; cwdMissing?: boolean; workspaceName?: string; workspaceId?: string }> {
 		const existing = this.findBySessionFile(path);
-		if (existing) return { slot: existing.slotId, created: false };
+		if (existing) {
+			const missing = this.describeMissingWorkspace(existing);
+			return missing
+				? { slot: existing.slotId, created: false, ...missing }
+				: { slot: existing.slotId, created: false };
+		}
 		const key = pathIdentityKey(path);
 		let pending = this.opening.get(key);
 		const created = !pending;
 		if (!pending) {
 			pending = (async () => {
 				const sessionManager = SessionManager.open(path, undefined, cwdOverride);
+				const issue = cwdOverride === undefined ? getMissingSessionCwdIssue(sessionManager, from.cwd) : undefined;
+				const missing = issue
+					? this.describeMissingWorkspaceForSession(
+							sessionManager.getCwd(),
+							sessionManager.getWorkspaceId(),
+							sessionManager.getMode(),
+						)
+					: undefined;
 				const runtime = await from.runtimeHost.createSibling({
 					sessionManager,
 					sessionStartEvent: {
@@ -234,18 +262,67 @@ export class WebHostHub implements WebHostHubLink {
 						previousSessionFile: from.session.sessionFile,
 					},
 					projectTrustContext: from.createProjectTrustContext(sessionManager.getCwd()),
+					allowMissingCwd: issue !== undefined,
 				});
-				return this.addRuntime(runtime, new WebDialogBridge());
+				const host = await this.addRuntime(runtime, new WebDialogBridge());
+				if (missing)
+					(
+						host as WebHost & {
+							pendingMissingWorkspace?: { cwdMissing: boolean; workspaceName: string; workspaceId?: string };
+						}
+					).pendingMissingWorkspace = { cwdMissing: true, ...missing };
+				return host;
 			})();
 			this.opening.set(key, pending);
 		}
 		try {
 			const host = await pending;
 			this.pruneIdle(host);
-			return { slot: host.slotId, created };
+			const pendingMissing = (
+				host as WebHost & {
+					pendingMissingWorkspace?: { cwdMissing: boolean; workspaceName: string; workspaceId?: string };
+				}
+			).pendingMissingWorkspace;
+			if (pendingMissing) return { slot: host.slotId, created, ...pendingMissing };
+			const missing = this.describeMissingWorkspace(host);
+			return missing ? { slot: host.slotId, created, ...missing } : { slot: host.slotId, created };
 		} finally {
 			this.opening.delete(key);
 		}
+	}
+
+	/** Name the workspace whose folder is gone, without ever exposing absolute paths. */
+	private describeMissingWorkspace(
+		host: WebHost,
+	): { cwdMissing: boolean; workspaceName: string; workspaceId?: string } | undefined {
+		try {
+			if (existsSync(host.cwd)) return undefined;
+		} catch {
+			return undefined;
+		}
+		const workspace = host.workspace;
+		const name =
+			workspace?.name ??
+			this.describeMissingWorkspaceForSession(
+				host.cwd,
+				host.session.sessionManager.getWorkspaceId(),
+				host.session.sessionManager.getMode(),
+			)?.workspaceName ??
+			basename(host.cwd);
+		return { cwdMissing: true, workspaceName: name, ...(workspace ? { workspaceId: workspace.workspaceId } : {}) };
+	}
+
+	private describeMissingWorkspaceForSession(
+		sessionCwd: string,
+		workspaceId: string | undefined,
+		mode: ChatMode,
+	): { workspaceName: string; workspaceId?: string } {
+		const store = this.workspaceStore ?? this.all()[0]?.workspaceStore;
+		const byId = workspaceId && store ? store.getById(workspaceId, mode) : undefined;
+		if (byId) return { workspaceName: byId.name, workspaceId: byId.workspaceId };
+		const byPath = store ? store.getByPath(sessionCwd, mode) : undefined;
+		if (byPath) return { workspaceName: byPath.name, workspaceId: byPath.workspaceId };
+		return { workspaceName: basename(sessionCwd) || sessionCwd };
 	}
 
 	/**
@@ -264,13 +341,46 @@ export class WebHostHub implements WebHostHubLink {
 		const manager = from.session.sessionManager;
 		const defaultStorage = manager.usesDefaultSessionDir() && manager.isPersisted();
 		const wantUnbound = defaultStorage && (unbound || (!rootPath && from.unbound));
-		const cwd = rootPath
+		let cwd = rootPath
 			? resolvePath(rootPath)
 			: wantUnbound
 				? ensureDefaultWorkingDir(from.runtimeHost.services.agentDir)
 				: from.cwd;
-		if (!existsSync(cwd)) throw new HttpError(400, `Workspace directory does not exist: ${cwd}`);
-		if (!statSync(cwd).isDirectory()) throw new HttpError(400, `Workspace path is not a directory: ${cwd}`);
+		// A mode switch that creates the next chat must never be blocked by a folder that
+		// vanished meanwhile: fall back to the default directory instead of throwing.
+		if (!rootPath) {
+			try {
+				if (!existsSync(cwd)) cwd = ensureDefaultWorkingDir(from.runtimeHost.services.agentDir);
+			} catch {
+				cwd = ensureDefaultWorkingDir(from.runtimeHost.services.agentDir);
+			}
+		} else {
+			let missing = false;
+			try {
+				missing = !existsSync(cwd);
+			} catch {
+				missing = false;
+			}
+			if (missing) {
+				const name = from.workspaceStore.getByPath(cwd, mode)?.name ?? basename(cwd);
+				throw new HttpError(400, `工作区 [${name}] 本地目录不存在或已被移除`);
+			}
+		}
+		let isDirectory = true;
+		try {
+			isDirectory = statSync(cwd).isDirectory();
+		} catch {
+			const name = rootPath
+				? (from.workspaceStore.getByPath(cwd, mode)?.name ?? basename(cwd))
+				: (from.workspace?.name ?? basename(cwd));
+			throw new HttpError(400, `工作区 [${name}] 本地目录不存在或已被移除`);
+		}
+		if (!isDirectory) {
+			const name = rootPath
+				? (from.workspaceStore.getByPath(cwd, mode)?.name ?? basename(cwd))
+				: (from.workspace?.name ?? basename(cwd));
+			throw new HttpError(400, `工作区 [${name}] 本地路径不是目录`);
+		}
 		// An untouched empty chat of the same kind in the same folder is already what the user asks for.
 		const reusable = [from, ...this.all()].find(
 			(host) =>

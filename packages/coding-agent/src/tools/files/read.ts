@@ -9,7 +9,7 @@ import { processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { OutputAccumulator } from "../output-accumulator.ts";
-import { resolveReadPathAsync } from "../path-utils.ts";
+import { assertLocalWorkspaceCwdAvailable, resolveReadPathAsync } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { discardTemporaryToolOutput, FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "../truncate.ts";
@@ -356,6 +356,7 @@ export function createReadToolDefinition(
 					(async () => {
 						let temporaryFullOutputPath: string | undefined;
 						try {
+							assertLocalWorkspaceCwdAvailable(cwd);
 							const absolutePath = await resolveReadPathAsync(path, cwd);
 							if (aborted) return;
 							// Check if file exists and is readable.

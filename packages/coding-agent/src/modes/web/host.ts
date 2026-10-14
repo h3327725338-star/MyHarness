@@ -8,6 +8,7 @@
  * `agent_settled`); this host only reacts to those events and never reimplements them.
  */
 
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
 import type { AssistantMessage, ImageContent } from "@myharness/ai";
@@ -1386,6 +1387,12 @@ export class WebHost {
 		const session = this.session;
 		const manager = session.sessionManager;
 		const cwd = manager.getCwd();
+		let cwdMissing = false;
+		try {
+			cwdMissing = !existsSync(cwd);
+		} catch {
+			cwdMissing = false;
+		}
 		const workspace = this.workspace;
 		const model = session.model;
 		const checkpoint = this.openCheckpoint() ?? session.getGitCheckpoint();
@@ -1398,8 +1405,9 @@ export class WebHost {
 			memoryMaintenance: session.getAutoMemoryMaintenanceStatus(),
 			app: { version: this.version, startedAt: this.startedAt, platform: process.platform },
 			cwd,
+			cwdMissing,
 			workspace: workspace
-				? { id: workspace.workspaceId, name: workspace.name, rootPath: workspace.rootPath }
+				? { id: workspace.workspaceId, name: workspace.name, rootPath: workspace.rootPath, missing: cwdMissing }
 				: null,
 			session: {
 				id: session.sessionId,
@@ -1472,6 +1480,15 @@ export class WebHost {
 		text: string,
 		options: { images?: ImageContent[]; mode?: "auto" | "steer" | "followUp" | "interrupt" } = {},
 	): Promise<void> {
+		try {
+			if (!existsSync(this.cwd)) {
+				const name = this.workspace?.name ?? basename(this.cwd);
+				const { HttpError } = await import("./http-server.ts");
+				throw new HttpError(400, `工作区 [${name}] 本地目录不存在或已被移除，无法执行本地操作，历史对话仍可查阅。`);
+			}
+		} catch (error) {
+			if (error && typeof error === "object" && "status" in (error as Record<string, unknown>)) throw error;
+		}
 		const session = this.session;
 		const mode = options.mode ?? "auto";
 		// A task that only waits for its background sub-agents has no run to interrupt, and stopping it would cancel them.
