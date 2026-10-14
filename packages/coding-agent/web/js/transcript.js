@@ -514,11 +514,24 @@ function UserMessage({ item, turn }) {
 /** Tokens of one reply: always with a unit and one decimal (0.2K, 12.7K, 1.3M). */
 const fmtCount = (n) => (n < 1000 ? `${(n / 1000).toFixed(1)}K` : fmtTokens(n));
 
+/** Stable part of the final answer, rendered as Markdown. memo on text only, so Preact skips re-parsing while stable is unchanged. */
+const FinalStable = memo(function FinalStable({ text }) {
+	return html`<${Markdown} text=${text} />`;
+});
+
+/** Streaming tail of the final answer, plain text only (no markdown parsing), so unclosed markers never flicker. Inline wrap style only, no height/max-height transition. */
+function FinalTail({ text }) {
+	return html`<div class="final-tail" style=${{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>${text}</div>`;
+}
+
 function FinalMessage({ final }) {
 	const message = final.message;
 	const usage = message.usage;
+	// Streaming: buffer high-frequency full-text updates to at most one commit per frame (lossless: keeps newest full text), then split stable/tail at last blank line. Stable reuses memo Markdown, tail is plain text appended only. Ended: full Markdown once for 100% fidelity.
+	const buffered = useRafBufferedText(final.text, final.streaming);
+	const { stable, tail } = useMemo(() => splitStableTail(buffered), [buffered]);
 	return html`<div class=${`final ${final.streaming ? "streaming" : ""}`}>
-		<${Markdown} text=${final.text} />
+		${final.streaming ? html`<div class="final-stream" style=${{ display: "flex", flexDirection: "column", minWidth: 0 }}>${stable ? html`<${FinalStable} text=${stable} />` : null}${tail ? html`<${FinalTail} text=${tail} />` : null}</div>` : html`<${Markdown} text=${final.text} />`}
 		${final.partial ? html`<div class="dim partial-note">${t("The response was cut off.")}</div>` : null}
 		${!final.streaming ? html`<div class="msg-actions final-actions">
 			<${CopyButton} text=${final.text} label=${t("Copy answer")} />
