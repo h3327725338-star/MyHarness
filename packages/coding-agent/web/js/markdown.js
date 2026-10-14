@@ -163,28 +163,58 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 	return out;
 }
 
-export async function renderMarkdownAsync(text, { breaks = false } = {}, cancelled = () => false) {
+/** Text at or above this length is parsed asynchronously so a long answer or reasoning never blocks a frame. */
+const LARGE_TEXT = 16000;
+
+/** Plain-text HTML for the part of a large text that has no parsed HTML yet: same font, size and wrapping as the
+ *  parsed blocks, only the Markdown markers are still literal. Never a monospace, non-wrapping placeholder. */
+const pendingHtml = (rest) => (rest ? `<div class="md-pending">${esc(rest)}</div>` : "");
+
+const isDefinition = (token) => token.type === "def";
+
+/**
+ * Render a large text in cooperative slices. The whole text is always lexed — block structure (loose lists, fenced
+ * or indented code, `wrapPatchBlocks`) depends on everything above it — but the per-token HTML of every leading token
+ * that did not change is reused, so text that only grew pays for the tokens that were appended, not for all of them.
+ * `previous` is the state returned by an earlier pass (it may cover less text); the returned state has one HTML chunk
+ * per token, or null when this pass was superseded before it finished.
+ */
+export async function renderMarkdownAsync(text, { breaks = false, previous = null } = {}, cancelled = () => false) {
 	const key = `${breaks ? "breaks" : "normal"}\0${text}`;
-	if (cache.has(key)) return cache.get(key);
+	const cached = cache.get(key);
+	if (cached !== undefined) return { text, breaks, html: cached, tokens: null, chunks: null };
 	await yieldToMain();
 	const md = getEngine();
-	if (!md) return `<pre>${esc(text)}</pre>`;
+	if (!md) return { text, breaks, html: pendingHtml(text), tokens: null, chunks: null };
+	const options = { ...md.defaults, breaks };
+	let tokens;
 	try {
-		const options = { ...md.defaults, breaks };
-		const tokens = md.lexer(wrapPatchBlocks(text), options);
-		const chunks = [];
-		for (const token of tokens) {
+		tokens = md.lexer(wrapPatchBlocks(text), options);
+	} catch {
+		return { text, breaks, html: pendingHtml(text), tokens: null, chunks: null };
+	}
+	// Reuse is sound while both passes see the same reference definitions: `tokens.links` is document-wide, so a text
+	// that defines links parses from scratch.
+	const reusable = previous && previous.breaks === breaks && previous.tokens && previous.chunks && previous.tokens.length <= tokens.length && !previous.tokens.some(isDefinition) && !tokens.some(isDefinition) ? previous : null;
+	let common = 0;
+	if (reusable) {
+		const before = reusable.tokens;
+		while (common < before.length && before[common].type === tokens[common].type && before[common].raw === tokens[common].raw) common++;
+	}
+	const chunks = common > 0 ? reusable.chunks.slice(0, common) : [];
+	try {
+		for (let i = common; i < tokens.length; i++) {
 			if (cancelled()) return null;
-			const batch = [token];
+			const batch = [tokens[i]];
 			batch.links = tokens.links;
 			chunks.push(md.parser(batch, options));
 			await yieldToMain();
 		}
-		const out = chunks.join("");
-		cache.set(key, out);
-		if (cache.size > 300) cache.delete(cache.keys().next().value);
-		return out;
-	} catch { return `<pre>${esc(text)}</pre>`; }
+	} catch { return { text, breaks, html: pendingHtml(text), tokens: null, chunks: null }; }
+	const html = chunks.join("");
+	cache.set(key, html);
+	if (cache.size > 300) cache.delete(cache.keys().next().value);
+	return { text, breaks, html, tokens, chunks };
 }
 
 /** Markdown block. A delegated click handles the code copy buttons; nothing in the text opens a panel. */
@@ -193,6 +223,9 @@ export class Markdown extends Component {
 	generation = 0;
 	slot = null;
 	parseGeneration = 0;
+	/** Last synchronous render of a text shorter than LARGE_TEXT: the growing text crosses the threshold with the
+	 *  previous HTML already in hand, so the crossing keeps the finished blocks instead of showing raw text again. */
+	small = null;
 	state = { parsed: null };
 	componentDidMount() { this.parseLarge(); this.linkify(); }
 	componentDidUpdate(previous) {
@@ -203,10 +236,18 @@ export class Markdown extends Component {
 	parseLarge() {
 		const generation = ++this.parseGeneration;
 		const { text = "", breaks = false } = this.props;
-		if (text.length < 16000) return;
-		void renderMarkdownAsync(text, { breaks }, () => generation !== this.parseGeneration).then((html) => {
-			if (generation === this.parseGeneration && html !== null) this.setState({ parsed: { text, breaks, html } });
+		if (text.length < LARGE_TEXT) return;
+		void renderMarkdownAsync(text, { breaks, previous: this.reusable(text, breaks) }, () => generation !== this.parseGeneration).then((state) => {
+			if (generation === this.parseGeneration && state !== null) this.setState({ parsed: state });
 		});
+	}
+	/** The newest already-rendered HTML that this text still starts with, in the same line-break mode. */
+	reusable(text, breaks) {
+		const parsed = this.state.parsed;
+		if (parsed && parsed.breaks === breaks && text.startsWith(parsed.text)) return parsed;
+		const small = this.small;
+		if (small && small.breaks === breaks && text.startsWith(small.text)) return small;
+		return null;
 	}
 	linkify() {
 		const generation = ++this.generation;
@@ -233,8 +274,15 @@ export class Markdown extends Component {
 		}
 	};
 	render({ text, class: cls, breaks = false }) {
-		const parsed = this.state.parsed;
-		const content = (text || "").length < 16000 ? renderMarkdown(text || "", { breaks }) : parsed?.text === text && parsed.breaks === breaks ? parsed.html : `<pre>${esc(text || "")}</pre>`;
+		const source = text || "";
+		let content;
+		if (source.length < LARGE_TEXT) {
+			content = renderMarkdown(source, { breaks });
+			this.small = { text: source, breaks, html: content };
+		} else {
+			const base = this.reusable(source, breaks);
+			content = base ? base.html + pendingHtml(source.slice(base.text.length)) : pendingHtml(source);
+		}
 		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: content }, onClick: this.onClick, onContextMenu: this.onContextMenu, ref: (node) => { this.root = node; } });
 	}
 }

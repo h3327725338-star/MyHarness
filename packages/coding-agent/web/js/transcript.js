@@ -342,7 +342,9 @@ export function splitStableTail(text) {
 	return { stable, tail };
 }
 
-/** Stable part, rendered as Markdown. Props are only text, so Preact skips re-parsing while it is unchanged. */
+/** Stable part, rendered as Markdown. Props are only text, so Preact skips re-parsing while it is unchanged. The same
+ *  component stays mounted when streaming ends (only its text grows to the whole body), so the blocks already on screen
+ *  are never thrown away for a placeholder frame. */
 const ThinkingStable = memo(function ThinkingStable({ text }) {
 	return html`<${Markdown} text=${text} />`;
 });
@@ -357,6 +359,7 @@ function Thinking({ step }) {
 	const buffered = useRafBufferedText(step.text, step.live);
 	const { title, body } = useMemo(() => splitThinking(buffered), [buffered]);
 	const { stable, tail } = useMemo(() => splitStableTail(body), [body]);
+	const text = step.live ? stable : body;
 	const has = !!(title || body);
 	const label = step.live ? (title ? clip(title, 90) : t("Thinking…")) : has ? (title ? clip(title, 90) : t("Reasoning")) : t("Reasoning (not exposed by the model)");
 	return html`<div class="thinking">
@@ -366,7 +369,7 @@ function Thinking({ step }) {
 			<span class="grow" />
 			${body ? html`<${Fold} />` : null}
 		</button>
-		<${Collapse} open=${open && !!body}><div class="thinking-text">${step.live ? html`<div class="thinking-stream">${stable ? html`<${ThinkingStable} text=${stable} />` : null}${tail ? html`<${ThinkingTail} text=${tail} />` : null}</div>` : html`<${Markdown} text=${body} />`}</div><//>
+		<${Collapse} open=${open && !!body}><div class="thinking-text"><div class="thinking-stream">${text ? html`<${ThinkingStable} text=${text} />` : null}${step.live && tail ? html`<${ThinkingTail} text=${tail} />` : null}</div></div><//>
 	</div>`;
 }
 
@@ -515,7 +518,7 @@ function UserMessage({ item, turn }) {
 /** Tokens of one reply: always with a unit and one decimal (0.2K, 12.7K, 1.3M). */
 const fmtCount = (n) => (n < 1000 ? `${(n / 1000).toFixed(1)}K` : fmtTokens(n));
 
-/** Stable part of the final answer, rendered as Markdown. memo on text only, so Preact skips re-parsing while stable is unchanged. */
+/** Stable part of the final answer, rendered as Markdown. memo on text only, so Preact skips re-parsing while stable is unchanged. The same component stays mounted when streaming ends (its text grows to the whole answer), so finished blocks are never replaced by a placeholder. */
 const FinalStable = memo(function FinalStable({ text }) {
 	return html`<${Markdown} text=${text} />`;
 });
@@ -528,11 +531,12 @@ function FinalTail({ text }) {
 function FinalMessage({ final }) {
 	const message = final.message;
 	const usage = message.usage;
-	// Streaming: buffer high-frequency full-text updates to at most one commit per frame (lossless: keeps newest full text), then split stable/tail at last blank line. Stable reuses memo Markdown, tail is plain text appended only. Ended: full Markdown once for 100% fidelity.
+	// Streaming: buffer high-frequency full-text updates to at most one commit per frame (lossless: keeps newest full text), then split stable/tail at last blank line. Stable reuses memo Markdown, tail is plain text appended only. Ended: the same stable Markdown takes the whole answer (its already-parsed blocks are kept), so the last paragraph is calibrated at full fidelity without a placeholder frame.
 	const buffered = useRafBufferedText(final.text, final.streaming);
 	const { stable, tail } = useMemo(() => splitStableTail(buffered), [buffered]);
+	const text = final.streaming ? stable : final.text;
 	return html`<div class=${`final ${final.streaming ? "streaming" : ""}`}>
-		${final.streaming ? html`<div class="final-stream" style=${{ display: "flex", flexDirection: "column", minWidth: 0 }}>${stable ? html`<${FinalStable} text=${stable} />` : null}${tail ? html`<${FinalTail} text=${tail} />` : null}</div>` : html`<${Markdown} text=${final.text} />`}
+		<div class="final-stream" style=${{ display: "flex", flexDirection: "column", minWidth: 0 }}>${text ? html`<${FinalStable} text=${text} />` : null}${final.streaming && tail ? html`<${FinalTail} text=${tail} />` : null}</div>
 		${final.partial ? html`<div class="dim partial-note">${t("The response was cut off.")}</div>` : null}
 		${!final.streaming ? html`<div class="msg-actions final-actions">
 			<${CopyButton} text=${final.text} label=${t("Copy answer")} />

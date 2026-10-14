@@ -70,6 +70,10 @@ describe("cooperative frontend scheduling", () => {
 			t: (text: string) => text,
 			looseStrong: () => null,
 			yieldToMain: async () => {},
+			// The link renderer needs these two; without them every parse throws and both sides silently degrade to the
+			// raw-text fallback, which would compare equal no matter what the renderer did.
+			localLinkPath: () => null,
+			exportReadOnly: () => false,
 		});
 		vm.runInContext(
 			readFileSync(new URL("../src/exports/html/vendor/marked.min.js", import.meta.url), "utf8"),
@@ -87,7 +91,9 @@ describe("cooperative frontend scheduling", () => {
 			const actual = await context.renderMarkdownAsync(text, { breaks });
 			// Clear cache so the synchronous comparison is a real independent parse.
 			vm.runInContext("cache.clear()", context);
-			expect(actual).toBe(context.renderMarkdown(text, { breaks }));
+			// The async pass returns its state (HTML plus the per-token chunks kept for the next, incremental pass).
+			expect(actual.html).toBe(context.renderMarkdown(text, { breaks }));
+			expect(actual.html.startsWith("<pre>")).toBe(false);
 		}
 	});
 });

@@ -167,6 +167,9 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 /* Markdown */
 .md { overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+/* Part of a large text whose Markdown is not parsed yet (JS adds div.md-pending). It keeps the block's own font, size
+   and wrapping and only shows the markers literally, so growing text never flips between two different layouts. */
+.md-pending { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font: inherit; color: inherit; margin: 0; }
 .md p { margin: 0 0 0.85em; }
 .md h1, .md h2, .md h3, .md h4 { margin: 1.3em 0 0.5em; line-height: 1.3; font-weight: 650; }
 .md h1 { font-size: 1.35em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.08em; } .md h4 { font-size: 1em; }
