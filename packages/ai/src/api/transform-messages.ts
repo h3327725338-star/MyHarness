@@ -32,6 +32,71 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 	return result;
 }
 
+/**
+ * Hard ceiling for images in a single provider request.
+ *
+ * A single PDF already contributes up to 12 inline page previews, so the
+ * count limit must stay above that to avoid breaking the normal one-document
+ * case. The byte limit is the real guard: with autoResize enabled, page renders
+ * are still hundreds of KB each, and several PDFs accumulate dozens of images
+ * in history. Without a global budget the request body grows to tens of MB and
+ * OpenAI-compatible relays reject it with a bare 400 `invalid_request_error`
+ * that names no parameter. Trimming keeps the newest images (most relevant)
+ * and replaces older ones with a text pointer, since the persisted full text
+ * and corpus files remain in the tool result text.
+ */
+const MAX_REQUEST_IMAGES = 16;
+const MAX_REQUEST_IMAGE_CHARS = 20 * 1024 * 1024;
+const TRIMMED_IMAGE_PLACEHOLDER =
+	"(earlier images omitted to stay within provider request limits; use the persisted full text and document corpus files quoted in the tool results)";
+
+function trimExcessImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
+	if (!model.input.includes("image")) return messages;
+	let totalImages = 0;
+	let totalChars = 0;
+	for (const msg of messages) {
+		const content = (msg as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		if (msg.role !== "user" && msg.role !== "toolResult") continue;
+		for (const block of content as (TextContent | ImageContent)[]) {
+			if (block.type === "image") {
+				totalImages += 1;
+				totalChars += block.data?.length ?? 0;
+			}
+		}
+	}
+	if (totalImages <= MAX_REQUEST_IMAGES && totalChars <= MAX_REQUEST_IMAGE_CHARS) return messages;
+	let keptImages = 0;
+	let keptChars = 0;
+	const result = messages.map((msg) => ({ ...msg }));
+	for (let i = result.length - 1; i >= 0; i--) {
+		const msg = result[i];
+		if (!msg || (msg.role !== "user" && msg.role !== "toolResult")) continue;
+		const content = (msg as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		const blocks = content as (TextContent | ImageContent)[];
+		if (!blocks.some((b) => b.type === "image")) continue;
+		const next: (TextContent | ImageContent)[] = [];
+		for (let j = blocks.length - 1; j >= 0; j--) {
+			const block = blocks[j];
+			if (!block || block.type !== "image") {
+				next.unshift(block as TextContent);
+				continue;
+			}
+			const size = (block as ImageContent).data?.length ?? 0;
+			if (keptImages + 1 <= MAX_REQUEST_IMAGES && keptChars + size <= MAX_REQUEST_IMAGE_CHARS) {
+				next.unshift(block);
+				keptImages += 1;
+				keptChars += size;
+			} else if (!next.some((b) => b.type === "text" && b.text === TRIMMED_IMAGE_PLACEHOLDER)) {
+				next.unshift({ type: "text", text: TRIMMED_IMAGE_PLACEHOLDER });
+			}
+		}
+		(result[i] as { content?: unknown }).content = next;
+	}
+	return result;
+}
+
 function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
 	if (model.input.includes("image")) {
 		return messages;
@@ -224,5 +289,5 @@ export function transformMessages<TApi extends Api>(
 	// If the conversation ends with unresolved tool calls, synthesize results now.
 	insertSyntheticToolResults();
 
-	return result;
+	return trimExcessImages(result, model);
 }
