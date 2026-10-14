@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, parse } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import {
 	getDataDir,
 	getDefaultWorkingDir,
@@ -126,6 +127,28 @@ function defaultWorkspaceName(rootPath: string): string {
 	if (base) return base;
 	const parsed = parse(rootPath);
 	return parsed.root || rootPath;
+}
+
+function isPathUnderDir(path: string, dir: string): boolean {
+	try {
+		const relativePath = relative(resolve(dir), resolve(path));
+		return (
+			relativePath === "" ||
+			(!isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`))
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** 测试临时目录是否想写入正式名单。正式名单指系统临时目录之外的 dataRoot。 */
+function isTestTempPathBlocked(rootPath: string, dataRoot: string | undefined): boolean {
+	if (!process.env.VITEST || !dataRoot) return false;
+	if (isPathUnderDir(dataRoot, tmpdir())) return false;
+	if (!isPathUnderDir(rootPath, tmpdir())) return false;
+	return resolve(rootPath)
+		.split(sep)
+		.some((segment) => segment.startsWith("myharness-"));
 }
 
 function serializeWorkspace(workspace: Workspace): PersistedWorkspace {
@@ -588,6 +611,10 @@ export class WorkspaceStore {
 		const validation = validateWorkspacePath(input, baseDir);
 		if ("error" in validation) return { ok: false, error: validation.error };
 		const { rootPath } = validation;
+
+		if (isTestTempPathBlocked(rootPath, this.dataRoot)) {
+			return { ok: false, error: `测试临时目录不能注册到正式工作区名单：${rootPath}` };
+		}
 
 		const existing = this.workspaces.find((workspace) => pathsEqual(workspace.rootPath, rootPath));
 		if (existing) {

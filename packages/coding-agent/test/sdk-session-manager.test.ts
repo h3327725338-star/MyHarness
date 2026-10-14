@@ -35,27 +35,37 @@ describe("createAgentSession session manager defaults", () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
-		const { session } = await createAgentSession({
-			cwd,
-			agentDir,
-			model: model!,
-		});
+		// 自隔离：不管 vitest setup 是否加载，都强制默认 dataRoot 落到本用例的临时目录，绝不写真名单。
+		const dataRoot = join(tempDir, "data-root");
+		mkdirSync(dataRoot, { recursive: true });
+		const previousDataRoot = process.env.MYHARNESS_DATA_ROOT;
+		process.env.MYHARNESS_DATA_ROOT = dataRoot;
+		try {
+			const { session } = await createAgentSession({
+				cwd,
+				agentDir,
+				model: model!,
+			});
 
-		const workspaceId = session.sessionManager.getWorkspaceId();
-		expect(workspaceId).toBeTruthy();
-		const expectedWorkspaceSessionsDir = getWorkspaceSessionsDir(getDataDir(), workspaceId!);
-		const expectedSessionDir = getSessionDir(getDataDir(), workspaceId!, session.sessionManager.getSessionId());
-		persistedSessionDir = expectedSessionDir;
-		const sessionDir = session.sessionManager.getSessionDir();
-		const sessionFile = session.sessionManager.getSessionFile();
+			const workspaceId = session.sessionManager.getWorkspaceId();
+			expect(workspaceId).toBeTruthy();
+			const expectedWorkspaceSessionsDir = getWorkspaceSessionsDir(getDataDir(), workspaceId!);
+			const expectedSessionDir = getSessionDir(getDataDir(), workspaceId!, session.sessionManager.getSessionId());
+			persistedSessionDir = expectedSessionDir;
+			const sessionDir = session.sessionManager.getSessionDir();
+			const sessionFile = session.sessionManager.getSessionFile();
 
-		expect(sessionDir).toBe(expectedSessionDir);
-		expect(getDefaultSessionDirPath(cwd)).toBe(expectedWorkspaceSessionsDir);
-		expect(sessionFile?.startsWith(`${expectedSessionDir}${sep}`)).toBe(true);
-		expect(sessionFile).toContain(`${sep}conversation${sep}`);
-		expect(session.sessionManager.getDataRoot()).toBe(getDataDir());
+			expect(sessionDir).toBe(expectedSessionDir);
+			expect(getDefaultSessionDirPath(cwd)).toBe(expectedWorkspaceSessionsDir);
+			expect(sessionFile?.startsWith(`${expectedSessionDir}${sep}`)).toBe(true);
+			expect(sessionFile).toContain(`${sep}conversation${sep}`);
+			expect(session.sessionManager.getDataRoot()).toBe(getDataDir());
 
-		session.dispose();
+			session.dispose();
+		} finally {
+			if (previousDataRoot === undefined) delete process.env.MYHARNESS_DATA_ROOT;
+			else process.env.MYHARNESS_DATA_ROOT = previousDataRoot;
+		}
 	});
 
 	it("uses an explicit dataRoot for the default SessionManager", async () => {
