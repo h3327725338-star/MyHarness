@@ -141,8 +141,12 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 	it("creates a real sub-folder under the reference workspace parent and registers it (general only)", async () => {
 		const fx = await start();
 		await resetGeneral(fx);
-		// No general workspace yet: no base to build on.
-		await expect(fx.get("/api/workspaces/create-target?mode=general")).rejects.toMatchObject({ status: 404 });
+		// No general workspace yet: falls back to the user directory (Desktop/Documents/home) so quick-create always has somewhere to go.
+		const fallbackTarget = await fx.get("/api/workspaces/create-target?mode=general");
+		expect(typeof fallbackTarget.baseDir).toBe("string");
+		expect(existsSync(fallbackTarget.baseDir)).toBe(true);
+		expect(fallbackTarget.referenceName).toBe("");
+		expect(fallbackTarget.referencePath).toBe("");
 
 		// Seed one general workspace inside its own parent dir.
 		const parent = tempDir("ws-create-parent");

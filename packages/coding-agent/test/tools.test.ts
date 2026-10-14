@@ -633,7 +633,7 @@ describe("Coding Agent Tools", () => {
 			const bashToolWithBadCwd = createBashTool(nonexistentCwd);
 
 			await expect(bashToolWithBadCwd.execute("test-call-11", { command: "echo test" })).rejects.toThrow(
-				/Working directory does not exist/,
+				/当前工作区本地目录不存在|Working directory does not exist/,
 			);
 		});
 

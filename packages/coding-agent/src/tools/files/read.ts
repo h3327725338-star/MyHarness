@@ -394,6 +394,17 @@ export function createReadToolDefinition(
 										: await ops.preprocessFile?.(absolutePath, autoResizeImages, signal, includeImages);
 							} catch (error) {
 								if (signal?.aborted) throw error;
+								// Preserve filesystem access semantics: a directory or an exclusively locked file must
+								// still fail with its errno instead of becoming a successful extraction diagnosis.
+								const code = (error as NodeJS.ErrnoException | undefined)?.code;
+								if (
+									code === "EISDIR" ||
+									code === "ENOTDIR" ||
+									code === "EBUSY" ||
+									code === "EPERM" ||
+									code === "EACCES"
+								)
+									throw error;
 								preprocessed = {
 									kind: "document",
 									text: `文件无法直接提取正文，可能已损坏、存在密码保护或无法访问。${error instanceof Error ? error.message : String(error)}`,
