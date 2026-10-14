@@ -29,6 +29,10 @@
 
 `read.ts`、`write.ts`、`edit.ts`、`grep.ts`、`find.ts`、`ls.ts`，每个文件一个工具（schema + 执行 + 可替换的 `*Operations`）。另有：
 
+- `extraction-cache.ts`：富文件结果的会话→工作区→Data 全局缓存，按原路径、mtime、size 与图像选项失效；不在原文件旁生成缓存。
+- `spreadsheet-preview.ts`：CSV/XLSX/ODS 的工作表概览和 Markdown 表格，每表最多 100 行、30 列、每格 500 字符。
+- `legacy-office.ts`：有界的 CFB 容器与 PPT 文本记录读取。当前是基础正文抽取，不支持完整的 PPT 修订链/逻辑页序，也尚未实现旧 DOC/XLS 正文解析；不能宣称旧 Office 已全量支持。
+- `read.ts` 的富文件解析异常返回成功工具结果中的诊断文字；取消、无效参数、路径访问失败仍保留既有错误语义。小于输出阈值的完整纯文本读取保留 BOM、CRLF 与末尾换行；分页/截断仍沿用原有按行预览。
 - `edit-diff.ts`：编辑的匹配、换行符保持、diff 生成；
 - `file-mutation-queue.ts`：同一文件的写操作排队；
 - `mutation-result.ts`：取消到达时文件其实已写入的情况标记；

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -20,7 +19,18 @@ import {
 	readDocumentCorpusManifest,
 	writeDocumentCorpusManifest,
 } from "../agent/vision/document-corpus.ts";
+import { getDataDir, type SessionDataPathInfo } from "../config/paths/index.ts";
 import { isBunBinary } from "../config.ts";
+import { assertDirectPath } from "../session/artifacts/store.ts";
+import {
+	extractionCacheRoots,
+	extractionDestination,
+	extractionKey,
+	readExtractionCache,
+	writeExtractionCache,
+} from "../tools/files/extraction-cache.ts";
+import { extractLegacyOffice } from "../tools/files/legacy-office.ts";
+import { formatSpreadsheet } from "../tools/files/spreadsheet-preview.ts";
 import { processImage } from "./image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "./mime.ts";
 import { killProcessTreeAndWait } from "./shell.ts";
@@ -46,12 +56,12 @@ const DEFAULT_MAX_PDF_INPUT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_PSD_INPUT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_VIDEO_INPUT_BYTES = 20 * 1024 * 1024 * 1024;
 
-const RASTER_IMAGE_EXTENSIONS = new Set([".apng", ".avif", ".heic", ".heif", ".jxl", ".tif", ".tiff"]);
+const RASTER_IMAGE_EXTENSIONS = new Set([".apng", ".avif", ".heic", ".heif", ".jxl", ".tif", ".tiff", ".ico"]);
 const INLINE_IMAGE_EXTENSIONS = new Set([".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 const SVG_EXTENSIONS = new Set([".svg", ".svgz"]);
 const PSD_EXTENSIONS = new Set([".psd", ".psb"]);
 const PDF_EXTENSIONS = new Set([".pdf"]);
-const OFFICE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf"]);
+const OFFICE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".epub", ".csv"]);
 const LEGACY_OFFICE_EXTENSIONS = new Set([".doc", ".xls", ".ppt"]);
 const VIDEO_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"]);
@@ -96,6 +106,9 @@ export interface PreprocessLocalFileOptions {
 	maxInputBytes?: number;
 	/** Directory for persistent page text, page images, and resumable manifests. */
 	documentCorpusDirectory?: string;
+	/** Internal storage scope; read's external parameters remain unchanged. */
+	cacheScope?: SessionDataPathInfo;
+	workspaceCwd?: string;
 }
 
 interface PreprocessCacheEntry {
@@ -184,7 +197,8 @@ function errorText(kind: string, error: unknown): string {
 
 function maximumInputBytes(extension: string): number | undefined {
 	if (PDF_EXTENSIONS.has(extension)) return DEFAULT_MAX_PDF_INPUT_BYTES;
-	if (OFFICE_EXTENSIONS.has(extension)) return DEFAULT_MAX_DOCUMENT_INPUT_BYTES;
+	if (OFFICE_EXTENSIONS.has(extension) || LEGACY_OFFICE_EXTENSIONS.has(extension))
+		return DEFAULT_MAX_DOCUMENT_INPUT_BYTES;
 	if (PSD_EXTENSIONS.has(extension)) return DEFAULT_MAX_PSD_INPUT_BYTES;
 	if (VIDEO_EXTENSIONS.has(extension)) return DEFAULT_MAX_VIDEO_INPUT_BYTES;
 	if (
@@ -218,7 +232,29 @@ async function toImageContent(
 	};
 }
 
+async function conversionTemporaryDirectory(kind: string): Promise<string> {
+	const root = join(getDataDir(), "cache", "extracted", "temporary");
+	assertDirectPath(root);
+	await mkdir(root, { recursive: true });
+	return mkdtemp(join(root, `${kind}-`));
+}
+
 async function convertWithSharp(filePath: string, extension: string): Promise<Buffer> {
+	if (extension === ".ico") {
+		const bytes = await readFile(filePath);
+		if (bytes.length < 22 || bytes.readUInt16LE(2) !== 1) throw new Error("ICO 文件损坏");
+		const length = bytes.readUInt32LE(14),
+			offset = bytes.readUInt32LE(18);
+		if (offset + length > bytes.length) throw new Error("ICO 图像越界");
+		const image = bytes.subarray(offset, offset + length);
+		if (image.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") return image;
+		const { loadImage } = await loadCanvas();
+		const decoded = await loadImage(bytes);
+		if (decoded.width * decoded.height > MAX_IMAGE_PIXELS) throw new Error("ICO 图像过大");
+		const canvas = (await loadCanvas()).createCanvas(decoded.width, decoded.height);
+		canvas.getContext("2d").drawImage(decoded, 0, 0);
+		return canvas.toBuffer("image/png");
+	}
 	const sharp = await loadSharp();
 	try {
 		return await sharp(filePath, { animated: false, failOn: "error", limitInputPixels: 100_000_000 })
@@ -339,7 +375,7 @@ async function runProcess(
 
 async function convertJxl(filePath: string, signal?: AbortSignal): Promise<Buffer> {
 	throwIfAborted(signal);
-	const temporaryDirectory = await mkdtemp(join(tmpdir(), "myharness-jxl-"));
+	const temporaryDirectory = await conversionTemporaryDirectory("jxl");
 	const outputPath = join(temporaryDirectory, "decoded.png");
 	try {
 		const decoderPath = isBunBinary
@@ -466,7 +502,10 @@ async function preprocessOfficeDocument(
 			includeImages: true,
 			textConfig: { preserveLayout: true, renderNotes: true },
 		});
-		const extractedText = textResult.value.trim();
+		const extractedText =
+			ast.type === "xlsx" || ast.type === "ods" || ast.type === "csv"
+				? formatSpreadsheet(ast.content)
+				: (await ast.to("md")).value.trim() || textResult.value.trim();
 		const splitBy =
 			ast.type === "pptx" || ast.type === "odp"
 				? "slide"
@@ -488,14 +527,16 @@ async function preprocessOfficeDocument(
 			? chunksResult.value.filter((chunk) => chunk.text.trim().length > 0)
 			: [];
 		const fallbackChunks: OfficeChunk[] =
-			chunks.length > 0
-				? chunks
-				: [
-						{
-							text: extractedText,
-							metadata: { sourceType: ast.type },
-						},
-					];
+			ast.type === "xlsx" || ast.type === "ods" || ast.type === "csv"
+				? [{ text: extractedText, metadata: { sourceType: ast.type } }]
+				: chunks.length > 0
+					? chunks
+					: [
+							{
+								text: extractedText,
+								metadata: { sourceType: ast.type },
+							},
+						];
 		const manifest = createDocumentCorpusManifest(
 			filePath,
 			sourceStats.size,
@@ -535,7 +576,7 @@ async function preprocessOfficeDocument(
 			const unitNumber = index + 1;
 			const textPath = join(corpusPaths.textDirectory, `${String(unitNumber).padStart(6, "0")}.txt`);
 			await writeFile(textPath, chunk.text, "utf8");
-			fullTextSections.push(`[${label}]\n${chunk.text}`);
+			fullTextSections.push(`## ${label}\n\n${chunk.text}`);
 			units.push({
 				unitNumber,
 				label,
@@ -837,7 +878,7 @@ async function preprocessPdf(
 		return { kind: "pdf", text: errorText("PDF", error), images: [] };
 	} finally {
 		signal?.removeEventListener("abort", abortLoading);
-		await loadingTask?.destroy();
+		await loadingTask?.destroy().catch(() => undefined);
 	}
 }
 
@@ -873,7 +914,7 @@ async function preprocessVideo(
 	if (!ffmpegPath) {
 		return { kind: "video", text: "[视频预处理失败：当前平台没有可用的 FFmpeg。]", images: [] };
 	}
-	const temporaryDirectory = await mkdtemp(join(tmpdir(), "myharness-video-"));
+	const temporaryDirectory = await conversionTemporaryDirectory("video");
 	try {
 		const probeOutput = await runProcess(
 			ffmpegPath,
@@ -944,13 +985,26 @@ export async function preprocessLocalFile(
 	filePath: string,
 	options?: PreprocessLocalFileOptions,
 ): Promise<PreprocessedLocalFile | null> {
-	const extension = getExtension(filePath);
+	let extension = getExtension(filePath);
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const includeImages = options?.includeImages ?? true;
 	const signal = options?.signal;
-	const documentCorpusDirectory = options?.documentCorpusDirectory;
 	throwIfAborted(signal);
 	const stats = await stat(filePath);
+	const header = Buffer.alloc(16);
+	const handle = await open(filePath, "r");
+	try {
+		await handle.read(header, 0, header.length, 0);
+	} finally {
+		await handle.close();
+	}
+	if (header.subarray(0, 5).toString() === "%PDF-") extension = ".pdf";
+	else if (header.subarray(0, 5).toString() === "{\\rtf") extension = ".rtf";
+	else if (header.subarray(0, 8).toString("hex") === "d0cf11e0a1b11ae1" && !OFFICE_EXTENSIONS.has(extension))
+		extension = ".ppt";
+	const roots = extractionCacheRoots(options?.cacheScope);
+	const destination = extractionDestination(filePath, options?.cacheScope, options?.workspaceCwd);
+	const documentCorpusDirectory = options?.documentCorpusDirectory ?? join(destination, "corpus");
 	const directlySupportedMimeType = await detectSupportedImageMimeTypeFromFile(filePath);
 	const inputLimit =
 		options?.maxInputBytes ??
@@ -969,7 +1023,15 @@ export async function preprocessLocalFile(
 			images: [],
 		};
 	}
-	const cacheKey = `${filePath}\0${stats.size}\0${stats.mtimeMs}\0${autoResizeImages}\0${includeImages}\0${documentCorpusDirectory ?? ""}`;
+	const cacheKey = `${filePath}\0${stats.size}\0${stats.mtimeMs}\0${autoResizeImages}\0${includeImages}\0${documentCorpusDirectory}`;
+	const diskKey = extractionKey(
+		filePath,
+		stats.size,
+		stats.mtimeMs,
+		`${autoResizeImages}:${includeImages}:${options?.documentCorpusDirectory ?? ""}`,
+	);
+	const diskCached = await readExtractionCache(roots, diskKey);
+	if (diskCached) return diskCached;
 	const cached = preprocessCache.get(filePath);
 	if (cached?.key === cacheKey) {
 		preprocessCache.delete(filePath);
@@ -1007,15 +1069,28 @@ export async function preprocessLocalFile(
 			images: [],
 		};
 	} else if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
-		result = {
-			kind: "unsupported",
-			text: `[暂不支持旧版 ${extension.slice(1).toUpperCase()} 二进制格式。请先另存为 DOCX、XLSX 或 PPTX。]`,
-			images: [],
-		};
+		try {
+			const text = await extractLegacyOffice(filePath);
+			result = { kind: "document", text, fullText: text, images: [] };
+		} catch (error) {
+			if (isAbortError(error, signal)) throw error;
+			result = { kind: "document", text: errorText("文档", error), images: [] };
+		}
 	} else {
 		result = null;
 	}
 	throwIfAborted(signal);
+	if (SVG_EXTENSIONS.has(extension) && result) {
+		result.fullText = `${await readFile(filePath, "utf8")}\n\n${result.text}`;
+	}
+	if (result) {
+		const latest = await stat(filePath);
+		if (latest.size === stats.size && latest.mtimeMs === stats.mtimeMs) {
+			await writeExtractionCache(destination, diskKey, filePath, stats.size, stats.mtimeMs, result).catch(
+				() => undefined,
+			);
+		}
+	}
 	const resultSize = estimatePreprocessedSize(result);
 	const previous = preprocessCache.get(filePath);
 	if (previous) preprocessCacheBytes -= previous.size;

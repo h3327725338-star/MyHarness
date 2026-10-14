@@ -119,6 +119,23 @@ deleted. Its optional artifact-deletion choice removes only that Workspace's
 artifacts; keeping them leaves them available globally. Deleting artifacts refuses
 symbolic links/junctions rather than traversing indirect user-owned targets.
 
+## Rich-file extraction cache
+
+The shared General/Coding `read` implementation checks derived results in order:
+Session `artifacts/temporary/extracted/`, Workspace `cache/extracted/`, then
+Data-root `cache/extracted/`. Session imports write to the Session tier, files
+inside the active Workspace write to the Workspace tier, and unbound/external
+files write to the Data-root tier. Keys include absolute source path (case-folded
+on Windows), size, mtime, parser version and image-processing options. Changed
+source metadata produces a new key; old entries are not deleted automatically.
+Cache write failures do not prevent reading. Document page corpora now default
+to the selected tier's `corpus/` rather than the legacy Agent directory.
+
+Derived results contain JSON metadata, a Markdown extraction and image bytes.
+No extraction files are written beside source documents. These caches can contain
+private document content and must not be committed. Legacy/custom SDK callers
+without a structured Session fall back to the configured Data root.
+
 ## Lifecycle and cleanup rules
 
 - `data/`, global Agent data, Session files, credentials, traces, memory and

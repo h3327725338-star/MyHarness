@@ -251,7 +251,12 @@ export class SessionToolRegistry {
 					Object.entries(baseToolsOverride).map(([name, tool]) => [name, createToolDefinitionFromAgentTool(tool)]),
 				)
 			: createAllToolDefinitions(this._options.cwd, {
-					read: { autoResizeImages, includeImages, omitDocumentPreviewImages },
+					read: {
+						autoResizeImages,
+						includeImages,
+						omitDocumentPreviewImages,
+						cacheScope: artifactScope(sessionManager),
+					},
 					bash: {
 						commandPrefix: shellCommandPrefix,
 						shellPath,

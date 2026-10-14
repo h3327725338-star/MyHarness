@@ -3,6 +3,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import type { ImageContent, TextContent } from "@myharness/ai";
 import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
 import { type Static, Type } from "typebox";
+import { parseSessionDataPath, type SessionDataPathInfo } from "../../config/paths/index.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { type PreprocessedLocalFile, preprocessLocalFile } from "../../utils/file-preprocess.ts";
 import { processImage } from "../../utils/image-process.ts";
@@ -82,6 +83,8 @@ export interface ReadToolOptions {
 	includeImages?: boolean;
 	/** Omit document previews because Vision Assistant will consume the persistent manifest. */
 	omitDocumentPreviewImages?: boolean;
+	/** Internal storage ownership, supplied by the session registry. */
+	cacheScope?: SessionDataPathInfo;
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
 }
@@ -190,6 +193,10 @@ async function readTextRangeFromFile(
 			throw new Error(`Offset ${offset} is beyond end of file (0 lines total)`);
 		}
 		return { outputText: "" };
+	}
+	if (fileSize <= DEFAULT_MAX_BYTES && offset === undefined && limit === undefined) {
+		const text = (await fsReadFile(absolutePath)).toString("utf8");
+		if (splitLinesForCounting(text).length <= DEFAULT_MAX_LINES) return { outputText: text };
 	}
 	const scanPastRequestedRange = limit === undefined || fileSize <= EXACT_TOTAL_LINE_SCAN_BYTES;
 	const output = new OutputAccumulator({ tempFilePrefix: "myharness-read", mode: "head" });
@@ -323,7 +330,7 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Reads files. Supports text, common images and converted images, PDFs, modern Office documents, SVG, PSD, and video keyframes. Binary files are preprocessed before being sent. Text output is capped at ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB, whichever is reached first. Use offset and limit when reading large text.`,
+		description: `Reads files. Supports text, common images and converted images, PDFs, Office documents (including legacy PPT), RTF, EPUB, Markdown spreadsheet previews, SVG source and rendering, converted images, PSD, and video keyframes. Binary files are preprocessed before being sent. Text output is capped at ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB, whichever is reached first. Use offset and limit when reading large text.`,
 		promptSnippet: loadSystemPrompt("tools/read/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/read/guidelines.md"),
 		parameters: readSchema,
@@ -362,9 +369,37 @@ export function createReadToolDefinition(
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);
 							if (aborted) return;
-							const preprocessed = ops.preprocessFile
-								? await ops.preprocessFile(absolutePath, autoResizeImages, signal, includeImages)
-								: undefined;
+							let sessionFile: string | undefined;
+							try {
+								const manager = (
+									ctx as { sessionManager?: { getSessionFile?: () => string | undefined } } | undefined
+								)?.sessionManager;
+								sessionFile = manager?.getSessionFile?.();
+							} catch {
+								/* Replaced extension contexts fall back to unscoped storage. */
+							}
+							const cacheScope =
+								options?.cacheScope ?? (sessionFile ? parseSessionDataPath(sessionFile) : undefined);
+							let preprocessed: PreprocessedLocalFile | null | undefined;
+							try {
+								preprocessed =
+									ops === defaultReadOperations
+										? await preprocessLocalFile(absolutePath, {
+												autoResizeImages,
+												signal,
+												includeImages,
+												cacheScope,
+												workspaceCwd: cwd,
+											})
+										: await ops.preprocessFile?.(absolutePath, autoResizeImages, signal, includeImages);
+							} catch (error) {
+								if (signal?.aborted) throw error;
+								preprocessed = {
+									kind: "document",
+									text: `文件无法直接提取正文，可能已损坏、存在密码保护或无法访问。${error instanceof Error ? error.message : String(error)}`,
+									images: [],
+								};
+							}
 							const mimeType =
 								!preprocessed && ops.detectImageMimeType
 									? await ops.detectImageMimeType(absolutePath)
@@ -428,7 +463,11 @@ export function createReadToolDefinition(
 							// filesystem can be stat'ed here: a custom operation set (for example SSH) may serve a
 							// path this process cannot see, and an unreadable state simply means the file stays
 							// untracked. This covers the text, image and converted-document branches alike.
-							if (ops === defaultReadOperations) {
+							if (
+								ops === defaultReadOperations &&
+								!preprocessed?.text.includes("失败") &&
+								!preprocessed?.text.includes("无法直接提取")
+							) {
 								const readState: FileReadState | undefined = await statFileReadState(absolutePath);
 								if (readState) recordFileReadState(absolutePath, readState, resolveFileStateScope(ctx));
 							}
