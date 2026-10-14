@@ -7,7 +7,7 @@
  * and which events hosts see is decided by AgentSession.
  */
 
-import type { Agent, ThinkingLevel } from "@myharness/agent-core";
+import type { Agent, AgentTool, ThinkingLevel } from "@myharness/agent-core";
 import type { Model, Usage } from "@myharness/ai/compat";
 import { clampThinkingLevel } from "@myharness/ai/compat";
 import type { SettingsManager } from "../../config/settings/index.ts";
@@ -114,16 +114,23 @@ export class SessionCompactionRunner {
 		settings: CompactionSettings = this._host.contextCoordinator.getRuntimeCompactionSettings(),
 	): Promise<{ preparation: CompactionPreparation | undefined; branchEntries: SessionEntry[] }> {
 		const branchEntries = this._host.sessionManager.getBranch();
-		const preparation = prepareCompaction(branchEntries, settings);
-		if (preparation) {
-			preparation.tokensBefore = (await this._host.contextCoordinator.buildProviderSnapshot()).activeTokens;
-		}
+		if (branchEntries.length === 0) return { preparation: undefined, branchEntries };
+		// One canonical snapshot per preparation: passed into prepareCompaction
+		// so the inner full-history estimate is skipped instead of computed
+		// and immediately overwritten here.
+		const tokensBefore = (await this._host.contextCoordinator.buildProviderSnapshot()).activeTokens;
+		const preparation = prepareCompaction(branchEntries, settings, { tokensBefore });
 		return { preparation, branchEntries };
 	}
 
 	/** Run a prepared compaction: ask extensions, write the checkpoint, rebuild the context, notify extensions. */
 	async run(request: SessionCompactionRequest): Promise<SessionCompactionOutcome> {
 		const { preparation, branchEntries, model, auth, customInstructions, reason, willRetry, signal } = request;
+		// P0-1 prefix stability: the summarization fork reuses the parent's exact
+		// system/tools references captured here, never a rebuilt prompt. A per-turn
+		// re-derivation inside _generate would risk prefix drift mid-compaction.
+		const parentSystemPrompt = this._host.agent.state.systemPrompt;
+		const parentTools = this._host.agent.state.tools;
 
 		let extensionCompaction: CompactionResult | undefined;
 		const extensionResult = await this._host.askExtensions({
@@ -150,6 +157,8 @@ export class SessionCompactionRunner {
 			signal,
 			this._resolveThinkingLevel(model),
 			extensionCompaction,
+			parentSystemPrompt,
+			parentTools,
 		);
 		const summary = outcome.result.summary;
 		const firstKeptEntryId = outcome.result.firstKeptEntryId;
@@ -192,6 +201,8 @@ export class SessionCompactionRunner {
 		signal: AbortSignal,
 		thinkingLevel: ThinkingLevel,
 		extensionCompaction?: CompactionResult,
+		parentSystemPrompt?: string,
+		parentTools?: AgentTool[],
 	): Promise<{ result: CompactionResult & { estimatedTokensAfter: number }; fromExtension: boolean }> {
 		const { agent, sessionManager, contextCoordinator } = this._host;
 		const mainModel = agent.state.model as Model<any> | undefined;
@@ -208,8 +219,8 @@ export class SessionCompactionRunner {
 				thinkingLevel,
 				agent.streamFunction,
 				auth.env,
-				agent.state.systemPrompt,
-				agent.state.tools,
+				parentSystemPrompt ?? agent.state.systemPrompt,
+				parentTools ?? agent.state.tools,
 				mainModel?.provider === model.provider &&
 					mainModel?.api === model.api &&
 					mainModel?.baseUrl === model.baseUrl,

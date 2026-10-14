@@ -35,7 +35,9 @@ export type StreamFn = (
  * Configuration for how tool calls from a single assistant message are executed.
  *
  * - "sequential": each tool call is prepared, executed, and finalized before the next one starts.
- * - "parallel": tool calls are prepared sequentially, then allowed tools execute concurrently.
+ * - "parallel": tool calls are validated concurrently (capped at 5), approved
+ *   strictly one at a time in assistant source order, then allowed tools execute
+ *   concurrently (capped at 5).
  *   `tool_execution_end` is emitted in tool completion order after each tool is finalized,
  *   while tool-result message artifacts are emitted later in assistant source order.
  */
@@ -99,6 +101,22 @@ export interface BeforeToolCallContext {
 	args: unknown;
 	/** Current agent context at the time the tool call is prepared. */
 	context: AgentContext;
+}
+
+/** Context passed to `onToolAbandoned`. */
+export interface ToolAbandonedInfo {
+	/** The raw tool call block from `assistantMessage.content`. */
+	toolCall: AgentToolCall;
+	/** Name of the abandoned tool. */
+	toolName: string;
+	/**
+	 * Per-tool signal linked to the run's abort signal: aborted exactly when the
+	 * run is cancelled. Hosts use its identity to target only the abandoned
+	 * tool's processes for a best-effort kill.
+	 */
+	toolSignal?: AbortSignal;
+	/** Grace period (ms) the tool was given after abort before being abandoned. */
+	graceMs: number;
 }
 
 /** Context passed to `afterToolCall`. */
@@ -266,7 +284,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Tool execution mode.
 	 * - "sequential": execute tool calls one by one
-	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
+	 * - "parallel": validate tool calls concurrently (capped at 5), run the
+	 *   `beforeToolCall` approval gate strictly one at a time in assistant source
+	 *   order, then execute allowed tools concurrently (capped at 5);
 	 *   emit `tool_execution_end` in tool completion order after each tool is finalized,
 	 *   then emit tool-result message artifacts later in assistant source order
 	 *
@@ -288,10 +308,24 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	toolAbortGraceMs?: number;
 
 	/**
+	 * Best-effort cleanup invoked once when a running tool is abandoned after the
+	 * abort grace period (`toolAbortGraceMs`) expires. Hosts use this to kill the
+	 * abandoned tool's process tree (see `ToolAbandonedInfo.toolSignal`).
+	 *
+	 * The hook is fire-and-forget: it is never awaited, and throws/rejections are
+	 * swallowed, so the recorded `TOOL_ABORT_TIMEOUT` error result is unaffected.
+	 * A tool that finishes within the grace period keeps its own result and never
+	 * triggers this hook.
+	 */
+	onToolAbandoned?: (info: ToolAbandonedInfo) => void | Promise<void>;
+
+	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
 	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 * In parallel mode this hook runs strictly one tool at a time in assistant
+	 * source order, so approval prompts and interception never interleave.
 	 */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 

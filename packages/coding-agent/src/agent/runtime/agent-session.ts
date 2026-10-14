@@ -109,8 +109,9 @@ import {
 } from "../../startup/slash-commands.ts";
 import {
 	applyAgentRoleBoundary,
+	buildDynamicContextReminder,
 	type BuildSystemPromptOptions,
-	buildSystemPrompt,
+	buildStableSystemPrompt,
 	collectSystemPromptOptions,
 	personalizationBlock,
 } from "../../system-prompts/composer/index.ts";
@@ -122,6 +123,7 @@ import { SessionBashRunner } from "../../tools/shell/session-bash.ts";
 import type { SubAgentBackgroundProgress, SubAgentBackgroundTask } from "../../tools/sub-agent.ts";
 import type { SymbolsCodeIntelligenceServices } from "../../tools/symbols-runtime.ts";
 import { cleanupOrphanedToolResults } from "../../tools/tool-result-persistence.ts";
+import { killChildProcessesForSignal } from "../../utils/child-process.ts";
 import { sleep } from "../../utils/sleep.ts";
 import type { WorkflowToolControls } from "../../workflow/tool.ts";
 import { SessionBackgroundWork } from "../delegation/background-work.ts";
@@ -506,10 +508,21 @@ export class AgentSession {
 	// Tool registry for extension getTools/setTools
 	private readonly _tools: SessionToolRegistry;
 
-	// Base system prompt (without extension appends) - used to apply fresh appends each turn
+	// Base system prompt (without extension appends) - used to apply fresh appends each turn.
+	// P0-1: this is the STABLE prefix (no working-directory/model-identity tail). The
+	// dynamic segments travel as a messages-tail system-reminder (see transformContext
+	// and _buildDynamicReminderMessage) so the system string stays byte-stable across
+	// turns for provider prefix caching. Rebuilt only on model/tools/resource changes.
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
+	// Last per-turn prompt derivation: reference-compared so an unchanged turn reuses
+	// the identical string instead of re-concatenating (model/tools change re-derives).
+	private _turnPromptCache:
+		| { base: string; personal: string; scopeKey: string; role: AgentRole; result: string }
+		| undefined;
+	// Cached dynamic-reminder text, keyed by its inputs so identical turns share it.
+	private _reminderCache: { key: string; text: string | undefined } | undefined;
 	private readonly _autoMemory: AutoMemoryManager;
 	private readonly _visionAssistant: VisionAssistantManager;
 	private _releaseSessionWriterLock?: () => void;
@@ -531,7 +544,7 @@ export class AgentSession {
 				compactBeforeModelDownshift: (nextModel) => this._compactBeforeModelDownshift(nextModel),
 				onModelSet: () => {
 					this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
-					this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+					this._setAgentSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 					const model = this.agent.state.model;
 					if (model)
 						new ModeStateStore(this._agentDir ?? getAgentDir()).update(this.sessionManager.getMode(), {
@@ -777,7 +790,24 @@ export class AgentSession {
 					message.role !== "custom" || message.customType !== "auto-memory-recall" || index > lastUser,
 			);
 			const transformed = previousTransformContext ? await previousTransformContext(current, signal) : current;
-			return this._visionAssistant.transformContext(transformed, signal);
+			const withVision = await this._visionAssistant.transformContext(transformed, signal);
+			// P0-1 prefix-cache stability: the stable system prompt carries no dynamic
+			// segments, so re-attach them here as a transient reminder. It is inserted
+			// BEFORE the last user message so the real user query stays last (model
+			// capability unchanged) and usage-anchor timestamps are unaffected.
+			// A fresh array is returned; persisted history is never mutated, and the
+			// reminder is never written to the session file (Session format unchanged).
+			const reminder = this._buildDynamicReminderMessage();
+			if (!reminder) return withVision;
+			let insertAt = withVision.length;
+			for (let index = withVision.length - 1; index >= 0; index--) {
+				if (withVision[index].role === "user") {
+					insertAt = index;
+					break;
+			}
+			}
+			if (insertAt >= withVision.length) return [...withVision, reminder];
+			return [...withVision.slice(0, insertAt), reminder, ...withVision.slice(insertAt)];
 		};
 
 		// Always subscribe to agent events for internal handling
@@ -867,6 +897,14 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		// When the agent loop abandons a tool that ignored cancellation, kill only
+		// that tool's still-registered process tree. Spawns register under the
+		// per-tool signal they received, so siblings and background jobs (which
+		// use their own internal signal) are never touched.
+		this.agent.onToolAbandoned = ({ toolSignal }) => {
+			killChildProcessesForSignal(toolSignal);
+		};
+
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			// Baseline: a delegated session never dispatches further agents, whatever
 			// name a future registration path (MCP, skills) gives such a tool. This
@@ -1273,13 +1311,20 @@ export class AgentSession {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
+				// P2-11: cancellation ("aborted") is a user stop, not a success and not a
+				// failure: it neither resets the recovery state as a success nor emits a
+				// retry-success event, and it never touches the retry counters.
+				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "aborted") {
 					this._providerRecovery.resetAfterSuccessfulAssistant();
 				}
 
 				// Reset retry counter immediately on successful assistant response
 				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt + this._networkAttempts > 0) {
+				if (
+					assistantMsg.stopReason !== "error" &&
+					assistantMsg.stopReason !== "aborted" &&
+					this._retryAttempt + this._networkAttempts > 0
+				) {
 					this._setRunState("running", "重试成功，继续执行");
 					this._emit({
 						type: "auto_retry_end",
@@ -1607,7 +1652,7 @@ export class AgentSession {
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
-		this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+		this._setAgentSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 	}
 
 	/**
@@ -1680,7 +1725,7 @@ export class AgentSession {
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
-		this._baseSystemPromptOptions = {
+		const nextOptions: BuildSystemPromptOptions = {
 			...collectSystemPromptOptions(this._resourceLoader, {
 				cwd: this._cwd,
 				tools: this._tools.getPromptContributions(toolNames),
@@ -1689,7 +1734,56 @@ export class AgentSession {
 			mode: this.sessionManager.getMode(),
 			personalPrompts: new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompts(),
 		};
-		return buildSystemPrompt(this._baseSystemPromptOptions);
+		// Stable prefix only; the dynamic tail (cwd/model) is delivered per-request as
+		// a messages-tail reminder and must not churn this string. Callers rebuild only
+		// on model/tools/resource changes, never per turn. Value-compare so an
+		// effectively unchanged rebuild keeps the identical reference (prefix cache
+		// survives registry refreshes that did not really change anything).
+		this._baseSystemPromptOptions = nextOptions;
+		const next = buildStableSystemPrompt(nextOptions);
+		// The reminder carries cwd/model and is key-compared on read, so it needs no
+		// reset here; only the turn derivation cache depends on this exact string.
+		if (next === this._baseSystemPrompt) return this._baseSystemPrompt;
+		this._turnPromptCache = undefined;
+		return next;
+	}
+
+	/** Cache key for the dynamic reminder: cwd + model identity. */
+	private _dynamicReminderKey(): string {
+		const model = this.model;
+		return `${this._cwd}\0${model?.provider ?? ""}\0${model?.name ?? model?.id ?? ""}`;
+	}
+
+	/** Dynamic context text (cwd + model identity); moved, not deleted, from the system tail. */
+	private _dynamicReminderText(): string | undefined {
+		const key = this._dynamicReminderKey();
+		const cached = this._reminderCache;
+		if (cached && cached.key === key) return cached.text;
+		const model = this.model;
+		const text = buildDynamicContextReminder({
+			cwd: this._cwd,
+			currentModel: model ? { name: model.name ?? model.id, provider: model.provider } : undefined,
+		});
+		this._reminderCache = { key, text };
+		return text;
+	}
+
+	/** Public observability for the messages-tail reminder (session.systemPrompt stays stable). */
+	getDynamicContextReminder(): string | undefined {
+		return this._dynamicReminderText();
+	}
+
+	/** Transient reminder message (before last user); never persisted to the session file. */
+	private _buildDynamicReminderMessage(): AgentMessage | undefined {
+		const text = this._dynamicReminderText();
+		if (!text) return undefined;
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		return {
+			role: "user",
+			content,
+			// Timestamp 0: transient, must not advance usage-anchor max-timestamp.
+			timestamp: 0,
+		};
 	}
 
 	// =========================================================================
@@ -1758,20 +1852,43 @@ export class AgentSession {
 		return this._contextCoordinator.ensure(additionalMessages, context, resumeAfterCompaction);
 	}
 
+	/** Assign the provider-facing system prompt only when it actually changed. */
+	private _setAgentSystemPrompt(next: string): void {
+		if (this.agent.state.systemPrompt !== next) this.agent.state.systemPrompt = next;
+	}
+
 	private _getTurnSystemPrompt(prompt: string): string {
 		const personalPrompt = new ModeStateStore(this._agentDir ?? getAgentDir()).getPersonalPrompt(
 			this.sessionManager.getMode(),
 		);
-		prompt = prompt.replace(/\s*<user_personalization>[\s\S]*?<\/user_personalization>/gu, "").trim();
-		if (personalPrompt.trim()) prompt = `${personalizationBlock(personalPrompt)}\n\n${prompt}`;
+		// Reference comparison: an unchanged turn reuses the identical string so the
+		// provider prefix cache survives. Only model/tools/resource/personal/scope/role
+		// changes re-derive. The scope key avoids the artifacts mkdir on cache hits.
+		const scopeKey = this.sessionManager.isPersisted() ? (this.sessionManager.getSessionFile() ?? "") : "";
+		const cached = this._turnPromptCache;
+		if (
+			cached &&
+			cached.base === prompt &&
+			cached.personal === personalPrompt &&
+			cached.scopeKey === scopeKey &&
+			cached.role === this._agentRole
+		) {
+			return cached.result;
+		}
+		// Strip any previously applied personalization block, including the
+		// priority-attributed form emitted by personalizationBlock.
+		let derived = prompt.replace(/\s*<user_personalization[^>]*>[\s\S]*?<\/user_personalization>/gu, "").trim();
+		if (personalPrompt.trim()) derived = `${personalizationBlock(personalPrompt)}\n\n${derived}`;
 		const scope = artifactScope(this.sessionManager);
 		if (scope) {
 			const artifactsDir = ensureSessionArtifacts(scope);
-			if (!prompt.includes("<session_artifacts>")) {
-				prompt += `\n\n${loadSystemPrompt("session/artifacts.md", { artifactsDir })}`;
+			if (!derived.includes("<session_artifacts>")) {
+				derived += `\n\n${loadSystemPrompt("session/artifacts.md", { artifactsDir })}`;
 			}
 		}
-		return applyAgentRoleBoundary(prompt, this._agentRole);
+		const result = applyAgentRoleBoundary(derived, this._agentRole);
+		this._turnPromptCache = { base: prompt, personal: personalPrompt, scopeKey, role: this._agentRole, result };
+		return result;
 	}
 
 	private async _runAgentPrompt(
@@ -1814,7 +1931,7 @@ export class AgentSession {
 		this._finalAnswerDeliveredAt = undefined;
 		this._lastAssistantMessage = undefined;
 		const inputMessages = Array.isArray(messages) ? messages : [messages];
-		this.agent.state.systemPrompt = this._getTurnSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
+		this._setAgentSystemPrompt(this._getTurnSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt));
 		messages = inputMessages;
 		this._providerRecovery.resetForRun();
 		this._fallbackFailure = undefined;
@@ -1859,12 +1976,28 @@ export class AgentSession {
 			}
 		} catch (error) {
 			if (!this._runStateTracker.terminal) {
-				this._runStateTracker.terminal = {
-					state: "failed",
-					activity: "任务失败",
-					error: error instanceof Error ? error.message : String(error),
-					reason: "runtime-error",
-				};
+				// P2-11: a run that ends because the user cancelled (abort flag set, or an
+				// AbortError from the agent loop / provider fetch tearing down its
+				// timer+reader) settles as cancelled, never as a failed run. It must not
+				// consume retry budget or trigger fallback; both are gated on
+				// stopReason "error" downstream.
+				const cancelled =
+					this._abortRequested ||
+					(error instanceof Error && error.name === "AbortError") ||
+					(error instanceof Error && /\b(aborted|Operation aborted)\b/i.test(error.message));
+				this._runStateTracker.terminal = cancelled
+					? {
+							state: "cancelled",
+							activity: "任务已取消",
+							error: error instanceof Error ? error.message : String(error),
+							reason: "user-cancelled",
+						}
+					: {
+							state: "failed",
+							activity: "任务失败",
+							error: error instanceof Error ? error.message : String(error),
+							reason: "runtime-error",
+						};
 			}
 			runError = error;
 			runFailed = true;
@@ -1915,6 +2048,20 @@ export class AgentSession {
 				activity: "任务未完成",
 				error: "Agent run ended without an assistant response",
 				reason: "interrupted",
+			};
+			return false;
+		}
+
+		// P2-11: cancellation ends the run here. No retry (planRetry already returns
+		// "none" for "aborted"), no provider recovery, no fallback, no compaction
+		// continuation: settle as cancelled with the counters untouched.
+		if (msg.stopReason === "aborted") {
+			this._resetRetryCounters();
+			this._runStateTracker.terminal = {
+				state: "cancelled",
+				activity: "任务已取消",
+				error: msg.errorMessage ?? "任务已取消",
+				reason: "user-cancelled",
 			};
 			return false;
 		}
@@ -2236,11 +2383,11 @@ export class AgentSession {
 					? `${extensionPrompt}\n\n${AUTO_MEMORY_SYSTEM_PROMPT}`
 					: extensionPrompt;
 				this._systemPromptOverride = this._getTurnSystemPrompt(turnSystemPrompt);
-				this.agent.state.systemPrompt = this._systemPromptOverride;
+				this._setAgentSystemPrompt(this._systemPromptOverride);
 			} else {
 				// Ensure we're using the base prompt (in case previous turn had modifications)
 				this._systemPromptOverride = undefined;
-				this.agent.state.systemPrompt = this._getTurnSystemPrompt(this._baseSystemPrompt);
+				this._setAgentSystemPrompt(this._getTurnSystemPrompt(this._baseSystemPrompt));
 			}
 		} catch (error) {
 			preflightResult?.(false);
@@ -2564,6 +2711,14 @@ export class AgentSession {
 
 	/**
 	 * Abort current operation and wait for agent to become idle.
+	 *
+	 * P2-11 full-chain propagation: Web POST /api/abort → WebHost.submit/session.abort
+	 * → here → agent.abort() (harness runAbortController) → the single AbortSignal
+	 * the agent loop hands to the provider stream, every tool execute(), and the
+	 * bash process tree. The retry backoff sleep observes abortRetry() and releases
+	 * its timer; provider SSE readers release in their `finally` (reader.releaseLock);
+	 * process-group killing itself stays owned by P0-4, this path only forwards the
+	 * signal and counts the outcome.
 	 */
 	async abort(): Promise<void> {
 		if (this._isAgentRunActive) this._abortRequested = true;
@@ -3039,7 +3194,7 @@ export class AgentSession {
 
 		this._resourceLoader.extendResources(extensionPaths);
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
-		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this._setAgentSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 	}
 
 	private _applyExtensionBindings(runner: ExtensionRunner): void {
@@ -3311,6 +3466,10 @@ export class AgentSession {
 	 * @returns true if the caller should continue the agent, false otherwise
 	 */
 	private async _prepareRetry(message: AssistantMessage, plan: RetryPlan): Promise<boolean> {
+		// P2-11: cancellation never reaches the retry budgets. The guard is defensive
+		// (planRetry maps "aborted" to "none"), so a future plan shape cannot start
+		// counting user stops as attempts.
+		if (message.stopReason === "aborted") return false;
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled || (plan.kind !== "network" && plan.kind !== "standard")) {
 			return false;

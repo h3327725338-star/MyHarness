@@ -3,7 +3,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { terminateProcessTree, waitForChildProcess } from "../../utils/child-process.ts";
+import {
+	terminateProcessTree,
+	trackChildProcessForSignal,
+	waitForChildProcess,
+} from "../../utils/child-process.ts";
 import { killProcessTreeAndWait } from "../../utils/shell.ts";
 
 /**
@@ -147,6 +151,10 @@ export async function execCommand(
 			}, options.timeout);
 		}
 
+		// Register under the caller's signal so abandon handling (after the abort
+		// grace period) can kill only this command's tree. Untracked in finish().
+		const untrackChild = trackChildProcessForSignal(options?.signal, proc);
+
 		proc.stdout?.on("data", (data) => {
 			stdout += data.toString();
 		});
@@ -168,6 +176,7 @@ export async function execCommand(
 		const finish = (code: number | null) => {
 			if (settled) return;
 			settled = true;
+			untrackChild();
 			clearTimers();
 			if (options?.signal) {
 				options.signal.removeEventListener("abort", onAbort);

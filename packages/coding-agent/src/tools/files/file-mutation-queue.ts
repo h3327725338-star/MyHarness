@@ -55,8 +55,13 @@ async function getMutationQueueKeys(filePath: string): Promise<string[]> {
 /**
  * Take one key's turn. Resolves once the operation may run, and returns the
  * function that hands the key to the next waiter.
+ *
+ * When `signal` aborts while waiting, the waiter releases its registered slot
+ * (so the chain behind it never stalls) and throws `Operation aborted`. This
+ * only applies before the operation starts: once acquired, the running
+ * operation keeps the queue locked until it settles and observes aborts itself.
  */
-async function acquireMutationQueue(key: string): Promise<() => void> {
+async function acquireMutationQueue(key: string, signal?: AbortSignal): Promise<() => void> {
 	const registration = registrationQueue.then(async () => {
 		const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
 
@@ -75,26 +80,72 @@ async function acquireMutationQueue(key: string): Promise<() => void> {
 	);
 
 	const { currentQueue, chainedQueue, releaseNext } = await registration;
-	await currentQueue;
 
-	return () => {
+	const release = () => {
 		releaseNext();
 		if (fileMutationQueues.get(key) === chainedQueue) {
 			fileMutationQueues.delete(key);
 		}
 	};
+
+	if (signal?.aborted) {
+		release();
+		throw new Error("Operation aborted");
+	}
+	if (signal) {
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const onAbort = () => {
+				if (settled) return;
+				settled = true;
+				// Release the slot we registered before throwing, or every
+				// waiter chained behind us would hang forever.
+				release();
+				reject(new Error("Operation aborted"));
+			};
+			currentQueue.then(
+				() => {
+					if (settled) return;
+					settled = true;
+					signal.removeEventListener("abort", onAbort);
+					resolve();
+				},
+				// The queue chain only resolves; a rejection here is unreachable,
+				// but handle it so a wait is never stuck.
+				() => {
+					if (settled) return;
+					settled = true;
+					signal.removeEventListener("abort", onAbort);
+					resolve();
+				},
+			);
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
+		return release;
+	}
+
+	await currentQueue;
+	return release;
 }
 
 /**
  * Serialize file mutation operations targeting the same file.
  * Operations for different files still run in parallel.
+ *
+ * When `signal` is given and aborts while waiting for the queue, the wait
+ * throws `Operation aborted` promptly instead of holding the tool past the
+ * abort grace period. Keys acquired before the abort are released as usual.
  */
-export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+export async function withFileMutationQueue<T>(
+	filePath: string,
+	fn: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
 	const keys = await getMutationQueueKeys(filePath);
 	const releases: Array<() => void> = [];
 	try {
 		for (const key of keys) {
-			releases.push(await acquireMutationQueue(key));
+			releases.push(await acquireMutationQueue(key, signal));
 		}
 		return await fn();
 	} finally {

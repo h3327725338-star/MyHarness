@@ -173,7 +173,7 @@ export function createApplyPatchToolDefinition(
 					content: [{ type: "text", text: summarize(files) }],
 					details: { files, ...(mutation ? { mutationStatus: mutation.mutationStatus } : {}) },
 				};
-			});
+			}, signal);
 		},
 	};
 }
@@ -249,10 +249,14 @@ async function fileIdentity(absolutePath: string): Promise<string> {
 }
 
 /** Take the queues of the given files, one after another in the given order (sorted by the caller). */
-async function withFileQueues<T>(paths: readonly string[], task: () => Promise<T>): Promise<T> {
+async function withFileQueues<T>(
+	paths: readonly string[],
+	task: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
 	const [first, ...rest] = paths;
 	if (first === undefined) return task();
-	return withFileMutationQueue(first, () => withFileQueues(rest, task));
+	return withFileMutationQueue(first, () => withFileQueues(rest, task, signal), signal);
 }
 
 async function computeChange(entry: PlannedOperation, scope: string): Promise<FileChange> {

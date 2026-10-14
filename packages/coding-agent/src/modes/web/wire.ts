@@ -464,6 +464,54 @@ export interface EntriesToWireOptions {
 	detailsCharLimit?: number;
 }
 
+/** Message roles that project to a wire item in messageToWire (anything else projects to nothing). */
+const PROJECTABLE_MESSAGE_ROLES = new Set([
+	"user",
+	"assistant",
+	"toolResult",
+	"bashExecution",
+	"custom",
+	"compactionSummary",
+	"branchSummary",
+	"reloadSummary",
+]);
+
+/** Whether a persisted entry projects to a wire item, without paying the sanitizeDetails cost.
+ *
+ * Mirrors entriesToWire/runChangesToWire exactly (one entry maps to at most one item, in order): callers use it to
+ * slice an entry branch down to the tail window before projecting, so paginated transcript reads only convert the
+ * entries they actually return. Existence never depends on sanitizeDetails (it only truncates details in place).
+ */
+export function entryProjectsToWire(entry: SessionEntry): boolean {
+	switch (entry.type) {
+		case "message":
+			return PROJECTABLE_MESSAGE_ROLES.has(
+				(entry.message as { role?: unknown } | undefined)?.role as string,
+			);
+		case "custom":
+			if (entry.customType === RUN_CHANGES_ENTRY) {
+				const card = entry.data as { files?: unknown } | null | undefined;
+				return (
+					Array.isArray(card?.files) &&
+					(card.files as Array<Record<string, unknown> | null>).some(
+						(file) => !!file && typeof file.path === "string",
+					)
+			);
+			}
+			return true;
+		case "custom_message":
+			return true;
+		case "compaction":
+			return true;
+		case "branch_summary":
+			return Boolean(entry.summary);
+		case "label":
+			return true;
+		default:
+			return false;
+	}
+}
+
 /** Project a persisted session branch into wire items (compaction entries become markers, not replayed history). */
 export function entriesToWire(entries: readonly SessionEntry[], options: EntriesToWireOptions = {}): WireItem[] {
 	const charLimit = options.detailsCharLimit ?? MAX_DETAILS_JSON_CHARS;

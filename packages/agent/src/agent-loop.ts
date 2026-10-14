@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	precheckToolArguments,
 	type ToolCall,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -741,6 +742,46 @@ async function executeToolCallsSequential(
 	};
 }
 
+/**
+ * Maximum number of tool calls validated or executed concurrently in parallel
+ * mode. The cap keeps fan-out batches from saturating IO (every tool can
+ * spawn processes or read files); the approval gate below stays strictly
+ * serial in assistant source order regardless of this cap.
+ */
+const TOOL_PARALLEL_LIMIT = 5;
+
+/** Tiny promise semaphore: at most `limit` tasks run `task` at the same time. */
+function createConcurrencyLimiter(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
+	let active = 0;
+	const waiting: Array<() => void> = [];
+	return async <T>(task: () => Promise<T>): Promise<T> => {
+		if (active >= limit) {
+			await new Promise<void>((resolve) => waiting.push(resolve));
+		} else {
+			active += 1;
+		}
+		try {
+			return await task();
+		} finally {
+			const next = waiting.shift();
+			// Hand the freed slot to the next waiter when there is one; only
+			// release the slot when nobody is waiting.
+			if (next) next();
+			else active -= 1;
+		}
+	};
+}
+
+/** Like `Promise.all(items.map(fn))`, but with at most `limit` tasks in flight. Results keep input order. */
+function mapWithLimit<T, R>(
+	items: readonly T[],
+	limit: number,
+	fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+	const run = createConcurrencyLimiter(limit);
+	return Promise.all(items.map((item, index) => run(() => fn(item, index))));
+}
+
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -749,10 +790,38 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
+	// Phase 1: pure argument validation runs concurrently under the cap. This
+	// half has no hooks and no side effects, so order does not matter here.
+	const validatedCalls = await mapWithLimit(toolCalls, TOOL_PARALLEL_LIMIT, async (toolCall) =>
+		validateToolCallArguments(currentContext, toolCall),
+	);
+
+	// Phase 2: the approval gate (beforeToolCall) runs strictly serially in
+	// assistant source order, exactly as before: approval prompts, extension
+	// tool_call interception, and checkpoint mutations must never interleave.
+	// Batches containing a sequential tool never reach this path at all (see
+	// executeToolCalls), so sequential-tool preparation stays fully serial.
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
-	for (const toolCall of toolCalls) {
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+	for (let index = 0; index < toolCalls.length; index++) {
+		const toolCall = toolCalls[index]!;
+		const validated = validatedCalls[index]!;
+		const preparation =
+			validated.kind === "invalid"
+				? {
+						kind: "immediate",
+						result: validated.result,
+						isError: validated.isError,
+					} satisfies ImmediateToolCallOutcome
+				: await runBeforeToolCallGate(
+						currentContext,
+						assistantMessage,
+						toolCall,
+						validated.tool,
+						validated.args,
+						config,
+						signal,
+					);
 		// See executeToolCallsSequential: start is emitted after pre-tool work so
 		// host-side duration reflects execution, not approval or preparation.
 		await emit({
@@ -794,8 +863,12 @@ async function executeToolCallsParallel(
 		}
 	}
 
+	// Phase 3: execution runs concurrently under the same cap.
+	// `tool_execution_end` still fires in completion order (emitted inside each
+	// task); the collected results below keep assistant source order.
+	const runLimited = createConcurrencyLimiter(TOOL_PARALLEL_LIMIT);
 	const orderedFinalizedCalls = await Promise.all(
-		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
+		finalizedCalls.map((entry) => (typeof entry === "function" ? runLimited(entry) : Promise.resolve(entry))),
 	);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
@@ -854,17 +927,23 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 	};
 }
 
-async function prepareToolCall(
+type ValidatedToolCallArguments =
+	| { kind: "valid"; tool: AgentTool<any>; args: unknown }
+	| { kind: "invalid"; result: AgentToolResult<any>; isError: boolean };
+
+/**
+ * Pure validation half of tool preparation: tool lookup, argument shims, and
+ * schema validation. No hooks and no side effects, so parallel batches can run
+ * it concurrently under the parallel cap.
+ */
+function validateToolCallArguments(
 	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
 	toolCall: AgentToolCall,
-	config: AgentLoopConfig,
-	signal: AbortSignal | undefined,
-): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+): ValidatedToolCallArguments {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
 		return {
-			kind: "immediate",
+			kind: "invalid",
 			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
 			isError: true,
 		};
@@ -872,7 +951,45 @@ async function prepareToolCall(
 
 	try {
 		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-		const validatedArgs = validateToolArguments(tool, preparedToolCall);
+		// P2-10 lightweight precheck (zero-dep, no throw): bad params become an
+		// invalid result so the model re-issues the call. Length-truncated
+		// messages never reach here; runLoop fails that whole batch via
+		// failToolCallsFromTruncatedMessage.
+		const precheckError = precheckToolArguments(tool, preparedToolCall);
+		if (precheckError) {
+			return {
+				kind: "invalid",
+				result: createErrorToolResult(precheckError),
+				isError: true,
+			};
+		}
+		return { kind: "valid", tool, args: validateToolArguments(tool, preparedToolCall) };
+	} catch (error) {
+		return {
+			kind: "invalid",
+			result: createErrorToolResult(error instanceof Error ? error.message : String(error), error),
+			isError: true,
+		};
+	}
+}
+
+/**
+ * Approval half of tool preparation: the beforeToolCall hook plus the abort
+ * checks around it. Must run serially in assistant source order — approval
+ * prompts, extension interception, and checkpoint mutations must never
+ * interleave — so the parallel path calls it after validation, one tool at a
+ * time in order.
+ */
+async function runBeforeToolCallGate(
+	currentContext: AgentContext,
+	assistantMessage: AssistantMessage,
+	toolCall: AgentToolCall,
+	tool: AgentTool<any>,
+	validatedArgs: unknown,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+	try {
 		if (config.beforeToolCall) {
 			const beforeResult = await config.beforeToolCall(
 				{
@@ -918,6 +1035,33 @@ async function prepareToolCall(
 			isError: true,
 		};
 	}
+}
+
+/** Combined preparation used by the sequential path (validation then gate, in order). */
+async function prepareToolCall(
+	currentContext: AgentContext,
+	assistantMessage: AssistantMessage,
+	toolCall: AgentToolCall,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+	const validated = validateToolCallArguments(currentContext, toolCall);
+	if (validated.kind === "invalid") {
+		return {
+			kind: "immediate",
+			result: validated.result,
+			isError: validated.isError,
+		};
+	}
+	return runBeforeToolCallGate(
+		currentContext,
+		assistantMessage,
+		toolCall,
+		validated.tool,
+		validated.args,
+		config,
+		signal,
+	);
 }
 
 const DEFAULT_TOOL_ABORT_GRACE_MS = 20_000;
@@ -983,6 +1127,56 @@ function waitForToolWithAbortGrace<T>(
 	});
 }
 
+/**
+ * Per-tool signal linked to the run's abort signal: it aborts exactly when the
+ * outer run is cancelled, but gives abandon handling a per-tool identity so a
+ * best-effort process-tree kill can target only the abandoned tool instead of
+ * every tool sharing the run signal.
+ */
+function linkToolSignal(outer: AbortSignal | undefined): {
+	signal: AbortSignal | undefined;
+	dispose: () => void;
+} {
+	if (!outer) return { signal: undefined, dispose: () => undefined };
+	const controller = new AbortController();
+	if (outer.aborted) {
+		controller.abort(outer.reason);
+		return { signal: controller.signal, dispose: () => undefined };
+	}
+	const onAbort = () => controller.abort(outer.reason);
+	outer.addEventListener("abort", onAbort, { once: true });
+	return { signal: controller.signal, dispose: () => outer.removeEventListener("abort", onAbort) };
+}
+
+/**
+ * Best-effort abandon cleanup: invoke the host's `onToolAbandoned` hook (used
+ * to kill the abandoned tool's process tree) without ever disturbing the
+ * timeout semantics — throws and rejections are swallowed, and the hook is
+ * never awaited, so the TOOL_ABORT_TIMEOUT result below is unaffected.
+ */
+function notifyToolAbandoned(
+	config: AgentLoopConfig,
+	prepared: PreparedToolCall,
+	toolSignal: AbortSignal | undefined,
+	graceMs: number,
+): void {
+	const hook = config.onToolAbandoned;
+	if (!hook) return;
+	try {
+		const outcome = hook({
+			toolCall: prepared.toolCall,
+			toolName: prepared.toolCall.name,
+			toolSignal,
+			graceMs,
+		});
+		if (outcome && typeof (outcome as Promise<void>).catch === "function") {
+			(outcome as Promise<void>).catch(() => undefined);
+		}
+	} catch {
+		// Abandon cleanup must never break result reporting.
+	}
+}
+
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	config: AgentLoopConfig,
@@ -992,9 +1186,10 @@ async function executePreparedToolCall(
 	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
 	const graceMs = resolveToolAbortGraceMs(config.toolAbortGraceMs);
+	const linked = linkToolSignal(signal);
 
 	try {
-		const execution = prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, (partialResult) => {
+		const execution = prepared.tool.execute(prepared.toolCall.id, prepared.args as never, linked.signal, (partialResult) => {
 			if (!acceptingUpdates) return;
 			updateEvents.push(
 				Promise.resolve(
@@ -1011,9 +1206,10 @@ async function executePreparedToolCall(
 		// Without a signal or with an infinite grace period there is nothing to race:
 		// keep the plain await so behavior matches the pre-grace implementation.
 		const result =
-			signal && graceMs !== Infinity
-				? await waitForToolWithAbortGrace(execution, signal, graceMs, () => {
+			linked.signal && graceMs !== Infinity
+				? await waitForToolWithAbortGrace(execution, linked.signal, graceMs, () => {
 						acceptingUpdates = false;
+						notifyToolAbandoned(config, prepared, linked.signal, graceMs);
 					})
 				: await execution;
 		acceptingUpdates = false;
@@ -1037,6 +1233,7 @@ async function executePreparedToolCall(
 		};
 	} finally {
 		acceptingUpdates = false;
+		linked.dispose();
 	}
 }
 

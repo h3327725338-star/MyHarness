@@ -5,6 +5,7 @@ import { getModel } from "@myharness/ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/runtime/sdk.ts";
+import { MISSING_TOOL_SNIPPET_PLACEHOLDER } from "../src/system-prompts/composer/index.ts";
 import { DefaultResourceLoader } from "../src/application/resource-loader.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
@@ -188,7 +189,7 @@ describe("AgentSession dynamic tool registration", () => {
 		session.dispose();
 	});
 
-	it("keeps custom tools active but omits them from available tools when promptSnippet is not provided", async () => {
+	it("keeps custom tools active with a stable placeholder when promptSnippet is not provided", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();
 
@@ -229,7 +230,10 @@ describe("AgentSession dynamic tool registration", () => {
 
 		expect(session.getAllTools().map((tool) => tool.name)).toContain("hidden_tool");
 		expect(session.getActiveToolNames()).toContain("hidden_tool");
-		expect(session.systemPrompt).not.toContain("hidden_tool");
+		// P0-1 prefix stability: a tool without a snippet keeps its entry with a stable
+		// placeholder instead of being dropped, so the system prefix never reshapes.
+		// The tool description itself still never leaks into the prompt.
+		expect(session.systemPrompt).toContain(`- hidden_tool: ${MISSING_TOOL_SNIPPET_PLACEHOLDER}`);
 		expect(session.systemPrompt).not.toContain("Description should not appear in available tools");
 
 		session.dispose();

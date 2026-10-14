@@ -8,7 +8,10 @@ export const RUN_MODES = {
 	interrupt: { label: N_("Interrupt"), long: N_("Interrupt and send"), hint: N_("Stops the current run right away, then sends this message.") },
 };
 
-export const DEFAULT_RUN_MODE = "steer";
+export const DEFAULT_RUN_MODE = "followUp";
+
+/** Queued-input debounce: rapid Enter presses coalesce into one queued message (P2-11, reuses debounce in util.js). */
+export const COMPOSER_QUEUE_DEBOUNCE_MS = 300;
 
 /** A stored choice that is not one of the three behaviours falls back to the default. */
 export const runModeOf = (value) => (Object.hasOwn(RUN_MODES, value) ? value : DEFAULT_RUN_MODE);

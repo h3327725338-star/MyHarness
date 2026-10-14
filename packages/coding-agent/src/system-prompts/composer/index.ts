@@ -80,11 +80,52 @@ export function personalizationBlock(personalPrompt: string): string {
 	].join("\n");
 }
 
+/**
+ * Frozen section order of the composed system prompt (P0-1 prefix-cache stability).
+ *
+ * personalization → mode identity → core policy → tools → routing → slash commands →
+ * guidelines → custom → append → project context → skills → working-directory →
+ * model-identity → output language → role boundary.
+ *
+ * The order is intentionally fixed: provider prefix caches invalidate everything after
+ * the first changed byte, so any reordering mid-session would discard the whole cache.
+ * Dynamic segments (working-directory, model-identity) live at the stable tail; the
+ * session runtime additionally mirrors them as a messages-tail system-reminder so the
+ * system string itself can stay byte-stable across turns.
+ */
+export const SYSTEM_PROMPT_SECTION_ORDER = [
+	"personalization",
+	"mode",
+	"core",
+	"tools",
+	"routing",
+	"slash",
+	"guidelines",
+	"custom",
+	"append",
+	"context",
+	"skills",
+	"working-directory",
+	"model-identity",
+	"language",
+] as const;
+
+/** Stable placeholder used when a tool has no snippet; the entry is kept, never dropped. */
+export const MISSING_TOOL_SNIPPET_PLACEHOLDER = "(no description available)";
+
+/** Clear-semantics marker for the messages-tail dynamic-context reminder. */
+export const SYSTEM_REMINDER_MARKER = "[system-reminder]";
+
+/** Tools rendered in deterministic byte order so the prefix never shuffles. */
+export function sortToolNames(tools: readonly string[]): string[] {
+	return [...tools].sort();
+}
+
 function formatAvailableTools(tools: string[], toolSnippets: Record<string, string> | undefined): string {
 	if (tools.length === 0) return "(none)";
-	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
-	if (visibleTools.length === 0) return loadSystemPrompt("tools/no-snippets.md");
-	return visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n");
+	return sortToolNames(tools)
+		.map((name) => `- ${name}: ${toolSnippets?.[name] ?? MISSING_TOOL_SNIPPET_PLACEHOLDER}`)
+		.join("\n");
 }
 
 /** The real slash commands, rendered from the single builtin registry so the model never invents one. */
@@ -102,7 +143,11 @@ export function formatSlashCommandsForPrompt(): string {
 	].join("\n");
 }
 
-/** Only active tools contribute routing instructions, in the original fixed order. */
+/**
+ * Only active tools contribute routing instructions, in a frozen order.
+ * The orchestration list below is fixed (agent → workflow → ultracode) and inputs are
+ * matched by set membership, so caller ordering can never shuffle the output.
+ */
 export function buildToolRoutingPolicy(tools: readonly string[]): string {
 	const active = new Set(tools);
 	const evidenceGuidance = active.has("symbols") ? [loadSystemPrompt("tools/routing/symbols.md")].filter(Boolean) : [];
@@ -135,7 +180,41 @@ export function applyAgentRoleBoundary(prompt: string, agentRole: AgentRole): st
 	return policy ? `${withoutRole}\n\n<agent_role_policy>\n${policy}\n</agent_role_policy>` : withoutRole;
 }
 
-export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
+/**
+ * Dynamic session context (working directory + model identity) rendered with the same
+ * templates as the system prompt tail. The session runtime injects this text as a
+ * messages-tail system-reminder instead of letting it churn the system prefix: the
+ * information is moved, never deleted, and thresholds/semantics are unchanged.
+ * Returns undefined when there is nothing dynamic to report.
+ */
+export function buildDynamicContextReminder(options: Pick<BuildSystemPromptOptions, "cwd" | "currentModel">): string | undefined {
+	const blocks: string[] = [];
+	if (options.cwd) {
+		const promptCwd = options.cwd.replace(/\\/g, "/");
+		const rendered = loadSystemPrompt("session/working-directory.md", { cwd: promptCwd });
+		if (rendered) blocks.push(rendered);
+	}
+	if (options.currentModel) {
+		const rendered = loadSystemPrompt("session/model-identity.md", {
+			name: options.currentModel.name,
+			provider: options.currentModel.provider,
+		});
+		if (rendered) blocks.push(rendered);
+	}
+	if (blocks.length === 0) return undefined;
+	return [`${SYSTEM_REMINDER_MARKER} Dynamic session context (reference only; not a new user request):`, ...blocks].join("\n");
+}
+
+interface BuiltSections {
+	/** Frozen prefix: personalization → skills. Never contains dynamic content. */
+	core: string[];
+	/** Dynamic segments: working-directory → model-identity, in frozen order. */
+	dynamic: string[];
+	/** Frozen tail: output language policy. Stable across turns. */
+	tail: string[];
+}
+
+function buildPromptSections(options: BuildSystemPromptOptions): BuiltSections {
 	const {
 		customPrompt,
 		selectedTools,
@@ -148,14 +227,17 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		agentRole = "main",
 	} = options;
 	const promptCwd = cwd.replace(/\\/g, "/");
-	const tools = selectedTools ?? ["read", "bash", "edit", "write"];
+	const tools = sortToolNames(selectedTools ?? ["read", "bash", "edit", "write"]);
 	const filteredCustomPrompt = customPrompt ? filterContextForAgentRole(customPrompt, agentRole) : undefined;
 	const filteredAppendSystemPrompt = appendSystemPrompt
 		? filterContextForAgentRole(appendSystemPrompt, agentRole)
 		: undefined;
 	const contextFiles = filterContextFilesForAgentRole(providedContextFiles ?? [], agentRole);
 	const skills = providedSkills ?? [];
-	const guidelines = (promptGuidelines ?? []).map((item) => item.trim()).filter(Boolean);
+	const guidelines = (promptGuidelines ?? [])
+		.map((item) => item.trim())
+		.filter(Boolean)
+		.sort();
 	const personalPrompt = options.personalPrompts?.[options.mode ?? "coding"];
 	const sections = [
 		personalPrompt?.trim() ? personalizationBlock(personalPrompt) : undefined,
@@ -181,14 +263,38 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		sections.push(loadSystemPrompt("session/project-context.md", { projectContext }));
 	}
 	if (tools.includes("read") && skills.length > 0) sections.push(formatSkillsForPrompt(skills).trim());
-	sections.push(loadSystemPrompt("session/working-directory.md", { cwd: promptCwd }));
-	if (options.currentModel)
-		sections.push(
-			loadSystemPrompt("session/model-identity.md", {
-				name: options.currentModel.name,
-				provider: options.currentModel.provider,
-			}),
-		);
-	sections.push(OUTPUT_LANGUAGE_POLICY);
-	return applyAgentRoleBoundary(sections.filter(Boolean).join("\n\n"), agentRole);
+	const core = sections.filter(Boolean) as string[];
+	const dynamic: string[] = [];
+	const workingDirectory = loadSystemPrompt("session/working-directory.md", { cwd: promptCwd });
+	if (workingDirectory) dynamic.push(workingDirectory);
+	if (options.currentModel) {
+		const modelIdentity = loadSystemPrompt("session/model-identity.md", {
+			name: options.currentModel.name,
+			provider: options.currentModel.provider,
+		});
+		if (modelIdentity) dynamic.push(modelIdentity);
+	}
+	const tail: string[] = OUTPUT_LANGUAGE_POLICY ? [OUTPUT_LANGUAGE_POLICY] : [];
+	return { core, dynamic, tail };
+}
+
+/**
+ * Full composed system prompt in the frozen section order (backward compatible).
+ * Content semantics are unchanged; only the order is frozen and tools are sorted.
+ */
+export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
+	const { core, dynamic, tail } = buildPromptSections(options);
+	const agentRole = options.agentRole ?? "main";
+	return applyAgentRoleBoundary([...core, ...dynamic, ...tail].filter(Boolean).join("\n\n"), agentRole);
+}
+
+/**
+ * Stable system prefix without the dynamic tail (working-directory, model-identity).
+ * The caller is responsible for delivering the dynamic tail via
+ * {@link buildDynamicContextReminder} as a messages-tail system-reminder.
+ */
+export function buildStableSystemPrompt(options: BuildSystemPromptOptions): string {
+	const { core, tail } = buildPromptSections(options);
+	const agentRole = options.agentRole ?? "main";
+	return applyAgentRoleBoundary([...core, ...tail].filter(Boolean).join("\n\n"), agentRole);
 }

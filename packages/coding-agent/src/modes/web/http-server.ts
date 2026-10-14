@@ -14,6 +14,31 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 const MAX_BODY_BYTES = 96 * 1024 * 1024;
 const SSE_KEEPALIVE_MS = 15_000;
 
+/**
+ * Streaming progress a slow tab may skip: the next frame already carries newer numbers/text, so only the latest
+ * one is kept while the socket drains. Everything else is final state (a finished message, tool call, entry or
+ * status) and is never dropped, only deferred until the socket drains.
+ */
+const DROPPABLE_SSE_EVENTS = new Set([
+	"message_update",
+	"tool_update",
+	"usage",
+	"generation_speed",
+	"cache_hit",
+	// A slots snapshot is state: the latest one supersedes any earlier pending one.
+	"slots",
+]);
+
+interface SseEntry {
+	res: ServerResponse;
+	/** The kernel buffer is full: later frames wait here until `drain` instead of piling uncapped writes. */
+	backedUp: boolean;
+	/** Latest droppable frame while backed up (intermediate frames are overwritten, never queued). */
+	pendingDrop: string | null;
+	/** Final frames while backed up (appended, always delivered on drain). */
+	pendingFinal: string;
+}
+
 const CONTENT_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".js": "text/javascript; charset=utf-8",
@@ -100,7 +125,7 @@ export class WebHttpServer {
 	private server: Server | undefined;
 	private readonly routes: Route[] = [];
 	private readonly mounts: StaticMount[] = [];
-	private readonly sseClients = new Map<number, ServerResponse>();
+	private readonly sseClients = new Map<number, SseEntry>();
 	private nextClientId = 1;
 	private eventSeq = 0;
 	private keepAlive: ReturnType<typeof setInterval> | undefined;
@@ -136,17 +161,66 @@ export class WebHttpServer {
 	/** Whether any browser page has connected since the server started (it may already be gone again). */
 	hadClient = false;
 
-	/** Broadcast an event to every connected browser tab. */
+	/** Broadcast an event to every connected browser tab.
+	 *
+	 * Slow-tab policy: when a socket's buffer is full (`write` returns false or throws), intermediate progress
+	 * (streamed text, tool partials, usage/speed/cache numbers) keeps only the newest pending frame while final
+	 * events are appended and always delivered on `drain`. Nothing is queued without bound; keepalive skips backed-up
+	 * sockets so it adds no pressure.
+	 */
 	broadcast(event: string, data: unknown): void {
 		if (this.sseClients.size === 0) return;
 		const frame = this.frame(event, data);
-		for (const res of this.sseClients.values()) {
-			try {
-				res.write(frame);
-			} catch {
-				// A dead connection is removed by its close handler.
-			}
+		const droppable = DROPPABLE_SSE_EVENTS.has(event);
+		for (const entry of this.sseClients.values()) this.deliver(entry, frame, droppable);
+	}
+
+	/**
+	 * Write several events in one socket write per tab (one JSON.stringify per event, one write per tab). Frames keep
+	 * their order and ids; a fully droppable batch behaves as one droppable unit under backpressure (only the newest
+	 * batch is kept), while a batch containing a final frame falls back to per-frame handling so finals are kept.
+	 */
+	broadcastBatch(events: Array<{ event: string; data: unknown }>): void {
+		if (events.length === 0 || this.sseClients.size === 0) return;
+		const framed = events.map(({ event, data }) => ({
+			frame: this.frame(event, data),
+			droppable: DROPPABLE_SSE_EVENTS.has(event),
+		}));
+		if (framed.every((item) => item.droppable)) {
+			const combined = framed.map((item) => item.frame).join("");
+			for (const entry of this.sseClients.values()) this.deliver(entry, combined, true);
+			return;
 		}
+		for (const entry of this.sseClients.values())
+			for (const item of framed) this.deliver(entry, item.frame, item.droppable);
+	}
+
+	private deliver(entry: SseEntry, frame: string, droppable: boolean): void {
+		if (entry.backedUp) {
+			if (droppable) entry.pendingDrop = frame;
+			else entry.pendingFinal += frame;
+			return;
+		}
+		try {
+			if (entry.res.write(frame) === false) entry.backedUp = true;
+		} catch {
+			// The socket died mid-write: hold the frame for `drain`/close instead of losing a final event.
+			// A dead connection is removed by its close handler.
+			entry.backedUp = true;
+			if (droppable) entry.pendingDrop = frame;
+			else entry.pendingFinal += frame;
+		}
+	}
+
+	private flushBacklog(id: number): void {
+		const entry = this.sseClients.get(id);
+		if (!entry?.backedUp) return;
+		entry.backedUp = false;
+		const pending = entry.pendingFinal + (entry.pendingDrop ?? "");
+		entry.pendingFinal = "";
+		entry.pendingDrop = null;
+		// Promoted to final: a still-full socket re-queues it instead of dropping it.
+		if (pending) this.deliver(entry, pending, false);
 	}
 
 	private frame(event: string, data: unknown): string {
@@ -174,9 +248,10 @@ export class WebHttpServer {
 		const address = server.address() as AddressInfo;
 		this.allowedHosts = new Set([`127.0.0.1:${address.port}`, `localhost:${address.port}`, `[::1]:${address.port}`]);
 		this.keepAlive = setInterval(() => {
-			for (const res of this.sseClients.values()) {
+			for (const entry of this.sseClients.values()) {
+				if (entry.backedUp) continue;
 				try {
-					res.write(": keepalive\n\n");
+					if (entry.res.write(": keepalive\n\n") === false) entry.backedUp = true;
 				} catch {
 					// ignored, close handler cleans up
 				}
@@ -188,9 +263,9 @@ export class WebHttpServer {
 
 	async close(): Promise<void> {
 		if (this.keepAlive) clearInterval(this.keepAlive);
-		for (const res of this.sseClients.values()) {
+		for (const entry of this.sseClients.values()) {
 			try {
-				res.end();
+				entry.res.end();
 			} catch {
 				// ignored
 			}
@@ -269,15 +344,22 @@ export class WebHttpServer {
 		});
 		res.write("retry: 1500\n\n");
 		const id = this.nextClientId++;
-		this.sseClients.set(id, res);
+		this.sseClients.set(id, { res, backedUp: false, pendingDrop: null, pendingFinal: "" });
 		this.hadClient = true;
 		const client: SseClient = {
 			id,
 			send: (event, data) => {
-				if (!res.destroyed && !res.writableEnded) res.write(this.frame(event, data));
+				if (!res.destroyed && !res.writableEnded) {
+					try {
+						res.write(this.frame(event, data));
+					} catch {
+						// ignored, close handler cleans up
+					}
+				}
 			},
 			close: () => res.end(),
 		};
+		res.on("drain", () => this.flushBacklog(id));
 		// IncomingMessage.close means the GET request completed, not that the SSE response disconnected.
 		res.once("close", () => {
 			if (!this.sseClients.delete(id)) return;

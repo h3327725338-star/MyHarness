@@ -107,7 +107,11 @@ describe("createAgentSession session manager defaults", () => {
 		});
 
 		expect(session.sessionManager).toBe(sessionManager);
-		expect(session.systemPrompt).toContain(`Current working directory: ${sessionCwd.replace(/\\/g, "/")}`);
+		// P0-1 prefix stability: the system prompt is the stable prefix; the working
+		// directory travels as a messages-tail system-reminder (moved, not deleted).
+		expect(session.getDynamicContextReminder()).toContain(
+			`Current working directory: ${sessionCwd.replace(/\\/g, "/")}`,
+		);
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
 		expect(bashTool).toBeTruthy();

@@ -946,11 +946,17 @@ export class ModelRuntime implements Models {
 			resolution.env || providerOptions.env
 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
 				: undefined;
+		// P2-11: the caller-owned AbortSignal (agent loop runAbortController) must reach
+		// the provider fetch untouched. It arrives inside providerOptions via the spread
+		// below; keep the explicit field so a future refactor cannot strip it while
+		// touching headers/env/auth. Aborting the fetch lets the SDK release its
+		// timer + SSE reader; the SDK then reports stopReason "aborted" (not "error").
 		return {
 			provider,
 			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
 			options: {
 				...providerOptions,
+				signal: providerOptions.signal,
 				apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
 				headers,
 				env,

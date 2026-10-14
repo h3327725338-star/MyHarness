@@ -8,6 +8,7 @@ import {
 	estimateMessageTokens,
 	estimateContextTokens as estimateProviderContextTokens,
 	estimateTextTokens,
+	type Message,
 } from "@myharness/ai";
 import { convertToLlm } from "../agent/runtime/messages.ts";
 import type { CompactionSettings } from "./compact/index.ts";
@@ -123,7 +124,14 @@ export type ContextBudgetResult =
  *   boundary is stale (it described the old, larger projection) and must not
  *   anchor the current context.
  */
-function findValidUsageAnchor(
+/**
+ * Find the last provider usage anchor that may describe the current Active
+ * Context. Exported so budget-check call sites can decide up front whether a
+ * full provider-shaped conversion is needed at all: when an anchor exists,
+ * only the small trailing slice is converted (incremental path); otherwise
+ * the caller converts once and shares the array via `llmMessages`.
+ */
+export function findValidUsageAnchor(
 	messages: readonly AgentMessage[],
 	latestCompactionTimestamp: number | undefined,
 ): { index: number; tokens: number } | undefined {
@@ -152,14 +160,24 @@ function findValidUsageAnchor(
  * Never silently returns 0 for a non-empty context: the no-anchor fallback is
  * an explicit conservative estimate.
  */
+export interface CanonicalEstimateOptions {
+	systemPrompt?: string;
+	tools?: readonly AgentTool[];
+	/** Only usage anchors strictly newer than this timestamp (ms) are valid. */
+	latestCompactionTimestamp?: number;
+	/**
+	 * Already provider-shaped messages (the `convertToLlm` output for
+	 * `messages`). When supplied, the no-anchor full estimate reuses them
+	 * instead of converting a second time: the caller converts once and
+	 * shares the array by parameter. The anchor path ignores this and still
+	 * converts only the small trailing slice.
+	 */
+	llmMessages?: readonly Message[];
+}
+
 export function estimateActiveContextTokensCanonical(
 	messages: readonly AgentMessage[],
-	options: {
-		systemPrompt?: string;
-		tools?: readonly AgentTool[];
-		/** Only usage anchors strictly newer than this timestamp (ms) are valid. */
-		latestCompactionTimestamp?: number;
-	} = {},
+	options: CanonicalEstimateOptions = {},
 ): ActiveContextEstimate {
 	const anchor = findValidUsageAnchor(messages, options.latestCompactionTimestamp);
 
@@ -185,20 +203,21 @@ export function estimateActiveContextTokensCanonical(
 	}
 
 	// No valid anchor: full conservative estimate of the next request.
-	// Strip assistant usage so neither this estimator nor the provider-shaped
-	// estimator below anchors on stale usage (e.g. a pre-compaction projection).
+	// `ignoreUsageAnchor` skips stale usage (e.g. a pre-compaction projection)
+	// without copying every assistant message, so the shared `llmMessages`
+	// keep their identity and hit the per-message token cache. Token math is
+	// unchanged (still a full sum plus prefix, still Math.ceil per message).
 	let fullTokens = 0;
 	try {
-		const llmMessages = convertToLlm([...messages]).map((message) => {
-			if (message.role !== "assistant") return message;
-			const { usage: _usage, ...withoutUsage } = message;
-			return withoutUsage as typeof message;
-		});
-		const estimate = estimateProviderContextTokens({
-			systemPrompt: options.systemPrompt,
-			messages: llmMessages,
-			tools: options.tools as Context["tools"],
-		});
+		const llmMessages = options.llmMessages ?? convertToLlm([...messages]);
+		const estimate = estimateProviderContextTokens(
+			{
+				systemPrompt: options.systemPrompt,
+				messages: llmMessages as Context["messages"],
+				tools: options.tools as Context["tools"],
+			},
+			{ ignoreUsageAnchor: true },
+		);
 		fullTokens = estimate.tokens;
 	} catch {
 		// Unusual message shapes: fall back to the raw chars/4 estimator plus the

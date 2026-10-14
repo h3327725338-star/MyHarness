@@ -65,7 +65,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 
 唯一文本入口：`packages/ai/src/api/system-prompt-loader.ts` 的 `loadSystemPrompt` / `loadSystemPromptLines`。编程会话的组合入口是 `packages/coding-agent/src/system-prompts/composer/index.ts`，本地 loader 边界是 `packages/coding-agent/src/system-prompts/loader/index.ts`；各独立任务只加载自己的文件，不遍历目录或按字母序自动注入。
 
-主聊天顺序为：当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → 当前工具规则 → General 个性化内容（有配置时）→ 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 工作目录 → 当前模型 → 回复语言 → 角色边界。
+主聊天稳定顺序为：当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → 当前工具规则 → General 个性化内容（有配置时）→ 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 回复语言 → 角色边界（顺序冻结；工具按名确定性排序，缺 snippet 时占位不断条目）。工作目录与当前模型不再进 system，改走 messages 提醒：插在最后一条 user 之前、时间戳为 0 的 transient user 消息，不写盘、不占缓存前缀，内容不变；压缩 fork 原样复用父 system/tools 引用。
 
 扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/agent/runtime/agent-session.ts`、`modes/web/` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
 
@@ -74,7 +74,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 - 文件不存在、空白、不可读、非法 UTF-8、控制字符或缺少模板变量：向 stderr 输出包含文件路径和原因的 `[system-prompts] warning: skipping ...`，返回空文本并继续。没有旧硬编码后备文本。
 - 源码和仓库内 dist 运行时，固定读取 **MyHarness 安装仓库根目录**，不跟随用户项目 cwd。打包时将可编辑副本放入 ai 的 `dist/system-prompts`；Bun 二进制使用可执行文件旁的 `system-prompts`。
 - 可用 `MYHARNESS_SYSTEM_PROMPT_DIR` 指定完整替代目录（建议绝对路径）。替代目录内缺失文件同样 skip，不偷偷回退。
-- 模块常量在进程加载时读取，部分工具及动态模板在构建时读取；重启是使所有编辑一致生效的方式。
+- 模块常量在进程加载时读取，部分工具及动态模板在构建时读取；`loadSystemPrompt` 另有内存缓存（key=目录+文件+排序后变量 JSON，上限 500 条 FIFO，只缓存默认内置目录的非空结果，`AGENTS.md`/`SYSTEM.md` 等项目文件直读不缓存）；`DefaultResourceLoader.reload()` 会清缓存，磁盘修改需重载/重启才刷新。
 - 文件系统不可用的运行时会 warning + skip；浏览器打包兼容不等于浏览器能够读取本地文件。
 
 `SYSTEM.md` 和 `APPEND_SYSTEM.md` 不属于本目录的静态资源清单。当前 Coding

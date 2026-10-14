@@ -48,6 +48,7 @@ import type { WebHttpServer } from "./http-server.ts";
 import { RequestCacheMeter } from "./request-cache.ts";
 import {
 	entriesToWire,
+	entryProjectsToWire,
 	messageToWire,
 	RUN_CHANGES_ENTRY,
 	runChangesToWire,
@@ -114,6 +115,59 @@ export function paginateTranscriptItems(
 	}
 	const page = items.slice(start, end);
 	return { items: page, hasMore: start > 0, nextCursor: start > 0 ? (page[0]?.id ?? null) : null };
+}
+
+/** Whether any projectable entry exists below `start` (cheap id/type scan, no wire conversion). */
+function hasProjectableBefore(entries: readonly SessionEntry[], start: number): boolean {
+	for (let i = start - 1; i >= 0; i -= 1) {
+		if (entryProjectsToWire(entries[i] as SessionEntry)) return true;
+	}
+	return false;
+}
+
+/**
+ * Paginated transcript with the `limit` pushed below the wire conversion (P1-8).
+ *
+ * Same contract as paginateTranscriptItems over `entriesToWire(entries)` — the same `before` cursor tolerance
+ * (unknown ids, including ids that project to nothing, keep the whole range) and the same forward alignment to
+ * the oldest `user` item — but only the tail window is converted: `before` first slices entries by id, then at
+ * most `limit` projectable entries are walked back and converted. Full-history wire work happens only when no
+ * `limit` bounds the window (a bare `before` page or an unparsable `limit`).
+ */
+export function paginateEntriesToWire(
+	entries: readonly SessionEntry[],
+	limitRaw?: string,
+	beforeRaw?: string,
+): TranscriptPage {
+	let end = entries.length;
+	if (beforeRaw !== undefined) {
+		const idx = entries.findIndex((entry) => entry.id === beforeRaw);
+		// A cursor that points at an entry with no wire form was never handed out as a cursor: tolerate it like
+		// the wire-level version does (which cannot find it among wire items at all).
+		if (idx >= 0 && entryProjectsToWire(entries[idx] as SessionEntry)) end = idx;
+	}
+	const limit = limitRaw !== undefined ? parseTranscriptLimit(limitRaw) : undefined;
+	if (limit === undefined) {
+		const items = entriesToWire(entries.slice(0, end));
+		return { items, hasMore: false, nextCursor: null };
+	}
+	// Walk back over entries (cheap projection check, no conversion) until the tail holds `limit` wire items.
+	let start = end;
+	let need = limit;
+	while (start > 0 && need > 0) {
+		start -= 1;
+		if (entryProjectsToWire(entries[start] as SessionEntry)) need -= 1;
+	}
+	const tail = entriesToWire(entries.slice(start, end));
+	// The predicate mirrors entriesToWire exactly, so the window holds at most `limit` items; trim defensively.
+	const window = tail.length > limit ? tail.slice(tail.length - limit) : tail;
+	// The raw window was cut iff more than `limit` wire items precede it.
+	const cut = window.length === limit && start > 0 && hasProjectableBefore(entries, start);
+	if (!cut) return { items: window, hasMore: false, nextCursor: null };
+	// Same forward user-alignment as paginateTranscriptItems; never empties the page.
+	const firstUser = window.findIndex((item) => item.kind === "user");
+	const page = firstUser > 0 ? window.slice(firstUser) : window;
+	return { items: page, hasMore: true, nextCursor: page[0]?.id ?? null };
 }
 
 export type TranscriptResponse = {
@@ -237,6 +291,9 @@ export class WebHost {
 	private liveAssistantId: string | undefined;
 	private assistantTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingAssistant: AgentMessage | undefined;
+	/** Usage/`usage` push deferred while a reply streams so it rides the next 50ms assistant wave. */
+	private usageDirty = false;
+	private usageTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Output tokens per second of the model, from real streamed output (see generation-speed.ts). */
 	private speed = new GenerationSpeedMeter();
 	private speedChanged = false;
@@ -567,6 +624,9 @@ export class WebHost {
 		this.assistantTimer = undefined;
 		this.pendingAssistant = undefined;
 		this.liveAssistantId = undefined;
+		if (this.usageTimer) clearTimeout(this.usageTimer);
+		this.usageTimer = undefined;
+		this.usageDirty = false;
 		// What the meters showed belonged to the chat that was on screen; the next request measures from scratch.
 		this.speed = new GenerationSpeedMeter();
 		this.speedChanged = false;
@@ -730,7 +790,7 @@ export class WebHost {
 			case "agent_start":
 				this.onAgentStart();
 				this.broadcast("agent_start", { runId: this.currentRunId });
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			case "agent_end":
 				this.lastAgentEnd = this.summariseAgentEnd(event.messages, event.willRetry);
@@ -739,7 +799,7 @@ export class WebHost {
 				if (this.speed.settle()) this.broadcast("generation_speed", { speed: this.speed.current });
 				if (this.cache.settle()) this.broadcast("cache_hit", { cache: this.cache.current });
 				this.broadcast("agent_end", { willRetry: event.willRetry });
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			case "agent_settled":
 				this.broadcast("agent_settled", {});
@@ -793,7 +853,7 @@ export class WebHost {
 					if (item) this.broadcast("message_end", { item });
 				}
 				// Every finished message changes what the context meter and the Session panel show.
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			}
 			case "tool_execution_start":
@@ -822,7 +882,7 @@ export class WebHost {
 					details: sanitizeDetails(event.result?.details),
 					ts: Date.now(),
 				});
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			}
 			case "queue_update":
@@ -839,7 +899,7 @@ export class WebHost {
 				return;
 			case "session_info_changed":
 				this.broadcast("session_info", { name: event.name });
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			case "thinking_level_changed":
 				this.broadcast("thinking_level", { level: event.level });
@@ -856,7 +916,7 @@ export class WebHost {
 					tokensAfter: event.result?.estimatedTokensAfter,
 					budget: sanitizeDetails(event.budget),
 				});
-				this.broadcastUsage();
+				this.scheduleUsage();
 				return;
 			case "auto_retry_start":
 				this.broadcast("auto_retry_start", {
@@ -965,23 +1025,85 @@ export class WebHost {
 		}
 		const message = this.pendingAssistant;
 		this.pendingAssistant = undefined;
-		if (!message || !this.liveAssistantId) return;
+		if (!message || !this.liveAssistantId) {
+			// No live text left, but a deferred usage push may still wait for its wave.
+			if (this.usageDirty) this.flushUsage();
+			return;
+		}
+		// One 50ms wave: streamed text, the usage/context meter and the throttled speed/cache numbers share a
+		// single transport write (METER 150ms throttle kept). Event semantics are unchanged: same events, same
+		// payloads, only their socket writes are coalesced.
+		const batch: Array<{ event: string; data: unknown }> = [];
 		const item = messageToWire(message);
-		if (item) this.broadcast("message_update", { liveId: this.liveAssistantId, item });
+		if (item) batch.push({ event: "message_update", data: { liveId: this.liveAssistantId, item } });
+		if (this.usageTimer) {
+			clearTimeout(this.usageTimer);
+			this.usageTimer = undefined;
+		}
+		this.usageDirty = false;
+		try {
+			batch.push({ event: "usage", data: this.usage() });
+		} catch {
+			// The numbers are best effort; the next message pushes them again.
+		}
 		// A change that has to wait stays flagged and goes out with the next update (or the final value at the end).
-		this.broadcastUsage();
 		const now = Date.now();
 		if (now - this.lastMeterBroadcastAt >= METER_BROADCAST_INTERVAL_MS) {
 			if (this.speedChanged || this.cacheChanged) this.lastMeterBroadcastAt = now;
 			if (this.speedChanged) {
 				this.speedChanged = false;
-				this.broadcast("generation_speed", { speed: this.speed.current });
+				batch.push({ event: "generation_speed", data: { speed: this.speed.current } });
 			}
 			if (this.cacheChanged) {
 				this.cacheChanged = false;
-				this.broadcast("cache_hit", { cache: this.cache.current });
+				batch.push({ event: "cache_hit", data: { cache: this.cache.current } });
 			}
 		}
+		this.emitBatch(batch);
+	}
+
+	/**
+	 * Queue a `usage` push. While a reply streams it rides the next 50ms assistant wave (a ≤50ms delay the UI
+	 * tolerates) instead of taking its own socket write; otherwise it goes out immediately, exactly as before.
+	 */
+	private scheduleUsage(): void {
+		if (this.liveAssistantId === undefined && this.pendingAssistant === undefined) {
+			this.broadcastUsage();
+			return;
+		}
+		this.usageDirty = true;
+		// The pending assistant flush already carries it; only arm a fallback wave when none is scheduled.
+		if (!this.assistantTimer && !this.usageTimer) {
+			this.usageTimer = setTimeout(() => {
+				this.usageTimer = undefined;
+				this.flushUsage();
+			}, ASSISTANT_UPDATE_INTERVAL_MS);
+		}
+	}
+
+	private flushUsage(): void {
+		if (this.usageTimer) {
+			clearTimeout(this.usageTimer);
+			this.usageTimer = undefined;
+		}
+		if (!this.usageDirty) return;
+		this.usageDirty = false;
+		this.broadcastUsage();
+	}
+
+	/** Send several events in one transport write, with the same per-event broadcast side effects. */
+	private emitBatch(events: Array<{ event: string; data: unknown }>): void {
+		if (events.length === 0) return;
+		const framed: Array<{ event: string; data: unknown }> = [];
+		for (const { event, data } of events) {
+			if (ACTIVITY_EVENTS.has(event)) this.lastActivityAt = Date.now();
+			framed.push({
+				event,
+				data: data !== null && typeof data === "object" ? { ...(data as object), slot: this.slotId } : data,
+			});
+		}
+		this.server.broadcastBatch(framed);
+		for (const { event } of events) this.hub?.hostBroadcast(this, event);
 	}
 
 	/** A model request starts (a new turn, or the assistant message that answers it): both per-request numbers restart. */
@@ -1372,14 +1494,14 @@ export class WebHost {
 
 	transcript(query: TranscriptQuery = {}): TranscriptResponse {
 		const manager = this.session.sessionManager;
-		const items = entriesToWire(manager.getBranch());
 		const leafId = manager.getLeafId();
 		// Without pagination parameters the response stays exactly as it always was: byte-identical for old clients,
 		// the HTML export and the existing tests. An empty query value counts as absent.
 		const limitRaw = typeof query.limit === "string" && query.limit.trim() ? query.limit.trim() : undefined;
 		const beforeRaw = typeof query.before === "string" && query.before.trim() ? query.before.trim() : undefined;
-		if (limitRaw === undefined && beforeRaw === undefined) return { items, leafId };
-		const page = paginateTranscriptItems(items, limitRaw, beforeRaw);
+		if (limitRaw === undefined && beforeRaw === undefined) return { items: entriesToWire(manager.getBranch()), leafId };
+		// Limit pushdown: slice entries by id first and convert only the tail window instead of the whole branch.
+		const page = paginateEntriesToWire(manager.getBranch(), limitRaw, beforeRaw);
 		return { items: page.items, leafId, hasMore: page.hasMore, nextCursor: page.nextCursor };
 	}
 

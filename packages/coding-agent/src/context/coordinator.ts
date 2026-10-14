@@ -1,5 +1,7 @@
 import type { Agent, AgentMessage, AgentTool } from "@myharness/agent-core";
+import type { Message } from "@myharness/ai";
 import type { Model } from "@myharness/ai/compat";
+import { convertToLlm } from "../agent/runtime/messages.ts";
 import type { SettingsManager } from "../config/settings/index.ts";
 import type { SessionManager } from "../session/manager/index.ts";
 import { getLatestCompactionEntry } from "../session/projection/index.ts";
@@ -12,6 +14,7 @@ import {
 	type ContextRuntimePolicy,
 	computeContextBudgetSnapshot,
 	estimateActiveContextTokensCanonical,
+	findValidUsageAnchor,
 	resolveContextRuntimePolicy,
 } from "./context-budget.ts";
 import {
@@ -71,6 +74,23 @@ export class AgentSessionContextCoordinator {
 		  }
 		| undefined;
 	private lastAutoCompactionFailure: AutoCompactionFailure | undefined;
+	/**
+	 * Memoized `transformContext` output for one round of budget checks.
+	 * Keyed by input composition (state/additional array references, length
+	 * and last message), so prepare → ensure → UI polls over unchanged
+	 * messages share a single extension/vision transform instead of re-running
+	 * it per snapshot. A length or last-message change misses naturally;
+	 * resetAfterCompaction()/invalidateBudgetContext() clear it eagerly.
+	 */
+	private transformCache:
+		| {
+				input: AgentMessage[];
+				stateMessages: AgentMessage[];
+				additionalMessages: AgentMessage[];
+				lastMessage: AgentMessage | undefined;
+				result: AgentMessage[];
+		  }
+		| undefined;
 
 	private readonly host: AgentSessionContextHost;
 
@@ -137,14 +157,23 @@ export class AgentSessionContextCoordinator {
 		const latestCompactionTimestamp = options.ignoreUsageAnchor
 			? Number.MAX_SAFE_INTEGER
 			: this.latestCompactionTimestamp();
+		const systemPrompt = context?.systemPrompt ?? this.host.agent.state.systemPrompt;
+		const tools = context?.tools ?? this.host.agent.state.tools;
 		try {
-			const transformed = this.host.agent.transformContext
-				? await this.host.agent.transformContext(messages)
-				: messages;
+			const transformed = await this.getTransformedContext(messages, additionalMessages, context);
+			// Convert once per distinct input and share by parameter: without an
+			// anchor the estimator reuses `llmMessages` instead of converting a
+			// second time; with an anchor it converts only the small trailing
+			// slice. The anchor scan itself is a cheap usage/timestamp walk.
+			let llmMessages: Message[] | undefined;
+			if (!options.ignoreUsageAnchor && !findValidUsageAnchor(transformed, latestCompactionTimestamp)) {
+				llmMessages = convertToLlm([...transformed]);
+			}
 			const estimate = estimateActiveContextTokensCanonical(transformed, {
-				systemPrompt: context?.systemPrompt ?? this.host.agent.state.systemPrompt,
-				tools: context?.tools ?? this.host.agent.state.tools,
+				systemPrompt,
+				tools,
 				latestCompactionTimestamp,
+				llmMessages,
 			});
 			if (
 				!options.ignoreUsageAnchor &&
@@ -152,6 +181,9 @@ export class AgentSessionContextCoordinator {
 				additionalMessages.length === 0 &&
 				estimate.usageSource === "post-compaction-estimated"
 			) {
+				// Post-compaction means no valid anchor, so the shared `llmRaw`
+				// below is always consumed (no second conversion inside).
+				const llmRaw = convertToLlm([...messages]);
 				this.providerEstimate = {
 					messages: this.host.agent.state.messages,
 					messageCount: messages.length,
@@ -163,18 +195,50 @@ export class AgentSessionContextCoordinator {
 						systemPrompt: this.host.agent.state.systemPrompt,
 						tools: this.host.agent.state.tools,
 						latestCompactionTimestamp: this.latestCompactionTimestamp(),
+						llmMessages: llmRaw,
 					}).tokens,
 				};
 			}
 			return computeContextBudgetSnapshot(this.runtimePolicy(), estimate);
 		} catch {
 			const estimate = estimateActiveContextTokensCanonical(messages, {
-				systemPrompt: context?.systemPrompt ?? this.host.agent.state.systemPrompt,
-				tools: context?.tools ?? this.host.agent.state.tools,
+				systemPrompt,
+				tools,
 				latestCompactionTimestamp,
 			});
 			return computeContextBudgetSnapshot(this.runtimePolicy(), estimate);
 		}
+	}
+
+	private async getTransformedContext(
+		messages: AgentMessage[],
+		additionalMessages: AgentMessage[],
+		context: ContextInput | undefined,
+	): Promise<AgentMessage[]> {
+		const cached = this.transformCache;
+		const stateMessages = this.host.agent.state.messages;
+		if (
+			cached &&
+			cached.lastMessage === messages.at(-1) &&
+			(context?.messages
+				? cached.input === messages
+				: cached.stateMessages === stateMessages &&
+					cached.additionalMessages === additionalMessages &&
+					cached.input.length === messages.length)
+		) {
+			return cached.result;
+		}
+		const transformed = this.host.agent.transformContext
+			? await this.host.agent.transformContext(messages)
+			: messages;
+		this.transformCache = {
+			input: messages,
+			stateMessages,
+			additionalMessages,
+			lastMessage: messages.at(-1),
+			result: transformed,
+		};
+		return transformed;
 	}
 
 	async ensure(
@@ -217,11 +281,13 @@ export class AgentSessionContextCoordinator {
 
 	resetAfterCompaction(): void {
 		this.lastBudgetCheck = undefined;
+		this.transformCache = undefined;
 		this.contextWindowExceeded = false;
 	}
 
 	invalidateBudgetContext(): void {
 		this.lastBudgetCheck = undefined;
+		this.transformCache = undefined;
 	}
 
 	setAutoCompactionFailure(failure: AutoCompactionFailure | undefined): void {

@@ -23,6 +23,7 @@ import type {
 	PrepareNextTurnContext,
 	QueueMode,
 	StreamFn,
+	ToolAbandonedInfo,
 	ToolExecutionMode,
 } from "./types.ts";
 
@@ -122,6 +123,8 @@ export interface AgentOptions {
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
 	toolAbortGraceMs?: number;
+	/** Best-effort cleanup invoked once when a running tool is abandoned after the abort grace period. */
+	onToolAbandoned?: (info: ToolAbandonedInfo) => void | Promise<void>;
 }
 
 class PendingMessageQueue {
@@ -214,6 +217,8 @@ export class Agent {
 	public toolExecution: ToolExecutionMode;
 	/** Milliseconds a running tool gets to finish after abort before the loop abandons it (default 20000). */
 	public toolAbortGraceMs?: number;
+	/** Best-effort cleanup invoked once when a running tool is abandoned after the abort grace period. */
+	public onToolAbandoned?: (info: ToolAbandonedInfo) => void | Promise<void>;
 
 	constructor(options: AgentOptions) {
 		this._state = createMutableAgentState(options.initialState);
@@ -237,6 +242,7 @@ export class Agent {
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
 		this.toolAbortGraceMs = options.toolAbortGraceMs;
+		this.onToolAbandoned = options.onToolAbandoned;
 	}
 
 	/**
@@ -459,6 +465,7 @@ export class Agent {
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
 			toolAbortGraceMs: this.toolAbortGraceMs,
+			onToolAbandoned: this.onToolAbandoned,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn:

@@ -28,6 +28,7 @@ import { loadSkills } from "../skills/loader/index.ts";
 import {
 	discoverAppendSystemPromptFile,
 	discoverSystemPromptFile,
+	clearSystemPromptCache,
 	resolveSystemPromptInput,
 } from "../system-prompts/loader/index.ts";
 import { dedupeThemeResources, loadThemeResources } from "../themes/loader/index.ts";
@@ -308,6 +309,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	 */
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
 		resetTimings("extensions");
+		clearSystemPromptCache();
 
 		if (this.loaded) {
 			this.extensionResourceLoader.clearCache();

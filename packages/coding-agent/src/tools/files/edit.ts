@@ -8,6 +8,11 @@ import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { assertLocalWorkspaceCwdAvailable, resolveToCwd } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import {
+	duplicateToolResultText,
+	idempotencyKey,
+	toolIdempotency,
+} from "../tool-idempotency.ts";
+import {
 	applyEditsToNormalizedContent,
 	detectLineEnding,
 	type Edit,
@@ -19,7 +24,12 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { committedAfterCancel } from "./mutation-result.ts";
-import { assertFileWasReadBefore, recordFileStateAfterMutation, resolveFileStateScope } from "./read-state.ts";
+import {
+	assertFileWasReadBefore,
+	canonicalFilePathKey,
+	recordFileStateAfterMutation,
+	resolveFileStateScope,
+} from "./read-state.ts";
 
 const replaceEditSchema = Type.Object(
 	{
@@ -58,6 +68,8 @@ export interface EditToolDetails {
 	firstChangedLine?: number;
 	/** The write committed after cancellation arrived during the write. */
 	mutationStatus?: "committed-after-cancel";
+	/** P2-11: this call repeats an identical edit already done in this session; not re-executed. */
+	idempotentDuplicate?: true;
 }
 
 /**
@@ -141,6 +153,20 @@ export function createEditToolDefinition(
 			// same way the write tool counts lines only for them.
 			const localFileSystem = ops === defaultEditOperations;
 			const scope = resolveFileStateScope(ctx);
+			// P2-11 idempotency: a repeated identical edit cannot apply twice (oldText is
+			// gone after the first commit), so the repeat is refused as a duplicate before
+			// the mutation queue instead of failing against the changed file. Only a
+				// previously successful edit marks the key; thrown outcomes stay retryable.
+			const key = idempotencyKey("edit", scope, {
+				path: canonicalFilePathKey(absolutePath),
+				edits,
+			});
+			if (toolIdempotency.has(key)) {
+				return {
+					content: [{ type: "text", text: duplicateToolResultText("edit") }],
+					details: { diff: "", patch: "", idempotentDuplicate: true as const },
+				};
+			}
 
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
@@ -196,6 +222,8 @@ export function createEditToolDefinition(
 				// Session is not reported as an external modification.
 				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 				const mutation = committedAfterCancel(signal);
+				// Mark the key only after a successful commit, so a failed edit stays retryable.
+				toolIdempotency.set(key, true);
 				return {
 					content: [
 						{
@@ -210,7 +238,9 @@ export function createEditToolDefinition(
 						...(mutation ? { mutationStatus: mutation.mutationStatus } : {}),
 					},
 				};
-			});
+			},
+			signal,
+			);
 		},
 	};
 }

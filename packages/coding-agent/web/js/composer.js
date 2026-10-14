@@ -13,7 +13,7 @@ import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
 import { debounce, fmtDuration, plural, pointerMoved } from "./util.js";
 import { serverText, t } from "./i18n.js";
-import { RUN_MODES, runModeOf } from "./run-modes.js";
+import { RUN_MODES, COMPOSER_QUEUE_DEBOUNCE_MS, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
 import { retryReason } from "./retry-reason.js";
 
@@ -598,6 +598,16 @@ const send = async (mode) => {
 		} else if (target.sessionId) clearDraft(target);
 	};
 
+	// P2-11: queued input is debounced (300ms, reuses debounce from util.js) and defaults to
+	// followUp (queue for after the run, never interrupts the current turn). No new setting:
+	// the existing runMode choice still decides Enter (default followUp, see run-modes.js),
+	// and the existing steeringMode/followUpMode queue settings still decide delivery order.
+	const sendRef = useRef(send);
+	sendRef.current = send;
+	const debouncedQueueSend = useMemo(() => debounce((mode) => sendRef.current(mode), COMPOSER_QUEUE_DEBOUNCE_MS), []);
+	useEffect(() => () => debouncedQueueSend.cancel(), [debouncedQueueSend]);
+	const sendOrQueue = (mode) => (active ? debouncedQueueSend(mode) : send(mode));
+
 	const onKeyDown = (event) => {
 		if (event.isComposing || event.keyCode === 229) return;
 		// Saved quote cards are only removed with the mouse on their own \u00d7: Backspace/Delete
@@ -613,7 +623,8 @@ const send = async (mode) => {
 		}
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
-			send(event.altKey && active ? "followUp" : undefined);
+			// Alt+Enter always queues; plain Enter follows the runMode default (followUp).
+			sendOrQueue(event.altKey && active ? "followUp" : undefined);
 			return;
 		}
 		// In the large editor Esc closes it (a window listener does that), never stops the run.
@@ -781,7 +792,7 @@ const send = async (mode) => {
 					<${ContextMeter} />
 					${showStop
 						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
-						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => send()} title=${active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
+						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "belowEditor").map((w, i) => html`<pre class="widget" key=${`wb${i}`}>${w.lines.join("\n")}</pre>`)}

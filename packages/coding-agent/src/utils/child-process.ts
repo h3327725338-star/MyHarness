@@ -60,6 +60,75 @@ function flushWindowsTaskkills(): void {
 	}
 }
 
+/**
+ * Processes still owned by a tool call, keyed by the AbortSignal that tool
+ * received. Spawn sites register here so abandon handling can kill only the
+ * abandoned tool's tree (see `killChildProcessesForSignal`). Entries are
+ * removed when the owning operation settles; anything left behind belongs to
+ * a tool that ignored cancellation and never settled.
+ */
+const signalTrackedChildren = new Map<AbortSignal, Set<ChildProcess>>();
+
+/**
+ * Register a spawned child under the signal its owner is listening to.
+ * Returns an untrack function the owner must call once the child settles
+ * (exit, close, or settle of the awaiting promise), so later kills never see
+ * a recycled pid. No-op when `signal` is undefined.
+ */
+export function trackChildProcessForSignal(signal: AbortSignal | undefined, child: ChildProcess): () => void {
+	if (!signal) return () => undefined;
+	let set = signalTrackedChildren.get(signal);
+	if (!set) {
+		set = new Set();
+		signalTrackedChildren.set(signal, set);
+	}
+	set.add(child);
+	let untracked = false;
+	return () => {
+		if (untracked) return;
+		untracked = true;
+		const current = signalTrackedChildren.get(signal);
+		if (current) {
+			current.delete(child);
+			if (current.size === 0) signalTrackedChildren.delete(signal);
+		}
+	};
+}
+
+/**
+ * Best-effort kill of every still-running child registered under `signal`.
+ * Used when the agent loop abandons a tool that ignored cancellation: the
+ * abort-time SIGTERM is long past, so still-alive trees get SIGKILL (Windows
+ * taskkill is forced unconditionally). Children that already exited are
+ * skipped and pruned, which also avoids touching recycled pids. Never throws;
+ * returns how many trees a kill was attempted against.
+ */
+export function killChildProcessesForSignal(signal: AbortSignal | undefined): number {
+	if (!signal) return 0;
+	const set = signalTrackedChildren.get(signal);
+	if (!set || set.size === 0) {
+		signalTrackedChildren.delete(signal);
+		return 0;
+	}
+	let attempted = 0;
+	for (const child of [...set]) {
+		// Node sets exitCode once the process is reaped; anything reaped is
+		// gone even if the owner's promise still hangs on inherited pipes.
+		if (child.exitCode !== null || child.signalCode !== null) {
+			set.delete(child);
+			continue;
+		}
+		attempted += 1;
+		try {
+			void terminateProcessTree(child, "SIGKILL");
+		} catch {
+			// Best effort: the process may have exited between the check and the kill.
+		}
+	}
+	if (set.size === 0) signalTrackedChildren.delete(signal);
+	return attempted;
+}
+
 export function runWindowsTaskkill(pid: number): Promise<void> {
 	if (process.platform !== "win32") return Promise.resolve();
 	return new Promise((resolve, reject) => {

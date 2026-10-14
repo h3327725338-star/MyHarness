@@ -38,7 +38,10 @@ describe("Codex context lifecycle", () => {
 	it("does not compact below the model threshold", async () => {
 		const h = await createHarness({ model: { ...fauxModel, contextWindow: 100000 }, tools: [] });
 		try {
-			seed(h, 89999);
+			// P0-1: the provider snapshot counts the transient messages-tail reminder
+			// (cwd/model, actually sent) on top of the usage anchor, so the seed
+			// leaves headroom for it instead of sitting 1 token below the threshold.
+			seed(h, 89500);
 			expect((await internals(h)._ensureContextBudget()).status).toBe("ok");
 			expect(h.faux.callCount).toBe(0);
 		} finally {

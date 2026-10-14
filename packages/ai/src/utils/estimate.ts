@@ -43,7 +43,90 @@ export function estimateTextAndImageContentTokens(content: string | Array<TextCo
 	return Math.ceil(estimateTextAndImageContentChars(content) / CHARS_PER_TOKEN);
 }
 
+// ============================================================================
+// Per-message token cache
+// ============================================================================
+
+/**
+ * Per-message token cache: keyed by message object reference, validated by
+ * `timestamp` plus a cheap content-length hint (`.length` properties only,
+ * never a UTF-8 encode or JSON serialization).
+ *
+ * A cache hit costs O(message blocks); only newly appended (or replaced)
+ * messages pay the full UTF-8 walk. Combined with the usage-anchor rule
+ * below (prefix covered by the anchor, only trailing messages summed), long
+ * sessions estimate incrementally instead of re-walking the full history.
+ *
+ * Messages are treated as immutable: a replaced message (new object and/or
+ * new timestamp) misses naturally, and entries for dropped messages are
+ * garbage-collected with the message itself. Only in-place deep mutation
+ * that keeps the same reference, timestamp and length hint (for example
+ * editing tool-call arguments to same-shaped values) needs an explicit
+ * `invalidateMessageTokenCache(message)` call.
+ */
+interface MessageTokenCacheEntry {
+	timestamp: number;
+	lengthHint: number;
+	tokens: number;
+}
+
+let messageTokenCache: WeakMap<object, MessageTokenCacheEntry> = new WeakMap();
+
+function getArgumentsLengthHint(value: unknown): number {
+	if (!value || typeof value !== "object") return 0;
+	if (Array.isArray(value)) return value.length * 64;
+	return Object.keys(value).length * 64;
+}
+
+function getTextImageLengthHint(content: string | Array<TextContent | ImageContent>): number {
+	if (typeof content === "string") return content.length;
+	let hint = content.length * 1024;
+	for (const block of content) {
+		if (block.type === "text") hint += block.text.length;
+	}
+	return hint;
+}
+
+function getMessageLengthHint(message: Message): number {
+	if (message.role === "user") {
+		if (message.compactionCheckpoint) return message.compactionCheckpoint.encrypted_content.length;
+		return getTextImageLengthHint(message.content);
+	}
+	if (message.role === "toolResult") return getTextImageLengthHint(message.content);
+	let hint = message.content.length * 1024;
+	for (const block of message.content) {
+		if (block.type === "text") hint += block.text.length;
+		else if (block.type === "thinking") hint += block.thinking.length;
+		else hint += block.name.length + getArgumentsLengthHint(block.arguments);
+	}
+	return hint;
+}
+
+/**
+ * Drop cached token estimates. Pass the mutated message when a message object
+ * is edited in place (same reference, same timestamp); call with no arguments
+ * after a history rewrite (for example compaction replacement) to release
+ * stale entries eagerly instead of waiting for garbage collection.
+ */
+export function invalidateMessageTokenCache(message?: Message): void {
+	if (message) {
+		messageTokenCache.delete(message);
+		return;
+	}
+	messageTokenCache = new WeakMap();
+}
+
 export function estimateMessageTokens(message: Message): number {
+	const timestamp = message.timestamp;
+	const lengthHint = getMessageLengthHint(message);
+	const cached = messageTokenCache.get(message);
+	if (cached && cached.timestamp === timestamp && cached.lengthHint === lengthHint) return cached.tokens;
+	const tokens = estimateMessageTokensUncached(message);
+	messageTokenCache.set(message, { timestamp, lengthHint, tokens });
+	return tokens;
+}
+
+function estimateMessageTokensUncached(message: Message): number {
 	let chars = 0;
 
 	if (message.role === "user") {
@@ -95,8 +178,15 @@ function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage
 	return usageInfo;
 }
 
-function estimateMessages(messages: readonly Message[]): ContextUsageEstimate {
-	const usageInfo = getLastAssistantUsageInfo(messages);
+function estimateMessages(
+	messages: readonly Message[],
+	options: { ignoreUsageAnchor?: boolean } = {},
+): ContextUsageEstimate {
+	// Incremental by construction: a valid usage anchor covers the whole
+	// prefix, so only the small trailing slice is summed per message (and
+	// most of those hits the per-message cache above). Over-estimation is
+	// preserved: every per-message term still uses Math.ceil.
+	const usageInfo = options.ignoreUsageAnchor ? undefined : getLastAssistantUsageInfo(messages);
 	if (usageInfo) {
 		const usageTokens = calculateContextTokens(usageInfo.usage);
 		let trailingTokens = 0;
@@ -120,10 +210,13 @@ function isMessageArray(value: Context | readonly Message[]): value is readonly 
 	return Array.isArray(value);
 }
 
-export function estimateContextTokens(context: Context | readonly Message[]): ContextUsageEstimate {
-	if (isMessageArray(context)) return estimateMessages(context);
+export function estimateContextTokens(
+	context: Context | readonly Message[],
+	options: { ignoreUsageAnchor?: boolean } = {},
+): ContextUsageEstimate {
+	if (isMessageArray(context)) return estimateMessages(context, options);
 
-	const estimate = estimateMessages(context.messages);
+	const estimate = estimateMessages(context.messages, options);
 	if (estimate.lastUsageIndex !== null) {
 		const addedNames = new Set(
 			context.messages

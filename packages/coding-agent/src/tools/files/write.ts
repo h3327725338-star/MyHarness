@@ -7,10 +7,16 @@ import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { assertLocalWorkspaceCwdAvailable, resolveToCwd } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
+import { idempotencyKey, toolIdempotency } from "../tool-idempotency.ts";
 import { countLineChanges } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { committedAfterCancel, type FileMutationDetails } from "./mutation-result.ts";
-import { assertFileWasReadBefore, recordFileStateAfterMutation, resolveFileStateScope } from "./read-state.ts";
+import {
+	assertFileWasReadBefore,
+	canonicalFilePathKey,
+	recordFileStateAfterMutation,
+	resolveFileStateScope,
+} from "./read-state.ts";
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "File path to write (relative or absolute)" }),
@@ -26,6 +32,8 @@ export interface WriteToolDetails extends Partial<FileMutationDetails> {
 	/** Lines added to / removed from the file by this write. */
 	additions?: number;
 	deletions?: number;
+	/** P2-11: this result replays a previous identical write (idempotency key hit), not a fresh mutation. */
+	idempotentReplay?: true;
 }
 
 /** Files larger than this are written without counting lines (the count would cost more than it tells). */
@@ -101,6 +109,23 @@ export function createWriteToolDefinition(
 			// host for that, as it already is for the line counts below.
 			const localFileSystem = ops === defaultWriteOperations;
 			const scope = resolveFileStateScope(ctx);
+			// P2-11 idempotency: same session + same absolute file + same bytes replays the
+			// stored success instead of mutating again. Checked before the mutation queue
+			// so a repeat never waits on, or redoes, the first write. Thrown outcomes
+			// (abort, read-gate refusal, IO error) are never stored and stay retryable.
+			const key = idempotencyKey("write", scope, {
+				path: canonicalFilePathKey(absolutePath),
+				content,
+			});
+			const replayed = toolIdempotency.get(key) as
+				| { content: { type: "text"; text: string }[]; details?: WriteToolDetails }
+				| undefined;
+			if (replayed) {
+				return {
+					...replayed,
+					details: { ...(replayed.details ?? {}), idempotentReplay: true as const },
+				};
+			}
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
 				// mutation queue while an in-flight filesystem operation may still finish.
@@ -135,7 +160,7 @@ export function createWriteToolDefinition(
 				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 
 				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
-				return {
+				const result = {
 					content: [
 						{
 							type: "text",
@@ -144,7 +169,12 @@ export function createWriteToolDefinition(
 					],
 					details: Object.keys(details).length > 0 ? details : undefined,
 				};
-			});
+				// Only successes are stored: the same bytes always produce the same file.
+				toolIdempotency.set(key, result);
+				return result;
+			},
+			signal,
+			);
 		},
 	};
 }

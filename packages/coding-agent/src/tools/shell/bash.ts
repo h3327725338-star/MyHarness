@@ -5,7 +5,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
-import { waitForChildProcess } from "../../utils/child-process.ts";
+import { trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
 	getShellEnv,
@@ -20,8 +20,12 @@ import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
 import { backgroundJobManager } from "./job-manager.ts";
 import { findBashNullDeviceRedirect } from "./null-redirect-guard.ts";
-import { resolveSessionScope } from "./session-scope.ts";
 import {
+	duplicateToolResultText,
+	idempotencyKey,
+	toolIdempotency,
+} from "../tool-idempotency.ts";
+import { resolveSessionScope } from "./session-scope.ts";import {
 	buildBashProbeSuffix,
 	resolvePreservedSpawnTarget,
 	splitProbeBlock,
@@ -83,6 +87,8 @@ export interface BashToolDetails {
 	fullOutputPath?: string;
 	/** Present when run_in_background was used: the id accepted by job_output/job_kill. */
 	taskId?: string;
+	/** P2-11: identical foreground command already ran in this session; not respawned. */
+	idempotentDuplicate?: true;
 }
 
 /**
@@ -166,6 +172,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
 			if (child.pid) onSpawn?.(child.pid);
+			// Register under this call's signal so abandon handling can kill only
+			// this command's tree. Background jobs pass their own internal signal,
+			// so they are never touched by another tool's abandonment.
+			const untrackChild = trackChildProcessForSignal(signal, child);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			let terminationPromise: Promise<boolean> | undefined;
@@ -210,6 +220,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				return { exitCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
+				untrackChild();
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
 				if (commandScriptDir) {
@@ -325,6 +336,22 @@ export function createBashToolDefinition(
 			}
 
 			const execCommand = keepState ? `${spawnContext.command}${buildBashProbeSuffix()}` : spawnContext.command;
+			// P2-11 idempotency (foreground only): same session + same cwd + same logical
+			// command replays a duplicate refusal instead of respawning. Background jobs
+			// always start fresh above and never touch the key. Only a successful run marks
+			// it; abort / timeout / non-zero exit throw below and stay retryable, so a
+			// TOOL_ABORT_TIMEOUT keeps counting as a failure while a user cancel does not.
+			const idempotencyScopeKey = idempotencyKey("bash", sessionKey, {
+				cwd: spawnTarget.cwd,
+				command: resolvedCommand,
+				keepState,
+			});
+			if (toolIdempotency.has(idempotencyScopeKey)) {
+				return {
+					content: [{ type: "text", text: duplicateToolResultText("bash") }],
+					details: { idempotentDuplicate: true as const },
+				};
+			}
 			const output = new OutputAccumulator({ tempFilePrefix: "myharness-bash" });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
@@ -469,6 +496,8 @@ export function createBashToolDefinition(
 				if (exitCode !== 0 && exitCode !== null) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
 				}
+				// Mark only after success: aborts, timeouts and non-zero exits throw above.
+				toolIdempotency.set(idempotencyScopeKey, true);
 				return { content: [{ type: "text", text: outputText }], details: { ...details, exitCode } };
 			} finally {
 				clearUpdateTimer();

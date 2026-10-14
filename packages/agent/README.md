@@ -120,14 +120,14 @@ prompt("Read config.json")
 
 Tool execution mode is configurable:
 
-- `parallel` (default): preflight tool calls sequentially, execute allowed tools concurrently, emit `tool_execution_end` as soon as each tool is finalized, then emit toolResult messages and `turn_end.toolResults` in assistant source order
+- `parallel` (default): validate tool calls concurrently (capped at 5), run the `beforeToolCall` approval gate strictly one at a time in assistant source order, then execute allowed tools concurrently (capped at 5); emit `tool_execution_end` as soon as each tool is finalized, then emit toolResult messages and `turn_end.toolResults` in assistant source order
 - `sequential`: execute tool calls one by one, matching the historical behavior
 
 In parallel mode, tool completion events follow tool completion order, but persisted toolResult messages still follow assistant source order.
 
 The mode can be set globally via `toolExecution` in the agent config, or per-tool via `executionMode` on `AgentTool`. If any tool call in a batch targets a tool with `executionMode: "sequential"`, the entire batch executes sequentially regardless of the global setting.
 
-When execution is cancelled while tools are running, running tools receive the abort signal. If a tool does not finish within `toolAbortGraceMs` (default: 20000ms), the loop stops waiting, records an error tool result with `details.errorCode: "TOOL_ABORT_TIMEOUT"`, and discards any later outcome from the abandoned tool. Pass `toolAbortGraceMs: Infinity` to wait indefinitely.
+When execution is cancelled while tools are running, each running tool receives its own linked abort signal (aborted exactly when the run is cancelled). If a tool does not finish within `toolAbortGraceMs` (default: 20000ms), the loop stops waiting, records an error tool result with `details.errorCode: "TOOL_ABORT_TIMEOUT"`, and discards any later outcome from the abandoned tool. Right when a tool is abandoned, the loop also invokes the optional `onToolAbandoned` hook once (fire-and-forget, never awaited) so hosts can kill the abandoned tool's process tree. Pass `toolAbortGraceMs: Infinity` to wait indefinitely.
 
 The `beforeToolCall` hook runs after validated argument parsing and before `tool_execution_start`. It can block execution. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
 

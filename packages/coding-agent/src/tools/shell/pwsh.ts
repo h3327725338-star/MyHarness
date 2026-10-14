@@ -5,7 +5,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
-import { waitForChildProcess } from "../../utils/child-process.ts";
+import { trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getPwshShellConfig,
 	getShellEnv,
@@ -188,6 +188,10 @@ export function createLocalPwshOperations(options?: { shellPath?: string }): Pws
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
 			if (child.pid) onSpawn?.(child.pid);
+			// Register under this call's signal so abandon handling can kill only
+			// this command's tree. Background jobs pass their own internal signal,
+			// so they are never touched by another tool's abandonment.
+			const untrackChild = trackChildProcessForSignal(signal, child);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			let terminationPromise: Promise<boolean> | undefined;
@@ -230,6 +234,7 @@ export function createLocalPwshOperations(options?: { shellPath?: string }): Pws
 				return { exitCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
+				untrackChild();
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
 				if (commandScriptDir) {

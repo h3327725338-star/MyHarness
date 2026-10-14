@@ -67,7 +67,12 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-	let trailingTokens = 0;
+	// Anchor scan first without converting: with a valid anchor only the small
+	// trailing slice is shaped and summed (incremental); otherwise one batched
+	// convertToLlm pass replaces N single-message conversions. Token math is
+	// unchanged (same per-message estimates, still over-estimating).
+	let anchorIndex = -1;
+	let anchorTokens = 0;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]!;
 		if (
@@ -76,12 +81,29 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 			message.stopReason !== "aborted" &&
 			calculateContextTokens(message.usage) > 0
 		) {
-			const usageTokens = calculateContextTokens(message.usage);
-			return { tokens: usageTokens + trailingTokens, usageTokens, trailingTokens, lastUsageIndex: i };
+			anchorIndex = i;
+			anchorTokens = calculateContextTokens(message.usage);
+			break;
 		}
-		trailingTokens += estimateTokens(message);
 	}
-	return { tokens: trailingTokens, usageTokens: 0, trailingTokens, lastUsageIndex: null };
+	if (anchorIndex >= 0) {
+		let trailingTokens = 0;
+		const trailing = messages.slice(anchorIndex + 1);
+		if (trailing.length > 0) {
+			const llmTrailing = convertToLlm(trailing);
+			for (const item of llmTrailing) trailingTokens += estimateMessageTokens(item);
+		}
+		return {
+			tokens: anchorTokens + trailingTokens,
+			usageTokens: anchorTokens,
+			trailingTokens,
+			lastUsageIndex: anchorIndex,
+		};
+	}
+	let total = 0;
+	const llmMessages = convertToLlm(messages);
+	for (const item of llmMessages) total += estimateMessageTokens(item);
+	return { tokens: total, usageTokens: 0, trailingTokens: total, lastUsageIndex: null };
 }
 export function shouldCompact(tokens: number, window: number, settings: CompactionSettings): boolean {
 	return settings.enabled && window > 0 && tokens >= Math.floor(window * 0.9);
@@ -89,13 +111,17 @@ export function shouldCompact(tokens: number, window: number, settings: Compacti
 export function prepareCompaction(
 	entries: SessionEntry[],
 	settings: CompactionSettings,
+	options: { tokensBefore?: number } = {},
 ): CompactionPreparation | undefined {
 	const messages = buildSessionContext(entries).messages;
 	if (!messages.length) return undefined;
 	return {
 		firstKeptEntryId: entries.at(-1)!.id,
 		messagesToSummarize: messages,
-		tokensBefore: estimateContextTokens(messages).tokens,
+		// Callers that already hold a canonical snapshot (e.g. the session
+		// compaction runner, which overwrites this with buildProviderSnapshot)
+		// pass it in to skip a duplicate full-history estimate here.
+		tokensBefore: options.tokensBefore ?? estimateContextTokens(messages).tokens,
 		settings,
 	};
 }

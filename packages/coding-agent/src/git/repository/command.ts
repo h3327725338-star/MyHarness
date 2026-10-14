@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { closeSync, createWriteStream, openSync, readFileSync, rmSync } from "node:fs";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { spawnProcess, spawnProcessSync } from "../../utils/child-process.ts";
+import { spawnProcess, spawnProcessSync, trackChildProcessForSignal } from "../../utils/child-process.ts";
 import { killProcessTreeAndWait } from "../../utils/shell.ts";
 
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
@@ -160,6 +160,9 @@ export function runGit(args: string[], options: GitCommandOptions = {}): Promise
 	}
 
 	return new Promise((resolvePromise) => {
+		// Register under the caller's signal so abandon handling (after the abort
+		// grace period) can kill only this command's tree. Untracked in cleanup().
+		const untrackChild = trackChildProcessForSignal(options.signal, child);
 		let settled = false;
 		let stdout = "";
 		let stderr = "";
@@ -171,6 +174,7 @@ export function runGit(args: string[], options: GitCommandOptions = {}): Promise
 
 		const cleanup = () => {
 			if (timeoutTimer) clearTimeout(timeoutTimer);
+			untrackChild();
 			if (options.signal) options.signal.removeEventListener("abort", onAbort);
 			child.removeListener("error", onError);
 			child.removeListener("close", onClose);
@@ -374,6 +378,9 @@ export function runGitToFile(
 	}
 
 	return new Promise((resolvePromise) => {
+		// Register under the caller's signal so abandon handling (after the abort
+		// grace period) can kill only this command's tree. Untracked in cleanup().
+		const untrackChild = trackChildProcessForSignal(options.signal, child);
 		let settled = false;
 		let stdoutBytes = 0;
 		let stdoutSha256: string | undefined;
@@ -397,6 +404,7 @@ export function runGitToFile(
 			if (options.signal) options.signal.removeEventListener("abort", onAbort);
 			child.removeListener("error", onError);
 			child.removeListener("close", onClose);
+			untrackChild();
 		};
 
 		const finish = (result: GitCommandFileResult) => {
