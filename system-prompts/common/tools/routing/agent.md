@@ -1,2 +1,2 @@
 # Tool selection
-- agent: use when there are multiple genuinely independent directions suitable for parallel investigation.
+- agent: use when 2 or more independently actionable directions appear; do the work directly for single-point or strictly ordered tasks.

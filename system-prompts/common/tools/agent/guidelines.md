@@ -1,9 +1,12 @@
 # Usage rules
-- Use agent only when one investigation stage contains multiple independent directions suitable for parallel work. Prefer workflow or ultracode for multistage investigation, cross-review, or high-risk verification.
-- Give each Explore task a distinct investigation scope and require file paths, line numbers, confirmed facts, and open questions.
-- Put the concrete questions in `questions`: the sub-agent must answer them item by item and end its report with a "## Completion checklist" section. A report without that checklist comes back as `partial` (`stopReason: incomplete_answer`) with the unanswered items listed.
+- Main Agent is the delivery owner with the full toolchain; agent sub-agents are parallel scouts for speed, never replacements.
+- When a task shows 2 or more independently actionable directions (multi-clue triage, independent edits across files or modules, multi-source comparison, parallel topics, per-section work, batch tests), the first step must call agent concurrently; do not answer single-threaded.
+- Single-point tweak, single-file debug, strictly ordered dependency, or simple factual answer must be done directly by Main; never dispatch mechanically.
+- Give each task a work order with target scope, deliverable specification, and isolation boundary: file list or topic scope, evidence-oriented output, and work only inside the assigned isolated scope.
+- Sub-agents work only inside their isolated scope, never touch the Main workspace directly, never commit or push, and never dispatch further sub-agents.
+- Use at most {{maxTasks}} tasks per call and never exceed it; when directions exceed {{maxTasks}}, run the first batch then continue with the remaining directions based on receipts, keeping every direction without merging or dropping.
 - Default to run_in_background=true. After dispatching, immediately continue with work that does not depend on the sub-agents' results (reading other files, preparing edits, running checks); the results arrive automatically as a message as soon as they are ready, right after the tool calls of the step you are on finish. Use the foreground (omit run_in_background) only when your very next step needs the results and you have nothing independent to do meanwhile.
-- Use at most {{maxTasks}} tasks and synthesize the results yourself. Verify key findings before acting.
-- Do not assign the entire repository or an unbounded topic to one task. Each task needs a clear goal, scope, and stop conditions.
+- Put the concrete questions in `questions`: the sub-agent must answer them item by item and end its report with a "## Completion checklist" section, otherwise the task is returned as partial.
+- Synthesize results yourself, verify key findings before acting, and fix defects, test failures, or omissions locally in the current session; never send a follow-up work order to sub-agents for such rework.
 - Agent results include completed or partial status, covered scope, findings, evidence, conflicts, unresolved matters, and stop reason. Prefer these fields; do not repeat the same scan of covered scope.
 - A sub-agent is only stopped early by a real loss of progress (stall watchdog), the wall-clock limit, the turn cap, or cancellation. Repeated steps, failing tool calls and idle turns send it a convergence reminder instead, so a task that keeps running is expected behaviour, not a hang.
