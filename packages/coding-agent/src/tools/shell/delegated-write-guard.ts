@@ -61,6 +61,25 @@ function isWriteGuardDispatchToolName(toolName: string): boolean {
 /** Input keys whose string values are treated as paths by the file tools. */
 const PATH_LIKE_KEYS = new Set(["path", "file_path", "dir", "directory"]);
 
+/** Env var pointing a temp-sandbox worker back at the read-only origin workspace (non-Git fallback). */
+const SANDBOX_ORIGIN_ENV = "MYHARNESS_INTERNAL_SANDBOX_ORIGIN";
+/** Read-only file tools that may read from the sandbox origin in non-Git fallback mode. */
+const SANDBOX_READABLE_TOOLS = new Set(["read", "grep", "find", "ls", "symbols"]);
+
+function getSandboxOrigin(explicitOrigin?: string): string | undefined {
+	const raw = explicitOrigin ?? (typeof process !== "undefined" ? process.env?.[SANDBOX_ORIGIN_ENV] : undefined);
+	if (typeof raw !== "string" || raw.trim() === "") return undefined;
+	return raw;
+}
+
+/** True when a read path stays inside the sandbox jail or inside the read-only origin workspace. */
+function isAllowedSandboxReadPath(candidate: string, root: string, origin?: string): boolean {
+	if (isPathWithinJail(candidate, root)) return true;
+	const resolvedOrigin = getSandboxOrigin(origin);
+	if (resolvedOrigin && isPathWithinJail(candidate, resolvedOrigin)) return true;
+	return false;
+}
+
 /** Glob-like parameters that must stay relative to the jail root, per tool. */
 const GLOB_LIKE_KEYS_BY_TOOL: Record<string, string[]> = { grep: ["glob"], find: ["pattern"] };
 
@@ -365,6 +384,7 @@ export function evaluateDelegatedWriteToolCall(
 	toolName: string,
 	input: Record<string, unknown> | undefined,
 	root: string,
+	origin?: string,
 ): string | undefined {
 	const normalized = toolName.toLowerCase();
 	if (isWriteGuardDispatchToolName(normalized)) {
@@ -380,7 +400,14 @@ export function evaluateDelegatedWriteToolCall(
 	}
 	const pathValues: string[] = [];
 	collectValuesByKeys(args, PATH_LIKE_KEYS, pathValues);
+	const mayReadOrigin = SANDBOX_READABLE_TOOLS.has(normalized);
 	for (const value of pathValues) {
+		if (mayReadOrigin) {
+			if (typeof value !== "string" || value.trim() === "") continue;
+			const stripped = value.trim().startsWith("@") ? value.trim().slice(1) : value;
+			if (!isAllowedSandboxReadPath(stripped, root, origin)) return `路径越出本任务 worktree：${value}`;
+			continue;
+		}
 		if (pathValueEscapesJail(value, root)) return `路径越出本任务 worktree：${value}`;
 	}
 	const globKeys = GLOB_LIKE_KEYS_BY_TOOL[normalized];
@@ -419,6 +446,10 @@ const WRITE_GUARD_DEPS = {
   isUnsafeDelegatedGitInvocation,
   splitAutoReviewShellSequence,
 };
+const SANDBOX_ORIGIN_ENV = "MYHARNESS_INTERNAL_SANDBOX_ORIGIN";
+const SANDBOX_READABLE_TOOLS = new Set(["read", "grep", "find", "ls", "symbols"]);
+const getSandboxOrigin = ${getSandboxOrigin.toString()};
+const isAllowedSandboxReadPath = ${isAllowedSandboxReadPath.toString()};
 const normalizeSlashes = ${normalizeSlashes.toString()};
 const isDriveAbsolute = ${isDriveAbsolute.toString()};
 const isUnixAbsolute = ${isUnixAbsolute.toString()};
@@ -439,7 +470,8 @@ const evaluateDelegatedWriteToolCall = ${evaluateDelegatedWriteToolCall.toString
 export default function (pi) {
   pi.on("tool_call", async (event) => {
     const root = typeof process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE === "string" && process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE !== "" ? process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE : process.cwd();
-    const reason = evaluateDelegatedWriteToolCall(event.toolName, event.input, root);
+    const origin = typeof process.env[SANDBOX_ORIGIN_ENV] === "string" && process.env[SANDBOX_ORIGIN_ENV] !== "" ? process.env[SANDBOX_ORIGIN_ENV] : undefined;
+    const reason = evaluateDelegatedWriteToolCall(event.toolName, event.input, root, origin);
     if (reason !== undefined) {
       return { block: true, reason: WRITE_GUARD_BLOCK_MARKER + " 已拦截：" + reason + "。请改用允许的方式完成任务，并在最终报告中如实说明被拦截的操作；不要尝试绕过。" };
     }

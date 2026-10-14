@@ -14,8 +14,13 @@ import {
 	extractDelegatedMessageToolEvidence,
 } from "../agent/delegation/event-parser.ts";
 import {
+	DELEGATED_SANDBOX_ORIGIN_ENV,
+	type DelegatedSandboxHandle,
 	type DelegatedWorktreeHandle,
+	finalizeDelegatedSandbox,
 	finalizeDelegatedWorktree,
+	isGitRepository,
+	prepareDelegatedSandbox,
 	prepareDelegatedWorktree,
 } from "../agent/delegation/worktree-sandbox.ts";
 import {
@@ -1028,6 +1033,8 @@ async function runExploreTask(options: {
 	/** `codeIntelligence.symbolsEnabled` of the dispatching session; false keeps symbols out of `--tools`. */
 	symbolsEnabled?: boolean;
 	traceContext?: RuntimeTraceChildContext;
+	/** Non-Git fallback: original workspace the sandbox worker may read (read-only). */
+	sandboxOrigin?: string;
 }): Promise<ExploreTaskResult> {
 	const eventState = createDelegatedEventState();
 	const messages = eventState.messages;
@@ -1102,6 +1109,7 @@ async function runExploreTask(options: {
 					MYHARNESS_INTERNAL_CHAT_MODE: options.chatMode ?? "coding",
 					...(options.mode === "read-write" ? { MYHARNESS_INTERNAL_DELEGATED_MODE: "read-write" } : {}),
 					...(options.mode === "read-write" ? { MYHARNESS_INTERNAL_DELEGATED_WORKTREE: options.cwd } : {}),
+					...(options.sandboxOrigin ? { [DELEGATED_SANDBOX_ORIGIN_ENV]: options.sandboxOrigin } : {}),
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
@@ -1748,11 +1756,22 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 			),
 		]);
 		emitProgress();
+		// Workspace-adaptive dispatch: Git workspaces keep the historical Git worktree
+		// isolation untouched; non-Git workspaces fall back to per-task temp sandboxes
+		// (never `git init`, never writes into the origin workspace).
+		let workspaceIsGit = false;
+		try {
+			workspaceIsGit = isGitRepository(options.cwd);
+		} catch {
+			workspaceIsGit = false;
+		}
 		// Read-write tasks each run inside their own fresh Git worktree, created
 		// up front so an unusable workspace fails the whole dispatch with a clear
 		// reason instead of after some workers already started.
 		const worktreeHandles: Array<DelegatedWorktreeHandle | undefined> = options.tasks.map(() => undefined);
-		if (mode === "read-write") {
+		const sandboxHandles: Array<DelegatedSandboxHandle | undefined> = options.tasks.map(() => undefined);
+		const sandboxNotes: string[] = [];
+		if (mode === "read-write" && workspaceIsGit) {
 			for (let index = 0; index < options.tasks.length; index++) {
 				const prepared = prepareDelegatedWorktree({ cwd: options.cwd, agentDir: getAgentDir() });
 				if (!prepared.ok) {
@@ -1763,6 +1782,23 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 				}
 				worktreeHandles[index] = prepared.handle;
 			}
+		} else if (!workspaceIsGit) {
+			// Non-Git fallback (both read-only and read-write): one lightweight temp
+			// sandbox per task. Sandbox creation must never fail the dispatch: on
+			// failure the task simply runs in the origin cwd with a note, and the
+			// batch still proceeds concurrently.
+			for (let index = 0; index < options.tasks.length; index++) {
+				try {
+					const prepared = prepareDelegatedSandbox({ originCwd: options.cwd });
+					if (prepared.ok) {
+						sandboxHandles[index] = prepared.handle;
+					} else {
+						sandboxNotes.push(prepared.error);
+					}
+				} catch (error) {
+					sandboxNotes.push(error instanceof Error ? error.message : String(error));
+				}
+			}
 		}
 		// Per-task abort controllers: the panel can kill a single Explore task
 		// while the rest of the batch keeps running.
@@ -1770,22 +1806,31 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		const lastProgressAt = options.tasks.map(() => undefined as string | undefined);
 		options.onKillReady?.((index) => taskControllers[index]?.abort());
 		// Uncommitted files of the Main Agent's workspace that could not be copied into a worktree: the worker is told.
+		const workerCwdFor = (index: number): string => {
+			const worktree = worktreeHandles[index];
+			if (mode === "read-write" && worktree) return worktree.worktreePath;
+			const sandbox = sandboxHandles[index];
+			if (sandbox) return sandbox.sandboxPath;
+			return options.cwd;
+		};
 		const workerPromptFor = (index: number): string => {
 			const base = taskPrompts[index] ?? options.tasks[index]?.prompt ?? "";
 			const notes = worktreeHandles[index]?.importNotes ?? [];
-			return notes.length === 0
-				? base
-				: `${base}\n\nWorkspace snapshot notes (these uncommitted files of the Main Agent's workspace are NOT in your worktree):\n${notes.map((note) => `- ${note}`).join("\n")}`;
+			const withWorktreeNotes =
+				notes.length === 0
+					? base
+					: `${base}\n\nWorkspace snapshot notes (these uncommitted files of the Main Agent's workspace are NOT in your worktree):\n${notes.map((note) => `- ${note}`).join("\n")}`;
+			const sandbox = sandboxHandles[index];
+			if (!sandbox) return withWorktreeNotes;
+			return `${withWorktreeNotes}\n\n[沙箱说明]你正在临时沙箱 ${sandbox.sandboxPath} 中运行，原工作区在 ${sandbox.originCwd}（只读可读，禁止写入污染；临时文件只写沙箱内）。读原工作区文件请用 read/grep/find/ls/symbols + 绝对路径 ${sandbox.originCwd}/...；不要用 bash/pwsh/edit/write 向原工作区写入。`;
 		};
 		const taskSettlements = await Promise.allSettled(
 			options.tasks.map(async (task, index) => {
 				const traceContext = taskTraceContexts[index]?.context;
 				try {
 					results[index] = await runExploreTask({
-						cwd:
-							mode === "read-write" && worktreeHandles[index]
-								? worktreeHandles[index].worktreePath
-								: options.cwd,
+						cwd: workerCwdFor(index),
+						sandboxOrigin: sandboxHandles[index]?.originCwd,
 						provider: options.settings.provider,
 						model: options.settings.model,
 						chatMode: options.settings.chatMode,
@@ -1900,6 +1945,33 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		}
 		if (normalizedRejectedTask) emitProgress();
 
+		// Temp sandboxes are always removed after the batch: they hold only throwaway
+		// files, and the origin workspace must stay clean. Never let cleanup throw.
+		for (let index = 0; index < sandboxHandles.length; index++) {
+			const handle = sandboxHandles[index];
+			if (!handle) continue;
+			try {
+				const finalized = finalizeDelegatedSandbox(handle);
+				if (finalized.error) {
+					results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
+				}
+			} catch (error) {
+				results[index].unresolved = pushUniqueLimited(
+					results[index].unresolved,
+					`清理临时沙箱失败：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		if (sandboxNotes.length > 0) {
+			for (let index = 0; index < results.length; index++) {
+				if (!sandboxHandles[index]) {
+					results[index].unresolved = pushUniqueLimited(
+						results[index].unresolved,
+						`临时沙箱不可用，已回退到原工作区直接运行：${sandboxNotes.join("；")}`,
+					);
+				}
+			}
+		}
 		// Finalize every read-write worktree: clean ones are removed automatically,
 		// anything with uncommitted or untracked changes is kept and reported.
 		if (mode === "read-write") {

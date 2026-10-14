@@ -376,42 +376,103 @@ describe("workflow/ultracode usable accounting follows the mode", () => {
 	});
 });
 
-describe("read-write dispatch requires a Git workspace", () => {
+describe("read-write dispatch in non-Git workspaces falls back to temp sandbox", () => {
 	const createdDirectories: string[] = [];
+	let previousEntry: string | undefined;
+	let previousAgentDir: string | undefined;
 
 	afterEach(() => {
+		if (previousEntry === undefined) delete process.env.MYHARNESS_CLI_ENTRY;
+		else process.env.MYHARNESS_CLI_ENTRY = previousEntry;
+		if (previousAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
+		else process.env[ENV_AGENT_DIR] = previousAgentDir;
+		previousEntry = undefined;
+		previousAgentDir = undefined;
+		delete process.env.MYHARNESS_INTERNAL_DELEGATED_MODE;
+		delete process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE;
+		delete process.env.MYHARNESS_INTERNAL_SANDBOX_ORIGIN;
 		while (createdDirectories.length > 0) {
 			const directory = createdDirectories.pop();
 			if (directory) rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 		}
 	});
 
-	it("fails the whole batch with a clear reason before any worker starts", async () => {
+	it("runs in a temp sandbox, keeps the origin clean, and auto-removes the sandbox", async () => {
 		const plainDir = mkdtempSync(join(tmpdir(), "myharness-rw-nongit-"));
 		createdDirectories.push(plainDir);
+		writeFileSync(join(plainDir, "orig.txt"), "origin\n", "utf8");
 		const agentDir = mkdtempSync(join(tmpdir(), "myharness-rw-agent-"));
 		createdDirectories.push(agentDir);
-		const previousAgentDir = process.env[ENV_AGENT_DIR];
+		const scratch = mkdtempSync(join(tmpdir(), "myharness-rw-nongit-entry-"));
+		createdDirectories.push(scratch);
+		const entryPath = join(scratch, "worker.mjs");
+		const envDumpPath = join(scratch, "env.json");
+		writeFileSync(
+			entryPath,
+			[
+				'import { writeFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				`writeFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify({ cwd: process.cwd(), mode: process.env.MYHARNESS_INTERNAL_DELEGATED_MODE, worktree: process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE, origin: process.env.MYHARNESS_INTERNAL_SANDBOX_ORIGIN }));`,
+				`writeFileSync(join(process.cwd(), "agent-change.txt"), "written inside the sandbox\\n");`,
+				`process.stdout.write(${JSON.stringify(
+					JSON.stringify({
+						type: "agent_end",
+						messages: [
+							{
+								role: "assistant",
+								content: [
+									{ type: "toolCall", id: "call-1", name: "edit", arguments: { path: "agent-change.txt" } },
+								],
+								timestamp: 1,
+							},
+							{
+								role: "toolResult",
+								toolCallId: "call-1",
+								toolName: "edit",
+								content: [{ type: "text", text: "ok" }],
+								isError: false,
+								timestamp: 2,
+							},
+							{ role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 3 },
+						],
+					}),
+				)} + "\\n");`,
+			].join("\n"),
+			"utf8",
+		);
+		previousEntry = process.env.MYHARNESS_CLI_ENTRY;
+		previousAgentDir = process.env[ENV_AGENT_DIR];
+		process.env.MYHARNESS_CLI_ENTRY = entryPath;
 		process.env[ENV_AGENT_DIR] = agentDir;
-		try {
-			const settings = resolveSubAgentRuntimeSettings({
-				enabled: true,
-				provider: "faux",
-				model: "faux-model",
-				thinkingLevel: "off",
-				mode: "read-write",
-			});
-			await expect(
-				runExploreBatch({
-					cwd: plainDir,
-					tasks: [{ description: "Try", prompt: "Change something." }],
-					settings,
-				}),
-			).rejects.toThrow(/无法派出读写子代理[\s\S]*不是 Git 仓库/);
-		} finally {
-			if (previousAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
-			else process.env[ENV_AGENT_DIR] = previousAgentDir;
-		}
+		const settings = resolveSubAgentRuntimeSettings({
+			enabled: true,
+			provider: "faux",
+			model: "faux-model",
+			thinkingLevel: "off",
+			mode: "read-write",
+		});
+		const result = await runExploreBatch({
+			cwd: plainDir,
+			tasks: [{ description: "Try", prompt: "Change something." }],
+			settings,
+		});
+		const dump = JSON.parse(readFileSync(envDumpPath, "utf8")) as {
+			cwd: string;
+			mode?: string;
+			worktree?: string;
+			origin?: string;
+		};
+		// The worker runs in a temp sandbox, not in the origin and not in a Git worktree dir.
+		expect(dump.cwd).not.toBe(plainDir);
+		expect(dump.cwd.includes("myharness-sandbox-")).toBe(true);
+		expect(dump.mode).toBe("read-write");
+		expect(dump.worktree).toBe(dump.cwd);
+		expect(dump.origin).toBe(plainDir);
+		// Sandbox is auto-removed after a clean run; origin stays clean.
+		expect(existsSync(dump.cwd)).toBe(false);
+		expect(readFileSync(join(plainDir, "orig.txt"), "utf8")).toBe("origin\n");
+		expect(existsSync(join(plainDir, "agent-change.txt"))).toBe(false);
+		expect(result.details.results[0]?.status).toBe("completed");
 	});
 });
 
