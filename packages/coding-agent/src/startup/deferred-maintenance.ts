@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { cleanupStaleDelegatedSandboxes } from "../agent/delegation/non-git-sandbox.ts";
 import { cleanupEmptySessionDirectoriesAsync } from "../session/storage/jsonl/index.ts";
 import { cleanupStaleAtomicWriteTempsAsync, writeFileAtomically } from "../utils/atomic-write.ts";
 
@@ -159,6 +160,14 @@ export function scheduleDeferredStartupMaintenance(options: DeferredMaintenanceO
 		if (abortController.signal.aborted) {
 			complete();
 			return;
+		}
+		// Owned temp sandboxes are independent of Data maintenance's daily throttle.
+		try {
+			for (const error of await cleanupStaleDelegatedSandboxes({ signal: abortController.signal })) {
+				logger?.warn?.(error);
+			}
+		} catch (error) {
+			logger?.warn?.(`Deferred sandbox cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		const markerPath = join(resolvedDataRoot, MARKER_FILE_NAME);
 		const currentNow = getNowMs(nowMs);

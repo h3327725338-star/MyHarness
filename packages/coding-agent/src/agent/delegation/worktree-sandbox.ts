@@ -15,67 +15,39 @@
  * untracked changes is always kept for the user.
  */
 import { randomBytes } from "node:crypto";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, rmdirSync, rmSync, type Stats } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { copyFileSync, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { runGitSync } from "../../git/repository/command.ts";
 import { GitWorktreeManager } from "../../git/worktrees/manager.ts";
 
-/** Env var the sandbox fallback uses to tell a worker where the read-only origin workspace lives. */
-export const DELEGATED_SANDBOX_ORIGIN_ENV = "MYHARNESS_INTERNAL_SANDBOX_ORIGIN";
+export {
+	DELEGATED_SANDBOX_ORIGIN_ENV,
+	type DelegatedSandboxHandle,
+	finalizeDelegatedSandbox,
+	prepareDelegatedSandbox,
+} from "./non-git-sandbox.ts";
 
-/**
- * Whether `cwd` sits inside a usable Git working tree. Never throws: any Git
- * failure (not a repo, no git binary, bad path) simply means "not a Git workspace".
- */
+/** Distinguish a plain folder from broken/unavailable Git detection before dispatch. */
+export function detectDelegatedWorkspace(cwd: string): { ok: true; isGit: boolean } | { ok: false; error: string } {
+	try {
+		const result = runGitSync(["rev-parse", "--show-toplevel"], {
+			cwd,
+			timeoutMs: 10_000,
+			env: { LC_ALL: "C", LANG: "C" },
+		});
+		if (result.ok && result.stdout.trim()) return { ok: true, isGit: true };
+		if (result.failureKind === "exit" && /not a git repository/i.test(result.stderr))
+			return { ok: true, isGit: false };
+		return { ok: false, error: `无法确认工作区 Git 状态：${result.error || result.stderr || "没有有效仓库路径"}` };
+	} catch (error) {
+		return { ok: false, error: `无法确认工作区 Git 状态：${error instanceof Error ? error.message : String(error)}` };
+	}
+}
+
+/** Compatibility helper for callers that only need a boolean. */
 export function isGitRepository(cwd: string): boolean {
-	try {
-		const toplevel = runGitSync(["rev-parse", "--show-toplevel"], { cwd, timeoutMs: 10_000 });
-		return Boolean(toplevel.ok) && toplevel.stdout.trim() !== "";
-	} catch {
-		return false;
-	}
-}
-
-export interface DelegatedSandboxHandle {
-	/** Absolute path of the task's own temp sandbox; the worker process runs inside it. */
-	sandboxPath: string;
-	/** Absolute path of the user's original workspace (read-only for the worker). */
-	originCwd: string;
-}
-
-/**
- * Create one lightweight temp sandbox for a delegated task in a non-Git workspace.
- * The directory is empty, lives under the OS temp dir, and is never a Git repo
- * (no `git init` here). Returns a structured error instead of throwing.
- */
-export function prepareDelegatedSandbox(options: {
-	originCwd: string;
-}): { ok: true; handle: DelegatedSandboxHandle } | { ok: false; error: string } {
-	try {
-		const sandboxPath = mkdtempSync(join(tmpdir(), "myharness-sandbox-"));
-		return { ok: true, handle: { sandboxPath, originCwd: resolve(options.originCwd) } };
-	} catch (error) {
-		return {
-			ok: false,
-			error: `创建子代理临时沙箱失败：${error instanceof Error ? error.message : String(error)}`,
-		};
-	}
-}
-
-/**
- * Remove one temp sandbox. Never throws: cleanup failures are reported, never bubbled.
- */
-export function finalizeDelegatedSandbox(handle: DelegatedSandboxHandle): { removed: boolean; error?: string } {
-	try {
-		rmSync(handle.sandboxPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-		return { removed: true };
-	} catch (error) {
-		return {
-			removed: false,
-			error: `清理临时沙箱失败（已保留 ${handle.sandboxPath}）：${error instanceof Error ? error.message : String(error)}`,
-		};
-	}
+	const result = detectDelegatedWorkspace(cwd);
+	return result.ok && result.isGit;
 }
 
 /** A single uncommitted file larger than this stays out of the worktree (reported in `importNotes`). */

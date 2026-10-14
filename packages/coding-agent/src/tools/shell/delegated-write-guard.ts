@@ -177,7 +177,7 @@ function resolveLexically(raw: string, root: string): string | undefined {
 	if (value === "") return root;
 	if (value.startsWith("~")) return undefined; // home paths are never inside the worktree jail
 	if (/\0/.test(value)) return undefined;
-	const base = isDriveAbsolute(value) || isUnixAbsolute(value) ? value : `${root}/${value}`;
+	const base = isDriveAbsolute(value) || isUnixAbsolute(value) ? value : `${normalizeSlashes(root)}/${value}`;
 	const segments: string[] = [];
 	for (const segment of normalizeSlashes(base).split("/")) {
 		if (segment === "" || segment === ".") continue;

@@ -41,6 +41,7 @@ interface BackgroundExploreEntry {
 export class SessionBackgroundWork {
 	private readonly _host: SessionBackgroundWorkHost;
 	private _exploreTasks = new Map<string, BackgroundExploreEntry>();
+	private _settlingExplore = new Set<Promise<void>>();
 	/** Latest progress of each background batch, to describe it correctly when it is stopped. */
 	private _progress = new Map<string, SubAgentBackgroundProgress["details"]>();
 	/** Runtime controls for in-flight workflow/ultracode runs, keyed by tool call id. */
@@ -67,12 +68,14 @@ export class SessionBackgroundWork {
 	}
 
 	trackExplore(task: SubAgentBackgroundTask): void {
+		this._settlingExplore.add(task.promise);
 		this._exploreTasks.set(task.batchId, {
 			abort: task.abort,
 			promise: task.promise,
 			specs: task.tasks,
 		});
 		const cleanup = () => {
+			this._settlingExplore.delete(task.promise);
 			const live = this._exploreTasks.get(task.batchId);
 			if (live?.promise !== task.promise) return;
 			this._exploreTasks.delete(task.batchId);
@@ -143,10 +146,19 @@ export class SessionBackgroundWork {
 		}
 	}
 
+	/** Includes disposed batches until their worker and sandbox cleanup has settled. */
+	async waitForExploreCleanup(): Promise<void> {
+		await Promise.allSettled([...this._settlingExplore]);
+	}
+
 	/** Session disposal: stop everything and forget it without notifying hosts. */
 	dispose(): void {
 		for (const task of this._exploreTasks.values()) {
-			task.abort();
+			try {
+				task.abort();
+			} catch {
+				// Continue cancelling the remaining batches.
+			}
 		}
 		this._exploreTasks.clear();
 		for (const pending of this._pendingProgress.values()) clearTimeout(pending.timer);

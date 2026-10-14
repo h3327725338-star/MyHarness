@@ -1481,6 +1481,7 @@ export class AgentSession {
 				this.waitForIdle(),
 				this._bash.activeCompletion ?? Promise.resolve(),
 				this._autoMemory.waitForMaintenancePersistence(),
+				this._backgroundWork.waitForExploreCleanup(),
 			]).then(
 				() => undefined,
 				() => undefined,

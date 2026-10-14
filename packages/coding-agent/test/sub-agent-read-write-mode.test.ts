@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -397,7 +397,7 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 		}
 	});
 
-	it("runs in a temp sandbox, keeps the origin clean, and auto-removes the sandbox", async () => {
+	it.each(["read-only", "read-write"] as const)("mirrors input and cleans up in %s mode", async (mode) => {
 		const plainDir = mkdtempSync(join(tmpdir(), "myharness-rw-nongit-"));
 		createdDirectories.push(plainDir);
 		writeFileSync(join(plainDir, "orig.txt"), "origin\n", "utf8");
@@ -410,8 +410,10 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 		writeFileSync(
 			entryPath,
 			[
-				'import { writeFileSync } from "node:fs";',
+				'import { writeFileSync, readFileSync } from "node:fs";',
 				'import { join } from "node:path";',
+				'if (readFileSync(join(process.cwd(), "orig.txt"), "utf8") !== "origin\\n") throw new Error("missing mirror input");',
+				'writeFileSync(join(process.cwd(), "orig.txt"), "changed only in mirror");',
 				`writeFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify({ cwd: process.cwd(), mode: process.env.MYHARNESS_INTERNAL_DELEGATED_MODE, worktree: process.env.MYHARNESS_INTERNAL_DELEGATED_WORKTREE, origin: process.env.MYHARNESS_INTERNAL_SANDBOX_ORIGIN }));`,
 				`writeFileSync(join(process.cwd(), "agent-change.txt"), "written inside the sandbox\\n");`,
 				`process.stdout.write(${JSON.stringify(
@@ -421,14 +423,19 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 							{
 								role: "assistant",
 								content: [
-									{ type: "toolCall", id: "call-1", name: "edit", arguments: { path: "agent-change.txt" } },
+									{
+										type: "toolCall",
+										id: "call-1",
+										name: mode === "read-write" ? "edit" : "read",
+										arguments: { path: "orig.txt" },
+									},
 								],
 								timestamp: 1,
 							},
 							{
 								role: "toolResult",
 								toolCallId: "call-1",
-								toolName: "edit",
+								toolName: mode === "read-write" ? "edit" : "read",
 								content: [{ type: "text", text: "ok" }],
 								isError: false,
 								timestamp: 2,
@@ -449,7 +456,7 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 			provider: "faux",
 			model: "faux-model",
 			thinkingLevel: "off",
-			mode: "read-write",
+			mode,
 		});
 		const result = await runExploreBatch({
 			cwd: plainDir,
@@ -465,9 +472,9 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 		// The worker runs in a temp sandbox, not in the origin and not in a Git worktree dir.
 		expect(dump.cwd).not.toBe(plainDir);
 		expect(dump.cwd.includes("myharness-sandbox-")).toBe(true);
-		expect(dump.mode).toBe("read-write");
-		expect(dump.worktree).toBe(dump.cwd);
-		expect(dump.origin).toBe(plainDir);
+		expect(dump.mode).toBe(mode === "read-write" ? "read-write" : undefined);
+		expect(dump.worktree).toBe(mode === "read-write" ? dump.cwd : undefined);
+		expect(dump.origin).toBe(realpathSync(plainDir));
 		// Sandbox is auto-removed after a clean run; origin stays clean.
 		expect(existsSync(dump.cwd)).toBe(false);
 		expect(readFileSync(join(plainDir, "orig.txt"), "utf8")).toBe("origin\n");

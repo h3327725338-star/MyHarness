@@ -13,13 +13,14 @@ import {
 	type DelegatedJsonEvent,
 	extractDelegatedMessageToolEvidence,
 } from "../agent/delegation/event-parser.ts";
+import { registerDelegatedSandboxWorker } from "../agent/delegation/non-git-sandbox.ts";
 import {
 	DELEGATED_SANDBOX_ORIGIN_ENV,
 	type DelegatedSandboxHandle,
 	type DelegatedWorktreeHandle,
+	detectDelegatedWorkspace,
 	finalizeDelegatedSandbox,
 	finalizeDelegatedWorktree,
-	isGitRepository,
 	prepareDelegatedSandbox,
 	prepareDelegatedWorktree,
 } from "../agent/delegation/worktree-sandbox.ts";
@@ -1035,6 +1036,7 @@ async function runExploreTask(options: {
 	traceContext?: RuntimeTraceChildContext;
 	/** Non-Git fallback: original workspace the sandbox worker may read (read-only). */
 	sandboxOrigin?: string;
+	sandboxHandle?: DelegatedSandboxHandle;
 }): Promise<ExploreTaskResult> {
 	const eventState = createDelegatedEventState();
 	const messages = eventState.messages;
@@ -1113,6 +1115,15 @@ async function runExploreTask(options: {
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
+			if (options.sandboxHandle && child.pid) {
+				try {
+					registerDelegatedSandboxWorker(options.sandboxHandle, child.pid);
+				} catch (error) {
+					child.on("error", () => {});
+					void waitForProcessStop(child.pid).then(() => reject(error));
+					return;
+				}
+			}
 			// 任务 prompt 与运行中提醒都通过 stdin 以 NDJSON 行传入：
 			// 避免超长命令行触发 ENAMETOOLONG，并允许向运行中的子会话注入 steering 提醒。
 			child.stdin?.on("error", () => {});
@@ -1710,6 +1721,19 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		});
 	};
 
+	const sandboxHandles: Array<DelegatedSandboxHandle | undefined> = options.tasks.map(() => undefined);
+	const sandboxErrors: Array<string | undefined> = options.tasks.map(() => undefined);
+	const taskControllers = options.tasks.map(() => new AbortController());
+	options.onKillReady?.((index) => taskControllers[index]?.abort());
+	const taskSignalFor = (index: number) =>
+		options.signal ? AbortSignal.any([options.signal, taskControllers[index].signal]) : taskControllers[index].signal;
+	const cleanupSandbox = async (index: number) => {
+		const handle = sandboxHandles[index];
+		if (!handle) return;
+		const finalized = await finalizeDelegatedSandbox(handle);
+		if (finalized.removed) sandboxHandles[index] = undefined;
+		if (finalized.error) results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
+	};
 	try {
 		for (let index = 0; index < taskTraceContexts.length; index++) {
 			const traceTask = taskTraceContexts[index];
@@ -1759,18 +1783,14 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		// Workspace-adaptive dispatch: Git workspaces keep the historical Git worktree
 		// isolation untouched; non-Git workspaces fall back to per-task temp sandboxes
 		// (never `git init`, never writes into the origin workspace).
-		let workspaceIsGit = false;
-		try {
-			workspaceIsGit = isGitRepository(options.cwd);
-		} catch {
-			workspaceIsGit = false;
-		}
+		const workspace = detectDelegatedWorkspace(options.cwd);
+		if (!workspace.ok) throw new Error(workspace.error);
+		const workspaceIsGit = workspace.isGit;
 		// Read-write tasks each run inside their own fresh Git worktree, created
 		// up front so an unusable workspace fails the whole dispatch with a clear
 		// reason instead of after some workers already started.
 		const worktreeHandles: Array<DelegatedWorktreeHandle | undefined> = options.tasks.map(() => undefined);
-		const sandboxHandles: Array<DelegatedSandboxHandle | undefined> = options.tasks.map(() => undefined);
-		const sandboxNotes: string[] = [];
+
 		if (mode === "read-write" && workspaceIsGit) {
 			for (let index = 0; index < options.tasks.length; index++) {
 				const prepared = prepareDelegatedWorktree({ cwd: options.cwd, agentDir: getAgentDir() });
@@ -1783,28 +1803,24 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 				worktreeHandles[index] = prepared.handle;
 			}
 		} else if (!workspaceIsGit) {
-			// Non-Git fallback (both read-only and read-write): one lightweight temp
-			// sandbox per task. Sandbox creation must never fail the dispatch: on
-			// failure the task simply runs in the origin cwd with a note, and the
-			// batch still proceeds concurrently.
+			// Assemble independent mirrors before dispatch. Failure never runs a writable worker on the host.
 			for (let index = 0; index < options.tasks.length; index++) {
-				try {
-					const prepared = prepareDelegatedSandbox({ originCwd: options.cwd });
-					if (prepared.ok) {
-						sandboxHandles[index] = prepared.handle;
-					} else {
-						sandboxNotes.push(prepared.error);
-					}
-				} catch (error) {
-					sandboxNotes.push(error instanceof Error ? error.message : String(error));
-				}
+				results[index].lastToolInfo = "正在准备工作区文件镜像…";
+				emitProgress();
+				const prepared = await prepareDelegatedSandbox({
+					originCwd: options.cwd,
+					signal: taskSignalFor(index),
+					onCreated: (handle) => {
+						sandboxHandles[index] = handle;
+					},
+				});
+				if (prepared.ok) sandboxHandles[index] = prepared.handle;
+				else sandboxErrors[index] = prepared.error;
 			}
 		}
 		// Per-task abort controllers: the panel can kill a single Explore task
 		// while the rest of the batch keeps running.
-		const taskControllers = options.tasks.map(() => new AbortController());
 		const lastProgressAt = options.tasks.map(() => undefined as string | undefined);
-		options.onKillReady?.((index) => taskControllers[index]?.abort());
 		// Uncommitted files of the Main Agent's workspace that could not be copied into a worktree: the worker is told.
 		const workerCwdFor = (index: number): string => {
 			const worktree = worktreeHandles[index];
@@ -1822,15 +1838,18 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 					: `${base}\n\nWorkspace snapshot notes (these uncommitted files of the Main Agent's workspace are NOT in your worktree):\n${notes.map((note) => `- ${note}`).join("\n")}`;
 			const sandbox = sandboxHandles[index];
 			if (!sandbox) return withWorktreeNotes;
-			return `${withWorktreeNotes}\n\n[沙箱说明]你正在临时沙箱 ${sandbox.sandboxPath} 中运行，原工作区在 ${sandbox.originCwd}（只读可读，禁止写入污染；临时文件只写沙箱内）。读原工作区文件请用 read/grep/find/ls/symbols + 绝对路径 ${sandbox.originCwd}/...；不要用 bash/pwsh/edit/write 向原工作区写入。`;
+			return `${withWorktreeNotes}\n\n[沙箱说明]工作区文件已复制到独立沙箱 ${sandbox.sandboxPath}（${sandbox.importedFiles} 个文件，${sandbox.importedBytes} 字节，装配 ${sandbox.preparationMs}ms）。优先用相对路径（如 ./课件.pdf）读取；所有修改和临时文件只留在沙箱，结束后删除，不写回宿主。原工作区 ${sandbox.originCwd} 仅可通过 read/grep/find/ls/symbols 绝对路径补读，不得通过 bash/pwsh/edit/write 访问或修改。镜像${sandbox.complete ? "已按过滤规则完成" : "不完整，不能将缺失文件当成不存在"}。\n未带入镜像的项目：\n${sandbox.importNotes.length ? sandbox.importNotes.map((note) => `- ${note}`).join("\n") : "- 无"}`;
 		};
 		const taskSettlements = await Promise.allSettled(
 			options.tasks.map(async (task, index) => {
 				const traceContext = taskTraceContexts[index]?.context;
+				const sandbox = sandboxHandles[index];
 				try {
+					if (sandboxErrors[index]) throw new Error(sandboxErrors[index]);
 					results[index] = await runExploreTask({
 						cwd: workerCwdFor(index),
-						sandboxOrigin: sandboxHandles[index]?.originCwd,
+						sandboxOrigin: sandbox?.originCwd,
+						sandboxHandle: sandbox,
 						provider: options.settings.provider,
 						model: options.settings.model,
 						chatMode: options.settings.chatMode,
@@ -1844,9 +1863,7 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						questions: task.questions,
 						systemPromptPath,
 						guardPath,
-						signal: options.signal
-							? AbortSignal.any([options.signal, taskControllers[index].signal])
-							: taskControllers[index].signal,
+						signal: taskSignalFor(index),
 						taskTimeoutMs: options.settings.taskTimeoutMs,
 						totalRuntimeLimitMs: options.settings.totalRuntimeLimitMs,
 						maxTurns: options.settings.maxTurns,
@@ -1926,6 +1943,12 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 							tokens: results[index].tokens,
 						});
 					}
+				} finally {
+					if (sandbox) {
+						for (const note of sandbox.importNotes)
+							results[index].unresolved = pushUniqueLimited(results[index].unresolved, `未带入镜像：${note}`);
+					}
+					await cleanupSandbox(index);
 				}
 			}),
 		);
@@ -1945,33 +1968,6 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		}
 		if (normalizedRejectedTask) emitProgress();
 
-		// Temp sandboxes are always removed after the batch: they hold only throwaway
-		// files, and the origin workspace must stay clean. Never let cleanup throw.
-		for (let index = 0; index < sandboxHandles.length; index++) {
-			const handle = sandboxHandles[index];
-			if (!handle) continue;
-			try {
-				const finalized = finalizeDelegatedSandbox(handle);
-				if (finalized.error) {
-					results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
-				}
-			} catch (error) {
-				results[index].unresolved = pushUniqueLimited(
-					results[index].unresolved,
-					`清理临时沙箱失败：${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
-		if (sandboxNotes.length > 0) {
-			for (let index = 0; index < results.length; index++) {
-				if (!sandboxHandles[index]) {
-					results[index].unresolved = pushUniqueLimited(
-						results[index].unresolved,
-						`临时沙箱不可用，已回退到原工作区直接运行：${sandboxNotes.join("；")}`,
-					);
-				}
-			}
-		}
 		// Finalize every read-write worktree: clean ones are removed automatically,
 		// anything with uncommitted or untracked changes is kept and reported.
 		if (mode === "read-write") {
@@ -2020,7 +2016,12 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 			details,
 		};
 	} finally {
-		await fs.promises.rm(tempDir, { recursive: true, force: true });
+		for (let index = 0; index < sandboxHandles.length; index++) await cleanupSandbox(index);
+		await fs.promises.rm(tempDir, { recursive: true, force: true }).catch((error) => {
+			console.warn(
+				`清理子代理提示目录失败（已保留 ${tempDir}）：${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
 	}
 }
 
@@ -2037,8 +2038,8 @@ export function createSubAgentToolDefinition(
 		label: "Agent",
 		description:
 			mode === "read-write"
-				? `Delegates one to ${advertisedMaxTasks} independent investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Each sub-agent may edit files and run commands only inside its own Git worktree (a separate checkout kept under the settings directory, made from the current HEAD plus a copy of the workspace's uncommitted changes as they are now, so it sees the same files you see; your later edits are not visible to it, and your workspace cannot be read from it by absolute path); it can never commit, push, merge or stage, cannot start further sub-agents, and reports its worktree path, branch and changed files back with the result. Changes stay uncommitted for the Main Agent and the user to review.`
-				: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project.`,
+				? `Delegates one to ${advertisedMaxTasks} independent investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Each sub-agent may edit files and run commands only inside its own Git worktree (a separate checkout kept under the settings directory, made from the current HEAD plus a copy of the workspace's uncommitted changes as they are now, so it sees the same files you see; your later edits are not visible to it, and your workspace cannot be read from it by absolute path); it can never commit, push, merge or stage, cannot start further sub-agents, and reports its worktree path, branch and changed files back with the result. Git worktree changes stay uncommitted for the Main Agent and the user to review. In a non-Git folder each task instead receives a filtered independent file mirror in a temporary sandbox; use relative paths there, and changes are disposable, never written back to the host. Mirror preparation failure never runs a writable worker in the host folder.`
+				: `Delegates one to ${advertisedMaxTasks} independent read-only investigation tasks to isolated Explore sub-agents. Suitable when there are multiple genuinely independent directions with parallel payoff; single-path or sequentially dependent investigations are not suitable. Sub-agents cannot modify the project. Non-Git folders are copied into per-task filtered file mirrors before workers start; use relative paths and observe the reported skipped files.`,
 		promptSnippet: loadSystemPrompt("tools/agent/snippet.md", promptVariables),
 		promptGuidelines: [
 			...loadSystemPromptLines("tools/agent/guidelines.md", promptVariables),
