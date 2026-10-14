@@ -20,6 +20,7 @@ import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexesIfChanged 
 import type { SessionManager } from "../session/manager/index.ts";
 import type { UltracodeToolOptions, WorkflowToolOptions } from "../workflow/tool.ts";
 import { createSessionMemoryOperations } from "./memory/search.ts";
+import { createSessionMemoryManageOperations } from "./memory/manage.ts";
 import { createAllToolDefinitions, createToolDefinition, type ToolName } from "./registry.ts";
 import type { SubAgentToolOptions } from "./sub-agent.ts";
 import type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
@@ -206,6 +207,8 @@ export class SessionToolRegistry {
 					"github",
 					"memory_search",
 					"memory_get",
+					"memory_delete",
+					"memory_claim",
 					"ask_user_question",
 					"todo_write",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
@@ -269,7 +272,10 @@ export class SessionToolRegistry {
 					agent: this._options.agent,
 					workflow: this._options.workflow,
 					ultracode: this._options.ultracode,
-					memory: { operations: createSessionMemoryOperations({ sessionManager, settingsManager }) },
+					memory: {
+						operations: createSessionMemoryOperations({ sessionManager, settingsManager }),
+						manageOperations: createSessionMemoryManageOperations({ sessionManager, settingsManager }),
+					},
 					webSearch: {
 						service: this._webSearchService,
 					},

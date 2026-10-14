@@ -25,7 +25,13 @@ import {
 	refreshArtifactIndexes,
 	resolveArtifact,
 } from "../../session/artifacts/store.ts";
-import { listMemoryFiles, migrateLegacyMemories, restoreMemoryArchive } from "../../session/memory/store.ts";
+import {
+	claimPendingMemory,
+	deleteMemoryPermanently,
+	listMemoryFiles,
+	migrateLegacyMemories,
+	restoreMemoryArchive,
+} from "../../session/memory/store.ts";
 import type { RunChangeCardFile } from "./changes.ts";
 import {
 	getCachedWorktreeChangesSync,
@@ -297,6 +303,27 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			throw new HttpError(409, "Wait for the current task to finish");
 		await restoreMemoryArchive(artifactDataRoot(), payload.path);
 		return { ok: true };
+	});
+	server.route("POST", "/api/memory/delete", async ({ body }) => {
+		const payload = body as { path?: unknown } | null;
+		if (typeof payload?.path !== "string") throw new HttpError(400, "Expected a memory path");
+		// Permanent deletion removes the active file and all its archived versions. Nothing can be recovered.
+		// Do not race a running task or its memory extraction.
+		if (!host.session.isIdle || host.completionActive)
+			throw new HttpError(409, "Wait for the current task to finish");
+		const { archiveCount } = await deleteMemoryPermanently(artifactDataRoot(), payload.path);
+		return { ok: true, archiveCount };
+	});
+	server.route("POST", "/api/memory/claim", async ({ body }) => {
+		const payload = body as { path?: unknown } | null;
+		if (typeof payload?.path !== "string") throw new HttpError(400, "Expected a pending memory path");
+		// Claiming moves a quarantined memory into this workspace. Do not race a running task.
+		if (!host.session.isIdle || host.completionActive)
+			throw new HttpError(409, "Wait for the current task to finish");
+		const workspaceId = host.session.sessionManager.getWorkspaceId();
+		if (!workspaceId) throw new HttpError(409, "No current workspace.");
+		const { id } = await claimPendingMemory(artifactDataRoot(), payload.path, workspaceId);
+		return { ok: true, id };
 	});
 	server.route("POST", "/api/memory/maintenance-retry", async () => {
 		// Do not race a running task: the pill only shows these buttons while idle.

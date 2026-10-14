@@ -20,11 +20,11 @@ function releasePendingDialog(fallback) {
 }
 
 /** Promise-based confirmation modal (rendered by overlays.js). */
-export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false }) {
+export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false, memoryChoice = false }) {
 	return new Promise((resolve) => {
 		releasePendingDialog(false);
 		dialogResolver = resolve;
-		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice } });
+		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice, memoryChoice } });
 	});
 }
 /** Promise-based text prompt (rendered by app.js). Resolves undefined when cancelled. */
@@ -277,9 +277,9 @@ export const actions = {
 	},
 
 	async deleteSession(path, title) {
-		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true, artifactChoice: true });
+		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true, artifactChoice: true, memoryChoice: true });
 		if (!ok) return;
-		const result = await attempt(() => post("/api/sessions/delete", { path, deleteArtifacts: ok.deleteArtifacts === true }));
+		const result = await attempt(() => post("/api/sessions/delete", { path, deleteArtifacts: ok.deleteArtifacts === true, deleteMemory: ok.deleteMemory === true }));
 		if (result) await refreshAll();
 	},
 

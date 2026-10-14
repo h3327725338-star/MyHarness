@@ -496,12 +496,15 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const input = asObject(body);
 		if (input.deleteArtifacts !== undefined && typeof input.deleteArtifacts !== "boolean")
 			throw new HttpError(400, "deleteArtifacts must be a boolean");
+		if (input.deleteMemory !== undefined && typeof input.deleteMemory !== "boolean")
+			throw new HttpError(400, "deleteMemory must be a boolean");
 		const path = asString(input.path, "path");
 		await assertKnownSession(path, true);
 		await releaseSessionSlots(path);
 		const deleted = await deleteSessionFile(path, {
 			permanent: true,
 			deleteArtifacts: input.deleteArtifacts === true,
+			deleteMemory: input.deleteMemory === true,
 		});
 		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
 		await setSessionMarker(path, ".pinned", false);

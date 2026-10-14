@@ -4,6 +4,7 @@ import { rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { getSessionDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { assertDirectTree, preserveArtifactOrigin, refreshSessionArtifactIndexes } from "../../artifacts/store.ts";
+import { refreshMemoryIndexes } from "../../memory/store.ts";
 
 function deleteTarget(sessionPath: string): { path: string; directory: boolean } {
 	const structured = parseSessionDataPath(sessionPath);
@@ -21,13 +22,20 @@ function deleteTarget(sessionPath: string): { path: string; directory: boolean }
 /** Delete a session file, preferring the platform trash command when available. */
 export async function deleteSessionFile(
 	sessionPath: string,
-	options: { permanent?: boolean; deleteArtifacts?: boolean } = {},
+	options: { permanent?: boolean; deleteArtifacts?: boolean; deleteMemory?: boolean } = {},
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
 	const target = deleteTarget(sessionPath);
 	const scope = parseSessionDataPath(sessionPath);
 	try {
 		assertDirectTree(target.path);
-		const hasMemory = target.directory && existsSync(join(target.path, "memory"));
+		// 连带删记忆（用户在删除确认框中显式勾选，默认不勾）：整个 memory/ 目录随聊天一起清除，
+		// 含归档与待处理快照，不可恢复。不勾选时记忆保留原样，可被记忆工具继续使用。
+		const keepMemory = options.deleteMemory !== true && target.directory && existsSync(join(target.path, "memory"));
+		if (options.deleteMemory === true && target.directory) {
+			await rm(join(target.path, "memory"), { recursive: true, force: true });
+			if (scope) await refreshMemoryIndexes(scope.dataRoot);
+		}
+		const hasMemory = keepMemory;
 		if (target.directory && scope && (options.deleteArtifacts !== true || hasMemory)) {
 			const hasArtifacts = options.deleteArtifacts !== true && existsSync(join(target.path, "artifacts"));
 			if (hasArtifacts) preserveArtifactOrigin(scope, sessionPath);

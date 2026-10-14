@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import {
 	AutoMemoryManager,
+	findMemoryContradictions,
 	getAutoMemoryPaths,
 	isMemoryProfile,
 	MEMORY_PROFILE_ID,
 	type MemoryEntry,
+	readCrossScopeMemoryEntries,
 	readMemoryEntries,
 	selectMemoriesForQuery,
 } from "../src/agent/runtime/auto-memory.ts";
@@ -21,6 +23,11 @@ import {
 	createSessionMemoryOperations,
 	type MemoryToolOperations,
 } from "../src/tools/memory/search.ts";
+import {
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteToolDefinition,
+	createSessionMemoryManageOperations,
+} from "../src/tools/memory/manage.ts";
 import { allToolNames, createAllToolDefinitions, createAllTools } from "../src/tools/registry.ts";
 
 interface MemoryFixture {
@@ -250,7 +257,7 @@ describe("memory annotations and recall", () => {
 		expect(selectMemoriesForQuery("为什么每次都要等我点头", bare)).toEqual([]);
 	});
 
-	it("keeps the relative-score cut for ordinary keyword matches", () => {
+	it("keeps the best match first and guarantees weaker matches instead of cutting them", () => {
 		const entries = [
 			entry({
 				id: "global/strong",
@@ -265,8 +272,39 @@ describe("memory annotations and recall", () => {
 				description: "杂项备注",
 			}),
 		];
+		// 默认保底 8 条：阈值之外的弱匹配也保留，但最佳匹配仍排第一。
 		const ids = selectMemoriesForQuery("部署发布流程怎么走", entries).map((result) => result.entry.id);
-		expect(ids).toEqual(["global/strong"]);
+		expect(ids).toEqual(["global/strong", "global/weak"]);
+		// guaranteed: 0 恢复严格截断行为。
+		const strict = selectMemoriesForQuery("部署发布流程怎么走", entries, { guaranteed: 0 }).map(
+			(result) => result.entry.id,
+		);
+		expect(strict).toEqual(["global/strong"]);
+	});
+
+	it("keeps every lexical match best-first and guarantees weaker ones up to eight", () => {
+		const strong = [0, 1].map((index) =>
+			entry({
+				id: `global/strong-${index}`,
+				name: "部署发布",
+				content: `部署发布流程备忘 ${index}`,
+				description: "部署发布流程",
+			}),
+		);
+		// 弱匹配只共享一个查询词且正文很长：阈值大概率筛掉它们，保底逻辑把它们捞回来凑满 8 条。
+		const weak = Array.from({ length: 8 }, (_, index) =>
+			entry({
+				id: `global/weak-${String(index).padStart(2, "0")}`,
+				name: `杂项 ${index}`,
+				content: `这里提到一次发布${" 其他无关长文本内容".repeat(60 + index)}`,
+				description: "杂项备注",
+			}),
+		);
+		const results = selectMemoriesForQuery("部署发布流程怎么走", [...strong, ...weak]);
+		expect(results).toHaveLength(8);
+		expect(results.map((result) => result.entry.id).slice(0, 2)).toEqual(["global/strong-0", "global/strong-1"]);
+		const scores = results.map((result) => result.score);
+		expect([...scores].sort((a, b) => b - a)).toEqual(scores);
 	});
 
 	it("matches trigger phrases by whole phrase, shared two-character groups and whole Latin words", () => {
@@ -596,12 +634,257 @@ describe("memory_search and memory_get", () => {
 	it("is registered as a read-only tool for the main agent but not for delegated sessions", () => {
 		expect(allToolNames.has("memory_search")).toBe(true);
 		expect(allToolNames.has("memory_get")).toBe(true);
+		expect(allToolNames.has("memory_delete")).toBe(true);
+		expect(allToolNames.has("memory_claim")).toBe(true);
 		const definitions = createAllToolDefinitions(projectDir);
 		expect(definitions.memory_search.executionMode).toBe("parallel");
 		expect(definitions.memory_get.executionMode).toBe("parallel");
+		expect(definitions.memory_delete.executionMode).toBe("sequential");
+		expect(definitions.memory_claim.executionMode).toBe("sequential");
 		expect(definitions.memory_search.promptSnippet).toContain("long-term memory");
 		expect(definitions.memory_get.promptSnippet).toContain("memory_search");
+		expect(definitions.memory_delete.promptSnippet).toContain("Permanently delete");
+		expect(definitions.memory_claim.promptSnippet).toContain("Claim");
 		expect(createAllTools(projectDir).memory_search.name).toBe("memory_search");
+		expect(createAllTools(projectDir).memory_delete.name).toBe("memory_delete");
 		expect(restrictToolNamesForRole("delegated", ["read", "memory_search", "memory_get"])).toEqual(["read"]);
+		expect(
+			restrictToolNamesForRole("delegated", ["read", "memory_delete", "memory_claim"]),
+		).toEqual(["read"]);
+	});
+});
+
+describe("memory v2: resident directory, contradictions, cross-scope access", () => {
+	afterEach(() => {
+		rmSync(testRoot, { recursive: true, force: true });
+	});
+
+	function otherPaths(workspaceId: string, sessionId: string) {
+		mkdirSync(projectDir, { recursive: true });
+		return getAutoMemoryPaths(projectDir, agentDir, { dataRoot, workspaceId, sessionId });
+	}
+
+	function writePending(id: string, name: string, body: string): string {
+		const directory = join(dataRoot, "memory", "pending", "legacy-key");
+		mkdirSync(directory, { recursive: true });
+		const file = join(directory, `${id.slice("pending/".length)}.md`);
+		writeFileSync(
+			file,
+			`---\n${stringifyYaml({ id, name, description: `${name} 相关时`, type: "reference", scope: "pending", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-02-01T00:00:00.000Z" }).trim()}\n---\n\n${body}\n`,
+		);
+		return file;
+	}
+
+	const manageOps = () =>
+		createSessionMemoryManageOperations({
+			sessionManager: {
+				isPersisted: () => true,
+				getDataRoot: () => dataRoot,
+				getWorkspaceId: () => location.workspaceId,
+				getSessionId: () => location.sessionId,
+			},
+			settingsManager: enabledSettings(),
+		});
+	const ops = () =>
+		createSessionMemoryOperations({
+			sessionManager: {
+				isPersisted: () => true,
+				getDataRoot: () => dataRoot,
+				getWorkspaceId: () => location.workspaceId,
+				getSessionId: () => location.sessionId,
+			},
+			settingsManager: enabledSettings(),
+		});
+	const search = () => createMemorySearchToolDefinition(projectDir, { operations: ops() });
+	const get = () => createMemoryGetToolDefinition(projectDir, { operations: ops() });
+	const run = <T extends { execute: (...args: any[]) => Promise<any> }>(tool: T, input: object) =>
+		tool.execute("call", input, undefined, undefined, undefined);
+	const deleter = () => createMemoryDeleteToolDefinition(projectDir, { operations: manageOps() });
+	const claimer = () => createMemoryClaimToolDefinition(projectDir, { operations: manageOps() });
+
+	it("carries a resident directory in every recall while cards stay budgeted", async () => {
+		writeMemory({ id: "global/one", name: "One", body: "第一条记忆正文。" });
+		writeMemory({ id: "global/two", name: "Two", body: "第二条记忆正文。" });
+		writeMemory({
+			id: MEMORY_PROFILE_ID,
+			name: "用户画像",
+			type: "user",
+			body: "画像正文独有标记。",
+		});
+
+		// Nothing matches: the profile still goes out, and the directory names every own memory.
+		const unrelated = await manager().recall("completely unrelated question about weather");
+		const unrelatedText = String(unrelated?.content);
+		expect(unrelatedText).toContain("画像正文独有标记");
+		expect(unrelatedText).toContain("记忆目录");
+		expect(unrelatedText).toContain("global/one | global | One");
+		expect(unrelatedText).toContain("global/two | global | Two");
+		expect(unrelatedText).toContain("memory_get");
+		expect((unrelated?.details as { ids: string[] }).ids).toEqual([MEMORY_PROFILE_ID]);
+
+		// A matching turn sends the profile, the directory and the card.
+		const matched = await manager().recall("第一条记忆是什么");
+		const matchedText = String(matched?.content);
+		expect(matchedText).toContain("第一条记忆正文");
+		expect(matchedText).toContain("记忆目录");
+		expect((matched?.details as { ids: string[] }).ids).toContain("global/one");
+	});
+
+	it("nominates same-topic pairs as contradiction candidates and ignores the rest", () => {
+		const entries = [
+			entry({
+				id: "global/deploy-old",
+				name: "部署命令",
+				content: "生产发布执行 make ship-prod 发布服务",
+				description: "部署发布命令",
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			}),
+			entry({
+				id: "global/deploy-new",
+				name: "部署命令",
+				content: "之前用 make ship-prod，现在改为 make deploy 发布服务",
+				description: "部署发布命令",
+				updatedAt: "2026-03-01T00:00:00.000Z",
+			}),
+			entry({
+				id: "global/lunch",
+				name: "午餐",
+				content: "今天中午吃牛肉面",
+				description: "午餐记录",
+				updatedAt: "2026-03-01T00:00:00.000Z",
+			}),
+		];
+		const pairs = findMemoryContradictions(entries);
+		expect(pairs).toHaveLength(1);
+		expect(pairs[0].a.id).toBe("global/deploy-old");
+		expect(pairs[0].b.id).toBe("global/deploy-new");
+		expect(pairs[0].cues).toContain("改为");
+		expect(pairs[0].sharedTerms.length).toBeGreaterThanOrEqual(2);
+		expect(findMemoryContradictions(entries, 0)).toEqual([]);
+		expect(findMemoryContradictions([entries[0]])).toEqual([]);
+	});
+
+	it("reads foreign and pending memories without injecting them into recall", async () => {
+		writeMemory({ id: "global/own", name: "Own Deploy", body: "自己项目的部署流程记忆正文。", description: "部署流程" });
+		const foreign = otherPaths("ws-other", "s-other");
+		mkdirSync(foreign.projectDir, { recursive: true });
+		writeFileSync(
+			join(foreign.projectDir, "deploy.md"),
+			`---\n${stringifyYaml({ id: "workspace/deploy", name: "Deploy", description: "别处项目的部署记忆", type: "project", scope: "workspace", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-04-01T00:00:00.000Z" }).trim()}\n---\n\n别处项目的部署流程记忆。\n`,
+		);
+		writePending("pending/legacy-note", "Legacy Note", "迁移时没找到主人的记忆。");
+
+		const cross = readCrossScopeMemoryEntries(dataRoot, location);
+		const byId = new Map(cross.map((item) => [item.id, item]));
+		expect(byId.get("workspace/deploy")?.originLabel).toContain("跨项目");
+		expect(byId.get("pending/legacy-note")?.originLabel).toBe("待认领");
+
+		// Automatic recall stays scoped: foreign bodies never become cards.
+		const recalled = await manager().recall("部署流程");
+		const text = String(recalled?.content);
+		expect(text).toContain("自己项目的部署流程记忆正文");
+		expect(text).not.toContain("别处项目的部署流程记忆");
+		expect(text).not.toContain("workspace/deploy");
+
+		// …but the tools surface them: directory rows, ranked summaries, full text on demand.
+		const listing = toolText(await run(search(), {}));
+		expect(listing).toContain("workspace/deploy");
+		expect(listing).toContain("跨项目");
+		expect(listing).toContain("pending/legacy-note");
+		expect(listing).toContain("待认领");
+		const searched = toolText(await run(search(), { query: "部署流程" }));
+		expect(searched).toContain("workspace/deploy");
+		const full = toolText(await run(get(), { id: "workspace/deploy" }));
+		expect(full).toContain("别处项目的部署流程记忆");
+		expect(full).toContain("跨项目");
+		const pendingFull = toolText(await run(get(), { id: "pending/legacy-note" }));
+		expect(pendingFull).toContain("迁移时没找到主人的记忆");
+	});
+
+	it("feeds candidate contradiction pairs to the consolidator task", async () => {
+		writeMemory({
+			id: "global/deploy-old",
+			name: "部署命令",
+			body: "生产发布执行 ship 工具发布服务",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+		});
+		writeMemory({
+			id: "global/deploy-new",
+			name: "部署命令",
+			body: "之前用 ship 工具，现在改为 deploy 工具发布服务",
+			updatedAt: "2026-03-01T00:00:00.000Z",
+		});
+		const tasks: string[] = [];
+		const errors: string[] = [];
+		const consolidator = manager({
+			onError: (_operation, error) => errors.push(error.message),
+			modelRunner: async ({ task }) => {
+				tasks.push(task);
+				return '<MEMORY_OPERATIONS>{"operations":[]}</MEMORY_OPERATIONS>';
+			},
+		});
+		let consolidated = await consolidator.runConsolidation(true);
+		// 同文件其他测试留下的后台 timer 可能正在占文件锁：失败时带错重试一次，真问题会落在 errors 里。
+		if (!consolidated) consolidated = await consolidator.runConsolidation(true);
+		consolidator.dispose();
+		expect(errors).toEqual([]);
+		expect(consolidated).toBe(true);
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]).toContain("Candidate contradiction pairs");
+		expect(tasks[0]).toContain("global/deploy-old");
+		expect(tasks[0]).toContain("global/deploy-new");
+	});
+
+	it("deletes own and pending memories permanently but refuses foreign ones", async () => {
+		const active = writeMemory({ id: "global/doomed", name: "Doomed", body: "待删记忆正文。" });
+		const { archiveMemoryFile } = await import("../src/session/memory/store.ts");
+		await archiveMemoryFile(active, "test");
+		const foreign = otherPaths("ws-other", "s-other");
+		mkdirSync(foreign.projectDir, { recursive: true });
+		writeFileSync(
+			join(foreign.projectDir, "keep.md"),
+			`---\n${stringifyYaml({ id: "workspace/keep", name: "Keep", description: "别处", type: "project", scope: "workspace", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }).trim()}\n---\n\n别处记忆。\n`,
+		);
+		writePending("pending/legacy-note", "Legacy Note", "待删的隔离记忆。");
+
+		const refused = toolText(await run(deleter(), { id: "workspace/keep" }));
+		expect(refused).toContain("不能删除");
+		expect(readFileSync(join(foreign.projectDir, "keep.md"), "utf8")).toContain("别处记忆");
+
+		const pendingDeleted = await run(deleter(), { id: "pending/legacy-note" });
+		expect(toolText(pendingDeleted)).toContain("已彻底删除");
+		expect(pendingDeleted.details).toMatchObject({ mode: "delete", ids: ["pending/legacy-note"] });
+
+		const ownDeleted = await run(deleter(), { id: "global/doomed" });
+		const ownText = toolText(ownDeleted);
+		expect(ownText).toContain("已彻底删除");
+		expect(ownText).toContain("连带清除 1 个归档版本");
+		expect(ownDeleted.details).toMatchObject({ mode: "delete", ids: ["global/doomed"] });
+		// 归档与正文都不剩：读目录与 get 都找不到。
+		expect(toolText(await run(search(), {}))).not.toContain("global/doomed");
+		expect(toolText(await run(get(), { id: "global/doomed" }))).toContain("未找到记忆");
+
+		const invalid = toolText(await run(deleter(), {}));
+		expect(invalid).toContain("请提供 id");
+	});
+
+	it("claims a pending memory into the current workspace", async () => {
+		writePending("pending/legacy-note", "Legacy Note", "认领后属于当前项目。");
+		// 认领目标工作区必须已登记：先建 metadata 标记。
+		const wsMeta = join(dataRoot, "workspaces", location.workspaceId, "metadata");
+		mkdirSync(wsMeta, { recursive: true });
+		writeFileSync(join(wsMeta, "workspace.json"), JSON.stringify({ workspace: { rootPath: projectDir } }));
+
+		const notPending = toolText(await run(claimer(), { id: "global/own" }));
+		expect(notPending).toContain("只能认领待认领区");
+
+		const claimed = await run(claimer(), { id: "pending/legacy-note" });
+		const text = toolText(claimed);
+		expect(text).toContain("已认领为当前工作区记忆");
+		const newId = (claimed.details as { ids: string[] }).ids[0];
+		expect(newId.startsWith("workspace/")).toBe(true);
+		// 搬家完成：隔离区清空，工作区可读。
+		expect(readCrossScopeMemoryEntries(dataRoot, location).some((item) => item.id === "pending/legacy-note")).toBe(false);
+		expect(toolText(await run(get(), { id: newId }))).toContain("认领后属于当前项目");
 	});
 });

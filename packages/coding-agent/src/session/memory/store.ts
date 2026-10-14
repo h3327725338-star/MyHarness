@@ -159,6 +159,105 @@ export async function refreshMemoryIndexes(dataRoot: string): Promise<void> {
 	}
 }
 
+/**
+ * Permanently delete one active memory together with every archived version derived from it.
+ * Nothing is kept: this is the explicit “really delete” path (user-confirmed), not the archive-on-update path.
+ * Pending quarantine entries have no archives and are removed with a plain unlink. Archived files cannot be
+ * deleted directly: restore one first if it should come back.
+ */
+export async function deleteMemoryPermanently(
+	dataRoot: string,
+	relativePath: string,
+): Promise<{ archiveCount: number }> {
+	return withMemoryLock(dataRoot, async () => {
+		const resolved = path.resolve(dataRoot);
+		const file = path.resolve(resolved, relativePath);
+		assertDirectPath(file);
+		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md")) throw new Error("Invalid memory path");
+		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error("Unknown memory");
+		const entry = listMemoryFiles(resolved).find((item) => path.resolve(resolved, item.path) === file);
+		if (!entry || entry.archived) throw new Error("Unknown memory");
+		const base = path.basename(file);
+		const baseNoExt = base.slice(0, -3);
+		await fs.promises.unlink(file);
+		let archiveCount = 0;
+		const archiveDir = path.join(path.dirname(file), "archive");
+		assertDirectPath(archiveDir);
+		if (fs.existsSync(archiveDir)) {
+			for (const item of fs.readdirSync(archiveDir, { withFileTypes: true })) {
+				if (!item.isFile() || !item.name.endsWith(".md")) continue;
+				const archiveFile = path.join(archiveDir, item.name);
+				assertDirectPath(archiveFile);
+				let owned = item.name.startsWith(`${baseNoExt}-`);
+				if (!owned) {
+					try {
+						const parsed = parseFrontmatter<Record<string, unknown>>(fs.readFileSync(archiveFile, "utf8"));
+						owned = parsed.frontmatter.originalFile === base;
+					} catch {
+						owned = false;
+					}
+				}
+				if (owned) {
+					await fs.promises.unlink(archiveFile);
+					archiveCount++;
+				}
+			}
+		}
+		await refreshMemoryIndexes(resolved);
+		return { archiveCount };
+	});
+}
+
+/**
+ * Claim a quarantined pending memory into a workspace: moves the file, rewrites its frontmatter to
+ * workspace scope with a fresh unique id, and refreshes the indexes. The quarantine original is gone
+ * (a move, not a copy); the moved entry keeps its legacySource trail.
+ */
+export async function claimPendingMemory(
+	dataRoot: string,
+	relativePath: string,
+	workspaceId: string,
+): Promise<{ id: string }> {
+	return withMemoryLock(dataRoot, async () => {
+		const resolved = path.resolve(dataRoot);
+		const file = path.resolve(resolved, relativePath);
+		assertDirectPath(file);
+		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md")) throw new Error("Invalid memory path");
+		const entry = listMemoryFiles(resolved).find(
+			(item) => path.resolve(resolved, item.path) === file && !item.archived && item.scope === "pending",
+		);
+		if (!entry) throw new Error("Unknown pending memory");
+		const targetDir = path.join(getWorkspaceDir(resolved, workspaceId), "memory");
+		assertDirectPath(targetDir);
+		if (!fs.existsSync(path.join(getWorkspaceDir(resolved, workspaceId), "metadata", "workspace.json")))
+			throw new Error("Unknown workspace");
+		const raw = fs.readFileSync(file, "utf8");
+		const parsed = parseFrontmatter<Record<string, unknown>>(raw);
+		const slug = String(parsed.frontmatter.name ?? path.basename(file, ".md"))
+			.normalize("NFKC")
+			.toLowerCase()
+			.replace(/[^\p{L}\p{N}]+/gu, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 50);
+		const base = (slug || "memory").slice(0, 50);
+		let name = base;
+		let id = `workspace/${name}`;
+		let suffix = 2;
+		while (fs.existsSync(path.join(targetDir, `${name}.md`))) {
+			name = `${base}-${suffix++}`;
+			id = `workspace/${name}`;
+		}
+		const { ...metadata } = parsed.frontmatter;
+		await writeMemoryFile(
+			path.join(targetDir, `${name}.md`),
+			`---\n${stringifyYaml({ ...metadata, id, scope: "workspace", workspaceId, claimedFrom: entry.id, legacySource: metadata.legacySource ?? entry.path, updatedAt: new Date().toISOString() }).trim()}\n---\n\n${parsed.body}\n`,
+		);
+		await fs.promises.unlink(file);
+		await refreshMemoryIndexes(resolved);
+		return { id };
+	});
+}
+
 export async function restoreMemoryArchive(dataRoot: string, relativePath: string): Promise<void> {
 	await withMemoryLock(dataRoot, async () => {
 		const entry = listMemoryFiles(dataRoot).find(

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { contentText } from "@myharness/ai";
+import { contentText, estimateTextTokens } from "@myharness/ai";
 import { stringify as stringifyYaml } from "yaml";
-import { getDataDir, getWorkspaceDir, getWorkspacesDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
+import { getDataDir, getSessionDir, getWorkspaceDir, getWorkspacesDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import type { AutoMemorySettings, SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import { runGitSync } from "../../git/repository/command.ts";
@@ -129,12 +129,21 @@ const MEMORY_IMPORTANCE_WEIGHT: Record<MemoryImportance, number> = { high: 1.3, 
 const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
 /** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
 export const MEMORY_PROFILE_ID = "global/用户画像";
-const RECALL_TURN_MAX_BYTES = 20 * 1024;
+// 召回分层 token 预算（estimateTextTokens：utf8 字节数 / 4）：画像固定位 + 目录位 + 动态卡片位。
+// 总量约 6000 token，与旧 20KB 字节卡片大致相当；规矩头与目录说明行不计入。
+const RECALL_TOTAL_TOKEN_BUDGET = 6000;
+const RECALL_PROFILE_TOKEN_RESERVE = 2500;
+const RECALL_DIRECTORY_TOKEN_BUDGET = 800;
 // 稳定性切块：提取按 30 条聊天一切逐块推进、整理按 20 张记忆一批独立存，
-// 单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文。主聊天的召回仍保留 20KB 卡片保护（规矩头不计），不在此列。
+// 单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文。主聊天的召回按分层 token 预算发送（画像固定位＋目录位＋动态卡片位），不在此列。
 const EXTRACT_CHUNK_ENTRIES = 30;
 const CONSOLIDATION_BATCH_SIZE = 20;
 const MAX_RECALLED_MEMORIES = 5;
+// 词面排序保证的最低条数：阈值之外的最佳匹配也至少带这么多，保证“找得到”。
+// 用户拍板：保底 8 条（上下文开销最大一档）。触发词直达（最多 3 条）不计入此数。
+const MEMORY_SELECTION_GUARANTEED = 8;
+// 候选矛盾对上限：整理时喂给整理器的本地启发式候选，最多列这么多对，由模型核实。
+const MEMORY_CONTRADICTION_PAIR_LIMIT = 10;
 const CONSOLIDATION_MIN_CHANGES = 5;
 const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const AUTO_MEMORY_TIMEOUT_MS = 15 * 60 * 1000;
@@ -289,7 +298,8 @@ function slugify(value: string): string {
 }
 
 export function isSafeMemoryId(id: string): boolean {
-	return /^(global|workspace|session|project)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
+	// pending/ 是待认领隔离区的 id 前缀：可被查看、认领与彻底删除，但模型整理/抽取不能以它建新记忆。
+	return /^(global|workspace|session|project|pending)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
 }
 
 function readImportance(value: unknown): MemoryImportance | undefined {
@@ -605,10 +615,15 @@ export interface MemorySelection {
 }
 
 export interface MemorySelectionOptions {
-	/** Keep at most this many results. Automatic recall keeps them all and is bounded by its byte budget instead. */
+	/** Keep at most this many results. Automatic recall keeps them all and is bounded by its token budget instead. */
 	limit?: number;
 	/** Only consider memories of this scope. */
 	scope?: MemoryScope;
+	/**
+	 * How many lexical matches to guarantee even below the relative-score cut. Defaults to 8 per user decision
+	 * (trigger-route hits do not count toward it). Set 0 to restore the strict cut-only behavior.
+	 */
+	guaranteed?: number;
 }
 
 /**
@@ -618,7 +633,9 @@ export interface MemorySelectionOptions {
  *    and are exempt from the relative-score cut of the second step.
  * 2. Lexical route: the existing TF-IDF relevance, multiplied by the importance weight (high 1.3, normal 1, low 0.7),
  *    keeping entries within half of the best weighted score.
- * 3. Entries with the same body are listed once. The resident profile is skipped here: it is sent every turn.
+ * 3. Guarantee: the best lexical matches below the cut are still kept until `guaranteed` (default 8) lexical
+ *    entries are selected, so a paraphrased query still finds something. Only ranked (score > 0) entries qualify.
+ * 4. Entries with the same body are listed once. The resident profile is skipped here: it is sent every turn.
  */
 export function selectMemoriesForQuery(
 	query: string,
@@ -660,7 +677,209 @@ export function selectMemoriesForQuery(
 		if (score < best * 0.5) continue;
 		take({ entry, score, via: "lexical", triggerHits: 0 });
 	}
+
+	// 保底：阈值之外的最佳词面匹配也保留，直到词面条数达到 guaranteed。只收有得分的，不凭空凑数。
+	const guaranteed = options.guaranteed ?? MEMORY_SELECTION_GUARANTEED;
+	if (guaranteed > 0) {
+		let lexicalCount = selected.filter((selection) => selection.via === "lexical").length;
+		if (lexicalCount < guaranteed) {
+			for (const { entry, score } of lexical) {
+				if (lexicalCount >= guaranteed) break;
+				if (take({ entry, score, via: "lexical", triggerHits: 0 })) lexicalCount++;
+			}
+		}
+	}
 	return options.limit === undefined ? selected : selected.slice(0, Math.max(0, options.limit));
+}
+
+export interface MemoryContradiction {
+	/** The older entry (by updatedAt). */
+	a: MemoryEntry;
+	/** The newer entry (by updatedAt). */
+	b: MemoryEntry;
+	/** Rare terms both entries share: why they look like the same topic. */
+	sharedTerms: string[];
+	/** Sum of idf weights of the shared rare terms. */
+	score: number;
+	/** Temporal/corrective cue words found in either body (不再/改为/之前/…). */
+	cues: string[];
+}
+
+const CONTRADICTION_CUES = ["不再", "改为", "之前", "现在", "纠正", "不要", "禁止", "必须", "取代", "替代", "过期", "作废"];
+
+/**
+ * Read-only heuristic for “two memories that may contradict each other”.
+ *
+ * Pairs share at least two rare terms (document frequency at most a quarter of the pool) and are ordered with
+ * corrective-cue pairs first. This only nominates candidates: the consolidator model verifies them, because only
+ * it can tell a real contradiction from two memories about the same topic. Pure function, reads nothing, writes nothing.
+ */
+export function findMemoryContradictions(
+	entries: readonly MemoryEntry[],
+	limit: number = MEMORY_CONTRADICTION_PAIR_LIMIT,
+): MemoryContradiction[] {
+	if (entries.length < 2 || limit <= 0) return [];
+	const pool = [...entries];
+	const termSets = pool.map((entry) => lexicalTerms(`${entry.name}\n${entry.description}\n${entry.content}`));
+	const documentFrequency = new Map<string, number>();
+	for (const terms of termSets) for (const term of terms) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+	const rareEnough = (term: string): boolean => (documentFrequency.get(term) ?? 0) <= Math.max(2, pool.length / 4);
+	const idf = (term: string): number => Math.log(1 + pool.length / (documentFrequency.get(term) ?? 1));
+	const pairs: MemoryContradiction[] = [];
+	for (let i = 0; i < pool.length; i++) {
+		for (let j = i + 1; j < pool.length; j++) {
+			const shared = [...termSets[i]].filter((term) => termSets[j].has(term) && rareEnough(term));
+			if (shared.length < 2) continue;
+			const [a, b] =
+				pool[i].updatedAt.localeCompare(pool[j].updatedAt) <= 0 ? [pool[i], pool[j]] : [pool[j], pool[i]];
+			const cues = CONTRADICTION_CUES.filter((cue) => a.content.includes(cue) || b.content.includes(cue));
+			pairs.push({
+				a,
+				b,
+				sharedTerms: shared.sort().slice(0, 8),
+				score: shared.reduce((sum, term) => sum + idf(term), 0),
+				cues,
+			});
+		}
+	}
+	return pairs
+		.sort((x, y) => y.cues.length - x.cues.length || y.score - x.score)
+		.slice(0, Math.max(0, limit));
+}
+
+/**
+ * A memory that lives outside the current conversation's own three layers: another workspace's
+ * workspace/session memories, or a quarantined pending memory waiting to be claimed.
+ * Read-only views: automatic recall never injects these; they surface through the memory_search
+ * directory/summaries and are fetched in full with memory_get on demand.
+ */
+export interface CrossScopeMemoryEntry {
+	kind: "foreign" | "pending";
+	id: string;
+	name: string;
+	description: string;
+	type: MemoryType;
+	scope: MemoryScope | "pending";
+	content: string;
+	createdAt: string;
+	updatedAt: string;
+	importance?: MemoryImportance;
+	triggers?: string[];
+	workspaceId?: string;
+	sessionId?: string;
+	/** e.g. “跨项目 · 工作区 ws-1” / “跨项目 · 工作区 ws-1 · 对话 s-2” / “待认领”. */
+	originLabel: string;
+	/** Absolute file path backing this entry (used by claim/delete flows). */
+	sourcePath: string;
+}
+
+function toCrossScopeEntry(
+	entry: MemoryEntry,
+	kind: "foreign" | "pending",
+	originLabel: string,
+): CrossScopeMemoryEntry {
+	return { ...entry, kind, originLabel, sourcePath: entry.filePath };
+}
+
+/** Lenient reader for quarantined pending files: an id is required, everything else falls back. */
+function parsePendingMemoryFile(filePath: string): CrossScopeMemoryEntry | undefined {
+	try {
+		const raw = fs.readFileSync(filePath, "utf8");
+		const parsed = parseFrontmatter<Record<string, unknown>>(raw);
+		const id = typeof parsed.frontmatter.id === "string" ? parsed.frontmatter.id : "";
+		if (!id.startsWith("pending/") || !isSafeMemoryId(id)) return undefined;
+		const name =
+			typeof parsed.frontmatter.name === "string" && parsed.frontmatter.name.trim()
+				? parsed.frontmatter.name.trim()
+				: path.basename(filePath, ".md");
+		const description =
+			typeof parsed.frontmatter.description === "string" && parsed.frontmatter.description.trim()
+				? parsed.frontmatter.description.trim()
+				: `${name} 相关时`;
+		const type =
+			typeof parsed.frontmatter.type === "string" && MEMORY_TYPES.has(parsed.frontmatter.type as MemoryType)
+				? (parsed.frontmatter.type as MemoryType)
+				: "reference";
+		const triggers = normalizeTriggers(parsed.frontmatter.triggers);
+		return {
+			kind: "pending",
+			id,
+			name,
+			description,
+			type,
+			scope: "pending",
+			content: truncateUtf8(parsed.body, MEMORY_BODY_MAX_BYTES),
+			createdAt:
+				typeof parsed.frontmatter.createdAt === "string" ? parsed.frontmatter.createdAt : new Date(0).toISOString(),
+			updatedAt:
+				typeof parsed.frontmatter.updatedAt === "string" ? parsed.frontmatter.updatedAt : new Date(0).toISOString(),
+			importance: readImportance(parsed.frontmatter.importance),
+			triggers: triggers.length > 0 ? triggers : undefined,
+			originLabel: "待认领",
+			sourcePath: filePath,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function childDirectories(directory: string): string[] {
+	assertDirectPath(directory);
+	if (!fs.existsSync(directory)) return [];
+	return fs
+		.readdirSync(directory, { withFileTypes: true })
+		.filter((item) => item.isDirectory() && !item.isSymbolicLink())
+		.map((item) => item.name);
+}
+
+/**
+ * Read memories outside the current conversation's own layers, newest first. Read-only: archive/ is skipped,
+ * nothing is written, and automatic recall never consumes the result. Pending quarantine entries are included
+ * so they can be inspected and claimed instead of rotting unseen.
+ */
+export function readCrossScopeMemoryEntries(
+	dataRoot: string,
+	location: { workspaceId: string; sessionId: string },
+): CrossScopeMemoryEntry[] {
+	const result: CrossScopeMemoryEntry[] = [];
+	const resolvedRoot = path.resolve(dataRoot);
+	for (const workspaceId of childDirectories(getWorkspacesDir(resolvedRoot))) {
+		if (workspaceId === location.workspaceId) continue;
+		const workspaceMemory = path.join(getWorkspaceDir(resolvedRoot, workspaceId), "memory");
+		for (const entry of scanMemoryDirectory(workspaceMemory, "workspace")) {
+			result.push(toCrossScopeEntry(entry, "foreign", `跨项目 · 工作区 ${workspaceId}`));
+		}
+		const sessionsDir = path.join(getWorkspaceDir(resolvedRoot, workspaceId), "sessions");
+		for (const sessionId of childDirectories(sessionsDir)) {
+			const sessionMemory = path.join(getSessionDir(resolvedRoot, workspaceId, sessionId), "memory");
+			for (const entry of scanMemoryDirectory(sessionMemory, "session")) {
+				result.push(toCrossScopeEntry(entry, "foreign", `跨项目 · 工作区 ${workspaceId} · 对话 ${sessionId}`));
+			}
+		}
+	}
+	// Own workspace's sibling conversations stay private to automatic recall, but their titles are visible
+	// on demand so nothing learned in another chat is silently lost. Controlled by user decision.
+	const ownSessionsDir = path.join(getWorkspaceDir(resolvedRoot, location.workspaceId), "sessions");
+	for (const sessionId of childDirectories(ownSessionsDir)) {
+		if (sessionId === location.sessionId) continue;
+		const sessionMemory = path.join(getSessionDir(resolvedRoot, location.workspaceId, sessionId), "memory");
+		for (const entry of scanMemoryDirectory(sessionMemory, "session")) {
+			result.push(toCrossScopeEntry(entry, "foreign", `同工作区 · 对话 ${sessionId}`));
+		}
+	}
+	const pendingRoot = path.join(resolvedRoot, "memory", "pending");
+	for (const key of childDirectories(pendingRoot)) {
+		const directory = path.join(pendingRoot, key);
+		assertDirectPath(directory);
+		for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+			if (!item.isFile() || !item.name.endsWith(".md")) continue;
+			const file = path.join(directory, item.name);
+			assertDirectPath(file);
+			const entry = parsePendingMemoryFile(file);
+			if (entry) result.push(entry);
+		}
+	}
+	return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function formatTranscript(entries: SessionEntry[], lastEntryId?: string): { text: string; lastEntryId?: string } {
@@ -1336,25 +1555,62 @@ export class AutoMemoryManager {
 		}
 		if (selected.length === 0) return undefined;
 
+		// 分层 token 预算：画像固定位在前，目录位其次，动态卡片用剩余额度。规矩头不占额度。
+		// 目录每轮常驻：模型先看到 id 表，需要全文再用 memory_get 按需取，避免卡片截断导致“有但看不见”。
+		const profile = selected.find(isMemoryProfile);
+		const cards = selected.filter((entry) => entry !== profile);
 		const sections: string[] = [];
-		let turnBytes = 0; // 20KB 只算卡片，规矩头白送不占额度。
-		for (const entry of selected) {
-			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
-			const sectionBytes = Buffer.byteLength(section, "utf8");
-			if (turnBytes + sectionBytes > RECALL_TURN_MAX_BYTES) {
-				break;
-			}
-			sections.push(section);
-			turnBytes += sectionBytes;
+		const sentIds: string[] = [];
+		let usedTokens = 0;
+		if (profile) {
+			const section = `## ${profile.name}\nType: ${profile.type}; Scope: ${profile.scope}\n${profile.content}`;
+			// 画像超长属于异常：截断到固定位，保证本轮不断流；画像本身仍要求整理器保持在 10KB 内。
+			const fitted =
+				estimateTextTokens(section) <= RECALL_PROFILE_TOKEN_RESERVE
+					? section
+					: truncateUtf8(section, RECALL_PROFILE_TOKEN_RESERVE * 4);
+			sections.push(fitted);
+			sentIds.push(profile.id);
+			usedTokens += estimateTextTokens(fitted);
 		}
-		if (sections.length === 0) return undefined;
+
+		const directoryRows = [...candidates]
+			.filter((entry) => !isMemoryProfile(entry))
+			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+			.map((entry) => `${entry.id} | ${entry.scope} | ${entry.name}`);
+		const directoryLines = ["记忆目录（本轮可见范围；用 memory_get 按 id 取全文）：", ...directoryRows];
+		const directory: string[] = [];
+		let directoryTokens = 0;
+		for (const line of directoryLines) {
+			const lineTokens = estimateTextTokens(`${line}\n`);
+			if (directory.length > 0 && directoryTokens + lineTokens > RECALL_DIRECTORY_TOKEN_BUDGET) break;
+			directory.push(line);
+			directoryTokens += lineTokens;
+		}
+		if (directory.length < directoryLines.length) {
+			directory.push(`[…目录过长，只列出前 ${directory.length - 1} 条，共 ${directoryRows.length} 条。带 query 用 memory_search 缩小范围。]`);
+		}
+		sections.push(directory.join("\n"));
+
+		const directoryTokensUsed = estimateTextTokens(sections[sections.length - 1]);
+		const budget = RECALL_TOTAL_TOKEN_BUDGET - usedTokens - directoryTokensUsed;
+		let cardTokens = 0;
+		for (const entry of cards) {
+			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
+			const sectionTokens = estimateTextTokens(section);
+			if (cardTokens + sectionTokens > Math.max(0, budget)) break;
+			sections.push(section);
+			cardTokens += sectionTokens;
+			sentIds.push(entry.id);
+		}
+		if (sentIds.length === 0) return undefined;
 
 		return {
 			role: "custom",
 			customType: "auto-memory-recall",
 			content: `${MEMORY_CONTEXT_RULES}\n\n<recalled_memory_context>\n${sections.join("\n\n")}\n</recalled_memory_context>`,
 			display: false,
-			details: { ids: selected.map((entry) => entry.id) },
+			details: { ids: sentIds },
 			timestamp: Date.now(),
 		};
 	}
@@ -1707,7 +1963,14 @@ export class AutoMemoryManager {
 		this.assertActive();
 		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
-		this.logMaintenance("consolidate-start", { entriesCount: entries.length, revision });
+		// 候选矛盾对：本地只读启发式先圈定“同一话题的两条旧记忆”，由整理器模型核实是否真矛盾。
+		// 真矛盾按新胜旧合并（旧版本自动归档）；同一话题但不矛盾则不动，避免误删。
+		const contradictions = findMemoryContradictions(entries);
+		this.logMaintenance("consolidate-start", {
+			entriesCount: entries.length,
+			revision,
+			contradictionPairs: contradictions.length,
+		});
 		// 稳定性切块：按 20 张一批独立存，成一批落一批，坏一批只记那一批的错继续往下走，
 		// 最后有错再抛出来变黄并保留 pending，下次定时器接着整。
 		const sorted = entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -1729,11 +1992,24 @@ export class AutoMemoryManager {
 			});
 			try {
 				const snapshot = this.loadEntries();
+				const batchIds = new Set(batch.map((entry) => entry.id));
+				const batchContradictions = contradictions.filter(
+					(pair) => batchIds.has(pair.a.id) || batchIds.has(pair.b.id),
+				);
+				const contradictionSection =
+					batchContradictions.length === 0
+						? ""
+						: `\n\nCandidate contradiction pairs (local heuristic, verify before acting; if a pair truly contradicts, merge with the newer winning and let the old version archive; if they are merely about the same topic, leave them alone):\n\n${batchContradictions
+								.map(
+									(pair) =>
+										`OLD ${pair.a.id} (${pair.a.updatedAt}): ${pair.a.content}\nNEW ${pair.b.id} (${pair.b.updatedAt}): ${pair.b.content}\nShared topic terms: ${pair.sharedTerms.join(", ")}${pair.cues.length > 0 ? `\nCorrective cues: ${pair.cues.join(", ")}` : ""}`,
+								)
+								.join("\n\n---\n\n")}`;
 				const output = await this.runModel({
 					cwd: this.options.cwd,
 					settings,
 					systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-					task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}`,
+					task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}${contradictionSection}`,
 				});
 				this.assertActive();
 				const operations = parseMemoryOperations(output);
@@ -1746,8 +2022,7 @@ export class AutoMemoryManager {
 					});
 					throw new Error("Auto Memory 整理器返回了无效的操作格式");
 				}
-				const ids = new Set(batch.map((entry) => entry.id));
-				const filtered = operations.filter((operation) => !!operation.id && ids.has(operation.id));
+				const filtered = operations.filter((operation) => !!operation.id && batchIds.has(operation.id));
 				try {
 					await this.applyOperations(filtered, true, snapshot);
 					this.logMaintenance("consolidate-batch-done", {

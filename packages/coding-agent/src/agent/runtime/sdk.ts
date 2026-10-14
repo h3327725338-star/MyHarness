@@ -293,6 +293,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						"github",
 						"memory_search",
 						"memory_get",
+						"memory_delete",
+						"memory_claim",
 						"ask_user_question",
 						"todo_write",
 						...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),

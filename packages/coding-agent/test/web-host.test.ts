@@ -138,7 +138,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(general.mode).toBe("general");
 		expect(opened.slot).not.toBe(coding.slot);
 		const generalOwner = fx.hub.get(opened.slot)!;
-		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose assistant");
+		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose AI agent");
 		expect(generalOwner.session.agent.state.systemPrompt).toContain("PERSONAL_GENERAL_ONLY");
 		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("PERSONAL_CODING_ONLY");
 		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("software engineering assistant");

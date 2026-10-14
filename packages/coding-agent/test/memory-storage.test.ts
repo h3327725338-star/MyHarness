@@ -8,6 +8,8 @@ import { getSessionConversationPath } from "../src/config/paths/index.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import {
 	archiveMemoryFile,
+	claimPendingMemory,
+	deleteMemoryPermanently,
 	getMemoryPaths,
 	listMemoryFiles,
 	migrateLegacyMemories,
@@ -228,5 +230,74 @@ describe("hierarchical memory storage", () => {
 		symlinkSync(outside, join(f.dataRoot, "memory"), process.platform === "win32" ? "junction" : "dir");
 		await expect(writeMemoryFile(join(f.dataRoot, "memory", "note.md"), "unsafe")).rejects.toThrow();
 		expect(existsSync(join(outside, "note.md"))).toBe(false);
+	});
+});
+
+describe("permanent memory deletion and pending claims", () => {
+	it("purges a memory with all its archives and refreshes the indexes", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const target = join(p.workspaceDir, "note.md");
+		await writeMemoryFile(target, memory("workspace", "note"));
+		await archiveMemoryFile(target, "test");
+		await archiveMemoryFile(target, "test-again");
+		await refreshMemoryIndexes(f.dataRoot);
+		expect(listMemoryFiles(f.dataRoot)).toHaveLength(3);
+
+		const { archiveCount } = await deleteMemoryPermanently(f.dataRoot, "workspaces/a/memory/note.md");
+		expect(archiveCount).toBe(2);
+		expect(existsSync(target)).toBe(false);
+		expect(listMemoryFiles(f.dataRoot)).toHaveLength(0);
+		const index = JSON.parse(readFileSync(join(f.dataRoot, "memory", "index.json"), "utf8")) as {
+			entries: unknown[];
+		};
+		expect(index.entries).toHaveLength(0);
+
+		await expect(deleteMemoryPermanently(f.dataRoot, "workspaces/a/memory/note.md")).rejects.toThrow();
+		await expect(deleteMemoryPermanently(f.dataRoot, "../outside.md")).rejects.toThrow();
+	});
+
+	it("refuses to delete archived copies directly", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const target = join(p.workspaceDir, "note.md");
+		await writeMemoryFile(target, memory("workspace", "note"));
+		const archive = await archiveMemoryFile(target, "test");
+		const archiveName = archive.split(/[\\/]/).pop() ?? "";
+		const relativeArchive = `workspaces/a/memory/archive/${archiveName}`;
+		await expect(deleteMemoryPermanently(f.dataRoot, relativeArchive)).rejects.toThrow();
+		expect(existsSync(archive)).toBe(true);
+	});
+
+	it("claims a pending memory into a registered workspace", async () => {
+		const f = fixture();
+		const metadata = join(f.dataRoot, "workspaces", "a", "metadata", "workspace.json");
+		mkdirSync(dirname(metadata), { recursive: true });
+		writeFileSync(metadata, JSON.stringify({ workspace: { rootPath: join(f.root, "project") } }));
+		const pendingDir = join(f.dataRoot, "memory", "pending", "source-key");
+		await writeMemoryFile(join(pendingDir, "legacy.md"), memory("pending", "legacy"));
+		await expect(claimPendingMemory(f.dataRoot, "memory/pending/source-key/legacy.md", "ghost")).rejects.toThrow();
+		const { id } = await claimPendingMemory(f.dataRoot, "memory/pending/source-key/legacy.md", "a");
+		expect(id.startsWith("workspace/")).toBe(true);
+		expect(existsSync(join(pendingDir, "legacy.md"))).toBe(false);
+		const claimed = listMemoryFiles(f.dataRoot).find((entry) => entry.id === id);
+		expect(claimed?.scope).toBe("workspace");
+		expect(claimed?.workspaceId).toBe("a");
+
+		await expect(claimPendingMemory(f.dataRoot, "memory/pending/source-key/legacy.md", "a")).rejects.toThrow();
+	});
+
+	it("deletes a chat's memory folder only when explicitly asked", async () => {
+		for (const deleteMemory of [false, true]) {
+			const f = fixture();
+			const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+			await writeMemoryFile(join(p.sessionDir, "note.md"), memory("session", "note"));
+			const file = getSessionConversationPath(f.dataRoot, "a", "one", "chat.jsonl");
+			mkdirSync(dirname(file), { recursive: true });
+			writeFileSync(file, "chat");
+			expect((await deleteSessionFile(file, { permanent: true, deleteMemory })).ok).toBe(true);
+			expect(existsSync(join(p.sessionDir, "note.md"))).toBe(!deleteMemory);
+			expect(listMemoryFiles(f.dataRoot)).toHaveLength(deleteMemory ? 0 : 1);
+		}
 	});
 });

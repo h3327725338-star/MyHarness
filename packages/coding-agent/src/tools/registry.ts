@@ -97,6 +97,19 @@ export {
 	type MemoryToolOptions,
 } from "./memory/search.ts";
 export {
+	createMemoryClaimTool,
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteTool,
+	createMemoryDeleteToolDefinition,
+	createSessionMemoryManageOperations,
+	type MemoryClaimToolInput,
+	type MemoryDeleteToolInput,
+	type MemoryManageContext,
+	type MemoryManageToolDetails,
+	type MemoryManageOperations,
+	type MemoryManageOptions,
+} from "./memory/manage.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -209,6 +222,12 @@ import {
 	type MemoryToolOptions,
 } from "./memory/search.ts";
 import {
+	createMemoryClaimTool,
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteTool,
+	createMemoryDeleteToolDefinition,
+} from "./memory/manage.ts";
+import {
 	createJobKillTool,
 	createJobKillToolDefinition,
 	createJobListTool,
@@ -250,6 +269,8 @@ export type ToolName =
 	| "github"
 	| "memory_search"
 	| "memory_get"
+	| "memory_delete"
+	| "memory_claim"
 	| "ask_user_question"
 	| "todo_write"
 	| "web_search"
@@ -274,6 +295,8 @@ export const allToolNames: Set<ToolName> = new Set([
 	"github",
 	"memory_search",
 	"memory_get",
+	"memory_delete",
+	"memory_claim",
 	"ask_user_question",
 	"todo_write",
 	"web_search",
@@ -338,6 +361,10 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createMemorySearchToolDefinition(cwd, options?.memory);
 		case "memory_get":
 			return createMemoryGetToolDefinition(cwd, options?.memory);
+		case "memory_delete":
+			return createMemoryDeleteToolDefinition(cwd, options?.memory);
+		case "memory_claim":
+			return createMemoryClaimToolDefinition(cwd, options?.memory);
 		case "ask_user_question":
 			return createAskUserQuestionToolDefinition();
 		case "todo_write":
@@ -391,6 +418,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createMemorySearchTool(cwd, options?.memory);
 		case "memory_get":
 			return createMemoryGetTool(cwd, options?.memory);
+		case "memory_delete":
+			return createMemoryDeleteTool(cwd, options?.memory);
+		case "memory_claim":
+			return createMemoryClaimTool(cwd, options?.memory);
 		case "ask_user_question":
 			return createAskUserQuestionTool();
 		case "todo_write":
@@ -444,6 +475,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		github: createGitHubToolDefinition(cwd, options?.github),
 		memory_search: createMemorySearchToolDefinition(cwd, options?.memory),
 		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
+		memory_delete: createMemoryDeleteToolDefinition(cwd, options?.memory),
+		memory_claim: createMemoryClaimToolDefinition(cwd, options?.memory),
 		ask_user_question: createAskUserQuestionToolDefinition(),
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
@@ -490,6 +523,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		github: createGitHubTool(cwd, options?.github),
 		memory_search: createMemorySearchTool(cwd, options?.memory),
 		memory_get: createMemoryGetTool(cwd, options?.memory),
+		memory_delete: createMemoryDeleteTool(cwd, options?.memory),
+		memory_claim: createMemoryClaimTool(cwd, options?.memory),
 		ask_user_question: createAskUserQuestionTool(),
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
