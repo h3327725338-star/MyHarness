@@ -115,6 +115,7 @@ export async function compact(
 	systemPrompt?: string,
 	tools?: AgentTool[],
 	remoteCompatible = true,
+	sessionId?: string,
 ): Promise<CompactionResult> {
 	const reasoning =
 		thinkingLevel && thinkingLevel !== "off" && model.reasoning
@@ -139,6 +140,7 @@ export async function compact(
 					headers,
 					env,
 					signal,
+					sessionId,
 					onPayload: codexRemotePayload,
 					...(reasoning && reasoning !== "off" ? { reasoning } : {}),
 				};
@@ -168,6 +170,7 @@ export async function compact(
 					headers,
 					env,
 					signal,
+					sessionId,
 					...(effort && effort !== "off" ? { reasoning: effort } : {}),
 				};
 				return streamFn

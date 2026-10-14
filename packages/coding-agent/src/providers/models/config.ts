@@ -218,6 +218,13 @@ const ProviderConfigSchema = Type.Object({
 	authMode: Type.Optional(Type.Union([Type.Literal("apiKey"), Type.Literal("config")])),
 	api: Type.Optional(Type.String({ minLength: 1 })),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
+	/**
+	 * Name of one header sent with every request to this provider (e.g. `x-opencode-session`).
+	 * The value is always the current conversation ID; empty or omitted turns it off.
+	 */
+	sessionHeader: Type.Optional(
+		Type.String({ minLength: 1, maxLength: 128, pattern: "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$" }),
+	),
 	compat: Type.Optional(ProviderCompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
 	/** Seconds an idle connection to this provider stays open (1–600). Omitted = the default (DEFAULT_KEEP_ALIVE_SECONDS). */

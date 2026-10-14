@@ -929,6 +929,18 @@ export class ModelRuntime implements Models {
 
 		const { transformHeaders, ...providerOptions } = options ?? {};
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
+		// A provider-level session header name (e.g. `x-opencode-session`) takes its value from the current
+		// conversation automatically. An explicitly passed header of the same name wins; without a
+		// conversation ID nothing is sent.
+		const sessionHeaderName = this.config.getProvider(model.provider)?.sessionHeader?.trim();
+		const sessionId = providerOptions.sessionId;
+		if (
+			sessionHeaderName &&
+			sessionId &&
+			!Object.keys(headers ?? {}).some((name) => name.toLowerCase() === sessionHeaderName.toLowerCase())
+		) {
+			headers = mergeHeaders(headers, { [sessionHeaderName]: sessionId });
+		}
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
 		const env =
 			resolution.env || providerOptions.env

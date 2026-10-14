@@ -40,6 +40,8 @@ export interface ConversationTitleGeneratorOptions {
 	thinkingLevel?: import("@myharness/agent-core").ThinkingLevel;
 	/** Preserve the existing title unless the main topic has materially changed. */
 	currentTitle?: string;
+	/** Conversation ID sent as the session header value when the provider configures one. */
+	sessionId?: string;
 	signal?: AbortSignal;
 	/** Background naming owns its retry budget; explicit rename keeps Provider defaults. */
 	maxRetries?: number;
@@ -299,6 +301,9 @@ export async function generateConversationTitle(
 			maxRetries: options.maxRetries ?? retry.maxRetries,
 			maxRetryDelayMs: retry.maxRetryDelayMs,
 			reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,
+			// Lets provider-level session headers (e.g. `x-opencode-session`) ride the
+			// conversation ID, like foreground chats do.
+			sessionId: options.sessionId,
 		});
 
 		if (controller.signal.aborted) throw getAbortMessage(options.signal ?? controller.signal);

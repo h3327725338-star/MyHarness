@@ -552,6 +552,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 				modelRuntime: host.session.modelRuntime,
 				settingsManager: host.session.settingsManager,
 				fallbackModel: host.session.model,
+				sessionId: manager.getSessionId(),
 			});
 			if (result.status === "skipped") return { status: "skipped", reason: result.reason };
 			const title = applyTitle(path, result.title, manager);

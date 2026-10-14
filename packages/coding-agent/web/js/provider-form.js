@@ -76,6 +76,15 @@ const slugify = (name) =>
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^[^a-z0-9]+|-+$/g, "");
 
+const SESSION_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** Why the session header name cannot be saved, or "" when empty (off) or fine. Only the name is edited; the value is always the current conversation ID. */
+const sessionHeaderProblem = (text) => {
+	const name = String(text ?? "").trim();
+	if (!name) return "";
+	if (name.length > 128 || !SESSION_HEADER_NAME_PATTERN.test(name)) return t("Header name “{name}” is not valid.", { name });
+	return "";
+};
+
 function draftFromConfig(id, config, previous) {
 	const authMode = authModeOf(config);
 	return {
@@ -87,6 +96,7 @@ function draftFromConfig(id, config, previous) {
 		// Empty = not set in models.json (the default applies); a choice, even "auto", is written to the file.
 		keepAlive: config.keepAliveSeconds === undefined ? "" : String(config.keepAliveSeconds),
 		ipFamily: config.ipFamily ?? "",
+		sessionHeader: config.sessionHeader ?? "",
 		auth: authMode,
 		apiKey: previous?.apiKey ?? "",
 		models: (config.models ?? []).map((model) => modelDraft(model)),
@@ -107,6 +117,10 @@ function buildConfig(draft, defaults) {
 	else config.keepAliveSeconds = keepAlive;
 	if (draft.ipFamily) config.ipFamily = draft.ipFamily;
 	else delete config.ipFamily;
+	// Static `headers` already in the file are left untouched here; this form only edits the session header name.
+	const sessionHeader = String(draft.sessionHeader ?? "").trim();
+	if (sessionHeader) config.sessionHeader = sessionHeader;
+	else delete config.sessionHeader;
 	// The chosen way to authenticate is saved with the provider. Whatever models.json already holds for the other way
 	// stays where it is, so switching back loses nothing.
 	config.authMode = draft.auth === "config" ? "config" : "apiKey";
@@ -122,6 +136,8 @@ function validate(draft, defaults) {
 	if (urlProblem === "invalid") return t("The Base URL must be a full http:// or https:// address.");
 	const keepAliveProblem = parseKeepAlive(draft.keepAlive, defaults).problem;
 	if (keepAliveProblem) return keepAliveProblem;
+	const headerProblem = sessionHeaderProblem(draft.sessionHeader);
+	if (headerProblem) return headerProblem;
 	const seen = new Set();
 	for (const model of draft.models) {
 		const id = model.id.trim();
@@ -274,6 +290,7 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 	const types = apiTypes?.length ? apiTypes : Object.keys(API_LABELS);
 	const ready = connectionReady(draft, { hasStoredKey });
 	const keepAliveProblem = parseKeepAlive(draft.keepAlive, defaults).problem;
+	const headerProblem = sessionHeaderProblem(draft.sessionHeader);
 	const ipFamilies = defaults?.ipFamilies?.length ? defaults.ipFamilies : Object.keys(IP_FAMILY_NAMES);
 
 	const switchView = (next) => {
@@ -372,6 +389,7 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 				return setError(t("Invalid JSON: {message}", { message: e.message }));
 			}
 			if (!ID_PATTERN.test(draft.id.trim())) problem = t("Provider ID may only use lowercase letters, digits, dots, underscores and hyphens.");
+			else problem = sessionHeaderProblem(config.sessionHeader);
 		} else {
 			problem = validate(draft, defaults);
 			config = buildConfig(draft, defaults);
@@ -448,6 +466,9 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 					<//>
 					<${Field} label=${t("IP protocol")} hint=${t("Forces one address type. If the chosen type does not work on this network, requests fail outright; switch back to Auto then.")}>
 						<${Select} value=${draft.ipFamily} ariaLabel=${t("IP protocol")} placeholder=${ipFamilyLabel(defaults?.ipFamily ?? "auto", defaults?.ipFamily)} onChange=${(next) => patch({ ipFamily: next })} options=${ipFamilies.map((family) => ({ value: family, label: ipFamilyLabel(family, defaults?.ipFamily) }))} />
+					<//>
+					<${Field} label=${t("Custom headers")} hint=${html`${t("Only the header name is filled in here, e.g. x-opencode-session. The value is always the current conversation ID; empty turns it off.")}${headerProblem ? html`<span class="pf-problem" role="alert"> ${headerProblem}</span>` : null}`}>
+						<input class="field mono" placeholder="x-opencode-session" aria-label=${t("Custom headers")} value=${draft.sessionHeader} onInput=${(e) => patch({ sessionHeader: e.target.value })} />
 					<//>
 					<div class="col field-label"><span class="field-name">${t("Authentication")}</span>
 						<div class="row"><${Segmented} value=${draft.auth} onChange=${(v) => patch({ auth: v })} options=${authOptions} /></div>

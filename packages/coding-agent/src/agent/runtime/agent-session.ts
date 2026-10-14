@@ -729,6 +729,7 @@ export class AgentSession {
 			settingsManager: config.settingsManager,
 			modelRuntime: config.modelRuntime,
 			getMainModel: () => this._mainModelRef(),
+			sessionId: config.sessionManager.getSessionId(),
 			checkpointDirectory: join(
 				config.sessionManager.getSessionDir(),
 				".vision-checkpoints",

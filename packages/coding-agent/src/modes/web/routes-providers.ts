@@ -54,11 +54,10 @@ class LoginCancelled extends Error {}
 
 const HIDDEN = "__hidden__";
 
-/** models.json may hold literal keys / auth headers: the browser only sees a placeholder. */
+/** models.json may hold literal keys: the browser only sees a placeholder for apiKey / model headers. Provider-level custom headers are shown and edited as plain text (user choice: simplest plaintext KV). */
 function redactProvider(config: ModelsJsonProvider): ModelsJsonProvider {
 	const copy = structuredClone(config);
 	if (copy.apiKey) copy.apiKey = HIDDEN;
-	if (copy.headers) for (const key of Object.keys(copy.headers)) copy.headers[key] = HIDDEN;
 	for (const model of copy.models ?? [])
 		if (model.headers) for (const key of Object.keys(model.headers)) model.headers[key] = HIDDEN;
 	return copy;

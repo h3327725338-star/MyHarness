@@ -195,6 +195,7 @@ export class ConversationNaming {
 				model,
 				thinkingLevel: ref?.thinkingLevel,
 				currentTitle: this.session.sessionName,
+				sessionId: this.session.sessionManager.getSessionId(),
 				signal: controller.signal,
 				maxRetries: 0,
 			});

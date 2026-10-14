@@ -116,6 +116,8 @@ export interface VisionAssistantManagerOptions {
 	onPersist?: (message: CustomMessage<VisionAssistantMessageDetails>) => void;
 	/** Session-scoped directory used to resume completed image batches after interruption. */
 	checkpointDirectory?: string;
+	/** Conversation ID sent as the session header value when the provider configures one. */
+	sessionId?: string;
 	modelRunner?: (parameters: {
 		model: Model<any>;
 		settings: Required<Pick<VisionAssistantSettings, "provider" | "model" | "thinkingLevel">>;
@@ -996,6 +998,9 @@ export class VisionAssistantManager {
 					maxRetries: retry.maxRetries,
 					maxRetryDelayMs: retry.maxRetryDelayMs,
 					maxTokens: 16_384,
+					// Lets provider-level session headers (e.g. `x-opencode-session`) ride the
+					// conversation ID, like foreground chats do.
+					sessionId: this.options.sessionId,
 				},
 			);
 			if (response.stopReason === "aborted") throw new Error("Vision Assistant 请求超时或被取消");

@@ -213,6 +213,7 @@ export class SessionCompactionRunner {
 				mainModel?.provider === model.provider &&
 					mainModel?.api === model.api &&
 					mainModel?.baseUrl === model.baseUrl,
+				sessionManager.getSessionId(),
 			));
 		if (signal.aborted) throw new Error("Compaction cancelled");
 		const id = sessionManager.appendCompaction(

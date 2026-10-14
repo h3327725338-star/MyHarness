@@ -78,6 +78,7 @@ export async function generateTitleForSession(
 		modelRuntime: session.modelRuntime,
 		settingsManager,
 		fallbackModel: session.model,
+		sessionId: sessionManager.getSessionId(),
 		signal,
 	});
 	return { result, sessionManager };

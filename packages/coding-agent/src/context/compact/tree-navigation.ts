@@ -155,6 +155,7 @@ export async function navigateSessionTree(
 			customInstructions,
 			replaceInstructions,
 			reserveTokens: Math.max(branchSummarySettings.reserveTokens, host.getCompactionReserveTokens()),
+			sessionId: host.sessionManager.getSessionId(),
 			streamFn: host.agent.streamFunction,
 		});
 		if (summary.aborted) {

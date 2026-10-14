@@ -28,7 +28,7 @@ Open `/settings`, choose **Providers**, then **添加 Provider** and **创建自
 - explicit image and reasoning capability declarations
 - connection tests and later Provider/model editing
 
-The UI is intended for common compatible APIs. Direct `models.json` editing is still required for custom headers, command-based key resolution, detailed compatibility overrides, overlays for an already registered Provider, and other advanced fields documented below.
+The UI is intended for common compatible APIs. The Connection card edits one provider-level session header name directly (a single `自定义请求头` box, e.g. `x-opencode-session`; the value is always the current conversation ID, empty turns it off). Direct `models.json` editing is still required for static custom `headers`, per-model headers, command-based key resolution, detailed compatibility overrides, overlays for an already registered Provider, and other advanced fields documented below.
 
 GUI saves are atomic and validated before replacing the active file. The previous source is copied to `models.json.bak`. Because the UI parses and rewrites JSON, comments and hand-formatted spacing are normalized in the active file.
 
@@ -158,6 +158,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `apiKey` | Optional API key config (see value resolution below). Omit it when auth is provided by `auth.json` or CLI `--api-key`. |
 | `oauth` | Dynamic OAuth provider type. Only available through the extension API (`ProviderConfigInput`), not in `models.json`. Currently supports `"radius"`; requires the gateway `baseUrl`. |
 | `headers` | Custom headers (see value resolution below) |
+| `sessionHeader` | Name of one header sent with every request carrying a conversation ID; the value is always that conversation ID (e.g. `x-opencode-session`). Empty or omitted turns it off |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for base or extension-registered models on this provider |
@@ -209,6 +210,8 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 `/model` availability checks use configured auth presence and do not execute shell commands.
 
 ### Custom Headers
+
+A provider-level session header name (`sessionHeader`, e.g. `x-opencode-session`) can be edited in Settings → Providers → Connection → 自定义请求头: a single box holding only the name. Whenever a request carries a conversation ID, a header of that name is sent with the conversation ID as its value; requests without a conversation ID (e.g. model detection) send nothing extra. Static `headers` and per-model `headers` remain JSON-only and are left untouched by the form.
 
 ```json
 {
