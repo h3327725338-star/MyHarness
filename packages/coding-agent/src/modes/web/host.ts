@@ -120,6 +120,14 @@ export function paginateTranscriptItems(
 	return { items: page, hasMore: start > 0, nextCursor: start > 0 ? (page[0]?.id ?? null) : null };
 }
 
+/** The fields web/js/store.js attachEntryId matches a live transcript item on (kind plus ts/text/toolCallId). */
+function appendedMatchKey(item: WireItem): { kind: string; ts: number; text?: string; toolCallId?: string } {
+	const key: { kind: string; ts: number; text?: string; toolCallId?: string } = { kind: item.kind, ts: item.ts };
+	if ("text" in item && typeof item.text === "string") key.text = item.text;
+	if ("toolCallId" in item && typeof item.toolCallId === "string") key.toolCallId = item.toolCallId;
+	return key;
+}
+
 /** Whether any projectable entry exists below `start` (cheap id/type scan, no wire conversion). */
 function hasProjectableBefore(entries: readonly SessionEntry[], start: number): boolean {
 	for (let i = start - 1; i >= 0; i -= 1) {
@@ -1185,8 +1193,14 @@ export class WebHost {
 		// A persisted write changes the branch the next transcript reads: drop the projection eagerly.
 		// (The per-request id-sequence check in transcript() would refuse the stale cache anyway.)
 		this.transcriptCache.invalidate();
-		if (
-			entry.type === "message" ||
+		if (entry.type === "message") {
+			// A persisted user message announces itself here so the Web UI can back-fill the entry id its edit
+			// pencil depends on (web/js/transcript.js renders it only with an id; web/js/store.js attachEntryId
+			// fills live items from this event). Only the fields that back-fill matches on go out, so the text,
+			// images and details already sent with message_start/message_end are not shipped a second time.
+			const item = entriesToWire([entry])[0];
+			if (item) this.broadcast("entry_appended", { id: entry.id, item: appendedMatchKey(item) });
+		} else if (
 			entry.type === "custom_message" ||
 			(entry.type === "custom" && (entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY))
 		) {

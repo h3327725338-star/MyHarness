@@ -1358,7 +1358,15 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message, timing);
+				const entryId = this.sessionManager.appendMessage(event.message, timing);
+				// The Web UI's edit-and-resend pencil only renders on items that carry this message's persisted
+				// entry id (web/js/transcript.js), and a live item takes that id from entry_appended
+				// (web/js/store.js attachEntryId). Announce the user message as soon as it is persisted; replies
+				// and tool results have no id consumer and stay unannounced instead of doubling their broadcast.
+				if (event.message.role === "user") {
+					const entry = this.sessionManager.getEntry(entryId);
+					if (entry) this._emit({ type: "entry_appended", entry });
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary)
 			// are persisted elsewhere.

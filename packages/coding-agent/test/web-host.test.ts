@@ -783,6 +783,32 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(workspaces.workspaces.some((w: any) => w.current)).toBe(true);
 	});
 
+	it("announces a persisted user message so the edit pencil can appear without a reload", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("noted")])]);
+		await fx.post("/api/prompt", { text: "edit me later" });
+		await fx.waitFor("agent_settled");
+		const live = fx.events.find((event) => event.event === "message_start" && event.data.item?.kind === "user");
+		expect(live).toBeTruthy();
+		// The live item itself still carries no id: the front end back-fills it from entry_appended.
+		expect(live?.data.item?.id).toBeUndefined();
+		const announced = fx.events.filter(
+			(event) => event.event === "entry_appended" && event.data.item?.kind === "user",
+		);
+		expect(announced).toHaveLength(1);
+		// Only the fields the live-item id back-fill matches on go out: no second copy of text, images or details.
+		expect(announced[0].data.item).toEqual({ kind: "user", ts: expect.any(Number), text: "edit me later" });
+		// The announced id is the persisted entry's id, so a fork can branch before this message.
+		const persisted = (await fx.get("/api/transcript")).items.find(
+			(item: { id?: string }) => item.id === announced[0].data.id,
+		);
+		expect(persisted).toMatchObject({ kind: "user", text: "edit me later" });
+		// The id also resolves through the same lookup the fork path starts with, so a fork can branch
+		// before this message right away, without a reload or a second transcript read.
+		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
+		expect(owner.session.sessionManager.getEntry(announced[0].data.id)?.type).toBe("message");
+	});
+
 	it("runs a prompt through the real Agent loop, streams events and reports the file change with a diff", async () => {
 		const fx = await start();
 		writeFileSync(join(fx.project, "notes.txt"), "alpha\n");
