@@ -997,7 +997,7 @@ export class VisionAssistantManager {
 					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,
 					maxRetryDelayMs: retry.maxRetryDelayMs,
-					maxTokens: 16_384,
+					// 不写死输出上限：与主聊天一致走 provider 默认。
 					// Lets provider-level session headers (e.g. `x-opencode-session`) ride the
 					// conversation ID, like foreground chats do.
 					sessionId: this.options.sessionId,

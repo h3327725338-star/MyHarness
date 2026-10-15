@@ -109,8 +109,8 @@ import {
 } from "../../startup/slash-commands.ts";
 import {
 	applyAgentRoleBoundary,
-	buildDynamicContextReminder,
 	type BuildSystemPromptOptions,
+	buildDynamicContextReminder,
 	buildStableSystemPrompt,
 	collectSystemPromptOptions,
 	personalizationBlock,
@@ -804,7 +804,7 @@ export class AgentSession {
 				if (withVision[index].role === "user") {
 					insertAt = index;
 					break;
-			}
+				}
 			}
 			if (insertAt >= withVision.length) return [...withVision, reminder];
 			return [...withVision.slice(0, insertAt), reminder, ...withVision.slice(insertAt)];
@@ -3701,6 +3701,10 @@ export class AgentSession {
 					sessionManager: this.sessionManager,
 					settingsManager: this.settingsManager,
 					getModel: () => this.model,
+					findBranchSummaryModel: (provider, modelId) =>
+						this._modelRuntime.isProviderEnabled(provider)
+							? this._modelRuntime.getModel(provider, modelId)
+							: undefined,
 					getEffectiveContextWindow: () => this.effectiveContextWindow,
 					getCompactionReserveTokens: () => this._getRuntimeCompactionSettings().reserveTokens,
 					resolveSummarizationAuth: (model) => this._getSummarizationRequestAuth(model),

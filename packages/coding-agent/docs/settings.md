@@ -128,12 +128,15 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 | `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时向 main Agent 注册 `web_search` 和 `web_fetch`。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
+| `commitDescription` | object | `{}` | Global AI 提交描述模型：为空表示使用主模型。设置 → 智能体 → 助手的“提交描述”行选择独立模型与思考档位。 |
+| `worktreeNaming` | object | `{}` | Global 工作区副本命名模型：为空表示使用主模型。设置 → 智能体 → 助手的“副本命名”行选择独立模型与思考档位。 |
+| `branchSummary` | object | `{}` | Global 分支摘要模型与摘要行为：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`reserveTokens`/`skipPrompt` 保持原有摘要行为。设置 → 智能体 → 助手的“分支摘要”行选择独立模型与思考档位。 |
 | `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
 | `visionCapabilityTests` | object | - | custom models 的 image-capability probe results cache，适用于未声明 input support 的 models。可选；尚未执行 probe 时不存在。 |
 | `codeIntelligence` | object | `{ "symbolsEnabled": false }` | Semantic/LSP Symbols 配置。`symbolsEnabled` 默认关闭，打开或关闭后需重启运行时；`disabledLanguages` 和 `servers` 保留用于语言模块管理。旧 `enabled` 字段仅作 deprecated 兼容读取类型，实际读取时忽略、不迁移且不再写出。 |
 | `gitIntegration` | object | `{ "enabled": false }` | 仅当前 project 使用的 local Git version history integration。通过 `/settings` 设置。 |
 
-Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Model 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
+Conversation Naming、Auto Memory、Sub Agent、Vision Assistant、Compact Model、Commit Description、Worktree Naming 和 Branch Summary 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
 
 - 没有设置 `provider` / `model`（Web UI 里的“使用主模型”）：运行时使用当前 main model，并且连同它当前的 Thinking Effort 一起继承；main model 变了就跟着变。如果另外写了 `thinkingLevel`，只覆盖 Effort。
 - 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）。
@@ -177,9 +180,9 @@ Conversation Naming、Auto Memory、Sub Agent、Vision Assistant 和 Compact Mod
 1. 在 main model 收到新的 user request 前（包括新 session 的第一次 request），通过本地文本匹配选择相关的已保存 memories（查询全文匹配）。Recall 不会发起 blocking model request；
 2. 将这些 memories 作为 hidden、low-priority context 添加。它们不能覆盖 system、global、project 或当前 user instructions，也不会授予 tool permissions；长期规则归属二分：人维护的、长期有效的规则放项目指令（`AGENTS.md` / `CLAUDE.md` / `.myharness/SYSTEM.md`），AI 从纠正和偏好里学到的放记忆。两者冲突时项目指令优先，记忆只当背景；觉得某条记忆已经是长期铁律时，把它写进项目指令而不是只留在记忆里；
 3. Task 完成后，只等待待处理任务安全写入当前 Conversation 的 `memory/maintenance.json`，不等待记忆模型。后台合并短时间内的任务快照，逐批处理尚未提取的 conversation delta，提取持久的 preferences、corrections、project facts 和 references；
-4. 每个 Workspace 的新增或实质更新累计达到 5 条时立即后台整理；不足 5 条但大于零时，从第一条待整理变化起满 3 小时整理，后续变化不重置计时。重复且无变化的写入不计数，整理自身的修改不计入下一轮。计数与起始时间保存在 `state.json`（关闭期间也保留，下次打开按原时间算），成功整理后清零，失败保留；旧 session-count 状态按当前 active memories 的更新时间恢复。软件开着时，任一存活的 persisted Chat runtime 每 30 秒检查到期任务，无需新消息：先整本 Workspace，再顺带清扫其他到期 Workspace（含 `unbound`）的 Global＋Workspace 共享部分，不为此新建 runtime；关闭服务期间不运行，打开任意 Chat 后恢复检查（含逾期的顺带清扫）。本 Workspace 整理读取该 runtime 可见的 Global、Workspace 和当前 Conversation，顺带清扫只读 Global＋对应 Workspace（其会话私密笔记仍等本人点开），超出输入保护的记忆分批全部检查，不跨 Conversation 提升归属。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。
+4. 每个 Workspace 的新增或实质更新累计达到 5 条时立即后台整理；不足 5 条但大于零时，从第一条待整理变化起满 3 小时整理，后续变化不重置计时。重复且无变化的写入不计数，整理自身的修改不计入下一轮。计数与起始时间保存在 `state.json`（关闭期间也保留，下次打开按原时间算），成功整理后清零，失败保留；旧 session-count 状态按当前 active memories 的更新时间恢复。软件开着时，任一存活的 persisted Chat runtime 每 30 秒检查到期任务，无需新消息：先整本 Workspace，再顺带清扫其他到期 Workspace（含 `unbound`）的 Global＋Workspace 共享部分，不为此新建 runtime；关闭服务期间不运行，打开任意 Chat 后恢复检查（含逾期的顺带清扫）。本 Workspace 整理读取该 runtime 可见的 Global、Workspace 和当前 Conversation，顺带清扫只读 Global＋对应 Workspace（其会话私密笔记仍等本人点开），超出输入保护的记忆分批全部检查，不跨 Conversation 提升归属。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。同一 Workspace 的整理（含顺带清扫）同时只运行一个：后来者本轮直接跳过，由 30 秒后的下一轮自然排队；写回前的乐观快照校验保留为安全网。模型调用不写死输出上限，与主聊天一致走 Provider 默认（思考与正文共用该预算）。
 
-选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。顶栏黄字旁有重试和归档两个小按钮：重试把次数清零再跑一次，归档把待处理快照收进会话归档并熄灯，两者都不永久删除。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
+选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。整理（consolidation/顺带清扫）的失败同样降噪：单次失败静默退避，连续 3 轮仍失败才在顶栏亮黄灯，悬停可见最近一条失败原因（详情在会话 `memory/maintenance.log`）；任何一轮成功（含无任务）即熄灯并清零计数。会话替换导致的中止不计入失败、不亮灯。顶栏黄字旁有重试和归档两个小按钮：重试把次数清零再跑一次，归档把待处理快照收进会话归档并熄灯，两者都不永久删除。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
 
 Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 200 条；查询全文都拿来匹配，不截断；本地词项稀有度和文本长度参与排序，按相对相关性筛选（最佳得分一半以上）并在同层去重，另保底 8 条最佳词面匹配（得分再低也带，触发词直达的最多 3 条不计入），保证换个说法也找得到。输出用分层 token 预算（`estimateTextTokens`，约 6000 token 总量：画像固定位 2500 ＋目录位 800 ＋动态卡片用剩余额度；规矩头不计），不再是 20 KB 字节卡片；也不是语义向量检索。每轮除画像和卡片外常驻一份本轮可见记忆的 id 目录（`id | scope | name`，超 800 token 截断并标注），模型需要全文再用 `memory_get` 按需取，避免卡片截断导致“有但看不见”。
 
@@ -339,6 +342,30 @@ Memory Markdown files 是 source of truth：
 }
 ```
 
+```json
+{
+  "commitDescription": {
+    "provider": "my-provider",
+    "model": "my-commit-model",
+    "thinkingLevel": "low"
+  },
+  "worktreeNaming": {
+    "provider": "my-provider",
+    "model": "my-naming-model",
+    "thinkingLevel": "low"
+  },
+  "branchSummary": {
+    "provider": "my-provider",
+    "model": "my-summary-model",
+    "thinkingLevel": "low"
+  }
+}
+```
+
+#### commitDescription（AI 提交描述）与 worktreeNaming（副本命名）
+
+两个都是 global 设置，默认都为空，即“使用主模型”：运行时使用当前主对话模型并继承它当前的 Thinking Effort，与改动前的行为完全一致；显式配置 `provider` + `model` 后改用独立模型，此时没写 `thinkingLevel`（Web UI 里的“默认”）表示不发送 Effort，相当于 `off`，只写其中一个视为没有配置。思考档位透传为一次性模型请求的 `reasoning` 参数（`off` 则不传）。两个请求都不再设置 `maxTokens`，输出上限走 Provider 默认。提交描述用于 `/commit` 从 diff 生成标题与正文，副本命名用于工作区副本的 AI 命名（2–5 词的展示名，只返回名称本身）。配置删除或 Provider 停用时回退到主模型；删除 Provider/模型时会清理指向它的引用。
+
 #### gitIntegration
 
 `Git` 默认关闭，只作用于当前 project。在 `/settings` 中启用后：
@@ -453,6 +480,9 @@ Project `.myharness/settings.json`:
 |---------|------|---------|-------------|
 | `branchSummary.reserveTokens` | number | `16384` | 为 branch summarization 预留的 tokens |
 | `branchSummary.skipPrompt` | boolean | `false` | session tree navigation 时跳过 `"Summarize branch?"` prompt（默认不生成 summary） |
+| `branchSummary.provider` | string | 当前主对话 Provider | 独立选择的分支摘要模型使用的 Provider；为空表示使用主模型 |
+| `branchSummary.model` | string | 当前主对话模型 | 分支摘要模型 ID；与 `provider` 一起配置，为空表示使用主模型 |
+| `branchSummary.thinkingLevel` | string | 未选独立模型时为当前主对话档位；选了独立模型时不发送 | 独立的分支摘要思考档位，会限制在所选模型支持的档位内；`off` 表示不发送 |
 
 ### Retry
 

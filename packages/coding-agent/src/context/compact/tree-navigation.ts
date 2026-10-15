@@ -6,9 +6,10 @@
  * only knows the session tree and the branch summarizer.
  */
 
-import type { Agent } from "@myharness/agent-core";
-import { contentText } from "@myharness/ai";
+import type { Agent, ThinkingLevel } from "@myharness/agent-core";
+import { clampThinkingLevel, contentText } from "@myharness/ai";
 import type { Model, Usage } from "@myharness/ai/compat";
+import { resolveAssistantModel } from "../../agent/runtime/assistant-model.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { BranchSummaryEntry, SessionEntry } from "../../session/types.ts";
@@ -44,6 +45,8 @@ export interface TreeNavigationHost {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	getModel(): Model<any> | undefined;
+	/** Look up an explicitly configured helper model; undefined when the provider is disabled or the model is missing. */
+	findBranchSummaryModel?(provider: string, modelId: string): Model<any> | undefined;
 	getEffectiveContextWindow(): number;
 	/** Reserve tokens of the session's runtime compaction settings. */
 	getCompactionReserveTokens(): number;
@@ -71,6 +74,38 @@ export interface TreeNavigationHost {
 		summaryEntry?: BranchSummaryEntry;
 		fromExtension?: boolean;
 	}): Promise<void>;
+}
+
+/**
+ * Resolve the branch-summary helper model. Empty provider/model (or half-filled)
+ * follows the main chat model and effort, exactly like before; an explicit
+ * provider+model runs on its own thinking level.
+ */
+export function resolveBranchSummaryModel(host: TreeNavigationHost): {
+	model: Model<any>;
+	thinkingLevel: ThinkingLevel;
+} {
+	const mainModel = host.getModel();
+	if (!mainModel) throw new Error("No model available for summarization");
+	const mainThinking = host.agent.state.thinkingLevel as ThinkingLevel;
+	const configured = host.settingsManager.getBranchSummaryModelSettings();
+	// Default (nothing configured, or only half of provider/model): follow the main model and effort.
+	if (!configured.provider && !configured.model) {
+		const level = (configured.thinkingLevel ?? mainThinking) as ThinkingLevel;
+		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
+	}
+	if (!configured.provider || !configured.model) {
+		const level = (configured.thinkingLevel ?? mainThinking) as ThinkingLevel;
+		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
+	}
+	const ref = resolveAssistantModel(configured, {
+		provider: mainModel.provider,
+		id: mainModel.id,
+		thinkingLevel: mainThinking,
+	});
+	const selected = ref ? host.findBranchSummaryModel?.(ref.provider, ref.model) : undefined;
+	if (!selected) throw new Error(`Branch summary model unavailable: ${configured.provider}/${configured.model}`);
+	return { model: selected, thinkingLevel: clampThinkingLevel(selected, ref!.thinkingLevel) as ThinkingLevel };
 }
 
 /**
@@ -142,7 +177,7 @@ export async function navigateSessionTree(
 	let summaryDetails: unknown;
 	let summaryUsage: Usage | undefined;
 	if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-		const model = host.getModel()!;
+		const { model, thinkingLevel } = resolveBranchSummaryModel(host);
 		const { apiKey, headers, env } = await host.resolveSummarizationAuth(model);
 		const branchSummarySettings = host.settingsManager.getBranchSummarySettings();
 		const summary = await generateBranchSummary(entriesToSummarize, {
@@ -157,6 +192,7 @@ export async function navigateSessionTree(
 			reserveTokens: Math.max(branchSummarySettings.reserveTokens, host.getCompactionReserveTokens()),
 			sessionId: host.sessionManager.getSessionId(),
 			streamFn: host.agent.streamFunction,
+			thinkingLevel,
 		});
 		if (summary.aborted) {
 			return { cancelled: true, aborted: true };

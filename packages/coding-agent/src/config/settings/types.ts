@@ -15,6 +15,23 @@ export interface CompactionSettings {
 export interface BranchSummarySettings {
 	reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
 	skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** AI commit description helper model: empty provider/model means "use the main model". */
+export interface CommitDescriptionSettings {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** Worktree copy naming helper model: empty provider/model means "use the main model". */
+export interface WorktreeNamingSettings {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
 }
 
 export interface ProviderRetrySettings {
@@ -265,6 +282,8 @@ export interface Settings {
 	/** Independent context caps for the main session and delegated child sessions. */
 	contextWindow?: ContextWindowSettings;
 	branchSummary?: BranchSummarySettings;
+	commitDescription?: CommitDescriptionSettings;
+	worktreeNaming?: WorktreeNamingSettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean; // default: true; collapse transcript details until expanded with Ctrl+O
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses

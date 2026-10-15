@@ -251,6 +251,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const code = s.getCodeIntelligenceSettings();
 		const popup = s.getPopupNotificationSettings();
 		const compaction = s.getCompactionModelSettings();
+		const commitDescription = s.getCommitDescriptionSettings();
+		const worktreeNaming = s.getWorktreeNamingSettings();
+		const branchSummaryModel = s.getBranchSummaryModelSettings();
 		const context = s.getContextWindowSettings();
 		const retry = s.getRetrySettings();
 		const networkTimeouts = s.getNetworkTimeouts();
@@ -398,6 +401,33 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				type: "modelRef",
 				value: { ...modelRef(vision), enabled: vision.enabled },
 				note: "enabled",
+			},
+			{
+				id: "commitDescription",
+				section: "Assistants",
+				label: "Commit description",
+				description:
+					"Model that writes AI commit messages. “Use the main model” follows the main chat's model and effort.",
+				type: "modelRef",
+				value: { ...modelRef(commitDescription) },
+			},
+			{
+				id: "worktreeNaming",
+				section: "Assistants",
+				label: "Worktree naming",
+				description:
+					"Model that names worktree copies. “Use the main model” follows the main chat's model and effort.",
+				type: "modelRef",
+				value: { ...modelRef(worktreeNaming) },
+			},
+			{
+				id: "branchSummaryModel",
+				section: "Assistants",
+				label: "Branch summary",
+				description:
+					"Model that summarizes the branch left behind when navigating the session tree. “Use the main model” follows the main chat's model and effort.",
+				type: "modelRef",
+				value: { ...modelRef(branchSummaryModel) },
 			},
 			// Web & code
 			{
@@ -930,6 +960,33 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				const enabled = (value as { enabled?: unknown } | undefined)?.enabled === true;
 				s.setVisionAssistantSettings({
 					enabled,
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "commitDescription": {
+				const ref = modelRefValue(value);
+				s.setCommitDescriptionSettings({
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "worktreeNaming": {
+				const ref = modelRefValue(value);
+				s.setWorktreeNamingSettings({
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "branchSummaryModel": {
+				const ref = modelRefValue(value);
+				s.setBranchSummaryModelSettings({
 					provider: ref.provider,
 					model: ref.model,
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,

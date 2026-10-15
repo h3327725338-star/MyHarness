@@ -5,7 +5,10 @@
  */
 
 import * as path from "node:path";
-import { contentText } from "@myharness/ai";
+import type { ThinkingLevel } from "@myharness/agent-core";
+import { clampThinkingLevel, contentText } from "@myharness/ai";
+import type { Model } from "@myharness/ai/compat";
+import { resolveAssistantModel } from "../../agent/runtime/assistant-model.ts";
 import { buildConversationTitleContext, normalizeConversationTitle } from "../../agent/runtime/conversation-title.ts";
 import { GitCommitUseCase } from "../../application/use-cases/git-commit.ts";
 import { GitPushUseCase } from "../../application/use-cases/git-push.ts";
@@ -55,6 +58,49 @@ function failureText(result: { stdout?: string; stderr: string; error?: string; 
 	const detail = [result.stdout, result.stderr || result.error].filter(Boolean).join("\n").trim();
 	if (!detail) return "Git command failed";
 	return result.exitCode != null ? `${detail} (exit code ${result.exitCode})` : detail;
+}
+
+/** Helper-model reference stored in settings: empty provider/model means "use the main model". */
+interface HelperModelRef {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/**
+ * Resolve the model a Git helper (commit description, worktree naming) runs on.
+ * Default (no provider/model) follows the main chat model and effort, exactly like before;
+ * an explicit provider+model uses its own effort ("off" when the level is left empty).
+ * A half-filled reference (only one of the two set) is treated as not configured.
+ */
+function resolveGitHelperModel(
+	host: WebHost,
+	configured: HelperModelRef,
+	notConfiguredError: string,
+): { model: Model<any>; thinkingLevel: ThinkingLevel } {
+	const mainModel = host.session.model as Model<any> | undefined;
+	if (!mainModel) throw new HttpError(400, notConfiguredError);
+	const mainRef = { provider: mainModel.provider, id: mainModel.id, thinkingLevel: host.session.thinkingLevel };
+	if (!configured.provider && !configured.model) {
+		const level = (configured.thinkingLevel ?? mainRef.thinkingLevel) as ThinkingLevel;
+		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
+	}
+	if (!configured.provider || !configured.model) {
+		const level = (configured.thinkingLevel ?? mainRef.thinkingLevel) as ThinkingLevel;
+		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
+	}
+	const ref = resolveAssistantModel(configured, mainRef);
+	const selected =
+		ref && host.session.modelRuntime.isProviderEnabled(ref.provider)
+			? host.session.modelRuntime.getModel(ref.provider, ref.model)
+			: undefined;
+	if (!selected) throw new HttpError(400, `Helper model unavailable: ${configured.provider}/${configured.model}`);
+	return { model: selected, thinkingLevel: clampThinkingLevel(selected, ref!.thinkingLevel) as ThinkingLevel };
+}
+
+/** Reasoning option for one-shot completions: 'off' sends nothing. */
+function reasoningOf(thinkingLevel: ThinkingLevel) {
+	return thinkingLevel === "off" ? undefined : thinkingLevel;
 }
 
 interface GitTaskState {
@@ -373,8 +419,12 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 					}
 				},
 				generateMessage: async (context) => {
-					const model = host.session.model;
-					if (!model) throw new HttpError(400, "Select a main Agent model before committing.");
+					const { model, thinkingLevel } = resolveGitHelperModel(
+						host,
+						host.session.settingsManager.getCommitDescriptionSettings(),
+						"Select a main Agent model before committing.",
+					);
+					const reasoning = reasoningOf(thinkingLevel);
 					return generateAICommitMessage(
 						context,
 						async (systemPrompt, input) => {
@@ -398,9 +448,9 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 									// retries take is governed by the network timeouts and the shared retry settings, never
 									// by a fixed wall-clock cap here (a cap at or below the timeouts used to kill every slow
 									// request with the generic "Request was aborted" before any retry could classify the real
-									// failure).
+									// failure). No maxTokens: the provider default applies.
 									signal: task.controller.signal,
-									maxTokens: Math.min(4096, model.maxTokens || 4096),
+									...(reasoning ? { reasoning } : {}),
 									sessionId,
 									headers: attributionHeaders,
 								},
@@ -424,7 +474,6 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 						},
 						{
 							contextWindow: model.contextWindow,
-							maxOutputTokens: Math.min(4096, model.maxTokens || 4096),
 							signal: task.controller.signal,
 							onProgress: (activity) => {
 								task.activity = activity;
@@ -574,8 +623,12 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const payload = asObject(body);
 		const worktree = findWorktree(repositoryRootOrThrow(), String(payload.path ?? ""));
 		if (worktree.isMain) throw new HttpError(400, "Select a test copy.");
-		const model = host.session.model;
-		if (!model) throw new HttpError(400, "Select a main Agent model first.");
+		const { model, thinkingLevel } = resolveGitHelperModel(
+			host,
+			host.session.settingsManager.getWorktreeNamingSettings(),
+			"Select a main Agent model first.",
+		);
+		const reasoning = reasoningOf(thinkingLevel);
 		// 与提交说明同理：opencode 模型缺 x-opencode-session 会 400，这里一并补上。
 		const sessionId = host.session.sessionId;
 		const attributionHeaders = mergeProviderAttributionHeaders(model, host.session.settingsManager, sessionId);
@@ -602,7 +655,8 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			// limits come from the network timeouts and the retries from the shared retry settings (a fixed wall-clock
 			// cap at or below the first-byte timeout would kill slow requests before any retry could classify them).
 			// The route itself has no cancel control, so it runs without an external signal.
-			options: { maxTokens: 512, sessionId, headers: attributionHeaders },
+			// No maxTokens: the provider default applies.
+			options: { ...(reasoning ? { reasoning } : {}), sessionId, headers: attributionHeaders },
 		});
 		if (response.stopReason === "error" || response.stopReason === "aborted")
 			throw new HttpError(502, response.errorMessage ?? "Copy naming failed.");

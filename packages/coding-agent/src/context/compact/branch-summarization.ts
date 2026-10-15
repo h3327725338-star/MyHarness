@@ -77,6 +77,8 @@ export interface GenerateBranchSummaryOptions {
 	env?: Record<string, string>;
 	/** Abort signal for cancellation */
 	signal: AbortSignal;
+	/** Thinking level for the request; omitted uses the model/provider default. */
+	thinkingLevel?: import("@myharness/agent-core").ThinkingLevel;
 	/** Optional custom instructions for summarization */
 	customInstructions?: string;
 	/** If true, customInstructions replaces the default prompt instead of being appended */
@@ -379,7 +381,15 @@ export async function generateBranchSummary(
 	// request behavior (timeouts, retries, attribution headers) stays consistent
 	// without running through agent state/events.
 	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
-	const requestOptions: SimpleStreamOptions = { apiKey, headers, env, signal, maxTokens: 2048, sessionId };
+	// 不写死输出上限：与主聊天一致走 provider 默认；思考档位由调用方设置透传。
+	const requestOptions: SimpleStreamOptions = {
+		apiKey,
+		headers,
+		env,
+		signal,
+		sessionId,
+		reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,
+	};
 	const response = streamFn
 		? await (await streamFn(model, context, requestOptions)).result()
 		: await completeSimple(model, context, requestOptions);

@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { contentText, estimateTextTokens } from "@myharness/ai";
 import { stringify as stringifyYaml } from "yaml";
-import { getDataDir, getSessionDir, getWorkspaceDir, getWorkspacesDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
+import {
+	getDataDir,
+	getSessionDir,
+	getWorkspaceDir,
+	getWorkspacesDir,
+	UNBOUND_WORKSPACE_ID,
+} from "../../config/paths/index.ts";
 import type { AutoMemorySettings, SettingsManager } from "../../config/settings/index.ts";
 import { getAgentDir } from "../../config.ts";
 import { runGitSync } from "../../git/repository/command.ts";
@@ -146,6 +152,9 @@ const MEMORY_SELECTION_GUARANTEED = 8;
 const MEMORY_CONTRADICTION_PAIR_LIMIT = 10;
 const CONSOLIDATION_MIN_CHANGES = 5;
 const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
+// 按工作区串行的整理互斥：同一工作区同时只允许一个整理任务在跑（跨会话实例共享）。
+// 后来者本轮直接跳过，由 30 秒后的下一轮定时器自然排队，而不是跑完再撞快照冲突。
+const activeConsolidations = new Set<string>();
 const AUTO_MEMORY_TIMEOUT_MS = 15 * 60 * 1000;
 const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
@@ -476,9 +485,11 @@ export function parseMemoryOperations(output: string): MemoryOperation[] | undef
 			firstBrace >= 0 && lastBrace > firstBrace ? [trimmed, trimmed.slice(firstBrace, lastBrace + 1)] : [trimmed];
 		for (const candidate of candidates) {
 			try {
-				const parsed = JSON.parse(candidate) as { operations?: unknown };
-				if (!Array.isArray(parsed.operations)) continue;
-				return parsed.operations.filter((value): value is MemoryOperation => {
+				const parsed = JSON.parse(candidate) as unknown;
+				// 兼容裸数组：模型可能直接返回 [...] 而不是 {"operations":[...]}。
+				const parsedOperations = Array.isArray(parsed) ? parsed : (parsed as { operations?: unknown }).operations;
+				if (!Array.isArray(parsedOperations)) continue;
+				return parsedOperations.filter((value): value is MemoryOperation => {
 					if (!value || typeof value !== "object") return false;
 					const operation = value as Partial<MemoryOperation>;
 					return operation.action === "upsert" || operation.action === "delete";
@@ -705,7 +716,20 @@ export interface MemoryContradiction {
 	cues: string[];
 }
 
-const CONTRADICTION_CUES = ["不再", "改为", "之前", "现在", "纠正", "不要", "禁止", "必须", "取代", "替代", "过期", "作废"];
+const CONTRADICTION_CUES = [
+	"不再",
+	"改为",
+	"之前",
+	"现在",
+	"纠正",
+	"不要",
+	"禁止",
+	"必须",
+	"取代",
+	"替代",
+	"过期",
+	"作废",
+];
 
 /**
  * Read-only heuristic for “two memories that may contradict each other”.
@@ -722,7 +746,8 @@ export function findMemoryContradictions(
 	const pool = [...entries];
 	const termSets = pool.map((entry) => lexicalTerms(`${entry.name}\n${entry.description}\n${entry.content}`));
 	const documentFrequency = new Map<string, number>();
-	for (const terms of termSets) for (const term of terms) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+	for (const terms of termSets)
+		for (const term of terms) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
 	const rareEnough = (term: string): boolean => (documentFrequency.get(term) ?? 0) <= Math.max(2, pool.length / 4);
 	const idf = (term: string): number => Math.log(1 + pool.length / (documentFrequency.get(term) ?? 1));
 	const pairs: MemoryContradiction[] = [];
@@ -742,9 +767,7 @@ export function findMemoryContradictions(
 			});
 		}
 	}
-	return pairs
-		.sort((x, y) => y.cues.length - x.cues.length || y.score - x.score)
-		.slice(0, Math.max(0, limit));
+	return pairs.sort((x, y) => y.cues.length - x.cues.length || y.score - x.score).slice(0, Math.max(0, limit));
 }
 
 /**
@@ -910,6 +933,8 @@ export class AutoMemoryManager {
 	private maintenanceStatus: MemoryMaintenanceStatus = { phase: "idle" };
 	private maintenanceEnqueue: Promise<void> = Promise.resolve();
 	private readonly reportedErrors = new Set<string>();
+	/** 连续整理失败轮数：成功（含 noop）即清零；连续 3 轮才亮黄灯（降噪），灯上带最近失败原因。 */
+	private consolidationFailureStreak = 0;
 	private backgroundQueue: Promise<void> = Promise.resolve();
 	private readonly disposeController = new AbortController();
 	private disposed = false;
@@ -1174,6 +1199,7 @@ export class AutoMemoryManager {
 				const othersDue = !force && this.listSweepWorkspaceIds().some((id) => this.consolidationDueFor(id));
 				if (!ownDue && !othersDue) {
 					this.logMaintenance("consolidation-noop", { force });
+					this.noteConsolidationSuccess();
 					return true;
 				}
 				this.logMaintenance("consolidation-start", { force, ownDue, othersDue });
@@ -1181,12 +1207,16 @@ export class AutoMemoryManager {
 				if (ownDue) await this.consolidate(settings);
 				if (!force) await this.sweepDueWorkspaces(settings);
 				this.logMaintenance("consolidation-done", { force, result: "ok" });
+				this.noteConsolidationSuccess();
 				this.setMaintenanceStatus({ phase: "idle" });
 				return true;
 			} catch (error) {
 				this.logMaintenance("consolidation-done", { force, result: "failed", ...describeMaintenanceError(error) });
+				// 会话替换导致的中止：静默退出，不计失败、不报错、不亮灯。
+				if (this.disposed) return false;
 				this.reportError("consolidate", error);
-				if (!this.disposed) this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
+				// 黄灯降噪：瞬时失败静默退避，连续 3 轮仍失败才亮灯，且灯上带最近失败原因。
+				this.noteConsolidationFailure(error);
 				return false;
 			}
 		});
@@ -1250,7 +1280,10 @@ export class AutoMemoryManager {
 					result: "failed",
 					...describeMaintenanceError(error),
 				});
+				// 会话替换中止：静默跳过，不计失败、不报错。
+				if (this.disposed) continue;
 				this.reportError("consolidate", error);
+				this.noteConsolidationFailure(error);
 			}
 		}
 	}
@@ -1260,6 +1293,25 @@ export class AutoMemoryManager {
 		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
 	): Promise<void> {
 		this.assertActive();
+		const dataRoot = this.paths.dataRoot;
+		if (!fs.existsSync(getWorkspaceDir(dataRoot, workspaceId))) return;
+		// 与本工作区的整理共用同一把串行锁；被占用则本轮跳过，留给 30 秒后的下一轮。
+		if (activeConsolidations.has(workspaceId)) {
+			this.logMaintenance("consolidation-skipped-busy", { workspaceId });
+			return;
+		}
+		activeConsolidations.add(workspaceId);
+		try {
+			await this.consolidateSweptWorkspaceLocked(workspaceId, settings);
+		} finally {
+			activeConsolidations.delete(workspaceId);
+		}
+	}
+
+	private async consolidateSweptWorkspaceLocked(
+		workspaceId: string,
+		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
+	): Promise<void> {
 		const dataRoot = this.paths.dataRoot;
 		if (!fs.existsSync(getWorkspaceDir(dataRoot, workspaceId))) return;
 		const sweptPaths = getMemoryPaths({ dataRoot, workspaceId, sessionId: "sweep" });
@@ -1384,6 +1436,22 @@ export class AutoMemoryManager {
 		return resolved ? { enabled: true, ...resolved } : undefined;
 	}
 
+	/** 整理连续失败计数：瞬时失败静默退避，连续 3 轮才亮黄灯，灯上带最近失败原因。 */
+	private noteConsolidationFailure(error: unknown): void {
+		this.consolidationFailureStreak += 1;
+		if (this.consolidationFailureStreak >= 3) {
+			this.setMaintenanceStatus({
+				phase: "warning",
+				error: `Memory maintenance failed ${this.consolidationFailureStreak} runs in a row: ${String(error).slice(0, 300)}`,
+			});
+		}
+	}
+
+	private noteConsolidationSuccess(): void {
+		this.consolidationFailureStreak = 0;
+		if (this.maintenanceStatus.phase === "warning") this.setMaintenanceStatus({ phase: "idle" });
+	}
+
 	private reportError(operation: "recall" | "extract" | "consolidate", error: unknown): void {
 		this.logMaintenance("error", { operation, ...describeMaintenanceError(error) });
 		const normalized = error instanceof Error ? error : new Error(String(error));
@@ -1463,7 +1531,7 @@ export class AutoMemoryManager {
 					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,
 					maxRetryDelayMs: retry.maxRetryDelayMs,
-					maxTokens: 8192,
+					// 不写死输出上限：与主聊天一致走 provider 默认（思考与正文共用该预算）。
 					// Lets provider-level session headers (e.g. `x-opencode-session`) ride the
 					// conversation ID, like foreground chats do.
 					sessionId: this.options.sessionId,
@@ -1588,7 +1656,9 @@ export class AutoMemoryManager {
 			directoryTokens += lineTokens;
 		}
 		if (directory.length < directoryLines.length) {
-			directory.push(`[…目录过长，只列出前 ${directory.length - 1} 条，共 ${directoryRows.length} 条。带 query 用 memory_search 缩小范围。]`);
+			directory.push(
+				`[…目录过长，只列出前 ${directory.length - 1} 条，共 ${directoryRows.length} 条。带 query 用 memory_search 缩小范围。]`,
+			);
 		}
 		sections.push(directory.join("\n"));
 
@@ -1617,7 +1687,11 @@ export class AutoMemoryManager {
 
 	scheduleExtraction(entries: SessionEntry[]): void {
 		if (this.disposed) return;
-		void this.runExtraction(entries).catch((error) => this.reportError("extract", error));
+		void this.runExtraction(entries).catch((error) => {
+			// 会话替换中止：静默退出，不计失败、不报错。
+			if (this.disposed) return;
+			this.reportError("extract", error);
+		});
 	}
 
 	runExtraction(entries: SessionEntry[]): Promise<boolean> {
@@ -1639,6 +1713,8 @@ export class AutoMemoryManager {
 				await this.extract(snapshot, settings);
 				return true;
 			} catch (error) {
+				// 会话替换导致的中止：静默退出，不计失败、不报错。
+				if (this.disposed) return false;
 				this.reportError("extract", error);
 				return false;
 			}
@@ -1646,6 +1722,7 @@ export class AutoMemoryManager {
 		this.backgroundQueue = result.then(
 			() => undefined,
 			(error) => {
+				if (this.disposed) return;
 				this.reportError("extract", error);
 			},
 		);
@@ -1949,10 +2026,13 @@ export class AutoMemoryManager {
 		if (shouldConsolidate) {
 			try {
 				await this.consolidate(settings);
+				this.noteConsolidationSuccess();
 			} catch (error) {
 				this.logMaintenance("extract-consolidate-error", { ...describeMaintenanceError(error) });
+				// 会话替换中止：静默退出，不计失败、不亮灯。
+				if (this.disposed) return;
 				this.reportError("consolidate", error);
-				this.setMaintenanceStatus({ phase: "warning", error: String(error).slice(0, 500) });
+				this.noteConsolidationFailure(error);
 			}
 		}
 	}
@@ -1961,6 +2041,23 @@ export class AutoMemoryManager {
 		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
 	): Promise<void> {
 		this.assertActive();
+		// 按工作区串行：同一工作区同时只允许一个整理在跑（含其他会话的清扫路径）。
+		// 被占用则本轮跳过，30 秒后由定时器自然排队；快照乐观校验保留为安全网。
+		if (activeConsolidations.has(this.paths.workspaceId)) {
+			this.logMaintenance("consolidation-skipped-busy", { workspaceId: this.paths.workspaceId });
+			return;
+		}
+		activeConsolidations.add(this.paths.workspaceId);
+		try {
+			await this.consolidateLocked(settings);
+		} finally {
+			activeConsolidations.delete(this.paths.workspaceId);
+		}
+	}
+
+	private async consolidateLocked(
+		settings: Required<Pick<AutoMemorySettings, "provider" | "model" | "thinkingLevel">>,
+	): Promise<void> {
 		const revision = readState(this.paths.statePath).consolidation[this.paths.workspaceId]?.revision ?? 0;
 		const entries = this.loadEntries();
 		// 候选矛盾对：本地只读启发式先圈定“同一话题的两条旧记忆”，由整理器模型核实是否真矛盾。

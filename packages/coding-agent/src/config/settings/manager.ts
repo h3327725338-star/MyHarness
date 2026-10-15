@@ -29,6 +29,7 @@ import { FileSettingsStorage, InMemorySettingsStorage, type SettingsStorage } fr
 import type {
 	AutoMemorySettings,
 	CodeIntelligenceSettings,
+	CommitDescriptionSettings,
 	CompactionSettings,
 	DefaultProjectTrust,
 	FallbackModelSettings,
@@ -49,6 +50,7 @@ import type {
 	WarningSettings,
 	WebSearchEngineId,
 	WebSearchSettings,
+	WorktreeNamingSettings,
 } from "./types.ts";
 
 export type { SettingsStorage } from "./storage.ts";
@@ -57,6 +59,7 @@ export type {
 	AutoMemorySettings,
 	BranchSummarySettings,
 	CodeIntelligenceSettings,
+	CommitDescriptionSettings,
 	CompactionSettings,
 	DefaultProjectTrust,
 	FallbackModelSettings,
@@ -82,6 +85,7 @@ export type {
 	WarningSettings,
 	WebSearchEngineId,
 	WebSearchSettings,
+	WorktreeNamingSettings,
 } from "./types.ts";
 
 function clampWebSearchNumber(value: unknown, range: { min: number; max: number }, fallback: number): number {
@@ -609,6 +613,26 @@ export class SettingsManager {
 			changed = true;
 		}
 
+		for (const field of ["commitDescription", "worktreeNaming"] as const) {
+			const configured = this.globalSettings[field];
+			if (configured?.provider === providerId && (modelId === undefined || configured.model === modelId)) {
+				delete configured.provider;
+				delete configured.model;
+				delete configured.thinkingLevel;
+				this.markModified(field);
+				changed = true;
+			}
+		}
+
+		const branchSummary = this.globalSettings.branchSummary;
+		if (branchSummary?.provider === providerId && (modelId === undefined || branchSummary.model === modelId)) {
+			delete branchSummary.provider;
+			delete branchSummary.model;
+			delete branchSummary.thinkingLevel;
+			this.markModified("branchSummary");
+			changed = true;
+		}
+
 		if (removeProvider) {
 			const disabled = this.getDisabledProviders().filter((candidate) => candidate !== providerId);
 			if (disabled.length !== this.getDisabledProviders().length) {
@@ -1029,6 +1053,47 @@ export class SettingsManager {
 
 	getBranchSummarySkipPrompt(): boolean {
 		return this.settings.branchSummary?.skipPrompt ?? SETTINGS_DEFAULTS.branchSummary.skipPrompt;
+	}
+
+	/** Branch summary helper model: empty provider/model means "use the main model". */
+	getBranchSummaryModelSettings(): Pick<
+		NonNullable<Settings["branchSummary"]>,
+		"provider" | "model" | "thinkingLevel"
+	> {
+		const { provider, model, thinkingLevel } = this.settings.branchSummary ?? {};
+		return { provider, model, thinkingLevel };
+	}
+
+	setBranchSummaryModelSettings(
+		settings: Pick<NonNullable<Settings["branchSummary"]>, "provider" | "model" | "thinkingLevel">,
+	): void {
+		this.globalSettings.branchSummary = { ...this.globalSettings.branchSummary, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("branchSummary", key);
+		this.save();
+	}
+
+	/** AI commit description helper model: empty provider/model means "use the main model". */
+	getCommitDescriptionSettings(): CommitDescriptionSettings {
+		const { provider, model, thinkingLevel } = this.settings.commitDescription ?? {};
+		return { provider, model, thinkingLevel };
+	}
+
+	setCommitDescriptionSettings(settings: CommitDescriptionSettings): void {
+		this.globalSettings.commitDescription = { ...this.globalSettings.commitDescription, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("commitDescription", key);
+		this.save();
+	}
+
+	/** Worktree copy naming helper model: empty provider/model means "use the main model". */
+	getWorktreeNamingSettings(): WorktreeNamingSettings {
+		const { provider, model, thinkingLevel } = this.settings.worktreeNaming ?? {};
+		return { provider, model, thinkingLevel };
+	}
+
+	setWorktreeNamingSettings(settings: WorktreeNamingSettings): void {
+		this.globalSettings.worktreeNaming = { ...this.globalSettings.worktreeNaming, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("worktreeNaming", key);
+		this.save();
 	}
 
 	getRetryEnabled(): boolean {
