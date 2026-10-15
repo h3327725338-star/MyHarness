@@ -1268,7 +1268,11 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(session.isIdle).toBe(true);
 	});
 
-	it("still stops the sub-agents when Interrupt mode stops a run whose main agent is answering", async () => {
+	it("keeps the sub-agents running when Interrupt mode stops a run whose main agent is answering", async () => {
+		const assistantTexts = (session: { messages: unknown[] }) =>
+			session.messages
+				.filter((message) => (message as { role?: string }).role === "assistant")
+				.map((message) => getMessageText(message));
 		const fx = await start();
 		const first = await fx.get("/api/state");
 		const session = fx.hub.get(first.slot)!.session;
@@ -1283,16 +1287,25 @@ describe("Web host (real runtime with a faux provider)", () => {
 				return fauxAssistantMessage([fauxText("还在回答")]);
 			},
 			fauxAssistantMessage([fauxText("新回答")]),
+			fauxAssistantMessage([fauxText("综合好了")]),
 		]);
 		void fx.post("/api/prompt", { text: "go" }, first.slot);
 		await fx.waitFor("agent_start", (data) => data.slot === first.slot);
 		expect(session.isWaitingForBackground).toBe(false);
 
 		const interrupted = fx.post("/api/prompt", { text: "换个问题", mode: "interrupt" }, first.slot);
-		await vi.waitFor(() => expect(batch.aborted()).toBe(1));
+		await vi.waitFor(() => expect((session as unknown as { _abortRequested: boolean })._abortRequested).toBe(true));
 		release();
 		await interrupted;
+		// Only the answering run was interrupted: the batch keeps running and the new message is answered.
+		await vi.waitFor(() => expect(session.getRunStateSnapshot().activity).toBe("等待子智能体"));
+		expect(batch.aborted()).toBe(0);
+		expect(session.backgroundTaskCount).toBe(1);
+		expect(assistantTexts(session)).toContain("新回答");
+
+		await batch.finish("completed", "找到了");
 		await vi.waitFor(() => expect(session.isIdle).toBe(true));
+		expect(assistantTexts(session).at(-1)).toBe("综合好了");
 		expect(session.backgroundTaskCount).toBe(0);
 	});
 

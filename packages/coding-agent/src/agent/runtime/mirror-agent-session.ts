@@ -11,6 +11,7 @@
 
 import type { AgentMessage } from "@myharness/agent-core";
 import type { ImageContent } from "@myharness/ai";
+import type { DispatchStopReport, DispatchStopTarget, SubAgentStateSnapshot } from "../delegation/background-work.ts";
 import { AgentSession, type AgentSessionEvent, type PromptOptions } from "./agent-session.ts";
 import type { RunStateSnapshot } from "./run-state.ts";
 import type { BridgeFlags, BridgeHello, SessionBridgeClient } from "./session-bridge.ts";
@@ -35,6 +36,7 @@ export class MirrorAgentSession extends AgentSession {
 	private idleWaiters: Array<() => void> = [];
 	private mirrorClosedHandler: (() => void) | undefined;
 	private mirrorDisposed = false;
+	private subAgents: SubAgentStateSnapshot = { items: [], running: 0 };
 
 	override get isMirror(): boolean {
 		return true;
@@ -49,6 +51,7 @@ export class MirrorAgentSession extends AgentSession {
 	attachBridge(client: SessionBridgeClient, hello: BridgeHello): void {
 		this.bridge = client;
 		this.applyFlags(hello.flags);
+		if (hello.subAgents) this.subAgents = hello.subAgents;
 		this.sessionManager.syncFromDisk();
 		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
 		client.onEvent((event, flags) => this.handleOwnerEvent(event, flags));
@@ -72,7 +75,8 @@ export class MirrorAgentSession extends AgentSession {
 		if (this.agent.state.thinkingLevel !== flags.thinkingLevel) {
 			this.agent.state.thinkingLevel = flags.thinkingLevel as never;
 		}
-		if (flags.isIdle) this.releaseIdleWaiters();
+		// Waiters re-check their own condition (idle, or idle apart from background sub-agents).
+		if (flags.isIdle || flags.foregroundIdle) this.releaseIdleWaiters();
 	}
 
 	private releaseIdleWaiters(): void {
@@ -92,6 +96,7 @@ export class MirrorAgentSession extends AgentSession {
 	private handleOwnerEvent(event: AgentSessionEvent, flags: BridgeFlags): void {
 		if (this.mirrorDisposed) return;
 		this.applyFlags(flags);
+		if (event.type === "sub_agent_state") this.subAgents = event.state;
 		if (SYNC_EVENTS.has(event.type)) this.syncFromOwner();
 		this._emit(event);
 	}
@@ -126,6 +131,14 @@ export class MirrorAgentSession extends AgentSession {
 		return this.flags?.waitingForBackground ?? false;
 	}
 
+	override get isForegroundIdle(): boolean {
+		return this.flags?.foregroundIdle ?? this.isIdle;
+	}
+
+	override get subAgentState(): SubAgentStateSnapshot {
+		return this.subAgents;
+	}
+
 	override getRunStateSnapshot(): RunStateSnapshot {
 		return this.flags?.run ?? NO_RUN;
 	}
@@ -151,8 +164,15 @@ export class MirrorAgentSession extends AgentSession {
 	}
 
 	override async waitForIdle(): Promise<void> {
-		if (this.isIdle) return;
-		await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+		while (!this.isIdle && this.flags) {
+			await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+		}
+	}
+
+	override async waitForForegroundIdle(): Promise<void> {
+		while (!this.isForegroundIdle && this.flags) {
+			await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+		}
 	}
 
 	// ----- commands go to the owner ------------------------------------------------------------------------
@@ -191,9 +211,15 @@ export class MirrorAgentSession extends AgentSession {
 		return queued;
 	}
 
-	override async abort(): Promise<void> {
-		await this.requireBridge().command("abort");
-		await this.waitForIdle();
+	override async abort(options?: { keepBackground?: boolean }): Promise<void> {
+		await this.requireBridge().command("abort", { keepBackground: options?.keepBackground === true });
+		if (options?.keepBackground) await this.waitForForegroundIdle();
+		else await this.waitForIdle();
+	}
+
+	override async stopSubAgents(target: DispatchStopTarget): Promise<DispatchStopReport> {
+		await this.requireBridge().command("stopSubAgents", { target });
+		return { stopped: [], errors: [], unconfirmed: 0 };
 	}
 
 	override async setModel(model: Parameters<AgentSession["setModel"]>[0]): Promise<void> {

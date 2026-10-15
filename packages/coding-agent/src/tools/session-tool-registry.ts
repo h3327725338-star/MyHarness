@@ -19,8 +19,9 @@ import { WebSearchApiKeys } from "../providers/credentials/web-search-keys.ts";
 import { artifactScope, ensureSessionArtifacts, refreshArtifactIndexesIfChanged } from "../session/artifacts/store.ts";
 import type { SessionManager } from "../session/manager/index.ts";
 import type { UltracodeToolOptions, WorkflowToolOptions } from "../workflow/tool.ts";
-import { createSessionMemoryOperations } from "./memory/search.ts";
+import type { AgentTasksToolOptions } from "./agent-tasks.ts";
 import { createSessionMemoryManageOperations } from "./memory/manage.ts";
+import { createSessionMemoryOperations } from "./memory/search.ts";
 import { createAllToolDefinitions, createToolDefinition, type ToolName } from "./registry.ts";
 import type { SubAgentToolOptions } from "./sub-agent.ts";
 import type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
@@ -28,7 +29,7 @@ import { createToolDefinitionFromAgentTool } from "./tool-definition-wrapper.ts"
 import { wrapToolWithResultPersistence } from "./tool-result-persistence.ts";
 import { createWebSearchService, type WebSearchService } from "./web-search/service.ts";
 
-const SUB_AGENT_TOOL_NAMES = ["agent", "workflow", "ultracode"];
+const SUB_AGENT_TOOL_NAMES = ["agent", "workflow", "ultracode", "agent_tasks"];
 const WEB_TOOL_NAMES = ["web_search", "web_fetch"];
 
 interface ToolDefinitionEntry {
@@ -54,6 +55,8 @@ export interface SessionToolRegistryOptions {
 	agent: SubAgentToolOptions;
 	workflow: WorkflowToolOptions;
 	ultracode: UltracodeToolOptions;
+	/** Lists and stops the sub-agents of this session. */
+	agentTasks?: AgentTasksToolOptions;
 	/** Whether a person can answer a browser challenge for Web Search right now. */
 	interactiveChallenges: () => boolean;
 }
@@ -165,7 +168,7 @@ export class SessionToolRegistry {
 		return { selectedTools, toolSnippets, promptGuidelines };
 	}
 
-	/** Add or remove the delegation tools (agent, workflow, ultracode) from a list of active names. */
+	/** Add or remove the delegation tools (agent, workflow, ultracode, agent_tasks) from a list of active names. */
 	withSubAgentTools(toolNames: string[], enabled: boolean): string[] {
 		const next = toolNames.filter((name) => !SUB_AGENT_TOOL_NAMES.includes(name));
 		if (enabled) {
@@ -223,11 +226,11 @@ export class SessionToolRegistry {
 	 */
 	rebuildDelegationDefinitions(): void {
 		if (this._options.baseToolsOverride) return;
-		const { cwd, agent, workflow, ultracode } = this._options;
+		const { cwd, agent, workflow, ultracode, agentTasks } = this._options;
 		for (const name of SUB_AGENT_TOOL_NAMES) {
 			this._baseToolDefinitions.set(
 				name,
-				createToolDefinition(name as ToolName, cwd, { agent, workflow, ultracode }) as ToolDefinition,
+				createToolDefinition(name as ToolName, cwd, { agent, workflow, ultracode, agentTasks }) as ToolDefinition,
 			);
 		}
 	}
@@ -272,6 +275,7 @@ export class SessionToolRegistry {
 					agent: this._options.agent,
 					workflow: this._options.workflow,
 					ultracode: this._options.ultracode,
+					agentTasks: this._options.agentTasks,
 					memory: {
 						operations: createSessionMemoryOperations({ sessionManager, settingsManager }),
 						manageOperations: createSessionMemoryManageOperations({ sessionManager, settingsManager }),

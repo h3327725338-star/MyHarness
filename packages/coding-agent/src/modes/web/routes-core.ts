@@ -11,7 +11,7 @@ import { collectInputImageAttachments } from "../../utils/input-image-attachment
 import type { WebHost } from "./host.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { HttpError } from "./http-server.ts";
-import { toWireModel } from "./wire.ts";
+import { subAgentStateToWire, toWireModel } from "./wire.ts";
 
 const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const BASH_CHUNK_INTERVAL_MS = 60;
@@ -76,6 +76,34 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/abort", async () => {
 		await host.session.abort();
 		return { ok: true };
+	});
+	/**
+	 * Stop sub-agents from the activity panel: one task, one dispatch, or all of them. Only the sub-agents stop; the
+	 * main run goes on. Fails (with the reason) when nothing could be stopped or a stop was not confirmed.
+	 */
+	server.route("POST", "/api/sub-agents/stop", async ({ body }) => {
+		const input = (body ?? {}) as { all?: unknown; id?: unknown; phase?: unknown; task?: unknown };
+		const id = typeof input.id === "string" ? input.id : undefined;
+		const task = typeof input.task === "number" && Number.isInteger(input.task) ? input.task : undefined;
+		const phase = typeof input.phase === "number" && Number.isInteger(input.phase) ? input.phase : undefined;
+		if (input.all !== true && !id) throw new HttpError(400, "Say which sub-agents to stop (id or all).");
+		const target =
+			input.all === true
+				? { all: true }
+				: task !== undefined
+					? { tasks: [{ id: id as string, phase, task }] }
+					: { ids: [id as string] };
+		const session = host.session;
+		const report = await session.stopSubAgents(target);
+		const stopped = report.stopped.reduce((sum, item) => sum + item.tasks.length, 0);
+		if (!session.isMirror && stopped === 0)
+			throw new HttpError(
+				409,
+				"Nothing was stopped: those sub-agents have already finished or were already stopped.",
+			);
+		if (report.unconfirmed > 0)
+			throw new HttpError(500, "Some sub-agents did not confirm the stop in time and may still be running.");
+		return { ok: true, stopped, errors: report.errors, state: subAgentStateToWire(session.subAgentState) };
 	});
 	server.route("POST", "/api/abort-compaction", () => {
 		host.session.abortCompaction();

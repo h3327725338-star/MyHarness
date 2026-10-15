@@ -8,7 +8,8 @@
  *                     event {event, flags}             every AgentSessionEvent of the owner's Session
  *                     ack {id, ok, error}              answer to a command
  *   client -> server  hello {token}
- *                     cmd {id, name, args}             prompt, steer, followUp, abort, clearQueue, setModel, setThinkingLevel
+ *                     cmd {id, name, args}             prompt, steer, followUp, abort, stopSubAgents, clearQueue,
+ *                                                      setModel, setThinkingLevel
  *
  * The owner keeps running the Agent and writing the Session file; the other process only watches the events, follows
  * the file (MirrorAgentSession) and sends commands. Both sides therefore always show the same conversation.
@@ -23,6 +24,7 @@ import {
 	writeSessionBridgeDescriptor,
 } from "../../session/bridge/descriptor.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
+import type { DispatchStopTarget, SubAgentStateSnapshot } from "../delegation/background-work.ts";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { RunStateSnapshot } from "./run-state.ts";
 
@@ -41,6 +43,8 @@ export interface BridgeFlags {
 	backgroundTasks: number;
 	/** Absent when the owner is an older version. */
 	waitingForBackground?: boolean;
+	/** Idle apart from background sub-agents. Absent when the owner is an older version. */
+	foregroundIdle?: boolean;
 	run: RunStateSnapshot;
 	steering: string[];
 	followUp: string[];
@@ -55,6 +59,7 @@ export type BridgeCommandName =
 	| "steer"
 	| "followUp"
 	| "abort"
+	| "stopSubAgents"
 	| "clearQueue"
 	| "setModel"
 	| "setThinkingLevel";
@@ -71,6 +76,8 @@ interface HelloOk {
 	flags: BridgeFlags;
 	/** The assistant message being streamed right now, so a late attacher can show it. */
 	streaming?: unknown;
+	/** The sub-agents' state at attach time; later changes arrive as sub_agent_state events. */
+	subAgents?: SubAgentStateSnapshot;
 }
 
 function buildFlags(session: AgentSession): BridgeFlags {
@@ -83,6 +90,7 @@ function buildFlags(session: AgentSession): BridgeFlags {
 		isBashRunning: session.isBashRunning,
 		backgroundTasks: session.backgroundTaskCount,
 		waitingForBackground: session.isWaitingForBackground,
+		foregroundIdle: session.isForegroundIdle,
 		run: session.getRunStateSnapshot(),
 		steering: [...session.getSteeringMessages()],
 		followUp: [...session.getFollowUpMessages()],
@@ -181,6 +189,7 @@ class BridgeConnection {
 			sessionFile: session.sessionFile,
 			flags: buildFlags(session),
 			streaming: session.isStreaming ? session.agent.state.streamingMessage : undefined,
+			subAgents: session.subAgentState,
 		};
 		this.write(hello);
 		this.host.connections.add(this);
@@ -252,8 +261,16 @@ class BridgeConnection {
 					break;
 				case "abort":
 					// Do not wait for the run to settle: the reply only confirms the request arrived.
-					void session.abort().catch(() => {});
+					void session.abort({ keepBackground: args.keepBackground === true }).catch(() => {});
 					break;
+				case "stopSubAgents": {
+					const report = await session.stopSubAgents((args.target ?? {}) as DispatchStopTarget);
+					const stopped = report.stopped.reduce((sum, item) => sum + item.tasks.length, 0);
+					if (stopped === 0) throw new Error(report.errors.join("; ") || "No running sub-agent matched.");
+					if (report.unconfirmed > 0)
+						throw new Error(`${report.unconfirmed} sub-agent task(s) did not confirm the stop in time.`);
+					break;
+				}
 				case "clearQueue":
 					session.clearQueue();
 					break;
@@ -421,6 +438,7 @@ export function detachSessionBridge(session: AgentSession): void {
 export interface BridgeHello {
 	flags: BridgeFlags;
 	streaming?: unknown;
+	subAgents?: SubAgentStateSnapshot;
 }
 
 export class SessionBridgeClient {
@@ -462,7 +480,10 @@ export class SessionBridgeClient {
 					settled = true;
 					clearTimeout(timer);
 					const hello = message as unknown as HelloOk;
-					resolve({ client, hello: { flags: hello.flags, streaming: hello.streaming } });
+					resolve({
+						client,
+						hello: { flags: hello.flags, streaming: hello.streaming, subAgents: hello.subAgents },
+					});
 					return;
 				}
 				client.handleMessage(message);

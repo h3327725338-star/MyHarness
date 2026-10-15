@@ -1346,7 +1346,9 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		// server-side enforcement so the model can never be handed them while `agent` is off).
 		const requested = [...new Set(names as string[])];
 		const agentOn = requested.includes("agent");
-		const finalNames = agentOn ? requested : requested.filter((name) => name !== "workflow" && name !== "ultracode");
+		const finalNames = agentOn
+			? requested
+			: requested.filter((name) => name !== "workflow" && name !== "ultracode" && name !== "agent_tasks");
 		const s = settings();
 		const currentEnabled = s.getSubAgentSettings().enabled === true;
 		let settingsChanged = false;

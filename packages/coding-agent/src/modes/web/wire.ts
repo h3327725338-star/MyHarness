@@ -290,6 +290,11 @@ export function sanitizeDetails(details: unknown, charLimit: number = MAX_DETAIL
 	}
 }
 
+/** The sub-agents' light state for the activity bar; each dispatch's details go through the same size bound. */
+export function subAgentStateToWire(state: { items: Array<{ details?: unknown }>; running: number }): unknown {
+	return { ...state, items: state.items.map((item) => ({ ...item, details: sanitizeDetails(item.details) })) };
+}
+
 function wireUsage(usage: {
 	input: number;
 	output: number;

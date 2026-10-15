@@ -42,6 +42,8 @@ const SLOT_DEFAULTS = () => ({
 	completion: false,
 	memoryMaintenance: null,
 	subAgents: {},
+	// The sub-agents' light state (activity bar, live cards): the server's sub_agent_state / snapshot `subAgents`.
+	subAgentState: { items: [], running: 0 },
 	resources: null,
 	gitStatus: undefined,
 	currentRunId: undefined,
@@ -441,9 +443,21 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 		state.surface = snap.surface;
 		state.completion = snap.flags.completion ? (snap.flags.completionStatus ?? { startedAt: Date.now() }) : false;
 	state.memoryMaintenance = snap.memoryMaintenance ?? null;
+		applySubAgentState(snap.subAgents);
 		emit();
 	});
 	return snap;
+}
+
+/**
+ * The server's sub-agent state replaces the shown one (it is complete each time). Cards that have no live details yet
+ * (a page opened while sub-agents run) start from the light details it carries.
+ */
+function applySubAgentState(next) {
+	const value = next && Array.isArray(next.items) ? next : { items: [], running: 0 };
+	state.subAgentState = value;
+	const missing = value.items.filter((item) => item.details && !state.subAgents[item.id]);
+	if (missing.length) state.subAgents = { ...state.subAgents, ...Object.fromEntries(missing.map((item) => [item.id, item.details])) };
 }
 
 // The thinking effort being changed, per session: `level` is the last one the user chose.
@@ -1448,6 +1462,10 @@ function connectEvents() {
 		state.subAgents = { ...state.subAgents, [d.batchId]: d.details };
 		emit();
 	});
+	on("sub_agent_state", (d) => {
+		applySubAgentState(d);
+		emit();
+	});
 
 	on("queue_update", (d) => set({ queue: d }));
 	on("session_info", (d) => {
@@ -1513,6 +1531,7 @@ function connectEvents() {
 		state.userBash = {};
 		state.userBashOrder = [];
 		state.subAgents = {};
+		state.subAgentState = { items: [], running: 0 };
 		state.compaction = null;
 		state.retry = null;
 		state.resources = null;

@@ -5,6 +5,7 @@ import { type Static, Type } from "typebox";
 import type { SubAgentMode } from "../config/settings/types.ts";
 import type { RuntimeTrace, RuntimeTraceScope } from "../observability/runtime-trace.ts";
 import type { BusinessToolDefinition } from "../tools/contracts/index.ts";
+import { awaitForegroundDispatch, type DispatchRegistrar } from "../tools/dispatch-control.ts";
 import {
 	DEFAULT_SUB_AGENT_TASK_TIMEOUT_MS,
 	type ExploreBatchResult,
@@ -64,7 +65,11 @@ function createInvestigationPhaseSchema(mode: SubAgentMode, maxTasks: number) {
 	});
 }
 
-function createInvestigationSchema(minPhases: number, mode: SubAgentMode = "read-only", maxTasks: number = resolveExploreMaxTasks()) {
+function createInvestigationSchema(
+	minPhases: number,
+	mode: SubAgentMode = "read-only",
+	maxTasks: number = resolveExploreMaxTasks(),
+) {
 	return Type.Object({
 		name: Type.String({
 			description: "Short name for the workflow",
@@ -111,6 +116,10 @@ export interface WorkflowToolDetails {
 	status: "running" | WorkflowTerminalStatus;
 	activePhase: number;
 	phases: WorkflowPhaseDetails[];
+	/** Session registry id of this run (see tools/dispatch-control.ts). */
+	batchId?: string;
+	/** The run was moved to the background when the main run was interrupted. */
+	background?: boolean;
 }
 
 export type UltracodeToolDetails = WorkflowToolDetails;
@@ -145,6 +154,8 @@ export interface WorkflowToolOptions {
 	onControlsReady?: (toolCallId: string, controls: WorkflowToolControls) => void;
 	/** Called when the workflow finished (success, failure or abort). */
 	onControlsRelease?: (toolCallId: string) => void;
+	/** Registers the run with the session, which can stop it or move it to the background. */
+	dispatch?: DispatchRegistrar;
 }
 
 export type UltracodeToolOptions = WorkflowToolOptions;
@@ -285,7 +296,11 @@ function normalizeSubAgentMode(mode: SubAgentMode | undefined): SubAgentMode {
  * is immediately visible to the Main Agent; the static workflowSchema/ultracodeSchema
  * objects below remain only for type-level Static<> exports.
  */
-function investigationSchemaFor<K extends InvestigationToolKind>(kind: K, mode: SubAgentMode, maxTasks: number): InvestigationSchema<K> {
+function investigationSchemaFor<K extends InvestigationToolKind>(
+	kind: K,
+	mode: SubAgentMode,
+	maxTasks: number,
+): InvestigationSchema<K> {
 	return createInvestigationSchema(
 		INVESTIGATION_TOOL_PROFILES[kind].minPhases,
 		mode,
@@ -384,6 +399,12 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 			) => {
 				if (options?.trace && scope) await options.trace.record(scope, type, data);
 			};
+			const handle = options?.dispatch?.begin({ source: kind, toolCallId, name: params.name });
+			if (handle) details.batchId = handle.id;
+			// The run's own lifetime: the session's controls when registered, else the tool call (as before).
+			const runSignal = handle ? handle.signal : signal;
+			// After a detach the tool call is over: progress goes to the session only.
+			let toolLive = true;
 			if (options?.trace && parentTraceScope) {
 				await recordTrace(parentTraceScope, "workflow-started", {
 					workflowRunId,
@@ -393,6 +414,8 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 				});
 			}
 			const emitProgress = () => {
+				handle?.progress(cloneDetails(details));
+				if (!toolLive) return;
 				onUpdate?.({
 					content: [{ type: "text", text: formatProgress(details, profile.label) }],
 					details: cloneDetails(details),
@@ -420,16 +443,18 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 			// (for example while the results directory is being created).
 			void workflowCancellation.catch(() => undefined);
 			let removeParentAbortListener: (() => void) | undefined;
-			const parentCancellation = signal
+			const parentCancellation = runSignal
 				? new Promise<never>((_, reject) => {
 						const onAbort = () =>
-							reject(signal.reason instanceof Error ? signal.reason : new Error(`${profile.label} 已中止。`));
-						if (signal.aborted) {
+							reject(
+								runSignal.reason instanceof Error ? runSignal.reason : new Error(`${profile.label} 已中止。`),
+							);
+						if (runSignal.aborted) {
 							onAbort();
 							return;
 						}
-						signal.addEventListener("abort", onAbort, { once: true });
-						removeParentAbortListener = () => signal.removeEventListener("abort", onAbort);
+						runSignal.addEventListener("abort", onAbort, { once: true });
+						removeParentAbortListener = () => runSignal.removeEventListener("abort", onAbort);
 					})
 				: undefined;
 			void parentCancellation?.catch(() => undefined);
@@ -439,273 +464,320 @@ export function createInvestigationToolDefinition<K extends InvestigationToolKin
 				killTask: (phaseIndex, taskIndex) => phaseKill[phaseIndex]?.(taskIndex),
 				killWorkflow: () => workflowController.abort(),
 			});
-			try {
-				if (signal?.aborted) throw new Error(`${profile.label} 已中止。`);
-				const taskTimeoutMs = runtimeSettings.taskTimeoutMs ?? DEFAULT_SUB_AGENT_TASK_TIMEOUT_MS;
-				const deadlineGraceMs = Math.max(0, options?.deadlineGraceMs ?? WORKFLOW_DEADLINE_GRACE_MS);
-				const phaseTimeoutMs = taskTimeoutMs > 0 ? taskTimeoutMs + deadlineGraceMs : undefined;
-				const workflowTimeoutMs =
-					phaseTimeoutMs === undefined
-						? undefined
-						: Math.min(2_147_000_000, phaseTimeoutMs * params.phases.length + deadlineGraceMs);
-				let workflowDeadline: Promise<never> | undefined;
-				if (workflowTimeoutMs !== undefined) {
-					workflowDeadline = new Promise<never>((_, reject) => {
-						workflowDeadlineTimer = setTimeout(() => {
-							workflowTimedOut = true;
-							workflowController.abort();
-							reject(new WorkflowTimeoutError("workflow"));
-						}, workflowTimeoutMs);
-					});
-				}
-				resultsDir = await mkdtemp(join(tmpdir(), "myharness-workflow-"));
-				for (let index = 0; index < params.phases.length; index++) {
-					if (signal?.aborted) throw new Error(`${profile.label} 已中止。`);
-					const phase = params.phases[index];
-					const phaseDetails = details.phases[index];
-					const phaseId = options?.trace?.createId("phase");
-					phaseDetails.phaseId = phaseId;
-					details.activePhase = index;
-					phaseDetails.status = "running";
-					const phaseTraceScope =
-						parentTraceScope && phaseId ? { ...parentTraceScope, phaseId, workflowRunId } : parentTraceScope;
-					activePhaseTraceScope = phaseTraceScope;
-					if (phaseTraceScope) {
-						await recordTrace(phaseTraceScope, "phase-started", {
-							phaseId,
-							workflowRunId,
-							name: phase.name,
-							index,
+			handle?.setControls({
+				killTask: (ref) => phaseKill[ref.phase ?? details.activePhase]?.(ref.task),
+				killAll: () => workflowController.abort(),
+			});
+			const run = async () => {
+				try {
+					if (runSignal?.aborted) throw new Error(`${profile.label} 已中止。`);
+					const taskTimeoutMs = runtimeSettings.taskTimeoutMs ?? DEFAULT_SUB_AGENT_TASK_TIMEOUT_MS;
+					const deadlineGraceMs = Math.max(0, options?.deadlineGraceMs ?? WORKFLOW_DEADLINE_GRACE_MS);
+					const phaseTimeoutMs = taskTimeoutMs > 0 ? taskTimeoutMs + deadlineGraceMs : undefined;
+					const workflowTimeoutMs =
+						phaseTimeoutMs === undefined
+							? undefined
+							: Math.min(2_147_000_000, phaseTimeoutMs * params.phases.length + deadlineGraceMs);
+					let workflowDeadline: Promise<never> | undefined;
+					if (workflowTimeoutMs !== undefined) {
+						workflowDeadline = new Promise<never>((_, reject) => {
+							workflowDeadlineTimer = setTimeout(() => {
+								workflowTimedOut = true;
+								workflowController.abort();
+								reject(new WorkflowTimeoutError("workflow"));
+							}, workflowTimeoutMs);
 						});
 					}
-					emitProgress();
-
-					const previousPhase = fullOutputs[index - 1];
-					activePhaseTimedOut = false;
-					const phaseController = new AbortController();
-					let phaseDeadlineTimer: NodeJS.Timeout | undefined;
-					let phaseDeadline: Promise<never> | undefined;
-					if (phaseTimeoutMs !== undefined) {
-						phaseDeadline = new Promise<never>((_, reject) => {
-							phaseDeadlineTimer = setTimeout(() => {
-								activePhaseTimedOut = true;
-								phaseController.abort();
-								reject(new WorkflowTimeoutError("phase"));
-							}, phaseTimeoutMs);
-						});
-					}
-					const phaseSignal = AbortSignal.any([
-						phaseController.signal,
-						workflowController.signal,
-						...(signal ? [signal] : []),
-					]);
-					let result: ExploreBatchResult;
-					let phaseActive = true;
-					const batchPromise = Promise.resolve().then(() =>
-						runBatch({
-							cwd,
-							settings: runtimeSettings,
-							signal: phaseSignal,
-							trace: options?.trace,
-							parentTraceScope: phaseTraceScope,
-							phaseId,
-							workflowRunId,
-							tasks: phase.tasks.map((task) => ({
-								description: task.description,
-								prompt: appendPreviousPhaseContext(task.prompt, previousPhase),
-								goal: task.goal,
-								scope: task.scope,
-								questions: task.questions,
-								expectedOutput: task.expectedOutput,
-								stopConditions: task.stopConditions,
-							})),
-							onProgress: (progress) => {
-								if (!phaseActive) return;
-								phaseDetails.completed = progress.completed;
-								phaseDetails.usable = progress.usable;
-								phaseDetails.findings = progress.findings;
-								phaseDetails.results = progress.results.map(cloneResult);
-								emitProgress();
-							},
-							onKillReady: (killTask) => {
-								if (phaseActive) phaseKill[index] = killTask;
-							},
-						}),
-					);
-					try {
-						result = await Promise.race([
-							batchPromise,
-							...(phaseDeadline ? [phaseDeadline] : []),
-							...(workflowDeadline ? [workflowDeadline] : []),
-							workflowCancellation,
-							...(parentCancellation ? [parentCancellation] : []),
-						]);
-					} finally {
-						phaseActive = false;
-						phaseKill[index] = undefined;
-						let drainTimer: NodeJS.Timeout | undefined;
-						await Promise.race([
-							batchPromise.then(
-								() => undefined,
-								() => undefined,
-							),
-							new Promise<void>((resolve) => {
-								drainTimer = setTimeout(resolve, WORKFLOW_BATCH_DRAIN_TIMEOUT_MS);
-							}),
-						]);
-						if (drainTimer) clearTimeout(drainTimer);
-						if (phaseDeadlineTimer) clearTimeout(phaseDeadlineTimer);
-					}
-					if (activePhaseTimedOut || workflowTimedOut) {
-						throw new WorkflowTimeoutError(workflowTimedOut ? "workflow" : "phase");
-					}
-
-					phaseDetails.results = result.details.results.map(cloneResult);
-					const successfulTasks = phaseDetails.results.filter((task) => task.status === "completed").length;
-					const usableTasks = phaseDetails.results.filter((task) =>
-						isUsableTaskResult(task, normalizeSubAgentMode(runtimeSettings.mode)),
-					).length;
-					phaseDetails.completed = successfulTasks;
-					phaseDetails.usable = usableTasks;
-					phaseDetails.findings = phaseDetails.results.reduce(
-						(count, task) => count + (task.findings?.length ?? 0),
-						0,
-					);
-					const allTasksSucceeded =
-						phaseDetails.results.length === phase.tasks.length && successfulTasks === phase.tasks.length;
-					const phaseHasUsableResult = phaseDetails.results.length === phase.tasks.length && usableTasks > 0;
-					phaseDetails.status = allTasksSucceeded
-						? "completed"
-						: phaseHasUsableResult
-							? "partial"
-							: phaseFailureStatus(phaseDetails.results);
-					if (phaseTraceScope) {
-						await recordTrace(phaseTraceScope, "phase-finished", {
-							phaseId,
-							workflowRunId,
-							status: phaseDetails.status,
-							completed: successfulTasks,
-							usable: usableTasks,
-							total: phase.tasks.length,
-						});
-					}
-					activePhaseTraceScope = undefined;
-					emitProgress();
-
-					if (phaseDetails.status !== "completed" && phaseDetails.status !== "partial") {
-						// Carry each failed task's own reason (including the worker's startup stderr) into the
-						// message: without it the caller only sees a count and has to reproduce the failure to
-						// learn the cause, while the plain Explore tool already shows the same details.
-						const clip = (text: string, limit = 400) =>
-							text.length <= limit ? text : `${text.slice(0, limit)}…`;
-						const reasons = phaseDetails.results
-							.filter((task) => task.status !== "completed" && task.status !== "partial")
-							.map((task) => {
-								const detail = [task.stopReason, task.error ?? task.lastToolInfo]
-									.filter(Boolean)
-									.map(String)
-									.join(": ");
-								return `${task.description || "task"}(${task.status}): ${clip(detail) || "unknown"}`;
+					resultsDir = await mkdtemp(join(tmpdir(), "myharness-workflow-"));
+					for (let index = 0; index < params.phases.length; index++) {
+						if (runSignal?.aborted) throw new Error(`${profile.label} 已中止。`);
+						const phase = params.phases[index];
+						const phaseDetails = details.phases[index];
+						const phaseId = options?.trace?.createId("phase");
+						phaseDetails.phaseId = phaseId;
+						details.activePhase = index;
+						phaseDetails.status = "running";
+						const phaseTraceScope =
+							parentTraceScope && phaseId ? { ...parentTraceScope, phaseId, workflowRunId } : parentTraceScope;
+						activePhaseTraceScope = phaseTraceScope;
+						if (phaseTraceScope) {
+							await recordTrace(phaseTraceScope, "phase-started", {
+								phaseId,
+								workflowRunId,
+								name: phase.name,
+								index,
 							});
-						throw new Error(
-							`${profile.label} 阶段“${phase.name}”没有可用调查结果（${usableTasks}/${phase.tasks.length}）` +
-								(reasons.length > 0 ? `。失败任务：${reasons.join("；")}` : "") +
-								"，已停止后续阶段。",
+						}
+						emitProgress();
+
+						const previousPhase = fullOutputs[index - 1];
+						activePhaseTimedOut = false;
+						const phaseController = new AbortController();
+						let phaseDeadlineTimer: NodeJS.Timeout | undefined;
+						let phaseDeadline: Promise<never> | undefined;
+						if (phaseTimeoutMs !== undefined) {
+							phaseDeadline = new Promise<never>((_, reject) => {
+								phaseDeadlineTimer = setTimeout(() => {
+									activePhaseTimedOut = true;
+									phaseController.abort();
+									reject(new WorkflowTimeoutError("phase"));
+								}, phaseTimeoutMs);
+							});
+						}
+						const phaseSignal = AbortSignal.any([
+							phaseController.signal,
+							workflowController.signal,
+							...(runSignal ? [runSignal] : []),
+						]);
+						let result: ExploreBatchResult;
+						let phaseActive = true;
+						const batchPromise = Promise.resolve().then(() =>
+							runBatch({
+								cwd,
+								settings: runtimeSettings,
+								signal: phaseSignal,
+								trace: options?.trace,
+								parentTraceScope: phaseTraceScope,
+								phaseId,
+								workflowRunId,
+								tasks: phase.tasks.map((task) => ({
+									description: task.description,
+									prompt: appendPreviousPhaseContext(task.prompt, previousPhase),
+									goal: task.goal,
+									scope: task.scope,
+									questions: task.questions,
+									expectedOutput: task.expectedOutput,
+									stopConditions: task.stopConditions,
+								})),
+								onProgress: (progress) => {
+									if (!phaseActive) return;
+									phaseDetails.completed = progress.completed;
+									phaseDetails.usable = progress.usable;
+									phaseDetails.findings = progress.findings;
+									phaseDetails.results = progress.results.map(cloneResult);
+									emitProgress();
+								},
+								onKillReady: (killTask) => {
+									if (phaseActive) phaseKill[index] = killTask;
+								},
+							}),
 						);
+						try {
+							result = await Promise.race([
+								batchPromise,
+								...(phaseDeadline ? [phaseDeadline] : []),
+								...(workflowDeadline ? [workflowDeadline] : []),
+								workflowCancellation,
+								...(parentCancellation ? [parentCancellation] : []),
+							]);
+						} finally {
+							phaseActive = false;
+							phaseKill[index] = undefined;
+							let drainTimer: NodeJS.Timeout | undefined;
+							await Promise.race([
+								batchPromise.then(
+									() => undefined,
+									() => undefined,
+								),
+								new Promise<void>((resolve) => {
+									drainTimer = setTimeout(resolve, WORKFLOW_BATCH_DRAIN_TIMEOUT_MS);
+								}),
+							]);
+							if (drainTimer) clearTimeout(drainTimer);
+							if (phaseDeadlineTimer) clearTimeout(phaseDeadlineTimer);
+						}
+						if (activePhaseTimedOut || workflowTimedOut) {
+							throw new WorkflowTimeoutError(workflowTimedOut ? "workflow" : "phase");
+						}
+
+						phaseDetails.results = result.details.results.map(cloneResult);
+						const successfulTasks = phaseDetails.results.filter((task) => task.status === "completed").length;
+						const usableTasks = phaseDetails.results.filter((task) =>
+							isUsableTaskResult(task, normalizeSubAgentMode(runtimeSettings.mode)),
+						).length;
+						phaseDetails.completed = successfulTasks;
+						phaseDetails.usable = usableTasks;
+						phaseDetails.findings = phaseDetails.results.reduce(
+							(count, task) => count + (task.findings?.length ?? 0),
+							0,
+						);
+						const allTasksSucceeded =
+							phaseDetails.results.length === phase.tasks.length && successfulTasks === phase.tasks.length;
+						const phaseHasUsableResult = phaseDetails.results.length === phase.tasks.length && usableTasks > 0;
+						phaseDetails.status = allTasksSucceeded
+							? "completed"
+							: phaseHasUsableResult
+								? "partial"
+								: phaseFailureStatus(phaseDetails.results);
+						if (phaseTraceScope) {
+							await recordTrace(phaseTraceScope, "phase-finished", {
+								phaseId,
+								workflowRunId,
+								status: phaseDetails.status,
+								completed: successfulTasks,
+								usable: usableTasks,
+								total: phase.tasks.length,
+							});
+						}
+						activePhaseTraceScope = undefined;
+						emitProgress();
+
+						if (phaseDetails.status !== "completed" && phaseDetails.status !== "partial") {
+							// Carry each failed task's own reason (including the worker's startup stderr) into the
+							// message: without it the caller only sees a count and has to reproduce the failure to
+							// learn the cause, while the plain Explore tool already shows the same details.
+							const clip = (text: string, limit = 400) =>
+								text.length <= limit ? text : `${text.slice(0, limit)}…`;
+							const reasons = phaseDetails.results
+								.filter((task) => task.status !== "completed" && task.status !== "partial")
+								.map((task) => {
+									const detail = [task.stopReason, task.error ?? task.lastToolInfo]
+										.filter(Boolean)
+										.map(String)
+										.join(": ");
+									return `${task.description || "task"}(${task.status}): ${clip(detail) || "unknown"}`;
+								});
+							throw new Error(
+								`${profile.label} 阶段“${phase.name}”没有可用调查结果（${usableTasks}/${phase.tasks.length}）` +
+									(reasons.length > 0 ? `。失败任务：${reasons.join("；")}` : "") +
+									"，已停止后续阶段。",
+							);
+						}
+
+						compactOutputs.push({ name: phase.name, text: result.text });
+						// 结构化、有界结果落盘；完整文本仍由 Sub Agent 工具的 sidecar 保留，避免阶段间复制超长上下文
+						// 上下文内联进每个任务的 prompt 导致 LLM 上下文溢出。
+						const phaseResultsFile = join(resultsDir, `phase-${index}.md`);
+						await writeFile(phaseResultsFile, result.text, { encoding: "utf8", mode: 0o600 });
+						fullOutputs.push({ name: phase.name, text: result.fullText, filePath: phaseResultsFile });
 					}
 
-					compactOutputs.push({ name: phase.name, text: result.text });
-					// 结构化、有界结果落盘；完整文本仍由 Sub Agent 工具的 sidecar 保留，避免阶段间复制超长上下文
-					// 上下文内联进每个任务的 prompt 导致 LLM 上下文溢出。
-					const phaseResultsFile = join(resultsDir, `phase-${index}.md`);
-					await writeFile(phaseResultsFile, result.text, { encoding: "utf8", mode: 0o600 });
-					fullOutputs.push({ name: phase.name, text: result.fullText, filePath: phaseResultsFile });
-				}
-
-				details.status = details.phases.some((phase) => phase.status === "partial") ? "partial" : "completed";
-				if (options?.trace && parentTraceScope) {
-					await recordTrace(parentTraceScope, "workflow-finished", {
-						workflowRunId,
-						status: details.status,
-						phaseCount: details.phases.length,
-					});
-				}
-				const text = formatFinalOutput(profile.label, params.name, compactOutputs, details.status);
-				const fullText = formatFinalOutput(profile.label, params.name, fullOutputs, details.status);
-				const result = {
-					content: [{ type: "text" as const, text }],
-					details: cloneDetails(details),
-				};
-				if (fullText !== text) Object.assign(result, { [FULL_TEXT_OUTPUT]: fullText });
-				return result;
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const parentCancelled = signal?.aborted === true || workflowController.signal.aborted;
-				const activePhase = details.phases[details.activePhase];
-				const existingTerminalStatus =
-					activePhase?.status === "timeout" ||
-					activePhase?.status === "cancelled" ||
-					activePhase?.status === "failed"
-						? activePhase.status
-						: undefined;
-				const timedOut =
-					activePhaseTimedOut || workflowTimedOut || (error as { code?: unknown })?.code === "WORKFLOW_TIMEOUT";
-				const terminalStatus = timedOut
-					? "timeout"
-					: parentCancelled
-						? "cancelled"
-						: (existingTerminalStatus ?? "failed");
-				details.status = terminalStatus;
-				if (activePhase && activePhase.status !== "completed") {
-					activePhase.status = terminalStatus;
-					finalizeUnsettledPhaseTasks(
-						activePhase,
-						params.phases[details.activePhase].tasks,
-						terminalStatus,
-						message,
-						details.model,
-						normalizeSubAgentMode(runtimeSettings.mode),
-					);
-					if (activePhaseTraceScope) {
-						await recordTrace(activePhaseTraceScope, "phase-finished", {
-							phaseId: activePhase.phaseId,
+					details.status = details.phases.some((phase) => phase.status === "partial") ? "partial" : "completed";
+					if (options?.trace && parentTraceScope) {
+						await recordTrace(parentTraceScope, "workflow-finished", {
+							workflowRunId,
+							status: details.status,
+							phaseCount: details.phases.length,
+						});
+					}
+					const text = formatFinalOutput(profile.label, params.name, compactOutputs, details.status);
+					const fullText = formatFinalOutput(profile.label, params.name, fullOutputs, details.status);
+					const result = {
+						content: [{ type: "text" as const, text }],
+						details: cloneDetails(details),
+					};
+					if (fullText !== text) Object.assign(result, { [FULL_TEXT_OUTPUT]: fullText });
+					return result;
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					const parentCancelled = runSignal?.aborted === true || workflowController.signal.aborted;
+					const activePhase = details.phases[details.activePhase];
+					const existingTerminalStatus =
+						activePhase?.status === "timeout" ||
+						activePhase?.status === "cancelled" ||
+						activePhase?.status === "failed"
+							? activePhase.status
+							: undefined;
+					const timedOut =
+						activePhaseTimedOut || workflowTimedOut || (error as { code?: unknown })?.code === "WORKFLOW_TIMEOUT";
+					const terminalStatus = timedOut
+						? "timeout"
+						: parentCancelled
+							? "cancelled"
+							: (existingTerminalStatus ?? "failed");
+					details.status = terminalStatus;
+					if (activePhase && activePhase.status !== "completed") {
+						activePhase.status = terminalStatus;
+						finalizeUnsettledPhaseTasks(
+							activePhase,
+							params.phases[details.activePhase].tasks,
+							terminalStatus,
+							message,
+							details.model,
+							normalizeSubAgentMode(runtimeSettings.mode),
+						);
+						if (activePhaseTraceScope) {
+							await recordTrace(activePhaseTraceScope, "phase-finished", {
+								phaseId: activePhase.phaseId,
+								workflowRunId,
+								status: terminalStatus,
+								completed: activePhase.completed,
+								total: activePhase.total,
+							}).catch(() => {});
+						}
+					}
+					if (options?.trace && parentTraceScope) {
+						await recordTrace(parentTraceScope, "workflow-finished", {
 							workflowRunId,
 							status: terminalStatus,
-							completed: activePhase.completed,
-							total: activePhase.total,
+							error: message,
 						}).catch(() => {});
 					}
+					const failure = (
+						timedOut || terminalStatus === "cancelled"
+							? new Error(message)
+							: error instanceof Error
+								? error
+								: new Error(message)
+					) as Error & {
+						code?: string;
+						details?: WorkflowToolDetails;
+					};
+					if (terminalStatus === "timeout") failure.code = "WORKFLOW_TIMEOUT";
+					if (terminalStatus === "cancelled") failure.code = "WORKFLOW_CANCELLED";
+					failure.details = cloneDetails(details);
+					emitProgress();
+					throw failure;
+				} finally {
+					if (workflowDeadlineTimer) clearTimeout(workflowDeadlineTimer);
+					removeParentAbortListener?.();
+					if (resultsDir) {
+						await rm(resultsDir, { recursive: true, force: true }).catch(() => {});
+					}
+					options?.onControlsRelease?.(toolCallId);
 				}
-				if (options?.trace && parentTraceScope) {
-					await recordTrace(parentTraceScope, "workflow-finished", {
-						workflowRunId,
-						status: terminalStatus,
-						error: message,
-					}).catch(() => {});
+			};
+			const work = run();
+			if (!handle) return await work;
+			let outcome: Awaited<ReturnType<typeof awaitForegroundDispatch<Awaited<typeof work>>>>;
+			try {
+				outcome = await awaitForegroundDispatch(handle, work, signal);
+			} catch (error) {
+				const failedDetails = (error as { details?: WorkflowToolDetails })?.details;
+				handle.finishForeground(failedDetails);
+				const note = handle.stopNote();
+				// Stopped from the panel while the main run goes on: tell the model it was the user's choice, not a failure to retry.
+				if (note && failedDetails && !signal?.aborted) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text" as const, text: `${note}\n\n${message}` }], details: failedDetails };
 				}
-				const failure = (
-					timedOut || terminalStatus === "cancelled"
-						? new Error(message)
-						: error instanceof Error
-							? error
-							: new Error(message)
-				) as Error & {
-					code?: string;
-					details?: WorkflowToolDetails;
-				};
-				if (terminalStatus === "timeout") failure.code = "WORKFLOW_TIMEOUT";
-				if (terminalStatus === "cancelled") failure.code = "WORKFLOW_CANCELLED";
-				failure.details = cloneDetails(details);
-				emitProgress();
-				throw failure;
-			} finally {
-				if (workflowDeadlineTimer) clearTimeout(workflowDeadlineTimer);
-				removeParentAbortListener?.();
-				if (resultsDir) {
-					await rm(resultsDir, { recursive: true, force: true }).catch(() => {});
-				}
-				options?.onControlsRelease?.(toolCallId);
+				throw error;
 			}
+			if (outcome.kind === "detached") {
+				toolLive = false;
+				handle.completeInBackground(
+					work.then((result) => ({
+						status: result.details.status === "partial" ? ("partial" as const) : ("completed" as const),
+						text: result.content[0]?.text ?? "",
+						fullText: (result as { [FULL_TEXT_OUTPUT]?: string })[FULL_TEXT_OUTPUT],
+						details: { ...result.details, background: true },
+					})),
+				);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `主智能体被用户的新消息打断；${profile.label}“${params.name}”（${handle.id}）没有被取消，已转入后台继续运行，完成后结果会自动交回主 Agent。不要重复启动同一个${profile.label}。`,
+						},
+					],
+					details: { ...cloneDetails(details), background: true },
+				};
+			}
+			const result = outcome.value;
+			handle.finishForeground(result.details);
+			const note = handle.stopNote();
+			if (note) result.content = [{ type: "text" as const, text: `${note}\n\n${result.content[0]?.text ?? ""}` }];
+			return result;
 		},
 	};
 }

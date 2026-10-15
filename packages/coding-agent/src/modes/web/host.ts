@@ -56,6 +56,7 @@ import {
 	RUN_CHANGES_ENTRY,
 	runChangesToWire,
 	sanitizeDetails,
+	subAgentStateToWire,
 	toWireModel,
 	type WireItem,
 } from "./wire.ts";
@@ -1016,6 +1017,9 @@ export class WebHost {
 					details: sanitizeDetails(event.progress.details),
 				});
 				return;
+			case "sub_agent_state":
+				this.broadcast("sub_agent_state", subAgentStateToWire(event.state));
+				return;
 			case "auto_memory_status":
 				this.broadcast("memory_status", event.status);
 				return;
@@ -1662,6 +1666,7 @@ export class WebHost {
 				mirror: session.isMirror,
 				background: session.backgroundTaskCount,
 			},
+			subAgents: subAgentStateToWire(session.subAgentState),
 			queue: { steering: [...session.getSteeringMessages()], followUp: [...session.getFollowUpMessages()] },
 			queueModes: { steering: session.steeringMode, followUp: session.followUpMode },
 			context: this.contextState(),
@@ -1719,11 +1724,12 @@ export class WebHost {
 		}
 		const session = this.session;
 		const mode = options.mode ?? "auto";
-		// A task that only waits for its background sub-agents has no run to interrupt, and stopping it would cancel them.
+		// A task that only waits for its background sub-agents has no run to interrupt: the message is steered in.
+		// Interrupting a running answer ends that run only; its sub-agents keep running in the background.
 		const interrupt = mode === "interrupt" && !session.isWaitingForBackground;
 		if (interrupt) {
-			await session.abort();
-			await session.waitForIdle();
+			await session.abort({ keepBackground: true });
+			await session.waitForForegroundIdle();
 			await this.waitForCompletion();
 		}
 		const running = session.isStreaming || session.isCompacting;

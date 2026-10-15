@@ -43,6 +43,7 @@ import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loade
 import { getMyHarnessInvocation } from "../utils/myharness-invocation.ts";
 import { killProcessTreeAndWait } from "../utils/shell.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
+import { awaitForegroundDispatch, type DispatchRegistrar } from "./dispatch-control.ts";
 import { createDelegatedWriteGuardExtensionSource } from "./shell/delegated-write-guard.ts";
 import { createReadOnlyGuardExtensionSource, isReadOnlyGuardBlockedToolResult } from "./shell/read-only-guard.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -242,6 +243,8 @@ export interface SubAgentToolOptions {
 	onBackgroundStarted?: (task: SubAgentBackgroundTask) => void;
 	onBackgroundProgress?: (progress: SubAgentBackgroundProgress) => void;
 	onBackgroundComplete?: (notification: SubAgentBackgroundNotification) => void | Promise<void>;
+	/** Registers foreground batches with the session, which can stop them or move them to the background. */
+	dispatch?: DispatchRegistrar;
 }
 
 export interface SubAgentBackgroundTask {
@@ -251,6 +254,10 @@ export interface SubAgentBackgroundTask {
 	settings: ResolvedSubAgentRuntimeSettings;
 	abort: () => void;
 	promise: Promise<void>;
+	/** The agent tool call that started the batch. */
+	toolCallId?: string;
+	/** Stop one task of the batch; the others keep running. */
+	killTask?: (index: number) => void;
 }
 
 export interface SubAgentBackgroundProgress {
@@ -2025,6 +2032,16 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 	}
 }
 
+function batchOutcomeStatus(details: SubAgentToolDetails): "completed" | "partial" | "failed" {
+	return details.results.some(
+		(item) => item.status === "failed" || item.status === "cancelled" || item.status === "timeout",
+	)
+		? "failed"
+		: details.results.some((item) => item.status === "partial")
+			? "partial"
+			: "completed";
+}
+
 export function createSubAgentToolDefinition(
 	cwd: string,
 	options?: SubAgentToolOptions,
@@ -2055,7 +2072,7 @@ export function createSubAgentToolDefinition(
 		// separate Agent tool calls keeps the process-wide Explore concurrency at that same cap. The schema binds
 		// maxItems to the live configured value; execute re-checks it and returns batch guidance without running.
 		executionMode: "sequential",
-		async execute(_toolCallId, params, signal, onUpdate) {
+		async execute(toolCallId, params, signal, onUpdate) {
 			const settings = options?.getSettings?.() ?? { enabled: false };
 			const maxTasks = resolveExploreMaxTasks(settings);
 			if (params.tasks.length < 1) {
@@ -2092,6 +2109,7 @@ export function createSubAgentToolDefinition(
 			if (params.run_in_background) {
 				const batchId = `explore-${randomBytes(5).toString("hex")}`;
 				const controller = new AbortController();
+				let killTask: ((index: number) => void) | undefined;
 				const initialDetails: SubAgentToolDetails = {
 					completed: 0,
 					total: params.tasks.length,
@@ -2116,17 +2134,14 @@ export function createSubAgentToolDefinition(
 					trace: options?.trace,
 					parentTraceScope,
 					onProgress: (details) => options?.onBackgroundProgress?.({ batchId, details }),
+					onKillReady: (kill) => {
+						killTask = kill;
+					},
 				})
 					.then(async (result) => {
 						await options?.onBackgroundComplete?.({
 							batchId,
-							status: result.details.results.some(
-								(item) => item.status === "failed" || item.status === "cancelled" || item.status === "timeout",
-							)
-								? "failed"
-								: result.details.results.some((item) => item.status === "partial")
-									? "partial"
-									: "completed",
+							status: batchOutcomeStatus(result.details),
 							text: result.text,
 							fullText: result.fullText,
 							details: { ...result.details, background: true, batchId },
@@ -2151,6 +2166,8 @@ export function createSubAgentToolDefinition(
 					settings: runtimeSettings,
 					abort: () => controller.abort(),
 					promise,
+					toolCallId,
+					killTask: (index) => killTask?.(index),
 				});
 				return {
 					content: [
@@ -2163,18 +2180,79 @@ export function createSubAgentToolDefinition(
 				};
 			}
 
-			const result = await runExploreBatch({
+			const handle = options?.dispatch?.begin({ source: "agent", toolCallId, tasks: params.tasks });
+			// After a detach the tool call is over: progress goes to the session only.
+			let toolLive = true;
+			const work = runExploreBatch({
 				cwd,
 				tasks: params.tasks,
 				settings: runtimeSettings,
-				signal,
+				signal: handle ? handle.signal : signal,
 				trace: options?.trace,
 				parentTraceScope,
-				onProgress: (details) => {
-					onUpdate?.({ content: [{ type: "text", text: formatProgress(details) }], details });
+				onProgress: (progress) => {
+					const details = handle ? { ...progress, batchId: handle.id } : progress;
+					handle?.progress(details);
+					if (toolLive) onUpdate?.({ content: [{ type: "text", text: formatProgress(details) }], details });
 				},
+				onKillReady: handle ? (kill) => handle.setControls({ killTask: (ref) => kill(ref.task) }) : undefined,
 			});
-			const toolResult = { content: [{ type: "text" as const, text: result.text }], details: result.details };
+			if (!handle) {
+				const result = await work;
+				const toolResult = { content: [{ type: "text" as const, text: result.text }], details: result.details };
+				if (result.fullText !== result.text) {
+					Object.assign(toolResult, { [FULL_TEXT_OUTPUT]: result.fullText });
+				}
+				return toolResult;
+			}
+			let outcome: Awaited<ReturnType<typeof awaitForegroundDispatch<ExploreBatchResult>>>;
+			try {
+				outcome = await awaitForegroundDispatch(handle, work, signal);
+			} catch (error) {
+				handle.finishForeground();
+				throw error;
+			}
+			if (outcome.kind === "detached") {
+				toolLive = false;
+				handle.completeInBackground(
+					work.then((result) => ({
+						status: batchOutcomeStatus(result.details),
+						text: result.text,
+						fullText: result.fullText,
+						details: { ...result.details, background: true, batchId: handle.id },
+					})),
+				);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `主智能体被用户的新消息打断；这批子智能体（${handle.id}，${params.tasks.length} 个任务）没有被取消，已转入后台继续运行，完成后结果会自动交回主 Agent。不要重复派发同样的任务。`,
+						},
+					],
+					details: {
+						completed: 0,
+						total: params.tasks.length,
+						background: true,
+						batchId: handle.id,
+						results: params.tasks.map((task) => ({
+							description: task.description,
+							prompt: formatDelegatedTaskPrompt(task),
+							status: "running",
+							output: "",
+							toolUseCount: 0,
+							tokens: 0,
+							lastToolInfo: "后台运行中…",
+							transcript: [],
+						})),
+					} as SubAgentToolDetails,
+				};
+			}
+			const result = outcome.value;
+			const details = { ...result.details, batchId: handle.id };
+			handle.finishForeground(details);
+			const note = handle.stopNote();
+			const text = note ? `${note}\n\n${result.text}` : result.text;
+			const toolResult = { content: [{ type: "text" as const, text }], details };
 			if (result.fullText !== result.text) {
 				Object.assign(toolResult, { [FULL_TEXT_OUTPUT]: result.fullText });
 			}

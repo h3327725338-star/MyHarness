@@ -126,7 +126,13 @@ import { cleanupOrphanedToolResults } from "../../tools/tool-result-persistence.
 import { killChildProcessesForSignal } from "../../utils/child-process.ts";
 import { sleep } from "../../utils/sleep.ts";
 import type { WorkflowToolControls } from "../../workflow/tool.ts";
-import { SessionBackgroundWork } from "../delegation/background-work.ts";
+import {
+	type DispatchStopReport,
+	type DispatchStopTarget,
+	SessionBackgroundWork,
+	type SubAgentDispatchState,
+	type SubAgentStateSnapshot,
+} from "../delegation/background-work.ts";
 import {
 	VisionAssistantManager,
 	type VisionAssistantMessageDetails,
@@ -174,6 +180,7 @@ export type AgentSessionEvent =
 	  }
 	| { type: "agent_settled" }
 	| { type: "sub_agent_progress"; progress: SubAgentBackgroundProgress }
+	| { type: "sub_agent_state"; state: SubAgentStateSnapshot }
 	| { type: "auto_memory_status"; status: MemoryMaintenanceStatus }
 	| {
 			type: "auto_memory_error";
@@ -496,6 +503,10 @@ export class AgentSession {
 	/** Wakes the final answer's wait for background Explore batches (see _holdForBackgroundExplore). */
 	private _wakeBackgroundWait: (() => void) | undefined;
 	private _holdingForBackground = false;
+	/** Sequence number of the agent run started last; a background dispatch remembers the run that started it. */
+	private _runSequence = 0;
+	/** Waiters of waitForForegroundIdle (idle apart from background sub-agents). */
+	private _foregroundIdleWaiters = new Set<() => void>();
 
 	// Hot-rebuild state: last error encountered while reloading model configuration
 	private _lastReloadError?: string;
@@ -609,14 +620,13 @@ export class AgentSession {
 			sessionManager: this.sessionManager,
 			isDisposed: () => this._disposed,
 			emitProgress: (progress) => this._emit({ type: "sub_agent_progress", progress }),
+			emitState: (state) => this._emit({ type: "sub_agent_state", state }),
 			onBatchSettled: () => {
 				this._resolveIdleWaitIfIdle();
 				this._signalBackgroundWait();
 			},
-			// A running main Agent gets the result as soon as its current turn (and the tool calls of that turn) has
-			// finished, before its next model request. A follow-up would wait until the Agent stops by itself, which a
-			// long tool loop never does.
-			deliverResult: (message) => this.sendCustomMessage(message, { triggerTurn: true, deliverAs: "steer" }),
+			currentRun: () => (this._isAgentRunActive ? this._runSequence : -1),
+			deliverResult: (message, options) => this._deliverBackgroundResult(message, options.sameRun),
 		});
 		const workflowToolOptions = {
 			getSettings: () => this._subAgentSettings(),
@@ -625,6 +635,7 @@ export class AgentSession {
 			onControlsReady: (toolCallId: string, controls: WorkflowToolControls) =>
 				this._backgroundWork.setWorkflowControls(toolCallId, controls),
 			onControlsRelease: (toolCallId: string) => this._backgroundWork.releaseWorkflowControls(toolCallId),
+			dispatch: this._backgroundWork,
 		};
 		this._tools = new SessionToolRegistry({
 			cwd: config.cwd,
@@ -644,6 +655,11 @@ export class AgentSession {
 				onBackgroundStarted: (task) => this._trackBackgroundExploreTask(task),
 				onBackgroundProgress: (progress) => this._backgroundWork.handleExploreProgress(progress),
 				onBackgroundComplete: (notification) => this._backgroundWork.handleExploreComplete(notification),
+				dispatch: this._backgroundWork,
+			},
+			agentTasks: {
+				list: () => this._backgroundWork.list(),
+				stop: (target) => this._backgroundWork.stop(target, "agent"),
 			},
 			workflow: workflowToolOptions,
 			ultracode: workflowToolOptions,
@@ -1101,6 +1117,11 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
+		if (this._foregroundIdleWaiters.size > 0 && this.isForegroundIdle) {
+			const waiters = [...this._foregroundIdleWaiters];
+			this._foregroundIdleWaiters.clear();
+			for (const resolve of waiters) resolve();
+		}
 		if (!this.isIdle || !this._resolveIdleWait) {
 			return;
 		}
@@ -1123,10 +1144,9 @@ export class AgentSession {
 				reason: "interrupted",
 			} satisfies RunTerminalOutcome);
 		this._runStateTracker.setTerminalReason(terminal.reason);
-		// Whatever the outcome (completed, cancelled, failed), the task is over and so is everything it started. A task
-		// that completed normally has already waited for its background Explore batches (_holdForBackgroundExplore);
-		// what is still running here belongs to a task that failed or was stopped, or is a workflow.
-		this._backgroundWork.cancel();
+		// Sub-agents do not end with the run: an interrupted, failed or timed-out run leaves them running, and their
+		// outcome is delivered later as a new turn. Only an explicit stop (abort(), the panel, agent_tasks) ends them;
+		// a run that completed normally has already waited for them (_holdForBackgroundExplore).
 		this._setRunState(terminal.state, terminal.activity, {
 			error: terminal.error,
 			terminalReason: terminal.reason,
@@ -1597,8 +1617,13 @@ export class AgentSession {
 		return this._isAgentRunActive;
 	}
 
-	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
+	/** Whether the session has no active agent run, retry, auto-compaction, queued continuation or sub-agent work. */
 	get isIdle(): boolean {
+		return this.isForegroundIdle && !this._backgroundWork.hasPendingWork;
+	}
+
+	/** Idle apart from sub-agents that keep running in the background (after an interrupted or failed run). */
+	get isForegroundIdle(): boolean {
 		return (
 			!this._isAgentRunActive &&
 			(!this._promptAdmissionPromise || this._emittingAgentSettled) &&
@@ -1609,7 +1634,6 @@ export class AgentSession {
 			!this._branchSummaryAbortController &&
 			!this._manualCompactionStarting &&
 			!this._bash.isRunning &&
-			!this._backgroundWork.hasPendingWork &&
 			this._pendingNextTurnMessages.length === 0 &&
 			!this.agent.hasQueuedMessages()
 		);
@@ -1939,6 +1963,7 @@ export class AgentSession {
 			await this._beforeAgentRun();
 		}
 		this._isAgentRunActive = true;
+		this._runSequence += 1;
 		const operationId = this._beginOperation("agent-run");
 		this._runStateTracker.beginRun();
 		this._finalAnswerDeliveredAt = undefined;
@@ -2571,9 +2596,58 @@ export class AgentSession {
 		this._backgroundWork.trackExplore(task);
 	}
 
-	/** Number of background Explore batches that are still running. */
+	/** Number of sub-agent dispatches running in the background whose outcome is still expected. */
 	get backgroundTaskCount(): number {
 		return this._backgroundWork.runningExploreCount;
+	}
+
+	/** The light state of the sub-agents of this session (activity bar). */
+	get subAgentState(): SubAgentStateSnapshot {
+		return this._backgroundWork.snapshot();
+	}
+
+	/** Running and recently finished sub-agent dispatches. */
+	listSubAgents(): SubAgentDispatchState[] {
+		return this._backgroundWork.list();
+	}
+
+	/**
+	 * Stop sub-agent tasks without touching the main run (the panel's stop). What they produced stays visible; a
+	 * dispatch stopped as a whole does not start a synthesis turn.
+	 */
+	stopSubAgents(target: DispatchStopTarget): Promise<DispatchStopReport> {
+		return this._backgroundWork.stop(target, "user");
+	}
+
+	/**
+	 * A finished background dispatch goes back to the model. While a run is active it is queued: before the next model
+	 * request when it belongs to that run (`sameRun`), else after the run's current work (a follow-up). Without a run
+	 * it starts one. Never waits for that run, so the dispatch can leave the registry (the run may itself wait for
+	 * other dispatches).
+	 */
+	private async _deliverBackgroundResult(
+		message: Pick<CustomMessage, "customType" | "content" | "display" | "details">,
+		sameRun: boolean,
+	): Promise<void> {
+		for (;;) {
+			if (this._disposed) return;
+			if (this.isStreaming) {
+				await this.sendCustomMessage(message, { triggerTurn: true, deliverAs: sameRun ? "steer" : "followUp" });
+				return;
+			}
+			if (this._promptAdmissionPromise) {
+				await this._promptAdmissionPromise.catch(() => undefined);
+				continue;
+			}
+			const run = this.sendCustomMessage(message, { triggerTurn: true });
+			run.catch((error: unknown) => {
+				console.warn(
+					"[sub-agents] The turn on a background result failed:",
+					error instanceof Error ? error.message : String(error),
+				);
+			});
+			return;
+		}
 	}
 
 	/**
@@ -2733,15 +2807,29 @@ export class AgentSession {
 	 * process-group killing itself stays owned by P0-4, this path only forwards the
 	 * signal and counts the outcome.
 	 */
-	async abort(): Promise<void> {
+	async abort(options?: { keepBackground?: boolean }): Promise<void> {
 		if (this._isAgentRunActive) this._abortRequested = true;
-		this._backgroundWork.cancel();
+		// An interruption (a new message) keeps the sub-agents: dispatches running inside a tool call move to the
+		// background and the tool call returns at once. The stop button ends everything.
+		if (options?.keepBackground) this._backgroundWork.detachForeground();
+		else this._backgroundWork.cancel();
 		this._signalBackgroundWait();
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBash();
 		this.agent.abort();
-		await this.waitForIdle();
+		if (options?.keepBackground) await this.waitForForegroundIdle();
+		else await this.waitForIdle();
+	}
+
+	/** Wait until the session is idle apart from sub-agents running in the background. */
+	async waitForForegroundIdle(): Promise<void> {
+		if (this.isForegroundIdle) return;
+		await new Promise<void>((resolve) => {
+			this._foregroundIdleWaiters.add(resolve);
+			// The state may have changed between the check and registration.
+			this._resolveIdleWaitIfIdle();
+		});
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -2874,6 +2962,8 @@ export class AgentSession {
 		try {
 			this._compactionAbortController = new AbortController();
 			this.abortRetry();
+			// Compaction interrupts the run; sub-agents running inside a tool call keep running in the background.
+			this._backgroundWork.detachForeground();
 			this.agent.abort();
 			await this._waitForAgentRunSettlement();
 			operationId = this._beginOperation("manual-compact", this._compactionAbortController);

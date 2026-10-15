@@ -4,7 +4,7 @@ import type { AgentSessionEvent } from "../../src/agent/runtime/agent-session.ts
 import { startBackgroundBatch } from "./background-batch.ts";
 import { createHarness, getAssistantTexts, getMessageText, type Harness } from "./harness.ts";
 
-describe("background tasks end with the main task", () => {
+describe("background tasks and the main task", () => {
 	const harnesses: Harness[] = [];
 
 	afterEach(() => {
@@ -50,16 +50,32 @@ describe("background tasks end with the main task", () => {
 		expect(events.filter((event) => event.type === "agent_settled")).toHaveLength(1);
 	});
 
-	it("does the same when the main task fails", async () => {
+	it("keeps them running when the main task fails, then delivers their result as a new turn", async () => {
 		const harness = await createHarness({
-			responses: [fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" })],
+			responses: [
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" }),
+				fauxAssistantMessage("综合：后台结果到了"),
+			],
 		});
 		harnesses.push(harness);
 		const background = startBackgroundBatch(harness);
 
 		await harness.session.prompt("hi").catch(() => {});
 
-		expect(background.aborted()).toBe(1);
-		expect(harness.session.backgroundTaskCount).toBe(0);
+		// The failed run ended; the sub-agents did not end with it.
+		expect(background.aborted()).toBe(0);
+		expect(harness.session.backgroundTaskCount).toBe(1);
+		expect(harness.session.isStreaming).toBe(false);
+		expect(harness.session.isForegroundIdle).toBe(true);
+		expect(harness.session.isIdle).toBe(false);
+
+		await background.finish("completed", "找到了 X");
+		await vi.waitFor(() => expect(harness.session.isIdle).toBe(true));
+		expect(getAssistantTexts(harness).at(-1)).toBe("综合：后台结果到了");
+		expect(
+			harness.session.messages.filter(
+				(message) => message.role === "custom" && message.customType === "background-explore-complete",
+			),
+		).toHaveLength(1);
 	});
 });

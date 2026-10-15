@@ -11,11 +11,12 @@ import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
 import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
-import { t, N_, serverText, tNodes, getLang } from "./i18n.js";
+import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
 import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
+import { DispatchCard, dispatchFor, runningSince, runningTasks, useSubAgents } from "./sub-agents.js";
 
 // ---- Small pieces ----------------------------------------------------------------------------
 function Ansi({ text }) {
@@ -222,16 +223,21 @@ function AgentDetails({ details }) {
 const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 	const [open, setOpen] = useState(!!defaultOpen);
 	const subAgents = useStore((st) => st.subAgents);
-	// Background batches legitimately outlive the call that started them, but only while the session still has some.
 	const nothingRunning = useStore((st) => !st.snap?.active && !st.snap?.flags?.background);
+	const subAgentState = useSubAgents();
 	const resultDetails = step.result?.details;
-	const rawDetails = step.kind === "agent" ? (resultDetails?.batchId && subAgents[resultDetails.batchId]) || resultDetails || step.run?.partialDetails : undefined;
-	const stale = rawDetails && step.status !== "running" && (!rawDetails.background || nothingRunning);
+	const batchId = resultDetails?.batchId || step.run?.partialDetails?.batchId;
+	const dispatch = step.kind === "agent" ? dispatchFor(subAgentState, step.call?.id, batchId) : undefined;
+	const rawDetails = step.kind === "agent" ? (batchId && subAgents[batchId]) || resultDetails || step.run?.partialDetails || dispatch?.details : undefined;
+	// Sub-agents run as long as the session says so (its sub-agent state), not as long as the call that started them:
+	// tasks still marked running without a live dispatch were stopped (the main task stopped, the server restarted).
+	const liveDispatch = dispatch?.status === "running";
+	const stale = rawDetails && step.status !== "running" && !liveDispatch;
 	const liveDetails = stale ? settleDetails(rawDetails) : rawDetails;
 	const took = step.startedAt && step.endedAt && step.endedAt - step.startedAt >= 1000 ? fmtDuration(step.endedAt - step.startedAt) : "";
 	const exit = step.result?.details?.exitCode;
 	const toggle = () => setOpen(!open);
-	return html`<div class=${`action ${step.isError ? "err" : ""} ${step.status}`}>
+	return html`<div class=${`action ${step.isError ? "err" : ""} ${step.status}`} data-tool-call=${step.call?.id}>
 		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<span class="action-ico"><${StatusGlyph} step=${step} /></span>
 			<span class="action-text truncate">
@@ -248,9 +254,24 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 			</span>
 		</div>
 		<${Collapse} open=${open}><${RawDetails} step=${step} /><//>
-		${step.kind === "agent" ? html`<${AgentDetails} details=${liveDetails} />` : null}
+		${step.kind === "agent" ? (liveDispatch ? html`<div class="dim sub-live-note">${t("Live status is in the sub-agent card below this step block.")}</div>` : html`<${AgentDetails} details=${liveDetails} />`) : null}
 	</div>`;
 });
+
+/** Live cards of the dispatches a block of steps started, while their sub-agents still run. */
+function LiveDispatchCards({ steps }) {
+	const state = useSubAgents();
+	const subAgents = useStore((st) => st.subAgents);
+	if (!state.items.length) return null;
+	const cards = [];
+	for (const step of steps) {
+		if (step.type !== "action" || step.kind !== "agent") continue;
+		const batchId = step.result?.details?.batchId || step.run?.partialDetails?.batchId;
+		const item = dispatchFor(state, step.call?.id, batchId);
+		if (item?.status === "running") cards.push(html`<${DispatchCard} key=${item.id} item=${item} details=${subAgents[item.id]} />`);
+	}
+	return cards.length ? html`<div class="sa-cards">${cards}</div>` : null;
+}
 
 /** Consecutive calls of one kind. The web (searching and reading pages) is always one aggregate line, even for a single call. */
 function Group({ group, forceOpen }) {
@@ -413,6 +434,8 @@ function StepList({ steps }) {
 }
 
 // ---- Run summary -------------------------------------------------------------------------------
+// The server's run activity while a finished answer waits for its sub-agents (agent-session.ts, written in Chinese).
+const WAITING_FOR_SUB_AGENTS = "\u7b49\u5f85\u5b50\u667a\u80fd\u4f53";
 function currentActivity(turn, run) {
 	const steps = turn.steps;
 	for (let i = steps.length - 1; i >= 0; i--) {
@@ -434,6 +457,12 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	const [open, setOpen] = useState(defaultOpen);
 	const interacted = useRef(false);
 	useEffect(() => { if (!interacted.current) setOpen(defaultOpen); }, [defaultOpen]);
+	// "Show in the conversation" from the sub-agent bar opens the block that holds the dispatch.
+	const reveal = useStore((st) => st.view.revealDispatch);
+	useEffect(() => {
+		if (reveal && steps.some((step) => step.call?.id === reveal.id)) setOpen(true);
+	}, [reveal?.n]);
+	const subAgentState = useSubAgents();
 	// While the context is compacted the strip above the input shows it, with its own timer and Cancel: this row stays
 	// still (no working glyph, activity or timer) and is not drawn at all when the turn has no steps yet.
 	const summary = processSummaryState({ last, running, compacting, outcome, duration, stats, changeCount });
@@ -445,12 +474,19 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 		return () => clearInterval(timer);
 	}, [live]);
 	if (!steps.length && !live) return null;
-	const elapsed = live ? now - (snapRun?.turnStartedAt || snapRun?.startedAt || turn.startedAt || now) : duration;
+	// Waiting for sub-agents: say how many and for how long, not the turn's own action count.
+	// That is the hold after the final answer, or a tool call that only waits for its own dispatch (nothing else runs).
+	const runningSteps = turn.steps.filter((step) => step.type === "action" && (step.status === "running" || step.status === "pending"));
+	const onlyDispatching = runningSteps.length > 0 && runningSteps.every((step) => step.kind === "agent");
+	const waitingSubAgents = live && (snapRun?.activity === WAITING_FOR_SUB_AGENTS || (snapRun?.state === "waiting" && onlyDispatching)) ? runningTasks(subAgentState) : 0;
+	const waitingSince = waitingSubAgents ? runningSince(subAgentState) : undefined;
+	const elapsed = live ? now - (waitingSince || snapRun?.turnStartedAt || snapRun?.startedAt || turn.startedAt || now) : duration;
 	const icon = live ? html`<${Spinner} />` : html`<${Icon} name=${summary.icon} size=${14} class=${`c-${summary.outcome}`} />`;
-	const label = live ? currentActivity(turn, snapRun) : summary.label;
+	const label = waitingSubAgents ? t("Waiting for {agents}", { agents: count(waitingSubAgents, "sub-agent") }) : live ? currentActivity(turn, snapRun) : summary.label;
+	const meta = waitingSubAgents ? t("{duration} elapsed", { duration: fmtDuration(Math.max(0, elapsed)) }) : `${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}`;
 	const head = html`<span class="summary-ico">${icon}</span>
 		<span class=${`summary-text truncate ${live ? "shimmer-text" : ""}`}>${label}</span>
-		${live ? html`<span class="summary-meta dim">${fmtDuration(elapsed)}${stats.actions ? ` · ${plural(stats.actions, "action")}` : ""}</span>` : null}
+		${live ? html`<span class="summary-meta dim">${meta}</span>` : null}
 		${stats.failedActions && !live ? html`<span class="badge danger">${plural(stats.failedActions, "failed action")}</span>` : null}`;
 	// Waiting for the model's first step: there is nothing to unfold yet, so the row is only the working glyph, what is
 	// happening and the timer (no arrow, and no empty area under it).
@@ -466,7 +502,25 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 }
 
 // ---- Outcome banner: never folded away ---------------------------------------------------------
-function OutcomeBanner({ turn, outcome, run, changeCount }) {
+/**
+ * After an interrupted or failed turn: the sub-agents it dispatched did not stop with it. The last turn also counts the
+ * ones earlier turns left running; an older turn counts only its own, so the notice stays after a new message.
+ */
+function BackgroundStillRunning({ turn, isLast }) {
+	const state = useSubAgents();
+	if (state.unknown) return null;
+	let running = 0;
+	for (const step of turn.steps) {
+		if (step.type !== "action" || step.kind !== "agent") continue;
+		const item = dispatchFor(state, step.call?.id, step.result?.details?.batchId || step.run?.partialDetails?.batchId);
+		if (item) running += item.tasks.filter((task) => task.status === "running").length;
+	}
+	if (isLast) running = Math.max(running, runningTasks(state));
+	if (!running) return null;
+	return html`<button class="link-btn sa-still" onClick=${() => setView({ subAgentPanel: Date.now() })}>${t("{agents} still running in the background", { agents: count(running, "sub-agent") })}</button>`;
+}
+
+function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 	if (outcome === "completed" || outcome === "running") return null;
 	if (outcome === "waiting") {
 		return html`<div class="banner o-waiting" role="status"><div class="banner-head"><${Icon} name="clock" size=${15} /><strong>${t("Waiting for you")}</strong><span class="dim">${t("The agent is paused until you answer the question above the input box.")}</span></div></div>`;
@@ -488,6 +542,7 @@ function OutcomeBanner({ turn, outcome, run, changeCount }) {
 		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${interrupted ? t("Interrupted") : titles[outcome] ? t(titles[outcome]) : outcome}</strong></div>
 		${interrupted ? html`<div class="banner-error">${blurb}${error ? html`<br />${clip(serverText(error, ""), 300)}` : null}</div>` : error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
+		${outcome === "cancelled" || outcome === "failed" || outcome === "partial" ? html`<${BackgroundStillRunning} turn=${turn} isLast=${isLast} />` : null}
 		${!exportReadOnly() ? html`<div class="banner-actions">
 			${turn.user && outcome !== "cancelled" ? html`<button class="btn sm" onClick=${() => actions.retry()}>${t("Retry")}</button>` : null}
 			${run?.uncommitted ? html`<button class="btn sm" onClick=${() => openCommand("git")}>${t("Undo or commit")}</button>` : null}
@@ -656,12 +711,12 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 		${segments.map((segment) =>
 			segment.type === "text"
 				? html`<div class="final" key=${segment.key}><${Markdown} text=${segment.step.text} /></div>`
-				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} />`,
+				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} /><${LiveDispatchCards} key=${`sa-${turn.key}-${segment.key}`} steps=${segment.steps} />`,
 		)}
 		${pending ? html`<${ProcessSummary} key=${`sum-${turn.key}-pending`} turn=${turn} steps=${[]} outcome=${outcome} live=${working} compacting=${compacting} snapRun=${snapRun} defaultOpen=${false} />` : null}
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
-		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} />
+		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} isLast=${isLast} />
 	</section>`;
 });
 

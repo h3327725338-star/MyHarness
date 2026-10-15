@@ -16,6 +16,7 @@ import { serverText, t } from "./i18n.js";
 import { RUN_MODES, COMPOSER_QUEUE_DEBOUNCE_MS, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
 import { retryReason } from "./retry-reason.js";
+import { SubAgentBar, runningTasks } from "./sub-agents.js";
 
 import { drafts, registerRestartDraft } from "./restart-state.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
@@ -302,6 +303,7 @@ export function Composer() {
 	const editArea = useRef(null);
 	// What Enter does while the agent runs: the default chosen in Settings.
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
+	const subAgentsRunning = useStore((s) => runningTasks(s.subAgentState || { items: [] }) > 0);
 	const [sending, setSending] = useState(false);
 	const [dragOver, setDragOver] = useState(false);
 	const [sel, setSel] = useState(0);
@@ -724,11 +726,14 @@ const send = async (mode) => {
 
 	const canSend = !switching && !restarting && connected && (text.trim() || images.length || quotes.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0 && quotes.length === 0;
+	// The input box's stop ends everything, the sub-agents included; the activity bar's stop ends only sub-agents.
+	const stopTitle = subAgentsRunning ? t("Stop the run and all sub-agents (Esc)") : t("Stop the current run (Esc)");
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 
 	return html`<div class="composer-zone">
 		<div class="composer-col">
 			<${StatusStrips} snap=${snap} />
+			<${SubAgentBar} />
 			<${QueueChips} queue=${queue} />
 			${dialogs.map((dialog) => html`<${DialogBar} key=${dialog.id} dialog=${dialog} />`)}
 			<${CommandPanel} />
@@ -817,7 +822,7 @@ const send = async (mode) => {
 					<${MainEffortPicker} />
 					<${ContextMeter} />
 					${showStop
-						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
+						? html`<button class="send stop" onClick=${actions.stop} title=${stopTitle} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
 						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${switching ? t("Loading…") : active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>

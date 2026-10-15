@@ -209,6 +209,7 @@ import {
 	type UltracodeToolOptions,
 	type WorkflowToolOptions,
 } from "../workflow/tool.ts";
+import { type AgentTasksToolOptions, createAgentTasksTool, createAgentTasksToolDefinition } from "./agent-tasks.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./files/ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./files/read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./files/write.ts";
@@ -266,6 +267,7 @@ export type ToolName =
 	| "agent"
 	| "workflow"
 	| "ultracode"
+	| "agent_tasks"
 	| "github"
 	| "memory_search"
 	| "memory_get"
@@ -292,6 +294,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"agent",
 	"workflow",
 	"ultracode",
+	"agent_tasks",
 	"github",
 	"memory_search",
 	"memory_get",
@@ -316,6 +319,7 @@ export interface ToolsOptions {
 	agent?: SubAgentToolOptions;
 	workflow?: WorkflowToolOptions;
 	ultracode?: UltracodeToolOptions;
+	agentTasks?: AgentTasksToolOptions;
 	github?: GitHubToolOptions;
 	memory?: MemoryToolOptions;
 	webSearch?: WebSearchToolOptions;
@@ -357,6 +361,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWorkflowToolDefinition(cwd, options?.workflow);
 		case "ultracode":
 			return createUltracodeToolDefinition(cwd, options?.ultracode);
+		case "agent_tasks":
+			return createAgentTasksToolDefinition(options?.agentTasks);
 		case "memory_search":
 			return createMemorySearchToolDefinition(cwd, options?.memory);
 		case "memory_get":
@@ -414,6 +420,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createWorkflowTool(cwd, options?.workflow);
 		case "ultracode":
 			return createUltracodeTool(cwd, options?.ultracode);
+		case "agent_tasks":
+			return createAgentTasksTool(options?.agentTasks);
 		case "memory_search":
 			return createMemorySearchTool(cwd, options?.memory);
 		case "memory_get":
@@ -472,6 +480,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		agent: createSubAgentToolDefinition(cwd, options?.agent),
 		workflow: createWorkflowToolDefinition(cwd, options?.workflow),
 		ultracode: createUltracodeToolDefinition(cwd, options?.ultracode),
+		agent_tasks: createAgentTasksToolDefinition(options?.agentTasks),
 		github: createGitHubToolDefinition(cwd, options?.github),
 		memory_search: createMemorySearchToolDefinition(cwd, options?.memory),
 		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
@@ -520,6 +529,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		agent: createSubAgentTool(cwd, options?.agent),
 		workflow: createWorkflowTool(cwd, options?.workflow),
 		ultracode: createUltracodeTool(cwd, options?.ultracode),
+		agent_tasks: createAgentTasksTool(options?.agentTasks),
 		github: createGitHubTool(cwd, options?.github),
 		memory_search: createMemorySearchTool(cwd, options?.memory),
 		memory_get: createMemoryGetTool(cwd, options?.memory),

@@ -85,9 +85,9 @@ export function ContextPanel() {
 	const tokenCount = (key) => formatSessionTokenCount(stats, key);
 	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
 	const agentActive = resources ? resources.tools.some((tool) => tool.name === "agent" && tool.active) : false;
-	const isDelegatedChild = (name) => name === "workflow" || name === "ultracode";
+	const isDelegatedChild = (name) => name === "workflow" || name === "ultracode" || name === "agent_tasks";
 	const toggleTool = async (name, on) => {
-		// workflow/ultracode share the sub-agent runtime with agent: they stay disabled while agent is off.
+		// workflow/ultracode/agent_tasks share the sub-agent runtime with agent: they stay disabled while agent is off.
 		// The UI disables them (see below); this is the second guard for keyboard/scripts, and the server
 		// strips them again so the model can never receive them while agent is off.
 		if (isDelegatedChild(name) && !resources.tools.some((tool) => tool.name === "agent" && tool.active) && on) return;
@@ -96,7 +96,7 @@ export function ContextPanel() {
 		if (name === "agent" && !on) {
 			// Turning agent off cascades: workflow + ultracode go off together (and stay disabled until
 			// agent is back on). Turning agent on only adds agent; the two children stay as they were.
-			names = current.filter((entry) => entry !== "agent" && entry !== "workflow" && entry !== "ultracode");
+			names = current.filter((entry) => entry !== "agent" && !isDelegatedChild(entry));
 		} else {
 			const active = new Set(current);
 			if (on) active.add(name);

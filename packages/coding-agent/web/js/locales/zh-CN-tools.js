@@ -29,6 +29,7 @@ export const zhToolDescriptions = {
 	agent: "委派任务给子 Agent",
 	workflow: "分阶段只读探索，用于多模块并行排查与验证",
 	ultracode: "高风险深度排查，结合反例检查与失败路径校验",
+	agent_tasks: "查看或停止本对话的子智能体",
 	github: "访问已连接的 GitHub 资源",
 	memory_search: "搜索已保存的长期记忆",
 	memory_get: "按编号读取完整记忆内容",
