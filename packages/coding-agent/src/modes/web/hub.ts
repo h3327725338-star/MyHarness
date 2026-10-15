@@ -22,6 +22,7 @@ import { getMissingSessionCwdIssue } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import type { ChatMode } from "../../session/types.ts";
 import { pathIdentityKey, resolvePath } from "../../utils/paths.ts";
+import { ChangeClaimRegistry } from "./change-claims.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { type SlotStatus, WebHost, type WebHostHubLink } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -79,6 +80,8 @@ export class WebHostHub implements WebHostHubLink {
 	private readonly scope = new AsyncLocalStorage<WebHost>();
 	private readonly opening = new Map<string, Promise<WebHost>>();
 	private readonly options: WebHostHubOptions;
+	/** Shared by all slots: what every open conversation changed, for cross-session attribution. */
+	private readonly changeClaims = new ChangeClaimRegistry();
 	private workspaceStore: WorkspaceStore | undefined;
 	private primary: WebHost | undefined;
 	private nextSlot = 1;
@@ -132,6 +135,7 @@ export class WebHostHub implements WebHostHubLink {
 			version: this.options.version,
 			slotId: `s${this.nextSlot++}`,
 			workspaceStore: this.workspaceStore,
+			changeClaims: this.changeClaims,
 			hub: this,
 		});
 		this.slots.set(host.slotId, host);

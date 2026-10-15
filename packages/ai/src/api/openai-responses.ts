@@ -83,6 +83,51 @@ function formatOpenAIResponsesError(error: unknown): string {
 	return formatProviderError(normalizeProviderError(error), "OpenAI API error");
 }
 
+function isDeepSeekResponsesFamily(model: Pick<Model<"openai-responses">, "id" | "provider" | "baseUrl">): boolean {
+	return (
+		model.provider === "deepseek" ||
+		model.baseUrl.includes("deepseek.com") ||
+		model.id.toLowerCase().includes("deepseek")
+	);
+}
+
+function isReasoningReplay400Error(error: unknown): boolean {
+	const status = (error as { status?: number } | null)?.status;
+	if (status !== 400) return false;
+	return /reasoning/i.test(formatOpenAIResponsesError(error));
+}
+
+/**
+ * DeepSeek thinking mode rejects the whole request with an HTTP 400 when the replayed
+ * history loses a reasoning item somewhere along the way. Third-party gateways are
+ * known to drop/mangle reasoning items intermittently (anomalyco/opencode issues
+ * #25000, #24722, #24190, #24124, #24104, #24261), and the same payload often succeeds
+ * on resend. The rejection happens before the first token, so retrying here cannot
+ * double-bill or double-emit. If the retry also fails, surface the original error.
+ */
+async function createResponsesWithReasoningRetry(
+	client: OpenAI,
+	params: ResponseCreateParamsStreaming,
+	requestOptions: { signal?: AbortSignal; timeout?: number; maxRetries: number },
+	aborted: () => boolean,
+) {
+	try {
+		return await client.responses.create(params, requestOptions).withResponse();
+	} catch (error) {
+		if (aborted() || params.reasoning?.effort === "none" || !isReasoningReplay400Error(error)) {
+			throw error;
+		}
+		try {
+			return await client.responses.create(params, requestOptions).withResponse();
+		} catch (retryError) {
+			if (aborted()) throw retryError;
+			// The retry reproduced the failure; keep the original error so the surfaced
+			// message reflects the first, real rejection.
+			throw error;
+		}
+	}
+}
+
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -139,7 +184,12 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: options?.maxRetries ?? 0,
 			};
-			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
+			const { data: openaiStream, response } = await createResponsesWithReasoningRetry(
+				client,
+				params,
+				requestOptions,
+				() => options?.signal?.aborted === true,
+			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			headersReceived = true;
 			stream.push({ type: "start", partial: output });
@@ -240,14 +290,11 @@ function createClient(
 function buildParams(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions) {
 	const compat = getCompat(model);
 	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch);
-	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
-		deferredTools: toolPlacement.deferred,
-	});
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
-		input: messages,
+		input: [],
 		stream: true,
 		prompt_cache_key: cacheRetention === "none" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
 		prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
@@ -291,6 +338,20 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		}
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
 	}
+
+	// DeepSeek thinking mode requires every assistant message in the input to carry its
+	// reasoning back when tools are used (all-or-nothing validation); turns where the
+	// model skipped thinking would otherwise poison the whole request with an HTTP 400.
+	const injectEmptyReasoning =
+		isDeepSeekResponsesFamily(model) &&
+		(toolPlacement.immediate.length > 0 || toolPlacement.deferred.size > 0) &&
+		!!params.reasoning &&
+		params.reasoning.effort !== "none";
+
+	params.input = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+		deferredTools: toolPlacement.deferred,
+		injectEmptyReasoning,
+	});
 
 	return params;
 }

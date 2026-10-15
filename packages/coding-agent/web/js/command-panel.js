@@ -5,7 +5,7 @@ import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
-import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoTaskChanges } from "./git-flow.js";
+import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoImpact, undoTaskChanges } from "./git-flow.js";
 import { explainDeleteFailure } from "./git-delete.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
@@ -38,10 +38,11 @@ function optionsScreen({ title, options, value, onPick, filterable, placeholder,
 	};
 }
 
-function confirmScreen({ title, message, confirmLabel, danger, onConfirm }) {
+function confirmScreen({ title, message, body, confirmLabel, danger, onConfirm }) {
 	return {
 		title,
 		subtitle: message,
+		body,
 		filterable: false,
 		rows: [
 			{ key: "cancel", label: t("Cancel"), onEnter: (ctx) => ctx.pop() },
@@ -803,12 +804,16 @@ function pathLines(total, lines) {
 function undoScreen() {
 	const checkpoint = useStore((s) => s.snap?.checkpoint);
 	const gitStatus = useStore((s) => s.gitStatus);
+	// Files another conversation changed since the checkpoint: the confirm step lists them, because undoing rolls
+	// those changes back as well.
+	const { data: impact } = useLoaded(undoImpact);
 	useEffect(() => {
 		loadGitStatus();
 	}, []);
 	const title = t("Undo task changes");
 	if (checkpoint?.status !== "created") return { title, size: "md", empty: t("There is no open task checkpoint. Use “Restore to last commit” (in Git tools) to discard everything since the latest commit."), rows: [] };
 	const preview = gitStatus?.preview;
+	const foreign = impact?.foreignPaths || [];
 	return {
 		title,
 		size: preview?.total > 8 ? "lg" : "md",
@@ -829,6 +834,12 @@ function undoScreen() {
 							message: checkpoint.hadBash
 								? t("Undo restores the workspace to the checkpoint state — that can include changes from later messages in the same session. It does not touch remote repositories or anything a shell command did outside the workspace (shell commands ran during this task).")
 								: t("Undo restores the workspace to the checkpoint state — that can include changes from later messages in the same session. It does not touch remote repositories or anything a shell command did outside the workspace."),
+							body: foreign.length
+								? html`<div class="cp-body">
+									<div class="dim">${t("Another conversation changed these files during this task; undoing rolls their changes back too ({n}):", { n: foreign.length })}</div>
+									<pre class="git-lines">${foreign.slice(0, 40).join("\n")}</pre>
+								</div>`
+								: undefined,
 							confirmLabel: t("Undo task changes"),
 							danger: true,
 							onConfirm: (cc) => (cc.close(), undoTaskChanges()),

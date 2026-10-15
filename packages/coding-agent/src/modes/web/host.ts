@@ -42,6 +42,7 @@ import {
 	showPopupNotification,
 	summarizeRunWork,
 } from "../../utils/popup-notification.ts";
+import type { ChangeClaimRegistry } from "./change-claims.ts";
 import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
@@ -247,6 +248,8 @@ export interface WebHostOptions {
 	slotId?: string;
 	/** Shared by all slots so the workspace list stays consistent. */
 	workspaceStore?: WorkspaceStore;
+	/** Shared by all slots: what every open conversation changed, for cross-session attribution. */
+	changeClaims?: ChangeClaimRegistry;
 	hub?: WebHostHubLink;
 }
 
@@ -269,6 +272,8 @@ export class WebHost {
 	readonly dialogs: WebDialogBridge;
 	readonly version: string;
 	readonly workspaceStore: WorkspaceStore;
+	/** Shared by all slots: what every open conversation changed, for cross-session attribution. */
+	readonly changeClaims: ChangeClaimRegistry | undefined;
 	readonly slotId: string;
 	readonly startedAt = Date.now();
 	/** Last time a request addressed this slot; the hub evicts the least recently used idle slots. */
@@ -346,7 +351,11 @@ export class WebHost {
 		this.hub = options.hub;
 		this.workspaceStore =
 			options.workspaceStore ?? WorkspaceStoreImpl.create(options.runtimeHost.services.agentDir, getDataDir());
-		this.tracker = new ChangeTracker(this.cwd);
+		this.changeClaims = options.changeClaims;
+		this.tracker = new ChangeTracker(this.cwd, {
+			changeClaims: this.changeClaims,
+			sessionKey: () => this.session.sessionId,
+		});
 		this.dialogs.onDialogsChanged = () => {
 			this.broadcast("dialogs", { requests: this.dialogs.requests });
 			const request = this.dialogs.requests.at(-1);
@@ -507,7 +516,10 @@ export class WebHost {
 		this.unsubscribe?.();
 		this.generation += 1;
 		this.resetLiveState();
-		this.tracker = new ChangeTracker(this.cwd);
+		this.tracker = new ChangeTracker(this.cwd, {
+			changeClaims: this.changeClaims,
+			sessionKey: () => this.session.sessionId,
+		});
 		const generation = this.generation;
 		const session = this.session;
 		this.conversationNaming = new ConversationNaming(
@@ -1236,6 +1248,7 @@ export class WebHost {
 			);
 		} else if (toolName === "bash" || toolName === "pwsh") {
 			this.tracker.recordBash(runId);
+			this.tracker.recordShellStart(runId, toolCallId);
 			const command = (args as { command?: unknown } | null | undefined)?.command;
 			if (bashCommandMayMoveGitHead(command)) this.tracker.recordGitHeadOp(runId);
 		}
@@ -1246,6 +1259,9 @@ export class WebHost {
 		if (runId === undefined) return;
 		if (toolName === "edit" || toolName === "write" || toolName === "apply_patch") {
 			this.tracker.recordToolOp(runId, toolCallId, toolName, !isError);
+		} else if (toolName === "bash" || toolName === "pwsh") {
+			// The window is recorded regardless of the exit code: a failed command may still have written files.
+			this.tracker.recordShellEnd(runId, toolCallId);
 		}
 	}
 

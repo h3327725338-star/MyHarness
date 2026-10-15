@@ -1622,6 +1622,7 @@ export const zhCN = {
 	"The files stay as they are; the checkpoint is closed.": "文件保持现状，并关闭这次任务的检查点。",
 	"Roll the workspace back to how it was when the task started.": "把工作区还原到任务开始时的样子。",
 	"Undo this task's changes?": "撤销这次任务的改动？",
+	"Another conversation changed these files during this task; undoing rolls their changes back too ({n}):": "以下文件在本次任务期间被其他对话改过，撤销会连带回滚这些改动（{n} 个）：",
 	"change": "调整",
 	"done": "完成",
 	"save": "保存",

@@ -4,6 +4,7 @@
  * use cases and Git primitives as the TUI commands.
  */
 
+import { statSync } from "node:fs";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@myharness/agent-core";
 import { clampThinkingLevel, contentText } from "@myharness/ai";
@@ -14,7 +15,11 @@ import { GitCommitUseCase } from "../../application/use-cases/git-commit.ts";
 import { GitPushUseCase } from "../../application/use-cases/git-push.ts";
 import { GitWorktreeUseCase } from "../../application/use-cases/git-worktree.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
-import { completeGitCheckpoint, restoreGitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
+import {
+	collectGitCheckpointWorkingTreeChangesAsync,
+	completeGitCheckpoint,
+	restoreGitCheckpoint,
+} from "../../git/checkpoints/checkpoint.ts";
 import { generateAICommitMessage } from "../../git/commits/ai-message.ts";
 import { generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
 import { LocalGitRepositoryStore, validateLocalGitDirectory } from "../../git/local-repositories/store.ts";
@@ -58,6 +63,13 @@ function failureText(result: { stdout?: string; stderr: string; error?: string; 
 	const detail = [result.stdout, result.stderr || result.error].filter(Boolean).join("\n").trim();
 	if (!detail) return "Git command failed";
 	return result.exitCode != null ? `${detail} (exit code ${result.exitCode})` : detail;
+}
+
+/** A repository-relative path as the Changes panel shows it: relative to the workspace folder. */
+function toCwdDisplayPath(cwd: string, repositoryRoot: string, repoRelative: string): string {
+	const relative = path.relative(path.resolve(cwd), path.resolve(repositoryRoot, repoRelative));
+	if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return repoRelative;
+	return relative.split(path.sep).join("/");
 }
 
 /** Helper-model reference stored in settings: empty provider/model means "use the main model". */
@@ -329,6 +341,30 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			externalSideEffectsUnknown: restored.externalSideEffectsUnknown === true,
 			cleanupError: restored.cleanupError ?? null,
 		};
+	});
+
+	// ---- Undo impact: files another conversation changed since this checkpoint was made ----
+	server.route("GET", "/api/git/undo/preview", async () => {
+		const checkpoint = openCheckpoint();
+		const registry = host.changeClaims;
+		if (!checkpoint || !registry) return { foreignPaths: [], foreignCount: 0 };
+		const working = await collectGitCheckpointWorkingTreeChangesAsync(checkpoint);
+		if (!working.changes) return { foreignPaths: [], foreignCount: 0, error: working.error ?? null };
+		const since = Date.parse(checkpoint.createdAt) || 0;
+		const { repositoryRoot } = checkpoint;
+		const candidates = working.changes.map((change) => {
+			const absolute = path.resolve(repositoryRoot, change.path);
+			let modifiedAt: number | undefined;
+			try {
+				modifiedAt = statSync(absolute).mtimeMs;
+			} catch {
+				modifiedAt = undefined;
+			}
+			return { path: absolute, modifiedAt, label: change.path };
+		});
+		const foreign = registry.foreignChangedSince(candidates, host.session.sessionId, since);
+		const paths = foreign.map((candidate) => toCwdDisplayPath(cwd(), repositoryRoot, candidate.label)).sort();
+		return { foreignPaths: paths.slice(0, 40), foreignCount: paths.length };
 	});
 
 	// ---- /restore: discard every uncommitted change ----------------------------------

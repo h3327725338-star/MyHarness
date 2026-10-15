@@ -168,3 +168,6 @@ export async function restoreToLatestCommit() {
 }
 
 export const restorePreview = () => api("/api/git/restore/preview");
+
+/** Files the open checkpoint's undo would roll back that another conversation changed. */
+export const undoImpact = () => api("/api/git/undo/preview");

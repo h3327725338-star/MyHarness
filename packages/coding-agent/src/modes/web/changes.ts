@@ -14,6 +14,8 @@ import { runGit, runGitSync } from "../../git/repository/command.ts";
 import { inspectGitRepositoryAsync } from "../../git/repository/integration.ts";
 import type { ReviewChange, ReviewChangeStatus } from "../../git/repository/review-types.ts";
 import type { ChangeDetectionResult, GitTaskChangeSummary } from "../../git/repository/workspace-changes.ts";
+import { pathIdentityKey } from "../../utils/paths.ts";
+import { type ChangeClaimRegistry, selectForeignChanges } from "./change-claims.ts";
 import {
 	batchWorktreeStats,
 	getCachedWorktreeChangesSync,
@@ -81,6 +83,15 @@ function toRelative(cwd: string, absolute: string): string | undefined {
 	const relative = path.relative(path.resolve(cwd), path.resolve(absolute));
 	if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
 	return relative.split(path.sep).join("/");
+}
+
+/** Last write time of a file on disk, undefined when it cannot be read. */
+function statModifiedAt(absolutePath: string): number | undefined {
+	try {
+		return statSync(absolutePath).mtimeMs;
+	} catch {
+		return undefined;
+	}
 }
 
 function looksBinary(buffer: Buffer): boolean {
@@ -159,17 +170,30 @@ async function gitShowAsync(repositoryRoot: string, spec: string): Promise<{ tex
 	return { text: result.stdout, binary: false };
 }
 
+export interface ChangeTrackerOptions {
+	/** Shared registry of what each open conversation changed (see change-claims.ts). */
+	changeClaims?: ChangeClaimRegistry;
+	/** Identity of this tracker's session; changes claimed under the same key are never treated as foreign. */
+	sessionKey?: () => string;
+}
+
 /** Tracks per-run tool snapshots and produces file diffs. One instance per runtime cwd. */
 export class ChangeTracker {
 	private cwd: string;
+	private readonly changeClaims: ChangeClaimRegistry | undefined;
+	private readonly sessionKeyProvider: (() => string) | undefined;
 	private readonly runs = new Map<number, RunChangeRecord>();
 	private readonly snapshots = new Map<number, Map<string, Snapshot>>();
 	private readonly snapshotBytes = new Map<number, number>();
 	private readonly checkpoints = new Map<number, GitCheckpoint>();
 	private readonly pendingBefore = new Map<string, { runId: number; rels: string[] }>();
+	/** Shell calls (bash / pwsh) that started but have not reported an end yet. */
+	private readonly openShells = new Map<string, { runId: number; startedAt: number }>();
 
-	constructor(cwd: string) {
+	constructor(cwd: string, options: ChangeTrackerOptions = {}) {
 		this.cwd = cwd;
+		this.changeClaims = options.changeClaims;
+		this.sessionKeyProvider = options.sessionKey;
 	}
 
 	setCwd(cwd: string): void {
@@ -182,6 +206,7 @@ export class ChangeTracker {
 		this.snapshotBytes.clear();
 		this.pendingBefore.clear();
 		this.checkpoints.clear();
+		this.openShells.clear();
 	}
 
 	beginRun(runId: number): RunChangeRecord {
@@ -197,6 +222,11 @@ export class ChangeTracker {
 		this.runs.set(runId, record);
 		this.snapshots.set(runId, new Map());
 		this.snapshotBytes.set(runId, 0);
+		// A shell call from an earlier run never reported its end; an unclosed window cannot be trusted to bound
+		// anything, so it is dropped instead of being stretched over the new run.
+		for (const [toolCallId, shell] of this.openShells) {
+			if (shell.runId !== runId) this.openShells.delete(toolCallId);
+		}
 		// Keep memory bounded: only the most recent runs retain snapshots.
 		const ids = [...this.runs.keys()].sort((a, b) => a - b);
 		while (ids.length > 12) {
@@ -263,7 +293,36 @@ export class ChangeTracker {
 		this.pendingBefore.delete(toolCallId);
 		const record = this.runs.get(runId);
 		if (!record || !pending) return;
-		for (const rel of pending.rels) record.toolFileOps.push({ path: rel, tool, ok });
+		const at = Date.now();
+		for (const rel of pending.rels) {
+			record.toolFileOps.push({ path: rel, tool, ok });
+			if (ok) this.publishClaim(runId, rel, tool, at);
+		}
+	}
+
+	/** A shell call started: remember when, so the files it writes can be attributed to this session. */
+	recordShellStart(runId: number, toolCallId: string): void {
+		this.openShells.set(toolCallId, { runId, startedAt: Date.now() });
+	}
+
+	/** A shell call ended: its window is what file writes inside it are attributed to. */
+	recordShellEnd(runId: number, toolCallId: string): void {
+		const shell = this.openShells.get(toolCallId);
+		this.openShells.delete(toolCallId);
+		if (!shell) return;
+		this.publishShellWindow(runId, shell.startedAt, Date.now());
+	}
+
+	private publishClaim(runId: number, rel: string, tool: FileMutationTool, at: number): void {
+		const sessionKey = this.sessionKeyProvider?.();
+		if (!this.changeClaims || !sessionKey) return;
+		this.changeClaims.record({ sessionKey, runId, path: path.resolve(this.cwd, rel), at, tool });
+	}
+
+	private publishShellWindow(runId: number, startedAt: number, endedAt: number): void {
+		const sessionKey = this.sessionKeyProvider?.();
+		if (!this.changeClaims || !sessionKey) return;
+		this.changeClaims.recordShell({ sessionKey, runId, startedAt, endedAt: Math.max(startedAt, endedAt) });
 	}
 
 	recordBash(runId: number): void {
@@ -296,6 +355,8 @@ export class ChangeTracker {
 			record.reason = "Final change detection was unavailable; showing files touched by edit/write only.";
 			this.mergeToolChanges(runId, record);
 		}
+		this.closeOpenShells(runId, record.endedAt ?? Date.now());
+		this.dropForeignChanges(record);
 		if (checkpoint) {
 			this.checkpoints.set(runId, checkpoint);
 			record.checkpointId = checkpoint.id;
@@ -329,6 +390,39 @@ export class ChangeTracker {
 				path: op.path,
 				status: snapshot.before === null ? "added" : exists ? "modified" : "deleted",
 			});
+		}
+	}
+
+	/**
+	 * Remove the changes another open conversation explains (see change-claims.ts): a file operation it recorded
+	 * inside this run's window, or a file whose last write falls inside one of its shell windows and outside every
+	 * shell window of this session. The run's own file operations are never removed.
+	 */
+	private dropForeignChanges(record: RunChangeRecord): void {
+		const sessionKey = this.sessionKeyProvider?.();
+		if (!this.changeClaims || !sessionKey || record.changes.length === 0) return;
+		const ownPaths = new Set(
+			record.toolFileOps.filter((op) => op.ok).map((op) => pathIdentityKey(path.resolve(this.cwd, op.path))),
+		);
+		const dropped = new Set(
+			selectForeignChanges(record.changes, {
+				registry: this.changeClaims,
+				sessionKey,
+				ownPaths,
+				from: record.startedAt,
+				to: record.endedAt ?? Date.now(),
+				baseDir: this.cwd,
+				modifiedAt: statModifiedAt,
+			}),
+		);
+		if (dropped.size > 0) record.changes = record.changes.filter((change) => !dropped.has(change.path));
+	}
+
+	private closeOpenShells(runId: number, endedAt: number): void {
+		for (const [toolCallId, shell] of this.openShells) {
+			if (shell.runId !== runId) continue;
+			this.openShells.delete(toolCallId);
+			this.publishShellWindow(runId, shell.startedAt, endedAt);
 		}
 	}
 
