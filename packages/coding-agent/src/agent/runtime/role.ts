@@ -6,8 +6,24 @@ export type AgentRole = "main" | "delegated" | "reviewer";
 /** Capability level a delegated worker may run with; read-only is the historical default. */
 export type DelegatedCapabilities = "read-only" | "read-write";
 
-/** Read-only inspection tools available to ordinary delegated sessions. */
-export const DELEGATED_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "symbols"] as const;
+/**
+ * Read-only inspection tools available to ordinary delegated sessions.
+ *
+ * `web_search`/`web_fetch` are named like any other tool here; the worker still builds its own session
+ * from the saved settings, where the global Web Search switch decides whether they are registered at all
+ * (see the `webSearchEnabled` gate in the session tool registry). A worker therefore never gains web
+ * access the Main session does not have.
+ */
+export const DELEGATED_TOOL_NAMES = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"bash",
+	"symbols",
+	"web_search",
+	"web_fetch",
+] as const;
 
 /**
  * Read-write delegated tools: the read-only set plus the write tools the main agent's

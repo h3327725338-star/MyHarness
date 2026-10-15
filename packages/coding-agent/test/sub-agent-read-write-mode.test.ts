@@ -57,8 +57,17 @@ describe("sub-agent runtime settings: capability mode", () => {
 });
 
 describe("delegated tool lists", () => {
-	it("keeps the historical read-only set and adds exactly edit/write/pwsh for read-write", () => {
-		expect([...DELEGATED_TOOL_NAMES]).toEqual(["read", "grep", "find", "ls", "bash", "symbols"]);
+	it("keeps the historical read-only set plus the web tools, and adds exactly edit/write/pwsh for read-write", () => {
+		expect([...DELEGATED_TOOL_NAMES]).toEqual([
+			"read",
+			"grep",
+			"find",
+			"ls",
+			"bash",
+			"symbols",
+			"web_search",
+			"web_fetch",
+		]);
 		expect([...DELEGATED_WRITE_TOOL_NAMES]).toEqual([
 			"read",
 			"grep",
@@ -66,6 +75,8 @@ describe("delegated tool lists", () => {
 			"ls",
 			"bash",
 			"symbols",
+			"web_search",
+			"web_fetch",
 			"edit",
 			"write",
 			"pwsh",
@@ -82,7 +93,7 @@ describe("delegated tool lists", () => {
 		});
 		const toolsIndex = args.indexOf("--tools");
 		expect(toolsIndex).toBeGreaterThan(-1);
-		expect(args[toolsIndex + 1]).toBe("read,grep,find,ls,bash,symbols");
+		expect(args[toolsIndex + 1]).toBe("read,grep,find,ls,bash,symbols,web_search,web_fetch");
 		// Read-write only changes the tool list, not any other flag.
 		const writeArgs = buildSubAgentArgs({
 			provider: "openai",
@@ -92,7 +103,9 @@ describe("delegated tool lists", () => {
 			guardPath: "/tmp/guard.js",
 			mode: "read-write",
 		});
-		expect(writeArgs[writeArgs.indexOf("--tools") + 1]).toBe("read,grep,find,ls,bash,symbols,edit,write,pwsh");
+		expect(writeArgs[writeArgs.indexOf("--tools") + 1]).toBe(
+			"read,grep,find,ls,bash,symbols,web_search,web_fetch,edit,write,pwsh",
+		);
 		// Every other flag is untouched by the mode.
 		const stripTools = (list: string[]) => {
 			const toolsIndex = list.indexOf("--tools");
@@ -157,7 +170,19 @@ describe("nested dispatch detection", () => {
 		]) {
 			expect(isNestedDispatchToolName(name), name).toBe(true);
 		}
-		for (const name of ["read", "grep", "find", "ls", "bash", "symbols", "edit", "write", "pwsh"]) {
+		for (const name of [
+			"read",
+			"grep",
+			"find",
+			"ls",
+			"bash",
+			"symbols",
+			"web_search",
+			"web_fetch",
+			"edit",
+			"write",
+			"pwsh",
+		]) {
 			expect(isNestedDispatchToolName(name), name).toBe(false);
 		}
 	});
@@ -169,6 +194,9 @@ describe("nested dispatch detection", () => {
 		}
 		// Ordinary in-jail writes are still allowed.
 		expect(evaluateDelegatedWriteToolCall("edit", { path: "src/a.ts" }, root)).toBeUndefined();
+		// The web tools carry no path input, so the write guard passes them through.
+		expect(evaluateDelegatedWriteToolCall("web_search", { queries: ["typescript release"] }, root)).toBeUndefined();
+		expect(evaluateDelegatedWriteToolCall("web_fetch", { urls: ["https://example.com"] }, root)).toBeUndefined();
 	});
 
 	it("the rejection marker is stable", () => {
@@ -202,6 +230,12 @@ describe("evidence detection per mode", () => {
 		expect(hasSuccessfulInvestigationEvidence([trace("edit", "completed")], "read-write")).toBe(true);
 		expect(hasSuccessfulInvestigationEvidence([trace("write", "failed")], "read-write")).toBe(false);
 		expect(hasSuccessfulInvestigationEvidence([trace("pwsh", "completed")], "read-write")).toBe(true);
+	});
+
+	it("counts completed web tool calls as work in both modes", () => {
+		expect(hasSuccessfulInvestigationEvidence([trace("web_search", "completed")])).toBe(true);
+		expect(hasSuccessfulInvestigationEvidence([trace("web_fetch", "completed")], "read-write")).toBe(true);
+		expect(hasSuccessfulInvestigationEvidence([trace("web_search", "failed")])).toBe(false);
 	});
 });
 

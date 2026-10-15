@@ -152,7 +152,7 @@ describe("sub agent", () => {
 		expect(args).toContain("--no-extensions");
 		expect(args).toContain("--no-context-files");
 		expect(args.slice(args.indexOf("--tools") + 1, args.indexOf("--model"))).toEqual([
-			"read,grep,find,ls,bash,symbols",
+			"read,grep,find,ls,bash,symbols,web_search,web_fetch",
 		]);
 		expect(args).not.toContain("agent");
 		expect(args).toContain("openai/gpt-test");

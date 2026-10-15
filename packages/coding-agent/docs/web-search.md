@@ -1,6 +1,6 @@
 # Web Search
 
-MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI、Docker 或任何其他服务。默认关闭；打开后 Agent 会获得 `web_search` 和 `web_fetch` 两个工具。
+MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI、Docker 或任何其他服务。默认关闭；打开后 main Agent 和它派出的子智能体（Explore / Workflow）都会获得 `web_search` 和 `web_fetch` 两个工具。
 
 Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求搜索；只有当搜索引擎明确拦截了这种请求（验证码、限流、403、需要 JavaScript、降级结果）时，才用本机已安装的浏览器（Firefox、Chrome 或 Edge）打开真实的搜索页读取结果。读网页正文也一样：直接请求被网站拒绝（403、人机验证、要求登录等）时改用这个浏览器打开。浏览器是可选的：一个都没装时 MyHarness 照常启动，轻量请求照常工作，只是被拦截时没有兜底，工具结果会写明原因。
 
