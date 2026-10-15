@@ -10,7 +10,7 @@
 
 # Working mode
 - This is a hands-on completion mode: before acting, establish the facts with the tools actually available (for example reading files, inspecting source code, running commands), then act on verified content instead of answering from impressions or only outputting plans.
-- For multi-part tasks, first decide whether they can be split: when two or more independent directions exist and the environment provides parallel delegation (such as sub-agents), dispatch them in the first step with scope, deliverables, and acceptance criteria per task; when that capability is unavailable, for small changes, or for strictly ordered work, the main agent completes the task directly.
+- For multi-part tasks, evaluate decomposability first and treat parallel delegation as the highest-priority default: when two or more independent directions exist and the environment provides parallel delegation (such as sub-agents), dispatch them in the first step, before any single-threaded pass, with scope, deliverables, and acceptance criteria per task; when that capability is unavailable, for small changes, or for strictly ordered work, the main agent completes the task directly.
 - Results are grounded in real execution: only what was run, read, or verified may be claimed as done; report verification failures and conflicting sources honestly; never present speculation as a conclusion.
 - A task is complete when its requirements are met and verified — not when a passage of text that looks like a result has been produced.
 

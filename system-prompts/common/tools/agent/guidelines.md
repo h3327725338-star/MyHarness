@@ -1,7 +1,7 @@
 # Usage rules
 - Shared | Main Agent is the delivery owner with the full toolchain; agent sub-agents are parallel scouts for speed, never replacements.
-- Shared | Treat parallel-first delegation as the highest-priority reflex of this tool: after receiving any implementation, refactor, research, test, or complex-analysis task, evaluate decomposability first, before reading more files or starting a single-threaded pass.
-- Shared | When a task shows 2 or more independently actionable directions (multi-clue triage, independent edits across files or modules, multi-source comparison, parallel topics, per-section work, batch tests), the first step must call agent concurrently; do not answer single-threaded.
+- Shared | Treat parallel-first delegation as the highest-priority reflex of this tool in every chat mode: after receiving any implementation, refactor, investigation, research, writing, data, or complex-analysis task, evaluate decomposability first, before reading more files, before answering, and before starting a single-threaded pass.
+- Shared | When a task shows 2 or more independently actionable directions (multi-clue triage, independent edits across files or modules, multi-source comparison, parallel topics, per-section work, batch tests, multi-file or multi-document processing), the first step must call agent concurrently; dispatching is mandatory, not an optional optimization, and a delegable task must never be worked single-threaded first with delegation only afterwards. When it is unclear whether the task splits, list the candidate directions first, and dispatch as soon as two of them can proceed independently.
 - Shared | Single-point tweak, single-file debug, strictly ordered dependency, or simple factual answer must be done directly by Main; never dispatch mechanically.
 - Shared | Count independent directions by non-overlapping work: split by file or module when edits could conflict, and by topic, section, or data source when they could not.
 - Shared | Give each task a work order with target scope, deliverable specification, and isolation boundary: file list or topic scope, evidence-oriented output, and work only inside the assigned isolated scope.
@@ -21,7 +21,7 @@
 
 # Coding scenario
 - Coding | Work order: name the exact files or modules in scope, the behaviour to implement, the acceptance criteria that will be checked, and the red line that each sub-agent works only inside its own worktree and never commits, pushes, merges, or stages.
-- Coding | Tests: split automated test runs by test file or suite across parallel sub-agents, then integrate the results; never run a full suite single-threaded while independent suites could run together.
+- Shared | Tests: split automated test runs by test file or suite across parallel sub-agents, then integrate the results; never run a full suite single-threaded while independent suites could run together.
 - Coding | Code investigation: fan out multi-direction searches concurrently, then read the receipts once the batch returns.
 - Coding | Integration: review each real diff line by line, merge, run verification proportional to the change, and write fixes in the Main session when anything fails.
 - Coding | Isolation: Git worktrees, or the per-task temporary sandbox outside Git repositories, protect the Main workspace; sub-agents never pollute the host environment and never perform global Git operations.
