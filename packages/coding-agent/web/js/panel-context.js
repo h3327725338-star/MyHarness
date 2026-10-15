@@ -130,7 +130,7 @@ export function ContextPanel() {
 					<span>${t("Tokens")}</span><span class="session-tokens">
 						<span>${t("Input")} ${tokenCount("input")} · ${t("Cache write")} ${tokenCount("cacheWrite")} · ${t("Cache read")} ${tokenCount("cacheRead")} · ${t("Output")} ${tokenCount("output")}</span>
 					</span>
-					<span aria-hidden="true"></span><span class="session-cumulative">${t("Cumulative speed")} ${fmtSpeed(stats.speed)} · ${t("Cumulative cache hit")} <${CacheValue} session=${sessionCache(stats)} /></span>
+					<span aria-hidden="true"></span><span class="session-cumulative">${t("Average speed")} ${fmtSpeed(stats.speed)} · ${t("Average cache hit rate")} <${CacheValue} session=${sessionCache(stats)} /></span>
 					<span>${t("Cost")}</span><span>${cost !== "—" && (stats.usageEstimated || stats.costIncomplete) ? "≈ " : ""}${cost}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>

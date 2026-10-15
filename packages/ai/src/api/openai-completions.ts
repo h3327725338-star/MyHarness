@@ -76,6 +76,41 @@ const KNOWN_OPENAI_COMPLETIONS_PROVIDER_IDS = new Set([
 ]);
 
 /**
+ * OpenAI-compatible endpoints that rejected `stream_options` (probed once per process): later
+ * requests stop carrying it until the process restarts. Keyed by provider | baseUrl | model id,
+ * because a gateway can behave differently per model.
+ */
+const usageStreamingUnsupported = new Set<string>();
+/** After a failed probe the endpoint errored for other reasons; pause repeat probes briefly so failing channels are not doubled. */
+const usageProbeBackoff = new Map<string, number>();
+const USAGE_PROBE_BACKOFF_MS = 10 * 60 * 1000;
+
+function usageStreamingKey(model: Model<"openai-completions">): string {
+	return `${model.provider}\u0000${model.baseUrl}\u0000${model.id}`;
+}
+
+/** The endpoint is remembered to reject `stream_options`; requests skip it instead of probing every time. */
+function usageStreamingBlocked(model: Model<"openai-completions">): boolean {
+	return usageStreamingUnsupported.has(usageStreamingKey(model));
+}
+
+/** A rejection retry is allowed only when `stream_options` was auto-attached (no explicit model.compat decision) and no probe recently failed for an unrelated reason. */
+function usageStreamingProbeEligible(model: Model<"openai-completions">, params: unknown): boolean {
+	if (model.compat?.supportsUsageInStreaming !== undefined) return false;
+	if ((params as { stream_options?: unknown }).stream_options === undefined) return false;
+	const backoffUntil = usageProbeBackoff.get(usageStreamingKey(model));
+	return backoffUntil === undefined || backoffUntil <= Date.now();
+}
+
+function noteUsageStreamingUnsupported(model: Model<"openai-completions">): void {
+	usageStreamingUnsupported.add(usageStreamingKey(model));
+}
+
+function noteUsageProbeBackoff(model: Model<"openai-completions">): void {
+	usageProbeBackoff.set(usageStreamingKey(model), Date.now() + USAGE_PROBE_BACKOFF_MS);
+}
+
+/**
  * Check if conversation messages contain tool calls or tool results.
  * This is needed because Anthropic (via proxy) requires the tools param
  * to be present when messages include tool_calls or tool role messages.
@@ -264,9 +299,10 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				maxRetries: options?.maxRetries ?? 0,
 			};
 			const finishRequestTiming = beginRequestTiming(output);
-			const { data: openaiStream, response } = await client.chat.completions
-				.create(params, requestOptions)
-				.withResponse();
+			const { data: openaiStream, response } = await createCompletionStream(client, params, requestOptions, {
+				model,
+				signal: options?.signal,
+			});
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			headersReceived = true;
 			attemptTimer.markHeaders();
@@ -631,6 +667,46 @@ function createClient(
 	});
 }
 
+/**
+ * Create the streaming completion. Usage-in-streaming (`stream_options.include_usage`) is sent by
+ * default because it is standard across OpenAI-compatible services; an endpoint that rejects the
+ * request because of it is retried once without it and remembered for the process. A rejection
+ * happens before any tokens are generated, so the retry cannot double-bill. An explicit
+ * `model.compat.supportsUsageInStreaming` decision is respected: `true` surfaces the endpoint's
+ * error instead of silently dropping usage, `false` never sends the field.
+ */
+async function createCompletionStream(
+	client: OpenAI,
+	params: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+	requestOptions: { signal?: AbortSignal; timeout?: number; maxRetries: number },
+	probe: { model: Model<"openai-completions">; signal?: AbortSignal },
+) {
+	try {
+		return await client.chat.completions.create(params, requestOptions).withResponse();
+	} catch (error) {
+		const status = (error as { status?: number } | null)?.status;
+		if (
+			(status !== 400 && status !== 422) ||
+			!usageStreamingProbeEligible(probe.model, params) ||
+			probe.signal?.aborted
+		) {
+			throw error;
+		}
+		const retryParams = { ...params } as typeof params;
+		delete (retryParams as { stream_options?: unknown }).stream_options;
+		try {
+			const result = await client.chat.completions.create(retryParams, requestOptions).withResponse();
+			noteUsageStreamingUnsupported(probe.model);
+			return result;
+		} catch {
+			// The 400/422 was not caused by stream_options: keep the original error (the request as
+			// configured failed with it) and pause further probes so failing channels are not doubled.
+			noteUsageProbeBackoff(probe.model);
+			throw error;
+		}
+	}
+}
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -653,7 +729,7 @@ function buildParams(
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};
 
-	if (compat.supportsUsageInStreaming !== false) {
+	if (compat.supportsUsageInStreaming !== false && !usageStreamingBlocked(model)) {
 		(params as any).stream_options = { include_usage: true };
 	}
 
@@ -1350,8 +1426,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
 	// Unknown OpenAI-compatible endpoints should receive the portable subset by default.
 	// OpenAI-only fields such as `store`, `developer`, `max_completion_tokens`,
-	// `reasoning_effort`, and `stream_options` are commonly rejected by third-party
-	// services. Known providers and explicit model.compat values can opt back in.
+	// and `reasoning_effort` are commonly rejected by third-party services.
+	// `stream_options` is the exception: usage in streaming is standard and safe to
+	// request everywhere, so it is sent by default; an endpoint that rejects it is
+	// probed once and remembered for the process (see probeUsageStreamingUnsupported).
 	const isGenericThirdParty =
 		!KNOWN_OPENAI_COMPLETIONS_PROVIDER_IDS.has(provider) &&
 		!isNativeOpenAI &&
@@ -1409,7 +1487,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 			!isCloudflareAiGateway &&
 			!isNvidia &&
 			!isAntLing,
-		supportsUsageInStreaming: !isGenericThirdParty,
+		supportsUsageInStreaming: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,

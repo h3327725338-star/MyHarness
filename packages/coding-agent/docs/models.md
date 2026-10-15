@@ -500,7 +500,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `supportsStore` | Provider supports `store` field |
 | `supportsDeveloperRole` | Use `developer` vs `system` role |
 | `supportsReasoningEffort` | Support for `reasoning_effort` parameter |
-| `supportsUsageInStreaming` | Supports `stream_options: { include_usage: true }` (default: `true`) |
+| `supportsUsageInStreaming` | Send `stream_options: { include_usage: true }` to get token usage during streaming. On by default: the field is standard, so it is sent unless set to `false`; if an endpoint rejects the request because of it, it is retried once without it and remembered for the process. Set `true` explicitly to keep sending it and surface the endpoint's error instead of falling back |
 | `maxTokensField` | Use `max_completion_tokens` or `max_tokens` |
 | `requiresToolResultName` | Include `name` on tool result messages |
 | `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |
