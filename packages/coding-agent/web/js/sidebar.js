@@ -113,14 +113,16 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 });
 
 /**
- * The chats one workspace group lists: pinned, then running, then most recent activity first (see chat-order.js);
- * an archived chat is never pinned on top. A blank chat that was left behind is not listed (see isLeftBlank); the
- * archive lists what was archived on purpose. Shared by Workspace (rendering) and WorkspaceList (height estimates),
- * so the estimate and the rows always agree.
+ * The chats one workspace group lists: a new chat that is still empty first, then pinned, then running, then most
+ * recent activity first (see chat-order.js); an archived chat is never pinned on top. A blank chat that was left
+ * behind is not listed (see isLeftBlank); the archive lists what was archived on purpose. Shared by Workspace
+ * (rendering) and WorkspaceList (height estimates), so the estimate and the rows always agree.
  */
 function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, currentFile, drafts }) {
-	const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived });
-	const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: !!currentFile && pathKey(info.path) === pathKey(currentFile), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
+	// The chat on screen: a new empty chat keeps the first place while it is this one (see chat-order.js).
+	const onScreen = (info) => !!currentFile && pathKey(info.path) === pathKey(currentFile);
+	const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived, onScreen });
+	const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: onScreen(info), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
 	if (!filter) return all;
 	const q = filter.toLowerCase();
 	return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));

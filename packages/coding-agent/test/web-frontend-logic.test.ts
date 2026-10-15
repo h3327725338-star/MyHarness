@@ -210,6 +210,29 @@ describe("Web UI: chat order in the sidebar", () => {
 			"busy",
 		]);
 	});
+
+	it("keeps a saved empty chat first while it is the chat on screen", async () => {
+		const { orderChats } = await import(new URL("chat-order.js", webDir).href);
+		const list = [
+			{ path: "recent", modified: 900 },
+			{ path: "pinned", modified: 950, pinned: true },
+			{ path: "saved-new", modified: 100, blank: true },
+			{ path: "left-blank", modified: 50, blank: true },
+		];
+		// Once the server wrote the new chat's setup it arrives as a blank row; the first place follows the chat on
+		// screen instead of its (older) creation time, so typing in it does not drop it below chats used since.
+		const onScreen = (info: any) => info.path === "saved-new";
+		expect(orderChats(list, () => undefined, { onScreen, now: 1000 }).map((info: any) => info.path)).toEqual([
+			"saved-new",
+			"pinned",
+			"recent",
+			"left-blank",
+		]);
+		// A blank chat that is not the one on screen keeps sorting by its own time.
+		expect(
+			orderChats(list, () => undefined, { onScreen: () => false, now: 1000 }).map((info: any) => info.path),
+		).toEqual(["pinned", "recent", "saved-new", "left-blank"]);
+	});
 });
 
 describe("Web UI: blank chats left behind", () => {
