@@ -111,12 +111,12 @@ describe("sub agent", () => {
 		const capped = createSubAgentToolDefinition(process.cwd(), {
 			getSettings: () => ({ enabled: false, maxTasks: 7 }),
 		});
-		expect(capped.description).toContain("one to 7 independent");
-		expect(capped.promptSnippet).toContain("up to 7 independent read-only exploration tasks");
+		expect(capped.description).toContain("Dispatch up to 7 parallel read-only scouts");
+		expect(capped.promptSnippet).toContain("Dispatches up to 7 parallel read-only scouts");
 		expect(capped.promptGuidelines?.some((line) => line.includes("at most 7 tasks"))).toBe(true);
 		const defaulted = createSubAgentToolDefinition(process.cwd());
-		expect(defaulted.description).toContain("one to 3 independent");
-		expect(defaulted.promptSnippet).toContain("up to 3 independent read-only exploration tasks");
+		expect(defaulted.description).toContain("Dispatch up to 3 parallel read-only scouts");
+		expect(defaulted.promptSnippet).toContain("Dispatches up to 3 parallel read-only scouts");
 	});
 
 	it("uses no task deadline by default", () => {

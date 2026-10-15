@@ -214,9 +214,9 @@ describe("sub-agent tool definition wording", () => {
 
 	it("keeps the historical read-only description verbatim-ish", () => {
 		const readOnly = definitionFor();
-		expect(readOnly.description).toContain("independent read-only investigation tasks");
+		expect(readOnly.description).toContain("Dispatch up to 5 parallel read-only scouts");
 		expect(readOnly.description).toContain("Sub-agents cannot modify the project.");
-		expect(readOnly.description).toContain("one to 5");
+		expect(readOnly.description).toContain("Give every task a work order");
 	});
 
 	it("describes worktree confinement and permanent git prohibitions in read-write", () => {
@@ -225,7 +225,7 @@ describe("sub-agent tool definition wording", () => {
 		expect(readWrite.description).toContain("never commit, push, merge or stage");
 		expect(readWrite.description).toContain("cannot start further sub-agents");
 		// Task cap wording stays driven by the same setting.
-		expect(readWrite.description).toContain("one to 5");
+		expect(readWrite.description).toContain("Dispatch up to 5 parallel read-write scouts");
 		expect((readWrite.promptGuidelines ?? []).length).toBe(
 			(definitionFor("read-only").promptGuidelines ?? []).length + 1,
 		);
