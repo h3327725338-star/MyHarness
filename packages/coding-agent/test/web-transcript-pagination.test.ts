@@ -460,6 +460,34 @@ describe("GET /api/transcript pagination (real host over HTTP)", () => {
 		turn("three", 1_700_000_304_000);
 	}
 
+	it("first-screen tail equals full-branch pagination even with long non-projectable tails and branches", async () => {
+		const fx = await start();
+		seed(fx);
+		const manager = fx.hub.host.session.sessionManager;
+		const fork = manager.getLeafId();
+		for (let i = 0; i < 200; i++) manager.appendCustomEntry("hidden-fixture", { i });
+		for (const limit of [1, 3, 5]) {
+			const actual = await fx.get(`/api/transcript?limit=${limit}`);
+			const expected = paginateTranscriptItems(entriesToWire(manager.getBranch()), String(limit));
+			expect(actual).toEqual({ ...expected, leafId: manager.getLeafId() });
+		}
+		manager.branch(fork!);
+		const actual = await fx.get("/api/transcript?limit=3");
+		expect(actual.items).toEqual(paginateTranscriptItems(entriesToWire(manager.getBranch()), "3").items);
+	});
+
+	it("does not advertise another page for a hidden-only prefix", async () => {
+		const fx = await start();
+		const manager = fx.hub.host.session.sessionManager;
+		for (let i = 0; i < 200; i++) manager.appendCustomEntry("hidden-fixture", { i });
+		for (let i = 0; i < 64; i++) manager.appendMessage({ role: "user", content: `visible ${i}`, timestamp: i });
+		const actual = await fx.get("/api/transcript?limit=64");
+		expect(actual).toEqual({
+			...paginateTranscriptItems(entriesToWire(manager.getBranch()), "64"),
+			leafId: manager.getLeafId(),
+		});
+	});
+
 	it("without parameters the body is byte-identical to the unpaginated response", async () => {
 		const fx = await start();
 		const manager = fx.hub.host.session.sessionManager;

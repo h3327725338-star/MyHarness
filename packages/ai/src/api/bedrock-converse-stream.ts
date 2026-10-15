@@ -50,7 +50,7 @@ import type {
 import { normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { finalizeToolCallArguments, parseStreamingJson } from "../utils/json-parse.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { recordProviderFailure } from "../utils/provider-failure.ts";
@@ -556,13 +556,19 @@ function handleContentBlockStop(
 		case "thinking":
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
 			break;
-		case "toolCall":
-			block.arguments = parseStreamingJson(block.partialJson);
+		case "toolCall": {
+			// P2-4 output-side safety: complete call end uses strict parsing only.
+			const finalized = finalizeToolCallArguments(block.partialJson);
+			block.arguments = finalized.args;
+			if (finalized.parseError !== undefined) {
+				block.argumentsParseError = finalized.parseError;
+			}
 			// Finalize in-place and strip the scratch buffer so replay only
 			// carries parsed arguments.
 			delete (block as Block).partialJson;
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ import {
 	type Stats,
 	statSync,
 	unlinkSync,
+	writeSync,
 } from "fs";
 import { lstat as lstatAsync, opendir, readdir, rmdir as rmdirAsync, stat } from "fs/promises";
 import { basename, dirname, join, resolve } from "path";
@@ -36,11 +37,14 @@ import type {
 	SessionEntry,
 	SessionHeader,
 	SessionInfo,
+	SessionJsonlDiagnostic,
 	SessionJsonlDiagnostics,
 	SessionJsonlIssueKind,
 	SessionListProgress,
 	SessionMessageEntry,
 } from "../../types.ts";
+import { invalidateParseCache, lookupParseCache, storeParseCache } from "./parse-cache.ts";
+import { dropPendingSessionWrites, enqueueSessionAppend, flushSessionWrites } from "./write-batch.ts";
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
@@ -70,7 +74,8 @@ function isValidFileEntryShape(value: unknown): value is FileEntry {
 	return true;
 }
 
-function parseSessionEntryLine(line: string): FileEntry | null {
+/** Parse one JSONL line into a Session entry, or `null` for blank/invalid lines. */
+export function parseSessionEntryLine(line: string): FileEntry | null {
 	if (!line.trim()) return null;
 	try {
 		const value: unknown = JSON.parse(line);
@@ -135,20 +140,49 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 	const resolvedFilePath = normalizePath(filePath);
 	if (!existsSync(resolvedFilePath)) return [];
 
-	const entries: FileEntry[] = [];
+	// Same-process read-your-writes: coalesced appends are flushed before any
+	// read, so readers see every completed in-process append. Cross-process
+	// readers may lag by the batch window; a kill mid-flush stays recoverable.
+	flushSessionWrites(resolvedFilePath);
+
+	const lookup = lookupParseCache(resolvedFilePath);
+	if (lookup.kind === "hit") {
+		if (diagnostics) {
+			if (lookup.recovered) diagnostics.recovered = true;
+			for (const issue of lookup.issues) diagnostics.issues.push({ ...issue });
+		}
+		return lookup.entries;
+	}
+
+	const carried = lookup.kind === "append" ? lookup : undefined;
+	// A torn tail is re-evaluated against the new bytes: completed tails stop
+	// being reported, still-torn tails are reported fresh at the same line.
+	const carriedIssues = (carried?.issues ?? []).filter((issue) => issue.kind !== "truncated_tail");
+	if (diagnostics && carried) {
+		if (carriedIssues.length > 0) diagnostics.recovered = true;
+		for (const issue of carriedIssues) diagnostics.issues.push({ ...issue });
+	}
+	const entries: FileEntry[] = carried?.entries ?? [];
+	let lineNumber = (carried?.lineCount ?? 0) + 1;
+	const startOffset = carried?.offset ?? 0;
 	const fd = openSync(resolvedFilePath, "r");
+	let consumedOffset = startOffset;
+	let linesConsumed = lineNumber - 1;
+	let unterminatedValidTail = false;
+	const freshIssues: SessionJsonlDiagnostic[] = [];
+	const freshDiagnostics: SessionJsonlDiagnostics = { recovered: false, issues: freshIssues };
 	try {
 		const decoder = new StringDecoder("utf8");
 		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
 		let pending = "";
-		let lineNumber = 1;
+		let position = startOffset;
 		const consumeLine = (line: string, lineNumberForEntry: number, isTail: boolean): void => {
 			if (!line.trim()) return;
 			try {
 				const value: unknown = JSON.parse(line);
 				if (!isValidFileEntryShape(value)) {
 					addJsonlDiagnostic(
-						diagnostics,
+						freshDiagnostics,
 						resolvedFilePath,
 						lineNumberForEntry,
 						"schema_invalid",
@@ -159,7 +193,7 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 				entries.push(value);
 			} catch (error) {
 				addJsonlDiagnostic(
-					diagnostics,
+					freshDiagnostics,
 					resolvedFilePath,
 					lineNumberForEntry,
 					isTail ? "truncated_tail" : "malformed_line",
@@ -169,8 +203,9 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 		};
 
 		while (true) {
-			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+			const bytesRead = readSync(fd, buffer, 0, buffer.length, position);
 			if (bytesRead === 0) break;
+			position += bytesRead;
 
 			pending += decoder.write(buffer.subarray(0, bytesRead));
 			let lineStart = 0;
@@ -178,14 +213,29 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 			while (newlineIndex !== -1) {
 				consumeLine(pending.slice(lineStart, newlineIndex), lineNumber, false);
 				lineNumber++;
+				linesConsumed++;
 				lineStart = newlineIndex + 1;
 				newlineIndex = pending.indexOf("\n", lineStart);
 			}
 			pending = pending.slice(lineStart);
 		}
 
+		// Recovered/torn files do not reuse incremental prefixes; their diagnostics require a fresh read.
+		consumedOffset = position - Buffer.byteLength(pending);
 		pending += decoder.end();
-		consumeLine(pending, lineNumber, true);
+		if (pending.trim()) {
+			const tailEntries = entries.length;
+			consumeLine(pending, lineNumber, true);
+			if (entries.length > tailEntries) {
+				unterminatedValidTail = true;
+				lineNumber++;
+				linesConsumed++;
+				// Keep a non-newline-terminated record out of incremental prefix reuse:
+				// future bytes may still be part of that same JSONL line.
+			}
+		} else {
+			consumedOffset = position;
+		}
 	} finally {
 		closeSync(fd);
 	}
@@ -193,6 +243,10 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 	if (entries.length === 0) return entries;
 	const header = entries[0];
 	if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+		if (diagnostics) {
+			for (const issue of freshIssues) diagnostics.issues.push({ ...issue });
+			if (freshDiagnostics.recovered) diagnostics.recovered = true;
+		}
 		addJsonlDiagnostic(
 			diagnostics,
 			resolvedFilePath,
@@ -202,6 +256,28 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 		);
 		return [];
 	}
+	if (unterminatedValidTail)
+		addJsonlDiagnostic(
+			freshDiagnostics,
+			resolvedFilePath,
+			lineNumber - 1,
+			"truncated_tail",
+			"Final valid Session entry has no newline separator; append will repair it",
+		);
+	if (diagnostics) {
+		for (const issue of freshIssues) diagnostics.issues.push({ ...issue });
+		if (freshDiagnostics.recovered) diagnostics.recovered = true;
+	}
+	if (carriedIssues.length || freshDiagnostics.recovered) invalidateParseCache(resolvedFilePath);
+	else
+		storeParseCache(
+			resolvedFilePath,
+			entries,
+			consumedOffset,
+			linesConsumed,
+			[...carriedIssues, ...freshIssues],
+			Boolean(carriedIssues.length > 0 || freshDiagnostics.recovered),
+		);
 	return entries;
 }
 
@@ -834,6 +910,8 @@ function sessionInfoFromScan(filePath: string, scan: SessionScan, mtime: Date): 
 
 async function buildSessionInfoUncached(filePath: string): Promise<SessionInfo | null> {
 	try {
+		// Same-process read-your-writes: a listing right after an append sees it.
+		flushSessionWrites(filePath);
 		const stats = await stat(filePath);
 		const cached = sessionScans.get(filePath);
 		if (cached && cached.ino === stats.ino && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
@@ -1068,6 +1146,16 @@ export async function listAllSessions(
  */
 export function rewriteSessionFile(filePath: string, entries: FileEntry[]): void {
 	writeFileAtomicallySync(filePath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+	// Only discard pending data after the replacement actually succeeded.
+	dropPendingSessionWrites(filePath);
+	try {
+		const size = statSync(normalizePath(filePath)).size;
+		// The writer emits exactly one complete line per entry, so the line
+		// count matches and the whole file is consumed.
+		storeParseCache(filePath, entries, size, entries.length, [], false);
+	} catch {
+		invalidateParseCache(filePath);
+	}
 }
 
 /**
@@ -1081,11 +1169,25 @@ export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "
 	} else {
 		writeFileAtomicallySync(filePath, content);
 	}
+	dropPendingSessionWrites(filePath);
+	invalidateParseCache(filePath);
 }
 
 /** Durably append one entry. Caller must hold the writer lease; no fsync ordering beyond the single write. */
 export function appendSessionEntry(filePath: string, entry: FileEntry): void {
 	writeFileDurablySync(filePath, `${JSON.stringify(entry)}\n`, { flag: "a" });
+	invalidateParseCache(filePath);
+}
+
+/**
+ * Coalesce one entry for a later durable append (see `write-batch.ts`).
+ * `repairTail` runs the truncated-tail repair eagerly, exactly as the
+ * synchronous path did, so the file on disk never holds a torn tail after
+ * an append returns. Caller must hold the writer lease.
+ */
+export function appendSessionEntryBatched(filePath: string, entry: FileEntry, repairTail = false): void {
+	if (repairTail) repairTruncatedSessionTail(filePath);
+	enqueueSessionAppend(filePath, entry);
 }
 
 /**
@@ -1133,10 +1235,17 @@ function repairTruncatedSessionTail(filePath: string): void {
 		} catch {
 			validTail = false;
 		}
-		if (validTail || fstatSync(fd).size !== size) return;
+		if (fstatSync(fd).size !== size) return;
+		if (validTail) {
+			writeSync(fd, "\n", size, "utf8");
+			fsyncSync(fd);
+			invalidateParseCache(filePath);
+			return;
+		}
 
 		ftruncateSync(fd, tailStart);
 		fsyncSync(fd);
+		invalidateParseCache(filePath);
 	} finally {
 		closeSync(fd);
 	}
@@ -1152,7 +1261,16 @@ export function hasPersistableSessionContent(entries: FileEntry[]): boolean {
 	);
 }
 
-/** Defer the first write until a response or a visible operation record exists. */
+/**
+ * Defer the first write until a response or a visible operation record exists.
+ *
+ * Once flushed, plain `user`/`assistant` messages are coalesced by the write
+ * batcher (a crash may lose at most the short batch window). Every other
+ * entry stays exactly as durable as before: pending lines are flushed and it
+ * writes through. `toolResult`/`bashExecution`/custom messages in particular
+ * are referenced by raw-JSONL readers outside the session scope (tool sidecar
+ * reference scan), so they act as flush boundaries rather than batch members.
+ */
 export function persistSessionEntry(
 	filePath: string,
 	entry: SessionEntry,
@@ -1160,10 +1278,9 @@ export function persistSessionEntry(
 	flushed: boolean,
 	repairTruncatedTail = false,
 ): boolean {
-	if (flushed && repairTruncatedTail) repairTruncatedSessionTail(filePath);
-
 	if (!hasPersistableSessionContent(pendingEntries)) {
 		if (flushed) {
+			if (repairTruncatedTail) repairTruncatedSessionTail(filePath);
 			appendSessionEntry(filePath, entry);
 			return true;
 		}
@@ -1174,6 +1291,16 @@ export function persistSessionEntry(
 		writeSessionFile(filePath, pendingEntries, "wx");
 		return true;
 	}
+	if (entry.type === "message") {
+		const role = (entry.message as { role?: unknown } | undefined)?.role;
+		if (role === "user" || role === "assistant") {
+			appendSessionEntryBatched(filePath, entry, repairTruncatedTail);
+			return true;
+		}
+	}
+	// Checkpoint/boundary entry: pending message lines first, then durable.
+	flushSessionWrites(filePath);
+	if (repairTruncatedTail) repairTruncatedSessionTail(filePath);
 	appendSessionEntry(filePath, entry);
 	return true;
 }
@@ -1215,8 +1342,13 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 	}
 
 	mkdirSync(resolve(targetResolved, ".."), { recursive: true });
+	// The full content is written atomically, subsuming any coalesced lines.
 	const content = options.entries.map((entry) => JSON.stringify(entry)).join("\n");
 	writeFileAtomicallySync(targetResolved, `${content}\n`);
+	dropPendingSessionWrites(sourceResolved);
+	dropPendingSessionWrites(targetResolved);
+	invalidateParseCache(sourceResolved);
+	invalidateParseCache(targetResolved);
 
 	if (!sameFile && sourceExists) {
 		try {

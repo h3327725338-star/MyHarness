@@ -1251,6 +1251,7 @@ export class AgentSession {
 
 		// Record when the run delivers a final answer, so a user message consumed
 		// afterwards can restart the live-timer baseline as a new user round.
+		if (event.type === "agent_end" || event.type === "turn_end") this.sessionManager.flushPendingWrites();
 		if (event.type === "agent_end") {
 			const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant") as
 				| AssistantMessage
@@ -1485,17 +1486,21 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		detachSessionBridge(this);
-		this._releaseSessionWriterLock?.();
-		this._releaseSessionWriterLock = undefined;
-		if (this.sessionManager.usesDefaultSessionDir()) {
-			this._sidecarCleanupPromise = cleanupOrphanedToolResults(this.sessionManager.getSessionDir(), {
-				reclaim: true,
-			}).then(
-				() => undefined,
-				() => undefined,
-			);
+		try {
+			this._releaseSessionWriterLock?.();
+		} finally {
+			// A failed final flush must still tear down resources, while surfacing the save error.
+			this._releaseSessionWriterLock = undefined;
+			if (this.sessionManager.usesDefaultSessionDir()) {
+				this._sidecarCleanupPromise = cleanupOrphanedToolResults(this.sessionManager.getSessionDir(), {
+					reclaim: true,
+				}).then(
+					() => undefined,
+					() => undefined,
+				);
+			}
+			cleanupSessionResources(this.sessionId);
 		}
-		cleanupSessionResources(this.sessionId);
 	}
 
 	/**

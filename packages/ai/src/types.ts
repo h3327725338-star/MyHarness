@@ -432,6 +432,13 @@ export interface ToolCall {
 	name: string;
 	arguments: Record<string, any>;
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
+	/**
+	 * Output-side safety marker (P2-4). Present when complete-call-end strict parsing
+	 * (`parseCompleteToolArguments`) failed: the accumulated JSON was truncated or
+	 * not deterministically repairable. Hosts must refuse execution and ask the model
+	 * to re-issue the call. Never set during streaming preview.
+	 */
+	argumentsParseError?: string;
 }
 
 export interface Usage {

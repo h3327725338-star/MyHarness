@@ -122,9 +122,8 @@ try {
  setView({motion:'off',lang:'en',chatMode:'coding'}); document.documentElement.dataset.motion='off';
  boot();
  await until(()=>activeSlotId()==='c1'&&state.workspaces.loaded);
- // 1. Nothing is read for the other mode in the first moments: the page serves what is on screen first.
- must(!(await asked()).some(r=>r.includes('mode=general')),'the other mode was read before the page was idle');
- // 2. Once the page is up and idle, the other mode's Workspaces are read without any click (this read fails here).
+ // Once the first screen is ready, read the other mode immediately, without the former 1.2s delay.
+ // This speculative read fails here; selecting General must retry independently.
  await loadGitStatus();
  await wait(1700);
  must(state.gitStatus?.branch==='main','initial Git status did not load');

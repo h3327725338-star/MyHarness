@@ -1,7 +1,7 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner, usePresence } from "./ui.js";
-import { api, attempt, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
+import { api, attempt, canSendToActive, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { DraftEditor } from "./draft-editor.js";
@@ -278,7 +278,10 @@ export function Composer() {
 	const activeSlot = useStore((s) => s.activeSlot);
 	const restarting = useStore((s) => s.restarting);
 	const connected = useStore((s) => s.connected);
+	const switching = useStore((s) => s.switching);
+	const draftIdentity = snap?.session?.id || (switching ? `target:${switching.mode}:${switching.path || "latest"}` : undefined);
 	const sessionId = snap?.session?.id;
+	const draftReady = !!sessionId && snap?.session?.persisted && !String(activeSlot).startsWith("pending:");
 	const chatMode = chatModeOf(snap?.mode);
 	const active = !!snap?.active;
 	// The branch / worktree chips above the input: read when the folder or the chat on screen changes and after each run.
@@ -306,51 +309,58 @@ export function Composer() {
 	const area = useRef(null);
 	const fileInput = useRef(null);
 	const lastSession = useRef(null);
+	const provisionalTarget = useRef(null);
+	const draftMatches = lastSession.current === draftIdentity;
 	// The command registry (names, aliases) is needed the moment a command is typed; load it up front.
 	useEffect(() => {
 		if (!state.resources) loadResources().catch(() => {});
 	}, [sessionId]);
 
 	// The draft is also saved on the server (per chat, in its mode) a moment after each edit, so it comes back when the
-	// chat is reopened later, in another tab or after the browser was closed. This runs before the effect below adopts a
-	// newly shown chat, so the previous chat's text is never saved under the new one.
+	// chat is reopened later, in another tab or after the browser was closed. The render-time identity guard
+	// skips a target-adoption render so the previous chat's text is never saved under the new one.
 	useEffect(() => {
-		if (!sessionId || lastSession.current !== sessionId) return;
+		if (!draftReady || !draftMatches || lastSession.current !== draftIdentity) return;
 		scheduleDraftSave({ slot: activeSlot, mode: chatMode, sessionId, text, images, quotes });
-	}, [text, images, quotes, sessionId]);
+	}, [text, images, quotes, sessionId, activeSlot, draftReady, draftMatches]);
 
-	// Drafts follow the session so switching chats does not lose typed text.
-	useEffect(() => {
-		if (lastSession.current !== null && lastSession.current !== sessionId) drafts.set(lastSession.current, { text, images, quotes });
-		if (lastSession.current !== sessionId) {
+	// Adopt a target before paint/input so its first keystroke never edits the previous Chat's draft.
+	useLayoutEffect(() => {
+		if (lastSession.current !== null && lastSession.current !== draftIdentity) drafts.set(lastSession.current, { text, images, quotes });
+		if (lastSession.current !== draftIdentity) {
 			if (lastSession.current !== null) flushDrafts();
 			// What the server saved for this chat; the text edited in this tab (if any) is newer and wins.
 			const saved = sessionId ? draftFromServer(state.modeState?.[chatMode]?.drafts?.[sessionId]) : null;
 			if (saved) markDraftSaved(sessionId, saved);
-			const draft = drafts.get(sessionId) || saved;
+			const target = provisionalTarget.current;
+			const sameTarget = target && target.mode === chatMode && (!target.path || target.path === snap?.session?.file);
+			const provisional = sessionId && sameTarget ? drafts.get(target.key) : null;
+			const draft = provisional || drafts.get(draftIdentity) || saved;
+			if (provisional) drafts.delete(target.key);
 			setText(draft?.text || "");
 			setImages(draft?.images || []);
 			setQuotes(draft?.quotes || []);
 			setHistoryIndex(-1);
 		}
-		lastSession.current = sessionId;
-	}, [sessionId]);
+		lastSession.current = draftIdentity;
+		provisionalTarget.current = !sessionId && switching ? { key: draftIdentity, mode: switching.mode, path: switching.path } : null;
+	}, [draftIdentity]);
 	// What the server was last told about each chat: it holds input (it stays listed) or it was emptied again (it is a blank
 	// chat like a new one). Only a change is sent.
 	const touched = useRef(new Map());
 	useEffect(() => {
-		if (lastSession.current !== sessionId) return;
+		if (!draftReady || !draftMatches || lastSession.current !== draftIdentity) return;
 		const has = !!text.trim() || images.length > 0 || quotes.length > 0;
 		if ((touched.current.get(sessionId) ?? false) === has) return;
 		touched.current.set(sessionId, has);
 		setChatTouched(activeSlot, has).then((ok) => ok || touched.current.set(sessionId, !has));
-	}, [text, images, quotes, sessionId]);
-	const latest = useRef({ text, images, quotes, sessionId });
-	latest.current = { text, images, quotes, sessionId };
+	}, [text, images, quotes, sessionId, activeSlot, draftReady, draftMatches]);
+	const latest = useRef({ text, images, quotes, sessionId, draftIdentity });
+	latest.current = { text, images, quotes, sessionId, draftIdentity };
 	useEffect(() => registerRestartDraft(() => latest.current), []);
 	useEffect(
 		() => () => {
-			const { text: t0, images: i0, quotes: q0, sessionId: id } = latest.current;
+			const { text: t0, images: i0, quotes: q0, draftIdentity: id } = latest.current;
 			if (id) drafts.set(id, { text: t0, images: i0, quotes: q0 });
 		},
 		[],
@@ -484,11 +494,20 @@ export function Composer() {
 	 * are sent like typed text. (Tab only completes the name, see applySuggestion.)
 	 */
 	const runCommand = async (item) => {
+		if (!canSendToActive()) return;
+		const target = { slot: activeSlot, mode: chatMode, sessionId };
 		const value = `/${item.command}`;
 		setText("");
 		setHistoryIndex(-1);
 		const result = await actions.submit(value, { mode: active ? runMode : "auto" });
-		if (!result.handled && !result.ok) setText(value);
+		if (!result.handled && !result.ok) {
+			if (latest.current.sessionId === target.sessionId) setText(value);
+			else if (target.sessionId) {
+				const restored = { text: value, images: [], quotes: [] };
+				drafts.set(target.sessionId, restored);
+				scheduleDraftSave({ ...target, ...restored });
+			}
+		}
 	};
 	const confirmSuggestion = (item) => (item.command ? runCommand(item) : applySuggestion(item));
 
@@ -507,6 +526,7 @@ export function Composer() {
 	const importing = useRef(false);
 	const [loadingFiles, setLoadingFiles] = useState(false);
 	const addFiles = async (fileList) => {
+		if (!draftReady) { toast(t("Loading…")); return; }
 		const picked = [...fileList];
 		if (!picked.length) return;
 		if (importing.current) { toast(t("Wait for the current file import to finish."), "warning"); return; }
@@ -572,7 +592,7 @@ export function Composer() {
 	}, []);
 
 const send = async (mode) => {
-		if (state.restarting || !state.connected) return;
+		if (state.restarting || !state.connected || !canSendToActive()) return;
 		const quotePrefix = formatQuotes(quotes);
 		const body = quotePrefix ? (text ? `${quotePrefix}\n\n${text}` : quotePrefix) : text;
 		const references = images.filter((item) => item.path);
@@ -592,9 +612,15 @@ const send = async (mode) => {
 		const result = await actions.submit(value, { images: attached, mode: mode || (active ? runMode : "auto") });
 		setSending(false);
 		if (!result.handled && !result.ok) {
-			setText(previousText);
-			setImages(previousImages);
-			setQuotes(previousQuotes);
+			if (latest.current.sessionId === target.sessionId) {
+				setText(previousText);
+				setImages(previousImages);
+				setQuotes(previousQuotes);
+			} else if (target.sessionId) {
+				const restored = { text: previousText, images: previousImages, quotes: previousQuotes };
+				drafts.set(target.sessionId, restored);
+				scheduleDraftSave({ ...target, ...restored });
+			}
 		} else if (target.sessionId) clearDraft(target);
 	};
 
@@ -605,7 +631,7 @@ const send = async (mode) => {
 	const sendRef = useRef(send);
 	sendRef.current = send;
 	const debouncedQueueSend = useMemo(() => debounce((mode) => sendRef.current(mode), COMPOSER_QUEUE_DEBOUNCE_MS), []);
-	useEffect(() => () => debouncedQueueSend.cancel(), [debouncedQueueSend]);
+	useLayoutEffect(() => { debouncedQueueSend.cancel(); return () => debouncedQueueSend.cancel(); }, [debouncedQueueSend, draftIdentity]);
 	const sendOrQueue = (mode) => (active ? debouncedQueueSend(mode) : send(mode));
 
 	const onKeyDown = (event) => {
@@ -696,7 +722,7 @@ const send = async (mode) => {
 		transformOrigin: editFrom?.origin || "50% 50%",
 	};
 
-	const canSend = !restarting && connected && (text.trim() || images.length || quotes.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
+	const canSend = !switching && !restarting && connected && (text.trim() || images.length || quotes.length) && !sending && !loadingFiles && !busyCompact && !(noModel && !text.trim().startsWith("/") && !text.trim().startsWith("!"));
 	const showStop = active && !text.trim() && images.length === 0 && quotes.length === 0;
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
 
@@ -710,7 +736,7 @@ const send = async (mode) => {
 			<div class="composer-env">
 				${snap?.cwd ? html`<span class="env-chip" title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></span>` : null}
 				${gitStatus?.isRepository ? html`<${BranchChip} gitStatus=${gitStatus} />` : null}
-				${snap && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
+				${snap?.trust && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
 				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
 			</div>
 			${expanded ? html`<div class="composer-ghost" style=${{ height: `${ghost.current}px` }} /><div class=${`composer-scrim ${closing ? "leaving" : ""}`} onMouseDown=${collapse} />` : null}
@@ -792,7 +818,7 @@ const send = async (mode) => {
 					<${ContextMeter} />
 					${showStop
 						? html`<button class="send stop" onClick=${actions.stop} title=${t("Stop the current run (Esc)")} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
-						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
+						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${switching ? t("Loading…") : active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "belowEditor").map((w, i) => html`<pre class="widget" key=${`wb${i}`}>${w.lines.join("\n")}</pre>`)}

@@ -9,6 +9,7 @@ import {
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
+	finalizeToolCallArguments,
 	type Model,
 	parseStreamingJson,
 	type SimpleStreamOptions,
@@ -336,6 +337,15 @@ function processProxyEvent(
 		case "toolcall_end": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
+				// P2-4 output-side safety: complete call end uses strict parsing only.
+				const raw = (content as unknown as { partialJson?: string }).partialJson;
+				const finalized = finalizeToolCallArguments(raw);
+				content.arguments = finalized.args;
+				if (finalized.parseError !== undefined) {
+					content.argumentsParseError = finalized.parseError;
+				} else {
+					delete content.argumentsParseError;
+				}
 				delete (content as any).partialJson;
 				return {
 					type: "toolcall_end",
@@ -348,6 +358,19 @@ function processProxyEvent(
 		}
 
 		case "done":
+			// P2-4: a length-done without a preceding toolcall_end must not leave
+			// guessed preview arguments executable. Finalize any pending raw JSON strictly.
+			for (const block of partial.content) {
+				if (block.type === "toolCall" && "partialJson" in block) {
+					const pending = block as unknown as { partialJson?: string };
+					const finalizedPending = finalizeToolCallArguments(pending.partialJson);
+					block.arguments = finalizedPending.args;
+					if (finalizedPending.parseError !== undefined) {
+						block.argumentsParseError = finalizedPending.parseError;
+					}
+					delete pending.partialJson;
+				}
+			}
 			partial.stopReason = proxyEvent.reason;
 			partial.usage = proxyEvent.usage;
 			return { type: "done", reason: proxyEvent.reason, message: partial };

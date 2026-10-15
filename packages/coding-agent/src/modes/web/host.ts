@@ -47,6 +47,7 @@ import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { RequestCacheMeter } from "./request-cache.ts";
+import { TranscriptCache } from "./transcript-cache.ts";
 import {
 	entriesToWire,
 	entryProjectsToWire,
@@ -277,6 +278,8 @@ export class WebHost {
 	private operationStarted = false;
 	inputTouched = false;
 	tracker: ChangeTracker;
+	/** Cached transcript projection of the current branch (see transcript-cache.ts). */
+	private readonly transcriptCache = new TranscriptCache();
 	private readonly hub: WebHostHubLink | undefined;
 
 	private conversationNaming: ConversationNaming | undefined;
@@ -468,6 +471,11 @@ export class WebHost {
 		return this.finishedRuns > this.seenRuns;
 	}
 
+	/** Approximate cached-projection bytes, for the hub's idle-slot memory budget (heuristic). */
+	get transcriptCacheBytes(): number {
+		return this.transcriptCache.approxBytes();
+	}
+
 	/** The user is looking at this session: its finished results count as read. */
 	markResultsSeen(): void {
 		if (!this.unread) return;
@@ -624,6 +632,8 @@ export class WebHost {
 	}
 
 	private resetLiveState(): void {
+		// A rebound session is a different branch history: the cached projection must not survive it.
+		this.transcriptCache.invalidate();
 		if (this.assistantTimer) clearTimeout(this.assistantTimer);
 		this.assistantTimer = undefined;
 		this.pendingAssistant = undefined;
@@ -1160,6 +1170,9 @@ export class WebHost {
 	}
 
 	private forwardEntryAppended(entry: SessionEntry): void {
+		// A persisted write changes the branch the next transcript reads: drop the projection eagerly.
+		// (The per-request id-sequence check in transcript() would refuse the stale cache anyway.)
+		this.transcriptCache.invalidate();
 		if (
 			entry.type === "message" ||
 			entry.type === "custom_message" ||
@@ -1516,12 +1529,58 @@ export class WebHost {
 		// the HTML export and the existing tests. An empty query value counts as absent.
 		const limitRaw = typeof query.limit === "string" && query.limit.trim() ? query.limit.trim() : undefined;
 		const beforeRaw = typeof query.before === "string" && query.before.trim() ? query.before.trim() : undefined;
-		if (limitRaw === undefined && beforeRaw === undefined) return { items: entriesToWire(manager.getBranch()), leafId };
-		// Limit pushdown: slice entries by id first and convert only the tail window instead of the whole branch.
-		const page = paginateEntriesToWire(manager.getBranch(), limitRaw, beforeRaw);
+		if (limitRaw === undefined && beforeRaw === undefined) return { items: this.projectedTranscript(), leafId };
+		// Paginated reads reuse the cached full projection when it already covers this branch (sliced with the same
+		// user-alignment as the wire-level pager); otherwise the limit is pushed below the wire conversion so only
+		// the tail window is converted instead of the whole branch.
+		// First-screen tail follows parent links directly: no full branch walk or entry-array allocation.
+		if (limitRaw !== undefined && beforeRaw === undefined) {
+			const limit = parseTranscriptLimit(limitRaw);
+			if (limit !== undefined) {
+				let count = Math.max(64, limit * 2);
+				let tail = manager.getBranchTail(count);
+				while (
+					tail.hasMore &&
+					tail.entries.reduce((n, entry) => n + Number(entryProjectsToWire(entry)), 0) <= limit
+				) {
+					count *= 2;
+					tail = manager.getBranchTail(count);
+				}
+				const page = this.transcriptCache.getPage(tail.entries, leafId, JSON.stringify([limitRaw, "tail"]), () =>
+					paginateEntriesToWire(tail.entries, limitRaw),
+				);
+				// The extra projectable entry proves there is another page; hidden-only prefixes do not.
+				const hasMore = page.hasMore;
+				return { items: page.items, leafId, hasMore, nextCursor: hasMore ? (page.items[0]?.id ?? null) : null };
+			}
+		}
+		const branch = manager.getBranch();
+		const cached = this.transcriptCache.peek(branch, leafId);
+		if (cached) {
+			const cachedPage = paginateTranscriptItems(cached, limitRaw, beforeRaw);
+			return { items: cachedPage.items, leafId, hasMore: cachedPage.hasMore, nextCursor: cachedPage.nextCursor };
+		}
+		const page = this.transcriptCache.getPage(branch, leafId, JSON.stringify([limitRaw, beforeRaw]), () =>
+			paginateEntriesToWire(branch, limitRaw, beforeRaw),
+		);
 		return { items: page.items, leafId, hasMore: page.hasMore, nextCursor: page.nextCursor };
 	}
 
+	/**
+	 * Full-branch wire projection with reuse (P0-2). The cache validates the exact entry-id sequence on every
+	 * call, so it never serves another branch or a stale prefix; writes invalidate it eagerly on
+	 * `entry_appended` and on session rebind. Only persisted data is cached: live run/completion state keeps
+	 * coming from `AgentSession` in `snapshot()` on every call.
+	 */
+	private projectedTranscript(): WireItem[] {
+		const manager = this.session.sessionManager;
+		return this.transcriptCache.get(manager.getBranch(), manager.getLeafId());
+	}
+
+	/**
+	 * Live state snapshot. Intentionally uncached: run/completion/dialog/context numbers are read fresh from
+	 * the session on every call, so a cached transcript projection can never freeze a running task here.
+	 */
 	snapshot() {
 		const session = this.session;
 		const manager = session.sessionManager;

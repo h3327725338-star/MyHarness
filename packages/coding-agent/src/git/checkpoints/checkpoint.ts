@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { getAgentDir } from "../../config.ts";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit, runGitSync } from "../repository/command.ts";
-import { runGitAsync } from "../repository/integration.ts";
+import { getCachedGitStatus, invalidateGitStatusCache } from "../repository/status-cache.ts";
 
 /**
  * Git checkpoint：任务开始前保存本地仓库快照，任务后可恢复。
@@ -437,6 +437,20 @@ function getStatus(repositoryRoot: string): { output?: string; entries?: GitStat
 	return { output: result.stdout, entries: parseGitStatus(result.stdout) };
 }
 
+/**
+ * `getStatus` 的异步缓存版本：TTL 内命中内存快照，并发读取合并为一次
+ * 底层调用；失败以 `{ error }` 返回且不入缓存。关键写操作前的读取请传
+ * `fresh: true` 绕过缓存。保留同步 `getStatus` 供必须阻塞的兼容路径使用。
+ */
+async function getStatusAsync(
+	repositoryRoot: string,
+	options: { fresh?: boolean; signal?: AbortSignal } = {},
+): Promise<{ output?: string; entries?: GitStatusEntry[]; error?: string }> {
+	const cached = await getCachedGitStatus(repositoryRoot, options);
+	if (cached.error || !cached.entries) return { error: cached.error ?? "无法读取当前 Git 工作区状态。" };
+	return { output: cached.output, entries: cached.entries };
+}
+
 function statusHash(entries: readonly GitStatusEntry[], excludedPaths: readonly string[] = []): string {
 	const excluded = excludedPaths.map((path) => path.replace(/\\/gu, "/"));
 	return hashText(
@@ -609,6 +623,14 @@ export function collectGitCheckpointLocalRefChanges(checkpoint: GitCheckpoint): 
 	return current.refs ? diffLocalRefs(checkpoint.localRefs, current.refs) : [];
 }
 
+/** 异步版：供 async Final ChangeSet 使用，不阻塞事件循环。失败返回空数组并由调用方按 fresh 语义处理。 */
+export async function collectGitCheckpointLocalRefChangesAsync(
+	checkpoint: GitCheckpoint,
+): Promise<GitCheckpointRefChange[]> {
+	const current = await getLocalRefsAsync(checkpoint.repositoryRoot);
+	return current.refs ? diffLocalRefs(checkpoint.localRefs, current.refs) : [];
+}
+
 export async function observeGitCheckpointFinalState(
 	checkpoint: GitCheckpoint,
 ): Promise<{ observation?: GitCheckpointObservation; error?: string }> {
@@ -622,6 +644,22 @@ export function collectGitCheckpointHeadChanges(checkpoint: GitCheckpoint): {
 	const current = getHeadState(checkpoint.repositoryRoot);
 	if (!checkpoint.headCommit || !current.commit || checkpoint.headCommit === current.commit) return { changes: [] };
 	const result = runCheckpointGit(
+		checkpoint.repositoryRoot,
+		["diff", "--name-status", "-z", "--no-renames", checkpoint.headCommit, current.commit, "--"],
+		true,
+	);
+	if (!result.ok) return { error: formatGitFailure(result) };
+	return { changes: parseHeadChanges(result.stdout) };
+}
+
+/** 异步版 collectGitCheckpointHeadChanges：同一语义，不阻塞事件循环。 */
+export async function collectGitCheckpointHeadChangesAsync(checkpoint: GitCheckpoint): Promise<{
+	changes?: GitCheckpointHeadChange[];
+	error?: string;
+}> {
+	const current = await getHeadStateAsync(checkpoint.repositoryRoot);
+	if (!checkpoint.headCommit || !current.commit || checkpoint.headCommit === current.commit) return { changes: [] };
+	const result = await runCheckpointGitAsync(
 		checkpoint.repositoryRoot,
 		["diff", "--name-status", "-z", "--no-renames", checkpoint.headCommit, current.commit, "--"],
 		true,
@@ -933,16 +971,12 @@ export async function getGitWorkingTreePathsAsync(
 	repositoryRoot: string,
 	excludedPaths: readonly string[] = [],
 	signal?: AbortSignal,
+	options: { fresh?: boolean } = {},
 ): Promise<{ paths?: string[]; error?: string }> {
-	const result = await runGitAsync(
-		repositoryRoot,
-		["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-		GIT_CHECKPOINT_TIMEOUT_MS,
-		signal,
-	);
-	if (!result.ok) return { error: formatGitFailure(result) };
+	const status = await getStatusAsync(repositoryRoot, { fresh: options.fresh, signal });
+	if (!status.entries) return { error: status.error ?? "无法读取当前 Git 工作区状态。" };
 	const excluded = excludedPaths.map((path) => path.replace(/\\/gu, "/"));
-	const paths = parseGitStatus(result.stdout)
+	const paths = status.entries
 		.map((entry) => entry.path.replace(/\\/gu, "/"))
 		.filter((path) => !excluded.some((excludedPath) => path === excludedPath || path.startsWith(`${excludedPath}/`)));
 	return { paths: [...new Set(paths)].sort() };
@@ -951,8 +985,9 @@ export async function getGitWorkingTreePathsAsync(
 export async function getGitCheckpointPendingTaskPathsAsync(
 	checkpoint: GitCheckpoint,
 	signal?: AbortSignal,
+	options: { fresh?: boolean } = {},
 ): Promise<{ paths?: string[]; error?: string }> {
-	return getGitWorkingTreePathsAsync(checkpoint.repositoryRoot, checkpoint.excludedPaths ?? [], signal);
+	return getGitWorkingTreePathsAsync(checkpoint.repositoryRoot, checkpoint.excludedPaths ?? [], signal, options);
 }
 
 /** Checkpoint task changes are the real repository delta from its saved baseline. */
@@ -994,12 +1029,9 @@ export async function hasGitCheckpointTaskChangesAsync(checkpoint: GitCheckpoint
 			if (workingTree.changes.length > 0) return true;
 		}
 
-		const statusResult = await runCheckpointGitAsync(
-			checkpoint.repositoryRoot,
-			["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-			true,
-		);
-		const statusEntries = statusResult.ok ? parseGitStatus(statusResult.stdout) : undefined;
+		// 工作区树对比（fresh）是主信号；status hash 只走短 TTL 缓存做廉价复核。
+		const statusResult = await getStatusAsync(checkpoint.repositoryRoot);
+		const statusEntries = statusResult.entries;
 		if (!statusEntries || statusHash(statusEntries, checkpoint.excludedPaths) !== checkpoint.statusBeforeHash)
 			return true;
 		const [head, refs] = await Promise.all([
@@ -1506,7 +1538,10 @@ export async function restoreGitCheckpoint(checkpoint: GitCheckpoint): Promise<G
 		};
 	}
 	if (checkpoint.version >= CHECKPOINT_VERSION && checkpoint.worktreeTree && checkpoint.indexTree) {
-		return restoreTreeCheckpoint(checkpoint);
+		const result = await restoreTreeCheckpoint(checkpoint);
+		// 恢复改写工作区/index/HEAD：无论成功还是回滚后都失效状态缓存。
+		invalidateGitStatusCache(checkpoint.repositoryRoot);
+		return result;
 	}
 
 	return {

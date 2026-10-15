@@ -25,9 +25,18 @@ import { pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { type SlotStatus, WebHost, type WebHostHubLink } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import {
+	DEFAULT_IDLE_SLOT_BUDGET_BYTES,
+	describeHostForBudget,
+	MAX_IDLE_BACKGROUND_SLOTS,
+	selectIdleSlotsToEvict,
+} from "./slot-budget.ts";
 
-/** Idle sessions kept ready in the background (running or waiting sessions are never released). */
-export const MAX_IDLE_BACKGROUND_SLOTS = 5;
+/**
+ * Hard fallback cap on idle background slots (defined in slot-budget.ts, re-exported here so existing
+ * imports keep working). The idle memory budget evicts first; this only bounds many tiny idle chats.
+ */
+export { MAX_IDLE_BACKGROUND_SLOTS };
 const STATUS_EVENTS = new Set([
 	"git_task",
 	"agent_start",
@@ -54,6 +63,15 @@ export interface WebHostHubOptions {
 	server: WebHttpServer;
 	version: string;
 	onShutdown: () => void;
+	/** Hard fallback cap on idle background slots (default MAX_IDLE_BACKGROUND_SLOTS). */
+	maxIdleSlots?: number;
+	/** Budget over the estimated bytes of evictable idle slots (default DEFAULT_IDLE_SLOT_BUDGET_BYTES). */
+	idleBudgetBytes?: number;
+	/**
+	 * Per-slot byte estimate override (tests inject exact sizes without real runtimes).
+	 * Defaults to the heuristic built from entry counts, cached projection size and tracked runs.
+	 */
+	estimateSlotBytes?: (host: WebHost) => number;
 }
 
 export class WebHostHub implements WebHostHubLink {
@@ -436,12 +454,28 @@ export class WebHostHub implements WebHostHubLink {
 		);
 	}
 
-	/** Keep only the most recently used idle background slots; running or waiting ones are never touched. */
+	/**
+	 * Keep the most-recently-touched idle background slots within the memory budget and the hard count cap
+	 * (P1-4; see slot-budget.ts). Running or waiting slots are never touched, nor the slot just opened and
+	 * nor the primary one.
+	 */
 	private pruneIdle(keep: WebHost): void {
-		const idle = this.all()
+		const byId = new Map(this.all().map((host) => [host.slotId, host]));
+		const candidates = this.all()
 			.filter((host) => host !== keep && host !== this.primary && !this.isBusy(host))
-			.sort((a, b) => b.touchedAt - a.touchedAt);
-		for (const host of idle.slice(MAX_IDLE_BACKGROUND_SLOTS)) void this.closeSlot(host).catch(() => {});
+			.map((host) => describeHostForBudget(host, this.primary, false));
+		const injected = this.options.estimateSlotBytes;
+		const { evict } = selectIdleSlotsToEvict(candidates, {
+			budgetBytes: this.options.idleBudgetBytes ?? DEFAULT_IDLE_SLOT_BUDGET_BYTES,
+			maxIdleSlots: this.options.maxIdleSlots ?? MAX_IDLE_BACKGROUND_SLOTS,
+			// An injected estimator ranks by host; the default ranks by the described view. Either way the
+			// pure selection stays free of WebHost.
+			...(injected ? { estimateBytes: (slot: { slotId: string }) => injected(byId.get(slot.slotId)!) } : {}),
+		});
+		for (const id of evict) {
+			const host = byId.get(id);
+			if (host) void this.closeSlot(host).catch(() => {});
+		}
 	}
 
 	async dispose(): Promise<void> {

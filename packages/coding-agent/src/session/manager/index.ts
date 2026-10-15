@@ -54,6 +54,7 @@ import {
 	writeSessionFile,
 	writeSessionMetadata,
 } from "../storage/jsonl/index.ts";
+import { dropPendingSessionWrites, flushSessionWrites, stopSessionWriteRetries } from "../storage/jsonl/write-batch.ts";
 import {
 	type BranchSummaryEntry,
 	type ChatMode,
@@ -94,6 +95,27 @@ export {
 	parseSessionEntries,
 	readSessionHeader,
 } from "../storage/jsonl/index.ts";
+export {
+	clearParseCache,
+	getParseCacheStats,
+	invalidateParseCache,
+	resetParseCacheOptions,
+	setParseCacheOptions,
+} from "../storage/jsonl/parse-cache.ts";
+export type { SessionTailOptions, SessionTailWindow } from "../storage/jsonl/tail-window.ts";
+export { DEFAULT_TAIL_MAX_BYTES, DEFAULT_TAIL_MAX_ENTRIES, loadSessionTail } from "../storage/jsonl/tail-window.ts";
+export {
+	DEFAULT_SESSION_WRITE_FLUSH_INTERVAL_MS,
+	DEFAULT_SESSION_WRITE_MAX_BATCH_BYTES,
+	dropPendingSessionWrites,
+	flushAllSessionWrites,
+	flushSessionWrites,
+	getPendingSessionWriteBytes,
+	getSessionWriteBatchError,
+	hasPendingSessionWrites,
+	resetSessionWriteBatchOptions,
+	setSessionWriteBatchOptions,
+} from "../storage/jsonl/write-batch.ts";
 export type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -710,7 +732,11 @@ export class SessionManager {
 			writeSessionFile(sourcePath, source.fileEntries, "w");
 			source.writeMetadata();
 		}
-		if (!sameFile && existsSync(targetPath)) rmSync(targetPath, { force: true });
+		if (!sameFile && existsSync(targetPath)) {
+			// A removed destination must not be resurrected by a pending batch timer.
+			dropPendingSessionWrites(targetPath);
+			rmSync(targetPath, { force: true });
+		}
 	}
 
 	getSessionId(): string {
@@ -906,11 +932,30 @@ export class SessionManager {
 		return added;
 	}
 
-	/** Release the active writer lease. Safe to call repeatedly. */
+	/**
+	 * Release the active writer lease. Safe to call repeatedly.
+	 *
+	 * Normal-close boundary for the write batcher: coalesced message lines are
+	 * flushed durably while still holding the lock, so every runtime dispose
+	 * flow (which funnels through here) persists the full session. A flush
+	 * failure still releases the lock and then rethrows instead of leaking it.
+	 */
 	releaseWriterLock(): void {
 		const release = this.writerLockRelease;
 		this.writerLockRelease = undefined;
+		let flushError: unknown;
+		let hasFlushError = false;
+		if (release && this.sessionFile && !this.mirror) {
+			try {
+				flushSessionWrites(this.sessionFile);
+			} catch (error) {
+				flushError = error;
+				hasFlushError = true;
+				stopSessionWriteRetries(this.sessionFile);
+			}
+		}
 		release?.();
+		if (hasFlushError) throw flushError;
 	}
 
 	/** Save a deferred session without adding a message or changing its model context. */
@@ -918,10 +963,22 @@ export class SessionManager {
 		if (!this.persist || !this.sessionFile || this.mirror) {
 			throw new Error("This session cannot be saved by this runtime.");
 		}
+		flushSessionWrites(this.sessionFile);
 		if (this.flushed && sessionFileExists(this.sessionFile)) return;
 		writeSessionFile(this.sessionFile, this.fileEntries, "wx");
 		this.flushed = true;
 		this.writeMetadata();
+	}
+
+	/**
+	 * Synchronously write coalesced message lines for this session's file.
+	 * No-op for in-memory/mirror sessions and when nothing is pending. Runs
+	 * automatically on checkpoint entries, reads, and lock release; hosts may
+	 * call it directly before their own shutdown checkpoints.
+	 */
+	flushPendingWrites(): void {
+		if (!this.persist || !this.sessionFile || this.mirror) return;
+		flushSessionWrites(this.sessionFile);
 	}
 
 	_persist(entry: SessionEntry, pendingEntries: FileEntry[] = this.fileEntries): void {
@@ -1186,6 +1243,25 @@ export class SessionManager {
 	 * {@link SessionParentCycleError} instead of hanging or returning a
 	 * truncated transcript as complete history.
 	 */
+	/** Count without allocating the defensive entries array (idle-runtime memory estimates). */
+	getEntryCount(): number {
+		return this.byId.size;
+	}
+
+	/** Bounded, branch-aware tail; never substitutes for full context or export history. */
+	getBranchTail(limit: number): { entries: SessionEntry[]; hasMore: boolean } {
+		const tail: SessionEntry[] = [];
+		const visited = new Set<string>();
+		let entry = this.leafId ? this.byId.get(this.leafId) : undefined;
+		while (entry && tail.length < Math.max(1, limit)) {
+			if (visited.has(entry.id)) return { entries: this.getBranch(), hasMore: false };
+			visited.add(entry.id);
+			tail.push(entry);
+			entry = entry.parentId ? this.byId.get(entry.parentId) : undefined;
+		}
+		return { entries: tail.reverse(), hasMore: !!entry };
+	}
+
 	getBranch(fromId?: string): SessionEntry[] {
 		const startId = fromId ?? this.leafId;
 		return walkSessionPath(this.getEntries(), startId, this.byId, { sessionFile: this.sessionFile });

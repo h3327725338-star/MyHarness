@@ -25,8 +25,10 @@ import {
 	type DiscardChangesPreview,
 	type DiscardChangesResult,
 	discardChangesToHead,
+	discardChangesToHeadAsync,
 	hasChangesToDiscard,
 	previewDiscardChanges,
+	previewDiscardChangesAsync,
 } from "../../git/repository/discard-changes.ts";
 import {
 	createInitialGitBaselineAsync,
@@ -36,8 +38,10 @@ import {
 	type GitRepositoryState,
 	type GitStatusPreview,
 	getGitStatusPreview,
+	getGitStatusPreviewAsync,
 	initializeGitRepository,
 	inspectGitRepository,
+	inspectGitRepositoryAsync,
 	readGitIdentity,
 	setLocalGitIdentity,
 } from "../../git/repository/integration.ts";
@@ -150,6 +154,11 @@ export function inspectWorkspaceRepository(cwd: string): GitRepositoryState {
 	return inspectGitRepository(cwd);
 }
 
+/** 异步版 inspectWorkspaceRepository，不阻塞事件循环。 */
+export function inspectWorkspaceRepositoryAsync(cwd: string): Promise<GitRepositoryState> {
+	return inspectGitRepositoryAsync(cwd);
+}
+
 /** Text list of the local changes in a status preview. */
 export function formatWorkspaceChanges(preview: GitStatusPreview): string {
 	return formatGitStatusPreview(preview);
@@ -230,6 +239,49 @@ export function inspectCheckpointDecisionTarget(cwd: string, checkpoint: GitChec
 	return { kind: "ready", preview: getGitStatusPreview(checkpoint.repositoryRoot) };
 }
 
+/**
+ * 异步版 inspectCommitTarget：同一语义，不阻塞事件循环。
+ * 同步版本保留，供未迁移的调用方兼容使用。
+ */
+export async function inspectCommitTargetAsync(
+	cwd: string,
+	getCandidates: () => ReadonlyArray<GitCheckpoint | undefined>,
+): Promise<CommitTarget> {
+	const state = await inspectGitRepositoryAsync(cwd);
+	if (!state.gitAvailable) return { kind: "git-unavailable", error: state.error };
+	if (!state.isRepository || !state.root) return { kind: "not-repository" };
+
+	const repositoryRoot = state.root;
+	const preview = await getGitStatusPreviewAsync(repositoryRoot);
+	if (!preview) return { kind: "status-unreadable" };
+
+	const checkpoints = getCandidates().filter(
+		(checkpoint): checkpoint is GitCheckpoint => checkpoint?.status === "created",
+	);
+	const checkpoint = checkpoints.find((candidate) => resolve(candidate.repositoryRoot) === resolve(repositoryRoot));
+	if (checkpoints.some((candidate) => resolve(candidate.repositoryRoot) !== resolve(repositoryRoot))) {
+		return { kind: "checkpoint-mismatch" };
+	}
+	return {
+		kind: "ready",
+		repositoryRoot,
+		checkpoint,
+		hasChanges: preview.total !== 0,
+		hasBaseline: state.hasBaseline,
+	};
+}
+
+/** 异步版 inspectCheckpointDecisionTarget：同一语义，不阻塞事件循环。 */
+export async function inspectCheckpointDecisionTargetAsync(
+	cwd: string,
+	checkpoint: GitCheckpoint,
+): Promise<CheckpointDecisionTarget> {
+	const state = await inspectGitRepositoryAsync(cwd);
+	if (!state.isRepository || !state.root || state.root !== checkpoint.repositoryRoot) return { kind: "root-mismatch" };
+	if (!state.hasBaseline) return { kind: "no-baseline" };
+	return { kind: "ready", preview: await getGitStatusPreviewAsync(checkpoint.repositoryRoot) };
+}
+
 // ---------------------------------------------------------------------------
 // Repository setup
 // ---------------------------------------------------------------------------
@@ -258,6 +310,16 @@ export function previewInitialVersion(repositoryRoot: string): {
 	hasGitignore: boolean;
 } {
 	const preview = getGitStatusPreview(repositoryRoot);
+	if (!preview) return { preview, hasGitignore: false };
+	return { preview, hasGitignore: existsSync(join(repositoryRoot, ".gitignore")) };
+}
+
+/** 异步版 previewInitialVersion：同一语义，不阻塞事件循环。 */
+export async function previewInitialVersionAsync(repositoryRoot: string): Promise<{
+	preview: GitStatusPreview | undefined;
+	hasGitignore: boolean;
+}> {
+	const preview = await getGitStatusPreviewAsync(repositoryRoot);
 	if (!preview) return { preview, hasGitignore: false };
 	return { preview, hasGitignore: existsSync(join(repositoryRoot, ".gitignore")) };
 }
@@ -294,4 +356,25 @@ export function discardWorkspaceChanges(
 	protectedPaths: string[],
 ): DiscardChangesResult {
 	return discardChangesToHead(preview, { protectedPaths });
+}
+
+/** 异步版 previewWorkspaceRestore：同一语义，不阻塞事件循环。 */
+export async function previewWorkspaceRestoreAsync(
+	cwd: string,
+	protectedPaths: string[],
+): Promise<WorkspaceRestoreTarget> {
+	const state = await inspectGitRepositoryAsync(cwd);
+	if (!state.isRepository || !state.root) return { kind: "not-repository", error: state.error };
+	const { preview, error } = await previewDiscardChangesAsync(state.root, { protectedPaths });
+	if (!preview) return { kind: "unavailable", error };
+	if (!hasChangesToDiscard(preview)) return { kind: "clean", headLabel: preview.headLabel };
+	return { kind: "ready", preview };
+}
+
+/** 异步版 discardWorkspaceChanges：同一语义，不阻塞事件循环。 */
+export function discardWorkspaceChangesAsync(
+	preview: DiscardChangesPreview,
+	protectedPaths: string[],
+): Promise<DiscardChangesResult> {
+	return discardChangesToHeadAsync(preview, { protectedPaths });
 }

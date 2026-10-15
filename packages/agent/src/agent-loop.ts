@@ -361,6 +361,17 @@ async function runLoop(
 				toolCall: ToolCall,
 				toolSignal?: AbortSignal,
 			): Promise<ToolResultMessage> => {
+				// P2-4: cancelled in-flight calls must not execute. Return an aborted
+				// error result without running validation or the tool itself.
+				if ((toolSignal ?? signal)?.aborted) {
+					const abortedResult = createErrorToolResultMessage(toolCall, "Operation aborted");
+					providerToolResults.push(abortedResult);
+					currentContext.messages.push(abortedResult);
+					newMessages.push(abortedResult);
+					await emit({ type: "message_start", message: abortedResult });
+					await emit({ type: "message_end", message: abortedResult });
+					return abortedResult;
+				}
 				if (toolCallIds.has(toolCall.id)) {
 					const duplicateResult = createErrorToolResultMessage(
 						toolCall,
@@ -940,6 +951,18 @@ function validateToolCallArguments(
 	currentContext: AgentContext,
 	toolCall: AgentToolCall,
 ): ValidatedToolCallArguments {
+	// P2-4 output-side safety: strict final parsing failed (truncated or
+	// non-deterministically repairable JSON). Never execute guessed arguments;
+	// report as an error so the model re-issues the call with complete arguments.
+	if (toolCall.argumentsParseError) {
+		return {
+			kind: "invalid",
+			result: createErrorToolResult(
+				`Tool call "${toolCall.name}" was not executed: its arguments are incomplete or truncated (${toolCall.argumentsParseError}). Re-issue the tool call with complete arguments.`,
+			),
+			isError: true,
+		};
+	}
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
 		return {

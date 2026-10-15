@@ -14,6 +14,7 @@ import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.j
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
+import { startInteraction, measureInteraction } from "./interaction-timing.js";
 
 const listeners = new Set();
 const prefs = loadPrefs();
@@ -147,6 +148,8 @@ export const state = {
 	activeSlot: null,
 	/** Session file of a chat that was clicked in the sidebar and is still being opened (marked there at once). */
 	opening: null,
+	/** Selected target, including cold opens before a server slot exists. Never routes writes to the old chat. */
+	switching: null,
 	toasts: [],
 	/** Saved state of each mode (`GET /api/modes/state`): its last chat, model choice and drafts; null until loaded. */
 	modeState: null,
@@ -334,6 +337,7 @@ export function useStore(selector = (s) => s) {
 // ---- HTTP ------------------------------------------------------------------------------------
 export async function api(path, options = {}) {
 	const slot = options.slot ?? targetSlot ?? activeSlot;
+	if (String(slot ?? "").startsWith("pending:")) throw new Error(t("Loading…"));
 	const init = { method: options.method || "GET", headers: { "x-myharness-web": "1" } };
 	// A half-dead server would otherwise hold one await forever; callers that poll pass a per-attempt budget.
 	if (options.timeoutMs) init.signal = AbortSignal.timeout(options.timeoutMs);
@@ -485,8 +489,13 @@ export async function chooseThinkingLevel(level) {
 	return choice.done;
 }
 
+const transcriptSent = new Map();
 export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } = {}) {
+	const requestKey = slot ?? "";
+	const requestSeq = (transcriptSent.get(requestKey) ?? 0) + 1;
+	transcriptSent.set(requestKey, requestSeq);
 	const data = await api(limit ? `/api/transcript?limit=${limit}` : "/api/transcript", { slot: slot ?? "" });
+	if (transcriptSent.get(requestKey) !== requestSeq) return data;
 	const toolRuns = {};
 	for (const item of data.items) {
 		if (item.kind === "toolResult") toolRuns[item.toolCallId] = { status: item.isError ? "error" : "done", endedAt: item.ts };
@@ -515,9 +524,15 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 export const TRANSCRIPT_FIRST_PAGE = 400;
 
 /** Load one session's snapshot and transcript into its bag. The first load pages (`TRANSCRIPT_FIRST_PAGE`); an explicit refresh takes the full transcript. */
+const slotLoads = new Map();
 export async function refreshSlot(slot = activeSlot, { full = false } = {}) {
-	await Promise.all([loadSnapshot(slot), loadTranscript(slot, full ? {} : { limit: TRANSCRIPT_FIRST_PAGE })]);
-	bagOf(slot).loaded = true;
+	const key = `${slot}:${full}`;
+	if (slotLoads.has(key)) return slotLoads.get(key);
+	const pending = Promise.all([loadSnapshot(slot), loadTranscript(slot, full ? {} : { limit: TRANSCRIPT_FIRST_PAGE })])
+		.then(() => { bagOf(slot).loaded = true; })
+		.finally(() => slotLoads.delete(key));
+	slotLoads.set(key, pending);
+	return pending;
 }
 
 /**
@@ -629,7 +644,9 @@ export async function loadSlots() {
  * chat whose Workspace counts as current (the one on screen by default).
  */
 export async function loadWorkspaces(mode = uiMode(), slot) {
-	const data = await api(`/api/workspaces?mode=${mode}`, slot === undefined ? {} : { slot });
+	const selected = targetSlot ?? activeSlot;
+	const requestSlot = slot === undefined && String(selected).startsWith("pending:") ? "" : slot;
+	const data = await api(`/api/workspaces?mode=${mode}`, requestSlot === undefined ? {} : { slot: requestSlot });
 	patchLists(mode, { list: data.workspaces, loaded: true, currentPath: data.currentPath, currentSessionFile: data.currentSessionFile });
 	emit();
 	const current = data.workspaces.find((w) => w.current);
@@ -648,7 +665,7 @@ export async function loadWorkspaces(mode = uiMode(), slot) {
 
 export async function loadArchived(mode = uiMode()) {
 	try {
-		const data = await api(`/api/sessions/archived?mode=${mode}`);
+		const data = await api(`/api/sessions/archived?mode=${mode}`, { slot: "" });
 		patchLists(mode, { archived: data.sessions });
 	} catch (error) { setListError(ARCHIVED_KEY, listFailure(error), mode); }
 	emit();
@@ -780,7 +797,7 @@ export function loadSessions(rootPath, mode = uiMode()) {
 			do {
 				load.again = false;
 				try {
-					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}&mode=${mode}`);
+					const data = await api(`/api/workspaces/sessions?path=${encodeURIComponent(rootPath)}&mode=${mode}`, { slot: "" });
 					setListError(rootPath, "", mode);
 					patchLists(mode, { sessions: { ...listsByMode[mode].sessions, [rootPath]: data.sessions } });
 					emit();
@@ -801,15 +818,23 @@ export function loadSessions(rootPath, mode = uiMode()) {
 /** The models already known (models.json and earlier detections); listing them never contacts a provider. */
 export async function loadModels() {
 	try {
-		state.models = await api("/api/models");
+		state.models = await api("/api/models", { slot: "" });
 		emit();
 	} catch (error) {
 		toast(error.message, "error");
 	}
 }
 
+const resourceLoads = new Map();
 export async function loadResources() {
 	const slot = targetSlot ?? activeSlot;
+	if (!slot || String(slot).startsWith("pending:")) return;
+	if (resourceLoads.has(slot)) return resourceLoads.get(slot);
+	const pending = fetchResources(slot).finally(() => resourceLoads.delete(slot));
+	resourceLoads.set(slot, pending);
+	return pending;
+}
+async function fetchResources(slot) {
 	try {
 		const data = await api("/api/resources", { slot });
 		runFor(slot, () => {
@@ -890,7 +915,7 @@ function setChatMode(mode) {
 }
 
 export async function loadModeState() {
-	state.modeState = await api("/api/modes/state", { slot: activeSlot ?? "" });
+	state.modeState = await api("/api/modes/state", { slot: String(activeSlot).startsWith("pending:") ? "" : activeSlot ?? "" });
 	emit();
 	return state.modeState;
 }
@@ -991,41 +1016,57 @@ export function setChatTouched(slot, touched) {
 }
 
 /**
- * Show the other mode: save the draft and the chat on screen, ask the server for the mode's chat (its latest one, or a
- * new blank one), then reveal it from the switch. A failure (for example a saved chat that cannot be opened) is shown
- * and the page stays where it is.
+ * Reveal the target mode immediately while draft persistence and opening/loading run in the background.
+ * Failures stay at the selected target with an explicit retry; no implicit return to the previous Chat.
  */
 export async function switchChatMode(target) {
 	const mode = chatModeOf(target);
+	const timing = startInteraction("mode");
 	state.view = { ...state.view, modeIntent: mode };
 	emit();
 	if (reverseModeReveal(mode)) return;
 	const seq = nextSwitch();
-	if (mode === state.view.chatMode) return;
+	if (mode === state.view.chatMode && !state.switching?.error) return;
 	const leaving = activeSlot;
 	const saved = Promise.all([flushDrafts(), rememberChat(leaving, { force: true })]);
 	const cached = [...bags].find(([id, bag]) => id !== leaving && bag.loaded && chatModeOf(bag.snap?.mode) === mode && sameFile(bag.snap?.session?.file, state.modeState?.[mode]?.lastSessionFile));
 	if (cached) {
-		await activateSlot(cached[0], seq);
+		await activateSlot(cached[0], seq, { timing });
 		return;
 	}
-	await saved;
-	if (!isLatestSwitch(seq)) return;
+	const previousMode = state.view.chatMode;
+	const previousSlot = activeSlot;
+	const targetView = { mode, path: state.modeState?.[mode]?.lastSessionFile, timing, retry: () => switchChatMode(mode) };
+	// Lock sends before a View Transition captures the old page; its update callback selects the target.
+	state.switching = { ...targetView, seq, error: null };
+	let pending;
+	const revealed = revealMode(() => { if (isLatestSwitch(seq)) pending = beginSwitch(targetView, seq); }, { from: previousMode, to: mode, restore: () => {
+		if (!isLatestSwitch(seq)) return;
+		nextSwitch();
+		activeSlot = previousSlot;
+		state.activeSlot = previousSlot;
+		state.switching = null;
+		state.opening = null;
+		setChatMode(previousMode);
+		state.view = { ...state.view, modeIntent: previousMode };
+		emit();
+	} });
+	void saved;
+	void loadWorkspaces(mode, "").catch(() => {});
 	let result;
 	try {
-		result = await post("/api/modes/open", { mode }, leaving ?? "");
+		result = await post("/api/modes/open", { mode }, String(leaving).startsWith("pending:") ? "" : leaving ?? "");
 	} catch (error) {
-		if (isLatestSwitch(seq)) {
-			state.view = { ...state.view, modeIntent: state.view.chatMode };
-			emit();
-			toast(serverText(error.message, t("The operation failed.")), "error", 9000);
-		}
+		await revealed;
+		failSwitch(seq, error);
 		return;
 	}
+	await revealed;
 	setModeState(mode, result.state);
 	if (!isLatestSwitch(seq)) return;
-	if (!state.slots.some((item) => item.slot === result.slot)) await loadSlots();
-	await activateSlot(result.slot, seq);
+	void loadSlots().catch(() => {});
+	try { await activateSlot(result.slot, seq, pending); }
+	catch (error) { failSwitch(seq, error); }
 	// The opened slot's snapshot carries the missing-folder flag; activateSlot toasts it by name.
 }
 
@@ -1036,19 +1077,62 @@ let switchSeq = 0;
 export const nextSwitch = () => ++switchSeq;
 export const isLatestSwitch = (seq) => seq === switchSeq;
 
+/** Select a real target immediately, before opening it. Synthetic slots cannot make API writes. */
+export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, retry, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
+	if (!isLatestSwitch(seq)) return null;
+	const id = `pending:${seq}`;
+	for (const key of bags.keys()) if (String(key).startsWith("pending:")) bags.delete(key);
+	const bag = bagOf(id);
+	bag.snap = { mode, session: { id: sessionId, file: path, name, persisted: false }, flags: {}, queue: bag.queue, dialogs: [], surface: bag.surface, active: false, thinking: { supported: false, levels: [] }, trust: { trusted: false, requiresTrust: false }, run: {}, app: {} };
+	activeSlot = id;
+	state.activeSlot = id;
+	state.opening = path;
+	state.switching = { seq, path, mode, name, retry, timing, error: null };
+	setChatMode(mode);
+	state.view = { ...state.view, modeIntent: mode, selectedTerminal: null };
+	measureInteraction(timing, "visibleMs");
+	emit(true);
+	return state.switching;
+}
+export function failSwitch(seq, error) {
+	if (!isLatestSwitch(seq) || state.switching?.seq !== seq) return;
+	state.switching = { ...state.switching, error: serverText(error.message, t("The operation failed.")) };
+	emit(true);
+}
+export function retrySwitch() { return state.switching?.retry?.(); }
+export const canSendToActive = () => !state.switching && !!activeSlot && !String(activeSlot).startsWith("pending:") && bagOf(activeSlot).loaded;
+
 /**
  * Show another open session. Sessions keep running in the background, so this only changes which bag is on screen.
- * Nothing on screen (an animation, a list) is waited for: the bag is loaded first if needed, then shown at once. A
+ * Select an unloaded target immediately and lock sends while its snapshot/transcript arrive. A
  * session of the other mode brings its mode with it (revealed from the mode switch, its lists loading behind it).
  */
-export async function activateSlot(slot, seq = nextSwitch()) {
-	if (!slot || slot === activeSlot) return;
-	if (!bagOf(slot).loaded) await refreshSlot(slot);
+export async function activateSlot(slot, seq = nextSwitch(), pending = state.switching) {
+	if (!slot || !isLatestSwitch(seq)) return;
+	const bag = bagOf(slot);
+	const info = state.slots.find((item) => item.slot === slot);
+	let mode = chatModeOf(bag.snap?.mode ?? info?.mode ?? pending?.mode ?? uiMode());
+	if (!bag.loaded) {
+		if (pending?.seq !== seq) pending = beginSwitch({ mode, path: info?.sessionFile ?? bag.snap?.session?.file, name: info?.name ?? bag.snap?.session?.name, sessionId: info?.sessionId ?? bag.snap?.session?.id, retry: () => activateSlot(slot) }, seq);
+		// A confirmed slot can safely hold a draft, but sending remains locked until both reads finish.
+		if (!bag.snap) bag.snap = { ...bagOf(activeSlot).snap, slot, mode };
+		activeSlot = slot;
+		state.activeSlot = slot;
+		emit();
+		try { await refreshSlot(slot); }
+		catch (error) { failSwitch(seq, error); throw error; }
+	}
 	if (!isLatestSwitch(seq)) return;
-	const mode = chatModeOf(bagOf(slot).snap?.mode);
+	mode = chatModeOf(bag.snap?.mode ?? mode);
+	const timing = pending?.timing ?? startInteraction("session");
 	const show = () => {
 		activeSlot = slot;
 		state.activeSlot = slot;
+		measureInteraction(timing, "visibleMs");
+		measureInteraction(timing, "contentMs");
+		state.switching = null;
+		state.opening = null;
+		for (const key of bags.keys()) if (String(key).startsWith("pending:")) bags.delete(key);
 		state.view = { ...state.view, selectedTerminal: null };
 		setChatMode(mode);
 		state.view = { ...state.view, modeIntent: mode };
@@ -1061,13 +1145,15 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 		loadWorkspaces(mode, slot).catch(() => {});
 		const previousSlot = activeSlot;
 		const previousMode = state.view.chatMode;
-		await revealMode(show, { from: previousMode, to: mode, restore: () => {
+		await revealMode(() => { if (isLatestSwitch(seq)) show(); }, { from: previousMode, to: mode, restore: () => {
+			if (!isLatestSwitch(seq)) return;
 			activeSlot = previousSlot;
 			state.activeSlot = previousSlot;
 			setChatMode(previousMode);
 			emit();
 		} });
 	} else show();
+	if (!isLatestSwitch(seq) || activeSlot !== slot) return;
 	markActiveSeen();
 	rememberChat(slot);
 	// A folder removed externally never blocks the switch: name it once in a lightweight toast.
@@ -1077,7 +1163,6 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 	} catch {
 		/* Toast must never break a session switch. */
 	}
-	const bag = bagOf(slot);
 	if (!bag.resources) loadResources();
 	loadGitStatus();
 	// The sidebar already knows every workspace and chat; only fetch what it has never loaded.
@@ -1090,21 +1175,24 @@ export async function activateSlot(slot, seq = nextSwitch()) {
 
 /** The session on screen is gone from the server (released or deleted elsewhere): reopen it, or start a fresh chat. */
 const recovering = new Set();
-function recoverLostSlot(slot) {
+function recoverLostSlot(slot, retryTarget) {
 	if (recovering.has(slot)) return;
-	const file = bags.get(slot)?.snap?.session?.file;
+	const file = retryTarget?.file ?? bags.get(slot)?.snap?.session?.file;
 	bags.delete(slot);
 	turnsCacheLru.delete(slot);
-	if (activeSlot !== slot) return;
+	if (activeSlot !== slot && !retryTarget) return;
 	recovering.add(slot);
+	const seq = nextSwitch();
+	const mode = retryTarget?.mode ?? uiMode();
+	const pending = beginSwitch({ path: file, mode, retry: () => recoverLostSlot(slot, { file, mode }) }, seq);
 	(async () => {
 		try {
-			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", { mode: state.view.chatMode }, "");
-			activeSlot = null;
-			await activateSlot(result.slot);
-			await loadSlots();
+			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", { mode }, "");
+			if (!isLatestSwitch(seq)) return;
+			await activateSlot(result.slot, seq, pending);
+			void loadSlots();
 		} catch (error) {
-			toast(error.message, "error");
+			failSwitch(seq, error);
 		} finally {
 			recovering.delete(slot);
 		}
@@ -1154,13 +1242,16 @@ let fallbackFailureShown = false;
  * that was on screen). Without mode support on the server the page shows the server's chat and follows its mode.
  */
 async function initialLoad() {
-	const snap = await api("/api/state", { slot: "" });
+	const [snap, initialModes] = await Promise.all([
+		api("/api/state", { slot: "" }),
+		api("/api/modes/state", { slot: "" }).catch(() => null),
+	]);
 	let slot = snap.slot;
 	let mode = chatModeOf(snap.mode);
 	const view = takeRestartState(snap.session?.id);
 	if (view) state.view = { ...state.view, ...view };
 	try {
-		const modes = await api("/api/modes/state", { slot });
+		const modes = initialModes ?? await api("/api/modes/state", { slot });
 		state.modeState = modes;
 		const wanted = chatModeOf(state.view.chatMode);
 		if (!view && (wanted !== mode || (modes[wanted]?.lastSessionFile && !sameFile(modes[wanted].lastSessionFile, snap.session?.file)))) {
@@ -1176,8 +1267,10 @@ async function initialLoad() {
 	state.activeSlot = slot;
 	setChatMode(mode);
 	applyAppearance();
-	// The first screen pages the transcript like a cold switch; an explicit refresh later takes it fully.
-	await refreshAll({ full: false });
+	// Lists reconcile independently; the first usable Chat must not wait for disk-scanned sidebar groups.
+	void loadWorkspaces(mode, slot).catch(() => {});
+	void loadSlots();
+	await refreshSlot(slot, { full: false });
 	try {
 		const first = bagOf(slot).snap;
 		if (first?.cwdMissing && first?.workspace?.name) notifyMissingWorkspace(first.workspace.name);
@@ -1189,14 +1282,14 @@ async function initialLoad() {
 }
 
 /**
- * The other mode's Workspaces and chats are read shortly after the page is up, so the first click on the mode switch
+ * The other mode's Workspaces and chats are read as soon as the first screen is ready, so the first mode switch
  * finds them ready. Only the lists are read: nothing is opened, created or saved for the other mode.
  */
 function prefetchOtherMode() {
 	setTimeout(() => {
 		const other = state.view.chatMode === "coding" ? "general" : "coding";
 		if (document.visibilityState === "visible" && !listsByMode[other].loaded) loadWorkspaces(other).catch(() => {});
-	}, 1200);
+	}, 0);
 }
 
 export async function boot() {
@@ -1602,7 +1695,7 @@ function notifyTaskEnd(d, slot) {
 
 export async function loadProviders() {
 	try {
-		set({ providers: await api("/api/providers") });
+		set({ providers: await api("/api/providers", { slot: "" }) });
 	} catch (error) {
 		toast(error.message, "error");
 	}
@@ -1610,7 +1703,7 @@ export async function loadProviders() {
 
 export async function loadSettings() {
 	try {
-		set({ settings: await api("/api/settings") });
+		set({ settings: await api("/api/settings", { slot: "" }) });
 	} catch (error) {
 		toast(error.message, "error");
 	}

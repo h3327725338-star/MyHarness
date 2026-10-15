@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { GENERAL_KEY, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
+import { GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -127,11 +127,16 @@ export const actions = {
 	},
 
 	async send(text, { images, mode } = {}) {
-		return attempt(() => post("/api/prompt", { text, images, mode }));
+		if (!canSendToActive()) return undefined;
+		const slot = activeSlotId();
+		return attempt(() => post("/api/prompt", { text, images, mode }, slot));
 	},
 
 	/** Route composer input: UI commands stay in the browser, everything else is a real prompt. */
 	async submit(rawText, { images = [], mode = "auto" } = {}) {
+		if (!canSendToActive()) return { handled: false, ok: false };
+		const submittedSlot = activeSlotId();
+		const stillSelected = () => canSendToActive() && activeSlotId() === submittedSlot;
 		const text = rawText.trim();
 		if (!text && images.length === 0) return { handled: true };
 		const [head, ...rest] = text.split(/\s+/);
@@ -141,6 +146,7 @@ export const actions = {
 			// A canonical name is handled at once (the panel must exist before the next keystroke); an alias needs the registry.
 			const typed = head.slice(1);
 			const name = BUILTIN_COMMAND_KINDS[typed] ? typed : (await builtinCommand(typed))?.name;
+			if (!stillSelected()) return { handled: false, ok: false };
 			const kind = name && BUILTIN_COMMAND_KINDS[name];
 			noteCommandUse(name || typed);
 			if (kind === "panel") {
@@ -152,6 +158,7 @@ export const actions = {
 				return { handled: true };
 			}
 		}
+		if (!stillSelected()) return { handled: false, ok: false };
 		if (text.startsWith("!") && images.length === 0) {
 			const excluded = text.startsWith("!!");
 			const command = (excluded ? text.slice(2) : text.slice(1)).trim();
@@ -223,12 +230,13 @@ export const actions = {
 	 */
 	async newSession(rootPath, { unbound = false } = {}) {
 		const mode = uiMode();
+		const seq = nextSwitch();
 		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound, mode }));
-		if (result?.slot) {
+		if (result?.slot && isLatestSwitch(seq)) {
 			const group = unbound ? GENERAL_KEY : rootPath;
 			const key = expandedKey(mode);
 			if (group) setView({ [key]: { ...state.view[key], [group]: true } });
-			await showSlot(result.slot);
+			await showSlot(result.slot, seq);
 		}
 		return result;
 	},
@@ -262,17 +270,24 @@ export const actions = {
 	 */
 	async openSession(path) {
 		const seq = nextSwitch();
-		set({ opening: path });
 		flushDrafts();
+		const open = state.slots.find((s) => s.sessionFile && samePath(s.sessionFile, path));
+		if (open) {
+			try { return await activateSlot(open.slot, seq); }
+			catch (error) { failSwitch(seq, error); return undefined; }
+		}
+		const info = findListed(path);
+		const pending = beginSwitch({ path, mode: uiMode(), name: info?.name, sessionId: info?.id ?? open?.sessionId, retry: () => actions.openSession(path) }, seq);
 		try {
-			const open = state.slots.find((s) => s.sessionFile && samePath(s.sessionFile, path));
-			if (open) return await attempt(() => showSlot(open.slot, seq));
-			const result = await attempt(() => post("/api/sessions/open", { path }));
-			if (result?.slot && isLatestSwitch(seq)) await attempt(() => showSlot(result.slot, seq));
+			const result = await post("/api/sessions/open", { path }, "");
+			if (result?.slot && isLatestSwitch(seq)) {
+				void loadSlots().catch(() => {});
+				await activateSlot(result.slot, seq, pending);
+			}
 			return result;
-		} finally {
-			// A later click on another chat marks that one instead; a later switch of another kind (a new chat) clears this mark.
-			if (isLatestSwitch(seq) || state.opening === path) set({ opening: null });
+		} catch (error) {
+			failSwitch(seq, error);
+			return undefined;
 		}
 	},
 
@@ -441,7 +456,7 @@ export const actions = {
 };
 
 async function showSlot(slot, seq) {
-	if (!state.slots.some((s) => s.slot === slot)) await loadSlots();
+	if (!state.slots.some((s) => s.slot === slot)) void loadSlots().catch(() => {});
 	await activateSlot(slot, seq);
 }
 

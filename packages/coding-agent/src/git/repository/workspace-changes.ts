@@ -3,14 +3,14 @@ import * as fs from "node:fs";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import {
-	collectGitCheckpointHeadChanges,
-	collectGitCheckpointLocalRefChanges,
-	collectGitCheckpointWorkingTreeChanges,
+	collectGitCheckpointHeadChangesAsync,
+	collectGitCheckpointLocalRefChangesAsync,
+	collectGitCheckpointWorkingTreeChangesAsync,
 	type GitCheckpoint,
-	getGitCheckpointPendingTaskPaths,
+	getGitCheckpointPendingTaskPathsAsync,
 	observeGitCheckpointFinalState,
 } from "../checkpoints/checkpoint.ts";
-import { runGitSync } from "./command.ts";
+import { runGit } from "./command.ts";
 import type { AutoReviewMutation, ReviewChange, ReviewChangeStatus } from "./review-types.ts";
 
 // ============================================================================
@@ -334,7 +334,7 @@ export async function collectCheckpointChanges(options: {
 	cwd: string;
 	checkpoint: GitCheckpoint;
 }): Promise<ReviewChange[]> {
-	const result = collectGitCheckpointWorkingTreeChanges(options.checkpoint);
+	const result = await collectGitCheckpointWorkingTreeChangesAsync(options.checkpoint);
 	if (!result.changes) return [];
 	const byPath = new Map(result.changes.map((change) => [change.path, change]));
 
@@ -346,17 +346,17 @@ export async function collectCheckpointChanges(options: {
 	if (added.length > 0 && deleted.length > 0 && options.checkpoint.worktreeTree) {
 		const currentOids = new Map<string, string | undefined>();
 		for (const change of added) {
-			const hash = runGitSync(["hash-object", path.resolve(options.checkpoint.repositoryRoot, change.path)], {
+			const hash = await runGit(["hash-object", path.resolve(options.checkpoint.repositoryRoot, change.path)], {
 				cwd: options.checkpoint.repositoryRoot,
 			});
-			if (hash.ok && hash.stdout) currentOids.set(change.path, hash.stdout);
+			if (hash.ok && hash.stdout.trim()) currentOids.set(change.path, hash.stdout.trim());
 		}
 		const baselineOids = new Map<string, string | undefined>();
 		for (const change of deleted) {
-			const rev = runGitSync(["rev-parse", "--verify", `${options.checkpoint.worktreeTree}:${change.path}`], {
+			const rev = await runGit(["rev-parse", "--verify", `${options.checkpoint.worktreeTree}:${change.path}`], {
 				cwd: options.checkpoint.repositoryRoot,
 			});
-			if (rev.ok && rev.stdout) baselineOids.set(change.path, rev.stdout);
+			if (rev.ok && rev.stdout.trim()) baselineOids.set(change.path, rev.stdout.trim());
 		}
 		for (const change of added) {
 			const currentOid = currentOids.get(change.path);
@@ -476,7 +476,9 @@ export interface GitTaskChangeSummary {
 /** Shell 命令里是否可能移动 Git HEAD（commit/merge/switch 等）：命中即按“本轮可能自己提交过”保守处理。 */
 export function bashCommandMayMoveGitHead(command: unknown): boolean {
 	if (typeof command !== "string" || command.length === 0) return false;
-	return /\bgit(\.exe)?\b[^;&|()]*\b(commit|merge|rebase|cherry-pick|switch|checkout|pull|reset|revert)\b/i.test(command);
+	return /\bgit(\.exe)?\b[^;&|()]*\b(commit|merge|rebase|cherry-pick|switch|checkout|pull|reset|revert)\b/i.test(
+		command,
+	);
 }
 
 function mergeReviewChanges(primary: readonly ReviewChange[], secondary: readonly ReviewChange[]): ReviewChange[] {
@@ -525,13 +527,13 @@ export async function collectFinalWorkspaceChanges(
 			};
 		}
 
-		const head = collectGitCheckpointHeadChanges(checkpoint);
+		const head = await collectGitCheckpointHeadChangesAsync(checkpoint);
 		// 外部分支切换防护：任务窗口外 HEAD 移到了基线历史之外的提交（例如用户在界面切到
 		// 另一个分支，整个工作区内容被替换），此时 workingChanges 是两个分支的内容差，
 		// 不是本轮编辑，不得归属。本轮自己提交的后代（headCommit 是其祖先）不受影响。
 		const finalHead = current.observation.headCommit;
 		if (finalHead && checkpoint.headCommit && finalHead !== checkpoint.headCommit) {
-			const lineage = runGitSync(["merge-base", "--is-ancestor", checkpoint.headCommit, finalHead], {
+			const lineage = await runGit(["merge-base", "--is-ancestor", checkpoint.headCommit, finalHead], {
 				cwd: checkpoint.repositoryRoot,
 			});
 			if (lineage.exitCode === 1) {
@@ -569,7 +571,8 @@ export async function collectFinalWorkspaceChanges(
 			effectiveWorkingChanges = workingChanges.filter((change) => !foreignPaths.has(pathCompareKey(change.path)));
 		}
 		const changes = mergeReviewChanges(effectiveWorkingChanges, ownCommittedChanges);
-		const pending = getGitCheckpointPendingTaskPaths(checkpoint);
+		// Final ChangeSet 决定提交/恢复语义：必须读最新状态，绕过短 TTL 缓存。
+		const pending = await getGitCheckpointPendingTaskPathsAsync(checkpoint, undefined, { fresh: true });
 		if (!pending.paths) {
 			return {
 				status: "indeterminate",
@@ -580,18 +583,21 @@ export async function collectFinalWorkspaceChanges(
 		const contentChanges = changes.length > 0;
 		// checkpoint 保存的是任务开始时的 write-tree oid；当前 index 同样用
 		// write-tree 取内容指纹比较（比旧的 staged diff patch hash 更精确、零临时文件）。
-		const currentIndexTree = runGitSync(["write-tree"], { cwd: checkpoint.repositoryRoot });
-		if (!currentIndexTree.ok || !currentIndexTree.stdout) {
+		const currentIndexTree = await runGit(["write-tree"], { cwd: checkpoint.repositoryRoot });
+		// 异步 runGit 不裁剪 stdout（同步版本默认 trim）：比较前必须 trim，
+		// 否则换行符会导致 indexChanged 恒为 true，破坏 checkpoint 准确性。
+		const currentIndexTreeOid = currentIndexTree.stdout.trim();
+		if (!currentIndexTree.ok || !currentIndexTreeOid) {
 			return {
 				status: "indeterminate",
 				changes,
 				reason: currentIndexTree.error ?? "无法读取当前 Git 暂存区状态。",
 			};
 		}
-		const indexChanged = checkpoint.indexTree !== currentIndexTree.stdout;
+		const indexChanged = checkpoint.indexTree !== currentIndexTreeOid;
 		const headChanged = checkpoint.headCommit !== current.observation.headCommit;
 		const headRefChanged = checkpoint.headRef !== current.observation.headRef;
-		const localRefChanges = collectGitCheckpointLocalRefChanges(checkpoint);
+		const localRefChanges = await collectGitCheckpointLocalRefChangesAsync(checkpoint);
 		const remoteSideEffects = false;
 		// 与 restore 后的提示保持一致：任务执行过不透明 Bash 时，Final ChangeSet
 		// 也如实报告外部/远端副作用未知，而不是硬编码为“没有”。
@@ -636,9 +642,7 @@ export async function collectFinalWorkspaceChanges(
 								!externalSideEffectsUnknown,
 							historyNavigation: false,
 							taskCreatedHistory: ownCommittedChanges.length > 0,
-							...(externalCommittedCount > 0
-								? { externalCommittedCount, externalCommittedFiles }
-								: {}),
+							...(externalCommittedCount > 0 ? { externalCommittedCount, externalCommittedFiles } : {}),
 						},
 					}
 				: {}),

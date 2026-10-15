@@ -36,7 +36,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { finalizeToolCallArguments, parseStreamingJson } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -307,7 +307,12 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						partial: output,
 					});
 				} else if (block.type === "toolCall") {
-					block.arguments = parseStreamingJson(block.partialArgs);
+					// P2-4 output-side safety: complete call end uses strict parsing only.
+					const finalized = finalizeToolCallArguments(block.partialArgs);
+					block.arguments = finalized.args;
+					if (finalized.parseError !== undefined) {
+						block.argumentsParseError = finalized.parseError;
+					}
 					// Finalize in-place and strip the scratch buffers so replay only
 					// carries parsed arguments.
 					delete block.partialArgs;

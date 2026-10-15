@@ -135,8 +135,8 @@ export class GitCommitUseCase {
 	): Promise<{ paths?: string[]; error?: string }> {
 		const target = normalizeGitCommitTarget(targetOrCheckpoint);
 		return target.checkpoint
-			? getGitCheckpointPendingTaskPathsAsync(target.checkpoint, this.host.signal)
-			: getGitWorkingTreePathsAsync(target.repositoryRoot, [], this.host.signal);
+			? getGitCheckpointPendingTaskPathsAsync(target.checkpoint, this.host.signal, { fresh: true })
+			: getGitWorkingTreePathsAsync(target.repositoryRoot, [], this.host.signal, { fresh: true });
 	}
 
 	/**

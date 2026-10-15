@@ -3,6 +3,12 @@
 .transcript { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: auto; padding: 8px 20px 24px; scrollbar-gutter: stable both-edges; overflow-anchor: none; }
 .transcript-inner { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
 .transcript-end { height: 1px; }
+.switch-placeholder { padding: 28px 0; }
+.switch-placeholder h2 { font-size: 16px; margin: 0 0 12px; }
+.switch-skeleton { display: grid; gap: 12px; margin-top: 24px; }
+.switch-skeleton i { display: block; height: 14px; width: 85%; border-radius: 5px; background: var(--border); }
+.switch-skeleton i:nth-child(2) { width: 65%; }
+.switch-skeleton i:nth-child(3) { width: 74%; }
 
 /* Jump to the latest message: a round arrow button on the centre line of the conversation and the input card, just
    above the input. Centred with auto margins (no transform), so an entrance animation cannot move it off centre. */

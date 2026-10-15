@@ -18,6 +18,10 @@ Provider 可以额外实现 `logout()` 来清理宿主拥有的认证运行时�
 
 静态模型读取不能被写成“远程目录一定最新”。Provider refresh 失败时要保留已有列表并暴露错误。
 
+## 工具参数的预览与执行
+
+`parseStreamingJson` 仅用于流式预览；字符串参数在完整调用结束时使用 `finalizeToolCallArguments`，只接受完整对象及既有确定性字符转义修复，不猜缺失字段、值、字符串或括号。解析失败以可选 `ToolCall.argumentsParseError` 传给宿主，Agent Core 拒绝执行并返回工具错误，供模型重新发出完整调用。`length` / `aborted` / `error` 的执行保护继续生效。原生对象参数（如 Google）沿用原路径，无需转成字符串再解析。
+
 ## 当前 catalog 规则
 
 修改 `providers/all.ts`、`models.generated.ts` 或 image catalog 时，必须确认是否仍为空 fork compatibility entrypoint。不要只看到 `getBuiltinModel()` 就推断有真实 catalog；它返回的是带 `example.invalid` base URL 的兼容 descriptor。

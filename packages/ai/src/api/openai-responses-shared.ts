@@ -31,7 +31,7 @@ import type {
 } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { finalizeToolCallArguments, parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -532,7 +532,14 @@ export async function processResponsesStream<TApi extends Api>(
 			if (!slot) continue;
 			const previousPartialJson = slot.block.partialJson;
 			slot.block.partialJson = event.arguments;
-			slot.block.arguments = parseStreamingJson(slot.block.partialJson);
+			// P2-4 output-side safety: complete arguments use strict parsing only.
+			const finalizedArgumentsDone = finalizeToolCallArguments(slot.block.partialJson);
+			slot.block.arguments = finalizedArgumentsDone.args;
+			if (finalizedArgumentsDone.parseError !== undefined) {
+				slot.block.argumentsParseError = finalizedArgumentsDone.parseError;
+			} else {
+				delete slot.block.argumentsParseError;
+			}
 
 			if (event.arguments.startsWith(previousPartialJson)) {
 				const delta = event.arguments.slice(previousPartialJson.length);
@@ -578,7 +585,14 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall") {
-				slot.block.arguments = parseStreamingJson(item.arguments || slot.block.partialJson || "{}");
+				// P2-4 output-side safety: complete call end uses strict parsing only.
+				const finalized = finalizeToolCallArguments(item.arguments || slot.block.partialJson || "{}");
+				slot.block.arguments = finalized.args;
+				if (finalized.parseError !== undefined) {
+					slot.block.argumentsParseError = finalized.parseError;
+				} else {
+					delete slot.block.argumentsParseError;
+				}
 				// Finalize in-place and strip the scratch buffer so replay only
 				// carries parsed arguments.
 				delete (slot.block as { partialJson?: string }).partialJson;

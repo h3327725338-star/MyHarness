@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit as runGitAsyncImpl, runGitSync } from "./command.ts";
 import type { AutoReviewMutation, ReviewChange } from "./review-types.ts";
+import { invalidateGitStatusCache } from "./status-cache.ts";
 
 const GIT_TIMEOUT_MS = 15_000;
 export const GIT_COMMIT_TIMEOUT_MS = 120_000;
@@ -230,7 +231,10 @@ export function getGitStatusPreview(repositoryRoot: string, paths: string[] = []
 	};
 }
 
-/** 异步版 getGitStatusPreview。 */
+/**
+ * 异步版 getGitStatusPreview。提交/恢复决策依赖它判断改动，故始终读最新
+ * 状态、不走短 TTL 缓存；高频轮询请用 checkpoint 的缓存 status 读取。
+ */
 export async function getGitStatusPreviewAsync(
 	repositoryRoot: string,
 	paths: string[] = [],
@@ -250,8 +254,13 @@ export async function getGitStatusPreviewAsync(
 
 export function createInitialGitBaseline(repositoryRoot: string, message = "建立项目初始版本"): GitCommandResult {
 	const addResult = runGit(repositoryRoot, ["add", "-A", "--", "."]);
-	if (!addResult.ok) return addResult;
-	return runGit(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS);
+	if (!addResult.ok) {
+		invalidateGitStatusCache(repositoryRoot);
+		return addResult;
+	}
+	const result = runGit(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS);
+	invalidateGitStatusCache(repositoryRoot);
+	return result;
 }
 
 /** 异步版 createInitialGitBaseline：git add -A + git commit，不阻塞事件循环。 */
@@ -261,8 +270,13 @@ export async function createInitialGitBaselineAsync(
 	signal?: AbortSignal,
 ): Promise<GitCommandResult> {
 	const addResult = await runGitAsync(repositoryRoot, ["add", "-A", "--", "."], undefined, signal);
-	if (!addResult.ok) return addResult;
-	return runGitAsync(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS, signal);
+	if (!addResult.ok) {
+		invalidateGitStatusCache(repositoryRoot);
+		return addResult;
+	}
+	const result = await runGitAsync(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS, signal);
+	invalidateGitStatusCache(repositoryRoot);
+	return result;
 }
 
 export function resolveMutationPaths(
@@ -413,7 +427,10 @@ export function createGitCommitForPaths(
 		};
 	}
 	const addResult = runGit(repositoryRoot, ["add", "-A", "--", ...filteredPaths], timeoutMs);
-	if (!addResult.ok) return addResult;
+	if (!addResult.ok) {
+		invalidateGitStatusCache(repositoryRoot);
+		return addResult;
+	}
 	const headBefore = runGit(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
 	const commitResult = runGit(
 		repositoryRoot,
@@ -424,12 +441,15 @@ export function createGitCommitForPaths(
 		const reconciled = reconcileCompletedCommit(repositoryRoot, filteredPaths, headBefore.stdout);
 		if (reconciled) {
 			runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
+			invalidateGitStatusCache(repositoryRoot);
 			return reconciled;
 		}
 		runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
+		invalidateGitStatusCache(repositoryRoot);
 		return commitResult;
 	}
 	runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
+	invalidateGitStatusCache(repositoryRoot);
 	return commitResult;
 }
 
@@ -462,7 +482,10 @@ export async function createGitCommitForPathsAsync(
 		};
 	}
 	const addResult = await runGitAsync(repositoryRoot, ["add", "-A", "--", ...filteredPaths], timeoutMs, signal);
-	if (!addResult.ok) return addResult;
+	if (!addResult.ok) {
+		invalidateGitStatusCache(repositoryRoot);
+		return addResult;
+	}
 	const headBefore = await runGitAsync(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"], undefined, signal);
 	const commitResult = await runGitAsync(
 		repositoryRoot,
@@ -474,13 +497,16 @@ export async function createGitCommitForPathsAsync(
 		const reconciled = await reconcileCompletedCommitAsync(repositoryRoot, filteredPaths, headBefore.stdout, signal);
 		if (reconciled) {
 			await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
+			invalidateGitStatusCache(repositoryRoot);
 			return reconciled;
 		}
 		await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
+		invalidateGitStatusCache(repositoryRoot);
 		return commitResult;
 	}
 
 	await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
+	invalidateGitStatusCache(repositoryRoot);
 
 	// A zero exit status is necessary but not sufficient for the caller's
 	// success state: confirm that Git created a real commit object and expose

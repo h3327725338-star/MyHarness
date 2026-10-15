@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getSessionDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { assertDirectTree, preserveArtifactOrigin, refreshSessionArtifactIndexes } from "../../artifacts/store.ts";
 import { refreshMemoryIndexes } from "../../memory/store.ts";
+import { dropPendingSessionWritesUnder, flushSessionWrites } from "./write-batch.ts";
 
 function deleteTarget(sessionPath: string): { path: string; directory: boolean } {
 	const structured = parseSessionDataPath(sessionPath);
@@ -28,6 +29,8 @@ export async function deleteSessionFile(
 	const scope = parseSessionDataPath(sessionPath);
 	try {
 		assertDirectTree(target.path);
+		// Stop the timer before async deletion yields; a failed delete retains durable data.
+		flushSessionWrites(sessionPath);
 		// 连带删记忆（用户在删除确认框中显式勾选，默认不勾）：整个 memory/ 目录随聊天一起清除，
 		// 含归档与待处理快照，不可恢复。不勾选时记忆保留原样，可被记忆工具继续使用。
 		const keepMemory = options.deleteMemory !== true && target.directory && existsSync(join(target.path, "memory"));
@@ -51,6 +54,8 @@ export async function deleteSessionFile(
 				}
 			} else if (!hasMemory) await rm(target.path, { recursive: true });
 			refreshSessionArtifactIndexes(scope);
+			// A removed session must not be resurrected by a pending batch timer.
+			dropPendingSessionWritesUnder(target.path);
 			return { ok: true, method: "unlink" };
 		}
 	} catch (error) {
@@ -72,6 +77,7 @@ export async function deleteSessionFile(
 
 	if (trashResult.status === 0 || !existsSync(target.path)) {
 		if (scope) refreshSessionArtifactIndexes(scope);
+		dropPendingSessionWritesUnder(target.path);
 		return { ok: true, method: "trash" };
 	}
 
@@ -82,6 +88,7 @@ export async function deleteSessionFile(
 			if (error.code !== "ENOENT") throw error;
 		});
 		if (scope) refreshSessionArtifactIndexes(scope);
+		dropPendingSessionWritesUnder(target.path);
 		return { ok: true, method: "unlink" };
 	} catch (err) {
 		const unlinkError = err instanceof Error ? err.message : String(err);

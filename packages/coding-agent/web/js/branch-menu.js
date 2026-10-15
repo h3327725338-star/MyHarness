@@ -8,6 +8,8 @@ import { relTime } from "./util.js";
 import { getLang, serverText, t } from "./i18n.js";
 import { openWorktreeTab } from "./worktree-tabs.js";
 import { explainDeleteFailure } from "./git-delete.js";
+import { createReadCache } from "./scheduling.js";
+const worktreeReads = createReadCache(12);
 
 /** A name for the branch of a new isolated copy: task-MMDD-HHmm. */
 function copyBranchName() {
@@ -86,7 +88,10 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const running = useStore((s) => !!s.snap?.active);
 	const [data, setData] = useState(branchSource.data);
 	const [error, setError] = useState("");
-	const [worktrees, setWorktrees] = useState(null);
+	const [worktrees, setWorktrees] = useState(() => {
+		const cached = worktreeReads.peek(slot);
+		return cached ? { list: cached.worktrees || [] } : null;
+	});
 	const [query, setQuery] = useState("");
 	const [sel, setSel] = useState(0);
 	const [busy, setBusy] = useState("");
@@ -127,16 +132,19 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	};
 	const loadWorktrees = async () => {
 		try {
-			setWorktrees({ list: (await api("/api/git/worktrees", { slot })).worktrees || [] });
+			const data = await worktreeReads.load(slot, () => api("/api/git/worktrees", { slot }));
+			setWorktrees({ list: data.worktrees || [] });
 		} catch (e) {
 			setWorktrees({ list: [], error: serverText(e.message, t("Cannot list worktrees.")) });
 		}
 	};
 	useEffect(() => {
 		load();
+		// Opening the branch popover expresses intent; avoid prefetching every Chat at startup.
+		loadWorktrees();
 	}, []);
 	useEffect(() => {
-		if (worktreesOpen && !worktrees) loadWorktrees();
+		if (worktreesOpen) loadWorktrees();
 	}, [worktreesOpen]);
 	useEffect(() => {
 		if (!branchDeletion) return;

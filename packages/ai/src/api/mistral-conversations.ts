@@ -23,7 +23,7 @@ import type {
 } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { finalizeToolCallArguments, parseStreamingJson } from "../utils/json-parse.ts";
 import { recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -474,7 +474,12 @@ async function consumeChatStream(
 		const block = output.content[index];
 		if (block.type !== "toolCall") continue;
 		const toolBlock = block as ToolCall & { partialArgs?: string };
-		toolBlock.arguments = parseStreamingJson<Record<string, unknown>>(toolBlock.partialArgs);
+		// P2-4 output-side safety: complete call end uses strict parsing only.
+		const finalized = finalizeToolCallArguments(toolBlock.partialArgs);
+		toolBlock.arguments = finalized.args;
+		if (finalized.parseError !== undefined) {
+			toolBlock.argumentsParseError = finalized.parseError;
+		}
 		// Finalize in-place and strip the scratch buffer so replay only
 		// carries parsed arguments.
 		delete toolBlock.partialArgs;

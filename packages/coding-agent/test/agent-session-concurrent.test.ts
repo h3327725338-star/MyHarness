@@ -78,6 +78,21 @@ describe("AgentSession concurrent prompt guard", () => {
 		}
 	});
 
+	it("finishes teardown while surfacing a failed final save", async () => {
+		await createSession();
+		const owned = session as unknown as {
+			_releaseSessionWriterLock: (() => void) | undefined;
+			_resourcesDisposed: boolean;
+		};
+		owned._releaseSessionWriterLock = () => {
+			throw new Error("final save failed");
+		};
+		expect(() => session.dispose()).toThrow("final save failed");
+		expect(owned._releaseSessionWriterLock).toBeUndefined();
+		expect(owned._resourcesDisposed).toBe(true);
+		expect(() => session.dispose()).not.toThrow();
+	});
+
 	async function createSession() {
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		let abortSignal: AbortSignal | undefined;

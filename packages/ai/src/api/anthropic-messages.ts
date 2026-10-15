@@ -32,7 +32,7 @@ import type {
 import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
+import { finalizeToolCallArguments, parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -696,7 +696,14 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
+							// P2-4 output-side safety: complete call end uses strict parsing only.
+							// Truncated or non-deterministically repairable JSON is marked and
+							// must not execute; the host asks the model to re-issue it.
+							const finalized = finalizeToolCallArguments(block.partialJson);
+							block.arguments = finalized.args;
+							if (finalized.parseError !== undefined) {
+								block.argumentsParseError = finalized.parseError;
+							}
 							// Finalize in-place and strip the scratch buffer so replay only
 							// carries parsed arguments.
 							delete (block as { partialJson?: string }).partialJson;

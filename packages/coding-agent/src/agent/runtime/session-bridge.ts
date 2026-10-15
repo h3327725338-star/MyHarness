@@ -174,6 +174,8 @@ class BridgeConnection {
 			this.socket.destroy();
 			return;
 		}
+		// Followers build context from disk, so announced history must already be durable.
+		session.sessionManager.flushPendingWrites();
 		const hello: HelloOk = {
 			t: "hello_ok",
 			sessionFile: session.sessionFile,
@@ -359,6 +361,14 @@ class BridgeHost {
 		const session = this.target;
 		if (!session) return;
 		this.unsubscribe = session.subscribe((event) => {
+			// Pay the flush boundary only when a cross-process follower actually exists.
+			if (
+				this.connections.size &&
+				["message_end", "turn_end", "agent_end", "agent_settled", "entry_appended", "compaction_end"].includes(
+					event.type,
+				)
+			)
+				session.sessionManager.flushPendingWrites();
 			for (const connection of this.connections) connection.send(event);
 		});
 	}

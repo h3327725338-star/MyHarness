@@ -1,7 +1,8 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
-import { activeSlotId, api, fetchMoreTranscript, getTurnsCache, setTurnsCache, setView, useStore } from "./store.js";
+import { createReadCache } from "./scheduling.js";
+import { retrySwitch, activeSlotId, api, fetchMoreTranscript, getTurnsCache, setTurnsCache, setView, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
@@ -569,19 +570,25 @@ function MarkdownDiff({ patch }) {
 	</div>`)}</div>`;
 }
 
-/** The diff of one file of a change card, loaded the first time the file is opened. */
+const cardDiffReads = createReadCache(24);
+const cardDiffKey = (slot, card, file) => JSON.stringify([slot, card.id, card.runId, file.path]);
+const readCardDiff = (slot, card, file) => cardDiffReads.load(cardDiffKey(slot, card, file), () => api(`/api/changes/card-diff?id=${encodeURIComponent(card.id)}&runId=${card.runId}&path=${encodeURIComponent(file.path)}`, { slot }));
+
+/** The diff of one file of a change card, prefetched on pointer/focus intent and scoped to its Chat. */
 function ChangeDiff({ card, file }) {
-	const [entry, setEntry] = useState(null);
+	const slot = activeSlotId();
+	const cached = cardDiffReads.peek(cardDiffKey(slot, card, file));
+	const [entry, setEntry] = useState(cached ? { data: cached } : null);
 	const markdown = MARKDOWN_PATH.test(file.path);
 	useEffect(() => {
 		let cancelled = false;
-		api(`/api/changes/card-diff?id=${encodeURIComponent(card.id)}&runId=${card.runId}&path=${encodeURIComponent(file.path)}`)
+		readCardDiff(slot, card, file)
 			.then((data) => !cancelled && setEntry({ data }))
 			.catch((e) => !cancelled && setEntry({ error: e.message }));
 		return () => {
 			cancelled = true;
 		};
-	}, [card.id, file.path]);
+	}, [slot, card.id, card.runId, file.path]);
 	const data = entry?.data;
 	if (entry?.error) return html`<div class="change-note c-danger">${entry.error}</div>`;
 	if (!data) return html`<div class="change-note"><${Spinner} /></div>`;
@@ -598,9 +605,11 @@ function ChangeFile({ card, file }) {
 	const [open, setOpen] = useState(false);
 	const [opened, setOpened] = useState(false);
 	const dir = dirname(file.path);
+	const slot = activeSlotId();
+	const prefetch = () => { void readCardDiff(slot, card, file).catch(() => {}); };
 	const toggle = () => (setOpened(true), setOpen(!open));
 	return html`<div class="change-item">
-		<button class="change-file" aria-expanded=${open} title=${file.path} onClick=${toggle}>
+		<button onPointerEnter=${prefetch} onFocus=${prefetch} class="change-file" aria-expanded=${open} title=${file.path} onClick=${toggle}>
 			<${Icon} name="chevronRight" size=${13} class="disclose" />
 			<span class="change-path truncate">${dir ? html`<span class="dim">${dir}/</span>` : null}${basename(file.path)}${file.oldPath ? html` <span class="dim">← ${file.oldPath}</span>` : null}</span>
 			${lineCounts(file)}
@@ -725,6 +734,7 @@ function Welcome({ snap, models }) {
 const CHUNK_FIRST = 20;
 const CHUNK_NEXT = 20;
 export function Transcript() {
+	const switching = useStore((s) => s.switching);
 	const items = useStore((s) => s.items);
 	const gitTask = useStore((s) => s.gitTask);
 	const toolRuns = useStore((s) => s.toolRuns);
@@ -742,6 +752,8 @@ export function Transcript() {
 	const turnsSlot = activeSlotId();
 	const [asyncTurns, setAsyncTurns] = useState(null);
 	const turns = useMemo(() => {
+		// A loading shell has no transcript to project; avoid empty intermediate builds and cache pollution.
+		if (switching || items.length === 0) return [];
 		// Cross-session cache: when this bag's last build still describes exactly these references, reuse the very
 		// same turn objects (skipping buildTurns and the sameTurn pass). Mount chunking stays as it is: reusing the
 		// objects does not spare the DOM insert, and a full-window first commit measured 3x slower to first paint.
@@ -751,24 +763,28 @@ export function Transcript() {
 			return cached;
 		}
 		if (items.length > 400) {
-			return asyncTurns?.slot === turnsSlot ? asyncTurns.turns : [];
+			if (asyncTurns?.slot === turnsSlot && asyncTurns.items === items && asyncTurns.toolRuns === toolRuns && asyncTurns.cwd === cwd) return asyncTurns.turns;
+			// Keep a complete tail turn when possible, rather than cutting in the middle of a tool exchange.
+			let start = Math.max(0, items.length - 60);
+			while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
+			return buildTurns(items.slice(start), { cwd, toolRuns });
 		}
 		const built = buildTurns(items, { cwd, toolRuns }, prevTurns.current);
 		setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
 		prevTurns.current = built;
 		return built;
-	}, [items, toolRuns, cwd, turnsSlot, asyncTurns]);
+	}, [items, toolRuns, cwd, turnsSlot, asyncTurns, switching]);
 	useEffect(() => {
-		if (items.length <= 400 || cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd)) return undefined;
+		if (switching || items.length <= 400 || cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd)) return undefined;
 		let cancelled = false;
 		void buildTurnsAsync(items, { cwd, toolRuns }, prevTurns.current, () => cancelled).then((built) => {
 			if (cancelled || !built) return;
 			setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
 			prevTurns.current = built;
-			setAsyncTurns({ slot: turnsSlot, turns: built });
+			setAsyncTurns({ slot: turnsSlot, items, toolRuns, cwd, turns: built });
 		});
 		return () => { cancelled = true; };
-	}, [items, toolRuns, cwd, turnsSlot]);
+	}, [items, toolRuns, cwd, turnsSlot, switching]);
 
 	// Scroll behaviour: follow new output only while the reader is at the bottom.
 	const scroller = useRef(null);
@@ -997,9 +1013,12 @@ export function Transcript() {
 	return html`<div class="transcript-wrap">
 		<div class="transcript" ref=${scroller} onScroll=${onScroll} onWheel=${noteInteraction} onClickCapture=${holdOnOpen} onMouseDown=${noteInteraction} onKeyDown=${noteInteraction}>
 			<div class="transcript-inner" ref=${content}>
-				${empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
-				${showEarlier ? html`<button class="btn sm ghost earlier" disabled=${!hidden && transcriptFetching} onClick=${showEarlierClick}>${hidden ? t("Show earlier messages ({hidden} hidden)", { hidden }) : transcriptFetching ? t("Loading…") : t("Show more")}</button>` : null}
-				${rendered.map((turn, i) => {
+				${switching ? html`<div class="switch-placeholder" role="status" aria-live="polite" aria-busy=${!switching.error}>
+					${switching.name ? html`<h2>${switching.name}</h2>` : null}
+					${switching.error ? html`<p>${switching.error}</p><button class="btn sm" onClick=${retrySwitch}>${t("Retry")}</button>` : html`<span class="dim">${t("Loading…")}</span><div class="switch-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>`}
+				</div>` : empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
+				${!switching && showEarlier ? html`<button class="btn sm ghost earlier" disabled=${!hidden && transcriptFetching} onClick=${showEarlierClick}>${hidden ? t("Show earlier messages ({hidden} hidden)", { hidden }) : transcriptFetching ? t("Loading…") : t("Show more")}</button>` : null}
+				${(switching ? [] : rendered).map((turn, i) => {
 					const index = renderedStart + i;
 					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
 					const isLast = index === lastTurnIndex;
@@ -1008,8 +1027,8 @@ export function Transcript() {
 					const run = live ? undefined : runForTurn(turn, runs, isLast);
 					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} />`;
 				})}
-				${liveBash.map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
-				${gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}
+				${(switching ? [] : liveBash).map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
+				${!switching && gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}
 				<div class="transcript-end" />
 			</div>
 		</div>

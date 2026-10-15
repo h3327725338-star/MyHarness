@@ -13,8 +13,9 @@
 | `command.ts` | `runGit()` / `runGitSync()` / `runGitChecked()`：统一的 Git 子进程执行、超时、失败分类 |
 | `integration.ts` | 仓库检查、身份（user.name/email）、状态预览、初始化、初始基线提交、按路径提交 |
 | `branches.ts` | 本地分支：列出、切换（`git switch`）、新建并切换（`git switch -c`）、安全删除（`git branch -d`，调用方可显式要求强删 `-D`），全部异步 |
-| `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹 |
-| `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行） |
+| `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹（Final ChangeSet 全异步：worktree/head/refs/pending/index 均走 async Git，pending 用 fresh 读） |
+| `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行；同步与异步各一套，恢复决策始终读最新状态） |
+| `status-cache.ts` | `git status --porcelain=v1 -z` 短 TTL（1s）缓存 + 并发去重；失败不入缓存、不抛错（`{ error }` 返回）。写入后由提交/丢弃/恢复调用 `invalidateGitStatusCache()` 失效；关键写操作前的读取用 `fresh: true` |
 | `failure-diagnosis.ts` | 把因具体路径导致的 Git 失败翻译成可读原因（如 Windows 保留名） |
 | `bash-command-classifier.ts` | 保守判断一条 Bash 命令是否只读，用来决定是否需要先建检查点 |
 | `source.ts` | `parseGitUrl()`：解析 Git 源地址 |
