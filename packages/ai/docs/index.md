@@ -43,7 +43,7 @@
 
 ## 客户端请求计时
 
-可选的 `AssistantMessage.requestDurationMs` 保存客户端 API 全程耗时（毫秒）。目前 `openai-completions` adapter 使用 `performance.now()`，在调用 SDK 前开始、消费完响应流后结束。包含首字等待、网络、SDK 处理及配置的 SDK 内部重试，不是服务器纯生成耗时；不包含调用前的 payload hook、Agent 消费、持久化或 Web 展示。其他 adapter 尚未接入时不应虚构计时。
+可选的 `AssistantMessage.requestDurationMs` 保存客户端 API 全程耗时（毫秒）。每个 Provider 请求都经过 `lazyStream`（`Models.stream` / `streamSimple`、`lazyApi`，以及 coding-agent 的 ProviderRuntime 与组合 Provider），它在适配器开始工作后计时，并在把终止事件交给消费方之前写入该字段，所以每个 adapter 都有值；适配器自己测出的正数优先，不会被覆盖。`openai-completions` adapter 另有更精确的自测：使用 `performance.now()` 在调用 SDK 前开始、消费完响应流后结束。两者都包含首字等待、网络与流消费（含配置的 SDK 内部重试），不是服务器纯生成耗时；`lazyStream` 兜底口径还包含对话 payload hook，两者都不包含鉴权解析、adapter 模块懒加载、Agent 消费、持久化或 Web 展示。失败与取消的请求同样带耗时，由消费方按 `stopReason` 排除。没有实际测量时不得虚构计时。
 
 ## 运行时证据
 
