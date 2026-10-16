@@ -2,7 +2,7 @@
 import { Component, Fragment, createContext, h, render } from "/vendor/preact.js";
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "/vendor/preact-hooks.js";
 import htm from "/vendor/htm.js";
-import { Icon } from "./icons.js";
+import { Icon, strokeFor } from "./icons.js";
 import { t } from "./i18n.js";
 import { reconcileRows } from "./list-presence.js";
 
@@ -232,7 +232,7 @@ export function Menu({ trigger, placement = "bottom", align = "start", width, ch
 	</span>`;
 }
 
-export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true, focusInput = true }) {
+export function Modal({ title, onClose, width = 560, children, footer, subtitle, class: cls, closeOnScrim = true, focusInput = true, closeIcon = "x", closeLabel }) {
 	const ref = useRef(null);
 	const inline = useContext(InlineFrame);
 	// Fields the dialog adds after it mounted (a new model row, the folder picker's address edit) still need the scan.
@@ -273,7 +273,7 @@ export function Modal({ title, onClose, width = 560, children, footer, subtitle,
 		<div class=${`modal ${cls || ""}`} style=${{ width: `min(${width}px, calc(100vw - 48px))` }} ref=${ref} tabindex="-1" role="dialog" aria-modal="true" aria-label=${title}>
 			<div class="modal-head">
 				<div class="col grow"><div class="modal-title truncate">${title}</div>${subtitle ? html`<div class="dim modal-sub">${subtitle}</div>` : null}</div>
-				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label=${t("Close")}><${Icon} name="x" size=${15} /></button>` : null}
+				${onClose ? html`<button class="icon-btn sm" onClick=${onClose} aria-label=${closeLabel || t("Close")} title=${closeLabel}><${Icon} name=${closeIcon} size=${15} /></button>` : null}
 			</div>
 			<div class="modal-body">${children}</div>
 			${footer ? html`<div class="modal-foot">${footer}</div>` : null}
@@ -300,17 +300,17 @@ export function Counts({ additions, deletions, class: cls }) {
 	return html`<span class=${`counts ${cls || ""}`}>${additions ? html`<span class="add">+${additions}</span>` : null}${deletions ? html`<span class="del">−${deletions}</span>` : null}</span>`;
 }
 
-/** The dropdown chevron of every chip and select-like button (native selects draw the same shape in CSS: --chev-img). */
+/** The dropdown chevron of every chip, `.select` button and Select trigger (base.css places it; one glyph everywhere). */
 export function Chevron() {
 	return html`<${Icon} name="chevronDown" size=${12} class="chev" />`;
 }
 
 /**
  * The one "working" glyph: a rounded three-quarter arc on a faint ring, drawn on the same 24-unit grid and with the same
- * round stroke as the line icons, so it sits next to them at the same size, weight and baseline.
+ * round stroke (strokeFor) as the line icons, so it sits next to them at the same size, weight and baseline.
  */
 export function Spinner({ title, size = 14 } = {}) {
-	return html`<svg class="spinner" width=${size} height=${size} viewBox="0 0 24 24" fill="none" aria-hidden=${title ? undefined : "true"} role=${title ? "img" : undefined}>
+	return html`<svg class="spinner" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke-width=${strokeFor(size)} aria-hidden=${title ? undefined : "true"} role=${title ? "img" : undefined}>
 		${title ? html`<title>${title}</title>` : null}
 		<circle class="spinner-ring" cx="12" cy="12" r="8.5" />
 		<path class="spinner-arc" d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" />

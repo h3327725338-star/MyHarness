@@ -1,4 +1,5 @@
 import {
+	Chevron,
 	Icon,
 	Popover,
 	html,
@@ -255,6 +256,7 @@ export function SearchableMultiSelect({
 				: selectedValues.length === 0
 				? html`<span class="set-multiselect-placeholder">${placeholder || defaultPlaceholder}</span>`
 				: html`<span class="set-multiselect-summary truncate" title=${summaryText}>${summaryText}</span>`}
+			<${Chevron} />
 		</button>
 		<${Popover}
 			anchor=${anchor}
@@ -312,7 +314,7 @@ export function SearchableMultiSelect({
 							title=${row.value}
 						>
 							<span class=${`multi-box ${on ? "on" : ""}`}>
-								${on ? html`<${Icon} name="check" size=${11} sw=${2.4} />` : null}
+								${on ? html`<${Icon} name="check" size=${11} />` : null}
 							</span>
 							<span class="set-multiselect-option-label truncate">${row.isUnknown ? row.label : serverText(row.label)}</span>
 							${row.isUnknown

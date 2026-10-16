@@ -143,7 +143,7 @@ try {
  await wait(450);
  for(const [id,deg] of [['f1',0],['f2',90],['d1',0],['d2',90]]){
   const svg=document.querySelector('#'+id+' svg');
-  must(svg.querySelector('path').getAttribute('d')==='m9 6 6 6-6 6','fold glyph is not a right arrow: '+id);
+  must(svg.querySelector('path').getAttribute('d')==='m8.25 4.5 7.5 7.5-7.5 7.5','fold glyph is not a right arrow: '+id);
   must(angle(svg)===deg,'fold arrow '+id+' is at '+angle(svg)+' degrees, not '+deg);
  }
 

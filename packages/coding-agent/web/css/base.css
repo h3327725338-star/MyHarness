@@ -98,10 +98,11 @@ svg { display: block; flex: none; }
 /* An example of what to type, not a value: lighter still, so it cannot be taken for one. */
 .field.example-placeholder::placeholder { color: var(--text-4); opacity: 0.55; font-style: italic; }
 textarea.field { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; }
-/* Every dropdown (native select, button that opens a list) draws the same chevron: one 12px stroke image, vertically
-   centred, 10px from the right edge, with room reserved for it so text never runs under it. The chips of the composer
-   draw the identical shape with the Chevron component. */
-.select { padding-right: 30px; appearance: none; background-image: var(--chev-img); background-repeat: no-repeat; background-position: right 10px center; background-size: 12px 12px; }
+/* Every dropdown (a `.select` button, the Select trigger, the composer chips) draws the same chevron: the Chevron
+   component (icons.js chevronDown, 12 px, --text-3). In `.select` / `.select-like` it is vertically centred 10px from
+   the right edge, with room reserved for it so text never runs under it. */
+.select { position: relative; padding-right: 30px; appearance: none; }
+.select > .chev, .select-like > .chev { position: absolute; right: 10px; top: 50%; margin-top: -6px; pointer-events: none; transition: transform var(--t-fast) var(--ease); }
 .select option { background: var(--bg-raised); color: var(--text); }
 .chev { color: var(--text-3); flex: none; }
 
@@ -148,8 +149,8 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 /* Status glyphs. State is always carried by text/shape; motion is only decoration. The spinner is an SVG on the icons'
    24-unit grid (see Spinner in ui.js): a faint ring and a rounded arc, in the icons' stroke weight. */
 .spinner { color: var(--accent); animation: spin 0.8s linear infinite; flex: none; }
-.spinner-ring { stroke: var(--border-strong); stroke-width: 2.2; }
-.spinner-arc { stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.spinner-ring { stroke: var(--border-strong); }
+.spinner-arc { stroke: currentColor; stroke-linecap: round; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.accent { background: var(--accent); }
@@ -198,7 +199,7 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .unit-input::placeholder { color: var(--text-4); }
 .unit-suffix { flex: none; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; user-select: none; }
 /* The unit of a numberUnit field: a plain select living inside the same bordered box as the number, with the shared chevron. */
-.unit-select { flex: none; height: 100%; border: 0; background: transparent; appearance: none; -webkit-appearance: none; padding: 0 13px 0 0; background-image: var(--chev-img); background-repeat: no-repeat; background-position: right center; background-size: 10px 10px; color: var(--text-3); font-size: var(--fs-sm); outline: none; cursor: pointer; }
+.unit-select { flex: none; height: 100%; border: 0; background: transparent; appearance: none; -webkit-appearance: none; padding: 0 13px 0 0; color: var(--text-3); font-size: var(--fs-sm); outline: none; cursor: pointer; }
 .unit-field:hover .unit-select, .unit-field:focus-within .unit-select { color: var(--text); }
 .unit-select option { background: var(--bg-raised); color: var(--text); }
 
@@ -222,7 +223,7 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .empty-hint { margin-top: 4px; font-size: var(--fs-sm); }
 
 /* The trigger of the self-drawn Select (web/js/select.js): the look of `.select` on a button, with the shared
-   `--chev-img` chevron drawn as its own ::after so it can turn 180 degrees while the list is open. The width shrinks
+   Chevron, which turns 180 degrees while the list is open. The width shrinks
    to the content (W30); text that does not fit is cut with the shared ellipsis and kept whole in the button's title. */
 .select-like {
 	position: relative; display: inline-flex; align-items: center;
@@ -237,8 +238,7 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .select-like:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .select-like.sm { height: var(--h-control-sm); font-size: var(--fs-sm); }
 .select-like.fill { flex: 1 1 auto; width: 100%; }
-.select-like::after { content: ""; position: absolute; right: 10px; top: 50%; margin-top: -6px; width: 12px; height: 12px; background: var(--chev-img) no-repeat center / 12px 12px; transition: transform var(--t-fast) var(--ease); }
-.select-like[aria-expanded="true"]::after { transform: rotate(180deg); }
+.select-like[aria-expanded="true"] > .chev { transform: rotate(180deg); }
 .select-value { min-width: 0; }
 .select-placeholder { color: var(--text-3); }
 

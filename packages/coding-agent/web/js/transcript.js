@@ -17,7 +17,7 @@ import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 import { AttachmentList, splitAttachments } from "./attachments.js";
-import { DispatchCard, dispatchFor, runningSince, runningTasks, useSubAgents } from "./sub-agents.js";
+import { SubAgentProcess, dispatchFor, runningSince, runningTasks, useSubAgents } from "./sub-agents.js";
 
 // ---- Small pieces ----------------------------------------------------------------------------
 function Ansi({ text }) {
@@ -171,6 +171,7 @@ const TASK_DOT = { running: "accent", completed: "ok", partial: "warn", failed: 
 
 function TaskResult({ task }) {
 	const [open, setOpen] = useState(false);
+	const cwd = useStore((st) => st.snap?.cwd || "");
 	const toggle = () => setOpen(!open);
 	return html`<div class="sub-task">
 		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
@@ -180,12 +181,7 @@ function TaskResult({ task }) {
 		</div>
 		${task.status === "running" && task.lastToolInfo ? html`<div class="dim sub-last truncate">${task.lastToolInfo}</div>` : null}
 		<${Collapse} open=${open}>
-			<div class="sub-detail">
-				${task.error ? html`<div class="c-danger">${task.error}</div>` : null}
-				${task.output ? html`<${Markdown} text=${task.output} />` : html`<div class="dim">${t("No report yet.")}</div>`}
-				${task.findings?.length ? html`<div class="raw-label">${t("Findings")}</div><ul class="sub-list">${task.findings.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
-				${task.unresolved?.length ? html`<div class="raw-label">${t("Unresolved")}</div><ul class="sub-list">${task.unresolved.map((f, i) => html`<li key=${i}>${f}</li>`)}</ul>` : null}
-			</div>
+			<div class="sub-detail"><${SubAgentProcess} result=${task} running=${task.status === "running"} cwd=${cwd} /></div>
 		<//>
 	</div>`;
 }
@@ -232,8 +228,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 	const rawDetails = step.kind === "agent" ? (batchId && subAgents[batchId]) || resultDetails || step.run?.partialDetails || dispatch?.details : undefined;
 	// Sub-agents run as long as the session says so (its sub-agent state), not as long as the call that started them:
 	// tasks still marked running without a live dispatch were stopped (the main task stopped, the server restarted).
-	const liveDispatch = dispatch?.status === "running";
-	const stale = rawDetails && step.status !== "running" && !liveDispatch;
+	const stale = rawDetails && step.status !== "running" && dispatch?.status !== "running";
 	const liveDetails = stale ? settleDetails(rawDetails) : rawDetails;
 	const took = step.startedAt && step.endedAt && step.endedAt - step.startedAt >= 1000 ? fmtDuration(step.endedAt - step.startedAt) : "";
 	const exit = step.result?.details?.exitCode;
@@ -255,24 +250,9 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 			</span>
 		</div>
 		<${Collapse} open=${open}><${RawDetails} step=${step} /><//>
-		${step.kind === "agent" ? (liveDispatch ? html`<div class="dim sub-live-note">${t("Live status is in the sub-agent card below this step block.")}</div>` : html`<${AgentDetails} details=${liveDetails} />`) : null}
+		${step.kind === "agent" ? html`<${AgentDetails} details=${liveDetails} />` : null}
 	</div>`;
 });
-
-/** Live cards of the dispatches a block of steps started, while their sub-agents still run. */
-function LiveDispatchCards({ steps }) {
-	const state = useSubAgents();
-	const subAgents = useStore((st) => st.subAgents);
-	if (!state.items.length) return null;
-	const cards = [];
-	for (const step of steps) {
-		if (step.type !== "action" || step.kind !== "agent") continue;
-		const batchId = step.result?.details?.batchId || step.run?.partialDetails?.batchId;
-		const item = dispatchFor(state, step.call?.id, batchId);
-		if (item?.status === "running") cards.push(html`<${DispatchCard} key=${item.id} item=${item} details=${subAgents[item.id]} />`);
-	}
-	return cards.length ? html`<div class="sa-cards">${cards}</div>` : null;
-}
 
 /** Consecutive calls of one kind. The web (searching and reading pages) is always one aggregate line, even for a single call. */
 function Group({ group, forceOpen }) {
@@ -458,11 +438,6 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	const [open, setOpen] = useState(defaultOpen);
 	const interacted = useRef(false);
 	useEffect(() => { if (!interacted.current) setOpen(defaultOpen); }, [defaultOpen]);
-	// "Show in the conversation" from the sub-agent bar opens the block that holds the dispatch.
-	const reveal = useStore((st) => st.view.revealDispatch);
-	useEffect(() => {
-		if (reveal && steps.some((step) => step.call?.id === reveal.id)) setOpen(true);
-	}, [reveal?.n]);
 	const subAgentState = useSubAgents();
 	// While the context is compacted the strip above the input shows it, with its own timer and Cancel: this row stays
 	// still (no working glyph, activity or timer) and is not drawn at all when the turn has no steps yet.
@@ -719,7 +694,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 		${segments.map((segment) =>
 			segment.type === "text"
 				? html`<div class="final" key=${segment.key}><${Markdown} text=${segment.step.text} /></div>`
-				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} /><${LiveDispatchCards} key=${`sa-${turn.key}-${segment.key}`} steps=${segment.steps} />`,
+				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} />`,
 		)}
 		${pending ? html`<${ProcessSummary} key=${`sum-${turn.key}-pending`} turn=${turn} steps=${[]} outcome=${outcome} live=${working} compacting=${compacting} snapRun=${snapRun} defaultOpen=${false} />` : null}
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}

@@ -284,7 +284,7 @@ export function FloatingQuoteToolbar() {
 		<div class="quote-note-bar">
 			<button class="icon-btn sm quote-tool" onClick=${() => fileInput.current?.click()} title=${t("Attach a file")} aria-label=${t("Attach a file")}><${Icon} name="paperclip" size=${11} /></button>
 			<span class="grow" />
-			<button class="icon-btn sm quote-tool quote-note-save" onClick=${save} title=${t("Save quote")} aria-label=${t("Save quote")}><span class="quote-enter" aria-hidden="true">⏎</span></button>
+			<button class="icon-btn sm quote-tool quote-note-save" onClick=${save} title=${t("Save quote")} aria-label=${t("Save quote")}><${Icon} name="enter" size=${13} /></button>
 		</div>
 		<input
 			ref=${fileInput}

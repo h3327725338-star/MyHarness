@@ -1,6 +1,7 @@
 // Context usage: how full the model's context window is, the session's cache hit rate and the model's output speed.
 // Session measurements come from the usage projection; the snapshot's speed is only the latest live request.
 import { html, useEffect, useRef, useState, Popover } from "./ui.js";
+import { strokeFor } from "./icons.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { t } from "./i18n.js";
@@ -142,7 +143,7 @@ export function ContextMeter() {
 	const fill = percent > 0 ? Math.max(2, Math.min(100, percent)) : 0;
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class=${`meter ${level}`} aria-haspopup="dialog" aria-expanded=${open} title=${`${t("Context")}: ${fmtK(tokens)} / ${fmtK(window_)} (${percent.toFixed(0)}%)`} onClick=${() => setOpen(!open)}>
-			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width="2.4" />${fill > 0 ? html`<circle class="meter-fill" cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" pathLength="100" stroke-dasharray=${`${fill} 100`} transform="rotate(-90 10 10)" />` : null}</svg>
+			<svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--border-strong)" stroke-width=${strokeFor(16, 20)} />${fill > 0 ? html`<circle class="meter-fill" cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width=${strokeFor(16, 20)} stroke-linecap="round" pathLength="100" stroke-dasharray=${`${fill} 100`} transform="rotate(-90 10 10)" />` : null}</svg>
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${280} maxHeight=${520}>
 			<${ContextDetails} onDone=${() => setOpen(false)} />

@@ -2,7 +2,7 @@
 // like `.select`, and the shared `Popover` for the panel, so it inherits the one open/close motion (pop-in / pop-out).
 // A native select's popup is drawn by the operating system and cannot be animated; this one can. Controlled like the
 // native one: `value` is a string, `onChange(newValue)` is called on pick, and the parent decides what shows.
-import { Fragment, Icon, Popover, html, useCallback, useEffect, useMemo, useRef, useState } from "./ui.js";
+import { Chevron, Fragment, Icon, Popover, html, useCallback, useEffect, useMemo, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
 import { pointerMoved } from "./util.js";
 
@@ -149,6 +149,7 @@ export function Select({ value, options = [], onChange, ariaLabel, id, class: cl
 			onClick=${() => (open ? closeList() : openList("first"))}
 			onKeyDown=${onTriggerKeyDown}>
 			<span class=${`select-value truncate ${chosen || shownText ? "" : "select-placeholder"}`}>${shownLabel}</span>
+			<${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${closeList} placement="bottom" align="start" minWidth=${panelWidth} class="select-pop">
 			<div class="pop-scroll select-options" ref=${listRef} id=${uid} role="listbox" aria-label=${ariaLabel}>

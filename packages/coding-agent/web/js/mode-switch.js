@@ -2,6 +2,7 @@
 // Both read the server's slot list (`/api/slots`, `slots` events); nothing here keeps a task state of its own.
 import { html, useLayoutEffect, useMemo, useRef, useState, Icon, Popover, motionEnabled } from "./ui.js";
 import { modeIconPaths } from "./mode-icon.js";
+import { strokeFor } from "./icons.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { modeSignal, modeTasks, otherMode, taskCounts } from "./chat-modes.js";
@@ -24,7 +25,7 @@ function SignalMark({ signal, mode }) {
 	if (!signal) return null;
 	if (signal === "running") return html`<span class=${`mode-breath ${mode}`} title=${t("Running")} />`;
 	const ui = SIGNAL_UI[signal];
-	return html`<span class=${`mode-mark ${ui.cls}`} title=${t(ui.label)}><${Icon} name=${ui.icon} size=${11} sw=${2.2} /></span>`;
+	return html`<span class=${`mode-mark ${ui.cls}`} title=${t(ui.label)}><${Icon} name=${ui.icon} size=${11} /></span>`;
 }
 
 /** A soft sliding knob with a continuously morphing icon; task marks stay attached to their own side. */
@@ -74,9 +75,9 @@ export function ModeSwitch() {
 		return () => { cancelAnimationFrame(frame); animation?.cancel(); };
 	}, [mode]);
 	return html`<button class=${`mode-switch ${mode}`} role="switch" aria-checked=${mode === "general"} aria-label=${t("General mode")} title=${`${t(MODE_LABEL[mode])} · ${label}`} onClick=${() => actions.switchMode(next)}>
-		<span class="mode-side coding" aria-hidden="true"><${Icon} name="terminal" size=${11} sw=${2} /><span class="mode-signal"><${SignalMark} signal=${signals.coding} mode="coding" /></span></span>
-		<span class="mode-side general" aria-hidden="true"><${Icon} name="chat" size=${11} sw=${2} /><span class="mode-signal"><${SignalMark} signal=${signals.general} mode="general" /></span></span>
-		<span ref=${knob} class="mode-knob" aria-hidden="true"><svg class="mode-morph-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${modeIconPaths(mode === "general" ? 1 : 0).map((d, i) => html`<path ref=${(node) => { paths.current[i] = node; }} d=${d} />`)}</svg></span>
+		<span class="mode-side coding" aria-hidden="true"><${Icon} name="terminal" size=${11} /><span class="mode-signal"><${SignalMark} signal=${signals.coding} mode="coding" /></span></span>
+		<span class="mode-side general" aria-hidden="true"><${Icon} name="chat" size=${11} /><span class="mode-signal"><${SignalMark} signal=${signals.general} mode="general" /></span></span>
+		<span ref=${knob} class="mode-knob" aria-hidden="true"><svg class="mode-morph-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=${strokeFor(15)} stroke-linecap="round" stroke-linejoin="round">${modeIconPaths(mode === "general" ? 1 : 0).map((d, i) => html`<path ref=${(node) => { paths.current[i] = node; }} d=${d} />`)}</svg></span>
 	</button>`;
 }
 

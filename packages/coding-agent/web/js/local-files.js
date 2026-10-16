@@ -1,4 +1,5 @@
 import { post, toast, activeSlotId, subscribe } from "./store.js";
+import { h, render, Icon } from "./ui.js";
 import { t } from "./i18n.js";
 import { isLocalAutolinkBlocked, pathCandidates } from "./local-file-links.js";
 
@@ -166,6 +167,7 @@ export async function showLocalFileMenu(event, path, slot) {
 		const arrow = document.createElement("span");
 		arrow.className = "local-file-menu-arrow";
 		arrow.setAttribute("aria-hidden", "true");
+		render(h(Icon, { name: "chevronRight", size: 12 }), arrow);
 		button.append(arrow);
 		const expand = (keyboard = false) => {
 			clearTimeout(hoverTimer);

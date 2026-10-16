@@ -203,7 +203,7 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
 	const text = value ? effortName(value) : t("Default");
 	return html`<span ref=${anchor} class=${`picker-anchor ${cls.split(" ").includes("model-ref-effort") ? "model-ref-effort-anchor" : ""}`}>
 		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
-			<span class="truncate chip-text">${text}</span>${cls.split(" ").includes("select") ? null : html`<${Chevron} />`}
+			<span class="truncate chip-text">${text}</span><${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${264} class="effort-pop">
 			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} withDefault=${withDefault} autoFocus onDone=${() => setOpen(false)} />
@@ -226,6 +226,7 @@ export function ModelRefPicker({ models, value, onChange, disabled, label, showI
 		<span ref=${anchor} class="picker-anchor grow">
 			<button class="select model-ref-btn" disabled=${disabled} aria-haspopup="listbox" aria-expanded=${open} aria-label=${label} title=${title} onClick=${() => setOpen(!open)}>
 				<span class="model-ref-text">${text}</span>
+				<${Chevron} />
 			</button>
 			<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="bottom" align="end" width=${360} maxHeight=${360} class="model-pop model-ref-pop">
 				<${ModelMenu} models=${models} selected=${v} mainOption fullText

@@ -27,6 +27,11 @@ material they cover:
   packages' ES module builds and stylesheet, unmodified except that the
   trailing source-map reference of the two scripts is removed (the maps are
   not shipped).
+- `packages/coding-agent/web/js/icons.js` contains SVG path data copied from
+  Heroicons 2.2.0 outline icons (MIT, Tailwind Labs, Inc.; the license text is
+  `packages/coding-agent/web/vendor/LICENSE.heroicons`). Only the path strings
+  are copied (no Heroicons package or file is shipped); the glyphs that
+  Heroicons does not have are MyHarness drawings.
 - The Terminal panel's pseudo terminal is the optional npm dependency
   `@lydell/node-pty` (MIT; Christopher Jeffrey, Daniel Imms and Microsoft
   Corporation), a repackaging of node-pty with prebuilt binaries. It is

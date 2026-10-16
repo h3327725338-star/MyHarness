@@ -10,7 +10,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 const installed = detectInstalledBrowsers();
 
 // The W141 self-drawn Select (web/js/select.js): a `.select-like` combobox trigger that looks like `.select`
-// (32 px / 28 px, shared --chev-img chevron that turns 180 degrees while open), the shared ui.js Popover for the
+// (32 px / 28 px, the shared Chevron icon that turns 180 degrees while open), the shared ui.js Popover for the
 // panel (so it inherits the W140 pop-in / pop-out motion), `.pop-item` options with aria-selected and a check on the
 // current row, full keyboard support (Enter/Space/arrows to open, arrows that skip disabled rows, Home/End,
 // Enter/Space pick, Esc/Tab close with focus kept on the trigger, 800 ms type-ahead), a 420 px wrap-safe panel with
@@ -170,9 +170,9 @@ if (location.search.indexOf('mode=narrow') < 0) {
 			assert(csA.backgroundColor === csRef.backgroundColor, 'background must match .select: ' + csA.backgroundColor + ' vs ' + csRef.backgroundColor);
 			assert(csA.borderTopColor === csRef.borderTopColor, 'border must match .select: ' + csA.borderTopColor + ' vs ' + csRef.borderTopColor);
 			assert(parseFloat(csA.paddingRight) >= 30, 'chevron room at the right edge: ' + csA.paddingRight);
-			var chevA = getComputedStyle(sa, '::after');
-			assert(/url\\(/.test(csRef.backgroundImage), 'native .select chevron image missing');
-			assert(chevA.backgroundImage === csRef.backgroundImage, 'trigger chevron must reuse --chev-img exactly');
+			var chevEl = sa.querySelector(':scope > svg.chev');
+			assert(chevEl, 'trigger chevron must be the shared Chevron icon (icons.js chevronDown)');
+			var chevA = getComputedStyle(chevEl);
 			assert(parseFloat(chevA.width) === 12 && parseFloat(chevA.height) === 12, 'chevron must be 12 px, got ' + chevA.width + '/' + chevA.height);
 			assert(parseFloat(chevA.right) === 10, 'chevron must sit 10 px from the right edge, got ' + chevA.right);
 			assert(chevA.transform === 'none', 'closed chevron must not be rotated, got ' + chevA.transform);
@@ -235,7 +235,7 @@ if (location.search.indexOf('mode=narrow') < 0) {
 			var chevOpen = '';
 			var rotOk = false;
 			for (var ci = 0; ci < 80 && !rotOk; ci++) {
-				chevOpen = getComputedStyle(sa, '::after').transform;
+				chevOpen = getComputedStyle(sa.querySelector(':scope > svg.chev')).transform;
 				rotOk = /matrix\\(-1, 0, 0, -1, 0, 0\\)/.test(chevOpen);
 				if (!rotOk) await wait(10);
 			}

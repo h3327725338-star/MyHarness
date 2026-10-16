@@ -785,7 +785,7 @@ const send = async (mode) => {
 						></textarea>
 						<div class="quote-edit-bar">
 							<span class="grow" />
-							<button class="icon-btn sm quote-tool quote-note-save" onClick=${saveEdit} title=${t("Save quote")} aria-label=${t("Save quote")}><span class="quote-enter" aria-hidden="true">⏎</span></button>
+							<button class="icon-btn sm quote-tool quote-note-save" onClick=${saveEdit} title=${t("Save quote")} aria-label=${t("Save quote")}><${Icon} name="enter" size=${13} /></button>
 						</div>
 					</div>
 				</div>` : null}
@@ -825,7 +825,7 @@ const send = async (mode) => {
 					<${MainEffortPicker} />
 					<${ContextMeter} />
 					${showStop
-						? html`<button class="send stop" onClick=${actions.stop} title=${stopTitle} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} sw=${0} /></button>`
+						? html`<button class="send stop" onClick=${actions.stop} title=${stopTitle} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} /></button>`
 						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${switching ? t("Loading…") : active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>

@@ -298,21 +298,14 @@ button.status-pill { cursor: pointer; }
 
 .earlier { align-self: center; }
 
-/* Live sub-agent card beside the turn that dispatched it (web/js/sub-agents.js DispatchCard). */
-.sa-cards { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
-.sa-card { border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: var(--r-md); background: var(--bg-inset); padding: 4px 6px 6px; transition: box-shadow var(--t-fast) var(--ease); }
-.sa-card-head { display: flex; align-items: center; gap: 8px; padding: 3px 4px; font-size: var(--fs-sm); }
-.sa-card-head .sa-head-text { flex: 1 1 auto; min-width: 0; color: var(--text-2); }
-.sa-card-head .sa-head-text strong { color: var(--text); font-weight: 600; }
-.sa-card-head .strip-time { flex: none; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-.sa-card-body { display: flex; flex-direction: column; gap: 1px; }
-.sa-card .sa-row { cursor: default; }
-.sa-card .sa-detail .sub-detail { padding: 4px 0 0; }
-.sub-live-note { margin: 0 0 4px 24px; padding-left: 10px; font-size: var(--fs-xs); }
+/* One sub-agent's steps (web/js/sub-agents.js SubAgentProcess), under its row in the activity bar and under its task
+   row in the dispatch's run step: the main agent's tool rows, then the report. */
+.sa-process { display: flex; flex-direction: column; gap: 6px; }
+.sa-facts, .sa-empty { font-size: var(--fs-xs); }
+.sa-report { display: flex; flex-direction: column; gap: 4px; }
+/* Inside these areas the tool data does not scroll on its own: the area around it is the one scroller (no nested scroll). */
+.sa-process .raw-body { max-height: none; overflow-y: visible; scrollbar-gutter: auto; }
 .sa-still { display: inline-block; margin-top: 6px; font-size: var(--fs-sm); }
-.flash { animation: sa-flash 1.4s var(--ease); }
-@keyframes sa-flash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
-@media (prefers-reduced-motion: reduce) { .flash { animation: none; outline: 2px solid var(--accent); } }
 
 /* History attachment cards: a file reference renders as name, size, preview, download and content
    reading instead of a bare path. A deleted file keeps its card with a Deleted mark, never an error. */
