@@ -14,9 +14,13 @@ npm.cmd run desktop:pack
 npm.cmd run desktop:test
 ```
 
+**Double-click launcher (daily development)**: `dev-desktop.cmd` in the repository root builds, packages and then starts the newest build in one step (`packages/desktop/pack-and-run.ps1`). It shows real progress in its window and closes on success; on failure the window stays open with the error. Before starting it closes a running MyHarness, because the single-instance lock would otherwise make the new build exit immediately and silently leave the old window in place. It resolves Node/npm itself with the same fallbacks as `web-runtime.ps1` (PATH first, then the usual install locations), so a double-click from Explorer also works when that inherited PATH has no Node.
+
+Artifacts of this launcher land in `dist\desktop` (it pins `MYHARNESS_DESKTOP_OUTPUT`, so an inherited `MYHARNESS_ARTIFACTS_DIR` cannot move them into a conversation folder). After a successful build it deletes older `stage-*` directories and keeps only the newest two `release-*` directories; anything that cannot be deleted (for example a still running build) is reported and skipped. `MYHARNESS_DESKTOP_SKIP_LAUNCH=1` builds without closing or starting anything.
+
 `desktop:pack` runs the unchanged root build, stages only compiled MyHarness packages, Web resources, system prompts and their installed runtime dependency closure, then uses electron-builder to create `win-unpacked/MyHarness.exe`. Keep the entire `win-unpacked` directory together. No external Node, tsx or npm is needed to start it. Bash/Git and optional tools still have the same requirements as the Web product; this does not bundle a development toolchain.
 
-Output goes to `MYHARNESS_DESKTOP_OUTPUT`, otherwise the current conversation's `MYHARNESS_ARTIFACTS_DIR/desktop`, otherwise root `dist/desktop`. Each build uses a new timestamped staging/release directory and does not delete previous builds. Electron download failures must be resolved using the actual installer error; no alternative shell is used.
+Output goes to `MYHARNESS_DESKTOP_OUTPUT`, otherwise the current conversation's `MYHARNESS_ARTIFACTS_DIR/desktop`, otherwise root `dist/desktop`. Each build uses a new timestamped staging/release directory; `build.mjs` itself never deletes previous builds (only `pack-and-run.ps1` prunes old ones as described above). Electron download failures must be resolved using the actual installer error; no alternative shell is used.
 
 ## Startup, storage and lifetime
 
