@@ -101,7 +101,8 @@ try {
 	setView({ motion: 'on', lang: 'zh-CN' });
 	set({
 		connected: true,
-		snap: { session: { id: 'test-sess' }, flags: {}, active: false },
+		activeSlot: 'test-slot',
+		snap: { slot: 'test-slot', session: { id: 'test-sess' }, flags: {}, active: false },
 		gitStatus: { gitAvailable: true, isRepository: true, branch: 'main', preview: { total: 8 }, head: { sha: 'abc1234' } },
 		view: { changesScope: 'worktree' },
 	});

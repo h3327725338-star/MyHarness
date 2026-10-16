@@ -3,12 +3,18 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit as runGitAsyncImpl, runGitSync } from "./command.ts";
+import {
+	fetchGitIdentity,
+	fetchGitRepositoryState,
+	fetchGitStatusPreview,
+	invalidateGitReadCache,
+	GIT_STATUS_PREVIEW_LIMIT as STATUS_PREVIEW_LIMIT,
+} from "./read-cache.ts";
 import type { AutoReviewMutation, ReviewChange } from "./review-types.ts";
 import { invalidateGitStatusCache } from "./status-cache.ts";
 
 const GIT_TIMEOUT_MS = 15_000;
 export const GIT_COMMIT_TIMEOUT_MS = 120_000;
-const STATUS_PREVIEW_LIMIT = 100;
 
 export type { GitCommandResult } from "./command.ts";
 
@@ -135,40 +141,13 @@ export function inspectGitRepository(cwd: string): GitRepositoryState {
 	};
 }
 
-/** 异步版 inspectGitRepository：结果相同，但不阻塞事件循环（Web 服务在检查期间仍能响应其他请求）。 */
+/**
+ * 异步版 inspectGitRepository：与同步版结果相同，不阻塞事件循环。
+ * 提交/恢复决策依赖它判断仓库状态，故始终直读最新状态、不走短 TTL 缓存；
+ * 高频轮询请用 `read-cache.ts` 的 `getCachedGitInspect`。
+ */
 export async function inspectGitRepositoryAsync(cwd: string): Promise<GitRepositoryState> {
-	const version = await runGitAsync(cwd, ["--version"]);
-	if (!version.ok) {
-		return {
-			gitAvailable: false,
-			isRepository: false,
-			hasBaseline: false,
-			error: version.error || version.stderr.trim() || "找不到 Git 命令",
-		};
-	}
-
-	const rootResult = await runGitAsync(cwd, ["rev-parse", "--show-toplevel"]);
-	const rootOutput = rootResult.stdout.trim();
-	if (!rootResult.ok || !rootOutput) {
-		return {
-			gitAvailable: true,
-			isRepository: false,
-			hasBaseline: false,
-		};
-	}
-
-	const root = resolveGitRepositoryRoot(cwd, rootOutput);
-	const [baselineResult, branchResult] = await Promise.all([
-		runGitAsync(root, ["rev-parse", "--verify", "HEAD"]),
-		runGitAsync(root, ["branch", "--show-current"]),
-	]);
-	return {
-		gitAvailable: true,
-		isRepository: true,
-		root,
-		hasBaseline: baselineResult.ok,
-		branch: branchResult.stdout.trim() || undefined,
-	};
+	return fetchGitRepositoryState(cwd);
 }
 
 function readConfig(cwd: string, args: string[]): string | undefined {
@@ -189,21 +168,12 @@ export function readGitIdentity(cwd: string, repositoryRoot?: string): GitIdenti
 	};
 }
 
-async function readConfigAsync(cwd: string, args: string[]): Promise<string | undefined> {
-	const result = await runGitAsync(cwd, args);
-	const value = result.stdout.trim();
-	return result.ok && value ? value : undefined;
-}
-
-/** 异步版 readGitIdentity：四个配置项并行读取，本地配置优先。 */
+/**
+ * 异步版 readGitIdentity：四个配置项并行读取，本地配置优先。
+ * 始终直读（决策语义不变）；高频轮询请用 `read-cache.ts` 的 `getCachedGitIdentity`。
+ */
 export async function readGitIdentityAsync(cwd: string, repositoryRoot?: string): Promise<GitIdentity> {
-	const [localName, localEmail, globalName, globalEmail] = await Promise.all([
-		repositoryRoot ? readConfigAsync(repositoryRoot, ["config", "--local", "--get", "user.name"]) : undefined,
-		repositoryRoot ? readConfigAsync(repositoryRoot, ["config", "--local", "--get", "user.email"]) : undefined,
-		readConfigAsync(cwd, ["config", "--global", "--get", "user.name"]),
-		readConfigAsync(cwd, ["config", "--global", "--get", "user.email"]),
-	]);
-	return { name: localName ?? globalName, email: localEmail ?? globalEmail };
+	return fetchGitIdentity(cwd, repositoryRoot);
 }
 
 export function initializeGitRepository(cwd: string): GitCommandResult {
@@ -233,33 +203,25 @@ export function getGitStatusPreview(repositoryRoot: string, paths: string[] = []
 
 /**
  * 异步版 getGitStatusPreview。提交/恢复决策依赖它判断改动，故始终读最新
- * 状态、不走短 TTL 缓存；高频轮询请用 checkpoint 的缓存 status 读取。
+ * 状态、不走短 TTL 缓存；高频轮询请用 `read-cache.ts` 的 `getCachedGitStatusPreview`。
  */
 export async function getGitStatusPreviewAsync(
 	repositoryRoot: string,
 	paths: string[] = [],
 ): Promise<GitStatusPreview | undefined> {
-	const args = ["status", "--short", "--untracked-files=all"];
-	if (paths.length > 0) args.push("--", ...paths);
-	const result = await runGitAsync(repositoryRoot, args);
-	if (!result.ok) return undefined;
-	const output = result.stdout.replace(/\s+$/u, "");
-	const allLines = output ? output.split(/\r?\n/).filter(Boolean) : [];
-	return {
-		lines: allLines.slice(0, STATUS_PREVIEW_LIMIT),
-		total: allLines.length,
-		truncated: allLines.length > STATUS_PREVIEW_LIMIT,
-	};
+	return fetchGitStatusPreview(repositoryRoot, paths);
 }
 
 export function createInitialGitBaseline(repositoryRoot: string, message = "建立项目初始版本"): GitCommandResult {
 	const addResult = runGit(repositoryRoot, ["add", "-A", "--", "."]);
 	if (!addResult.ok) {
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return addResult;
 	}
 	const result = runGit(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS);
 	invalidateGitStatusCache(repositoryRoot);
+	invalidateGitReadCache(repositoryRoot);
 	return result;
 }
 
@@ -272,10 +234,12 @@ export async function createInitialGitBaselineAsync(
 	const addResult = await runGitAsync(repositoryRoot, ["add", "-A", "--", "."], undefined, signal);
 	if (!addResult.ok) {
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return addResult;
 	}
 	const result = await runGitAsync(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS, signal);
 	invalidateGitStatusCache(repositoryRoot);
+	invalidateGitReadCache(repositoryRoot);
 	return result;
 }
 
@@ -429,6 +393,7 @@ export function createGitCommitForPaths(
 	const addResult = runGit(repositoryRoot, ["add", "-A", "--", ...filteredPaths], timeoutMs);
 	if (!addResult.ok) {
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return addResult;
 	}
 	const headBefore = runGit(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
@@ -442,14 +407,17 @@ export function createGitCommitForPaths(
 		if (reconciled) {
 			runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
 			invalidateGitStatusCache(repositoryRoot);
+			invalidateGitReadCache(repositoryRoot);
 			return reconciled;
 		}
 		runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return commitResult;
 	}
 	runGit(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths]);
 	invalidateGitStatusCache(repositoryRoot);
+	invalidateGitReadCache(repositoryRoot);
 	return commitResult;
 }
 
@@ -484,6 +452,7 @@ export async function createGitCommitForPathsAsync(
 	const addResult = await runGitAsync(repositoryRoot, ["add", "-A", "--", ...filteredPaths], timeoutMs, signal);
 	if (!addResult.ok) {
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return addResult;
 	}
 	const headBefore = await runGitAsync(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"], undefined, signal);
@@ -498,15 +467,18 @@ export async function createGitCommitForPathsAsync(
 		if (reconciled) {
 			await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 			invalidateGitStatusCache(repositoryRoot);
+			invalidateGitReadCache(repositoryRoot);
 			return reconciled;
 		}
 		await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 		invalidateGitStatusCache(repositoryRoot);
+		invalidateGitReadCache(repositoryRoot);
 		return commitResult;
 	}
 
 	await runGitAsync(repositoryRoot, ["reset", "--quiet", "HEAD", "--", ...filteredPaths], undefined, signal);
 	invalidateGitStatusCache(repositoryRoot);
+	invalidateGitReadCache(repositoryRoot);
 
 	// A zero exit status is necessary but not sufficient for the caller's
 	// success state: confirm that Git created a real commit object and expose

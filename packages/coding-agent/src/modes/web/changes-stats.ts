@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { runGit } from "../../git/repository/command.ts";
+import { invalidateGitReadCache } from "../../git/repository/read-cache.ts";
 import type { ReviewChange } from "../../git/repository/review-types.ts";
 import type { FileChangeSummary } from "./changes.ts";
 
@@ -56,7 +57,7 @@ export function parseNumstatZ(output: string): Map<string, { additions: number; 
 	return map;
 }
 
-export async function batchWorktreeStats(
+async function batchWorktreeStatsUncached(
 	repositoryRoot: string,
 	cwd: string,
 	changes: readonly ReviewChange[],
@@ -166,7 +167,81 @@ const worktreeCaches = new Map<string, WorktreeCacheData>();
 const worktreeVersions = new Map<string, number>();
 
 function normalizeCwd(cwd: string): string {
-	return path.resolve(cwd).toLowerCase();
+	const resolved = path.resolve(cwd);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export interface WorktreeListResult {
+	repositoryRoot?: string;
+	changes: ReviewChange[];
+	error?: string;
+	/** Generation captured before the read; stale completions must not repopulate the shared cache. */
+	cacheVersion?: number;
+}
+
+/** 同 checkout 列表读取的在途合并：并发未命中只派生一次 Git 进程。失败不缓存，结果按版本守卫写回。 */
+const worktreeListInflight = new Map<
+	string,
+	{ promise: Promise<WorktreeListResult>; version: number; fresh: boolean }
+>();
+
+export function coalescedWorktreeListFetch(
+	cwd: string,
+	fetcher: () => Promise<WorktreeListResult>,
+	options: { fresh?: boolean } = {},
+): Promise<WorktreeListResult> {
+	const key = normalizeCwd(cwd);
+	const ongoing = worktreeListInflight.get(key);
+	// An explicit refresh cannot join an older ordinary read. Concurrent refreshes share their own generation.
+	if (ongoing && (!options.fresh || ongoing.fresh)) return ongoing.promise;
+	if (options.fresh) bumpWorktreeVersion(cwd);
+	const version = getWorktreeVersion(cwd);
+	const promise = (async (): Promise<WorktreeListResult> => {
+		try {
+			const result = { ...(await fetcher()), cacheVersion: version };
+			if (getWorktreeVersion(cwd) === version && !result.error) setCachedWorktreeChanges(cwd, result);
+			return result;
+		} finally {
+			if (worktreeListInflight.get(key)?.version === version) worktreeListInflight.delete(key);
+		}
+	})();
+	worktreeListInflight.set(key, { promise, version, fresh: !!options.fresh });
+	return promise;
+}
+
+/** 并发相同批量统计只执行一次 Git `diff --numstat`，等待者各拿一份浅拷贝（只读使用）。 */
+const batchStatsInflight = new Map<string, Promise<FileChangeSummary[]>>();
+
+function batchStatsInflightKey(
+	repositoryRoot: string,
+	cwd: string,
+	changes: readonly ReviewChange[],
+): string | undefined {
+	const signature = changes.map((change) => `${change.status}\0${change.path}\0${change.oldPath ?? ""}`).join("\0");
+	if (signature.length > 8192) return undefined;
+	return `batch\0${normalizeCwd(repositoryRoot)}\0${normalizeCwd(cwd)}\0${getWorktreeVersion(cwd)}\0${signature}`;
+}
+
+export async function batchWorktreeStats(
+	repositoryRoot: string,
+	cwd: string,
+	changes: readonly ReviewChange[],
+	diffSingleFile?: (repoRoot: string, change: ReviewChange) => Promise<{ summary: FileChangeSummary; patch?: string }>,
+): Promise<FileChangeSummary[]> {
+	const key = batchStatsInflightKey(repositoryRoot, cwd, changes);
+	if (key !== undefined) {
+		const ongoing = batchStatsInflight.get(key);
+		if (ongoing) return ongoing.then((files) => [...files]);
+		const promise = batchWorktreeStatsUncached(repositoryRoot, cwd, changes, diffSingleFile);
+		batchStatsInflight.set(key, promise);
+		try {
+			const files = await promise;
+			return [...files];
+		} finally {
+			if (batchStatsInflight.get(key) === promise) batchStatsInflight.delete(key);
+		}
+	}
+	return batchWorktreeStatsUncached(repositoryRoot, cwd, changes, diffSingleFile);
 }
 
 export function getWorktreeVersion(cwd: string): number {
@@ -179,17 +254,25 @@ export function bumpWorktreeVersion(cwd: string): number {
 	const next = (worktreeVersions.get(key) ?? 0) + 1;
 	worktreeVersions.set(key, next);
 	worktreeCaches.delete(key);
+	// 失效后新读取不再加入旧的在途查询；在途完成靠版本守卫丢弃，不覆盖新状态。
+	worktreeListInflight.delete(key);
 	return next;
 }
 
 export function invalidateWorktreeCache(cwd?: string): void {
+	invalidateGitReadCache(cwd);
 	if (cwd) {
 		bumpWorktreeVersion(cwd);
 	} else {
-		for (const key of [...worktreeVersions.keys()]) {
+		for (const key of new Set([
+			...worktreeVersions.keys(),
+			...worktreeListInflight.keys(),
+			...worktreeCaches.keys(),
+		])) {
 			worktreeVersions.set(key, (worktreeVersions.get(key) ?? 0) + 1);
 		}
 		worktreeCaches.clear();
+		worktreeListInflight.clear();
 	}
 }
 
@@ -216,10 +299,11 @@ export function setCachedWorktreeChanges(
 		changes: ReviewChange[];
 		files?: FileChangeSummary[];
 		error?: string;
+		cacheVersion?: number;
 	},
 ): WorktreeCacheData {
 	const key = normalizeCwd(cwd);
-	const version = worktreeVersions.get(key) ?? 0;
+	const version = data.cacheVersion ?? worktreeVersions.get(key) ?? 0;
 	const changesByPath = new Map<string, ReviewChange>();
 	for (const change of data.changes) {
 		if (change?.path && !changesByPath.has(change.path)) {
@@ -235,6 +319,9 @@ export function setCachedWorktreeChanges(
 		cachedAt: Date.now(),
 		version,
 	};
-	worktreeCaches.set(key, entry);
+	if (!data.error && getWorktreeVersion(cwd) === version) {
+		worktreeCaches.set(key, entry);
+		while (worktreeCaches.size > 128) worktreeCaches.delete(worktreeCaches.keys().next().value!);
+	}
 	return entry;
 }

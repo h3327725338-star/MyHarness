@@ -38,14 +38,20 @@ import {
 	createInitialGitBaselineAsync,
 	formatGitStatusPreview,
 	getGitStatusPreview,
-	getGitStatusPreviewAsync,
 	initializeGitRepository,
 	inspectGitRepository,
 	inspectGitRepositoryAsync,
-	readGitIdentityAsync,
 	runGitAsync,
 	setLocalGitIdentity,
 } from "../../git/repository/integration.ts";
+import {
+	getCachedGitHead,
+	getCachedGitIdentity,
+	getCachedGitInspect,
+	getCachedGitLinkedWorktree,
+	getCachedGitStatusPreview,
+	invalidateGitReadCache,
+} from "../../git/repository/read-cache.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import type { GitWorktree } from "../../git/worktrees/manager.ts";
 import { completeWithNetworkPolicy, failureOf } from "../../providers/recovery/network-retry.ts";
@@ -193,8 +199,10 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 
 	// Polled after every run, session switch and checkpoint change: every Git call here is asynchronous (and the
 	// independent ones run in parallel), so the server keeps answering other requests while Git works.
-	server.route("GET", "/api/git/status", async () => {
-		const state = await inspectGitRepositoryAsync(cwd());
+	// 高频轮询走同 checkout 短 TTL 缓存 + 在途合并；`?fresh=1` 强制重验。提交/恢复决策仍走同步直读，不受影响。
+	server.route("GET", "/api/git/status", async ({ url }) => {
+		const fresh = url.searchParams.get("fresh") === "1";
+		const state = await getCachedGitInspect(cwd(), { fresh });
 		const settings = host.session.settingsManager;
 		const checkpoint = openCheckpoint();
 		let preview: { lines: string[]; total: number; truncated: boolean } | null = null;
@@ -203,23 +211,16 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		let linkedWorktree = false;
 		if (state.isRepository && state.root) {
 			const root = state.root;
-			const [statusPreview, gitIdentity, log, dirs] = await Promise.all([
-				getGitStatusPreviewAsync(root),
-				readGitIdentityAsync(cwd(), root),
-				runGitAsync(root, ["log", "-1", "--format=%H%n%s"]),
-				runGitAsync(root, ["rev-parse", "--absolute-git-dir", "--git-common-dir"]),
+			const [statusPreview, gitIdentity, cachedHead, linked] = await Promise.all([
+				getCachedGitStatusPreview(root, [], { fresh }),
+				getCachedGitIdentity(cwd(), root, { fresh }),
+				getCachedGitHead(root, { fresh }),
+				getCachedGitLinkedWorktree(root, { fresh }),
 			]);
 			preview = statusPreview ?? null;
 			identity = gitIdentity;
-			if (log.ok) {
-				const [sha, ...subject] = log.stdout.trim().split("\n");
-				head = { sha, subject: subject.join("\n") };
-			}
-			// A linked worktree has its own git dir under the main repository's common dir.
-			if (dirs.ok) {
-				const [gitDir, commonDir] = dirs.stdout.trim().split(/\r?\n/u);
-				if (gitDir && commonDir) linkedWorktree = path.resolve(gitDir) !== path.resolve(root, commonDir);
-			}
+			head = cachedHead;
+			linkedWorktree = linked;
 		}
 		return {
 			...state,
@@ -296,6 +297,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			if (!baseline.ok) throw new HttpError(500, `Failed to create the initial version: ${failureText(baseline)}`);
 			baselineCreated = true;
 		}
+		invalidateGitReadCache(repositoryRoot);
 		return { ok: true, enabled: true, baselineCreated };
 	});
 
@@ -335,6 +337,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			host.session.invalidateGitCheckpointRecovery(checkpoint, reason);
 			throw new HttpError(500, `The task was not undone: ${reason}`);
 		}
+		invalidateGitReadCache(checkpoint.repositoryRoot);
 		host.broadcast("checkpoint_changed", {});
 		return {
 			ok: true,
@@ -387,6 +390,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!preview) throw new HttpError(400, error ?? "Cannot preview the restore.");
 		const result = discardChangesToHead(preview, { protectedPaths });
 		if (result.error) throw new HttpError(500, result.error);
+		invalidateGitReadCache(state.root);
 		return { ok: true, headLabel: preview.headLabel, failedPaths: result.failedPaths };
 	});
 
@@ -736,6 +740,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const branch = String(asObject(body).branch ?? "");
 		if (!branch) throw new HttpError(400, "Branch is required.");
 		const result = worktreeCase.combine(root, branch);
+		if (result.ok) invalidateGitReadCache(root);
 		return JSON.parse(JSON.stringify(result));
 	});
 
@@ -760,8 +765,10 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/git/branches/switch", async ({ body }) => {
 		requireIdle("switch branches");
 		requireTrusted();
-		const result = await switchBranchAsync(await branchRootOrThrow(), branchName(body));
+		const root = await branchRootOrThrow();
+		const result = await switchBranchAsync(root, branchName(body));
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to switch branches.");
+		invalidateGitReadCache(root);
 		return { ok: true };
 	});
 

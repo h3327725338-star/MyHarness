@@ -11,16 +11,16 @@ import * as path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { runGit, runGitSync } from "../../git/repository/command.ts";
-import { inspectGitRepositoryAsync } from "../../git/repository/integration.ts";
+import { getCachedGitInspect } from "../../git/repository/read-cache.ts";
 import type { ReviewChange, ReviewChangeStatus } from "../../git/repository/review-types.ts";
 import type { ChangeDetectionResult, GitTaskChangeSummary } from "../../git/repository/workspace-changes.ts";
 import { pathIdentityKey } from "../../utils/paths.ts";
 import { type ChangeClaimRegistry, selectForeignChanges } from "./change-claims.ts";
 import {
 	batchWorktreeStats,
+	coalescedWorktreeListFetch,
 	getCachedWorktreeChangesSync,
 	invalidateWorktreeCache,
-	setCachedWorktreeChanges,
 } from "./changes-stats.ts";
 
 export { batchWorktreeStats, invalidateWorktreeCache };
@@ -546,60 +546,67 @@ export class ChangeTracker {
 	}
 
 	// The working-tree view runs Git asynchronously: a large or slow repository must not stall the Web server.
+	// 列表读取短 TTL 缓存 + 同 checkout 在途合并；`fresh` 强制重验且不加入旧的在途查询。
 	async listWorktreeChanges(options?: {
 		forceRefresh?: boolean;
-	}): Promise<{ repositoryRoot?: string; changes: ReviewChange[]; error?: string }> {
+	}): Promise<{ repositoryRoot?: string; changes: ReviewChange[]; error?: string; cacheVersion?: number }> {
 		if (!options?.forceRefresh) {
 			const cached = getCachedWorktreeChangesSync(this.cwd);
 			if (cached) {
-				return { repositoryRoot: cached.repositoryRoot, changes: cached.changes, error: cached.error };
+				return {
+					repositoryRoot: cached.repositoryRoot,
+					changes: cached.changes,
+					error: cached.error,
+					cacheVersion: cached.version,
+				};
 			}
 		}
-		const state = await inspectGitRepositoryAsync(this.cwd);
-		if (!state.isRepository || !state.root) {
-			const result = {
-				changes: [],
-				error: state.gitAvailable ? "The workspace is not a Git repository." : "Git is not available.",
-			};
-			setCachedWorktreeChanges(this.cwd, result);
-			return result;
-		}
-		const result = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-			cwd: state.root,
-			timeoutMs: 30_000,
-			env: { GIT_OPTIONAL_LOCKS: "0" },
-		});
-		if (!result.ok) {
-			const errResult = { repositoryRoot: state.root, changes: [], error: result.stderr || result.error };
-			setCachedWorktreeChanges(this.cwd, errResult);
-			return errResult;
-		}
-		const changes: ReviewChange[] = [];
-		const fields = result.stdout.split("\u0000");
-		for (let index = 0; index < fields.length; index++) {
-			const field = fields[index];
-			if (field.length < 4) continue;
-			const x = field[0];
-			const y = field[1];
-			let file = field.slice(3);
-			let oldPath: string | undefined;
-			if (x === "R" || x === "C") {
-				oldPath = fields[++index];
-			}
-			const absolute = path.join(state.root, file);
-			const rel = toRelative(this.cwd, absolute);
-			if (!rel) continue;
-			file = rel;
-			let status: ReviewChangeStatus = "modified";
-			if (x === "?" || x === "A" || y === "A") status = "added";
-			else if (x === "D" || y === "D") status = "deleted";
-			else if (x === "R") status = "renamed";
-			const oldRel = oldPath ? toRelative(this.cwd, path.join(state.root, oldPath)) : undefined;
-			changes.push({ path: file, status, ...(oldRel ? { oldPath: oldRel } : {}) });
-		}
-		const data = { repositoryRoot: state.root, changes };
-		setCachedWorktreeChanges(this.cwd, data);
-		return data;
+		const fresh = options?.forceRefresh === true;
+		return coalescedWorktreeListFetch(
+			this.cwd,
+			async () => {
+				const state = await getCachedGitInspect(this.cwd, fresh ? { fresh: true } : undefined);
+				if (!state.isRepository || !state.root) {
+					return {
+						changes: [],
+						error: state.gitAvailable ? "The workspace is not a Git repository." : "Git is not available.",
+					};
+				}
+				const result = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+					cwd: state.root,
+					timeoutMs: 30_000,
+					env: { GIT_OPTIONAL_LOCKS: "0" },
+				});
+				if (!result.ok) {
+					return { repositoryRoot: state.root, changes: [], error: result.stderr || result.error };
+				}
+				const changes: ReviewChange[] = [];
+				const fields = result.stdout.split("\u0000");
+				for (let index = 0; index < fields.length; index++) {
+					const field = fields[index];
+					if (field.length < 4) continue;
+					const x = field[0];
+					const y = field[1];
+					let file = field.slice(3);
+					let oldPath: string | undefined;
+					if (x === "R" || x === "C") {
+						oldPath = fields[++index];
+					}
+					const absolute = path.join(state.root, file);
+					const rel = toRelative(this.cwd, absolute);
+					if (!rel) continue;
+					file = rel;
+					let status: ReviewChangeStatus = "modified";
+					if (x === "?" || x === "A" || y === "A") status = "added";
+					else if (x === "D" || y === "D") status = "deleted";
+					else if (x === "R") status = "renamed";
+					const oldRel = oldPath ? toRelative(this.cwd, path.join(state.root, oldPath)) : undefined;
+					changes.push({ path: file, status, ...(oldRel ? { oldPath: oldRel } : {}) });
+				}
+				return { repositoryRoot: state.root, changes };
+			},
+			{ fresh },
+		);
 	}
 
 	async diffForWorktreeFile(

@@ -835,6 +835,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				changes: listed.changes,
 				files,
 				error: listed.error,
+				cacheVersion: listed.cacheVersion,
 			});
 			return { scope, files, total: listed.changes.length, error: listed.error ?? null };
 		}

@@ -15,6 +15,9 @@ import { t, N_, serverText } from "./i18n.js";
 const STATUS_LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" };
 const STATUS_TITLE = { added: N_("Added"), modified: N_("Modified"), deleted: N_("Deleted"), renamed: N_("Renamed") };
 
+/** A slot that cannot serve reads yet: empty or a pending switch target (store.js `api()` throws Loading… for it). */
+const isPendingSlot = (slot) => !slot || String(slot).startsWith("pending:");
+
 const fileCounts = (file) => (file.binary || file.unavailable ? null : html`<${Counts} additions=${file.additions} deletions=${file.deletions} />`);
 
 /** The path of a file as the panel writes it everywhere: the folder weaker, the name stronger, the old name of a rename after it. */
@@ -95,10 +98,14 @@ export function ChangesPanel() {
 	const storedScope = useStore((s) => s.view.changesScope);
 	const scope = storedScope === "worktree" ? "worktree" : "session";
 	const snap = useStore((s) => s.snap);
+	const slot = useStore((s) => s.activeSlot);
+	const sessionId = snap?.session?.id;
 	const gitStatus = useStore((s) => s.gitStatus);
 	const lastRunId = snap?.lastRun?.runId;
 	const active = !!snap?.active;
-	const [data, setData] = useState(null);
+	const [loadedData, setData] = useState(null);
+	const dataKey = `${slot}|${sessionId}|${scope}`;
+	const data = loadedData?.key === dataKey ? loadedData.value : null;
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [mode, setMode] = useState(() => localStorage.getItem("myharness.diffmode") || "unified");
@@ -108,45 +115,62 @@ export function ChangesPanel() {
 	const [nonce, setNonce] = useState(0);
 	const listRef = useRef(null);
 	const loadVersion = useRef(0);
+	// The slot that is on screen right now; requests capture it explicitly so a fast switch cannot be overwritten by an older answer.
+	const slotRef = useRef(slot);
+	slotRef.current = slot;
 	// Whether the latest list load bypassed the server cache; the diff of the file being read follows the same choice.
 	const freshLoadRef = useRef(false);
 
-	const load = useCallback(async (fresh) => {
+	const load = useCallback(async (fresh, overrideSlot) => {
+		const targetSlot = overrideSlot ?? slotRef.current;
+		// Pending or empty: never send a request that can only throw Loading…; stay on the skeleton until the real slot arrives.
+		if (isPendingSlot(targetSlot)) return;
 		const version = ++loadVersion.current;
 		setLoading(true);
 		try {
 			const q = `scope=${scope}${fresh ? "&fresh=1" : ""}`;
-			const result = await api(`/api/changes?${q}`);
+			const result = await api(`/api/changes?${q}`, { slot: targetSlot });
 			if (version !== loadVersion.current) return;
+			if (slotRef.current !== targetSlot) return;
 			freshLoadRef.current = !!fresh;
-			setData(result);
+			setData({ key: dataKey, value: result });
 			setError("");
 			setNonce((n) => n + 1);
 		} catch (e) {
+			if (version !== loadVersion.current) return;
+			if (slotRef.current !== targetSlot) return;
 			if (version === loadVersion.current) setError(e.message);
 		} finally {
-			if (version === loadVersion.current) setLoading(false);
+			if (version === loadVersion.current && slotRef.current === targetSlot) setLoading(false);
 		}
-	}, [scope, snap?.session?.id]);
-	// Opening the panel or switching scope/session reads from the server cache; the refresh after a run ends bypasses it.
+	}, [scope, dataKey]);
+	// Opening the panel or switching scope/slot/session reads from the server cache; the refresh after a run ends bypasses it.
+	// The effect keys on the real slot (not only the session id): a pending target shares the session id with the real
+	// chat, so keying on the session id alone would keep the pending Loading… error after the real slot arrived.
 	useEffect(() => {
 		setData(null);
 		setChosen("");
 		setDiffs({});
-		load();
+		setError("");
+		if (isPendingSlot(slot)) {
+			setLoading(true);
+			return () => { loadVersion.current += 1; };
+		}
+		load(undefined, slot);
 		return () => { loadVersion.current += 1; };
-	}, [scope, snap?.session?.id]);
+	}, [scope, slot, sessionId]);
 	const firstRunEffect = useRef(true);
 	useEffect(() => {
 		if (firstRunEffect.current) {
 			firstRunEffect.current = false;
 			return;
 		}
+		if (isPendingSlot(slotRef.current)) return;
 		load(true);
 	}, [lastRunId, active]);
 	useEffect(() => {
-		loadGitStatus();
-	}, [lastRunId, active]);
+		if (!isPendingSlot(slot)) loadGitStatus();
+	}, [slot, lastRunId, active]);
 
 	const files = data?.files || [];
 	const total = files.reduce((acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }), { add: 0, del: 0 });
@@ -155,15 +179,17 @@ export function ChangesPanel() {
 
 	// The diff of the file being read, fetched when it is chosen and again after the list is refreshed; what is already on
 	// screen stays until the new one arrives, so reading is never interrupted by a spinner.
-	const diffKey = selected ? `${snap?.session?.id}|${scope}|${selected.path}` : "";
+	const diffKey = selected ? `${slot}|${sessionId}|${scope}|${selected.path}` : "";
 	useEffect(() => {
-		if (!selected) return undefined;
+		if (!selected || isPendingSlot(slot)) return undefined;
 		let cancelled = false;
+		const targetSlot = slot;
+		const keyForRequest = diffKey;
 		const fresh = nonce > 0 && freshLoadRef.current;
 		const url = `/api/changes/diff?scope=${scope}&path=${encodeURIComponent(selected.path)}${fresh ? "&fresh=1" : ""}`;
-		api(url)
-			.then((d) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { data: d } })))
-			.catch((e) => !cancelled && setDiffs((all) => ({ ...all, [diffKey]: { error: e.message } })));
+		api(url, { slot: targetSlot })
+			.then((d) => { if (!cancelled && slotRef.current === targetSlot) setDiffs((all) => ({ ...all, [keyForRequest]: { data: d } })); })
+			.catch((e) => { if (!cancelled && slotRef.current === targetSlot) setDiffs((all) => ({ ...all, [keyForRequest]: { error: e.message } })); });
 		return () => {
 			cancelled = true;
 		};
@@ -224,7 +250,7 @@ export function ChangesPanel() {
 						</div>
 					<//>
 				</div>
-				<${DiffPane} file=${selected} mode=${mode} entry=${diffs[diffKey]} isRefreshing=${loading} />
+				<${DiffPane} key=${dataKey} file=${selected} mode=${mode} entry=${diffs[diffKey]} isRefreshing=${loading} />
 			</div>`
 			: null}
 	</div>`;
