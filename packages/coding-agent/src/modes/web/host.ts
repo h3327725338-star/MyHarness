@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { AgentMessage } from "@myharness/agent-core";
-import type { AssistantMessage, ImageContent } from "@myharness/ai";
+import { type AssistantMessage, type ImageContent, stripModelGuidance } from "@myharness/ai";
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
 import { ConversationNaming, type ConversationNamingStatus } from "../../agent/runtime/conversation-naming.ts";
 import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
@@ -911,7 +911,7 @@ export class WebHost {
 				this.broadcast("tool_end", {
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
-					text: parts.text,
+					text: stripModelGuidance(parts.text),
 					images: parts.images,
 					isError: event.isError,
 					details: sanitizeDetails(event.result?.details),

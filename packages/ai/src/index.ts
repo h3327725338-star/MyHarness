@@ -47,6 +47,7 @@ export * from "./utils/provider-dispatcher.ts";
 export * from "./utils/provider-failure.ts";
 export * from "./utils/retry.ts";
 export { contentText } from "./utils/text.ts";
+export * from "./utils/tool-args-coerce.ts";
 export * from "./utils/tool-args-precheck.ts";
 export * from "./utils/typebox-helpers.ts";
 export { uuidv7 } from "./utils/uuid.ts";

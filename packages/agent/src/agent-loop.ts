@@ -6,6 +6,7 @@
 import {
 	type AssistantMessage,
 	type Context,
+	coerceToolArgumentsBySchema,
 	EventStream,
 	precheckToolArguments,
 	type ToolCall,
@@ -925,16 +926,23 @@ function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): b
 }
 
 function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall): AgentToolCall {
-	if (!tool.prepareArguments) {
-		return toolCall;
+	// Deterministic shape recovery first: a nested array/object that reached us as a string
+	// holding its JSON is a formatting accident that every tool hits the same way, so it is
+	// fixed against the tool's own schema instead of per tool. It never invents a value, so a
+	// genuinely missing or truncated argument still fails validation below.
+	let resolvedArguments: Record<string, unknown> = coerceToolArgumentsBySchema(tool.parameters, toolCall.arguments);
+	if (tool.prepareArguments) {
+		const preparedArguments = tool.prepareArguments(resolvedArguments);
+		if (preparedArguments !== resolvedArguments) {
+			resolvedArguments = preparedArguments as Record<string, unknown>;
+		}
 	}
-	const preparedArguments = tool.prepareArguments(toolCall.arguments);
-	if (preparedArguments === toolCall.arguments) {
+	if (resolvedArguments === toolCall.arguments) {
 		return toolCall;
 	}
 	return {
 		...toolCall,
-		arguments: preparedArguments as Record<string, any>,
+		arguments: resolvedArguments as Record<string, any>,
 	};
 }
 

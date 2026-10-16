@@ -7,6 +7,7 @@
  */
 
 import type { AgentMessage } from "@myharness/agent-core";
+import { stripModelGuidance } from "@myharness/ai";
 import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
@@ -437,7 +438,9 @@ export function messageToWire(
 				ts,
 				toolCallId: message.toolCallId,
 				toolName: message.toolName,
-				text,
+				// Argument-precheck failures carry a block written for the model that made the
+				// call; the person reading the transcript gets the failure without it.
+				text: stripModelGuidance(text),
 				images,
 				isError: message.isError,
 				details: sanitizeDetails(message.details, meta.detailsCharLimit),

@@ -57,8 +57,8 @@ function createInvestigationPhaseSchema(mode: SubAgentMode, maxTasks: number) {
 		tasks: Type.Array(createInvestigationTaskSchema(mode), {
 			description:
 				mode === "read-write"
-					? `Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个`
-					: `Read-only Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个`,
+					? `Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个；必须是真正的 JSON 数组而不是字符串，单条 prompt 保持简短，超长就减少任务数或拆成多次调用`
+					: `Read-only Explore tasks run in parallel within this phase；当前单阶段上限为${maxTasks}个；必须是真正的 JSON 数组而不是字符串，单条 prompt 保持简短，超长就减少任务数或拆成多次调用`,
 			minItems: 1,
 			maxItems: maxTasks,
 		}),
@@ -75,7 +75,7 @@ function createInvestigationSchema(
 			description: "Short name for the workflow",
 		}),
 		phases: Type.Array(createInvestigationPhaseSchema(mode, maxTasks), {
-			description: "Phases executed in order; each phase may run multiple tasks in parallel",
+			description: `Phases executed in order; each phase may run multiple tasks in parallel; at least ${minPhases} phase(s) are required (investigation, then independent review). Emit a real JSON array, never a quoted string, and keep double quotes out of the text so the JSON stays valid`,
 			minItems: minPhases,
 		}),
 	});

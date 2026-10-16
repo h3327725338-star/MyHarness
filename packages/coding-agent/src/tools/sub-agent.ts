@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentTool, ThinkingLevel } from "@myharness/agent-core";
+import { stripModelGuidance } from "@myharness/ai";
 import type { Message } from "@myharness/ai/compat";
 import { type Static, Type } from "typebox";
 import {
@@ -72,7 +73,7 @@ const MAX_STRUCTURED_ITEMS = 24;
  * the description names the same cap so the model plans at most N tasks and splits the rest into later batches.
  */
 function subAgentTasksDescription(advertisedMaxTasks: number): string {
-	return `Independent exploration tasks to run in parallel; this call accepts at most ${advertisedMaxTasks} - split more directions into separate agent calls of at most ${advertisedMaxTasks} each, keeping every direction without merging or dropping`;
+	return `Independent exploration tasks to run in parallel; this call accepts at most ${advertisedMaxTasks} - split more directions into separate agent calls of at most ${advertisedMaxTasks} each, keeping every direction without merging or dropping. Emit it as a real JSON array, never a quoted string, and keep double quotes out of the task text so the surrounding JSON stays valid`;
 }
 const SUB_AGENT_BACKGROUND_DESCRIPTION =
 	"Preferred. Run the Explore tasks in the background and keep working on independent steps while they run; results arrive automatically. Omit only when you have nothing else to do until the results are in.";
@@ -704,7 +705,8 @@ function getToolResultText(result: unknown): string {
 }
 
 function summarizeToolResult(toolName: string, result: unknown, isError: boolean): string {
-	const text = getToolResultText(result);
+	// The model-only guidance block would otherwise become the "error" line of a sub-agent trace.
+	const text = stripModelGuidance(getToolResultText(result));
 	const lines = text === "" ? [] : text.split("\n").filter((line) => line.trim() !== "");
 	if (isError) return truncateDisplay(lines.at(-1)?.trim() || "执行失败", 100);
 	const normalized = toolName.toLowerCase();
