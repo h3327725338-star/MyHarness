@@ -244,7 +244,10 @@ describe("non-Git workspace mirrors", () => {
 			sessionManager: {} as never,
 			isDisposed: () => true,
 			emitProgress: () => {},
+			emitState: () => {},
 			onBatchSettled: () => {},
+			// A disposed host has no active agent run, matching the session's `-1` for "none active".
+			currentRun: () => -1,
 			deliverResult: async () => {},
 		});
 		work.trackExplore({

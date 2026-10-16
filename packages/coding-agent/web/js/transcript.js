@@ -788,6 +788,10 @@ function Welcome({ snap, models }) {
 // and no single frame carries the full mount.
 const CHUNK_FIRST = 20;
 const CHUNK_NEXT = 20;
+/** Whether a build published for `owner` describes the session on screen right now (same slot, same session id). */
+function describesSession(owner, slot, session) {
+	return !!owner && owner.slot === slot && (owner.session == null || owner.session === session);
+}
 export function Transcript() {
 	const switching = useStore((s) => s.switching);
 	const items = useStore((s) => s.items);
@@ -804,42 +808,104 @@ export function Transcript() {
 	const cwd = snap?.cwd || "";
 	const active = !!snap?.active || !!snap?.flags?.completion;
 	const prevTurns = useRef(null);
+	// Which session those turns belong to (slot plus session id): a reload of another session must never show them.
+	const prevOwner = useRef({ slot: null, session: null });
 	const turnsSlot = activeSlotId();
+	const session = snap?.session?.id;
 	const [asyncTurns, setAsyncTurns] = useState(null);
+	// True while the newest render is the cold-load tail preview instead of a full build. The first full build replaces
+	// it once, and that swap gets the same scroll compensation as "show earlier": the transcript only grows above.
+	const previewing = useRef(false);
+	const swapHeight = useRef(0);
 	const turns = useMemo(() => {
 		// A loading shell has no transcript to project; avoid empty intermediate builds and cache pollution.
-		if (switching || items.length === 0) return [];
+		if (switching || items.length === 0) {
+			previewing.current = false;
+			return [];
+		}
 		// Cross-session cache: when this bag's last build still describes exactly these references, reuse the very
 		// same turn objects (skipping buildTurns and the sameTurn pass). Mount chunking stays as it is: reusing the
 		// objects does not spare the DOM insert, and a full-window first commit measured 3x slower to first paint.
 		const cached = cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd);
 		if (cached) {
 			prevTurns.current = cached;
+			prevOwner.current = { slot: turnsSlot, session };
+			previewing.current = false;
 			return cached;
 		}
 		if (items.length > 400) {
-			if (asyncTurns?.slot === turnsSlot && asyncTurns.items === items && asyncTurns.toolRuns === toolRuns && asyncTurns.cwd === cwd) return asyncTurns.turns;
-			// Keep a complete tail turn when possible, rather than cutting in the middle of a tool exchange.
+			// One visible source only: once a full build of this session exists, keep showing it — at most one build
+			// behind the newest stream update — instead of falling back to the tail preview. Swapping between the two on
+			// every update remounted the whole transcript (new keys each time), replayed its entry animation and threw
+			// the reader's scroll position away; the build driver below publishes each full build as it lands.
+			if (asyncTurns && describesSession(asyncTurns, turnsSlot, session)) {
+				prevTurns.current = asyncTurns.turns;
+				prevOwner.current = { slot: turnsSlot, session: asyncTurns.session };
+				previewing.current = false;
+				return asyncTurns.turns;
+			}
+			if (prevTurns.current && describesSession(prevOwner.current, turnsSlot, session)) {
+				previewing.current = false;
+				return prevTurns.current;
+			}
+			// Cold load: keep a complete tail turn when possible, rather than cutting in the middle of a tool exchange.
+			// Only until the first full build of this session lands: from then on the preview is never shown again.
 			let start = Math.max(0, items.length - 60);
 			while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
-			return buildTurns(items.slice(start), { cwd, toolRuns });
+			previewing.current = true;
+			return buildTurns(items.slice(start), { cwd, toolRuns }, prevTurns.current);
 		}
 		const built = buildTurns(items, { cwd, toolRuns }, prevTurns.current);
 		setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
 		prevTurns.current = built;
+		prevOwner.current = { slot: turnsSlot, session };
+		previewing.current = false;
 		return built;
-	}, [items, toolRuns, cwd, turnsSlot, asyncTurns, switching]);
-	useEffect(() => {
-		if (switching || items.length <= 400 || cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd)) return undefined;
-		let cancelled = false;
-		void buildTurnsAsync(items, { cwd, toolRuns }, prevTurns.current, () => cancelled).then((built) => {
-			if (cancelled || !built) return;
-			setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
-			prevTurns.current = built;
-			setAsyncTurns({ slot: turnsSlot, items, toolRuns, cwd, turns: built });
+	}, [items, toolRuns, cwd, turnsSlot, session, asyncTurns, switching]);
+	// Full builds for huge sessions run one at a time: while one runs, newer stream updates only mark it dirty, the
+	// finished build is published as soon as it lands, and the newest state is built right after. Cancelling the build
+	// on every update (the previous shape) meant no build ever finished while output streamed, so the view kept falling
+	// back to the tail preview it had just replaced.
+	const build = useRef({ running: false, dirty: false, token: null, slot: null, items: null, toolRuns: null });
+	const buildRequest = useRef(null);
+	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching };
+	const startBuild = () => {
+		const request = buildRequest.current;
+		const state = build.current;
+		if (state.running) {
+			if (state.slot !== request.slot) {
+				// The bag moved on: the running build describes another session and must not be published.
+				if (state.token) state.token.cancelled = true;
+				state.running = false;
+			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns) state.dirty = true;
+			else return;
+		}
+		if (request.switching || request.items.length <= 400) return;
+		if (cachedTurns(getTurnsCache(request.slot), request.items, request.toolRuns, request.cwd)) return;
+		state.running = true;
+		state.dirty = false;
+		state.slot = request.slot;
+		state.items = request.items;
+		state.toolRuns = request.toolRuns;
+		const token = state.token = { cancelled: false };
+		void buildTurnsAsync(request.items, { cwd: request.cwd, toolRuns: request.toolRuns }, request.slot === prevOwner.current.slot ? prevTurns.current : null, () => token.cancelled).then((built) => {
+			if (token.cancelled || !built) return;
+			state.running = false;
+			// The cold-load preview is about to be replaced: take the height before the swap so the reader's place can be
+			// kept (pinned to the bottom, the follow below holds its place anyway).
+			if (previewing.current) swapHeight.current = scroller.current?.scrollHeight || 0;
+			setTurnsCache({ items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built }, request.slot);
+			setAsyncTurns({ slot: request.slot, session: request.session, items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built });
+			if (state.dirty) startBuild();
 		});
-		return () => { cancelled = true; };
-	}, [items, toolRuns, cwd, turnsSlot, switching]);
+	};
+	// Runs after every render: a no-op while a build for the newest references is already running, otherwise it starts one.
+	useEffect(() => {
+		startBuild();
+	});
+	useEffect(() => () => {
+		if (build.current.token) build.current.token.cancelled = true;
+	}, []);
 
 	// Scroll behaviour: follow new output only while the reader is at the bottom.
 	const scroller = useRef(null);
@@ -958,7 +1024,6 @@ export function Transcript() {
 			ro.disconnect();
 		};
 	}, []);
-	const session = snap?.session?.id;
 	useLayoutEffect(() => {
 		stick.current = true;
 		// The cached height belongs to the previous session; the first follow after a switch reads once.
@@ -1059,6 +1124,14 @@ export function Transcript() {
 			heightBefore.current = 0;
 		}
 	}, [limit]);
+	// The cold-load preview is replaced by the first full build here: the height taken before the swap shifts the scroll
+	// by exactly the growth above the reader, so what they were reading stays where it is.
+	useLayoutEffect(() => {
+		if (!swapHeight.current || !scroller.current) return;
+		const delta = scroller.current.scrollHeight - swapHeight.current;
+		swapHeight.current = 0;
+		if (!stick.current && delta) scroller.current.scrollTop += delta;
+	}, [turns]);
 	useEffect(() => setLimit(60), [session]);
 	const waiting = dialogs.length > 0 && active;
 	const compacting = !!compaction || !!snap?.flags?.compacting;

@@ -327,12 +327,17 @@ function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	const turns = [];
 	let turn = null;
 	let repair;
+	// A key identifies its entry, never its position: an older page prepended above or the preview-to-full swap must keep
+	// the same key, or Preact remounts the node (the entry animation replays, open folds and the reader's scroll reset).
+	// The entry id wins because it is what a reload projects back; ts is the fallback for items the server has not named
+	// yet, and the array index only covers items with neither. A live user message takes its id from entry_appended a
+	// few milliseconds after it appears (before anything is rendered into the turn), so that one key move stays invisible.
 	const standalone = (item, index) => {
-		turns.push({ key: `s-${item.id || index}-${item.kind}`, standalone: item, entries: [], steps: [] });
+		turns.push({ key: `s-${item.id || item.ts || index}-${item.kind}`, standalone: item, entries: [], steps: [] });
 	};
-	const startTurn = (user, index) => {
+	const startTurn = (user, index, first) => {
 		turn = {
-			key: `t-${user?.id || user?.ts || index}-${index}`,
+			key: `t-${user?.id || user?.ts || first?.id || first?.ts || index}`,
 			user,
 			steps: [],
 			final: null,
@@ -397,7 +402,7 @@ function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 			}
 			return;
 		}
-		if (!turn) startTurn(null, index);
+		if (!turn) startTurn(null, index, item);
 		turn.items.push(item);
 		turn.endedAt = Math.max(turn.endedAt || 0, item.ts || 0);
 		if (item.kind === "assistant") turn.assistants.push(item);

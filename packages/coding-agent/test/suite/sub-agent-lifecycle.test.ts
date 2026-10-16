@@ -37,7 +37,9 @@ function fakeHost(run = 1) {
 		currentRun: () => run,
 		deliverResult: async (message, options) => {
 			const first = message.content[0];
-			delivered.push({ text: first && first.type === "text" ? first.text : "", sameRun: options.sameRun });
+			// Content parts may also be plain strings, which carry no `type`/`text`.
+			const text = first && typeof first !== "string" && first.type === "text" ? first.text : "";
+			delivered.push({ text, sameRun: options.sameRun });
 		},
 	};
 	return { host, delivered, states };

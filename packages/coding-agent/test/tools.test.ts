@@ -310,12 +310,12 @@ describe("Coding Agent Tools", () => {
 			});
 
 			expect(result.details).toEqual({ additions: 3, deletions: 1 });
-			// The same content again changes nothing.
+			// The same content again is replayed instead of mutated: no counts of its own, marked as a replay.
 			const same = await writeTool.execute("test-call-3c", {
 				path: testFile,
 				content: "one\n2\nthree\nfour\nfive\nsix\n",
 			});
-			expect(same.details).toEqual({ additions: 0, deletions: 0 });
+			expect(same.details).toEqual({ additions: 0, deletions: 0, idempotentReplay: true });
 		});
 
 		it("should give no line count for a file that cannot be read as text", async () => {

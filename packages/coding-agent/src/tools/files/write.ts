@@ -1,6 +1,6 @@
 import { mkdir as fsMkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentTool } from "@myharness/agent-core";
+import type { AgentTool, AgentToolResult } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt, loadSystemPromptLines } from "../../system-prompts/loader/index.ts";
 import { writeFileAtomically } from "../../utils/atomic-write.ts";
@@ -121,9 +121,12 @@ export function createWriteToolDefinition(
 				| { content: { type: "text"; text: string }[]; details?: WriteToolDetails }
 				| undefined;
 			if (replayed) {
+				// P2-11 replay: these bytes were already written by an earlier call, so this call changed nothing and
+				// reports no line counts of its own (the front end sums them per turn); the marker says the mutation
+				// was skipped rather than repeated.
 				return {
 					...replayed,
-					details: { ...(replayed.details ?? {}), idempotentReplay: true as const },
+					details: { ...(replayed.details ?? {}), additions: 0, deletions: 0, idempotentReplay: true as const },
 				};
 			}
 			return withFileMutationQueue(absolutePath, async () => {
@@ -160,7 +163,9 @@ export function createWriteToolDefinition(
 				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 
 				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
-				const result = {
+				// Annotated with the framework result type: the literal's `type: "text"` would otherwise widen to
+				// `string` and no longer satisfy the `TextContent` the tool contract returns.
+				const result: AgentToolResult<WriteToolDetails | undefined> = {
 					content: [
 						{
 							type: "text",

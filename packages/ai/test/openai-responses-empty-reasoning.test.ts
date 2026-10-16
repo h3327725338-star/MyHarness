@@ -36,7 +36,7 @@ vi.mock("openai", () => {
 							type: "response.completed",
 							sequence_number: 1,
 							response: { id: "resp_test", status: "completed", output: [] },
-						} as ResponseStreamEvent;
+						} as unknown as ResponseStreamEvent;
 					},
 				};
 				const promise = Promise.resolve(eventStream) as Promise<typeof eventStream> & {
@@ -107,7 +107,8 @@ function assistant(content: AssistantMessage["content"], overrides?: Partial<Ass
 	};
 }
 
-function reasoningIndexes(input: readonly { type: string }[]): number[] {
+// SDK input items carry `type` as a literal or `null` (`ItemReference`), so the probe stays structural.
+function reasoningIndexes(input: readonly { type?: string | null }[]): number[] {
 	return input.map((item, index) => (item.type === "reasoning" ? index : -1)).filter((index) => index >= 0);
 }
 
@@ -125,6 +126,7 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 					toolCallId: "call_1|fc_1",
 					toolName: "read_file",
 					content: [{ type: "text", text: "file body" }],
+					isError: false,
 					timestamp: 2,
 				},
 				assistant([{ type: "text", text: "done" }]),

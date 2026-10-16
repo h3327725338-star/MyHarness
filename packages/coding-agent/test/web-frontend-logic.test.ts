@@ -289,6 +289,87 @@ describe("Web UI: bookmark labels in the transcript wire", () => {
 	});
 });
 
+describe("Web UI: turn keys stay with their entry, never their position", () => {
+	it("gives the same turn one key in the tail preview and in the full transcript", () => {
+		const first = { kind: "user", id: "u-1", ts: 1, text: "first task", images: [] };
+		const firstReply = assistant([{ type: "text", text: "first answer" }], { ts: 2 });
+		const second = { kind: "user", id: "u-2", ts: 10, text: "second task", images: [] };
+		const secondReply = assistant([{ type: "text", text: "second answer" }], { ts: 11 });
+		const full = buildTurns([first, firstReply, second, secondReply], { toolRuns: {} });
+		// A cold load of a long session paints the tail window first (web/js/transcript.js): the same turns built from
+		// that slice must carry the same keys, or replacing the preview with the full build remounts them.
+		const tail = buildTurns([second, secondReply], { toolRuns: {} });
+		expect(tail.map((turn: { key: string }) => turn.key)).toEqual([full[1].key]);
+	});
+
+	it("keeps the key when a reload stamps the entry with its own timestamp", () => {
+		// The streamed item carries the message time, a reload the entry time; both name the same entry, so the entry id
+		// must decide the key and neither timestamp may move it.
+		const card = {
+			kind: "runChanges",
+			id: "rc-7",
+			runId: 1,
+			files: [{ path: "a.ts", status: "modified", additions: 1, deletions: 0, binary: false }],
+		};
+		const live = buildTurns(
+			[
+				{ kind: "user", id: "e-5", ts: 500, text: "ask", images: [] },
+				{ ...card, ts: 501 },
+			],
+			{ toolRuns: {} },
+		);
+		const reloaded = buildTurns(
+			[
+				{ kind: "user", id: "e-5", ts: 480, text: "ask", images: [] },
+				{ ...card, ts: 999 },
+			],
+			{ toolRuns: {} },
+		);
+		expect(reloaded.map((turn: { key: string }) => turn.key)).toEqual(live.map((turn: { key: string }) => turn.key));
+	});
+
+	it("keeps every key when an older page is prepended above", () => {
+		const card = {
+			kind: "runChanges",
+			id: "rc-1",
+			ts: 3,
+			runId: 1,
+			files: [{ path: "a.ts", status: "modified", additions: 1, deletions: 0, binary: false }],
+		};
+		const head = { kind: "user", id: "u-1", ts: 2, text: "first task", images: [] };
+		const headReply = assistant([{ type: "text", text: "first answer" }], { ts: 4 });
+		const items = [
+			head,
+			headReply,
+			card,
+			{ kind: "gitStatus", id: "g-1", ts: 5, result: { tone: "ok", title: "Commit succeeded" } },
+			{ kind: "user", id: "u-2", ts: 10, text: "second task", images: [] },
+			assistant([{ type: "text", text: "second answer" }], { ts: 11 }),
+		];
+		const window = buildTurns(items, { toolRuns: {} });
+		const older = [
+			{ kind: "user", id: "u-0", ts: 1, text: "older task", images: [] },
+			assistant([{ type: "text", text: "older answer" }], { ts: 1 }),
+		];
+		const paged = buildTurns([...older, ...items], { toolRuns: {} });
+		expect(paged.slice(1).map((turn: { key: string }) => turn.key)).toEqual(
+			window.map((turn: { key: string }) => turn.key),
+		);
+	});
+
+	it("reuses the preview's turn objects when the full build takes over", () => {
+		const user = { kind: "user", id: "u-1", ts: 10, text: "task", images: [] };
+		const reply = assistant([{ type: "text", text: "done" }], { ts: 11 });
+		const preview = buildTurns([user, reply], { toolRuns: {} });
+		const full = buildTurns(
+			[assistant([{ type: "text", text: "earlier" }], { ts: 1 }), user, reply],
+			{ toolRuns: {} },
+			preview,
+		);
+		expect(full[1]).toBe(preview[0]);
+	});
+});
+
 describe("Web UI: Commit repair containment", () => {
 	const marker = { kind: "custom", id: "repair", ts: 2, customType: "git-commit-repair", display: false };
 	const user = { kind: "user", ts: 1, text: "task", images: [] };
