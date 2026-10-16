@@ -11,11 +11,13 @@
  * (running task, pending completion, open Git operation, waiting dialog, or an unread finished result whose
  * sidebar marker must not vanish unseen). Eviction only releases idle runtimes via the hub's `closeSlot`.
  *
- * Sizes are heuristics from data visible inside `modes/web/` (entry counts, cached projection size, recorded
- * runs), not measured heap: they rank slots and cap growth, they do not report real memory use. Hub options
+ * Sizes are heuristics from data visible inside `modes/web/` (entry counts, cached projection size, on-disk
+ * session file size, recorded runs), not measured heap: they rank slots and cap growth, they do not report real
+ * memory use. Hub options
  * accept an injected estimator so tests use exact sizes without real runtimes.
  */
 
+import { statSync } from "node:fs";
 import type { WebHost } from "./host.ts";
 
 /**
@@ -28,9 +30,9 @@ export const MAX_IDLE_BACKGROUND_SLOTS = 16;
 export const DEFAULT_IDLE_SLOT_BUDGET_BYTES = 256 * 1024 * 1024;
 
 /** Heuristic weights for one slot's estimated bytes (ranking and bounding only, not measured heap). */
-export const SLOT_BASE_BYTES = 4 * 1024 * 1024;
-export const SLOT_BYTES_PER_SESSION_ENTRY = 2 * 1024;
-export const SLOT_BYTES_PER_TRACKED_RUN = 512 * 1024;
+export const SLOT_BASE_BYTES = 8 * 1024 * 1024;
+export const SLOT_BYTES_PER_SESSION_ENTRY = 4 * 1024;
+export const SLOT_BYTES_PER_TRACKED_RUN = 1024 * 1024;
 
 /** Minimal shape the estimator and the eviction selection need (real WebHost satisfies it). */
 export interface BudgetSlotView {
@@ -40,6 +42,8 @@ export interface BudgetSlotView {
 	readonly primary: boolean;
 	readonly sessionEntries: number;
 	readonly transcriptCacheBytes: number;
+	/** On-disk session file bytes (statSync once per description; 0 when unknown). Weight 1.0. */
+	readonly sessionFileBytes: number;
 	readonly trackedRuns: number;
 }
 
@@ -48,6 +52,7 @@ export function estimateSlotBytes(slot: BudgetSlotView): number {
 		SLOT_BASE_BYTES +
 		slot.sessionEntries * SLOT_BYTES_PER_SESSION_ENTRY +
 		slot.transcriptCacheBytes +
+		slot.sessionFileBytes +
 		slot.trackedRuns * SLOT_BYTES_PER_TRACKED_RUN
 	);
 }
@@ -66,6 +71,13 @@ export function describeHostForBudget(host: WebHost, primary: WebHost | undefine
 	} catch {
 		trackedRuns = 0;
 	}
+	let sessionFileBytes = 0;
+	try {
+		const sessionFile = host.session.sessionFile;
+		if (sessionFile) sessionFileBytes = statSync(sessionFile).size;
+	} catch {
+		sessionFileBytes = 0;
+	}
 	return {
 		slotId: host.slotId,
 		touchedAt: host.touchedAt,
@@ -73,6 +85,7 @@ export function describeHostForBudget(host: WebHost, primary: WebHost | undefine
 		primary: primary !== undefined && host.slotId === primary.slotId,
 		sessionEntries,
 		transcriptCacheBytes: host.transcriptCacheBytes,
+		sessionFileBytes,
 		trackedRuns,
 	};
 }

@@ -7,11 +7,7 @@ import { writeFileAtomically } from "../../utils/atomic-write.ts";
 import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { assertLocalWorkspaceCwdAvailable, resolveToCwd } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
-import {
-	duplicateToolResultText,
-	idempotencyKey,
-	toolIdempotency,
-} from "../tool-idempotency.ts";
+import { duplicateToolResultText, idempotencyKey, toolIdempotency } from "../tool-idempotency.ts";
 import {
 	applyEditsToNormalizedContent,
 	detectLineEnding,
@@ -156,7 +152,7 @@ export function createEditToolDefinition(
 			// P2-11 idempotency: a repeated identical edit cannot apply twice (oldText is
 			// gone after the first commit), so the repeat is refused as a duplicate before
 			// the mutation queue instead of failing against the changed file. Only a
-				// previously successful edit marks the key; thrown outcomes stay retryable.
+			// previously successful edit marks the key; thrown outcomes stay retryable.
 			const key = idempotencyKey("edit", scope, {
 				path: canonicalFilePathKey(absolutePath),
 				edits,
@@ -168,78 +164,80 @@ export function createEditToolDefinition(
 				};
 			}
 
-			return withFileMutationQueue(absolutePath, async () => {
-				// Do not reject from an abort event listener here: that would release the
-				// mutation queue while an in-flight filesystem operation may still finish.
-				// Checking signal.aborted after each await observes the same aborts while
-				// keeping the queue locked until the current operation has settled.
-				const throwIfAborted = (): void => {
-					if (signal?.aborted) throw new Error("Operation aborted");
-				};
+			return withFileMutationQueue(
+				absolutePath,
+				async () => {
+					// Do not reject from an abort event listener here: that would release the
+					// mutation queue while an in-flight filesystem operation may still finish.
+					// Checking signal.aborted after each await observes the same aborts while
+					// keeping the queue locked until the current operation has settled.
+					const throwIfAborted = (): void => {
+						if (signal?.aborted) throw new Error("Operation aborted");
+					};
 
-				throwIfAborted();
-
-				// Check if file exists.
-				try {
-					await ops.access(absolutePath);
-				} catch (error: unknown) {
 					throwIfAborted();
-					const errorMessage =
-						error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
-					throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
-				}
-				throwIfAborted();
 
-				// Refuse to edit a file the model has not looked at, or that moved since it did.
-				if (localFileSystem) {
-					await assertFileWasReadBefore(absolutePath, "edit", path, scope);
-				}
-				throwIfAborted();
+					// Check if file exists.
+					try {
+						await ops.access(absolutePath);
+					} catch (error: unknown) {
+						throwIfAborted();
+						const errorMessage =
+							error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
+						throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
+					}
+					throwIfAborted();
 
-				// Read the file.
-				const buffer = await ops.readFile(absolutePath);
-				const rawContent = buffer.toString("utf-8");
-				throwIfAborted();
+					// Refuse to edit a file the model has not looked at, or that moved since it did.
+					if (localFileSystem) {
+						await assertFileWasReadBefore(absolutePath, "edit", path, scope);
+					}
+					throwIfAborted();
 
-				// Strip BOM before matching. The model will not include an invisible BOM in oldText.
-				const { bom, text: content } = stripBom(rawContent);
-				const originalEnding = detectLineEnding(content);
-				const normalizedContent = normalizeToLF(content);
-				const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
-				throwIfAborted();
+					// Read the file.
+					const buffer = await ops.readFile(absolutePath);
+					const rawContent = buffer.toString("utf-8");
+					throwIfAborted();
 
-				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-				const diffResult = generateDiffString(baseContent, newContent);
-				const patch = generateUnifiedPatch(path, baseContent, newContent);
-				// Validated change set, reported while the atomic write is still running.
-				onUpdate?.({
-					content: [],
-					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
-				});
-				throwIfAborted();
-				await ops.writeFile(absolutePath, finalContent);
-				// The change is ours: remember its shape so the next edit of this file in the same
-				// Session is not reported as an external modification.
-				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
-				const mutation = committedAfterCancel(signal);
-				// Mark the key only after a successful commit, so a failed edit stays retryable.
-				toolIdempotency.set(key, true);
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+					// Strip BOM before matching. The model will not include an invisible BOM in oldText.
+					const { bom, text: content } = stripBom(rawContent);
+					const originalEnding = detectLineEnding(content);
+					const normalizedContent = normalizeToLF(content);
+					const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
+					throwIfAborted();
+
+					const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+					const diffResult = generateDiffString(baseContent, newContent);
+					const patch = generateUnifiedPatch(path, baseContent, newContent);
+					// Validated change set, reported while the atomic write is still running.
+					onUpdate?.({
+						content: [],
+						details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+					});
+					throwIfAborted();
+					await ops.writeFile(absolutePath, finalContent);
+					// The change is ours: remember its shape so the next edit of this file in the same
+					// Session is not reported as an external modification.
+					if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
+					const mutation = committedAfterCancel(signal);
+					// Mark the key only after a successful commit, so a failed edit stays retryable.
+					toolIdempotency.set(key, true);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+							},
+						],
+						details: {
+							diff: diffResult.diff,
+							patch,
+							firstChangedLine: diffResult.firstChangedLine,
+							...(mutation ? { mutationStatus: mutation.mutationStatus } : {}),
 						},
-					],
-					details: {
-						diff: diffResult.diff,
-						patch,
-						firstChangedLine: diffResult.firstChangedLine,
-						...(mutation ? { mutationStatus: mutation.mutationStatus } : {}),
-					},
-				};
-			},
-			signal,
+					};
+				},
+				signal,
 			);
 		},
 	};

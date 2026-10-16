@@ -26,9 +26,9 @@ import { dedupePromptTemplates, loadPromptTemplates } from "../prompts/loader/in
 import type { Skill } from "../skills/loader/index.ts";
 import { loadSkills } from "../skills/loader/index.ts";
 import {
+	clearSystemPromptCache,
 	discoverAppendSystemPromptFile,
 	discoverSystemPromptFile,
-	clearSystemPromptCache,
 	resolveSystemPromptInput,
 } from "../system-prompts/loader/index.ts";
 import { dedupeThemeResources, loadThemeResources } from "../themes/loader/index.ts";

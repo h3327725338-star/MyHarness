@@ -3,11 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
-import {
-	terminateProcessTree,
-	trackChildProcessForSignal,
-	waitForChildProcess,
-} from "../../utils/child-process.ts";
+import { terminateProcessTree, trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
 import { killProcessTreeAndWait } from "../../utils/shell.ts";
 
 /**

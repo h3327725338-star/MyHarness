@@ -18,7 +18,6 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { getAttachmentDir, getDataDir } from "../../config/paths/index.ts";
 import {
 	guessAttachmentMime,
 	resolveAttachmentReference,
@@ -26,12 +25,14 @@ import {
 	writeAttachmentManifest,
 	writeLegacyAttachmentManifest,
 } from "../../config/paths/attachments.ts";
+import { getAttachmentDir, getDataDir } from "../../config/paths/index.ts";
 import {
 	artifactScope,
 	listArtifacts,
 	refreshArtifactIndexes,
 	resolveArtifact,
 } from "../../session/artifacts/store.ts";
+import { SessionManager } from "../../session/manager/index.ts";
 import {
 	claimPendingMemory,
 	deleteMemoryPermanently,
@@ -52,7 +53,6 @@ import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { resolveLocalFile, runLocalFileAction } from "./local-files.ts";
 import { collectSessionChanges } from "./session-changes.ts";
 import { RUN_CHANGES_ENTRY, splitAttachmentText } from "./wire.ts";
-import { SessionManager } from "../../session/manager/index.ts";
 
 const MAX_TEXT_BYTES = 1.5 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -377,7 +377,16 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			await mkdir(directory, { recursive: true });
 			await writeFile(target, bytes, { flag: "wx" });
 			const relativePath = toAttachmentRelativePath(dataRoot, target);
-			const manifest = { version: 1 as const, id, originalName: name, storedName, mime: guessAttachmentMime(name), size: bytes.length, createdAt: new Date().toISOString(), relativePath };
+			const manifest = {
+				version: 1 as const,
+				id,
+				originalName: name,
+				storedName,
+				mime: guessAttachmentMime(name),
+				size: bytes.length,
+				createdAt: new Date().toISOString(),
+				relativePath,
+			};
 			writeAttachmentManifest(dataRoot, workspaceId, sessionId, id, manifest);
 			host.inputTouched = true;
 			return { name, path: relativePath, id: manifest.id, mime: manifest.mime, size: manifest.size };
@@ -387,7 +396,16 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		await mkdir(directory, { recursive: true });
 		await writeFile(target, bytes, { flag: "wx" });
 		try {
-			writeLegacyAttachmentManifest(directory, { version: 1 as const, id: path.basename(directory), originalName: name, storedName, mime: guessAttachmentMime(name), size: bytes.length, createdAt: new Date().toISOString(), relativePath: target });
+			writeLegacyAttachmentManifest(directory, {
+				version: 1 as const,
+				id: path.basename(directory),
+				originalName: name,
+				storedName,
+				mime: guessAttachmentMime(name),
+				size: bytes.length,
+				createdAt: new Date().toISOString(),
+				relativePath: target,
+			});
 		} catch {
 			// Legacy layout keeps the previous absolute-path contract even when the manifest cannot be written.
 		}
@@ -449,6 +467,44 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		return uploadMeta(resolveUploadPath(url.searchParams.get("path")));
 	});
 
+	// Batch metadata for the attachment cards of one message or chat: one POST instead of one GET
+	// per file. Read-only (statSync via uploadMeta); per-path failures stay per-path
+	// (`{ ok: false, status, error }`) so one deleted file never fails the rest, and the whole
+	// answer is always 200. Only the array shape is validated as a whole (400); ownership and
+	// cleanup logic are untouched.
+	server.route("POST", "/api/uploads/info-batch", ({ body }) => {
+		const payload = body as { paths?: unknown } | null;
+		const paths = payload?.paths;
+		if (!Array.isArray(paths) || paths.length < 1 || paths.length > 100)
+			throw new HttpError(400, "Expected 1 to 100 paths");
+		for (const candidate of paths) {
+			if (typeof candidate !== "string" || candidate.length > 4096) throw new HttpError(400, "Invalid path");
+		}
+		const seen = new Set<string>();
+		const unique: string[] = [];
+		for (const candidate of paths as string[]) {
+			if (!seen.has(candidate)) {
+				seen.add(candidate);
+				unique.push(candidate);
+			}
+		}
+		return {
+			results: unique.map((uploadPath) => {
+				try {
+					return { path: uploadPath, ok: true as const, meta: uploadMeta(resolveUploadPath(uploadPath)) };
+				} catch (error) {
+					const status = error instanceof HttpError ? error.status : 500;
+					return {
+						path: uploadPath,
+						ok: false as const,
+						status,
+						error: error instanceof Error ? error.message : "Request failed",
+					};
+				}
+			}),
+		};
+	});
+
 	server.route("GET", "/api/uploads/read", ({ url }) => {
 		const absolute = resolveUploadPath(url.searchParams.get("path"));
 		if (!existsSync(absolute)) throw new HttpError(404, "Attachment has been deleted.");
@@ -464,7 +520,12 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const imageType = IMAGE_TYPES[ext];
 		if (imageType && ext !== ".svg") {
 			if (stat.size > MAX_IMAGE_BYTES) return { ...meta, kind: "large" as const };
-			return { ...meta, kind: "image" as const, mimeType: imageType, data: readFileSync(absolute).toString("base64") };
+			return {
+				...meta,
+				kind: "image" as const,
+				mimeType: imageType,
+				data: readFileSync(absolute).toString("base64"),
+			};
 		}
 		if (stat.size > MAX_TEXT_BYTES) {
 			const head = readFileSync(absolute).subarray(0, MAX_TEXT_BYTES);
@@ -486,7 +547,10 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		}
 		if (!stat.isFile()) throw new HttpError(404, "Attachment has been deleted.");
 		res.setHeader("Content-Type", "application/octet-stream");
-		res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(uploadMeta(absolute).name)}`);
+		res.setHeader(
+			"Content-Disposition",
+			`attachment; filename*=UTF-8''${encodeURIComponent(uploadMeta(absolute).name)}`,
+		);
 		res.end(readFileSync(absolute));
 	});
 
@@ -528,7 +592,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 						? (content as Array<{ type?: string; text?: string }>)
 								.filter((part) => part.type === "text")
 								.map((part) => part.text ?? "")
-							.join("")
+								.join("")
 						: "";
 			const { attachments } = splitAttachmentText(text);
 			const ts = Date.parse(entry.timestamp) || 0;

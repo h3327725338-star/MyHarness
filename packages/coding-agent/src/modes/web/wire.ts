@@ -68,7 +68,8 @@ export function attachmentName(path: string): string {
  * Unknown lines stop the header so model/user text is never eaten. Missing/odd input yields no attachments.
  */
 export function splitAttachmentText(text: unknown): { attachments: WireAttachment[]; body: string } {
-	if (typeof text !== "string" || !text.startsWith(ATTACH_HEADER)) return { attachments: [], body: typeof text === "string" ? text : "" };
+	if (typeof text !== "string" || !text.startsWith(ATTACH_HEADER))
+		return { attachments: [], body: typeof text === "string" ? text : "" };
 	const lines = text.split("\n");
 	const attachments: WireAttachment[] = [];
 	let index = 1;
@@ -391,7 +392,15 @@ export function messageToWire(
 				};
 			}
 			const split = splitAttachmentText(text);
-			return { kind: "user", id: meta.id, ts, text, images, ...(split.attachments.length ? { attachments: split.attachments } : {}), ...timingProp };
+			return {
+				kind: "user",
+				id: meta.id,
+				ts,
+				text,
+				images,
+				...(split.attachments.length ? { attachments: split.attachments } : {}),
+				...timingProp,
+			};
 		}
 		case "assistant": {
 			const blocks: WireAssistantBlock[] = [];
@@ -541,9 +550,7 @@ const PROJECTABLE_MESSAGE_ROLES = new Set([
 export function entryProjectsToWire(entry: SessionEntry): boolean {
 	switch (entry.type) {
 		case "message":
-			return PROJECTABLE_MESSAGE_ROLES.has(
-				(entry.message as { role?: unknown } | undefined)?.role as string,
-			);
+			return PROJECTABLE_MESSAGE_ROLES.has((entry.message as { role?: unknown } | undefined)?.role as string);
 		case "custom":
 			if (entry.customType === RUN_CHANGES_ENTRY) {
 				const card = entry.data as { files?: unknown } | null | undefined;
@@ -552,7 +559,7 @@ export function entryProjectsToWire(entry: SessionEntry): boolean {
 					(card.files as Array<Record<string, unknown> | null>).some(
 						(file) => !!file && typeof file.path === "string",
 					)
-			);
+				);
 			}
 			return true;
 		case "custom_message":

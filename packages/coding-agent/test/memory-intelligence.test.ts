@@ -19,16 +19,16 @@ import { restrictToolNamesForRole } from "../src/agent/runtime/role.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import type { SessionEntry } from "../src/session/manager/index.ts";
 import {
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteToolDefinition,
+	createSessionMemoryManageOperations,
+} from "../src/tools/memory/manage.ts";
+import {
 	createMemoryGetToolDefinition,
 	createMemorySearchToolDefinition,
 	createSessionMemoryOperations,
 	type MemoryToolOperations,
 } from "../src/tools/memory/search.ts";
-import {
-	createMemoryClaimToolDefinition,
-	createMemoryDeleteToolDefinition,
-	createSessionMemoryManageOperations,
-} from "../src/tools/memory/manage.ts";
 import { allToolNames, createAllToolDefinitions, createAllTools } from "../src/tools/registry.ts";
 
 interface MemoryFixture {
@@ -745,9 +745,7 @@ describe("memory_search and memory_get", () => {
 		expect(createAllTools(projectDir).memory_search.name).toBe("memory_search");
 		expect(createAllTools(projectDir).memory_delete.name).toBe("memory_delete");
 		expect(restrictToolNamesForRole("delegated", ["read", "memory_search", "memory_get"])).toEqual(["read"]);
-		expect(
-			restrictToolNamesForRole("delegated", ["read", "memory_delete", "memory_claim"]),
-		).toEqual(["read"]);
+		expect(restrictToolNamesForRole("delegated", ["read", "memory_delete", "memory_claim"])).toEqual(["read"]);
 	});
 });
 
@@ -862,7 +860,12 @@ describe("memory v2: resident directory, contradictions, cross-scope access", ()
 	});
 
 	it("reads foreign and pending memories without injecting them into recall", async () => {
-		writeMemory({ id: "global/own", name: "Own Deploy", body: "自己项目的部署流程记忆正文。", description: "部署流程" });
+		writeMemory({
+			id: "global/own",
+			name: "Own Deploy",
+			body: "自己项目的部署流程记忆正文。",
+			description: "部署流程",
+		});
 		const foreign = otherPaths("ws-other", "s-other");
 		mkdirSync(foreign.projectDir, { recursive: true });
 		writeFileSync(
@@ -981,7 +984,9 @@ describe("memory v2: resident directory, contradictions, cross-scope access", ()
 		const newId = (claimed.details as { ids: string[] }).ids[0];
 		expect(newId.startsWith("workspace/")).toBe(true);
 		// 搬家完成：隔离区清空，工作区可读。
-		expect(readCrossScopeMemoryEntries(dataRoot, location).some((item) => item.id === "pending/legacy-note")).toBe(false);
+		expect(readCrossScopeMemoryEntries(dataRoot, location).some((item) => item.id === "pending/legacy-note")).toBe(
+			false,
+		);
 		expect(toolText(await run(get(), { id: newId }))).toContain("认领后属于当前项目");
 	});
 });

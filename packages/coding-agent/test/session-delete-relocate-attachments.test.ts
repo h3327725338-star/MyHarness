@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getSessionConversationPath, getSessionDir } from "../src/config/paths/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
+import { deleteSessionFile, describeSessionDeleteImpact } from "../src/session/storage/jsonl/file-operations.ts";
 import {
 	cleanupEmptySessionDirectories,
 	hasSessionAttachmentsForCleanup,
@@ -12,10 +13,6 @@ import {
 	removeEmptySessionDirectory,
 	rewriteSessionManifestPaths,
 } from "../src/session/storage/jsonl/index.ts";
-import {
-	deleteSessionFile,
-	describeSessionDeleteImpact,
-} from "../src/session/storage/jsonl/file-operations.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -178,7 +175,13 @@ describe("session relocate carries attachments", () => {
 				sourceFile: s.file,
 				targetFile,
 				entries: [
-					{ type: "session", version: 3, id: "session-nomanifest", timestamp: new Date().toISOString(), cwd: tmpdir() },
+					{
+						type: "session",
+						version: 3,
+						id: "session-nomanifest",
+						timestamp: new Date().toISOString(),
+						cwd: tmpdir(),
+					},
 				] as never[],
 				flushed: true,
 				sourceSessionDir: s.sessionDir,

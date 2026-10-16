@@ -82,7 +82,9 @@ export function readAttachmentManifest(
 	attachmentId: string,
 ): AttachmentManifest | undefined {
 	try {
-		const parsed = JSON.parse(readFileSync(getAttachmentManifestPath(dataRoot, workspaceId, sessionId, attachmentId), "utf8")) as Partial<AttachmentManifest>;
+		const parsed = JSON.parse(
+			readFileSync(getAttachmentManifestPath(dataRoot, workspaceId, sessionId, attachmentId), "utf8"),
+		) as Partial<AttachmentManifest>;
 		if (
 			parsed?.version !== 1 ||
 			typeof parsed.id !== "string" ||

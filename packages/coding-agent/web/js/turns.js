@@ -294,6 +294,20 @@ export function cachedTurns(cache, items, toolRuns, cwd) {
 }
 
 /**
+ * Cold-load tail preview window (P0-1): transcripts longer than a full page — or a full 400-item first page
+ * with older items still server-side (`hasMore`) — paint the newest tail first and build the full projection
+ * behind it. Returns the slice the synchronous preview build receives, or null when the whole list builds
+ * synchronously. The window is the newest 60 items, walked back (at most 120) to a user boundary so a turn
+ * is never cut mid-way. Pure function for unit tests.
+ */
+export function tailPreviewSlice(items, hasMore) {
+	if (!(items.length > 400 || (hasMore && items.length > 60))) return null;
+	let start = Math.max(0, items.length - 60);
+	while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
+	return items.slice(start);
+}
+
+/**
  * Build turns from wire items.
  * ctx: { cwd, toolRuns, running, lastKey }
  */
@@ -315,11 +329,29 @@ export async function buildTurnsAsync(items, ctx, previous, cancelled = () => fa
 	return null;
 }
 
-function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
+/**
+ * Chunked full-build driver off the shared buildTurnsWork generator: every generator step already spans 60
+ * entries/turns/assistant messages (see the yield cadence in buildTurnsWork), so yielding back to the main thread
+ * after every step keeps each slice to about 60 items of work. Items and the ctx references (toolRuns/cwd) pass
+ * through untouched and `previous` carries the same sameTurn-reuse semantics as buildTurnsAsync, so the
+ * cachedTurns triple-reference check keeps working. Resolves null when cancelled() trips.
+ */
+export async function buildTurnsChunked(items, ctx, previous, cancelled = () => false) {
+	const work = buildTurnsWork(items, ctx, previous);
+	await yieldToMain();
+	while (!cancelled()) {
+		const next = work.next();
+		if (next.done) return next.value;
+		await yieldToMain();
+	}
+	return null;
+}
+
+export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	turnsProbe.builds += 1;
 	const results = new Map();
 	for (let index = 0; index < items.length; index++) {
-		if (index && index % 200 === 0) yield;
+		if (index && index % 60 === 0) yield;
 		const item = items[index];
 		if (item.kind === "toolResult") results.set(item.toolCallId, item);
 	}
@@ -395,7 +427,7 @@ function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 		if (item.kind === "custom") {
 			if (!item.display) return;
 			if (turn) {
-				turn.steps.push({ type: "custom", item, key: `c-${index}` });
+				turn.steps.push({ type: "custom", item, key: `c-${item.id || item.ts || index}` });
 				turn.items.push(item);
 			} else {
 				standalone(item, index);
@@ -409,7 +441,7 @@ function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	};
 
 	for (let index = 0; index < items.length; index++) {
-		if (index && index % 200 === 0) yield;
+		if (index && index % 60 === 0) yield;
 		addItem(items[index], index);
 	}
 
@@ -417,12 +449,12 @@ function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 
 	let processed = 0;
 	for (const turn of turns) {
-		if (++processed % 20 === 0) yield;
+		if (++processed % 60 === 0) yield;
 		if (turn.standalone) continue;
 		const list = turn.assistants;
 		const lastAssistant = list[list.length - 1];
 		for (let ai = 0; ai < list.length; ai++) {
-			if (ai && ai % 20 === 0) yield;
+			if (ai && ai % 60 === 0) yield;
 			const message = list[ai];
 			const isLast = ai === list.length - 1;
 			const hasCalls = message.blocks.some((b) => b.type === "toolCall");

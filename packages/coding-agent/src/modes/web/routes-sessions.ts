@@ -9,13 +9,19 @@ import {
 	validateConversationTitle,
 } from "../../agent/runtime/conversation-title.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
-import { getDataDir } from "../../config/paths/index.ts";
+import { getDataDir, getWorkspacesDir } from "../../config/paths/index.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
+import { readSessionHeader } from "../../session/storage/jsonl/index.ts";
+import {
+	getIndexedSessionMarkers,
+	isSessionPathIndexed,
+	patchIndexMarker,
+} from "../../session/storage/jsonl/sessions-index.ts";
 import {
 	type ChatMode,
 	getChatMode,
@@ -27,6 +33,31 @@ import { pathIdentityKey } from "../../utils/paths.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type RequestContext, type WebHttpServer } from "./http-server.ts";
 import type { WebHostHub } from "./hub.ts";
+
+/** Optional `limit` (1-200) / `offset` pagination for session lists. Exported for tests. */
+export function parseSessionListPagination(url: URL): { limit: number; offset: number } | undefined {
+	const limitRaw = url.searchParams.get("limit");
+	const offsetRaw = url.searchParams.get("offset");
+	if (limitRaw === null && offsetRaw === null) return undefined;
+	const limit = limitRaw === null ? 50 : Number(limitRaw);
+	const offset = offsetRaw === null ? 0 : Number(offsetRaw);
+	if (!Number.isInteger(limit) || limit < 1 || limit > 200)
+		throw new HttpError(400, '"limit" must be an integer 1-200');
+	if (!Number.isInteger(offset) || offset < 0) throw new HttpError(400, '"offset" must be a non-negative integer');
+	return { limit, offset };
+}
+
+/** Slice an already (modified-desc) sorted summary list. Without pagination the shape is unchanged (no `total`). */
+export function paginateSessionSummaries<T>(
+	summaries: T[],
+	pagination?: { limit: number; offset: number },
+): { sessions: T[]; total?: number } {
+	if (!pagination) return { sessions: summaries };
+	return {
+		sessions: summaries.slice(pagination.offset, pagination.offset + pagination.limit),
+		total: summaries.length,
+	};
+}
 
 function asObject(body: unknown): Record<string, unknown> {
 	if (body && typeof body === "object" && !Array.isArray(body)) return body as Record<string, unknown>;
@@ -181,8 +212,12 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
+	const isArchivedSession = (info: SessionInfo): boolean =>
+		getIndexedSessionMarkers(info.path)?.archived ?? existsSync(`${info.path}.archived`);
+
 	const sessionSummary = (info: SessionInfo) => {
 		const currentFile = host.session.sessionFile;
+		const markers = getIndexedSessionMarkers(info.path);
 		return {
 			path: info.path,
 			mode: getChatMode(info),
@@ -194,7 +229,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			messageCount: info.messageCount,
 			blank: info.blank === true,
 			parentSessionPath: info.parentSessionPath ?? null,
-			pinned: existsSync(`${info.path}.pinned`),
+			pinned: markers?.pinned ?? existsSync(`${info.path}.pinned`),
 			current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
 		};
 	};
@@ -203,24 +238,31 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const rootPath = url.searchParams.get("path");
 		if (!rootPath) throw new HttpError(400, "Missing path");
 		const mode = requestMode(url.searchParams.get("mode"));
+		const pagination = parseSessionListPagination(url);
 		const sessions = host.workspaceStore.getByPath(rootPath, mode)
 			? (await useCase.listSessions(rootPath)).filter(
-					(info) => getChatMode(info) === mode && !existsSync(`${info.path}.archived`),
+					(info) => getChatMode(info) === mode && !isArchivedSession(info),
 				)
 			: [];
-		return { sessions: sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime()).map(sessionSummary) };
+		const sorted = sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		const page = paginateSessionSummaries(sorted.map(sessionSummary), pagination);
+		return pagination ? { sessions: page.sessions, total: page.total } : { sessions: page.sessions };
 	});
 
 	/** Chats that belong to no registered Workspace: created without one, or left behind by a removed Workspace. */
 	server.route("GET", "/api/sessions/unbound", async ({ url }) => {
 		const mode = requestMode(url.searchParams.get("mode"));
-		const sessions = (await SessionManager.listAll(sessionDir())).filter(
-			(info) =>
-				getChatMode(info) === mode &&
-				!existsSync(`${info.path}.archived`) &&
-				(!info.workspaceId || !host.workspaceStore.getById(info.workspaceId, mode)),
-		);
-		return { sessions: sessions.map(sessionSummary) };
+		const pagination = parseSessionListPagination(url);
+		const customDir = sessionDir();
+		// detached-only: sessions whose workspace is gone (or never registered), not the whole library.
+		const infos = customDir
+			? (await SessionManager.listAll(customDir)).filter(
+					(info) => !info.workspaceId || !host.workspaceStore.getById(info.workspaceId, mode),
+				)
+			: await SessionManager.listUnbound();
+		const sessions = infos.filter((info) => getChatMode(info) === mode && !isArchivedSession(info));
+		const page = paginateSessionSummaries(sessions.map(sessionSummary), pagination);
+		return pagination ? { sessions: page.sessions, total: page.total } : { sessions: page.sessions };
 	});
 
 	server.route("POST", "/api/workspaces/add", ({ body }) => {
@@ -429,14 +471,14 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		}
 	};
 
-	server.route("GET", "/api/sessions/archived", async ({ url }) => ({
-		sessions: (await SessionManager.listAll(sessionDir()))
-			.filter(
-				(info) =>
-					getChatMode(info) === requestMode(url.searchParams.get("mode")) && existsSync(`${info.path}.archived`),
-			)
-			.map(sessionSummary),
-	}));
+	server.route("GET", "/api/sessions/archived", async ({ url }) => {
+		const pagination = parseSessionListPagination(url);
+		const sessions = (await SessionManager.listAll(sessionDir()))
+			.filter((info) => getChatMode(info) === requestMode(url.searchParams.get("mode")) && isArchivedSession(info))
+			.map(sessionSummary);
+		const page = paginateSessionSummaries(sessions, pagination);
+		return pagination ? { sessions: page.sessions, total: page.total } : { sessions: page.sessions };
+	});
 	/** Set or clear a marker file next to the session's JSONL (`.archived`, `.pinned`); the session data is not touched. */
 	const setSessionMarker = async (path: string, suffix: string, on: boolean): Promise<void> => {
 		if (on) {
@@ -450,13 +492,31 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 				if (error.code !== "ENOENT") throw error;
 			});
 		}
+		if (suffix === ".pinned" || suffix === ".archived")
+			patchIndexMarker(path, suffix.slice(1) as "pinned" | "archived", on);
+	};
+	/** Header fast path guard: only files inside the current library's sessions tree can be known sessions. */
+	const isInsideSessionsLibrary = (path: string): boolean => {
+		const customDir = sessionDir();
+		const rootKey = pathIdentityKey(customDir ?? getWorkspacesDir(getDataDir()));
+		const key = pathIdentityKey(path);
+		return key === rootKey || key.startsWith(`${rootKey}/`);
 	};
 	const assertKnownSession = async (path: string, allowDeferred = false): Promise<void> => {
 		if (allowDeferred && hub.slotsShowing(path).length > 0) return;
-		const known = (await SessionManager.listAll(sessionDir())).some(
-			(info) => pathIdentityKey(info.path) === pathIdentityKey(path),
-		);
-		if (!known) throw new HttpError(404, "Unknown session");
+		// Fast path: persistent index hit (rows only exist for real library files).
+		if (isSessionPathIndexed(path)) return;
+		// Header fast path: containment first. A file outside the library's sessions tree must stay
+		// unknown even when its first line looks like a session header, or delete/pin/archive would
+		// operate on arbitrary user files.
+		if (isInsideSessionsLibrary(path)) {
+			try {
+				if (readSessionHeader(path) !== null) return;
+			} catch {
+				// Fall through to the 404 below.
+			}
+		}
+		throw new HttpError(404, "Unknown session");
 	};
 
 	/**

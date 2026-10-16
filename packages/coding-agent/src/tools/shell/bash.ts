@@ -17,15 +17,12 @@ import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { OutputAccumulator } from "../output-accumulator.ts";
 import { assertLocalWorkspaceCwdAvailable } from "../path-utils.ts";
 import { wrapToolDefinition } from "../tool-definition-wrapper.ts";
+import { duplicateToolResultText, idempotencyKey, toolIdempotency } from "../tool-idempotency.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "../truncate.ts";
 import { backgroundJobManager } from "./job-manager.ts";
 import { findBashNullDeviceRedirect } from "./null-redirect-guard.ts";
+import { resolveSessionScope } from "./session-scope.ts";
 import {
-	duplicateToolResultText,
-	idempotencyKey,
-	toolIdempotency,
-} from "../tool-idempotency.ts";
-import { resolveSessionScope } from "./session-scope.ts";import {
 	buildBashProbeSuffix,
 	resolvePreservedSpawnTarget,
 	splitProbeBlock,

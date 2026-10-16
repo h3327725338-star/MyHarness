@@ -170,10 +170,7 @@ export function getWorkspaceUploadsDir(dataRoot: string, workspaceId: string): s
  * `workspaces/<workspace>/sessions/<session>/uploads/<attachmentId>/`.
  */
 export function getSessionUploadDir(dataRoot: string, workspaceId: string, sessionId: string): string {
-	return join(
-		getSessionDir(dataRoot, workspaceId, sessionId),
-		UPLOADS_DIR_NAME,
-	);
+	return join(getSessionDir(dataRoot, workspaceId, sessionId), UPLOADS_DIR_NAME);
 }
 
 /** Resolve one uploaded attachment's folder without creating it. */

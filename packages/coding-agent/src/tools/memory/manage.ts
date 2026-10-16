@@ -1,11 +1,7 @@
-import type { AgentTool } from "@myharness/agent-core";
 import { relative } from "node:path";
+import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
-import {
-	isSafeMemoryId,
-	readCrossScopeMemoryEntries,
-	readMemoryEntries,
-} from "../../agent/runtime/auto-memory.ts";
+import { isSafeMemoryId, readCrossScopeMemoryEntries, readMemoryEntries } from "../../agent/runtime/auto-memory.ts";
 import { getDataDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
@@ -57,9 +53,7 @@ export interface MemoryManageOperations {
 
 const unavailableOperations: MemoryManageOperations = { context: () => undefined };
 
-function resolveManageOperations(
-	options?: MemoryManageOptions | MemoryToolOptions,
-): MemoryManageOperations {
+function resolveManageOperations(options?: MemoryManageOptions | MemoryToolOptions): MemoryManageOperations {
 	const direct = (options as MemoryManageOptions | undefined)?.operations;
 	if (direct && typeof (direct as Partial<MemoryManageOperations>).context === "function") {
 		return direct as MemoryManageOperations;
@@ -98,8 +92,16 @@ function resolveDeletablePath(
 	id: string,
 	context: MemoryManageContext,
 ): { relativePath: string } | { refusal: string } {
-	const paths = getMemoryPaths({ dataRoot: context.dataRoot, workspaceId: context.workspaceId, sessionId: context.sessionId });
-	const own = readMemoryEntries({ globalDir: paths.globalDir, projectDir: paths.workspaceDir, sessionDir: paths.sessionDir });
+	const paths = getMemoryPaths({
+		dataRoot: context.dataRoot,
+		workspaceId: context.workspaceId,
+		sessionId: context.sessionId,
+	});
+	const own = readMemoryEntries({
+		globalDir: paths.globalDir,
+		projectDir: paths.workspaceDir,
+		sessionDir: paths.sessionDir,
+	});
 	const hit = own.find((entry) => entry.id === id);
 	if (hit) return { relativePath: relative(context.dataRoot, hit.filePath).replace(/\\/g, "/") };
 	const cross = readCrossScopeMemoryEntries(context.dataRoot, {
@@ -140,7 +142,9 @@ export function createMemoryDeleteToolDefinition(
 			const deleted: string[] = [];
 			for (const item of requested.slice(0, MANAGE_MAX_IDS)) {
 				if (!isSafeMemoryId(item)) {
-					sections.push(`无效的记忆 id：${item}（格式应为 global/xxx、workspace/xxx、session/xxx 或 pending/xxx）`);
+					sections.push(
+						`无效的记忆 id：${item}（格式应为 global/xxx、workspace/xxx、session/xxx 或 pending/xxx）`,
+					);
 					continue;
 				}
 				const resolved = resolveDeletablePath(item, context);
@@ -159,7 +163,9 @@ export function createMemoryDeleteToolDefinition(
 				}
 			}
 			if (requested.length > MANAGE_MAX_IDS) {
-				sections.push(`[一次最多删除 ${MANAGE_MAX_IDS} 条，其余 ${requested.length - MANAGE_MAX_IDS} 个 id 未处理。]`);
+				sections.push(
+					`[一次最多删除 ${MANAGE_MAX_IDS} 条，其余 ${requested.length - MANAGE_MAX_IDS} 个 id 未处理。]`,
+				);
 			}
 			return textResult(sections.join("\n"), {
 				mode: "delete",

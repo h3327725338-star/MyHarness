@@ -956,6 +956,7 @@ export const zhCN = {
 	"Error output": "错误输出",
 	Result: "结果",
 	"Output so far": "目前的输出",
+	"Render as Markdown": "渲染为 Markdown",
 	"tool image": "工具图片",
 	"Hide result details": "隐藏结果详情",
 	"Result details": "结果详情",

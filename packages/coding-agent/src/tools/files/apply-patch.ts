@@ -143,37 +143,41 @@ export function createApplyPatchToolDefinition(
 
 			// Everything from the read gate to the last write runs under the queues of every file the patch
 			// touches, so a concurrent edit or write cannot change a file between the check and the write.
-			return withFileQueues(plan.lockPaths, async () => {
-				// Checking signal.aborted after each await keeps the queues locked until the current operation has
-				// settled, the same way the edit tool does.
-				const throwIfAborted = (): void => {
-					if (signal?.aborted) throw new Error("Operation aborted");
-				};
+			return withFileQueues(
+				plan.lockPaths,
+				async () => {
+					// Checking signal.aborted after each await keeps the queues locked until the current operation has
+					// settled, the same way the edit tool does.
+					const throwIfAborted = (): void => {
+						if (signal?.aborted) throw new Error("Operation aborted");
+					};
 
-				throwIfAborted();
-				const changes: FileChange[] = [];
-				for (const entry of plan.entries) {
-					changes.push(await computeChange(entry, scope));
 					throwIfAborted();
-				}
+					const changes: FileChange[] = [];
+					for (const entry of plan.entries) {
+						changes.push(await computeChange(entry, scope));
+						throwIfAborted();
+					}
 
-				const files = changes.map(detailsOf);
-				// The validated change set, reported while the writes are still to come.
-				onUpdate?.({ content: [], details: { files } });
-				throwIfAborted();
+					const files = changes.map(detailsOf);
+					// The validated change set, reported while the writes are still to come.
+					onUpdate?.({ content: [], details: { files } });
+					throwIfAborted();
 
-				await runWriteSteps(changes.flatMap(stepsFor));
-				for (const change of changes) {
-					await recordFileStateAfterMutation(change.absolutePath, scope);
-					if (change.operation === "move") await recordFileStateAfterMutation(change.destinationPath, scope);
-				}
+					await runWriteSteps(changes.flatMap(stepsFor));
+					for (const change of changes) {
+						await recordFileStateAfterMutation(change.absolutePath, scope);
+						if (change.operation === "move") await recordFileStateAfterMutation(change.destinationPath, scope);
+					}
 
-				const mutation = committedAfterCancel(signal);
-				return {
-					content: [{ type: "text", text: summarize(files) }],
-					details: { files, ...(mutation ? { mutationStatus: mutation.mutationStatus } : {}) },
-				};
-			}, signal);
+					const mutation = committedAfterCancel(signal);
+					return {
+						content: [{ type: "text", text: summarize(files) }],
+						details: { files, ...(mutation ? { mutationStatus: mutation.mutationStatus } : {}) },
+					};
+				},
+				signal,
+			);
 		},
 	};
 }
@@ -249,11 +253,7 @@ async function fileIdentity(absolutePath: string): Promise<string> {
 }
 
 /** Take the queues of the given files, one after another in the given order (sorted by the caller). */
-async function withFileQueues<T>(
-	paths: readonly string[],
-	task: () => Promise<T>,
-	signal?: AbortSignal,
-): Promise<T> {
+async function withFileQueues<T>(paths: readonly string[], task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
 	const [first, ...rest] = paths;
 	if (first === undefined) return task();
 	return withFileMutationQueue(first, () => withFileQueues(rest, task, signal), signal);

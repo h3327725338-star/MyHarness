@@ -25,6 +25,7 @@ function view(slotId: string, touchedAt: number, overrides: Partial<BudgetSlotVi
 		primary: false,
 		sessionEntries: 10,
 		transcriptCacheBytes: 0,
+		sessionFileBytes: 0,
 		trackedRuns: 0,
 		...overrides,
 	};
@@ -92,12 +93,15 @@ describe("selectIdleSlotsToEvict (pure)", () => {
 
 interface StubSpec {
 	touchedAt: number;
+	startedAt?: number;
 	busy?: boolean;
 }
 
 function stubHost(slotId: string, spec: StubSpec, disposed: string[]): WebHost {
 	return {
 		slotId,
+		// Aged slots by default: the hub's startup grace only protects freshly created ones.
+		startedAt: spec.startedAt ?? 0,
 		touchedAt: spec.touchedAt,
 		session: { isIdle: !spec.busy },
 		completionActive: false,

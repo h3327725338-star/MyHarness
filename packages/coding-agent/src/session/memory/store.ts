@@ -224,7 +224,8 @@ export async function deleteMemoryPermanently(
 		const resolved = path.resolve(dataRoot);
 		const file = path.resolve(resolved, relativePath);
 		assertDirectPath(file);
-		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md")) throw new Error("Invalid memory path");
+		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md"))
+			throw new Error("Invalid memory path");
 		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error("Unknown memory");
 		const entry = listMemoryFiles(resolved).find((item) => path.resolve(resolved, item.path) === file);
 		if (!entry || entry.archived) throw new Error("Unknown memory");
@@ -273,7 +274,8 @@ export async function claimPendingMemory(
 		const resolved = path.resolve(dataRoot);
 		const file = path.resolve(resolved, relativePath);
 		assertDirectPath(file);
-		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md")) throw new Error("Invalid memory path");
+		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md"))
+			throw new Error("Invalid memory path");
 		const entry = listMemoryFiles(resolved).find(
 			(item) => path.resolve(resolved, item.path) === file && !item.archived && item.scope === "pending",
 		);

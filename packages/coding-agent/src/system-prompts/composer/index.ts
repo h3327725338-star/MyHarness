@@ -187,7 +187,9 @@ export function applyAgentRoleBoundary(prompt: string, agentRole: AgentRole): st
  * information is moved, never deleted, and thresholds/semantics are unchanged.
  * Returns undefined when there is nothing dynamic to report.
  */
-export function buildDynamicContextReminder(options: Pick<BuildSystemPromptOptions, "cwd" | "currentModel">): string | undefined {
+export function buildDynamicContextReminder(
+	options: Pick<BuildSystemPromptOptions, "cwd" | "currentModel">,
+): string | undefined {
 	const blocks: string[] = [];
 	if (options.cwd) {
 		const promptCwd = options.cwd.replace(/\\/g, "/");
@@ -202,7 +204,10 @@ export function buildDynamicContextReminder(options: Pick<BuildSystemPromptOptio
 		if (rendered) blocks.push(rendered);
 	}
 	if (blocks.length === 0) return undefined;
-	return [`${SYSTEM_REMINDER_MARKER} Dynamic session context (reference only; not a new user request):`, ...blocks].join("\n");
+	return [
+		`${SYSTEM_REMINDER_MARKER} Dynamic session context (reference only; not a new user request):`,
+		...blocks,
+	].join("\n");
 }
 
 interface BuiltSections {

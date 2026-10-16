@@ -47,7 +47,98 @@ export function splitAttachments(text) {
 
 const metaCache = new Map();
 
-function useAttachmentMeta(path) {
+// Same-frame batching for useAttachmentMeta: hooks that mount in the same microtask frame
+// (one message's cards, one sidebar group) share a single POST /api/uploads/info-batch instead
+// of one GET per file. Cache key stays the file path; 404/400 answers are cached too (with the
+// status on the error object) so a deleted file is not requested again. Invalidation below keeps
+// its meaning: it only drops cache entries, never the batching itself.
+const metaPending = new Map();
+let metaFlushQueued = false;
+
+function flushMetaBatch() {
+	metaFlushQueued = false;
+	if (metaPending.size === 0) return;
+	const waiting = [...metaPending];
+	metaPending.clear();
+	const uncached = waiting.filter(([uploadPath]) => !metaCache.has(uploadPath));
+	if (uncached.length === 0) {
+		for (const [uploadPath, list] of waiting) {
+			const entry = metaCache.get(uploadPath);
+			for (const waiter of list) {
+				if (!waiter.isCancelled()) waiter.setState(entry);
+			}
+		}
+		return;
+	}
+	const resolveBatch = async (paths) => {
+		const data = await api("/api/uploads/info-batch", { method: "POST", body: { paths } });
+		const byPath = new Map();
+		for (const item of data?.results ?? []) byPath.set(item?.path, item);
+		return byPath;
+	};
+	const settle = (uploadPath, list, entry) => {
+		metaCache.set(uploadPath, entry);
+		for (const waiter of list) {
+			if (!waiter.isCancelled()) waiter.setState(entry);
+		}
+	};
+	const settleError = (uploadPath, list, message, status) => {
+		const error = new Error(message);
+		error.status = status;
+		settle(uploadPath, list, { error });
+	};
+	// The server caps a batch at 100 paths; chunk so a huge list degrades to a few POSTs, not a 400.
+	const chunks = [];
+	for (let index = 0; index < uncached.length; index += 100) chunks.push(uncached.slice(index, index + 100));
+	(async () => {
+		try {
+			const maps = await Promise.all(chunks.map((chunk) => resolveBatch(chunk.map(([uploadPath]) => uploadPath))));
+			const byPath = new Map();
+			for (const map of maps) for (const [key, value] of map) byPath.set(key, value);
+			for (const [uploadPath, list] of uncached) {
+				const item = byPath.get(uploadPath);
+				if (item?.ok) settle(uploadPath, list, { data: item.meta });
+				else if (item) settleError(uploadPath, list, item.error || "Request failed", item.status ?? 500);
+				else settleError(uploadPath, list, "Request failed", 500);
+			}
+		} catch (error) {
+			// An older server has no batch route yet (static frontend is served before the process restarts):
+			// fall back to the single-GET path so a pre-restart page keeps rendering attachment cards.
+			if (error?.status === 404) {
+				await Promise.all(
+					uncached.map(async ([uploadPath, list]) => {
+						try {
+							const meta = await api(`/api/uploads/info?path=${encodeURIComponent(uploadPath)}`);
+							settle(uploadPath, list, { data: meta });
+						} catch (fallbackError) {
+							settleError(uploadPath, list, fallbackError?.message || "Request failed", fallbackError?.status);
+						}
+					}),
+				);
+				return;
+			}
+			for (const [uploadPath, list] of uncached) {
+				if (error?.status !== undefined) settleError(uploadPath, list, error.message || "Request failed", error.status);
+				else settle(uploadPath, list, { error });
+			}
+		}
+	})();
+}
+
+function queueMetaFetch(uploadPath, setState, isCancelled) {
+	let list = metaPending.get(uploadPath);
+	if (!list) {
+		list = [];
+		metaPending.set(uploadPath, list);
+	}
+	list.push({ setState, isCancelled });
+	if (!metaFlushQueued) {
+		metaFlushQueued = true;
+		Promise.resolve().then(flushMetaBatch);
+	}
+}
+
+export function useAttachmentMeta(path) {
 	const cached = metaCache.get(path);
 	const [state, setState] = useState(cached || null);
 	useEffect(() => {
@@ -57,19 +148,7 @@ function useAttachmentMeta(path) {
 			setState(metaCache.get(path));
 			return undefined;
 		}
-		api(`/api/uploads/info?path=${encodeURIComponent(path)}`)
-			.then((data) => {
-				if (cancelled) return;
-				const entry = { data };
-				metaCache.set(path, entry);
-				setState(entry);
-			})
-			.catch((error) => {
-				if (cancelled) return;
-				const entry = { error };
-				metaCache.set(path, entry);
-				setState(entry);
-			});
+		queueMetaFetch(path, setState, () => cancelled);
 		return () => {
 			cancelled = true;
 		};

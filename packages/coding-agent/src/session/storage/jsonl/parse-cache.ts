@@ -28,7 +28,50 @@ import type { FileEntry, SessionJsonlDiagnostic } from "../../types.ts";
  *   mutations.
  */
 
-export const DEFAULT_MAX_CACHED_PARSE_BYTES = 32 * 1024 * 1024;
+export const DEFAULT_MAX_CACHED_PARSE_BYTES = 128 * 1024 * 1024;
+
+/** Single-file cap: files larger than this are read correctly but never cached. */
+export const MAX_SINGLE_PARSE_BYTES = 32 * 1024 * 1024;
+
+/** Hard upper bounds: env overrides may lower the budgets, never blow past these caps. */
+export const MAX_PARSE_CACHE_TOTAL_BYTES = 1024 * 1024 * 1024;
+export const MAX_PARSE_CACHE_SINGLE_BYTES = 256 * 1024 * 1024;
+
+const PARSE_CACHE_MB_ENV = "MYHARNESS_PARSE_CACHE_MB";
+const PARSE_CACHE_FILE_MB_ENV = "MYHARNESS_PARSE_CACHE_FILE_MB";
+
+/**
+ * Env convention follows the rest of the agent (config.ts `ENV_*` keys plus direct
+ * `process.env.MYHARNESS_*` reads): plain megabytes, loaded once at module entry so
+ * no extra startup wiring is needed. `0` disables caching; missing or invalid
+ * values fall back to the compiled defaults.
+ */
+function parseEnvMegabytes(raw: string | undefined, fallbackBytes: number): number {
+	const text = raw?.trim();
+	if (!text) return fallbackBytes;
+	const mb = Number(text);
+	if (!Number.isFinite(mb) || mb < 0) return fallbackBytes;
+	return Math.floor(mb * 1024 * 1024);
+}
+
+/** Pure resolver over an env record so the mapping is testable without re-importing. */
+export function resolveParseCacheLimitsFromEnv(env: Record<string, string | undefined>): {
+	maxBytes: number;
+	maxSingleBytes: number;
+} {
+	return {
+		maxBytes: Math.min(
+			parseEnvMegabytes(env[PARSE_CACHE_MB_ENV], DEFAULT_MAX_CACHED_PARSE_BYTES),
+			MAX_PARSE_CACHE_TOTAL_BYTES,
+		),
+		maxSingleBytes: Math.min(
+			parseEnvMegabytes(env[PARSE_CACHE_FILE_MB_ENV], MAX_SINGLE_PARSE_BYTES),
+			MAX_PARSE_CACHE_SINGLE_BYTES,
+		),
+	};
+}
+
+const envParseCacheLimits = resolveParseCacheLimitsFromEnv(process.env);
 
 interface CachedParse {
 	ino: number;
@@ -47,21 +90,28 @@ interface CachedParse {
 	recovered: boolean;
 }
 
-let maxCachedParseBytes = DEFAULT_MAX_CACHED_PARSE_BYTES;
+let maxCachedParseBytes = envParseCacheLimits.maxBytes;
+let maxSingleParseBytes = envParseCacheLimits.maxSingleBytes;
 const cachedParses = new Map<string, CachedParse>();
 let cachedParseBytes = 0;
 
-/** Override the byte budget (tests). Values below 1 disable caching. */
-export function setParseCacheOptions(options: { maxBytes?: number }): void {
+/** Override the budgets (tests). Values below 1 disable caching. */
+export function setParseCacheOptions(options: { maxBytes?: number; maxSingleBytes?: number }): void {
 	if (options.maxBytes !== undefined) {
 		maxCachedParseBytes = Number.isFinite(options.maxBytes) ? Math.max(0, Math.floor(options.maxBytes)) : 0;
 		evictOldestParseCaches();
 	}
+	if (options.maxSingleBytes !== undefined) {
+		maxSingleParseBytes = Number.isFinite(options.maxSingleBytes)
+			? Math.max(0, Math.floor(options.maxSingleBytes))
+			: 0;
+	}
 }
 
-/** Restore the default budget and drop all cached snapshots. */
+/** Restore the startup (env-derived) budgets and drop all cached snapshots. */
 export function resetParseCacheOptions(): void {
-	maxCachedParseBytes = DEFAULT_MAX_CACHED_PARSE_BYTES;
+	maxCachedParseBytes = envParseCacheLimits.maxBytes;
+	maxSingleParseBytes = envParseCacheLimits.maxSingleBytes;
 	cachedParses.clear();
 	cachedParseBytes = 0;
 }
@@ -81,8 +131,18 @@ export function invalidateParseCache(filePath: string): void {
 	cachedParseBytes -= previous.bytes;
 }
 
-export function getParseCacheStats(): { files: number; bytes: number; maxBytes: number } {
-	return { files: cachedParses.size, bytes: cachedParseBytes, maxBytes: maxCachedParseBytes };
+export function getParseCacheStats(): {
+	files: number;
+	bytes: number;
+	maxBytes: number;
+	maxSingleBytes: number;
+} {
+	return {
+		files: cachedParses.size,
+		bytes: cachedParseBytes,
+		maxBytes: maxCachedParseBytes,
+		maxSingleBytes: maxSingleParseBytes,
+	};
 }
 
 function refreshParseCacheEntry(key: string, snapshot: CachedParse): void {
@@ -118,7 +178,7 @@ export type ParseCacheLookup =
 export function lookupParseCache(filePath: string): ParseCacheLookup {
 	const key = normalizePath(filePath);
 	const cached = cachedParses.get(key);
-	if (!cached || maxCachedParseBytes < 1) {
+	if (!cached || maxCachedParseBytes < 1 || maxSingleParseBytes < 1) {
 		if (cached) invalidateParseCache(key);
 		return { kind: "miss" };
 	}
@@ -163,8 +223,9 @@ export function lookupParseCache(filePath: string): ParseCacheLookup {
 /**
  * Remember a freshly parsed file. `offset` is the count of bytes holding
  * complete lines (a torn tail stays out of the snapshot so its completion is
- * parsed on the next growth). Files larger than the whole budget are not
- * cached; their reads stay correct, just uncached.
+ * parsed on the next growth). Files larger than the effective cap (the smaller
+ * of the total budget and the single-file cap) are not cached; their reads
+ * stay correct, just uncached.
  */
 export function storeParseCache(
 	filePath: string,
@@ -176,7 +237,7 @@ export function storeParseCache(
 ): void {
 	const key = normalizePath(filePath);
 	invalidateParseCache(key);
-	if (maxCachedParseBytes < 1) return;
+	if (maxCachedParseBytes < 1 || maxSingleParseBytes < 1) return;
 	let identity: { ino: number; size: number; mtimeMs: number };
 	try {
 		const stats = statSync(key);
@@ -184,7 +245,7 @@ export function storeParseCache(
 	} catch {
 		return;
 	}
-	if (identity.size > maxCachedParseBytes || offset > identity.size) return;
+	if (identity.size > Math.min(maxCachedParseBytes, maxSingleParseBytes) || offset > identity.size) return;
 	const snapshot: CachedParse = {
 		ino: identity.ino,
 		size: identity.size,

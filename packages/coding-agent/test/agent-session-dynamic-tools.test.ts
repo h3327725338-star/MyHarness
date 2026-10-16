@@ -5,11 +5,11 @@ import { getModel } from "@myharness/ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/runtime/sdk.ts";
-import { MISSING_TOOL_SNIPPET_PLACEHOLDER } from "../src/system-prompts/composer/index.ts";
 import { DefaultResourceLoader } from "../src/application/resource-loader.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
+import { MISSING_TOOL_SNIPPET_PLACEHOLDER } from "../src/system-prompts/composer/index.ts";
 import { registerManualTestProvider } from "./model-runtime-test-utils.ts";
 
 describe("AgentSession dynamic tool registration", () => {

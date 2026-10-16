@@ -85,6 +85,19 @@ export {
 	type TodoWriteToolInput,
 } from "./interaction/todo-write.ts";
 export {
+	createMemoryClaimTool,
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteTool,
+	createMemoryDeleteToolDefinition,
+	createSessionMemoryManageOperations,
+	type MemoryClaimToolInput,
+	type MemoryDeleteToolInput,
+	type MemoryManageContext,
+	type MemoryManageOperations,
+	type MemoryManageOptions,
+	type MemoryManageToolDetails,
+} from "./memory/manage.ts";
+export {
 	createMemoryGetTool,
 	createMemoryGetToolDefinition,
 	createMemorySearchTool,
@@ -96,19 +109,6 @@ export {
 	type MemoryToolOperations,
 	type MemoryToolOptions,
 } from "./memory/search.ts";
-export {
-	createMemoryClaimTool,
-	createMemoryClaimToolDefinition,
-	createMemoryDeleteTool,
-	createMemoryDeleteToolDefinition,
-	createSessionMemoryManageOperations,
-	type MemoryClaimToolInput,
-	type MemoryDeleteToolInput,
-	type MemoryManageContext,
-	type MemoryManageToolDetails,
-	type MemoryManageOperations,
-	type MemoryManageOptions,
-} from "./memory/manage.ts";
 export {
 	type BashOperations,
 	type BashSpawnContext,
@@ -216,18 +216,18 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 import { createAskUserQuestionTool, createAskUserQuestionToolDefinition } from "./interaction/ask-user-question.ts";
 import { createTodoWriteTool, createTodoWriteToolDefinition } from "./interaction/todo-write.ts";
 import {
+	createMemoryClaimTool,
+	createMemoryClaimToolDefinition,
+	createMemoryDeleteTool,
+	createMemoryDeleteToolDefinition,
+} from "./memory/manage.ts";
+import {
 	createMemoryGetTool,
 	createMemoryGetToolDefinition,
 	createMemorySearchTool,
 	createMemorySearchToolDefinition,
 	type MemoryToolOptions,
 } from "./memory/search.ts";
-import {
-	createMemoryClaimTool,
-	createMemoryClaimToolDefinition,
-	createMemoryDeleteTool,
-	createMemoryDeleteToolDefinition,
-} from "./memory/manage.ts";
 import { createMemoryWriteTool, createMemoryWriteToolDefinition } from "./memory/write.ts";
 
 export {

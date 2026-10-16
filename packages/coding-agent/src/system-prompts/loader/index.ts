@@ -8,7 +8,11 @@ import { join } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../../config.ts";
 
-export { clearSystemPromptCache, loadSystemPrompt, loadSystemPromptLines } from "@myharness/ai/api/system-prompt-loader";
+export {
+	clearSystemPromptCache,
+	loadSystemPrompt,
+	loadSystemPromptLines,
+} from "@myharness/ai/api/system-prompt-loader";
 
 /**
  * Resolve a CLI or settings-provided prompt input. Existing callers may pass

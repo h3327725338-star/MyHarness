@@ -59,6 +59,10 @@ const STATUS_EVENTS = new Set([
 const STATUS_DEBOUNCE_MS = 80;
 const RECLAIM_RETRY_MS = 250;
 const RECLAIM_TIMEOUT_MS = 15_000;
+/** A slot created less than this long ago counts as busy for eviction (a fresh empty chat must survive the next open). */
+export const SLOT_STARTUP_GRACE_MS = 30_000;
+/** An eviction candidate touched this recently is skipped this round (a racing request just addressed it). */
+export const SLOT_TOUCH_RECHECK_MS = 5_000;
 
 export interface WebHostHubOptions {
 	server: WebHttpServer;
@@ -297,9 +301,9 @@ export class WebHostHub implements WebHostHubLink {
 			})();
 			this.opening.set(key, pending);
 		}
+		let host: WebHost | undefined;
 		try {
-			const host = await pending;
-			this.pruneIdle(host);
+			host = await pending;
 			const pendingMissing = (
 				host as WebHost & {
 					pendingMissingWorkspace?: { cwdMissing: boolean; workspaceName: string; workspaceId?: string };
@@ -310,6 +314,10 @@ export class WebHostHub implements WebHostHubLink {
 			return missing ? { slot: host.slotId, created, ...missing } : { slot: host.slotId, created };
 		} finally {
 			this.opening.delete(key);
+			// pruneIdle defers while an open is still in flight (`opening.size > 0`), so it must run after
+			// the key is removed. Calling it before the delete made the open path never prune, letting idle
+			// background slots pile up until the next create.
+			if (host) this.pruneIdle(host);
 		}
 	}
 
@@ -464,9 +472,18 @@ export class WebHostHub implements WebHostHubLink {
 	 * nor the primary one.
 	 */
 	private pruneIdle(keep: WebHost): void {
+		// An open/create still in flight may be about to claim a slot: defer to the next round.
+		if (this.opening.size > 0) return;
+		const now = Date.now();
 		const byId = new Map(this.all().map((host) => [host.slotId, host]));
 		const candidates = this.all()
-			.filter((host) => host !== keep && host !== this.primary && !this.isBusy(host))
+			.filter(
+				(host) =>
+					host !== keep &&
+					host !== this.primary &&
+					!this.isBusy(host) &&
+					now - host.startedAt >= SLOT_STARTUP_GRACE_MS,
+			)
 			.map((host) => describeHostForBudget(host, this.primary, false));
 		const injected = this.options.estimateSlotBytes;
 		const { evict } = selectIdleSlotsToEvict(candidates, {
@@ -478,7 +495,10 @@ export class WebHostHub implements WebHostHubLink {
 		});
 		for (const id of evict) {
 			const host = byId.get(id);
-			if (host) void this.closeSlot(host).catch(() => {});
+			if (!host) continue;
+			// Re-check before releasing: a request may have addressed the slot after the plan was made.
+			if (Date.now() - host.touchedAt < SLOT_TOUCH_RECHECK_MS) continue;
+			void this.closeSlot(host).catch(() => {});
 		}
 	}
 

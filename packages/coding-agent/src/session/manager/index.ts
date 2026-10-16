@@ -34,6 +34,7 @@ import { getCwdRelativePath, normalizePath, resolvePath } from "../../utils/path
 import { readSessionBridgeDescriptor } from "../bridge/descriptor.ts";
 import { migrateToCurrentVersion } from "../migrations/index.ts";
 import { buildContextEntries, buildSessionContext, walkSessionPath } from "../projection/index.ts";
+import type { SessionDeleteImpact } from "../storage/jsonl/file-operations.ts";
 import {
 	describeSessionDeleteImpact,
 	ensureSessionDirectory,
@@ -56,7 +57,7 @@ import {
 	writeSessionFile,
 	writeSessionMetadata,
 } from "../storage/jsonl/index.ts";
-import type { SessionDeleteImpact } from "../storage/jsonl/file-operations.ts";
+import { removeIndexEntryForPath } from "../storage/jsonl/sessions-index.ts";
 import { dropPendingSessionWrites, flushSessionWrites, stopSessionWriteRetries } from "../storage/jsonl/write-batch.ts";
 import {
 	type BranchSummaryEntry,
@@ -746,9 +747,10 @@ export class SessionManager {
 			// Best effort: the conversation file rollback above is authoritative.
 		}
 		if (!sameFile && existsSync(targetPath)) {
-			// A removed destination must not be resurrected by a pending batch timer.
+			// A removed destination must not be resurrected by a pending batch timer or a stale index row.
 			dropPendingSessionWrites(targetPath);
 			rmSync(targetPath, { force: true });
+			removeIndexEntryForPath(targetPath);
 		}
 	}
 

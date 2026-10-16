@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { getSessionDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { assertDirectTree, preserveArtifactOrigin, refreshSessionArtifactIndexes } from "../../artifacts/store.ts";
 import { refreshMemoryIndexes } from "../../memory/store.ts";
+import { removeIndexEntryForPath } from "./sessions-index.ts";
 import { dropPendingSessionWritesUnder, flushSessionWrites } from "./write-batch.ts";
 
 function deleteTarget(sessionPath: string): { path: string; directory: boolean } {
@@ -60,21 +61,24 @@ function walkRealFiles(root: string): { fileCount: number; bytes: number } {
 			const full = join(current, entry.name);
 			if (entry.isDirectory()) {
 				stack.push(full);
-			continue;
+				continue;
 			}
 			if (!entry.isFile() || entry.name === ".gitignore") continue;
 			try {
 				bytes += statSync(full).size;
-		} catch {
-			// Unreadable file still counts as an attachment for safety.
-		}
+			} catch {
+				// Unreadable file still counts as an attachment for safety.
+			}
 			fileCount++;
 		}
 	}
 	return { fileCount, bytes };
 }
 
-function summarizeAttachmentDir(path: string, kind: SessionAttachmentSummary["kind"]): SessionAttachmentSummary | undefined {
+function summarizeAttachmentDir(
+	path: string,
+	kind: SessionAttachmentSummary["kind"],
+): SessionAttachmentSummary | undefined {
 	if (!existsSync(path)) return undefined;
 	try {
 		const stats = lstatSync(path);
@@ -101,9 +105,7 @@ function attachmentDirsForSessionDir(sessionDir: string, conversationDir?: strin
 export function hasSessionAttachments(sessionDirOrFile: string): boolean {
 	try {
 		const scope = parseSessionDataPath(sessionDirOrFile);
-		const sessionDir = scope
-			? getSessionDir(scope.dataRoot, scope.workspaceId, scope.sessionId)
-			: sessionDirOrFile;
+		const sessionDir = scope ? getSessionDir(scope.dataRoot, scope.workspaceId, scope.sessionId) : sessionDirOrFile;
 		let stats: import("node:fs").Stats;
 		try {
 			stats = lstatSync(sessionDir);
@@ -137,14 +139,14 @@ export function describeSessionDeleteImpact(sessionPath: string): SessionDeleteI
 			sessionDir = getSessionDir(scope.dataRoot, scope.workspaceId, scope.sessionId);
 			for (const [dir, kind] of attachmentDirsForSessionDir(sessionDir, scope.conversationDir)) {
 				const summary = summarizeAttachmentDir(dir, kind as SessionAttachmentSummary["kind"]);
-			if (summary && !attachments.some((item) => item.path === summary.path)) attachments.push(summary);
+				if (summary && !attachments.some((item) => item.path === summary.path)) attachments.push(summary);
 			}
 			hasMemory = existsSync(join(sessionDir, "memory"));
 		} else {
 			const base = dirname(sessionPath);
 			for (const kind of ["uploads", "tool-results"] as const) {
 				const summary = summarizeAttachmentDir(join(base, kind), kind);
-			if (summary) attachments.push(summary);
+				if (summary) attachments.push(summary);
 			}
 		}
 	} catch {
@@ -180,7 +182,12 @@ export function describeSessionDeleteImpact(sessionPath: string): SessionDeleteI
  */
 export async function deleteSessionFile(
 	sessionPath: string,
-	options: { permanent?: boolean; deleteArtifacts?: boolean; deleteMemory?: boolean; deleteAttachments?: boolean } = {},
+	options: {
+		permanent?: boolean;
+		deleteArtifacts?: boolean;
+		deleteMemory?: boolean;
+		deleteAttachments?: boolean;
+	} = {},
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
 	const target = deleteTarget(sessionPath);
 	const scope = parseSessionDataPath(sessionPath);
@@ -241,8 +248,9 @@ export async function deleteSessionFile(
 				}
 			} else if (!hasMemory && !keepAttachmentLib) await rm(target.path, { recursive: true });
 			refreshSessionArtifactIndexes(scope);
-			// A removed session must not be resurrected by a pending batch timer.
+			// A removed session must not be resurrected by a pending batch timer or a stale index row.
 			dropPendingSessionWritesUnder(target.path);
+			removeIndexEntryForPath(sessionPath);
 			return { ok: true, method: "unlink" };
 		}
 	} catch (error) {
@@ -265,6 +273,7 @@ export async function deleteSessionFile(
 	if (trashResult.status === 0 || !existsSync(target.path)) {
 		if (scope) refreshSessionArtifactIndexes(scope);
 		dropPendingSessionWritesUnder(target.path);
+		removeIndexEntryForPath(sessionPath);
 		return { ok: true, method: "trash" };
 	}
 
@@ -276,6 +285,7 @@ export async function deleteSessionFile(
 		});
 		if (scope) refreshSessionArtifactIndexes(scope);
 		dropPendingSessionWritesUnder(target.path);
+		removeIndexEntryForPath(sessionPath);
 		return { ok: true, method: "unlink" };
 	} catch (err) {
 		const unlinkError = err instanceof Error ? err.message : String(err);

@@ -2002,7 +2002,7 @@ describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)"
 
 	it("③ exceeding the cap evicts the least recently used sessions first", () => {
 		const cap = cacheStore.TURNS_CACHE_MAX as number;
-		expect(cap).toBe(8);
+		expect(cap).toBe(16);
 		// Start from a clean cap: drop the entries the earlier cases in this block left behind.
 		for (const slot of ["cache-s1", "cache-s2", "cache-s3"]) cacheStore.setTurnsCache(null, slot);
 		const items = [user, reply];

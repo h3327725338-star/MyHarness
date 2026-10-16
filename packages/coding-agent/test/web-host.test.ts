@@ -398,6 +398,18 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.post("/api/sessions/archive", { path: unknown })).rejects.toThrow("404: Unknown session");
 		await expect(fx.post("/api/sessions/delete", { path: unknown })).rejects.toThrow("404: Unknown session");
 		expect(existsSync(`${unknown}.archived`)).toBe(false);
+		// A file outside the sessions library whose first line forges a valid session header must stay
+		// unknown too: the header fast path only accepts paths inside the library's sessions tree, or
+		// delete/archive/pin would operate on arbitrary user files.
+		const forged = join(fx.project, "forged-session.jsonl");
+		writeFileSync(
+			forged,
+			`${JSON.stringify({ type: "session", version: 3, id: "forged-1", timestamp: "2025-01-01T00:00:00Z", cwd: fx.project })}\n`,
+		);
+		await expect(fx.post("/api/sessions/archive", { path: forged })).rejects.toThrow("404: Unknown session");
+		await expect(fx.post("/api/sessions/delete", { path: forged })).rejects.toThrow("404: Unknown session");
+		expect(existsSync(forged)).toBe(true);
+		expect(existsSync(`${forged}.archived`)).toBe(false);
 	});
 
 	it("persists a new chat containing only a Commit card and does not reuse it as empty", async () => {

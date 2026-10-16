@@ -129,56 +129,58 @@ export function createWriteToolDefinition(
 					details: { ...(replayed.details ?? {}), additions: 0, deletions: 0, idempotentReplay: true as const },
 				};
 			}
-			return withFileMutationQueue(absolutePath, async () => {
-				// Do not reject from an abort event listener here: that would release the
-				// mutation queue while an in-flight filesystem operation may still finish.
-				// Checking signal.aborted after each await observes the same aborts while
-				// keeping the queue locked until the current operation has settled.
-				const throwIfAborted = (): void => {
-					if (signal?.aborted) throw new Error("Operation aborted");
-				};
+			return withFileMutationQueue(
+				absolutePath,
+				async () => {
+					// Do not reject from an abort event listener here: that would release the
+					// mutation queue while an in-flight filesystem operation may still finish.
+					// Checking signal.aborted after each await observes the same aborts while
+					// keeping the queue locked until the current operation has settled.
+					const throwIfAborted = (): void => {
+						if (signal?.aborted) throw new Error("Operation aborted");
+					};
 
-				throwIfAborted();
-				// An existing file must have been read, and must not have changed since. A target
-				// that does not exist yet is a creation and is always allowed.
-				if (localFileSystem) {
-					await assertFileWasReadBefore(absolutePath, "write", path, scope);
 					throwIfAborted();
-				}
-				// What the file holds now, to tell afterwards how many lines the write added and removed. Only for the
-				// local file system: a custom operation set (for example SSH) cannot be read from here.
-				const before = localFileSystem ? await readBeforeWrite(absolutePath) : undefined;
-				throwIfAborted();
-				// Create parent directories if needed.
-				await ops.mkdir(dir);
-				throwIfAborted();
+					// An existing file must have been read, and must not have changed since. A target
+					// that does not exist yet is a creation and is always allowed.
+					if (localFileSystem) {
+						await assertFileWasReadBefore(absolutePath, "write", path, scope);
+						throwIfAborted();
+					}
+					// What the file holds now, to tell afterwards how many lines the write added and removed. Only for the
+					// local file system: a custom operation set (for example SSH) cannot be read from here.
+					const before = localFileSystem ? await readBeforeWrite(absolutePath) : undefined;
+					throwIfAborted();
+					// Create parent directories if needed.
+					await ops.mkdir(dir);
+					throwIfAborted();
 
-				const changes = describeWrite(before, content);
-				if (Object.keys(changes).length) onUpdate?.({ content: [], details: changes });
-				throwIfAborted();
-				// Write the file contents without splitting the atomic mutation for presentation.
-				await ops.writeFile(absolutePath, content);
-				// The write is ours: remember the new shape so the next edit or write of this file
-				// in the same Session is not reported as an external modification.
-				if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
+					const changes = describeWrite(before, content);
+					if (Object.keys(changes).length) onUpdate?.({ content: [], details: changes });
+					throwIfAborted();
+					// Write the file contents without splitting the atomic mutation for presentation.
+					await ops.writeFile(absolutePath, content);
+					// The write is ours: remember the new shape so the next edit or write of this file
+					// in the same Session is not reported as an external modification.
+					if (localFileSystem) await recordFileStateAfterMutation(absolutePath, scope);
 
-				const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
-				// Annotated with the framework result type: the literal's `type: "text"` would otherwise widen to
-				// `string` and no longer satisfy the `TextContent` the tool contract returns.
-				const result: AgentToolResult<WriteToolDetails | undefined> = {
-					content: [
-						{
-							type: "text",
-							text: `Successfully wrote ${Buffer.byteLength(content, "utf-8")} bytes to ${path}`,
-						},
-					],
-					details: Object.keys(details).length > 0 ? details : undefined,
-				};
-				// Only successes are stored: the same bytes always produce the same file.
-				toolIdempotency.set(key, result);
-				return result;
-			},
-			signal,
+					const details: WriteToolDetails = { ...committedAfterCancel(signal), ...changes };
+					// Annotated with the framework result type: the literal's `type: "text"` would otherwise widen to
+					// `string` and no longer satisfy the `TextContent` the tool contract returns.
+					const result: AgentToolResult<WriteToolDetails | undefined> = {
+						content: [
+							{
+								type: "text",
+								text: `Successfully wrote ${Buffer.byteLength(content, "utf-8")} bytes to ${path}`,
+							},
+						],
+						details: Object.keys(details).length > 0 ? details : undefined,
+					};
+					// Only successes are stored: the same bytes always produce the same file.
+					toolIdempotency.set(key, result);
+					return result;
+				},
+				signal,
 			);
 		},
 	};

@@ -6,7 +6,7 @@ import { retrySwitch, activeSlotId, api, fetchMoreTranscript, getTurnsCache, set
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, buildTurnsAsync, cachedTurns, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
+import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSlice, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
@@ -121,6 +121,39 @@ function MarkdownOutput({ text, max = 60_000 }) {
 		${text.length > max ? html`<button class="btn sm ghost" onClick=${() => glide.run(() => (show.expanded ? show.collapse() : show.expand()))}>${show.expanded ? t("Show less") : t("Show all ({fmtBytes})", { fmtBytes: fmtBytes(text.length) })}</button>` : null}</div>`;
 }
 
+// A tool output with more than this many characters (or lines) is a "big card": it opens as plain chunked
+// text and a markdown file offers one explicit render pass instead of parsing up front (that parse is itself
+// the long task). Thresholds only; the Output/MarkdownOutput limits above are unchanged.
+const BIG_CARD_CHARS = 50 * 1024;
+const BIG_CARD_LINES = 500;
+
+/** Whether a tool output body is a big card (either limit is enough). Growing stream output qualifies the same way. */
+function isBigCardOutput(text) {
+	if (!text) return false;
+	if (text.length > BIG_CARD_CHARS) return true;
+	let lines = 1;
+	for (let i = 0; i < text.length; i++) {
+		if (text.charCodeAt(i) === 10 && ++lines > BIG_CARD_LINES) return true;
+	}
+	return false;
+}
+
+/**
+ * A big markdown-file output: plain chunked text first, with one explicit "render as Markdown" pass.
+ * Only finished reads mount this (running output stays plain `Output`); once rendered it stays rendered.
+ * The swap glides with the shared height motion, like the other show-all buttons.
+ */
+function BigReadOutput({ text }) {
+	const [rich, setRich] = useState(false);
+	const glide = useHeightGlide();
+	if (rich) return html`<${MarkdownOutput} text=${text} />`;
+	// Above MARKDOWN_PLAIN_LIMIT the render pass stays plain by design; offering the button would just
+	// look broken, so the plain output stands on its own.
+	if (text.length > MARKDOWN_PLAIN_LIMIT) return html`<div ref=${glide.ref}><${Output} text=${text} /></div>`;
+	return html`<div ref=${glide.ref}><${Output} text=${text} />
+		<button class="btn sm ghost" onClick=${() => glide.run(() => setRich(true))}>${t("Render as Markdown")}</button></div>`;
+}
+
 function RawDetails({ step }) {
 	const { call, result, run } = step;
 	const details = result?.details;
@@ -129,6 +162,10 @@ function RawDetails({ step }) {
 	const exitCode = details?.exitCode;
 	// The server replaces oversized details with { truncatedDetails, originalChars }; show a quiet note instead of the raw fields.
 	const originalChars = typeof details?.originalChars === "number" && Number.isFinite(details.originalChars) ? details.originalChars : undefined;
+	// Finished markdown-file reads parse as markdown; big ones stay plain text first with one explicit render
+	// pass, and running output is always plain text, never parsed.
+	const isMdRead = step.kind === "read" && result && !result.isError && MARKDOWN_PATH.test(step.path || "");
+	const bigRead = isMdRead && isBigCardOutput(output);
 	return html`<div class="raw">
 		<div class="raw-meta">
 			<span class="raw-key">${t("tool")}</span><code>${call.name}</code>
@@ -143,7 +180,7 @@ function RawDetails({ step }) {
 			</div>
 			${output ? html`<div class=${`raw-section${result?.isError ? " raw-err" : ""}`}>
 				<div class="raw-label">${result ? (result.isError ? t("Error output") : t("Result")) : t("Output so far")}</div>
-				${step.kind === "read" && result && !result.isError && MARKDOWN_PATH.test(step.path || "") ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}
+				${bigRead ? html`<${BigReadOutput} text=${output} />` : isMdRead ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}
 			</div>` : null}
 			${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => {
 				const src = `data:${img.mimeType};base64,${img.data}`;
@@ -800,6 +837,9 @@ export function Transcript() {
 	// it once, and that swap gets the same scroll compensation as "show earlier": the transcript only grows above.
 	const previewing = useRef(false);
 	const swapHeight = useRef(0);
+	// The paged first screen (TRANSCRIPT_FIRST_PAGE): a full 400-item page with older items still
+	// server-side opens as the 60-turn tail preview, exactly like an over-long transcript.
+	const transcriptHasMore = useStore((s) => s.transcriptHasMore);
 	const turns = useMemo(() => {
 		// A loading shell has no transcript to project; avoid empty intermediate builds and cache pollution.
 		if (switching || items.length === 0) {
@@ -816,7 +856,8 @@ export function Transcript() {
 			previewing.current = false;
 			return cached;
 		}
-		if (items.length > 400) {
+		const previewSlice = tailPreviewSlice(items, transcriptHasMore);
+		if (previewSlice) {
 			// One visible source only: once a full build of this session exists, keep showing it — at most one build
 			// behind the newest stream update — instead of falling back to the tail preview. Swapping between the two on
 			// every update remounted the whole transcript (new keys each time), replayed its entry animation and threw
@@ -833,25 +874,37 @@ export function Transcript() {
 			}
 			// Cold load: keep a complete tail turn when possible, rather than cutting in the middle of a tool exchange.
 			// Only until the first full build of this session lands: from then on the preview is never shown again.
-			let start = Math.max(0, items.length - 60);
-			while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
 			previewing.current = true;
-			return buildTurns(items.slice(start), { cwd, toolRuns }, prevTurns.current);
+			return buildTurns(previewSlice, { cwd, toolRuns }, prevTurns.current);
 		}
-		const built = buildTurns(items, { cwd, toolRuns }, prevTurns.current);
-		setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
-		prevTurns.current = built;
-		prevOwner.current = { slot: turnsSlot, session };
-		previewing.current = false;
-		return built;
-	}, [items, toolRuns, cwd, turnsSlot, session, asyncTurns, switching]);
+		// Small sessions still build synchronously, but under an 8ms frame budget: drive the shared generator
+		// directly and publish only a finished build. When the budget runs out, show the same tail-window preview
+		// the cold-load path above shows and let the single-flight startBuild below publish the full build (it is
+		// gated to run while previewing/fullNeeded); no intermediate state is published and thumbnails never roll back.
+		const work = buildTurnsWork(items, { cwd, toolRuns }, prevTurns.current);
+		const deadline = performance.now() + 8;
+		let step = work.next();
+		while (!step.done && performance.now() < deadline) step = work.next();
+		if (step.done) {
+			const built = step.value;
+			setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
+			prevTurns.current = built;
+			prevOwner.current = { slot: turnsSlot, session };
+			previewing.current = false;
+			return built;
+		}
+		let start = Math.max(0, items.length - 60);
+		while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
+		previewing.current = true;
+		return buildTurns(items.slice(start), { cwd, toolRuns }, prevTurns.current);
+	}, [items, toolRuns, cwd, turnsSlot, session, asyncTurns, switching, transcriptHasMore]);
 	// Full builds for huge sessions run one at a time: while one runs, newer stream updates only mark it dirty, the
 	// finished build is published as soon as it lands, and the newest state is built right after. Cancelling the build
 	// on every update (the previous shape) meant no build ever finished while output streamed, so the view kept falling
 	// back to the tail preview it had just replaced.
 	const build = useRef({ running: false, dirty: false, token: null, slot: null, items: null, toolRuns: null });
 	const buildRequest = useRef(null);
-	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching };
+	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching, hasMore: transcriptHasMore, fullNeeded: previewing.current };
 	const startBuild = () => {
 		const request = buildRequest.current;
 		const state = build.current;
@@ -863,7 +916,11 @@ export function Transcript() {
 			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns) state.dirty = true;
 			else return;
 		}
-		if (request.switching || request.items.length <= 400) return;
+		if (request.switching) return;
+		// A full build runs while the screen shows the tail preview, while the window is over-long, or while a
+		// rebuild of an over-long window is pending (`fullNeeded`/`previewing` — set by the preview branch
+		// above). Small complete transcripts build synchronously and never need one.
+		if (!(previewing.current === true || request.fullNeeded || request.items.length > 400)) return;
 		if (cachedTurns(getTurnsCache(request.slot), request.items, request.toolRuns, request.cwd)) return;
 		state.running = true;
 		state.dirty = false;
@@ -877,9 +934,26 @@ export function Transcript() {
 			// The cold-load preview is about to be replaced: take the height before the swap so the reader's place can be
 			// kept (pinned to the bottom, the follow below holds its place anyway).
 			if (previewing.current) swapHeight.current = scroller.current?.scrollHeight || 0;
+			// An older page that arrived while the full view was showing (full→full prepend) grows the list above
+			// the reader once this build publishes; the fetch commit itself showed the stale build and changed no
+			// height. Pure appends and branch replacements keep the tail object and are excluded: appended content
+			// grows below the reader and must not be compensated.
+			else if (
+				asyncTurns &&
+				describesSession(asyncTurns, request.slot, request.session) &&
+				request.items.length > asyncTurns.items.length &&
+				request.items[0] !== asyncTurns.items[0] &&
+				request.items[request.items.length - 1] === asyncTurns.items[asyncTurns.items.length - 1]
+			)
+				swapHeight.current = scroller.current?.scrollHeight || 0;
 			setTurnsCache({ items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built }, request.slot);
 			setAsyncTurns({ slot: request.slot, session: request.session, items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built });
 			if (state.dirty) startBuild();
+		}).catch(() => {
+			// A failed background build must not wedge the single-flight gate: clear it so the next render can
+			// start a fresh build. The tail preview or the previous turns stay on screen until then.
+			state.running = false;
+			state.dirty = false;
 		});
 	};
 	// Runs after every render: a no-op while a build for the newest references is already running, otherwise it starts one.
@@ -1031,7 +1105,7 @@ export function Transcript() {
 	const [limit, setLimit] = useState(60);
 	const hidden = Math.max(0, turns.length - limit);
 	// A paged transcript still has older items on the server once everything in memory is shown.
-	const transcriptHasMore = useStore((s) => s.transcriptHasMore);
+	// (transcriptHasMore is subscribed above: the tail-preview useMemo depends on it.)
 	const transcriptFetching = useStore((s) => s.transcriptFetching);
 	const showEarlier = hidden > 0 || transcriptHasMore;
 	const shown = hidden ? turns.slice(hidden) : turns;

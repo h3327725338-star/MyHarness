@@ -531,7 +531,15 @@ export class WorkspaceStore {
 	 */
 	listDetachedWorkspaceIds(): string[] {
 		if (!this.dataRoot) return [];
-		const registered = new Set(this.workspaces.map((workspace) => workspace.workspaceId));
+		// A Workspace that was removed from every mode's list keeps an empty `modes` record in the registry
+		// file. It owns no session list anywhere, so its data directory counts as detached: the old
+		// listAll-based filtering treated it as unbound, and detached-only scanning must reach the same set
+		// or removed Workspaces' chats would disappear from the sidebar.
+		const registered = new Set(
+			this.workspaces
+				.filter((workspace) => (workspace.modes ?? ["coding"]).length > 0)
+				.map((workspace) => workspace.workspaceId),
+		);
 		const archived = readArchivedWorkspaceIds(this.dataRoot);
 		const ids = new Set<string>();
 		try {

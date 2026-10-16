@@ -37,6 +37,11 @@ Git repository integration 对 `add`、按路径 `commit` 和失败回滚 `reset
 
 `git/commits/ai-message.ts` 负责只读 Diff 收集与分批提交说明。根据当前模型上下文预算分批，全部片段必须有经校验的分析和来源；关联分组只是线索，不是语义正确性的证明。大摘要分层合并，汇总可按稳定 ID 补读原始片段。分析失败或仓库变化不执行提交，最终由 GitCommitUseCase 正常提交；仅对明确报告的 pre-commit hook 失败启动 Agent 代码修复，最多 3 轮；每轮修复成功后重新采集 Diff、生成说明并带正常 hooks 重试提交。第 3 轮后仍失败则停止并报告轮次上限及最后一次检查错误；修复失败或取消立即停止。修复是否成功依据收尾后保留的 terminalReason，而非已经回到 idle 的实时状态。超时、取消、启动失败及其他 Git 错误不触发修复；不绕过检查或署名。异步 Git 文本输出必须跨 chunk 解码 UTF-8，避免大中文 Diff 被错误替换字符导致仓库变化误报。相关测试包括 `git-commit-batching.test.ts`、`git-ai-message.test.ts`、`git-ai-message-integration.test.ts` 和 Web/用例测试；真实模型描述质量必须单独验证。
 
+## 环境变量
+
+- `MYHARNESS_PARSE_CACHE_MB`：session JSONL 解析缓存总预算（MB，默认 128），`0` 关闭缓存。
+- `MYHARNESS_PARSE_CACHE_FILE_MB`：单个 session 文件可进缓存的上限（MB，默认 32）；超限文件照常读取，只是不缓存，`0` 关闭缓存。两个设置值都会被内置上限钳制：总预算最高 1024 MB，单文件上限最高 256 MB。
+
 ## 常用验证
 
 ```powershell

@@ -60,19 +60,28 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		const rawText = asString(payload.text, "text").trim();
 		const images = await toImageContent(host, payload.images);
 		const attachments = Array.isArray((payload as { attachments?: unknown }).attachments)
-			? ((payload as { attachments: unknown[] }).attachments
+			? (payload as { attachments: unknown[] }).attachments
 					.filter((entry) => entry !== null && typeof entry === "object")
 					.map((entry) => {
 						const record = entry as { id?: unknown; path?: unknown };
-						const ref = typeof record.path === "string" && record.path ? record.path : typeof record.id === "string" ? record.id : "";
+						const ref =
+							typeof record.path === "string" && record.path
+								? record.path
+								: typeof record.id === "string"
+									? record.id
+									: "";
 						return ref.trim();
 					})
 					.filter((ref) => ref.length > 0)
-					.slice(0, 12))
+					.slice(0, 12)
 			: [];
 		const header = "Attached files (use read to inspect):";
 		const refs = attachments.map((ref) => JSON.stringify(ref)).join("\n");
-		const text = attachments.length ? (rawText ? header + "\n" + refs + "\n\n" + rawText : header + "\n" + refs) : rawText;
+		const text = attachments.length
+			? rawText
+				? header + "\n" + refs + "\n\n" + rawText
+				: header + "\n" + refs
+			: rawText;
 		if (!text && images.length === 0) throw new HttpError(400, "Empty message");
 		const modeRaw = payload.mode;
 		const mode =

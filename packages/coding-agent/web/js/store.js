@@ -89,8 +89,11 @@ function bagOf(slot) {
 // requires all three source references to be unchanged; any SSE event or transcript reload that writes a new items
 // or toolRuns value invalidates the entry by itself, so nothing can serve stale turns. The bag holds only references
 // (the turn objects outlived the last render anyway), so one cached session costs one array of pointers. When more
-// than TURNS_CACHE_MAX sessions hold a cache, the least recently used ones lose it.
-export const TURNS_CACHE_MAX = 8;
+// than TURNS_CACHE_MAX sessions hold a cache, the least recently used ones lose it. Past TURNS_CACHE_BYTES_MAX
+// total (~128 bytes counted per wire item) the least recently used ones lose it too: the bags hold only
+// references, but the bound keeps pathological sessions from pinning unbounded windows.
+export const TURNS_CACHE_MAX = 16;
+export const TURNS_CACHE_BYTES_MAX = 8 * 1024 * 1024;
 const turnsCacheLru = new Map(); // slot ids holding a cache, least recently used first (Map keeps insertion order)
 
 export function getTurnsCache(slot = activeSlot) {
@@ -121,6 +124,31 @@ export function setTurnsCache(cache, slot = activeSlot) {
 			if (old) old.turnsCache = null;
 		}
 	}
+	// Byte soft cap: evict the least recently used entries while the total stays over budget.
+	// A single entry is never evicted for its own size (there is nothing older to drop for it).
+	let turnsCacheBytes = 0;
+	for (const id of turnsCacheLru.keys()) {
+		const entry = bags.get(id)?.turnsCache;
+		if (entry) turnsCacheBytes += (entry.items?.length || 0) * 128;
+	}
+	while (turnsCacheBytes > TURNS_CACHE_BYTES_MAX && turnsCacheLru.size > 1) {
+		const oldest = turnsCacheLru.keys().next().value;
+		if (oldest === slot) break;
+		turnsCacheLru.delete(oldest);
+		const old = bags.get(oldest);
+		if (old?.turnsCache) {
+			turnsCacheBytes -= (old.turnsCache.items?.length || 0) * 128;
+			old.turnsCache = null;
+		}
+	}
+}
+
+/** Drop one session's turns cache entry: a closed or lost session must never serve its old turns again. */
+export function dropTurnsCache(slot) {
+	if (!slot) return;
+	const bag = bags.get(slot);
+	if (bag) bag.turnsCache = null;
+	turnsCacheLru.delete(slot);
 }
 
 /** Apply `fn` with state accessors bound to one session's bag (used for events of sessions that are not on screen). */
@@ -371,7 +399,10 @@ export async function api(path, options = {}) {
 		// Keep the server cause for action-specific explanations and collapsed details (including non-English paths).
 		err.rawMessage = typeof data?.error === "string" ? data.error : message;
 		err.status = res.status;
-		if (res.status === 410 && slot && !state.restarting) recoverLostSlot(slot);
+		if (res.status === 410 && slot && !state.restarting) {
+			dropTurnsCache(slot);
+			recoverLostSlot(slot);
+		}
 		throw err;
 	}
 	return data;
@@ -522,7 +553,25 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 	bag.transcriptFetching = false;
 	bag.fetchFailures = 0;
 	runFor(key, () => {
-		state.items = data.items;
+		// A staged open streams into the fresh target bag while this page is in flight. Carry those live
+		// entries across the replacement so the in-flight turn does not blink away; live copies the
+		// server already persisted (same id / toolCallId) are dropped instead of duplicated.
+		const carry = [];
+		if (bag.stagedLoading) {
+			const persistedIds = new Set();
+			const persistedToolCalls = new Set();
+			for (const item of data.items) {
+				if (item.id) persistedIds.add(item.id);
+				if (item.kind === "toolResult" && item.toolCallId) persistedToolCalls.add(item.toolCallId);
+			}
+			for (const item of state.items) {
+				if (!item.liveId && !(item.live && !item.id)) continue;
+				if (item.id && persistedIds.has(item.id)) continue;
+				if (item.kind === "toolResult" && item.toolCallId && persistedToolCalls.has(item.toolCallId)) continue;
+				carry.push(item);
+			}
+		}
+		state.items = carry.length ? [...data.items, ...carry] : data.items;
 		state.toolRuns = toolRuns;
 		state.runs = {};
 		// Old servers answer without paging fields: that is a complete transcript.
@@ -547,6 +596,36 @@ export async function refreshSlot(slot = activeSlot, { full = false } = {}) {
 		.finally(() => slotLoads.delete(key));
 	slotLoads.set(key, pending);
 	return pending;
+}
+
+/**
+ * Staged session open: the snapshot lands first (the target shell shows at once), then the first transcript
+ * page. `loaded` flips only after both succeed, so `canSendToActive` and the `show()` that clears
+ * `state.switching` keep their contract; any failure only goes through `failSwitch` (the target page stays
+ * with its retry, never rolling back to the previous chat). A superseded switch bails out between the stages.
+ */
+export async function refreshSlotStaged(slot = activeSlot, seq = switchSeq) {
+	const bag = bagOf(slot);
+	// Live items that stream in while the first transcript page is in flight are carried across the
+	// full-window replacement instead of being wiped by it (see loadTranscript).
+	bag.stagedLoading = true;
+	bag.stagedLoadingSeq = seq;
+	try {
+		await loadSnapshot(slot);
+		if (!isLatestSwitch(seq)) return;
+		runFor(slot, () => emit());
+		const sentBefore = transcriptSent.get(slot ?? "") ?? 0;
+		await loadTranscript(slot, { limit: TRANSCRIPT_FIRST_PAGE });
+		if (!isLatestSwitch(seq)) return;
+		// Only mark loaded when this request's transcript actually landed: a concurrent full refresh for
+		// the same slot silently supersedes this one inside loadTranscript, and that path sets `loaded`
+		// itself (refreshSlot) or belongs to the newer switch (its own staged load).
+		if ((transcriptSent.get(slot ?? "") ?? 0) === sentBefore + 1) bag.loaded = true;
+	} finally {
+		// A same-slot concurrent staged load may still be streaming into the bag: only the load that owns
+		// the newest seq may clear the carry flag, or the newer load's carry would be silently skipped.
+		if (bag.stagedLoadingSeq === seq) bag.stagedLoading = false;
+	}
 }
 
 /**
@@ -1133,7 +1212,7 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 		activeSlot = slot;
 		state.activeSlot = slot;
 		emit();
-		try { await refreshSlot(slot); }
+		try { await refreshSlotStaged(slot, seq); }
 		catch (error) { failSwitch(seq, error); throw error; }
 	}
 	if (!isLatestSwitch(seq)) return;
@@ -1383,7 +1462,10 @@ function connectEvents() {
 		set({ slots: d.slots });
 		markActiveSeen();
 	});
-	on("slot_closed", (d) => recoverLostSlot(d.slot));
+	on("slot_closed", (d) => {
+		dropTurnsCache(d.slot);
+		recoverLostSlot(d.slot);
+	});
 
 	on("agent_start", (d, slot) => {
 		announced.delete(slot);

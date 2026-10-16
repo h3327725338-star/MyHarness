@@ -23,7 +23,7 @@ import {
 	writeSync,
 } from "fs";
 import { lstat as lstatAsync, opendir, readdir, rmdir as rmdirAsync, stat } from "fs/promises";
-import { basename, dirname, join, relative, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { getDataDir, getWorkspaceSessionsDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { getAgentDir } from "../../../config.ts";
@@ -46,10 +46,21 @@ import type {
 	SessionMessageEntry,
 } from "../../types.ts";
 import { invalidateParseCache, lookupParseCache, storeParseCache } from "./parse-cache.ts";
+import {
+	collectIndexGarbage,
+	computeSessionHeadHashSync,
+	indexKeyForSessionFile,
+	loadWorkspaceIndexSync,
+	markIndexDirtyForFile,
+	recordIndexEntry,
+	relocateIndexEntry,
+	tryAssembleIndexedSessionInfo,
+	tryAssembleIndexedSessionInfoWithIndex,
+} from "./sessions-index.ts";
 import { dropPendingSessionWrites, enqueueSessionAppend, flushSessionWrites } from "./write-batch.ts";
 
-export { describeSessionDeleteImpact, hasSessionAttachments } from "./file-operations.ts";
 export type { SessionAttachmentSummary, SessionDeleteImpact } from "./file-operations.ts";
+export { describeSessionDeleteImpact, hasSessionAttachments } from "./file-operations.ts";
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
@@ -403,7 +414,7 @@ function dirHasRealFilesForCleanup(dir: string): boolean {
 			if (stats.isSymbolicLink() || !stats.isDirectory()) return true;
 			entries = readdirSync(current, { withFileTypes: true });
 		} catch {
-		return true;
+			return true;
 		}
 		for (const entry of entries) {
 			if (entry.name === ".gitignore") continue;
@@ -439,7 +450,7 @@ export function hasSessionAttachmentsForCleanup(sessionDir: string): boolean {
 			if (dirHasRealFilesForCleanup(join(sessionDir, "uploads"))) return true;
 			if (dirHasRealFilesForCleanup(join(sessionDir, "conversation", "uploads"))) return true;
 			continue;
-	}
+		}
 		if (dirHasRealFilesForCleanup(join(sessionDir, name))) return true;
 	}
 	return false;
@@ -856,10 +867,25 @@ interface SessionScan {
 }
 
 /** Scans kept for the next listing. The conversation text is what costs memory, so the total is bounded. */
-const MAX_CACHED_SCAN_TEXT_CHARS = 48 * 1024 * 1024;
+const DEFAULT_MAX_CACHED_SCAN_TEXT_CHARS = 48 * 1024 * 1024;
+/** Upper bound on cached scans: stale small files must not accumulate without limit. */
+const DEFAULT_MAX_CACHED_SCANS = 500;
+let maxCachedScanTextChars = DEFAULT_MAX_CACHED_SCAN_TEXT_CHARS;
+let maxCachedScans = DEFAULT_MAX_CACHED_SCANS;
 const sessionScans = new Map<string, SessionScan>();
 let cachedScanTextChars = 0;
 const sessionScansInFlight = new Map<string, Promise<SessionInfo | null>>();
+
+/** Test-only: drop the in-memory scan cache so the next listing must use the sidecar or rescan. */
+export function resetSessionScanCacheForTests(): void {
+	sessionScans.clear();
+	cachedScanTextChars = 0;
+}
+
+/** Test-only: current number of cached scans. */
+export function getSessionScanCacheSizeForTests(): { scans: number; textChars: number } {
+	return { scans: sessionScans.size, textChars: cachedScanTextChars };
+}
 
 function rememberSessionScan(filePath: string, scan: SessionScan): void {
 	const previous = sessionScans.get(filePath);
@@ -867,14 +893,29 @@ function rememberSessionScan(filePath: string, scan: SessionScan): void {
 		cachedScanTextChars -= previous.textChars;
 		sessionScans.delete(filePath);
 	}
+	// A single file larger than the whole budget is never cached: keeping it would evict everything else
+	// while still exceeding the budget (the old loop kept it when it was the only entry left).
+	if (scan.textChars > maxCachedScanTextChars) return;
 	sessionScans.set(filePath, scan);
 	cachedScanTextChars += scan.textChars;
 	// Oldest scans go first (Map keeps insertion order, and a scan that is refreshed moves to the end).
 	for (const [key, old] of sessionScans) {
-		if (cachedScanTextChars <= MAX_CACHED_SCAN_TEXT_CHARS || key === filePath) break;
+		if (cachedScanTextChars <= maxCachedScanTextChars && sessionScans.size <= maxCachedScans) break;
+		if (key === filePath) break;
 		sessionScans.delete(key);
 		cachedScanTextChars -= old.textChars;
 	}
+}
+
+/** Test-only: shrink the scan cache bounds to exercise eviction without real data volumes. */
+export function setSessionScanCacheLimitsForTests(options: { maxChars?: number; maxScans?: number }): void {
+	if (options.maxChars !== undefined) maxCachedScanTextChars = options.maxChars;
+	if (options.maxScans !== undefined) maxCachedScans = options.maxScans;
+}
+
+export function resetSessionScanCacheLimitsForTests(): void {
+	maxCachedScanTextChars = DEFAULT_MAX_CACHED_SCAN_TEXT_CHARS;
+	maxCachedScans = DEFAULT_MAX_CACHED_SCANS;
 }
 
 function applySessionScanLine(scan: SessionScan, line: string): void {
@@ -982,6 +1023,9 @@ async function buildSessionInfoUncached(filePath: string): Promise<SessionInfo |
 			// Nothing changed since the last listing.
 			return cached.info ? { ...cached.info } : null;
 		}
+		// Persistent sidecar fast path: unchanged files assemble with zero parsing.
+		const indexed = tryAssembleIndexedSessionInfo(filePath, stats);
+		if (indexed) return indexed;
 		// A file that only grew (same file, more bytes) continues from where the last scan stopped.
 		const scan: SessionScan =
 			cached && cached.ino === stats.ino && stats.size >= cached.offset
@@ -1009,6 +1053,19 @@ async function buildSessionInfoUncached(filePath: string): Promise<SessionInfo |
 		scan.info = scan.invalid ? null : sessionInfoFromScan(filePath, scan, stats.mtime);
 		if (scan === cached) cachedScanTextChars += scan.textChars - textBefore;
 		rememberSessionScan(filePath, scan);
+		if (scan.info) {
+			// Refresh the persistent sidecar row so the next cold start hits with zero parsing.
+			const headHash = computeSessionHeadHashSync(filePath);
+			if (headHash) {
+				try {
+					// No fresher marker knowledge here: the row re-reads the marker files on disk
+					// (a patch that arrived before the row existed is applied inside). Advisory only.
+					recordIndexEntry(filePath, stats, headHash, scan.info, undefined);
+				} catch {
+					// The sidecar is advisory: a failed row update never fails the listing.
+				}
+			}
+		}
 		return scan.info ? { ...scan.info } : null;
 	} catch {
 		sessionScans.delete(filePath);
@@ -1103,13 +1160,44 @@ async function listSessionFilesFromWorkspaceDir(
 ): Promise<SessionInfo[]> {
 	if (!existsSync(workspaceSessionsDir)) return [];
 	const files = await listConversationFiles(workspaceSessionsDir);
-
-	let loaded = 0;
-	const results = await buildSessionInfosWithConcurrency(files, () => {
+	if (files.length === 0) {
+		// Still garbage-collect rows whose files vanished; never touches real files.
+		collectIndexGarbage(normalizePath(workspaceSessionsDir), new Set());
+		return [];
+	}
+	const sessionsDir = normalizePath(workspaceSessionsDir);
+	// One shared index for the whole pass: no per-file directory stat. Each file then costs a
+	// single stat plus a 4KB head-hash read on hits, zero parsing.
+	const workspaceIndex = loadWorkspaceIndexSync(sessionsDir);
+	const hits: (SessionInfo | null)[] = new Array(files.length).fill(null);
+	const missIndexes: number[] = [];
+	for (let i = 0; i < files.length; i++) {
+		const file = files[i]!;
+		let hit: SessionInfo | undefined;
+		try {
+			flushSessionWrites(file);
+			const fileStats = statSync(file);
+			hit = tryAssembleIndexedSessionInfoWithIndex(workspaceIndex, sessionsDir, file, fileStats);
+		} catch {
+			hit = undefined;
+		}
+		if (hit) hits[i] = hit;
+		else missIndexes.push(i);
+		onProgress?.(i + 1, files.length);
+	}
+	// A high miss rate means the sidecar is stale: rebuild the whole workspace in one pass.
+	// Either way misses go through the existing incremental scan, which refreshes their rows.
+	const missFiles = missIndexes.map((i) => files[i]!);
+	// Progress keeps the same total as the hit loop: hits were already counted one by one.
+	let loaded = files.length - missFiles.length;
+	const missResults = await buildSessionInfosWithConcurrency(missFiles, () => {
 		loaded++;
 		onProgress?.(loaded, files.length);
 	});
-	return results.filter((info): info is SessionInfo => info !== null);
+	for (let m = 0; m < missIndexes.length; m++) hits[missIndexes[m]!] = missResults[m] ?? null;
+	// Drop rows for files that no longer exist (soft rebuild: real files are never touched).
+	collectIndexGarbage(sessionsDir, new Set(files.map((file) => indexKeyForSessionFile(sessionsDir, file))));
+	return hits.filter((info): info is SessionInfo => info !== null);
 }
 
 export async function listSessionsForCwd(
@@ -1179,23 +1267,26 @@ export async function listAllSessions(
 			...workspaceStore.list().map((workspace) => workspace.workspaceId),
 			...workspaceStore.listDetachedWorkspaceIds(),
 		];
-		const allFiles = (
-			await Promise.all(
-				workspaceIds.map((workspaceId) => listConversationFiles(getWorkspaceSessionsDir(sessionsDir, workspaceId))),
-			)
-		).flat();
-
+		// Per-workspace indexed listings run in parallel; each hits the sidecar for unchanged files.
+		const perWorkspace = await Promise.all(
+			workspaceIds.map((workspaceId) =>
+				listSessionFilesFromWorkspaceDir(getWorkspaceSessionsDir(sessionsDir, workspaceId)),
+			),
+		);
+		const total = perWorkspace.reduce((sum, infos) => sum + infos.length, 0);
 		let loaded = 0;
-		const results = await buildSessionInfosWithConcurrency(allFiles, () => {
-			loaded++;
-			progress?.(loaded, allFiles.length);
-		});
+		for (const infos of perWorkspace) {
+			loaded += infos.length;
+			progress?.(loaded, total);
+		}
 		const sessions: SessionInfo[] = [];
 		const seenIds = new Set<string>();
-		for (const info of results) {
-			if (!info || seenIds.has(info.id)) continue;
-			seenIds.add(info.id);
-			sessions.push(info);
+		for (const infos of perWorkspace) {
+			for (const info of infos) {
+				if (seenIds.has(info.id)) continue;
+				seenIds.add(info.id);
+				sessions.push(info);
+			}
 		}
 		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 		return sessions;
@@ -1220,6 +1311,7 @@ export function rewriteSessionFile(filePath: string, entries: FileEntry[]): void
 	} catch {
 		invalidateParseCache(filePath);
 	}
+	markIndexDirtyForFile(filePath);
 }
 
 /**
@@ -1235,12 +1327,14 @@ export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "
 	}
 	dropPendingSessionWrites(filePath);
 	invalidateParseCache(filePath);
+	markIndexDirtyForFile(filePath);
 }
 
 /** Durably append one entry. Caller must hold the writer lease; no fsync ordering beyond the single write. */
 export function appendSessionEntry(filePath: string, entry: FileEntry): void {
 	writeFileDurablySync(filePath, `${JSON.stringify(entry)}\n`, { flag: "a" });
 	invalidateParseCache(filePath);
+	markIndexDirtyForFile(filePath);
 }
 
 /**
@@ -1304,12 +1398,14 @@ function repairTruncatedSessionTail(filePath: string): void {
 			writeSync(fd, "\n", size, "utf8");
 			fsyncSync(fd);
 			invalidateParseCache(filePath);
+			markIndexDirtyForFile(filePath);
 			return;
 		}
 
 		ftruncateSync(fd, tailStart);
 		fsyncSync(fd);
 		invalidateParseCache(filePath);
+		markIndexDirtyForFile(filePath);
 	} finally {
 		closeSync(fd);
 	}
@@ -1503,7 +1599,7 @@ export function rewriteSessionManifestPaths(sessionDir: string, newConversationP
 			else {
 				for (const entry of entries) {
 					const relativePath = (entry as { relativePath?: unknown }).relativePath;
-				if (typeof relativePath !== "string" || relativePath.startsWith("/") || relativePath.includes("..")) {
+					if (typeof relativePath !== "string" || relativePath.startsWith("/") || relativePath.includes("..")) {
 						warnings.push(`sidecar manifest 存在绝对/越界路径，已保留原文件：${orphanManifest}`);
 						break;
 					}
@@ -1527,7 +1623,8 @@ export function relocateSessionAttachments(
 ): RelocateAttachmentsResult {
 	const moved: string[] = [];
 	const warnings: string[] = [];
-	if (!sourceSessionDir || !targetSessionDir || sameDir(sourceSessionDir, targetSessionDir)) return { moved, warnings };
+	if (!sourceSessionDir || !targetSessionDir || sameDir(sourceSessionDir, targetSessionDir))
+		return { moved, warnings };
 	let sourceStats: Stats;
 	try {
 		sourceStats = lstatSync(sourceSessionDir);
@@ -1540,9 +1637,16 @@ export function relocateSessionAttachments(
 		return { moved, warnings };
 	}
 	mkdirSync(targetSessionDir, { recursive: true });
-	for (const name of ["artifacts", "tool-results"]) moveDirMerge(join(sourceSessionDir, name), join(targetSessionDir, name), moved, warnings);
-	const sourceUploadsCandidates = [join(sourceSessionDir, "conversation", "uploads"), join(sourceSessionDir, "uploads")];
-	const targetUploadsCandidates = [join(targetSessionDir, "conversation", "uploads"), join(targetSessionDir, "uploads")];
+	for (const name of ["artifacts", "tool-results"])
+		moveDirMerge(join(sourceSessionDir, name), join(targetSessionDir, name), moved, warnings);
+	const sourceUploadsCandidates = [
+		join(sourceSessionDir, "conversation", "uploads"),
+		join(sourceSessionDir, "uploads"),
+	];
+	const targetUploadsCandidates = [
+		join(targetSessionDir, "conversation", "uploads"),
+		join(targetSessionDir, "uploads"),
+	];
 	for (let index = 0; index < sourceUploadsCandidates.length; index++) {
 		if (!existsSync(sourceUploadsCandidates[index]!)) continue;
 		moveDirMerge(sourceUploadsCandidates[index]!, targetUploadsCandidates[index]!, moved, warnings);
@@ -1601,6 +1705,8 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 	dropPendingSessionWrites(targetResolved);
 	invalidateParseCache(sourceResolved);
 	invalidateParseCache(targetResolved);
+	if (!sameFile) relocateIndexEntry(sourceResolved, targetResolved);
+	else markIndexDirtyForFile(targetResolved);
 
 	const attachmentWarnings: string[] = [];
 	const sourceScope = parseSessionDataPath(sourceResolved);

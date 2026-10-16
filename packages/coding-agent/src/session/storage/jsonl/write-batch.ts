@@ -3,6 +3,7 @@ import { writeFileDurablySync } from "../../../utils/atomic-write.ts";
 import { normalizePath } from "../../../utils/paths.ts";
 import type { FileEntry } from "../../types.ts";
 import { invalidateParseCache } from "./parse-cache.ts";
+import { markIndexDirtyForFile } from "./sessions-index.ts";
 
 /**
  * Coalesced JSONL appends for Session files.
@@ -109,6 +110,7 @@ function writeBatchLines(key: string, batch: PendingBatch): void {
 		batch.bytes = 0;
 		batch.lastError = undefined;
 		invalidateParseCache(key);
+		markIndexDirtyForFile(key);
 	} catch (error) {
 		if (start !== undefined) {
 			try {
@@ -163,6 +165,7 @@ export function enqueueSessionAppend(filePath: string, entry: FileEntry): void {
 	if (!batchingEnabled) {
 		writeFileDurablySync(key, line, { flag: "a" });
 		invalidateParseCache(key);
+		markIndexDirtyForFile(key);
 		return;
 	}
 	let batch = pendingBatches.get(key);
@@ -176,6 +179,7 @@ export function enqueueSessionAppend(filePath: string, entry: FileEntry): void {
 		flushSessionWrites(key);
 		writeFileDurablySync(key, line, { flag: "a" });
 		invalidateParseCache(key);
+		markIndexDirtyForFile(key);
 		return;
 	}
 	batch.lines.push(line);

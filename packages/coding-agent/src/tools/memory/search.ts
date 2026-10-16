@@ -1,8 +1,8 @@
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
 import {
-	isSafeMemoryId,
 	type CrossScopeMemoryEntry,
+	isSafeMemoryId,
 	type MemoryEntry,
 	type MemoryScope,
 	readCrossScopeMemoryEntries,
@@ -268,7 +268,9 @@ function formatSearch(
 		rankableCross.set(rankable, item);
 	}
 	const crossResults = selectMemoriesForQuery(query, [...rankableCross.keys()]);
-	const merged = [...ownResults.map((result) => ({ ...result, cross: undefined as CrossScopeMemoryEntry | undefined }))];
+	const merged = [
+		...ownResults.map((result) => ({ ...result, cross: undefined as CrossScopeMemoryEntry | undefined })),
+	];
 	for (const result of crossResults) merged.push({ ...result, cross: rankableCross.get(result.entry) });
 	merged.sort(
 		(a, b) =>
@@ -330,8 +332,7 @@ export function createMemorySearchToolDefinition(
 			const loaded = loadVisibleEntries(ops);
 			if ("failure" in loaded) return loaded.failure;
 			const scoped = scope ? loaded.entries.filter((entry) => entry.scope === scope) : loaded.entries;
-			const scopedCross =
-				scope === undefined ? loaded.cross : loaded.cross.filter((entry) => entry.scope === scope);
+			const scopedCross = scope === undefined ? loaded.cross : loaded.cross.filter((entry) => entry.scope === scope);
 			const requested = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : undefined;
 			const bounded = requested === undefined ? undefined : Math.min(SEARCH_MAX_LIMIT, Math.max(1, requested));
 			if (!query?.trim()) return formatDirectory(scoped, scopedCross, bounded);
@@ -374,7 +375,9 @@ export function createMemoryGetToolDefinition(
 			if (requested.length === 0) {
 				return textResult("请提供 id 或 ids（来自 memory_search 的结果）。", { mode: "get", returned: 0 });
 			}
-			const byId = new Map(loaded.entries.map((entry) => [entry.id, { entry, origin: undefined as string | undefined }]));
+			const byId = new Map(
+				loaded.entries.map((entry) => [entry.id, { entry, origin: undefined as string | undefined }]),
+			);
 			for (const cross of loaded.cross) {
 				if (byId.has(cross.id)) continue;
 				byId.set(cross.id, {
@@ -404,7 +407,9 @@ export function createMemoryGetToolDefinition(
 					sections.push(formatMemory(hit.entry, hit.origin));
 					found.push(hit.entry.id);
 				} else if (!isSafeMemoryId(item)) {
-					sections.push(`无效的记忆 id：${cell(item, 80)}（格式应为 global/xxx、workspace/xxx、session/xxx 或 pending/xxx）`);
+					sections.push(
+						`无效的记忆 id：${cell(item, 80)}（格式应为 global/xxx、workspace/xxx、session/xxx 或 pending/xxx）`,
+					);
 				} else {
 					sections.push(`未找到记忆：${item}（只能读取可见且未归档的记忆；用 memory_search 查看目录）`);
 				}
