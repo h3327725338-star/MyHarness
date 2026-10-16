@@ -186,7 +186,7 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .env-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; min-width: 0; max-width: 55%; flex: 0 1 auto; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); }
 button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .env-chip > svg { flex: none; }
-.env-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.env-chip.warn { color: var(--warn); }
 .env-status { color: var(--text-3); font-size: var(--fs-xs); max-width: 260px; }
 
 /* The branch chip opens the branch popover (branch-menu.js). In an isolated copy (a linked worktree) it says so. */
@@ -255,7 +255,8 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 /* Status strips, queue, dialogs, pills above the composer */
 .strips { display: flex; flex-direction: column; gap: 6px; }
 .strip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
-.strip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+/* A provider problem the agent is retrying on its own: a neutral strip; only its status ("Retry 2/5 in 3s") is coloured. */
+.strip.warn .strip-status { color: var(--warn); }
 /* The outcome of a Git operation: one line (what happened, the real hash or reason), the real output folded under it. */
 .strip.git-result { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
 .strip-line { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 6px 0 12px; }
@@ -265,7 +266,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .strip-detail { min-width: 0; color: var(--text-2); }
 .strip-lines { margin: 0 12px 8px; padding: 8px 10px; max-height: 180px; overflow: auto; background: var(--code-bg); border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .strip-activity { padding: 0 12px 8px 34px; font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.strip.git-result.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.strip.git-result.ok { color: var(--text); }
 .strip.git-result.error { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .strip.git-result.warn { color: var(--warn); }
 .strip.git-result.info { color: var(--text); }
@@ -294,14 +295,21 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .queue-head { display: flex; align-items: center; gap: 6px; }
 .queue-head .link-btn { margin-left: auto; }
 .queue-item { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
-.dialog-bar { border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border-strong)); border-radius: var(--r-lg); background: var(--bg-raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 0 0 3px var(--warn-soft); }
+/* A question or confirmation waits for the user's choice; it is not an error, so it wears no warning colour: a neutral
+   card whose border turns to the focus colour while it has the keyboard, like the input box below it. */
+.dialog-bar { border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--bg-raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; transition: border-color var(--t-fast) var(--ease); }
 .dialog-head { display: flex; align-items: center; gap: 8px; }
 .dialog-msg { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: var(--fs-body); max-height: 200px; overflow: auto; }
 .dialog-bar:focus { outline: none; }
-.dialog-bar:focus-within { box-shadow: 0 0 0 3px var(--warn-soft), 0 0 0 1px var(--border-focus); }
+.dialog-bar:focus-within { border-color: var(--border-focus); }
 .dialog-bar .btn.kbd-sel { outline: 2px solid var(--border-focus); outline-offset: 1px; }
-.dialog-keys { font-size: var(--fs-xs); }
-.dialog-actions, .dialog-options { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+/* The key hints keep their place (no jump) but stay in the faintest text level until the card is hovered or focused. */
+.dialog-bar .dialog-keys { font-size: var(--fs-xs); color: var(--text-4); transition: color var(--t-fast) var(--ease); }
+.dialog-bar:hover .dialog-keys, .dialog-bar:focus-within .dialog-keys { color: var(--text-3); }
+.dialog-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+/* Choices of a question: one per row, left-aligned and as wide as the card, so short and long answers line up the same. */
+.dialog-options { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.dialog-options .btn { justify-content: flex-start; height: auto; min-height: var(--h-control-sm); padding-block: 4px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .dialog-input { display: flex; gap: 6px; }
 .dialog-editor { display: flex; flex-direction: column; gap: 6px; }
 
@@ -491,7 +499,6 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .sa-time { flex: none; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-3); }
 .sa-detail { padding: 2px 6px 8px 30px; font-size: var(--fs-sm); }
 .sa-task.s-cancelled .sa-name, .sa-task.s-unknown .sa-name { color: var(--text-3); }
-.sa-summary.good .sa-head-text, .sa-summary.good .sa-head .sa-ico, .sa-full-head.sa-summary.good { color: var(--ok); }
 .sa-summary.bad .sa-head-text, .sa-summary.bad .sa-head .sa-ico, .sa-full-head.sa-summary.bad { color: var(--danger); }
 /* Fullscreen: the same list in a large dialog, whose body is then the one scroller. */
 .modal.sa-full { height: min(820px, calc(100vh - 64px)); }

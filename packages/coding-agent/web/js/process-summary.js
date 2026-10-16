@@ -3,7 +3,7 @@ import { t } from "./i18n.js";
 import { fmtDuration, plural } from "./util.js";
 import { OUTCOME_LABEL } from "./turns.js";
 
-export const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertCircle" };
+export const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertTriangle" };
 
 function summaryText({ outcome, duration, stats, changeCount }) {
 	const bits = [];

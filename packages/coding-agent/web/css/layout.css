@@ -65,6 +65,8 @@
 /* Failed naming keeps its clickable retry in the same slot (a plain icon, never colored text). */
 .chat-row .ind-retry { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-3); cursor: pointer; }
 .chat-row .ind-retry:hover { color: var(--text-2); background: var(--surface-hover); }
+/* A question waiting for the user: a neutral clock, a different shape from the unread dot (not a different colour only). */
+.ind-warn { display: grid; place-items: center; color: var(--text-2); }
 .chat-row .title { padding: 0 6px; }
 .chat-row .slot-end { position: relative; height: 100%; display: flex; align-items: center; justify-content: flex-end; }
 .chat-row .when { font-size: var(--fs-xs); color: var(--text-4); transition: opacity var(--t-fast), color var(--t-fast); }
@@ -86,6 +88,8 @@
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */
 .conn { display: grid; place-items: center; width: var(--h-icon-sm); height: var(--h-icon-sm); margin-right: 4px; flex: none; }
+/* Connected is the normal state and stays neutral; only a lost connection shows its colour. */
+.conn .dot.ok { background: var(--text-4); }
 /* Export pages only: the read-only area between the scrolling list and the settings foot. A fixed block (it never
    scrolls away), stacked vertically: badge, full-width download button, two ellipsized lines — so even at the 200px
    minimum column width nothing overflows and the button is never squeezed out. Colors are theme tokens only. */
@@ -150,8 +154,7 @@
 .toast-slot .toast { margin-bottom: 8px; }
 .toast-slot.open > .collapse-inner { overflow: visible; }
 .toast { pointer-events: auto; padding: 9px 12px; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-md); animation: fade-in var(--t-base) var(--ease); }
-.toast.error { border-color: color-mix(in srgb, var(--danger) 55%, var(--border-strong)); }
-.toast.warning { border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong)); }
+/* An error or warning toast keeps the neutral frame: its glyph alone carries the colour (see Toasts in app.js). */
 .toast .msg { white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
 
 .splash { height: 100%; display: grid; place-items: center; color: var(--text-3); }

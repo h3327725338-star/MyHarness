@@ -59,7 +59,7 @@ function ChatIndicator({ slot, currentFile, onRetry }) {
 		${ring.mounted ? html`<span class=${`ind-ring ${ring.shown ? "" : "leaving"}`}><${Spinner} size=${14} title=${t("Running")} /></span>` : null}
 		${dot.mounted ? html`<span class=${`ind-dot ${dot.shown ? "" : "leaving"}`} title=${hint.current} />` : null}
 		${retry.mounted ? html`<button class=${`ind-retry ${retry.shown ? "" : "leaving"}`} title=${hint.current} aria-label=${hint.current} onClick=${(e) => { e.stopPropagation(); onRetry(); }} onDblClick=${(e) => e.stopPropagation()}><${Icon} name="refresh" size=${11} /></button>` : null}
-		${warn.mounted ? html`<span class=${`dot warn ind-warn ${warn.shown ? "" : "leaving"}`} title=${t("Waiting for you")} />` : null}
+		${warn.mounted ? html`<span class=${`ind-warn ${warn.shown ? "" : "leaving"}`} title=${t("Waiting for you")}><${Icon} name="clock" size=${11} /></span>` : null}
 		${mark.mounted ? html`<span class=${`dot accent ind-unread ${mark.shown ? "" : "leaving"}`} title=${t("Unread result")} />` : null}
 	</span>`;
 }

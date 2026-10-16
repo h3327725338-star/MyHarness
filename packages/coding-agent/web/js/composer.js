@@ -89,7 +89,7 @@ function DialogBar({ dialog }) {
 	const head = lines[0];
 	const rest = lines.slice(1).join("\n");
 	return html`<div class="dialog-bar fade-in" role="alertdialog" aria-label=${head} ref=${root} tabindex="-1" onKeyDown=${onChoiceKey}>
-		<div class="dialog-head"><${Icon} name="alertCircle" size=${15} class="c-warn" /><strong class="grow">${head}</strong>${left != null ? html`<span class="dim">${left}s</span>` : null}</div>
+		<div class="dialog-head"><${Icon} name="clock" size=${15} class="c-dim" /><strong class="grow">${head}</strong>${left != null ? html`<span class="dim">${left}s</span>` : null}</div>
 		${rest || dialog.message ? html`<div class="dialog-msg">${[rest, dialog.message].filter(Boolean).join("\n")}</div>` : null}
 		${dialog.kind === "confirm"
 			? html`<div class="dialog-actions"><button class=${`btn sm ${pick === 0 ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(false)} onMouseMove=${() => setPick(0)}>${t("Deny")}</button><button class=${`btn sm primary ${pick === 1 ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(true)} onMouseMove=${() => setPick(1)}>${t("Allow")}</button></div><div class="dialog-keys dim">${t("←/→ choose · Enter answer · Esc deny · Alt+A focus here")}</div>`

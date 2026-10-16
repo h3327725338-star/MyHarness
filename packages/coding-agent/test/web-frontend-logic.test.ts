@@ -34,6 +34,7 @@ const {
 	searchModels,
 	shellOutcome,
 	shortPath,
+	splitFirstSentence,
 	stripAnsi,
 	storedToUnitValue,
 	taskWorkLine,
@@ -695,6 +696,7 @@ describe("Web UI: process summary status", () => {
 			["partial", "alertTriangle"],
 			["cancelled", "stopCircle"],
 			["waiting", "clock"],
+			["unanswered", "alertTriangle"],
 		]) {
 			expect(processSummaryState({ ...props, outcome })).toMatchObject({ live: false, icon, outcome });
 		}
@@ -2212,5 +2214,28 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		await pageStore.refreshSlot("page-s10b", { full: true });
 		expect(seen).toContain("/api/transcript");
 		expect(seen.some((url) => url.includes("limit="))).toBe(false);
+	});
+});
+
+describe("Web UI: failed-turn text folds to its first sentence", () => {
+	it("shows the cause of an explained provider error and keeps the advice and raw text for Details", () => {
+		const cause = "模型请求失败：模型服务暂时不可用（网关返回 503）。";
+		const advice = "这通常是服务商一侧的临时故障。请稍后再试。";
+		const raw = "原始信息：503 Service Unavailable";
+		const [lead, rest] = splitFirstSentence(`${cause}${advice}\n${raw}`);
+		expect(lead).toBe(cause);
+		expect(rest).toBe(`${advice}\n${raw}`);
+		// Nothing is dropped: the two parts hold the whole text.
+		expect(lead + rest).toBe(`${cause}${advice}\n${raw}`);
+	});
+
+	it("splits English sentences and line breaks, and leaves one-sentence text whole", () => {
+		expect(splitFirstSentence("Failed. Try again later.")).toEqual(["Failed.", "Try again later."]);
+		expect(splitFirstSentence("Request failed: 500\nbody")).toEqual(["Request failed: 500", "body"]);
+		expect(splitFirstSentence("Connection error.")).toEqual(["Connection error.", ""]);
+		expect(splitFirstSentence("terminated")).toEqual(["terminated", ""]);
+		expect(splitFirstSentence("v1.2 failed")).toEqual(["v1.2 failed", ""]);
+		expect(splitFirstSentence("\nonly a second line")).toEqual(["\nonly a second line", ""]);
+		expect(splitFirstSentence(undefined)).toEqual(["", ""]);
 	});
 });

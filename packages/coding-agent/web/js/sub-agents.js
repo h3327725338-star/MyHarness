@@ -11,7 +11,8 @@ import { count, serverText, t } from "./i18n.js";
 import { clip, fmtDuration, fmtShortDuration, formatData, plural } from "./util.js";
 
 export const EMPTY_SUB_AGENTS = Object.freeze({ items: [], running: 0 });
-const DOT = { completed: "ok", partial: "warn", failed: "danger", timeout: "danger" };
+/** How a finished sub-agent looks: a glyph that differs in shape, coloured only when it needs the user. */
+const DONE_MARK = { completed: ["checkCircle", "c-dim"], partial: ["alertTriangle", "c-warn"], failed: ["alertCircle", "c-danger"], timeout: ["alertCircle", "c-danger"] };
 const STATUS_LABEL = { running: "running", completed: "completed", partial: "partial", failed: "failed", timeout: "timeout", cancelled: "Stopped", pending: "Not started" };
 const SUMMARY_MS = 6000;
 
@@ -80,7 +81,8 @@ export function TaskStatusIcon({ status, unknown }) {
 	if (unknown) return html`<${Icon} name="clock" size=${13} class="c-dim" />`;
 	if (status === "running") return html`<${Spinner} size=${13} />`;
 	if (status === "cancelled") return html`<${Icon} name="stopCircle" size=${13} class="c-dim" />`;
-	return html`<span class=${`dot ${DOT[status] ?? ""}`} />`;
+	const mark = DONE_MARK[status];
+	return mark ? html`<${Icon} name=${mark[0]} size=${13} class=${mark[1]} />` : html`<span class="dot" />`;
 }
 
 /**

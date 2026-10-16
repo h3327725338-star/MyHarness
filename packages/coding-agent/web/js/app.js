@@ -22,7 +22,7 @@ import { t, N_, serverText } from "./i18n.js";
 import { eventShortcut, SHORTCUTS, shortcutFor } from "./shortcuts.js";
 
 const OUTCOME_UI = {
-	completed: { label: N_("Completed"), cls: "ok", icon: "checkCircle" },
+	completed: { label: N_("Completed"), cls: "", icon: "checkCircle" },
 	partial: { label: N_("Partially completed"), cls: "warn", icon: "alertTriangle" },
 	failed: { label: N_("Failed"), cls: "danger", icon: "alertCircle" },
 	cancelled: { label: N_("Cancelled"), cls: "", icon: "stopCircle" },
@@ -35,7 +35,7 @@ function StatusPill() {
 	const completion = useStore((s) => s.completion);
 	const memory = useStore((s) => s.memoryMaintenance);
 	if (!snap) return null;
-	if (dialogs.length && snap.active) return html`<span class="status-pill warn" role="status"><${Icon} name="clock" size=${13} />${t("Waiting for you")}</span>`;
+	if (dialogs.length && snap.active) return html`<span class="status-pill" role="status"><${Icon} name="clock" size=${13} />${t("Waiting for you")}</span>`;
 	if (compaction) return html`<span class="status-pill" role="status"><${Spinner} />${t("Compacting context")}</span>`;
 	if (snap.active) {
 		const detail = snap.run.state === "recovering" ? t("Recovering") : t("Working");

@@ -10,7 +10,7 @@ import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSl
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
-import { basename, clip, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
+import { basename, clip, splitFirstSentence, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
 import { exportReadOnly } from "./export-mode.js";
@@ -533,7 +533,13 @@ function BackgroundStillRunning({ turn, isLast }) {
 	return html`<button class="link-btn sa-still" onClick=${() => setView({ subAgentPanel: Date.now() })}>${t("{agents} still running in the background", { agents: count(running, "sub-agent") })}</button>`;
 }
 
+/** The text of a failed turn: one sentence by default, the rest behind "Details" (the toggle sits in the banner's head). */
+function BannerText({ lead, rest, open }) {
+	return html`<div class="banner-error">${lead}</div>${rest ? html`<${Collapse} open=${open}><div class="banner-error banner-detail">${rest}</div><//>` : null}`;
+}
+
 function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
+	const [detailOpen, setDetailOpen] = useState(false);
 	if (outcome === "completed" || outcome === "running") return null;
 	if (outcome === "waiting") {
 		return html`<div class="banner o-waiting" role="status"><div class="banner-head"><${Icon} name="clock" size=${15} /><strong>${t("Waiting for you")}</strong><span class="dim">${t("The agent is paused until you answer the question above the input box.")}</span></div></div>`;
@@ -551,9 +557,13 @@ function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 	// A network failure after output started: what was shown stays, nothing is resent on its own, "Retry" continues it.
 	const interrupted = run?.terminalReason === "output-interrupted";
 	const blurb = interrupted ? t("The connection dropped while the answer was being written. What was shown is kept; nothing is resent automatically.") : blurbs[outcome] ? t(blurbs[outcome]) : "";
+	// One sentence says what happened; the advice and the raw error stay one click away ("Details"), never dropped.
+	let [lead, rest] = [blurb, ""];
+	if (interrupted) rest = error ? clip(serverText(error, ""), 300) : "";
+	else if (error) [lead, rest] = splitFirstSentence(clip(serverText(error, t("The task did not finish.")), 800));
 	return html`<div class=${`banner o-${outcome}`} role="status">
-		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${interrupted ? t("Interrupted") : titles[outcome] ? t(titles[outcome]) : outcome}</strong></div>
-		${interrupted ? html`<div class="banner-error">${blurb}${error ? html`<br />${clip(serverText(error, ""), 300)}` : null}</div>` : error ? html`<div class="banner-error">${clip(serverText(error, t("The task did not finish.")), 800)}</div>` : blurb ? html`<div class="banner-error">${blurb}</div>` : null}
+		<div class="banner-head"><${Icon} name=${OUTCOME_ICON[outcome]} size=${15} /><strong>${interrupted ? t("Interrupted") : titles[outcome] ? t(titles[outcome]) : outcome}</strong>${rest ? html`<span class="grow" /><button class="link-btn banner-more" aria-expanded=${detailOpen} onClick=${() => setDetailOpen(!detailOpen)}>${detailOpen ? t("Hide details") : t("Details")}</button>` : null}</div>
+		${lead ? html`<${BannerText} lead=${lead} rest=${rest} open=${detailOpen} />` : null}
 		<div class="banner-facts dim">${facts.join(" · ")}${run?.reliability === "indeterminate" ? ` · ${t("change detection may be incomplete")}` : ""}</div>
 		${outcome === "cancelled" || outcome === "failed" || outcome === "partial" ? html`<${BackgroundStillRunning} turn=${turn} isLast=${isLast} />` : null}
 		${!exportReadOnly() ? html`<div class="banner-actions">

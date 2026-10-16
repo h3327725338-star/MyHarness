@@ -47,10 +47,12 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .summary-meta { font-size: var(--fs-sm); flex: none; }
 .summary-ico { display: inline-flex; width: 16px; justify-content: center; flex: none; }
 .summary-body { margin: 2px 0 4px; }
-.c-completed { color: var(--ok); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-waiting { color: var(--warn); }
+/* Run glyphs: only the states that need the user (partial, failed) are coloured; done, stopped and waiting stay neutral. */
+.c-completed { color: var(--text-3); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-waiting { color: var(--text-3); }
 .c-dim { color: var(--text-3); } .c-danger { color: var(--danger); } .c-warn { color: var(--warn); } .c-folder { color: var(--accent); opacity: 0.85; }
-.summary.o-failed .summary-text { color: var(--danger); }
-.summary.o-partial .summary-text { color: var(--warn); }
+/* The banner under the turn already says how it ended: the summary row keeps its text neutral; the glyph and the
+   failed-actions count carry the state colour, the count without a tinted background. */
+.summary-head .badge.danger { background: var(--bg-inset); }
 
 .steps { display: flex; flex-direction: column; gap: 2px; }
 /* A thin line joins the glyph of a step to the glyph of the next one, so it exists only between steps that really are
@@ -218,13 +220,18 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .hljs-type, .hljs-class .hljs-title, .hljs-title.class_, .hljs-tag, .hljs-name { color: var(--hl-type); }
 .hljs-deletion { color: var(--diff-del-text); } .hljs-meta { color: var(--text-3); }
 
-/* Outcome banner: always visible */
-.banner { border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 10px 12px; background: var(--bg-raised); display: flex; flex-direction: column; gap: 6px; }
-.banner-head { display: flex; align-items: center; gap: 8px; }
-.banner.o-failed { border-color: color-mix(in srgb, var(--danger) 40%, var(--border-strong)); background: var(--danger-soft); } .banner.o-failed .banner-head { color: color-mix(in srgb, var(--danger) 85%, var(--text)); }
-.banner.o-partial { border-color: color-mix(in srgb, var(--warn) 40%, var(--border-strong)); background: var(--warn-soft); } .banner.o-partial .banner-head { color: color-mix(in srgb, var(--warn) 85%, var(--text)); }
-.banner.o-cancelled .banner-head { color: var(--text-2); }
-.banner-error { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-body); max-height: 180px; overflow: auto; }
+/* Outcome banner: always visible, and part of its turn rather than a card over it: a neutral rule on the left groups
+   head, text, facts and actions. One emphasis per state: only the head (glyph and title) of a state that needs the user
+   (failed, partially completed, no response) takes its colour; text, facts and the rule stay in the neutral levels. */
+.banner { border-left: 2px solid var(--border-strong); padding: 2px 0 2px 12px; display: flex; flex-direction: column; gap: 6px; }
+.banner-head { display: flex; align-items: center; gap: 8px; min-height: 22px; color: var(--text-2); }
+.banner.o-failed .banner-head { color: color-mix(in srgb, var(--danger) 85%, var(--text)); }
+.banner.o-partial .banner-head, .banner.o-unanswered .banner-head { color: color-mix(in srgb, var(--warn) 85%, var(--text)); }
+/* "Details" stays in the head, so it does not move when the text below it opens or closes. */
+.banner-head .banner-more { flex: none; font-size: var(--fs-sm); color: var(--text-3); }
+.banner-head .banner-more:hover { color: var(--text); }
+.banner-error { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-body); }
+.banner-detail { padding-top: 2px; color: var(--text-2); max-height: 180px; overflow: auto; overscroll-behavior: contain; }
 .banner-facts { font-size: var(--fs-sm); }
 .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 
@@ -269,19 +276,20 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 
 /* Status pill (header) */
 .status-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--fs-sm); background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
-.status-pill.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
-.status-pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
-.status-pill.memory-warn { gap: 0; height: 28px; padding: 0 4px 0 11px; border: 1px solid transparent; border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+/* A result in the header keeps the neutral pill; only a state that needs the user colours its text and glyph. */
+.status-pill.warn { color: var(--warn); }
+/* Memory maintenance that needs the user (Retry or Archive): the one header state with a muted background, nothing more. */
+.status-pill.memory-warn { gap: 0; height: 28px; padding: 0 4px 0 11px; background: var(--warn-soft); border-color: transparent; }
 .status-pill.memory-warn .mem-left { display: inline-flex; align-items: center; gap: 7px; padding-right: 2px; }
-.status-pill.memory-warn .mem-dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; box-shadow: 0 0 0 4px var(--warn-soft); flex: none; }
+.status-pill.memory-warn .mem-dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; flex: none; }
 .status-pill.memory-warn .mem-divider { width: 1px; height: 16px; background: currentColor; opacity: 0.35; margin: 0 6px 0 10px; flex: none; }
 .status-pill.memory-warn .mem-btn { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: var(--r-pill); border: 0; cursor: pointer; font-size: var(--fs-sm); line-height: 1; white-space: nowrap; }
-.status-pill.memory-warn .mem-btn.retry { background: var(--warn); color: var(--bg-app); font-weight: 600; }
-.status-pill.memory-warn .mem-btn.retry:hover { filter: brightness(1.08); }
+.status-pill.memory-warn .mem-btn.retry { background: color-mix(in srgb, currentColor 16%, transparent); color: inherit; font-weight: 600; }
+.status-pill.memory-warn .mem-btn.retry:hover { background: color-mix(in srgb, currentColor 24%, transparent); }
 .status-pill.memory-warn .mem-btn.dismiss { background: transparent; color: inherit; padding: 0 8px; }
-.status-pill.memory-warn .mem-btn.dismiss:hover { background: var(--warn-soft); }
+.status-pill.memory-warn .mem-btn.dismiss:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .status-pill.memory-warn .mem-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
-.status-pill.danger { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
+.status-pill.danger { color: var(--danger); }
 button.status-pill { cursor: pointer; }
 .tab-badge { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
 .icon-btn { position: relative; }

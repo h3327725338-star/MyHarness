@@ -128,6 +128,20 @@ export function clip(text, n) {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
+/**
+ * The first sentence of an error text and what follows it, split without dropping any text (only the whitespace between
+ * the two parts): the explained provider error ("<request failed>: <cause>. <advice>\n<raw message>: <raw>", see
+ * error-explanation.ts) shows its cause and folds the advice and the raw text away. A sentence ends at a full-width or
+ * ASCII stop, or at a line break. Text with one sentence only (or nothing after it) comes back whole, with no rest.
+ */
+export function splitFirstSentence(text) {
+	text = String(text ?? "");
+	const end = /[\u3002\uFF01\uFF1F]|[.!?](?=\s)|\n/.exec(text);
+	const cut = !end ? text.length : end[0] === "\n" ? end.index : end.index + 1;
+	if (!text.slice(0, cut).trim() || !text.slice(cut).trim()) return [text, ""];
+	return [text.slice(0, cut), text.slice(cut).replace(/^\s+/, "")];
+}
+
 export const firstNonBlankLine = (text) => String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
 /** The line of Git's output that says what went wrong: Git's own `warning:` and `hint:` lines come first but are not the cause. */
 export const reasonLine = (text) => String(text || "").split("\n").map((line) => line.trim()).find((line) => line && !/^(warning|hint):/i.test(line)) || firstNonBlankLine(text);

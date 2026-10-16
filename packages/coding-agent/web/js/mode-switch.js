@@ -14,10 +14,10 @@ const MODE_LABEL = { coding: N_("Coding"), general: N_("General") };
 /** How each signal looks: running breathes, the others are static marks that differ in shape and colour. */
 const SIGNAL_UI = {
 	running: { label: N_("Running"), icon: null },
-	waiting: { label: N_("Waiting for you"), icon: "clock", cls: "c-warn" },
+	waiting: { label: N_("Waiting for you"), icon: "clock", cls: "c-dim" },
 	failed: { label: N_("Failed"), icon: "alertCircle", cls: "c-danger" },
 	partial: { label: N_("Partially completed"), icon: "alertTriangle", cls: "c-warn" },
-	completed: { label: N_("Completed"), icon: "checkCircle", cls: "c-ok" },
+	completed: { label: N_("Completed"), icon: "checkCircle", cls: "c-dim" },
 	cancelled: { label: N_("Cancelled"), icon: "stopCircle", cls: "c-dim" },
 };
 
