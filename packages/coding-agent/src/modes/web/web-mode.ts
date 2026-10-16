@@ -261,7 +261,9 @@ export async function runWebMode(
 				console.error(`Server close error: ${error instanceof Error ? error.message : String(error)}`);
 				code = 1;
 			}
-			if (restarting && code === 0) {
+			if (restarting && code === 0 && process.env.MYHARNESS_DESKTOP_HOST === "1" && process.send) {
+				process.send({ type: "myharness:restart", port: bootstrap.port, session: restartSessionFile });
+			} else if (restarting && code === 0) {
 				const restartLog = openSync(join(runtimeHost.services.agentDir, "web-restart.log"), "a");
 				const childArgs = [
 					...restartArguments,
@@ -357,6 +359,7 @@ export async function runWebMode(
 	}
 
 	const code = await exited;
+	if (process.env.MYHARNESS_DESKTOP_HOST === "1" && process.connected) process.disconnect?.();
 	for (const { signal, handler } of handlers) process.off(signal, handler);
 	return code;
 }

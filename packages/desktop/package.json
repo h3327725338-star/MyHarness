@@ -1,0 +1,17 @@
+{
+  "name": "@myharness/desktop",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "main": "main.cjs",
+  "description": "MyHarness Windows Electron host",
+  "author": "MyHarness",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "koffi": "3.3.3"
+  },
+  "devDependencies": {
+    "electron": "44.8.0",
+    "electron-builder": "26.15.3"
+  }
+}

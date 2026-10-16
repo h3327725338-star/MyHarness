@@ -22,6 +22,8 @@ npm.cmd install --ignore-scripts
 npm.cmd run build
 ```
 
+Electron 桌面宿主位于独立的 `packages/desktop`，不进入 Coding Agent 的产品依赖。开发使用 `npm.cmd run desktop:dev`，免安装目录打包使用 `npm.cmd run desktop:pack`，宿主测试使用 `npm.cmd run desktop:test`；首次 `--ignore-scripts` 安装后需显式运行 `node node_modules/electron/install.js` 下载 Electron。打包包含现有 root build，写入 timestamped staging/release 目录，默认位置及数据锚点见 `packages/desktop/README.md`。原有 build/check/test 语义保持不变。
+
 已有模型缓存时可使用 `npm.cmd run build:offline`。根脚本还提供：
 
 | 命令 | 当前行为 | 是否写入 |

@@ -10,6 +10,7 @@ import { ChangesPanel } from "./panel-changes.js";
 import { FilesPanel } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
 import { ContextPanel } from "./panel-context.js";
+import { BrowserPanel } from "./panel-browser.js";
 import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
@@ -91,6 +92,7 @@ function Header() {
 		${tabBtn("files", "folder", t("Files"))}
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
+		${window.myHarnessDesktop && !exportReadOnly() ? tabBtn("browser", "globe", state.view.lang === "en" ? "Browser" : "浏览器") : null}
 	</header>`;
 }
 
@@ -115,6 +117,7 @@ function PanelContainer() {
 			<div class="panel-pane" hidden=${tab !== "files"}><${FilesPanel} /></div>
 			<div class="panel-pane" hidden=${tab !== "terminal"}>${tab === "terminal" ? html`<${TerminalPanel} />` : null}</div>
 			<div class="panel-pane" hidden=${tab !== "context"}>${tab === "context" ? html`<${ContextPanel} />` : null}</div>
+			${window.myHarnessDesktop ? html`<div class="panel-pane" hidden=${tab !== "browser"}>${tab === "browser" ? html`<${BrowserPanel} />` : null}</div>` : null}
 		</div>
 	</aside>`;
 }

@@ -1,5 +1,7 @@
 .panel-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .panel-pane[hidden] { display: none; }
+.desktop-browser-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.desktop-browser-target { flex: 1; min-height: 0; overflow: hidden; }
 .panel-close { position: absolute; top: 10px; right: 10px; z-index: 15; background: var(--bg-panel); }
 .panel-toolbar { display: flex; align-items: center; gap: 6px; height: 44px; min-height: 44px; box-sizing: border-box; padding: 0 var(--pad-panel); padding-right: calc(var(--pad-panel) + 30px); flex: none; border-bottom: 1px solid var(--border); }
 .panel-toolbar .panel-title { font-weight: 600; font-size: var(--fs-body); color: var(--text); }

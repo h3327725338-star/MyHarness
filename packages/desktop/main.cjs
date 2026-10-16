@@ -1,0 +1,106 @@
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { spawn } = require('node:child_process');
+const { mkdirSync, appendFileSync, readFileSync } = require('node:fs');
+const { join, resolve } = require('node:path');
+const { homedir } = require('node:os');
+const { createBrowser, httpUrl } = require('./browser-view.cjs');
+const root = resolve(__dirname, '../..');
+// The packaged app retains the checkout's data anchor, not the exe's arbitrary directory.
+const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory : root;
+const cwd = resolve(process.env.MYHARNESS_DESKTOP_CWD || anchor);
+const data = resolve(process.env.MYHARNESS_DATA_ROOT || join(cwd, 'data'));
+const logs = join(data, 'logs');
+mkdirSync(logs, { recursive: true });
+const log = (message) => appendFileSync(join(logs, 'web-launch.err.log'), `[desktop ${new Date().toISOString()}] ${message}\n`);
+let window, browser, child, job, serviceUrl, stopping = false, finished = false;
+// Host browser storage only; Agent configuration and persisted data are not redirected.
+app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
+app.setName('MyHarness');
+const escaped = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const errorPage = async (message) => {
+  log(message);
+  if (!window || window.isDestroyed()) { dialog.showErrorBox('MyHarness 桌面端启动失败', `${message}\n日志：${logs}`); return; }
+  browser?.destroy();
+  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<html lang="zh-CN"><meta charset="utf-8"><title>MyHarness</title><body style="background:#1e1f1f;color:#eee;font:16px system-ui;padding:48px"><h2>MyHarness 无法启动</h2><pre style="white-space:pre-wrap">${escaped(message)}</pre><p>日志：${escaped(logs)}</p><p>请关闭窗口后重新启动。</p></body></html>`)}`);
+  window.show();
+};
+async function stop() {
+  if (stopping) return;
+  stopping = true;
+  browser?.destroy();
+  if (child && child.exitCode === null && serviceUrl) {
+    try { await fetch(new URL('/api/shutdown', serviceUrl), { method: 'POST', headers: { 'x-myharness-web': '1' }, signal: AbortSignal.timeout(2000) }); } catch (error) { log(`正常退出请求：${error.message}`); }
+    await Promise.race([new Promise((done) => child.once('exit', done)), new Promise((done) => setTimeout(done, 8000))]);
+  }
+  // KILL_ON_JOB_CLOSE handles remaining PTYs, shells, tasks and restart descendants.
+  job?.close(); job = undefined;
+  finished = true;
+  app.quit();
+}
+function startService(restart) {
+  serviceUrl = undefined;
+  let requestedRestart;
+  const entry = app.isPackaged ? join(__dirname, 'runtime/node_modules/@myharness/coding-agent/dist/web.js') : join(root, 'packages/coding-agent/src/web.ts');
+  const loader = app.isPackaged ? undefined : join(root, 'scripts/dev-fast-loader.mjs');
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', MYHARNESS_PROCESS_ENTRY: entry, MYHARNESS_DATA_ROOT: data, MYHARNESS_DESKTOP_HOST: '1' };
+  if (loader) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --import=${require('node:url').pathToFileURL(loader).href}`.trim();
+  if (app.isPackaged) env.MYHARNESS_SYSTEM_PROMPT_DIR = join(__dirname, 'runtime/system-prompts');
+  job?.close();
+  job = require('./windows-job.cjs').createJob();
+  child = spawn(process.execPath, [join(__dirname, 'service-entry.cjs')], { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const timeout = setTimeout(() => { if (!serviceUrl) { void errorPage('本地服务启动超时（180 秒）'); job?.close(); job = undefined; } }, 180000);
+  let pending = '';
+  for (const [stream, filename] of [[child.stdout, 'web-launch.out.log'], [child.stderr, 'web-launch.err.log']]) {
+    stream.on('data', (chunk) => {
+      appendFileSync(join(logs, filename), chunk);
+      pending = (pending + chunk.toString()).slice(-16000);
+      const found = pending.match(/MyHarness Web UI: (http:\/\/127\.0\.0\.1:\d+\/)/);
+      if (found && !serviceUrl) {
+        clearTimeout(timeout); serviceUrl = found[1];
+        void window.loadURL(serviceUrl).then(() => window.show()).catch((error) => errorPage(`界面加载失败：${error.message}`));
+      }
+    });
+  }
+  child.once('spawn', () => {
+    try { job.assign(child.pid); child.send({ type: 'start', entry, args: ['--port', String(restart?.port || 0), '--no-open', ...(restart?.session ? ['--session', restart.session] : ['--continue'])], loader }); }
+    catch (error) { child.kill(); void errorPage(`无法建立服务进程管理：${error.message}`); }
+  });
+  child.once('error', (error) => { clearTimeout(timeout); void errorPage(`本地服务启动失败：${error.message}`); });
+  let restartDeadline;
+  child.on('message', (message) => {
+    if (message?.type !== 'myharness:restart') return;
+    // This message is sent only after runtime disposal and HTTP close. Background
+    // handles may still keep Node alive; don't let them strand a completed restart.
+    requestedRestart = message;
+    restartDeadline = setTimeout(() => { job?.close(); job = undefined; }, 1500);
+  });
+  child.once('exit', (code) => {
+    clearTimeout(timeout);
+    clearTimeout(restartDeadline);
+    if (!stopping && requestedRestart) { startService(requestedRestart); return; }
+    if (!stopping) void errorPage(`本地服务已退出（${code}）。请查看日志中的具体原因。`);
+  });
+}
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
+  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
+  app.on('before-quit', (event) => { if (!finished) { event.preventDefault(); void stop(); } });
+  app.whenReady().then(async () => {
+    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    window.setMenu(null);
+    browser = createBrowser(window, log);
+    const trusted = (event) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && serviceUrl && new URL(event.senderFrame.url).origin === new URL(serviceUrl).origin;
+    ipcMain.handle('desktop:navigate', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return browser.navigate(url); });
+    ipcMain.handle('desktop:external', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return shell.openExternal(httpUrl(url)); });
+    ipcMain.on('desktop:bounds', (event, rect) => { if (trusted(event)) browser.bounds(rect); });
+    ipcMain.on('desktop:destroy', (event) => { if (trusted(event)) browser.destroy(); });
+    window.webContents.setWindowOpenHandler(({ url }) => { try { void shell.openExternal(httpUrl(url)); } catch {} return { action: 'deny' }; });
+    window.webContents.on('will-navigate', (event, url) => { if (serviceUrl && new URL(url).origin !== new URL(serviceUrl).origin) event.preventDefault(); });
+    window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) browser.destroy(); });
+    window.on('close', (event) => { if (!finished) { event.preventDefault(); window.hide(); void stop(); } });
+    await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>MyHarness</title><body style="background:#1e1f1f;color:#ccc;font:16px system-ui;padding:40px">正在启动 MyHarness…</body>'));
+    window.show();
+    startService();
+  }).catch((error) => void errorPage(error.stack || error.message));
+}
+process.on('uncaughtException', (error) => { void errorPage(error.stack || error.message); });

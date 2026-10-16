@@ -20,6 +20,9 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"build": "cd packages/ai && npm run build && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
+		"desktop:dev": "node packages/desktop/dev.mjs",
+		"desktop:pack": "npm run build && node packages/desktop/build.mjs",
+		"desktop:test": "node --test packages/desktop/test/*.test.cjs",
 		"build:offline": "cd packages/ai && npm run build:offline && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"check": "biome check --write --error-on-warnings . && node scripts/run-checks-parallel.mjs",
 		"build:code-intelligence": "node scripts/build-code-intelligence-artifacts.mjs",

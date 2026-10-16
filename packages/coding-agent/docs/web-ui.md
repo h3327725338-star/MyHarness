@@ -1,6 +1,6 @@
 # Web UI
 
-MyHarness 默认且唯一的用户交互入口是本机浏览器 Web UI。它使用现有 `AgentSessionRuntime` / `AgentSession`、Session、Settings、Provider、Tool、Git checkpoint 和 Extension，没有第二套 Agent 逻辑。终端 CLI/TUI 已移出本仓库；Web Terminal 面板仍保留。
+MyHarness 使用统一的 Web UI，可由本机浏览器或独立 Electron Windows 桌面宿主打开；桌面开发、打包、数据锚点与限制见 [Desktop README](../../desktop/README.md)。Electron 下仅新增一个最小浏览器面板入口，第三方网站由主进程 WebContentsView 承载，不使用 iframe/webview；原有四个面板不改变。它使用现有 `AgentSessionRuntime` / `AgentSession`、Session、Settings、Provider、Tool、Git checkpoint 和 Extension，没有第二套 Agent 逻辑。终端 CLI/TUI 已移出本仓库；Web Terminal 面板仍保留。
 
 ## Coding / General 双模式
 

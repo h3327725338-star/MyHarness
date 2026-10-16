@@ -4,7 +4,7 @@
 
 ## 产品与平台
 
-MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用户交互只通过本机浏览器 Web UI。旧终端聊天、print、JSON 输出、RPC、TUI 包和终端组件 API 均不属于当前产品。
+MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用户交互使用同一份 Web UI，可通过本机浏览器或独立 Electron Windows 桌面宿主打开；桌面入口与边界见 `packages/desktop/README.md`。旧终端聊天、print、JSON 输出、RPC、TUI 包和终端组件 API 均不属于当前产品。
 
 正式 GitHub CI 使用 `windows-2022` 和 `windows-2025` matrix；两边执行相同验证且必须通过。它们是 CI runner，不是最终用户桌面支持矩阵，不代表逐一验证 Windows 10/11 的每个版本。
 
@@ -17,6 +17,7 @@ MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用�
 | `packages/ai` | Provider、模型、认证、API adapter、流式消息和 usage | `src/index.ts` 及 manifest subpath |
 | `packages/agent` | Provider 无关的 Agent loop、工具队列、通用 Session 与 Harness contract | `src/index.ts`、`./node` |
 | `packages/storage/sqlite-node` | 通用存储 contract 的 Node SQLite backend 和 migration | `src/index.ts` |
+| `packages/desktop` | 私有 Electron Windows 宿主、服务进程所有权、原生第三方浏览器视图与分发 | `main.cjs`；`build.mjs` |
 | `packages/coding-agent` | 产品编排、Web、Session、Settings、Trust、资源、Provider runtime、工具、Git、扩展 | `src/index.ts`；进程入口 `src/web.ts` |
 
 依赖方向：`coding-agent → agent → ai`；产品层也直接依赖 ai 和 storage。不存在 `packages/tui` workspace。底层业务不得依赖浏览器页面或终端展示组件。
@@ -40,7 +41,8 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
                          loopback HTTP + SSE → coding-agent/web/
 ```
 
-- `dev-web.cmd` 是唯一双击开发入口，后台启动；`--console` 用于查看服务日志，不是终端聊天模式。
+- `npm run desktop:dev` 启动独立 Electron 宿主，`npm run desktop:pack` 构建免安装目录；宿主复用 Web 服务与数据，第三方网页只使用主进程 `WebContentsView`。桌面重启由 IPC 交回宿主监督，浏览器重启路径不变。
+- `dev-web.cmd` 是浏览器方式的双击开发入口，后台启动；`--console` 用于查看服务日志，不是终端聊天模式。
 - `web-runtime.ps1` 检查 Node/npm/tsx/bash/ffmpeg，并在必要时准备依赖。从脚本位置定位仓库。
 - `web-source.ps1` / `web-source.sh` 直接运行 `src/web.ts`，保留调用者工作目录；`--no-env` 清理当前进程的 Provider 环境变量。
 - npm `myharness` 指向 `dist/web.js`；它是 Web 服务启动命令，不提供第二套交互。
