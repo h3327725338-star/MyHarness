@@ -13,7 +13,9 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
+	readFileSync,
 	readSync,
+	renameSync,
 	rmdirSync,
 	type Stats,
 	statSync,
@@ -21,7 +23,7 @@ import {
 	writeSync,
 } from "fs";
 import { lstat as lstatAsync, opendir, readdir, rmdir as rmdirAsync, stat } from "fs/promises";
-import { basename, dirname, join, resolve } from "path";
+import { basename, dirname, join, relative, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { getDataDir, getWorkspaceSessionsDir, parseSessionDataPath } from "../../../config/paths/index.ts";
 import { getAgentDir } from "../../../config.ts";
@@ -45,6 +47,9 @@ import type {
 } from "../../types.ts";
 import { invalidateParseCache, lookupParseCache, storeParseCache } from "./parse-cache.ts";
 import { dropPendingSessionWrites, enqueueSessionAppend, flushSessionWrites } from "./write-batch.ts";
+
+export { describeSessionDeleteImpact, hasSessionAttachments } from "./file-operations.ts";
+export type { SessionAttachmentSummary, SessionDeleteImpact } from "./file-operations.ts";
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
@@ -384,6 +389,62 @@ export function ensureSessionDirectory(sessionDir: string): void {
 
 const SAFE_SESSION_DIRECTORY_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u;
 
+/** Session-owned attachment libraries that must never be treated as empty shells. */
+const SESSION_ATTACHMENT_DIR_NAMES = new Set(["artifacts", "tool-results", "uploads", "memory"]);
+
+function dirHasRealFilesForCleanup(dir: string): boolean {
+	if (!existsSync(dir)) return false;
+	const stack: string[] = [dir];
+	while (stack.length > 0) {
+		const current = stack.pop()!;
+		let entries: Dirent[];
+		try {
+			const stats = lstatSync(current);
+			if (stats.isSymbolicLink() || !stats.isDirectory()) return true;
+			entries = readdirSync(current, { withFileTypes: true });
+		} catch {
+		return true;
+		}
+		for (const entry of entries) {
+			if (entry.name === ".gitignore") continue;
+			const full = join(current, entry.name);
+			let childStats: Stats;
+			try {
+				childStats = lstatSync(full);
+			} catch {
+				return true;
+			}
+			if (childStats.isSymbolicLink()) return true;
+			if (!childStats.isDirectory()) return true;
+			stack.push(full);
+		}
+	}
+	return false;
+}
+
+/**
+ * Explicit attachment guard for empty-shell reclamation. Returns true when `sessionDir`
+ * owns real attachment bytes under `artifacts/`, `tool-results/`, `uploads/` (either layout)
+ * or `memory/`. Scaffolding `.gitignore` files alone do not count.
+ */
+export function hasSessionAttachmentsForCleanup(sessionDir: string): boolean {
+	try {
+		const stats = lstatSync(sessionDir);
+		if (stats.isSymbolicLink() || !stats.isDirectory()) return false;
+	} catch {
+		return false;
+	}
+	for (const name of SESSION_ATTACHMENT_DIR_NAMES) {
+		if (name === "uploads") {
+			if (dirHasRealFilesForCleanup(join(sessionDir, "uploads"))) return true;
+			if (dirHasRealFilesForCleanup(join(sessionDir, "conversation", "uploads"))) return true;
+			continue;
+	}
+		if (dirHasRealFilesForCleanup(join(sessionDir, name))) return true;
+	}
+	return false;
+}
+
 function inspectEmptyDirectoryTree(directory: string, newestMtime: { value: number }): boolean {
 	let directoryStats: Stats;
 	try {
@@ -440,6 +501,7 @@ export function removeEmptySessionDirectory(sessionDir: string, sessionId: strin
 	const resolvedDir = normalizePath(sessionDir);
 	if (!SAFE_SESSION_DIRECTORY_NAME.test(sessionId) || basename(resolvedDir) !== sessionId) return false;
 	if (sessionFile && existsSync(normalizePath(sessionFile))) return false;
+	if (hasSessionAttachmentsForCleanup(resolvedDir)) return false;
 	const newestMtime = { value: 0 };
 	if (!inspectEmptyDirectoryTree(resolvedDir, newestMtime)) return false;
 	return removeEmptyDirectoryTree(resolvedDir);
@@ -490,6 +552,7 @@ export function cleanupEmptySessionDirectories(
 		for (const sessionEntry of sessionEntries) {
 			if (!sessionEntry.isDirectory() || !SAFE_SESSION_DIRECTORY_NAME.test(sessionEntry.name)) continue;
 			const sessionDir = join(sessionsDir, sessionEntry.name);
+			if (hasSessionAttachmentsForCleanup(sessionDir)) continue;
 			const newestMtime = { value: 0 };
 			if (!inspectEmptyDirectoryTree(sessionDir, newestMtime)) continue;
 			if (nowMs - newestMtime.value < minAgeMs) continue;
@@ -654,6 +717,7 @@ export async function cleanupEmptySessionDirectoriesAsync(
 
 					if (!sessionEntry.isDirectory() || !SAFE_SESSION_DIRECTORY_NAME.test(sessionEntry.name)) continue;
 					const sessionDir = join(sessionsDir, sessionEntry.name);
+					if (hasSessionAttachmentsForCleanup(sessionDir)) continue;
 					const newestMtime = { value: 0 };
 					if (!(await inspectEmptyDirectoryTreeAsync(sessionDir, newestMtime, checkYield, signal))) continue;
 					if (signal?.aborted) return removed;
@@ -1311,6 +1375,194 @@ export interface RelocateSessionFileOptions {
 	sourceRecordedFile?: string;
 	entries: FileEntry[];
 	flushed: boolean;
+	/** Explicit session containers for attachment migration; derived from the files when omitted. */
+	sourceSessionDir?: string;
+	targetSessionDir?: string;
+}
+
+export interface RelocateAttachmentsResult {
+	moved: string[];
+	warnings: string[];
+}
+
+function sameDir(a: string, b: string): boolean {
+	const left = resolve(a);
+	const right = resolve(b);
+	return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function moveDirMerge(sourceDir: string, targetDir: string, moved: string[], warnings: string[]): void {
+	let sourceStats: Stats;
+	try {
+		sourceStats = lstatSync(sourceDir);
+	} catch {
+		return;
+	}
+	if (sourceStats.isSymbolicLink() || !sourceStats.isDirectory()) {
+		warnings.push(`跳过搬迁（存在软链接或非目录）：${sourceDir}`);
+		return;
+	}
+	try {
+		const targetStats = lstatSync(targetDir);
+		if (targetStats.isSymbolicLink()) {
+			warnings.push(`跳过搬迁（目标存在软链接）：${targetDir}`);
+			return;
+		}
+		if (!targetStats.isDirectory()) {
+			warnings.push(`跳过搬迁（目标不是目录）：${targetDir}`);
+			return;
+		}
+	} catch {
+		try {
+			mkdirSync(dirname(targetDir), { recursive: true });
+			renameSync(sourceDir, targetDir);
+			moved.push(`${sourceDir} -> ${targetDir}`);
+		} catch (error) {
+			warnings.push(`附件搬迁失败：${sourceDir}：${error instanceof Error ? error.message : String(error)}`);
+		}
+		return;
+	}
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(sourceDir, { withFileTypes: true });
+	} catch (error) {
+		warnings.push(`附件搬迁读取失败：${sourceDir}：${error instanceof Error ? error.message : String(error)}`);
+		return;
+	}
+	for (const entry of entries) {
+		const from = join(sourceDir, entry.name);
+		const to = join(targetDir, entry.name);
+		if (existsSync(to)) {
+			warnings.push(`附件目标已存在，已保留目标：${to}`);
+			continue;
+		}
+		try {
+			renameSync(from, to);
+			moved.push(`${from} -> ${to}`);
+		} catch (error) {
+			warnings.push(`附件搬迁失败：${from}：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	try {
+		rmdirSync(sourceDir);
+	} catch {
+		// 来源残留空目录不影响正确性，忽略。
+	}
+}
+
+function rewriteJsonConversationPath(file: string, newConversationPath: string, warnings: string[]): void {
+	let raw: string;
+	try {
+		raw = readFileSync(file, "utf8");
+	} catch {
+		// manifest 缺失是正常情况（首次写入前、旧会话、无附件会话）：静默跳过，不抛错。
+		return;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		warnings.push(`manifest 损坏，已保留原文件：${file}`);
+		return;
+	}
+	if (typeof parsed !== "object" || parsed === null) {
+		warnings.push(`manifest 形状未知，已保留原文件：${file}`);
+		return;
+	}
+	const record = parsed as Record<string, unknown>;
+	if (typeof record.conversationPath !== "string") {
+		warnings.push(`manifest 缺少 conversationPath，已保留原文件：${file}`);
+		return;
+	}
+	if (record.conversationPath === newConversationPath) return;
+	record.conversationPath = newConversationPath;
+	try {
+		writeFileAtomicallySync(file, `${JSON.stringify(record, null, 2)}\n`);
+	} catch (error) {
+		warnings.push(`manifest 重写失败：${file}：${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+/**
+ * 重写会话 manifest 中的路径：`metadata/session.json` 与 `metadata/artifacts-origin.json`
+ * 的 `conversationPath` 改为新会话文件的绝对路径；sidecar 孤儿 manifest
+ * （`tool-results/.myharness-sidecar-orphans.json`）以相对路径存放，整库搬迁后无需改写，
+ * 这里仅校验存在性与形状，缺失或损坏时返回 warning 而不抛错。
+ */
+export function rewriteSessionManifestPaths(sessionDir: string, newConversationPath: string): string[] {
+	const warnings: string[] = [];
+	rewriteJsonConversationPath(join(sessionDir, "metadata", "session.json"), newConversationPath, warnings);
+	const origin = join(sessionDir, "metadata", "artifacts-origin.json");
+	if (existsSync(origin)) rewriteJsonConversationPath(origin, newConversationPath, warnings);
+	const orphanManifest = join(sessionDir, "tool-results", ".myharness-sidecar-orphans.json");
+	if (existsSync(orphanManifest)) {
+		try {
+			const parsed: unknown = JSON.parse(readFileSync(orphanManifest, "utf8"));
+			const entries = (parsed as { entries?: unknown }).entries;
+			if (!Array.isArray(entries)) warnings.push(`sidecar manifest 形状未知，已保留原文件：${orphanManifest}`);
+			else {
+				for (const entry of entries) {
+					const relativePath = (entry as { relativePath?: unknown }).relativePath;
+				if (typeof relativePath !== "string" || relativePath.startsWith("/") || relativePath.includes("..")) {
+						warnings.push(`sidecar manifest 存在绝对/越界路径，已保留原文件：${orphanManifest}`);
+						break;
+					}
+				}
+			}
+		} catch {
+			warnings.push(`sidecar manifest 损坏，已保留原文件：${orphanManifest}`);
+		}
+	}
+	return warnings;
+}
+
+/**
+ * 把附件库从旧会话目录一起搬到新会话目录，并重写 manifest 路径。
+ * 缺 manifest 时不抛错，只返回 warnings；调用方应把 warnings 透出给用户。
+ */
+export function relocateSessionAttachments(
+	sourceSessionDir: string,
+	targetSessionDir: string,
+	newConversationPath?: string,
+): RelocateAttachmentsResult {
+	const moved: string[] = [];
+	const warnings: string[] = [];
+	if (!sourceSessionDir || !targetSessionDir || sameDir(sourceSessionDir, targetSessionDir)) return { moved, warnings };
+	let sourceStats: Stats;
+	try {
+		sourceStats = lstatSync(sourceSessionDir);
+	} catch {
+		// 无附件目录是正常情况（纯对话搬迁）：静默跳过，不抛错。
+		return { moved, warnings };
+	}
+	if (sourceStats.isSymbolicLink() || !sourceStats.isDirectory()) {
+		warnings.push(`附件来源不是普通目录，已跳过附件搬迁：${sourceSessionDir}`);
+		return { moved, warnings };
+	}
+	mkdirSync(targetSessionDir, { recursive: true });
+	for (const name of ["artifacts", "tool-results"]) moveDirMerge(join(sourceSessionDir, name), join(targetSessionDir, name), moved, warnings);
+	const sourceUploadsCandidates = [join(sourceSessionDir, "conversation", "uploads"), join(sourceSessionDir, "uploads")];
+	const targetUploadsCandidates = [join(targetSessionDir, "conversation", "uploads"), join(targetSessionDir, "uploads")];
+	for (let index = 0; index < sourceUploadsCandidates.length; index++) {
+		if (!existsSync(sourceUploadsCandidates[index]!)) continue;
+		moveDirMerge(sourceUploadsCandidates[index]!, targetUploadsCandidates[index]!, moved, warnings);
+	}
+	for (const metadataFile of ["session.json", "artifacts-origin.json"]) {
+		const metadataSource = join(sourceSessionDir, "metadata", metadataFile);
+		if (!existsSync(metadataSource)) continue;
+		mkdirSync(join(targetSessionDir, "metadata"), { recursive: true });
+		const metadataTarget = join(targetSessionDir, "metadata", metadataFile);
+		if (!existsSync(metadataTarget)) {
+			try {
+				renameSync(metadataSource, metadataTarget);
+				moved.push(`${metadataSource} -> ${metadataTarget}`);
+			} catch (error) {
+				warnings.push(`附件搬迁失败：${metadataSource}：${error instanceof Error ? error.message : String(error)}`);
+			}
+		} else warnings.push(`附件目标已存在，已保留目标：${metadataTarget}`);
+	}
+	if (newConversationPath) warnings.push(...rewriteSessionManifestPaths(targetSessionDir, newConversationPath));
+	return { moved, warnings };
 }
 
 /**
@@ -1350,13 +1602,44 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 	invalidateParseCache(sourceResolved);
 	invalidateParseCache(targetResolved);
 
+	const attachmentWarnings: string[] = [];
+	const sourceScope = parseSessionDataPath(sourceResolved);
+	const targetScope = parseSessionDataPath(targetResolved);
+	const explicitDirs = options.sourceSessionDir && options.targetSessionDir;
+	const sourceSessionDir = explicitDirs
+		? resolvePath(options.sourceSessionDir!)
+		: sourceScope
+			? join(sourceScope.dataRoot, "workspaces", sourceScope.workspaceId, "sessions", sourceScope.sessionId)
+			: undefined;
+	const targetSessionDir = explicitDirs
+		? resolvePath(options.targetSessionDir!)
+		: targetScope
+			? join(targetScope.dataRoot, "workspaces", targetScope.workspaceId, "sessions", targetScope.sessionId)
+			: undefined;
+	if (sourceSessionDir && targetSessionDir && !sameDir(sourceSessionDir, targetSessionDir)) {
+		try {
+			const result = relocateSessionAttachments(sourceSessionDir, targetSessionDir, targetResolved);
+			attachmentWarnings.push(...result.warnings);
+		} catch (error) {
+			attachmentWarnings.push(`附件搬迁失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	} else if (targetSessionDir) {
+		try {
+			attachmentWarnings.push(...rewriteSessionManifestPaths(targetSessionDir, targetResolved));
+		} catch (error) {
+			attachmentWarnings.push(`manifest 重写失败：${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	if (!sameFile && sourceExists) {
 		try {
 			unlinkSync(sourceResolved);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return { flushed: true, warning: `会话已迁移，但旧会话文件清理失败：${message}` };
+			const extra = attachmentWarnings.length > 0 ? `；${attachmentWarnings.join("；")}` : "";
+			return { flushed: true, warning: `会话已迁移，但旧会话文件清理失败：${message}${extra}` };
 		}
 	}
+	if (attachmentWarnings.length > 0) return { flushed: true, warning: attachmentWarnings.join("；") };
 	return { flushed: true };
 }

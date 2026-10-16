@@ -11,6 +11,7 @@ import { shortcutFor } from "./shortcuts.js";
 import { chatModeOf, draftHasContent, expandedKey } from "./chat-modes.js";
 import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 import { ExportSidebarFoot, exportReadOnly } from "./export-mode.js";
+import { AttachmentList, useSessionAttachments } from "./attachments.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
@@ -63,6 +64,23 @@ function ChatIndicator({ slot, currentFile, onRetry }) {
 	</span>`;
 }
 
+/**
+ * Attachments of one conversation, grouped under its own chat row. Fetched lazily on first
+ * expand and cached per session file; missing files stay listed as deleted and failures show
+ * one quiet line, so the sidebar never breaks on an unreadable history.
+ */
+function ChatAttachments({ sessionPath }) {
+	const state = useSessionAttachments(sessionPath);
+	if (!state) return html`<div class="chat-attach"><span class="dim chat-attach-note"><${Spinner} size=${13} /> ${t("Loading attachments…")}</span></div>`;
+	if (state.error) return html`<div class="chat-attach"><span class="dim chat-attach-note">${t("Attachments unavailable.")}</span></div>`;
+	const entries = state.data?.entries || [];
+	if (!entries.length) return html`<div class="chat-attach"><span class="dim chat-attach-note">${t("No attachments")}</span></div>`;
+	return html`<div class="chat-attach">
+		<div class="chat-attach-head dim">${t("Attachments")} (${entries.length})</div>
+		<${AttachmentList} attachments=${entries} compact=${true} />
+	</div>`;
+}
+
 const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
@@ -74,6 +92,8 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 	const unnamed = !info.name && (info.messageCount === 0 || (info.unsaved && !info.firstMessage));
 	const title = fresh || unnamed ? t("New chat") : chatTitle(info);
 	const busy = !!(slot && (slot.active || slot.completion));
+	// Attachments of this conversation, grouped under its own row (fetched only while expanded).
+	const [attOpen, setAttOpen] = useState(false);
 	// An edit ends once, whichever way: Enter saves, Escape keeps the name as it was. The box that closes also loses the
 	// focus, and that must neither save what was typed after Escape nor save a second time after Enter.
 	const ended = useRef(true);
@@ -91,7 +111,8 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 		if (save && next && next !== info.name) await actions.renameSession(info.path, next);
 	};
 	const open = () => !editing && !current && actions.openSession(info.path);
-	return html`<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}>
+	return html`<div class="chat-entry">
+	<div class=${`chat-row ${current ? "current" : ""}`} role="button" tabindex="0" title=${title} onClick=${open} onDblClick=${startEdit} onKeyDown=${(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}>
 		${editing
 			? html`<input class="field title-edit" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
@@ -99,6 +120,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 				<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
 				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
+						<button class="icon-btn sm" title=${t("Attachments")} aria-label=${t("Attachments of this chat")} aria-expanded=${attOpen} onClick=${() => setAttOpen(!attOpen)}><${Icon} name="paperclip" size=${14} /></button>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
 							${(close) => html`
 								<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startEdit())} />
@@ -109,6 +131,8 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 								<${MenuItem} icon="trash" label=${t("Delete")} danger disabled=${busy} onClick=${() => (close(), actions.deleteSession(info.path, title))} />`}
 						<//>
 					</span>`}</span>`}
+	</div>
+	${attOpen && !fresh ? html`<${ChatAttachments} sessionPath=${info.path} />` : null}
 	</div>`;
 });
 

@@ -52,7 +52,7 @@ describe("conversation artifacts", () => {
 		expect(resolveArtifact(a.data, entries[0]!.path)).toContain("report.md");
 		expect(() => resolveArtifact(a.data, "../private.txt")).toThrow();
 	});
-	it("keeps artifacts and provenance by default, removes chat and uploads", async () => {
+	it("keeps artifacts and attachments by default, removing only the conversation reference", async () => {
 		const a = fixture();
 		mkdirSync(join(a.session, "tool-results"));
 		writeFileSync(join(a.session, "tool-results", "result.txt"), "private output");
@@ -60,10 +60,23 @@ describe("conversation artifacts", () => {
 		writeFileSync(join(a.scope.conversationDir, "uploads", "input.txt"), "attachment");
 		expect((await deleteSessionFile(a.file, { permanent: true })).ok).toBe(true);
 		expect(existsSync(a.file)).toBe(false);
-		expect(existsSync(join(a.session, "tool-results"))).toBe(false);
+		// 未确认时仅删引用：附件字节保留，可恢复； confirmed deletion needs deleteAttachments: true.
+		expect(existsSync(join(a.session, "tool-results", "result.txt"))).toBe(true);
+		expect(existsSync(join(a.scope.conversationDir, "uploads", "input.txt"))).toBe(true);
 		expect(existsSync(join(a.session, "metadata", "artifacts-origin.json"))).toBe(true);
 		expect(listArtifacts(a.data)[0]!.conversationDeleted).toBe(true);
 		expect(readFileSync(join(a.artifacts, "reports", "report.md"), "utf8")).toBe("report");
+	});
+	it("confirmed deletion removes attachments together", async () => {
+		const a = fixture();
+		mkdirSync(join(a.session, "tool-results"));
+		writeFileSync(join(a.session, "tool-results", "result.txt"), "private output");
+		mkdirSync(join(a.scope.conversationDir, "uploads"));
+		writeFileSync(join(a.scope.conversationDir, "uploads", "input.txt"), "attachment");
+		expect(
+			(await deleteSessionFile(a.file, { permanent: true, deleteArtifacts: true, deleteAttachments: true })).ok,
+		).toBe(true);
+		expect(existsSync(a.session)).toBe(false);
 	});
 	it("explicit deletion removes only the target artifacts and parent references", async () => {
 		const a = fixture();

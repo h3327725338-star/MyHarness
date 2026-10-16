@@ -313,3 +313,18 @@ button.status-pill { cursor: pointer; }
 .flash { animation: sa-flash 1.4s var(--ease); }
 @keyframes sa-flash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .flash { animation: none; outline: 2px solid var(--accent); } }
+
+/* History attachment cards: a file reference renders as name, size, preview, download and content
+   reading instead of a bare path. A deleted file keeps its card with a Deleted mark, never an error. */
+.attach-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.attach-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-body); }
+.attach-card.is-compact { padding: 5px 8px; font-size: var(--fs-sm); }
+.attach-ico { display: inline-flex; flex: none; }
+.attach-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.attach-name { font-weight: 600; }
+.attach-sub { font-size: var(--fs-xs); }
+.attach-btns { display: inline-flex; gap: 2px; flex: none; }
+.attach-note { flex-basis: 100%; font-size: var(--fs-sm); color: var(--text-2); }
+.attach-thumb { max-width: 220px; max-height: 160px; border-radius: var(--r-md); border: 1px solid var(--border); object-fit: cover; cursor: zoom-in; }
+.attach-preview, .attach-full { flex-basis: 100%; margin: 0; padding: 6px 8px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; overscroll-behavior: contain; }
+.attach-full { max-height: 320px; }

@@ -35,6 +35,7 @@ import { readSessionBridgeDescriptor } from "../bridge/descriptor.ts";
 import { migrateToCurrentVersion } from "../migrations/index.ts";
 import { buildContextEntries, buildSessionContext, walkSessionPath } from "../projection/index.ts";
 import {
+	describeSessionDeleteImpact,
 	ensureSessionDirectory,
 	findMostRecentSession,
 	getSessionHeaderCwd,
@@ -46,6 +47,7 @@ import {
 	loadEntriesFromFile,
 	persistSessionEntry,
 	readSessionHeader,
+	relocateSessionAttachments,
 	relocateSessionFile,
 	rewriteSessionFile,
 	SessionHeaderScanLimitError,
@@ -54,6 +56,7 @@ import {
 	writeSessionFile,
 	writeSessionMetadata,
 } from "../storage/jsonl/index.ts";
+import type { SessionDeleteImpact } from "../storage/jsonl/file-operations.ts";
 import { dropPendingSessionWrites, flushSessionWrites, stopSessionWriteRetries } from "../storage/jsonl/write-batch.ts";
 import {
 	type BranchSummaryEntry,
@@ -706,6 +709,8 @@ export class SessionManager {
 			sourceRecordedFile: this.relocationSourceFile,
 			entries: this.fileEntries,
 			flushed: this.flushed,
+			sourceSessionDir: source.sessionDir || undefined,
+			targetSessionDir: this.sessionDir || undefined,
 		});
 		this.flushed = result.flushed;
 		if (this.flushed) this.writeMetadata();
@@ -716,7 +721,8 @@ export class SessionManager {
 	 * Restore the source side of a relocation commit.  Relocation normally
 	 * writes the destination and removes the source, so a later UI rebind or
 	 * runtime-creation failure needs an explicit filesystem rollback before the
-	 * old runtime can become authoritative again.
+	 * old runtime can become authoritative again. Attachment libraries moved to
+	 * the target are moved back when the session containers differ.
 	 */
 	rollbackRelocationFrom(source: SessionManager): void {
 		if (!this.persist || !this.sessionFile || !source.sessionFile) return;
@@ -732,11 +738,27 @@ export class SessionManager {
 			writeSessionFile(sourcePath, source.fileEntries, "w");
 			source.writeMetadata();
 		}
+		try {
+			if (source.sessionDir && this.sessionDir && source.sessionDir !== this.sessionDir) {
+				relocateSessionAttachments(this.sessionDir, source.sessionDir, sourcePath);
+			}
+		} catch {
+			// Best effort: the conversation file rollback above is authoritative.
+		}
 		if (!sameFile && existsSync(targetPath)) {
 			// A removed destination must not be resurrected by a pending batch timer.
 			dropPendingSessionWrites(targetPath);
 			rmSync(targetPath, { force: true });
 		}
+	}
+
+	/**
+	 * Read-only attachment ownership for the delete confirmation prompt.
+	 * Returns undefined when this manager has no session file yet.
+	 */
+	describeDeleteImpact(): SessionDeleteImpact | undefined {
+		if (!this.sessionFile) return undefined;
+		return describeSessionDeleteImpact(this.sessionFile);
 	}
 
 	getSessionId(): string {

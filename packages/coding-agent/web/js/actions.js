@@ -126,23 +126,23 @@ export const actions = {
 		set({ quoteInsert: { text: trimmed, note, files, hint, nonce: Date.now() } });
 	},
 
-	async send(text, { images, mode } = {}) {
+	async send(text, { images, attachments, mode } = {}) {
 		if (!canSendToActive()) return undefined;
 		const slot = activeSlotId();
-		return attempt(() => post("/api/prompt", { text, images, mode }, slot));
+		return attempt(() => post("/api/prompt", { text, images, attachments, mode }, slot));
 	},
 
 	/** Route composer input: UI commands stay in the browser, everything else is a real prompt. */
-	async submit(rawText, { images = [], mode = "auto" } = {}) {
+	async submit(rawText, { images = [], attachments = [], mode = "auto" } = {}) {
 		if (!canSendToActive()) return { handled: false, ok: false };
 		const submittedSlot = activeSlotId();
 		const stillSelected = () => canSendToActive() && activeSlotId() === submittedSlot;
 		const text = rawText.trim();
-		if (!text && images.length === 0) return { handled: true };
+		if (!text && images.length === 0 && attachments.length === 0) return { handled: true };
 		const [head, ...rest] = text.split(/\s+/);
 		const arg = rest.join(" ").trim();
 		const active = state.snap?.active;
-		if (head.startsWith("/") && images.length === 0) {
+		if (head.startsWith("/") && images.length === 0 && attachments.length === 0) {
 			// A canonical name is handled at once (the panel must exist before the next keystroke); an alias needs the registry.
 			const typed = head.slice(1);
 			const name = BUILTIN_COMMAND_KINDS[typed] ? typed : (await builtinCommand(typed))?.name;
@@ -159,7 +159,7 @@ export const actions = {
 			}
 		}
 		if (!stillSelected()) return { handled: false, ok: false };
-		if (text.startsWith("!") && images.length === 0) {
+		if (text.startsWith("!") && images.length === 0 && attachments.length === 0) {
 			const excluded = text.startsWith("!!");
 			const command = (excluded ? text.slice(2) : text.slice(1)).trim();
 			if (command) {
@@ -167,7 +167,7 @@ export const actions = {
 				return { handled: true };
 			}
 		}
-		const ok = await actions.send(text, { images, mode: active ? (mode === "auto" ? "steer" : mode) : "auto" });
+		const ok = await actions.send(text, { images, attachments, mode: active ? (mode === "auto" ? "steer" : mode) : "auto" });
 		return { handled: false, ok: !!ok };
 	},
 

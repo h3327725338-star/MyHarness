@@ -16,6 +16,7 @@ import { openImageLightbox } from "./lightbox.js";
 import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
+import { AttachmentList, splitAttachments } from "./attachments.js";
 import { DispatchCard, dispatchFor, runningSince, runningTasks, useSubAgents } from "./sub-agents.js";
 
 // ---- Small pieces ----------------------------------------------------------------------------
@@ -552,6 +553,12 @@ function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 
 // ---- Messages ----------------------------------------------------------------------------------
 function UserMessage({ item, turn }) {
+	// Upload references (`Attached files` header + JSON path lines) render as cards, not bare paths.
+	// The wire carries `attachments`; older items fall back to parsing the text. Either way the header
+	// itself is never shown as message text, and a deleted file renders as deleted, never as an error.
+	const parsed = useMemo(() => splitAttachments(item.text), [item.text]);
+	const attachments = item.attachments?.length ? item.attachments : parsed.attachments;
+	const body = attachments.length ? parsed.body : item.text;
 	return html`<div class="user-row">
 		<div class="user-bubble" title=${new Date(item.ts).toLocaleString(getLang())}>
 			${item.command ? html`<div class="chip-line"><span class="badge accent">/${item.command.name}</span></div>` : null}
@@ -562,10 +569,11 @@ function UserMessage({ item, turn }) {
 				const zoomable = src.startsWith("data:") || src.startsWith("blob:"); // the page CSP only allows these two
 				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
 			})}</div>` : null}
-			${item.text ? html`<${Markdown} text=${item.text} class="user-text" breaks=${true} />` : null}
+			${attachments.length ? html`<${AttachmentList} attachments=${attachments} />` : null}
+			${body ? html`<${Markdown} text=${body} class="user-text" breaks=${true} />` : null}
 		</div>
 		<div class="msg-actions">
-			<${CopyButton} text=${item.text} label=${t("Copy message")} />
+			<${CopyButton} text=${body || item.text} label=${t("Copy message")} />
 			${item.id ? html`<button class="icon-btn sm" title=${t("Edit and resend from here (forks the session)")} aria-label=${t("Edit and resend")} onClick=${() => actions.editAndResend(item)}><${Icon} name="edit" size=${14} /></button>` : null}
 		</div>
 	</div>`;

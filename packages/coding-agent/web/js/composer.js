@@ -19,6 +19,7 @@ import { retryReason } from "./retry-reason.js";
 import { SubAgentBar, runningTasks } from "./sub-agents.js";
 
 import { drafts, registerRestartDraft } from "./restart-state.js";
+import { invalidateAttachmentCaches } from "./attachments.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
 import { clipLine, formatQuotes, quoteFromSelection } from "./quote-text.js";
 import { clearQuoteHighlights, paintQuotes } from "./quote-highlight.js";
@@ -552,7 +553,7 @@ export function Composer() {
 						if (state.snap?.model && !state.snap.model.input.includes("image")) toast(t("The current model does not list image input; the image may be ignored or trigger the vision assistant if enabled."), "warning", 6000);
 					} else {
 						const uploaded = await post("/api/files/upload", { name: file.name, data: converted.data }, targetSlot);
-						attachment = { name: uploaded.name, path: uploaded.path };
+						attachment = { name: uploaded.name, path: uploaded.path, id: uploaded.id ?? uploaded.path, mime: uploaded.mime ?? file.type ?? null, size: uploaded.size ?? file.size ?? null };
 					}
 					count++;
 					if (latest.current.sessionId === targetSession) setImages((prev) => [...prev, attachment]);
@@ -564,6 +565,8 @@ export function Composer() {
 					}
 				} catch (error) { toast(serverText(error.message, t("Could not read the file.")), "error"); }
 			}
+			// Newly uploaded files appear in the sidebar's per-chat group at once.
+			try { invalidateAttachmentCaches(); } catch { /* sidebar hook is optional */ }
 		} finally { importing.current = false; setLoadingFiles(false); }
 	};
 	const importFiles = useRef(addFiles);
@@ -597,13 +600,13 @@ const send = async (mode) => {
 		if (state.restarting || !state.connected || !canSendToActive()) return;
 		const quotePrefix = formatQuotes(quotes);
 		const body = quotePrefix ? (text ? `${quotePrefix}\n\n${text}` : quotePrefix) : text;
-		const references = images.filter((item) => item.path);
-		const value = references.length ? `Attached files (use read to inspect):\n${references.map((item) => JSON.stringify(item.path)).join("\n")}${body ? `\n\n${body}` : ""}` : body;
+		const value = body;
 		if ((!value.trim() && images.length === 0) || sending || importing.current) return;
 		if (!active && !value.trim() && images.length === 0) return;
 		setSending(true);
 		const target = { slot: activeSlot, mode: chatMode, sessionId };
-		const attached = images.filter((item) => !item.path).map(({ mimeType, data }) => ({ mimeType, data }));
+		const attached = images.filter((item) => !item.path).map(({ mimeType, data, name }) => ({ mimeType, data, name }));
+		const attachments = images.filter((item) => item.path).map((item) => ({ id: item.id ?? item.path, name: item.name, mime: item.mime ?? null, size: item.size ?? null, path: item.path }));
 		const previousText = text;
 		const previousImages = images;
 		const previousQuotes = quotes;
@@ -611,7 +614,7 @@ const send = async (mode) => {
 		setImages([]);
 		setQuotes([]);
 		setHistoryIndex(-1);
-		const result = await actions.submit(value, { images: attached, mode: mode || (active ? runMode : "auto") });
+		const result = await actions.submit(value, { images: attached, attachments, mode: mode || (active ? runMode : "auto") });
 		setSending(false);
 		if (!result.handled && !result.ok) {
 			if (latest.current.sessionId === target.sessionId) {

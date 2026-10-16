@@ -157,6 +157,48 @@ export function getSessionScopedDataDir(
 	return join(getSessionDir(dataRoot, workspaceId, sessionId), assertDataPathSegment(category, "category"));
 }
 
+const UPLOADS_DIR_NAME = "uploads";
+const ATTACHMENT_MANIFEST_FILE_NAME = "manifest.json";
+
+/** Resolve the workspace-level attachment library root without creating it. Kept for listing compatibility. */
+export function getWorkspaceUploadsDir(dataRoot: string, workspaceId: string): string {
+	return join(getWorkspaceDir(dataRoot, workspaceId), UPLOADS_DIR_NAME);
+}
+
+/** Resolve one session's attachment library without creating it.
+ * Kept inside the session dir so delete/relocate/cleanup move together:
+ * `workspaces/<workspace>/sessions/<session>/uploads/<attachmentId>/`.
+ */
+export function getSessionUploadDir(dataRoot: string, workspaceId: string, sessionId: string): string {
+	return join(
+		getSessionDir(dataRoot, workspaceId, sessionId),
+		UPLOADS_DIR_NAME,
+	);
+}
+
+/** Resolve one uploaded attachment's folder without creating it. */
+export function getAttachmentDir(
+	dataRoot: string,
+	workspaceId: string,
+	sessionId: string,
+	attachmentId: string,
+): string {
+	return join(
+		getSessionUploadDir(dataRoot, workspaceId, sessionId),
+		assertDataPathSegment(attachmentId, "attachmentId"),
+	);
+}
+
+/** Resolve the manifest file kept beside one uploaded attachment without creating it. */
+export function getAttachmentManifestPath(
+	dataRoot: string,
+	workspaceId: string,
+	sessionId: string,
+	attachmentId: string,
+): string {
+	return join(getAttachmentDir(dataRoot, workspaceId, sessionId, attachmentId), ATTACHMENT_MANIFEST_FILE_NAME);
+}
+
 export interface SessionDataPathInfo {
 	dataRoot: string;
 	workspaceId: string;

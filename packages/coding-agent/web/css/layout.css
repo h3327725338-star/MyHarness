@@ -77,6 +77,11 @@
 .chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
 /* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
 .chat-rows { position: relative; }
+/* One conversation and its attachments: the row stays as it was, the group opens below it. */
+.chat-entry { display: flex; flex-direction: column; min-width: 0; }
+.chat-attach { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px 8px 38px; }
+.chat-attach-head { font-size: var(--fs-xs); }
+.chat-attach-note { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); }
 
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */

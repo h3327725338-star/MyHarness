@@ -18,7 +18,14 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { getDataDir } from "../../config/paths/index.ts";
+import { getAttachmentDir, getDataDir } from "../../config/paths/index.ts";
+import {
+	guessAttachmentMime,
+	resolveAttachmentReference,
+	toAttachmentRelativePath,
+	writeAttachmentManifest,
+	writeLegacyAttachmentManifest,
+} from "../../config/paths/attachments.ts";
 import {
 	artifactScope,
 	listArtifacts,
@@ -44,7 +51,8 @@ import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { resolveLocalFile, runLocalFileAction } from "./local-files.ts";
 import { collectSessionChanges } from "./session-changes.ts";
-import { RUN_CHANGES_ENTRY } from "./wire.ts";
+import { RUN_CHANGES_ENTRY, splitAttachmentText } from "./wire.ts";
+import { SessionManager } from "../../session/manager/index.ts";
 
 const MAX_TEXT_BYTES = 1.5 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -340,6 +348,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// Browser uploads retain their original bytes as session-owned context references.
+	// New uploads land in the workspace attachment library with a manifest beside the file.
 	server.route("POST", "/api/files/upload", async ({ body }) => {
 		const payload = body as { name?: unknown; data?: unknown } | null;
 		if (typeof payload?.name !== "string" || typeof payload.data !== "string")
@@ -353,14 +362,192 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				.basename(payload.name.replaceAll("\\", "/"))
 				.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
 				.replace(/[. ]+$/g, "") || "file";
-		const sessionFile = host.session.sessionManager.getSessionFile();
+		const manager = host.session.sessionManager;
+		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new HttpError(409, "No current session.");
+		const storedName = `attachment-${name}`;
+		const bytes = Buffer.from(payload.data, "base64");
+		const workspaceId = manager.getWorkspaceId?.();
+		const sessionId = manager.getSessionId?.();
+		const dataRoot = manager.getDataRoot?.() ?? getDataDir();
+		if (workspaceId && sessionId && dataRoot) {
+			const id = randomUUID();
+			const directory = getAttachmentDir(dataRoot, workspaceId, sessionId, id);
+			const target = path.join(directory, storedName);
+			await mkdir(directory, { recursive: true });
+			await writeFile(target, bytes, { flag: "wx" });
+			const relativePath = toAttachmentRelativePath(dataRoot, target);
+			const manifest = { version: 1 as const, id, originalName: name, storedName, mime: guessAttachmentMime(name), size: bytes.length, createdAt: new Date().toISOString(), relativePath };
+			writeAttachmentManifest(dataRoot, workspaceId, sessionId, id, manifest);
+			host.inputTouched = true;
+			return { name, path: relativePath, id: manifest.id, mime: manifest.mime, size: manifest.size };
+		}
 		const directory = path.join(path.dirname(sessionFile), "uploads", randomUUID());
-		const target = path.join(directory, `attachment-${name}`);
+		const target = path.join(directory, storedName);
 		await mkdir(directory, { recursive: true });
-		await writeFile(target, Buffer.from(payload.data, "base64"), { flag: "wx" });
+		await writeFile(target, bytes, { flag: "wx" });
+		try {
+			writeLegacyAttachmentManifest(directory, { version: 1 as const, id: path.basename(directory), originalName: name, storedName, mime: guessAttachmentMime(name), size: bytes.length, createdAt: new Date().toISOString(), relativePath: target });
+		} catch {
+			// Legacy layout keeps the previous absolute-path contract even when the manifest cannot be written.
+		}
 		host.inputTouched = true;
 		return { name, path: target };
+	});
+
+	// ---- Session upload attachments ----------------------------------------------------
+	// Non-image composer uploads live next to their session file (`uploads/<id>/attachment-<name>`);
+	// history keeps only the absolute path as text, so the transcript and the sidebar read them back here.
+	// A file deleted from disk answers as missing (`exists: false` / 404) and never breaks the page.
+	function resolveUploadPath(raw: unknown): string {
+		if (typeof raw !== "string" || !raw) throw new HttpError(400, "Missing path");
+		const ref = raw.trim();
+		if (!ref) throw new HttpError(400, "Missing path");
+		try {
+			const dataRoot = host.session.sessionManager.getDataRoot?.() ?? getDataDir();
+			if (dataRoot && !ref.startsWith("\u0000")) {
+				const resolved = resolveAttachmentReference(dataRoot, ref);
+				if (resolved.split(path.sep).includes("uploads")) return resolved;
+			}
+		} catch {
+			// Fall through to legacy absolute-path handling below.
+		}
+		const absolute = path.resolve(ref);
+		if (!path.basename(absolute).startsWith("attachment-")) throw new HttpError(400, "Unknown attachment");
+		if (!absolute.split(path.sep).includes("uploads")) throw new HttpError(400, "Unknown attachment");
+		if (!existsSync(absolute)) throw new HttpError(404, "Attachment has been deleted.");
+		return absolute;
+	}
+
+	function uploadMeta(absolute: string): {
+		name: string;
+		path: string;
+		exists: boolean;
+		size?: number;
+		mtime?: number;
+		mimeType?: string | null;
+	} {
+		const base = path.basename(absolute);
+		const name = base.startsWith("attachment-") ? base.slice("attachment-".length) || base : base;
+		try {
+			const stat = statSync(absolute);
+			if (!stat.isFile()) return { name, path: absolute, exists: false };
+			return {
+				name,
+				path: absolute,
+				exists: true,
+				size: stat.size,
+				mtime: stat.mtimeMs,
+				mimeType: IMAGE_TYPES[path.extname(absolute).toLowerCase()] ?? null,
+			};
+		} catch {
+			return { name, path: absolute, exists: false };
+		}
+	}
+
+	server.route("GET", "/api/uploads/info", ({ url }) => {
+		return uploadMeta(resolveUploadPath(url.searchParams.get("path")));
+	});
+
+	server.route("GET", "/api/uploads/read", ({ url }) => {
+		const absolute = resolveUploadPath(url.searchParams.get("path"));
+		if (!existsSync(absolute)) throw new HttpError(404, "Attachment has been deleted.");
+		let stat: ReturnType<typeof statSync>;
+		try {
+			stat = statSync(absolute);
+		} catch {
+			throw new HttpError(404, "Attachment has been deleted.");
+		}
+		if (!stat.isFile()) throw new HttpError(404, "Attachment has been deleted.");
+		const meta = uploadMeta(absolute);
+		const ext = path.extname(absolute).toLowerCase();
+		const imageType = IMAGE_TYPES[ext];
+		if (imageType && ext !== ".svg") {
+			if (stat.size > MAX_IMAGE_BYTES) return { ...meta, kind: "large" as const };
+			return { ...meta, kind: "image" as const, mimeType: imageType, data: readFileSync(absolute).toString("base64") };
+		}
+		if (stat.size > MAX_TEXT_BYTES) {
+			const head = readFileSync(absolute).subarray(0, MAX_TEXT_BYTES);
+			if (looksBinary(head)) return { ...meta, kind: "binary" as const };
+			return { ...meta, kind: "text" as const, content: head.toString("utf8"), truncated: true };
+		}
+		const buffer = readFileSync(absolute);
+		if (looksBinary(buffer)) return { ...meta, kind: "binary" as const };
+		return { ...meta, kind: "text" as const, content: buffer.toString("utf8"), truncated: false };
+	});
+
+	server.route("GET", "/api/uploads/download", ({ url, res }) => {
+		const absolute = resolveUploadPath(url.searchParams.get("path"));
+		let stat: ReturnType<typeof statSync>;
+		try {
+			stat = statSync(absolute);
+		} catch {
+			throw new HttpError(404, "Attachment has been deleted.");
+		}
+		if (!stat.isFile()) throw new HttpError(404, "Attachment has been deleted.");
+		res.setHeader("Content-Type", "application/octet-stream");
+		res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(uploadMeta(absolute).name)}`);
+		res.end(readFileSync(absolute));
+	});
+
+	// Attachments of one conversation (sidebar groups them per chat): scanned off the persisted branch,
+	// with on-disk state attached per file. Unknown sessions 404; unreadable histories 500; missing files
+	// stay in the list as `exists: false` so the sidebar can say "deleted" instead of failing.
+	server.route("GET", "/api/session/attachments", ({ url }) => {
+		const sessionPath = url.searchParams.get("path");
+		if (!sessionPath) throw new HttpError(400, "Missing path");
+		const resolved = path.resolve(sessionPath);
+		try {
+			if (!statSync(resolved).isFile()) throw new HttpError(404, "Unknown session");
+		} catch (error) {
+			if (error instanceof HttpError) throw error;
+			throw new HttpError(404, "Unknown session");
+		}
+		let manager: SessionManager;
+		try {
+			manager = SessionManager.open(resolved);
+		} catch {
+			throw new HttpError(404, "Unknown session");
+		}
+		let branch: ReturnType<SessionManager["getBranch"]>;
+		try {
+			branch = manager.getBranch();
+		} catch {
+			throw new HttpError(500, "Could not read the chat history.");
+		}
+		const seen = new Map<string, { messageId?: string; ts: number }>();
+		for (const entry of branch) {
+			if (entry.type !== "message") continue;
+			const message = (entry as { message?: { role?: unknown; content?: unknown } }).message;
+			if (!message || message.role !== "user") continue;
+			const content = message.content;
+			const text =
+				typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? (content as Array<{ type?: string; text?: string }>)
+								.filter((part) => part.type === "text")
+								.map((part) => part.text ?? "")
+							.join("")
+						: "";
+			const { attachments } = splitAttachmentText(text);
+			const ts = Date.parse(entry.timestamp) || 0;
+			for (const attachment of attachments) {
+				if (!seen.has(attachment.path)) seen.set(attachment.path, { messageId: entry.id, ts });
+			}
+		}
+		const entries = [...seen].map(([uploadPath, ref]) => {
+			let meta: ReturnType<typeof uploadMeta>;
+			try {
+				meta = uploadMeta(resolveUploadPath(uploadPath));
+			} catch {
+				const base = String(uploadPath).replace(/\\/g, "/").split("/").pop() || String(uploadPath);
+				meta = { name: base.replace(/^attachment-/, "") || base, path: uploadPath, exists: false };
+			}
+			return { ...meta, messageId: ref.messageId, ts: ref.ts };
+		});
+		entries.sort((a, b) => a.ts - b.ts);
+		return { entries };
 	});
 
 	server.route("GET", "/api/files/list", ({ url }) => {

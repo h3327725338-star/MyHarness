@@ -45,6 +45,51 @@ export interface WireImage {
 	data: string;
 }
 
+/** One file the composer uploaded for a user message (see composer.js `Attached files`). */
+export interface WireAttachment {
+	path: string;
+	name: string;
+}
+
+/** Header the composer prepends to the message text for non-image uploads. */
+export const ATTACH_HEADER = "Attached files (use read to inspect):";
+
+/** Display name of an uploaded file: the basename without the server's `attachment-` prefix. */
+export function attachmentName(path: string): string {
+	const base = path.replace(/\\/g, "/").replace(/\/+$/, "");
+	const leaf = base.slice(base.lastIndexOf("/") + 1) || path;
+	return leaf.startsWith("attachment-") ? leaf.slice("attachment-".length) || leaf : leaf;
+}
+
+/**
+ * Split the composer's attachment header off the message text. Historical messages keep the header as plain
+ * text (`"path"` JSON lines under it); the transcript renders `attachments` as cards and `body` as Markdown.
+ * Unknown lines stop the header so model/user text is never eaten. Missing/odd input yields no attachments.
+ */
+export function splitAttachmentText(text: unknown): { attachments: WireAttachment[]; body: string } {
+	if (typeof text !== "string" || !text.startsWith(ATTACH_HEADER)) return { attachments: [], body: typeof text === "string" ? text : "" };
+	const lines = text.split("\n");
+	const attachments: WireAttachment[] = [];
+	let index = 1;
+	for (; index < lines.length; index += 1) {
+		const line = lines[index]!.trim();
+		if (!line) {
+			index += 1;
+			break;
+		}
+		let path: unknown;
+		try {
+			path = JSON.parse(line);
+		} catch {
+			break;
+		}
+		if (typeof path !== "string" || !path) break;
+		attachments.push({ path, name: attachmentName(path) });
+	}
+	if (attachments.length === 0) return { attachments, body: text };
+	return { attachments, body: lines.slice(index).join("\n").replace(/^\n+/, "") };
+}
+
 export type WireAssistantBlock =
 	| { type: "text"; text: string }
 	| { type: "thinking"; text: string; redacted?: boolean }
@@ -74,6 +119,8 @@ export type WireItem =
 			ts: number;
 			text: string;
 			images: WireImage[];
+			/** Non-image uploads of this message, parsed off the attachment header (history renders cards, not raw paths). */
+			attachments?: WireAttachment[];
 			/** The user picked a built-in prompt command such as /workflow. */
 			command?: { name: string; task: string };
 			skill?: { name: string; location: string; content: string };
@@ -342,7 +389,8 @@ export function messageToWire(
 					...timingProp,
 				};
 			}
-			return { kind: "user", id: meta.id, ts, text, images, ...timingProp };
+			const split = splitAttachmentText(text);
+			return { kind: "user", id: meta.id, ts, text, images, ...(split.attachments.length ? { attachments: split.attachments } : {}), ...timingProp };
 		}
 		case "assistant": {
 			const blocks: WireAssistantBlock[] = [];

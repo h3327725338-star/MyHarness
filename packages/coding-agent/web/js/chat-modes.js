@@ -16,7 +16,7 @@ export const expandedKey = (mode) => (chatModeOf(mode) === "general" ? "expanded
  * file keeps the path it was already uploaded to. Nothing is uploaded again and nothing becomes a sent message.
  */
 export function draftToServer({ text = "", images = [], quotes = [] } = {}) {
-	const attachments = images.map((item) => (item.path ? { kind: "file", name: item.name, path: item.path } : { kind: "image", name: item.name, mimeType: item.mimeType, data: item.data }));
+	const attachments = images.map((item) => (item.path ? { kind: "file", name: item.name, path: item.path, ...(item.id ? { id: item.id } : {}), ...(item.mime ? { mime: item.mime } : {}), ...(Number.isFinite(item.size) ? { size: item.size } : {}) } : { kind: "image", name: item.name, mimeType: item.mimeType, data: item.data }));
 	const savedQuotes = Array.isArray(quotes)
 		? quotes
 				.filter((q) => q && typeof q.text === "string" && q.text.trim())
@@ -39,7 +39,7 @@ export function draftFromServer(draft) {
 	const images = [];
 	for (const item of Array.isArray(draft.attachments) ? draft.attachments : []) {
 		if (!item || typeof item !== "object") continue;
-		if (typeof item.path === "string") images.push({ name: typeof item.name === "string" ? item.name : item.path, path: item.path });
+		if (typeof item.path === "string") images.push({ name: typeof item.name === "string" ? item.name : item.path, path: item.path, ...(typeof item.id === "string" ? { id: item.id } : {}), ...(typeof item.mime === "string" ? { mime: item.mime } : {}), ...(Number.isFinite(item.size) ? { size: item.size } : {}) });
 		else if (typeof item.data === "string" && typeof item.mimeType === "string") images.push({ name: typeof item.name === "string" ? item.name : "image", mimeType: item.mimeType, data: item.data, url: `data:${item.mimeType};base64,${item.data}` });
 	}
 	const result = { text: draft.text, images };
