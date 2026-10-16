@@ -58,7 +58,7 @@
 
 ### memory/ — 记忆工具
 
-`search.ts`：`memory_search`（无 `query` 列记忆目录，有 `query` 用 `agent/runtime/auto-memory.ts` 的 `selectMemoriesForQuery()` 返回摘要）和 `memory_get`（按 id 取全文，未找到只返回说明）。两个工具只读、`executionMode: "parallel"`；读取通过可注入的 `MemoryToolOperations`，`createSessionMemoryOperations()` 按会话的 Data root / Workspace / Conversation 读取，Auto Memory 关闭或会话不持久化时返回“未启用”说明。子智能体按 `agent/runtime/role.ts` 白名单不会拿到它们。
+`search.ts`：`memory_search`（无 `query` 列记忆目录，有 `query` 用 `agent/runtime/auto-memory.ts` 的 `selectMemoriesForQuery()` 返回摘要）和 `memory_get`（按 id 取全文，未找到只返回说明）。两个工具只读、`executionMode: "parallel"`；读取通过可注入的 `MemoryToolOperations`，`createSessionMemoryOperations()` 按会话的 Data root / Workspace / Conversation 读取，Auto Memory 关闭或会话不持久化时返回“未启用”说明。`write.ts`：`memory_write`（用户明确要求记住、导入、更正或更新时，一次最多 10 条地创建/更新本轮三层的记忆与常驻画像；省略 `id` 新建，只有 `global/用户画像` 允许带 `id` 首次创建；超 10 KB 拒绝而不截断；`executionMode: "sequential"`，经 `session/memory/store.ts` 的锁写盘并刷新索引、记一笔待整理变化）。`manage.ts`：`memory_delete` 彻底删除、`memory_claim` 认领 `pending/`。子智能体按 `agent/runtime/role.ts` 白名单不会拿到这些工具（写入类同样不给）。
 
 ### interaction/ — 交互工具
 

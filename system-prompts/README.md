@@ -28,7 +28,7 @@
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
 | `skills/harness.md` | 通用 AgentHarness 的技能说明；原文不同，独立维护 |
 | `harness/default.md` | 通用 AgentHarness 未提供自定义 systemPrompt 时的默认身份 |
-| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,find,grep,ls,github,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,ask-user-question,todo-write}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 说明仅在 symbols 启用时出现 |
+| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,find,grep,ls,github,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,ask-user-question,todo-write}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 说明仅在 symbols 启用时出现 |
 | `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合。symbols 规则仅在 symbols 启用时出现 |
 | `tools/no-snippets.md` | 有工具但无简短说明时的提示 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |
@@ -37,7 +37,7 @@
 | `tools/routing/organization-heading.md`、`organization-boundary.md` | 至少一个编排工具启用时的标题与组合约束 |
 | `compaction/coding-agent/system.md` | 编程会话压缩、分支摘要、长回合前缀摘要的系统职责 |
 | `compaction/harness/system.md` | 通用 AgentHarness 压缩及分支摘要的系统职责；与编程版不同，不能直接合并 |
-| `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容；可选的 `importance` / `triggers` 标注及更新时保留原值；整理器整篇重写常驻用户画像（条目 ID 由任务文本给出，提示词文件本身不含非英文字符） |
+| `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容；可选的 `importance` / `triggers` 标注及更新时保留原值；整理器仅在事实充分时可创建常驻用户画像初版、之后整篇重写（条目 ID 由任务文本给出，提示词文件本身不含非英文字符） |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
 | `tasks/conversation-title.md` | 独立会话标题生成请求；新标题用核心对象＋主要目的，中文目标 6–10 字、最多 12 字，英文 2–4 词，保留必要技术名称；主题未变时保留已有标题，不为缩短旧标题增加请求 |
 | `tasks/commit-message.md` | `/commit` 的独立无工具提交说明请求；按模型容量分批分析 Diff、保留来源、分层合并及补读核对后生成一个提交说明，参考 Git 历史，不添加 AI 署名 |

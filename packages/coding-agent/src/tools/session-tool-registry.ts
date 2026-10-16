@@ -212,6 +212,7 @@ export class SessionToolRegistry {
 					"memory_get",
 					"memory_delete",
 					"memory_claim",
+					"memory_write",
 					"ask_user_question",
 					"todo_write",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),

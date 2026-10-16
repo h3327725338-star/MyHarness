@@ -228,6 +228,16 @@ import {
 	createMemoryDeleteTool,
 	createMemoryDeleteToolDefinition,
 } from "./memory/manage.ts";
+import { createMemoryWriteTool, createMemoryWriteToolDefinition } from "./memory/write.ts";
+
+export {
+	createMemoryWriteTool,
+	createMemoryWriteToolDefinition,
+	type MemoryWriteToolDetails,
+	type MemoryWriteToolInput,
+	type MemoryWriteToolItem,
+} from "./memory/write.ts";
+
 import {
 	createJobKillTool,
 	createJobKillToolDefinition,
@@ -273,6 +283,7 @@ export type ToolName =
 	| "memory_get"
 	| "memory_delete"
 	| "memory_claim"
+	| "memory_write"
 	| "ask_user_question"
 	| "todo_write"
 	| "web_search"
@@ -300,6 +311,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"memory_get",
 	"memory_delete",
 	"memory_claim",
+	"memory_write",
 	"ask_user_question",
 	"todo_write",
 	"web_search",
@@ -371,6 +383,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createMemoryDeleteToolDefinition(cwd, options?.memory);
 		case "memory_claim":
 			return createMemoryClaimToolDefinition(cwd, options?.memory);
+		case "memory_write":
+			return createMemoryWriteToolDefinition(cwd, options?.memory);
 		case "ask_user_question":
 			return createAskUserQuestionToolDefinition();
 		case "todo_write":
@@ -430,6 +444,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createMemoryDeleteTool(cwd, options?.memory);
 		case "memory_claim":
 			return createMemoryClaimTool(cwd, options?.memory);
+		case "memory_write":
+			return createMemoryWriteTool(cwd, options?.memory);
 		case "ask_user_question":
 			return createAskUserQuestionTool();
 		case "todo_write":
@@ -486,6 +502,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
 		memory_delete: createMemoryDeleteToolDefinition(cwd, options?.memory),
 		memory_claim: createMemoryClaimToolDefinition(cwd, options?.memory),
+		memory_write: createMemoryWriteToolDefinition(cwd, options?.memory),
 		ask_user_question: createAskUserQuestionToolDefinition(),
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
@@ -535,6 +552,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		memory_get: createMemoryGetTool(cwd, options?.memory),
 		memory_delete: createMemoryDeleteTool(cwd, options?.memory),
 		memory_claim: createMemoryClaimTool(cwd, options?.memory),
+		memory_write: createMemoryWriteTool(cwd, options?.memory),
 		ask_user_question: createAskUserQuestionTool(),
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),

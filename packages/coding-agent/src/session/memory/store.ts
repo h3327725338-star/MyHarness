@@ -142,6 +142,57 @@ export function listMemoryFiles(dataRoot: string): MemoryFile[] {
 	return result;
 }
 
+interface MemoryWriteConsolidationValue {
+	sessionIds: string[];
+	lastAt?: string;
+	pendingChanges?: number;
+	pendingSince?: string;
+	revision?: number;
+}
+
+/**
+ * Record direct memory writes from the memory_write tool so a later consolidation pass can review them.
+ * Caller must already hold the memory lock (withMemoryLock): this only reads and rewrites state.json.
+ * Self-contained on purpose: it mirrors the bookkeeping in the auto-memory consolidation path without
+ * importing it, so the session memory store never depends back on the agent runtime.
+ */
+export async function recordMemoryWriteConsolidation(
+	dataRoot: string,
+	workspaceId: string,
+	changeCount: number,
+): Promise<void> {
+	if (!Number.isFinite(changeCount) || Math.floor(changeCount) <= 0) return;
+	const resolved = path.resolve(dataRoot);
+	const statePath = path.join(resolved, "memory", "state.json");
+	assertDirectPath(statePath);
+	let sessions: Record<string, unknown> = {};
+	let consolidation: Record<string, MemoryWriteConsolidationValue> = {};
+	try {
+		const parsed = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
+			version?: unknown;
+			sessions?: unknown;
+			consolidation?: unknown;
+		};
+		if (parsed?.version === 1 && parsed.sessions !== null && typeof parsed.sessions === "object") {
+			sessions = parsed.sessions as Record<string, unknown>;
+		}
+		if (parsed?.version === 1 && parsed.consolidation !== null && typeof parsed.consolidation === "object") {
+			consolidation = parsed.consolidation as Record<string, MemoryWriteConsolidationValue>;
+		}
+	} catch {
+		sessions = {};
+		consolidation = {};
+	}
+	const now = new Date().toISOString();
+	const value = consolidation[workspaceId] ?? { sessionIds: [] };
+	const before = typeof value.pendingChanges === "number" ? Math.max(0, value.pendingChanges) : 0;
+	value.pendingChanges = before + Math.floor(changeCount);
+	value.pendingSince ??= now;
+	value.revision = (typeof value.revision === "number" ? value.revision : 0) + 1;
+	consolidation[workspaceId] = value;
+	await writeMemoryFile(statePath, `${JSON.stringify({ version: 1, sessions, consolidation }, null, 2)}\n`);
+}
+
 /** Rebuild global and workspace reference catalogs without copying memory bodies. Caller owns the lock. */
 export async function refreshMemoryIndexes(dataRoot: string): Promise<void> {
 	const entries = listMemoryFiles(dataRoot).map(({ content: _content, ...entry }) => entry);

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import {
 	AutoMemoryManager,
+	estimateMemoryTokens,
 	findMemoryContradictions,
 	getAutoMemoryPaths,
 	isMemoryProfile,
@@ -86,8 +87,14 @@ function writeMemory(fixture: MemoryFixture, directory = directoryFor("global"))
 	return file;
 }
 
+/** 本文件创建的 manager 统一登记，afterEach 统一 dispose：否则残留的后台 timer 会在后续测试里抢本工作区的整理锁。 */
+const activeManagers: AutoMemoryManager[] = [];
+afterEach(() => {
+	for (const instance of activeManagers.splice(0)) instance.dispose();
+});
+
 function manager(options: Partial<ConstructorParameters<typeof AutoMemoryManager>[0]> = {}): AutoMemoryManager {
-	return new AutoMemoryManager({
+	const instance = new AutoMemoryManager({
 		cwd: projectDir,
 		sessionId: location.sessionId,
 		dataRoot,
@@ -97,6 +104,8 @@ function manager(options: Partial<ConstructorParameters<typeof AutoMemoryManager
 		agentDir,
 		...options,
 	});
+	activeManagers.push(instance);
+	return instance;
 }
 
 function userEntries(text: string): SessionEntry[] {
@@ -398,7 +407,8 @@ describe("memory annotations and recall", () => {
 			},
 		});
 		expect(await consolidator.runConsolidation(true)).toBe(true);
-		expect(tasks[0]).toMatch(new RegExp(`Resident user profile entry ID \\(.*\\): ${MEMORY_PROFILE_ID}`));
+		expect(tasks[0]).toContain(`Resident user profile entry ID: ${MEMORY_PROFILE_ID}`);
+		expect(tasks[0]).toContain("rewrite the whole entry as usual");
 		const rewritten = readFileSync(file, "utf8");
 		expect(rewritten).toContain("整理器重写");
 		expect(rewritten).toContain("importance: high");
@@ -451,6 +461,93 @@ describe("memory annotations and recall", () => {
 		expect(String(recalled?.content)).toContain("检查源码是好习惯");
 		await manager().recall("再来一次，检查源码");
 		expect(snapshotTree(dataRoot)).toEqual(before);
+	});
+
+	it("estimates Chinese text at roughly one token per character", () => {
+		expect(estimateMemoryTokens("")).toBe(0);
+		expect(estimateMemoryTokens("hello")).toBe(2); // 5 ASCII chars pack 4:1
+		expect(estimateMemoryTokens("abcdefgh")).toBe(2);
+		expect(estimateMemoryTokens("你好")).toBe(2);
+		expect(estimateMemoryTokens("一二三四")).toBe(4);
+		expect(estimateMemoryTokens("hi你好")).toBe(3); // ceil(2/4) + 2
+	});
+
+	it("lists about 120 memories fully in the directory with one-line summaries", async () => {
+		for (let index = 0; index < 120; index++) {
+			writeMemory({
+				id: `global/bulk-${String(index).padStart(3, "0")}`,
+				name: `Bulk ${index}`,
+				description: `第 ${index} 条批量记忆的摘要说明`,
+				body: `批量正文 ${index}：完全不同的主题内容。`,
+				updatedAt: `2026-02-${String((index % 27) + 1).padStart(2, "0")}T00:00:00.000Z`,
+			});
+		}
+		writeMemory({
+			id: "global/long-desc",
+			name: "Long Desc",
+			description: "描".repeat(100),
+			body: "正文",
+			updatedAt: "2026-03-01T00:00:00.000Z",
+		});
+		const recalled = await manager().recall("彻底无关的火星天气查询");
+		const content = String(recalled?.content);
+		expect(content).toContain("记忆目录");
+		// 121 rows, all listed: no truncation hint.
+		for (let index = 0; index < 120; index++) {
+			expect(content).toContain(`global/bulk-${String(index).padStart(3, "0")} | global | Bulk ${index} |`);
+		}
+		expect(content).toContain(`global/long-desc | global | Long Desc | ${"描".repeat(20)}…`);
+		expect(content).not.toContain("目录过长");
+		expect((recalled?.details as { ids: string[] }).ids).toEqual([]);
+		const directoryText = content.slice(content.indexOf("记忆目录"), content.indexOf("</recalled_memory_context>"));
+		// 实测：121 行约 3.7k token（新口径），目录预算 4200 覆盖约 130 条。
+		expect(estimateMemoryTokens(directoryText)).toBeLessThanOrEqual(4200);
+	});
+
+	it("skips an oversized card and still sends a smaller later card", async () => {
+		// 240 条填充把目录顶到预算帽，让卡片预算只够小卡片、装不下 10KB 大卡片。
+		for (let index = 0; index < 240; index++) {
+			writeMemory({
+				id: `global/filler-${String(index).padStart(3, "0")}`,
+				name: `Filler ${index}`,
+				description: `无关填充记忆摘要 ${index}`,
+				body: `午餐吃了牛肉面 ${index} 碗，与查询无关。`,
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			});
+		}
+		writeMemory({
+			id: "global/big-card",
+			name: "Big Card",
+			description: "部署口令相关的大卡片",
+			body: `部署口令${"操作步骤说明".repeat(1500)}`,
+			triggers: ["部署口令"],
+			updatedAt: "2026-03-02T00:00:00.000Z",
+		});
+		writeMemory({
+			id: "global/small-card",
+			name: "Small Card",
+			description: "部署口令相关的小卡片",
+			body: "部署口令的简短说明：先跑测试再发布。",
+			updatedAt: "2026-03-01T00:00:00.000Z",
+		});
+		writeMemory({ id: MEMORY_PROFILE_ID, name: "用户画像", type: "user", body: "画像".repeat(300) });
+
+		const recalled = await manager().recall("部署口令怎么走");
+		const ids = (recalled?.details as { ids: string[] }).ids;
+		expect(ids).toContain(MEMORY_PROFILE_ID);
+		expect(ids).toContain("global/small-card");
+		expect(ids).not.toContain("global/big-card");
+		expect(String(recalled?.content)).toContain("部署口令的简短说明");
+	});
+
+	it("still injects the directory when neither the profile nor any card matches", async () => {
+		writeMemory({ id: "global/solo", name: "Solo", description: "午餐记录", body: "午餐吃了牛肉面。" });
+		const recalled = await manager().recall("彻底无关的火星天气查询");
+		expect(recalled).toBeDefined();
+		const content = String(recalled?.content);
+		expect(content).toContain("记忆目录");
+		expect(content).toContain("global/solo | global | Solo | 午餐记录");
+		expect((recalled?.details as { ids: string[] }).ids).toEqual([]);
 	});
 });
 
@@ -824,8 +921,8 @@ describe("memory v2: resident directory, contradictions, cross-scope access", ()
 			},
 		});
 		let consolidated = await consolidator.runConsolidation(true);
-		// 同文件其他测试留下的后台 timer 可能正在占文件锁：失败时带错重试一次，真问题会落在 errors 里。
-		if (!consolidated) consolidated = await consolidator.runConsolidation(true);
+		// 同文件其他测试留下的后台 timer 可能正在整理本工作区占锁：被跳过时不产生任务，带错或空任务时重试一次。
+		if (!consolidated || tasks.length === 0) consolidated = await consolidator.runConsolidation(true);
 		consolidator.dispose();
 		expect(errors).toEqual([]);
 		expect(consolidated).toBe(true);

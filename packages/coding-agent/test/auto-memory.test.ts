@@ -7,7 +7,6 @@ import {
 	AutoMemoryManager,
 	getAutoMemoryPaths,
 	parseMemoryOperations,
-	parseMemorySelection,
 	sanitizeMemoryText,
 } from "../src/agent/runtime/auto-memory.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
@@ -60,15 +59,6 @@ describe("auto memory", () => {
 			),
 		).toEqual([]);
 		expect(parseMemoryOperations("<MEMORY_OPERATIONS>not json</MEMORY_OPERATIONS>")).toBeUndefined();
-	});
-
-	it("parses a bounded tagged recall selection", () => {
-		expect(
-			parseMemorySelection(
-				'<MEMORY_SELECTION>["global/one","project/two","global/three","global/four","global/five","global/six"]</MEMORY_SELECTION>',
-			),
-		).toEqual(["global/one", "project/two", "global/three", "global/four", "global/five"]);
-		expect(parseMemorySelection('["global/one"]')).toBeUndefined();
 	});
 
 	it("redacts common secrets and rejects private keys before persistence", () => {

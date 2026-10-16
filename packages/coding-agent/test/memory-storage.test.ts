@@ -59,7 +59,11 @@ describe("hierarchical memory storage", () => {
 		try {
 			expect((await manager.recall("rare-anchor"))?.content).toContain("confirmed convention");
 			expect((await manager.recall("rare-anchor"))?.content).toContain("confirmed convention");
-			expect(await manager.recall("no-matching-topic")).toBeUndefined();
+			// 新口径：目录每轮常驻；没有任何词面匹配时仍注入目录，但不带正文卡片。
+			const fallback = await manager.recall("no-matching-topic");
+			expect(fallback).toBeDefined();
+			expect(String(fallback?.content)).toContain("记忆目录");
+			expect((fallback?.details as { ids: string[] }).ids).toEqual([]);
 		} finally {
 			manager.dispose();
 		}

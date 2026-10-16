@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { contentText, estimateTextTokens } from "@myharness/ai";
+import { contentText } from "@myharness/ai";
 import { stringify as stringifyYaml } from "yaml";
 import {
 	getDataDir,
@@ -127,7 +127,7 @@ export type AutoMemoryModelRunner = (options: {
 }) => Promise<string>;
 
 // 10KB 只算正文（标题摘要等头不计），常驻画像整篇也按这个来；普通条目仍要求写短。
-const MEMORY_BODY_MAX_BYTES = 10 * 1024;
+export const MEMORY_BODY_MAX_BYTES = 10 * 1024;
 const MEMORY_TRIGGER_MAX_COUNT = 6;
 const MEMORY_TRIGGER_MAX_BYTES = 60;
 const MAX_DIRECT_TRIGGER_MEMORIES = 3;
@@ -135,16 +135,54 @@ const MEMORY_IMPORTANCE_WEIGHT: Record<MemoryImportance, number> = { high: 1.3, 
 const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
 /** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
 export const MEMORY_PROFILE_ID = "global/用户画像";
-// 召回分层 token 预算（estimateTextTokens：utf8 字节数 / 4）：画像固定位 + 目录位 + 动态卡片位。
-// 总量约 6000 token，与旧 20KB 字节卡片大致相当；规矩头与目录说明行不计入。
-const RECALL_TOTAL_TOKEN_BUDGET = 6000;
-const RECALL_PROFILE_TOKEN_RESERVE = 2500;
-const RECALL_DIRECTORY_TOKEN_BUDGET = 800;
+/**
+ * Recall-side token estimate tuned for Chinese text: every non-ASCII character counts as ~1 token,
+ * ASCII characters count as ~1 token per 4 characters (rounded up). The shared estimateTextTokens
+ * (utf8 bytes / 4) undercounts Chinese by ~3x, which used to starve the directory budget.
+ */
+export function estimateMemoryTokens(text: string): number {
+	let ascii = 0;
+	let nonAscii = 0;
+	for (const character of text) {
+		if ((character.codePointAt(0) ?? 0) <= 127) ascii++;
+		else nonAscii++;
+	}
+	return nonAscii + Math.ceil(ascii / 4);
+}
+
+/** Cut a one-line directory summary to 16-24 characters: keep short ones whole, shorten long ones with an ellipsis. */
+function shortenDirectoryDescription(value: string): string {
+	const oneLine = value.replace(/\s+/g, " ").trim();
+	const points = [...oneLine];
+	if (points.length <= 24) return oneLine;
+	return `${points.slice(0, 20).join("").trimEnd()}…`;
+}
+
+/** Shrink text to a token budget measured by estimateMemoryTokens. */
+function truncateToTokenBudget(value: string, maxTokens: number): string {
+	const normalized = value.trim();
+	if (estimateMemoryTokens(normalized) <= maxTokens) return normalized;
+	let low = 0;
+	let high = normalized.length;
+	while (low < high) {
+		const mid = Math.floor((low + high) / 2);
+		if (estimateMemoryTokens(normalized.slice(0, mid)) <= maxTokens) low = mid + 1;
+		else high = mid;
+	}
+	return normalized.slice(0, Math.max(0, low - 1)).trimEnd();
+}
+
+// 召回分层 token 预算（estimateMemoryTokens 新口径：非 ASCII 字符约 1 token、ASCII 约 1/4 token）：画像固定位 + 目录位 + 动态卡片位。
+// 实测：目录行约 30 token/条，120 条约 3615，130 条约 3917；10KB 全中文画像约 3425，典型画像约 600，典型卡片约 300。
+// 目录位 4200 覆盖约 130 条（当前量级 100-130 条尽量列全）；画像位 3500 覆盖 10KB 上限的最坏情况（仅截断帽、非实际花费）；
+// 总量 8000 与旧口径 6000 的实际花费大致相当（旧口径低估中文约 3 倍）；规矩头不占额度。
+const RECALL_TOTAL_TOKEN_BUDGET = 8000;
+const RECALL_PROFILE_TOKEN_RESERVE = 3500;
+const RECALL_DIRECTORY_TOKEN_BUDGET = 4200;
 // 稳定性切块：提取按 30 条聊天一切逐块推进、整理按 20 张记忆一批独立存，
 // 单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文。主聊天的召回按分层 token 预算发送（画像固定位＋目录位＋动态卡片位），不在此列。
 const EXTRACT_CHUNK_ENTRIES = 30;
 const CONSOLIDATION_BATCH_SIZE = 20;
-const MAX_RECALLED_MEMORIES = 5;
 // 词面排序保证的最低条数：阈值之外的最佳匹配也至少带这么多，保证“找得到”。
 // 用户拍板：保底 8 条（上下文开销最大一档）。触发词直达（最多 3 条）不计入此数。
 const MEMORY_SELECTION_GUARANTEED = 8;
@@ -156,8 +194,8 @@ const CONSOLIDATION_INTERVAL_MS = 3 * 60 * 60 * 1000;
 // 后来者本轮直接跳过，由 30 秒后的下一轮定时器自然排队，而不是跑完再撞快照冲突。
 const activeConsolidations = new Set<string>();
 const AUTO_MEMORY_TIMEOUT_MS = 15 * 60 * 1000;
-const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
-const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
+export const MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
+export const MEMORY_SCOPES = new Set<MemoryScope>(["global", "workspace", "session", "project"]);
 
 // 记忆维护本地日志：只追加、不改业务，排查“记忆维护需要检查”用。
 // 落盘位置：<data>/workspaces/<workspaceId>/sessions/<sessionId>/memory/maintenance.log（JSONL，一行一条）。
@@ -296,7 +334,7 @@ export function sanitizeMemoryText(value: string): string {
 		.trim();
 }
 
-function slugify(value: string): string {
+export function slugify(value: string): string {
 	const slug = value
 		.normalize("NFKC")
 		.toLowerCase()
@@ -311,7 +349,7 @@ export function isSafeMemoryId(id: string): boolean {
 	return /^(global|workspace|session|project|pending)\/[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(id);
 }
 
-function readImportance(value: unknown): MemoryImportance | undefined {
+export function readImportance(value: unknown): MemoryImportance | undefined {
 	return typeof value === "string" && MEMORY_IMPORTANCES.has(value as MemoryImportance)
 		? (value as MemoryImportance)
 		: undefined;
@@ -321,7 +359,7 @@ function readImportance(value: unknown): MemoryImportance | undefined {
  * Trigger phrases from a frontmatter value or a model operation: collapse whitespace, cut each to the byte limit,
  * drop empty or repeated ones and keep the first six. Oversized input is trimmed, never rejected.
  */
-function normalizeTriggers(value: unknown, clean: (text: string) => string = (text) => text): string[] {
+export function normalizeTriggers(value: unknown, clean: (text: string) => string = (text) => text): string[] {
 	const items = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
 	const triggers: string[] = [];
 	for (const item of items) {
@@ -416,7 +454,7 @@ export function readMemoryEntries(directories: {
 	].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function serializeMemory(entry: MemoryEntry): string {
+export function serializeMemory(entry: MemoryEntry): string {
 	// Every optional field must be listed here: this writer is a whitelist, so anything left out is erased on update.
 	const frontmatter = stringifyYaml({
 		id: entry.id,
@@ -500,18 +538,6 @@ export function parseMemoryOperations(output: string): MemoryOperation[] | undef
 		}
 	}
 	return undefined;
-}
-
-export function parseMemorySelection(output: string): string[] | undefined {
-	const match = /<MEMORY_SELECTION>\s*([\s\S]*?)\s*<\/MEMORY_SELECTION>/i.exec(output);
-	if (!match) return undefined;
-	try {
-		const parsed = JSON.parse(match[1]) as unknown;
-		if (!Array.isArray(parsed)) return undefined;
-		return parsed.filter((value): value is string => typeof value === "string").slice(0, MAX_RECALLED_MEMORIES);
-	} catch {
-		return undefined;
-	}
 }
 
 function formatManifest(entries: MemoryEntry[]): string {
@@ -1621,8 +1647,6 @@ export class AutoMemoryManager {
 			this.reportError("recall", error);
 			return undefined;
 		}
-		if (selected.length === 0) return undefined;
-
 		// 分层 token 预算：画像固定位在前，目录位其次，动态卡片用剩余额度。规矩头不占额度。
 		// 目录每轮常驻：模型先看到 id 表，需要全文再用 memory_get 按需取，避免卡片截断导致“有但看不见”。
 		const profile = selected.find(isMemoryProfile);
@@ -1633,24 +1657,24 @@ export class AutoMemoryManager {
 		if (profile) {
 			const section = `## ${profile.name}\nType: ${profile.type}; Scope: ${profile.scope}\n${profile.content}`;
 			// 画像超长属于异常：截断到固定位，保证本轮不断流；画像本身仍要求整理器保持在 10KB 内。
-			const fitted =
-				estimateTextTokens(section) <= RECALL_PROFILE_TOKEN_RESERVE
-					? section
-					: truncateUtf8(section, RECALL_PROFILE_TOKEN_RESERVE * 4);
+			const fitted = truncateToTokenBudget(section, RECALL_PROFILE_TOKEN_RESERVE);
 			sections.push(fitted);
 			sentIds.push(profile.id);
-			usedTokens += estimateTextTokens(fitted);
+			usedTokens += estimateMemoryTokens(fitted);
 		}
 
 		const directoryRows = [...candidates]
 			.filter((entry) => !isMemoryProfile(entry))
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-			.map((entry) => `${entry.id} | ${entry.scope} | ${entry.name}`);
+			.map(
+				(entry) =>
+					`${entry.id} | ${entry.scope} | ${entry.name} | ${shortenDirectoryDescription(entry.description)}`,
+			);
 		const directoryLines = ["记忆目录（本轮可见范围；用 memory_get 按 id 取全文）：", ...directoryRows];
 		const directory: string[] = [];
 		let directoryTokens = 0;
 		for (const line of directoryLines) {
-			const lineTokens = estimateTextTokens(`${line}\n`);
+			const lineTokens = estimateMemoryTokens(`${line}\n`);
 			if (directory.length > 0 && directoryTokens + lineTokens > RECALL_DIRECTORY_TOKEN_BUDGET) break;
 			directory.push(line);
 			directoryTokens += lineTokens;
@@ -1662,18 +1686,19 @@ export class AutoMemoryManager {
 		}
 		sections.push(directory.join("\n"));
 
-		const directoryTokensUsed = estimateTextTokens(sections[sections.length - 1]);
+		const directoryTokensUsed = estimateMemoryTokens(sections[sections.length - 1]);
 		const budget = RECALL_TOTAL_TOKEN_BUDGET - usedTokens - directoryTokensUsed;
 		let cardTokens = 0;
 		for (const entry of cards) {
 			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
-			const sectionTokens = estimateTextTokens(section);
-			if (cardTokens + sectionTokens > Math.max(0, budget)) break;
+			const sectionTokens = estimateMemoryTokens(section);
+			// 装不下的卡片跳过、继续尝试后面更小的卡片，而不是整段停止。
+			if (cardTokens + sectionTokens > Math.max(0, budget)) continue;
 			sections.push(section);
 			cardTokens += sectionTokens;
 			sentIds.push(entry.id);
 		}
-		if (sentIds.length === 0) return undefined;
+		// 只要目录非空就注入：画像与卡片全空时 details.ids 为空数组，语义仍是“画像+卡片 id”。
 
 		return {
 			role: "custom",
@@ -1816,7 +1841,11 @@ export class AutoMemoryManager {
 				}
 				const scope = operation.scope === "project" ? "workspace" : operation.scope;
 				// Consolidation must not promote conversation information into a broader scope.
-				if (allowDelete && (!operation.id || existing.get(operation.id)?.scope !== scope)) continue;
+				// The resident profile is exempt: this lets the consolidator create its first version.
+				// The scope/id prefix check below still applies (must be global/用户画像 with scope global).
+				const isProfileBootstrap = operation.id === MEMORY_PROFILE_ID && scope === "global";
+				if (allowDelete && !isProfileBootstrap && (!operation.id || existing.get(operation.id)?.scope !== scope))
+					continue;
 				if (operation.id && (!isSafeMemoryId(operation.id) || !operation.id.startsWith(`${scope}/`))) {
 					continue;
 				}
@@ -2070,11 +2099,24 @@ export class AutoMemoryManager {
 		});
 		// 稳定性切块：按 20 张一批独立存，成一批落一批，坏一批只记那一批的错继续往下走，
 		// 最后有错再抛出来变黄并保留 pending，下次定时器接着整。
-		const sorted = entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		// 画像逐出按 updatedAt 倒序切批的集合，固定插入第一个批次（允许该批 21 条），保证每轮必定重写且不重复出现在两个批次。
+		const profile = entries.find(isMemoryProfile);
+		const sorted = entries
+			.filter((entry) => entry !== profile)
+			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 		const batches: MemoryEntry[][] = [];
 		for (let start = 0; start < sorted.length; start += CONSOLIDATION_BATCH_SIZE) {
 			batches.push(sorted.slice(start, start + CONSOLIDATION_BATCH_SIZE));
 		}
+		if (profile) {
+			if (batches.length === 0) batches.push([profile]);
+			else batches[0].unshift(profile);
+		}
+		// entries 为空时 batches 为空，本轮不跑批（维持现状）。
+		const profileTaskPrefix = profile
+			? `Resident user profile entry ID: ${MEMORY_PROFILE_ID} (its full text is included in this batch; rewrite the whole entry as usual)`
+			: `Resident user profile entry ID: ${MEMORY_PROFILE_ID} (it does not exist yet; you may create its first version from facts already present in this batch only if they contain enough stable identity, communication or workflow facts; otherwise skip it and never invent facts)`;
+		const otherBatchPrefix = `Resident user profile entry ID: ${MEMORY_PROFILE_ID} (it is maintained in another batch; do not create or modify it in this batch)`;
 		const format = (entry: MemoryEntry) =>
 			`ID: ${entry.id}\nScope: ${entry.scope}\nName: ${entry.name}\nDescription: ${entry.description}\nType: ${entry.type}${entry.importance ? `\nImportance: ${entry.importance}` : ""}${entry.triggers?.length ? `\nTriggers: ${JSON.stringify(entry.triggers)}` : ""}\nContent:\n${entry.content}`;
 		let firstError: unknown;
@@ -2106,7 +2148,7 @@ export class AutoMemoryManager {
 					cwd: this.options.cwd,
 					settings,
 					systemPrompt: MEMORY_CONSOLIDATOR_PROMPT,
-					task: `Resident user profile entry ID (maintain it only if it is listed below): ${MEMORY_PROFILE_ID}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}${contradictionSection}`,
+					task: `${batchIndex === 0 ? profileTaskPrefix : otherBatchPrefix}\n\nPlease consolidate the following existing memories:\n\n${batch.map(format).join("\n\n---\n\n")}${contradictionSection}`,
 				});
 				this.assertActive();
 				const operations = parseMemoryOperations(output);
@@ -2119,7 +2161,12 @@ export class AutoMemoryManager {
 					});
 					throw new Error("Auto Memory 整理器返回了无效的操作格式");
 				}
-				const filtered = operations.filter((operation) => !!operation.id && batchIds.has(operation.id));
+				// batchIndex 0 放行画像操作（新建或重写）；其它批次沿用白名单，画像操作被丢弃。
+				const filtered = operations.filter(
+					(operation) =>
+						!!operation.id &&
+						(batchIds.has(operation.id) || (batchIndex === 0 && operation.id === MEMORY_PROFILE_ID)),
+				);
 				try {
 					await this.applyOperations(filtered, true, snapshot);
 					this.logMaintenance("consolidate-batch-done", {
