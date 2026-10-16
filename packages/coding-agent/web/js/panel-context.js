@@ -83,6 +83,19 @@ export function ContextPanel() {
 	}, [snap?.session?.id, snap?.lastRun?.runId]);
 	if (!snap) return null;
 	const tokenCount = (key) => formatSessionTokenCount(stats, key);
+	// The provider billing a request without reporting its usage leaves these sums behind; say so instead of
+	// letting a frozen number look current. The averages are marked separately: only they depend on the newest request.
+	const unreportedRequests = stats?.usageUnreportedRequests ?? 0;
+	const unreportedBadge = (title) => html`<span class="badge" title=${title}>${t("usage not reported")}</span>`;
+	const tokensUnreported =
+		unreportedRequests > 0
+			? unreportedBadge(
+					t("{count} requests of this session answered without the provider reporting token usage; the totals and averages cover only what was reported.", { count: unreportedRequests }),
+				)
+			: null;
+	const averagesUnreported = stats?.latestUsageUnreported
+		? unreportedBadge(t("The newest request reported no token usage, so these averages still describe the earlier requests."))
+		: null;
 	const cost = stats?.costByCurrency ? Object.entries(stats.costByCurrency).map(([currency, value]) => fmtCost(value, currency)).join(" · ") || "—" : fmtCost(stats?.cost);
 	const agentActive = resources ? resources.tools.some((tool) => tool.name === "agent" && tool.active) : false;
 	const isDelegatedChild = (name) => name === "workflow" || name === "ultracode" || name === "agent_tasks";
@@ -128,9 +141,9 @@ export function ContextPanel() {
 				${stats ? html`
 					<span>${t("Messages")}</span><span>${t("{userMessages} user · {assistantMessages} Agent · {toolCalls} tool calls", { userMessages: fmtTokens(stats.userMessages), assistantMessages: fmtTokens(stats.assistantMessages), toolCalls: fmtTokens(stats.toolCalls) })}</span>
 					<span>${t("Tokens")}</span><span class="session-tokens">
-						<span>${t("Input")} ${tokenCount("input")} · ${t("Cache write")} ${tokenCount("cacheWrite")} · ${t("Cache read")} ${tokenCount("cacheRead")} · ${t("Output")} ${tokenCount("output")}</span>
+						<span>${t("Input")} ${tokenCount("input")} · ${t("Cache write")} ${tokenCount("cacheWrite")} · ${t("Cache read")} ${tokenCount("cacheRead")} · ${t("Output")} ${tokenCount("output")}</span>${tokensUnreported}
 					</span>
-					<span aria-hidden="true"></span><span class="session-cumulative">${t("Average speed")} ${fmtSpeed(stats.speed)} · ${t("Average cache hit rate")} <${CacheValue} session=${sessionCache(stats)} /></span>
+					<span aria-hidden="true"></span><span class="session-cumulative">${t("Average speed")} ${fmtSpeed(stats.speed)} · ${t("Average cache hit rate")} <${CacheValue} session=${sessionCache(stats)} />${averagesUnreported}</span>
 					<span>${t("Cost")}</span><span>${cost !== "—" && (stats.usageEstimated || stats.costIncomplete) ? "≈ " : ""}${cost}</span>` : null}
 			</div>
 			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>

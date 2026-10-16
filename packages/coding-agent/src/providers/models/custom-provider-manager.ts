@@ -1,20 +1,10 @@
 import { copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ThinkingLevel, ThinkingLevelMap } from "@myharness/ai";
+import type { ThinkingLevelMap } from "@myharness/ai";
 import { stripJsonComments } from "../../utils/json.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 import { ModelConfig } from "./config.ts";
 import { resolveThinkingCapability, type ThinkingSource } from "./thinking-capability.ts";
-import {
-	applyStatusesToMap,
-	isProbeApi,
-	mergeLevelStatuses,
-	PROBE_LEVELS,
-	probeThinkingLevels,
-	type ThinkingLevelStatus,
-	type ThinkingLevelStatuses,
-	unresolvedLevels,
-} from "./thinking-probe.ts";
 
 export const CUSTOM_PROVIDER_API_TYPES = [
 	"openai-completions",
@@ -56,37 +46,10 @@ export interface DiscoveredProviderModel {
 	 */
 	thinkingLevelAliases?: Record<string, string>;
 	/**
-	 * Where the thinking capability comes from: the provider's documentation (`official`), the endpoint's catalog, a real
-	 * probe request, or `unconfirmed` (nothing settled: no level is hidden or claimed).
+	 * Where the thinking capability comes from: the provider's documentation (`official`), the endpoint's catalog, or
+	 * `unconfirmed` (nothing settled: no level is hidden or claimed).
 	 */
 	thinkingSource?: ThinkingSource;
-	/** Per-level result of a real probe (`thinkingSource: "probe"`); levels missing here are undecided. */
-	thinkingLevelStatus?: ThinkingLevelStatuses;
-}
-
-/** Real-request probing of thinking levels for models the catalog leaves undecided. */
-export interface ThinkingProbeOptions {
-	/** At most this many models are probed per call (default 24); the rest are probed by a later refresh. */
-	maxModels?: number;
-	/** Total time for all probes (default 60 s); levels not finished by then stay undecided. */
-	budgetMs?: number;
-	/** Models known to reason although the catalog does not say (declared in models.json). */
-	reasoningModelIds?: ReadonlySet<string>;
-	/**
-	 * Models to probe even though nothing says whether they reason (the provider's configured models, or the ones picked
-	 * in the edit form). The probe then also settles whether the model takes an effort at all.
-	 */
-	candidateModelIds?: ReadonlySet<string>;
-	/** Statuses recorded by an earlier probe; levels a real request already confirmed as supported are not asked again. */
-	knownStatuses?: ReadonlyMap<string, ThinkingLevelStatuses>;
-	/**
-	 * Also ask about models whose efforts the catalog lists (a detection of specific Model IDs): what the model really
-	 * answers then decides, level by level, and the catalog only fills what no request could settle.
-	 */
-	probeSettled?: boolean;
-	/** Waits between the attempts of an undecided level (see `probeThinkingLevels`). */
-	retryDelaysMs?: readonly number[];
-	fetchImpl?: typeof fetch;
 }
 
 export type ProviderModelDiscoveryErrorCode =
@@ -134,7 +97,7 @@ function publicUrl(url: URL): string {
 
 export interface DiscoveredModelsSyncResult {
 	added: number;
-	/** Existing models whose thinking capability was brought in line with the catalog or a probe. */
+	/** Existing models whose thinking capability was brought in line with the catalog or the provider's documentation. */
 	updated: number;
 	existing: number;
 }
@@ -345,7 +308,7 @@ function isCopilotModelSelectable(value: Record<string, unknown>): boolean {
 
 /**
  * Fills the thinking capability from the provider's documentation, else from the catalog, else records that it is unknown
- * (a probe may settle it later).
+ * (the user picks the levels).
  */
 function applyThinkingCapability(model: DiscoveredProviderModel, baseUrl: string): void {
 	const capability = resolveThinkingCapability({
@@ -375,14 +338,10 @@ function mergeThinkingLevelMap(current: ThinkingLevelMap | undefined, discovered
 	return merged;
 }
 
-/** Whether a level is offered by this map: the runtime offers `xhigh` / `max` only with an entry, the others unless `null`. */
-const offersLevel = (map: ThinkingLevelMap, level: ThinkingLevel): boolean =>
-	level === "xhigh" || level === "max" ? typeof map[level] === "string" : map[level] !== null;
-
 /**
  * Brings an existing model in line with what the provider's documentation states (see `official-effort.ts`): its level
  * map follows the documented levels, the names that only run as another level are recorded as aliases, and an earlier
- * probe's results for levels the model does not offer are dropped (a test request cannot overrule the documentation).
+ * levels the documentation does not list are hidden.
  * Returns the same object when nothing changes.
  */
 function mergeOfficialEffort(
@@ -394,27 +353,19 @@ function mergeOfficialEffort(
 		? undefined
 		: existing.thinkingLevelMap;
 	const thinkingLevelMap = mergeThinkingLevelMap(current, documented);
-	const statuses = Object.fromEntries(
-		Object.entries(existing.thinkingLevelStatus ?? {}).filter(([level]) =>
-			offersLevel(thinkingLevelMap, level as ThinkingLevel),
-		),
-	) as ThinkingLevelStatuses;
-	const hasStatuses = Object.keys(statuses).length > 0;
 	if (
 		existing.reasoning === true &&
 		sameJson(existing.thinkingLevelMap, thinkingLevelMap) &&
-		sameJson(existing.thinkingLevelAliases, aliases) &&
-		sameJson(existing.thinkingLevelStatus, hasStatuses ? statuses : undefined)
+		sameJson(existing.thinkingLevelAliases, aliases)
 	) {
 		return existing;
 	}
-	const { thinkingLevelAliases: _aliases, thinkingLevelStatus: _statuses, ...rest } = existing;
+	const { thinkingLevelAliases: _aliases, ...rest } = existing;
 	return {
 		...rest,
 		reasoning: true,
 		thinkingLevelMap,
 		...(aliases ? { thinkingLevelAliases: aliases } : {}),
-		...(hasStatuses ? { thinkingLevelStatus: statuses } : {}),
 	};
 }
 
@@ -423,107 +374,13 @@ function mergeOfficialEffort(
  * level, so it is treated as "nothing known" rather than as a decision. The same map backed by probe results (every
  * level confirmed unsupported) is a real decision and is kept.
  */
-export function isLegacyUnconfirmedMap(map: ThinkingLevelMap | undefined, statuses?: ThinkingLevelStatuses): boolean {
+export function isLegacyUnconfirmedMap(map: ThinkingLevelMap | undefined, statuses?: Record<string, unknown>): boolean {
 	if (statuses && Object.keys(statuses).length > 0) return false;
 	return (
 		!!map &&
 		Object.keys(map).length === 4 &&
 		(["minimal", "low", "medium", "high"] as const).every((level) => map[level] === null)
 	);
-}
-
-const confirmedOnly = (statuses: ThinkingLevelStatuses): ThinkingLevelStatuses => {
-	const result: ThinkingLevelStatuses = {};
-	for (const level of PROBE_LEVELS) {
-		const status: ThinkingLevelStatus | undefined = statuses[level];
-		if (status === "supported" || status === "unsupported") result[level] = status;
-	}
-	return result;
-};
-
-/**
- * Detection by real minimal requests, level by level (see `thinking-probe.ts`). Runs after the model list is read (or
- * could not be read), with its own time budget, and never fails discovery. Only confirmed answers change anything: a
- * level that stays undecided is neither hidden nor claimed, and what is already configured for it is kept. Models
- * declared to reason come first, then the other candidates.
- */
-async function probeUnresolvedThinking(
-	models: DiscoveredProviderModel[],
-	options: { api: string; baseUrl: string; apiKey?: string; signal?: AbortSignal },
-	headers: Headers,
-	probe: ThinkingProbeOptions,
-): Promise<void> {
-	if (!isProbeApi(options.api) || options.signal?.aborted) return;
-	const api = options.api;
-	const declared = (model: DiscoveredProviderModel) =>
-		model.reasoning === true || probe.reasoningModelIds?.has(model.id) === true;
-	const targets = models
-		.filter(
-			(model) =>
-				model.reasoning !== false &&
-				// What the provider's documentation states is not tested: a request cannot tell an accepted name from a level.
-				model.thinkingSource !== "official" &&
-				(declared(model) || probe.candidateModelIds?.has(model.id)) &&
-				(probe.probeSettled === true ||
-					model.thinkingSource === undefined ||
-					model.thinkingSource === "unconfirmed"),
-		)
-		.map((model) => ({
-			model,
-			declared: declared(model),
-			levels: unresolvedLevels(probe.knownStatuses?.get(model.id)),
-		}))
-		.filter((target) => target.levels.length > 0)
-		.sort((a, b) => Number(b.declared) - Number(a.declared))
-		.slice(0, probe.maxModels ?? 24);
-	if (targets.length === 0) return;
-
-	const budgetTimeout = AbortSignal.timeout(probe.budgetMs ?? 120_000);
-	const budget = options.signal ? AbortSignal.any([options.signal, budgetTimeout]) : budgetTimeout;
-	const googleKey =
-		api === "google-generative-ai" && options.apiKey && options.apiKey !== "local" ? options.apiKey : undefined;
-	const queue = [...targets];
-	const worker = async (): Promise<void> => {
-		for (let target = queue.shift(); target; target = queue.shift()) {
-			const found = await probeThinkingLevels({
-				api,
-				baseUrl: options.baseUrl,
-				modelId: target.model.id,
-				headers,
-				googleApiKey: googleKey,
-				levels: target.levels,
-				signal: budget,
-				retryDelaysMs: probe.retryDelaysMs,
-				fetchImpl: probe.fetchImpl,
-			});
-			const statuses = mergeLevelStatuses(probe.knownStatuses?.get(target.model.id), found);
-			target.model.thinkingLevelStatus = statuses;
-			// What the catalog lists stays the base; confirmed answers of the model itself are applied on top of it.
-			const catalogMap = target.model.thinkingSource === "catalog" ? target.model.thinkingLevelMap : undefined;
-			// Nothing could be checked: no level is hidden (xhigh / max stay selectable) and nothing is claimed.
-			if (!PROBE_LEVELS.some((level) => found[level] === "supported" || found[level] === "unsupported")) {
-				if (!catalogMap) {
-					const open = applyStatusesToMap(undefined, statuses, { enableUnconfirmedExtras: true });
-					if (open) target.model.thinkingLevelMap = open;
-				}
-				continue;
-			}
-			const confirmedSupported = PROBE_LEVELS.some((level) => statuses[level] === "supported");
-			const allUnsupported = PROBE_LEVELS.every((level) => statuses[level] === "unsupported");
-			target.model.thinkingSource = "probe";
-			if (confirmedSupported) target.model.reasoning = true;
-			// The service rejected the effort parameter at every level: a model nobody declared as reasoning takes no
-			// effort at all. A declared reasoning model keeps reasoning, with every level hidden.
-			else if (allUnsupported && !target.declared) {
-				target.model.reasoning = false;
-				delete target.model.thinkingLevelMap;
-				continue;
-			}
-			const map = applyStatusesToMap(catalogMap, statuses, { enableUnconfirmedExtras: !catalogMap });
-			if (map) target.model.thinkingLevelMap = map;
-		}
-	};
-	await Promise.all([worker(), worker(), worker()]);
 }
 
 function sameJson(a: unknown, b: unknown): boolean {
@@ -629,8 +486,6 @@ export async function discoverProviderModels(options: {
 	authType?: "api_key" | "oauth";
 	headers?: Record<string, string | null>;
 	signal?: AbortSignal;
-	/** Also probe the thinking levels the catalog leaves undecided (costs a few tiny requests per model). */
-	probeThinking?: ThinkingProbeOptions;
 }): Promise<DiscoveredProviderModel[]> {
 	if (
 		options.api !== "openai-completions" &&
@@ -693,7 +548,6 @@ export async function discoverProviderModels(options: {
 		}
 		if (!parsed.next) {
 			const discovered = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
-			if (options.probeThinking) await probeUnresolvedThinking(discovered, options, headers, options.probeThinking);
 			return discovered;
 		}
 		if (cursors.has(parsed.next)) {
@@ -707,19 +561,19 @@ export async function discoverProviderModels(options: {
 }
 
 export interface SpecifiedModelDetection {
-	/** Only these models are looked up and probed; nothing else in the catalog is returned or tested. */
+	/** Only these models are looked up; nothing else in the catalog is returned. */
 	models: DiscoveredProviderModel[];
 	/** Specified IDs the endpoint's model list does not name (absent when the list could not be read). */
 	unlisted?: string[];
-	/** Why the model list could not be read; the thinking probe still ran for the specified models. */
+	/** Why the model list could not be read; the specified models are still returned with default values. */
 	catalogError?: ProviderModelDiscoveryError;
 }
 
 /**
- * Checks exactly the models the user named, whether or not MyHarness or the endpoint's model list knows them. The model
- * list (a free GET) supplies what it states about these IDs (context window, image input …); every thinking effort is
- * then tested with minimal real requests for these IDs, each level on its own. A model list that cannot be read does
- * not stop the probe.
+ * Looks up exactly the models the user named in the endpoint's model list (a free GET that sends no model request): what
+ * the list states about these IDs (context window, image input, listed efforts …) is returned. No thinking effort is
+ * tested; the user picks the levels. An ID the list does not name, or a list that cannot be read, still yields a model
+ * with default values.
  */
 export async function detectSpecifiedModels(options: {
 	providerId?: string;
@@ -730,19 +584,13 @@ export async function detectSpecifiedModels(options: {
 	headers?: Record<string, string | null>;
 	signal?: AbortSignal;
 	modelIds: readonly string[];
-	/** Models declared (in the form or models.json) to reason. */
-	reasoningModelIds?: ReadonlySet<string>;
-	knownStatuses?: ReadonlyMap<string, ThinkingLevelStatuses>;
-	probeBudgetMs?: number;
-	retryDelaysMs?: readonly number[];
-	fetchImpl?: typeof fetch;
 }): Promise<SpecifiedModelDetection> {
 	const ids = [...new Set(options.modelIds.map((id) => id.trim()).filter(Boolean))];
 	if (ids.length === 0) return { models: [] };
 	let catalog: DiscoveredProviderModel[] | undefined;
 	let catalogError: ProviderModelDiscoveryError | undefined;
 	try {
-		catalog = await discoverProviderModels({ ...options, probeThinking: undefined });
+		catalog = await discoverProviderModels(options);
 	} catch (error) {
 		if (options.signal?.aborted) throw error;
 		catalogError =
@@ -757,19 +605,6 @@ export async function detectSpecifiedModels(options: {
 		const model: DiscoveredProviderModel = { id, name: id };
 		applyThinkingCapability(model, options.baseUrl);
 		return model;
-	});
-	const confirmed = new Map<string, ThinkingLevelStatuses>();
-	for (const [id, statuses] of options.knownStatuses ?? []) confirmed.set(id, confirmedOnly(statuses));
-	const headers = discoveryHeaders(options);
-	await probeUnresolvedThinking(models, options, headers, {
-		maxModels: ids.length,
-		budgetMs: options.probeBudgetMs,
-		reasoningModelIds: options.reasoningModelIds,
-		candidateModelIds: new Set(ids),
-		knownStatuses: confirmed,
-		probeSettled: true,
-		retryDelaysMs: options.retryDelaysMs,
-		fetchImpl: options.fetchImpl,
 	});
 	return {
 		models,
@@ -844,8 +679,7 @@ export class CustomProviderManager {
 		let updated = 0;
 
 		// A refresh also brings existing models' thinking capability up to date, but only from a source that settles
-		// levels (catalog, official documentation, or a probe's confirmed results); an unconfirmed capability never
-		// overwrites anything, and a level that is merely unverified or unknown leaves the stored entry alone.
+		// levels (catalog or official documentation); an unconfirmed capability never overwrites anything.
 		const updatedModels = existingModels.map((existing) => {
 			const found = discoveredById.get(existing.id);
 			if (!found) return existing;
@@ -854,36 +688,6 @@ export class CustomProviderManager {
 				if (merged === existing) return existing;
 				updated++;
 				return merged;
-			}
-			if (found.thinkingSource === "probe" && found.thinkingLevelStatus) {
-				const confirmed = confirmedOnly(found.thinkingLevelStatus);
-				const current = isLegacyUnconfirmedMap(existing.thinkingLevelMap, existing.thinkingLevelStatus)
-					? undefined
-					: existing.thinkingLevelMap;
-				const thinkingLevelMap = applyStatusesToMap(current, confirmed);
-				const thinkingLevelStatus = mergeLevelStatuses(existing.thinkingLevelStatus, found.thinkingLevelStatus);
-				// The probe settles whether a model nobody declared as reasoning takes an effort at all; a user's
-				// `reasoning: true` is never turned off by it.
-				const reasoning =
-					found.reasoning === true
-						? true
-						: existing.reasoning === true
-							? true
-							: (found.reasoning ?? existing.reasoning);
-				if (
-					sameJson(existing.thinkingLevelMap, thinkingLevelMap) &&
-					sameJson(existing.thinkingLevelStatus, thinkingLevelStatus) &&
-					existing.reasoning === reasoning
-				) {
-					return existing;
-				}
-				updated++;
-				return {
-					...existing,
-					...(reasoning !== undefined ? { reasoning } : {}),
-					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-					thinkingLevelStatus,
-				};
 			}
 			if (!found.thinkingLevelMap || found.thinkingSource !== "catalog") {
 				if (!isLegacyUnconfirmedMap(existing.thinkingLevelMap, existing.thinkingLevelStatus)) return existing;
@@ -912,7 +716,6 @@ export class CustomProviderManager {
 				...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
 				...(model.reasoning === true && model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
 				...(model.thinkingLevelAliases ? { thinkingLevelAliases: model.thinkingLevelAliases } : {}),
-				...(model.thinkingLevelStatus ? { thinkingLevelStatus: model.thinkingLevelStatus } : {}),
 			});
 		}
 

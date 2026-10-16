@@ -6,10 +6,10 @@
  * efforts. A test request cannot tell the two apart (it only shows that a name is accepted), and a model list rarely
  * says. When the provider's documentation spells the mapping out for its own API host, that statement is what
  * MyHarness follows: only the distinct actual levels are offered, the other names are kept as `aliases` (information
- * about what the API accepts, never shown as levels of their own), and neither a model list nor a probe can override it.
+ * about what the API accepts, never shown as levels of their own), and a model list cannot override it.
  *
  * Deliberately narrow: first-party API hosts and models whose documentation states the mapping. Anything else is not
- * listed here, so the model list and the real test requests decide as before (see `thinking-probe.ts`). Relays that
+ * listed here, so the model list decides and, failing that, the user picks the levels. Relays that
  * serve the same model IDs are not matched: the documentation describes the vendor's own API, not what a relay forwards.
  * Each entry cites the page it was read from; when a provider changes the documented values, update the entry from it.
  */

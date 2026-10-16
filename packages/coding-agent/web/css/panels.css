@@ -190,6 +190,9 @@
 .cu-controls .check-label { white-space: nowrap; }
 .cu-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: var(--fs-xs); }
 .cu-stat strong { font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* "usage not reported": the mark sits right after the number it qualifies, in the panel and in the card alike. */
+.session-tokens .badge, .session-cumulative .badge { margin-left: 6px; vertical-align: middle; }
+.cu-stat > .badge { align-self: flex-start; margin-top: 1px; }
 .cu-speed { display: inline-flex; align-items: center; gap: 5px; }
 .cu-speed.detecting { color: var(--text-3); font-weight: 500; }
 .cu-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: cu-pulse 1.2s ease-in-out infinite; flex: none; }

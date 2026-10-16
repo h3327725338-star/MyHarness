@@ -7,7 +7,7 @@ import { Select } from "./select.js";
 import { post } from "./store.js";
 import { effortName, fmtTokens } from "./util.js";
 import { N_, t } from "./i18n.js";
-import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, detectOutcome, detectRecord, fmtK, fromK, levelStatus, levelUnconfirmed, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
+import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, detectOutcome, detectRecord, fmtK, fromK, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -29,8 +29,8 @@ const parseKeepAlive = (text, defaults) => {
 	return Number.isSafeInteger(value) && value >= min && value <= max ? { value } : { problem: t("Enter a whole number of seconds from {min} to {max}, or leave it empty for the default.", { min, max }) };
 };
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-/** The server tests the efforts for up to 120 s (undecided levels are retried); this only guards against no answer at all. */
-const DETECT_TIMEOUT_MS = 180_000;
+/** The server reads the model list for up to 60 s; this only guards against no answer at all. */
+const DETECT_TIMEOUT_MS = 90_000;
 
 const DETECT_ERRORS = {
 	authentication: N_("The endpoint rejected the API key."),
@@ -164,15 +164,11 @@ function Detected({ title }) {
 const levelSummary = (model) => offeredLevels(model).filter((level) => model.levels[level] && level !== "off").map((level) => effortName(level)).join(" · ");
 
 /** Where the levels of a detected model come from. */
-const levelSourceTitle = (source) => (source === "probe" ? t("Checked with test requests to the service") : source === "official" ? t("Taken from the provider's documentation") : t("Read from the endpoint's model list"));
+const levelSourceTitle = (source) => (source === "official" ? t("Taken from the provider's documentation") : t("Read from the endpoint's model list"));
 
 /** What a level chip says when it is hovered or focused. */
 function levelTitle(model, level, detected) {
-	if (levelUnconfirmed(model, level)) return t("The API accepts this name, but whether the model has a separate reasoning level for it is not confirmed. It stays as you set it.");
-	const status = levelStatus(model, level);
-	if (status === "unsupported") return t("The service said it does not support this level.");
 	if (model.levels[level] && detected.levelsSource === "official") return t("Stated in the provider's documentation.");
-	if (status === "supported") return t("Confirmed by a test request.");
 	return undefined;
 }
 
@@ -242,8 +238,8 @@ function ModelCard({ model, open, onToggle, onChange, onRemove }) {
 				</div>
 				${model.reasoning
 					? html`<div class="col field-label"><span class="field-name">${t("Thinking effort this model accepts")}${d.levels ? html` <${Detected} title=${levelSourceTitle(d.levelsSource)} />` : null}</span>
-						<div class="pf-levels">${offeredLevels(model).map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelTitle(model, level, d)} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}${levelUnconfirmed(model, level) ? html`<span class="badge unconfirmed">${t("Unconfirmed")}</span>` : null}</button>`)}</div>
-						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "probe" ? t("Levels the service said it does not support are unticked; a level marked “Unconfirmed” could not be checked and keeps its setting.") : d.levelsSource === "official" ? t("These are the levels the provider's documentation lists for this model.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing has confirmed which levels this model accepts, so all of them stay available. Detect the model, or untick the ones you know it rejects.")}</span>
+						<div class="pf-levels">${offeredLevels(model).map((level) => html`<button type="button" key=${level} class=${`chip-toggle ${model.levels[level] ? "on" : ""}`} aria-pressed=${model.levels[level]} title=${levelTitle(model, level, d)} onClick=${() => touch("levels", { levels: { ...model.levels, [level]: !model.levels[level] }, detected: { ...d, levels: false } })}>${effortName(level)}</button>`)}</div>
+						<span class="dim pf-hint">${d.levels ? (d.levelsSource === "official" ? t("These are the levels the provider's documentation lists for this model.") : t("These are the levels the endpoint lists for this model.")) : t("Nothing states which levels this model accepts, so the standard ones stay available. Tick the levels it really accepts and untick the others; MyHarness does not test them.")}</span>
 						${aliasPairs(model).length ? html`<span class="dim pf-hint">${t("Accepted by the API, but not separate levels (provider documentation): {pairs}", { pairs: aliasPairs(model).map(([name, level]) => `${effortName(name)} → ${effortName(level)}`).join(" · ") })}</span>` : null}</div>`
 					: null}
 			</div>
@@ -334,10 +330,6 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 					headers: draft.raw.headers,
 					id: isNew ? "" : draft.id,
 					modelIds: ids,
-					// What the form already knows about these models: declared reasoning and earlier probe results.
-					models: draft.models
-						.filter((model) => ids.includes(model.id.trim()))
-						.map((model) => ({ id: model.id.trim(), reasoning: model.reasoning || undefined, thinkingLevelStatus: model.raw?.thinkingLevelStatus })),
 				}),
 				DETECT_TIMEOUT_MS,
 			);
@@ -356,7 +348,6 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 			notes: [],
 			result: detectRecord(summary, result.models, {
 				unlisted: result.unlisted ?? [],
-				unsettled: result.models.filter((m) => !m.thinkingSource || m.thinkingSource === "unconfirmed").map((m) => m.id),
 				listError: result.listError ?? null,
 			}),
 		});
@@ -433,9 +424,8 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 				warn: false,
 				message: t("Detected {n}: {added} added, {updated} updated. Save to keep the result.", { n: outcome.total, added: outcome.added, updated: outcome.updated }),
 				notes: [
-					...(outcome.listError ? [t("The model list could not be read ({reason}); only the thinking effort was tested.", { reason: detectMessage(outcome.listError) })] : []),
+					...(outcome.listError ? [t("The model list could not be read ({reason}); the models were added with default values.", { reason: detectMessage(outcome.listError) })] : []),
 					...(outcome.unlisted.length ? [t("Not in the endpoint's model list: {ids}. Check the spelling; they were added with default values.", { ids: outcome.unlisted.join(", ") })] : []),
-					...(outcome.unsettled.length ? [t("Thinking effort could not be settled for: {ids}. Their current setting is kept.", { ids: outcome.unsettled.join(", ") })] : []),
 				],
 			}
 		: detect.message && detect.status !== "loading"
@@ -489,7 +479,7 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 							<input class="field mono grow" placeholder=${t("Model IDs to detect, e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />
 							<button class="btn" disabled=${detecting || !idsText.trim()} onClick=${runDetect}>${detecting ? html`<${Spinner} />` : html`<${Icon} name="search" size=${13} />`}${detecting ? t("Detecting…") : t("Detect")}</button>
 						</div>
-						<span class="dim pf-hint">${t("Only the Model IDs typed here are checked (separate several with commas or spaces). A new ID is added; for an existing model only what the detection settles is updated. Each thinking effort is tested with a tiny real request to the model, which the service may bill; a level that cannot be checked keeps its current setting.")}</span>
+						<span class="dim pf-hint">${t("Only the Model IDs typed here are looked up in the endpoint's model list (separate several with commas or spaces); no request is sent to the models themselves. A new ID is added; for an existing model only what the list states is updated. Thinking effort levels, context window and the other values are never tested: tick or enter them yourself.")}</span>
 						${notice ? html`<div class=${`notice ${notice.warn ? "warn" : ""}`} role="status">${notice.message}${notice.notes.map((note, i) => html`<div class="dim pf-hint" key=${i}>${note}</div>`)}</div>` : null}
 					</div>
 					${!draft.models.length ? html`<div class="dim pf-hint">${t("No model yet. Type its Model ID above and detect it, or add it manually.")}</div>` : null}

@@ -214,12 +214,17 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			throw new HttpError(400, `Invalid thinking level: ${String(level)}`);
 		await host.session.setModel(model);
 		if (typeof level === "string") host.session.setThinkingLevel(level as ThinkingLevel);
+		// The context window, the thinking levels and the session totals all follow the new model: push them now, so
+		// every open tab shows the switch itself instead of waiting for the next request to end.
+		host.broadcast("usage", host.usage());
 		return { ok: true };
 	});
 
 	server.route("POST", "/api/model/cycle", async ({ body }) => {
 		const direction = asObject(body).direction === "backward" ? "backward" : "forward";
 		const result = await host.session.cycleModel(direction);
+		// Cycling switches the model too, so it owes the same push as POST /api/model.
+		if (result !== undefined) host.broadcast("usage", host.usage());
 		return { changed: result !== undefined };
 	});
 

@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type { AssistantMessageEvent, Context, Model, OpenAICompletionsCompat } from "../src/types.ts";
 
@@ -210,6 +210,78 @@ describe("openai-completions usage-in-streaming probe", () => {
 
 		expect(requestBodies).toHaveLength(1);
 		expect(events.at(-1)?.type).toBe("error");
+	});
+
+	it("probes stream_options again once the rejection memory expires", async () => {
+		const providerId = `probe-provider-expiry-${Math.random().toString(36).slice(2)}`;
+		const requestBodies: ChatCompletionsRequestBody[] = [];
+		const server = http.createServer(async (req, res) => {
+			if (req.method !== "POST" || req.url !== "/chat/completions") {
+				res.writeHead(404).end();
+				return;
+			}
+			let raw = "";
+			for await (const chunk of req) {
+				raw += chunk.toString();
+			}
+			const body = JSON.parse(raw) as ChatCompletionsRequestBody;
+			requestBodies.push(body);
+			// Only the very first request rejects the field; the endpoint accepts it again afterwards.
+			if (requestBodies.length === 1 && body.stream_options) {
+				errorResponse(res, "stream_options is not supported");
+				return;
+			}
+			sseResponse(res);
+		});
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+
+		const model: Model<"openai-completions"> = {
+			id: "probe-model",
+			name: "Probe Model",
+			api: "openai-completions",
+			provider: providerId,
+			baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		};
+		const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
+		const collect = async () => {
+			const events: AssistantMessageEvent[] = [];
+			for await (const event of streamOpenAICompletions(model, context, { apiKey: "test-key" })) {
+				events.push(event);
+			}
+			return events;
+		};
+
+		const realNow = Date.now;
+		try {
+			const first = await collect();
+			expect(first.at(-1)?.type).toBe("done");
+			expect(requestBodies).toHaveLength(2);
+			expect(requestBodies[0]?.stream_options).toEqual({ include_usage: true });
+			expect(requestBodies[1]?.stream_options).toBeUndefined();
+
+			// Still inside the window: the next request skips the field without probing.
+			const second = await collect();
+			expect(second.at(-1)?.type).toBe("done");
+			expect(requestBodies).toHaveLength(3);
+			expect(requestBodies[2]?.stream_options).toBeUndefined();
+
+			// The memory expires: the next request asks for usage again, and this time the endpoint accepts it.
+			vi.spyOn(Date, "now").mockImplementation(() => realNow() + 31 * 60 * 1000);
+			const third = await collect();
+			expect(third.at(-1)?.type).toBe("done");
+			expect(requestBodies).toHaveLength(4);
+			expect(requestBodies[3]?.stream_options).toEqual({ include_usage: true });
+		} finally {
+			vi.restoreAllMocks();
+			server.close();
+			await once(server, "close");
+		}
 	});
 
 	it("never sends stream_options with an explicit supportsUsageInStreaming: false", async () => {

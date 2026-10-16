@@ -22,7 +22,6 @@ import {
 	detectSpecifiedModels,
 	ProviderModelDiscoveryError,
 } from "../../providers/models/custom-provider-manager.ts";
-import type { ThinkingLevelStatuses } from "../../providers/models/thinking-probe.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
@@ -91,34 +90,7 @@ function restoreSecrets(incoming: ModelsJsonProvider, stored: ModelsJsonProvider
 	return copy;
 }
 
-interface FormModel {
-	id: string;
-	reasoning?: boolean;
-	thinkingLevelStatus?: Record<string, unknown>;
-}
-
-function isFormModel(value: unknown): value is FormModel {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const model = value as Record<string, unknown>;
-	return (
-		typeof model.id === "string" &&
-		model.id.trim().length > 0 &&
-		(model.thinkingLevelStatus === undefined ||
-			(typeof model.thinkingLevelStatus === "object" && model.thinkingLevelStatus !== null))
-	);
-}
-
-export interface ProviderRouteOptions {
-	/** Waits between the attempts of one undecided thinking-effort test (default: the probe's own). */
-	probeRetryDelaysMs?: readonly number[];
-}
-
-export function registerProviderRoutes(
-	server: WebHttpServer,
-	host: WebHost,
-	hub?: WebHostHub,
-	options: ProviderRouteOptions = {},
-): void {
+export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub?: WebHostHub): void {
 	const runtime = () => host.session.modelRuntime;
 	const manager = () => new CustomProviderManager(runtime().getModelsConfigPath());
 	const providerSettings = new ProviderSettingsUseCase({
@@ -452,10 +424,8 @@ export function registerProviderRoutes(
 			? [...new Set(payload.modelIds.filter((id): id is string => typeof id === "string").map((id) => id.trim()))]
 			: [];
 		if (!modelIds.some(Boolean)) throw new HttpError(400, "Enter at least one Model ID to detect.");
-		// What the form already knows about these models: declared reasoning, and levels an earlier probe confirmed.
-		const formModels = Array.isArray(payload.models) ? payload.models.filter(isFormModel) : [];
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), 150_000);
+		const timer = setTimeout(() => controller.abort(), 60_000);
 		try {
 			const result = await detectSpecifiedModels({
 				baseUrl,
@@ -465,14 +435,6 @@ export function registerProviderRoutes(
 				headers,
 				signal: controller.signal,
 				modelIds,
-				probeBudgetMs: 120_000,
-				retryDelaysMs: options.probeRetryDelaysMs,
-				reasoningModelIds: new Set(formModels.filter((model) => model.reasoning === true).map((model) => model.id)),
-				knownStatuses: new Map(
-					formModels.flatMap((model) =>
-						model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus as ThinkingLevelStatuses]] : [],
-					),
-				),
 			});
 			const listError = result.catalogError;
 			return {
@@ -520,13 +482,15 @@ export function registerProviderRoutes(
 		const custom = manager();
 		const snapshot = await custom.snapshot().catch(() => undefined);
 		let savedKeyId: string | undefined;
+		// The entry as it was stored before this save: what is no longer in the new model list was deleted here.
+		const referenceProvider = previousId ?? id;
+		const stored = await custom.get(referenceProvider).catch(() => undefined);
 		// An empty Base URL is saved as "not filled in yet", never as an address.
 		const incoming = { ...(config as ModelsJsonProvider) };
 		if (typeof incoming.baseUrl !== "string" || !incoming.baseUrl.trim()) delete incoming.baseUrl;
 		else incoming.baseUrl = incoming.baseUrl.trim();
 		const missingBaseUrl = modelsJsonProviderLacksBaseUrl(incoming);
 		try {
-			const stored = await custom.get(previousId ?? id).catch(() => undefined);
 			await custom.upsert(id, restoreSecrets(incoming, stored), previousId);
 			await runtime().reloadConfig();
 			const configError = runtime().getError();
@@ -544,6 +508,15 @@ export function registerProviderRoutes(
 				.reloadConfig()
 				.catch(() => {});
 			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
+		// A model deleted by this save must not stay referenced by settings that pin one (default, sub-agent, compaction...).
+		const keptModels = new Set((incoming.models ?? []).map((model) => model.id));
+		const removedModels = (stored?.models ?? []).filter((model) => !keptModels.has(model.id));
+		if (removedModels.length > 0) {
+			for (const model of removedModels)
+				host.session.settingsManager.clearModelReferences(referenceProvider, model.id);
+			await host.session.settingsManager.flush();
+			host.broadcast("settings_changed", {});
 		}
 		host.broadcast("models_changed", {});
 		host.broadcast("usage", host.usage());

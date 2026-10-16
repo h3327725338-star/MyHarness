@@ -102,7 +102,7 @@ export interface ProviderModelRefreshResult {
 	providerId: string;
 	discovered: number;
 	added: number;
-	/** Existing models whose thinking capability was updated from the catalog or a probe. */
+	/** Existing models whose thinking capability was updated from the catalog or the provider's documentation. */
 	updated: number;
 	existing: number;
 	removed: number;
@@ -527,18 +527,6 @@ export class ModelRuntime implements Models {
 				authType: this.snapshot.auth.get(providerId)?.type,
 				headers: auth.auth.headers,
 				signal: controller.signal,
-				// Levels the catalog does not settle are tested with real minimal requests for every configured model
-				// (declared reasoning models first). Newly listed models are probed when the catalog says they reason, the
-				// others once they are configured (the next refresh).
-				probeThinking: {
-					reasoningModelIds: new Set(localModels.filter((model) => model.reasoning).map((model) => model.id)),
-					candidateModelIds: new Set(configured.map((model) => model.id)),
-					knownStatuses: new Map(
-						configured.flatMap((model) =>
-							model.thinkingLevelStatus ? [[model.id, model.thinkingLevelStatus]] : [],
-						),
-					),
-				},
 			});
 			const localIds = new Set(localModels.map((model) => model.id));
 			const staleMarkers = new Set(
@@ -551,9 +539,7 @@ export class ModelRuntime implements Models {
 			const hasCapabilities = discovered.some(
 				(model) =>
 					localIds.has(model.id) &&
-					((model.thinkingLevelMap && model.thinkingSource !== "unconfirmed") ||
-						model.thinkingLevelStatus ||
-						staleMarkers.has(model.id)),
+					((model.thinkingLevelMap && model.thinkingSource !== "unconfirmed") || staleMarkers.has(model.id)),
 			);
 			if (!hasNewModels && !hasCapabilities) {
 				return {

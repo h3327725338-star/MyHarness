@@ -92,6 +92,8 @@ export class WebHostHub implements WebHostHubLink {
 	private statusTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastStatusJson = "";
 	private disposed = false;
+	/** Slots whose model list changed while they were busy; they are reconciled as soon as they are idle. */
+	private readonly deferredModelsReconcile = new Set<string>();
 	/** Route code sees this as a normal WebHost; every access is forwarded to the slot the request addresses. */
 	readonly host: WebHost;
 
@@ -176,18 +178,43 @@ export class WebHostHub implements WebHostHubLink {
 		if (event === "settings_changed" || event === "models_changed") {
 			// Other runtimes keep their own in-memory settings; pick up what this one just saved.
 			for (const other of this.slots.values()) {
-				if (other === host || !other.session.isIdle) continue;
-				void (async () => {
-					await other.session.settingsManager.reload();
-					other.refreshConversationNaming();
-					// Providers added, edited or deleted here must reach the other runtimes too (each has its own ModelRuntime).
-					if (event === "models_changed") {
-						await other.session.modelRuntime.reloadConfig();
-						await other.session.reconcileModelAfterConfigChange();
-					}
-				})().catch(() => {});
+				if (other === host) continue;
+				// A busy slot must not swap its model mid-run: reconcile it as soon as it is idle again.
+				if (!other.session.isIdle) {
+					if (event === "models_changed") this.deferredModelsReconcile.add(other.slotId);
+					continue;
+				}
+				this.reconcileSlot(other, event);
 			}
 		}
+		// A slot that missed a model update while it was busy catches up once its work has settled.
+		if (this.deferredModelsReconcile.has(host.slotId) && host.session.isIdle) this.reconcileSlot(host, "models_changed");
+	}
+
+	/**
+	 * Pull one slot's in-memory settings and models up to date with what another slot just saved. When the slot's
+	 * own model was deleted, its session is reconciled first and the reconciled slot is announced afterwards: the
+	 * original event can reach browsers before this runtime finishes reloading, and an already loaded chat would
+	 * otherwise keep showing the deleted model until the page is reloaded.
+	 */
+	private reconcileSlot(other: WebHost, event: string): void {
+		this.deferredModelsReconcile.delete(other.slotId);
+		void (async () => {
+			await other.session.settingsManager.reload();
+			if (!this.slots.has(other.slotId)) return;
+			other.refreshConversationNaming();
+			if (event !== "models_changed") return;
+			// Providers added, edited or deleted elsewhere must reach this runtime too (each has its own ModelRuntime).
+			await other.session.modelRuntime.reloadConfig();
+			await other.session.reconcileModelAfterConfigChange();
+			if (!this.slots.has(other.slotId)) return;
+			// Publish the reconciled slot without feeding the hub's reload fan-out again.
+			this.options.server.broadcast("models_changed", { slot: other.slotId });
+			other.broadcast("usage", other.usage());
+		})().catch(() => {
+			// A catch-up that fails must not be forgotten: while the slot is open, the next broadcast retries it.
+			if (this.slots.has(other.slotId)) this.deferredModelsReconcile.add(other.slotId);
+		});
 	}
 
 	requestShutdown(): void {
@@ -449,6 +476,7 @@ export class WebHostHub implements WebHostHubLink {
 	/** Release a slot's runtime. The last slot is kept; callers replace its session instead. */
 	async closeSlot(host: WebHost): Promise<void> {
 		if (!this.slots.delete(host.slotId)) return;
+		this.deferredModelsReconcile.delete(host.slotId);
 		if (this.primary === host) this.primary = this.all()[0];
 		await host.dispose();
 		this.options.server.broadcast("slot_closed", { slot: host.slotId });

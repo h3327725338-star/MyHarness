@@ -31,7 +31,6 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `custom-provider-manager.ts` | 用户自定义 Provider 的增删改、模型发现、把发现结果写回 `models.json` |
 | `thinking-capability.ts` | 判断一个模型的 Thinking Effort 能力来自哪里（官方文档 > 模型目录 > 探测） |
 | `official-effort.ts` | Provider 官方文档明确写出的“请求档位 → 实际档位” |
-| `thinking-probe.ts` | 用真实的最小请求探测 Thinking Effort |
 | `store.ts` | 模型缓存（`models-store.json`） |
 | `disabled.ts` | Provider 启用/禁用策略 |
 | `index.ts` | models/ 出口 |

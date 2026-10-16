@@ -71,8 +71,8 @@ try {
  // The reported case: the detection added one model that was never saved.
  await detect('gpt-5');
  check(notice().textContent.includes('已检测 1 个：新增 1 个，更新 0 个'),'the summary of the detection is wrong: '+notice().textContent);
- check(notice().querySelectorAll('.pf-hint').length===2,'the warnings of the new model are missing: '+notice().textContent);
- check([...notice().querySelectorAll('.pf-hint')].some((el)=>el.textContent.includes('Thinking Effort 无法确认')),'the thinking warning is missing: '+notice().textContent);
+ check(notice().querySelectorAll('.pf-hint').length===1,'the warning of the new model is missing: '+notice().textContent);
+ check([...notice().querySelectorAll('.pf-hint')].some((el)=>el.textContent.includes('模型列表中没有')),'the not-listed warning is missing: '+notice().textContent);
  await removeModel('gpt-5');
  await until(()=>!notice());
  check(cards().length===1&&cardOf('Own'),'removing the detected model took a saved model with it');

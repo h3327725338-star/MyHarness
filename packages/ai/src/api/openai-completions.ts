@@ -76,11 +76,13 @@ const KNOWN_OPENAI_COMPLETIONS_PROVIDER_IDS = new Set([
 ]);
 
 /**
- * OpenAI-compatible endpoints that rejected `stream_options` (probed once per process): later
- * requests stop carrying it until the process restarts. Keyed by provider | baseUrl | model id,
- * because a gateway can behave differently per model.
+ * OpenAI-compatible endpoints that rejected `stream_options` (probed once per window): later requests skip it until
+ * the window ends, then the next request probes again. Keyed by provider | baseUrl | model id, because a gateway can
+ * behave differently per model. A permanent in-process memo left a channel without usage until the service restarted.
  */
-const usageStreamingUnsupported = new Set<string>();
+const usageStreamingUnsupported = new Map<string, number>();
+/** How long a rejection is remembered before the next request probes `stream_options` again. */
+const USAGE_STREAMING_RETRY_MS = 30 * 60 * 1000;
 /** After a failed probe the endpoint errored for other reasons; pause repeat probes briefly so failing channels are not doubled. */
 const usageProbeBackoff = new Map<string, number>();
 const USAGE_PROBE_BACKOFF_MS = 10 * 60 * 1000;
@@ -89,9 +91,10 @@ function usageStreamingKey(model: Model<"openai-completions">): string {
 	return `${model.provider}\u0000${model.baseUrl}\u0000${model.id}`;
 }
 
-/** The endpoint is remembered to reject `stream_options`; requests skip it instead of probing every time. */
+/** The endpoint is remembered to reject `stream_options`; requests skip it until the memory expires. */
 function usageStreamingBlocked(model: Model<"openai-completions">): boolean {
-	return usageStreamingUnsupported.has(usageStreamingKey(model));
+	const until = usageStreamingUnsupported.get(usageStreamingKey(model));
+	return until !== undefined && until > Date.now();
 }
 
 /** A rejection retry is allowed only when `stream_options` was auto-attached (no explicit model.compat decision) and no probe recently failed for an unrelated reason. */
@@ -103,7 +106,7 @@ function usageStreamingProbeEligible(model: Model<"openai-completions">, params:
 }
 
 function noteUsageStreamingUnsupported(model: Model<"openai-completions">): void {
-	usageStreamingUnsupported.add(usageStreamingKey(model));
+	usageStreamingUnsupported.set(usageStreamingKey(model), Date.now() + USAGE_STREAMING_RETRY_MS);
 }
 
 function noteUsageProbeBackoff(model: Model<"openai-completions">): void {
@@ -670,10 +673,11 @@ function createClient(
 /**
  * Create the streaming completion. Usage-in-streaming (`stream_options.include_usage`) is sent by
  * default because it is standard across OpenAI-compatible services; an endpoint that rejects the
- * request because of it is retried once without it and remembered for the process. A rejection
- * happens before any tokens are generated, so the retry cannot double-bill. An explicit
- * `model.compat.supportsUsageInStreaming` decision is respected: `true` surfaces the endpoint's
- * error instead of silently dropping usage, `false` never sends the field.
+ * request because of it is retried once without it and remembered for `USAGE_STREAMING_RETRY_MS`.
+ * A rejection happens before any tokens are generated, so the retry cannot double-bill, and the
+ * memory expires so a channel that accepts the field again recovers usage in the same process.
+ * An explicit `model.compat.supportsUsageInStreaming` decision is respected: `true` surfaces the
+ * endpoint's error instead of silently dropping usage, `false` never sends the field.
  */
 async function createCompletionStream(
 	client: OpenAI,
@@ -1429,7 +1433,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	// and `reasoning_effort` are commonly rejected by third-party services.
 	// `stream_options` is the exception: usage in streaming is standard and safe to
 	// request everywhere, so it is sent by default; an endpoint that rejects it is
-	// probed once and remembered for the process (see probeUsageStreamingUnsupported).
+	// remembered for a short window (see probeUsageStreamingUnsupported).
 	const isGenericThirdParty =
 		!KNOWN_OPENAI_COMPLETIONS_PROVIDER_IDS.has(provider) &&
 		!isNativeOpenAI &&

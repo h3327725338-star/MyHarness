@@ -472,6 +472,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .sa-toggle { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; padding: 3px 4px 3px 6px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: inherit; outline: none; }
 .sa-head .sa-toggle { padding-block: 4px; }
 .sa-head-text { flex: 1 1 auto; min-width: 0; color: var(--text); }
+.sa-head-text .badge { margin-left: 8px; vertical-align: middle; }
 .sa-bar .strip-time, .sa-full-head .strip-time { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
 .sa-ico { flex: none; width: 16px; display: inline-flex; align-items: center; justify-content: center; }
 .sa-chev { flex: none; display: inline-flex; width: 20px; justify-content: center; }
@@ -481,9 +482,6 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .icon-btn.sa-icon-btn:disabled { opacity: 0.6; cursor: default; }
 .sa-list { display: flex; flex-direction: column; gap: 4px; max-height: min(42vh, 360px); overflow-y: auto; overscroll-behavior: contain; padding: 2px 0 4px; }
 .sa-dispatch { display: flex; flex-direction: column; gap: 1px; }
-.sa-dispatch-head { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 0 0 0 6px; font-size: var(--fs-xs); color: var(--text-2); }
-.sa-dispatch-name { flex: 1 1 auto; min-width: 0; }
-.sa-dispatch-head .sa-icon-btn { margin-right: 20px; }
 .sa-phase-head { display: flex; align-items: center; gap: 8px; padding: 2px 30px 2px 22px; font-size: var(--fs-xs); }
 .sa-phase-head .truncate { flex: 1 1 auto; min-width: 0; }
 .sa-phase .sa-task { padding-left: 16px; }

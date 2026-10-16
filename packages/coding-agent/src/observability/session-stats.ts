@@ -23,6 +23,10 @@ export interface SessionUsageStats {
 	speed: Measurement;
 	tokenAvailability?: Record<"input" | "output" | "cacheRead" | "cacheWrite", boolean>;
 	costIncomplete?: boolean;
+	/** Assistant requests that produced a reply while the provider reported no token usage for them; the totals and averages only cover the rest. */
+	usageUnreportedRequests?: number;
+	/** The newest assistant request of the session is one of them: the totals and averages are behind the conversation. */
+	latestUsageUnreported?: boolean;
 	costByCurrency?: Partial<Record<"USD" | "CNY", number>>;
 }
 
@@ -55,6 +59,8 @@ export function collectSessionUsageStats(
 		tools = 0,
 		speedTokens = 0,
 		speedMs = 0;
+	let usageUnreportedRequests = 0;
+	let latestUsageUnreported = false;
 	let latestRequest: SessionUsageStats["latestRequest"];
 	const countDuration = (key: keyof typeof durations, value: number | undefined) => {
 		if (typeof value === "number" && Number.isFinite(value) && value >= 0) durations[key].push(value);
@@ -115,6 +121,14 @@ export function collectSessionUsageStats(
 			// Never mix legacy first-chunk/Agent timing with Provider end-to-end samples.
 			const ms = entry.timing?.providerRequestMs;
 			const reportedOutput = assistantMsg.usage.reported?.output ?? assistantMsg.usage.output > 0;
+			// A finished request the provider billed but never reported usage for: the session sums stay behind it.
+			const unreported =
+				!reportedOutput &&
+				assistantMsg.usage.output <= 0 &&
+				assistantMsg.stopReason !== "error" &&
+				assistantMsg.stopReason !== "aborted";
+			latestUsageUnreported = unreported;
+			if (unreported) usageUnreportedRequests++;
 			const measurable =
 				ms !== undefined &&
 				Number.isFinite(ms) &&
@@ -182,5 +196,7 @@ export function collectSessionUsageStats(
 			: { input: false, output: false, cacheRead: false, cacheWrite: false },
 		costIncomplete:
 			unknownCompactionCost || (samples > 0 && Object.values(tokenAvailability).some((available) => !available)),
+		usageUnreportedRequests,
+		latestUsageUnreported,
 	};
 }

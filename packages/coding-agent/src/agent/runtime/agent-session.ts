@@ -368,6 +368,10 @@ export interface SessionStats {
 	speed: import("../../observability/session-stats.ts").SessionUsageStats["speed"];
 	timing: import("../../observability/session-stats.ts").SessionUsageStats["timing"];
 	latestRequest?: import("../../observability/session-stats.ts").SessionUsageStats["latestRequest"];
+	/** Assistant requests the provider answered without reporting token usage; totals and averages cover only the rest. */
+	usageUnreportedRequests?: number;
+	/** The newest assistant request is one of them: the totals and averages are behind the conversation. */
+	latestUsageUnreported?: boolean;
 	contextUsage?: ContextUsage;
 }
 

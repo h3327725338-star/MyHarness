@@ -2,19 +2,18 @@
  * Where a discovered model's thinking-effort capability comes from, in order of trust:
  *
  * 1. `official`: the provider's own documentation for its own API host (`official-effort.ts`), which says which effort
- *    names run as which level. It outranks everything below, because a model list or a test request can only show that
- *    a name is accepted, not that it is a level of its own;
- * 2. `catalog`: what the endpoint's own model catalog states;
- * 3. `probe`: real minimal requests to the model (`thinking-probe.ts`).
+ *    names run as which level. It outranks the catalog, because a model list can only show that a name is accepted, not
+ *    that it is a level of its own;
+ * 2. `catalog`: what the endpoint's own model catalog states.
  *
  * Nothing is derived from a model's name beyond the documented entries; a model no source settles is `unconfirmed`
- * (no level hidden, none claimed to work).
+ * (no level hidden, none claimed to work). There is no automatic test: the user picks the levels of such a model.
  */
 
 import type { ThinkingLevelMap } from "@myharness/ai";
 import { resolveOfficialEffort } from "./official-effort.ts";
 
-export type ThinkingSource = "official" | "catalog" | "probe" | "unconfirmed";
+export type ThinkingSource = "official" | "catalog" | "unconfirmed";
 
 export interface ThinkingCapabilityInput {
 	/** The API address the model is served from (the documented rules are keyed by the provider's own host). */

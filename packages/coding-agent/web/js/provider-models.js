@@ -21,16 +21,10 @@ export function levelsFromMap(map) {
 }
 
 /**
- * Levels of a model whose accepted efforts nobody has confirmed: only a level that is confirmed unsupported is hidden,
- * so every standard level stays selectable. "xhigh" / "max" are opt-in in the runtime and stay off until stated.
+ * Levels of a model whose accepted efforts nobody has stated: every standard level stays selectable and the user ticks
+ * what the model really accepts. "xhigh" / "max" are opt-in in the runtime and stay off until ticked.
  */
 const unknownLevels = () => Object.fromEntries([...BASE_LEVELS, ...EXTRA_LEVELS].map((level) => [level, !EXTRA_LEVELS.includes(level)]));
-
-/** The probe status of a level ("supported" | "unsupported" | "unverified" | "unknown"), when a test request recorded one. */
-export const levelStatus = (model, level) => model.raw?.thinkingLevelStatus?.[level];
-
-/** A level no check could settle: it stays as the user set it and is marked "Unconfirmed". */
-export const levelUnconfirmed = (model, level) => levelStatus(model, level) === "unknown" || levelStatus(model, level) === "unverified";
 
 /**
  * Effort names the API accepts but runs as another level, as the provider's documentation states (`{ medium: "high" }`).
@@ -46,13 +40,6 @@ export const offeredLevels = (model) => [...BASE_LEVELS, ...EXTRA_LEVELS].filter
 /** The aliases as [name, level] pairs in the order of the levels. */
 export const aliasPairs = (model) =>
 	Object.entries(levelAliases(model)).sort(([a], [b]) => (LEVEL_ORDER.indexOf(a) + 1 || 99) - (LEVEL_ORDER.indexOf(b) + 1 || 99));
-
-/** Test results kept for the levels a map still offers (the runtime offers xhigh / max only with an entry). */
-function statusesOfOfferedLevels(statuses, map) {
-	if (!statuses) return undefined;
-	const kept = Object.fromEntries(Object.entries(statuses).filter(([level]) => (EXTRA_LEVELS.includes(level) ? typeof map?.[level] === "string" : map?.[level] !== null)));
-	return Object.keys(kept).length ? kept : undefined;
-}
 
 export function positive(text) {
 	const value = Number(String(text).trim());
@@ -146,13 +133,12 @@ export function seedFromDetected(found) {
 	if (found.contextWindow) seed.contextWindow = found.contextWindow;
 	if (found.maxTokens) seed.maxTokens = found.maxTokens;
 	if (found.thinkingLevelMap) seed.thinkingLevelMap = found.thinkingLevelMap;
-	if (found.thinkingLevelStatus) seed.thinkingLevelStatus = found.thinkingLevelStatus;
 	if (found.thinkingLevelAliases) seed.thinkingLevelAliases = found.thinkingLevelAliases;
 	const detected = {};
 	for (const key of ["reasoning", "input", "contextWindow", "maxTokens"]) if (found[key] !== undefined) detected[key] = true;
-	// Levels are marked "auto" only when the provider's documentation, the catalog or a test request settled them; a
-	// model whose efforts nobody confirmed keeps every level selectable.
-	if ((found.thinkingLevelMap || found.thinkingLevelStatus) && (found.thinkingSource === "official" || found.thinkingSource === "catalog" || found.thinkingSource === "probe")) detected.levels = true;
+	// Levels are marked "auto" only when the provider's documentation or the catalog states them; for any other model the
+	// user ticks the levels.
+	if (found.thinkingLevelMap && (found.thinkingSource === "official" || found.thinkingSource === "catalog")) detected.levels = true;
 	if (found.thinkingSource) detected.levelsSource = found.thinkingSource;
 	return modelDraft(seed, detected);
 }
@@ -164,8 +150,8 @@ export function parseModelIds(text) {
 
 /**
  * Brings what one detection settled into a model already in the form. Only fields the answer really states change:
- * image input, context window and max output when the model list names them; thinking levels from the list, or per
- * level from a probe (confirmed supported / unsupported only). Everything the detection could not settle keeps its value.
+ * image input, context window and max output when the model list names them, and thinking levels when the list or the
+ * provider's documentation states them. Everything the detection could not settle keeps its value.
  */
 export function updateFromDetection(model, found) {
 	const next = { ...model, raw: { ...model.raw }, detected: { ...model.detected } };
@@ -179,29 +165,7 @@ export function updateFromDetection(model, found) {
 			next.detected[field] = true;
 		}
 	}
-	if (found.thinkingSource === "probe" && found.thinkingLevelStatus) {
-		const statuses = found.thinkingLevelStatus;
-		next.raw.thinkingLevelStatus = statuses;
-		// A test request is only made where the documentation says nothing: an earlier documented mapping no longer applies.
-		delete next.raw.thinkingLevelAliases;
-		if (found.reasoning !== undefined) {
-			next.reasoning = found.reasoning;
-			next.detected.reasoning = true;
-		}
-		const levels = { ...model.levels };
-		let changed = false;
-		for (const level of [...BASE_LEVELS, ...EXTRA_LEVELS]) {
-			if (statuses[level] === "supported" || statuses[level] === "unsupported") {
-				levels[level] = statuses[level] === "supported";
-				changed = true;
-			}
-		}
-		if (changed) {
-			next.levels = levels;
-			next.detected.levels = true;
-			next.detected.levelsSource = "probe";
-		}
-	} else if (found.thinkingLevelMap && found.thinkingSource && found.thinkingSource !== "unconfirmed") {
+	if (found.thinkingLevelMap && found.thinkingSource && found.thinkingSource !== "unconfirmed") {
 		next.reasoning = true;
 		next.detected.reasoning = true;
 		next.levels = levelsFromMap(found.thinkingLevelMap);
@@ -211,13 +175,9 @@ export function updateFromDetection(model, found) {
 		next.raw.thinkingLevelMap = map;
 		if (found.thinkingSource !== "official") delete next.raw.thinkingLevelAliases;
 		else {
-			// The documentation settles the levels: what the model really runs as is kept, and a test result for a name that only
-			// runs as another level is dropped (it only showed that the API accepts the name).
+			// The documentation settles the levels: what the model really runs as is kept.
 			if (found.thinkingLevelAliases) next.raw.thinkingLevelAliases = found.thinkingLevelAliases;
 			else delete next.raw.thinkingLevelAliases;
-			const statuses = statusesOfOfferedLevels(next.raw.thinkingLevelStatus, map);
-			if (statuses) next.raw.thinkingLevelStatus = statuses;
-			else delete next.raw.thinkingLevelStatus;
 		}
 		next.detected.levels = true;
 		next.detected.levelsSource = found.thinkingSource;
@@ -253,9 +213,9 @@ export function applyDetection(models, foundList) {
 /**
  * What one detection settled, remembered per model entry of the form (`uid`) instead of as finished sentences: the user
  * can still remove an entry before saving, and every part of the notice that belonged to it must go with it.
- * `summary` is applyDetection's answer for the same found list; `unlisted` / `unsettled` name Model IDs.
+ * `summary` is applyDetection's answer for the same found list; `unlisted` names Model IDs.
  */
-export function detectRecord(summary, foundList, { unlisted = [], unsettled = [], listError = null } = {}) {
+export function detectRecord(summary, foundList, { unlisted = [], listError = null } = {}) {
 	const uidOf = (id) => summary.models.find((model) => model.id.trim() === id)?.uid;
 	const addedUids = new Set(summary.added.map((model) => model.uid));
 	const entries = (ids) =>
@@ -265,7 +225,6 @@ export function detectRecord(summary, foundList, { unlisted = [], unsettled = []
 	return {
 		touched: entries(foundList.map((found) => found.id)).map((entry) => ({ ...entry, added: addedUids.has(entry.uid) })),
 		unlisted: entries(unlisted),
-		unsettled: entries(unsettled),
 		listError,
 	};
 }
@@ -286,7 +245,6 @@ export function detectOutcome(record, models) {
 		added: touched.filter((entry) => entry.added).length,
 		updated: touched.filter((entry) => !entry.added).length,
 		unlisted: kept(record.unlisted).map((entry) => entry.id),
-		unsettled: kept(record.unsettled).map((entry) => entry.id),
 		listError: record.listError,
 	};
 }

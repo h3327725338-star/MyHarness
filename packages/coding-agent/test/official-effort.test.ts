@@ -70,7 +70,7 @@ describe("official effort mapping", () => {
 		).toBe("catalog");
 	});
 
-	it("is applied to discovery and detection without asking the model, and the user's probe cannot overrule it", async () => {
+	it("is applied to discovery and detection without asking the model", async () => {
 		const requests: string[] = [];
 		vi.stubGlobal(
 			"fetch",
@@ -87,10 +87,6 @@ describe("official effort mapping", () => {
 			baseUrl: "https://api.deepseek.com",
 			api: "openai-completions",
 			apiKey: "k",
-			probeThinking: {
-				reasoningModelIds: new Set(["deepseek-v4-pro"]),
-				candidateModelIds: new Set(["deepseek-v4-pro"]),
-			},
 		});
 		const documented = discovered.find((model) => model.id === "deepseek-v4-pro");
 		expect(documented).toMatchObject({
@@ -99,7 +95,6 @@ describe("official effort mapping", () => {
 			thinkingLevelMap: { minimal: null, medium: null, max: "max" },
 			thinkingLevelAliases: { minimal: "low", medium: "high", xhigh: "high", ultra: "max" },
 		});
-		expect(documented?.thinkingLevelStatus).toBeUndefined();
 		expect(discovered.find((model) => model.id === "deepseek-chat")?.thinkingSource).toBeUndefined();
 
 		const detected = await detectSpecifiedModels({
@@ -107,8 +102,6 @@ describe("official effort mapping", () => {
 			api: "openai-completions",
 			apiKey: "k",
 			modelIds: ["deepseek-v4-pro", "deepseek-flash"],
-			reasoningModelIds: new Set(["deepseek-v4-pro"]),
-			retryDelaysMs: [0, 0, 0],
 		});
 		// A model the list does not name is documented all the same.
 		expect(detected.models.map((model) => [model.id, model.thinkingSource])).toEqual([
@@ -119,7 +112,7 @@ describe("official effort mapping", () => {
 		expect(requests.every((request) => request.startsWith("GET "))).toBe(true);
 	});
 
-	it("brings a stored model in line on refresh: documented levels, aliases, and no stale test results for hidden levels", async () => {
+	it("brings a stored model in line on refresh: documented levels, aliases, and old test results left alone", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "myharness-official-effort-"));
 		directories.push(directory);
 		const path = join(directory, "models.json");
@@ -170,8 +163,15 @@ describe("official effort mapping", () => {
 		const model = saved.providers.deepseek.models[0];
 		expect(model.thinkingLevelMap).toEqual({ minimal: null, medium: null, max: "max" });
 		expect(model.thinkingLevelAliases).toEqual({ minimal: "low", medium: "high", xhigh: "high", ultra: "max" });
-		// The levels that are real keep their results; the names that only run as another level lose theirs.
-		expect(model.thinkingLevelStatus).toEqual({ low: "supported", high: "supported", max: "supported" });
+		// Results written by older versions are no longer used and stay as they were.
+		expect(model.thinkingLevelStatus).toEqual({
+			minimal: "supported",
+			low: "supported",
+			medium: "supported",
+			high: "supported",
+			xhigh: "supported",
+			max: "supported",
+		});
 
 		// Refreshing again changes nothing.
 		expect(await manager.mergeDiscoveredModels("deepseek", [found], "openai-completions")).toEqual({

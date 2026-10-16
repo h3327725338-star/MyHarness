@@ -973,25 +973,6 @@ describe("Web UI: provider model catalog", () => {
 		});
 	});
 
-	it("seeds a probed model with its confirmed levels and remembers the per-level statuses", () => {
-		const seeded = models.seedFromDetected({
-			id: "probed",
-			reasoning: true,
-			thinkingSource: "probe",
-			thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
-			thinkingLevelStatus: { minimal: "unsupported", low: "supported", high: "unverified", xhigh: "unknown" },
-		});
-		expect(seeded.detected).toMatchObject({ levels: true, levelsSource: "probe" });
-		expect(models.levelStatus(seeded, "high")).toBe("unverified");
-		expect(seeded.levels).toMatchObject({ minimal: false, low: true, high: true, xhigh: true });
-		expect(models.buildModel(seeded).thinkingLevelStatus).toEqual({
-			minimal: "unsupported",
-			low: "supported",
-			high: "unverified",
-			xhigh: "unknown",
-		});
-	});
-
 	it("does not invent a level map for a model whose catalog lists none", () => {
 		const built = models.buildModel(models.seedFromDetected({ id: "m", reasoning: true }));
 		expect(built.reasoning).toBe(true);
@@ -1059,7 +1040,6 @@ describe("Web UI: provider model catalog", () => {
 		const summary = models.applyDetection([own, current], found);
 		const record = models.detectRecord(summary, found, {
 			unlisted: ["new"],
-			unsettled: ["m", "new"],
 			listError: { code: "timeout" },
 		});
 		expect(record.touched.map((entry: any) => [entry.id, entry.added])).toEqual([
@@ -1072,7 +1052,6 @@ describe("Web UI: provider model catalog", () => {
 			added: 1,
 			updated: 1,
 			unlisted: ["new"],
-			unsettled: ["m", "new"],
 			listError: { code: "timeout" },
 		});
 		// Removing a model the detection did not touch says nothing about this detection.
@@ -1092,7 +1071,6 @@ describe("Web UI: provider model catalog", () => {
 			added: 0,
 			updated: 1,
 			unlisted: [],
-			unsettled: ["m"],
 		});
 		// Removing every model it produced leaves nothing to report, even with other models still in the list.
 		expect(models.detectOutcome(record, [current, own])).toMatchObject({ total: 1, added: 0, updated: 1 });
@@ -1104,29 +1082,14 @@ describe("Web UI: provider model catalog", () => {
 	it("names a removed Model ID in no warning of a detection that is still reported", () => {
 		const found = [{ id: "a" }, { id: "b" }];
 		const summary = models.applyDetection([], found);
-		const record = models.detectRecord(summary, found, { unsettled: ["a", "b"] });
+		const record = models.detectRecord(summary, found, { unlisted: ["a", "b"] });
 		const kept = summary.models.filter((entry: any) => entry.id !== "a");
-		expect(models.detectOutcome(record, kept)).toMatchObject({ total: 1, added: 1, unsettled: ["b"] });
+		expect(models.detectOutcome(record, kept)).toMatchObject({ total: 1, added: 1, unlisted: ["b"] });
 		// An ID the detection never reached a model for is not reported either.
-		expect(models.detectRecord(summary, found, { unsettled: ["missing"] }).unsettled).toEqual([]);
+		expect(models.detectRecord(summary, found, { unlisted: ["missing"] }).unlisted).toEqual([]);
 	});
 
-	it("takes only confirmed probe levels and keeps the others as they were", () => {
-		const current = models.modelDraft({ id: "m", reasoning: true, thinkingLevelMap: { minimal: null } });
-		const next = models.updateFromDetection(current, {
-			id: "m",
-			reasoning: true,
-			thinkingSource: "probe",
-			thinkingLevelStatus: { minimal: "supported", low: "unsupported", high: "unverified", xhigh: "unknown" },
-		});
-		expect(next.levels).toMatchObject({ minimal: true, low: false, medium: true, high: true, xhigh: false });
-		expect(models.buildModel(next).thinkingLevelStatus).toEqual({
-			minimal: "supported",
-			low: "unsupported",
-			high: "unverified",
-			xhigh: "unknown",
-		});
-		// A detection that settled nothing changes nothing.
+	it("leaves a model alone when a detection states nothing about it", () => {
 		const plain = models.modelDraft({ id: "p", contextWindow: 4000 });
 		const same = models.updateFromDetection(plain, { id: "p", name: "p" });
 		expect(same).toMatchObject({ contextWindow: "4", reasoning: false, image: false, levels: plain.levels });
@@ -1279,20 +1242,6 @@ describe("Web UI: effort names an API accepts versus the levels a model runs", (
 			["ultra", "max"],
 		]);
 		expect(models.aliasPairs({ raw: {} })).toEqual([]);
-	});
-
-	it("marks only a level no check could settle as unconfirmed", () => {
-		const probed = {
-			raw: {
-				thinkingLevelStatus: { minimal: "unknown", low: "supported", medium: "unverified", high: "unsupported" },
-			},
-		};
-		expect(models.levelUnconfirmed(probed, "minimal")).toBe(true);
-		expect(models.levelUnconfirmed(probed, "medium")).toBe(true);
-		expect(models.levelUnconfirmed(probed, "low")).toBe(false);
-		expect(models.levelUnconfirmed(probed, "high")).toBe(false);
-		// No test result at all is not "unconfirmed": nothing was tried.
-		expect(models.levelUnconfirmed({ raw: {} }, "minimal")).toBe(false);
 	});
 });
 

@@ -135,7 +135,7 @@ describe("apply_patch in the Web change panel", () => {
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
-		registerProviderRoutes(server, host, hub, { probeRetryDelaysMs: [0, 0, 0] });
+		registerProviderRoutes(server, host, hub);
 		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());

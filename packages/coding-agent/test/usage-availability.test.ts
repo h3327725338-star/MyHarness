@@ -29,6 +29,31 @@ const message = (reported: AssistantMessage["usage"]["reported"]) =>
 		},
 	}) as SessionEntry;
 
+const unreportedMessage = (stopReason = "stop") =>
+	({
+		type: "message",
+		id: `b-${stopReason}`,
+		parentId: null,
+		timestamp: "2026-01-01T00:00:01Z",
+		message: {
+			role: "assistant",
+			provider: "fixture",
+			model: "fixture",
+			api: "openai-completions",
+			timestamp: 2,
+			content: [{ type: "text", text: "answer without usage" }],
+			stopReason,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		},
+	}) as SessionEntry;
+
 describe("usage availability", () => {
 	it("distinguishes a reported zero from an absent cache dimension", () => {
 		const stats = collectSessionUsageStats([
@@ -55,5 +80,26 @@ describe("usage availability", () => {
 	});
 	it("has no measurements in an empty session", () => {
 		expect(Object.values(collectSessionUsageStats([]).tokenAvailability!)).toEqual([false, false, false, false]);
+	});
+	it("counts a finished reply the provider reported no usage for", () => {
+		const stats = collectSessionUsageStats([
+			message({ input: true, output: true, cacheRead: true, cacheWrite: true }),
+			unreportedMessage(),
+		]);
+		expect(stats.usageUnreportedRequests).toBe(1);
+		expect(stats.latestUsageUnreported).toBe(true);
+		// The totals only cover what was reported, so the last request's own tokens are missing from them.
+		expect(stats.tokens.input).toBe(100);
+	});
+	it("clears the mark once a later request reports usage again", () => {
+		const stats = collectSessionUsageStats([unreportedMessage(), message({ input: true, output: true, cacheRead: true, cacheWrite: true })]);
+		expect(stats.usageUnreportedRequests).toBe(1);
+		expect(stats.latestUsageUnreported).toBe(false);
+	});
+	it("does not mark a reply that was stopped or failed before answering", () => {
+		for (const stopReason of ["error", "aborted"] as const) {
+			const stats = collectSessionUsageStats([unreportedMessage(stopReason)]);
+			expect(stats.usageUnreportedRequests).toBe(0);
+		}
 	});
 });

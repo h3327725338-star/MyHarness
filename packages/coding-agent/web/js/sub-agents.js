@@ -1,5 +1,5 @@
-// Sub-agents of the chat on screen: the activity bar above the input (the one place that shows them live, with their
-// stops and a fullscreen view of the same list) and the steps of one sub-agent, which the transcript's dispatch rows
+// Sub-agents of the chat on screen: the activity bar above the input (the one place that shows them live, with the
+// one stop that ends all of them and a fullscreen view of the same list) and the steps of one sub-agent, which the transcript's dispatch rows
 // reuse. The server's sub_agent_state (and the snapshot's `subAgents`) is the only source of truth for what is running;
 // nothing here guesses a "running" state.
 import { html, useEffect, useLayoutEffect, useRef, useState, Collapse, Fold, Icon, Modal, Overlay, Spinner } from "./ui.js";
@@ -84,8 +84,7 @@ export function TaskStatusIcon({ status, unknown }) {
 }
 
 /**
- * Stop sub-agents (one task, one dispatch, or all of them) without touching the main run. Failures are shown: a stop
- * that did not happen must never look done.
+ * Stop sub-agents without touching the main run. Failures are shown: a stop that did not happen must never look done.
  */
 export async function stopSubAgents(body) {
 	try {
@@ -96,15 +95,8 @@ export async function stopSubAgents(body) {
 	}
 }
 
-function sourceLabel(item) {
-	if (item.source === "workflow") return item.name ? t("Workflow “{name}”", { name: item.name }) : t("Workflow");
-	if (item.source === "ultracode") return item.name ? t("Ultracode “{name}”", { name: item.name }) : t("Ultracode");
-	return count(item.tasks.length, "sub-agent");
-}
-
-
 /**
- * The stop of one task, one dispatch or all sub-agents: a quiet square icon (the player's stop) that only this small
+ * The one stop of the bar: a quiet square icon (the player's stop) that only this small
  * button answers. It never takes the click or the keys of the row it sits in, and a stop that failed says why.
  */
 function StopButton({ label, title, onStop, disabled }) {
@@ -238,7 +230,7 @@ const rowClick = (toggle) => (event) => {
 };
 
 /**
- * One sub-agent: status, name, what it does now (or how it ended), its own tool calls and timer, and its own stop.
+ * One sub-agent: status, name, what it does now (or how it ended), its own tool calls and timer.
  * The row opens in place to what the sub-agent did; it never jumps anywhere.
  */
 function TaskRow({ item, task, now, cwd, unknown, result, rows, traces }) {
@@ -257,7 +249,6 @@ function TaskRow({ item, task, now, cwd, unknown, result, rows, traces }) {
 				<span class=${`sa-activity truncate ${running ? "shimmer-text" : "dim"}`}>${unknown ? t("Status unknown") : taskActivity(task, cwd)}</span>
 				<span class="sa-time">${meta}</span>
 			</button>
-			${running ? html`<${StopButton} label=${t("Stop only this sub-agent; the main agent keeps going")} onStop=${() => stopSubAgents({ id: item.id, phase: task.phase, task: task.index })} />` : null}
 			<span class="sa-chev" aria-hidden="true"><${Fold} /></span>
 		</div>
 		<${Collapse} open=${open}>
@@ -266,17 +257,13 @@ function TaskRow({ item, task, now, cwd, unknown, result, rows, traces }) {
 	</div>`;
 }
 
-/** One dispatch: its head (what it is, its model, whether it runs in the background, its own stop), then its sub-agents; a workflow by phase. */
+/**
+ * One dispatch: its sub-agents, a workflow grouped by phase. What the dispatch is, its model and whether it runs in
+ * the background are read on the bar's own title row instead of a row of its own.
+ */
 function DispatchRows({ item, details, now, cwd, unknown, rows, traces }) {
-	const running = item.tasks.some(isRunning) && !unknown;
 	const row = (task) => html`<${TaskRow} key=${task.index} item=${item} task=${task} now=${now} cwd=${cwd} unknown=${unknown} result=${resultOf(details, task)} rows=${rows} traces=${traces} />`;
 	return html`<div class="sa-dispatch">
-		<div class="sa-dispatch-head">
-			<span class="sa-ico"><${TaskStatusIcon} status=${item.status} unknown=${unknown} /></span>
-			<span class="sa-dispatch-name truncate">${sourceLabel(item)}${item.model ? html`<span class="dim"> · ${item.model}</span>` : null}</span>
-			${item.background ? html`<span class="badge">${item.detached ? t("moved to the background") : t("background")}</span>` : null}
-			${running ? html`<${StopButton} label=${t("Stop these sub-agents; the main agent keeps going")} onStop=${() => stopSubAgents({ id: item.id })} />` : null}
-		</div>
 		${item.phases
 			? item.phases.map((phase, index) => html`<div class="sa-phase" key=${index}>
 					<div class="sa-phase-head dim"><span class="sa-ico"><${TaskStatusIcon} status=${phase.status === "pending" ? "pending" : phase.status} unknown=${unknown} /></span><span class="truncate">${t("Phase {n}: {name}", { n: index + 1, name: phase.name })}</span><span class="sa-time">${phase.status === "pending" ? t("Not started") : `${phase.completed}/${phase.total}`}</span></div>
@@ -375,6 +362,8 @@ export function SubAgentBar() {
 		: state.unknown
 			? html`<${Icon} name="clock" size=${14} class="c-dim" />`
 			: html`<${Spinner} size=${14} />`;
+	// One mark for the whole bar: sub-agents that keep running after the main agent moved on.
+	const background = items.some((item) => item.background) ? html`<span class="badge"><${Icon} name="layers" size=${12} />${t("background")}</span>` : null;
 	const elapsed = !ended && since && !state.unknown ? html`<span class="strip-time">${t("{duration} elapsed", { duration: fmtDuration(Math.max(0, now - since)) })}</span>` : null;
 	const stopAll = !ended && !state.unknown ? html`<${StopButton} label=${t("Stop all sub-agents")} title=${t("Stops only the sub-agents. The main agent's current turn is not stopped (the stop button in the input box stops everything).")} onStop=${() => stopSubAgents({ all: true })} />` : null;
 	const list = html`<${SubAgentList} items=${items} subAgents=${subAgents} now=${now} cwd=${cwd} unknown=${state.unknown} rows=${rows} traces=${traces} />`;
@@ -383,7 +372,7 @@ export function SubAgentBar() {
 		<div class="sa-head" onClick=${rowClick(toggle)}>
 			<button type="button" class="sa-toggle" aria-expanded=${open} title=${open ? t("Hide sub-agents") : t("Show sub-agents")}>
 				<span class="sa-ico">${icon}</span>
-				<span class="sa-head-text truncate">${text}</span>
+				<span class="sa-head-text truncate">${text}${background}</span>
 				${elapsed}
 			</button>
 			<button type="button" class="icon-btn sm sa-icon-btn" onClick=${(event) => (event.stopPropagation(), setFull(true))} onKeyDown=${(event) => event.stopPropagation()} title=${t("Show sub-agents fullscreen")} aria-label=${t("Show sub-agents fullscreen")}><${Icon} name="maximize" size=${13} /></button>
@@ -394,7 +383,7 @@ export function SubAgentBar() {
 	</div>
 		<${Overlay} show=${full}>
 			<${Modal} title=${t("Sub-agents")} onClose=${() => setFull(false)} width=${1100} class="sa-full" closeIcon="minimize" closeLabel=${t("Exit fullscreen (Esc)")} focusInput=${false}>
-				<div class=${`sa-full-head ${ended ? `sa-summary ${bad ? "bad" : "good"}` : ""}`}><span class="sa-ico">${icon}</span><span class="sa-head-text truncate">${text}</span>${elapsed}${stopAll}</div>
+				<div class=${`sa-full-head ${ended ? `sa-summary ${bad ? "bad" : "good"}` : ""}`}><span class="sa-ico">${icon}</span><span class="sa-head-text truncate">${text}${background}</span>${elapsed}${stopAll}</div>
 				${list}
 			<//>
 		<//>

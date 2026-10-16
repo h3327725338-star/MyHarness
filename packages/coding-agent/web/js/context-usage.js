@@ -98,6 +98,10 @@ export function CacheValue({ cache, session }) {
 export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 	const snap = useStore((s) => s.snap);
 	const stats = useStore((s) => s.stats);
+	// The newest request reported nothing: the session averages below still describe the earlier requests.
+	const usageBehind = stats?.latestUsageUnreported
+		? html`<span class="badge" title=${t("The newest request reported no token usage, so these averages still describe the earlier requests.")}>${t("usage not reported")}</span>`
+		: null;
 	const data = contextCapacity(snap?.context);
 	const window_ = Math.max(data.window ?? 0, 1);
 	const remaining = data.window != null && data.used != null ? Math.max(0, data.window - data.used) : null;
@@ -116,7 +120,7 @@ export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 			<div class="cu-stat" title=${tokensText(remaining)}><span class="dim">${t("Remaining")}</span><strong>${tokensText(remaining)}</strong></div>
 			${controls ? html`<div class="cu-controls">${controls}</div>` : null}
 			${!capacityOnly ? html`<div class="cu-stat"><span class="dim">${t("Cache hit")}</span><strong><${CacheValue} session=${cache} /></strong></div>
-			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Reported output divided by its paired first-output-to-completion time; requests without both measurements are excluded.")}>${fmtSpeed(stats?.speed)}</strong></div>` : null}
+			<div class="cu-stat"><span class="dim">${t("Speed")}</span><strong title=${t("Reported output divided by its paired first-output-to-completion time; requests without both measurements are excluded.")}>${fmtSpeed(stats?.speed)}</strong>${usageBehind}</div>` : null}
 		</div>
 		${!capacityOnly ? html`<div class="cu-actions">
 			<button class="btn sm" disabled=${snap?.active} onClick=${() => (onDone?.(), actions.compact())}>${t("Compact now")}</button>

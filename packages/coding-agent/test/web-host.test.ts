@@ -507,7 +507,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
 		// An undecided thinking-effort test is tried again; the tests do not wait between the attempts.
-		registerProviderRoutes(server, host, hub, { probeRetryDelaysMs: [0, 0, 0] });
+		registerProviderRoutes(server, host, hub);
 		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());
@@ -1428,18 +1428,17 @@ describe("Web host (real runtime with a faux provider)", () => {
 
 	it("adds a custom provider with detected models, keeps its key in the credential store and deletes both for good", async () => {
 		const fx = await start();
-		// Every model a probe request was sent for: only the Model IDs the user named may appear here.
+		// Detection only reads the model list: a request sent to a model itself is recorded here and must never happen.
 		const probed: string[] = [];
 		const catalog = createServer((req, res) => {
 			if (req.method === "POST") {
-				// Probe of a named model's thinking levels: a rate limit leaves them undecided, however often it is tried.
 				let body = "";
 				req.on("data", (chunk) => {
 					body += chunk;
 				});
 				req.on("end", () => {
 					probed.push(JSON.parse(body).model);
-					res.statusCode = 429;
+					res.statusCode = 500;
 					res.end("{}");
 				});
 				return;
@@ -1472,7 +1471,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		).rejects.toThrow(/Model ID/);
 		expect(probed).toEqual([]);
 
-		// Only the named model comes back and only it is probed, although the list holds another one.
+		// Only the named model comes back, although the list holds another one.
 		const detected = await fx.post("/api/providers/custom/detect", {
 			baseUrl,
 			api: "openai-completions",
@@ -1487,24 +1486,14 @@ describe("Web host (real runtime with a faux provider)", () => {
 				reasoning: true,
 				input: ["text", "image"],
 				contextWindow: 32000,
-				// Undecided is not "unsupported": no level is hidden, and the opt-in levels stay selectable.
-				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-				thinkingLevelStatus: {
-					minimal: "unknown",
-					low: "unknown",
-					medium: "unknown",
-					high: "unknown",
-					xhigh: "unknown",
-					max: "unknown",
-				},
+				// The catalog says it reasons but not which efforts: nothing is claimed, the user ticks the levels.
 				thinkingSource: "unconfirmed",
 			},
 		]);
-		// Each level is asked on its own: once, then up to three more times while the answer is undecided.
-		expect(probed).toHaveLength(6 * 4);
-		expect(new Set(probed)).toEqual(new Set(["thinker"]));
+		// No thinking effort is tested: not one request went to the model itself.
+		expect(probed).toEqual([]);
 
-		// An ID the list does not name is still checked, and reported as not listed.
+		// An ID the list does not name is still returned with default values, and reported as not listed.
 		probed.length = 0;
 		const ghost = await fx.post("/api/providers/custom/detect", {
 			baseUrl,
@@ -1513,9 +1502,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 			modelIds: ["ghost"],
 		});
 		expect(ghost).toMatchObject({ ok: true, unlisted: ["ghost"], models: [{ id: "ghost", name: "ghost" }] });
-		expect(new Set(probed)).toEqual(new Set(["ghost"]));
+		expect(probed).toEqual([]);
 
-		// A model list that cannot be read is reported next to the (still attempted) check of the named model.
+		// A model list that cannot be read is reported, and the named model still comes back with default values.
 		const unreachable = await fx.post("/api/providers/custom/detect", {
 			baseUrl: "http://127.0.0.1:9/v1",
 			api: "openai-completions",
@@ -1523,9 +1512,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		});
 		expect(unreachable.ok).toBe(true);
 		expect(unreachable.listError).toMatchObject({ code: "connection" });
-		// Nothing could be asked, so nothing is settled: every level is undecided, none is reported as unsupported.
 		expect(unreachable.models).toMatchObject([{ id: "x", name: "x" }]);
-		expect(new Set(Object.values(unreachable.models[0].thinkingLevelStatus))).toEqual(new Set(["unknown"]));
+		expect(unreachable.models[0].thinkingLevelStatus).toBeUndefined();
 		expect(unreachable.models[0].reasoning).toBeUndefined();
 
 		await fx.post("/api/providers/custom/save", {
@@ -1561,6 +1549,42 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.post("/api/providers/custom/delete", { id: "form-provider" })).rejects.toThrow(
 			/No such provider/,
 		);
+	});
+
+	it("announces a background slot only after its deleted model has been reconciled", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const config = {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+			apiKey: "local",
+			models: [{ id: "temporary" }],
+		};
+		await fx.post("/api/providers/custom/save", { id: "selection-test", config }, first.slot);
+		await fx.post("/api/model", { provider: "selection-test", id: "temporary" }, first.slot);
+		const other = await fx.post("/api/sessions/new", {}, first.slot);
+		const startAt = fx.events.length;
+		await fx.post(
+			"/api/providers/custom/save",
+			{
+				id: "selection-test",
+				previousId: "selection-test",
+				config: { ...config, models: [] },
+			},
+			other.slot,
+		);
+		await vi.waitFor(() => {
+			expect(
+				fx.events
+					.slice(startAt)
+					.some((event) => event.event === "models_changed" && event.data.slot === first.slot),
+			).toBe(true);
+		});
+		const state = await fx.get("/api/state", first.slot);
+		expect(state.model?.provider).not.toBe("selection-test");
+		expect(
+			(await fx.get("/api/models", first.slot)).providers.some((provider: any) => provider.id === "selection-test"),
+		).toBe(false);
 	});
 
 	/** A local HTTP server standing in for a provider endpoint. */
