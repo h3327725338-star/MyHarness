@@ -103,29 +103,40 @@ function isReasoningReplay400Error(error: unknown): boolean {
  * known to drop/mangle reasoning items intermittently (anomalyco/opencode issues
  * #25000, #24722, #24190, #24124, #24104, #24261), and the same payload often succeeds
  * on resend. The rejection happens before the first token, so retrying here cannot
- * double-bill or double-emit. If the retry also fails, surface the original error.
+ * double-bill or double-emit. A short backoff between attempts is what actually helps:
+ * the flakiness is server-side, so an immediate resend can hit the same bad path.
+ * If every attempt fails, surface the original error.
  */
+const REASONING_REPLAY_MAX_ATTEMPTS = 3;
+const REASONING_REPLAY_BACKOFF_MS = 400;
+
 async function createResponsesWithReasoningRetry(
 	client: OpenAI,
 	params: ResponseCreateParamsStreaming,
 	requestOptions: { signal?: AbortSignal; timeout?: number; maxRetries: number },
 	aborted: () => boolean,
 ) {
-	try {
-		return await client.responses.create(params, requestOptions).withResponse();
-	} catch (error) {
-		if (aborted() || params.reasoning?.effort === "none" || !isReasoningReplay400Error(error)) {
-			throw error;
-		}
+	let originalError: unknown;
+	for (let attempt = 1; attempt <= REASONING_REPLAY_MAX_ATTEMPTS; attempt++) {
 		try {
 			return await client.responses.create(params, requestOptions).withResponse();
-		} catch (retryError) {
-			if (aborted()) throw retryError;
-			// The retry reproduced the failure; keep the original error so the surfaced
-			// message reflects the first, real rejection.
-			throw error;
+		} catch (error) {
+			if (aborted() || params.reasoning?.effort === "none" || !isReasoningReplay400Error(error)) {
+				throw error;
+			}
+			originalError ??= error;
+			if (attempt === REASONING_REPLAY_MAX_ATTEMPTS) break;
+			await sleep(REASONING_REPLAY_BACKOFF_MS * attempt);
+			if (aborted()) throw originalError;
 		}
 	}
+	// Every attempt reproduced the rejection; keep the original error so the surfaced
+	// message reflects the first, real rejection.
+	throw originalError;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // OpenAI Responses-specific options
@@ -342,7 +353,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	// DeepSeek thinking mode requires every assistant message in the input to carry its
 	// reasoning back when tools are used (all-or-nothing validation); turns where the
 	// model skipped thinking would otherwise poison the whole request with an HTTP 400.
-	const injectEmptyReasoning =
+	// The same flag also turns on reasoning_text normalization of replayed items, since
+	// OpenCode Go returns summary-only reasoning items that the relay then rejects.
+	const strictReasoningReplay =
 		isDeepSeekResponsesFamily(model) &&
 		(toolPlacement.immediate.length > 0 || toolPlacement.deferred.size > 0) &&
 		!!params.reasoning &&
@@ -350,7 +363,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 
 	params.input = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		deferredTools: toolPlacement.deferred,
-		injectEmptyReasoning,
+		strictReasoningReplay,
 	});
 
 	return params;

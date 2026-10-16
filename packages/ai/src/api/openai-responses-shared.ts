@@ -83,13 +83,17 @@ export interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean;
 	deferredTools?: ReadonlyMap<string, Tool>;
 	/**
-	 * Inject an empty reasoning item for assistant messages that have no replayable
-	 * reasoning. DeepSeek thinking mode requires every assistant message in the input
-	 * to carry reasoning back when tools are used (all-or-nothing validation), so a
-	 * single turn where the model skipped thinking would otherwise poison the whole
-	 * request with an HTTP 400.
+	 * DeepSeek-family strict reasoning replay mode. When enabled:
+	 * - assistant messages that have no replayable reasoning get an empty reasoning
+	 *   placeholder injected (DeepSeek thinking mode requires every assistant message
+	 *   in the input to carry reasoning back when tools are used, all-or-nothing
+	 *   validation, so a single turn where the model skipped thinking would otherwise
+	 *   poison the whole request with an HTTP 400);
+	 * - replayed reasoning items that only carry summary text (the shape OpenCode Go
+	 *   returns; it never sends encrypted_content) get their text moved into
+	 *   `content[].reasoning_text`, the field the relay names in its 400.
 	 */
-	injectEmptyReasoning?: boolean;
+	strictReasoningReplay?: boolean;
 }
 
 export interface ConvertResponsesToolsOptions {
@@ -135,6 +139,26 @@ export function convertResponsesMessages<TApi extends Api>(
 			content: [{ type: "reasoning_text", text: EMPTY_REASONING_PLACEHOLDER_TEXT }],
 		};
 		return item as ResponseReasoningItem;
+	};
+
+	// DeepSeek-family relays validate replayed reasoning against the `reasoning_text`
+	// content part (their 400 names that field), but some gateways only return
+	// summary-only reasoning items and never provide encrypted_content. Moving the
+	// stored thinking text into content.reasoning_text makes the replay
+	// self-contained; moving (not copying) keeps the input token count unchanged.
+	const normalizeReplayedReasoningItem = (reasoningItem: ResponseReasoningItem, block: ThinkingContent): void => {
+		const item = reasoningItem as ResponseReasoningItem & {
+			content?: Array<{ type?: string; text?: string }> | null;
+		};
+		if (item.encrypted_content || (Array.isArray(item.content) && item.content.length > 0)) return;
+		const summaryText = (item.summary ?? [])
+			.map((part) => part.text ?? "")
+			.join("\n")
+			.trim();
+		const text = block.thinking?.trim() ? block.thinking : summaryText;
+		if (!text) return;
+		item.content = [{ type: "reasoning_text", text }];
+		item.summary = [];
 	};
 
 	const normalizeToolCallId = (id: string, _targetModel: Model<TApi>, source: AssistantMessage): string => {
@@ -209,6 +233,9 @@ export function convertResponsesMessages<TApi extends Api>(
 				if (block.type === "thinking") {
 					if (block.thinkingSignature) {
 						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+						if (options?.strictReasoningReplay) {
+							normalizeReplayedReasoningItem(reasoningItem, block);
+						}
 						output.push(reasoningItem);
 						sawReasoningItem = true;
 					}
@@ -256,7 +283,7 @@ export function convertResponsesMessages<TApi extends Api>(
 			}
 			// The turn has replayed content (text/tool calls) but no reasoning item:
 			// fill the gap so the all-or-nothing check sees a uniform history.
-			if (options?.injectEmptyReasoning && !sawReasoningItem && output.length > 0) {
+			if (options?.strictReasoningReplay && !sawReasoningItem && output.length > 0) {
 				output.unshift(buildEmptyReasoningItem());
 			}
 			if (output.length === 0) continue;

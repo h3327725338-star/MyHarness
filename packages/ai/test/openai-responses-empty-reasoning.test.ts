@@ -69,6 +69,23 @@ const realReasoningSignature = JSON.stringify({
 	content: [{ type: "reasoning_text", text: "checking the file" }],
 });
 
+// The shape OpenCode Go returns for deepseek-v4.1-flash: summary carries the text,
+// no content and no encrypted_content.
+const summaryOnlyReasoningSignature = JSON.stringify({
+	id: "rs_summary_1",
+	type: "reasoning",
+	status: "completed",
+	summary: [{ type: "summary_text", text: "gateway summary text" }],
+});
+
+const encryptedReasoningSignature = JSON.stringify({
+	id: "rs_enc_1",
+	type: "reasoning",
+	status: "completed",
+	summary: [{ type: "summary_text", text: "keep me" }],
+	encrypted_content: "enc_123",
+});
+
 function createDeepSeekModel(overrides?: Partial<Model<"openai-responses">>): Model<"openai-responses"> {
 	return {
 		id: "deepseek-v4.1-flash",
@@ -135,7 +152,7 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 			tools: [tool],
 		};
 
-		const input = convertResponsesMessages(model, context, providers, { injectEmptyReasoning: true });
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
 		const reasoning = reasoningIndexes(input);
 		expect(reasoning).toHaveLength(2);
 		expect(input[reasoning[0]]).toMatchObject({
@@ -167,7 +184,7 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 			tools: [tool],
 		};
 
-		const input = convertResponsesMessages(model, context, providers, { injectEmptyReasoning: true });
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
 		const reasoning = reasoningIndexes(input);
 		expect(reasoning).toHaveLength(2);
 		expect(input[reasoning[0]]).toMatchObject({ id: "rs_real_1" });
@@ -196,7 +213,7 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 			tools: [tool],
 		};
 
-		const input = convertResponsesMessages(model, context, providers, { injectEmptyReasoning: true });
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
 		const reasoning = reasoningIndexes(input);
 		expect(reasoning).toHaveLength(1);
 		expect(input[reasoning[0]]).toMatchObject({
@@ -204,6 +221,112 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 			content: [{ type: "reasoning_text", text: "reasoning unavailable" }],
 		});
 		expect((input[reasoning[0]] as { id?: string }).id).toBeUndefined();
+	});
+
+	it("moves summary-only replayed reasoning into content.reasoning_text", () => {
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "q", timestamp: 1 },
+				assistant([
+					{ type: "thinking", thinking: "stored full thought", thinkingSignature: summaryOnlyReasoningSignature },
+					{ type: "toolCall", id: "call_1|fc_1", name: "read_file", arguments: {} },
+				]),
+				{
+					role: "toolResult",
+					toolCallId: "call_1|fc_1",
+					toolName: "read_file",
+					content: [{ type: "text", text: "body" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+			tools: [tool],
+		};
+
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
+		const reasoning = reasoningIndexes(input);
+		expect(reasoning).toHaveLength(1);
+		expect(input[reasoning[0]]).toMatchObject({
+			id: "rs_summary_1",
+			summary: [],
+			content: [{ type: "reasoning_text", text: "stored full thought" }],
+		});
+	});
+
+	it("falls back to the summary text when the stored thinking text is empty", () => {
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "q", timestamp: 1 },
+				assistant([
+					{ type: "thinking", thinking: "", thinkingSignature: summaryOnlyReasoningSignature },
+					{ type: "text", text: "answer" },
+				]),
+				{ role: "user", content: "next", timestamp: 2 },
+			],
+			tools: [tool],
+		};
+
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
+		const reasoning = reasoningIndexes(input);
+		expect(input[reasoning[0]]).toMatchObject({
+			summary: [],
+			content: [{ type: "reasoning_text", text: "gateway summary text" }],
+		});
+	});
+
+	it("leaves items that already carry content or encrypted_content untouched", () => {
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "q", timestamp: 1 },
+				assistant([
+					{ type: "thinking", thinking: "plain", thinkingSignature: realReasoningSignature },
+					{ type: "text", text: "one" },
+				]),
+				assistant([
+					{ type: "thinking", thinking: "opaque", thinkingSignature: encryptedReasoningSignature },
+					{ type: "text", text: "two" },
+				]),
+				{ role: "user", content: "next", timestamp: 2 },
+			],
+			tools: [tool],
+		};
+
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
+		const reasoning = reasoningIndexes(input);
+		expect(reasoning).toHaveLength(2);
+		expect(input[reasoning[0]]).toMatchObject({
+			id: "rs_real_1",
+			content: [{ type: "reasoning_text", text: "checking the file" }],
+		});
+		expect(input[reasoning[1]]).toMatchObject({
+			id: "rs_enc_1",
+			encrypted_content: "enc_123",
+			summary: [{ type: "summary_text", text: "keep me" }],
+		});
+		expect((input[reasoning[1]] as { content?: unknown }).content).toBeUndefined();
+	});
+
+	it("does not normalize summary-only items when the option is off", () => {
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "q", timestamp: 1 },
+				assistant([
+					{ type: "thinking", thinking: "stored full thought", thinkingSignature: summaryOnlyReasoningSignature },
+					{ type: "text", text: "answer" },
+				]),
+				{ role: "user", content: "next", timestamp: 2 },
+			],
+			tools: [tool],
+		};
+
+		const input = convertResponsesMessages(model, context, providers);
+		const reasoning = reasoningIndexes(input);
+		expect(reasoning).toHaveLength(1);
+		expect(input[reasoning[0]]).toMatchObject({
+			id: "rs_summary_1",
+			summary: [{ type: "summary_text", text: "gateway summary text" }],
+		});
+		expect((input[reasoning[0]] as { content?: unknown }).content).toBeUndefined();
 	});
 
 	it("does not inject when the option is off", () => {
@@ -230,7 +353,7 @@ describe("convertResponsesMessages empty reasoning injection", () => {
 			tools: [tool],
 		};
 
-		const input = convertResponsesMessages(model, context, providers, { injectEmptyReasoning: true });
+		const input = convertResponsesMessages(model, context, providers, { strictReasoningReplay: true });
 		expect(input.some((item) => item.type === "message")).toBe(false);
 		expect(reasoningIndexes(input)).toHaveLength(0);
 	});
@@ -279,6 +402,14 @@ describe("openai-responses reasoning 400 retry and placeholder wiring", () => {
 		expect(result.stopReason).toBe("stop");
 	});
 
+	it("retries up to two times and succeeds on the third attempt after reasoning replay 400s", async () => {
+		mockState.outcomes = [reasoning400, reasoning400, "ok"];
+		const result = await consumeStream(createDeepSeekModel(), buildContext(), { reasoningEffort: "max" });
+		expect(mockState.createCalls).toHaveLength(3);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+	});
+
 	it("does not retry unrelated 400s", async () => {
 		mockState.outcomes = [other400];
 		const result = await consumeStream(createDeepSeekModel(), buildContext(), { reasoningEffort: "max" });
@@ -286,10 +417,10 @@ describe("openai-responses reasoning 400 retry and placeholder wiring", () => {
 		expect(result.errorMessage).toContain("tools must be an array");
 	});
 
-	it("surfaces the original error when the retry also fails", async () => {
-		mockState.outcomes = [reasoning400, reasoning400];
+	it("surfaces the original error when every retry also fails", async () => {
+		mockState.outcomes = [reasoning400, reasoning400, reasoning400];
 		const result = await consumeStream(createDeepSeekModel(), buildContext(), { reasoningEffort: "max" });
-		expect(mockState.createCalls).toHaveLength(2);
+		expect(mockState.createCalls).toHaveLength(3);
 		expect(result.errorMessage).toContain("reasoning");
 		expect(result.stopReason).toBe("error");
 	});
