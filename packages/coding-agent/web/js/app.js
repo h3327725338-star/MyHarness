@@ -17,6 +17,7 @@ import { CommandPalette } from "./palette.js";
 import { FloatingQuoteToolbar } from "./quote-toolbar.js";
 import { ImageLightboxHost } from "./lightbox.js";
 import { useWorkspaceTitle } from "./workspace-title.js";
+import { SourcesPageHost } from "./sources-page.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
@@ -284,6 +285,7 @@ export function App() {
 			<${Header} />
 			<${Transcript} />
 			${exportReadOnly() ? null : html`<${Composer} />`}
+			${exportReadOnly() ? null : html`<${SourcesPageHost} />`}
 			<${Toasts} />
 			${exportReadOnly() ? null : html`<${FloatingQuoteToolbar} />`}
 		</main>

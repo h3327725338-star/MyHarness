@@ -660,7 +660,7 @@ function Safety({ items, models }) {
  * dialog (its only stops are the minimize button and the editor). A scrim click also closes it. While a pending IME
  * composition is alive, Escape belongs to the composition and never closes the window.
  */
-function PersonalFullscreen({ open, title, value, caret, anchor, placeholder, onInput, onClose }) {
+export function PersonalFullscreen({ open, title, value, caret, anchor, placeholder, onInput, onClose }) {
 	const { mounted, shown } = usePresence(open, motionEnabled() ? 110 : 0);
 	const last = useRef(null);
 	if (open) last.current = { title, value, caret, anchor, placeholder, onInput };

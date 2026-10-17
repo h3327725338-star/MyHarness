@@ -10,7 +10,12 @@ import {
 } from "../../agent/runtime/conversation-title.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { getDataDir, getWorkspacesDir } from "../../config/paths/index.ts";
-import { listWorkspaceSources, uploadWorkspaceSource } from "../../data/workspace-sources.ts";
+import {
+	deleteWorkspaceSource,
+	listWorkspaceSources,
+	uploadWorkspaceSource,
+	WorkspaceSourceError,
+} from "../../data/workspace-sources.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
@@ -259,6 +264,26 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		} catch (error) {
 			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
 		}
+	});
+	server.route("POST", "/api/workspaces/sources/delete", ({ body }) => {
+		const input = asObject(body);
+		const workspace = generalWorkspace(input.id);
+		const sourceId = asString(input.sourceId, "sourceId");
+		try {
+			deleteWorkspaceSource(host.workspaceStore.getDataRoot() ?? getDataDir(), workspace.workspaceId, sourceId);
+		} catch (error) {
+			const status =
+				error instanceof WorkspaceSourceError
+					? error.code === "not_found"
+						? 404
+						: error.code === "invalid"
+							? 400
+							: 409
+					: 409;
+			throw new HttpError(status, error instanceof Error ? error.message : "Delete failed");
+		}
+		host.broadcast("workspaces_changed", {});
+		return { ok: true };
 	});
 
 	const isArchivedSession = (info: SessionInfo): boolean =>

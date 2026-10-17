@@ -172,6 +172,9 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		await owner.session.waitForForegroundIdle();
 		expect(owner.session.agent.state.systemPrompt).toContain("UNIQUE_WORKSPACE_FIRST");
 		expect(owner.session.agent.state.systemPrompt).toContain(JSON.stringify(source.path));
+		expect(owner.session.agent.state.systemPrompt).toContain(
+			"They apply together with <user_personalization>, and they take precedence over it",
+		);
 		const user = events.find((event) => event.type === "message_start" && event.message.role === "user");
 		expect(user).toBeDefined();
 		const { promptCorrelation } = await import("../src/agent/runtime/prompt-correlation.ts");
@@ -188,6 +191,35 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		expect(owner.session.agent.state.systemPrompt).toContain("UNIQUE_WORKSPACE_SECOND");
 		expect(owner.session.agent.state.systemPrompt).not.toContain("UNIQUE_WORKSPACE_FIRST");
 		expect(owner.session.agent.state.systemPrompt).not.toContain(JSON.stringify(source.path));
+	});
+
+	it("deletes one workspace source by id with clear 4xx answers and drops it from the next turn", async () => {
+		const fx = await start();
+		const created = await fx.post("/api/workspaces/create", { name: "source-delete", mode: "general" });
+		const id = created.workspace.id;
+		const upload = (name: string) =>
+			fx.post("/api/workspaces/sources/upload", { id, name, data: Buffer.from(name).toString("base64") });
+		const kept = await upload("kept.txt");
+		const gone = await upload("gone.txt");
+		expect(await fx.post("/api/workspaces/sources/delete", { id, sourceId: gone.id })).toEqual({ ok: true });
+		const { sources } = await fx.get(`/api/workspaces/settings?id=${encodeURIComponent(id)}`);
+		expect(sources.map((source: { id: string }) => source.id)).toEqual([kept.id]);
+		await expect(fx.post("/api/workspaces/sources/delete", { id, sourceId: gone.id })).rejects.toMatchObject({
+			status: 404,
+		});
+		await expect(fx.post("/api/workspaces/sources/delete", { id, sourceId: "../uploads" })).rejects.toMatchObject({
+			status: 400,
+		});
+		await expect(
+			fx.post("/api/workspaces/sources/delete", { id: "missing", sourceId: kept.id }),
+		).rejects.toMatchObject({ status: 404 });
+		const opened = await fx.post("/api/sessions/new", { rootPath: created.workspace.rootPath, mode: "general" });
+		const owner = fx.hub.get(opened.slot)!;
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
+		await owner.submit("hello");
+		await owner.session.waitForForegroundIdle();
+		expect(owner.session.agent.state.systemPrompt).toContain(JSON.stringify(kept.path));
+		expect(owner.session.agent.state.systemPrompt).not.toContain(JSON.stringify(gone.path));
 	});
 
 	async function resetGeneral(fx: {

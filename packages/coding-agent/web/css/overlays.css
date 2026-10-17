@@ -285,6 +285,12 @@
 .personal-expand { position: relative; }
 .personal-expand > .personal-prompt { padding-right: 32px; }
 .personal-expand-btn { position: absolute; top: 6px; right: 6px; }
+/* Workspace settings (workspace-settings.js): two quiet groups told apart by spacing and a small heading; the
+   instructions box reuses the personal prompt's maximize corner and keeps its own row count. */
+.ws-set { gap: 18px; }
+.ws-set-group { gap: 10px; }
+.ws-set-title { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
+.ws-set-instructions { min-height: 0; }
 
 /* Image lightbox (ImageLightboxHost in lightbox.js): a fullscreen dark scrim above every other overlay, the image
    centered inside 90% of the viewport, a round close button pinned to the image's top-right corner. The ".open" class

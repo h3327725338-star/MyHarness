@@ -629,6 +629,8 @@ export function turnOutcome(turn, { run, live, waiting }) {
 	if (waiting) return "waiting";
 	if (live) return "running";
 	if (run) return run.outcome;
+	// A message the server has not confirmed yet (the optimistic local copy) is still on its way: it is never "no response".
+	if (!turn.lastAssistant && turn.user?.pending) return "running";
 	if (!turn.lastAssistant) return turn.user ? "unanswered" : "completed";
 	const stop = turn.lastAssistant.stopReason;
 	if (stop === "aborted") return "cancelled";

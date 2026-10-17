@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmdirSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getWorkspaceUploadsDir } from "../config/paths/index.ts";
 
@@ -8,7 +17,18 @@ export interface WorkspaceSource {
 	name: string;
 	path: string;
 	size: number;
+	/** Modification time of the stored file (ms since epoch); shown as the source's date. */
+	modified: number;
 }
+/** Why a source could not be deleted: a malformed id, a source that is not there, or a directory left untouched. */
+export class WorkspaceSourceError extends Error {
+	readonly code: "invalid" | "not_found" | "refused";
+	constructor(code: "invalid" | "not_found" | "refused", message: string) {
+		super(message);
+		this.code = code;
+	}
+}
+const SOURCE_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 function sourceRoot(dataRoot: string, workspaceId: string): string {
 	const root = getWorkspaceUploadsDir(dataRoot, workspaceId);
 	// Refuse indirect roots; never write through a user-created junction/symlink.
@@ -37,8 +57,9 @@ export function listWorkspaceSources(dataRoot: string, workspaceId: string): Wor
 			)
 				continue;
 			const path = join(directory, source.storedName);
-			if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) continue;
-			sources.push({ id: entry.name, name: source.name, size: source.size, path });
+			const stat = lstatSync(path);
+			if (!stat.isFile() || stat.isSymbolicLink()) continue;
+			sources.push({ id: entry.name, name: source.name, size: source.size, path, modified: stat.mtimeMs });
 		} catch {
 			/* An incomplete upload does not become a source. */
 		}
@@ -68,11 +89,41 @@ export function uploadWorkspaceSource(
 	const path = join(directory, storedName);
 	const bytes = Buffer.from(data, "base64");
 	writeFileSync(path, bytes, { flag: "wx" });
-	const source = { id, name: name.slice(0, 255), path, size: bytes.length };
+	const source = { id, name: name.slice(0, 255), path, size: bytes.length, modified: lstatSync(path).mtimeMs };
 	writeFileSync(
 		join(directory, "source.json"),
 		JSON.stringify({ version: 1, name: source.name, size: source.size, storedName }),
 		{ flag: "wx" },
 	);
 	return source;
+}
+/**
+ * Delete one source: only its own `<uploads>/<id>/` directory. The same indirect-root checks as listing and upload
+ * apply first; the directory itself must be a real directory holding only plain files (its manifest and the stored
+ * file), so nothing is ever removed through a link and the uploads root and workspace directory stay untouched.
+ */
+export function deleteWorkspaceSource(dataRoot: string, workspaceId: string, sourceId: string): void {
+	if (!SOURCE_ID.test(sourceId)) throw new WorkspaceSourceError("invalid", "Invalid source id.");
+	const root = sourceRoot(dataRoot, workspaceId);
+	const directory = join(root, sourceId);
+	let stat: ReturnType<typeof lstatSync>;
+	try {
+		stat = lstatSync(directory);
+	} catch {
+		throw new WorkspaceSourceError("not_found", "This source no longer exists.");
+	}
+	if (stat.isSymbolicLink() || !stat.isDirectory())
+		throw new WorkspaceSourceError("refused", "Indirect source directories are not supported.");
+	const entries = readdirSync(directory, { withFileTypes: true });
+	if (entries.some((entry) => !entry.isFile()))
+		throw new WorkspaceSourceError("refused", "The source directory holds unexpected entries and was left as is.");
+	try {
+		for (const entry of entries) unlinkSync(join(directory, entry.name));
+		rmdirSync(directory);
+	} catch (error) {
+		throw new WorkspaceSourceError(
+			"refused",
+			`Could not delete the source: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 }

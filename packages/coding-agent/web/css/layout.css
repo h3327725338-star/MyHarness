@@ -79,11 +79,8 @@
 .chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
 /* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
 .chat-rows { position: relative; }
-/* One conversation and its attachments: the row stays as it was, the group opens below it. */
+/* One conversation row in its list slot. */
 .chat-entry { display: flex; flex-direction: column; min-width: 0; }
-.chat-attach { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px 8px 38px; }
-.chat-attach-head { font-size: var(--fs-xs); }
-.chat-attach-note { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); }
 
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */
@@ -111,6 +108,15 @@
 
 .main-header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; flex: none; border-bottom: 1px solid transparent; }
 .main-header.scrolled, .app.panel-open .main-header { border-bottom-color: var(--border); }
+/* Project sources page (sources-page.js): covers the conversation area, which stays mounted (and running) below it. */
+.sources-page { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; background: var(--bg-panel); animation: fade-only var(--t-base) var(--ease) both; }
+.sources-head { padding-left: 8px; border-bottom-color: var(--border); }
+.sources-title { min-width: 0; font-weight: 650; }
+.sources-kind { flex: none; font-size: var(--fs-sm); }
+.sources-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 20px 24px; }
+.sources-body .attach-list { margin: 0; }
+.sources-row { flex-wrap: nowrap; }
+.sources-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 56px 0; font-size: var(--fs-sm); }
 .export-top-badge {
 	display: inline-flex;
 	align-items: center;

@@ -24,6 +24,7 @@
 | `session/project-context.md` | 有项目上下文时使用，变量 `projectContext` |
 | `session/artifacts.md` | 持久化结构化 Session 的临时产出存放规则，变量 `artifactsDir`；由 `_getTurnSystemPrompt` 追加实际对话路径，不适用于正式源码或用户指定路径 |
 | `session/working-directory.md` | 当前工作目录，变量 `cwd` |
+| `session/workspace-instructions.md` | 仅 General 模式且工作区设置了说明时，放在 `<workspace_context>` 内说明前：工作区说明与 `<user_personalization>` 同时生效，冲突时以工作区说明为准；由 `_getTurnSystemPrompt` 追加 |
 | `session/model-identity.md` | 当前模型已知时使用，变量 `name`、`provider` |
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
 | `skills/harness.md` | 通用 AgentHarness 的技能说明；原文不同，独立维护 |

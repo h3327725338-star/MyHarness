@@ -617,6 +617,14 @@ describe("Web UI: turns", () => {
 		expect(turnOutcome(failedNoEdits, { live: true, waiting: false })).toBe("running");
 	});
 
+	it("never shows an unconfirmed local message as unanswered, but still flags a confirmed one with no reply", () => {
+		const turnOf = (user: Record<string, unknown>) =>
+			buildTurns([{ kind: "user", ts: 1, text: "x", images: [], ...user }], { cwd: "", toolRuns: {} })[0];
+		const idle = { run: undefined, live: false, waiting: false };
+		expect(turnOutcome(turnOf({ pending: true, clientMessageId: "c1" }), idle)).toBe("running");
+		expect(turnOutcome(turnOf({ id: "u1" }), idle)).toBe("unanswered");
+	});
+
 	it("uses the authoritative run record when present and groups same-kind actions", () => {
 		const turn = buildTurns(
 			[
