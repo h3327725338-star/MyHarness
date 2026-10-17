@@ -1,8 +1,39 @@
 // Runs before first paint (loaded as a classic script) so the chosen theme applies without a flash.
+// It also decides which copy of the preferences the page starts from (util.js loadPrefs reads the result):
+// /api/web-prefs.js (loaded just before) holds the copy every origin shares; localStorage holds this origin's copy.
+// The copy with the later change wins. A local copy without a change time predates the shared copy, so it only
+// counts when there is no shared copy yet (it is then moved there).
 (() => {
+	const KEY = "myharness.web.prefs";
+	const AT_KEY = "myharness.web.prefs.updatedAt";
+	const shared = globalThis.__MYHARNESS_WEB_PREFS__;
+	let boot = { prefs: {}, updatedAt: 0, push: false, unreadable: false };
 	try {
-		const raw = localStorage.getItem("myharness.web.prefs");
-		const prefs = raw ? JSON.parse(raw) : {};
+		let raw = null;
+		let local = null;
+		let localAt = 0;
+		try {
+			raw = localStorage.getItem(KEY);
+			localAt = Number(localStorage.getItem(AT_KEY)) || 0;
+			local = raw ? JSON.parse(raw) : null;
+			if (local !== null && (typeof local !== "object" || Array.isArray(local))) throw new Error("not an object");
+		} catch {
+			// A copy that exists but cannot be read is reported to the user (store.js) unless the shared copy replaces it.
+			boot.unreadable = raw !== null;
+			local = null;
+		}
+		const sharedPrefs = shared && typeof shared.prefs === "object" && shared.prefs ? shared : null;
+		if (sharedPrefs && (!local || localAt <= sharedPrefs.updatedAt)) {
+			boot = { prefs: sharedPrefs.prefs, updatedAt: sharedPrefs.updatedAt, push: false, unreadable: false };
+		} else if (local) {
+			boot = { prefs: local, updatedAt: localAt || Date.now(), push: true, unreadable: false };
+		}
+	} catch {
+		// Keep the defaults below.
+	}
+	globalThis.__MYHARNESS_BOOT_PREFS__ = boot;
+	try {
+		const prefs = boot.prefs;
 		document.documentElement.lang = prefs.lang === "zh-CN" ? "zh-CN" : "en";
 		const mode = prefs.theme || "system";
 		const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);

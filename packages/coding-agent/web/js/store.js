@@ -2,7 +2,7 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { chatTitle, clip, fmtDuration, loadPrefs, plural, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
+import { bootPrefsState, chatTitle, clip, fmtDuration, loadPrefs, plural, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
@@ -234,6 +234,23 @@ export const state = {
 };
 
 setLang(state.view.lang);
+
+// Start-up choice of preferences (boot-theme.js): move a newer local copy to the shared one, and say so when saved
+// preferences could not be read, so defaults are never shown as if they were the user's settings. The desktop host
+// adds `prefsReset` when the preferences of its earlier windows could not be read.
+{
+	const boot = bootPrefsState();
+	if (boot.push) savePrefs(prefs, boot.updatedAt);
+	const search = new URLSearchParams(globalThis.location?.search ?? "");
+	const hostReset = search.has("prefsReset");
+	if (hostReset) {
+		search.delete("prefsReset");
+		history.replaceState(history.state, "", `${location.pathname}${search.size ? `?${search}` : ""}${location.hash}`);
+	}
+	if (boot.unreadable || hostReset) {
+		toast(t("Saved appearance settings could not be read, so the defaults are in use. Choose them again in Settings → Appearance."), "warning", 0);
+	}
+}
 
 // ---- Sidebar lists, one set per mode ---------------------------------------------------------------
 // Each mode has its own Workspaces and chats. `state.workspaces` is the set of the mode on screen; loads that finish

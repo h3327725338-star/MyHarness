@@ -5,10 +5,22 @@ exports.httpUrl = (value) => {
   return url.href;
 };
 exports.createBrowser = (window, log) => {
-  let view, timer, rectangle;
+  let view, timer, rectangle, shown = false, pictures;
   const status = (value) => { if (!window.isDestroyed()) window.webContents.send('desktop:status', value); };
+  // The page shows the last picture of the view while the view is hidden (it cannot take part in the page's
+  // animations or stacking; see web/js/panel-browser.js). Pictures are taken only while the view is on screen.
+  const picture = async () => {
+    const current = view;
+    if (!current || !shown || current.webContents.isDestroyed() || current.webContents.isLoading()) return;
+    try {
+      const image = await current.webContents.capturePage();
+      if (view === current && !image.isEmpty()) status({ snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}` });
+    } catch (error) { log(`网页截图失败：${error.message}`); }
+  };
   const destroy = () => {
     clearTimeout(timer);
+    clearInterval(pictures); pictures = undefined;
+    shown = false;
     if (view) {
       window.contentView.removeChildView(view);
       view.webContents.close({ waitForBeforeUnload: false });
@@ -21,11 +33,12 @@ exports.createBrowser = (window, log) => {
     if (!view) return;
     const [width, height] = window.getContentSize();
     const valid = rect && ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(rect[key]));
-    if (!valid || rect.width < 1 || rect.height < 1) { view.setVisible(false); return; }
+    if (!valid || rect.width < 1 || rect.height < 1) { view.setVisible(false); shown = false; return; }
     const x = Math.max(0, Math.min(width, Math.round(rect.x)));
     const y = Math.max(0, Math.min(height, Math.round(rect.y)));
     view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(rect.width))), height: Math.max(0, Math.min(height - y, Math.round(rect.height))) });
     view.setVisible(true);
+    if (!shown) { shown = true; setTimeout(picture, 300); }
   };
   const navigate = async (value) => {
     const url = exports.httpUrl(value);
@@ -52,7 +65,8 @@ exports.createBrowser = (window, log) => {
       clearTimeout(timer);
       timer = setTimeout(() => { if (view === current) fail('加载超时（45 秒）', current.webContents.getURL() || url); }, 45000);
     });
-    current.webContents.on('did-stop-loading', () => clearTimeout(timer));
+    current.webContents.on('did-stop-loading', () => { clearTimeout(timer); setTimeout(picture, 300); });
+    pictures = setInterval(picture, 1000);
     current.webContents.on('did-navigate', (_event, target) => status({ url: target }));
     current.webContents.on('did-fail-load', (_event, code, description, target, mainFrame) => {
       if (mainFrame && code !== -3 && view === current) fail(`${description} (${code})`, target || url);

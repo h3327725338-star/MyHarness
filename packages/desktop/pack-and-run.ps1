@@ -7,6 +7,7 @@
 #     删不掉的（例如旧版本还在运行）只提示并跳过，不会中断流程。
 #   * 启动最新产物前会关闭正在运行的 MyHarness，否则单实例锁会让新版本直接退出、看到的还是旧窗口。
 #     关闭走的是窗口关闭（和点右上角 X 一样），服务与子进程随之正常退出。
+#     20 秒后仍有残留（如无窗口的孤儿子进程）时，只强制结束位于 dist\desktop 下的 MyHarness 进程。
 #   * 失败时保留窗口显示原因，成功时窗口在启动新版本后自动关闭。
 #
 # 参数：由环境变量控制，脚本本身不消费参数。
@@ -106,6 +107,20 @@ function Stop-RunningInstance {
 	foreach ($process in $running) { [void]$process.CloseMainWindow() }
 	$deadline = (Get-Date).AddSeconds(20)
 	while ((Get-Packaging).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+	if ((Get-Packaging).Count -gt 0) {
+		# 窗口关闭后仍残留的进程多半是主进程已退出后遗留的孤儿子进程（没有窗口，CloseMainWindow 无效），
+		# 它们会一直占着旧版本的 MyHarness.exe。只强制结束命令行位于本脚本产物目录下的进程，别的位置的不碰。
+		$leftover = @(Get-Packaging | Where-Object {
+			$cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue
+			$cim -and $cim.CommandLine -and $cim.CommandLine.IndexOf($OutputRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+		})
+		if ($leftover.Count -gt 0) {
+			Write-Host "  有 $($leftover.Count) 个残留进程没有响应窗口关闭，强制结束它们" -ForegroundColor DarkYellow
+			foreach ($process in $leftover) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+			$deadline = (Get-Date).AddSeconds(10)
+			while ((Get-Packaging).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+		}
+	}
 	if ((Get-Packaging).Count -gt 0) {
 		throw "MyHarness 没有在 20 秒内退出。请手动关闭它的窗口，然后重新双击 dev-desktop.cmd。"
 	}

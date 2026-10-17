@@ -92,7 +92,7 @@ function Header() {
 		${tabBtn("files", "folder", t("Files"))}
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
-		${window.myHarnessDesktop && !exportReadOnly() ? tabBtn("browser", "globe", state.view.lang === "en" ? "Browser" : "浏览器") : null}
+		${window.myHarnessDesktop && !exportReadOnly() ? tabBtn("browser", "globe", t("Browser")) : null}
 	</header>`;
 }
 

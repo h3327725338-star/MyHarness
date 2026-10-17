@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
-import { getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
+import { getAgentDir, getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import { setMirrorSessionsAllowed } from "../../session/manager/index.ts";
@@ -32,6 +32,7 @@ import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
 import { registerTerminalRoutes } from "./routes-terminal.ts";
 import { WebTerminals } from "./terminal.ts";
+import { registerWebPrefsRoutes } from "./web-prefs.ts";
 import { worktreeServiceIdentity } from "./worktree-launch.ts";
 
 export const DEFAULT_WEB_PORT = 7878;
@@ -86,6 +87,8 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 						copyIdentity.path.split(/[\\/]/u).pop(),
 				}
 			: null;
+	// Appearance preferences are shared by every origin: a worktree copy uses the Agent directory of its source.
+	registerWebPrefsRoutes(server, () => copyIdentity?.metadataAgentDir ?? getAgentDir());
 	server.route("GET", "/api/worktree-service", () =>
 		copyIdentity ? { ...serviceIdentity(), token: copyIdentity.token } : {},
 	);

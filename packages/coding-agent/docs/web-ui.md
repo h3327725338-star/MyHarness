@@ -353,7 +353,7 @@ packages/coding-agent/
 * Terminal 面板的伪终端来自可选依赖 `@lydell/node-pty`（预编译二进制，没有安装脚本），第一次打开终端时才加载（与剪贴板模块相同的两处查找位置）；缺少它或没有当前平台的二进制时，只有终端提示不可用，其余功能不受影响。结束 Shell 用项目自己的 `killProcessTree`，不调用 node-pty 的 `kill()`：后者会用当前可执行文件再启动一个辅助进程，只适合普通的 Node 进程。代价是已结束终端的 `conhost.exe` 会保留到服务退出（服务退出时随进程一起结束）。xterm.js 在 `web/vendor/`，第一次显示终端时才加载；终端的配色取自页面主题（`terminal-session.js`），切换主题时跟着变。
 * wire 格式（`wire.ts`）只投影现有数据，不发明字段；前端不要伪造后端没有返回的状态。
 * 对话模型的纯逻辑（`turns.js`、`diff-parse.js`、`util.js`、`provider-models.js`）、界面语言（`test/web-i18n.test.ts`）和上下文构成（`test/web-context-breakdown.test.ts`）有单元测试；`ExtensionMode` 现在包含 `"web"`，新增基于 mode 的 Extension 分支时要一并考虑。
-* Web 偏好（主题、宽度、面板状态）存在浏览器 `localStorage`（按 origin，即端口区分）；它们不进入 `settings.json`。
+* Web 偏好（主题、语言、动画、宽度、面板页签、运行模式、通知等，`store.js` 的 `PERSISTED`）有两份：所有 origin 共用的一份由服务端存在 Agent 目录的 `web-ui-prefs.json`（`src/modes/web/web-prefs.ts`：`GET/PUT /api/web-prefs`，首绘前由 `index.html` 加载的经典脚本 `/api/web-prefs.js` 提供；Worktree 副本使用源 Agent 目录），本 origin 的一份仍在 `localStorage`（服务不可达时兜底）。`boot-theme.js` 在首绘前比较两份的修改时间（`myharness.web.prefs.updatedAt`），较新的一份生效；没有修改时间的旧版本地副本只在服务端还没有时迁移过去。保存时先写本地，再 300ms 合并写入服务端（页面关闭时用 keepalive 立即发送）；服务端忽略比已存时间更旧的写入。已保存的偏好无法读取时用默认值启动并显示提示。它们不进入 `settings.json`。浏览器端与桌面端因此共用同一套外观设置。
 
 ## 验证
 

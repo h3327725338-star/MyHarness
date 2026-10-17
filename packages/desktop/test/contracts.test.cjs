@@ -30,3 +30,43 @@ test('preload exposes no raw Electron or Node APIs', () => {
   assert.doesNotMatch(source, /exposeInMainWorld\(['"](?:fs|require|ipcRenderer|electron)['"]/);
   assert.match(source, /contextBridge.exposeInMainWorld/);
 });
+test('legacy desktop preferences: the last change of each preference across earlier origins', () => {
+  const os = require('node:os');
+  const { readLegacyPrefs } = require('../legacy-prefs.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-prefs-'));
+  try {
+    const leveldb = path.join(dir, 'Local Storage', 'leveldb');
+    fs.mkdirSync(leveldb, { recursive: true });
+    // Minimal LevelDB write-ahead log: one FULL record per batch, each batch one put of a localStorage value.
+    const varint = (n) => { const out = []; while (n > 127) { out.push((n & 127) | 128); n >>>= 7; } out.push(n); return Buffer.from(out); };
+    const put = (seq, origin, prefs, utf16 = false) => {
+      const key = Buffer.from(`_http://127.0.0.1:${origin}\x00\x01myharness.web.prefs`, 'latin1');
+      const text = JSON.stringify(prefs);
+      const value = Buffer.concat([Buffer.from([utf16 ? 0 : 1]), Buffer.from(text, utf16 ? 'utf16le' : 'latin1')]);
+      const head = Buffer.alloc(12); head.writeUInt32LE(seq, 0); head.writeUInt32LE(1, 8);
+      const batch = Buffer.concat([head, Buffer.from([1]), varint(key.length), key, varint(value.length), value]);
+      const header = Buffer.alloc(7); header.writeUInt16LE(batch.length, 4); header[6] = 1;
+      return Buffer.concat([header, batch]);
+    };
+    const defaults = { theme: 'system', motion: 'system', lang: 'en', panelTab: 'changes', sidebarW: 272 };
+    fs.writeFileSync(path.join(leveldb, '000003.log'), Buffer.concat([
+      put(1, 50000, defaults),
+      put(2, 50000, { ...defaults, theme: 'dark' }),
+      put(3, 50000, { ...defaults, theme: 'dark', motion: 'on' }, true),
+      // A later start restarted from the defaults and only changed the panel tab.
+      put(4, 50001, { ...defaults, panelTab: 'files' }),
+      put(5, 50001, { ...defaults, panelTab: 'files', lang: 'zh-CN' }),
+    ]));
+    const result = readLegacyPrefs(dir);
+    assert.equal(result.prefs.theme, 'dark');
+    assert.equal(result.prefs.motion, 'on');
+    assert.equal(result.prefs.panelTab, 'files');
+    assert.equal(result.prefs.lang, 'zh-CN');
+    assert.equal(result.prefs.sidebarW, 272);
+    assert.ok(result.updatedAt > 0);
+    fs.writeFileSync(path.join(leveldb, '000003.log'), put(1, 50000, 'not an object'));
+    assert.deepEqual(readLegacyPrefs(dir), { unreadable: true });
+    fs.rmSync(path.join(leveldb, '000003.log'));
+    assert.equal(readLegacyPrefs(dir), null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

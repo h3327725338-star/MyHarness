@@ -259,23 +259,62 @@ export function ansiSegments(text) {
 	return segments;
 }
 
-// ---- Preferences (localStorage, best-effort) ---------------------------------------------
+// ---- Preferences ------------------------------------------------------------------------
+// The server keeps the copy every origin shares (/api/web-prefs); localStorage keeps this origin's copy so the page
+// still remembers them when the server cannot be reached. boot-theme.js decides which copy the page starts from.
 const PREF_KEY = "myharness.web.prefs";
+const PREF_AT_KEY = "myharness.web.prefs.updatedAt";
 export function loadPrefs() {
 	const exportedPrefs = globalThis.__MYHARNESS_EXPORT__?.prefs;
 	if (exportedPrefs && typeof exportedPrefs === "object") return exportedPrefs;
+	if (savedPrefs) return savedPrefs;
+	const boot = globalThis.__MYHARNESS_BOOT_PREFS__;
+	if (boot && typeof boot.prefs === "object" && boot.prefs) return boot.prefs;
 	try {
 		return JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {};
 	} catch {
 		return {};
 	}
 }
-export function savePrefs(prefs) {
+
+/** What the start-up choice of preferences needs from the page: the shared copy is older (push) or a copy was unreadable. */
+export function bootPrefsState() {
+	const boot = globalThis.__MYHARNESS_BOOT_PREFS__;
+	return { push: Boolean(boot?.push), unreadable: Boolean(boot?.unreadable), updatedAt: boot?.updatedAt || 0 };
+}
+
+let savedPrefs = null;
+let sharedPrefs = null;
+let sharedTimer = 0;
+function sendSharedPrefs(keepalive = false) {
+	clearTimeout(sharedTimer);
+	sharedTimer = 0;
+	if (!sharedPrefs || globalThis.__MYHARNESS_EXPORT__) return;
+	const body = JSON.stringify(sharedPrefs);
+	sharedPrefs = null;
+	fetch("/api/web-prefs", {
+		method: "PUT",
+		headers: { "content-type": "application/json", "x-myharness-web": "1" },
+		body,
+		keepalive,
+	}).catch(() => {
+		// The localStorage copy still has them; the next change sends them again.
+	});
+}
+if (typeof addEventListener === "function") addEventListener("pagehide", () => sendSharedPrefs(true));
+
+/** Save the preferences here and (shortly after, so dragging a width sends one request) in the shared copy. */
+export function savePrefs(prefs, updatedAt = Date.now()) {
+	savedPrefs = prefs;
 	try {
 		localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+		localStorage.setItem(PREF_AT_KEY, String(updatedAt));
 	} catch {
-		// storage unavailable: preferences just will not persist
+		// storage unavailable: the shared copy still keeps them
 	}
+	sharedPrefs = { prefs, updatedAt };
+	clearTimeout(sharedTimer);
+	sharedTimer = setTimeout(() => sendSharedPrefs(), 300);
 }
 
 export function debounce(fn, ms) {

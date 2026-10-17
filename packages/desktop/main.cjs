@@ -4,6 +4,7 @@ const { mkdirSync, appendFileSync, readFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 const { homedir } = require('node:os');
 const { createBrowser, httpUrl } = require('./browser-view.cjs');
+const { readLegacyPrefs } = require('./legacy-prefs.cjs');
 const root = resolve(__dirname, '../..');
 // The packaged app retains the checkout's data anchor, not the exe's arbitrary directory.
 const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory : root;
@@ -37,6 +38,23 @@ async function stop() {
   finished = true;
   app.quit();
 }
+// Earlier windows kept appearance preferences only in their own (random-port) origin. Move the user's choices to the
+// shared server copy once; when they exist but cannot be read, the page says the defaults are in use.
+async function migratePrefs(url) {
+  try {
+    const headers = { 'x-myharness-web': '1', 'content-type': 'application/json' };
+    const current = await (await fetch(new URL('/api/web-prefs', url), { signal: AbortSignal.timeout(5000) })).json();
+    if (current?.prefs) return '';
+    const legacy = readLegacyPrefs(app.getPath('userData'));
+    if (legacy?.unreadable) return '?prefsReset=1';
+    if (legacy?.prefs) {
+      const response = await fetch(new URL('/api/web-prefs', url), { method: 'PUT', headers, body: JSON.stringify(legacy), signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      log('已把早期桌面窗口的外观偏好迁移到共享设置');
+    }
+  } catch (error) { log(`外观偏好迁移失败：${error.message}`); }
+  return '';
+}
 function startService(restart) {
   serviceUrl = undefined;
   let requestedRestart;
@@ -57,7 +75,7 @@ function startService(restart) {
       const found = pending.match(/MyHarness Web UI: (http:\/\/127\.0\.0\.1:\d+\/)/);
       if (found && !serviceUrl) {
         clearTimeout(timeout); serviceUrl = found[1];
-        void window.loadURL(serviceUrl).then(() => window.show()).catch((error) => errorPage(`界面加载失败：${error.message}`));
+        void migratePrefs(serviceUrl).then((query) => window.loadURL(serviceUrl + query)).then(() => window.show()).catch((error) => errorPage(`界面加载失败：${error.message}`));
       }
     });
   }
