@@ -26,6 +26,12 @@
 .sidebar-scroll { flex: 1 1 auto; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; overscroll-behavior: contain; padding: 0 var(--pad-side) 8px; }
 .side-section { display: flex; align-items: center; gap: 4px; padding: 10px 4px 4px 8px; color: var(--text-3); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
 .side-section .grow { font-weight: 600; }
+/* The other space (main-copy chats while in a copy, copy chats while in main): folded at the bottom of the list. */
+.side-other { margin-top: 6px; border-top: 1px solid var(--border); }
+.side-other-head { width: 100%; background: none; border: 0; cursor: pointer; text-align: left; }
+.side-other-head:hover { color: var(--text-2); }
+.side-other-head .chev { flex: none; color: var(--text-4); transition: transform var(--t-base) var(--ease); }
+.side-other-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
 
 .ws-row { display: flex; align-items: center; gap: 6px; height: var(--h-row); padding: 0 4px 0 6px; border-radius: var(--r-md); color: var(--text-2); cursor: pointer; position: relative; transition: background var(--t-fast), color var(--t-fast); }
 .ws-row:hover { background: var(--surface-hover); }

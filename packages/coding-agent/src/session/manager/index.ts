@@ -1544,6 +1544,36 @@ export class SessionManager {
 	}
 
 	/**
+	 * Fill this brand-new session with the active branch of `source` (its messages, names and setup entries), keeping
+	 * this session's own id, file, cwd and storage. Used when a chat moves into another checkout (a worktree copy and
+	 * back) and must keep its history. Labels are dropped like createBranchedSession does; the source is not touched.
+	 * @throws When this session already has entries of its own.
+	 */
+	adoptHistoryFrom(source: SessionManager): void {
+		if (this.fileEntries.some((entry) => entry.type !== "session"))
+			throw new Error("Only an empty session can adopt another session's history");
+		const header = this.fileEntries.find((entry) => entry.type === "session") as SessionHeader | undefined;
+		if (!header) throw new Error("Session header is missing");
+		const entries: SessionEntry[] = [];
+		let parentId: string | null = null;
+		for (const entry of source.getBranch()) {
+			if (entry.type === "label") continue;
+			entries.push({ ...entry, parentId });
+			parentId = entry.id;
+		}
+		if (source.isPersisted() && source.getSessionFile()) header.parentSession = source.getSessionFile();
+		this.fileEntries = [header, ...entries];
+		this._buildIndex();
+		if (!this.persist) return;
+		if (hasPersistableSessionContent(this.fileEntries)) {
+			if (this.sessionFile) ensureSessionDirectory(resolve(this.sessionFile, ".."));
+			this._rewriteFile();
+			this.flushed = true;
+			this.writeMetadata();
+		}
+	}
+
+	/**
 	 * Create an independent in-memory manager for a branch without mutating this
 	 * manager.  Runtime replacement prepares the new manager before it disposes
 	 * the current session, so a later factory failure can leave the old history

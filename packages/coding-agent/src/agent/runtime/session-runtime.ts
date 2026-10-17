@@ -395,6 +395,8 @@ export class AgentSessionRuntime {
 		options?: {
 			/** Worktree entry uses existing registrations only; unregistered copies stay unbound. */
 			registerWorkspace?: boolean;
+			/** The new session starts with the current session's history (a chat moving into or out of a copy). */
+			carryHistory?: boolean;
 			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
 		},
@@ -429,6 +431,7 @@ export class AgentSessionRuntime {
 				? SessionManager.createUnbound(resolvedCwd, newSessionOptions, storageOptions)
 				: SessionManager.create(resolvedCwd, sessionDir, newSessionOptions, storageOptions)
 			: SessionManager.inMemory(resolvedCwd, newSessionOptions);
+		if (options?.carryHistory) sessionManager.adoptHistoryFrom(this.session.sessionManager);
 
 		await this.replaceRuntime(
 			"new",

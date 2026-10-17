@@ -5,7 +5,7 @@ import { api, attempt, canSendToActive, chooseThinkingLevel, clearDraft, flushDr
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
 import { DraftEditor } from "./draft-editor.js";
-import { BranchChip } from "./branch-menu.js";
+import { BranchChip, MergeBackChip } from "./branch-menu.js";
 import { openImageLightbox } from "./lightbox.js";
 
 import { ContextMeter } from "./context-usage.js";
@@ -18,7 +18,7 @@ import { completionDelay, completionLabel } from "./completion-status.js";
 import { retryReason } from "./retry-reason.js";
 import { SubAgentBar, runningTasks } from "./sub-agents.js";
 
-import { drafts, registerRestartDraft } from "./restart-state.js";
+import { drafts, registerRestartDraft, takeCarriedDraft } from "./restart-state.js";
 import { invalidateAttachmentCaches } from "./attachments.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
 import { clipLine, formatQuotes, quoteFromSelection } from "./quote-text.js";
@@ -336,6 +336,8 @@ export function Composer() {
 	useLayoutEffect(() => {
 		if (lastSession.current !== null && lastSession.current !== draftIdentity) drafts.set(lastSession.current, { text, images, quotes });
 		if (lastSession.current !== draftIdentity) {
+			// The chat moved into a worktree copy or back (a new session in the same slot): its unsent draft moves with it.
+			const carried = takeCarriedDraft(lastSession.current, sessionId);
 			if (lastSession.current !== null) flushDrafts();
 			// What the server saved for this chat; the text edited in this tab (if any) is newer and wins.
 			const saved = sessionId ? draftFromServer(state.modeState?.[chatMode]?.drafts?.[sessionId]) : null;
@@ -343,7 +345,7 @@ export function Composer() {
 			const target = provisionalTarget.current;
 			const sameTarget = target && target.mode === chatMode && (!target.path || target.path === snap?.session?.file);
 			const provisional = sessionId && sameTarget ? drafts.get(target.key) : null;
-			const draft = provisional || drafts.get(draftIdentity) || saved;
+			const draft = carried || provisional || drafts.get(draftIdentity) || saved;
 			if (provisional) drafts.delete(target.key);
 			setText(draft?.text || "");
 			setImages(draft?.images || []);
@@ -743,6 +745,7 @@ const send = async (mode) => {
 			<div class="composer-env">
 				${snap?.cwd ? html`<span class="env-chip" title=${`${t("Workspace folder")}: ${snap.cwd}`}><${Icon} name="folder" size=${12} /><span class="truncate">${snap.cwd}</span></span>` : null}
 				${gitStatus?.isRepository ? html`<${BranchChip} gitStatus=${gitStatus} />` : null}
+				${gitStatus?.isRepository && gitStatus.linkedWorktree ? html`<${MergeBackChip} gitStatus=${gitStatus} />` : null}
 				${snap?.trust && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
 				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
 			</div>

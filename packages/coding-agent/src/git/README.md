@@ -44,8 +44,9 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `manager.ts` | `GitWorktreeManager`。列出、创建、合并、删除 Worktree。`remove()` 默认安全删除，调用方可以显式传 `force: true` 使用 `git worktree remove --force` 丢弃未提交内容；两种删除都只删除副本、保留分支，不跳过主副本保护。同步失败优先保留 Git 的 `stderr` 真正原因供界面解释。分支是否被副本占用仍由 Git 拒绝，分支 `-D` 也不能绕过，副本与分支须分别操作。 |
+| `manager.ts` | `GitWorktreeManager`。列出、创建、合并、删除 Worktree。`readActivityAsync()` 只读地统计副本的未提交文件数和 main 没有的提交数；`mergeBack()` 把副本分支合并进 main 但保留副本：main 有未提交改动时拒绝，副本有未提交改动时需调用方明确同意先提交，冲突时执行 `git merge --abort` 并返回冲突文件，不留下合并中的状态，可按用户选择用 `-X ours/theirs` 重试。`remove()` 默认安全删除，调用方可以显式传 `force: true` 使用 `git worktree remove --force` 丢弃未提交内容；两种删除都只删除副本、保留分支，不跳过主副本保护。同步失败优先保留 Git 的 `stderr` 真正原因供界面解释。分支是否被副本占用仍由 Git 拒绝，分支 `-D` 也不能绕过，副本与分支须分别操作。 |
 | `display-name.ts` | `WorktreeDisplayNames`：worktree 展示别名（`agentDir/worktrees/names/`），纯展示元数据，不改分支、目录或 Git 身份 |
+| `merged-records.ts` | `WorktreeMergedRecords`：已合回 main 的副本记录（`agentDir/worktrees/merged/`），合并后副本作为只读留档；`isWorktreeCopyPath()` 只按路径判断目录是否在某个副本内（无 Git 调用、无文件访问），供侧栏区分主副本/副本空间 |
 | `index.ts` | worktrees/ 出口（转出 `manager.ts`） |
 
 ### ci/

@@ -53,7 +53,8 @@ import {
 	invalidateGitReadCache,
 } from "../../git/repository/read-cache.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
-import type { GitWorktree } from "../../git/worktrees/manager.ts";
+import { type GitWorktree, GitWorktreeManager } from "../../git/worktrees/manager.ts";
+import { WorktreeMergedRecords } from "../../git/worktrees/merged-records.ts";
 import { completeWithNetworkPolicy, failureOf } from "../../providers/recovery/network-retry.ts";
 import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
 import type { WebHost } from "./host.ts";
@@ -133,6 +134,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	const tasks = new Map<string, GitTaskState>();
 	const cwd = () => host.session.sessionManager.getCwd();
 	const copyNames = () => new WorktreeDisplayNames(host.runtimeHost.services.agentDir);
+	const mergedCopies = () => new WorktreeMergedRecords(host.runtimeHost.services.agentDir);
 	const launchers = new Map<string, WorktreeLauncher>();
 
 	const publishTask = (state: GitTaskState | undefined, result?: unknown) => {
@@ -156,9 +158,10 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		getAgentDir: () => host.runtimeHost.services.agentDir,
 		getCurrentCwd: cwd,
 		isSessionIdle: () => host.session.isIdle,
-		switchWorkspace: (target) =>
+		switchWorkspace: (target, options) =>
 			host.runtimeHost.switchWorkspace(target, {
 				registerWorkspace: false,
+				carryHistory: options?.carryHistory === true,
 				projectTrustContextFactory: (nextCwd) => host.createProjectTrustContext(nextCwd),
 			}),
 	});
@@ -230,6 +233,8 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			head,
 			linkedWorktree,
 			copyName: linkedWorktree && state.root ? copyNames().label({ path: state.root, branch: state.branch }) : null,
+			// A copy that was merged back is a read-only record: the composer and the merge button follow this flag.
+			copyMerged: linkedWorktree && state.root ? !!mergedCopies().get(state.root) : false,
 			checkpoint: checkpoint
 				? {
 						id: checkpoint.id,
@@ -617,10 +622,28 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const listing = await worktreeCase.listAsync(root);
 		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
 		const current = path.resolve(cwd());
+		const worktrees = listing.worktrees ?? [];
+		// What each copy holds that main does not (uncommitted files, unmerged commits), read a few at a time so a
+		// long list of sub-agent copies cannot start dozens of Git processes at once.
+		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
+		const activity = new Array<Awaited<ReturnType<GitWorktreeManager["readActivityAsync"]>>>(worktrees.length);
+		let next = 0;
+		await Promise.all(
+			Array.from({ length: Math.min(6, worktrees.length) }, async () => {
+				while (next < worktrees.length) {
+					const index = next++;
+					activity[index] = await manager.readActivityAsync(worktrees[index]!).catch(() => ({}));
+				}
+			}),
+		);
+		const merged = mergedCopies();
 		return {
 			repositoryRoot: listing.repositoryRoot ?? root,
-			worktrees: (listing.worktrees ?? []).map((worktree) => ({
+			worktrees: worktrees.map((worktree, index) => ({
 				...worktree,
+				...activity[index],
+				merged: worktree.isMain ? null : (merged.get(worktree.path) ?? null),
+				subagent: !!worktree.branch?.startsWith("myharness-subagent-"),
 				displayName: copyNames().label(worktree),
 				current: path.resolve(worktree.path) === current,
 			})),
@@ -634,15 +657,23 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		return found;
 	};
 
-	server.route("POST", "/api/git/worktrees/create", ({ body }) => {
+	server.route("POST", "/api/git/worktrees/create", async ({ body }) => {
 		const payload = asObject(body);
 		const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
 		if (!branch) throw new HttpError(400, "Branch name is required.");
 		requireTrusted();
 		const root = repositoryRootOrThrow();
+		// `base: "head"`: the new branch starts from the commit this chat has checked out right now, not from main.
+		let base = "main";
+		if (payload.newBranch === true && payload.base === "head") {
+			const head = await runGitAsync(cwd(), ["rev-parse", "--verify", "HEAD^{commit}"]);
+			if (!head.ok || !head.stdout.trim())
+				throw new HttpError(400, "The current branch has no commit yet, so a copy cannot start from it.");
+			base = head.stdout.trim();
+		}
 		const result =
 			payload.newBranch === true
-				? worktreeCase.createBranch(root, branch)
+				? worktreeCase.createBranch(root, branch, base)
 				: worktreeCase.createFromBranch(root, branch);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to create the worktree.");
 		return JSON.parse(JSON.stringify(result));
@@ -720,7 +751,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/git/worktrees/enter", async ({ body }) => {
 		const root = repositoryRootOrThrow();
 		const worktree = findWorktree(root, String(asObject(body).path ?? ""));
-		const result = await worktreeCase.enter(worktree);
+		const result = await worktreeCase.enter(worktree, { carryHistory: asObject(body).carryHistory === true });
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to enter the worktree.");
 		return { ok: true, message: result.message ?? null };
 	});
@@ -741,6 +772,31 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!branch) throw new HttpError(400, "Branch is required.");
 		const result = worktreeCase.combine(root, branch);
 		if (result.ok) invalidateGitReadCache(root);
+		return JSON.parse(JSON.stringify(result));
+	});
+
+	// One-click merge back from the copy this chat runs in: merge into main, mark the copy merged (read-only record),
+	// and move the chat with its history back to the main copy. Conflicts are aborted and reported, never left behind.
+	server.route("POST", "/api/git/worktrees/merge-back", async ({ body }) => {
+		requireIdle("merge a copy back");
+		requireTrusted();
+		const payload = asObject(body);
+		const strategy = payload.strategy === "ours" || payload.strategy === "theirs" ? payload.strategy : undefined;
+		const root = repositoryRootOrThrow();
+		const result = await worktreeCase.mergeBack(
+			root,
+			{ commitChanges: payload.commitChanges === true, strategy },
+			(merged) => {
+				if (!merged.worktree || !merged.main) return;
+				mergedCopies().set(merged.worktree.path, {
+					mergedAt: new Date().toISOString(),
+					into: merged.main.branch ?? "main",
+					commit: merged.commit,
+				});
+				invalidateGitReadCache(merged.main.path);
+				invalidateGitReadCache(merged.worktree.path);
+			},
+		);
 		return JSON.parse(JSON.stringify(result));
 	});
 

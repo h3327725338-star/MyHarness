@@ -46,6 +46,27 @@ export interface GitWorktreeCombineResult {
 	message?: string;
 }
 
+export interface GitWorktreeActivity {
+	/** Uncommitted files (tracked and untracked). */
+	changes?: number;
+	/** Commits on the copy's branch that `main` does not have. */
+	ahead?: number;
+}
+
+export interface GitWorktreeMergeBackResult {
+	ok: boolean;
+	status: "merged" | "conflict" | "needs-commit" | "failed";
+	main?: GitWorktree;
+	worktree?: GitWorktree;
+	/** Uncommitted files in the copy (status "needs-commit"). */
+	changes?: number;
+	/** Conflicting files of the aborted merge (status "conflict"). */
+	files?: string[];
+	commit?: string;
+	error?: string;
+	message?: string;
+}
+
 interface ParsedWorktree {
 	path: string;
 	branch?: string;
@@ -370,6 +391,132 @@ export class GitWorktreeManager {
 		};
 	}
 
+	/**
+	 * What a copy holds that `main` does not: uncommitted files and commits not reachable from `main`. Read-only and
+	 * asynchronous; a value that cannot be read stays undefined (the caller must not treat it as "nothing").
+	 */
+	async readActivityAsync(worktree: GitWorktree, mainBranch = "main"): Promise<GitWorktreeActivity> {
+		if (worktree.isMain || worktree.prunable) return {};
+		const options = { cwd: worktree.path, timeoutMs: WORKTREE_TIMEOUT_MS };
+		const [status, ahead] = await Promise.all([
+			runGit(["status", "--porcelain", "--untracked-files=all"], options),
+			worktree.branch
+				? runGit(["rev-list", "--count", `${mainBranch}..refs/heads/${worktree.branch}`], options)
+				: Promise.resolve(undefined),
+		]);
+		const count = ahead?.ok ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
+		return {
+			changes: status.ok ? status.stdout.split(/\r?\n/).filter((line) => line.trim()).length : undefined,
+			ahead: Number.isFinite(count) ? count : undefined,
+		};
+	}
+
+	/**
+	 * Merge a copy's branch into `main` without removing the copy (it stays as a read-only record).
+	 * - `main` must be clean; the copy must be clean unless `commitChanges` asks to commit its files first.
+	 * - A conflict is never left behind: the merge is aborted and the conflicting files are reported, so the caller can
+	 *   ask the user which side to keep (`strategy` "ours" keeps main, "theirs" keeps the copy) and try again.
+	 */
+	mergeBack(
+		repositoryRoot: string,
+		copyPath: string,
+		options: { commitChanges?: boolean; strategy?: "ours" | "theirs"; commitMessage?: string } = {},
+	): GitWorktreeMergeBackResult {
+		const listing = this.list(repositoryRoot);
+		if (!listing.ok || !listing.main || !listing.worktrees)
+			return { ok: false, status: "failed", error: listing.error ?? "无法读取 Worktree。" };
+		const main = listing.main;
+		const source = listing.worktrees.find((worktree) => pathsEqual(worktree.path, copyPath));
+		if (!source) return { ok: false, status: "failed", main, error: "选中的 Worktree 已不存在。" };
+		if (source.isMain) return { ok: false, status: "failed", main, error: "不能把 main 合并到自身。" };
+		if (!source.branch)
+			return { ok: false, status: "failed", main, worktree: source, error: "副本处于游离 HEAD，没有可合并的分支。" };
+		const branch = source.branch;
+
+		const mainStatus = this.readDirtyStatus(main.path);
+		if (!mainStatus.ok) return { ok: false, status: "failed", main, worktree: source, error: mainStatus.error };
+		if (mainStatus.dirty)
+			return {
+				ok: false,
+				status: "failed",
+				main,
+				worktree: source,
+				error: "主副本（main）有未提交的修改，请先在主副本提交或处理后再合回。",
+			};
+
+		const sourceStatus = this.readDirtyStatus(source.path);
+		if (!sourceStatus.ok) return { ok: false, status: "failed", main, worktree: source, error: sourceStatus.error };
+		if (sourceStatus.dirty) {
+			if (!options.commitChanges)
+				return { ok: false, status: "needs-commit", main, worktree: source, changes: sourceStatus.count };
+			const add = runGitSync(["add", "-A"], { cwd: source.path, timeoutMs: WORKTREE_TIMEOUT_MS });
+			if (!add.ok)
+				return {
+					ok: false,
+					status: "failed",
+					main,
+					worktree: source,
+					error: `提交副本改动失败：${formatGitFailure(add)}`,
+				};
+			const commit = runGitSync(
+				["commit", "-m", options.commitMessage?.trim() || "Save copy changes before merging back"],
+				{ cwd: source.path, timeoutMs: MERGE_TIMEOUT_MS },
+			);
+			if (!commit.ok)
+				return {
+					ok: false,
+					status: "failed",
+					main,
+					worktree: source,
+					error: `提交副本改动失败：${formatGitFailure(commit)}`,
+				};
+		}
+
+		const head = runGitSync(["rev-parse", `refs/heads/${branch}`], {
+			cwd: main.path,
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		const merge = runGitSync(["merge", "--no-edit", ...(options.strategy ? ["-X", options.strategy] : []), branch], {
+			cwd: main.path,
+			timeoutMs: MERGE_TIMEOUT_MS,
+		});
+		if (!merge.ok) {
+			if (!this.hasMergeInProgress(main.path)) {
+				return {
+					ok: false,
+					status: "failed",
+					main,
+					worktree: source,
+					error: `合并失败，main 未改变：${formatGitFailure(merge)}`,
+				};
+			}
+			const conflicted = runGitSync(["diff", "--name-only", "--diff-filter=U"], {
+				cwd: main.path,
+				timeoutMs: WORKTREE_TIMEOUT_MS,
+			});
+			const files = conflicted.ok ? conflicted.stdout.split(/\r?\n/).filter(Boolean) : [];
+			const abort = runGitSync(["merge", "--abort"], { cwd: main.path, timeoutMs: WORKTREE_TIMEOUT_MS });
+			return {
+				ok: false,
+				status: "conflict",
+				main,
+				worktree: source,
+				files,
+				error: abort.ok
+					? "合并有冲突，已撤销这次合并，main 保持原样。"
+					: `合并有冲突，且撤销失败，main 仍处于合并中：${formatGitFailure(abort)}`,
+			};
+		}
+		return {
+			ok: true,
+			status: "merged",
+			main,
+			worktree: source,
+			commit: head.ok ? head.stdout.trim() : undefined,
+			message: `已把 ${branch} 合并到 main。`,
+		};
+	}
+
 	private addWorktree(repositoryRoot: string, branchName: string, baseBranch?: string): GitWorktreeActionResult {
 		const listing = this.list(repositoryRoot);
 		if (!listing.ok || !listing.main || !listing.worktrees)
@@ -418,13 +565,17 @@ export class GitWorktreeManager {
 		}
 	}
 
-	private readDirtyStatus(cwd: string): { ok: boolean; dirty?: boolean; error?: string } {
+	private readDirtyStatus(cwd: string): { ok: boolean; dirty?: boolean; count?: number; error?: string } {
 		const result = runGitSync(["status", "--porcelain", "--untracked-files=all"], {
 			cwd,
 			timeoutMs: WORKTREE_TIMEOUT_MS,
 		});
 		return result.ok
-			? { ok: true, dirty: result.stdout.trim().length > 0 }
+			? {
+					ok: true,
+					dirty: result.stdout.trim().length > 0,
+					count: result.stdout.split(/\r?\n/).filter((line) => line.trim()).length,
+				}
 			: { ok: false, error: `无法读取 Git 状态：${formatGitFailure(result)}` };
 	}
 

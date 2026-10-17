@@ -2,21 +2,40 @@
 // this chat into an isolated copy of the repository (a Git worktree) or back to the main copy. Every action calls the
 // server's Git routes (routes-git.ts), which use Git's own rules; nothing here decides what Git allows.
 import { html, useEffect, useMemo, useRef, useState, afterPaint, Chevron, Collapse, COLLAPSE_MS, Icon, Popover, Spinner, Toggle } from "./ui.js";
-import { api, attempt, loadGitStatus, post, toast, useStore } from "./store.js";
+import { api, attempt, loadGitStatus, post, state, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
 import { getLang, serverText, t } from "./i18n.js";
 import { openWorktreeTab } from "./worktree-tabs.js";
 import { explainDeleteFailure } from "./git-delete.js";
 import { createReadCache } from "./scheduling.js";
+import { carryDraftFrom, dropCarriedDraft } from "./restart-state.js";
+import { actions } from "./actions.js";
 const worktreeReads = createReadCache(12);
 
-/** A name for the branch of a new isolated copy: task-MMDD-HHmm. */
-function copyBranchName() {
+/** A name for the branch of a new isolated copy: task-MMDD-HHmm, with -2, -3… when that name is taken. */
+function copyBranchName(taken = new Set()) {
 	const d = new Date();
 	const two = (n) => String(n).padStart(2, "0");
-	return `task-${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+	const base = `task-${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+	let name = base;
+	for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+	return name;
 }
+
+/** Display name of a copy: its alias, else its branch, else its folder. */
+const copyLabel = (w) => (w.isMain ? t("Main copy") : w.displayName || w.branch || w.path.split(/[\\/]/).pop());
+/** A long copy path shows its last two folders; the full path is in the tooltip and behind the copy button. */
+function shortPath(path) {
+	const sep = path.includes("\\") ? "\\" : "/";
+	const parts = path.split(/[\\/]/).filter(Boolean);
+	return parts.length > 3 ? `…${sep}${parts.slice(-2).join(sep)}` : path;
+}
+/** The copy holds work main does not have (or its state could not be read, which counts as work to be safe). */
+const holdsWork = (w) => !w.isMain && !w.merged && (w.changes === undefined || w.ahead === undefined || w.changes > 0 || w.ahead > 0);
+const workText = (w) => (w.changes === undefined || w.ahead === undefined
+	? t("Its changes could not be read, so it is treated as holding work.")
+	: t("Uncommitted files: {changes} · commits not in main: {ahead}", { changes: w.changes, ahead: w.ahead }));
 
 const sameCopyPath = (a, b) => !!a && !!b && a.replaceAll("\\", "/").toLowerCase() === b.replaceAll("\\", "/").toLowerCase();
 
@@ -86,6 +105,7 @@ export function BranchChip({ gitStatus }) {
 
 function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const running = useStore((s) => !!s.snap?.active);
+	const linked = !!gitStatus.linkedWorktree;
 	const [data, setData] = useState(branchSource.data);
 	const [error, setError] = useState("");
 	const [worktrees, setWorktrees] = useState(() => {
@@ -102,13 +122,13 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	// Refusals and force confirmation stay visible until cancelled or successfully deleted; pointer movement never clears them.
 	const [branchDeletion, setBranchDeletion] = useState(null);
 	const [removing, setRemoving] = useState("");
-	const [worktreesOpen, setWorktreesOpen] = useState(false);
-	const [isolating, setIsolating] = useState(false);
-	const [copyName, setCopyName] = useState("");
+	const [worktreesOpen, setWorktreesOpen] = useState(linked);
+	const [agentsOpen, setAgentsOpen] = useState(false);
+	const [fresh, setFresh] = useState("");
 	const [naming, setNaming] = useState(null);
 	const [displayName, setDisplayName] = useState("");
-	const [createDisplayName, setCreateDisplayName] = useState("");
-	const [autoName, setAutoName] = useState(false);
+	const [confirmCopy, setConfirmCopy] = useState("");
+	const [discarding, setDiscarding] = useState(false);
 	const [deletingCopy, setDeletingCopy] = useState(null);
 	const [copyFailure, setCopyFailure] = useState(null);
 	const [targetCopy, setTargetCopy] = useState(null);
@@ -117,7 +137,6 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const copies = useRef(null);
 	const known = useRef(null);
 	const list = useRef(null);
-	const linked = !!gitStatus.linkedWorktree;
 
 	const load = async (force = false) => {
 		try {
@@ -130,9 +149,10 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			setError(serverText(e.message, t("Cannot list branches.")));
 		}
 	};
-	const loadWorktrees = async () => {
+	// `fresh`: read again even if a read is in flight (it may have started before a copy was created or removed).
+	const loadWorktrees = async (fresh = false) => {
 		try {
-			const data = await worktreeReads.load(slot, () => api("/api/git/worktrees", { slot }));
+			const data = fresh ? await api("/api/git/worktrees", { slot }) : await worktreeReads.load(slot, () => api("/api/git/worktrees", { slot }));
 			setWorktrees({ list: data.worktrees || [] });
 		} catch (e) {
 			setWorktrees({ list: [], error: serverText(e.message, t("Cannot list worktrees.")) });
@@ -188,13 +208,19 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } }));
 		if (message) toast(message, "info", 3500);
 	};
-	const enterCopy = async (path, message) => {
+	// `carryHistory`: the chat (history and unsent draft) moves along instead of a new empty chat opening there.
+	const enterCopy = async (path, message, carryHistory = false) => {
 		setBusy(`w:${path}`);
-		const ok = await attempt(() => post("/api/git/worktrees/enter", { path }));
+		if (carryHistory) carryDraftFrom(state.snap?.session?.id);
+		const ok = await attempt(() => post("/api/git/worktrees/enter", { path, ...(carryHistory ? { carryHistory: true } : {}) }));
 		setBusy("");
-		if (!ok) return;
+		if (!ok) {
+			dropCarriedDraft();
+			return false;
+		}
 		close();
 		await done(message);
+		return true;
 	};
 	const switchTo = async (branch) => {
 		if (branch.current) return close();
@@ -299,54 +325,84 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		setTargetCopy({ branch: branch.name, path: failure?.worktreePath || branch.worktreePath });
 		await loadWorktrees();
 	};
-	const main = worktrees?.list.find((w) => w.isMain);
-	const others = (worktrees?.list || []).filter((w) => !w.current || !w.isMain);
-	const targetWorktree = targetCopy && worktrees?.list.find((w) => sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch);
+	const copiesList = worktrees?.list || [];
+	const main = copiesList.find((w) => w.isMain);
+	// The main copy is always first; copies the user made follow (current, with work, clean, merged last); sub-agent
+	// copies sit in their own group at the bottom, folded by default.
+	const rank = (w) => (w.current ? 0 : w.merged ? 3 : holdsWork(w) ? 1 : 2);
+	const mine = copiesList.filter((w) => !w.isMain && !w.subagent).sort((a, b) => rank(a) - rank(b));
+	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent);
+	const isTarget = (w) => !!targetCopy && (sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch);
+	const targetWorktree = targetCopy && copiesList.find(isTarget);
 	const targetProtection = targetWorktree?.isMain || targetWorktree?.current
 		? explainDeleteFailure({ detail: "The main worktree cannot be deleted." }, "copy").message
 		: "";
-	const setIsolation = (on) => {
-		if (linked) {
-			if (!on && main) enterCopy(main.path, t("Back in the main copy"));
-			return;
+	useEffect(() => {
+		if (targetWorktree?.subagent) setAgentsOpen(true);
+	}, [targetWorktree]);
+
+	// The copy gets its formal name from the main Agent once the chat is in it; until then the branch name stands in.
+	// A name the user typed in the meantime is never replaced, and a busy or failed request keeps the temporary name.
+	const nameInBackground = async (w) => {
+		try {
+			const result = await post("/api/git/worktrees/name-ai", { path: w.path, language: getLang() }, slot);
+			if (!result?.name) return;
+			const listing = await api("/api/git/worktrees", { slot });
+			const now = listing.worktrees?.find((item) => sameCopyPath(item.path, w.path));
+			if (!now || (now.displayName && now.displayName !== now.branch)) return;
+			await post("/api/git/worktrees/rename", { path: w.path, name: result.name }, slot);
+			await loadGitStatus();
+			await loadWorktrees(true);
+		} catch {
+			// Naming is a convenience: the copy keeps its branch name.
 		}
-		setIsolating(on);
-		if (on) setCopyName(copyBranchName());
 	};
-	const createCopy = async () => {
-		const branch = copyName.trim();
-		if (!branch) return;
+	// One action: a new branch from the commit checked out right now, a copy on it, and this chat (history and draft)
+	// moved into it. If the chat cannot move, it stays in the main copy and the empty copy is removed again.
+	const createAndEnter = async () => {
+		if (disabled || !worktrees || worktrees.error || linked) return;
+		const taken = new Set([...(data?.branches || []).map((b) => b.name), ...copiesList.map((w) => w.branch).filter(Boolean)]);
+		const branch = copyBranchName(taken);
 		setBusy("copy");
-		const created = await attempt(() => post("/api/git/worktrees/create", { branch, newBranch: true }));
+		const created = await attempt(() => post("/api/git/worktrees/create", { branch, newBranch: true, base: "head" }));
 		if (!created?.worktree?.path) {
 			setBusy("");
 			return;
 		}
-		if (autoName) {
-			setBusy("");
-			await loadWorktrees();
-			await suggestName(created.worktree);
-			setIsolating(false);
+		const path = created.worktree.path;
+		setFresh(path);
+		setWorktreesOpen(true);
+		await loadWorktrees(true);
+		carryDraftFrom(state.snap?.session?.id);
+		const entered = await attempt(() => post("/api/git/worktrees/enter", { path, carryHistory: true }));
+		setBusy("");
+		if (!entered) {
+			dropCarriedDraft();
+			setFresh("");
+			// Safe delete only: a copy that somehow holds files is kept and stays listed.
+			await tryPost("/api/git/worktrees/delete", { path });
+			await Promise.all([loadWorktrees(true), load(true)]);
+			toast(t("Still in the main copy; nothing was moved."), "warning", 6000);
 			return;
 		}
-		if (createDisplayName.trim()) await attempt(() => post("/api/git/worktrees/rename", { path: created.worktree.path, name: createDisplayName }, slot));
-		const entered = await attempt(() => post("/api/git/worktrees/enter", { path: created.worktree.path }));
-		setBusy("");
-		if (!entered) return loadWorktrees();
-		close();
 		await done(t("Now working in an isolated copy on {branch}", { branch }));
+		await loadWorktrees(true);
+		nameInBackground(created.worktree);
 	};
+	const backToMain = () => main && enterCopy(main.path, t("Back in the main copy"), true);
 
-	const deleteCopy = async (force = false) => {
-		if (!deletingCopy || deletingCopy.isMain || deletingCopy.current || running || busy || deletePending.current) return;
-		if (force && !copyFailure?.canForce) return;
+	const deleteCopy = async (w, force = false) => {
+		if (!w || w.isMain || w.current || running || busy || deletePending.current) return;
 		deletePending.current = true;
-		setBusy(`delete:${deletingCopy.path}`);
-		const err = await tryPost("/api/git/worktrees/delete", { path: deletingCopy.path, ...(force ? { force: true } : {}) });
+		setBusy(`delete:${w.path}`);
+		const err = await tryPost("/api/git/worktrees/delete", { path: w.path, ...(force ? { force: true } : {}) });
 		deletePending.current = false;
 		setBusy("");
 		if (err) {
 			const failure = { ...err, ...explainDeleteFailure(err, "copy", force) };
+			setConfirmCopy("");
+			setDiscarding(false);
+			setDeletingCopy(w);
 			setCopyFailure(failure);
 			// Unknown, permission, locked and busy errors do NOT mean dirty; force cannot be offered for them.
 			toast(failure.message, "error", 9000);
@@ -354,16 +410,45 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		}
 		setCopyFailure(null);
 		setDeletingCopy(null);
+		setConfirmCopy("");
+		setDiscarding(false);
 		setTargetCopy(null);
-		if (naming?.path === deletingCopy.path) setNaming(null);
-		await Promise.all([loadWorktrees(), load(true)]);
+		if (naming?.path === w.path) setNaming(null);
+		await Promise.all([loadWorktrees(true), load(true)]);
 		await done(t("Copy deleted"));
+	};
+	const cancelCopyDeletion = () => {
+		setDeletingCopy(null);
+		setCopyFailure(null);
+		setDiscarding(false);
+		setConfirmCopy("");
+	};
+	// A merged or clean copy is deleted after one confirming click; a copy that holds work opens the choices panel.
+	const askDeleteCopy = (w) => {
+		if (holdsWork(w)) {
+			setConfirmCopy("");
+			setCopyFailure(null);
+			setDiscarding(false);
+			setDeletingCopy(w);
+			return;
+		}
+		if (confirmCopy === w.path) return deleteCopy(w);
+		cancelCopyDeletion();
+		setConfirmCopy(w.path);
+	};
+	const mergeFirst = async (w) => {
+		cancelCopyDeletion();
+		if (await enterCopy(w.path)) toast(t("Use “Merge into main” above the input when the copy is ready."), "info", 6000);
 	};
 
 	const startCopy = async (w) => {
 		setBusy(`start:${w.path}`);
 		await attempt(() => openWorktreeTab(w.path, () => post("/api/git/worktrees/start", { path: w.path }, slot)));
 		setBusy("");
+	};
+	const copyPath = async (w) => {
+		const ok = await attempt(() => navigator.clipboard.writeText(w.path));
+		if (ok) toast(t("Path copied"), "info", 2500);
 	};
 	const suggestName = async (w) => {
 		setBusy("name");
@@ -375,7 +460,11 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		setBusy("name");
 		const result = await attempt(() => post("/api/git/worktrees/rename", { path: naming.path, name: displayName }, slot));
 		setBusy("");
-		if (result) { setNaming(null); await loadWorktrees(); }
+		if (result) {
+			setNaming(null);
+			await loadWorktrees(true);
+			await loadGitStatus();
+		}
 	};
 
 	const activate = (row) => (row.kind === "new" ? startNew() : switchTo(row.branch));
@@ -386,6 +475,31 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		if (event.key === "Enter") return event.preventDefault(), rows[sel] && activate(rows[sel]);
 	};
 	const disabled = running || !!busy || !data;
+
+	const copyRow = (w) => {
+		const work = holdsWork(w);
+		const highlighted = isTarget(w) || (!!fresh && sameCopyPath(w.path, fresh));
+		const rowBusy = busy === `w:${w.path}` || busy === `delete:${w.path}` || busy === `start:${w.path}`;
+		return html`<div key=${w.path} data-copy-path=${w.path} data-copy-branch=${w.branch} tabindex=${isTarget(w) ? "-1" : undefined}
+			class=${`pop-item branch-copy ${w.current ? "active" : ""} ${highlighted ? "branch-copy-target" : ""}`} title=${w.path}>
+			<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
+			<span class="col branch-copy-info">
+				<span class="branch-copy-title"><span class="truncate">${copyLabel(w)}</span>${w.merged
+					? html`<span class="copy-state ok" title=${t("Merged into main; kept as a read-only record")}>${t("Merged")}</span>`
+					: work ? html`<span class="copy-state warn" title=${workText(w)}>${t("Unmerged")}</span>` : null}</span>
+				<span class="dim truncate branch-copy-path">${shortPath(w.path)}</span>
+			</span>
+			${confirmCopy === w.path ? html`<button class="branch-confirm" disabled=${disabled} onClick=${() => deleteCopy(w)}>${t("Delete?")}</button>` : null}
+			${rowBusy ? html`<${Spinner} size=${13} />` : w.current ? html`<${Icon} name="check" size=${14} class="branch-check" />` : null}
+			<div class="branch-copy-actions">
+				${w.current ? null : html`<button class="icon-btn sm" disabled=${disabled} title=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} aria-label=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} onClick=${() => (w.isMain && linked ? backToMain() : enterCopy(w.path))}><${Icon} name="arrowRight" size=${13} /></button>`}
+				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}><${Icon} name="play" size=${13} /></button>
+				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
+				<button class="icon-btn sm" title=${t("Copy path")} aria-label=${t("Copy path")} onClick=${() => copyPath(w)}><${Icon} name="copy" size=${13} /></button>
+				${!w.isMain && confirmCopy !== w.path ? html`<button class="icon-btn sm" disabled=${disabled || w.current} title=${w.current ? t("Return to the main copy before deleting this one") : t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => askDeleteCopy(w)}><${Icon} name="trash" size=${13} /></button>` : null}
+			</div>
+		</div>`;
+	};
 
 	return html`<div class="branch-menu" role="dialog" aria-label=${t("Branches")}>
 		<div class="pop-search"><${Icon} name="search" size=${13} /><input autofocus value=${query} placeholder=${t("Search branches")} aria-label=${t("Search branches")}
@@ -441,51 +555,161 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		</div>
 		<div class="branch-wt">
 			<button class="pop-item branch-wt-heading" aria-expanded=${worktreesOpen} onClick=${() => setWorktreesOpen(!worktreesOpen)}>
-				<${Chevron} /><span>${t("Worktree")}</span><span class="dim">${t("Isolated working copies")}</span>
+				<${Chevron} /><span>${t("Worktree")}</span>
 			</button>
 			<${Collapse} open=${worktreesOpen}>
-			<div class="branch-wt-row">
-				<div class="col grow branch-wt-text">
-					<span>${t("Work in an isolated copy")}</span>
-					<span class="dim">${linked ? t("This chat runs in a separate worktree; the main copy and its branch are untouched.") : t("A new chat runs in a separate worktree on its own branch; this folder and branch stay as they are.")}</span>
-				</div>
-				${busy === "copy" || (main && busy === `w:${main.path}`) ? html`<${Spinner} />` : html`<${Toggle} checked=${linked || isolating} disabled=${disabled || !worktrees || !!worktrees.error || (linked && !main)} label=${t("Work in an isolated copy")} onChange=${setIsolation} />`}
-			</div>
-			${worktrees?.error ? html`<div class="branch-note dim">${worktrees.error}</div>` : null}
-			<${Collapse} open=${isolating && !linked}>
-				<form class="branch-form" onSubmit=${(e) => (e.preventDefault(), createCopy())}>
-					<input class="field sm grow" value=${copyName} aria-label=${t("Branch for the copy")} placeholder=${t("Branch for the copy")} onInput=${(e) => setCopyName(e.target.value)} />
-					<button class="btn sm primary" type="submit" disabled=${disabled || !copyName.trim()}>${t("Create and open")}</button>
-				</form>
-				<div class="branch-form"><input class="field sm grow" value=${createDisplayName} maxlength="80" aria-label=${t("Copy display name")} placeholder=${t("Copy display name (optional)")} onInput=${(e) => setCreateDisplayName(e.target.value)} /></div>
-				<label class="branch-hint"><input type="checkbox" checked=${autoName} onChange=${(e) => setAutoName(e.target.checked)} /> ${t("Let the main Agent name it")}</label>
-				<div class="branch-hint dim">${t("The new branch starts from main.")}</div>
-			<//>
-			${others.length ? html`<div class="pop-group">${t("Existing copies")}</div>` : null}
+			${linked
+				? html`<button class="pop-item branch-wt-action" disabled=${disabled || !main} onClick=${backToMain} title=${t("This chat and its draft move back to the main copy")}>
+					<${Icon} name="arrowLeft" size=${13} /><span class="truncate">${t("Back to the main copy")}</span><span class="grow" />${main && busy === `w:${main.path}` ? html`<${Spinner} size=${13} />` : null}</button>`
+				: html`<button class="pop-item branch-wt-action" disabled=${disabled || !worktrees || !!worktrees.error} onClick=${createAndEnter}
+					title=${t("A new branch from {branch} in its own folder; this chat and its draft move into it", { branch: gitStatus.branch || "HEAD" })}>
+					<${Icon} name="layers" size=${13} /><span class="truncate">${t("Create and enter a copy")}</span><span class="grow" />${busy === "copy" ? html`<${Spinner} size=${13} />` : null}</button>`}
+			${worktrees?.error ? html`<div class="branch-note c-danger">${worktrees.error}</div>` : null}
 			${targetCopy ? html`<div class="branch-hint">${targetProtection || t("Review the copy for “{branch}” below. Nothing is deleted by going here.", { branch: targetCopy.branch })}</div>` : null}
 			<div class="branch-copy-region" ref=${copies}>
-			${others.length ? html`<div class="branch-copies">${others.map((w) => html`<div key=${w.path} data-copy-path=${w.path} data-copy-branch=${w.branch} tabindex=${targetCopy && (sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch) ? "-1" : undefined} class=${`pop-item branch-copy ${targetCopy && (sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch) ? "branch-copy-target" : ""}`} title=${w.path}>
-				<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
-				<span class="col branch-copy-info">
-					<span class="truncate">${w.isMain ? t("Main copy") : w.displayName || w.branch || w.path.split(/[\\/]/).pop()}</span>
-					<span class="dim truncate branch-copy-path">${w.path}</span>
-				</span>
-				<div class="branch-copy-actions">
-				<button class="icon-btn sm" disabled=${disabled} title=${t("Enter to edit")} aria-label=${t("Enter to edit")} onClick=${() => enterCopy(w.path)}><${Icon} name="arrowRight" size=${13} /></button>
-				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}>${busy === `start:${w.path}` ? html`<${Spinner} size=${13} />` : html`<${Icon} name="play" size=${13} />`}</button>
-				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>
-				<button class="icon-btn sm" disabled=${disabled || w.current} title=${t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => { setDeletingCopy(w); setCopyFailure(null); }}><${Icon} name="trash" size=${13} /></button>` : null}
-				</div>
-			</div>`)}</div>` : !worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
+				${!worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
+				${main ? html`<div class="branch-copies">${copyRow(main)}</div>` : null}
+				${mine.length ? html`<div class="pop-group">${t("My copies")}</div><div class="branch-copies">${mine.map(copyRow)}</div>` : null}
+				${agentCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${agentsOpen} onClick=${() => setAgentsOpen(!agentsOpen)}>
+					<${Chevron} /><span>${t("Sub-agent copies")}</span><span class="badge">${agentCopies.length}</span></button>
+					<${Collapse} open=${agentsOpen}><div class="branch-copies">${agentCopies.map(copyRow)}</div><//>` : null}
 			</div>
 			${deletingCopy ? html`<div ref=${copyDeletionPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Delete copy?")}>
-				<div>${t("Delete copy “{name}”? Its folder will be deleted, not its branch. This does not merge changes into main.", { name: deletingCopy.displayName || deletingCopy.branch || deletingCopy.path.split(/[\\/]/).pop() })}</div>
-				${copyFailure ? html`<div class="c-danger" role="alert">${copyFailure.message}</div><details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${copyFailure.detail}</div></details>` : null}
-				${copyFailure?.canForce ? html`<div>${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
-				<div class="branch-form">${copyFailure?.canForce ? html`<button class="btn sm danger solid" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => deleteCopy(true)}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Force delete copy")}</button>` : html`<button class="btn sm danger" disabled=${disabled || deletingCopy.current || deletingCopy.isMain} onClick=${() => deleteCopy()}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : copyFailure ? t("Retry delete") : t("Delete")}</button>`}<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${() => { setDeletingCopy(null); setCopyFailure(null); }}>${t("Cancel")}</button></div>
+				<strong>${t("Delete copy “{name}”?", { name: copyLabel(deletingCopy) })}</strong>
+				${copyFailure
+					? html`<div class="c-danger" role="alert">${copyFailure.message}</div><details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${copyFailure.detail}</div></details>
+						${copyFailure.canForce ? html`<div>${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
+						${copyFailure.canForce && discarding ? html`<div class="c-danger">${t("Confirm force deletion of this copy and all uncommitted changes inside it?")}</div>` : null}
+						<div class="branch-form">${copyFailure.canForce
+							? html`<button class=${`btn sm danger ${discarding ? "solid" : ""}`} disabled=${disabled || deletingCopy.current} onClick=${() => (discarding ? deleteCopy(deletingCopy, true) : setDiscarding(true))}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Force delete copy")}</button>`
+							: html`<button class="btn sm danger" disabled=${disabled || deletingCopy.current} onClick=${() => deleteCopy(deletingCopy)}>${t("Retry delete")}</button>`}<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelCopyDeletion}>${t("Cancel")}</button></div>`
+					: html`<div>${workText(deletingCopy)}</div>
+						${discarding ? html`<div class="c-danger" role="alert">${t("Discarding permanently deletes the copy's folder and its uncommitted changes. Its branch and commits are kept. Discard?")}</div>` : null}
+						<div class="branch-form">
+							<button class="btn sm primary" disabled=${disabled} onClick=${() => mergeFirst(deletingCopy)}>${t("Merge it now")}</button>
+							<button class=${`btn sm danger ${discarding ? "solid" : ""}`} disabled=${disabled || deletingCopy.current} onClick=${() => (discarding ? deleteCopy(deletingCopy, deletingCopy.changes !== 0) : setDiscarding(true))}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : discarding ? t("Confirm discard") : t("Discard and delete")}</button>
+							<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelCopyDeletion}>${t("Cancel")}</button>
+						</div>`}
 			</div>` : null}
-			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
+			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${busy === "name" ? html`<${Spinner} size=${12} />` : t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
 			<//>
 		</div>
+	</div>`;
+}
+
+/**
+ * Beside the branch chip while the chat runs in a copy: one click merges the copy back into main (the server commits
+ * the copy's open files first when the user agreed, never leaves a conflict behind) and the chat continues in the main
+ * copy with its history and draft. A conflict stops and asks: keep the copy's side, keep main's side, or let the agent
+ * merge main into the copy and resolve it. A merged copy is a read-only record; the chip then leads back to main.
+ */
+export function MergeBackChip({ gitStatus }) {
+	const anchor = useRef(null);
+	const slot = useStore((s) => s.activeSlot);
+	const running = useStore((s) => !!s.snap?.active);
+	const [open, setOpen] = useState(false);
+	const [leaving, setLeaving] = useState(false);
+	const merged = !!gitStatus.copyMerged;
+	const label = gitStatus.copyName || gitStatus.branch || "";
+	// Merged copies only lead back to main: the chat moves with its history, nothing is written in the copy.
+	const goBack = async () => {
+		if (running || leaving) return;
+		setLeaving(true);
+		const listing = await attempt(() => api("/api/git/worktrees", { slot }));
+		const main = listing?.worktrees?.find((w) => w.isMain);
+		if (main) {
+			carryDraftFrom(state.snap?.session?.id);
+			const ok = await attempt(() => post("/api/git/worktrees/enter", { path: main.path, carryHistory: true }, slot));
+			if (!ok) dropCarriedDraft();
+			else {
+				await loadGitStatus();
+				window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } }));
+				toast(t("Back in the main copy"), "info", 3500);
+			}
+		}
+		setLeaving(false);
+	};
+	if (merged) {
+		return html`<button class="env-chip merge-chip merged" disabled=${running || leaving} onClick=${goBack}
+			title=${t("“{name}” was merged into main and is read-only here. Click to continue this chat in the main copy.", { name: label })}>
+			${leaving ? html`<${Spinner} size=${12} />` : html`<${Icon} name="checkCircle" size=${12} />`}<span class="truncate merge-chip-text">${t("Merged · back to main")}</span>
+		</button>`;
+	}
+	return html`<span ref=${anchor} class="merge-anchor">
+		<button class="env-chip merge-chip" onClick=${() => setOpen(!open)} aria-haspopup="dialog" aria-expanded=${open}
+			title=${t("Merge “{name}” into main and continue this chat there", { name: label })}>
+			<${Icon} name="gitMerge" size=${12} /><span class="truncate merge-chip-text">${t("Merge into main")}</span>
+		</button>
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="start" width=${300} maxHeight=${420} class="branch-pop">
+			<${MergeBackPanel} key=${slot} slot=${slot} label=${label} running=${running} close=${() => setOpen(false)} />
+		<//>
+	</span>`;
+}
+
+function MergeBackPanel({ slot, label, running, close }) {
+	const [copy, setCopy] = useState(null);
+	const [readError, setReadError] = useState("");
+	const [busy, setBusy] = useState("");
+	// null: confirm; { conflict: files } or { error } after a refused merge.
+	const [outcome, setOutcome] = useState(null);
+	useEffect(() => {
+		api("/api/git/worktrees", { slot })
+			.then((data) => setCopy(data.worktrees?.find((w) => w.current) || null))
+			.catch((e) => setReadError(serverText(e.message, t("Cannot list worktrees."))));
+	}, []);
+	const merge = async (strategy) => {
+		if (running || busy) return;
+		setBusy(strategy || "merge");
+		carryDraftFrom(state.snap?.session?.id);
+		let result;
+		try {
+			result = await post("/api/git/worktrees/merge-back", { commitChanges: true, ...(strategy ? { strategy } : {}) }, slot);
+		} catch (e) {
+			result = { status: "failed", error: e.rawMessage || e.message };
+		}
+		setBusy("");
+		if (result?.status !== "merged") {
+			dropCarriedDraft();
+			setOutcome(result?.status === "conflict" ? { conflict: result.files || [], error: result.error } : { error: serverText(result?.error || "", t("The operation failed.")) });
+			return;
+		}
+		if (!result.returned) dropCarriedDraft();
+		close();
+		await loadGitStatus();
+		window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } }));
+		if (result.returned) toast(t("Merged into main; the chat continues in the main copy"), "info", 5000);
+		else toast(t("Merged into main, but the chat could not move back: {error}", { error: serverText(result.returnError || "") }), "warning", 9000);
+	};
+	const askAgent = async (files) => {
+		close();
+		await actions.send(t("Merge main into this branch (git merge main) and resolve the conflicts in: {files}. Keep what both sides need, check the result, and commit it. Then tell me so I can merge back.", { files: files.join(", ") || "-" }));
+	};
+	const nothing = copy && copy.ahead === 0 && copy.changes === 0;
+	return html`<div class="branch-menu merge-panel" role="dialog" aria-label=${t("Merge into main")}>
+		<div class="merge-title"><${Icon} name="gitMerge" size=${13} /><span class="truncate">${t("Merge “{name}” into main", { name: label })}</span></div>
+		${running ? html`<div class="branch-note dim">${t("Available when the agent is idle")}</div>` : null}
+		${outcome?.conflict
+			? html`<div class="branch-note branch-delete-panel" role="alert">
+				<strong>${t("Conflicting files: {n}. Main is unchanged.", { n: outcome.conflict.length })}</strong>
+				${outcome.conflict.length ? html`<ul class="merge-files">${outcome.conflict.slice(0, 8).map((file) => html`<li class="truncate" title=${file}>${file}</li>`)}${outcome.conflict.length > 8 ? html`<li class="dim">${t("…and {n} more", { n: outcome.conflict.length - 8 })}</li>` : null}</ul>` : null}
+				<div class="branch-form">
+					<button class="btn sm" disabled=${running || !!busy} onClick=${() => merge("theirs")}>${busy === "theirs" ? html`<${Spinner} size=${12} />` : null}${t("Keep the copy's version")}</button>
+					<button class="btn sm" disabled=${running || !!busy} onClick=${() => merge("ours")}>${busy === "ours" ? html`<${Spinner} size=${12} />` : null}${t("Keep main's version")}</button>
+					<button class="btn sm primary" disabled=${running || !!busy} onClick=${() => askAgent(outcome.conflict)}>${t("Let the agent resolve it")}</button>
+					<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${close}>${t("Cancel")}</button>
+				</div>
+			</div>`
+			: html`<div class="branch-note merge-facts">
+				${readError ? html`<span class="c-danger">${readError}</span>`
+					: !copy ? html`<${Spinner} size=${12} />${t("Loading…")}`
+					: html`<span>${workText(copy)}</span>`}
+			</div>
+			${copy?.changes > 0 ? html`<div class="branch-note">${t("Uncommitted files are committed in the copy first.")}</div>` : null}
+			${nothing ? html`<div class="branch-note">${t("Nothing to merge; the copy will be marked merged.")}</div>` : null}
+			${outcome?.error ? html`<div class="branch-note c-danger" role="alert">${outcome.error}</div>` : null}
+			<div class="branch-form merge-actions">
+				<button class="btn sm primary" disabled=${running || !!busy || !copy} onClick=${() => merge()}>${busy ? html`<${Spinner} size=${12} />` : null}${outcome?.error ? t("Retry") : t("Merge into main")}</button>
+				<button class="btn sm" disabled=${!!busy} onClick=${close}>${t("Cancel")}</button>
+			</div>`}
 	</div>`;
 }

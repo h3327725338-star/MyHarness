@@ -41,7 +41,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				return {
 					worktrees: [
 						{ path: "C:/project", isMain: true, current: true },
-						...(copyDeleted ? [] : [{ path: "C:/copies/task-fix", branch: "task-fix" }]),
+						...(copyDeleted ? [] : [{ path: "C:/copies/task-fix", branch: "task-fix", changes: 0, ahead: 0 }]),
 						{ path: "C:/copies/detached", current: true },
 					],
 				};
@@ -91,7 +91,7 @@ import {actions} from '/js/actions.js';
 import {setLang} from '/js/lang.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const check=(ok,msg)=>{if(!ok)throw Error(msg)};
-const until=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await wait(50)}throw Error('timed out waiting for UI')};
+const until=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await wait(50)}throw Error('timed out waiting for UI: '+String(fn).slice(0,160))};
 const pickSelect=async(triggerSelector,optionText)=>{const trigger=document.querySelector(triggerSelector);check(trigger,'select trigger missing: '+triggerSelector);trigger.click();await until(()=>document.querySelector('.popover.select-pop:not(.closing) [role=option]'));const options=[...document.querySelectorAll('.popover.select-pop:not(.closing) [role=option]')];const hit=options.find(el=>el.textContent.includes(optionText));check(hit,'select option missing: '+optionText);hit.click();await wait(120);};
 try {
  setView({motion:'on',lang:'zh-CN'}); setLang('zh-CN');
@@ -141,7 +141,7 @@ try {
  let pop=document.querySelector('.branch-pop');check(pop&&!pop.classList.contains('leaving'),'branch entered with exit animation');
  check(!document.querySelector('.branch-new.hi'),'new branch highlighted while loading');
  const initialCounts=await (await fetch('/api/test/request-counts')).json();
- check(initialCounts.branchRequests===1&&initialCounts.worktreeRequests===0,'prefetch duplicated or collapsed worktrees requested: '+JSON.stringify(initialCounts));
+ check(initialCounts.branchRequests===1&&initialCounts.worktreeRequests<=1,'prefetch duplicated: '+JSON.stringify(initialCounts));
  const search=document.querySelector('.pop-search input');
  search.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await wait(30);
  check(!document.querySelector('.branch-foot form'),'Enter creates branch while loading');
@@ -154,40 +154,37 @@ try {
  const anchored=()=>Math.abs(pop.getBoundingClientRect().bottom-anchor.top+6)<3||Math.abs(pop.getBoundingClientRect().top-8)<3;
  check(anchored(),'compact popover lost anchor');
  const heading=document.querySelector('.branch-wt-heading');
- check(heading.getAttribute('aria-expanded')==='false'&&!document.querySelector('.branch-wt-row'),'worktrees not collapsed by default');
+ check(heading.getAttribute('aria-expanded')==='false'&&!document.querySelector('.branch-wt-action'),'worktrees not collapsed by default');
  const compactHeight=pop.offsetHeight;
- heading.click();await until(()=>document.querySelectorAll('.branch-copy').length===2);await wait(450);
- check(heading.getAttribute('aria-expanded')==='true'&&document.querySelector('.branch-wt-row'),'worktrees not expanded');
+ heading.click();await until(()=>document.querySelectorAll('.branch-copy').length===3);await wait(450);
+ check(heading.getAttribute('aria-expanded')==='true'&&document.querySelector('.branch-wt-action')?.textContent.includes('创建并进入副本'),'worktrees not expanded');
  check(pop.offsetHeight>compactHeight&&anchored(),'expanded popover lost anchor');
- check(pop.textContent.includes('已有副本')&&document.querySelectorAll('.branch-copy').length===2,'copy group missing');
+ check(pop.textContent.includes('我的副本')&&document.querySelector('.branch-copy').textContent.includes('主副本'),'main copy not first or copy group missing');
  const copyInfo=document.querySelector('.branch-copy-info');
  check(copyInfo.children.length===2&&copyInfo.children[1].getBoundingClientRect().top>copyInfo.children[0].getBoundingClientRect().top,'copy name and path not stacked');
  const copyDeletes=()=>[...document.querySelectorAll('[aria-label="删除副本"]')];
- check(copyDeletes().length===2&&!copyDeletes()[0].disabled&&copyDeletes()[1].disabled,'copy deletion protection missing');
+ check(copyDeletes().length===2&&copyDeletes()[0].disabled&&!copyDeletes()[1].disabled,'copy deletion protection missing');
  set({snap:{...state.snap,active:true}});await wait(60);check(copyDeletes().every(button=>button.disabled),'running task permits copy deletion');
  set({snap:{...state.snap,active:false}});await wait(60);
- copyDeletes()[0].click();await wait(60);
- let deletion=document.querySelector('[aria-label="删除副本？"]');check(deletion?.textContent.includes('保留分支'),'copy deletion confirmation missing');
- deletion.querySelectorAll('button')[1].click();await wait(60);
- check(!document.querySelector('[aria-label="删除副本？"]')&&(await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===0,'cancel deletes copy');
- copyDeletes()[0].click();await wait(60);document.querySelector('[aria-label="删除副本？"] button').click();
+ copyDeletes()[1].click();await wait(60);
+ const pill=()=>document.querySelector('.branch-copy .branch-confirm');
+ check(pill()&&(await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===0,'clean copy deletion is not a one-click confirmation');
+ pill().click();
  for(let i=0;i<100;i++){if((await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===1)break;await wait(50)}
  await wait(100);
- await until(()=>!document.querySelector('[aria-label="删除副本？"] button').disabled);
- check(document.querySelectorAll('.branch-copy').length===2&&document.querySelector('[aria-label="删除副本？"]'),'failed deletion removes copy or loses confirmation');
+ await until(()=>document.querySelector('[aria-label="删除副本？"] button')&&!document.querySelector('[aria-label="删除副本？"] button').disabled);
+ check(document.querySelectorAll('.branch-copy').length===3&&document.querySelector('[aria-label="删除副本？"]'),'failed deletion removes copy or loses confirmation');
  check(document.body.textContent.includes('安全删除被拒绝'),'safe delete failure shows no plain-language explanation');
  const forceButton=[...document.querySelectorAll('[aria-label="删除副本？"] button')].find(b=>b.textContent.includes('强制删除'));check(forceButton,'failed copy deletion does not offer force retry');
  forceButton.click();await until(()=>document.querySelector('[aria-label="删除副本？"]').textContent.includes('确认强制删除这个副本'));
  check((await(await fetch('/api/test/request-counts')).json()).copyDeleteRequests===1,'copy force confirmation writes before the user confirms');
- document.querySelector('[aria-label="删除副本？"] .danger').click();await until(()=>document.querySelectorAll('.branch-copy').length===1);
+ document.querySelector('[aria-label="删除副本？"] .danger.solid').click();await until(()=>document.querySelectorAll('.branch-copy').length===2);
  check((await(await fetch('/api/test/request-counts')).json()).copyDeleteForceRequests===1,'force copy delete did not send force flag');
- check(!document.querySelector('[aria-label="删除副本？"]')&&document.querySelector('.branch-copy').textContent.includes('detached'),'successful deletion not refreshed');
- document.querySelector('.branch-wt-row .toggle').click();await wait(400);
- check(document.querySelector('[aria-label="副本使用的分支"]'),'creation form missing');
+ check(!document.querySelector('[aria-label="删除副本？"]')&&document.querySelector('.branch-copy').textContent.includes('主副本')&&document.querySelectorAll('.branch-copy')[1].textContent.includes('detached'),'successful deletion not refreshed');
  heading.click();await wait(400);
- check(!document.querySelector('.branch-wt-row')&&pop.offsetHeight===compactHeight,'worktree collapse retains blank space');
+ check(!document.querySelector('.branch-wt-action')&&pop.offsetHeight===compactHeight,'worktree collapse retains blank space');
  heading.click();await wait(400);
- check(document.querySelector('[aria-label="副本使用的分支"]'),'folding changed isolation selection');
+ check(document.querySelector('.branch-wt-action'),'folding lost the create action');
  heading.click();await wait(400);
  document.querySelector('.branch-chip').click();await wait(240);check(!document.querySelector('.branch-pop'),'popover exit retained');
  document.querySelector('.branch-chip').click();await wait(60);
@@ -197,9 +194,8 @@ try {
  render(null,document.getElementById('app'));
  render(h(BranchChip,{gitStatus:{branch:'task-fix',linkedWorktree:true}}),document.getElementById('app'));await wait(60);
  document.querySelector('.branch-chip').click();await until(()=>document.querySelector('.branch-name')&&document.querySelector('.branch-wt-heading'));await wait(400);
- check(document.querySelector('.branch-chip .wt-tag')&&!document.querySelector('.branch-wt-row'),'linked copy not labelled or defaults expanded');
- document.querySelector('.branch-wt-heading').click();await until(()=>{const toggle=document.querySelector('.branch-wt-row .toggle');return toggle&&!toggle.disabled});await wait(400);
- check(document.querySelector('.branch-wt-row .toggle').getAttribute('aria-checked')==='true','linked isolation state missing');
+ check(document.querySelector('.branch-chip .wt-tag')&&document.querySelector('.branch-wt-heading').getAttribute('aria-expanded')==='true','linked copy not labelled or worktrees not open');
+ await until(()=>document.querySelector('.branch-wt-action')?.textContent.includes('返回主副本'));
  document.querySelector('.branch-wt-heading').click();await wait(400);
  check(document.querySelector('.branch-chip .wt-tag'),'folding clears worktree label');
  render(null,document.getElementById('app'));

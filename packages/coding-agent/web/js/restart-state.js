@@ -32,3 +32,24 @@ export function takeRestartState(sessionId) {
 		return null;
 	}
 }
+
+// A chat that moves into a worktree copy (or back) becomes a new session in the same slot: the unsent draft travels
+// with it. The mover arms the carry before asking the server; the composer takes it when its session id changes.
+let carried = null;
+
+export function carryDraftFrom(sessionId) {
+	const current = currentDraft();
+	carried = sessionId && current?.sessionId === sessionId ? { from: sessionId, draft: { text: current.text || "", images: current.images || [], quotes: current.quotes || [] } } : null;
+}
+
+/** `previous`: the identity the composer leaves (may be empty during a reload); `next`: the session it shows now. */
+export function takeCarriedDraft(previous, next) {
+	if (!carried || !next || next === carried.from || (previous && previous !== carried.from)) return null;
+	const { draft } = carried;
+	carried = null;
+	return draft.text || draft.images.length || draft.quotes.length ? draft : null;
+}
+
+export function dropCarriedDraft() {
+	carried = null;
+}

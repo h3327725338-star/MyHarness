@@ -39,6 +39,8 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .main[data-w="xs"] .branch-chip .chev,
 .main[data-w="xs"] .branch-chip .wt-tag,
 .main[data-w="xs"] .branch-chip .badge { display: none; }
+.main[data-w="xs"] .merge-chip-text { display: none; }
+.main[data-w="xs"] .merge-chip { padding: 0 5px; }
 .composer-col { max-width: var(--read-w); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; position: relative; }
 
 .composer { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px 12px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-xl); transition: border-color var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
@@ -202,7 +204,7 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-mini); line-height: 15px; }
 .popover.branch-pop { padding: 3px; overflow-y: auto; }
 .branch-list { max-height: 171px; overflow-y: auto; scrollbar-gutter: stable; }
-.branch-copy-region { max-height: 156px; overflow-y: auto; scrollbar-gutter: stable; }
+.branch-copy-region { max-height: 236px; overflow-y: auto; scrollbar-gutter: stable; }
 .branch-row { cursor: pointer; }
 .branch-row.hi { background: var(--surface-hover); color: var(--text); }
 .branch-row.active { color: var(--text); font-weight: 600; }
@@ -242,6 +244,32 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-copy-info { flex: 1; min-width: 0; gap: 2px; }
 .branch-copy > svg { flex: none; }
 .branch-copy-path { font-size: var(--fs-xs); }
+.branch-copy.active { color: var(--text); }
+.branch-copy-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The one state a copy row shows: work main does not have yet, or merged (a read-only record). Same pill as .wt-tag. */
+.copy-state { flex: none; padding: 0 5px; border-radius: var(--r-pill); font-size: var(--fs-mini); line-height: 15px; }
+.copy-state.warn { background: var(--warn-soft); color: var(--warn); }
+.copy-state.ok { background: var(--ok-soft); color: var(--ok); }
+.branch-wt-action { width: 100%; color: var(--text); }
+.branch-wt-action > svg { flex: none; color: var(--accent); }
+.branch-wt-action:disabled { color: var(--text-3); }
+.branch-wt-action:disabled > svg { color: var(--text-3); }
+.branch-wt-group { display: flex; align-items: center; gap: 4px; width: 100%; text-align: left; }
+.branch-wt-group .chev { flex: none; transform: rotate(-90deg); transition: transform var(--t-base) var(--ease); }
+.branch-wt-group[aria-expanded="true"] .chev { transform: rotate(0deg); }
+.branch-wt-group .badge { height: 15px; padding: 0 5px; font-size: var(--fs-mini); text-transform: none; letter-spacing: 0; }
+/* Merge back: the chip beside the branch chip, same size and shape as the other environment chips. */
+.merge-anchor { display: inline-flex; min-width: 0; flex: 0 1 auto; }
+.merge-chip { max-width: 100%; color: var(--accent); }
+.merge-chip[aria-expanded="true"] { color: var(--text); background: var(--surface-hover); border-color: var(--border-strong); }
+.merge-chip.merged { color: var(--ok); }
+.merge-chip:disabled { opacity: 0.6; cursor: default; }
+.merge-panel .merge-title { display: flex; align-items: center; gap: 6px; padding: 6px 8px 2px; min-width: 0; color: var(--text); font-size: var(--fs-code); font-weight: 600; }
+.merge-panel .merge-title > svg { flex: none; color: var(--accent); }
+.merge-facts { color: var(--text-2); }
+.merge-actions { padding-bottom: 6px; }
+.merge-files { margin: 0; padding: 0; list-style: none; max-height: 120px; overflow-y: auto; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 18px; }
+.merge-files li { overflow: hidden; }
 .widget { margin: 0; padding: 6px 12px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; }
 
 /* Suggestions */

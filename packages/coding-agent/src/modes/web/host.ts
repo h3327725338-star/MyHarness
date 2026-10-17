@@ -33,6 +33,7 @@ import {
 	collectFinalWorkspaceChanges,
 	type WorkspaceBaseline,
 } from "../../git/repository/workspace-changes.ts";
+import { isWorktreeCopyPath } from "../../git/worktrees/merged-records.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
@@ -230,6 +231,8 @@ export interface SlotStatus {
 	unread: boolean;
 	/** The session belongs to no registered Workspace (created without one, or its Workspace was removed). */
 	unbound: boolean;
+	/** The session runs inside a worktree copy (the sidebar shows one space at a time: main or copies). */
+	copy: boolean;
 	/**
 	 * Last time something happened in this session while it was open here (a task started or ended, a command ran, a
 	 * Git operation): the sidebar orders chats by it. Null until something happens; merely showing the chat is not activity.
@@ -459,6 +462,7 @@ export class WebHost {
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
 			unread: this.unread,
 			unbound: this.unbound,
+			copy: isWorktreeCopyPath(this.runtimeHost.services.agentDir, this.cwd),
 			lastActivityAt: this.lastActivityAt,
 			conversationNaming: this.conversationNaming?.status ?? null,
 		};

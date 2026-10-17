@@ -5,6 +5,7 @@ import {
 	type GitWorktreeCombineResult,
 	type GitWorktreeListResult,
 	GitWorktreeManager,
+	type GitWorktreeMergeBackResult,
 } from "../../git/worktrees/manager.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 
@@ -12,7 +13,7 @@ export interface GitWorktreeUseCaseHost {
 	getAgentDir(): string;
 	getCurrentCwd(): string;
 	isSessionIdle(): boolean;
-	switchWorkspace(cwd: string): Promise<{ cancelled: boolean }>;
+	switchWorkspace(cwd: string, options?: { carryHistory?: boolean }): Promise<{ cancelled: boolean }>;
 }
 
 export interface GitWorktreeUseCaseActionResult extends GitWorktreeActionResult {
@@ -41,10 +42,11 @@ export class GitWorktreeUseCase {
 		return new GitWorktreeManager(this.host.getAgentDir()).createFromBranch(repositoryRoot, branchName);
 	}
 
-	createBranch(repositoryRoot: string, branchName: string): GitWorktreeUseCaseActionResult {
+	/** `base`: the commit or branch the new branch starts from (default `main`). */
+	createBranch(repositoryRoot: string, branchName: string, base = "main"): GitWorktreeUseCaseActionResult {
 		const blocked = this.requireIdle();
 		if (blocked) return blocked;
-		return new GitWorktreeManager(this.host.getAgentDir()).createBranch(repositoryRoot, branchName, "main");
+		return new GitWorktreeManager(this.host.getAgentDir()).createBranch(repositoryRoot, branchName, base);
 	}
 
 	delete(repositoryRoot: string, worktree: GitWorktree, force = false): GitWorktreeUseCaseActionResult {
@@ -80,14 +82,21 @@ export class GitWorktreeUseCase {
 		return deleteBranchAsync(repositoryRoot, branch, true);
 	}
 
-	async enter(worktree: GitWorktree): Promise<GitWorktreeUseCaseActionResult> {
+	/** `carryHistory`: the chat moves with its history instead of starting a new empty chat in the copy. */
+	async enter(
+		worktree: GitWorktree,
+		options: { carryHistory?: boolean } = {},
+	): Promise<GitWorktreeUseCaseActionResult> {
 		if (this.isCurrentWorkspace(worktree.path)) {
 			return { ok: true, message: "当前已经在这个 Worktree 中。", close: true };
 		}
 		const blocked = this.requireIdle();
 		if (blocked) return blocked;
 		try {
-			const result = await this.host.switchWorkspace(worktree.path);
+			const result = await this.host.switchWorkspace(
+				worktree.path,
+				options.carryHistory ? { carryHistory: true } : undefined,
+			);
 			return result.cancelled
 				? { ok: false, error: "已取消进入 Worktree。" }
 				: { ok: true, message: `已进入 ${worktree.branch ?? "Detached HEAD"} Worktree。`, close: true };
@@ -119,6 +128,36 @@ export class GitWorktreeUseCase {
 			};
 		}
 		return manager.combine(repositoryRoot, branchName);
+	}
+
+	/**
+	 * Merge the copy this chat runs in back into `main`, keep the copy as a read-only record, and move the chat (with
+	 * its history) back to the main copy. A conflict, dirty main or other refusal leaves everything as it was.
+	 */
+	async mergeBack(
+		repositoryRoot: string,
+		options: { commitChanges?: boolean; strategy?: "ours" | "theirs" },
+		onMerged: (result: GitWorktreeMergeBackResult) => void,
+	): Promise<GitWorktreeMergeBackResult & { returned?: boolean; returnError?: string }> {
+		const blocked = this.requireIdle();
+		if (blocked) return { ok: false, status: "failed", error: blocked.error };
+		const manager = new GitWorktreeManager(this.host.getAgentDir());
+		const listing = manager.list(repositoryRoot);
+		if (!listing.ok || !listing.worktrees)
+			return { ok: false, status: "failed", error: listing.error ?? "无法读取 Worktree。" };
+		const source = listing.worktrees.find((worktree) => !worktree.isMain && this.isCurrentWorkspace(worktree.path));
+		if (!source) return { ok: false, status: "failed", error: "当前对话不在副本中，没有可合回的副本。" };
+		const result = manager.mergeBack(repositoryRoot, source.path, options);
+		if (!result.ok || !result.main) return result;
+		onMerged(result);
+		try {
+			const switched = await this.host.switchWorkspace(result.main.path, { carryHistory: true });
+			return switched.cancelled
+				? { ...result, returned: false, returnError: "已取消返回主副本。" }
+				: { ...result, returned: true };
+		} catch (error) {
+			return { ...result, returned: false, returnError: error instanceof Error ? error.message : String(error) };
+		}
 	}
 
 	private requireIdle(): { ok: false; error: string } | undefined {

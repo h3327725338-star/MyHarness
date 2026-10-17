@@ -24,6 +24,7 @@ import {
 } from "../../data/workspace-sources.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
+import { isWorktreeCopyPath } from "../../git/worktrees/merged-records.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
@@ -395,6 +396,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			messageCount: info.messageCount,
 			blank: info.blank === true,
 			parentSessionPath: info.parentSessionPath ?? null,
+			copy: isWorktreeCopyPath(host.runtimeHost.services.agentDir, info.cwd),
 			pinned: markers?.pinned ?? existsSync(`${info.path}.pinned`),
 			current: currentFile !== undefined && pathIdentityKey(info.path) === pathIdentityKey(currentFile),
 		};

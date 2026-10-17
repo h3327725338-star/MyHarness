@@ -5,6 +5,7 @@ import type { ImageContent } from "@myharness/ai";
 import { modelsAreEqual } from "@myharness/ai/compat";
 import { AUTO_MEMORY_SYSTEM_PROMPT } from "../../agent/runtime/auto-memory.ts";
 import { buildContextBreakdown } from "../../context/context-breakdown.ts";
+import { WorktreeMergedRecords } from "../../git/worktrees/merged-records.ts";
 import { formatSkillsForPrompt } from "../../skills/loader/index.ts";
 import { resizeImage } from "../../utils/image-resize.ts";
 import { collectInputImageAttachments } from "../../utils/input-image-attachments.ts";
@@ -49,6 +50,15 @@ async function toImageContent(host: WebHost, raw: unknown): Promise<ImageContent
 }
 
 export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
+	// A copy that was merged back stays as a read-only record: writing there again would leave work main never sees.
+	const requireWritableCopy = () => {
+		if (new WorktreeMergedRecords(host.runtimeHost.services.agentDir).covers(host.cwd))
+			throw new HttpError(
+				409,
+				"This copy was merged back into main and is now read-only. Continue in the main copy.",
+			);
+	};
+
 	server.route("GET", "/api/state", () => host.snapshot());
 	// Optional `limit` (newest items) and `before` (item-id cursor) page the transcript; without them the response is unchanged.
 	server.route("GET", "/api/transcript", ({ url }) =>
@@ -56,6 +66,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	);
 
 	server.route("POST", "/api/prompt", async ({ body }) => {
+		requireWritableCopy();
 		const payload = asObject(body);
 		const rawText = asString(payload.text, "text").trim();
 		const images = await toImageContent(host, payload.images);
@@ -313,6 +324,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	// ---- Direct shell command ("!" / "!!") ---------------------------------------
 	let bashSeq = 0;
 	server.route("POST", "/api/bash", async ({ body }) => {
+		requireWritableCopy();
 		const payload = asObject(body);
 		const command = asString(payload.command, "command").trim();
 		if (!command) throw new HttpError(400, "Empty command");

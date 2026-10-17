@@ -552,7 +552,7 @@ export function Sidebar() {
 	const unsaved = useMemo(() => {
 		const archivedPaths = new Set((ws.archived || []).map((info) => pathKey(info.path)));
 		const listable = (slot) => !!slot.sessionFile && !archivedPaths.has(pathKey(slot.sessionFile)) && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
-		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
+		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, copy: !!slot.copy, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();
 		const savedByRoot = new Map(ws.list.map((workspace) => [pathKey(workspace.rootPath), new Set((ws.sessions[workspace.rootPath] || []).map((info) => pathKey(info.path)))]));
 		for (const slot of slots) {
@@ -577,6 +577,26 @@ export function Sidebar() {
 		const extra = unsaved.byRoot.get(pathKey(rootPath));
 		return saved && extra ? [...extra, ...saved] : saved;
 	}, [ws.sessions, unsaved]);
+	// One space at a time: chats in worktree copies, or chats in the main checkout. The space follows the chat on screen
+	// (entering a copy or returning switches it); the other space stays reachable in a folded section at the bottom.
+	const inCopy = !!allSlots.find((slot) => slot.slot === activeSlot)?.copy;
+	const [otherOpen, setOtherOpen] = useState(false);
+	useEffect(() => setOtherOpen(false), [inCopy]);
+	const spaceSessionsOf = useCallback((rootPath) => sessionsOf(rootPath)?.filter((info) => !!info.copy === inCopy), [sessionsOf, inCopy]);
+	const otherSessionsOf = useCallback((rootPath) => sessionsOf(rootPath)?.filter((info) => !!info.copy !== inCopy), [sessionsOf, inCopy]);
+	const unboundHere = useMemo(() => unboundChats?.filter((info) => !!info.copy === inCopy), [unboundChats, inCopy]);
+	const unboundOther = useMemo(() => unboundChats?.filter((info) => !!info.copy !== inCopy), [unboundChats, inCopy]);
+	// In the main space every Workspace is listed (its copy chats move to the bottom section); in a copy space only the
+	// Workspaces that hold copy chats are, and the main Workspaces wait in the bottom section.
+	const hereList = useMemo(() => (inCopy ? ws.list.filter((w) => spaceSessionsOf(w.rootPath)?.length) : ws.list), [inCopy, ws.list, spaceSessionsOf]);
+	const otherList = useMemo(() => (inCopy ? ws.list : ws.list.filter((w) => otherSessionsOf(w.rootPath)?.length)), [inCopy, ws.list, otherSessionsOf]);
+	const otherCount = (unboundOther?.length || 0) + (inCopy ? 0 : otherList.reduce((n, w) => n + (otherSessionsOf(w.rootPath)?.length || 0), 0));
+	const showOther = inCopy || otherCount > 0;
+	const renderGroups = (list, sessionsFor) => html`<${WorkspaceList} list=${list} sessionsOf=${sessionsFor} errors=${ws.errors} expanded=${expanded} currentWorkspaceId=${currentWorkspace} filter=${filter} slotsByFile=${slotsByFile} currentFile=${shownFile} drafts=${drafts} renderGroup=${(w, control) => {
+		const isCurrent = w.id === currentWorkspace;
+		const stored = expanded[w.rootPath];
+		return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${sessionsFor(w.rootPath)} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} showAll=${control.showAll} onShowAll=${control.setShowAll} />`;
+	}} />`;
 	const onWidth = (w) => {
 		state.view = { ...state.view, sidebarW: w };
 		document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
@@ -592,12 +612,20 @@ export function Sidebar() {
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll" key=${mode}>
 			<div class="side-section"><span class="grow">${t("Workspaces")}</span><${AddWorkspaceButton} onPickExisting=${addWorkspace} onCreateNew=${() => setCreating(true)} /></div>
-			<${WorkspaceList} list=${ws.list} sessionsOf=${sessionsOf} errors=${ws.errors} expanded=${expanded} currentWorkspaceId=${currentWorkspace} filter=${filter} slotsByFile=${slotsByFile} currentFile=${shownFile} drafts=${drafts} renderGroup=${(w, control) => {
-				const isCurrent = w.id === currentWorkspace;
-				const stored = expanded[w.rootPath];
-				return html`<${Workspace} workspace=${w} error=${ws.errors[w.rootPath]} isCurrent=${isCurrent} open=${stored === undefined ? isCurrent : !!stored} sessions=${sessionsOf(w.rootPath)} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadRoots.has(pathKey(w.rootPath))} expandKey=${expandKey} showAll=${control.showAll} onShowAll=${control.setShowAll} />`;
-			}} />
-			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundChats} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+			${renderGroups(hereList, spaceSessionsOf)}
+			<${Workspace} general workspace=${{ rootPath: GENERAL_KEY, name: inCopy ? t("Copy chats") : t("Default") }} error=${ws.errors[GENERAL_KEY]} isCurrent=${!currentWorkspaceRoot && !!currentFile} open=${expanded[GENERAL_KEY] === undefined ? true : !!expanded[GENERAL_KEY]} sessions=${unboundHere} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${unreadUnbound} expandKey=${expandKey} />
+			${showOther ? html`<div class="side-other">
+				<button class="side-section side-other-head" aria-expanded=${otherOpen} onClick=${() => setOtherOpen(!otherOpen)}
+					title=${inCopy ? t("Chats in the main checkout. Returning to the main copy shows them again.") : t("Chats that run in worktree copies. Entering a copy shows them again.")}>
+					<${Icon} name="chevronRight" size=${13} class="chev" /><span class="grow">${inCopy ? t("Main copy chats") : t("Copy chats")}</span>${!inCopy && otherCount ? html`<span class="dim">${otherCount}</span>` : null}
+				</button>
+				<div class=${`collapse ${otherOpen ? "open" : ""}`} inert=${!otherOpen}>
+					<div class="collapse-inner">${otherOpen ? html`
+						${inCopy ? renderGroups(otherList, otherSessionsOf) : null}
+						${unboundOther?.length || inCopy ? html`<${Workspace} general workspace=${{ rootPath: `${GENERAL_KEY}:other`, name: t("Default") }} isCurrent=${false} open=${expanded[`${GENERAL_KEY}:other`] === undefined ? true : !!expanded[`${GENERAL_KEY}:other`]} sessions=${unboundOther} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
+						${!inCopy ? renderGroups(otherList, otherSessionsOf) : null}` : null}</div>
+				</div>
+			</div>` : null}
 		</div>
 		${exportReadOnly() ? html`<${ExportSidebarFoot} />` : null}
 		<div class="sidebar-foot">
