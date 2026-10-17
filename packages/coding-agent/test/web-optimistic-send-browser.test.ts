@@ -2,8 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { WebHttpServer } from "../src/modes/web/http-server.ts";
-import { HttpError } from "../src/modes/web/http-server.ts";
+import { HttpError, WebHttpServer } from "../src/modes/web/http-server.ts";
 import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/browser/firefox.ts";
 
 it("renders immediately in both modes, reconciles by id and restores rejected drafts in a real browser", async () => {
@@ -51,6 +50,12 @@ it("renders immediately in both modes, reconciles by id and restores rejected dr
 			const input = body as { text: string; clientMessageId: string };
 			await new Promise((resolve) => setTimeout(resolve, 700));
 			if (input.text.includes("reject")) throw new HttpError(400, "Rejected for test");
+			// The request is accepted, then the run refuses the prompt (the shape a provider failure takes in
+			// host.ts): the optimistic row has to end through the same event a real rejection uses.
+			if (input.text.includes("late")) {
+				setTimeout(() => server.broadcast("prompt_rejected", { clientMessageId: input.clientMessageId }), 250);
+				return { ok: true };
+			}
 			server.broadcast("message_start", {
 				slot: "test",
 				clientMessageId: input.clientMessageId,
@@ -68,23 +73,33 @@ it("renders immediately in both modes, reconciles by id and restores rejected dr
 			`
 import {h,render} from '/vendor/preact.js';
 import {Composer} from '/js/composer.js';
+import {Transcript} from '/js/transcript.js';
 import {boot,state,useStore,setView,canSendToActive} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const check=(ok,msg)=>{if(!ok)throw Error(msg)};
 const until=async fn=>{for(let i=0;i<150;i++){if(fn())return;await wait(30)}throw Error('timeout')};
-function App(){const items=useStore(s=>s.items);return h('div',{},h('div',{id:'messages'},items.map((i,n)=>h('p',{key:i.id||i.clientMessageId||n},i.text))),h(Composer));}
+function App(){const items=useStore(s=>s.items);return h('div',{},h('div',{id:'messages'},items.map((i,n)=>h('p',{key:i.id||i.clientMessageId||n},i.text))),h(Transcript),h(Composer));}
 try {
  await boot();await until(()=>state.connected&&canSendToActive());render(h(App),document.getElementById('app'));await wait(100);
  const timings=[];
+ // One throwaway send absorbs the browser's first-render/JIT cost, so the timings below measure the send path
+ // instead of how long the very first paint of this page takes.
+ const warm=document.querySelector('.draft');warm.focus();warm.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:'warmup'}));await wait(40);
+ warm.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await wait(1300);
  for(const mode of ['general','coding']){
   setView({chatMode:mode});await wait(80);
-  for(const failure of [false,true]){
-   const text=mode+(failure?'-reject':'-send');const el=document.querySelector('.draft');el.focus();el.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:text}));await wait(40);
-   const start=performance.now();el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+  for(const kind of ['send','reject','late']){
+   const failure=kind!=='send';
+   const text=mode+'-'+kind;const el=document.querySelector('.draft');el.focus();el.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:text}));await wait(40);
+   const start=performance.now();el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));const dispatchMs=performance.now()-start;
    await until(()=>state.items.some(i=>i.pending&&i.text===text));await new Promise(requestAnimationFrame);
-   const elapsed=performance.now()-start;timings.push({mode,failure,elapsed});check(elapsed<100,'slow optimistic render: '+elapsed);check(document.querySelector('.draft').textContent==='','composer not cleared');
-   await wait(900);
+   const elapsed=performance.now()-start;timings.push({mode,kind,elapsed,dispatchMs});check(elapsed<100,'slow optimistic render ('+mode+'-'+kind+'): '+elapsed+' dispatch='+dispatchMs);check(document.querySelector('.draft').textContent==='','composer not cleared');
+   // The reply side is never blank while the message is on its way: the turn already shows the working row that a
+   // live run shows, before the server has confirmed anything.
+   check(!!document.querySelector('.turn .summary.live'),'no working row while the message is on its way');
+   await wait(1300);
    check(!state.items.some(i=>i.pending&&i.text===text),'pending remained');
+   check(!document.querySelector('.summary.live'),'working row stayed after the message settled');
    if(failure){check(document.querySelector('.draft').textContent===text,'draft not restored');el.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true,cancelable:true}));document.getSelection().selectAllChildren(el);el.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'deleteContentBackward'}));await wait(50);}
    else check(state.items.filter(i=>i.text==='server:'+text).length===1,'not reconciled uniquely');
   }

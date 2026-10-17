@@ -160,11 +160,13 @@
 .title-btn { max-width: 46%; padding: 0 6px; height: var(--h-control-sm); border-radius: var(--r-md); font-weight: 600; font-size: var(--fs-title-xs); text-align: left; }
 .title-btn:hover { background: var(--surface-hover); }
 
-/* Right inspector panel. It keeps its own width while its track grows or shrinks, and slides and fades in the same time, so it
-   neither re-wraps nor jumps. Only its header buttons open, close and switch it. */
-.panel-slot { display: flex; min-width: 0; min-height: 0; }
-.panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; box-shadow: var(--shadow-panel); opacity: 0; transform: translateX(28px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
-.app.panel-open .panel { opacity: 1; transform: none; }
+/* Right inspector panel: the same motion as the sidebar, mirrored. Its track grows and the slot fades in the same time;
+   the panel itself keeps its own width and is pinned to the right edge of that track, so its content never moves or
+   re-wraps — the slot's clip reveals it from the right edge leftwards and takes it back the same way. The shadow sits on
+   the slot because the slot's clip would cut a shadow drawn by the panel, and the slot's own shadow is not clipped by it. */
+.panel-slot { display: flex; justify-content: flex-end; min-width: 0; min-height: 0; overflow: hidden; box-shadow: var(--shadow-panel); opacity: 0; transition: opacity var(--t-slow) var(--ease); }
+.app.panel-open .panel-slot { opacity: 1; }
+.panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; }
 /* While the sidebar is collapsed the panel takes the room it leaves: the width override lives on the panel itself,
    so opening or closing the sidebar never touches a custom property on .app (that would restyle the whole tree). */
 .sidebar.is-collapsed ~ .panel-slot .panel { --panel-width: min(var(--panel-w), max(340px, calc(100vw - 520px))); }

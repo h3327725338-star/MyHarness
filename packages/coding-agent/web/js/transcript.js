@@ -1254,8 +1254,13 @@ export function Transcript() {
 					const isLast = index === lastTurnIndex;
 					// A manual compaction runs after the last turn ended: that turn keeps its finished look.
 					const live = isLast && active && !repairing && compaction?.reason !== "manual";
-					const run = live ? undefined : runForTurn(turn, runs, isLast);
-					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${live} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} />`;
+					// A message the server has not confirmed yet has no run state to wait for: its turn already shows the
+					// same working row a live run does, so the reply side is never blank while the request is on its way.
+					// Nothing else is faked: the row ends when the real run takes over (or the message is rejected).
+					const awaiting = !live && isLast && !turn.final && !turn.steps?.length && !!turn.user?.pending;
+					const working = live || awaiting;
+					const run = working ? undefined : runForTurn(turn, runs, isLast);
+					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${working} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} />`;
 				})}
 				${(switching ? [] : liveBash).map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
 				${!switching && gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}
