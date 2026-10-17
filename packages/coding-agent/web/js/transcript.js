@@ -574,6 +574,41 @@ function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 }
 
 // ---- Messages ----------------------------------------------------------------------------------
+/** A message of the user's own longer than this many rendered lines folds to FOLDED_LINES with a fade. */
+const FOLD_AFTER_LINES = 8;
+const FOLDED_LINES = 6;
+
+/**
+ * The text of one user message. Whether it folds is decided on the rendered Markdown's real height (re-measured
+ * whenever it changes size), never on a character count; a folded message opens fully and folds again on demand.
+ * Only user messages use this: replies are never folded.
+ */
+function UserText({ text }) {
+	const box = useRef(null);
+	const [fold, setFold] = useState({ foldable: false, line: 0, full: 0 });
+	const [open, setOpen] = useState(false);
+	useLayoutEffect(() => {
+		const el = box.current;
+		const inner = el?.firstElementChild;
+		if (!el || !inner) return undefined;
+		const measure = () => {
+			const line = Number.parseFloat(getComputedStyle(el).lineHeight) || 24;
+			const full = inner.offsetHeight;
+			const foldable = full > line * FOLD_AFTER_LINES + 1;
+			setFold((prev) => (prev.foldable === foldable && prev.line === line && prev.full === full ? prev : { foldable, line, full }));
+		};
+		measure();
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+		observer?.observe(inner);
+		return () => observer?.disconnect();
+	}, []);
+	const folded = fold.foldable && !open;
+	return html`<div class=${`user-fold ${fold.foldable ? "is-foldable" : ""} ${folded ? "folded" : ""}`} ref=${box} style=${fold.foldable ? { maxHeight: `${open ? fold.full : fold.line * FOLDED_LINES}px` } : undefined}>
+		<${Markdown} text=${text} class="user-text" breaks=${true} />
+	</div>
+	${fold.foldable ? html`<button class="link-btn user-fold-toggle" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Show less") : t("Show more")}</button>` : null}`;
+}
+
 function UserMessage({ item, turn }) {
 	// Upload references (`Attached files` header + JSON path lines) render as cards, not bare paths.
 	// The wire carries `attachments`; older items fall back to parsing the text. Either way the header
@@ -592,7 +627,7 @@ function UserMessage({ item, turn }) {
 				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
 			})}</div>` : null}
 			${attachments.length ? html`<${AttachmentList} attachments=${attachments} />` : null}
-			${body ? html`<${Markdown} text=${body} class="user-text" breaks=${true} />` : null}
+			${body ? html`<${UserText} text=${body} />` : null}
 		</div>
 		<div class="msg-actions">
 			<${CopyButton} text=${body || item.text} label=${t("Copy message")} />

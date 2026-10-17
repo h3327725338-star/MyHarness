@@ -79,6 +79,9 @@
 .chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
 /* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
 .chat-rows { position: relative; }
+/* A fully expanded long group: twelve rows tall (CHAT_ROWS_SHOWN in sidebar.js), the rest scrolls inside without
+   scrolling the sidebar once it reaches either end. */
+.chat-rows-capped { max-height: calc(12 * var(--h-row)); overflow-y: auto; overscroll-behavior: contain; }
 /* One conversation row in its list slot. */
 .chat-entry { display: flex; flex-direction: column; min-width: 0; }
 
@@ -117,6 +120,24 @@
 .sources-body .attach-list { margin: 0; }
 .sources-row { flex-wrap: nowrap; }
 .sources-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 56px 0; font-size: var(--fs-sm); }
+.sources-add { display: inline-flex; gap: 6px; flex: none; }
+.sources-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: var(--fs-sm); }
+.sources-body > .notice { margin: 0; }
+.sources-progress { align-items: center; }
+.sources-problems, .sources-body > .notice.danger { flex-direction: column; gap: 4px; }
+.sources-problems ul { margin: 0; padding-left: 18px; }
+.sources-error-detail { color: var(--text-2); }
+/* A folder source: its card holds the header row and, when open, its entries (one tree level per indent step). */
+.attach-card.sources-folder { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; }
+.sources-folder-head { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+.sources-children { padding-top: 6px; }
+.source-node { --depth: 0; display: flex; align-items: center; gap: 6px; min-width: 0; height: 28px; padding: 0 2px 0 calc(var(--depth) * 16px); border-radius: var(--r-sm); font-size: var(--fs-sm); }
+.source-node.is-folder { cursor: pointer; }
+.source-node:hover { background: var(--surface-hover); }
+.source-node-pad { width: 13px; flex: none; }
+.source-node-name { flex: 1 1 auto; min-width: 0; }
+.source-node-sub { flex: none; font-size: var(--fs-xs); }
+.sources-folder-head:focus-visible, .source-node.is-folder:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; border-radius: var(--r-sm); }
 .export-top-badge {
 	display: inline-flex;
 	align-items: center;
@@ -206,8 +227,10 @@
 .mode-tasks { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-2); font-size: var(--fs-sm); text-align: left; transition: background var(--t-fast), color var(--t-fast); }
 .mode-tasks:hover { background: var(--surface-hover); color: var(--text); }
 .mode-tag { flex: none; padding: 1px 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600; }
-.mode-tag.coding { color: var(--mode-coding); background: color-mix(in srgb, var(--mode-coding) 16%, transparent); }
-.mode-tag.general { color: var(--mode-general); background: color-mix(in srgb, var(--mode-general) 16%, transparent); }
+/* The tag wears exactly the knob's pair (the mode colour as its fill, --mode-on on it), so it reads as the same mode as
+   the switch at a glance in every theme; a tinted fill made the same colour look like a different, paler one. */
+.mode-tag.coding { color: var(--mode-on); background: var(--mode-coding); }
+.mode-tag.general { color: var(--mode-on); background: var(--mode-general); }
 .pop-head { padding: 4px 8px 6px; font-size: var(--fs-xs); }
 .mode-task-mark { display: grid; place-items: center; width: 14px; flex: none; }
 .mode-task-state { flex: none; }

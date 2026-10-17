@@ -1,6 +1,6 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
-import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, MenuSep, Popover, Spinner, usePresence } from "./ui.js";
+import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, Popover, Spinner, usePresence } from "./ui.js";
 import { api, attempt, canSendToActive, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
@@ -23,6 +23,10 @@ import { invalidateAttachmentCaches } from "./attachments.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
 import { clipLine, formatQuotes, quoteFromSelection } from "./quote-text.js";
 import { clearQuoteHighlights, paintQuotes } from "./quote-highlight.js";
+import { MAX_UPLOAD_BYTES, sendFileInChunks } from "./upload-chunks.js";
+
+/** Images up to this size travel inline with the message (as before); a larger one is attached as a file. */
+const INLINE_IMAGE_BYTES = 32 * 1024 * 1024;
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -311,6 +315,7 @@ export function Composer() {
 	const [historyIndex, setHistoryIndex] = useState(-1);
 	const area = useRef(null);
 	const fileInput = useRef(null);
+	const folderInput = useRef(null);
 	const lastSession = useRef(null);
 	const provisionalTarget = useRef(null);
 	const draftMatches = lastSession.current === draftIdentity;
@@ -539,23 +544,22 @@ export function Composer() {
 		const initial = latest.current;
 		importing.current = true;
 		setLoadingFiles(true);
-		let count = initial.images.length;
 		try {
-			// Read one file at a time: do not materialize an unbounded batch of base64 strings.
+			// One file at a time, and a file that is not an inline image goes up in chunks: no batch, and no large file,
+			// is ever held whole in memory. A file that fails or is too large is skipped; the rest still go.
 			for (const file of picked) {
-				if (count >= 12) { toast(t("At most 12 attachments per message."), "warning"); break; }
-				if (file.size > 32 * 1024 * 1024) { toast(t("Files must be 32 MiB or smaller."), "warning"); continue; }
+				if (file.size > MAX_UPLOAD_BYTES) { toast(`${file.name}: ${t("Files must be 500 MiB or smaller.")}`, "warning"); continue; }
 				try {
-					const converted = await fileToImage(file);
 					let attachment;
-					if (file.type.startsWith("image/")) {
-						attachment = converted;
+					if (file.type.startsWith("image/") && file.size <= INLINE_IMAGE_BYTES) {
+						attachment = await fileToImage(file);
 						if (state.snap?.model && !state.snap.model.input.includes("image")) toast(t("The current model does not list image input; the image may be ignored or trigger the vision assistant if enabled."), "warning", 6000);
 					} else {
-						const uploaded = await post("/api/files/upload", { name: file.name, data: converted.data }, targetSlot);
+						const { uploadId } = await post("/api/files/upload/begin", { name: file.name, size: file.size }, targetSlot);
+						await sendFileInChunks(file, (offset, data) => post("/api/files/upload/chunk", { uploadId, offset, data }, targetSlot));
+						const uploaded = await post("/api/files/upload/finish", { uploadId }, targetSlot);
 						attachment = { name: uploaded.name, path: uploaded.path, id: uploaded.id ?? uploaded.path, mime: uploaded.mime ?? file.type ?? null, size: uploaded.size ?? file.size ?? null };
 					}
-					count++;
 					if (latest.current.sessionId === targetSession) setImages((prev) => [...prev, attachment]);
 					else {
 						const draft = drafts.get(targetSession) || initial;
@@ -563,7 +567,7 @@ export function Composer() {
 						drafts.set(targetSession, next);
 						scheduleDraftSave({ slot: targetSlot, mode: targetMode, sessionId: targetSession, ...next });
 					}
-				} catch (error) { toast(serverText(error.message, t("Could not read the file.")), "error"); }
+				} catch (error) { toast(`${file.name}: ${serverText(error.message, t("Could not read the file."))}`, "error"); }
 			}
 			// Newly uploaded files appear in the sidebar's per-chat group at once.
 			try { invalidateAttachmentCaches(); } catch { /* sidebar hook is optional */ }
@@ -808,13 +812,10 @@ const send = async (mode) => {
 						${(close) => html`
 							<${MenuItem} icon="file" label=${t("Upload files from Explorer")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = ""; fileInput.current.click(); } }}  />
 							<${MenuItem} icon="image" label=${t("Attach image")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = "image/*"; fileInput.current.click(); } }}  />
-							<${MenuItem} icon="file" label=${t("Mention a file")} hint="@" onClick=${() => (close(), setText((t) => `${t}${t && !t.endsWith(" ") ? " " : ""}@`), setTimeout(() => area.current?.focus(), 0))} />
-							<${MenuItem} icon="terminal" label=${t("Run a shell command")} hint="!" onClick=${() => (close(), setText("!"), setTimeout(() => area.current?.focus(), 0))} />
-							<${MenuItem} icon="bolt" label=${t("Slash commands & skills")} hint="/" onClick=${() => (close(), setText("/"), setTimeout(() => area.current?.focus(), 0))} />
-							<${MenuSep} />
-							<${MenuItem} icon="layers" label=${t("Compact context now")} disabled=${active} onClick=${() => (close(), actions.compact())} />`}
+							<${MenuItem} icon="folder" label=${t("Upload folder from Explorer")} disabled=${loadingFiles} onClick=${() => { close(); folderInput.current?.click(); }}  />`}
 					<//>
 					<input ref=${fileInput} type="file" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
+					<input ref=${folderInput} type="file" multiple hidden webkitdirectory directory onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 					<span class="grow" />
 					<${ModelPicker} />
 					<${MainEffortPicker} />

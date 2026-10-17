@@ -15,6 +15,8 @@ import { WorkspaceSettings } from "./workspace-settings.js";
 import { openSourcesPage } from "./sources-page.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
+/** Chats a group lists before "Show N more", and the height (in rows) a fully expanded group scrolls within. */
+const CHAT_ROWS_SHOWN = 12;
 
 /**
  * A finished result the user has not read yet. The chat on screen counts as read, so it never shows the marker
@@ -160,7 +162,9 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 	// Pinned, then running, then most recent activity first (see selectWorkspaceChats).
 	const list = useMemo(() => selectWorkspaceChats(sessions, { filter, slotsByFile, archived, currentFile, drafts }), [sessions, filter, slotsByFile, archived, currentFile, drafts]);
 	if (filter && !list.length) return null;
-	const shown = showAll || filter ? list : list.slice(0, 12);
+	const shown = showAll || filter ? list : list.slice(0, CHAT_ROWS_SHOWN);
+	// Fully expanded, a long group scrolls inside a box of CHAT_ROWS_SHOWN rows instead of pushing the sidebar away.
+	const capped = showAll && !filter && list.length > CHAT_ROWS_SHOWN;
 	const reload = () => (archived ? loadArchived() : general ? loadUnbound() : loadSessions(workspace.rootPath));
 	const create = () => (general ? actions.newSession(undefined, { unbound: true }) : actions.newSession(workspace.rootPath));
 	const note = error ? html`<div class="dim side-note">${error} <button class="link-btn" onClick=${reload}>${t("Retry")}</button></div>`
@@ -198,7 +202,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 				${rendered
 					? html`<div class="ws-children" ref=${glide.ref}>
 						<${FoldIn} content=${note} />
-						<${ChatRows} key=${showAll ? "all" : "head"} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
+						<${ChatRows} key=${showAll ? "all" : "head"} capped=${capped} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => glide.run(() => setShowAll(true))}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
@@ -218,7 +222,7 @@ function DraftChat({ info, present, initial, renderRow }) {
  * arrives grows in; a row that moves (a chat that became active goes to the top) slides from where it was to its new
  * place. The slide is a transform on that row only: nothing else moves with it, and clicks are never held back.
  */
-function ChatRows({ items, renderRow }) {
+function ChatRows({ items, renderRow, capped = false }) {
 	const signature = items.map((item) => item.path).join("\n");
 	// Rows that left stay for the length of the fold-away; a row that left is animated in again if it comes back later.
 	const { rows: visible, present, initial } = useRetainedRows(items);
@@ -243,7 +247,8 @@ function ChatRows({ items, renderRow }) {
 			], { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
 		}
 	}, [signature]);
-	return html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.has(info.path)} renderRow=${renderRow} />`)}</div>`;
+	const rows = html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.has(info.path)} renderRow=${renderRow} />`)}</div>`;
+	return capped ? html`<div class="chat-rows-capped">${rows}</div>` : rows;
 }
 
 /** How many groups stay mounted past each edge of the visible area (about a screen each way). */
@@ -280,10 +285,12 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 		const stored = expanded[w.rootPath];
 		const showing = (stored === undefined ? w.id === currentWorkspaceId : !!stored) || !!filter;
 		if (!showing) return metrics.row;
-		const shown = showAllMap[w.id] || filter ? chats.length : Math.min(12, chats.length);
+		const shown = showAllMap[w.id] || filter ? chats.length : Math.min(CHAT_ROWS_SHOWN, chats.length);
 		const note = errors[w.rootPath] || sessions === undefined || !chats.length ? metrics.note : 0;
 		const more = !filter && chats.length > shown ? metrics.more : 0;
-		return metrics.row + note + shown * metrics.row + more;
+		// The same cap as Workspace: a fully expanded group is never taller than CHAT_ROWS_SHOWN rows.
+		const rows = !filter ? Math.min(shown, CHAT_ROWS_SHOWN) : shown;
+		return metrics.row + note + rows * metrics.row + more;
 	}), [list, sessionsOf, errors, expanded, currentWorkspaceId, filter, slotsByFile, currentFile, drafts, showAllMap, metrics]);
 	const virtualize = retained.length === list.length;
 	const updateRange = useCallback(() => {

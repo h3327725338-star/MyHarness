@@ -13,7 +13,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
@@ -26,6 +26,7 @@ import {
 	writeLegacyAttachmentManifest,
 } from "../../config/paths/attachments.ts";
 import { getAttachmentDir, getDataDir } from "../../config/paths/index.ts";
+import { decodeUploadChunk, MAX_UPLOAD_BYTES, writeUploadChunk } from "../../data/upload-chunks.ts";
 import {
 	artifactScope,
 	listArtifacts,
@@ -349,6 +350,67 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 
 	// Browser uploads retain their original bytes as session-owned context references.
 	// New uploads land in the workspace attachment library with a manifest beside the file.
+	// Where one new upload goes: the workspace attachment library when the session has one, else the legacy
+	// `uploads/<id>/` folder beside the session file.
+	const prepareAttachment = async (rawName: string) => {
+		const name =
+			path
+				.basename(rawName.replaceAll("\\", "/"))
+				.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+				.replace(/[. ]+$/g, "") || "file";
+		const manager = host.session.sessionManager;
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new HttpError(409, "No current session.");
+		const storedName = `attachment-${name}`;
+		const workspaceId = manager.getWorkspaceId?.();
+		const sessionId = manager.getSessionId?.();
+		const dataRoot = manager.getDataRoot?.() ?? getDataDir();
+		const id = randomUUID();
+		const library = workspaceId && sessionId && dataRoot ? { workspaceId, sessionId, dataRoot } : undefined;
+		const directory = library
+			? getAttachmentDir(library.dataRoot, library.workspaceId, library.sessionId, id)
+			: path.join(path.dirname(sessionFile), "uploads", id);
+		await mkdir(directory, { recursive: true });
+		return { name, storedName, id, library, directory, target: path.join(directory, storedName) };
+	};
+	// Record a written upload the same way for one-request and chunked uploads.
+	const recordAttachment = (prepared: Awaited<ReturnType<typeof prepareAttachment>>, size: number) => {
+		const { name, storedName, id, library, directory, target } = prepared;
+		host.inputTouched = true;
+		if (library) {
+			const relativePath = toAttachmentRelativePath(library.dataRoot, target);
+			const manifest = {
+				version: 1 as const,
+				id,
+				originalName: name,
+				storedName,
+				mime: guessAttachmentMime(name),
+				size,
+				createdAt: new Date().toISOString(),
+				relativePath,
+			};
+			writeAttachmentManifest(library.dataRoot, library.workspaceId, library.sessionId, id, manifest);
+			return { name, path: relativePath, id: manifest.id, mime: manifest.mime, size: manifest.size };
+		}
+		try {
+			writeLegacyAttachmentManifest(directory, {
+				version: 1 as const,
+				id: path.basename(directory),
+				originalName: name,
+				storedName,
+				mime: guessAttachmentMime(name),
+				size,
+				createdAt: new Date().toISOString(),
+				relativePath: target,
+			});
+		} catch {
+			// Legacy layout keeps the previous absolute-path contract even when the manifest cannot be written.
+		}
+		return { name, path: target };
+	};
+
+	// Browser uploads retain their original bytes as session-owned context references.
+	// New uploads land in the workspace attachment library with a manifest beside the file.
 	server.route("POST", "/api/files/upload", async ({ body }) => {
 		const payload = body as { name?: unknown; data?: unknown } | null;
 		if (typeof payload?.name !== "string" || typeof payload.data !== "string")
@@ -357,60 +419,58 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			throw new HttpError(413, "Files must be 32 MiB or smaller.");
 		if (payload.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(payload.data))
 			throw new HttpError(400, "Invalid base64 file data.");
-		const name =
-			path
-				.basename(payload.name.replaceAll("\\", "/"))
-				.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
-				.replace(/[. ]+$/g, "") || "file";
-		const manager = host.session.sessionManager;
-		const sessionFile = manager.getSessionFile();
-		if (!sessionFile) throw new HttpError(409, "No current session.");
-		const storedName = `attachment-${name}`;
+		const prepared = await prepareAttachment(payload.name);
 		const bytes = Buffer.from(payload.data, "base64");
-		const workspaceId = manager.getWorkspaceId?.();
-		const sessionId = manager.getSessionId?.();
-		const dataRoot = manager.getDataRoot?.() ?? getDataDir();
-		if (workspaceId && sessionId && dataRoot) {
-			const id = randomUUID();
-			const directory = getAttachmentDir(dataRoot, workspaceId, sessionId, id);
-			const target = path.join(directory, storedName);
-			await mkdir(directory, { recursive: true });
-			await writeFile(target, bytes, { flag: "wx" });
-			const relativePath = toAttachmentRelativePath(dataRoot, target);
-			const manifest = {
-				version: 1 as const,
-				id,
-				originalName: name,
-				storedName,
-				mime: guessAttachmentMime(name),
-				size: bytes.length,
-				createdAt: new Date().toISOString(),
-				relativePath,
-			};
-			writeAttachmentManifest(dataRoot, workspaceId, sessionId, id, manifest);
-			host.inputTouched = true;
-			return { name, path: relativePath, id: manifest.id, mime: manifest.mime, size: manifest.size };
-		}
-		const directory = path.join(path.dirname(sessionFile), "uploads", randomUUID());
-		const target = path.join(directory, storedName);
-		await mkdir(directory, { recursive: true });
-		await writeFile(target, bytes, { flag: "wx" });
+		await writeFile(prepared.target, bytes, { flag: "wx" });
+		return recordAttachment(prepared, bytes.length);
+	});
+	// Large files arrive in order, one chunk per request, and never sit whole in memory on either side. An upload
+	// that is never finished leaves only its `.part` file, which no attachment list reads.
+	const chunkedUploads = new Map<
+		string,
+		{ prepared: Awaited<ReturnType<typeof prepareAttachment>>; size: number; written: number }
+	>();
+	server.route("POST", "/api/files/upload/begin", async ({ body }) => {
+		const payload = body as { name?: unknown; size?: unknown } | null;
+		const size = Number(payload?.size);
+		if (typeof payload?.name !== "string" || !Number.isSafeInteger(size) || size < 0)
+			throw new HttpError(400, "Expected a file name and size.");
+		if (size > MAX_UPLOAD_BYTES) throw new HttpError(413, "Files must be 500 MiB or smaller.");
+		const prepared = await prepareAttachment(payload.name);
+		chunkedUploads.set(prepared.id, { prepared, size, written: 0 });
+		return { uploadId: prepared.id };
+	});
+	const chunkedUpload = (raw: unknown) => {
+		const upload = typeof raw === "string" ? chunkedUploads.get(raw) : undefined;
+		if (!upload) throw new HttpError(404, "This upload is no longer available.");
+		return upload;
+	};
+	server.route("POST", "/api/files/upload/chunk", ({ body }) => {
+		const payload = body as { uploadId?: unknown; offset?: unknown; data?: unknown } | null;
+		const upload = chunkedUpload(payload?.uploadId);
+		if (typeof payload?.data !== "string") throw new HttpError(400, "Expected base64 data.");
 		try {
-			writeLegacyAttachmentManifest(directory, {
-				version: 1 as const,
-				id: path.basename(directory),
-				originalName: name,
-				storedName,
-				mime: guessAttachmentMime(name),
-				size: bytes.length,
-				createdAt: new Date().toISOString(),
-				relativePath: target,
-			});
-		} catch {
-			// Legacy layout keeps the previous absolute-path contract even when the manifest cannot be written.
+			upload.written = writeUploadChunk(
+				`${upload.prepared.target}.part`,
+				Number(payload.offset),
+				decodeUploadChunk(payload.data),
+				upload.size,
+			);
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
 		}
-		host.inputTouched = true;
-		return { name, path: target };
+		return { written: upload.written };
+	});
+	server.route("POST", "/api/files/upload/finish", async ({ body }) => {
+		const payload = body as { uploadId?: unknown } | null;
+		const upload = chunkedUpload(payload?.uploadId);
+		const part = `${upload.prepared.target}.part`;
+		if (upload.size === 0 && upload.written === 0) await writeFile(part, Buffer.alloc(0));
+		else if (upload.written !== upload.size) throw new HttpError(409, "The file has not been fully uploaded.");
+		if (existsSync(upload.prepared.target)) throw new HttpError(409, "The file already exists.");
+		await rename(part, upload.prepared.target);
+		chunkedUploads.delete(upload.prepared.id);
+		return recordAttachment(upload.prepared, upload.size);
 	});
 
 	// ---- Session upload attachments ----------------------------------------------------

@@ -222,6 +222,54 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		expect(owner.session.agent.state.systemPrompt).not.toContain(JSON.stringify(gone.path));
 	});
 
+	it("uploads a folder source in chunks over HTTP and lists it as one line with its file count", async (ctx) => {
+		const fx = await start();
+		// Stored paths are kept under 250 characters; a fixture data root this long leaves no room for any file.
+		if (process.env.MYHARNESS_DATA_ROOT!.length > 110) ctx.skip();
+		const created = await fx.post("/api/workspaces/create", { name: "folder-sources", mode: "general" });
+		const id = created.workspace.id;
+		const refused = await fx.post("/api/workspaces/sources/stage", {
+			id,
+			items: [{ kind: "folder", name: "Docs", files: [{ path: "big/disk.img", size: 500 * 1024 * 1024 + 1 }] }],
+		});
+		expect(refused).toEqual({ problems: [{ item: 0, path: "big/disk.img", reason: "too_large" }] });
+		const files = ["one.txt", "sub/two.txt", "sub/deeper/three.txt"];
+		const staged = await fx.post("/api/workspaces/sources/stage", {
+			id,
+			items: [{ kind: "folder", name: "Docs", files: files.map((path) => ({ path, size: path.length })) }],
+		});
+		expect(staged.problems).toBeUndefined();
+		const { sourceId } = staged.uploads[0];
+		for (const [index, path] of files.entries())
+			expect(
+				await fx.post("/api/workspaces/sources/chunk", {
+					id,
+					sourceId,
+					index,
+					offset: 0,
+					data: Buffer.from(path).toString("base64"),
+				}),
+			).toEqual({ done: true });
+		const folder = await fx.post("/api/workspaces/sources/finish", { id, sourceId });
+		expect(folder).toMatchObject({ id: sourceId, kind: "folder", fileCount: 3 });
+		await expect(fx.post("/api/workspaces/sources/finish", { id, sourceId })).rejects.toMatchObject({ status: 404 });
+		const tree = await fx.get(
+			`/api/workspaces/sources/tree?id=${encodeURIComponent(id)}&sourceId=${encodeURIComponent(sourceId)}`,
+		);
+		expect(tree.entries.map((entry: { name: string }) => entry.name).sort()).toEqual(["one.txt", "sub"]);
+		expect(await fx.post("/api/workspaces/sources/delete", { id, sourceId, path: "sub/two.txt" })).toEqual({
+			ok: true,
+		});
+		const opened = await fx.post("/api/sessions/new", { rootPath: created.workspace.rootPath, mode: "general" });
+		const owner = fx.hub.get(opened.slot)!;
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
+		await owner.submit("hello");
+		await owner.session.waitForForegroundIdle();
+		const line = JSON.stringify({ name: "Docs", path: folder.path, type: "folder", files: 2 });
+		expect(owner.session.agent.state.systemPrompt).toContain(line);
+		expect(owner.session.agent.state.systemPrompt).not.toContain("one.txt");
+	});
+
 	async function resetGeneral(fx: {
 		get: (path: string) => Promise<any>;
 		post: (path: string, body?: unknown) => Promise<any>;

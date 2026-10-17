@@ -22,6 +22,12 @@
 .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .user-bubble { max-width: 88%; background: var(--user-bg); border: 1px solid var(--user-border); border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); padding: 8px 13px; font-size: var(--fs-read); line-height: 1.6; }
 .user-text { white-space: normal; overflow-wrap: anywhere; }
+/* A long message of the user's own folds to six lines (UserText in transcript.js): the height glides, the last line fades
+   into the bubble, and the toggle below opens and folds it again. */
+.user-fold.is-foldable { position: relative; overflow: hidden; transition: max-height var(--t-slow) var(--ease); }
+.user-fold.is-foldable::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.4em; background: linear-gradient(to bottom, transparent, var(--user-bg)); opacity: 0; pointer-events: none; transition: opacity var(--t-base) var(--ease); }
+.user-fold.folded::after { opacity: 1; }
+.user-fold-toggle { display: block; margin: 2px 0 0 auto; font-size: var(--fs-sm); }
 
 /* A passage that is quoted stays painted in the conversation while its card is mounted above the input. The painter uses
    the CSS Custom Highlight API (a text range, no DOM change); a browser without it paints the same range with .quote-hl
@@ -186,7 +192,9 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .md li { margin: 0.3em 0; } .md li > p { margin: 0.35em 0; }
 .md li > p:first-child { margin-top: 0; } .md li > p:last-child { margin-bottom: 0; }
 .md li .code-block { margin: 0.35em 0; }
-.md blockquote { margin: 0 0 0.85em; padding: 0.3em 0 0.3em 1em; border-left: 3px solid var(--border-strong); color: var(--text-2); }
+/* A quote reads as quoted at a glance: a darker inset, an accent edge and one size smaller; the text around it is unchanged. */
+.md blockquote { margin: 0 0 0.85em; padding: 0.3em 0.75em 0.3em 0.85em; border-left: 3px solid var(--accent-line); border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--quote-bg); color: var(--text-2); font-size: 0.92em; }
+.md blockquote blockquote { font-size: 1em; }
 .md blockquote > :last-child { margin-bottom: 0; }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
 .md code { background: var(--inline-code-bg); padding: 0.12em 0.38em; border-radius: var(--r-xs); font-size: 0.92em; }

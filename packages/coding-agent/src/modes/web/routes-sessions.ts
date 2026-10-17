@@ -12,9 +12,15 @@ import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-s
 import { getDataDir, getWorkspacesDir } from "../../config/paths/index.ts";
 import {
 	deleteWorkspaceSource,
+	finishWorkspaceSourceUpload,
 	listWorkspaceSources,
+	readWorkspaceSourceTree,
+	type StagedWorkspaceSourceUpload,
+	stageWorkspaceSourceUploads,
 	uploadWorkspaceSource,
+	type WorkspaceSourceUploadItem,
 	WorkspaceSourceError,
+	writeWorkspaceSourceChunk,
 } from "../../data/workspace-sources.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
@@ -265,12 +271,98 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
 		}
 	});
+	server.route("GET", "/api/workspaces/sources/tree", ({ url }) => {
+		const workspace = generalWorkspace(url.searchParams.get("id"));
+		try {
+			return {
+				entries: readWorkspaceSourceTree(
+					host.workspaceStore.getDataRoot() ?? getDataDir(),
+					workspace.workspaceId,
+					asString(url.searchParams.get("sourceId"), "sourceId"),
+				),
+			};
+		} catch (error) {
+			throw new HttpError(
+				error instanceof WorkspaceSourceError && error.code === "not_found" ? 404 : 400,
+				error instanceof Error ? error.message : "Could not read the source",
+			);
+		}
+	});
+	// Chunked uploads: `stage` checks a whole batch (files and folders) and prepares it, `chunk` writes one piece of
+	// one file, `finish` completes a source. Staged uploads live only as long as this server, so an interrupted batch
+	// can be continued from the same page, never across a restart.
+	const stagedSources = new Map<string, { workspaceId: string; upload: StagedWorkspaceSourceUpload }>();
+	const stagedSource = (input: Record<string, unknown>) => {
+		const workspace = generalWorkspace(input.id);
+		const staged = stagedSources.get(asString(input.sourceId, "sourceId"));
+		if (!staged || staged.workspaceId !== workspace.workspaceId)
+			throw new HttpError(404, "This upload is no longer available. Choose the files again.");
+		return staged.upload;
+	};
+	server.route("POST", "/api/workspaces/sources/stage", ({ body }) => {
+		const input = asObject(body);
+		const workspace = generalWorkspace(input.id);
+		if (!Array.isArray(input.items) || !input.items.length) throw new HttpError(400, "Expected upload items");
+		const items: WorkspaceSourceUploadItem[] = input.items.map((raw) => {
+			const item = asObject(raw);
+			if ((item.kind !== "file" && item.kind !== "folder") || !Array.isArray(item.files))
+				throw new HttpError(400, "Invalid upload item");
+			return {
+				kind: item.kind,
+				name: asString(item.name, "name"),
+				files: item.files.map((file) => {
+					const entry = asObject(file);
+					return { path: typeof entry.path === "string" ? entry.path : "", size: Number(entry.size) };
+				}),
+			};
+		});
+		try {
+			const { problems, staged } = stageWorkspaceSourceUploads(
+				host.workspaceStore.getDataRoot() ?? getDataDir(),
+				workspace.workspaceId,
+				items,
+			);
+			if (problems.length) return { problems };
+			for (const upload of staged) stagedSources.set(upload.id, { workspaceId: workspace.workspaceId, upload });
+			return { uploads: staged.map((upload) => ({ sourceId: upload.id, kind: upload.kind })) };
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
+		}
+	});
+	server.route("POST", "/api/workspaces/sources/chunk", ({ body }) => {
+		const input = asObject(body);
+		const upload = stagedSource(input);
+		if (typeof input.data !== "string") throw new HttpError(400, '"data" must be a string');
+		try {
+			return writeWorkspaceSourceChunk(upload, Number(input.index), Number(input.offset), input.data);
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
+		}
+	});
+	server.route("POST", "/api/workspaces/sources/finish", ({ body }) => {
+		const input = asObject(body);
+		const upload = stagedSource(input);
+		try {
+			const source = finishWorkspaceSourceUpload(upload);
+			stagedSources.delete(upload.id);
+			return source;
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
+		}
+	});
 	server.route("POST", "/api/workspaces/sources/delete", ({ body }) => {
 		const input = asObject(body);
 		const workspace = generalWorkspace(input.id);
 		const sourceId = asString(input.sourceId, "sourceId");
+		const innerPath = input.path === undefined ? undefined : asString(input.path, "path");
 		try {
-			deleteWorkspaceSource(host.workspaceStore.getDataRoot() ?? getDataDir(), workspace.workspaceId, sourceId);
+			deleteWorkspaceSource(
+				host.workspaceStore.getDataRoot() ?? getDataDir(),
+				workspace.workspaceId,
+				sourceId,
+				innerPath,
+			);
+			if (innerPath === undefined) stagedSources.delete(sourceId);
 		} catch (error) {
 			const status =
 				error instanceof WorkspaceSourceError

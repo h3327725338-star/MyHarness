@@ -73,7 +73,6 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 						return ref.trim();
 					})
 					.filter((ref) => ref.length > 0)
-					.slice(0, 12)
 			: [];
 		const header = "Attached files (use read to inspect):";
 		const refs = attachments.map((ref) => JSON.stringify(ref)).join("\n");

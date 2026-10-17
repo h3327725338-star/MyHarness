@@ -105,6 +105,8 @@
 
 	--user-bg: #262a30;
 	--user-border: #30353d;
+	/* A Markdown blockquote: one step darker than the text around it, in a bubble or on the page. */
+	--quote-bg: rgba(0, 0, 0, 0.18);
 
 	--diff-add-bg: rgba(72, 170, 108, 0.14);
 	--diff-add-gutter: rgba(72, 170, 108, 0.22);
@@ -169,6 +171,8 @@
 
 	--user-bg: #eef1f6;
 	--user-border: #dde3ee;
+	/* A Markdown blockquote: one step darker than the text around it, in a bubble or on the page. */
+	--quote-bg: rgba(0, 0, 0, 0.045);
 
 	--diff-add-bg: rgba(44, 150, 90, 0.11);
 	--diff-add-gutter: rgba(44, 150, 90, 0.2);

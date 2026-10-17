@@ -43,8 +43,7 @@ export function registerModeRoutes(server: WebHttpServer, host: WebHost, hub: We
 				if (
 					typeof candidate.text !== "string" ||
 					candidate.text.length > 1_000_000 ||
-					!Array.isArray(candidate.attachments) ||
-					candidate.attachments.length > 12
+					!Array.isArray(candidate.attachments)
 				) {
 					throw new HttpError(400, "Invalid draft");
 				}
