@@ -57,7 +57,7 @@ describe("sub-agent runtime settings: capability mode", () => {
 });
 
 describe("delegated tool lists", () => {
-	it("keeps the historical read-only set plus the web tools, and adds exactly edit/write/pwsh for read-write", () => {
+	it("keeps the historical read-only set plus the web tools, and adds exactly edit/write/pwsh/apply_rename for read-write", () => {
 		expect([...DELEGATED_TOOL_NAMES]).toEqual([
 			"read",
 			"grep",
@@ -80,6 +80,7 @@ describe("delegated tool lists", () => {
 			"edit",
 			"write",
 			"pwsh",
+			"apply_rename",
 		]);
 	});
 
@@ -104,7 +105,7 @@ describe("delegated tool lists", () => {
 			mode: "read-write",
 		});
 		expect(writeArgs[writeArgs.indexOf("--tools") + 1]).toBe(
-			"read,grep,find,ls,bash,symbols,web_search,web_fetch,edit,write,pwsh",
+			"read,grep,find,ls,bash,symbols,web_search,web_fetch,edit,write,pwsh,apply_rename",
 		);
 		// Every other flag is untouched by the mode.
 		const stripTools = (list: string[]) => {

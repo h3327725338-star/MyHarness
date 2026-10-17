@@ -10,6 +10,7 @@ import type { CodeIntelligenceSettings } from "../../config/settings/index.ts";
 import { VERSION } from "../../config.ts";
 import { LanguageServerRegistry } from "../lsp/language-server/registry.ts";
 import { createBuiltInLanguageServerRegistry } from "./configuration.ts";
+import { initializationOptionsForServer } from "./server-options.ts";
 
 const pipeline = promisify(pipelineCallback);
 const execFileAsync = promisify(execFile);
@@ -738,6 +739,7 @@ export class CodeIntelligenceInstallationManager {
 						MYHARNESS_SYMBOLS_DATA_ROOT: dataRoot ?? path.join(this.storeDir, "data"),
 					},
 					clientInfo: { name: "myharness-symbols", version: this.manifest.releaseVersion },
+					initializationOptions: initializationOptionsForServer(entry.serverKey),
 				});
 			}
 		}

@@ -238,6 +238,7 @@ export {
 	type MemoryWriteToolItem,
 } from "./memory/write.ts";
 
+import { createApplyRenameTool, createApplyRenameToolDefinition } from "./apply-rename.ts";
 import {
 	createJobKillTool,
 	createJobKillToolDefinition,
@@ -274,6 +275,7 @@ export type ToolName =
 	| "find"
 	| "ls"
 	| "symbols"
+	| "apply_rename"
 	| "agent"
 	| "workflow"
 	| "ultracode"
@@ -302,6 +304,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"find",
 	"ls",
 	"symbols",
+	"apply_rename",
 	"agent",
 	"workflow",
 	"ultracode",
@@ -367,6 +370,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "symbols":
 			return createSymbolsToolDefinition(cwd, options?.symbols);
+		case "apply_rename":
+			return createApplyRenameToolDefinition(cwd);
 		case "agent":
 			return createSubAgentToolDefinition(cwd, options?.agent);
 		case "workflow":
@@ -428,6 +433,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "symbols":
 			return createSymbolsTool(cwd, options?.symbols);
+		case "apply_rename":
+			return createApplyRenameTool(cwd);
 		case "agent":
 			return createSubAgentTool(cwd, options?.agent);
 		case "workflow":
@@ -493,6 +500,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		symbols: createSymbolsToolDefinition(cwd, options?.symbols),
+		apply_rename: createApplyRenameToolDefinition(cwd),
 		agent: createSubAgentToolDefinition(cwd, options?.agent),
 		workflow: createWorkflowToolDefinition(cwd, options?.workflow),
 		ultracode: createUltracodeToolDefinition(cwd, options?.ultracode),
@@ -543,6 +551,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		symbols: createSymbolsTool(cwd, options?.symbols),
+		apply_rename: createApplyRenameTool(cwd),
 		agent: createSubAgentTool(cwd, options?.agent),
 		workflow: createWorkflowTool(cwd, options?.workflow),
 		ultracode: createUltracodeTool(cwd, options?.ultracode),

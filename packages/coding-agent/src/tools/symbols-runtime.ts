@@ -23,6 +23,14 @@ export interface SymbolsToolRuntime {
 	readonly getStatus: () => CodeIntelligenceRuntimeStatus;
 	readonly hasSymbolId: (symbolId: string) => boolean;
 	readonly supportsSymbolIds: boolean;
+	/** Languages with a registered language server; building the default runtime on first call. */
+	readonly semanticLanguages: () => ReadonlySet<string>;
+}
+
+function languagesOfStatus(status: CodeIntelligenceRuntimeStatus): ReadonlySet<string> {
+	return new Set(
+		status.languageServers.flatMap((server) => server.languages.map((language) => language.toLowerCase())),
+	);
 }
 
 export type SymbolsToolConfigurationErrorCode = "workspace_mismatch" | "invalid_workspace";
@@ -167,6 +175,12 @@ class DeferredDefaultRouter implements CodeIntelligenceRouterAdvancedApi {
 	): ReturnType<CodeIntelligenceRouterAdvancedApi["subtypes"]> {
 		return this.getRouter().subtypes(...args);
 	}
+
+	rename(
+		...args: Parameters<NonNullable<CodeIntelligenceRouterApi["rename"]>>
+	): ReturnType<NonNullable<CodeIntelligenceRouterApi["rename"]>> {
+		return this.lazy.getRuntime().router.rename(...args);
+	}
 }
 
 export function requireAdvancedRouter(
@@ -234,6 +248,7 @@ export function createSymbolsToolRuntime(
 				})),
 			hasSymbolId: injected.hasSymbolId ?? (() => false),
 			supportsSymbolIds: injected.supportsSymbolIds ?? false,
+			semanticLanguages: () => (injected.getStatus ? languagesOfStatus(injected.getStatus()) : new Set<string>()),
 		};
 	}
 
@@ -262,5 +277,9 @@ export function createSymbolsToolRuntime(
 		hasSymbolId: (symbolId: string) =>
 			lazy.hasInstance() ? lazy.getRuntime().services.hasSymbolId(symbolId) : false,
 		supportsSymbolIds: true,
+		semanticLanguages: () => {
+			const instance = lazy.getRuntime();
+			return instance.semantic ? languagesOfStatus(instance.getStatus()) : new Set<string>();
+		},
 	};
 }

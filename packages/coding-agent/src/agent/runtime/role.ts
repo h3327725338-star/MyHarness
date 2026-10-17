@@ -30,16 +30,17 @@ export const DELEGATED_TOOL_NAMES = [
  * write configuration already ships with (`edit`, `write`, `pwsh`). Edits are still
  * confined to the worker's own Git worktree by the delegated write guard.
  */
-export const DELEGATED_WRITE_TOOL_NAMES = [...DELEGATED_TOOL_NAMES, "edit", "write", "pwsh"] as const;
+export const DELEGATED_WRITE_TOOL_NAMES = [...DELEGATED_TOOL_NAMES, "edit", "write", "pwsh", "apply_rename"] as const;
 
 /**
  * Built-in tools a settings switch can take away completely. A tool listed here that the saved settings
  * have switched off must not survive any tool boundary: it is not registered, not active, not whitelisted
  * for a delegated worker, and therefore never named in a system prompt.
  */
-const GATED_BUILTIN_TOOL_NAMES: readonly string[] = ["symbols"];
+// apply_rename only writes plans made by symbols, so the same switch governs both.
+const GATED_BUILTIN_TOOL_NAMES: readonly string[] = ["symbols", "apply_rename"];
 
-/** Whether this built-in tool is one a settings switch can take away entirely (currently only `symbols`). */
+/** Whether this built-in tool is one a settings switch can take away entirely (`symbols` and `apply_rename`, both behind `codeIntelligence.symbolsEnabled`). */
 export function isGatedBuiltinToolName(toolName: string): boolean {
 	return GATED_BUILTIN_TOOL_NAMES.includes(toolName);
 }

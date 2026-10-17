@@ -80,11 +80,25 @@ describe("Symbols operation-specific tool schema", () => {
 			supertypes: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
 			subtypes: ["operation", "target", "language", "definitionId", "timeoutMs", "limit", "maxChars"],
 			status: ["operation", "maxChars"],
+			find_existing: [
+				"operation",
+				"intent",
+				"names",
+				"path",
+				"languages",
+				"kinds",
+				"limit",
+				"timeoutMs",
+				"maxChars",
+			],
+			read_symbol: ["operation", "target", "include", "maxLines", "timeoutMs", "maxChars"],
+			impact: ["operation", "target", "limit", "context", "includeText", "timeoutMs", "maxChars"],
+			rename_preview: ["operation", "target", "newName", "timeoutMs", "maxChars"],
 		};
 
-		// The tool contract is language-service (LSP) only: exactly these 13 operations.
+		// 13 language-service (LSP) operations plus 4 workflow operations built on them.
 		expect([...actual.keys()].sort()).toEqual(Object.keys(expected).sort());
-		expect(actual.size).toBe(13);
+		expect(actual.size).toBe(17);
 		for (const [operation, properties] of Object.entries(expected)) {
 			expect([...actual.get(operation)!].sort()).toEqual([...properties].sort());
 		}

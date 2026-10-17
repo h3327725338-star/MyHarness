@@ -287,3 +287,35 @@ export type HoverResult = IntelligenceResult<CodeHoverInfo>;
 export type CallHierarchyResult = IntelligenceResult<CodeCallEdge>;
 export type TypeHierarchyResult = IntelligenceResult<CodeSymbol>;
 export type ResolvedSymbolResult = IntelligenceResult<CodeSymbol>;
+
+// =============================================================================
+// Rename (workspace edit) model
+// =============================================================================
+
+/** One text replacement. `range` is in the coordinates of the document the server saw. */
+export interface CodeTextEdit {
+	readonly range: CodeRange;
+	readonly newText: string;
+}
+
+/** All replacements the server proposed for one workspace file. */
+export interface CodeFileEdit {
+	/** Workspace-relative POSIX path. */
+	readonly path: string;
+	readonly edits: readonly CodeTextEdit[];
+	/** Document version the server bound the edits to, when it supplied one. */
+	readonly version?: number;
+}
+
+/**
+ * The semantic result of a rename request: text edits per file. Changes the
+ * backend cannot represent or apply safely (file create/rename/delete,
+ * locations outside the workspace, edits that need user confirmation) are
+ * listed in `unsupportedChanges` instead of being dropped, so a caller can
+ * refuse the whole rename rather than apply part of it.
+ */
+export interface RenameResult extends IntelligenceResult<CodeFileEdit> {
+	readonly unsupportedChanges: readonly string[];
+	/** The current name at the target, as reported by prepareRename, when known. */
+	readonly placeholder?: string;
+}

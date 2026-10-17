@@ -272,6 +272,118 @@ export function readDiagnosticReport(value: unknown): RawLspDiagnosticReport | u
 	};
 }
 
+export interface RawLspTextEdit {
+	readonly range: RawLspRange;
+	readonly newText: string;
+	readonly annotationId: string | undefined;
+}
+
+export interface RawLspDocumentEdits {
+	readonly uri: string;
+	readonly version: number | undefined;
+	readonly edits: readonly RawLspTextEdit[];
+}
+
+export interface RawLspWorkspaceEdit {
+	/** Text edits grouped by document URI, in the order the server sent them. */
+	readonly documents: readonly RawLspDocumentEdits[];
+	/** Resource operations (create/rename/delete) and malformed entries, described for the caller. */
+	readonly unsupported: readonly string[];
+	/** Annotation ids whose change annotation asks for user confirmation. */
+	readonly confirmationAnnotations: ReadonlySet<string>;
+}
+
+function readTextEdit(value: unknown): RawLspTextEdit | undefined {
+	if (!isJsonObject(value)) return undefined;
+	const range = readRange(value.range);
+	if (!range) return undefined;
+	// A SnippetTextEdit (LSP 3.18) carries `snippet` instead of `newText`: it is not plain text.
+	if (typeof value.newText !== "string") return undefined;
+	const annotationId = typeof value.annotationId === "string" ? value.annotationId : undefined;
+	return { range, newText: value.newText, annotationId };
+}
+
+function readTextEdits(uri: string, values: readonly JsonValue[], unsupported: string[]): RawLspTextEdit[] {
+	const edits: RawLspTextEdit[] = [];
+	for (const value of values) {
+		const parsed = readTextEdit(value);
+		if (parsed) edits.push(parsed);
+		else unsupported.push(`unsupported or malformed text edit in ${uri}`);
+	}
+	return edits;
+}
+
+/**
+ * Parse a WorkspaceEdit (`documentChanges` or `changes`). Nothing is dropped
+ * silently: resource operations and malformed entries are reported in
+ * `unsupported`, because applying only the remaining edits would leave a
+ * half-renamed workspace.
+ */
+export function readWorkspaceEdit(value: unknown): RawLspWorkspaceEdit | undefined {
+	if (!isJsonObject(value)) return undefined;
+	const documents: RawLspDocumentEdits[] = [];
+	const unsupported: string[] = [];
+	const confirmationAnnotations = new Set<string>();
+	if (isJsonObject(value.changeAnnotations)) {
+		for (const [id, annotation] of Object.entries(value.changeAnnotations)) {
+			if (isJsonObject(annotation) && annotation.needsConfirmation === true) confirmationAnnotations.add(id);
+		}
+	}
+	if (value.documentChanges !== undefined) {
+		if (!Array.isArray(value.documentChanges)) return undefined;
+		for (const change of value.documentChanges as JsonValue[]) {
+			if (!isJsonObject(change)) {
+				unsupported.push("malformed documentChanges entry");
+				continue;
+			}
+			if (typeof change.kind === "string") {
+				const target =
+					typeof change.uri === "string"
+						? change.uri
+						: typeof change.oldUri === "string"
+							? `${change.oldUri} -> ${String(change.newUri)}`
+							: "";
+				unsupported.push(`resource operation ${change.kind} ${target}`.trim());
+				continue;
+			}
+			const textDocument = change.textDocument;
+			if (!isJsonObject(textDocument) || typeof textDocument.uri !== "string" || !Array.isArray(change.edits)) {
+				unsupported.push("malformed TextDocumentEdit");
+				continue;
+			}
+			documents.push({
+				uri: textDocument.uri,
+				version: isFiniteInteger(textDocument.version) ? textDocument.version : undefined,
+				edits: readTextEdits(textDocument.uri, change.edits as JsonValue[], unsupported),
+			});
+		}
+	} else if (value.changes !== undefined) {
+		if (!isJsonObject(value.changes)) return undefined;
+		for (const [uri, edits] of Object.entries(value.changes)) {
+			if (!Array.isArray(edits)) {
+				unsupported.push(`malformed edits for ${uri}`);
+				continue;
+			}
+			documents.push({ uri, version: undefined, edits: readTextEdits(uri, edits, unsupported) });
+		}
+	}
+	return { documents, unsupported, confirmationAnnotations };
+}
+
+/** prepareRename result: a range, a range with a placeholder, `{ defaultBehavior }`, or null. */
+export function readPrepareRename(
+	value: unknown,
+): { readonly range: RawLspRange | undefined; readonly placeholder: string | undefined } | null | undefined {
+	if (value === null) return null;
+	const direct = readRange(value);
+	if (direct) return { range: direct, placeholder: undefined };
+	if (!isJsonObject(value)) return undefined;
+	if (value.defaultBehavior === true) return { range: undefined, placeholder: undefined };
+	const range = readRange(value.range);
+	if (!range) return undefined;
+	return { range, placeholder: typeof value.placeholder === "string" ? value.placeholder : undefined };
+}
+
 export function isProviderSupported(value: unknown): boolean {
 	return value === true || isJsonObject(value);
 }

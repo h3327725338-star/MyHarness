@@ -82,9 +82,35 @@ export function describeAction(call, result, run, cwd) {
 			break;
 		case "symbols":
 			kind = "search";
-			target = str(args.query || args.symbol || args.name || args.path || args.action || t("code symbols"));
+			target = str(
+				args.query ||
+					args.intent ||
+					args.symbol ||
+					args.name ||
+					args.target?.name ||
+					args.target?.path ||
+					args.path ||
+					args.action ||
+					t("code symbols"),
+			);
 			detail = t("symbols");
 			break;
+		case "apply_rename": {
+			// The plan names its files only in the result: the step lists them once the rename is written.
+			kind = "edit";
+			const details = result ? result.details : run?.partialDetails;
+			const files = Array.isArray(details?.files) ? details.files : [];
+			paths = files.map((file) => str(file.path)).filter(Boolean);
+			path = paths.length === 1 ? paths[0] : undefined;
+			target = paths.length > 0 ? paths.map((file) => shortPath(file, cwd)).join(" · ") : str(args.planId);
+			if (files.length > 0) {
+				extra = {
+					additions: files.reduce((sum, file) => sum + (file.linesAdded || 0), 0),
+					deletions: files.reduce((sum, file) => sum + (file.linesRemoved || 0), 0),
+				};
+			}
+			break;
+		}
 		case "bash":
 		case "pwsh":
 			kind = "run";

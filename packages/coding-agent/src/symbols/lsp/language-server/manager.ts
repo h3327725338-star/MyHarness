@@ -4,6 +4,7 @@ import { win32 as windowsPath } from "node:path";
 import { getCodeLanguage } from "../../language.ts";
 import { getWorkspaceIdentity, normalizeWorkspaceRoot as normalizeWindowsWorkspaceRoot } from "../../path-semantics.ts";
 import { LspClient, type LspInitializeOptions } from "../client.ts";
+import { DEFAULT_LSP_CLIENT_CAPABILITIES } from "../client-capabilities.ts";
 import { LspProcessError } from "../errors.ts";
 import type { LspClientState, LspLogger } from "../types.ts";
 import { toFileUri } from "../uri.ts";
@@ -93,6 +94,31 @@ export function normalizeWorkspaceRoot(workspaceRoot: string): string {
 
 /** Cache identity uses normalized absolute paths and does not resolve symlinks. */
 export { getWorkspaceIdentity } from "../../path-semantics.ts";
+
+/**
+ * Answers for the server-to-client requests that the default client
+ * capabilities invite. Servers ask for their configuration and workspace
+ * folders, and (re)register capabilities dynamically; an unanswered or
+ * "method not found" reply makes several of them (pyright, gopls, jdtls)
+ * degrade or log errors. The answers are neutral: no configuration
+ * (defaults), the one workspace folder, and acknowledgements.
+ */
+function registerDefaultServerRequestHandlers(
+	client: LspClient,
+	workspaceFolders: ReadonlyArray<{ uri: string; name: string }>,
+): void {
+	client.onRequest("workspace/configuration", (params) => {
+		const items =
+			typeof params === "object" && params !== null && !Array.isArray(params) && Array.isArray(params.items)
+				? params.items
+				: [];
+		return items.map(() => null);
+	});
+	client.onRequest("workspace/workspaceFolders", () => workspaceFolders.map((folder) => ({ ...folder })));
+	client.onRequest("client/registerCapability", () => null);
+	client.onRequest("client/unregisterCapability", () => null);
+	client.onRequest("window/workDoneProgress/create", () => null);
+}
 
 function makeInstanceKey(definitionId: string, workspaceIdentity: string): string {
 	return `${definitionId}\u0000${workspaceIdentity}`;
@@ -331,17 +357,24 @@ export class LanguageServerManager {
 
 			phase = "initialize";
 			const rootUri = toFileUri(entry.workspaceRoot);
+			const workspaceFolders = [
+				{
+					uri: rootUri,
+					name: windowsPath.basename(entry.workspaceRoot) || entry.workspaceRoot,
+				},
+			];
+			const capabilities = entry.definition.capabilities ?? DEFAULT_LSP_CLIENT_CAPABILITIES;
+			if (entry.definition.capabilities === undefined)
+				registerDefaultServerRequestHandlers(client, workspaceFolders);
 			const initializeOptions: LspInitializeOptions = {
 				rootUri,
-				capabilities: entry.definition.capabilities ?? {},
-				workspaceFolders: [
-					{
-						uri: rootUri,
-						name: windowsPath.basename(entry.workspaceRoot) || entry.workspaceRoot,
-					},
-				],
+				capabilities,
+				workspaceFolders,
 			};
 			if (entry.definition.clientInfo !== undefined) initializeOptions.clientInfo = entry.definition.clientInfo;
+			if (entry.definition.initializationOptions !== undefined) {
+				initializeOptions.initializationOptions = entry.definition.initializationOptions;
+			}
 			await this.waitForStartupPhase(entry, client.initialize(initializeOptions));
 			this.ensureEntryCanStart(entry);
 

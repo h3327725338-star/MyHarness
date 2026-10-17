@@ -23,8 +23,16 @@ import type {
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
 } from "../symbols/types.ts";
+import { FileSymbolCache, type WorkflowContext } from "../symbols/workflow/context.ts";
+import { findExisting, renderFindExisting } from "../symbols/workflow/discovery.ts";
+import { analyzeImpact } from "../symbols/workflow/impact.ts";
+import type { WorkflowTarget } from "../symbols/workflow/locate.ts";
+import { previewRename } from "../symbols/workflow/rename.ts";
+import { readSymbol, type SliceInclude } from "../symbols/workflow/slice.ts";
+import type { SourceSnapshot } from "../symbols/workflow/text.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
+import { recordFileReadState, resolveFileStateScope, statFileReadState } from "./files/read-state.ts";
 import {
 	createSymbolsToolRuntime,
 	requireAdvancedRouter,
@@ -100,7 +108,13 @@ type SymbolsOperation =
 	| "outgoing_calls"
 	| "supertypes"
 	| "subtypes"
-	| "status";
+	| "status"
+	| "find_existing"
+	| "read_symbol"
+	| "impact"
+	| "rename_preview";
+
+const WORKFLOW_OPERATIONS: ReadonlySet<string> = new Set(["find_existing", "read_symbol", "impact", "rename_preview"]);
 
 const positionTargetSchema = Type.Object({
 	type: Type.Literal("position"),
@@ -117,6 +131,20 @@ const symbolIdTargetSchema = Type.Object({
 });
 
 const preciseTargetSchema = Type.Union([positionTargetSchema, symbolIdTargetSchema]);
+const declarationTargetSchema = Type.Object(
+	{
+		type: Type.Literal("symbol"),
+		path: Type.String({ minLength: 1, description: "Workspace-relative file that declares the symbol" }),
+		name: Type.String({
+			minLength: 1,
+			description: "Declaration name, optionally qualified by its parents: load, UserService/load, UserService.load",
+		}),
+	},
+	{ additionalProperties: false },
+);
+/** Workflow operations also accept a file-and-name target, which survives edits that move lines. */
+const workflowTargetSchema = Type.Union([declarationTargetSchema, positionTargetSchema, symbolIdTargetSchema]);
+const workflowTimeoutSchema = Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 600_000 }));
 const optionalPathSchema = Type.Optional(
 	Type.String({ minLength: 1, description: "Workspace-relative path or directory" }),
 );
@@ -260,6 +288,76 @@ const symbolsOperationSchemas = [
 		},
 		{ additionalProperties: false },
 	),
+	Type.Object(
+		{
+			operation: Type.Literal("find_existing"),
+			intent: Type.String({
+				minLength: 1,
+				description: "What the code you are about to write would do, in plain words (any language)",
+			}),
+			names: Type.Optional(
+				Type.Array(Type.String({ minLength: 1 }), {
+					maxItems: 10,
+					description: "Names you would give it or expect it to have",
+				}),
+			),
+			path: optionalPathSchema,
+			languages: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 20 })),
+			kinds: kindsSchema,
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, description: "Maximum candidates (default 8)" })),
+			timeoutMs: workflowTimeoutSchema,
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("read_symbol"),
+			target: workflowTargetSchema,
+			include: Type.Optional(
+				Type.Array(Type.Union([Type.Literal("imports"), Type.Literal("callers"), Type.Literal("callees")]), {
+					minItems: 1,
+					maxItems: 3,
+				}),
+			),
+			maxLines: Type.Optional(
+				Type.Integer({ minimum: 10, maximum: 2_000, description: "Source line budget (default 200)" }),
+			),
+			timeoutMs: workflowTimeoutSchema,
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("impact"),
+			target: workflowTargetSchema,
+			limit: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 500, description: "Maximum listed sites (default 80)" }),
+			),
+			context: Type.Optional(
+				Type.Integer({ minimum: 0, maximum: 3, description: "Lines of code around each site" }),
+			),
+			includeText: Type.Optional(
+				Type.Boolean({
+					description: "Also list text occurrences the language server did not report (default true)",
+				}),
+			),
+			timeoutMs: workflowTimeoutSchema,
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("rename_preview"),
+			target: workflowTargetSchema,
+			newName: Type.String({ minLength: 1 }),
+			timeoutMs: workflowTimeoutSchema,
+			maxChars: maxCharsSchema,
+		},
+		{ additionalProperties: false },
+	),
 ];
 
 export type SymbolsToolInput = Static<(typeof symbolsOperationSchemas)[number]>;
@@ -283,6 +381,15 @@ export interface SymbolsToolDetails {
 	semanticEnabled?: boolean;
 	symbolStoreEntryCount?: number;
 	languageServerCount?: number;
+	/** find_existing: number of candidates listed. */
+	candidateCount?: number;
+	/** read_symbol: the source itself was condensed or cut (with a continuation hint). */
+	sourceTruncated?: boolean;
+	/** rename_preview: the plan to pass to apply_rename. */
+	renamePlanId?: string;
+	renameFiles?: Array<{ path: string; edits: number }>;
+	/** rename_preview: no plan was created; the output says why. */
+	renameRefused?: boolean;
 }
 
 export interface SymbolsToolOptions {
@@ -423,9 +530,76 @@ function validateCommonTypes(args: Record<string, unknown>, operation: SymbolsOp
 	validateBoolean(args.includeDeclaration, operation, "includeDeclaration");
 }
 
+function validateWorkflowTarget(value: unknown, operation: string): WorkflowTarget {
+	const target = recordOf(value);
+	if (target.type === "symbol") {
+		const unexpected = Object.keys(target).filter((key) => key !== "type" && key !== "path" && key !== "name");
+		if (unexpected.length > 0) {
+			throw new SymbolsToolInputError(
+				operation,
+				`${operation} symbol target does not accept: ${unexpected.join(", ")}`,
+			);
+		}
+		return {
+			type: "symbol",
+			path: requireNonEmpty(target.path, operation, "target.path"),
+			name: requireNonEmpty(target.name, operation, "target.name"),
+		};
+	}
+	return validateTarget(value, operation);
+}
+
+function validateStringArray(value: unknown, operation: string, label: string, maxItems: number): void {
+	if (value === undefined) return;
+	if (
+		!Array.isArray(value) ||
+		value.length > maxItems ||
+		value.some((item) => typeof item !== "string" || item.trim() === "")
+	) {
+		throw new SymbolsToolInputError(
+			operation,
+			`${operation} ${label} must be an array of at most ${maxItems} non-empty strings`,
+		);
+	}
+}
+
+function validateWorkflowInput(args: Record<string, unknown>, operation: SymbolsOperation): void {
+	if (operation === "find_existing") {
+		requireNonEmpty(args.intent, operation, "intent");
+		validateStringArray(args.names, operation, "names", 10);
+		validateStringArray(args.languages, operation, "languages", 20);
+		validateInteger(args.limit, operation, "limit", 1, 30);
+		if (args.path !== undefined) requireNonEmpty(args.path, operation, "path");
+		return;
+	}
+	if (!hasValue(args, "target")) throw new SymbolsToolInputError(operation, `${operation} requires target`);
+	validateWorkflowTarget(args.target, operation);
+	if (operation === "read_symbol") {
+		if (
+			args.include !== undefined &&
+			(!Array.isArray(args.include) ||
+				args.include.length === 0 ||
+				args.include.some((item) => item !== "imports" && item !== "callers" && item !== "callees"))
+		) {
+			throw new SymbolsToolInputError(operation, "read_symbol include must list imports, callers and/or callees");
+		}
+		validateInteger(args.maxLines, operation, "maxLines", 10, 2_000);
+	} else if (operation === "impact") {
+		validateInteger(args.context, operation, "context", 0, 3);
+		validateBoolean(args.includeText, operation, "includeText");
+	} else if (operation === "rename_preview") {
+		requireNonEmpty(args.newName, operation, "newName");
+	}
+}
+
 function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
 	const args = recordOf(input);
 	const operation = args.operation;
+	if (typeof operation === "string" && WORKFLOW_OPERATIONS.has(operation)) {
+		validateCommonTypes(args, operation as SymbolsOperation);
+		validateWorkflowInput(args, operation as SymbolsOperation);
+		return input;
+	}
 	if (
 		operation !== "file_symbols" &&
 		operation !== "find_definition" &&
@@ -747,11 +921,109 @@ function requireQuery(operation: SymbolsOperation, value: unknown): string {
 	return requireNonEmpty(value, operation, "query");
 }
 
+type WorkflowOperation = "find_existing" | "read_symbol" | "impact" | "rename_preview";
+
+interface WorkflowOutcome {
+	readonly lines: string[];
+	readonly source: "semantic" | "lexical";
+	readonly completeness: ResultCompleteness;
+	readonly warnings: string[];
+	readonly shown: readonly SourceSnapshot[];
+	readonly details: Partial<SymbolsToolDetails>;
+}
+
+async function runWorkflowOperation(
+	operation: WorkflowOperation,
+	args: Record<string, unknown>,
+	context: WorkflowContext,
+): Promise<WorkflowOutcome> {
+	if (operation === "find_existing") {
+		const result = await findExisting(context, {
+			intent: String(args.intent),
+			...(Array.isArray(args.names) ? { names: args.names as string[] } : {}),
+			...(typeof args.path === "string" ? { path: args.path } : {}),
+			...(Array.isArray(args.languages) ? { languages: args.languages as string[] } : {}),
+			...(Array.isArray(args.kinds) ? { kinds: args.kinds as CodeSymbolKind[] } : {}),
+			...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+		});
+		const lexicalOnly = [...result.coverage.languages.values()].some((coverage) => coverage.mode === "lexical");
+		const partial =
+			lexicalOnly ||
+			result.coverage.hitsTruncated ||
+			result.coverage.codeFilesTruncated ||
+			result.coverage.errors.length > 0;
+		return {
+			lines: renderFindExisting(result),
+			source: result.candidates.some((candidate) => candidate.evidence !== "lexical") ? "semantic" : "lexical",
+			completeness: partial ? "partial" : "complete",
+			warnings: [...result.coverage.errors],
+			shown: [],
+			details: { candidateCount: result.candidates.length },
+		};
+	}
+	const target = validateWorkflowTarget(args.target, operation);
+	if (operation === "read_symbol") {
+		const result = await readSymbol(context, target, {
+			...(Array.isArray(args.include) ? { include: args.include as SliceInclude[] } : {}),
+			...(typeof args.maxLines === "number" ? { maxLines: args.maxLines } : {}),
+		});
+		return { ...result, details: { sourceTruncated: result.sourceTruncated } };
+	}
+	if (operation === "impact") {
+		const result = await analyzeImpact(context, target, {
+			...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+			...(typeof args.context === "number" ? { context: args.context } : {}),
+			...(typeof args.includeText === "boolean" ? { includeText: args.includeText } : {}),
+		});
+		return { ...result, shown: [], details: {} };
+	}
+	const preview = await previewRename(context, target, String(args.newName));
+	return {
+		lines: preview.lines,
+		source: "semantic",
+		completeness: preview.kind === "planned" && !preview.partial ? "complete" : "partial",
+		warnings: preview.warnings,
+		shown: [],
+		details:
+			preview.kind === "planned"
+				? {
+						renamePlanId: preview.plan.id,
+						renameFiles: preview.plan.files.map((file) => ({ path: file.path, edits: file.edits.length })),
+					}
+				: { renameRefused: true },
+	};
+}
+
+function composeWorkflowOutput(details: SymbolsToolDetails, lines: string[]): string {
+	const notices = [metaHeader(details)];
+	for (const warning of details.warnings ?? []) notices.push(`[warning] ${warning}`);
+	notices.push(...lines);
+	return notices.join("\n");
+}
+
+/**
+ * A slice shown by read_symbol counts as a read of that file for the
+ * read-before-edit check, exactly like a ranged `read`: the model has seen
+ * the code it is about to edit. It is recorded only when the file is still
+ * the one that was shown.
+ */
+async function recordShownFiles(shown: readonly SourceSnapshot[], ctx: unknown): Promise<void> {
+	if (shown.length === 0) return;
+	const scope = resolveFileStateScope(ctx);
+	for (const snapshot of shown) {
+		const current = await statFileReadState(snapshot.absolutePath);
+		if (current && current.mtimeMs === snapshot.mtimeMs && current.size === snapshot.size) {
+			recordFileReadState(snapshot.absolutePath, current, scope);
+		}
+	}
+}
+
 export function createSymbolsToolDefinition(
 	cwd: string,
 	options?: SymbolsToolOptions,
 ): BusinessToolDefinition<typeof symbolsSchema, SymbolsToolDetails | undefined> {
 	const runtime = createSymbolsToolRuntime(cwd, options);
+	const fileSymbols = new FileSymbolCache();
 	return {
 		name: "symbols",
 		label: "symbols",
@@ -767,6 +1039,31 @@ export function createSymbolsToolDefinition(
 			const supportsSymbolIds = runtime.supportsSymbolIds;
 			let text: string;
 			let details: SymbolsToolDetails;
+
+			if (WORKFLOW_OPERATIONS.has(operation)) {
+				const raw = recordOf(args);
+				const context: WorkflowContext = {
+					workspaceRoot: runtime.workspaceRoot,
+					router: runtime.router,
+					semanticLanguages: runtime.semanticLanguages,
+					fileSymbols,
+					...(signal ? { signal } : {}),
+					...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
+				};
+				const outcome = await runWorkflowOperation(operation as WorkflowOperation, raw, context);
+				details = {
+					operation,
+					source: outcome.source as IntelligenceResultMeta["source"],
+					completeness: outcome.completeness,
+					...(outcome.warnings.length > 0 ? { warnings: [...new Set(outcome.warnings)] } : {}),
+					...outcome.details,
+				};
+				text = composeWorkflowOutput(details, outcome.lines);
+				await recordShownFiles(outcome.shown, _ctx);
+				const finalized = finalizeOutput(text, maxChars);
+				details.outputTruncated = finalized.outputTruncated;
+				return { content: [{ type: "text", text: finalized.text }], details };
+			}
 
 			if (operation === "status") {
 				const status = runtime.getStatus();

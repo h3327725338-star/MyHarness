@@ -6,7 +6,14 @@
  */
 
 import type { LspClient } from "../client.ts";
-import type { LspClientCapabilities, LspClientInfo, LspClientOptions, LspClientState, LspLogger } from "../types.ts";
+import type {
+	JsonObject,
+	LspClientCapabilities,
+	LspClientInfo,
+	LspClientOptions,
+	LspClientState,
+	LspLogger,
+} from "../types.ts";
 import type { LanguageServerRegistry } from "./registry.ts";
 
 export interface LanguageServerDefinition {
@@ -21,6 +28,8 @@ export interface LanguageServerDefinition {
 	readonly clientOptions?: Omit<LspClientOptions, "logger">;
 	readonly clientInfo?: LspClientInfo;
 	readonly capabilities?: LspClientCapabilities;
+	/** Server-specific `initializationOptions` sent with initialize. */
+	readonly initializationOptions?: JsonObject;
 }
 
 export interface LanguageServerAcquireOptions {

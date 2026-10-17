@@ -368,7 +368,7 @@ describe("Symbols Tool V2", () => {
 		await execute(after!, { operation: "file_symbols", path: "src/service.ts" });
 		expect(router.fileSymbols).toHaveBeenCalledTimes(1);
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(session.getAllTools().find((tool) => tool.name === "symbols")?.promptGuidelines).toHaveLength(8);
+		expect(session.getAllTools().find((tool) => tool.name === "symbols")?.promptGuidelines).toHaveLength(10);
 		session.dispose();
 	});
 });

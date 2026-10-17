@@ -28,6 +28,7 @@ import {
 import {
 	DELEGATED_TOOL_NAMES,
 	DELEGATED_WRITE_TOOL_NAMES,
+	isGatedBuiltinToolName,
 	withoutDisabledBuiltinTools,
 } from "../agent/runtime/role.ts";
 import { SETTINGS_DEFAULTS, SUB_AGENT_SETTING_RANGES } from "../config/settings/defaults.ts";
@@ -1621,7 +1622,8 @@ export function buildSubAgentArgs(options: {
 	// The worker builds its own session in its own process, so it reads the saved switch itself. This list
 	// is what its role boundary receives as the requested tools, so dropping the name here is what keeps a
 	// switched-off symbols tool out of the worker.
-	const isConfigured = (name: string): boolean => (name === "symbols" ? options.symbolsEnabled !== false : true);
+	const isConfigured = (name: string): boolean =>
+		isGatedBuiltinToolName(name) ? options.symbolsEnabled !== false : true;
 	const toolNames = withoutDisabledBuiltinTools(
 		options.mode === "read-write" ? DELEGATED_WRITE_TOOL_NAMES : DELEGATED_TOOL_NAMES,
 		isConfigured,

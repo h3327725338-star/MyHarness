@@ -10,8 +10,7 @@ import { buildSubAgentArgs, hasSuccessfulInvestigationEvidence } from "../src/to
 import { createHarness } from "./suite/harness.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
-const SYMBOLS_GUIDELINE =
-	"query workspace_symbols only when there is a real risk of duplication or a reusable implementation";
+const SYMBOLS_GUIDELINE = "call find_existing with the intent in plain words";
 
 function toolsArgument(args: string[]): string[] {
 	const index = args.indexOf("--tools");
@@ -28,6 +27,9 @@ describe("codeIntelligence.symbolsEnabled gate", () => {
 			expect(harness.session.getActiveToolNames()).not.toContain("symbols");
 			expect(harness.session.getToolDefinition("symbols")).toBeUndefined();
 			expect(harness.session.isBuiltinEnabled("symbols")).toBe(false);
+			// apply_rename only applies plans made by symbols, so it is gated with it.
+			expect(harness.session.getAllTools().map((tool) => tool.name)).not.toContain("apply_rename");
+			expect(harness.session.getActiveToolNames()).not.toContain("apply_rename");
 			expect(harness.session.systemPrompt).not.toContain(SYMBOLS_GUIDELINE);
 			// Asking for the tool by name cannot bring it back: it is not registered, so the active set
 			// drops the unknown name instead of erroring.
@@ -43,6 +45,7 @@ describe("codeIntelligence.symbolsEnabled gate", () => {
 		try {
 			expect(harness.session.getAllTools().map((tool) => tool.name)).toContain("symbols");
 			expect(harness.session.getActiveToolNames()).toContain("symbols");
+			expect(harness.session.getActiveToolNames()).toContain("apply_rename");
 			expect(harness.session.getToolDefinition("symbols")?.name).toBe("symbols");
 			expect(harness.session.isBuiltinEnabled("symbols")).toBe(true);
 			expect(harness.session.systemPrompt).toContain(SYMBOLS_GUIDELINE);
@@ -119,6 +122,14 @@ describe("codeIntelligence.symbolsEnabled gate", () => {
 			"symbols",
 		);
 		expect(toolsArgument(buildSubAgentArgs({ ...base, symbolsEnabled: true }))).toContain("symbols");
+		// apply_rename follows the same switch, and only read-write workers get it.
+		expect(toolsArgument(buildSubAgentArgs({ ...base, symbolsEnabled: false, mode: "read-write" }))).not.toContain(
+			"apply_rename",
+		);
+		expect(toolsArgument(buildSubAgentArgs({ ...base, symbolsEnabled: true, mode: "read-write" }))).toContain(
+			"apply_rename",
+		);
+		expect(toolsArgument(buildSubAgentArgs({ ...base, symbolsEnabled: true }))).not.toContain("apply_rename");
 		// Callers that never learned about the switch keep the historical list (the child session still
 		// applies its own settings gate when it builds).
 		expect(toolsArgument(buildSubAgentArgs(base))).toContain("symbols");

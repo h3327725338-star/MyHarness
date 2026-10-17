@@ -290,6 +290,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						"edit",
 						"write",
 						"symbols",
+						"apply_rename",
 						"github",
 						"memory_search",
 						"memory_get",

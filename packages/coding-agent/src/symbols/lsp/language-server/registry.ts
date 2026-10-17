@@ -1,4 +1,4 @@
-import type { LspClientCapabilities, LspClientInfo, LspClientOptions } from "../types.ts";
+import type { JsonObject, LspClientCapabilities, LspClientInfo, LspClientOptions } from "../types.ts";
 import { DuplicateLanguageServerDefinitionError, InvalidLanguageServerDefinitionError } from "./errors.ts";
 import type { LanguageServerDefinition } from "./types.ts";
 
@@ -13,6 +13,7 @@ export interface LanguageServerDefinitionInput {
 	readonly clientOptions?: Omit<LspClientOptions, "logger">;
 	readonly clientInfo?: LspClientInfo;
 	readonly capabilities?: LspClientCapabilities;
+	readonly initializationOptions?: JsonObject;
 }
 
 interface RegisteredDefinition {
@@ -81,6 +82,8 @@ function normalizeDefinition(input: LanguageServerDefinitionInput): LanguageServ
 		clientOptions: input.clientOptions === undefined ? undefined : freezeDeep(clone(input.clientOptions)),
 		clientInfo: input.clientInfo === undefined ? undefined : freezeDeep(clone(input.clientInfo)),
 		capabilities: input.capabilities === undefined ? undefined : freezeDeep(clone(input.capabilities)),
+		initializationOptions:
+			input.initializationOptions === undefined ? undefined : freezeDeep(clone(input.initializationOptions)),
 	};
 	return freezeDeep(definition);
 }

@@ -20,6 +20,7 @@ import type {
 	ImplementationsResult,
 	IntelligenceSource,
 	ReferencesResult,
+	RenameResult,
 	ResolvedSymbolResult,
 	SymbolTarget,
 	TypeHierarchyResult,
@@ -131,6 +132,21 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 		);
 		this.observeSymbols(result.items, result.meta.source, options);
 		return result;
+	}
+
+	/** Semantic rename edits for the symbol at `target`; nothing is written. */
+	async rename(
+		target: SymbolTarget,
+		newName: string,
+		options: CodeIntelligenceRoutingOptions = {},
+	): Promise<RenameResult> {
+		return this.routeAdvancedTarget("rename", target, options, (position, opts) => {
+			const semantic = this.requireSemantic("rename");
+			if (typeof semantic.rename !== "function") {
+				throw this.error("unsupported_operation", "semantic backend does not implement rename", "rename");
+			}
+			return semantic.rename(position, newName, this.semanticOptions(opts));
+		});
 	}
 
 	async findDefinition(target: SymbolTarget, options: CodeIntelligenceRoutingOptions = {}): Promise<DefinitionResult> {

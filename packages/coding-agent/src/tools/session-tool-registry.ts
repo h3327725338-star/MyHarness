@@ -207,6 +207,7 @@ export class SessionToolRegistry {
 					"edit",
 					"write",
 					"symbols",
+					"apply_rename",
 					"github",
 					"memory_search",
 					"memory_get",
@@ -360,7 +361,7 @@ export class SessionToolRegistry {
 						return await persisted.execute(...args);
 					} finally {
 						const scope = artifactScope(sessionManager);
-						if (scope && ["write", "edit", "apply_patch", "bash", "pwsh"].includes(tool.name)) {
+						if (scope && ["write", "edit", "apply_patch", "apply_rename", "bash", "pwsh"].includes(tool.name)) {
 							try {
 								refreshArtifactIndexesIfChanged(scope);
 							} catch (error) {

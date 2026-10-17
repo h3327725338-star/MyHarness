@@ -121,7 +121,7 @@ interface PlannedOperation {
 }
 
 /** One write or removal on disk, with the way back to the state before the patch. */
-interface WriteStep {
+export interface WriteStep {
 	description: string;
 	run: () => Promise<void>;
 	undo: () => Promise<void>;
@@ -239,7 +239,7 @@ function conflictError(path: string, line: number, previous: { path: string; lin
  * Stable key for "the same file": the real path when the file exists, otherwise its real directory plus its
  * name. Two different spellings of one file (symlinks, junctions, case on Windows) get the same key.
  */
-async function fileIdentity(absolutePath: string): Promise<string> {
+export async function fileIdentity(absolutePath: string): Promise<string> {
 	try {
 		return canonicalFilePathKey(await realpath(absolutePath));
 	} catch {
@@ -253,7 +253,11 @@ async function fileIdentity(absolutePath: string): Promise<string> {
 }
 
 /** Take the queues of the given files, one after another in the given order (sorted by the caller). */
-async function withFileQueues<T>(paths: readonly string[], task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function withFileQueues<T>(
+	paths: readonly string[],
+	task: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
 	const [first, ...rest] = paths;
 	if (first === undefined) return task();
 	return withFileMutationQueue(first, () => withFileQueues(rest, task, signal), signal);
@@ -565,7 +569,7 @@ function createFileStep(displayPath: string, absolutePath: string, content: stri
 	};
 }
 
-function replaceFileStep(
+export function replaceFileStep(
 	displayPath: string,
 	absolutePath: string,
 	content: string | Uint8Array,
@@ -590,14 +594,14 @@ function removeFileStep(displayPath: string, absolutePath: string, before: Uint8
  * Run the steps in order. If one fails, the steps already done are undone in reverse, and the error says which
  * files were restored, which could not be restored, and which were never written.
  */
-async function runWriteSteps(steps: readonly WriteStep[]): Promise<void> {
+export async function runWriteSteps(steps: readonly WriteStep[], toolName = "apply_patch"): Promise<void> {
 	const done: WriteStep[] = [];
 	for (const [index, step] of steps.entries()) {
 		try {
 			await step.run();
 			done.push(step);
 		} catch (error) {
-			throw await writeFailure(error, step, done, steps.slice(index + 1));
+			throw await writeFailure(error, step, done, steps.slice(index + 1), toolName);
 		}
 	}
 }
@@ -607,6 +611,7 @@ async function writeFailure(
 	failed: WriteStep,
 	done: readonly WriteStep[],
 	notAttempted: readonly WriteStep[],
+	toolName: string,
 ): Promise<Error> {
 	const restored: string[] = [];
 	const unrestored: string[] = [];
@@ -619,7 +624,7 @@ async function writeFailure(
 		}
 	}
 
-	const parts = [`apply_patch could not finish: ${messageOf(error)}.`];
+	const parts = [`${toolName} could not finish: ${messageOf(error)}.`];
 	if (restored.length > 0) parts.push(`Written and then restored to their earlier state: ${restored.join(", ")}.`);
 	if (unrestored.length > 0) parts.push(`Could not restore: ${unrestored.join(", ")}. Check these files by hand.`);
 	const notWritten = [failed.description, ...notAttempted.map((step) => step.description)];

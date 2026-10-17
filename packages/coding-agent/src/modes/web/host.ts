@@ -15,6 +15,7 @@ import { type AssistantMessage, type ImageContent, stripModelGuidance } from "@m
 import type { AgentSession, AgentSessionEvent } from "../../agent/runtime/agent-session.ts";
 import { ConversationNaming, type ConversationNamingStatus } from "../../agent/runtime/conversation-naming.ts";
 import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
+import { promptCorrelation } from "../../agent/runtime/prompt-correlation.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
@@ -22,7 +23,6 @@ import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspac
 import { UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../config/trust/index.ts";
 import { getDataDir } from "../../config.ts";
-import { promptCorrelation } from "../../agent/runtime/prompt-correlation.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { hasGitCheckpointTaskChangesAsync, listGitCheckpoints } from "../../git/checkpoints/checkpoint.ts";
@@ -36,6 +36,7 @@ import {
 import { isWorktreeCopyPath } from "../../git/worktrees/merged-records.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
 import type { SessionEntry } from "../../session/types.ts";
+import { getRenamePlanPaths } from "../../symbols/workflow/rename-plans.ts";
 import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
 import { resolveToCwd } from "../../tools/path-utils.ts";
 import {
@@ -1269,6 +1270,13 @@ export class WebHost {
 				toolCallId,
 				applyPatchPaths(patch).map((p) => resolveToCwd(p, this.cwd)),
 			);
+		} else if (toolName === "apply_rename") {
+			// The rename plan, not the arguments, names the files; it is still pending when the call starts.
+			this.tracker.captureBeforePaths(
+				runId,
+				toolCallId,
+				getRenamePlanPaths((args as { planId?: unknown } | null)?.planId),
+			);
 		} else if (toolName === "bash" || toolName === "pwsh") {
 			this.tracker.recordBash(runId);
 			this.tracker.recordShellStart(runId, toolCallId);
@@ -1280,7 +1288,7 @@ export class WebHost {
 	private onToolEnd(toolCallId: string, toolName: string, isError: boolean): void {
 		const runId = this.currentRunId;
 		if (runId === undefined) return;
-		if (toolName === "edit" || toolName === "write" || toolName === "apply_patch") {
+		if (toolName === "edit" || toolName === "write" || toolName === "apply_patch" || toolName === "apply_rename") {
 			this.tracker.recordToolOp(runId, toolCallId, toolName, !isError);
 		} else if (toolName === "bash" || toolName === "pwsh") {
 			// The window is recorded regardless of the exit code: a failed command may still have written files.

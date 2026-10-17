@@ -58,6 +58,7 @@ export interface LspInitializeOptions {
 	/** 缺省为 {}：只声明 MyHarness 真实支持的能力 */
 	capabilities?: LspClientCapabilities;
 	workspaceFolders?: LspWorkspaceFolder[] | null;
+	initializationOptions?: JsonObject;
 }
 
 interface PendingRequest {
@@ -175,6 +176,7 @@ export class LspClient {
 		if (options.rootUri !== undefined) params.rootUri = options.rootUri;
 		if (options.clientInfo !== undefined) params.clientInfo = options.clientInfo;
 		if (options.workspaceFolders !== undefined) params.workspaceFolders = options.workspaceFolders;
+		if (options.initializationOptions !== undefined) params.initializationOptions = options.initializationOptions;
 
 		let result: LspInitializeResult;
 		try {

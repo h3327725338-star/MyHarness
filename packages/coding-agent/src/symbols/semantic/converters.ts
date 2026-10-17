@@ -109,14 +109,19 @@ export function convertWorkspaceLocation(
 	workspaceRoot: string,
 	text?: string,
 ): LocationConversion {
-	if (!/^file:/i.test(uri)) {
-		return { kind: "skip", warning: `skipped non-file semantic location: ${uri}` };
-	}
 	let absolutePath: string;
-	try {
-		absolutePath = fromFileUri(uri);
-	} catch (cause) {
-		return { kind: "skip", warning: `skipped invalid file URI: ${String(cause)}` };
+	if (/^(?:[A-Za-z]:[\\/]|\\\\)/u.test(uri)) {
+		// Some servers (kotlin-language-server on Windows) send plain absolute
+		// paths where the protocol requires a file URI; the path is unambiguous.
+		absolutePath = uri;
+	} else if (!/^file:/i.test(uri)) {
+		return { kind: "skip", warning: `skipped non-file semantic location: ${uri}` };
+	} else {
+		try {
+			absolutePath = fromFileUri(uri);
+		} catch (cause) {
+			return { kind: "skip", warning: `skipped invalid file URI: ${String(cause)}` };
+		}
 	}
 	let document: ResolvedWorkspaceDocument;
 	try {

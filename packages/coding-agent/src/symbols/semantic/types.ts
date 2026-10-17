@@ -10,6 +10,7 @@ import type {
 	ImplementationsResult,
 	IntelligenceResult,
 	ReferencesResult,
+	RenameResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
@@ -30,6 +31,8 @@ export interface SemanticCapabilities {
 	readonly hoverProvider: boolean;
 	readonly callHierarchyProvider: boolean;
 	readonly typeHierarchyProvider: boolean;
+	readonly renameProvider: boolean;
+	readonly renamePrepareProvider: boolean;
 	readonly positionEncoding: "utf-16";
 }
 
@@ -96,6 +99,11 @@ export interface SemanticBackendApi {
 		target: Extract<SymbolTarget, { type: "position" }>,
 		options: SemanticBackendQueryOptions,
 	): Promise<TypeHierarchyResult>;
+	rename?(
+		target: Extract<SymbolTarget, { type: "position" }>,
+		newName: string,
+		options: SemanticBackendQueryOptions,
+	): Promise<RenameResult>;
 	getDiagnostics(filePath: string, options: SemanticBackendQueryOptions): Promise<DiagnosticsResult>;
 	closeDocument(filePath: string, options: SemanticBackendQueryOptions): Promise<void>;
 	dispose(): Promise<void>;

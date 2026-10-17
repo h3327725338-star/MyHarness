@@ -4,6 +4,7 @@
 
 import type { AgentMessage } from "@myharness/agent-core";
 import { contentText, type Message } from "@myharness/ai";
+import { getRenamePlanPaths } from "../../symbols/workflow/rename-plans.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
 
@@ -43,6 +44,11 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 		// apply_patch names its files inside the patch text, not in a path argument.
 		if (block.name === "apply_patch") {
 			for (const path of applyPatchPaths(args.patch)) fileOps.edited.add(path);
+			continue;
+		}
+		// apply_rename names only its plan; the plan registry remembers the files it wrote.
+		if (block.name === "apply_rename") {
+			for (const path of getRenamePlanPaths(args.planId)) fileOps.edited.add(path);
 			continue;
 		}
 

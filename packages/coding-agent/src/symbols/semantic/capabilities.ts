@@ -70,6 +70,9 @@ export function parseSemanticCapabilities(result: LspInitializeResult | undefine
 		hoverProvider: hover.supported,
 		callHierarchyProvider: callHierarchy.supported,
 		typeHierarchyProvider: typeHierarchy.supported,
+		renameProvider: isProviderSupported(capabilities.renameProvider),
+		renamePrepareProvider:
+			isJsonObject(capabilities.renameProvider) && capabilities.renameProvider.prepareProvider === true,
 		positionEncoding: parsePositionEncoding(capabilities.positionEncoding),
 	});
 }

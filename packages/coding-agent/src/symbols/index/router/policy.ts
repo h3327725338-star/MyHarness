@@ -13,7 +13,8 @@ export type RouterOperation =
 	| "incoming_calls"
 	| "outgoing_calls"
 	| "supertypes"
-	| "subtypes";
+	| "subtypes"
+	| "rename";
 
 export type RouterBackend = "semantic" | "unsupported";
 

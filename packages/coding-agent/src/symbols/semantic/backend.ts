@@ -1,12 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 
-import { getCodeLanguage } from "../language.ts";
+import { getCodeLanguage, LANGUAGE_BY_EXTENSION } from "../language.ts";
+import { listWorkspaceFiles } from "../lexical/search.ts";
 import { LspResponseError } from "../lsp/errors.ts";
 import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type { ManagedLanguageServer } from "../lsp/language-server/types.ts";
 import type { JsonObject, JsonValue } from "../lsp/types.ts";
-import { getDocumentIdentity, getWorkspaceIdentity, samePath } from "../path-semantics.ts";
+import {
+	getDocumentIdentity,
+	getWorkspaceIdentity,
+	getWorkspaceRelativeIdentity,
+	samePath,
+	toFileUri,
+} from "../path-semantics.ts";
 import { buildNamePath, createSymbolId } from "../symbol-identity.ts";
 import type {
 	CallHierarchyResult,
@@ -18,12 +25,14 @@ import type {
 	CodeReference,
 	CodeSymbol,
 	CodeSymbolTreeNode,
+	CodeTextEdit,
 	DefinitionResult,
 	DiagnosticsResult,
 	FileSymbolsResult,
 	HoverResult,
 	ImplementationsResult,
 	ReferencesResult,
+	RenameResult,
 	SymbolTarget,
 	TypeHierarchyResult,
 	WorkspaceSymbolsResult,
@@ -72,8 +81,10 @@ import {
 	readLspLocation,
 	readLspLocationLink,
 	readOutgoingCall,
+	readPrepareRename,
 	readPublishDiagnosticsParams,
 	readSymbolInformation,
+	readWorkspaceEdit,
 	readWorkspaceSymbol,
 } from "./lsp-types.ts";
 import type {
@@ -117,6 +128,28 @@ interface ClientSession {
 	readonly diagnostics: Map<string, DiagnosticSnapshot>;
 	readonly diagnosticWarnings: Map<string, readonly string[]>;
 	offDiagnostics: (() => void) | undefined;
+	/** Readiness signals for cross-file queries (see `prepareCrossFileQuery`). */
+	readonly readiness: SessionReadiness;
+}
+
+interface SessionReadiness {
+	readonly startedAt: number;
+	readonly languages: readonly string[];
+	/** Work-done progress tokens that began and have not ended yet. */
+	readonly activeProgress: Set<string>;
+	/** The server has sent at least one progress or status report. */
+	signalSeen: boolean;
+	/** Requests of ours currently waiting for an answer. */
+	inFlight: number;
+	/** C/C++ only: "" once a compilation database was found, else the warning to show. */
+	compilationWarning: string | undefined;
+	/** rust-analyzer `experimental/serverStatus`: false while it is still loading/indexing. */
+	quiescent: boolean | undefined;
+	/** Last on-disk snapshot of the workspace files of this server's languages (path -> mtime:size). */
+	watched: Map<string, string> | undefined;
+	lastScanAt: number;
+	scan: Promise<boolean> | undefined;
+	unsubscribe: (() => void)[];
 }
 
 interface SynchronizedQuery<T> {
@@ -175,6 +208,38 @@ function isLocation(value: unknown): value is RawLspLocation {
 	return readLspLocation(value) !== undefined;
 }
 
+/** The text a valid range covers in `text` (ranges are UTF-16 and end-exclusive). */
+function textInRange(text: string, range: CodeRange): string {
+	const lines = text.split(/\r\n|\n|\r/);
+	if (range.start.line === range.end.line) {
+		return (lines[range.start.line] ?? "").slice(range.start.character, range.end.character);
+	}
+	const parts = [(lines[range.start.line] ?? "").slice(range.start.character)];
+	for (let line = range.start.line + 1; line < range.end.line; line++) parts.push(lines[line] ?? "");
+	parts.push((lines[range.end.line] ?? "").slice(0, range.end.character));
+	return parts.join("\n");
+}
+
+/**
+ * SymbolInformation only carries the full declaration range. Find the name
+ * inside it so the symbol gets a real name position; when the name is not
+ * found the range start is kept, as before.
+ */
+function locateNameInRange(text: string, range: CodeRange, name: string): CodeRange | undefined {
+	if (name === "") return undefined;
+	const lines = text.split(/\r\n|\n|\r/);
+	for (let line = range.start.line; line <= range.end.line && line < lines.length; line++) {
+		const lineText = lines[line] ?? "";
+		const from = line === range.start.line ? range.start.character : 0;
+		const to = line === range.end.line ? range.end.character : lineText.length;
+		const index = lineText.slice(0, to).indexOf(name, from);
+		if (index >= 0) {
+			return { start: { line, character: index }, end: { line, character: index + name.length } };
+		}
+	}
+	return undefined;
+}
+
 function isCodePositionValid(position: CodePosition, text: string): boolean {
 	return tryCodePosition(position, text) !== undefined;
 }
@@ -182,6 +247,37 @@ function isCodePositionValid(position: CodePosition, text: string): boolean {
 const DEFAULT_ADVANCED_LIMIT = 100;
 const MAX_ADVANCED_LIMIT = 500;
 const MAX_PUSH_DIAGNOSTIC_WAIT_MS = 1_000;
+/** Upper bound for waiting on a server that reports it is still indexing. */
+const MAX_READY_WAIT_MS = 20_000;
+/** A server this young that never reported progress may still be indexing. */
+const YOUNG_SESSION_MS = 10_000;
+const STABILITY_RETRY_DELAY_MS = 750;
+const SILENT_SERVER_SETTLE_MS = 4_000;
+const MAX_STABILITY_RETRIES = 8;
+const WATCH_SCAN_INTERVAL_MS = 2_000;
+const MAX_WATCHED_FILES = 20_000;
+/** LSP ContentModified / ServerCancelled: the request raced a server-side change and may be retried. */
+const RETRYABLE_LSP_ERRORS = new Set([-32801, -32802]);
+const MAX_REQUEST_RETRIES = 3;
+const REQUEST_RETRY_DELAY_MS = 300;
+const STILL_INDEXING_WARNING = "language server is still indexing the workspace; cross-file results may be incomplete";
+const UNSTABLE_RESULT_WARNING =
+	"language server gives no indexing progress and its results were still changing; cross-file results may be incomplete";
+
+function withReadinessWarnings<R extends { meta: { completeness: string; warnings?: readonly string[] } }>(
+	result: R,
+	warnings: readonly string[],
+): R {
+	if (warnings.length === 0) return result;
+	return {
+		...result,
+		meta: {
+			...result.meta,
+			completeness: "partial",
+			warnings: uniqueWarnings([...(result.meta.warnings ?? []), ...warnings]),
+		},
+	};
+}
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -268,12 +364,13 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		}
 		const session = await this.ensureSession(managed);
 		this.requireCapability("workspaceSymbol", session.capabilities.workspaceSymbolProvider);
+		const readinessWarnings = (await this.runCrossFile(session, options, async () => undefined)).warnings;
 		const raw = await this.request<unknown>(session, "workspace/symbol", asJsonObject({ query }), options);
 		if (raw === null) return { items: [], meta: semanticMeta("complete") };
 		if (!Array.isArray(raw)) {
 			throw new SemanticBackendError("invalid_server_response", "workspace/symbol result must be an array or null");
 		}
-		const warnings: string[] = [];
+		const warnings: string[] = [...readinessWarnings];
 		const items: CodeSymbol[] = [];
 		for (const value of raw) {
 			let parsed = readWorkspaceSymbol(value);
@@ -418,30 +515,166 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		return this.queryTypeHierarchy("subtypes", target, options);
 	}
 
+	/**
+	 * Ask the language server for the edits of a semantic rename. Nothing is
+	 * written here: the result is the server's WorkspaceEdit converted to
+	 * workspace-relative text edits, with everything the caller must not apply
+	 * blindly (resource operations, out-of-workspace files, edits that need
+	 * confirmation) reported in `unsupportedChanges`.
+	 */
+	async rename(
+		target: Extract<SymbolTarget, { type: "position" }>,
+		newName: string,
+		options: SemanticBackendQueryOptions,
+	): Promise<RenameResult> {
+		const positionTarget = this.requirePositionTarget(target);
+		if (newName.trim() === "") {
+			throw new SemanticBackendError("invalid_server_response", "rename requires a non-empty new name");
+		}
+		const document = this.resolveDocument(options.workspaceRoot, positionTarget.path);
+		const language = this.resolveLanguage(document, options.language);
+		const session = await this.acquireSession(document, language, options);
+		this.requireCapability("rename", session.capabilities.renameProvider);
+		const crossFile = await this.runCrossFile(
+			session,
+			options,
+			() =>
+				this.runSynchronizedQuery(session, document, language, options, async (state) => {
+					if (!isCodePositionValid(positionTarget.position, state.text)) {
+						throw new SemanticBackendError(
+							"invalid_document_position",
+							"rename target position is outside the document",
+							{
+								filePath: document.absolutePath,
+							},
+						);
+					}
+					const textDocument = asJsonObject({ uri: state.uri });
+					const position = lspPositionJson(positionTarget.position);
+					let placeholder: string | undefined;
+					if (session.capabilities.renamePrepareProvider) {
+						const prepared = readPrepareRename(
+							await this.request<unknown>(
+								session,
+								"textDocument/prepareRename",
+								asJsonObject({ textDocument, position }),
+								options,
+							),
+						);
+						if (prepared === null) {
+							throw new SemanticBackendError(
+								"invalid_document_position",
+								"the language server reports that the symbol at this position cannot be renamed",
+								{ filePath: document.absolutePath },
+							);
+						}
+						if (prepared === undefined) {
+							throw new SemanticBackendError(
+								"invalid_server_response",
+								"prepareRename result has an invalid shape",
+							);
+						}
+						placeholder = prepared.placeholder;
+						if (placeholder === undefined && prepared.range) {
+							const range = tryCodeRange(prepared.range, state.text);
+							if (range) placeholder = textInRange(state.text, range);
+						}
+					}
+					const edit = await this.request<unknown>(
+						session,
+						"textDocument/rename",
+						asJsonObject({ textDocument, position, newName }),
+						options,
+					);
+					return { edit, placeholder };
+				}),
+			(result) => JSON.stringify(result.value.edit),
+		);
+		const query = crossFile.value;
+		if (query.value.edit === null) {
+			return {
+				items: [],
+				unsupportedChanges: [],
+				meta: semanticMeta(crossFile.warnings.length > 0 ? "partial" : "complete", crossFile.warnings),
+				placeholder: query.value.placeholder,
+			};
+		}
+		const parsed = readWorkspaceEdit(query.value.edit);
+		if (!parsed) throw new SemanticBackendError("invalid_server_response", "rename result is not a WorkspaceEdit");
+		const unsupported = [...parsed.unsupported];
+		const byPath = new Map<string, { path: string; version?: number; edits: CodeTextEdit[] }>();
+		for (const documentEdits of parsed.documents) {
+			for (const edit of documentEdits.edits) {
+				const converted = convertWorkspaceLocation(
+					documentEdits.uri,
+					edit.range,
+					session.workspaceRoot,
+					samePath(documentEdits.uri, query.state.absolutePath, session.workspaceRoot)
+						? query.state.text
+						: undefined,
+				);
+				if (converted.kind === "skip") {
+					unsupported.push(`edit cannot be applied inside the workspace: ${converted.warning}`);
+					continue;
+				}
+				if (edit.annotationId !== undefined && parsed.confirmationAnnotations.has(edit.annotationId)) {
+					unsupported.push(`edit in ${converted.location.path} needs user confirmation (${edit.annotationId})`);
+					continue;
+				}
+				const key = getWorkspaceRelativeIdentity(converted.location.path);
+				let entry = byPath.get(key);
+				if (!entry) {
+					entry = {
+						path: converted.location.path,
+						...(documentEdits.version === undefined ? {} : { version: documentEdits.version }),
+						edits: [],
+					};
+					byPath.set(key, entry);
+				}
+				entry.edits.push({ range: converted.location.range, newText: edit.newText });
+			}
+		}
+		return {
+			items: [...byPath.values()],
+			unsupportedChanges: uniqueWarnings(unsupported),
+			meta: semanticMeta(crossFile.warnings.length > 0 ? "partial" : "complete", crossFile.warnings),
+			...(query.value.placeholder === undefined ? {} : { placeholder: query.value.placeholder }),
+		};
+	}
+
 	async findReferences(target: SymbolTarget, options: SemanticReferencesQueryOptions): Promise<ReferencesResult> {
 		const positionTarget = this.requirePositionTarget(target);
 		const document = this.resolveDocument(options.workspaceRoot, positionTarget.path);
 		const language = this.resolveLanguage(document, options.language);
 		const session = await this.acquireSession(document, language, options);
 		this.requireCapability("references", session.capabilities.referencesProvider);
-		const query = await this.runSynchronizedQuery(session, document, language, options, async (state) => {
-			if (!isCodePositionValid(positionTarget.position, state.text)) {
-				throw new SemanticBackendError(
-					"invalid_document_position",
-					"reference target position is outside the document",
-					{
-						filePath: document.absolutePath,
-					},
-				);
-			}
-			const params = asJsonObject({
-				textDocument: asJsonObject({ uri: state.uri }),
-				position: lspPositionJson(positionTarget.position),
-				context: asJsonObject({ includeDeclaration: options.includeDeclaration ?? true }),
-			});
-			return this.request<unknown>(session, "textDocument/references", params, options);
-		});
-		return this.convertReferences(query.value, session.workspaceRoot);
+		const crossFile = await this.runCrossFile(
+			session,
+			options,
+			() =>
+				this.runSynchronizedQuery(session, document, language, options, async (state) => {
+					if (!isCodePositionValid(positionTarget.position, state.text)) {
+						throw new SemanticBackendError(
+							"invalid_document_position",
+							"reference target position is outside the document",
+							{
+								filePath: document.absolutePath,
+							},
+						);
+					}
+					const params = asJsonObject({
+						textDocument: asJsonObject({ uri: state.uri }),
+						position: lspPositionJson(positionTarget.position),
+						context: asJsonObject({ includeDeclaration: options.includeDeclaration ?? true }),
+					});
+					return this.request<unknown>(session, "textDocument/references", params, options);
+				}),
+			(result) => JSON.stringify(result.value),
+		);
+		return withReadinessWarnings(
+			this.convertReferences(crossFile.value.value, session.workspaceRoot),
+			crossFile.warnings,
+		);
 	}
 
 	async getDiagnostics(filePath: string, options: SemanticBackendQueryOptions): Promise<DiagnosticsResult> {
@@ -623,11 +856,45 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			diagnostics: new Map(),
 			diagnosticWarnings: new Map(),
 			offDiagnostics: undefined,
+			readiness: {
+				startedAt: Date.now(),
+				languages: managed.definition.languages,
+				activeProgress: new Set(),
+				signalSeen: false,
+				inFlight: 0,
+				compilationWarning: undefined,
+				quiescent: undefined,
+				watched: undefined,
+				lastScanAt: 0,
+				scan: undefined,
+				unsubscribe: [],
+			},
 		};
+		const readiness = session.readiness;
+		readiness.unsubscribe.push(
+			managed.client.onNotification("$/progress", (params) => {
+				const record = params as { token?: unknown; value?: { kind?: unknown } } | undefined;
+				const token = record?.token;
+				const kind = record?.value?.kind;
+				if ((typeof token !== "string" && typeof token !== "number") || typeof kind !== "string") return;
+				// Progress that a request of ours started (pyright: "Finding references")
+				// says nothing about whether the workspace index is ready.
+				if (readiness.inFlight === 0) readiness.signalSeen = true;
+				if (kind === "begin") readiness.activeProgress.add(String(token));
+				else if (kind === "end") readiness.activeProgress.delete(String(token));
+			}),
+			managed.client.onNotification("experimental/serverStatus", (params) => {
+				const quiescent = (params as { quiescent?: unknown } | undefined)?.quiescent;
+				if (typeof quiescent !== "boolean") return;
+				readiness.signalSeen = true;
+				readiness.quiescent = quiescent;
+			}),
+		);
 		for (const staleSession of [...this.sessions.values()]) {
 			if (staleSession.key !== managed.key || staleSession.client === managed.client) continue;
 			staleSession.offDiagnostics?.();
 			staleSession.offDiagnostics = undefined;
+			for (const off of staleSession.readiness.unsubscribe.splice(0)) off();
 			staleSession.documents.clear();
 			staleSession.diagnostics.clear();
 			staleSession.diagnosticWarnings.clear();
@@ -866,10 +1133,25 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		options: SemanticBackendQueryOptions,
 	): Promise<T> {
 		try {
-			return await session.client.request<T>(method, params, {
-				signal: options.signal,
-				timeoutMs: options.timeoutMs,
-			});
+			for (let attempt = 0; ; attempt++) {
+				session.readiness.inFlight++;
+				try {
+					return await session.client.request<T>(method, params, {
+						signal: options.signal,
+						timeoutMs: options.timeoutMs,
+					});
+				} catch (cause) {
+					const retryable =
+						cause instanceof LspResponseError &&
+						RETRYABLE_LSP_ERRORS.has(cause.code) &&
+						attempt < MAX_REQUEST_RETRIES;
+					if (!retryable) throw cause;
+					await delay(REQUEST_RETRY_DELAY_MS);
+					throwIfAborted(options.signal);
+				} finally {
+					session.readiness.inFlight--;
+				}
+			}
 		} catch (cause) {
 			if (cause instanceof SemanticBackendError) throw cause;
 			const suffix = cause instanceof LspResponseError ? `: ${cause.message}` : "";
@@ -878,6 +1160,195 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				method,
 			});
 		}
+	}
+
+	/**
+	 * Bring every open document in line with the disk before a cross-file
+	 * query: edits made by other tools or outside the agent are sent as
+	 * didChange, and documents whose file is gone are closed. Returns 1 when
+	 * anything was sent.
+	 */
+	private async resyncOpenDocuments(session: ClientSession): Promise<number> {
+		let changed = 0;
+		for (const state of [...session.documents.values()]) {
+			if (!state.open) continue;
+			let text: string;
+			try {
+				text = decoder.decode(await readFile(state.absolutePath));
+			} catch (cause) {
+				const code = (cause as { code?: unknown } | undefined)?.code;
+				if (code === "ENOENT" || code === "ENOTDIR") {
+					await this.closeState(session, state).catch(() => undefined);
+					changed = 1;
+				}
+				continue;
+			}
+			if (text === state.text) continue;
+			const queued = state.tail.then(
+				() => this.synchronizeState(state, text),
+				() => this.synchronizeState(state, text),
+			);
+			state.tail = queued.then(
+				() => undefined,
+				() => undefined,
+			);
+			await queued.catch(() => undefined);
+			changed = 1;
+		}
+		return changed;
+	}
+
+	/**
+	 * Tell the server about files of its languages that were created, changed
+	 * or deleted on disk since the previous scan (workspace/didChangeWatchedFiles).
+	 * Servers that watch files themselves just see duplicates; servers that rely
+	 * on the client would otherwise answer from a stale index. The first scan of
+	 * a session only records the baseline. Scans are throttled and bounded.
+	 */
+	private notifyWatchedFileChanges(session: ClientSession, options: SemanticBackendQueryOptions): Promise<boolean> {
+		const readiness = session.readiness;
+		if (readiness.scan) return readiness.scan;
+		if (Date.now() - readiness.lastScanAt < WATCH_SCAN_INTERVAL_MS) return Promise.resolve(false);
+		const extensions = Object.entries(LANGUAGE_BY_EXTENSION)
+			.filter(([, language]) => readiness.languages.includes(language))
+			.map(([extension]) => extension);
+		if (extensions.length === 0) return Promise.resolve(false);
+		const scan = (async (): Promise<boolean> => {
+			const listing = await listWorkspaceFiles({
+				workspaceRoot: session.workspaceRoot,
+				globs: extensions.map((extension) => `**/*${extension}`),
+				maxFiles: MAX_WATCHED_FILES,
+				signal: options.signal,
+				timeoutMs: 5_000,
+			});
+			if (listing.error || listing.truncated) return false;
+			const next = new Map<string, string>();
+			const files = listing.files;
+			for (let index = 0; index < files.length; index += 64) {
+				await Promise.all(
+					files.slice(index, index + 64).map(async (path) => {
+						try {
+							const info = await stat(`${session.workspaceRoot}/${path}`);
+							next.set(path, `${info.mtimeMs}:${info.size}`);
+						} catch {
+							// Deleted between listing and stat: treated as absent.
+						}
+					}),
+				);
+			}
+			const previous = readiness.watched;
+			readiness.watched = next;
+			if (!previous) return false;
+			const changes: JsonObject[] = [];
+			const open = new Set(
+				[...session.documents.values()]
+					.filter((state) => state.open)
+					.map((state) => getWorkspaceRelativeIdentity(state.relativePath)),
+			);
+			for (const [path, signature] of next) {
+				const before = previous.get(path);
+				if (before === signature || open.has(getWorkspaceRelativeIdentity(path))) continue;
+				changes.push({ uri: toFileUri(`${session.workspaceRoot}/${path}`), type: before === undefined ? 1 : 2 });
+			}
+			for (const path of previous.keys()) {
+				if (!next.has(path)) changes.push({ uri: toFileUri(`${session.workspaceRoot}/${path}`), type: 3 });
+			}
+			if (changes.length === 0 || session.client.state !== "initialized") return false;
+			await session.client.notify("workspace/didChangeWatchedFiles", asJsonObject({ changes }));
+			return true;
+		})()
+			.catch(() => false)
+			.finally(() => {
+				readiness.lastScanAt = Date.now();
+				readiness.scan = undefined;
+			});
+		readiness.scan = scan;
+		return scan;
+	}
+
+	/**
+	 * clangd only indexes the files a compilation database describes; without one
+	 * every C/C++ file is analysed on its own, so references and rename stop at
+	 * the current file. Checked once per session.
+	 */
+	private async compilationDatabaseWarning(session: ClientSession): Promise<string | undefined> {
+		const readiness = session.readiness;
+		if (!readiness.languages.some((language) => language === "c" || language === "cpp")) return undefined;
+		if (readiness.compilationWarning === undefined) {
+			const candidates = ["compile_commands.json", "compile_flags.txt", "build/compile_commands.json"];
+			let found = false;
+			for (const candidate of candidates) {
+				try {
+					await stat(`${session.workspaceRoot}/${candidate}`);
+					found = true;
+					break;
+				} catch {
+					// Not present: try the next location.
+				}
+			}
+			readiness.compilationWarning = found
+				? ""
+				: "no compile_commands.json or compile_flags.txt in the workspace: the C/C++ server sees each file on its own, so cross-file references and rename are limited to the current file";
+		}
+		return readiness.compilationWarning === "" ? undefined : readiness.compilationWarning;
+	}
+
+	/**
+	 * Cross-file queries are only as complete as the server's index. Wait
+	 * (bounded) while the server reports indexing work, then run the query; a
+	 * young server that never reported progress is re-queried until two
+	 * consecutive answers agree. Whatever cannot be confirmed is disclosed as
+	 * a warning, never hidden.
+	 */
+	private async runCrossFile<T>(
+		session: ClientSession,
+		options: SemanticBackendQueryOptions,
+		run: () => Promise<T>,
+		fingerprint?: (value: T) => string,
+	): Promise<{ value: T; warnings: string[] }> {
+		const warnings: string[] = [];
+		const readiness = session.readiness;
+		const changed =
+			(await this.resyncOpenDocuments(session)) | Number(await this.notifyWatchedFileChanges(session, options));
+		const notifiedAt = Date.now();
+		const compilationWarning = await this.compilationDatabaseWarning(session);
+		if (compilationWarning) warnings.push(compilationWarning);
+		// Give the server a moment to start (and report) work for the changes it was just told about.
+		if (changed) await delay(150);
+		// A server status (rust-analyzer) is authoritative: its long-lived progress
+		// tokens (for example `cargo check`) do not block queries.
+		const busy = () =>
+			readiness.quiescent === undefined ? readiness.activeProgress.size > 0 : readiness.quiescent === false;
+		if (busy()) {
+			const budget = Math.min(MAX_READY_WAIT_MS, Math.max(0, (options.timeoutMs ?? MAX_READY_WAIT_MS * 2) / 2));
+			const deadline = Date.now() + budget;
+			while (busy() && Date.now() < deadline) {
+				throwIfAborted(options.signal);
+				await delay(50);
+			}
+			if (busy()) warnings.push(STILL_INDEXING_WARNING);
+		}
+		let value = await run();
+		if (!fingerprint || readiness.signalSeen) return { value, warnings };
+		// Without progress reports, a young server or one that was just told about
+		// file changes may still be (re)indexing: re-query until the answer settles.
+		// A silent server re-indexes changed files after its own debounce
+		// (the bundled devsense PHP server: about 2-3 s), so after a change the answer must also hold
+		// past that window.
+		const young = Date.now() - readiness.startedAt < YOUNG_SESSION_MS;
+		if (!changed && !young) return { value, warnings };
+		const settledAt = changed ? notifiedAt + SILENT_SERVER_SETTLE_MS : 0;
+		let previous = fingerprint(value);
+		for (let attempt = 0; attempt < MAX_STABILITY_RETRIES; attempt++) {
+			await delay(STABILITY_RETRY_DELAY_MS);
+			throwIfAborted(options.signal);
+			value = await run();
+			const current = fingerprint(value);
+			if (current === previous && Date.now() >= settledAt) return { value, warnings };
+			previous = current;
+		}
+		warnings.push(UNSTABLE_RESULT_WARNING);
+		return { value, warnings };
 	}
 
 	private requirePositionTarget(target: SymbolTarget): Extract<SymbolTarget, { type: "position" }> {
@@ -900,6 +1371,10 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				? session.capabilities.definitionProvider
 				: session.capabilities.implementationProvider;
 		this.requireCapability(operation, supported);
+		const readinessWarnings =
+			operation === "implementation"
+				? (await this.runCrossFile(session, options, async () => undefined)).warnings
+				: [];
 		const query = await this.runSynchronizedQuery(session, document, language, options, async (state) => {
 			if (!isCodePositionValid(positionTarget.position, state.text)) {
 				throw new SemanticBackendError(
@@ -916,7 +1391,16 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			});
 			return this.request<unknown>(session, method, params, options);
 		});
-		return this.convertSymbolLocations(query.value, operation, session.workspaceRoot, session.definitionId, options);
+		return withReadinessWarnings(
+			await this.convertSymbolLocations(
+				query.value,
+				operation,
+				session.workspaceRoot,
+				session.definitionId,
+				options,
+			),
+			readinessWarnings,
+		);
 	}
 
 	private convertDocumentSymbols(raw: unknown, state: DocumentState, workspaceRoot: string): FileSymbolsResult {
@@ -1018,21 +1502,26 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			return undefined;
 		}
 		const namePath = buildNamePath([raw.containerName, raw.name]);
+		const sameDocument = samePath(raw.location.uri, state.absolutePath, workspaceRoot);
+		const declarationRange = converted.location.range;
+		const nameRange = sameDocument ? locateNameInRange(state.text, declarationRange, raw.name) : undefined;
+		const selectionRange = nameRange ?? declarationRange;
 		const symbol: CodeSymbol = {
 			id: createSymbolId({
 				path: converted.location.path,
 				kind,
 				namePath,
-				line: converted.location.range.start.line,
-				character: converted.location.range.start.character,
+				line: selectionRange.start.line,
+				character: selectionRange.start.character,
 			}),
 			name: raw.name,
 			namePath,
 			kind,
 			language,
 			path: converted.location.path,
-			selectionRange: converted.location.range,
-			line: converted.location.range.start.line,
+			selectionRange,
+			...(nameRange ? { bodyRange: declarationRange } : {}),
+			line: selectionRange.start.line,
 			parentNamePath: raw.containerName,
 		};
 		return { symbol, children: [] };
@@ -1185,6 +1674,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		const language = this.resolveLanguage(document, options.language);
 		const session = await this.acquireSession(document, language, options);
 		this.requireCapability("callHierarchy", session.capabilities.callHierarchyProvider);
+		const readinessWarnings = (await this.runCrossFile(session, options, async () => undefined)).warnings;
 		const prepared = await this.runSynchronizedQuery(session, document, language, options, async (state) => {
 			if (!isCodePositionValid(positionTarget.position, state.text)) {
 				throw new SemanticBackendError(
@@ -1227,7 +1717,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			};
 		if (!Array.isArray(raw))
 			throw new SemanticBackendError("invalid_server_response", `${method} result must be an array or null`);
-		const warnings = [...preparedItems.warnings];
+		const warnings = [...readinessWarnings, ...preparedItems.warnings];
 		const items: CodeCallEdge[] = [];
 		for (const value of raw) {
 			const parsed = direction === "incoming" ? readIncomingCall(value) : readOutgoingCall(value);
@@ -1265,6 +1755,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		const language = this.resolveLanguage(document, options.language);
 		const session = await this.acquireSession(document, language, options);
 		this.requireCapability("typeHierarchy", session.capabilities.typeHierarchyProvider);
+		const readinessWarnings = (await this.runCrossFile(session, options, async () => undefined)).warnings;
 		const prepared = await this.runSynchronizedQuery(session, document, language, options, async (state) => {
 			if (!isCodePositionValid(positionTarget.position, state.text)) {
 				throw new SemanticBackendError(
@@ -1307,7 +1798,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			};
 		if (!Array.isArray(raw))
 			throw new SemanticBackendError("invalid_server_response", `${method} result must be an array or null`);
-		const warnings = [...preparedItems.warnings];
+		const warnings = [...readinessWarnings, ...preparedItems.warnings];
 		const items: CodeSymbol[] = [];
 		for (const value of raw) {
 			const parsed = readCallHierarchyItem(value);

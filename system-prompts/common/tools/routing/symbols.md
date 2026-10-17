@@ -1,2 +1,2 @@
 # Tool selection
-- Prefer symbols for symbol definitions, references, implementations, call relationships, type hierarchies, diagnostics, or file structure. Use grep/find/ls for plain-text matching and read for original content.
+- Prefer symbols for finding existing implementations (find_existing), reading one symbol's source (read_symbol), checking what a contract change affects (impact), semantic renames (rename_preview, then apply_rename), and for definitions, references, implementations, call relationships, type hierarchies, diagnostics, or file structure. Use grep/find/ls for plain-text matching and read for original content.
