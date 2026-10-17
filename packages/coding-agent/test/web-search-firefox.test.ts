@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,7 @@ describe.skipIf(!realFirefox)("Firefox transport with a real Firefox", () => {
 	let base = "";
 	let rootDir = "";
 	let browser: FirefoxBrowser;
+	let gateChecks = 0;
 
 	beforeAll(async () => {
 		rootDir = mkdtempSync(join(tmpdir(), "myharness-firefox-"));
@@ -71,6 +72,19 @@ describe.skipIf(!realFirefox)("Firefox transport with a real Firefox", () => {
 					});
 				case "/echo-cookie":
 					return send(200, `<html><body><p id="cookie">${request.headers.cookie ?? "none"}</p></body></html>`);
+				case "/gate":
+					// A site that remembers a passed check in a cookie, like a login: the first visit shows the check.
+					if (request.headers.cookie?.includes("passed=1")) {
+						return send(200, `<html><body><ol id="results"><li>through the gate</li></ol></body></html>`);
+					}
+					gateChecks += 1;
+					return send(
+						200,
+						`<html><body><form id="captcha-form"></form><script>setTimeout(()=>{document.cookie="passed=1; Max-Age=86400; Path=/";location.reload()},1500)</script></body></html>`,
+					);
+				case "/stuck":
+					// A check nobody passes.
+					return send(200, `<html><body><form id="captcha-form"></form></body></html>`);
 				case "/slow":
 					setTimeout(() => send(200, "<html><body><p id='late'>late</p></body></html>"), 15_000);
 					return;
@@ -149,14 +163,77 @@ describe.skipIf(!realFirefox)("Firefox transport with a real Firefox", () => {
 		}
 	}, 90_000);
 
-	it("lets only one browser instance own the profile", async () => {
+	it("gives a second MyHarness process its own profile slot with the first one's cookies", async () => {
+		// Another FirefoxBrowser on the same folder stands in for another process: the profile lock is a file lock.
+		await browser.load({ url: `${base}/set-cookie`, readySelector: "#done", label: "Local" });
+		await browser.shutdown();
 		await browser.load({ url: `${base}/results?q=owner`, readySelector: "#results", label: "Local" });
 		const second = new FirefoxBrowser({ rootDir });
-		await expect(
-			second.load({ url: `${base}/results?q=second`, readySelector: "#results", label: "Local" }),
-		).rejects.toMatchObject({ code: "browser_unavailable", message: expect.stringContaining("另一个 MyHarness") });
-		await second.shutdown();
-	}, 60_000);
+		try {
+			const [mine, theirs] = await Promise.all([
+				browser.load({ url: `${base}/results?q=first`, readySelector: "#results", label: "Local" }),
+				second.load({ url: `${base}/echo-cookie`, readySelector: "#cookie", label: "Local" }),
+			]);
+			expect(mine.text).toContain("first");
+			expect(theirs.text).toContain("session=kept");
+			expect(existsSync(join(rootDir, "slots", "1", "firefox.pid"))).toBe(true);
+		} finally {
+			await second.shutdown();
+		}
+	}, 90_000);
+
+	it("serves five parallel loads after the browser crashed", async () => {
+		await browser.load({ url: `${base}/results?q=warm`, readySelector: "#results", label: "Local" });
+		process.kill(Number(readFileSync(join(rootDir, "firefox.pid"), "utf8")));
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		const pages = await Promise.all(
+			Array.from({ length: 5 }, (_, index) =>
+				browser.load({ url: `${base}/results?q=parallel-${index}`, readySelector: "#results", label: "Local" }),
+			),
+		);
+		pages.forEach((page, index) => {
+			expect(page.text).toContain(`parallel-${index}`);
+		});
+	}, 90_000);
+
+	it("lets a load that waits for someone else's check be cancelled at once", async () => {
+		const check = new AbortController();
+		const pending = browser.solveChallenge(
+			{ url: `${base}/stuck`, readySelector: "#results", label: "Local", isSolved: () => false },
+			check.signal,
+		);
+		pending.catch(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 3_000));
+		const waiting = new AbortController();
+		const load = browser.load(
+			{ url: `${base}/results?q=queued`, readySelector: "#results", label: "Local" },
+			waiting.signal,
+		);
+		setTimeout(() => waiting.abort(), 300);
+		const started = Date.now();
+		await expect(load).rejects.toMatchObject({ code: "aborted" });
+		expect(Date.now() - started).toBeLessThan(3_000);
+		check.abort();
+		await expect(pending).rejects.toMatchObject({ code: "aborted" });
+	}, 90_000);
+
+	it("opens one window for a site check that several calls hit at once; the others reuse it", async () => {
+		gateChecks = 0;
+		const solved = (candidate: { ready?: boolean; text: string }) =>
+			candidate.ready === true && !candidate.text.includes("captcha-form");
+		const pages = await Promise.all(
+			Array.from({ length: 3 }, () =>
+				browser.solveChallenge({
+					url: `${base}/gate`,
+					readySelector: "#results",
+					label: "Local",
+					isSolved: solved,
+				}),
+			),
+		);
+		for (const page of pages) expect(page.text).toContain("through the gate");
+		expect(gateChecks).toBe(1);
+	}, 120_000);
 
 	it("reports a Firefox crash to pending loads and starts a new Firefox for the next one", async () => {
 		await browser.load({ url: `${base}/results?q=warm`, readySelector: "#results", label: "Local" });

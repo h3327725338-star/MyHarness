@@ -20,6 +20,7 @@ import { writeExtension } from "./extension.ts";
 import { keepChallengeForeground } from "./foreground.ts";
 import { type DailyCookies, findDailyCookies, forgetCookieImport, importDailyCookiesOnce } from "./import-cookies.ts";
 import type { BrowserLaunch, PageBridge, PageSnapshot } from "./launch.ts";
+import { mergeProfileCookies } from "./profile-cookies.ts";
 import { installTemporaryAddon } from "./rdp.ts";
 
 /**
@@ -33,7 +34,9 @@ import { installTemporaryAddon } from "./rdp.ts";
  * - Launched lazily on first use, shut down after a few idle minutes and when
  *   MyHarness exits. A crashed browser fails the pending requests with a clear
  *   error; the next request starts a new one.
- * - One MyHarness process owns a profile at a time (file lock).
+ * - One MyHarness process owns a profile at a time (file lock). A second process that needs the browser meanwhile
+ *   uses another profile slot of the same browser, which first takes over the other slots' cookies
+ *   (profile-cookies.ts), so logins are shared; only when every slot is taken does it wait in line for one.
  *
  * Firefox is driven through a small extension (extension.ts), Chrome and Edge through the DevTools pipe
  * (chromium.ts); both answer the same commands, so everything in this file is shared.
@@ -59,6 +62,11 @@ export const FIREFOX_LIMITS = {
 	maxTabs: 3,
 	/** How long the bridge holds a poll open with no command. */
 	pollHoldMs: 20_000,
+	/** Profiles of one browser that MyHarness processes can use at the same time (see LocalBrowser.lock). */
+	profileSlots: 4,
+	/** How long a process waits in line when every profile slot is in use by other MyHarness processes. */
+	profileWaitMs: 2 * 60_000,
+	profileWaitPollMs: 1_000,
 } as const;
 
 /** Prefs for the dedicated profile: quiet startup, and the debugger server used once to install the extension. */
@@ -328,7 +336,10 @@ const QUIT_WAIT_MS = 5_000;
 export interface LocalBrowserOptions {
 	/** Which browser to drive. Defaults to Firefox. */
 	kind?: BrowserKind;
-	/** Holds `profile/`, `extension/`, the pid file and the lock. Defaults to <agent dir>/web-search/<kind>. */
+	/**
+	 * Holds `profile/`, `extension/`, the pid file and the lock of the first profile slot, and `slots/<n>/` with the
+	 * same files for the others. Defaults to <agent dir>/web-search/<kind>.
+	 */
 	rootDir?: string;
 	executable?: string;
 	/** Injectable for tests. */
@@ -428,6 +439,23 @@ async function launchFirefox(options: {
 	};
 }
 
+/** One of the profiles of a browser that MyHarness processes take in turn (see LocalBrowser.lock). */
+interface ProfileSlot {
+	index: number;
+	/** Holds the profile, the extension and the pid file; the slot's lock file sits next to it. */
+	dir: string;
+	profileDir: string;
+	pidFile: string;
+}
+
+function hostOf(url: string): string {
+	try {
+		return new URL(url).hostname;
+	} catch {
+		return url;
+	}
+}
+
 export class LocalBrowser implements BrowserTransport {
 	readonly kind: BrowserKind;
 	/** "Firefox", "Chrome" or "Edge", as messages name this browser. */
@@ -445,16 +473,22 @@ export class LocalBrowser implements BrowserTransport {
 	private executable: string | undefined;
 	private session: Promise<Session> | undefined;
 	private releaseLock: (() => Promise<void>) | undefined;
+	/** The profile slot this process holds the lock of, while it holds one. */
+	private slot: ProfileSlot | undefined;
+	/** Starting and stopping the browser happen one at a time (see exclusive). */
+	private gate: Promise<void> = Promise.resolve();
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 	private activeTabs = 0;
 	private readonly tabWaiters: Array<() => void> = [];
+	/** Loads holding the running session; a restart in another mode waits for them. */
 	private busy = 0;
-	private challenge: Promise<unknown> | undefined;
+	private challenge: { run: Promise<unknown>; host: string } | undefined;
 	/** The running Firefox, kept synchronously for cleanup on process exit. */
 	private currentChild: ChildProcess | undefined;
+	private currentPidFile: string | undefined;
 	private readonly onProcessExit = () => {
 		if (this.currentChild?.pid && this.currentChild.exitCode === null) killTree(this.currentChild.pid);
-		rmSync(this.pidFile, { force: true });
+		if (this.currentPidFile) rmSync(this.currentPidFile, { force: true });
 	};
 
 	constructor(options: LocalBrowserOptions = {}) {
@@ -466,8 +500,10 @@ export class LocalBrowser implements BrowserTransport {
 		this.findDailyCookies = options.findDailyCookies ?? (() => findDailyCookies(this.kind));
 	}
 
-	private get pidFile(): string {
-		return join(this.rootDir, `${this.kind}.pid`);
+	/** Folder of profile slot `index`: the first one is the root folder itself, as before slots existed. */
+	private slotAt(index: number): ProfileSlot {
+		const dir = index === 0 ? this.rootDir : join(this.rootDir, "slots", String(index));
+		return { index, dir, profileDir: join(dir, "profile"), pidFile: join(dir, `${this.kind}.pid`) };
 	}
 
 	state(): BrowserState {
@@ -489,11 +525,12 @@ export class LocalBrowser implements BrowserTransport {
 	/** Headless background load of one page. */
 	async load(request: BrowserPageRequest, signal?: AbortSignal): Promise<TransportPage> {
 		// While the user is solving a challenge, the visible browser serves everything.
-		if (this.challenge) await this.challenge.catch(() => {});
+		if (this.challenge) await this.waitFor(this.challenge.run, signal);
 		const release = await this.acquireTab(signal);
-		this.busy += 1;
+		let leased = false;
 		try {
-			const session = await this.ensureSession({ headless: undefined, signal });
+			const session = await this.ensureSession({ headless: undefined, signal, lease: true });
+			leased = true;
 			const snapshot = await this.withAbort(
 				session.bridge.command<PageSnapshot>(
 					{
@@ -511,17 +548,35 @@ export class LocalBrowser implements BrowserTransport {
 			);
 			return this.toPage(snapshot);
 		} finally {
-			this.busy -= 1;
+			if (leased) this.busy -= 1;
 			release();
 			this.scheduleIdleShutdown();
 		}
 	}
 
 	async solveChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage> {
-		// One visible challenge at a time; others wait and then reuse the solved session.
-		while (this.challenge) await this.challenge.catch(() => {});
+		// One visible window at a time. Who waited for another person's check first tries the page again: when that
+		// check (or login) was for the same site, it is passed now and no second window is opened.
+		const host = hostOf(request.url);
+		while (this.challenge) {
+			while (this.challenge) {
+				const other = this.challenge;
+				const outcome = await this.waitFor(other.run, signal);
+				if (other.host === host && outcome instanceof WebSearchError && outcome.code === "challenge_required") {
+					// The person just did not get through on this site: not asked again right away for every waiting call.
+					throw new WebSearchError("challenge_required", `${request.label}：${outcome.message}`, {
+						cause: outcome,
+					});
+				}
+			}
+			const page = await this.load(request, signal).catch((error: unknown) => {
+				if (error instanceof WebSearchError && error.code === "aborted") throw error;
+				return undefined;
+			});
+			if (page && request.isSolved(page)) return page;
+		}
 		const run = this.runChallenge(request, signal);
-		this.challenge = run;
+		this.challenge = { run, host };
 		try {
 			return await run;
 		} finally {
@@ -534,7 +589,7 @@ export class LocalBrowser implements BrowserTransport {
 	private async runChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage> {
 		// Browser E2E runs have nobody to solve anything: keep their window hidden and never pull it to the front.
 		const unattended = process.env.MYHARNESS_TARGETED_BROWSER_E2E === "1";
-		const session = await this.ensureSession({ headless: unattended, signal });
+		const session = await this.ensureSession({ headless: unattended, signal, lease: false });
 		const releaseForeground = unattended ? () => {} : keepChallengeForeground(session.child.pid);
 		try {
 			const opened = await this.withAbort(
@@ -616,7 +671,21 @@ export class LocalBrowser implements BrowserTransport {
 	}
 
 	/** Stop the browser and release the profile. Safe to call at any time. */
-	async shutdown(): Promise<void> {
+	shutdown(): Promise<void> {
+		return this.exclusive(() => this.stop());
+	}
+
+	/** Run `task` after every earlier start/stop has finished, so two of them never race for the profile. */
+	private exclusive<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.gate.then(task);
+		this.gate = run.then(
+			() => {},
+			() => {},
+		);
+		return run;
+	}
+
+	private async stop(): Promise<void> {
 		if (this.idleTimer) clearTimeout(this.idleTimer);
 		this.idleTimer = undefined;
 		const current = this.session;
@@ -672,6 +741,30 @@ export class LocalBrowser implements BrowserTransport {
 		}
 	}
 
+	/**
+	 * Wait until another call's challenge is over, or until this call is cancelled. Resolves with that challenge's
+	 * error (undefined when it succeeded); never rejects except on cancellation.
+	 */
+	private waitFor(run: Promise<unknown>, signal: AbortSignal | undefined): Promise<unknown> {
+		const settled = run.then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		const aborted = abortError(signal);
+		if (aborted) return Promise.reject(aborted);
+		if (!signal) return settled;
+		let onAbort: (() => void) | undefined;
+		return Promise.race([
+			settled,
+			new Promise<never>((_resolve, reject) => {
+				onAbort = () => reject(abortError(signal));
+				signal.addEventListener("abort", onAbort, { once: true });
+			}),
+		]).finally(() => {
+			if (onAbort) signal.removeEventListener("abort", onAbort);
+		});
+	}
+
 	private sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -725,64 +818,136 @@ export class LocalBrowser implements BrowserTransport {
 		this.idleTimer.unref?.();
 	}
 
-	/** Reuse the running browser, or start one. `headless: undefined` accepts either mode. */
-	private async ensureSession(options: { headless: boolean | undefined; signal?: AbortSignal }): Promise<Session> {
-		if (this.idleTimer) clearTimeout(this.idleTimer);
-		if (this.session) {
-			const current = await this.session.catch(() => undefined);
-			if (current && !current.exited && (options.headless === undefined || current.headless === options.headless)) {
-				return current;
-			}
-			if (current && !current.exited) {
-				// Mode change (headless → visible for a challenge) needs a restart; the
-				// profile keeps the cookies. Let background loads that already run finish.
-				while (this.busy > 0) await this.sleep(200, options.signal);
-			}
-			await this.shutdown();
-		}
-		const starting = this.start(options.headless ?? true, options.signal);
-		this.session = starting;
+	/**
+	 * Reuse the running browser, or start one. `headless: undefined` accepts either mode. Runs one at a time with
+	 * other starts and stops (see exclusive). With `lease`, the caller is counted in `busy` from the moment it gets
+	 * the session, so a restart in another mode cannot close the session under a load that is about to use it.
+	 * Cancelling stops the wait at once, also while other starts are still ahead in line.
+	 */
+	private async ensureSession(options: {
+		headless: boolean | undefined;
+		signal?: AbortSignal;
+		lease: boolean;
+	}): Promise<Session> {
+		const task = this.startOrReuse(options);
+		task.catch(() => {});
+		const { signal } = options;
+		if (!signal) return task;
+		let onAbort: (() => void) | undefined;
 		try {
-			return await starting;
+			return await Promise.race([
+				task,
+				new Promise<never>((_resolve, reject) => {
+					onAbort = () => reject(abortError(signal));
+					if (signal.aborted) onAbort();
+					else signal.addEventListener("abort", onAbort, { once: true });
+				}),
+			]);
 		} catch (error) {
-			if (this.session === starting) this.session = undefined;
-			await this.unlock();
+			// Given up while still in line: a session leased later on is not used by anybody.
+			if (options.lease) {
+				task.then(
+					() => {
+						this.busy -= 1;
+						this.scheduleIdleShutdown();
+					},
+					() => {},
+				);
+			}
 			throw error;
+		} finally {
+			if (onAbort) signal.removeEventListener("abort", onAbort);
 		}
 	}
 
-	private async lock(): Promise<void> {
-		if (this.releaseLock) return;
-		mkdirSync(this.rootDir, { recursive: true });
-		try {
-			this.releaseLock = await lockfile.lock(this.rootDir, {
-				realpath: false,
-				stale: 30_000,
-				update: 10_000,
-				retries: 0,
-				onCompromised: () => {
-					this.releaseLock = undefined;
-				},
-			});
-		} catch {
-			throw browserUnavailable(
-				`另一个 MyHarness 进程正在使用 ${this.label} 搜索配置文件，本进程暂时不能使用浏览器兜底。`,
-			);
+	private startOrReuse(options: {
+		headless: boolean | undefined;
+		signal?: AbortSignal;
+		lease: boolean;
+	}): Promise<Session> {
+		return this.exclusive(async () => {
+			if (this.idleTimer) clearTimeout(this.idleTimer);
+			const aborted = abortError(options.signal);
+			if (aborted) throw aborted;
+			if (this.session) {
+				const current = await this.session.catch(() => undefined);
+				if (
+					current &&
+					!current.exited &&
+					(options.headless === undefined || current.headless === options.headless)
+				) {
+					if (options.lease) this.busy += 1;
+					return current;
+				}
+				if (current && !current.exited) {
+					// Mode change (headless → visible for a challenge) needs a restart; the
+					// profile keeps the cookies. Let background loads that already run finish.
+					while (this.busy > 0) await this.sleep(200, options.signal);
+				}
+				await this.stop();
+			}
+			const starting = this.start(options.headless ?? true, options.signal);
+			this.session = starting;
+			try {
+				const session = await starting;
+				if (options.lease) this.busy += 1;
+				return session;
+			} catch (error) {
+				if (this.session === starting) this.session = undefined;
+				await this.unlock();
+				throw error;
+			}
+		});
+	}
+
+	/**
+	 * Take a profile slot: the first one no other MyHarness process holds. When all of them are taken, wait in line
+	 * (cancellable) until one is free.
+	 */
+	private async lock(signal: AbortSignal | undefined): Promise<ProfileSlot> {
+		if (this.releaseLock && this.slot) return this.slot;
+		const deadline = Date.now() + FIREFOX_LIMITS.profileWaitMs;
+		for (;;) {
+			for (let index = 0; index < FIREFOX_LIMITS.profileSlots; index++) {
+				const slot = this.slotAt(index);
+				mkdirSync(slot.dir, { recursive: true });
+				try {
+					this.releaseLock = await lockfile.lock(slot.dir, {
+						realpath: false,
+						stale: 30_000,
+						update: 10_000,
+						retries: 0,
+						onCompromised: () => {
+							this.releaseLock = undefined;
+						},
+					});
+					this.slot = slot;
+					return slot;
+				} catch {
+					// Held by another MyHarness process: try the next slot.
+				}
+			}
+			if (Date.now() >= deadline) {
+				throw browserUnavailable(
+					`${FIREFOX_LIMITS.profileSlots} 个 ${this.label} 搜索配置都被其他 MyHarness 进程占用，排队等待 ${FIREFOX_LIMITS.profileWaitMs / 60_000} 分钟后仍没有空出来，本次不能使用浏览器兜底。`,
+				);
+			}
+			await this.sleep(FIREFOX_LIMITS.profileWaitPollMs, signal);
 		}
 	}
 
 	private async unlock(): Promise<void> {
 		const release = this.releaseLock;
 		this.releaseLock = undefined;
+		this.slot = undefined;
 		await release?.().catch(() => {});
 	}
 
 	private async start(headless: boolean, signal: AbortSignal | undefined): Promise<Session> {
 		const state = this.state();
 		if (!state.available) throw browserUnavailable(state.reason);
-		await this.lock();
-		const profileDir = join(this.rootDir, "profile");
-		const pidFile = this.pidFile;
+		const slot = await this.lock(signal);
+		const { profileDir, pidFile } = slot;
 		// A browser left behind by a MyHarness that crashed still holds the profile.
 		if (existsSync(pidFile)) {
 			const pid = Number(readFileSync(pidFile, "utf8").trim());
@@ -790,18 +955,24 @@ export class LocalBrowser implements BrowserTransport {
 			rmSync(pidFile, { force: true });
 		}
 		if (this.useDailyCookies) {
-			const imported = importDailyCookiesOnce(this.label, this.rootDir, profileDir, this.findDailyCookies());
+			const imported = importDailyCookiesOnce(this.label, slot.dir, profileDir, this.findDailyCookies());
 			this.cookieNote = imported.ok ? undefined : imported.error;
 		} else {
-			forgetCookieImport(this.rootDir);
+			forgetCookieImport(slot.dir);
 			this.cookieNote = undefined;
 		}
+		// Logins and checks passed in this browser's other MyHarness profiles count here too. A failed merge only
+		// means this profile may ask for a login again; it never stops the browser from starting.
+		const others = Array.from({ length: FIREFOX_LIMITS.profileSlots }, (_, index) => this.slotAt(index))
+			.filter((other) => other.index !== slot.index && existsSync(other.profileDir))
+			.map((other) => other.profileDir);
+		if (others.length > 0) mergeProfileCookies(this.kind, profileDir, others);
 		const launch =
 			this.kind === "firefox"
 				? await launchFirefox({
 						executable: state.executable,
 						profileDir,
-						extensionDir: join(this.rootDir, "extension"),
+						extensionDir: join(slot.dir, "extension"),
 						headless,
 					})
 				: launchChromium({
@@ -850,6 +1021,7 @@ export class LocalBrowser implements BrowserTransport {
 			);
 		});
 		this.currentChild = child;
+		this.currentPidFile = pidFile;
 		if (child.pid) writeFileSync(pidFile, String(child.pid));
 		process.on("exit", this.onProcessExit);
 		try {

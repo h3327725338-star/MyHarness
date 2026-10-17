@@ -86,7 +86,7 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
           └─ 被网站拒绝时 → BrowserPageReader（page-browser.ts）：用同一个浏览器读正文
 ```
 
-`browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）、`foreground.ts`（Windows 人工验证窗口的临时置顶与激活）和 `import-cookies.ts`（复制日常浏览器的 Cookie）。
+`browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）、`foreground.ts`（Windows 人工验证窗口的临时置顶与激活）、`import-cookies.ts`（复制日常浏览器的 Cookie）和 `profile-cookies.ts`（在 MyHarness 自己的几个专用配置之间合并 Cookie）。
 
 轻量 HTML 请求带导航用途的 Headers、Cache-Control 和支持的压缩格式；这不会改变 Node/undici 的 TLS 指纹。被拦截后的浏览器访问使用实际安装的浏览器自身的 TLS、Cookie 与网络栈，Chrome/Edge 优先从自身读取真实 Client Hints，再去掉 headless 品牌标记，避免编造平台版本。Chrome/Edge 在每次导航的网站脚本执行前将 `navigator.webdriver` 设为未定义，其余浏览器原生属性不伪造。没有模拟鼠标或自动解验证码，也不保证通过网站的所有反爬策略。
 
@@ -130,9 +130,11 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 - **结果**：扩展等到结果区域出现（每个引擎有自己的选择器），把最终页面的 HTML、最终网址和 HTTP 状态交回，由引擎的解析器解析。Agent 不直接操作浏览器。
 - **会话复用**：Cookie、同意选择和通过的验证都保存在这个专用配置文件里，MyHarness 重启后继续使用。不同网站的 Cookie 由 Firefox 按网站分开保存。关闭时先让浏览器自己正常退出（最多等 5 秒，之后才结束进程），刚拿到的 Cookie 才来得及写入磁盘。
 - **平时无界面**：普通兜底用无界面（headless）Firefox，首次启动约 1–2 秒，之后每次读取约 0.5–1 秒。空闲 3 分钟后自动关闭；MyHarness 退出时一并关闭。
-- **需要人工验证时**：搜索引擎的“是不是验证页”判断读的是页面源码，源码里提到 CAPTCHA 不等于真的在显示验证；所以判断为验证页时，先试着解析结果，能解析出结果就说明页面是正常加载的，直接使用，不弹窗。确实在 Firefox 里也遇到验证码或同意页，并且当前是 Web UI 交互界面时，MyHarness 会打开一个可见的 Firefox 窗口，工具进度里提示你去完成验证；最长等待 3 分钟，Esc 取消。验证通过后搜索自动继续，之后的搜索复用这次验证，窗口关闭，后续恢复无界面。在无人值守的 SDK/后台任务中不会弹窗，工具结果返回 `challenge_required` 并说明需要在 Web UI 交互界面里完成一次。
+- **需要人工验证时**：搜索引擎的“是不是验证页”判断读的是页面源码，源码里提到 CAPTCHA 不等于真的在显示验证；所以判断为验证页时，先试着解析结果，能解析出结果就说明页面是正常加载的，直接使用，不弹窗。确实在 Firefox 里也遇到验证码或同意页，并且当前是 Web UI 交互界面时，MyHarness 会打开一个可见的 Firefox 窗口，工具进度里提示你去完成验证；最长等待 3 分钟，Esc 取消。验证通过后搜索自动继续，之后的搜索复用这次验证，窗口关闭，后续恢复无界面。同一时间只开一个可见窗口：其他也需要验证的调用先排队等待；窗口结束后，它们先在无界面浏览器里再试一次，同一网站已经通过就直接复用，不再弹窗。如果同一网站这次没有完成（超时或关掉窗口），排队的调用直接返回 `challenge_required`，不会一个接一个地弹窗。在无人值守的 SDK/后台任务中不会弹窗，工具结果返回 `challenge_required` 并说明需要在 Web UI 交互界面里完成一次。
 - **Chrome / Edge**：不用扩展。MyHarness 用 `--remote-debugging-pipe` 启动浏览器，通过只属于这一对进程的管道发 DevTools 命令（不开任何网络端口），关闭"自动化控制"标记，无界面时把 UA 改回普通浏览器的 UA。配置目录是 `<agent 目录>/web-search/chrome/profile` 或 `.../edge/profile`，同样与你自己的浏览器隔离；其余行为（会话复用、无界面、人工验证、空闲关闭）与 Firefox 相同。
-- **可靠性**：Firefox 未安装、被关闭、崩溃、扩展没连上、页面加载失败或超时，都会以明确的错误返回（`browser_unavailable` / `unavailable` / `timeout`），下一次需要时重新启动 Firefox。上次 MyHarness 异常退出留下的 Firefox（按专用配置文件路径确认，不会误关你自己的 Firefox）会在下次启动前关闭。同一时间只有一个 MyHarness 进程能使用这个配置文件，另一个进程会得到明确提示。
+- **可靠性**：Firefox 未安装、被关闭、崩溃、扩展没连上、页面加载失败或超时，都会以明确的错误返回（`browser_unavailable` / `unavailable` / `timeout`），下一次需要时重新启动 Firefox。上次 MyHarness 异常退出留下的 Firefox（按专用配置文件路径确认，不会误关你自己的 Firefox）会在下次启动前关闭。
+- **同一进程内并发**：同一个 MyHarness 进程里的所有 Agent 和子智能体共用一个浏览器进程。启动、重启和关闭浏览器按顺序进行，并发的调用不会互相抢配置文件锁；限流只有三种排队等待：同一引擎的浏览器访问间隔、共享下载上限（Concurrent Downloads）和最多 3 个标签页。
+- **多个 MyHarness 进程**：每种浏览器最多有 4 个专用配置：第一个是 `<agent 目录>/web-search/<浏览器>/profile`，其余是同一目录下的 `slots/1`–`slots/3/profile`。每个进程占用第一个空闲的配置（文件锁），所以两个进程同时用浏览器兜底时各自都能用。4 个都被占用时排队等待（最长 2 分钟，Esc 可取消），等不到才返回 `browser_unavailable` 并说明原因。启动前会把其他几个配置里的 Cookie 合并进来：同一网站同名的 Cookie 以最近使用或更新的那份为准，所以在任一个配置里登录或通过验证后，其他进程下次启动浏览器时也会复用。限制：正在运行的浏览器要等下次启动才能拿到其他配置的新 Cookie；某个配置里退出登录不会删除其他配置里的登录 Cookie；Chrome/Edge 只在两个配置的 Cookie 加密密钥相同时合并。异常残留的浏览器只按各自配置的路径识别并关闭。
 
 找浏览器的顺序：环境变量（`MYHARNESS_FIREFOX_PATH`、`MYHARNESS_CHROME_PATH`、`MYHARNESS_EDGE_PATH`）→ `Program Files`/`Program Files (x86)`/`%LOCALAPPDATA%` 下的默认安装位置（`Mozilla Firefox\firefox.exe`、`Google\Chrome\Application\chrome.exe`、`Microsoft\Edge\Application\msedge.exe`）→ `PATH`。
 
@@ -208,7 +210,7 @@ npm.cmd run test:web-search:e2e
 
 它会：
 
-- 用一个本地网页服务器测试真实 Firefox 通道（加载、脚本跳转、429、打不开的页面、取消、可见窗口中的验证流程、Cookie 跨重启保留、配置文件独占、Firefox 崩溃后恢复）；
+- 用一个本地网页服务器测试真实 Firefox 通道（加载、脚本跳转、429、打不开的页面、取消、可见窗口中的验证流程、Cookie 跨重启保留、第二个进程使用另一个配置并带上第一个配置的 Cookie、崩溃后 5 路并行加载、同一网站多个调用同时需要验证时只验证一次、Firefox 崩溃后恢复）；
 - 真实读取公开网页（包括一次跳转和一次被拒绝的本机地址）；
 - 对 Google 和 Bing 分别用 `OpenAI GPT`、`Taylor's University`、`马来西亚 人工智能` 真实搜索，检查结果标题、网址、摘要和相关性；各连续搜索 12 次；
 - 强制走 Firefox 通道，用真实 Firefox 读取真实的 Google/Bing 结果页；
@@ -223,5 +225,5 @@ npm.cmd run test:web-search:e2e
 - 真实 Google/Bing CAPTCHA 的人工完成流程受外部网络和搜索引擎策略影响，仓库中的人工验证集成测试主要使用本地 challenge 页面模拟；不能把模拟通过理解成所有线上 CAPTCHA 都能稳定复现或完成。
 - Bing 的降级结果识别是基于查询词和结果文本的启发式判断；搜索引擎 HTML DOM 或反自动化策略变化时，解析器和判断规则仍需维护。
 - 用浏览器读网页只是让请求看起来和真人浏览一样，不保证能通过所有网站的反爬；需要付费或账号权限的内容在登录前仍然读不到。
-- Firefox Transport 依赖 localhost Remote Debugging / IPC、已安装的 Firefox 和专用 profile；Firefox 未安装、扩展接入失败、profile 被其他 MyHarness 进程占用或浏览器崩溃时会返回明确失败，不会把错误伪装成搜索结果。
+- Firefox Transport 依赖 localhost Remote Debugging / IPC、已安装的 Firefox 和专用 profile；Firefox 未安装、扩展接入失败、4 个 profile 都被其他 MyHarness 进程占用且排队超时，或浏览器崩溃时，会返回明确失败，不会把错误伪装成搜索结果。
 - 高频搜索仍可能触发搜索引擎 CAPTCHA 或限流；Google 轻量路径固定使用 IPv4，因为当前 IPv6 网络表现不可靠。
