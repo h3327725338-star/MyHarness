@@ -157,7 +157,7 @@ const maxCharsSchema = Type.Optional(
 	Type.Integer({ minimum: 200, maximum: 100_000, description: "Cap for text output (default 20000)" }),
 );
 
-const parameters = Type.Union([
+const workspaceParametersUnion = Type.Union([
 	Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
 	Type.Object({ operation: Type.Literal("tabs") }, { additionalProperties: false }),
 	Type.Object(
@@ -311,7 +311,13 @@ const parameters = Type.Union([
 	),
 ]);
 
-export type WorkspaceToolInput = Static<typeof parameters>;
+export type WorkspaceToolInput = Static<typeof workspaceParametersUnion>;
+
+/** Keep a provider-friendly object root while retaining the discriminated anyOf branches. */
+const parameters = Type.Unsafe<WorkspaceToolInput>({
+	type: "object",
+	anyOf: workspaceParametersUnion.anyOf,
+});
 
 export interface WorkspaceTabSummary {
 	id: string;

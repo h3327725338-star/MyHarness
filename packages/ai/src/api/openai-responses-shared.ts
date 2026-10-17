@@ -372,11 +372,28 @@ export function convertResponsesTools(tools: readonly Tool[], options?: ConvertR
 			type: "function",
 			name: tool.name,
 			description: tool.description,
-			parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
+			parameters: normalizeResponsesToolParameterSchema(tool.parameters as Record<string, unknown>),
 			strict,
 			...(options?.deferLoading ? { defer_loading: true } : {}),
 		}),
 	);
+}
+
+/**
+ * Some strict Responses providers (e.g. DeepSeek official) reject function tools whose
+ * parameter schema lacks a root `type: "object"` declaration, failing the whole request.
+ * A root-level anyOf/oneOf whose branches are all object schemas is semantically unchanged
+ * once the root type is declared, so add it there. Anything else passes through untouched.
+ */
+export function normalizeResponsesToolParameterSchema(schema: Record<string, unknown>): Record<string, unknown> {
+	if (schema.type !== undefined) return schema;
+	const branches = schema.anyOf ?? schema.oneOf;
+	if (!Array.isArray(branches) || branches.length === 0) return schema;
+	const allObjectBranches = branches.every(
+		(branch) =>
+			typeof branch === "object" && branch !== null && (branch as Record<string, unknown>).type === "object",
+	);
+	return allObjectBranches ? { ...schema, type: "object" } : schema;
 }
 
 // =============================================================================
