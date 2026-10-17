@@ -7,10 +7,11 @@ import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
 import { ExportHeaderDownload, exportReadOnly } from "./export-mode.js";
 import { ChangesPanel } from "./panel-changes.js";
-import { FilesPanel } from "./panel-files.js";
+import { FilesPanel, FileTab } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
 import { ContextPanel } from "./panel-context.js";
 import { BrowserPanel } from "./panel-browser.js";
+import { WorkspaceTabs, PANEL_TAB_TYPES } from "./workspace-tabs.js";
 import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
@@ -60,7 +61,8 @@ function Header() {
 	const items = useStore((s) => s.items);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const panelOpen = useStore((s) => s.view.panelOpen);
-	const panelTab = useStore((s) => s.view.panelTab);
+	const wsActive = useStore((s) => s.view.wsActive);
+	const wsTabs = useStore((s) => s.view.wsTabs);
 	const runningBash = useStore((s) => s.snap?.flags?.bashRunning);
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
@@ -78,7 +80,8 @@ function Header() {
 		if (save && next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
 	};
 	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
-	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && panelTab === tab ? "active" : ""}`} aria-pressed=${panelOpen && panelTab === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
+	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && wsActive === tab ? "active" : ""}`} aria-pressed=${panelOpen && wsActive === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
+	const browserActive = panelOpen && wsTabs.some((tab) => tab.id === wsActive && tab.type === "browser");
 	return html`<header class="main-header">
 		${!sidebarOpen ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
@@ -93,13 +96,16 @@ function Header() {
 		${tabBtn("files", "folder", t("Files"))}
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
-		${window.myHarnessDesktop && !exportReadOnly() ? tabBtn("browser", "globe", t("Browser")) : null}
+		${window.myHarnessDesktop && !exportReadOnly() ? html`<button class=${`icon-btn ${browserActive ? "active" : ""}`} aria-pressed=${browserActive} title=${t("Browser")} aria-label=${t("Browser")} onClick=${() => actions.openWorkspace({ type: "browser", url: "https://github.com" })}><${Icon} name="globe" size=${17} /></button>` : null}
 	</header>`;
 }
 
 function PanelContainer() {
-	const tab = useStore((s) => s.view.panelTab);
+	const tabs = useStore((s) => s.view.wsTabs);
+	const activeId = useStore((s) => s.view.wsActive);
+	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const panelRef = useRef(null);
+	const active = tabs.find((item) => item.id === activeId) || tabs[0] || null;
 	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
 	// from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
 	// in a larger window, or a drag past the cap, leaves no dead stretch to drag back through.
@@ -110,15 +116,27 @@ function PanelContainer() {
 		document.documentElement.style.setProperty("--panel-w", `${w}px`);
 	};
 	useWidthClass(panelRef, [], [440, 440]);
+	// Panel tabs stay mounted while another tab is shown (their tree, filters and scroll survive a switch); file and
+	// browser tabs mount only while active — a browser tab's page lives in the host process and is not reloaded.
+	const panelTab = (type) => {
+		if (type === "changes") return html`<${ChangesPanel} />`;
+		if (type === "files") return html`<${FilesPanel} embedded=${true} />`;
+		if (type === "terminal") return html`<${TerminalPanel} />`;
+		if (type === "context") return html`<${ContextPanel} />`;
+		return null;
+	};
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
-		<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => setView({ panelOpen: false })}><${Icon} name="x" size=${15} /></button>
+		<div class="panel-head">
+			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
+			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
+			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="x" size=${15} /></button>
+		</div>
 		<div class="panel-body">
-			<div class="panel-pane" hidden=${tab !== "changes"}>${tab === "changes" ? html`<${ChangesPanel} />` : null}</div>
-			<div class="panel-pane" hidden=${tab !== "files"}><${FilesPanel} /></div>
-			<div class="panel-pane" hidden=${tab !== "terminal"}>${tab === "terminal" ? html`<${TerminalPanel} />` : null}</div>
-			<div class="panel-pane" hidden=${tab !== "context"}>${tab === "context" ? html`<${ContextPanel} />` : null}</div>
-			${window.myHarnessDesktop ? html`<div class="panel-pane" hidden=${tab !== "browser"}>${tab === "browser" ? html`<${BrowserPanel} />` : null}</div>` : null}
+			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
+				${item.id !== active?.id ? null : item.type === "file" ? html`<${FileTab} key=${item.id} path=${item.path} />` : item.type === "browser" ? html`<${BrowserPanel} key=${item.id} tabId=${item.id} url=${item.url} />` : panelTab(item.type)}
+			</div>`)}
+			${!active ? html`<div class="panel-empty"><span class="dim">${t("No tabs open. Use the header buttons to open Changes, Files, Terminal, Session or the browser.")}</span></div>` : null}
 		</div>
 	</aside>`;
 }

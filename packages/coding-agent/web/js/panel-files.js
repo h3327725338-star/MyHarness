@@ -24,7 +24,7 @@ const TreeRow = memo(function TreeRow({ entry, depth, expanded, onToggle, status
 	</div>`;
 });
 
-export function FilesPanel() {
+export function FilesPanel({ embedded = false } = {}) {
 	const lastRunId = useStore((s) => s.snap?.lastRun?.runId);
 	const sessionId = useStore((s) => s.snap?.session?.id);
 	const cwd = useStore((s) => s.snap?.cwd);
@@ -137,6 +137,11 @@ export function FilesPanel() {
 	}, [query, cwd, slot]);
 
 	const open = async (path, line) => {
+		// In the workspace a file becomes its own tab: the tree stays where it is and the file does not replace it.
+		if (embedded) {
+			actions.openWorkspace({ type: "file", path });
+			return;
+		}
 		setViewing({ path, line });
 		setFile(null);
 		setError("");
@@ -190,14 +195,58 @@ export function FilesPanel() {
 				${error && !viewing ? html`<div class="notice danger">${error}</div>` : null}
 			</div>
 		</div>
-		${viewing ? html`<${FileViewer} key=${viewing.path} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null))} />` : null}
+		${viewing ? html`<${FileViewer} key=${viewing.path} viewing=${viewing} file=${file} error=${error} onBack=${() => (setViewing(null), setFile(null))} onSaved=${(content) => setFile((current) => (current ? { ...current, content } : current))} onReload=${() => open(viewing.path, viewing.line)} />` : null}
 	</div>`;
 }
 
-function FileViewer({ viewing, file, error, onBack }) {
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i;
+
+function FileViewer({ viewing, file, error, onBack, onSaved, onReload }) {
 	const path = viewing.path;
+	const isMarkdown = /\.(md|markdown)$/i.test(path);
 	const [dirty, setDirty] = useState(false);
-	const back = () => { if (!dirty || window.confirm(t("Discard unsaved Markdown changes?"))) onBack(); };
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState("");
+	const [saving, setSaving] = useState(false);
+	const [saveError, setSaveError] = useState("");
+	const [zoom, setZoom] = useState(1);
+	const [rotation, setRotation] = useState(0);
+	const [findOpen, setFindOpen] = useState(false);
+	const [findText, setFindText] = useState("");
+	const [findAt, setFindAt] = useState(0);
+	const findInput = useRef(null);
+	const matchRef = useRef(null);
+	const canEdit = file?.kind === "text" && !isMarkdown && !file.truncated;
+	const back = () => {
+		if ((!dirty && !editing) || window.confirm(t("Discard unsaved changes?"))) onBack?.();
+	};
+	const startEdit = () => {
+		setDraft(file.content);
+		setSaveError("");
+		setEditing(true);
+	};
+	const cancelEdit = () => {
+		if (dirty && !window.confirm(t("Discard unsaved changes?"))) return;
+		setEditing(false);
+		setDirty(false);
+		setSaveError("");
+	};
+	const save = async () => {
+		if (!file || saving) return;
+		setSaving(true);
+		setSaveError("");
+		try {
+			// The server compares the full text it read with `original`; an edit from the Agent or another program is a 409, not a loss.
+			const result = await api("/api/files/text", { method: "POST", body: { path, original: file.content, content: draft } });
+			onSaved?.(result.content);
+			setEditing(false);
+			setDirty(false);
+		} catch (e) {
+			setSaveError(e.message);
+		} finally {
+			setSaving(false);
+		}
+	};
 	const lang = file?.language || languageFor(path);
 	const lines = useMemo(() => {
 		if (!file || file.kind !== "text") return [];
@@ -206,23 +255,165 @@ function FileViewer({ viewing, file, error, onBack }) {
 		const raw = code.split("\n");
 		return raw.map((text, i) => ({ text, html: rendered && rendered.length === raw.length ? rendered[i] : null }));
 	}, [file, lang]);
+	const searchable = file?.kind === "text" && !isMarkdown;
+	const matchList = useMemo(() => {
+		const query = findText.trim().toLowerCase();
+		if (!query || !searchable) return [];
+		const found = [];
+		for (let index = 0; index < lines.length; index++) {
+			if (lines[index].text.toLowerCase().includes(query)) found.push(index);
+		}
+		return found;
+	}, [findText, lines, searchable]);
+	const matchSet = useMemo(() => new Set(matchList), [matchList]);
+	const currentMatch = matchList.length ? matchList[Math.min(findAt, matchList.length - 1)] : -1;
+	useEffect(() => {
+		setFindAt(0);
+	}, [findText, path]);
+	useEffect(() => {
+		if (!findOpen) return undefined;
+		const frame = requestAnimationFrame(() => {
+			findInput.current?.focus();
+			findInput.current?.select();
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [findOpen]);
+	useEffect(() => {
+		if (currentMatch < 0) return undefined;
+		const frame = requestAnimationFrame(() => matchRef.current?.scrollIntoView({ block: "center" }));
+		return () => cancelAnimationFrame(frame);
+	}, [currentMatch]);
+	useEffect(() => {
+		if (!searchable) return undefined;
+		const onKey = (event) => {
+			if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f" && !document.querySelector(".ws-find, .palette, [aria-modal='true']")) {
+				event.preventDefault();
+				setFindOpen(true);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [searchable]);
+	const step = (direction) => {
+		if (!matchList.length) return;
+		setFindAt((current) => (current + direction + matchList.length) % matchList.length);
+	};
 	const targetRef = useRef(null);
 	useEffect(() => {
 		const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
 		return () => cancelAnimationFrame(frame);
 	}, [file, viewing.line]);
-	return html`<div class="file-viewer">
-		<div class="panel-toolbar">
-			<button class="icon-btn sm" onClick=${back} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>
-			<span class="truncate grow" title=${path}><span class="dim">${dirname(path)}${dirname(path) ? "/" : ""}</span><strong>${basename(path)}</strong></span>
-			${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
-			<${CopyButton} text=${path} label=${t("Copy path")} />
-			<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
-		</div>
-		<div class=${`panel-scroll ${/\.(md|markdown)$/i.test(path) ? "" : "code-view"}`}>
-			${error ? html`<div class="notice danger">${error}</div>` : !file ? html`<div class="empty"><${Spinner} /></div>` : file.kind === "image" ? html`<div class="image-view"><img src=${`data:${file.mimeType};base64,${file.data}`} alt=${path} /></div>` : file.kind === "binary" ? html`<div class="empty">${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</div>` : file.kind === "large" ? html`<div class="empty">${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</div>` : /\.(md|markdown)$/i.test(path) ? html`<${MarkdownEditor} file=${file} path=${path} onDirty=${setDirty} />` : html`
-				${file.truncated ? html`<div class="notice warn">${t("Showing the first {fmtBytes} of {fmtBytes2}.", { fmtBytes: fmtBytes(file.content.length), fmtBytes2: fmtBytes(file.size) })}</div>` : null}
-				<div class="code-lines mono">${lines.map((line, i) => html`<div class=${`cl ${viewing.line === i + 1 ? "target" : ""}`} key=${i} ref=${viewing.line === i + 1 ? targetRef : null}><span class="cl-no">${i + 1}</span>${line.html !== null ? html`<span class="cl-text hljs" dangerouslySetInnerHTML=${{ __html: line.html || " " }} />` : html`<span class="cl-text">${line.text || " "}</span>`}</div>`)}</div>`}
-		</div>
+	const rawUrl = file?.rawUrl || `/api/files/raw?path=${encodeURIComponent(path)}`;
+	const downloadUrl = `/api/files/raw?path=${encodeURIComponent(path)}&download=1`;
+	const image = file?.kind === "image" || (file?.kind === "large" && IMAGE_EXTENSIONS.test(path));
+	const openExternally = async () => {
+		const host = window.myHarnessDesktop;
+		if (host?.openPath && file?.absolutePath) {
+			try {
+				const failure = await host.openPath(file.absolutePath);
+				if (failure) setSaveError(failure);
+				return;
+			} catch (e) {
+				setSaveError(e.message);
+				return;
+			}
+		}
+		setSaveError(t("This file can only be opened by an application outside MyHarness, which is not available here."));
+	};
+	const head = html`<div class="panel-toolbar">
+		${onBack ? html`<button class="icon-btn sm" onClick=${back} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>` : null}
+		<span class="truncate grow" title=${path}><span class="dim">${dirname(path)}${dirname(path) ? "/" : ""}</span><strong>${basename(path)}</strong></span>
+		${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
+		${searchable ? html`<button class=${`icon-btn sm ${findOpen ? "active" : ""}`} title=${t("Find in file")} aria-label=${t("Find in file")} aria-pressed=${findOpen} onClick=${() => (findOpen ? setFindOpen(false) : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>` : null}
+		${image ? html`<button class="icon-btn sm" title=${t("Zoom out")} aria-label=${t("Zoom out")} onClick=${() => setZoom((value) => Math.max(0.25, Math.round((value - 0.25) * 100) / 100))}><${Icon} name="zoomOut" size=${14} /></button>
+			<button class="icon-btn sm" title=${t("Reset zoom")} aria-label=${t("Reset zoom")} onClick=${() => { setZoom(1); setRotation(0); }}><span class="dim">${Math.round(zoom * 100)}%</span></button>
+			<button class="icon-btn sm" title=${t("Zoom in")} aria-label=${t("Zoom in")} onClick=${() => setZoom((value) => Math.min(4, Math.round((value + 0.25) * 100) / 100))}><${Icon} name="zoomIn" size=${14} /></button>
+			<button class="icon-btn sm" title=${t("Rotate left")} aria-label=${t("Rotate left")} onClick=${() => setRotation((value) => (value + 270) % 360)}><${Icon} name="rotateLeft" size=${14} /></button>
+			<button class="icon-btn sm" title=${t("Rotate right")} aria-label=${t("Rotate right")} onClick=${() => setRotation((value) => (value + 90) % 360)}><${Icon} name="rotateRight" size=${14} /></button>` : null}
+		${canEdit ? (editing ? html`<button class="btn sm" disabled=${saving} onClick=${save}>${saving ? t("Saving…") : t("Save")}</button><button class="btn sm" disabled=${saving} onClick=${cancelEdit}>${t("Cancel")}</button>` : html`<button class="icon-btn sm" title=${t("Edit text")} aria-label=${t("Edit text")} onClick=${startEdit}><${Icon} name="edit" size=${14} /></button>`) : null}
+		${file ? html`<a class="icon-btn sm" href=${downloadUrl} title=${t("Download")} aria-label=${t("Download")}><${Icon} name="download" size=${14} /></a>` : null}
+		<${CopyButton} text=${path} label=${t("Copy path")} />
+		<button class="icon-btn sm" title=${t("Reload from disk")} aria-label=${t("Reload from disk")} onClick=${() => onReload?.()}><${Icon} name="refresh" size=${14} /></button>
+		<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
 	</div>`;
+	const findBar = findOpen && searchable ? html`<form class="panel-toolbar file-find" onSubmit=${(event) => { event.preventDefault(); step(1); }}>
+		<input class="field grow" ref=${findInput} aria-label=${t("Find in file")} placeholder=${t("Find in file")} value=${findText}
+			onInput=${(event) => setFindText(event.target.value)}
+			onKeyDown=${(event) => {
+				if (event.key === "Escape") { event.preventDefault(); setFindOpen(false); }
+				if (event.key === "Enter") { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
+			}} />
+		<span class="dim file-find-count" role="status">${findText ? (matchList.length ? t("{active} of {matches}", { active: Math.min(findAt + 1, matchList.length), matches: matchList.length }) : t("No matches")) : ""}</span>
+		<button class="icon-btn sm" type="button" title=${t("Previous match")} aria-label=${t("Previous match")} disabled=${!matchList.length} onClick=${() => step(-1)}><${Icon} name="chevronUp" size=${14} /></button>
+		<button class="icon-btn sm" type="button" title=${t("Next match")} aria-label=${t("Next match")} disabled=${!matchList.length} onClick=${() => step(1)}><${Icon} name="chevronDown" size=${14} /></button>
+		<button class="icon-btn sm" type="button" title=${t("Close find")} aria-label=${t("Close find")} onClick=${() => setFindOpen(false)}><${Icon} name="x" size=${14} /></button>
+	</form>` : null;
+	if (error) return html`<div class="file-viewer">${head}${findBar}<div class="panel-scroll"><div class="notice danger">${error}</div></div></div>`;
+	if (!file) return html`<div class="file-viewer">${head}${findBar}<div class="panel-scroll"><div class="empty"><${Spinner} /></div></div></div>`;
+	const body = (() => {
+		if (file.kind === "pdf") return html`<iframe class="file-frame" src=${rawUrl} title=${path}></iframe>`;
+		if (file.kind === "audio")
+			return html`<div class="media-view"><audio controls src=${rawUrl} preload="metadata"></audio><div class="dim">${t("Audio playback uses the browser's own player. Download keeps the original bytes.")}</div><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
+		if (file.kind === "video")
+			return html`<div class="media-view"><video controls src=${rawUrl} preload="metadata"></video><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
+		if (file.kind === "office")
+			return html`<div class="office-view"><${Icon} name="file" size=${28} class="c-dim" /><h3>${basename(path)}</h3><p>${t("Office documents are shown read-only: MyHarness has no Office engine, so the file is not rendered or converted here. Open it in its system application, or download the original file.")}</p><div class="row"><button class="btn sm" onClick=${openExternally}>${t("Open with the default application")}</button><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div></div>`;
+		if (image)
+			return html`<div class="image-view"><img class="zoomed" src=${file.kind === "image" ? `data:${file.mimeType};base64,${file.data}` : rawUrl} alt=${path} style=${{ transform: `scale(${zoom}) rotate(${rotation}deg)` }} /></div>`;
+		if (file.kind === "binary")
+			return html`<div class="empty"><p>${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</p><a class="btn sm" href=${downloadUrl}>${t("Download")}</a><button class="btn sm" onClick=${openExternally}>${t("Open with the default application")}</button></div>`;
+		if (file.kind === "large")
+			return html`<div class="empty"><p>${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</p><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
+		if (isMarkdown) return html`<${MarkdownEditor} file=${file} path=${path} onDirty=${setDirty} />`;
+		if (editing)
+			return html`<div class="text-editor">
+				${saveError ? html`<div class="notice danger">${saveError}</div>` : null}
+				<textarea class="field mono" spellcheck="false" value=${draft} onInput=${(event) => {
+					setDraft(event.target.value);
+					setDirty(true);
+				}} onKeyDown=${(event) => {
+					if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+						event.preventDefault();
+						save();
+					}
+				}} />
+			</div>`;
+		return html`<div class="text-view">
+			${file.truncated ? html`<div class="notice warn">${t("Showing the first {fmtBytes} of {fmtBytes2}.", { fmtBytes: fmtBytes(file.content.length), fmtBytes2: fmtBytes(file.size) })}</div>` : null}
+			<div class="code-lines mono">${lines.map(
+				(line, i) => html`<div class=${`cl ${viewing.line === i + 1 ? "target" : ""} ${matchSet.has(i) ? "find-hit" : ""} ${currentMatch === i ? "find-current" : ""}`} key=${i} ref=${currentMatch === i ? matchRef : viewing.line === i + 1 ? targetRef : null}><span class="cl-no">${i + 1}</span>${line.html !== null ? html`<span class="cl-text hljs" dangerouslySetInnerHTML=${{ __html: line.html || " " }} />` : html`<span class="cl-text">${line.text || " "}</span>`}</div>`,
+			)}</div>
+		</div>`;
+	})();
+	return html`<div class="file-viewer">${head}${findBar}${saveError && !editing ? html`<div class="notice danger">${saveError}</div>` : null}<div class=${`panel-scroll ${isMarkdown || editing ? "" : "code-view"}`}>${body}</div></div>`;
+}
+
+/** One file opened as its own workspace tab: the tab keeps its path, the file is read again when the tab is shown. */
+export function FileTab({ path }) {
+	const slot = state.activeSlot;
+	const [file, setFile] = useState(null);
+	const [error, setError] = useState("");
+	const load = async () => {
+		setError("");
+		try {
+			setFile(await api(`/api/files/read?path=${encodeURIComponent(path)}`, { slot }));
+		} catch (e) {
+			setError(e.message);
+		}
+	};
+	useEffect(() => {
+		let live = true;
+		(async () => {
+			try {
+				const data = await api(`/api/files/read?path=${encodeURIComponent(path)}`, { slot });
+				if (live) setFile(data);
+			} catch (e) {
+				if (live) setError(e.message);
+			}
+		})();
+		return () => {
+			live = false;
+		};
+	}, [path, slot]);
+	return html`<${FileViewer} viewing=${{ path }} file=${file} error=${error} onSaved=${(content) => setFile((current) => (current ? { ...current, content } : current))} onReload=${load} />`;
 }

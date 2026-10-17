@@ -20,6 +20,7 @@
 | `sub-agent.ts` | `agent` 工具：启动只读或读写的 Explore 子进程（前台或后台批次）；非 Git 工作区先装配过滤后的独立文件镜像，失败不回宿主运行，逐任务 finally 清理（机制见 `agent/delegation/non-git-sandbox.ts`），通过 NDJSON stdin 下发任务与“收敛提醒” steering 消息，收集结果、超时与停滞检测；只有 stall watchdog、墙钟超时、`maxTurns` 和取消会真正终止任务，重复操作/连续工具失败/无新信息只注入提醒；带 `questions` 的任务要求逐项回答并附 `## Completion checklist`，缺失即记为 `partial`（`stopReason: "incomplete_answer"`）；`runExploreBatch()` 也被 `workflow/` 使用 |
 | `symbols.ts` | `symbols` 工具：符号、定义、引用、诊断等查询，以及 find_existing / read_symbol / impact / rename_preview 组合操作（实现在 `symbols/workflow/`） |
 | `apply-rename.ts` | `apply_rename` 工具：按 rename_preview 的计划写入；与 `symbols` 同受 `codeIntelligence.symbolsEnabled` 控制，复用 apply_patch 的文件队列与整体回滚，任一文件哈希变化则整份拒绝 |
+| `workspace.ts` | `workspace` 工具（仅桌面端）：内置浏览器与右侧工作区的结构化控制。浏览器命令经服务进程到 Electron 主进程的 IPC 通道操作 `WebContentsView`（含导航、DOM/可访问性/交互元素、点击/输入/滚动、页内查找、工作区文件上传、截图、下载取消/重试、网络与站点权限状态），工作区命令转发给页面（页面拥有标签列表和媒体元素）并以其回报的状态为准；只在 `MYHARNESS_DESKTOP_HOST=1` 且 IPC 已连接时注册。站点权限只能由页面里的用户决定，工具不能授予。 |
 | `symbols-runtime.ts` | `symbols` 工具需要的运行时端口：索引、路由、安装状态 |
 
 ### contracts/

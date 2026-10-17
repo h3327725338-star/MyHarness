@@ -27,6 +27,7 @@ export const zhToolDescriptions = {
 	ls: "列出文件与文件夹",
 	symbols: "查询代码符号与引用",
 	apply_rename: "按重命名方案一次性修改全部相关文件",
+	workspace: "控制内置浏览器与工作区标签",
 	agent: "委派任务给子 Agent",
 	workflow: "分阶段只读探索，用于多模块并行排查与验证",
 	ultracode: "高风险深度排查，结合反例检查与失败路径校验",

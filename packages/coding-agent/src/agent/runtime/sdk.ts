@@ -28,6 +28,7 @@ import {
 	createReadTool,
 	createSymbolsTool,
 	createWriteTool,
+	desktopWorkspaceAvailable,
 	type SymbolsCodeIntelligenceServices,
 	type ToolName,
 	withFileMutationQueue,
@@ -300,6 +301,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						"ask_user_question",
 						"todo_write",
 						...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
+						// The desktop workspace tool only exists under the Electron host (see SessionToolRegistry.isBuiltinEnabled).
+						...(desktopWorkspaceAvailable() ? ["workspace"] : []),
 					],
 					isBuiltinConfigured,
 				) as ToolName[])

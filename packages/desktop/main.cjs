@@ -14,6 +14,33 @@ const logs = join(data, 'logs');
 mkdirSync(logs, { recursive: true });
 const log = (message) => appendFileSync(join(logs, 'web-launch.err.log'), `[desktop ${new Date().toISOString()}] ${message}\n`);
 let window, browser, child, job, serviceUrl, stopping = false, finished = false;
+// Workspace commands are executed by the page itself (it owns the tab list and the media elements). One request is one
+// round trip: the page answers with the state it reached, so the caller can verify the result instead of assuming it.
+// A reload, a closed window or a timeout fails the pending request instead of hanging.
+const pendingUi = new Map();
+const settleUi = (requestId, ok, payload) => {
+  const entry = pendingUi.get(requestId);
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  pendingUi.delete(requestId);
+  if (ok) entry.resolve(payload);
+  else entry.reject(new Error(String(payload || '页面执行失败')));
+  return true;
+};
+const failPendingUi = (reason) => {
+  for (const [requestId, entry] of pendingUi) {
+    clearTimeout(entry.timer);
+    pendingUi.delete(requestId);
+    entry.reject(new Error(reason));
+  }
+};
+const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, reject) => {
+  if (!window || window.isDestroyed()) return reject(new Error('应用窗口已关闭'));
+  const requestId = `ui${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const timer = setTimeout(() => { pendingUi.delete(requestId); reject(new Error('前端工作区未在超时内响应')); }, timeoutMs);
+  pendingUi.set(requestId, { resolve, reject, timer });
+  window.webContents.send('desktop:workspace', { requestId, command });
+});
 // Host browser storage only; Agent configuration and persisted data are not redirected.
 app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
 app.setName('MyHarness');
@@ -86,6 +113,17 @@ function startService(restart) {
   child.once('error', (error) => { clearTimeout(timeout); void errorPage(`本地服务启动失败：${error.message}`); });
   let restartDeadline;
   child.on('message', (message) => {
+    // The Agent session's workspace tool asks the host process for browser or page commands; the answer goes back over
+    // the same channel with the request id. Nothing here trusts the child: each command is validated by the browser
+    // command surface or by the page itself.
+    if (message?.type === 'myharness:browser-command') {
+      const requestId = String(message.requestId || '');
+      Promise.resolve()
+        .then(() => (message.action === 'workspace' ? workspaceRequest(message.command, Number(message.timeoutMs) || 15000) : browser.command(message.command)))
+        .then((value) => { try { child.send({ type: 'myharness:browser-result', requestId, ok: true, value }); } catch (error) { log(`无法回传浏览器命令结果：${error.message}`); } })
+        .catch((error) => { try { child.send({ type: 'myharness:browser-result', requestId, ok: false, error: error?.message || String(error) }); } catch { /* child already gone */ } });
+      return;
+    }
     if (message?.type !== 'myharness:restart') return;
     // This message is sent only after runtime disposal and HTTP close. Background
     // handles may still keep Node alive; don't let them strand a completed restart.
@@ -106,15 +144,44 @@ else {
   app.whenReady().then(async () => {
     window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
-    browser = createBrowser(window, log);
+    browser = createBrowser(window, log, { workspaceRoot: cwd });
     const trusted = (event) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && serviceUrl && new URL(event.senderFrame.url).origin === new URL(serviceUrl).origin;
+    const handleBrowserCommand = async (command) => {
+      if (command && typeof command === 'object' && command.action === 'workspace') return workspaceRequest(command.command, Number(command.timeoutMs) || 15000);
+      return browser.command(command);
+    };
+    ipcMain.handle('desktop:workspace-reply', (event, payload) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      const requestId = payload && typeof payload.requestId === 'string' ? payload.requestId : '';
+      if (!requestId || !pendingUi.has(requestId)) return { ok: false, error: '未知或已超时的工作区请求' };
+      settleUi(requestId, payload.ok === true, payload.ok === true ? payload.result : payload.error);
+      return { ok: true };
+    });
     ipcMain.handle('desktop:navigate', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return browser.navigate(url); });
     ipcMain.handle('desktop:external', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return shell.openExternal(httpUrl(url)); });
+    // The workspace bridge: every browser tab, navigation, snapshot, script, accessibility tree and click goes through
+    // this one command surface. Only the app's own page (same service origin, main frame) may call it.
+    ipcMain.handle('desktop:browser', (event, command) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return handleBrowserCommand(command); });
+    ipcMain.handle('desktop:open-path', async (event, target) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      if (typeof target !== 'string' || !target || !require('node:path').isAbsolute(target)) throw new Error('需要绝对路径');
+      return (await shell.openPath(target)) || null;
+    });
+    ipcMain.handle('desktop:reveal-path', (event, target) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      if (typeof target !== 'string' || !target || !require('node:path').isAbsolute(target)) throw new Error('需要绝对路径');
+      shell.showItemInFolder(target);
+      return { ok: true };
+    });
     ipcMain.on('desktop:bounds', (event, rect) => { if (trusted(event)) browser.bounds(rect); });
     ipcMain.on('desktop:destroy', (event) => { if (trusted(event)) browser.destroy(); });
     window.webContents.setWindowOpenHandler(({ url }) => { try { void shell.openExternal(httpUrl(url)); } catch {} return { action: 'deny' }; });
     window.webContents.on('will-navigate', (event, url) => { if (serviceUrl && new URL(url).origin !== new URL(serviceUrl).origin) event.preventDefault(); });
-    window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) browser.destroy(); });
+    window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) { failPendingUi('页面已重新加载，工作区请求已取消'); browser.destroy(); } });
+    // Moving, resizing or maximizing the window changes the content area that the page measured. Re-clamp the last
+    // rectangle immediately; the page also re-measures every frame while a browser tab is active.
+    for (const event of ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen', 'show'])
+      window.on(event, () => browser?.refresh());
     window.on('close', (event) => { if (!finished) { event.preventDefault(); window.hide(); void stop(); } });
     await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>MyHarness</title><body style="background:#1e1f1f;color:#ccc;font:16px system-ui;padding:40px">正在启动 MyHarness…</body>'));
     window.show();

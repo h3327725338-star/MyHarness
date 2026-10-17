@@ -28,6 +28,7 @@ import type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
 import { createToolDefinitionFromAgentTool } from "./tool-definition-wrapper.ts";
 import { wrapToolWithResultPersistence } from "./tool-result-persistence.ts";
 import { createWebSearchService, type WebSearchService } from "./web-search/service.ts";
+import { desktopWorkspaceAvailable } from "./workspace.ts";
 
 const SUB_AGENT_TOOL_NAMES = ["agent", "workflow", "ultracode", "agent_tasks"];
 const WEB_TOOL_NAMES = ["web_search", "web_fetch"];
@@ -109,6 +110,9 @@ export class SessionToolRegistry {
 	 * is built, so switching it needs a new session or a restart.
 	 */
 	isBuiltinEnabled(name: string): boolean {
+		// The workspace tool drives the desktop app built-in browser and its tabs, so it only exists when this process
+		// is a child of the Electron host with a live IPC link. Everywhere else it is absent, not a tool that always fails.
+		if (name === "workspace") return desktopWorkspaceAvailable();
 		if (!isGatedBuiltinToolName(name)) return true;
 		return this._symbolsEnabled;
 	}
@@ -217,6 +221,7 @@ export class SessionToolRegistry {
 					"ask_user_question",
 					"todo_write",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
+					...(desktopWorkspaceAvailable() ? ["workspace"] : []),
 				]);
 		return this.withSubAgentTools(requested ?? defaultActiveToolNames, settings.getSubAgentSettings().enabled);
 	}

@@ -14,6 +14,7 @@ import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.j
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
+import { normalizeWorkspaceTabs } from "./workspace-model.js";
 import { startInteraction, measureInteraction } from "./interaction-timing.js";
 
 const listeners = new Set();
@@ -166,6 +167,10 @@ export { runFor as inSlot };
 
 export const activeSlotId = () => activeSlot;
 
+const restoredWorkspaceTabs = normalizeWorkspaceTabs(prefs.wsTabs, prefs.panelTab);
+const restoredWorkspaceActive = restoredWorkspaceTabs.some((tab) => tab.id === prefs.wsActive)
+	? prefs.wsActive
+	: (restoredWorkspaceTabs[0]?.id ?? null);
 export const state = {
 	boot: { phase: "connecting", detail: null, dialogs: [] },
 	connected: false,
@@ -199,6 +204,13 @@ export const state = {
 		sidebarW: prefs.sidebarW ?? 272,
 		panelOpen: false,
 		panelTab: prefs.panelTab ?? "changes",
+		/** Open workspace tabs (panels, files, browser pages) and the active one; restored from the saved preferences. */
+		wsTabs: restoredWorkspaceTabs,
+		// A saved active id for a tab that the saved list no longer contains (or that normalization rejected) must not
+		// leave the panel showing a tab that is not in the strip; fall back to the first restored tab.
+		wsActive: restoredWorkspaceActive,
+		/** Tabs closed in this page session, newest last ("restore closed tab"). */
+		wsClosed: [],
 		panelW: prefs.panelW ?? 560,
 		expanded: prefs.expanded ?? {},
 		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
@@ -323,7 +335,7 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "wsTabs", "wsActive", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];

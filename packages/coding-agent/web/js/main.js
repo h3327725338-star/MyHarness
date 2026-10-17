@@ -2,6 +2,7 @@ import { Component, h, render } from "/vendor/preact.js";
 import { useLayoutEffect, useMemo, useRef, useState } from "/vendor/preact-hooks.js";
 import { App } from "./app.js";
 import { boot, state, subscribe, version } from "./store.js";
+import { installWorkspaceHost } from "./workspace-host.js";
 import { t } from "./i18n.js";
 
 // A rendering bug must never leave a blank page: show the error and let the user reload.
@@ -47,4 +48,6 @@ function Root() {
 }
 
 render(h(Root, null), document.getElementById("app"));
+// The desktop host can drive the same workspace actions from the Agent side; answers report the state that was reached.
+installWorkspaceHost();
 boot();

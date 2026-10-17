@@ -198,6 +198,7 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./files/grep.ts";
 import { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./shell/bash.ts";
+import { createWorkspaceTool, createWorkspaceToolDefinition } from "./workspace.ts";
 
 export { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
 
@@ -259,6 +260,15 @@ import {
 	type WebSearchToolOptions,
 } from "./web-search/tool.ts";
 
+export {
+	createWorkspaceTool,
+	createWorkspaceToolDefinition,
+	desktopWorkspaceAvailable,
+	type WorkspaceTabSummary,
+	type WorkspaceToolDetails,
+	type WorkspaceToolInput,
+} from "./workspace.ts";
+
 export type Tool = AgentTool<any>;
 export type ToolDef = BusinessToolDefinition<any, any>;
 export type ToolName =
@@ -289,7 +299,8 @@ export type ToolName =
 	| "ask_user_question"
 	| "todo_write"
 	| "web_search"
-	| "web_fetch";
+	| "web_fetch"
+	| "workspace";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
@@ -319,6 +330,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"todo_write",
 	"web_search",
 	"web_fetch",
+	"workspace",
 ]);
 
 export interface ToolsOptions {
@@ -398,6 +410,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWebSearchToolDefinition(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchToolDefinition(cwd, options?.webSearch);
+		case "workspace":
+			return createWorkspaceToolDefinition();
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -461,6 +475,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createWebSearchTool(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchTool(cwd, options?.webSearch);
+		case "workspace":
+			return createWorkspaceTool();
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -515,6 +531,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
+		workspace: createWorkspaceToolDefinition(),
 	};
 }
 
@@ -566,5 +583,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
+		workspace: createWorkspaceTool(),
 	};
 }

@@ -7,8 +7,18 @@ import { loadPrefs, normPath } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
 import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
+import { normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
 
 let dialogResolver = null;
+
+/**
+ * Hide every native browser view at once. A WebContentsView is drawn above the page, so it must be gone before a
+ * non-browser tab is rendered or the panel is closed; waiting for the browser component's own cleanup is too late.
+ */
+function hideBrowserViews() {
+	const desktop = window.myHarnessDesktop;
+	if (desktop?.browser) desktop.browser({ action: "hide" }).catch(() => undefined);
+}
 
 /**
  * A modal that replaces a still-pending one must resolve the old Promise, or the awaiting flow (e.g. the service
@@ -110,10 +120,113 @@ export const actions = {
 	/**
 	 * The right-hand panel opens, closes and switches only from its own buttons in the header (and their keyboard
 	 * shortcuts): nothing in the conversation, no event of a running task and no command opens it.
+	 *
+	 * The four panel tabs are singletons inside the workspace: pressing their button focuses the open tab, adds it when
+	 * it is not open, and closes the panel when it is already the active one. Closing the panel keeps the tabs.
 	 */
 	togglePanel(tab) {
-		if (state.view.panelOpen && state.view.panelTab === tab) setView({ panelOpen: false });
-		else setView({ panelOpen: true, panelTab: tab });
+		const active = state.view.wsActive;
+		if (state.view.panelOpen && active === tab) {
+			actions.closePanel();
+			return;
+		}
+		actions.openWorkspace({ type: tab });
+	},
+
+	/** Hide the panel and every native browser view it was showing; the tabs stay open and come back as they were. */
+	closePanel() {
+		hideBrowserViews();
+		setView({ panelOpen: false });
+	},
+
+	/** Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. */
+	openWorkspace(descriptor) {
+		const tab = normalizeWorkspaceTab(descriptor);
+		if (!tab) return null;
+		const tabs = state.view.wsTabs;
+		const existing = tabs.find((item) => item.id === tab.id);
+		// The native view of the tab that is on screen right now must disappear before another tab is rendered.
+		if (state.view.panelOpen && state.view.wsActive && state.view.wsActive !== tab.id) hideBrowserViews();
+		const patch = { panelOpen: true, wsActive: tab.id };
+		if (PANEL_TAB_TYPES.includes(tab.type)) patch.panelTab = tab.type;
+		if (!existing) patch.wsTabs = [...tabs, tab];
+		setView(patch);
+		return tab.id;
+	},
+
+	activateWorkspaceTab(id) {
+		const tab = state.view.wsTabs.find((item) => item.id === id);
+		if (!tab) return;
+		if (state.view.wsActive !== id) hideBrowserViews();
+		setView({ panelOpen: true, wsActive: id, ...(PANEL_TAB_TYPES.includes(tab.type) ? { panelTab: tab.type } : {}) });
+	},
+
+	closeWorkspaceTab(id) {
+		const tabs = state.view.wsTabs;
+		const index = tabs.findIndex((item) => item.id === id);
+		if (index < 0) return;
+		const closed = tabs[index];
+		const rest = tabs.filter((item) => item.id !== id);
+		// A view being closed, or hidden while the next tab is shown, must not survive the switch for a single frame.
+		if (state.view.wsActive === id) hideBrowserViews();
+		const patch = { wsTabs: rest, wsClosed: [...state.view.wsClosed.slice(-19), closed] };
+		if (closed.type === "browser") {
+			const desktop = window.myHarnessDesktop;
+			if (desktop?.browser) desktop.browser({ action: "close", tabId: closed.id }).catch(() => undefined);
+		}
+		if (state.view.wsActive === id) {
+			const next = rest[Math.min(index, rest.length - 1)];
+			patch.wsActive = next ? next.id : null;
+			if (next && PANEL_TAB_TYPES.includes(next.type)) patch.panelTab = next.type;
+		}
+		if (rest.length === 0) patch.panelOpen = false;
+		setView(patch);
+	},
+
+	closeOtherWorkspaceTabs(id) {
+		const keep = state.view.wsTabs.find((item) => item.id === id);
+		if (!keep) return;
+		const closed = state.view.wsTabs.filter((item) => item.id !== id);
+		if (state.view.wsActive !== keep.id) hideBrowserViews();
+		const desktop = window.myHarnessDesktop;
+		for (const item of closed) if (item.type === "browser" && desktop?.browser) desktop.browser({ action: "close", tabId: item.id }).catch(() => undefined);
+		setView({
+			wsTabs: [keep],
+			wsActive: keep.id,
+			wsClosed: [...state.view.wsClosed, ...closed].slice(-20),
+			...(PANEL_TAB_TYPES.includes(keep.type) ? { panelTab: keep.type } : {}),
+		});
+	},
+
+	/** The most recently closed tab comes back, with its file path or URL; nothing else is restored. */
+	reopenWorkspaceTab() {
+		const closed = state.view.wsClosed;
+		const last = closed[closed.length - 1];
+		if (!last) return;
+		setView({ wsClosed: closed.slice(0, -1) });
+		actions.openWorkspace(last);
+	},
+
+	moveWorkspaceTab(fromId, toId) {
+		const tabs = [...state.view.wsTabs];
+		const from = tabs.findIndex((item) => item.id === fromId);
+		const to = tabs.findIndex((item) => item.id === toId);
+		if (from < 0 || to < 0 || from === to) return;
+		const [moved] = tabs.splice(from, 1);
+		tabs.splice(to, 0, moved);
+		setView({ wsTabs: tabs });
+	},
+
+	/**
+	 * A browser tab keeps its stable id while its page navigates; the latest URL is what a restart restores and what
+	 * the tab strip names. Called only when the URL really changed, so ordinary loading-state events do not persist.
+	 */
+	updateWorkspaceTabUrl(id, url) {
+		if (!url) return;
+		const tabs = state.view.wsTabs;
+		const index = tabs.findIndex((item) => item.id === id);
+		if (index < 0 || tabs[index].type !== "browser" || tabs[index].url === url) return;
+		setView({ wsTabs: tabs.map((tab, position) => (position === index ? { ...tab, url } : tab)) });
 	},
 
 	insertIntoComposer(text, { replace = false } = {}) {

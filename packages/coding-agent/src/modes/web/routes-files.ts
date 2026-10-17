@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	closeSync,
+	createReadStream,
 	existsSync,
 	mkdirSync,
 	openSync,
@@ -82,6 +83,55 @@ const IMAGE_TYPES: Record<string, string> = {
 	".bmp": "image/bmp",
 	".ico": "image/x-icon",
 	".svg": "image/svg+xml",
+};
+
+/** Files the workspace viewer can play or page through with a native element (the browser owns the renderer). */
+const MEDIA_TYPES: Record<string, { mime: string; kind: "pdf" | "audio" | "video" }> = {
+	".pdf": { mime: "application/pdf", kind: "pdf" },
+	".mp3": { mime: "audio/mpeg", kind: "audio" },
+	".wav": { mime: "audio/wav", kind: "audio" },
+	".ogg": { mime: "audio/ogg", kind: "audio" },
+	".oga": { mime: "audio/ogg", kind: "audio" },
+	".m4a": { mime: "audio/mp4", kind: "audio" },
+	".flac": { mime: "audio/flac", kind: "audio" },
+	".aac": { mime: "audio/aac", kind: "audio" },
+	".mp4": { mime: "video/mp4", kind: "video" },
+	".m4v": { mime: "video/mp4", kind: "video" },
+	".webm": { mime: "video/webm", kind: "video" },
+	".ogv": { mime: "video/ogg", kind: "video" },
+	".mov": { mime: "video/quicktime", kind: "video" },
+};
+
+/**
+ * Office documents open read-only: the viewer neither parses nor converts them. MyHarness ships no Office engine and
+ * the desktop host may not have one installed, so the tab explains that and offers the system application / download
+ * instead of pretending to render the file.
+ */
+const OFFICE_EXTENSIONS = new Set([
+	".doc",
+	".docx",
+	".dot",
+	".dotx",
+	".xls",
+	".xlsx",
+	".xlsm",
+	".ppt",
+	".pptx",
+	".pps",
+	".ppsx",
+	".odt",
+	".ods",
+	".odp",
+]);
+
+/** Content type for the streaming raw route; unknown types are served as octet-stream (download). */
+const RAW_CONTENT_TYPES: Record<string, string> = {
+	...IMAGE_TYPES,
+	...Object.fromEntries(Object.entries(MEDIA_TYPES).map(([extension, value]) => [extension, value.mime])),
+	".txt": "text/plain; charset=utf-8",
+	".csv": "text/csv; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".md": "text/markdown; charset=utf-8",
 };
 
 const LANGUAGES: Record<string, string> = {
@@ -717,7 +767,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const stat = statSync(absolute);
 		if (!stat.isFile()) throw new HttpError(400, "Not a file");
 		const ext = path.extname(absolute).toLowerCase();
-		const base = { path: relPosix(cwd, absolute), size: stat.size, mtime: stat.mtimeMs };
+		const base = { path: relPosix(cwd, absolute), absolutePath: absolute, size: stat.size, mtime: stat.mtimeMs };
 		const imageType = IMAGE_TYPES[ext];
 		if (imageType && ext !== ".svg") {
 			if (stat.size > MAX_IMAGE_BYTES) return { ...base, kind: "large" as const };
@@ -727,6 +777,18 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				mimeType: imageType,
 				data: readFileSync(absolute).toString("base64"),
 			};
+		}
+		const media = MEDIA_TYPES[ext];
+		if (media) {
+			return {
+				...base,
+				kind: media.kind,
+				mimeType: media.mime,
+				rawUrl: `/api/files/raw?path=${encodeURIComponent(relPosix(cwd, absolute))}`,
+			};
+		}
+		if (OFFICE_EXTENSIONS.has(ext)) {
+			return { ...base, kind: "office" as const, mimeType: RAW_CONTENT_TYPES[ext] ?? "application/octet-stream" };
 		}
 		if (stat.size > MAX_TEXT_BYTES) {
 			const head = readFileSync(absolute).subarray(0, MAX_TEXT_BYTES);
@@ -748,6 +810,94 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			truncated: false,
 			language: LANGUAGES[ext] ?? null,
 		};
+	});
+
+	// Raw bytes for the viewers that need a real element (PDF pages, audio, video, large images).
+	// Range requests are answered so media can seek; everything is read-only and confined to the workspace.
+	server.route("GET", "/api/files/raw", ({ url, req, res }) => {
+		const cwd = root();
+		const rel = url.searchParams.get("path");
+		if (!rel) throw new HttpError(400, "Missing path");
+		const absolute = resolveInside(cwd, rel);
+		if (!existsSync(absolute)) throw new HttpError(404, "File not found");
+		const stat = statSync(absolute);
+		if (!stat.isFile()) throw new HttpError(400, "Not a file");
+		const type = RAW_CONTENT_TYPES[path.extname(absolute).toLowerCase()] ?? "application/octet-stream";
+		const download = url.searchParams.get("download") === "1";
+		const headers: Record<string, string | number> = {
+			"content-type": type,
+			"accept-ranges": "bytes",
+			"cache-control": "no-cache",
+			"x-content-type-options": "nosniff",
+			"content-disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(path.basename(absolute))}`,
+		};
+		const range = req.headers.range;
+		const parsed = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+		if (parsed && (parsed[1] !== "" || parsed[2] !== "")) {
+			const start = parsed[1] === "" ? Math.max(0, stat.size - Number(parsed[2])) : Number(parsed[1]);
+			const end =
+				parsed[1] === ""
+					? stat.size - 1
+					: parsed[2] === ""
+						? stat.size - 1
+						: Math.min(Number(parsed[2]), stat.size - 1);
+			if (start > end || start >= stat.size) {
+				res.writeHead(416, { "content-range": `bytes */${stat.size}` });
+				res.end();
+				return;
+			}
+			res.writeHead(206, {
+				...headers,
+				"content-range": `bytes ${start}-${end}/${stat.size}`,
+				"content-length": end - start + 1,
+			});
+			if (req.method === "HEAD") return res.end();
+			createReadStream(absolute, { start, end })
+				.on("error", () => res.destroy())
+				.pipe(res);
+			return;
+		}
+		res.writeHead(200, { ...headers, "content-length": stat.size });
+		if (req.method === "HEAD") return res.end();
+		createReadStream(absolute)
+			.on("error", () => res.destroy())
+			.pipe(res);
+	});
+
+	// Plain-text save for the code/text editor. The byte-for-byte baseline makes a concurrent Agent, editor or Git write
+	// a conflict instead of being overwritten; a failed check writes nothing.
+	server.route("POST", "/api/files/text", ({ body }) => {
+		const payload = (body ?? {}) as { path?: unknown; original?: unknown; content?: unknown };
+		if (
+			typeof payload.path !== "string" ||
+			typeof payload.original !== "string" ||
+			typeof payload.content !== "string"
+		)
+			throw new HttpError(400, "Invalid text save request");
+		const cwd = root();
+		const absolute = resolveInside(cwd, payload.path);
+		if (!existsSync(absolute) || !statSync(absolute).isFile()) throw new HttpError(404, "File not found");
+		if (
+			MEDIA_TYPES[path.extname(absolute).toLowerCase()] ||
+			OFFICE_EXTENSIONS.has(path.extname(absolute).toLowerCase())
+		)
+			throw new HttpError(400, "Binary files cannot be edited as text");
+		const bytes = readFileSync(absolute);
+		if (bytes.length > MAX_TEXT_BYTES) throw new HttpError(413, "File is too large to edit");
+		if (looksBinary(bytes)) throw new HttpError(400, "File cannot be edited as text");
+		const raw = bytes.toString("utf8");
+		if (!Buffer.from(raw, "utf8").equals(bytes)) throw new HttpError(400, "Only UTF-8 text can be edited");
+		const bom = raw.startsWith("\uFEFF");
+		const original = bom ? raw.slice(1) : raw;
+		if (original !== payload.original) throw new HttpError(409, "File changed on disk. Reopen it before saving.");
+		if (Buffer.byteLength(payload.content, "utf8") > MAX_TEXT_BYTES) throw new HttpError(413, "Text is too large");
+		try {
+			writeFileSync(absolute, `${bom ? "\uFEFF" : ""}${payload.content}`, "utf8");
+		} catch (error) {
+			throw new HttpError(403, `Cannot write the file: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const written = statSync(absolute);
+		return { path: relPosix(cwd, absolute), size: written.size, mtime: written.mtimeMs, content: payload.content };
 	});
 
 	// Only Markdown gets an editor; compare the complete source before writing so Agent/external edits are not lost.

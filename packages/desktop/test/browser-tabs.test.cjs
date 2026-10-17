@@ -1,0 +1,334 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const Module = require('node:module');
+
+/** Load browser-view.cjs with a small Electron stand-in: real views cannot be created outside Electron. */
+function loadBrowser() {
+  const file = path.join(__dirname, '../browser-view.cjs');
+  const events = [];
+  const contents = [];
+  const webRequest = { onCompleted: (handler) => { webRequest.completed = handler; }, onErrorOccurred: (handler) => { webRequest.failed = handler; } };
+  const makeContents = (id) => {
+    const handlers = new Map();
+    const webContents = {
+      id,
+      url: '',
+      on(event, handler) { handlers.set(event, handler); return this; },
+      setWindowOpenHandler(handler) { this.openHandler = handler; },
+      async loadURL(url) { this.url = url; webContents.loaded.push(url); },
+      downloadURL(url) { webContents.downloaded.push(url); },
+      executeJavaScript: async (code) => { webContents.executed.push(code); return { ok: true, code }; },
+      capturePage: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('png'), toJPEG: () => Buffer.from('jpg') }),
+      navigationHistory: { canGoBack: () => true, canGoForward: () => false, goBack() {}, goForward() {} },
+      isDestroyed: () => false,
+      isLoading: () => false,
+      getURL() { return this.url; },
+      reload() {}, stop() {},
+      debugger: { isAttached: () => false, attach() {}, detach() {}, sendCommand: async () => ({ nodes: [] }) },
+      close() { webContents.closed = true; },
+      handlers,
+    };
+    webContents.loaded = [];
+    webContents.executed = [];
+    webContents.downloaded = [];
+    contents.push(webContents);
+    return webContents;
+  };
+  let nextId = 1;
+  const downloadHandlers = {};
+  const permission = {};
+  const desktopSession = {
+    setPermissionRequestHandler(handler) { permission.request = handler; },
+    setPermissionCheckHandler(handler) { permission.check = handler; },
+    on(event, handler) { downloadHandlers[event] = handler; },
+    webRequest,
+  };
+  const electron = {
+    WebContentsView: class {
+      constructor() { this.webContents = makeContents(nextId++); this.visible = false; this.bounds = null; }
+      setVisible(value) { this.visible = value; this.visibleCalls = (this.visibleCalls || 0) + 1; }
+      getVisible() { return this.visible; }
+      setBounds(bounds) { this.bounds = bounds; }
+    },
+    session: { fromPartition: () => desktopSession },
+    Menu: { buildFromTemplate: () => ({ popup() {} }) },
+    shell: { openExternal: async () => undefined },
+    app: { getPath: () => os.tmpdir() },
+  };
+  const module = new Module(file);
+  const original = module.require;
+  module.require = (name) => (name === 'electron' ? electron : original.call(module, name));
+  module._compile(fs.readFileSync(file, 'utf8'), file);
+  const window = {
+    isDestroyed: () => false,
+    webContents: { send: (channel, value) => events.push({ channel, value }) },
+    contentView: { children: 0, addChildView() { this.children += 1; }, removeChildView() { this.children -= 1; } },
+    size: [1200, 800],
+    getContentSize() { return this.size; },
+  };
+  const browser = module.exports.createBrowser(window, () => {});
+  return { browser, events, contents, webRequest, window, download: downloadHandlers['will-download'], permission };
+}
+
+/** A download item shaped like Electron's DownloadItem, recording cancellation and listeners. */
+function makeDownload() {
+  const handlers = new Map();
+  const item = {
+    filename: 'report.csv',
+    url: 'https://example.com/report.csv',
+    savePath: '',
+    total: 2048,
+    received: 0,
+    cancelled: false,
+    on(event, handler) { handlers.set(event, handler); },
+    once(event, handler) { handlers.set(event, handler); },
+    getFilename() { return item.filename; },
+    getURL() { return item.url; },
+    setSavePath(value) { item.savePath = value; },
+    getSavePath() { return item.savePath; },
+    getTotalBytes() { return item.total; },
+    getReceivedBytes() { return item.received; },
+    cancel() { item.cancelled = true; },
+    handlers,
+  };
+  return item;
+}
+
+test('browser tabs open, activate, report state and close independently', async () => {
+  const { browser, events } = loadBrowser();
+  const first = await browser.command({ action: 'open', url: 'https://example.com/a' });
+  assert.equal(first.url, 'https://example.com/a');
+  assert.equal(first.tabId.startsWith('tab'), true);
+  const second = await browser.command({ action: 'open', url: 'https://example.com/b' });
+  assert.notEqual(second.tabId, first.tabId);
+  const list = await browser.command({ action: 'list' });
+  assert.equal(list.length, 2);
+  const activated = await browser.command({ action: 'activate', tabId: first.tabId, rect: { x: 10, y: 20, width: 400, height: 500 } });
+  assert.equal(activated.tabId, first.tabId);
+  assert.equal(activated.canGoBack, true);
+  assert.equal(activated.canGoForward, false);
+  await browser.command({ action: 'close', tabId: second.tabId });
+  assert.equal((await browser.command({ action: 'list' })).length, 1);
+  assert.equal(events.some((event) => event.value?.type === 'closed'), true);
+  browser.destroy();
+  assert.equal(browser.tabs.length, 0);
+});
+
+test('page commands run against the addressed tab and reject unknown actions or unsafe URLs', async () => {
+  const { browser } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/' });
+  const exec = await browser.command({ action: 'exec', tabId: tab.tabId, code: '1 + 1' });
+  assert.equal(exec.result.ok, true);
+  assert.equal(exec.result.code, '1 + 1');
+  const clicked = await browser.command({ action: 'click', tabId: tab.tabId, selector: '#submit' });
+  assert.equal(clicked.ok, true);
+  await assert.rejects(() => browser.command({ action: 'open', url: 'file:///C:/Windows' }), /http/);
+  await assert.rejects(() => browser.command({ action: 'nope' }), /未知的浏览器命令/);
+  await assert.rejects(() => browser.command({ action: 'snapshot', tabId: 'missing' }), /没有浏览器标签/);
+  browser.destroy();
+});
+
+test('the page owns the tab id: ensure creates it once, keeps its page and does not reload on re-activation', async () => {
+  const { browser, contents } = loadBrowser();
+  const id = 'browser:https://example.com/dashboard';
+  const created = await browser.command({ action: 'ensure', tabId: id, url: 'https://example.com/dashboard' });
+  assert.equal(created.tabId, id);
+  assert.equal(created.created, true);
+  // The first navigation is asynchronous; wait for the load to be recorded.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const loadedOnce = contents[0].loaded.length;
+  const again = await browser.command({ action: 'ensure', tabId: id, url: 'https://example.com/dashboard' });
+  assert.equal(again.created, undefined);
+  assert.equal(contents.length, 1, 'a second ensure must not create another view');
+  assert.equal(contents[0].loaded.length, loadedOnce, 'a second ensure must not navigate again');
+  const opened = await browser.command({ action: 'open', tabId: id });
+  assert.equal(opened.tabId, id);
+  assert.equal(contents.length, 1);
+  browser.destroy();
+});
+
+test('click and type address elements by interactive index as well as by selector', async () => {
+  const { browser, contents } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/form' });
+  await browser.command({ action: 'click', tabId: tab.tabId, index: 2 });
+  await browser.command({ action: 'type', tabId: tab.tabId, index: 1, text: 'hello' });
+  const codes = contents[0].executed || [];
+  assert.equal(codes.some((code) => /querySelectorAll\([^)]*\)\[2\]/.test(code)), true);
+  assert.equal(codes.some((code) => /querySelectorAll\([^)]*\)\[1\]/.test(code) && /hello/.test(code)), true);
+  await assert.rejects(() => browser.command({ action: 'click', tabId: tab.tabId }), /selector 或 index/);
+  browser.destroy();
+});
+
+test('downloads and request metadata are listed per tab and stay bounded', async () => {
+  const { browser, webRequest } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/' });
+  const contentsId = browser.tabs[0].view.webContents.id;
+  webRequest.completed({ webContentsId: contentsId, method: 'GET', url: 'https://example.com/app.js', statusCode: 200, resourceType: 'script' });
+  webRequest.failed({ webContentsId: contentsId, method: 'GET', url: 'https://example.com/missing', error: 'net::ERR_FAILED', resourceType: 'xhr' });
+  const network = await browser.command({ action: 'network', tabId: tab.tabId });
+  assert.equal(network.requests.length, 2);
+  assert.equal(network.requests[0].status, 200);
+  assert.equal(network.requests[1].error, 'net::ERR_FAILED');
+  assert.equal((await browser.command({ action: 'downloads' })).downloads.length, 0);
+  browser.destroy();
+});
+
+test('a hidden tab reporting its old box never steals the active tab or hides it', async () => {
+  const { browser } = loadBrowser();
+  const first = await browser.command({ action: 'open', url: 'https://example.com/a', rect: { x: 0, y: 0, width: 300, height: 200 } });
+  const second = await browser.command({ action: 'open', url: 'https://example.com/b', rect: { x: 0, y: 0, width: 300, height: 200 } });
+  assert.equal(browser.tabs.find((tab) => tab.id === second.tabId).view.getVisible(), true);
+  await browser.command({ action: 'bounds', tabId: first.tabId, rect: { x: 5, y: 5, width: 100, height: 100 } });
+  assert.equal(browser.tabs.find((tab) => tab.id === first.tabId).view.getVisible(), false);
+  assert.equal(browser.tabs.find((tab) => tab.id === second.tabId).view.getVisible(), true);
+  browser.destroy();
+});
+
+test('site permissions are asked, remembered for the session, denied by default and revocable', async () => {
+  const { browser, contents, events, permission } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 0, width: 300, height: 200 } });
+  const contents0 = contents[0];
+  let answer;
+  permission.request(contents0, 'notifications', (value) => { answer = value; }, { requestingUrl: 'https://example.com/' });
+  assert.equal(answer, undefined, 'nothing is granted before the user answers');
+  const ask = events.find((event) => event.value?.type === 'permission-request');
+  assert.ok(ask, 'the request is reported to the workspace');
+  assert.equal(ask.value.tabId, tab.tabId);
+  assert.equal(ask.value.permission, 'notifications');
+  assert.equal(ask.value.origin, 'https://example.com');
+  assert.equal(permission.check(contents0, 'notifications', 'https://example.com/'), false, 'an undecided check is denied');
+
+  const allowed = await browser.command({ action: 'permission', requestId: ask.value.requestId, allow: true });
+  assert.equal(allowed.allowed, true);
+  assert.equal(answer, true, 'the pending page callback receives the decision');
+  assert.equal(permission.check(contents0, 'notifications', 'https://example.com/'), true);
+  const list = await browser.command({ action: 'permissions', origin: 'https://example.com' });
+  assert.deepEqual(list.permissions, [{ origin: 'https://example.com', permission: 'notifications', allowed: true }]);
+
+  let remembered;
+  permission.request(contents0, 'notifications', (value) => { remembered = value; }, { requestingUrl: 'https://example.com/settings' });
+  assert.equal(remembered, true, 'a remembered allow is applied without another prompt');
+
+  await browser.command({ action: 'revokePermission', origin: 'https://example.com', permissions: ['notifications'] });
+  assert.equal(permission.check(contents0, 'notifications', 'https://example.com/'), false, 'revoking clears the decision');
+  let again;
+  permission.request(contents0, 'notifications', (value) => { again = value; }, { requestingUrl: 'https://example.com/' });
+  assert.equal(again, undefined, 'after revoking, the next request asks again');
+
+  let pendingDeny;
+  permission.request(contents0, 'clipboard-read', (value) => { pendingDeny = value; }, { requestingUrl: 'https://example.com/' });
+  await browser.command({ action: 'close', tabId: tab.tabId });
+  assert.equal(pendingDeny, false, 'closing the tab denies a request that is still pending');
+  await assert.rejects(() => browser.command({ action: 'permission', requestId: 'missing', allow: true }), /没有待处理的网站权限请求/);
+  browser.destroy();
+});
+
+test('permission wiring asks the workspace, defaults to denial and enforces the sandbox', async () => {
+  const file = path.join(__dirname, '../browser-view.cjs');
+  const source = fs.readFileSync(file, 'utf8');
+  assert.match(source, /setPermissionRequestHandler/);
+  assert.match(source, /type: 'permission-request'/);
+  assert.match(source, /PERMISSION_TIMEOUT_MS/);
+  assert.match(source, /revokePermission/);
+  assert.match(source, /callback\(false\)/);
+  assert.match(source, /persist:myharness-third-party/);
+  assert.match(source, /contextIsolation: true, nodeIntegration: false, sandbox: true/);
+});
+
+test('activating without fresh bounds hides every view and never reuses an old rectangle', async () => {
+  const { browser } = loadBrowser();
+  const first = await browser.command({ action: 'open', url: 'https://example.com/a', rect: { x: 10, y: 20, width: 400, height: 500 } });
+  assert.equal(browser.tabs[0].view.getVisible(), true);
+  assert.deepEqual(browser.tabs[0].view.bounds, { x: 10, y: 20, width: 400, height: 500 });
+  // Switching back to the same tab must not show it at the previous rectangle: only a fresh bounds after activation may.
+  const second = await browser.command({ action: 'activate', tabId: first.tabId });
+  assert.equal(second.visible, false);
+  assert.equal(browser.tabs[0].view.getVisible(), false);
+  await browser.command({ action: 'bounds', tabId: first.tabId, rect: { x: 50, y: 60, width: 300, height: 400 } });
+  assert.equal(browser.tabs[0].view.getVisible(), true);
+  assert.deepEqual(browser.tabs[0].view.bounds, { x: 50, y: 60, width: 300, height: 400 });
+  // A null rectangle (tab scrolled away, panel closing) hides immediately and forgets the box.
+  await browser.command({ action: 'bounds', tabId: first.tabId, rect: null });
+  assert.equal(browser.tabs[0].view.getVisible(), false);
+  assert.equal(browser.rectangle, null);
+  await browser.command({ action: 'hide' });
+  assert.equal(browser.tabs[0].view.getVisible(), false);
+  browser.destroy();
+});
+
+test('only the active browser tab is visible; closing it does not promote another view to the old box', async () => {
+  const { browser } = loadBrowser();
+  const first = await browser.command({ action: 'open', url: 'https://example.com/a', rect: { x: 1, y: 2, width: 300, height: 200 } });
+  const second = await browser.command({ action: 'open', url: 'https://example.com/b', rect: { x: 1, y: 2, width: 300, height: 200 } });
+  const views = () => browser.tabs.map((tab) => ({ id: tab.id, visible: tab.view.getVisible() }));
+  assert.deepEqual(views().filter((tab) => tab.visible).map((tab) => tab.id), [second.tabId]);
+  await browser.command({ action: 'close', tabId: second.tabId });
+  assert.equal(browser.tabs.length, 1);
+  assert.equal(browser.tabs[0].view.getVisible(), false, 'closing the active tab must not show the remaining view');
+  assert.equal(browser.rectangle, null);
+  assert.ok(first.tabId);
+  browser.destroy();
+});
+
+test('closing a tab cancels its downloads, clears its timers and stops its screenshot interval', async () => {
+  const { browser, contents, download } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 0, width: 300, height: 200 } });
+  const live = browser.tabs[0];
+  contents[0].handlers.get('did-start-loading')();
+  assert.ok(live.timer, 'a load must schedule its timeout');
+  assert.ok(live.pictures, 'a visible tab takes the fallback screenshot periodically');
+  const item = makeDownload();
+  download({}, item, contents[0]);
+  assert.equal(item.cancelled, false);
+  browser.command({ action: 'close', tabId: tab.tabId });
+  assert.equal(item.cancelled, true, 'closing the tab must cancel a download that belongs to it');
+  assert.equal(live.destroyed, true);
+  assert.equal(live.timers.size, 0);
+  assert.equal(live.pictures, undefined);
+  assert.equal(live.downloads.size, 0);
+  assert.equal(contents[0].closed, true);
+  assert.equal(browser.tabs.length, 0);
+  browser.destroy();
+});
+
+test('downloads report progress, can be cancelled by id and retried after they finish', async () => {
+  const { browser, contents, events, download } = loadBrowser();
+  await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 0, width: 300, height: 200 } });
+  const item = makeDownload();
+  download({}, item, contents[0]);
+  assert.equal(item.savePath.startsWith(os.tmpdir()), true, 'the file is saved to the downloads folder');
+  const started = events.find((event) => event.value?.type === 'download' && event.value.state === 'started');
+  assert.ok(started);
+  const id = started.value.id;
+  await browser.command({ action: 'download-cancel', id });
+  assert.equal(item.cancelled, true);
+  item.handlers.get('done')({}, 'cancelled');
+  const listed = await browser.command({ action: 'downloads' });
+  assert.equal(listed.downloads.length, 1);
+  assert.equal(listed.downloads[0].state, 'cancelled');
+  const retried = await browser.command({ action: 'download-retry', id });
+  assert.equal(retried.ok, true);
+  assert.deepEqual(contents[0].downloaded, [item.url]);
+  await assert.rejects(() => browser.command({ action: 'download-cancel', id: 'missing' }), /没有正在进行的下载/);
+  browser.destroy();
+});
+
+test('window resize re-clamps the native view and a zero-sized window hides it', async () => {
+  const { browser, window } = loadBrowser();
+  await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 1000, y: 700, width: 400, height: 300 } });
+  const view = browser.tabs[0].view;
+  assert.deepEqual(view.bounds, { x: 1000, y: 700, width: 200, height: 100 });
+  window.size = [800, 600];
+  browser.refresh();
+  // The page's rectangle is still the old one; the host clamps it into the new content area instead of drawing outside.
+  assert.deepEqual(view.bounds, { x: 799, y: 599, width: 1, height: 1 });
+  assert.equal(view.getVisible(), true);
+  window.size = [0, 0];
+  browser.refresh();
+  assert.equal(view.getVisible(), false);
+  browser.destroy();
+});
+
