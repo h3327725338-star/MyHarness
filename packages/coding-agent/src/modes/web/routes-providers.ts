@@ -160,8 +160,35 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		host.broadcast("models_changed", {});
 	};
 
+	/**
+	 * Saves the key typed in the provider form. That form has one key field, so saving a key under the label the provider
+	 * already has means "this is its key now": the stored entry is updated instead of adding a second one, which the
+	 * credential store refuses as a duplicate label. Only a save that really added a key may be rolled back afterwards.
+	 */
+	const saveFormProviderKey = async (
+		providerId: string,
+		label: string,
+		key: string,
+	): Promise<{ id: string; created: boolean }> => {
+		const overview = await runtime()
+			.getProviderCredentialOverview(providerId)
+			.catch(() => undefined);
+		const existing = overview?.apiKeys.find(
+			(candidate) => candidate.label.localeCompare(label, undefined, { sensitivity: "accent" }) === 0,
+		);
+		if (existing) {
+			await runtime().replaceProviderApiKey(providerId, existing.id, createInteraction(key));
+			return { id: existing.id, created: false };
+		}
+		return { id: (await runtime().addProviderApiKey(providerId, label, createInteraction(key))).id, created: true };
+	};
+
 	server.route("GET", "/api/providers", async () => {
 		const rt = runtime();
+		// Every session has its own runtime and each keeps the credentials it read from auth.json in memory. A key saved
+		// by another session (this list is read from the first one) is on disk but not in this copy: read the file again,
+		// so what the page shows and the missing-API-key check that draws it agree with what is really stored.
+		rt.reloadCredentials();
 		const disabled = new Set(host.session.settingsManager.getDisabledProviders());
 		const configEntries = new Map(
 			(
@@ -174,6 +201,11 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		for (const provider of rt.getProviders()) {
 			const overview = await rt.getProviderCredentialOverview(provider.id).catch(() => undefined);
 			const status = rt.getProviderAuthStatus(provider.id);
+			// A credential that is stored counts as configured even when this runtime's model snapshot predates it. This is
+			// the same rule getProviderAuthStatus applies for its "stored" source, which it can only see after a refresh.
+			const storedCredential =
+				!!overview && (overview.apiKeys.length > 0 || overview.hasOAuth || overview.runtimeOverride === true);
+			const configured = status.configured || storedCredential;
 			// A models.json provider saved without a Base URL is unfinished: it is off until the address is filled in.
 			const missingBaseUrl = modelsJsonProviderLacksBaseUrl(configEntries.get(provider.id));
 			providers.push({
@@ -182,8 +214,8 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 				baseUrl: provider.baseUrl ?? null,
 				enabled: !disabled.has(provider.id) && !missingBaseUrl,
 				missingBaseUrl,
-				configured: status.configured,
-				authSource: status.configured ? (status.source ?? null) : null,
+				configured,
+				authSource: status.configured ? (status.source ?? null) : storedCredential ? "stored" : null,
 				supportsApiKeyLogin: typeof provider.auth.apiKey?.login === "function",
 				supportsOAuth: provider.auth.oauth !== undefined,
 				/** Defined in models.json: edited, renamed and deleted from its card. */
@@ -476,12 +508,16 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 		if (!config || typeof config !== "object" || Array.isArray(config))
 			throw new HttpError(400, "config must be an object");
 		// An API key typed in the form goes to the credential store (like the TUI does), not into models.json.
-		const newKey = typeof payload.apiKey === "string" && payload.apiKey.trim() ? payload.apiKey.trim() : undefined;
+		const typedKey = typeof payload.apiKey === "string" ? payload.apiKey : undefined;
+		// A field holding only spaces is a mistake, not "no key": say so instead of saving without one.
+		if (typedKey !== undefined && typedKey !== "" && !typedKey.trim())
+			throw new HttpError(400, "The API key is empty. Type the key, or leave the field empty to save without one.");
+		const newKey = typedKey?.trim() || undefined;
 		const keyLabel =
 			typeof payload.keyLabel === "string" && payload.keyLabel.trim() ? payload.keyLabel.trim() : "Default key";
 		const custom = manager();
 		const snapshot = await custom.snapshot().catch(() => undefined);
-		let savedKeyId: string | undefined;
+		let savedKey: { id: string; created: boolean } | undefined;
 		// The entry as it was stored before this save: what is no longer in the new model list was deleted here.
 		const referenceProvider = previousId ?? id;
 		const stored = await custom.get(referenceProvider).catch(() => undefined);
@@ -495,12 +531,13 @@ export function registerProviderRoutes(server: WebHttpServer, host: WebHost, hub
 			await runtime().reloadConfig();
 			const configError = runtime().getError();
 			if (configError) throw new Error(configError);
-			if (newKey) savedKeyId = (await runtime().addProviderApiKey(id, keyLabel, createInteraction(newKey))).id;
+			if (newKey) savedKey = await saveFormProviderKey(id, keyLabel, newKey);
 			await host.session.reconcileModelAfterConfigChange();
 		} catch (error) {
-			if (savedKeyId) {
+			// Only a key this save added is removed again; a replaced one keeps the value it was just given.
+			if (savedKey?.created) {
 				await runtime()
-					.deleteProviderApiKey(id, savedKeyId)
+					.deleteProviderApiKey(id, savedKey.id)
 					.catch(() => {});
 			}
 			if (snapshot) await custom.restore(snapshot).catch(() => {});

@@ -845,6 +845,47 @@ describe("CustomProviderManager", () => {
 		]);
 	});
 
+	it("shows a key another session's runtime saved only after this runtime reads the credentials again", async () => {
+		const modelsPath = await createTemporaryModelsPath();
+		const authPath = `${modelsPath}.auth`;
+		await writeFile(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					plus: {
+						name: "plus",
+						baseUrl: "https://example.com/v1",
+						api: "openai-completions",
+						authMode: "apiKey",
+						models: [{ id: "plus-model" }],
+					},
+				},
+			}),
+			"utf8",
+		);
+		// One runtime per session, both reading the same models.json and auth.json.
+		const saving = await ModelRuntime.create({ authPath, modelsPath, allowModelNetwork: false });
+		const other = await ModelRuntime.create({ authPath, modelsPath, allowModelNetwork: false });
+		expect(other.getProviderAuthStatus("plus")).toEqual({ configured: false });
+
+		await saving.addProviderApiKey(
+			"plus",
+			"Default key",
+			{ prompt: async () => "placeholder-key", notify: () => {} },
+			"main",
+		);
+		expect(saving.getProviderAuthStatus("plus")).toMatchObject({ configured: true, source: "stored" });
+		// This runtime keeps the credentials it read when it started, so it cannot see that key yet...
+		expect((await other.getProviderCredentialOverview("plus")).apiKeys).toEqual([]);
+		expect(other.getProviderAuthStatus("plus")).toEqual({ configured: false });
+
+		// ...until it reads auth.json again, which is what the hub now does for every other session.
+		other.reloadCredentials();
+		await other.reloadConfig();
+		expect((await other.getProviderCredentialOverview("plus")).apiKeys).toMatchObject([{ label: "Default key" }]);
+		expect(other.getProviderAuthStatus("plus")).toMatchObject({ configured: true, source: "stored" });
+	});
+
 	it("deletes only the credentials belonging to a removed provider", async () => {
 		const modelsPath = await createTemporaryModelsPath();
 		const authPath = `${modelsPath}.auth`;

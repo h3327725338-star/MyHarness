@@ -45,6 +45,8 @@ interface Fixture {
 	port: number;
 	project: string;
 	events: Array<{ event: string; data: any }>;
+	/** The credential store behind the runtime, to stand in for what another session's runtime saved. */
+	authStorage: AuthStorage;
 	get(path: string, slot?: string): Promise<any>;
 	post(path: string, body?: unknown, slot?: string): Promise<any>;
 	waitFor(event: string, predicate?: (data: any) => boolean, timeoutMs?: number): Promise<any>;
@@ -560,6 +562,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 			project,
 			events,
 			faux,
+			authStorage,
 			get: (path, slot) => call("GET", path, undefined, slot),
 			post: (path, body, slot) => call("POST", path, body ?? {}, slot),
 			waitFor: (event, predicate = () => true, timeoutMs = 15_000) =>
@@ -1549,6 +1552,59 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.post("/api/providers/custom/delete", { id: "form-provider" })).rejects.toThrow(
 			/No such provider/,
 		);
+	});
+
+	it("keeps a key typed in the provider form, reports the provider as configured and takes the same key again", async () => {
+		const fx = await start();
+		const config = {
+			name: "plus",
+			baseUrl: "https://api.sudocode.chat/v1",
+			api: "openai-completions",
+			authMode: "apiKey",
+			models: [{ id: "gpt-5.6-luna", input: ["text"], contextWindow: 256000, maxTokens: 128000 }],
+		};
+		const listed = async () =>
+			(await fx.get("/api/providers")).providers.find((provider: any) => provider.id === "plus");
+
+		expect(
+			await fx.post("/api/providers/custom/save", { id: "plus", config, apiKey: "sk-plus-placeholder" }),
+		).toMatchObject({ ok: true, missingBaseUrl: false });
+		const afterFirst = await listed();
+		// The missing-API-key check and the key summary read the same stored key, so the provider is ready at once.
+		expect(afterFirst).toMatchObject({ configured: true, enabled: true, authSource: "stored" });
+		expect(afterFirst.credentials.apiKeys).toMatchObject([{ label: "Default key", active: true, suffix: "lder" }]);
+		// The key itself never leaves the server.
+		expect(JSON.stringify(afterFirst)).not.toContain("sk-plus-placeholder");
+
+		// A key saved by another session's runtime is on disk but not in this runtime's snapshot: still reported as
+		// configured, without waiting for a refresh.
+		await fx.post("/api/providers/custom/save", {
+			id: "second",
+			config: { ...config, name: "second" },
+		});
+		await fx.authStorage.addApiKey("second", "Default key", { type: "api_key", key: "sk-second-placeholder" });
+		expect(
+			(await fx.get("/api/providers")).providers.find((provider: any) => provider.id === "second"),
+		).toMatchObject({ configured: true, authSource: "stored", credentials: { apiKeys: [{ label: "Default key" }] } });
+
+		// Saving the same key again updates the stored one instead of failing as a duplicate.
+		await fx.post("/api/providers/custom/save", {
+			id: "plus",
+			previousId: "plus",
+			config,
+			apiKey: "sk-plus-placeholder",
+		});
+		const afterSecond = await listed();
+		expect(afterSecond.credentials.apiKeys).toMatchObject([{ label: "Default key", active: true }]);
+
+		// A field holding only spaces is refused instead of quietly saving the provider without a key.
+		await expect(
+			fx.post("/api/providers/custom/save", { id: "blank", config: { ...config, name: "blank" }, apiKey: "   " }),
+		).rejects.toThrow(/API key is empty/);
+		expect((await fx.get("/api/providers/custom")).providers.map((provider: any) => provider.id)).toEqual([
+			"plus",
+			"second",
+		]);
 	});
 
 	it("announces a background slot only after its deleted model has been reconciled", async () => {

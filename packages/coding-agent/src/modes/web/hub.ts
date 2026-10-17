@@ -205,6 +205,9 @@ export class WebHostHub implements WebHostHubLink {
 			other.refreshConversationNaming();
 			if (event !== "models_changed") return;
 			// Providers added, edited or deleted elsewhere must reach this runtime too (each has its own ModelRuntime).
+			// Credentials go first: a key or login saved in the other session lives in auth.json, and the reload below is
+			// what lets this runtime's snapshot pick it up.
+			other.session.modelRuntime.reloadCredentials();
 			await other.session.modelRuntime.reloadConfig();
 			await other.session.reconcileModelAfterConfigChange();
 			if (!this.slots.has(other.slotId)) return;
