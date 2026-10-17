@@ -10,6 +10,7 @@ import {
 } from "../../agent/runtime/conversation-title.ts";
 import { WorkspaceSessionUseCase } from "../../application/use-cases/workspace-session.ts";
 import { getDataDir, getWorkspacesDir } from "../../config/paths/index.ts";
+import { listWorkspaceSources, uploadWorkspaceSource } from "../../data/workspace-sources.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
@@ -212,6 +213,54 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
+	const generalWorkspace = (id: unknown) => {
+		const workspace = host.workspaceStore.getById(asString(id, "id"), "general");
+		if (!workspace) throw new HttpError(404, "Unknown workspace");
+		return workspace;
+	};
+	server.route("GET", "/api/workspaces/settings", ({ url }) => {
+		const workspace = generalWorkspace(url.searchParams.get("id"));
+		return {
+			workspace,
+			sources: listWorkspaceSources(host.workspaceStore.getDataRoot() ?? getDataDir(), workspace.workspaceId),
+		};
+	});
+	server.route("POST", "/api/workspaces/settings", ({ body }) => {
+		const input = asObject(body);
+		const workspace = generalWorkspace(input.id);
+		if (
+			typeof input.instructions !== "string" ||
+			typeof input.memoryEnabled !== "boolean" ||
+			typeof input.libraryEnabled !== "boolean"
+		)
+			throw new HttpError(400, "Invalid workspace settings");
+		if (
+			!host.workspaceStore.updateGeneralSettings(workspace.workspaceId, {
+				name: asString(input.name, "name"),
+				instructions: input.instructions,
+				memoryEnabled: input.memoryEnabled,
+				libraryEnabled: input.libraryEnabled,
+			})
+		)
+			throw new HttpError(500, "Could not save workspace settings");
+		host.broadcast("workspaces_changed", {});
+		return { ok: true };
+	});
+	server.route("POST", "/api/workspaces/sources/upload", ({ body }) => {
+		const input = asObject(body);
+		const workspace = generalWorkspace(input.id);
+		try {
+			return uploadWorkspaceSource(
+				host.workspaceStore.getDataRoot() ?? getDataDir(),
+				workspace.workspaceId,
+				asString(input.name, "name"),
+				asString(input.data, "data"),
+			);
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : "Upload failed");
+		}
+	});
+
 	const isArchivedSession = (info: SessionInfo): boolean =>
 		getIndexedSessionMarkers(info.path)?.archived ?? existsSync(`${info.path}.archived`);
 
@@ -284,57 +333,14 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
-	/**
-	 * Where a General quick-created Workspace lands: the parent folder of the reference Workspace. The reference is
-	 * the current Workspace when it belongs to the requested mode, otherwise the first Workspace of that mode. It is
-	 * the "default Workspace's parent" the sidebar's quick-create dialog shows: the new folder becomes a sibling of
-	 * the existing Workspaces, never a child of the agent config dir or a random drive root. With no Workspace at
-	 * all, the Desktop (then Documents, then home) is the base, so quick-create always has somewhere to go.
-	 */
-	const resolveUserBaseDir = (): string | undefined => {
-		const home = process.env.USERPROFILE ?? process.env.HOME ?? undefined;
-		const oneDrive = process.env.OneDrive ?? process.env.OneDriveConsumer ?? undefined;
-		for (const candidate of [
-			oneDrive ? join(oneDrive, "Desktop") : undefined,
-			home ? join(home, "Desktop") : undefined,
-			oneDrive ? join(oneDrive, "Documents") : undefined,
-			home ? join(home, "Documents") : undefined,
-			home,
-		]) {
-			if (!candidate) continue;
-			try {
-				if (statSync(candidate).isDirectory()) return candidate;
-			} catch {
-				// Missing or unreadable: try the next fallback.
-			}
-		}
-		return undefined;
-	};
-	const resolveCreateBase = (mode: ChatMode): { baseDir: string; referenceName: string; referencePath: string } => {
-		const list = host.workspaceStore.list(mode);
-		const current = host.workspace;
-		const ordered = [
-			...(current && (current.modes ?? ["coding"]).includes(mode) ? [current] : []),
-			...list.filter((workspace) => workspace.workspaceId !== current?.workspaceId),
-		];
-		if (ordered.length === 0) {
-			const fallback = resolveUserBaseDir();
-			if (!fallback) throw new HttpError(404, "There is no workspace yet to decide where the new folder goes.");
-			return { baseDir: fallback, referenceName: "", referencePath: "" };
-		}
-		// A workspace whose parent is gone (deleted folder, unplugged drive) is skipped, so one dead entry never
-		// bricks quick-create while a healthy sibling exists.
-		for (const reference of ordered) {
-			const baseDir = dirname(reference.rootPath);
-			try {
-				if (!statSync(baseDir).isDirectory()) continue;
-			} catch {
-				continue;
-			}
-			return { baseDir, referenceName: reference.name, referencePath: reference.rootPath };
-		}
-		throw new HttpError(404, "The parent folder of the existing workspace is not available.");
-	};
+	// Anchor to the same resolved Data root as the registry, not a user folder or the current Chat's cwd.
+	// Capture once: a later cwd change cannot silently create another data tree.
+	let createBaseDir: string | undefined;
+	const resolveCreateBase = (_mode: ChatMode) => ({
+		baseDir: (createBaseDir ??= join(host.workspaceStore.getDataRoot() ?? getDataDir(), "workspace-folders")),
+		referenceName: "",
+		referencePath: "",
+	});
 
 	const INVALID_WORKSPACE_NAME = /[\\/:*?"<>|]/;
 	const validateNewWorkspaceName = (raw: unknown): string => {
@@ -357,7 +363,7 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	/**
 	 * General-only quick-create: make a real sub-folder `<baseDir>/<name>` and register it as a Workspace. The parent
 	 * always comes from the server (see resolveCreateBase); the client never sends a path, so it cannot escape to an
-	 * arbitrary location. Validation runs before any disk write; an existing name returns 409 and never overwrites.
+	 * arbitrary location. Existing unregistered directories are registered in place, never overwritten.
 	 */
 	server.route("POST", "/api/workspaces/create", ({ body }) => {
 		const payload = asObject(body);
@@ -366,10 +372,24 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const name = validateNewWorkspaceName(payload.name);
 		const { baseDir } = resolveCreateBase(mode);
 		const created = join(baseDir, name);
-		if (existsSync(created)) throw new HttpError(409, "A file or folder with that name already exists.");
+		if (
+			host.workspaceStore
+				.list(mode)
+				.some(
+					(workspace) =>
+						workspace.name.toLocaleLowerCase() === name.toLocaleLowerCase() ||
+						pathIdentityKey(workspace.rootPath) === pathIdentityKey(created),
+				)
+		)
+			throw new HttpError(409, "A workspace with that name already exists.");
 		try {
-			mkdirSync(created);
+			mkdirSync(baseDir, { recursive: true });
+			if (existsSync(created)) {
+				if (!statSync(created).isDirectory())
+					throw new HttpError(400, "A file occupies this path. Choose another workspace name.");
+			} else mkdirSync(created);
 		} catch (error) {
+			if (error instanceof HttpError) throw error;
 			throw new HttpError(403, error instanceof Error ? error.message : "Cannot create the folder");
 		}
 		const result = host.workspaceStore.add(created, host.session.sessionManager.getCwd(), true, mode);

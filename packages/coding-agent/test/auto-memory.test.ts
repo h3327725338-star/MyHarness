@@ -154,6 +154,14 @@ describe("auto memory", () => {
 			agentDir,
 			modelRunner,
 		});
+		const disabledWorkspace = new AutoMemoryManager({
+			cwd: projectDir, sessionId: "session-disabled", dataRoot, workspaceId: "project", settingsManager,
+			persisted: true, agentDir, modelRunner, isWorkspaceMemoryEnabled: () => false,
+		});
+		const withoutWorkspace = await disabledWorkspace.recall("Project Language 面向用户的说明");
+		expect(withoutWorkspace?.content).not.toContain("面向用户的说明优先使用简体中文");
+		expect(existsSync(join(paths.projectDir, "project-language.md"))).toBe(true);
+		disabledWorkspace.dispose();
 		const recalled = await nextSession.recall("检查代码实现");
 		expect(recalled?.display).toBe(false);
 		expect(recalled?.content).toContain("先检查真实源码");

@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { registerFauxProvider } from "@myharness/ai/compat";
+import { join } from "node:path";
+import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@myharness/ai/compat";
+import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -21,18 +22,28 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 	const cleanups: Array<() => Promise<void> | void> = [];
 	const previousCwd = process.cwd();
 	let previousAgentDir: string | undefined;
+	const previousDataRoot = process.env.MYHARNESS_DATA_ROOT;
 
 	afterEach(async () => {
+		process.chdir(previousCwd);
 		while (cleanups.length > 0) await cleanups.pop()?.();
 		if (previousAgentDir === undefined) delete process.env.MYHARNESS_CODING_AGENT_DIR;
 		else process.env.MYHARNESS_CODING_AGENT_DIR = previousAgentDir;
+		if (previousDataRoot === undefined) delete process.env.MYHARNESS_DATA_ROOT;
+		else process.env.MYHARNESS_DATA_ROOT = previousDataRoot;
 	});
 
 	function tempDir(prefix: string): string {
-		const dir = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const dir = join(
+			process.env.MYHARNESS_TEMP_DIR ?? tmpdir(),
+			`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		mkdirSync(dir, { recursive: true });
 		cleanups.push(() => {
-			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+			process.chdir(previousCwd);
+			// Session runtimes may leave terminal handles alive briefly on Windows. Keep task-owned
+			// artifact fixtures for inspection; only disposable OS-temp fixtures are removed here.
+			if (!process.env.MYHARNESS_TEMP_DIR && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 		});
 		return dir;
 	}
@@ -41,6 +52,7 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		const project = tempDir("ws-create-project");
 		const dataRoot = tempDir("ws-create-data");
 		const agentDir = tempDir("ws-create-agent");
+		process.env.MYHARNESS_DATA_ROOT = join(dataRoot, "data");
 		process.chdir(dataRoot);
 		cleanups.push(() => process.chdir(previousCwd));
 		previousAgentDir = process.env.MYHARNESS_CODING_AGENT_DIR;
@@ -104,9 +116,13 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		const server = new WebHttpServer();
 		const hub = new WebHostHub({ server, version: "test", onShutdown: () => {} });
 		registerSessionRoutes(server, hub.host, hub);
+		registerCoreRoutes(server, hub.host);
 		await hub.addPrimary(runtimeHost, new WebDialogBridge());
 		const address = await server.listen(0);
-		cleanups.push(() => server.close());
+		cleanups.push(async () => {
+			await hub.dispose();
+			await server.close();
+		});
 
 		const call = async (method: string, path: string, body?: unknown) => {
 			const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
@@ -123,10 +139,56 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 			return json;
 		};
 		return {
+			hub,
+			faux,
 			get: (path: string) => call("GET", path),
 			post: (path: string, body?: unknown) => call("POST", path, body),
 		};
 	}
+
+	it("re-reads instructions and sources on the next turn and correlates user events without persisting ids", async () => {
+		const fx = await start();
+		const created = await fx.post("/api/workspaces/create", { name: "live-context", mode: "general" });
+		const id = created.workspace.id;
+		const opened = await fx.post("/api/sessions/new", { rootPath: created.workspace.rootPath, mode: "general" });
+		const events: any[] = [];
+		const owner = fx.hub.get(opened.slot)!;
+		owner.session.subscribe((event) => events.push(event));
+		const settings = {
+			id,
+			name: "Live context",
+			instructions: "UNIQUE_WORKSPACE_FIRST",
+			memoryEnabled: true,
+			libraryEnabled: true,
+		};
+		await fx.post("/api/workspaces/settings", settings);
+		const source = await fx.post("/api/workspaces/sources/upload", {
+			id,
+			name: "shared.txt",
+			data: Buffer.from("shared content").toString("base64"),
+		});
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
+		await owner.submit("hello", { clientMessageId: "test-first" });
+		await owner.session.waitForForegroundIdle();
+		expect(owner.session.agent.state.systemPrompt).toContain("UNIQUE_WORKSPACE_FIRST");
+		expect(owner.session.agent.state.systemPrompt).toContain(JSON.stringify(source.path));
+		const user = events.find((event) => event.type === "message_start" && event.message.role === "user");
+		expect(user).toBeDefined();
+		const { promptCorrelation } = await import("../src/agent/runtime/prompt-correlation.ts");
+		expect(promptCorrelation(user.message)).toBe("test-first");
+		expect(JSON.stringify(owner.session.sessionManager.getBranch())).not.toContain("test-first");
+		await fx.post("/api/workspaces/settings", {
+			...settings,
+			instructions: "UNIQUE_WORKSPACE_SECOND",
+			libraryEnabled: false,
+		});
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("done again")])]);
+		await owner.submit("next");
+		await owner.session.waitForForegroundIdle();
+		expect(owner.session.agent.state.systemPrompt).toContain("UNIQUE_WORKSPACE_SECOND");
+		expect(owner.session.agent.state.systemPrompt).not.toContain("UNIQUE_WORKSPACE_FIRST");
+		expect(owner.session.agent.state.systemPrompt).not.toContain(JSON.stringify(source.path));
+	});
 
 	async function resetGeneral(fx: {
 		get: (path: string) => Promise<any>;
@@ -138,13 +200,13 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		}
 	}
 
-	it("creates a real sub-folder under the reference workspace parent and registers it (general only)", async () => {
+	it("uses the registry data root regardless of existing workspaces or cwd (general only)", async () => {
 		const fx = await start();
 		await resetGeneral(fx);
-		// No general workspace yet: falls back to the user directory (Desktop/Documents/home) so quick-create always has somewhere to go.
+		// No general workspace yet: the same internal data-root location is still available.
 		const fallbackTarget = await fx.get("/api/workspaces/create-target?mode=general");
 		expect(typeof fallbackTarget.baseDir).toBe("string");
-		expect(existsSync(fallbackTarget.baseDir)).toBe(true);
+		expect(fallbackTarget.baseDir).toBe(join(process.cwd(), "data", "workspace-folders"));
 		expect(fallbackTarget.referenceName).toBe("");
 		expect(fallbackTarget.referencePath).toBe("");
 
@@ -155,14 +217,16 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		await fx.post("/api/workspaces/add", { path: seed, mode: "general" });
 
 		const target = await fx.get("/api/workspaces/create-target?mode=general");
-		expect(target.baseDir).toBe(dirname(seed));
+		expect(target.baseDir).toBe(fallbackTarget.baseDir);
+		process.chdir(parent);
+		expect((await fx.get("/api/workspaces/create-target?mode=general")).baseDir).toBe(target.baseDir);
 
 		const created = await fx.post("/api/workspaces/create", { name: "my-new-space", mode: "general" });
-		expect(created.workspace.rootPath).toBe(join(parent, "my-new-space"));
-		expect(existsSync(join(parent, "my-new-space"))).toBe(true);
+		expect(created.workspace.rootPath).toBe(join(target.baseDir, "my-new-space"));
+		expect(existsSync(join(target.baseDir, "my-new-space"))).toBe(true);
 
 		const list = await fx.get("/api/workspaces?mode=general");
-		expect(list.workspaces.map((w: any) => w.rootPath)).toContain(join(parent, "my-new-space"));
+		expect(list.workspaces.map((w: any) => w.rootPath)).toContain(join(target.baseDir, "my-new-space"));
 
 		// Coding mode is isolated: quick-create is rejected there.
 		await expect(fx.post("/api/workspaces/create", { name: "coding-try", mode: "coding" })).rejects.toMatchObject({
@@ -189,7 +253,11 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 
 		// Duplicate: first create succeeds, second returns 409 and keeps the original folder.
 		await fx.post("/api/workspaces/create", { name: "dupe", mode: "general" });
-		expect(existsSync(join(parent, "dupe"))).toBe(true);
+		const { baseDir } = await fx.get("/api/workspaces/create-target?mode=general");
+		expect(existsSync(join(baseDir, "dupe"))).toBe(true);
+		mkdirSync(join(baseDir, "existing"));
+		const adopted = await fx.post("/api/workspaces/create", { name: "existing", mode: "general" });
+		expect(adopted.workspace.rootPath).toBe(join(baseDir, "existing"));
 		await expect(fx.post("/api/workspaces/create", { name: "dupe", mode: "general" })).rejects.toMatchObject({
 			status: 409,
 		});

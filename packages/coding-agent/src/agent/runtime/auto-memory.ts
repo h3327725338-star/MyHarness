@@ -92,6 +92,7 @@ interface AutoMemoryPaths {
 }
 
 interface AutoMemoryManagerOptions {
+	isWorkspaceMemoryEnabled?: () => boolean;
 	cwd: string;
 	sessionId: string;
 	settingsManager: SettingsManager;
@@ -1615,7 +1616,11 @@ export class AutoMemoryManager {
 	}
 
 	private loadEntries(): MemoryEntry[] {
-		return readMemoryEntries(this.paths);
+		return readMemoryEntries(this.paths).filter(
+			(entry) =>
+				this.options.isWorkspaceMemoryEnabled?.() !== false ||
+				(entry.scope !== "workspace" && entry.scope !== "project"),
+		);
 	}
 
 	async recall(query: string): Promise<CustomMessage | undefined> {
@@ -1822,6 +1827,8 @@ export class AutoMemoryManager {
 					const target = existing.get(operation.id);
 					// The resident profile is rewritten by the consolidator, never retired by a model.
 					if (!target || isMemoryProfile(target)) continue;
+					if (!scopeContext && target.scope === "workspace" && this.options.isWorkspaceMemoryEnabled?.() === false)
+						continue;
 					await archiveMemoryFile(target.filePath, "consolidated");
 					await fs.promises.unlink(target.filePath);
 					existing.delete(operation.id);
@@ -1840,6 +1847,7 @@ export class AutoMemoryManager {
 					continue;
 				}
 				const scope = operation.scope === "project" ? "workspace" : operation.scope;
+				if (!scopeContext && scope === "workspace" && this.options.isWorkspaceMemoryEnabled?.() === false) continue;
 				// Consolidation must not promote conversation information into a broader scope.
 				// The resident profile is exempt: this lets the consolidator create its first version.
 				// The scope/id prefix check below still applies (must be global/用户画像 with scope global).

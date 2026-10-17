@@ -230,7 +230,7 @@ describe("WorkspaceStore", () => {
 			writeFileSync(
 				getWorkspaceRegistryPath(dataRoot),
 				JSON.stringify({
-					version: 2,
+					version: 3,
 					workspaces: [
 						{
 							workspaceId,

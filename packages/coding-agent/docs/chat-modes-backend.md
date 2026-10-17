@@ -19,7 +19,10 @@ Workspace 保存模式登记 `modes`，旧登记默认仅 Coding。同一物理�
 - `GET /api/workspaces?mode=general`：只返回该模式登记。省略模式时使用请求 slot 模式。
 - `GET /api/workspaces/sessions?path=...&mode=general`、`GET /api/sessions/unbound?mode=general`、`GET /api/sessions/archived?mode=general`：只返回该模式聊天。每个 summary 增加 `mode` 和 `blank`：Session 文件里除了创建时写入的模型和思考级别设置之外没有别的记录（没有消息、名称、标签、操作卡片等）时为 `true`。前端用它不再列出被留下的空白聊天（文件不删除，见 web-ui.md）。
 - `POST /api/workspaces/add|remove|rename` 接受可选 `mode`，用于匹配登记；默认请求 slot 模式。`remove` 仅取消该模式登记。重命名仍修改共享 Workspace 名称。明确删除产出仍是共享数据操作，需保留现有确认和运行中保护。
-- General 快捷新建（Coding 不可用）：`GET /api/workspaces/create-target?mode=general` 返回新建文件夹的上级目录（当前或首个 General Workspace 所在目录的父目录，父目录不可用时顺延下一个，全部不可用时 404）；`POST /api/workspaces/create` body `{ name, mode: "general" }` 在该目录下创建真实子文件夹并登记为 Workspace。名称校验（空/空白、\\ / : * ? " < > |、以空格或句点结尾）与重名（409，不覆盖）都在落盘前拦截。
+- General 快捷新建（Coding 不可用）：`GET /api/workspaces/create-target?mode=general` 返回注册表已解析 Data root 下的 `workspace-folders/`，不跟随已有工作区父目录或桌面；`POST /api/workspaces/create` body `{ name, mode: "general" }` 创建子目录并登记。已有未登记目录直接登记，不移动、覆盖文件；已登记名称占用返回 409，同名普通文件返回可换名的错误。既有工作区路径不变。
+- General 两种工作区入口共用菜单中的“工作区设置”：`GET /api/workspaces/settings?id=...` 返回设置及来源清单；`POST /api/workspaces/settings` 保存 `{ id, name, instructions, memoryEnabled, libraryEnabled }`。注册表 v3、metadata v2 双写并参与 reconcile；旧字段默认说明为空、两个开关开启。Coding 不注入这些说明或来源。说明与来源清单按后续请求重新读取，不写入旧聊天。
+- `POST /api/workspaces/sources/upload` 接受 `{ id, name, data }`（base64），单文件 32 MiB、每工作区 100 个，立即写入 `workspaces/<id>/uploads/<source-id>/` 的原文件及 `source.json`，与 `sessions/<session-id>/uploads/` 独立。模型收到清单后按需 `read`，不做 embedding；关闭资料开关仅取消清单注入，不是文件系统权限沙箱。记忆开关控制本工作区层自动召回与维护写入，不关闭全局和当前对话层，也不限制显式工具读取。
+- 两种模式共用的 `/api/prompt` 增加可选 `clientMessageId`，仅通过内存 WeakMap 关联到 `message_start` SSE，不改变 Session JSONL 或消息对象结构。浏览器立即插入占位，按该 ID 替换；HTTP 拒绝移除占位并沿用 Composer 草稿恢复。排队发送的 300ms 等待在占位之后；本地 `/`、`!`、`!!` 分支不创建聊天占位。
 - `POST /api/sessions/clear` 仅清理指定 `mode` 的聊天（默认请求 slot 模式），不能误删另一侧。
 
 ## 模式导航与状态保存

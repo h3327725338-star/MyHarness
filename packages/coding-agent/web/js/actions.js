@@ -1,11 +1,12 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { loadPrefs, normPath } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
+import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
 
 let dialogResolver = null;
 
@@ -126,14 +127,19 @@ export const actions = {
 		set({ quoteInsert: { text: trimmed, note, files, hint, nonce: Date.now() } });
 	},
 
-	async send(text, { images, attachments, mode } = {}) {
+	async send(text, { images, attachments, mode, clientMessageId, onRejected } = {}) {
 		if (!canSendToActive()) return undefined;
 		const slot = activeSlotId();
-		return attempt(() => post("/api/prompt", { text, images, attachments, mode }, slot));
+		const id = clientMessageId || crypto.randomUUID();
+		addPendingMessage(id, text, images, slot, onRejected);
+		if (state.snap?.active) await new Promise((resolve) => setTimeout(resolve, COMPOSER_QUEUE_DEBOUNCE_MS));
+		const result = await attempt(() => post("/api/prompt", { text, images, attachments, mode, clientMessageId: id }, slot));
+		if (!result) removePendingMessage(id, slot);
+		return result;
 	},
 
 	/** Route composer input: UI commands stay in the browser, everything else is a real prompt. */
-	async submit(rawText, { images = [], attachments = [], mode = "auto" } = {}) {
+	async submit(rawText, { images = [], attachments = [], mode = "auto", onRejected } = {}) {
 		if (!canSendToActive()) return { handled: false, ok: false };
 		const submittedSlot = activeSlotId();
 		const stillSelected = () => canSendToActive() && activeSlotId() === submittedSlot;
@@ -167,7 +173,7 @@ export const actions = {
 				return { handled: true };
 			}
 		}
-		const ok = await actions.send(text, { images, attachments, mode: active ? (mode === "auto" ? "steer" : mode) : "auto" });
+		const ok = await actions.send(text, { images, attachments, onRejected, mode: active ? (mode === "auto" ? "steer" : mode) : "auto" });
 		return { handled: false, ok: !!ok };
 	},
 

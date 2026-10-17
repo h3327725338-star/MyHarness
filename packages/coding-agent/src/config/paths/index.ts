@@ -160,7 +160,7 @@ export function getSessionScopedDataDir(
 const UPLOADS_DIR_NAME = "uploads";
 const ATTACHMENT_MANIFEST_FILE_NAME = "manifest.json";
 
-/** Resolve the workspace-level attachment library root without creating it. Kept for listing compatibility. */
+/** Resolve workspace-shared sources (separate from session-owned attachments), without creating it. */
 export function getWorkspaceUploadsDir(dataRoot: string, workspaceId: string): string {
 	return join(getWorkspaceDir(dataRoot, workspaceId), UPLOADS_DIR_NAME);
 }

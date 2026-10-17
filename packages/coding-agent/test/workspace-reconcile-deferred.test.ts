@@ -43,7 +43,7 @@ function createScratch(prefix: string): { dir: string; cleanup: () => void } {
 }
 
 function metadataFile(workspace: Workspace): string {
-	return `${JSON.stringify({ version: 1, workspace: { workspaceId: workspace.workspaceId, modes: workspace.modes ?? ["coding"], name: workspace.name, rootPath: workspace.rootPath, createdAt: workspace.createdAt } }, null, 2)}\n`;
+	return `${JSON.stringify({ version: 2, workspace: { workspaceId: workspace.workspaceId, modes: workspace.modes ?? ["coding"], name: workspace.name, rootPath: workspace.rootPath, createdAt: workspace.createdAt, instructions: workspace.instructions ?? "", memoryEnabled: workspace.memoryEnabled !== false, libraryEnabled: workspace.libraryEnabled !== false } }, null, 2)}\n`;
 }
 
 interface FixtureWorkspace extends Workspace {
@@ -125,7 +125,7 @@ function buildFixture(baseDir: string): { agentDir: string; dataRoot: string; wo
 
 	writeFileAtomicallySync(
 		getWorkspaceRegistryPath(dataRoot),
-		`${JSON.stringify({ version: 2, workspaces: workspaces.map((w) => ({ workspaceId: w.workspaceId, modes: w.modes, name: w.name, rootPath: w.rootPath, createdAt: w.createdAt })) }, null, 2)}\n`,
+		`${JSON.stringify({ version: 3, workspaces: workspaces.map((w) => ({ workspaceId: w.workspaceId, modes: w.modes, name: w.name, rootPath: w.rootPath, createdAt: w.createdAt })) }, null, 2)}\n`,
 	);
 	return { agentDir, dataRoot, workspaces };
 }

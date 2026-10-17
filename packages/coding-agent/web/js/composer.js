@@ -13,7 +13,7 @@ import { EffortPicker, ModelMenu } from "./model-menu.js";
 import { rankSearch } from "./search.js";
 import { debounce, fmtDuration, plural, pointerMoved } from "./util.js";
 import { serverText, t } from "./i18n.js";
-import { RUN_MODES, COMPOSER_QUEUE_DEBOUNCE_MS, runModeOf } from "./run-modes.js";
+import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { completionDelay, completionLabel } from "./completion-status.js";
 import { retryReason } from "./retry-reason.js";
 import { SubAgentBar, runningTasks } from "./sub-agents.js";
@@ -614,9 +614,7 @@ const send = async (mode) => {
 		setImages([]);
 		setQuotes([]);
 		setHistoryIndex(-1);
-		const result = await actions.submit(value, { images: attached, attachments, mode: mode || (active ? runMode : "auto") });
-		setSending(false);
-		if (!result.handled && !result.ok) {
+		const restore = () => {
 			if (latest.current.sessionId === target.sessionId) {
 				setText(previousText);
 				setImages(previousImages);
@@ -626,18 +624,15 @@ const send = async (mode) => {
 				drafts.set(target.sessionId, restored);
 				scheduleDraftSave({ ...target, ...restored });
 			}
-		} else if (target.sessionId) clearDraft(target);
+		};
+		const result = await actions.submit(value, { images: attached, attachments, mode: mode || (active ? runMode : "auto"), onRejected: restore });
+		setSending(false);
+		if (!result.handled && !result.ok) restore();
+		else if (target.sessionId) clearDraft(target);
 	};
 
-	// P2-11: queued input is debounced (300ms, reuses debounce from util.js) and defaults to
-	// followUp (queue for after the run, never interrupts the current turn). No new setting:
-	// the existing runMode choice still decides Enter (default followUp, see run-modes.js),
-	// and the existing steeringMode/followUpMode queue settings still decide delivery order.
-	const sendRef = useRef(send);
-	sendRef.current = send;
-	const debouncedQueueSend = useMemo(() => debounce((mode) => sendRef.current(mode), COMPOSER_QUEUE_DEBOUNCE_MS), []);
-	useLayoutEffect(() => { debouncedQueueSend.cancel(); return () => debouncedQueueSend.cancel(); }, [debouncedQueueSend, draftIdentity]);
-	const sendOrQueue = (mode) => (active ? debouncedQueueSend(mode) : send(mode));
+	// Capture and render now; the shared action delays queued delivery, not the user's bubble.
+	const sendOrQueue = (mode) => send(mode);
 
 	const onKeyDown = (event) => {
 		if (event.isComposing || event.keyCode === 229) return;

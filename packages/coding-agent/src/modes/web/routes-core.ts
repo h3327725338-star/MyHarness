@@ -92,7 +92,11 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		const pathImages = await collectInputImageAttachments(text, {
 			autoResizeImages: host.session.settingsManager.getImageAutoResize(),
 		});
-		await host.submit(text, { images: [...images, ...pathImages], mode });
+		const clientMessageId =
+			typeof payload.clientMessageId === "string" && /^[A-Za-z0-9-]{1,100}$/.test(payload.clientMessageId)
+				? payload.clientMessageId
+				: undefined;
+		await host.submit(text, { images: [...images, ...pathImages], mode, clientMessageId });
 		return { ok: true };
 	});
 
@@ -146,6 +150,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 
 	server.route("POST", "/api/queue/clear", () => {
 		const cleared = host.session.clearQueue();
+		host.broadcast("queue_cleared", {});
 		return { steering: cleared.steering, followUp: cleared.followUp };
 	});
 

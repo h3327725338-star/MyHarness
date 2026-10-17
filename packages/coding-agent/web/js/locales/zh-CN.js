@@ -7,6 +7,17 @@
 //   serverTextZh  English server text        -> Chinese   (patterns for messages with variable parts)
 
 export const zhCN = {
+	"Workspace settings": "工作区设置",
+	"Workspace instructions": "说明（工作区指令）",
+	"Workspace instructions apply to the next message in every chat.": "保存后，所有对话的下一条消息立即使用新说明。",
+	"Enable workspace memory": "启用工作区记忆",
+	"Allow workspace sources": "允许使用工作区资料库",
+	"Controls whether chats receive this workspace's source list. Files stay on disk when disabled.": "控制该工作区的对话能否收到来源资料清单；关闭不会删除文件。",
+	"Workspace sources": "工作区来源资料",
+	"Shared by all chats in this workspace. Uploads are saved immediately, separately from chat attachments.": "该工作区所有对话共用。上传立即保存，与对话附件分开存放。",
+	"Upload workspace sources": "上传工作区来源资料",
+	"A workspace with that name already exists.": "已有工作区使用这个名称，请换一个名称。",
+	"A file occupies this path. Choose another workspace name.": "目标路径已有同名文件，请换一个工作区名称。" ,
 	"Open in File Explorer": "在资源管理器中打开",
 	"Show in File Explorer": "在资源管理器中定位",
 	"Open with {app}": "使用 {app} 打开",

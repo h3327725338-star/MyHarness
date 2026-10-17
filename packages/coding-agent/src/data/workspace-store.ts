@@ -18,8 +18,8 @@ import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../utils/paths
 import { noteWorkspaceMetadataSaved, scheduleWorkspaceMetadataReconcile } from "./workspace-reconcile.ts";
 
 const LEGACY_WORKSPACES_FILE_VERSION = 1;
-const WORKSPACES_FILE_VERSION = 2;
-const WORKSPACE_METADATA_VERSION = 1;
+const WORKSPACES_FILE_VERSION = 3;
+const WORKSPACE_METADATA_VERSION = 2;
 const SAFE_WORKSPACE_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 /** A persisted Workspace identity and its current filesystem location. */
@@ -34,11 +34,18 @@ export interface Workspace {
 	name: string;
 	/** Absolute normalized path of the workspace root directory. */
 	rootPath: string;
+	/** General-mode settings; shared identity does not enable these in Coding mode. */
+	instructions?: string;
+	memoryEnabled?: boolean;
+	libraryEnabled?: boolean;
 	/** ISO timestamp of when the workspace was added. */
 	createdAt: string;
 }
 
 interface PersistedWorkspace {
+	instructions?: unknown;
+	memoryEnabled?: unknown;
+	libraryEnabled?: unknown;
 	modes?: unknown;
 	workspaceId?: unknown;
 	id?: unknown;
@@ -158,6 +165,9 @@ function serializeWorkspace(workspace: Workspace): PersistedWorkspace {
 		name: workspace.name,
 		rootPath: workspace.rootPath,
 		createdAt: workspace.createdAt,
+		instructions: workspace.instructions,
+		memoryEnabled: workspace.memoryEnabled,
+		libraryEnabled: workspace.libraryEnabled,
 	};
 }
 
@@ -187,6 +197,9 @@ function normalizeWorkspace(value: unknown, legacyMode = false): { workspace?: W
 				: ["coding"],
 			workspaceId,
 			id: workspaceId,
+			instructions: typeof candidate.instructions === "string" ? candidate.instructions : "",
+			memoryEnabled: candidate.memoryEnabled !== false,
+			libraryEnabled: candidate.libraryEnabled !== false,
 			name: candidate.name || defaultWorkspaceName(rootPath),
 			rootPath,
 			createdAt: candidate.createdAt,
@@ -294,6 +307,9 @@ function workspaceRegistrySignature(workspaces: readonly Workspace[]): string {
 			workspace.rootPath,
 			workspace.createdAt,
 			workspace.modes ?? ["coding"],
+			workspace.instructions ?? "",
+			workspace.memoryEnabled !== false,
+			workspace.libraryEnabled !== false,
 		]),
 	);
 }
@@ -417,6 +433,11 @@ export class WorkspaceStore {
 		return store;
 	}
 
+	/** The registry's resolved data root, fixed when this store was opened. */
+	getDataRoot(): string | undefined {
+		return this.dataRoot;
+	}
+
 	list(mode?: ChatMode): Workspace[] {
 		return this.workspaces
 			.filter((workspace) => !mode || (workspace.modes ?? ["coding"]).includes(mode))
@@ -490,6 +511,9 @@ export class WorkspaceStore {
 				metadata === undefined ||
 				metadata.workspaceId !== workspace.workspaceId ||
 				metadata.name !== workspace.name ||
+				(metadata.instructions ?? "") !== (workspace.instructions ?? "") ||
+				metadata.memoryEnabled !== (workspace.memoryEnabled !== false) ||
+				metadata.libraryEnabled !== (workspace.libraryEnabled !== false) ||
 				!pathsEqual(metadata.rootPath, workspace.rootPath) ||
 				metadata.createdAt !== workspace.createdAt;
 			if (!mismatch) continue;
@@ -644,6 +668,9 @@ export class WorkspaceStore {
 			modes: [mode],
 			workspaceId,
 			id: workspaceId,
+			instructions: detached?.instructions ?? "",
+			memoryEnabled: detached?.memoryEnabled !== false,
+			libraryEnabled: detached?.libraryEnabled !== false,
 			name: detached?.name ?? defaultWorkspaceName(rootPath),
 			rootPath,
 			createdAt: detached?.createdAt ?? new Date().toISOString(),
@@ -677,6 +704,23 @@ export class WorkspaceStore {
 			return true;
 		} catch {
 			workspace.name = previous;
+			return false;
+		}
+	}
+
+	updateGeneralSettings(
+		id: string,
+		settings: { name: string; instructions: string; memoryEnabled: boolean; libraryEnabled: boolean },
+	): boolean {
+		const workspace = this.workspaces.find((entry) => entry.workspaceId === id && entry.modes?.includes("general"));
+		if (!workspace || !settings.name.trim()) return false;
+		const previous = { ...workspace };
+		Object.assign(workspace, settings, { name: settings.name.trim() });
+		try {
+			this.save();
+			return true;
+		} catch {
+			Object.assign(workspace, previous);
 			return false;
 		}
 	}

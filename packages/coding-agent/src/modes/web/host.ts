@@ -22,6 +22,7 @@ import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspac
 import { UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../config/trust/index.ts";
 import { getDataDir } from "../../config.ts";
+import { promptCorrelation } from "../../agent/runtime/prompt-correlation.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import type { GitCheckpoint } from "../../git/checkpoints/checkpoint.ts";
 import { hasGitCheckpointTaskChangesAsync, listGitCheckpoints } from "../../git/checkpoints/checkpoint.ts";
@@ -855,7 +856,7 @@ export class WebHost {
 					this.broadcast("message_start", { liveId: this.liveAssistantId, item });
 				} else if (message.role !== "toolResult") {
 					const item = messageToWire(message);
-					if (item) this.broadcast("message_start", { item });
+					if (item) this.broadcast("message_start", { item, clientMessageId: promptCorrelation(message) });
 				}
 				return;
 			}
@@ -1711,7 +1712,11 @@ export class WebHost {
 	 */
 	async submit(
 		text: string,
-		options: { images?: ImageContent[]; mode?: "auto" | "steer" | "followUp" | "interrupt" } = {},
+		options: {
+			images?: ImageContent[];
+			mode?: "auto" | "steer" | "followUp" | "interrupt";
+			clientMessageId?: string;
+		} = {},
 	): Promise<void> {
 		try {
 			if (!existsSync(this.cwd)) {
@@ -1734,25 +1739,34 @@ export class WebHost {
 		}
 		const running = session.isStreaming || session.isCompacting;
 		if (!running && this.completionPromise) await this.completionPromise;
-		const streamingBehavior = running && !interrupt ? (mode === "followUp" ? "followUp" : "steer") : undefined;
+		const streamingBehavior: "followUp" | "steer" | undefined =
+			running && !interrupt ? (mode === "followUp" ? "followUp" : "steer") : undefined;
 		await new Promise<void>((resolve, reject) => {
 			let acknowledged = false;
-			const promptPromise = session.prompt(text, {
+			const promptOptions = {
+				clientMessageId: options.clientMessageId,
+				onPromptHandled: () => {
+					if (options.clientMessageId)
+						this.broadcast("prompt_settled", { clientMessageId: options.clientMessageId });
+				},
 				images: options.images && options.images.length > 0 ? options.images : undefined,
 				streamingBehavior,
-				source: "interactive",
-				preflightResult: (ok) => {
+				source: "interactive" as const,
+				preflightResult: (ok: boolean) => {
 					if (ok) {
 						acknowledged = true;
 						resolve();
 					}
 				},
-			});
+			};
+			const promptPromise = session.prompt(text, promptOptions);
 			promptPromise
 				.then(() => {
 					if (!acknowledged) resolve();
 				})
 				.catch((error: unknown) => {
+					if (options.clientMessageId)
+						this.broadcast("prompt_rejected", { clientMessageId: options.clientMessageId });
 					if (!acknowledged) {
 						reject(error instanceof Error ? error : new Error(String(error)));
 						return;

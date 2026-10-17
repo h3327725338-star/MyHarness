@@ -12,6 +12,7 @@ import { chatModeOf, draftHasContent, expandedKey } from "./chat-modes.js";
 import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 import { ExportSidebarFoot, exportReadOnly } from "./export-mode.js";
 import { AttachmentList, useSessionAttachments } from "./attachments.js";
+import { WorkspaceSettings } from "./workspace-settings.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 
@@ -159,6 +160,8 @@ function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, current
  * estimate must know it); without them the group keeps that state itself (the General group).
  */
 function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title, showAll: controlledShowAll = undefined, onShowAll = undefined }) {
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const mode = useStore((s) => s.view.chatMode);
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [innerShowAll, setInnerShowAll] = useState(false);
@@ -203,11 +206,13 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 					${(close) => html`
 						<${MenuItem} icon="plus" label=${t("New chat")} onClick=${() => (close(), create())} />
 						<${MenuItem} icon="refresh" label=${t("Reload chats")} onClick=${() => (close(), reload())} />
+						${!general && mode === "general" ? html`<${MenuItem} icon="gear" label=${t("Workspace settings")} onClick=${() => (close(), setSettingsOpen(true))} />` : null}
 						${general ? null : html`<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startRename())} /><${MenuSep} />
 						<${MenuItem} icon="x" label=${t("Remove from list")} danger onClick=${() => (close(), actions.removeWorkspace(workspace.id, workspace.name))} />`}`}
 				<//>` : null}
 			</span>
 		</div>
+		${settingsOpen ? html`<${WorkspaceSettings} id=${workspace.id} onClose=${() => setSettingsOpen(false)} />` : null}
 		<div class=${`collapse ${showing ? "open" : ""}`} inert=${!showing}>
 			<div class="collapse-inner">
 				${rendered
@@ -467,7 +472,7 @@ function NewWorkspaceDialog({ onClose }) {
 				? html`<div class="dim">${t("Loading…")}</div>`
 				: baseError
 					? html`<div class="notice danger">${baseError}</div>`
-					: html`<div class="dim">${t("New folders go under {dir}", { dir: baseDir })}<br /><span class="mono" style=${{ overflowWrap: "anywhere" }}>${baseDir}</span></div>`}
+					: html`<div class="dim">${t("New folders go under {dir}", { dir: baseDir })}<br /><span class="mono" style=${{ overflowWrap: "anywhere" }}>${baseDir}${value.trim() ? `${baseDir.includes("\\") ? "\\" : "/"}${value.trim()}` : ""}</span></div>`}
 			<label class="col field-label">${t("Workspace name")}
 				<input class="field ${error ? "invalid" : ""}" autofocus value=${value} placeholder=${t("My project")} aria-label=${t("Workspace name")} aria-invalid=${error ? "true" : undefined}
 					onInput=${(e) => {

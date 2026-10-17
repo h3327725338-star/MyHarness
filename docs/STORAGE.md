@@ -35,6 +35,8 @@ The project root contains the project configuration and runtime data:
 | `%USERPROFILE%\.myharness\agent\traces\` | Runtime traces | Potentially sensitive diagnostics; redact before sharing |
 | `%USERPROFILE%\.myharness\agent\memory\` | Legacy memory migration source | Copied once per source Agent directory into the active Data root; originals preserved |
 | `<data>\memory\` | Global active memories, archive, derived index, extraction state and migration records | Shared only within this Data root; user-owned data |
+| `<data>\workspace-folders\` | General quick-created physical workspace folders | Same resolved Data root as the registry; existing workspace paths never move |
+| `<data>\workspaces\<workspace-id>\uploads\<source-id>\` | General workspace source file and `source.json` manifest | Shared across its chats; independent of session attachments; disabling library access does not delete files |
 | `<data>\workspaces\<workspace-id>\memory\` | Workspace active memories, archive and reference index | Shared by this Workspace's conversations |
 | `<data>\workspaces\<workspace-id>\sessions\<session-id>\memory\` | Conversation active memories and archive | Retained when the conversation is deleted, even when artifacts are explicitly deleted |
 | `<project>\.myharness\settings.json` | Project Settings | Project-local configuration; tracked only when intentionally supplied |

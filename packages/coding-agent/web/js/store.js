@@ -650,6 +650,20 @@ export async function refreshSlotStaged(slot = activeSlot, seq = switchSeq) {
  * page may be in flight. Appends and older pages touch opposite ends of the window and could merge, but a stream
  * may also rewrite history (compaction); when the page lands it is dropped and the transcript reloads fully.
  */
+const pendingRejections = new Map();
+export function addPendingMessage(clientMessageId, text, images = [], slot = activeSlot, onRejected) {
+	if (onRejected) pendingRejections.set(clientMessageId, onRejected);
+	appendStreamedItem({ kind: "user", text, images, ts: Date.now(), pending: true, clientMessageId }, slot);
+}
+
+export function removePendingMessage(clientMessageId, slot = targetSlot ?? activeSlot) {
+	pendingRejections.delete(clientMessageId);
+	runFor(slot, () => {
+		state.items = state.items.filter((item) => !(item.pending && item.clientMessageId === clientMessageId));
+		emit();
+	});
+}
+
 export function appendStreamedItem(item, slot = targetSlot ?? activeSlot) {
 	const bag = slot ? bags.get(slot) : undefined;
 	if (bag?.transcriptFetching) bag.streamedDuringFetch = true;
@@ -1516,7 +1530,18 @@ function connectEvents() {
 	on("message_start", (d) => {
 		const item = d.liveId ? { ...d.item, liveId: d.liveId } : d.item;
 		if (!item) return;
-		appendStreamedItem(item);
+		if (d.clientMessageId) pendingRejections.delete(d.clientMessageId);
+		const index = d.clientMessageId ? state.items.findIndex((entry) => entry.pending && entry.clientMessageId === d.clientMessageId) : -1;
+		if (index >= 0) {
+			state.items = state.items.map((entry, at) => at === index ? item : entry);
+			emit();
+		} else appendStreamedItem(item);
+	});
+	on("prompt_settled", (d) => removePendingMessage(d.clientMessageId));
+	on("prompt_rejected", (d) => {
+		const restore = pendingRejections.get(d.clientMessageId);
+		removePendingMessage(d.clientMessageId);
+		restore?.();
 	});
 	on("message_update", (d) => {
 		const index = findLive(d.liveId);
@@ -1566,6 +1591,10 @@ function connectEvents() {
 		emit();
 	});
 
+	on("queue_cleared", () => {
+		state.items = state.items.filter((item) => !item.pending);
+		emit();
+	});
 	on("queue_update", (d) => set({ queue: d }));
 	on("session_info", (d) => {
 		if (state.snap) state.snap = { ...state.snap, session: { ...state.snap.session, name: d.name } };
@@ -1725,7 +1754,7 @@ function attachEntryId(d) {
 		let match = false;
 		if (item.kind === "toolResult") match = candidate.kind === "toolResult" && candidate.toolCallId === item.toolCallId;
 		else if (item.kind === "assistant") match = candidate.kind === "assistant" && Math.abs(candidate.ts - item.ts) < 60_000;
-		else if (item.kind === "user") match = candidate.kind === "user" && candidate.text === item.text;
+		else if (item.kind === "user") match = candidate.kind === "user" && !candidate.pending && candidate.ts === item.ts;
 		else match = candidate.kind === item.kind && candidate.ts === item.ts;
 		if (match) {
 			const next = items.slice();
