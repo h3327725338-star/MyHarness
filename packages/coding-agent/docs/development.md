@@ -36,11 +36,10 @@ npm.cmd run build
 从源码运行：
 
 ```powershell
-.\web-source.ps1
-# 或双击/执行：.\dev-web.cmd
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts
 ```
 
-`dev-web.cmd` 通过 `web-runtime.ps1` 从脚本位置定位仓库，用 `node --import scripts/dev-fast-loader.mjs` 直接运行 `packages/coding-agent/src/web.ts`。设置 `MYHARNESS_DEV_LOADER=tsx` 或传 `--no-env` 时使用 `web-source.ps1` 的 tsx 路径。修改源码后不要求先 build。`web-source.ps1` / `web-source.sh` 是直接源码入口，保留调用者工作目录；双击入口从仓库根运行。
+在仓库根目录执行，参数原样转发，保留调用者工作目录；修改源码后不要求先 build。`scripts/dev-fast-loader.mjs` 按根 `tsconfig.json` 的 paths 把 `@myharness/*` 指向源码，配合 Node 原生类型剥离运行 TypeScript。服务启动后不打开浏览器，只在日志打印 `MyHarness Web UI: <url>`；`--no-open` 仅为兼容保留。日常使用走桌面端 `dev-desktop.cmd`。原先的浏览器启动脚本（`dev-web.cmd`、`web-runtime.ps1`、`web-source.ps1`、`web-source.sh` 等）已移除。
 
 ## Provider 配置与启动约定
 
@@ -51,7 +50,7 @@ MyHarness 的 library 层采用手动 Provider 模式：`ModelRuntime.create()` 
 - 不把上游 Provider 当作启动前置条件；
 - 只使用 `models.json` 中的 Provider，以及明确注册的 extension Provider。
 
-直接运行 `web-source.ps1` 会走 Coding Agent 产品入口；Provider 必须来自 `models.json` 或 extension。不要把本机生成的模型目录或用户配置复制回仓库。
+直接运行源码入口会走 Coding Agent 产品入口；Provider 必须来自 `models.json` 或 extension。不要把本机生成的模型目录或用户配置复制回仓库。
 
 ## 推送前检查
 
@@ -109,7 +108,7 @@ npm.cmd run test
 
 ```bash
 ./test.sh                         # 运行 non-LLM tests（脚本会按环境跳过依赖 API 的测试）
-./web-source.sh                   # 从源码启动
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts   # 从源码启动
 npm --workspace packages/coding-agent run test -- test/specific.test.ts
 ```
 

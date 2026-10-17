@@ -445,7 +445,6 @@ export async function main(args: string[], options?: MainOptions) {
 		appMode === "web"
 			? await (await import("./modes/web/web-mode.ts")).startWebBootstrap({
 					port: parsed.webPort,
-					openBrowser: !parsed.noOpenBrowser,
 				})
 			: undefined;
 

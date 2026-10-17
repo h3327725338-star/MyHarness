@@ -25,10 +25,8 @@ MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用�
 ## 启动与运行时
 
 ```text
-dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
-                                               │
-                               node + scripts/dev-fast-loader.mjs
-                               或 web-source.ps1 → tsx
+dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
+或 node --import ./scripts/dev-fast-loader.mjs（命令行直接跑源码）
                                                │
                                   coding-agent/src/web.ts
                                                │
@@ -42,9 +40,9 @@ dev-web.cmd → dev-web.vbs → dev-web.ps1 → web-runtime.ps1
 ```
 
 - `npm run desktop:dev` 启动独立 Electron 宿主，`npm run desktop:pack` 构建免安装目录；宿主复用 Web 服务与数据，第三方网页只使用主进程 `WebContentsView`。桌面重启由 IPC 交回宿主监督，浏览器重启路径不变。
-- `dev-web.cmd` 是浏览器方式的双击开发入口，后台启动；`--console` 用于查看服务日志，不是终端聊天模式。
-- `web-runtime.ps1` 检查 Node/npm/tsx/bash/ffmpeg，并在必要时准备依赖。从脚本位置定位仓库。
-- `web-source.ps1` / `web-source.sh` 直接运行 `src/web.ts`，保留调用者工作目录；`--no-env` 清理当前进程的 Provider 环境变量。
+- 日常使用走桌面端：双击仓库根目录 `dev-desktop.cmd`。原先用系统浏览器打开的启动脚本（`dev-web.cmd`、`dev-web.vbs`、`dev-web.ps1`、`web-runtime.ps1`、`web-source.ps1`、`web-source.sh`）已移除，界面代码历史另存于私有仓库 `MyHarness-WebArchive`。
+- 需要直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`（参数原样转发，保留调用者工作目录）。服务启动后不打开任何浏览器，只在日志里打印 `MyHarness Web UI: <url>`；`--no-open` 仍被接受（桌面端在传），仅为兼容保留。
+- Worktree 的“启动副本”和“生成启动文件”都用 Node 直接运行副本自己的 `src/web.ts` 与 `scripts/dev-fast-loader.mjs`，同样打印地址、不打开浏览器。
 - npm `myharness` 指向 `dist/web.js`；它是 Web 服务启动命令，不提供第二套交互。
 - Bun 编译入口为 `src/bun/web.ts`，保留 OAuth、sandbox 环境恢复与 Bedrock 注册。
 - `src/web.ts` 也分发内部 `--internal-delegated-worker`。Explore 使用内部 NDJSON 协议，不能将它当作公开 JSON 输出模式。

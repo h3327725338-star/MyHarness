@@ -28,7 +28,7 @@ export const WEB_STARTUP_HELP_SECTIONS: readonly WebStartupHelpSection[] = [
 		title: "Web service",
 		options: [
 			{ flags: "--port <n>", description: "Web UI port (default 7878; 0 picks a free port)" },
-			{ flags: "--no-open", description: "Do not open the browser automatically in Web UI mode" },
+			{ flags: "--no-open", description: "Kept for compatibility; the service never opens a browser on startup" },
 			{ flags: "--export <file>", description: "Export a session file to HTML and exit" },
 		],
 	},

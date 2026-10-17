@@ -22,7 +22,15 @@ function createRepository(): { root: string; agentDir: string; manager: GitWorkt
 	const agentDir = join(tempRoot, "agent data");
 	mkdirSync(root, { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
-	writeFileSync(join(root, "dev-web.cmd"), "@echo off\r\necho %CD%\r\n", "utf8");
+	// Stand-ins for the copy's own source entry and loader: the generated launcher runs them with Node.
+	mkdirSync(join(root, "packages", "coding-agent", "src"), { recursive: true });
+	mkdirSync(join(root, "scripts"), { recursive: true });
+	writeFileSync(
+		join(root, "packages", "coding-agent", "src", "web.ts"),
+		'console.log(process.cwd());\nconsole.log("loader=" + globalThis.fixtureLoader + " args=" + JSON.stringify(process.argv.slice(2)));\n',
+		"utf8",
+	);
+	writeFileSync(join(root, "scripts", "dev-fast-loader.mjs"), "globalThis.fixtureLoader = true;\n", "utf8");
 	writeFileSync(join(root, "shared.txt"), "base\n", "utf8");
 	runGit(root, ["init", "-b", "main"]);
 	runGit(root, ["config", "user.name", "MyHarness Test"]);
@@ -109,10 +117,26 @@ describe("GitWorktreeManager", () => {
 		const launcher = manager.createLauncher(created.worktree);
 		expect(launcher.ok).toBe(true);
 		expect(launcher.launcherPath).toContain(join(agentDir, "worktrees", "launchers"));
-		expect(readFileSync(launcher.launcherPath!, "utf8")).toContain(worktreePath.replaceAll("%", "%%"));
+		const launcherContent = readFileSync(launcher.launcherPath!, "utf8");
+		expect(launcherContent).toContain(worktreePath.replaceAll("%", "%%"));
+		expect(launcherContent).toContain(
+			'"%NODE_EXE%" --import "./scripts/dev-fast-loader.mjs" "%WORKTREE_DIR%\\packages\\coding-agent\\src\\web.ts" %*',
+		);
+		for (const fallback of [
+			"%ProgramFiles%\\nodejs\\node.exe",
+			"%ProgramFiles(x86)%\\nodejs\\node.exe",
+			"%LOCALAPPDATA%\\Programs\\nodejs\\node.exe",
+		]) {
+			expect(launcherContent).toContain(fallback);
+		}
+		expect(launcherContent).not.toContain("dev-web");
+		expect(launcherContent.split("\r\n").length).toBe(launcherContent.split("\n").length);
 		if (process.platform === "win32") {
-			const output = execSync(`call "${launcher.launcherPath}"`, { encoding: "utf8", shell: process.env.ComSpec });
-			expect(output.replaceAll("\r\n", "\n")).toContain(`${worktreePath}\n`);
+			const output = execSync(`call "${launcher.launcherPath}" --port 0`, {
+				encoding: "utf8",
+				shell: process.env.ComSpec,
+			});
+			expect(output.replaceAll("\r\n", "\n")).toContain(`${worktreePath}\nloader=true args=["--port","0"]\n`);
 		}
 
 		let switchedTo: string | undefined;
@@ -136,6 +160,20 @@ describe("GitWorktreeManager", () => {
 		expect(existsSync(worktreePath)).toBe(false);
 		expect(existsSync(launcher.launcherPath!)).toBe(false);
 		expect(runGit(root, ["branch", "--list", "feature/one"]).stdout).toContain("feature/one");
+	});
+
+	it("refuses to generate a launcher when the copy lacks its source entry or loader", () => {
+		const { root, manager } = createRepository();
+		const created = manager.createBranch(root, "feature/no-entry");
+		if (!created.worktree) throw new Error("Worktree was not created");
+		rmSync(join(created.worktree.path, "scripts", "dev-fast-loader.mjs"));
+		const missingLoader = manager.createLauncher(created.worktree);
+		expect(missingLoader.ok).toBe(false);
+		expect(missingLoader.error).toContain("scripts\\dev-fast-loader.mjs");
+		rmSync(join(created.worktree.path, "packages", "coding-agent", "src", "web.ts"));
+		const missingEntry = manager.createLauncher(created.worktree);
+		expect(missingEntry.ok).toBe(false);
+		expect(missingEntry.error).toContain("packages\\coding-agent\\src\\web.ts");
 	});
 
 	it("creates a Worktree from an existing branch and removes only that Worktree", () => {

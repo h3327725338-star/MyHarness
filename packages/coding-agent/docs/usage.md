@@ -4,9 +4,9 @@ MyHarness 只提供本机浏览器 Web UI，不再提供终端聊天、print、J
 
 ## 启动
 
-Windows 源码 checkout：双击仓库根目录 `dev-web.cmd`。服务在后台运行；需要查看日志时使用 `dev-web.cmd --console`。已构建入口为 `myharness`，它同样启动 Web。
+Windows 源码 checkout：日常使用双击仓库根目录 `dev-desktop.cmd` 启动桌面端。需要直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`，它保留调用者的工作目录，不打开浏览器，会在日志打印实际地址 `MyHarness Web UI: <url>`。已构建入口为 `myharness`，它启动同一个服务。
 
-启动参数仍可指定 `--port`、`--no-open`、Provider、模型、Session 和资源；使用 `web-source.ps1 --help` 查看当前完整列表。`web-source.ps1` 直接运行源码并保留调用者的工作目录；`web-runtime.ps1` 负责仓库开发环境检查。
+启动参数仍可指定 `--port`、Provider、模型、Session 和资源；在上面的命令后加 `--help` 查看当前完整列表。`--no-open` 仍被接受，仅为兼容保留：服务启动本来就不会打开浏览器。
 
 ## 对话与命令
 

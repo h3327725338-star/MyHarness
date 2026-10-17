@@ -19,10 +19,16 @@ describe("Web-only product boundary", () => {
 			"packages/ai/src/cli.ts",
 			"packages/coding-agent/src/cli.ts",
 			"packages/coding-agent/src/cli",
+			"dev-web.cmd",
+			"dev-web.ps1",
+			"dev-web.vbs",
+			"web-runtime.ps1",
+			"web-source.ps1",
+			"web-source.sh",
 		]) {
 			expect(existsSync(join(root, removed)), removed).toBe(false);
 		}
-		for (const kept of ["dev-web.cmd", "web-runtime.ps1", "web-source.ps1", "packages/coding-agent/src/web.ts"]) {
+		for (const kept of ["packages/coding-agent/src/web.ts"]) {
 			expect(existsSync(join(root, kept)), kept).toBe(true);
 		}
 		const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));

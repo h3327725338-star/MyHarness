@@ -9,8 +9,9 @@
  * reproduces for the `@myharness/*` workspace packages.
  *
  * Usage: node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts ...
- * It is only used by the Windows dev launcher (web-runtime.ps1); tests and other tools keep using
- * tsx / vitest.
+ * It is used by the desktop app in development (packages/desktop/main.cjs), by Worktree copy startup and
+ * generated Worktree launchers, and for running the sources directly from a command line; tests and other
+ * tools keep using tsx / vitest.
  */
 
 import { existsSync, readFileSync } from "node:fs";

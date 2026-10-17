@@ -60,10 +60,10 @@ it("starts default Web without console input using isolated state", async () => 
 	}
 }, 60000);
 
-it("reports the process start time in /api/boot for the launcher's wake check", async () => {
+it("reports the process start time in /api/boot and never opens a browser on startup", async () => {
 	openBrowserMock.mockClear();
 	const before = Date.now();
-	const bootstrap = await startWebBootstrap({ port: 0, openBrowser: false });
+	const bootstrap = await startWebBootstrap({ port: 0 });
 	try {
 		expect(openBrowserMock).not.toHaveBeenCalled();
 		const response = await fetch(`${bootstrap.url}api/boot`);
@@ -76,27 +76,13 @@ it("reports the process start time in /api/boot for the launcher's wake check", 
 		expect(Number.isInteger(startedAtMs)).toBe(true);
 		expect(startedAtMs).toBeLessThanOrEqual(Date.now());
 		expect(startedAtMs).toBeGreaterThan(before - 60_000);
-	} finally {
-		await bootstrap.server.close();
-	}
-});
-
-it("opens the browser on POST /api/wake and rejects requests without the Web header", async () => {
-	openBrowserMock.mockClear();
-	const bootstrap = await startWebBootstrap({ port: 0, openBrowser: false });
-	try {
-		const noHeader = await fetch(`${bootstrap.url}api/wake`, { method: "POST", body: "{}" });
-		expect(noHeader.status).toBe(403);
-		expect(openBrowserMock).not.toHaveBeenCalled();
 		const wake = await fetch(`${bootstrap.url}api/wake`, {
 			method: "POST",
 			headers: { "content-type": "application/json", origin: bootstrap.url.slice(0, -1), "x-myharness-web": "1" },
 			body: "{}",
 		});
-		expect(wake.status).toBe(200);
-		expect(await wake.json()).toEqual({ ok: true });
-		expect(openBrowserMock).toHaveBeenCalledTimes(1);
-		expect(openBrowserMock).toHaveBeenCalledWith(bootstrap.url);
+		expect(wake.status).toBe(404);
+		expect(openBrowserMock).not.toHaveBeenCalled();
 	} finally {
 		await bootstrap.server.close();
 	}

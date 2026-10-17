@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import lockfile from "proper-lockfile";
 import { worktreeId } from "../../git/worktrees/display-name.ts";
 import type { GitWorktree } from "../../git/worktrees/manager.ts";
@@ -45,7 +46,7 @@ interface RunningService {
 	token: string;
 }
 
-/** Starts the selected checkout, never the main checkout's entry and never dev-web.ps1's replacement flow. */
+/** Starts the selected checkout's own source entry with Node, never the main checkout's entry. */
 export class WorktreeLauncher {
 	private readonly agentDir: string;
 	constructor(agentDir: string) {
@@ -55,8 +56,9 @@ export class WorktreeLauncher {
 	async start(worktree: GitWorktree, graceSeconds: number): Promise<{ url: string; id: string }> {
 		if (worktree.isMain) throw new Error("The main copy is not a test copy.");
 		if (process.platform !== "win32") throw new Error("Copy startup currently requires Windows.");
-		const script = join(worktree.path, "web-runtime.ps1");
-		if (!existsSync(script) || !existsSync(join(worktree.path, "packages/coding-agent/src/web.ts"))) {
+		const entry = join(worktree.path, "packages/coding-agent/src/web.ts");
+		const loader = join(worktree.path, "scripts/dev-fast-loader.mjs");
+		if (!existsSync(entry) || !existsSync(loader)) {
 			throw new Error("This copy does not contain the MyHarness source startup entry.");
 		}
 		const modeFile = join(worktree.path, "packages/coding-agent/src/modes/web/web-mode.ts");
@@ -106,22 +108,19 @@ export class WorktreeLauncher {
 			};
 			const logPath = join(directory, "startup.log");
 			const log = openSync(logPath, "w");
-			const child = spawn(
-				"powershell.exe",
-				["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "--port", "0", "--no-open"],
-				{
-					cwd: worktree.path,
-					windowsHide: true,
-					env: {
-						...process.env,
-						MYHARNESS_CODING_AGENT_DIR: privateAgent,
-						MYHARNESS_DATA_ROOT: join(directory, "data"),
-						MYHARNESS_CODING_AGENT_SESSION_DIR: join(directory, "sessions"),
-						MYHARNESS_WORKTREE_SERVICE: JSON.stringify(identity),
-					},
-					stdio: ["ignore", log, log],
+			// --import takes a module specifier: a bare Windows absolute path is rejected, its file URL is not.
+			const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, entry, "--port", "0"], {
+				cwd: worktree.path,
+				windowsHide: true,
+				env: {
+					...process.env,
+					MYHARNESS_CODING_AGENT_DIR: privateAgent,
+					MYHARNESS_DATA_ROOT: join(directory, "data"),
+					MYHARNESS_CODING_AGENT_SESSION_DIR: join(directory, "sessions"),
+					MYHARNESS_WORKTREE_SERVICE: JSON.stringify(identity),
 				},
-			);
+				stdio: ["ignore", log, log],
+			});
 			closeSync(log);
 			child.unref();
 			let failure: Error | undefined;

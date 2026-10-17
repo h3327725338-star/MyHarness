@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,12 +15,14 @@ it.skipIf(process.platform !== "win32")(
 			join(checkout, "packages/coding-agent/src/modes/web/web-mode.ts"),
 			"// worktreeServiceIdentity fixture",
 		);
-		writeFileSync(join(checkout, "packages/coding-agent/src/web.ts"), "// Fixture entry marker");
+		// The launcher runs the copy's own entry and loader with Node; these stand-ins forward to the real ones.
 		const loader = pathToFileURL(resolve("../../scripts/dev-fast-loader.mjs")).href;
-		const entry = resolve("src/web.ts");
+		const entry = pathToFileURL(resolve("src/web.ts")).href;
+		mkdirSync(join(checkout, "scripts"), { recursive: true });
+		writeFileSync(join(checkout, "scripts/dev-fast-loader.mjs"), `await import(${JSON.stringify(loader)});\n`);
 		writeFileSync(
-			join(checkout, "web-runtime.ps1"),
-			`& '${process.execPath}' --import '${loader}' '${entry}' --offline --no-extensions --no-context-files --approve @args\nexit $LASTEXITCODE\n`,
+			join(checkout, "packages/coding-agent/src/web.ts"),
+			`process.argv.push("--offline", "--no-extensions", "--no-context-files", "--approve");\nawait import(${JSON.stringify(entry)});\n`,
 		);
 		const launcher = new WorktreeLauncher(join(root, "agent"));
 		const copy = { path: checkout, isMain: false, locked: false, branch: "test-copy" };
@@ -79,3 +81,22 @@ it.skipIf(process.platform !== "win32")(
 	},
 	90000,
 );
+
+it.skipIf(process.platform !== "win32")("refuses a copy without its own source entry or dev loader", async () => {
+	const root = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "copy-launch-missing-"));
+	const checkout = join(root, "checkout");
+	mkdirSync(join(checkout, "packages/coding-agent/src/modes/web"), { recursive: true });
+	writeFileSync(
+		join(checkout, "packages/coding-agent/src/modes/web/web-mode.ts"),
+		"// worktreeServiceIdentity fixture",
+	);
+	writeFileSync(join(checkout, "packages/coding-agent/src/web.ts"), "// Fixture entry marker");
+	const launcher = new WorktreeLauncher(join(root, "agent"));
+	const copy = { path: checkout, isMain: false, locked: false, branch: "test-copy" };
+	await expect(launcher.start(copy, 20)).rejects.toThrow("does not contain the MyHarness source startup entry");
+	mkdirSync(join(checkout, "scripts"), { recursive: true });
+	writeFileSync(join(checkout, "scripts/dev-fast-loader.mjs"), "");
+	rmSync(join(checkout, "packages/coding-agent/src/web.ts"));
+	await expect(launcher.start(copy, 20)).rejects.toThrow("does not contain the MyHarness source startup entry");
+	rmSync(root, { recursive: true, force: true });
+});

@@ -32,15 +32,17 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
+
+`dev-desktop.cmd` 会构建并启动 Electron 桌面端，这是日常使用 MyHarness 的方式。需要在命令行直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`；它不会打开浏览器，会在日志中打印实际地址 `MyHarness Web UI: <url>`。
 
 启动后，在 `/settings` 中配置 Provider 和 model，再输入任务。配置说明见 [Providers](packages/coding-agent/docs/providers.md) 和 [Settings](packages/coding-agent/docs/settings.md)。
 
 没有 Provider 凭据时，可以先检查Web 源码入口 是否能够启动：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts --help
 ```
 
 这个 smoke check 不能证明外部 Provider、OAuth flow、Web Search service 或真实 model conversation 已经成功。

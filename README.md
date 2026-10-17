@@ -32,15 +32,17 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
+
+`dev-desktop.cmd` builds and starts the Electron desktop app, which is the normal way to use MyHarness. To run the sources directly from a command line instead, use `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts` from the repository root; it opens no browser and prints the actual address as `MyHarness Web UI: <url>`.
 
 After startup, configure a Provider and model in `/settings`, then enter a task. Provider configuration is described in [Providers](packages/coding-agent/docs/providers.md) and [Settings](packages/coding-agent/docs/settings.md).
 
 To check that the Web source entry can start without a Provider credential:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts --help
 ```
 
 This smoke check does not prove that an external Provider, OAuth flow, Web Search service, or real model conversation works.

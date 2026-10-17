@@ -11,8 +11,10 @@ MyHarness 是一个本机浏览器代码协作工具。Coding Agent 产品层提
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
+
+`dev-desktop.cmd` 启动桌面端。需要在命令行直接跑源码时使用 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`；它不会打开浏览器，会打印地址 `MyHarness Web UI: <url>`。
 
 启动 model-backed session 前，请先在 `models.json`、Settings、extension 中配置 Provider 和 model。library 层的 `ModelRuntime.create()` 仍然不会自动加载 Provider，只有产品入口或 extension 显式注册后才会出现 catalog。首次运行流程见 [Quickstart](quickstart.md)。
 

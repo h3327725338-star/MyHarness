@@ -9,10 +9,10 @@ From the repository root:
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
 
-Double-click `dev-web.cmd` for background startup. Use `dev-web.cmd --console` to inspect service output, or `web-source.ps1` to run sources in the caller's working directory. The built `myharness` command starts the same Web service through `dist/web.js`.
+Daily use goes through the desktop app: double-click `dev-desktop.cmd` in the repository root. To run the sources directly in the caller's working directory, use `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts` (arguments are forwarded). The service never opens a browser; it prints its actual address as `MyHarness Web UI: <url>`. The built `myharness` command starts the same service through `dist/web.js`.
 
 Configure Providers, credentials and models in browser Settings or `models.json`. There is no default Provider catalog. Local runtime data, credentials and existing Session formats are preserved.
 

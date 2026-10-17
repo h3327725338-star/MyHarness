@@ -26,7 +26,7 @@ Output goes to `MYHARNESS_DESKTOP_OUTPUT`, otherwise the current conversation's 
 
 `MyHarness.exe → Electron main → Electron exe with ELECTRON_RUN_AS_NODE=1 → service-entry.cjs → existing coding-agent dist/web.js → main/startWebBootstrap → HTTP/SSE → existing web/`.
 
-Development uses that same chain with `src/web.ts` and the repository dev loader. Refresh for frontend changes; close/relaunch for backend changes. `dev-web.cmd` remains unchanged.
+Development uses that same chain with `src/web.ts` and the repository dev loader. Refresh for frontend changes; close/relaunch for backend changes. The browser launch scripts (`dev-web.cmd` and its helpers) have been removed: the desktop app is the way to use MyHarness, and `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts` runs the sources from a command line without opening a browser.
 
 The source host anchors its working directory to the repository. The packaged host records that directory in `runtime.json` at build time, independently of where the executable is copied. This is intentional for this checkout's desktop/Web shared-data requirement: Agent configuration remains in `~/.myharness/agent` (or the existing environment override); current Session/Workspace data remains in the checkout's `data/`, not a new Electron data store. `MYHARNESS_DESKTOP_CWD` can explicitly select a different working directory; `MYHARNESS_DATA_ROOT` retains the backend's existing semantics. A different machine needs an explicitly chosen existing working directory; a build-time checkout path is not a universal installer data location.
 

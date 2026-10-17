@@ -11,8 +11,10 @@ The repository does not currently publish `@myharness/coding-agent` to the publi
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
+
+`dev-desktop.cmd` starts the desktop app. To run the sources from a command line, use `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`; it opens no browser and prints its address as `MyHarness Web UI: <url>`.
 
 Configure a Provider and model in `models.json`, Settings, or an extension before starting a model-backed session. The library-level `ModelRuntime.create()` catalog remains empty until a product entrypoint or extension registers a Provider. See [Quickstart](quickstart.md) for the first-session flow.
 

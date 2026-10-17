@@ -17,7 +17,6 @@ import { getAgentDir, getExportTemplateDir, getWebUiDir, VERSION } from "../../c
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import { setMirrorSessionsAllowed } from "../../session/manager/index.ts";
-import { openBrowser } from "../../utils/open-browser.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { WebHttpServer } from "./http-server.ts";
 import { WebHostHub } from "./hub.ts";
@@ -58,7 +57,7 @@ export interface WebModeOptions {
 }
 
 /** Start the HTTP server before the runtime exists so startup questions (Project Trust) can reach the browser. */
-export async function startWebBootstrap(options: { port?: number; openBrowser: boolean }): Promise<WebBootstrap> {
+export async function startWebBootstrap(options: { port?: number }): Promise<WebBootstrap> {
 	// A session that the terminal UI (or another Web UI process) runs can be opened here and followed live.
 	setMirrorSessionsAllowed(true);
 	const server = new WebHttpServer();
@@ -138,16 +137,7 @@ export async function startWebBootstrap(options: { port?: number; openBrowser: b
 	if (preferred !== 0 && address.port !== preferred) {
 		console.error(`Port ${preferred} is in use; the Web UI is listening on ${address.port} instead.`);
 	}
-	// Wake channel for the dev-web.ps1 launcher: an explicit request to open the
-	// browser on the already running instance. It fires even when the process
-	// itself started with --no-open; the launcher skips calling it in that case.
-	// The x-myharness-web header is enforced by checkOrigin, same as /api/shutdown.
-	server.route("POST", "/api/wake", () => {
-		openBrowser(url);
-		return { ok: true };
-	});
 	console.error(`MyHarness Web UI: ${url}`);
-	if (options.openBrowser) openBrowser(url);
 
 	return {
 		server,

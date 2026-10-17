@@ -73,7 +73,7 @@ Files 面板不再提供记忆查看入口；记忆查询 API 仍可按当前对
 
 ## Worktree 副本启动与显示名称
 
-分支浮层的已有副本行悬停或键盘聚焦时提供“进入修改”“启动副本”、重命名和删除。删除先在浮层内确认，说明会删除副本目录、保留分支且不自动合并到 main；主副本不提供删除，当前副本或任务运行时禁用删除。复用现有 Worktree 删除接口，失败保留副本和确认区：原因与下一步以人话常驻显示，原始报错收在默认折叠的“错误详情”。只有匹配到 `contains modified or untracked files` / `use --force` 的未提交改动拒绝时，才提供显眼的红色“强制删除副本”；点后先显示二次确认，明确永久丢弃副本目录、未提交改动和新增文件，分支保留，再点才发送 `force: true`（`git worktree remove --force`）。未知、权限、锁定等错误不误称脏副本、不随便提供强制按钮，而提供对应说明、“重试删除”和“取消”。强制失败仍保留确认和人话原因，成功刷新副本及分支列表。删除接口的安全与强制路径都检查请求所属 Chat 的信任、运行/收尾/Git 操作状态，且不能跳过当前副本与主副本保护；这不等于检查其他 Chat 或独立副本服务的全部占用。进入修改会在副本目录新建 Chat，但不自动登记工作区：未登记副本的 Chat 放在 No Folder，已登记目录沿用现有工作区，返回主目录也沿用主目录已有登记；已有工作区不自动移除。启动副本在当前浏览器打开具名的新标签页，运行所选 checkout 的 `web-runtime.ps1`，不经过会替换旧实例的 `dev-web.ps1`。重复点击复用已确认身份的服务，并尽量聚焦原标签页；页面刷新或浏览器限制可能导致重新打开标签页，但仍连接同一个服务。弹窗被拦截时明确报错，标签页/窗口形式由浏览器设置决定。
+分支浮层的已有副本行悬停或键盘聚焦时提供“进入修改”“启动副本”、重命名和删除。删除先在浮层内确认，说明会删除副本目录、保留分支且不自动合并到 main；主副本不提供删除，当前副本或任务运行时禁用删除。复用现有 Worktree 删除接口，失败保留副本和确认区：原因与下一步以人话常驻显示，原始报错收在默认折叠的“错误详情”。只有匹配到 `contains modified or untracked files` / `use --force` 的未提交改动拒绝时，才提供显眼的红色“强制删除副本”；点后先显示二次确认，明确永久丢弃副本目录、未提交改动和新增文件，分支保留，再点才发送 `force: true`（`git worktree remove --force`）。未知、权限、锁定等错误不误称脏副本、不随便提供强制按钮，而提供对应说明、“重试删除”和“取消”。强制失败仍保留确认和人话原因，成功刷新副本及分支列表。删除接口的安全与强制路径都检查请求所属 Chat 的信任、运行/收尾/Git 操作状态，且不能跳过当前副本与主副本保护；这不等于检查其他 Chat 或独立副本服务的全部占用。进入修改会在副本目录新建 Chat，但不自动登记工作区：未登记副本的 Chat 放在 No Folder，已登记目录沿用现有工作区，返回主目录也沿用主目录已有登记；已有工作区不自动移除。启动副本在当前浏览器打开具名的新标签页，服务端用 Node 直接运行所选 checkout 自己的 `packages/coding-agent/src/web.ts` 与 `scripts/dev-fast-loader.mjs`（`--port 0`），从启动日志中的 `MyHarness Web UI: <url>` 取得地址并校验服务身份；副本缺少这两个文件时拒绝启动。重复点击复用已确认身份的服务，并尽量聚焦原标签页；页面刷新或浏览器限制可能导致重新打开标签页，但仍连接同一个服务。弹窗被拦截时明确报错，标签页/窗口形式由浏览器设置决定。
 
 `/git` → Worktrees 中的“删除副本”也使用同样的独立确认、人话报错、折叠错误详情与显眼“强制删除副本”入口；强制前再次确认、默认选中“取消”，不会删分支或执行 Combine。两处复用 `web/js/git-delete.js` 的失败说明；API 在本地错误对象的 `rawMessage` 保留服务端原因，避免界面语言转换（特别是英文界面中的中文分支名/路径）丢失 Git 关键词。
 
@@ -114,22 +114,22 @@ Windows 重启经隐藏 PowerShell `Start-Process` 启动原 Node 入口、相�
 ## 启动
 
 ```powershell
-# 源码 checkout（Windows）
-.\dev-web.cmd
-# 查看服务日志：.\dev-web.cmd --console
-# 或已构建的 Web 启动入口
+# 日常使用：桌面端（Windows 源码 checkout）
+.\dev-desktop.cmd
+# 命令行直接跑源码（在仓库根目录执行，日志打印实际地址）
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts
+# 或已构建的启动入口
 myharness
 ```
 
 | 参数 | 说明 |
 | --- | --- |
 | `--port <n>` | 端口，默认 `7878`；被占用时依次尝试后面的 10 个端口；`0` 表示由系统分配。 |
-| `--no-open` | 不自动打开默认浏览器（终端会打印 `MyHarness Web UI: http://127.0.0.1:<port>/`）。 |
-| `--restart` | 启动器专用：强制结束已在运行的实例并重新启动（后端源码没变也重启；该参数不转发给服务端）。 |
+| `--no-open` | 兼容保留（桌面端仍在传）：服务启动本来就不会打开浏览器，只在日志打印 `MyHarness Web UI: http://127.0.0.1:<port>/`。 |
 
-**无窗口启动（Windows 源码 checkout）**：`dev-web.cmd` 不再占用控制台。它把工作交给 `dev-web.vbs`（wscript，本身没有控制台）后立即退出；`dev-web.ps1` 发现已有就绪实例（默认端口 7878 或 `--port`）且后端源码没变时，直接唤醒它（`POST /api/wake` 打开浏览器后退出，不到 1 秒），不关停、不重启；判据是服务端启动时刻（`/api/boot` 的 `startedAtMs`）与后端加载范围（`packages/*/src`、`packages/*/package.json`、根 `package.json`、`tsconfig*.json`、`scripts/dev-fast-loader.mjs`、`system-prompts`）的最大修改时间的比较。源码变了（或实例没就绪、判不准）则照旧先请求旧实例正常退出（`POST /api/shutdown`），15 秒内没退出则只结束确认是 MyHarness 的监听进程；`--no-open` 拉起走同一套新鲜度判断：源码没变时静默留下已有实例（不打开浏览器，直接退出），源码变了照样关停再重启；端口看着忙但 150ms 内问不出 `/api/boot` 时会再用 2000ms 确认一次（实例可能正忙），仍然没回答才报端口被其他程序占用并取消启动，旧实例无法结束时同样弹错取消；`--restart` 强制走重启。这样打开的总是当前源码的后端（重启时旧实例里未完成的对话会随之结束）。注意只改了 `.myharness` 配置（或改了前端 `packages/coding-agent/web/` 下的文件）不会触发重启：前者唤醒后不会重读配置，需要 `--restart` 或在页面里退出再启动，后者刷新页面即是最新。随后以隐藏方式运行 `web-runtime.ps1`，输出（UTF-8）写入 `data/logs/web-launch.out.log` / `web-launch.err.log`，服务就绪（打印出地址）后退出。启动超过约 0.3 秒仍未就绪时会显示一个小启动窗口（深色、无边框、圆角，带 MyHarness 标志和一条细进度线，颜色与 Web UI 一致，不再是系统默认白色窗口），当前阶段文字对应 `web-runtime.ps1` 打印的真实阶段（读取项目要求、Node.js、npm、依赖、bash、ffmpeg、加载并启动服务）和最后的服务监听，就绪后自动关闭；快速启动时不出现任何窗口。启动小窗右上角有标准的最小化和关闭按钮（按住窗口其余部分可拖动，最小化后从任务栏还原）：最小化只是收到后台，启动继续；关闭（或 Alt+F4）明确取消启动，并结束启动进程及其子进程（`taskkill /T`），不弹错误对话框。“就绪”不只看日志：服务端口一监听，`dev-web.ps1` 每约 0.25 秒用不走代理的短超时请求 `GET /api/boot`，应答就立即认为就绪，所以日志文件暂时读不到也不会一直等；服务端在存储迁移、会话查找、运行时创建之前就开始监听（`main.ts` 里 `startWebBootstrap` 最先执行），页面在这段时间显示 “Starting MyHarness…”。启动失败、进程提前退出或 180 秒仍未就绪时，会停止启动进程并弹出错误对话框（带日志尾部与日志路径；日志必须按 UTF-8 读取，否则中文会乱码）。
+服务启动后不会打开任何浏览器；唯一会打开系统浏览器的是 Provider OAuth 登录跳转。原先用系统浏览器打开界面的启动脚本（`dev-web.cmd`、`dev-web.vbs`、`dev-web.ps1`、`web-runtime.ps1`、`web-source.ps1`、`web-source.sh`）及其唤醒接口 `POST /api/wake` 已移除，界面代码的提交历史另存于私有仓库 `h3327725338-star/MyHarness-WebArchive`。
 
-**启动耗时**：`web-runtime.ps1` 默认用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒，双击到页面可用约 5 秒。需要回到 `tsx` 时设置 `MYHARNESS_DEV_LOADER=tsx`。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。需要看控制台输出时用 `dev-web.cmd --console`（原来的可见窗口方式）。`myharness` 同样启动 Web；旧 `dev.cmd` 与多界面切换参数已移除。
+**启动耗时**：源码运行用 `node --import scripts/dev-fast-loader.mjs` 直接运行源码（Node 原生类型剥离）。此前用 `tsx` 时，约 1600 个模块逐个经过转换 hook，从进程启动到服务监听要 11–12 秒；现在约 2.3 秒。服务用页面里的 **Quit MyHarness** 结束，整棵进程树一起退出。`myharness` 同样启动 Web；旧 `dev.cmd` 与多界面切换参数已移除。
 
 其余参数照常生效：`--session`、`--continue`、`--model`、`--thinking`、`--no-extensions`、`--approve/--no-approve` 等；命令行里的初始 message / `@file` 会在启动后作为第一条消息发送。终端里按 `Ctrl+C`（或界面里的 **Quit MyHarness**）会停止服务并结束当前任务。
 

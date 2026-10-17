@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
 const cliPath = resolve(__dirname, "../src/web.ts");
-// The real launcher runs `node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts`
-// (web-runtime.ps1). Plain node without the loader resolves @myharness/* to the stale compiled
+// Source runs (command line, desktop dev mode, Worktree copies) use
+// `node --import ./scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts`. Plain node without the loader resolves @myharness/* to the stale compiled
 // packages/ai/dist and fails at module load. The child here runs with cwd set to a temporary project,
 // so the loader is pinned to an absolute file URL (a bare or "./" specifier would resolve against that cwd).
 const devLoaderHref = pathToFileURL(resolve(__dirname, "../../../scripts/dev-fast-loader.mjs")).href;

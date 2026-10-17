@@ -14,13 +14,15 @@ From the repository root on Windows:
 ```powershell
 npm.cmd install --ignore-scripts
 npm.cmd run build
-.\dev-web.cmd
+.\dev-desktop.cmd
 ```
+
+`dev-desktop.cmd` builds and starts the desktop app. To run the sources from a command line instead, use `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`; it opens no browser and prints its address as `MyHarness Web UI: <url>`.
 
 For a Web source startup check that does not need a Provider credential:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\web-source.ps1 --help
+node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts --help
 ```
 
 After a future npm publication, the intended package installation will be:
@@ -59,8 +61,9 @@ cd /path/to/project
 myharness
 ```
 
-For the current source checkout, run `.\dev-web.cmd` from the repository root
-instead; the process still operates on the directory from which you invoke it.
+For the current source checkout, use the desktop app (`.\dev-desktop.cmd`) or run
+`node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts` from the
+repository root instead; the process operates on the directory from which you invoke it.
 
 ## Configure Provider and authentication
 

@@ -44,19 +44,29 @@ describe("Phase 0 compatibility contracts", () => {
 		}
 	});
 
-	it("keeps the Windows source startup chain and argument forwarding", () => {
-		const devCmd = normalizeSource(readRepositoryFile("dev-web.cmd"));
-		const devPs1 = normalizeSource(readRepositoryFile("web-runtime.ps1"));
-		const testPs1 = normalizeSource(readRepositoryFile("web-source.ps1"));
-
-		expect(devCmd).toContain("-NoProfile -ExecutionPolicy Bypass -File");
-		expect(devCmd).toContain("%~dp0web-runtime.ps1");
-		expect(devCmd).toContain("%*");
-		expect(devPs1).toContain('Join-Path $Root "web-source.ps1"');
-		expect(devPs1).toContain("& $entryScript @args");
-		expect(testPs1).toContain('Join-Path $scriptDir "node_modules/.bin/tsx.cmd"');
-		expect(testPs1).toContain('Join-Path $scriptDir "packages/coding-agent/src/web.ts"');
-		expect(testPs1).toContain("& $tsxBin $webPath @forwardArgs");
+	it("starts from source with Node and the dev loader instead of browser launcher scripts", () => {
+		for (const entry of ["packages/coding-agent/src/web.ts", "scripts/dev-fast-loader.mjs"]) {
+			expect(existsSync(resolve(repositoryRoot, entry)), entry).toBe(true);
+		}
+		for (const removed of [
+			"dev-web.cmd",
+			"dev-web.ps1",
+			"dev-web.vbs",
+			"web-runtime.ps1",
+			"web-source.ps1",
+			"web-source.sh",
+			"scripts/test-dev-launcher.ps1",
+		]) {
+			expect(existsSync(resolve(repositoryRoot, removed)), removed).toBe(false);
+		}
+		const desktopMain = normalizeSource(readRepositoryFile("packages/desktop/main.cjs"));
+		expect(desktopMain).toContain("packages/coding-agent/src/web.ts");
+		expect(desktopMain).toContain("scripts/dev-fast-loader.mjs");
+		expect(desktopMain).toContain("'--no-open'");
+		const copyLauncher = readRepositoryFile("packages/coding-agent/src/modes/web/worktree-launch.ts");
+		expect(copyLauncher).toContain(
+			'spawn(process.execPath, ["--import", pathToFileURL(loader).href, entry, "--port", "0"]',
+		);
 	});
 
 	it("keeps the Bun binary entrypoint, build inputs, and adjacent asset layout", () => {
