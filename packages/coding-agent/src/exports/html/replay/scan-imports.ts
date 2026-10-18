@@ -17,6 +17,8 @@
  * dependency only and would be missing on a production install, where exporting runs on the user's machine.
  */
 
+const RUNTIME_ONLY_PREFIX = "/vendor-pdf/";
+
 export type ImportKind = "static" | "export-from" | "dynamic";
 
 export interface ScannedImport {
@@ -195,7 +197,8 @@ class ImportScanner {
 					throw new ScanImportsError(`dynamic import() must take exactly one string literal (index ${lit.start})`);
 				}
 				this.i++;
-				this.record("dynamic", lit.start, lit.end, lit.text);
+				// pdf.js is served only by the live server (/vendor-pdf/); an exported replay has no PDF tab to open it.
+				if (!lit.text.startsWith(RUNTIME_ONLY_PREFIX)) this.record("dynamic", lit.start, lit.end, lit.text);
 				this.prev = ")";
 				return;
 			}

@@ -2168,7 +2168,9 @@ export class AgentSession {
 				error: msg.errorMessage ?? "任务已取消",
 				reason: "user-cancelled",
 			};
-			return false;
+			// Messages queued before the stop still get their one final turn, which inherits the cancellation (see
+			// the continuation loop in prompt handling); leaving them queued would keep the session busy forever.
+			return this.agent.hasQueuedMessages();
 		}
 
 		const retryPlan = this._planRetryFor(msg);

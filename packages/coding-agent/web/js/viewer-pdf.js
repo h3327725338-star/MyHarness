@@ -25,11 +25,11 @@ function loadPdfjs() {
 					.replace(/url\((["']?)(?![a-z]+:|#|\/)/giu, `url($1${BASE}web/`)}\n}`;
 				document.head.append(style);
 			}
-			const lib = await import(`${BASE}build/pdf.min.mjs`);
+			const lib = await import("/vendor-pdf/build/pdf.min.mjs");
 			// The viewer layer finds the library through this global.
 			globalThis.pdfjsLib = lib;
 			lib.GlobalWorkerOptions.workerSrc = `${BASE}build/pdf.worker.min.mjs`;
-			const viewer = await import(`${BASE}web/pdf_viewer.mjs`);
+			const viewer = await import("/vendor-pdf/web/pdf_viewer.mjs");
 			return { lib, viewer };
 		})().catch((error) => {
 			pdfjs = null;

@@ -67,17 +67,21 @@ function checkModuleSyntax(source: string): string | null {
 /** es-module-lexer 声明 → 与扫描器同款 {kind, specifier}（lexer 的 d>=0 是动态 import；ss..se 起头是 export 的是 export-from）。 */
 function lexerFindings(source: string): string[] {
 	const [declarations] = parseLexer(source, "cross-check.js");
-	return declarations
-		.map((d) => {
-			const kind =
-				d.d !== undefined && d.d >= 0
-					? "dynamic"
-					: /^\s*export\b/.test(source.slice(d.ss ?? 0, d.se ?? 0))
-						? "export-from"
-						: "static";
-			return `${kind}:${d.n}`;
-		})
-		.sort();
+	return (
+		declarations
+			.map((d) => {
+				const kind =
+					d.d !== undefined && d.d >= 0
+						? "dynamic"
+						: /^\s*export\b/.test(source.slice(d.ss ?? 0, d.se ?? 0))
+							? "export-from"
+							: "static";
+				return `${kind}:${d.n}`;
+			})
+			// The scanner deliberately skips server-only pdf.js assets (see RUNTIME_ONLY_PREFIX).
+			.filter((entry) => !entry.startsWith("dynamic:/vendor-pdf/"))
+			.sort()
+	);
 }
 
 function scannerFindings(found: readonly ScannedImport[]): string[] {
