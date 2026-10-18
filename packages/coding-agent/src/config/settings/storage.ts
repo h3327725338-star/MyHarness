@@ -25,6 +25,13 @@ export interface SettingsStorage {
 }
 
 /** File-backed Settings storage preserving the existing lock and atomic-write protocol. */
+/**
+ * The settings lock is held only for one short read-modify-write. If its directory disappears meanwhile (the
+ * data root was removed or moved), proper-lockfile's default handler throws an unhandled error from a timer;
+ * the write itself already succeeded or failed on its own, so there is nothing left to act on.
+ */
+function ignoreCompromisedSettingsLock(): void {}
+
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
@@ -38,7 +45,7 @@ export class FileSettingsStorage implements SettingsStorage {
 	private acquireLockSyncWithRetry(path: string): () => void {
 		// The legacy synchronous entry must fail promptly rather than spin on the event loop.
 		// Runtime saves use withLockAsync below, which retries without blocking.
-		return lockfile.lockSync(path, { realpath: false });
+		return lockfile.lockSync(path, { realpath: false, onCompromised: ignoreCompromisedSettingsLock });
 	}
 
 	async withLockAsync(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): Promise<void> {
@@ -60,6 +67,7 @@ export class FileSettingsStorage implements SettingsStorage {
 		}
 		const release = await lockfile.lock(path, {
 			realpath: false,
+			onCompromised: ignoreCompromisedSettingsLock,
 			retries: { retries: 9, factor: 1, minTimeout: 20, maxTimeout: 20 },
 		});
 		try {

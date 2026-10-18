@@ -18,7 +18,7 @@ describe("auto memory", () => {
 	const dataRoot = join(testRoot, "data");
 
 	afterEach(() => {
-		rmSync(testRoot, { recursive: true, force: true });
+		rmSync(testRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	});
 
 	it("keeps global storage shared while isolating project storage", () => {
@@ -155,8 +155,15 @@ describe("auto memory", () => {
 			modelRunner,
 		});
 		const disabledWorkspace = new AutoMemoryManager({
-			cwd: projectDir, sessionId: "session-disabled", dataRoot, workspaceId: "project", settingsManager,
-			persisted: true, agentDir, modelRunner, isWorkspaceMemoryEnabled: () => false,
+			cwd: projectDir,
+			sessionId: "session-disabled",
+			dataRoot,
+			workspaceId: "project",
+			settingsManager,
+			persisted: true,
+			agentDir,
+			modelRunner,
+			isWorkspaceMemoryEnabled: () => false,
 		});
 		const withoutWorkspace = await disabledWorkspace.recall("Project Language 面向用户的说明");
 		expect(withoutWorkspace?.content).not.toContain("面向用户的说明优先使用简体中文");
