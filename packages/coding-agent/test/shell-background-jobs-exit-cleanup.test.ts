@@ -69,7 +69,11 @@ describe("shell background jobs: exit, cleanup and wording gaps", () => {
 		backgroundJobManager.killAllRunningSync();
 		backgroundJobManager.clearRecords();
 		if (testDir && existsSync(testDir)) {
-			rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+			try {
+				rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+			} catch {
+				// A just-killed child can still hold the directory on Windows (EBUSY); the OS temp directory is cleaned later.
+			}
 		}
 	});
 
