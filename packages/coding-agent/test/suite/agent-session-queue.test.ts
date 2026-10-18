@@ -215,7 +215,8 @@ describe("AgentSession queue characterization", () => {
 			(context) => {
 				batchedUserMessages = context.messages
 					.filter((message) => message.role === "user")
-					.map((message) => getMessageText(message));
+					.map((message) => getMessageText(message))
+					.filter((text) => !text.startsWith("[system-reminder]"));
 				return fauxAssistantMessage("batched steer response");
 			},
 		]);
@@ -243,7 +244,8 @@ describe("AgentSession queue characterization", () => {
 			(context) => {
 				batchedUserMessages = context.messages
 					.filter((message) => message.role === "user")
-					.map((message) => getMessageText(message));
+					.map((message) => getMessageText(message))
+					.filter((text) => !text.startsWith("[system-reminder]"));
 				return fauxAssistantMessage("batched follow-up response");
 			},
 		]);

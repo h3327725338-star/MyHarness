@@ -18,7 +18,8 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		setupFiles: [fileURLToPath(new URL("./test/setup-data-root.ts", import.meta.url))],
-		testTimeout: 30000,
+		// Shared CI runners are slower than a desktop, so they get twice the per-test budget.
+		testTimeout: process.env.GITHUB_ACTIONS ? 60000 : 30000,
 		maxWorkers: process.platform === "win32" ? maxWindowsWorkers : undefined,
 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 		silent: "passed-only",

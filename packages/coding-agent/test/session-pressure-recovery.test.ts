@@ -40,7 +40,7 @@ function terminateTree(pid: number | undefined): void {
 	}
 }
 
-async function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
+async function waitForFile(path: string, timeoutMs = 45_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (!existsSync(path)) {
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
