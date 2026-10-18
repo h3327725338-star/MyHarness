@@ -6,6 +6,8 @@ type SchemaRecord = {
 	type?: unknown;
 	properties?: Record<string, SchemaRecord>;
 	anyOf?: SchemaRecord[];
+	// Literal discriminators such as `{ const: "status" }` are what the operation matrix is built from.
+	const?: unknown;
 };
 
 function validate(arguments_: Record<string, unknown>): unknown {

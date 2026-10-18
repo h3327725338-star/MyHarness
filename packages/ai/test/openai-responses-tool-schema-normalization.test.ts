@@ -56,6 +56,9 @@ describe("Responses tool parameter schema normalization", () => {
 			{ type: "object", properties: { operation: { const: "tabs" } }, additionalProperties: false },
 		];
 		const [converted] = convertResponsesTools([toolWith({ anyOf: branches })]);
+		// convertResponsesTools is typed against the SDK's wide Tool union; only its function branch carries
+		// `parameters`, so narrow to that branch instead of reading the property off the union.
+		if (converted.type !== "function") throw new Error(`expected a function tool, got ${converted.type}`);
 		expect(converted.parameters?.type).toBe("object");
 		expect(converted.parameters?.anyOf).toEqual(branches);
 	});
