@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stream as anthropic } from "../src/api/anthropic-messages.ts";
 import { stream as openai } from "../src/api/openai-completions.ts";
+import { clearSystemPromptCache } from "../src/api/system-prompt-loader.ts";
 import type { Context, Model } from "../src/types.ts";
 
 async function capture(api: "anthropic-messages" | "openai-completions", apiKey: string) {
@@ -73,10 +74,13 @@ describe("provider instruction scope on actual HTTP requests", () => {
 			}
 			return Reflect.apply(original, nativeFs, [file, ...args]);
 		}) as typeof original);
+		// Built-in prompts are cached until reload; simulate a reload so disk edits are visible.
+		clearSystemPromptCache();
 		const edited = await capture("anthropic-messages", "sk-ant-oat01-test");
 		expect(edited.system[0].text).toBe("EDITED_IDENTITY");
 		fail = true;
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		clearSystemPromptCache();
 		const skipped = await capture("anthropic-messages", "sk-ant-oat01-test");
 		expect(skipped.system.map((block: { text: string }) => block.text)).toEqual(["GLOBAL_SENTINEL"]);
 		expect(warning).toHaveBeenCalledWith(expect.stringContaining("EACCES"));

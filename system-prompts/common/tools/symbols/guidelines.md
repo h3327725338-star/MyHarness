@@ -1,3 +1,4 @@
+# Usage rules
 - Before writing nontrivial code that may already exist, consider find_existing with a short intent, likely names and a narrow path. Read strong candidates before reusing; skip discovery when prior evidence is sufficient or text search is enough.
 - find_existing returns leads, not equivalence or proof of absence. Its coverage explains semantic versus lexical evidence; on timeout, keep useful candidates and narrow path/languages instead of repeating a broad slow query.
 - Once located, prefer read_symbol for the declaration and necessary context. Follow its source continuation hint when condensed; a paginated or partial result does not mean all source was read.
