@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
 	generateConversationTitle,
 	normalizeConversationTitle,
@@ -18,8 +18,8 @@ import {
 	type StagedWorkspaceSourceUpload,
 	stageWorkspaceSourceUploads,
 	uploadWorkspaceSource,
-	type WorkspaceSourceUploadItem,
 	WorkspaceSourceError,
+	type WorkspaceSourceUploadItem,
 	writeWorkspaceSourceChunk,
 } from "../../data/workspace-sources.ts";
 import { buildReplayHtml } from "../../exports/html/replay/build.ts";
@@ -461,11 +461,16 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	// Anchor to the same resolved Data root as the registry, not a user folder or the current Chat's cwd.
 	// Capture once: a later cwd change cannot silently create another data tree.
 	let createBaseDir: string | undefined;
-	const resolveCreateBase = (_mode: ChatMode) => ({
-		baseDir: (createBaseDir ??= join(host.workspaceStore.getDataRoot() ?? getDataDir(), "workspace-folders")),
-		referenceName: "",
-		referencePath: "",
-	});
+	const resolveCreateBase = (_mode: ChatMode) => {
+		if (createBaseDir === undefined) {
+			createBaseDir = join(host.workspaceStore.getDataRoot() ?? getDataDir(), "workspace-folders");
+		}
+		return {
+			baseDir: createBaseDir,
+			referenceName: "",
+			referencePath: "",
+		};
+	};
 
 	const INVALID_WORKSPACE_NAME = /[\\/:*?"<>|]/;
 	const validateNewWorkspaceName = (raw: unknown): string => {
