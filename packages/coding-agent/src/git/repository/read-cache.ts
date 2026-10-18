@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit } from "./command.ts";
@@ -304,7 +305,12 @@ async function fetchDirsInternal(
 	const [gitDir, commonDir] = result.stdout.trim().split(/\r?\n/u);
 	if (!gitDir || !commonDir) return { value: false, cacheable: false };
 	// 关联 Worktree 的 git 目录位于主仓库公共目录之下（与 routes-git.ts 原逻辑一致）。
-	return { value: resolve(gitDir) !== resolve(repositoryRoot, commonDir), cacheable: true };
+	// Compare real paths: on Windows git prints the long name while the caller's path may use a short (8.3) name.
+	const [realGitDir, realCommonDir] = await Promise.all([
+		realpath(gitDir).catch(() => resolve(gitDir)),
+		realpath(resolve(repositoryRoot, commonDir)).catch(() => resolve(repositoryRoot, commonDir)),
+	]);
+	return { value: realGitDir !== realCommonDir, cacheable: true };
 }
 
 /** 直读仓库状态：与 `integration.ts` 的异步检查语义相同，不接触缓存，供决策链路使用。 */

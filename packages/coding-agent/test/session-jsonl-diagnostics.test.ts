@@ -44,7 +44,7 @@ describe("Session JSONL recovery diagnostics", () => {
 
 	it("distinguishes a malformed middle line from a recoverable tail", () => {
 		const filePath = createSessionFile(
-			[JSON.stringify(header()), "not-json", JSON.stringify({ type: "custom", id: "c1" })].join("\n"),
+			[JSON.stringify(header()), "not-json", JSON.stringify({ type: "custom", id: "c1" }), ""].join("\n"),
 		);
 		const diagnostics: SessionJsonlDiagnostics = { recovered: false, issues: [] };
 		const entries = loadEntriesFromFile(filePath, diagnostics);

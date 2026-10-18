@@ -182,6 +182,6 @@ it("uses checkpoint exclusions without limiting changes to the current conversat
 		repositoryRoot: "repo",
 		checkpoint,
 	});
-	expect(getGitCheckpointPendingTaskPathsAsync).toHaveBeenCalledWith(checkpoint, undefined);
+	expect(getGitCheckpointPendingTaskPathsAsync).toHaveBeenCalledWith(checkpoint, undefined, { fresh: true });
 	expect(generateMessage).toHaveBeenCalledWith(context);
 });

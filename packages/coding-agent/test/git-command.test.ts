@@ -14,6 +14,7 @@ const { spawnProcessMock, spawnProcessSyncMock } = vi.hoisted(() => ({
 vi.mock("../src/utils/child-process.ts", () => ({
 	spawnProcess: spawnProcessMock,
 	spawnProcessSync: spawnProcessSyncMock,
+	trackChildProcessForSignal: () => () => {},
 }));
 
 import { runGit, runGitSync, runGitToFile } from "../src/utils/git-command.ts";

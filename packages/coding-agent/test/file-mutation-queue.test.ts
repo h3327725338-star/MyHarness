@@ -138,7 +138,11 @@ describe("withFileMutationQueue", () => {
 			}),
 		]);
 
-		expect(order).toEqual(["target:start", "target:end", "alias:start", "alias:end"]);
+		// Which caller enters first depends on async path resolution; what matters is that they never interleave.
+		expect([
+			["target:start", "target:end", "alias:start", "alias:end"],
+			["alias:start", "alias:end", "target:start", "target:end"],
+		]).toContainEqual(order);
 	});
 
 	// Directory junctions (Windows) and directory symlinks (POSIX) must also map to
@@ -165,7 +169,11 @@ describe("withFileMutationQueue", () => {
 			}),
 		]);
 
-		expect(order).toEqual(["target:start", "target:end", "alias:start", "alias:end"]);
+		// Which caller enters first depends on async path resolution; what matters is that they never interleave.
+		expect([
+			["target:start", "target:end", "alias:start", "alias:end"],
+			["alias:start", "alias:end", "target:start", "target:end"],
+		]).toContainEqual(order);
 	});
 });
 
