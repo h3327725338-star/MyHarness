@@ -12,6 +12,34 @@ packages/ai/src/providers/data/
 packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
 
+# Repository-root allowlist. The repository root holds only maintained project
+# documents and configuration. Everything else that agents put there is session
+# output: reports, plans, receipts, evidence dumps, scratch scripts, and the
+# workspace directories created by Harness/Agent/IDE tools (`.workbuddy*`,
+# `.claude/`, `.codex/`, ...). A new formal root document or root dot entry
+# must be added to these exceptions and to docs/maintenance/git-workflow.md
+# before it can be tracked.
+/*.md
+!/AGENTS.md
+!/ARCHITECTURE_AND_DEVELOPMENT.md
+!/CONTRIBUTING.md
+!/CONTRIBUTING.zh-CN.md
+!/DEVELOPMENT_ROADMAP.md
+!/DOCUMENTATION_INDEX.md
+!/MAINTENANCE.md
+!/PROJECT_STATUS.md
+!/README.md
+!/README.zh-CN.md
+!/SECURITY.md
+!/THIRD_PARTY_NOTICES.md
+/.*
+!/.gitattributes
+!/.gitignore
+!/.npmrc
+!/.github/
+!/.husky/
+!/.myharness/
+
 # Environment
 .env
 
@@ -25,9 +53,10 @@ packages/ai/src/providers/.model-generation-*/
 
 # Coding-agent local workspace state (memory, receipts, scratch output). These
 # directories belong to the agent tool that created them and never to MyHarness
-# source. The list is not closed: a new agent directory must be added here and
-# to the matching path rules in scripts/release-audit.mjs before it can leak
-# into a commit.
+# source. The list is not closed: root-level dot directories are already covered
+# by the repository-root allowlist above, but a new nested agent directory must
+# be added here and to the matching path rules in scripts/release-audit.mjs
+# before it can leak into a commit.
 .claude/
 .codex/
 .cursor/

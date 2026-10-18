@@ -90,6 +90,14 @@
 - 不为了减少代码量破坏已有抽象、错误处理、取消、恢复或持久化语义。
 - 不重复实现已经存在的能力。
 
+## 产物落盘与仓库根约束
+
+- Agent 产生的报告、计划、调研回执、证据、截图和一次性脚本属于会话产物，不是项目源码。它们必须写入当前会话的 artifact 目录：环境变量 `MYHARNESS_ARTIFACTS_DIR` 指向的绝对路径（实际位于 `data/workspaces/<workspace>/sessions/<session>/artifacts/`，`/data/` 已被 Git 忽略），并按 `reports/`、`tests/`、`temporary/` 分类存放。
+- 不得把会话产物写进仓库根目录、`packages/`、`scripts/`、`docs/` 或其他正式源码路径；不得为了让这类文件入库而修改 `.gitignore`。
+- 仓库根目录采用白名单：只有已维护的正式文档和项目配置可以跟踪，名单写在 `.gitignore` 的 Repository-root allowlist 段。其他根级 `*.md` 和根级 `.` 开头条目默认被忽略，由 Harness 或 Agent 创建的 `.workbuddy*` 一类工作区目录因此不需要逐条登记。
+- 确实需要在仓库根新增正式文件时，必须同时更新 `.gitignore` 白名单和 `docs/maintenance/git-workflow.md`，并在提交说明中写明理由。
+- 不得用 `git add -f` 绕过忽略规则；`.workbuddy*`、`.claude/`、`data/`、`outputs/`、`_receipts/`、`_tickets/` 这类本地状态目录永远不属于项目源码。
+
 ## 兼容性和安全
 
 - 修改前检查 Public API、package.json exports、src/index.ts、Session JSONL、Settings、Credentials、migration、Extension API、Git metadata 和 Prompt 行为。

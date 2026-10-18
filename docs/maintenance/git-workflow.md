@@ -16,11 +16,19 @@ Agent、Harness、IDE Agent、自动化脚本和人工维护者。
 - 仓库根目录下由 Agent 编排脚本、任务回执和演示输出产生的 `_receipts/`、`_tickets/`、`outputs/`
 - `.vscode/`、`.zed/`、`.idea/` 这类本仓库已按本地配置处理的 IDE 目录
 
-名单不是封闭集合。出现新的类似 `.xxx/` 目录时，若用途或归属不清楚，先调查并确认，
+名单不是封闭集合。出现新的非根级类似 `.xxx/` 目录时，若用途或归属不清楚，先调查并确认，
 再决定是否应进入项目；不得直接 stage。确认属于本地工具状态后，应同时补充 `.gitignore`
-和 `scripts/release-audit.mjs` 的明确路径规则。不要用 `.*` 等规则忽略所有隐藏文件；
-`.github/`、`.husky/`、`.myharness/`、`.gitattributes`、`.gitignore`、`.npmrc` 等合法项目
-内容必须继续保留。
+和 `scripts/release-audit.mjs` 的明确路径规则。
+
+仓库根目录另用白名单兜底：`.gitignore` 的 Repository-root allowlist 段以 `/*.md` 忽略所有
+根级 Markdown，再逐个例外放行正式文档；以 `/.*` 忽略所有根级点条目，再例外放行
+`.gitattributes`、`.gitignore`、`.npmrc`、`.github/`、`.husky/`、`.myharness/`。因此 agent
+写在仓库根的报告、计划和此后新出现的 Harness/Agent 工作区目录都不会进入候选列表。
+
+在仓库根新增正式文件时，必须同时更新 `.gitignore` 的白名单例外和本段说明，否则文件会被
+静默忽略。不得用 `git add -f` 绕过忽略规则。会话产物本身不属于仓库内容：报告、回执、证据、
+截图和一次性脚本应写入 `MYHARNESS_ARTIFACTS_DIR` 指向的会话 artifact 目录
+（`data/workspaces/<workspace>/sessions/<session>/artifacts/`，`/data/` 已被忽略）。
 
 `.gitignore` 只阻止尚未跟踪的文件进入候选列表，不能解除已经 tracked 的文件。已跟踪的本地状态目录还必须从 index 移除，并由 audit 和 hooks 阻止再次进入。
 
