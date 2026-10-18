@@ -49,12 +49,19 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 const LOCAL_TOOL_STATE_PATH_RULE = {
-	pattern: /(^|\/)\.(?:workbuddy|claude|codex|cursor|continue|opencode|agent|agents|pi_config|vscode|zed|idea)(\/|$)/i,
+	pattern:
+		/(^|\/)\.(?:agent|agents|aider[a-z0-9._-]*|claude|codeium|codex|continue|crush|cursor|gemini|junie|kiro|opencode|pi_config|qwen|roo|vscode|windsurf|workbuddy[a-z0-9_-]*|zed|idea)(\/|$)/i,
 	category: "Agent/Harness/IDE local state directory",
+};
+
+const LOCAL_AGENT_WORKSPACE_PATH_RULE = {
+	pattern: /^(?:_receipts|_tickets|outputs)(\/|$)/i,
+	category: "local agent workspace directory",
 };
 
 const FORBIDDEN_PATH_RULES = [
 	LOCAL_TOOL_STATE_PATH_RULE,
+	LOCAL_AGENT_WORKSPACE_PATH_RULE,
 	{ pattern: /^(?:data|packages\/[^/]+\/data)(\/|$)/i, category: "user-data directory" },
 	{ pattern: /(^|\/)node_modules(\/|$)/i, category: "installed dependency directory" },
 	{ pattern: /(^|\/)dist(\/|$)/i, category: "generated build directory" },
@@ -216,8 +223,11 @@ function getEntries(options) {
 function checkStagedIndexToolDirectories(findings) {
 	for (const entry of parseIndexEntries()) {
 		const path = toPosixPath(entry.path);
-		if (LOCAL_TOOL_STATE_PATH_RULE.pattern.test(path)) {
-			addFinding(findings, `${LOCAL_TOOL_STATE_PATH_RULE.category} is tracked`, path, "", 0);
+		for (const rule of [LOCAL_TOOL_STATE_PATH_RULE, LOCAL_AGENT_WORKSPACE_PATH_RULE]) {
+			if (rule.pattern.test(path)) {
+				addFinding(findings, `${rule.category} is tracked`, path, "", 0);
+				break;
+			}
 		}
 	}
 }
@@ -380,11 +390,12 @@ function checkLicenseFiles(entries, findings) {
 	}
 }
 
-function checkTreeShape(entries, findings, skipLocalToolStatePaths = false) {
+function checkTreeShape(entries, findings, skipIndexCoveredRules = false) {
 	for (const entry of entries) {
 		const path = toPosixPath(entry.path);
 		for (const rule of FORBIDDEN_PATH_RULES) {
-			if (skipLocalToolStatePaths && rule === LOCAL_TOOL_STATE_PATH_RULE) continue;
+			// Staged mode already checks these two rules against the whole index.
+			if (skipIndexCoveredRules && (rule === LOCAL_TOOL_STATE_PATH_RULE || rule === LOCAL_AGENT_WORKSPACE_PATH_RULE)) continue;
 			if (rule.pattern.test(path)) {
 				addFinding(findings, `${rule.category} is tracked`, path, "", 0);
 				break;

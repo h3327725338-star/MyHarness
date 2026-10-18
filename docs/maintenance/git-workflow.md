@@ -12,7 +12,8 @@ Agent、Harness、IDE Agent、自动化脚本和人工维护者。
 
 由 Agent、Harness、IDE 或自动化开发工具生成的本地工作目录、状态、缓存、会话、记忆、scratch 和报告默认不属于正式源码。当前明确禁止进入版本库的常见目录包括：
 
-- `.workbuddy/`、`.claude/`、`.codex/`、`.cursor/`、`.continue/`、`.opencode/`、`.agent/`、`.agents/`、`.pi_config/`
+- `.workbuddy*/`、`.claude/`、`.codex/`、`.cursor/`、`.continue/`、`.opencode/`、`.gemini/`、`.aider*`、`.windsurf/`、`.codeium/`、`.junie/`、`.kiro/`、`.roo/`、`.qwen/`、`.crush/`、`.agent/`、`.agents/`、`.pi_config/`
+- 仓库根目录下由 Agent 编排脚本、任务回执和演示输出产生的 `_receipts/`、`_tickets/`、`outputs/`
 - `.vscode/`、`.zed/`、`.idea/` 这类本仓库已按本地配置处理的 IDE 目录
 
 名单不是封闭集合。出现新的类似 `.xxx/` 目录时，若用途或归属不清楚，先调查并确认，
