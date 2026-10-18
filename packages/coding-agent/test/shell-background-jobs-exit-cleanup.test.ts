@@ -69,7 +69,7 @@ describe("shell background jobs: exit, cleanup and wording gaps", () => {
 		backgroundJobManager.killAllRunningSync();
 		backgroundJobManager.clearRecords();
 		if (testDir && existsSync(testDir)) {
-			rmSync(testDir, { recursive: true, force: true });
+			rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 		}
 	});
 

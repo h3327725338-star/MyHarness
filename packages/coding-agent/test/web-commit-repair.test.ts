@@ -69,6 +69,7 @@ it.each([
 			sessionManager: { getCwd: () => "repo" },
 			settingsManager: {
 				isProjectTrusted: () => true,
+				getCommitDescriptionSettings: () => ({}),
 				getNetworkTimeouts: () => ({
 					connectTimeoutMs: 10_000,
 					firstByteTimeoutMs: 60_000,

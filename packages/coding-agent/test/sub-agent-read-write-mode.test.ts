@@ -509,7 +509,7 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 		expect(dump.cwd.includes("myharness-sandbox-")).toBe(true);
 		expect(dump.mode).toBe(mode === "read-write" ? "read-write" : undefined);
 		expect(dump.worktree).toBe(mode === "read-write" ? dump.cwd : undefined);
-		expect(dump.origin).toBe(realpathSync(plainDir));
+		expect(dump.origin).toBe(realpathSync.native(plainDir));
 		// Sandbox is auto-removed after a clean run; origin stays clean.
 		expect(existsSync(dump.cwd)).toBe(false);
 		expect(readFileSync(join(plainDir, "orig.txt"), "utf8")).toBe("origin\n");

@@ -140,7 +140,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(general.mode).toBe("general");
 		expect(opened.slot).not.toBe(coding.slot);
 		const generalOwner = fx.hub.get(opened.slot)!;
-		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose AI agent");
+		expect(generalOwner.session.agent.state.systemPrompt).toContain("general-purpose AI assistant");
 		expect(generalOwner.session.agent.state.systemPrompt).toContain("PERSONAL_GENERAL_ONLY");
 		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("PERSONAL_CODING_ONLY");
 		expect(generalOwner.session.agent.state.systemPrompt).not.toContain("software engineering assistant");
@@ -366,9 +366,10 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(existsSync(path)).toBe(false);
 		await fx.post("/api/sessions/delete", { path, deleteArtifacts }, next.slot);
 		expect(fx.hub.slotsShowing(path)).toHaveLength(0);
-		expect(existsSync(uploads)).toBe(false);
+		// Deleting a chat keeps its uploaded attachments (the attachment library) unless attachments are deleted explicitly.
+		expect(existsSync(uploads)).toBe(true);
 		expect(existsSync(report)).toBe(!deleteArtifacts);
-		expect(existsSync(dirname(dirname(path)))).toBe(!deleteArtifacts);
+		expect(existsSync(dirname(dirname(path)))).toBe(true);
 		expect((await fx.get("/api/state", next.slot)).slot).toBe(next.slot);
 	});
 
