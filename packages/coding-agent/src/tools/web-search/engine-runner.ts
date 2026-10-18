@@ -107,7 +107,7 @@ export class EngineRunner {
 
 	async run(
 		engineId: WebSearchEngineId,
-		query: Omit<EngineQuery, "apiKey">,
+		query: Omit<EngineQuery, "apiKeys">,
 		signal?: AbortSignal,
 		onProgress?: (message: string) => void,
 	): Promise<EngineRun> {
@@ -115,7 +115,7 @@ export class EngineRunner {
 		const state = this.state(engineId);
 		const engineQuery: EngineQuery = {
 			...query,
-			apiKey: engine.requiresApiKey ? this.options.keys?.get("brave_api") : undefined,
+			apiKeys: engine.requiresApiKey ? (this.options.keys?.all("tavily") ?? []) : undefined,
 		};
 		const context: EngineContext = { http: this.options.http, signal, now: this.options.now };
 		const browser = this.browserPath(engine);

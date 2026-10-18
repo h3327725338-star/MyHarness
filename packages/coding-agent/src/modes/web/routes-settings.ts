@@ -31,6 +31,14 @@ import { WebSearchApiKeys } from "../../providers/credentials/web-search-keys.ts
 import { rankByUsage } from "../../providers/models/usage-ranking.ts";
 import { settingsMenuFor } from "../../startup/settings-menu.ts";
 import { builtinSlashCommandsFor } from "../../startup/slash-commands.ts";
+import {
+	fetchTavilyRemaining,
+	onTavilySearchFinished,
+	sumTavilyRemaining,
+} from "../../tools/web-search/engines/tavily.ts";
+import { WebSearchError } from "../../tools/web-search/errors.ts";
+import { plainHttpFetch } from "../../tools/web-search/http.ts";
+import { HttpTransport } from "../../tools/web-search/transport.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
@@ -100,7 +108,7 @@ const SEARCH_ENGINES = [
 	{ value: "bing", label: "Bing" },
 	{ value: "duckduckgo", label: "DuckDuckGo" },
 	{ value: "brave", label: "Brave" },
-	{ value: "brave_api", label: "Brave Search API" },
+	{ value: "tavily", label: "Tavily API" },
 ];
 /** The browsers the fallback can use; "auto" is the first installed one. */
 const SEARCH_BROWSERS = [
@@ -178,6 +186,32 @@ function modelRefValue(value: unknown): ModelRefValue {
 	if (typeof raw.model === "string" && raw.model) ref.model = raw.model;
 	if (typeof raw.thinkingLevel === "string" && raw.thinkingLevel) ref.thinkingLevel = raw.thinkingLevel;
 	return ref;
+}
+
+/** The id the settings page uses for a key that comes from TAVILY_API_KEY rather than the key file. */
+const TAVILY_ENVIRONMENT_KEY_ID = "env";
+
+/** What the settings page knows about the Tavily keys: names and last four characters, never the keys. */
+function tavilyKeyState() {
+	const keys = new WebSearchApiKeys();
+	const stored = keys.summaries("tavily");
+	const environment = !stored.length && keys.get("tavily") !== undefined;
+	return {
+		configured: stored.length > 0 || environment,
+		keys: stored,
+		environment: environment
+			? { id: TAVILY_ENVIRONMENT_KEY_ID, variable: WebSearchApiKeys.environmentVariable("tavily") }
+			: null,
+	};
+}
+
+/** A key-file change; its own errors (empty key, duplicate, unknown id) are the caller's mistake. */
+function tavilyKeyChange<T>(change: () => T): T {
+	try {
+		return change();
+	} catch (error) {
+		throw new HttpError(400, error instanceof Error ? error.message : String(error));
+	}
 }
 
 export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): void {
@@ -1147,7 +1181,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			menu: buildSettingsMenu(),
 			errors: s.getErrors().map((entry) => ({ scope: entry.scope, message: entry.error.message })),
 			trusted: s.isProjectTrusted(),
-			braveApiKey: { configured: new WebSearchApiKeys().hasStored("brave_api") },
+			tavilyApiKey: tavilyKeyState(),
 		};
 	});
 
@@ -1181,18 +1215,58 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		return { ok: true };
 	});
 
-	server.route("POST", "/api/settings/brave-key", async ({ body }) => {
+	/** Add one named Tavily key at the end of the list; keys are tried in list order. */
+	server.route("POST", "/api/settings/tavily-key/add", ({ body }) => {
 		const payload = asObject(body);
-		const keys = new WebSearchApiKeys();
-		const key = typeof payload.key === "string" ? payload.key.trim() : "";
-		if (!key) {
-			keys.clear("brave_api");
-			return { ok: true, configured: false };
-		}
-		keys.set("brave_api", key);
+		const key = typeof payload.key === "string" ? payload.key : "";
+		const label = typeof payload.label === "string" ? payload.label : undefined;
+		const id = tavilyKeyChange(() => new WebSearchApiKeys().add("tavily", key, label));
 		host.session.refreshToolsAfterSettingsChange();
-		return { ok: true, configured: true };
+		return { ok: true, id, tavilyApiKey: tavilyKeyState() };
 	});
+
+	server.route("POST", "/api/settings/tavily-key/rename", ({ body }) => {
+		const payload = asObject(body);
+		const id = typeof payload.id === "string" ? payload.id : "";
+		const label = typeof payload.label === "string" ? payload.label : "";
+		tavilyKeyChange(() => new WebSearchApiKeys().rename("tavily", id, label));
+		return { ok: true, tavilyApiKey: tavilyKeyState() };
+	});
+
+	server.route("POST", "/api/settings/tavily-key/delete", ({ body }) => {
+		const id = typeof asObject(body).id === "string" ? (asObject(body).id as string) : "";
+		tavilyKeyChange(() => new WebSearchApiKeys().remove("tavily", id));
+		host.session.refreshToolsAfterSettingsChange();
+		return { ok: true, tavilyApiKey: tavilyKeyState() };
+	});
+
+	/**
+	 * Remaining Tavily searches of every key, as Tavily's own `/usage` API reports them; never estimated here. The
+	 * total adds up the keys whose count is known; one unlimited key makes it unlimited.
+	 */
+	server.route("GET", "/api/settings/tavily-usage", async () => {
+		const keys = new WebSearchApiKeys();
+		const stored = keys.listStored("tavily");
+		const environment = stored.length ? undefined : keys.get("tavily");
+		const entries = stored.length
+			? stored.map(({ id, key }) => ({ id, key }))
+			: environment
+				? [{ id: TAVILY_ENVIRONMENT_KEY_ID, key: environment }]
+				: [];
+		const http = new HttpTransport(plainHttpFetch);
+		const results = await Promise.all(
+			entries.map(async ({ id, key }) => {
+				try {
+					return { id, remaining: await fetchTavilyRemaining(http, key) };
+				} catch (error) {
+					return { id, error: error instanceof WebSearchError ? error.message : "无法获取剩余次数。" };
+				}
+			}),
+		);
+		return { configured: entries.length > 0, keys: results, ...sumTavilyRemaining(results) };
+	});
+	// Every finished Tavily search changes the remaining count: tell the pages to read it again.
+	onTavilySearchFinished(() => server.broadcast("tavily_usage_changed", {}));
 
 	// ---- Project trust ------------------------------------------------------------------
 	server.route("GET", "/api/trust", () => {

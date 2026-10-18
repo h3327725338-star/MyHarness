@@ -1,9 +1,9 @@
 import type { WebSearchEngineId } from "../../../config/settings/types.ts";
 import { bing } from "./bing.ts";
 import { brave } from "./brave.ts";
-import { braveApi } from "./brave-api.ts";
 import { duckduckgo } from "./duckduckgo.ts";
 import { google } from "./google.ts";
+import { tavily } from "./tavily.ts";
 import type { SearchEngine } from "./types.ts";
 
 export type {
@@ -20,5 +20,5 @@ export const WEB_SEARCH_ENGINES: Readonly<Record<WebSearchEngineId, SearchEngine
 	bing,
 	duckduckgo,
 	brave,
-	brave_api: braveApi,
+	tavily,
 };

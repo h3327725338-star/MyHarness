@@ -60,7 +60,7 @@ const items: Array<Record<string, unknown>> = [
 			{ value: "bing", label: "Bing" },
 			{ value: "duckduckgo", label: "DuckDuckGo" },
 			{ value: "brave", label: "Brave" },
-			{ value: "brave_api", label: "Brave Search API" },
+			{ value: "tavily", label: "Tavily API" },
 		],
 	},
 ];
@@ -406,7 +406,7 @@ try {
 		lastSaved = saved[saved.length - 1];
 		assert(JSON.stringify(lastSaved.value) === JSON.stringify(['google']), 'last engine cannot be deselected');
 
-		// Search br: filters Brave and Brave Search API
+		// Search br: filters to plain Brave only (the Brave Search API option was removed)
 		const engSearch = enginesPop.querySelector('.pop-search input');
 		engSearch.focus();
 		engSearch.value = 'br';
@@ -414,12 +414,8 @@ try {
 		await wait(100);
 
 		const brFiltered = [...enginesPop.querySelectorAll('[role="option"]')];
-		assert(brFiltered.length === 2, 'expected 2 Brave options, got ' + brFiltered.length);
-		if (locale === 'zh-CN') {
-			assert(brFiltered.some((o) => o.textContent.includes('Brave 搜索 API')), 'missing Brave 搜索 API in Chinese');
-		} else {
-			assert(brFiltered.some((o) => o.textContent.includes('Brave Search API')), 'missing Brave Search API in English');
-		}
+		assert(brFiltered.length === 1, 'expected 1 Brave option, got ' + brFiltered.length);
+		assert(!enginesPop.textContent.includes('Brave Search API') && !enginesPop.textContent.includes('Brave 搜索 API'), 'Brave Search API option still listed');
 
 		// Close
 		window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -443,7 +439,7 @@ try {
 		await wait(150);
 		enginesPop = document.querySelector('.popover.set-multiselect-pop');
 		assert(enginesPop, 'engines popover not reopened in ' + locale);
-		for (const val of ['bing', 'duckduckgo', 'brave', 'brave_api']) {
+		for (const val of ['bing', 'duckduckgo', 'brave', 'tavily']) {
 			const opt = [...enginesPop.querySelectorAll('[role="option"]')].find((o) => o.title === val);
 			assert(opt, 'missing engine option ' + val + ' in ' + locale);
 			opt.click();
@@ -451,7 +447,7 @@ try {
 		}
 		lastSaved = saved[saved.length - 1];
 		assert(
-			JSON.stringify(lastSaved.value) === JSON.stringify(['google', 'bing', 'duckduckgo', 'brave', 'brave_api']),
+			JSON.stringify(lastSaved.value) === JSON.stringify(['google', 'bing', 'duckduckgo', 'brave', 'tavily']),
 			'all-five payload mismatch: ' + JSON.stringify(lastSaved.value)
 		);
 		window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -473,7 +469,7 @@ try {
 			'chips row overflows horizontally: ' + tagsBox.scrollWidth + ' > ' + tagsBox.clientWidth
 		);
 
-		// Narrow the card (still wide enough for the longest chip "Brave Search API" ~116px): the five chips wrap into
+		// Narrow the card (still wide enough for the longest chip "DuckDuckGo"): the five chips wrap into
 		// at least two rows, names stay complete, the button grows, nothing overflows sideways
 		const flatBtnH = enginesBtn.getBoundingClientRect().height;
 		const settingsGrid = document.querySelector('.settings');

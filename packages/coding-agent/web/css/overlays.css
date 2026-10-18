@@ -196,6 +196,10 @@
 .key-replace > .select { flex: 1 1 0; min-width: 120px; max-width: 240px; }
 .key-replace > .select-like { flex: 1 1 0; min-width: 120px; max-width: 240px; }
 .key-add { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; gap: 8px; }
+/* Tavily keys under the Web search engine list: the saved keys with their counts, then the add form. */
+.tavily-keys { display: flex; flex-direction: column; gap: 8px; padding: 0 0 12px; }
+.tavily-keys > .key-row:first-child { border-top: 1px solid var(--border); }
+.tavily-count { flex: none; font-variant-numeric: tabular-nums; }
 
 /* Palette */
 .palette { width: 600px; max-width: 100%; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden; animation: dialog-in var(--t-pop) var(--ease-out); }

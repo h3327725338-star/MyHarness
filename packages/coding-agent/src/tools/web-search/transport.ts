@@ -61,6 +61,33 @@ export class HttpTransport {
 		};
 	}
 
+	/** One JSON POST (for search APIs); same limits and diagnostics as get. */
+	async postJson(url: string, body: unknown, options: HttpGetOptions): Promise<TransportPage> {
+		const response = await requestBytes(
+			this.fetchImpl,
+			url,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...options.headers },
+				body: JSON.stringify(body),
+				ipFamily: options.ipFamily,
+			},
+			{
+				signal: options.signal,
+				timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+				maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES,
+				label: options.label,
+			},
+		);
+		return {
+			status: response.status,
+			url,
+			text: decodeBody(response.bytes, response.headers.get("content-type")),
+			headers: response.headers,
+			via: "http",
+		};
+	}
+
 	/** Where a redirect URL points, without following it. Undefined when it is not a redirect. */
 	async redirectTarget(url: string, options: HttpGetOptions): Promise<string | undefined> {
 		const page = await this.get(url, { ...options, maxBytes: 64 * 1024 });

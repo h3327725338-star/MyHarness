@@ -97,7 +97,7 @@ export const SETTINGS_DEFAULTS = {
 export const WEB_SEARCH_BROWSER_IDS = ["auto", "firefox", "chrome", "edge"] as const;
 
 /** Every Web Search engine id, in the order the settings page lists them. */
-export const WEB_SEARCH_ENGINE_IDS = ["google", "bing", "duckduckgo", "brave", "brave_api"] as const;
+export const WEB_SEARCH_ENGINE_IDS = ["google", "bing", "duckduckgo", "brave", "tavily"] as const;
 
 /**
  * The default engine list before Google and Bing were added. A saved list equal

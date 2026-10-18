@@ -93,7 +93,7 @@ describe("SettingsManager", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setWebSearchSettings({
 				enabled: true,
-				engines: ["brave_api", "duckduckgo", "bing"],
+				engines: ["tavily", "duckduckgo", "bing"],
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
@@ -106,7 +106,7 @@ describe("SettingsManager", () => {
 
 			const expected = {
 				enabled: true,
-				engines: ["bing", "duckduckgo", "brave_api"],
+				engines: ["bing", "duckduckgo", "tavily"],
 				pagesPerSearch: 0,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 1,
@@ -154,6 +154,15 @@ describe("SettingsManager", () => {
 					.browserFallback,
 			).toBe(true);
 			expect(SettingsManager.inMemory({ webSearch: { engines: [] } }).getWebSearchSettings().engines).toEqual([]);
+		});
+
+		it("drops the removed Brave Search API engine without turning it into Tavily", () => {
+			const engines = (list: string[]) =>
+				SettingsManager.inMemory({
+					webSearch: { browserFallback: true, engines: list as never },
+				}).getWebSearchSettings().engines;
+			expect(engines(["brave_api", "brave", "bing"])).toEqual(["bing", "brave"]);
+			expect(engines(["brave_api"])).toEqual(["google", "bing"]);
 		});
 
 		it("migrates a SearXNG/Crawl4AI configuration and drops the legacy fields on save", async () => {

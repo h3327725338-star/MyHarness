@@ -82,7 +82,7 @@
 | `tool.ts` | `web_search` / `web_fetch` 的 schema 与结果格式 |
 | `service.ts` | `WebSearchService`：多查询 × 多引擎、合并去重排序、下载上限、缓存、引擎测试 |
 | `engine-runner.ts` | 先走 HTTP，被拦截时按规则切到浏览器；引擎冷却 |
-| `engines/` | 各引擎的请求与结果解析：`google.ts`、`bing.ts`、`duckduckgo.ts`、`brave.ts`、`brave-api.ts`；`index.ts` 是引擎表 |
+| `engines/` | 各引擎的请求与结果解析：`google.ts`、`bing.ts`、`duckduckgo.ts`、`brave.ts`、`tavily.ts`；`index.ts` 是引擎表 |
 | `transport.ts` | HTTP 与浏览器两种传输的契约 |
 | `http.ts` | 普通 HTTP 请求与解码 |
 | `browser/` | 本机浏览器兜底：专用 profile、Firefox（扩展 + 本地桥 + RDP）、Chrome/Edge（CDP）、浏览器选择、Cookie 导入、验证窗口置前 |

@@ -6,8 +6,8 @@ export type SearchTimeRange = "day" | "month" | "year";
 export interface EngineQuery {
 	query: string;
 	timeRange?: SearchTimeRange;
-	/** Only set for engines that need a key. */
-	apiKey?: string;
+	/** Only set for engines that need a key: every saved key, tried in order. */
+	apiKeys?: string[];
 }
 
 /** What an engine may use while searching; it never builds its own network stack. */

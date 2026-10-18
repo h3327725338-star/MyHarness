@@ -32,9 +32,9 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 | Bing | `www.bing.com/search` 普通页面 | 同一个页面在 Firefox 中打开 | 无 |
 | DuckDuckGo | `lite.duckduckgo.com/lite` | `html.duckduckgo.com/html` | 无 |
 | Brave | `search.brave.com/search` | 同一个页面在 Firefox 中打开 | 无 |
-| Brave Search API | 官方 API `api.search.brave.com/res/v1/web/search` | 没有（API 与网页搜索相互独立，也不作为 Google/Bing 的兜底） | API Key |
+| Tavily API | 官方 API `POST api.tavily.com/search`（`search_depth: basic`，每次 1 credit） | 没有（不作为 Google/Bing 的兜底） | API Key |
 
-除 Brave Search API 外都不是公开 API，页面结构或反自动化策略改变时可能需要更新解析器；解析失败会明确报告为 `invalid_response`，不会被当成"被拦截"去启动浏览器掩盖掉。
+除 Tavily API 外都不是公开 API，页面结构或反自动化策略改变时可能需要更新解析器；解析失败会明确报告为 `invalid_response`，不会被当成"被拦截"去启动浏览器掩盖掉。
 
 实测行为（2026-09，马来西亚住宅网络，Windows 11，Firefox 156）：
 
@@ -42,7 +42,9 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 - Bing 轻量方式经常返回 HTTP 200 但结果与问题无关（例如搜 `rust tokio select` 返回游戏《Rust》）。MyHarness 检查结果里是否完全没有出现问题中的某个词，出现这种情况就把它当作被拦截，改用 Firefox；Firefox 中的 Bing 结果正常。
 - 本网络下 DuckDuckGo 轻量方式基本总是返回人机验证（HTTP 202），Firefox 方式可用；Brave 在请求较多时返回 429。
 
-**Brave Search API Key** 在 Search Engines 页面里填写。输入时会被遮挡，保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`。留空回车会删除已保存的 Key。没有保存 Key 时会读取环境变量 `BRAVE_SEARCH_API_KEY`。
+**Tavily API Key**：在设置页的 Web search 中选中 Tavily API 后，搜索引擎下方出现 Tavily API Key 一行，展开后可以添加（名称可选，Key 用密码框输入，点“保存”或回车）、重命名和删除 Key，可以保存多个。搜索时按列表顺序使用：一个 Key 被拒绝（401/403）、请求过频（429）或额度用完（432/433）时自动换下一个；全部失败时报告每个 Key 的原因（不含 Key 本身）。取消选中 Tavily 只隐藏这一行，不删除已保存的 Key。Key 保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`；早期的单 Key 格式会读成一个名为 “Key 1” 的 Key。没有保存任何 Key 时会读取环境变量 `TAVILY_API_KEY`。旧版本的 `brave_api` 引擎已移除，`settings.json` 中残留的 `brave_api` 会被忽略，不会转成 Tavily。
+
+剩余次数来自 Tavily 官方 `GET api.tavily.com/usage`：每个 Key 取 Key 与所属账户剩余额度中较小者（basic 搜索每次 1 credit）。展开后每个 Key 显示自己的剩余次数，行上显示所有 Key 的合计；某个 Key 查询失败时合计只加能读到的 Key，并注明几个 Key 无法获取。同一账户下的多个 Key 共享账户额度，合计会把账户额度按 Key 重复计算。设置页打开、增删 Key 后、每次 Tavily 搜索完成后会自动重新查询，也可点刷新按钮。查询失败显示“无法获取”，不会显示 0，也不会用本地计数估算。
 
 Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引擎真实搜索一次，显示是否可用、结果数、走的是轻量请求还是 Firefox、耗时；等待时按 Esc 会取消请求并返回。在这个页面测试时如果搜索引擎在 Firefox 中也要求人机验证，会打开 Firefox 窗口让你完成。
 
@@ -216,9 +218,9 @@ npm.cmd run test:web-search:e2e
 - 强制走 Firefox 通道，用真实 Firefox 读取真实的 Google/Bing 结果页；
 - 在 Agent 工具循环里真实调用 `web_search` 和 `web_fetch`。
 
-每次搜索会输出一行 `[e2e]` 日志，写明每个引擎实际走的是 HTTP 还是 Firefox。可用 `MYHARNESS_WEB_SEARCH_E2E_ENGINES=google,bing,duckduckgo` 等方式指定引擎（`brave_api` 需要 `BRAVE_SEARCH_API_KEY`）。
+每次搜索会输出一行 `[e2e]` 日志，写明每个引擎实际走的是 HTTP 还是 Firefox。可用 `MYHARNESS_WEB_SEARCH_E2E_ENGINES=google,bing,duckduckgo` 等方式指定引擎（`tavily` 需要 `TAVILY_API_KEY`）。
 
-参考：[Brave Search API](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)。
+参考：[Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Tavily Usage API](https://docs.tavily.com/documentation/api-reference/endpoint/usage)。
 
 ## 已知限制
 

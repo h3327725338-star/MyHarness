@@ -9,8 +9,13 @@ import { WebSearchApiKeys } from "../src/providers/credentials/web-search-keys.t
 import { FULL_TEXT_OUTPUT } from "../src/tools/tool-result-persistence.ts";
 import { WebSearchCache } from "../src/tools/web-search/cache.ts";
 import { parseBraveHtml } from "../src/tools/web-search/engines/brave.ts";
-import { parseBraveApi } from "../src/tools/web-search/engines/brave-api.ts";
 import { parseDuckDuckGoLite } from "../src/tools/web-search/engines/duckduckgo.ts";
+import {
+	onTavilySearchFinished,
+	parseTavily,
+	parseTavilyRemaining,
+	sumTavilyRemaining,
+} from "../src/tools/web-search/engines/tavily.ts";
 import { plainHttpFetch, requestBytes } from "../src/tools/web-search/http.ts";
 import { htmlToMarkdown } from "../src/tools/web-search/page.ts";
 import { WebSearchService } from "../src/tools/web-search/service.ts";
@@ -189,18 +194,49 @@ describe("search engine parsers", () => {
 		]);
 	});
 
-	it("parses Brave Search API JSON", () => {
+	it("parses Tavily Search API JSON", () => {
 		expect(
-			parseBraveApi({
-				web: {
-					results: [
-						{ title: "<strong>A</strong>", url: "https://a.example/", description: "d", page_age: "2026-01-01" },
-						{ title: "no url" },
-					],
-				},
+			parseTavily({
+				results: [
+					{ title: " A ", url: "https://a.example/", content: "d", published_date: "2026-01-01" },
+					{ title: "no url" },
+					{ title: "B", url: "https://b.example/", content: "e", published_date: null },
+				],
 			}),
-		).toEqual([{ title: "A", url: "https://a.example/", snippet: "d", publishedAt: "2026-01-01", rank: 1 }]);
-		expect(parseBraveApi({})).toEqual([]);
+		).toEqual([
+			{ title: "A", url: "https://a.example/", snippet: "d", publishedAt: "2026-01-01", rank: 1 },
+			{ title: "B", url: "https://b.example/", snippet: "e", publishedAt: undefined, rank: 2 },
+		]);
+		expect(parseTavily({})).toEqual([]);
+	});
+
+	it("reads the remaining Tavily searches only from the usage numbers Tavily returns", () => {
+		// The key's own limit is smaller than what the account has left.
+		expect(
+			parseTavilyRemaining({
+				key: { usage: 150, limit: 1000 },
+				account: { plan_usage: 500, plan_limit: 15000, paygo_usage: 25, paygo_limit: 100 },
+			}),
+		).toBe(850);
+		// An unlimited key (limit null) is bounded by the account: plan plus pay-as-you-go left.
+		expect(
+			parseTavilyRemaining({
+				key: { usage: 10, limit: null },
+				account: { plan_usage: 950, plan_limit: 1000, paygo_usage: 0, paygo_limit: 0 },
+			}),
+		).toBe(50);
+		expect(parseTavilyRemaining({ key: { usage: 1200, limit: 1000 } })).toBe(0);
+		expect(parseTavilyRemaining({ key: { usage: 3, limit: null } })).toBeNull();
+		// Missing or malformed numbers are unknown, never 0.
+		expect(parseTavilyRemaining({})).toBeUndefined();
+		expect(parseTavilyRemaining({ key: { usage: "1", limit: 10 } })).toBeUndefined();
+		expect(parseTavilyRemaining(null)).toBeUndefined();
+		// Totals add up only the counts Tavily returned; unknown keys are counted apart, never as 0.
+		expect(sumTavilyRemaining([{ remaining: 950 }, { remaining: 50 }])).toEqual({ total: 1000, unknown: 0 });
+		expect(sumTavilyRemaining([{ remaining: 950 }, { error: "x" }])).toEqual({ total: 950, unknown: 1 });
+		expect(sumTavilyRemaining([{ error: "x" }])).toEqual({ total: undefined, unknown: 1 });
+		expect(sumTavilyRemaining([{ remaining: 3 }, { remaining: null }])).toEqual({ total: null, unknown: 0 });
+		expect(sumTavilyRemaining([])).toEqual({ total: undefined, unknown: 0 });
 	});
 });
 
@@ -480,44 +516,79 @@ describe("WebSearchService search", () => {
 		expect(network.calls.slice(after).map((url) => url.hostname)).toContain("lite.duckduckgo.com");
 	});
 
-	it("uses the Brave Search API key and reports a missing key only for that engine", async () => {
+	it("uses the Tavily API keys in order and reports a missing key only for that engine", async () => {
+		const bodies: unknown[] = [];
 		const routes: Record<string, Route> = {
 			...engineRoutes,
-			"api.search.brave.com": (_url, init) => {
-				const token = new Headers(init?.headers).get("X-Subscription-Token");
-				return token === "secret-key"
-					? Response.json({
-							web: { results: [{ title: "API", url: "https://api-result.example/", description: "d" }] },
-						})
+			"api.tavily.com": (url, init) => {
+				expect(url.pathname).toBe("/search");
+				expect(init?.method).toBe("POST");
+				expect(url.search).toBe("");
+				bodies.push(JSON.parse(String(init?.body)));
+				const auth = new Headers(init?.headers).get("Authorization");
+				if (auth === "Bearer spent") return new Response("quota", { status: 432 });
+				return auth === "Bearer secret-key"
+					? Response.json({ results: [{ title: "API", url: "https://api-result.example/", content: "d" }] })
 					: new Response("unauthorized", { status: 401 });
 			},
 		};
-		const previous = process.env.BRAVE_SEARCH_API_KEY;
-		delete process.env.BRAVE_SEARCH_API_KEY;
+		const previous = process.env.TAVILY_API_KEY;
+		delete process.env.TAVILY_API_KEY;
 		try {
 			const keys = new WebSearchApiKeys(new InMemoryAuthStorageBackend());
-			const missing = createService({ engines: ["duckduckgo", "brave_api"], pagesPerSearch: 0 }, routes, { keys });
+			const missing = createService({ engines: ["duckduckgo", "tavily"], pagesPerSearch: 0 }, routes, { keys });
 			const withoutKey = await missing.service.search({ queries: ["x"] });
-			expect(withoutKey.failures).toEqual([
-				expect.objectContaining({ engine: "brave_api", code: "missing_api_key" }),
-			]);
-			expect(missing.calls.some((url) => url.hostname === "api.search.brave.com")).toBe(false);
+			expect(withoutKey.failures).toEqual([expect.objectContaining({ engine: "tavily", code: "missing_api_key" })]);
+			expect(missing.calls.some((url) => url.hostname === "api.tavily.com")).toBe(false);
 
-			keys.set("brave_api", "  secret-key  ");
-			expect(keys.hasStored("brave_api")).toBe(true);
-			const withKey = createService({ engines: ["brave_api"], pagesPerSearch: 0 }, routes, { keys });
-			const response = await withKey.service.search({ queries: ["x"] });
+			// Several keys are tried in list order: the refused first key hands the search to the second.
+			const wrongId = keys.add("tavily", "wrong", "Old");
+			keys.add("tavily", "  secret-key  ");
+			expect(keys.hasStored("tavily")).toBe(true);
+			expect(keys.summaries("tavily")).toEqual([
+				{ id: wrongId, label: "Old", suffix: "rong" },
+				{ id: expect.any(String), label: "Key 2", suffix: "-key" },
+			]);
+			expect(() => keys.add("tavily", "secret-key")).toThrow();
+			const withKey = createService({ engines: ["tavily"], pagesPerSearch: 0 }, routes, { keys });
+			let finished = 0;
+			const stop = onTavilySearchFinished(() => finished++);
+			const before = bodies.length;
+			const response = await withKey.service.search({ queries: ["x"] }).finally(stop);
+			expect(finished).toBe(1);
+			expect(bodies.length - before).toBe(2);
 			expect(response.results).toEqual([
-				expect.objectContaining({ url: "https://api-result.example/", source: "Brave Search API" }),
+				expect.objectContaining({ url: "https://api-result.example/", source: "Tavily API" }),
 			]);
+			expect(bodies.at(-1)).toMatchObject({ query: "x", search_depth: "basic" });
+			expect(JSON.stringify(bodies)).not.toContain("secret-key");
 
-			keys.set("brave_api", "wrong");
-			const rejected = createService({ engines: ["brave_api"] }, routes, { keys });
-			await expect(rejected.service.search({ queries: ["x"] })).rejects.toMatchObject({ code: "http" });
-			keys.clear("brave_api");
-			expect(keys.get("brave_api")).toBeUndefined();
+			keys.rename("tavily", wrongId, "  Renamed  ");
+			expect(keys.summaries("tavily")[0]?.label).toBe("Renamed");
+			keys.remove("tavily", keys.summaries("tavily")[1]!.id);
+			keys.add("tavily", "spent");
+			expect(keys.all("tavily")).toEqual(["wrong", "spent"]);
+			const rejected = createService({ engines: ["tavily"] }, routes, { keys });
+			const failure = await rejected.service.search({ queries: ["x"] }).catch((error: unknown) => error);
+			expect(failure).toMatchObject({ code: "http" });
+			const message = String((failure as Error).message);
+			expect(message).toContain("第 1 个 Key 拒绝了 API Key");
+			expect(message).toContain("第 2 个 Key 可用额度已用完");
+			expect(message).not.toContain("wrong");
+			expect(message).not.toContain("spent");
+			keys.clear("tavily");
+			expect(keys.get("tavily")).toBeUndefined();
+
+			// The first single-key format reads as one key and keeps other entries of the file on write.
+			const storage = new InMemoryAuthStorageBackend();
+			storage.withLock(() => ({ result: undefined, next: JSON.stringify({ tavily: "legacy", other: 1 }) }));
+			const legacy = new WebSearchApiKeys(storage);
+			expect(legacy.summaries("tavily")).toEqual([{ id: "key-1", label: "Key 1", suffix: "gacy" }]);
+			legacy.add("tavily", "second");
+			expect(legacy.all("tavily")).toEqual(["legacy", "second"]);
+			expect(storage.withLock((text) => ({ result: JSON.parse(text ?? "{}").other }))).toBe(1);
 		} finally {
-			if (previous !== undefined) process.env.BRAVE_SEARCH_API_KEY = previous;
+			if (previous !== undefined) process.env.TAVILY_API_KEY = previous;
 		}
 	});
 

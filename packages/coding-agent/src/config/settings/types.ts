@@ -160,8 +160,8 @@ export interface VisionCapabilityTestRecord {
 	testedAt: number;
 }
 
-/** Search sources built into MyHarness. `brave_api` additionally needs a user API key. */
-export type WebSearchEngineId = "google" | "bing" | "duckduckgo" | "brave" | "brave_api";
+/** Search sources built into MyHarness. `tavily` additionally needs a user API key. */
+export type WebSearchEngineId = "google" | "bing" | "duckduckgo" | "brave" | "tavily";
 
 /** The browser the web tools fall back to: a named one, or "auto" for the first installed of Firefox, Chrome, Edge. */
 export type WebSearchBrowserId = "auto" | "firefox" | "chrome" | "edge";

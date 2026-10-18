@@ -3,7 +3,7 @@
 // on the left and the control on the right.
 import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy, motionEnabled, usePresence } from "./ui.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
-import { actions, confirmDialog } from "./actions.js";
+import { actions, confirmDialog, inputDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
 import { clip, storedToUnitValue, tokensToUnit, unitToTokens, unitValueToStored } from "./util.js";
 import { N_, serverText, t } from "./i18n.js";
@@ -368,6 +368,133 @@ function SettingRow({ item, models, off, before }) {
 	<//>`;
 }
 
+/** Remaining searches of one key, or why they are unknown. */
+function keyCount(entry, loading) {
+	if (!entry) return loading ? t("Checking…") : "";
+	if ("error" in entry) return t("Count unavailable");
+	return entry.remaining === null ? t("Unlimited") : t("{count} searches left", { count: entry.remaining });
+}
+
+/**
+ * The Tavily API keys, shown under the engine list while Tavily is selected. The row says how many searches all keys
+ * have left together (as Tavily's `/usage` API reports each key); unfolded, it lists every key with its own count, its
+ * name, rename and delete, and a form to add one more with a Save button. Searches use the keys in list order. The counts
+ * are read again when the page opens, after a key is added or deleted, after every finished Tavily search and from the
+ * refresh button; only the newest request may write its answer, so a count from before a change never replaces a newer one.
+ */
+function TavilyKeyRow({ off }) {
+	const keyState = useStore((s) => s.settings?.tavilyApiKey);
+	const searches = useStore((s) => s.tavilyUsageNonce || 0);
+	const configured = !!keyState?.configured;
+	const keys = keyState?.keys || [];
+	const environment = keyState?.environment || null;
+	const [open, setOpen] = useState(!configured);
+	const [label, setLabel] = useState("");
+	const [value, setValue] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [usage, setUsage] = useState({ loading: false, byId: {}, total: undefined, unknown: 0 });
+	const latest = useRef(0);
+	const alive = useRef(true);
+	useEffect(() => () => {
+		alive.current = false;
+	}, []);
+	const listKey = [...keys.map((k) => k.id), environment?.id || ""].join(",");
+	const refresh = async () => {
+		const id = ++latest.current;
+		if (!configured) {
+			setUsage({ loading: false, byId: {}, total: undefined, unknown: 0 });
+			return;
+		}
+		setUsage((current) => ({ ...current, loading: true }));
+		let next;
+		try {
+			const result = await api("/api/settings/tavily-usage", { slot: "", timeoutMs: 20_000 });
+			const byId = {};
+			for (const entry of result.keys || []) byId[entry.id] = entry;
+			next = { loading: false, byId, total: result.total, unknown: result.unknown || 0 };
+		} catch (error) {
+			next = { loading: false, byId: {}, total: undefined, unknown: 0, error: error?.message };
+		}
+		if (alive.current && id === latest.current) setUsage(next);
+	};
+	// A changed key list must never show counts read before the change: forget them before asking again.
+	useEffect(() => {
+		setUsage({ loading: false, byId: {}, total: undefined, unknown: 0 });
+		refresh();
+	}, [configured, listKey]);
+	// Only searches finished while the row is shown: the run above already reads the current counts.
+	const seenSearches = useRef(searches);
+	useEffect(() => {
+		if (searches === seenSearches.current) return;
+		seenSearches.current = searches;
+		refresh();
+	}, [searches]);
+	const act = async (fn, success) => {
+		setBusy(true);
+		try {
+			const ok = await attempt(fn, { success });
+			if (ok !== undefined) await loadSettings();
+			return ok;
+		} finally {
+			if (alive.current) setBusy(false);
+		}
+	};
+	const add = async () => {
+		if (!value.trim() || busy) return;
+		const ok = await act(() => post("/api/settings/tavily-key/add", { label, key: value }, ""), t("API key saved"));
+		if (ok && alive.current) {
+			setValue("");
+			setLabel("");
+		}
+	};
+	const rename = async (key) => {
+		const next = await inputDialog({ title: t("Rename API key"), label: t("Name"), initial: key.label });
+		if (next && next.trim() !== key.label) await act(() => post("/api/settings/tavily-key/rename", { id: key.id, label: next }, ""));
+	};
+	const remove = async (key) => {
+		if (!(await confirmDialog({ title: t("Delete this API key?"), message: t("The Tavily key “{label}” is removed from this computer.", { label: key.label }), confirmLabel: t("Delete API key"), danger: true }))) return;
+		await act(() => post("/api/settings/tavily-key/delete", { id: key.id }, ""), t("API key deleted"));
+	};
+	const total = !configured ? t("Not configured")
+		: usage.error ? t("Count unavailable")
+		: usage.total === undefined ? (usage.loading || !Object.keys(usage.byId).length ? t("Checking…") : t("Count unavailable"))
+		: usage.total === null ? t("Unlimited")
+		: usage.unknown ? `${t("{count} searches left", { count: usage.total })} · ${t("{n} keys unavailable", { n: usage.unknown })}`
+		: t("{count} searches left", { count: usage.total });
+	const count = keys.length + (environment ? 1 : 0);
+	const keyRow = (key, name, actions) => {
+		const entry = usage.byId[key.id];
+		const tone = !entry ? "" : "error" in entry ? "danger" : entry.remaining === 0 ? "warn" : "ok";
+		return html`<div class="key-row" key=${key.id}>
+			<span class=${`dot ${tone}`} />
+			<span class="grow truncate">${name}${key.suffix ? html` <span class="dim mono">••••${key.suffix}</span>` : null}</span>
+			<span class="dim tavily-count" title=${entry && "error" in entry ? serverText(entry.error, entry.error) : undefined}>${keyCount(entry, usage.loading)}</span>
+			${actions}
+		</div>`;
+	};
+	return html`<div class=${`set-row ${off ? "off" : ""}`}>
+		<div class="set-text">
+			<span class="set-label">Tavily API Key</span>
+			<span class="set-desc row" role="status" title=${usage.error ? serverText(usage.error, usage.error) : undefined}>${total}${configured ? html`<button class="icon-btn sm" disabled=${usage.loading} title=${t("Refresh")} aria-label=${t("Refresh")} onClick=${refresh}>${usage.loading ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${12} />`}</button>` : null}</span>
+		</div>
+		<div class="set-control"><button class="btn sm" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${count ? t("Keys ({n})", { n: count }) : t("Add API key")}</button></div>
+	</div>
+	<${Collapse} open=${open}>
+		<div class="tavily-keys">
+			${keys.map((key) => keyRow(key, key.label, html`
+				<button class="icon-btn sm" disabled=${busy} title=${t("Rename API key")} aria-label=${t("Rename API key")} onClick=${() => rename(key)}><${Icon} name="edit" size=${13} /></button>
+				<button class="icon-btn sm" disabled=${busy} title=${t("Delete API key")} aria-label=${t("Delete API key")} onClick=${() => remove(key)}><${Icon} name="trash" size=${13} /></button>`))}
+			${environment ? keyRow({ id: environment.id }, t("From {variable}", { variable: environment.variable }), null) : null}
+			<div class="key-add">
+				<input class="field" placeholder=${t("Name (optional)")} aria-label=${t("Key name")} value=${label} onInput=${(e) => setLabel(e.target.value)} />
+				<input class="field mono" type="password" autocomplete="off" spellcheck="false" placeholder=${t("Paste the API key")} aria-label="Tavily API Key" value=${value} onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && add()} />
+				<button class="btn primary" disabled=${busy || !value.trim()} onClick=${add}>${t("Save")}</button>
+			</div>
+			<span class="set-desc">${t("Keys are used in list order; when one is used up or refused, the next one takes over.")}</span>
+		</div>
+	<//>`;
+}
+
 /** The switch in the header of a group card (web search). */
 function GroupSwitch({ item }) {
 	const [saving, save] = useSaving();
@@ -413,7 +540,7 @@ function SettingsList({ items, models }) {
 			const rest = card.items.filter((i) => i !== head);
 			return html`<${Card} key=${card.key} title=${serverText(head?.label)} description=${head ? describe(head) : undefined}
 				action=${head ? html`<${GroupSwitch} item=${head} />` : null}>
-				${rest.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} off=${head && !head.value} />`)}
+				${rest.map((item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} off=${head && !head.value} />${item.id === "webSearch.engines" && Array.isArray(item.value) && item.value.includes("tavily") ? html`<${TavilyKeyRow} key="tavily-key" off=${head && !head.value} />` : null}`)}
 			<//>`;
 		}
 		// A page with a single group needs no group title: the page title says it.

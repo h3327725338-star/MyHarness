@@ -40,7 +40,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				label: "Search engines",
 				type: "multi",
 				value: ["google"],
-				options: ["Google", "Bing", "DuckDuckGo", "Brave", "Brave Search API"].map((label) => ({
+				options: ["Google", "Bing", "DuckDuckGo", "Brave", "Tavily API"].map((label) => ({
 					value: label.toLowerCase(),
 					label,
 				})),
@@ -143,7 +143,7 @@ try {
  for(const section of ['conversation','search','network']) {setView({settingsSection:section});await wait(100);checkRows();}
  setView({settingsSection:'search'});await wait(100);
  (document.querySelector('.set-multiselect-btn') || document.querySelector('.select-like'))?.click();await wait(100);
- if(!document.body?.textContent?.includes('Brave 搜索 API')) throw Error('Brave Search API option is not translated in Chinese');
+ if(!document.body?.textContent?.includes('Tavily API')||document.body.textContent.includes('Brave 搜索 API')) throw Error('engine list should offer Tavily API, not Brave Search API');
  (document.querySelector('.set-multiselect-btn') || document.querySelector('.select-like'))?.click();await wait(100);
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
  if(document.querySelector('.settings-nav').textContent.includes('工具调用')) throw Error('empty tools page still in the navigation');

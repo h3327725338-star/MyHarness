@@ -30,7 +30,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Settings](settings.md) — global and project settings.
 - [Symbols contract](symbols.md) — structured navigation, routing, coordinates, partial results, deadlines, and continuation.
 - [Windows](windows.md) — Bash and Windows-specific setup.
-- [Web Search](web-search.md) — optional built-in web search (Google/Bing first, with optional DuckDuckGo, Brave, Brave Search API and a Firefox/Chrome/Edge browser fallback) and page reading.
+- [Web Search](web-search.md) — optional built-in web search (Google/Bing first, with optional DuckDuckGo, Brave, Tavily API and a Firefox/Chrome/Edge browser fallback) and page reading.
 - [Sessions](sessions.md) — Session management, branching, and navigation.
 - [Compaction](compaction.md) — context compaction and branch summaries.
 - [Git Worktrees](worktrees.md) — managing development worktrees through `/git`.

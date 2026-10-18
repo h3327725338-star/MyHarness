@@ -1728,6 +1728,8 @@ function connectEvents() {
 		else state.resources = null;
 		attempt(() => loadSnapshot(slot), { quiet: true });
 	});
+	// A Tavily search finished somewhere: the settings page reads the remaining count again.
+	on("tavily_usage_changed", () => set({ tavilyUsageNonce: (state.tavilyUsageNonce || 0) + 1 }));
 	on("workspaces_changed", async (d, slot) => {
 		await attempt(() => loadSnapshot(slot), { quiet: true });
 		await attempt(() => loadWorkspaces(), { quiet: true });

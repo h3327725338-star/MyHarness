@@ -95,7 +95,7 @@ describe("Web UI: interface language", () => {
 	it("turns English server text into Chinese, including messages with variable parts", () => {
 		lang.setLang("zh-CN");
 		expect(i18n.serverText("Steering messages")).toBe("引导消息");
-		expect(i18n.serverText("Brave Search API")).toBe("Brave 搜索 API");
+		expect(i18n.serverText("Search engines")).toBe("搜索引擎");
 		expect(i18n.serverText("Retry transient provider errors (up to 3 times).")).toBe(
 			"遇到临时性的 Provider 错误时自动重试（最多 3 次）。",
 		);

@@ -262,7 +262,7 @@ Memory Markdown files 是 source of truth：
 
 | 字段 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |
-| `engines` | 启用的搜索引擎：`google`、`bing`、`duckduckgo`、`brave`、`brave_api`（需要 API Key） | 任意组合 | `["google", "bing"]` |
+| `engines` | 启用的搜索引擎：`google`、`bing`、`duckduckgo`、`brave`、`tavily`（需要 API Key） | 任意组合 | `["google", "bing"]` |
 | `browserFallback` | 轻量请求被拦截时，是否允许用本机浏览器（MyHarness 专用配置）打开真实的搜索页或网页 | On / Off | `true` |
 | `browser` | 兜底用哪个浏览器；`auto` = Firefox、Chrome、Edge 中第一个已安装的 | `auto` / `firefox` / `chrome` / `edge` | `"auto"` |
 | `useBrowserCookies` | 是否把日常浏览器的 Cookie 复制一份到专用配置，用来读取已登录的网站 | On / Off | `false` |
@@ -289,7 +289,7 @@ Memory Markdown files 是 source of truth：
 
 `browserFallback` 使用 MyHarness 专用的浏览器 profile，与用户自己的浏览器隔离，并复用该 profile 中的 Cookie/Session；搜索页和网页正文（直接请求遇到 403、人机验证、登录页等）都会用到它。浏览器未安装、无法连接或 profile 被占用时会在 Diagnostics 中说明原因；如果页面仍要求 CAPTCHA、登录或 consent，交互界面会提示用户在弹出的浏览器窗口完成，完成后自动继续，无人值守模式返回 `challenge_required`。`useBrowserCookies` 只复制 Cookie，不修改用户自己的浏览器配置，限制见 Web Search 文档。
 
-超出范围的数字按最近的上下限处理。Brave Search API Key 不在 `settings.json` 中，保存在 agent 目录的 `web-search-keys.json`。旧的 `searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`parallelPages`、`searchRounds` 和缓存 TTL 字段的迁移方式、各引擎的稳定性说明、Tool schema、缓存、超时和取消见 [Web Search 文档](web-search.md)。
+超出范围的数字按最近的上下限处理。Tavily API Key 不在 `settings.json` 中，保存在 agent 目录的 `web-search-keys.json`。旧的 `searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`parallelPages`、`searchRounds` 和缓存 TTL 字段的迁移方式、各引擎的稳定性说明、Tool schema、缓存、超时和取消见 [Web Search 文档](web-search.md)。
 
 #### visionAssistant
 

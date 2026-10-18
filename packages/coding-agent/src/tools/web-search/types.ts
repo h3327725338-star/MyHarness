@@ -95,5 +95,6 @@ export interface WebSearchSettingsSource {
 
 /** Supplies API keys for engines that need one; missing keys fail only that engine. */
 export interface WebSearchKeySource {
-	get(engine: "brave_api"): string | undefined;
+	/** Every key of the engine, in the order they are tried. */
+	all(engine: "tavily"): string[];
 }
