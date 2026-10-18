@@ -191,6 +191,44 @@ describe("conversation artifacts", () => {
 			const global = JSON.parse(readFileSync(join(a.data, "artifacts", "index.json"), "utf8"));
 			expect(global.entries).toHaveLength(3);
 		});
+
+		it("drops only the removed workspace's entries when its artifacts are deleted", () => {
+			const a = fixture();
+			fixture("workspace-b", "session-b", a.data);
+			refreshArtifactIndexes(a.data);
+			const untouched = indexFiles(a.data, "workspace-b").slice(2);
+			const before = age(untouched);
+			deleteWorkspaceArtifacts(a.data, "workspace-a");
+			const owners = (file: string) =>
+				JSON.parse(readFileSync(file, "utf8")).entries.map((entry: { workspaceId: string }) => entry.workspaceId);
+			expect(owners(join(a.data, "artifacts", "index.json"))).toEqual(["workspace-b"]);
+			expect(owners(indexFiles(a.data, "workspace-a")[2]!)).toEqual([]);
+			expect(untouched.map((file) => statSync(file).mtimeMs)).toEqual(before);
+		});
+
+		it("rewrites no index for a workspace that never had artifacts", () => {
+			const a = fixture();
+			const b = fixture("workspace-b", "session-b", a.data);
+			refreshArtifactIndexes(a.data);
+			const files = [...indexFiles(a.data, "workspace-a"), ...indexFiles(a.data, "workspace-b")];
+			const before = age(files);
+			rmSync(b.artifacts, { recursive: true });
+			deleteWorkspaceArtifacts(a.data, "workspace-b");
+			expect(files.map((file) => statSync(file).mtimeMs)).toEqual(before);
+		});
+
+		it("still cleans the workspace's own index when the global one lost its entries", () => {
+			const a = fixture();
+			fixture("workspace-b", "session-b", a.data);
+			refreshArtifactIndexes(a.data);
+			const globalIndex = join(a.data, "artifacts", "index.json");
+			const ownIndex = indexFiles(a.data, "workspace-a")[2]!;
+			// Drift: the global index no longer lists this Workspace, its own index still does.
+			writeFileSync(globalIndex, JSON.stringify({ version: 1, entries: [] }));
+			deleteWorkspaceArtifacts(a.data, "workspace-a");
+			expect(JSON.parse(readFileSync(ownIndex, "utf8")).entries).toEqual([]);
+			expect(JSON.parse(readFileSync(globalIndex, "utf8")).entries).toEqual([]);
+		});
 	});
 
 	it("resolves an artifact through its own session and refuses a path that names another one", () => {

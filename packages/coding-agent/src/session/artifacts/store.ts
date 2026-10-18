@@ -183,10 +183,10 @@ export function refreshArtifactIndexes(dataRoot: string): ArtifactEntry[] {
 	return entries;
 }
 
-/** The entries of the global index as the last refresh wrote them; undefined when it is missing or not in the known shape. */
-function readGlobalIndex(dataRoot: string): ArtifactEntry[] | undefined {
+/** The entries one index file lists, as the last refresh wrote them; undefined when it is missing or in an unknown shape. */
+function readArtifactIndex(directory: string): ArtifactEntry[] | undefined {
 	try {
-		const parsed = JSON.parse(readFileSync(join(dataRoot, "artifacts", "index.json"), "utf8")) as {
+		const parsed = JSON.parse(readFileSync(join(directory, "index.json"), "utf8")) as {
 			version?: unknown;
 			entries?: unknown;
 		};
@@ -206,6 +206,11 @@ function readGlobalIndex(dataRoot: string): ArtifactEntry[] | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/** The entries of the global index as the last refresh wrote them. */
+function readGlobalIndex(dataRoot: string): ArtifactEntry[] | undefined {
+	return readArtifactIndex(join(dataRoot, "artifacts"));
 }
 
 /** What the last index refresh saw of each session's artifact files (a hash of their paths, sizes and times). */
@@ -283,13 +288,65 @@ export function assertDirectTree(root: string): void {
 	for (const entry of readdirSync(root)) assertDirectTree(join(root, entry));
 }
 
+/**
+ * Remove one Workspace's artifact files and take its entries out of the derived indexes.
+ *
+ * The deletion itself only touches that Workspace's folders. The indexes are patched instead of rebuilt: a full refresh
+ * walks every Workspace and rewrites the whole global index (52 s of uninterrupted work on a data root holding 1,400
+ * Workspaces and 227,000 artifacts, which froze every other request while it ran), while removing one Workspace can only
+ * drop that Workspace's entries. A Workspace without artifacts — a folder that was just created, for instance — hence
+ * rewrites no index at all.
+ */
 export function deleteWorkspaceArtifacts(dataRoot: string, workspaceId: string): void {
-	const roots = directories(join(getWorkspaceDir(dataRoot, workspaceId), "sessions")).map((sessionId) =>
-		join(getSessionDir(dataRoot, workspaceId, sessionId), "artifacts"),
+	const sessionIds = directories(join(getWorkspaceDir(dataRoot, workspaceId), "sessions"));
+	const roots = sessionIds.map((sessionId) => ({
+		sessionId,
+		path: join(getSessionDir(dataRoot, workspaceId, sessionId), "artifacts"),
+	}));
+	for (const root of roots) assertDirectTree(root.path);
+	const deleted = roots.filter((root) => existsSync(root.path));
+	for (const root of deleted) rmSync(root.path, { recursive: true });
+	// Nothing was there, so no index can list anything for this Workspace: a Workspace that was just created costs
+	// nothing but the (empty) directory reads above.
+	if (deleted.length === 0) return;
+	dropWorkspaceArtifactEntries(
+		dataRoot,
+		workspaceId,
+		deleted.map((root) => root.sessionId),
 	);
-	for (const root of roots) assertDirectTree(root);
-	for (const root of roots) if (existsSync(root)) rmSync(root, { recursive: true });
-	refreshArtifactIndexes(dataRoot);
+}
+
+/** Drop the deleted Sessions' entries of one Workspace from the global index and from that Workspace's own index. */
+function dropWorkspaceArtifactEntries(dataRoot: string, workspaceId: string, sessionIds: readonly string[]): void {
+	const global = readGlobalIndex(dataRoot);
+	// No usable index (missing, or interrupted mid-write): rebuild it as before, so the derived files stay authoritative.
+	if (!global) {
+		refreshArtifactIndexes(dataRoot);
+		return;
+	}
+	const removed = new Set(sessionIds);
+	const gone = (entry: ArtifactEntry) => entry.workspaceId === workspaceId && removed.has(entry.sessionId);
+	dropEntries(dataRoot, join(dataRoot, "artifacts"), global, gone);
+	// The two indexes are written by the same refresh, but each is patched on its own: an index that never listed these
+	// files (drift, a hand-edited file) is left untouched instead of being rebuilt from the other one.
+	const own = join(getWorkspaceDir(dataRoot, workspaceId), "artifacts");
+	const entries = readArtifactIndex(own);
+	if (entries) dropEntries(dataRoot, own, entries, gone);
+}
+
+/** Rewrite one index without the entries `gone` matches, and not at all when it lists none of them. */
+function dropEntries(
+	dataRoot: string,
+	directory: string,
+	entries: readonly ArtifactEntry[],
+	gone: (entry: ArtifactEntry) => boolean,
+): void {
+	if (!entries.some(gone)) return;
+	writeArtifactIndex(
+		dataRoot,
+		directory,
+		entries.filter((entry) => !gone(entry)),
+	);
 }
 
 export function preserveArtifactOrigin(scope: SessionDataPathInfo, sessionPath: string): void {

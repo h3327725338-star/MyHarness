@@ -164,6 +164,12 @@ function flattenTree(nodes: SessionTreeNode[], pathIds: Set<string>, leafId: str
 }
 
 export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub: WebHostHub): void {
+	/**
+	 * Saved chats checked per uninterrupted step while the archive is selected. One step stays around a hundred
+	 * milliseconds even when a chat's index has to be read, so requests that have nothing to do with the archive are
+	 * served between steps instead of waiting for the whole list.
+	 */
+	const ARCHIVED_SCAN_SLICE = 50;
 	const sessionDir = () =>
 		host.session.sessionManager.usesDefaultSessionDir() ? undefined : host.session.sessionManager.getSessionDir();
 	const useCase = new WorkspaceSessionUseCase({
@@ -610,11 +616,21 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		}
 	};
 
+	/**
+	 * The archive lists the chats whose `.archived` marker is set, so every saved chat is looked at once. Marking them
+	 * used to be one uninterrupted pass of several seconds on a large library, which held every other request (the
+	 * folder window, another click) until it ended; it now runs in slices, so the server answers between them.
+	 */
 	server.route("GET", "/api/sessions/archived", async ({ url }) => {
 		const pagination = parseSessionListPagination(url);
-		const sessions = (await SessionManager.listAll(sessionDir()))
-			.filter((info) => getChatMode(info) === requestMode(url.searchParams.get("mode")) && isArchivedSession(info))
-			.map(sessionSummary);
+		const mode = requestMode(url.searchParams.get("mode"));
+		const infos = await SessionManager.listAll(sessionDir());
+		const sessions: ReturnType<typeof sessionSummary>[] = [];
+		for (let index = 0; index < infos.length; index += ARCHIVED_SCAN_SLICE) {
+			for (const info of infos.slice(index, index + ARCHIVED_SCAN_SLICE))
+				if (getChatMode(info) === mode && isArchivedSession(info)) sessions.push(sessionSummary(info));
+			if (index + ARCHIVED_SCAN_SLICE < infos.length) await new Promise<void>((resolve) => setImmediate(resolve));
+		}
 		const page = paginateSessionSummaries(sessions, pagination);
 		return pagination ? { sessions: page.sessions, total: page.total } : { sessions: page.sessions };
 	});

@@ -778,8 +778,36 @@ export async function loadSlots() {
 /**
  * Load the Workspaces of a mode (the one on screen by default) and the chat lists its sidebar shows. `slot` is the
  * chat whose Workspace counts as current (the one on screen by default).
+ *
+ * A change to the Workspace list is read back from two places at once: the action that made it, and the server's
+ * `workspaces_changed` event. One refresh reads the list, every open group's chats and the unbound list from disk, so
+ * the two callers share one run; a request made while it runs causes exactly one more read afterwards (the same rule
+ * loadSessions follows), which keeps a refresh that started before the change from being the last word.
  */
-export async function loadWorkspaces(mode = uiMode(), slot) {
+const workspaceLoads = new Map();
+export function loadWorkspaces(mode = uiMode(), slot) {
+	const key = `${mode}\n${slot ?? ""}`;
+	const running = workspaceLoads.get(key);
+	if (running) {
+		running.again = true;
+		return running.promise;
+	}
+	const load = { again: false, promise: null };
+	load.promise = (async () => {
+		try {
+			do {
+				load.again = false;
+				await fetchWorkspaceLists(mode, slot);
+			} while (load.again);
+		} finally {
+			workspaceLoads.delete(key);
+		}
+	})();
+	workspaceLoads.set(key, load);
+	return load.promise;
+}
+
+async function fetchWorkspaceLists(mode, slot) {
 	const selected = targetSlot ?? activeSlot;
 	const requestSlot = slot === undefined && String(selected).startsWith("pending:") ? "" : slot;
 	const data = await api(`/api/workspaces?mode=${mode}`, requestSlot === undefined ? {} : { slot: requestSlot });

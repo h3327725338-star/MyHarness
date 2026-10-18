@@ -491,11 +491,27 @@ export const actions = {
 		return result;
 	},
 
+	/**
+	 * Un-register a Workspace. The row leaves the sidebar at once (with the group's own fold motion), while the server
+	 * removes the registration; a refusal puts the row back where it was. Waiting for the answer first left the row on
+	 * screen — and the whole sidebar looking unresponsive — for as long as the removal took.
+	 */
 	async removeWorkspace(id, name) {
 		const ok = await confirmDialog({ title: t("Remove workspace?"), message: t("“{name}” is removed from the list. Its folder, project files and chats are not deleted; its chats stay available without a workspace.", { name }), confirmLabel: t("Remove"), artifactChoice: true });
 		if (!ok) return;
-		await attempt(() => post("/api/workspaces/remove", { id, deleteArtifacts: ok.deleteArtifacts === true, mode: uiMode() }));
-		await loadWorkspaces();
+		const mode = uiMode();
+		const before = state.workspaces;
+		const row = before.list.find((workspace) => workspace.id === id);
+		// The sidebar may be showing another mode by now: then its list is not the one to touch.
+		const showList = (list) => {
+			if (uiMode() !== mode) return;
+			state.workspaces = { ...state.workspaces, list };
+			emit();
+		};
+		if (row) showList(before.list.filter((workspace) => workspace.id !== id));
+		const result = await attempt(() => post("/api/workspaces/remove", { id, deleteArtifacts: ok.deleteArtifacts === true, mode }));
+		if (!result && row) showList(before.list);
+		await loadWorkspaces(mode);
 	},
 
 	/** The dialog that turns Git integration on for the workspace (identity, repository, first version). */

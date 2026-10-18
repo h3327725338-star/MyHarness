@@ -1631,6 +1631,141 @@ describe("Web UI: actions.js closeCommand", () => {
 	});
 });
 
+describe("Web UI: actions.js removeWorkspace drops the row before the server answers", () => {
+	let store: any;
+	let actions: any;
+	let removeWorkspace: (id: string, name: string) => Promise<unknown>;
+	let resolveConfirm: (value: unknown) => void;
+	let release: ((value: unknown) => void) | undefined;
+	let releaseList: ((value: unknown) => void) | undefined;
+	let origDoc: unknown;
+	let origMatchMedia: unknown;
+
+	const reply = (data: unknown, ok = true, status = 200) => ({
+		ok,
+		status,
+		async text() {
+			return JSON.stringify(data);
+		},
+	});
+	const flush = async () => {
+		for (let i = 0; i < 8; i += 1) await Promise.resolve();
+	};
+	const rowIds = () => store.state.workspaces.list.map((workspace: { id: string }) => workspace.id);
+
+	beforeAll(async () => {
+		store = await import(new URL("store.js", webDir).href);
+		actions = await import(new URL("actions.js", webDir).href);
+		removeWorkspace = actions.actions.removeWorkspace;
+		resolveConfirm = actions.resolveConfirm;
+	});
+
+	beforeEach(() => {
+		// setView() funnels through applyAppearance(), which reads the live document and the colour-scheme query.
+		origDoc = (globalThis as Record<string, unknown>).document;
+		origMatchMedia = (globalThis as Record<string, unknown>).matchMedia;
+		(globalThis as Record<string, unknown>).document = {
+			documentElement: { dataset: {}, style: { getPropertyValue: () => "", setProperty: vi.fn() } },
+		};
+		(globalThis as Record<string, unknown>).matchMedia = vi.fn().mockReturnValue({ matches: false });
+		// savePrefs() arms a shared-prefs timer; fake timers keep it from firing into the next test's fetch stub.
+		vi.useFakeTimers();
+		store.state.view.chatMode = "general";
+		store.state.workspaces = {
+			list: [
+				{ id: "w1", name: "One", rootPath: "C:/one" },
+				{ id: "w2", name: "Two", rootPath: "C:/two" },
+			],
+			loaded: true,
+			currentPath: null,
+			currentSessionFile: null,
+			sessions: {},
+			unbound: [],
+			errors: {},
+		};
+		release = undefined;
+		releaseList = undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((input: unknown) => {
+				const { pathname } = new URL(String(input), "http://127.0.0.1");
+				if (pathname === "/api/workspaces/remove")
+					return new Promise((resolve) => {
+						release = resolve;
+					});
+				if (pathname === "/api/workspaces")
+					return new Promise((resolve) => {
+						releaseList = resolve;
+					});
+				return Promise.resolve(reply({ sessions: [] }));
+			}),
+		);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+		if (origDoc === undefined) delete (globalThis as Record<string, unknown>).document;
+		else (globalThis as Record<string, unknown>).document = origDoc;
+		if (origMatchMedia === undefined) delete (globalThis as Record<string, unknown>).matchMedia;
+		else (globalThis as Record<string, unknown>).matchMedia = origMatchMedia;
+		store.state.workspaces = {
+			list: [],
+			loaded: false,
+			currentPath: null,
+			currentSessionFile: null,
+			sessions: {},
+			unbound: undefined,
+			errors: {},
+		};
+	});
+
+	it("removes the row at once and keeps the server's list afterwards", async () => {
+		const run = removeWorkspace("w1", "One");
+		await flush();
+		resolveConfirm({ deleteArtifacts: false });
+		await flush();
+		// The row is gone while the removal is still in flight.
+		expect(rowIds()).toEqual(["w2"]);
+		expect(release).toBeDefined();
+		release!(reply({ ok: true }));
+		await flush();
+		releaseList!(
+			reply({
+				workspaces: [{ id: "w2", name: "Two", rootPath: "C:/two" }],
+				currentPath: null,
+				currentSessionFile: null,
+			}),
+		);
+		await run;
+		expect(rowIds()).toEqual(["w2"]);
+	});
+
+	it("puts the row back when the server refuses the removal", async () => {
+		const run = removeWorkspace("w1", "One");
+		await flush();
+		resolveConfirm(true);
+		await flush();
+		expect(rowIds()).toEqual(["w2"]);
+		release!(reply({ error: "Could not save the workspace list." }, false, 500));
+		await flush();
+		// Restored before the refreshed list arrives: the sidebar never keeps a row the server refused.
+		expect(rowIds()).toEqual(["w1", "w2"]);
+		releaseList!(
+			reply({
+				workspaces: [
+					{ id: "w1", name: "One", rootPath: "C:/one" },
+					{ id: "w2", name: "Two", rootPath: "C:/two" },
+				],
+				currentPath: null,
+				currentSessionFile: null,
+			}),
+		);
+		await run;
+		expect(rowIds()).toEqual(["w1", "w2"]);
+	});
+});
+
 describe("Web UI: store.js first-screen ordering of the unbound and archived lists", () => {
 	let bootStore: any;
 	let calls: string[];
