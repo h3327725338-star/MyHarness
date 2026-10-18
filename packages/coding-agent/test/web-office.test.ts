@@ -136,7 +136,7 @@ describe("Office editing through a document server", () => {
 		writeFileSync(join(root, "report.docx"), "the agent wrote this");
 		const later = new Date(Date.now() + 5000);
 		utimesSync(join(root, "report.docx"), later, later);
-		expect(await (await fetch(`${base}/api/office/session-state?token=${token}`)).json()).toEqual({
+		expect(await (await fetch(`${base}/api/office/session-state?${new URLSearchParams({ token })}`)).json()).toEqual({
 			changedOnDisk: true,
 		});
 

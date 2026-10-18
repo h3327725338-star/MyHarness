@@ -94,7 +94,7 @@ function OfficeEditor({ path, bar, onReload }) {
 	}, [dirty]);
 	const token = session?.token;
 	const check = useRef(null);
-	check.current = async () => (await api(`/api/office/session-state?token=${encodeURIComponent(token)}`)).changedOnDisk;
+	check.current = async () => (await api(`/api/office/session-state?${new URLSearchParams({ token })}`)).changedOnDisk;
 	const poll = useRef(() => check.current());
 	usePoll(poll.current, (value) => setChanged(!!value), !!token);
 	const status = !ready
