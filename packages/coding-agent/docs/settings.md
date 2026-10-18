@@ -19,7 +19,7 @@ MyHarness 使用 JSON settings files，project settings 会覆盖 global setting
 
 Web 设置新增 Keyboard shortcuts 页面，输入框统一为 120px 宽度，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改旧终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
 
-代码智能页通过 `codeIntelligence.symbolsEnabled` 控制 Symbols 工具（以及配套的 `apply_rename`），默认关闭；关闭时这两个工具都不会注册，也不会出现在模型可用工具、活动工具或提示词中。开关修改后需重启运行时生效。旧 `codeIntelligence.enabled` 字段仅作为 deprecated 类型兼容保留，读取时忽略、不迁移且不再写出；`disabledLanguages` 和 `servers` 仍用于语言模块配置。页面把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
+代码智能页通过 `codeIntelligence.symbolsEnabled` 控制 Symbols 工具（以及配套的 `apply_rename`），默认关闭；关闭时这两个工具都不会注册，也不会出现在模型可用工具、活动工具或提示词中。开关修改后需重启运行时生效。旧 `codeIntelligence.enabled` 字段仅作为 deprecated 类型兼容保留，读取时忽略、不迁移且不再写出；`disabledLanguages` 和 `servers` 仍用于语言模块配置。工具输入、workspace 路由、诊断/空结果语义、默认超时与分页契约见 [Symbols](symbols.md)。页面把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
 ## Popup notifications（任务结束提醒）
 

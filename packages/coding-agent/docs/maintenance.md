@@ -29,7 +29,7 @@
 - `modes/web` 只做传输和展示投影：不复制 Agent、Session、Git、Provider 逻辑，改动 wire 格式或新增 API 前先读 [Web UI](web-ui.md) 的“维护”一节；前端（`packages/coding-agent/web/`）没有构建步骤。
 - UI 交互修改遵循 [Interaction guidelines](interaction-guidelines.md)；`startup/settings-menu.ts` 保留共享设置元数据，但 Web API 不展示 Terminal 专用设置。
 - `platform/process` 负责 Windows/Bun/Node 进程和 stdout 边界；不要在每个 tool 中复制。
-- `symbols` 的结果要保留 backend/source 信息；semantic backend 不可用时不能伪称已成功启动语言服务器。
+- `symbols` 的结果要保留 backend/source 信息；semantic backend 不可用时不能伪称已成功启动语言服务器。参数、坐标、工作区多语言路由、诊断可靠性、总 deadline 和分页契约见 [Symbols](symbols.md)；低层 manager 的无语言多 server 请求不再任意选首个，调用方需显式选择或走 semantic 层发现/合并。
 
 ## 大批量 Git 提交
 

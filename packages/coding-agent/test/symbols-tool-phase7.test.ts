@@ -223,9 +223,13 @@ describe("Symbols Tool V2", () => {
 				definitionId: "ts-server",
 				timeoutMs: 1000,
 				includeDeclaration: true,
-				signal: controller.signal,
+				signal: expect.any(AbortSignal),
 			}),
 		);
+		const forwarded = vi.mocked(router.findReferences).mock.calls[0]?.[1]?.signal;
+		expect(forwarded?.aborted).toBe(false);
+		// Cancellation is composed with the end-to-end deadline rather than forwarding signal identity.
+		expect(forwarded).not.toBe(controller.signal);
 		expect(vi.mocked(router.findReferences).mock.calls[0]?.[1]).not.toHaveProperty("mode");
 	});
 

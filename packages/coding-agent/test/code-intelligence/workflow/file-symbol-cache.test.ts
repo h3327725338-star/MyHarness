@@ -41,6 +41,19 @@ describe("FileSymbolCache", () => {
 		expect(fileSymbols).toHaveBeenCalledTimes(2);
 	});
 
+	it("rejects user cancellation even when an unchanged file is cached", async () => {
+		const root = await workspace();
+		const cache = new FileSymbolCache();
+		const { fileSymbols, api } = router();
+		await cache.get(root, api, "a.ts", {});
+		const controller = new AbortController();
+		controller.abort();
+		await expect(cache.get(root, api, "a.ts", { signal: controller.signal })).rejects.toMatchObject({
+			name: "AbortError",
+		});
+		expect(fileSymbols).toHaveBeenCalledTimes(1);
+	});
+
 	it("drops a deleted file and never caches partial answers", async () => {
 		const root = await workspace();
 		const cache = new FileSymbolCache();

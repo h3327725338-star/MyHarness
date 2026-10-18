@@ -76,6 +76,7 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
 ## 公共 contract 与兼容
 
 - 正式 import/export 以各 package manifest 和 `src/index.ts` 为准。源码内部路径不是新的公共 API。
+- Symbols 的兼容输入、结果状态/分页、workspace 多语言路由、总时限与单独 `apply_rename` 的契约见 [Symbols](packages/coding-agent/docs/symbols.md)。旧嵌套 target / 0-based symbolId 保留；多 server 的低层 `acquireForWorkspace` 必须指定 language 或 definitionId，自动语言发现/合并由 semantic 层负责。
 - `Args` / `parseArgs` 与斜杠命令公开导出保留，其实现移动到 `startup/`。不再解析旧终端输出参数或多界面切换参数。
 - Extension host 只有 `web` 与 `headless`（SDK/worker，无浏览器 UI）；用 `hasUI` 判断实际对话框能力。
 - 不提供终端输入 handler、TUI component、Theme renderer、custom editor/overlay factories 或 Tool terminal render callbacks。Web dialogs、纯文本 widgets、消息/entry 文本 renderer、工具执行和业务事件保留。

@@ -207,8 +207,9 @@ export class LanguageServerManager {
 
 	/**
 	 * Acquire a server for workspace-level requests that have no source file.
-	 * An explicit definition remains strict; otherwise the highest-priority
-	 * registered definition is selected deterministically.
+	 * An explicit definition remains strict. With several definitions the caller
+	 * must select a language (workspace fan-out belongs to the semantic backend),
+	 * never silently route an arbitrary language to the highest-priority server.
 	 */
 	async acquireForWorkspace(options: {
 		readonly workspaceRoot: string;
@@ -218,11 +219,12 @@ export class LanguageServerManager {
 		if (options.language !== undefined) {
 			return this.acquire({ ...options });
 		}
-		const definition = options.definitionId
-			? this.registry.get(options.definitionId)
-			: [...this.registry.getAll()].sort(
-					(left, right) => right.priority - left.priority || left.id.localeCompare(right.id),
-				)[0];
+		if (!options.definitionId && this.registry.size > 1) {
+			throw new UnsupportedLanguageError(
+				"workspace requests with multiple servers require language or definitionId; discover workspace languages before routing",
+			);
+		}
+		const definition = options.definitionId ? this.registry.get(options.definitionId) : this.registry.getAll()[0];
 		if (!definition) {
 			if (options.definitionId) throw new LanguageServerDefinitionNotFoundError(options.definitionId);
 			throw new NoLanguageServerRegisteredError("workspace");

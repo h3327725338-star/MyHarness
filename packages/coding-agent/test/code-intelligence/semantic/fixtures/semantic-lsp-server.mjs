@@ -37,6 +37,7 @@ function uriFor(relativePath) {
 }
 
 function targetUri() {
+	if (process.env.SYMBOLS_FIXTURE_PATH) return uriFor(process.env.SYMBOLS_FIXTURE_PATH);
 	return uriFor(
 		scenario === "symbol-information-cross-language" || scenario === "definition-cross-language"
 			? "src/target.py"
@@ -62,7 +63,7 @@ function capabilities() {
 		referencesProvider: scenario === "unsupported-references" ? false : true,
 		implementationProvider: scenario === "unsupported-implementation" ? false : true,
 	};
-	if (scenario === "phase8-advanced") {
+	if (["phase8-advanced", "upgrade-workspace", "upgrade-calls-duplicates"].includes(scenario)) {
 		result.workspaceSymbolProvider = { resolveProvider: true };
 		result.hoverProvider = {};
 		result.callHierarchyProvider = {};
@@ -308,6 +309,23 @@ function handleRequest(id, method, params) {
 	}
 	if (method === "textDocument/references") {
 		respond(id, scenario === "references-null" ? null : scenario === "malformed-references" ? {} : referencesResult());
+		return;
+	}
+	if (scenario === "upgrade-workspace" && method === "workspace/symbol") {
+		const active = documents.size > 0;
+		respond(id, active ? [{ name: fixtureLabel, kind: 5, location: { uri: targetUri(), range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } } } }] : []);
+		return;
+	}
+	if (scenario === "upgrade-calls-duplicates" && method === "textDocument/prepareCallHierarchy") {
+		respond(id, [phase8HierarchyItem("Target", "src/target.ts", 13, 5)]);
+		return;
+	}
+	if (scenario === "upgrade-calls-duplicates" && ["callHierarchy/incomingCalls", "callHierarchy/outgoingCalls"].includes(method)) {
+		const key = method.endsWith("incomingCalls") ? "from" : "to";
+		const range = { start: { line: 0, character: 7 }, end: { line: 0, character: 13 } };
+		const other = { start: { line: 0, character: 1 }, end: { line: 0, character: 5 } };
+		const edge = { [key]: phase8HierarchyItem("caller", "src/source.ts", 7), fromRanges: [range, range] };
+		respond(id, [edge, edge, { ...edge, fromRanges: [other, range] }, { [key]: phase8HierarchyItem("caller", "src/target.ts", 1), fromRanges: [range] }]);
 		return;
 	}
 	if (scenario === "phase8-advanced" && method === "workspace/symbol") {

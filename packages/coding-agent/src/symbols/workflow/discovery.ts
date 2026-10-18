@@ -1,4 +1,5 @@
 import { CODE_FILE_GLOBS, languageOfPath, listWorkspaceFiles, searchWorkspaceText } from "../lexical/search.ts";
+import { createOperationBudget, type OperationBudget } from "../operation-budget.ts";
 import { normalizeDocumentPath } from "../path-semantics.ts";
 import type { CodeSymbol, CodeSymbolKind } from "../types.ts";
 import { flattenSymbolTree, routingOptions, type WorkflowContext } from "./context.ts";
@@ -276,8 +277,10 @@ function attributeToSymbols(
 	snapshot: SourceSnapshot | undefined,
 	terms: readonly QueryTerm[],
 	kinds: ReadonlySet<string> | undefined,
+	check: () => void = () => {},
 ): ScoredDeclaration[] {
 	const declarations = symbols.filter((symbol) => {
+		check();
 		if (kinds && !kinds.has(symbol.kind)) return false;
 		if (isStructuralKind(symbol.kind)) return true;
 		// `const f = () => ...` and multi-line properties are callable declarations too.
@@ -293,6 +296,7 @@ function attributeToSymbols(
 	});
 	const entries = new Map<CodeSymbol, ScoredDeclaration>();
 	const spans = declarations.map((symbol) => {
+		check();
 		const range = symbolRange(symbol)!;
 		const docStart = snapshot
 			? leadingDecorationStart(snapshot.lines, range.start.line, symbol.language)
@@ -300,6 +304,7 @@ function attributeToSymbols(
 		return { symbol, docStart, start: range.start.line, end: range.end.line };
 	});
 	for (const span of spans) {
+		check();
 		entries.set(span.symbol, {
 			name: span.symbol.name,
 			namePath: span.symbol.namePath,
@@ -315,6 +320,7 @@ function attributeToSymbols(
 		});
 	}
 	for (const [line, lineTerms] of hits.lines) {
+		check();
 		const owner = spans
 			.filter((span) => span.docStart <= line && span.end >= line)
 			.sort((left, right) => left.end - left.start - (right.end - right.start))[0];
@@ -336,9 +342,11 @@ function attributeLexically(
 	snapshot: SourceSnapshot,
 	hits: FileHits,
 	terms: readonly QueryTerm[],
+	check: () => void = () => {},
 ): ScoredDeclaration[] {
 	const byDeclaration = new Map<number, ScoredDeclaration>();
 	for (const [line, lineTerms] of hits.lines) {
+		check();
 		let declarationLine: number | undefined;
 		let name: string | undefined;
 		for (let candidate = line; candidate >= 0 && candidate >= line - 120; candidate--) {
@@ -377,6 +385,51 @@ export async function findExisting(
 	context: WorkflowContext,
 	options: FindExistingOptions,
 ): Promise<FindExistingResult> {
+	const budget = createOperationBudget(context.timeoutMs ?? 30_000, context.signal);
+	let checkpoint: FindExistingResult = {
+		candidates: [],
+		terms: buildQueryTerms(options.intent, options.names ?? []),
+		coverage: {
+			scope: options.path ?? "<workspace>",
+			codeFiles: 0,
+			codeFilesTruncated: false,
+			filesWithHits: 0,
+			filesExamined: 0,
+			hitsTruncated: false,
+			languages: new Map(),
+			workspaceSymbolQueries: new Map(),
+			errors: [],
+		},
+	};
+	try {
+		return await budget.run(() =>
+			findExistingWithinBudget({ ...context, signal: budget.signal }, options, budget, (result) => {
+				checkpoint = result;
+			}),
+		);
+	} catch (error) {
+		if (context.signal?.aborted || !budget.timedOut()) throw error;
+		return {
+			...checkpoint,
+			coverage: {
+				...checkpoint.coverage,
+				errors: [
+					...checkpoint.coverage.errors,
+					`find_existing timed out after ${budget.timeoutMs}ms; retained candidates are partial. Narrow path/languages or retry after server warmup.`,
+				],
+			},
+		};
+	} finally {
+		budget.dispose();
+	}
+}
+
+async function findExistingWithinBudget(
+	context: WorkflowContext,
+	options: FindExistingOptions,
+	budget: OperationBudget,
+	onCheckpoint: (result: FindExistingResult) => void,
+): Promise<FindExistingResult> {
 	const names = (options.names ?? []).map((name) => name.trim()).filter(Boolean);
 	const terms = buildQueryTerms(options.intent, names);
 	const limit = Math.min(MAX_LIMIT, Math.max(1, options.limit ?? DEFAULT_LIMIT));
@@ -410,7 +463,13 @@ export async function findExisting(
 	}
 
 	const [listing, search] = await Promise.all([
-		listWorkspaceFiles({ workspaceRoot: context.workspaceRoot, globs, path: options.path, signal: context.signal }),
+		listWorkspaceFiles({
+			workspaceRoot: context.workspaceRoot,
+			globs,
+			path: options.path,
+			signal: context.signal,
+			timeoutMs: budget.remainingMs(),
+		}),
 		searchWorkspaceText({
 			workspaceRoot: context.workspaceRoot,
 			patterns: terms.map(patternFor),
@@ -420,6 +479,7 @@ export async function findExisting(
 			maxCountPerFile: 400,
 			maxMatches: 80_000,
 			signal: context.signal,
+			timeoutMs: budget.remainingMs(),
 		}),
 	]);
 	if (listing.error) errors.push(`file listing: ${listing.error}`);
@@ -427,6 +487,7 @@ export async function findExisting(
 
 	const files = new Map<string, FileHits>();
 	for (const match of search.matches) {
+		budget.check();
 		const lineTerms = matchTerms(match.text, terms);
 		if (lineTerms.length === 0) continue;
 		let entry = files.get(match.path);
@@ -452,6 +513,7 @@ export async function findExisting(
 	const primaryWeight =
 		terms.filter((term) => term.origin !== "synonym").reduce((sum, term) => sum + term.weight, 0) || 1;
 	for (const entry of files.values()) {
+		budget.check();
 		const counts = new Map<string, { term: QueryTerm; count: number }>();
 		for (const lineTerms of entry.lines.values()) {
 			for (const term of lineTerms) {
@@ -510,15 +572,47 @@ export async function findExisting(
 		}
 		const pathTerms = matchTerms(hits.path, terms);
 		if (language && semanticLanguages.has(language) && !failedLanguages.has(language)) {
+			// Keep honest lexical leads if every semantic request subsequently stalls.
+			if (!kinds) {
+				addFileCandidates({
+					hits,
+					declarations: attributeLexically(snapshot, hits, terms, budget.check),
+					snapshot,
+					pathTerms,
+				});
+				publishCheckpoint();
+			}
 			try {
-				const result = await context.fileSymbols.get(
-					context.workspaceRoot,
-					context.router,
-					hits.path,
-					routingOptions(context, { language }),
+				const result = await budget.run(() =>
+					context.fileSymbols.get(
+						context.workspaceRoot,
+						context.router,
+						hits.path,
+						routingOptions(context, { language, timeoutMs: budget.remainingMs() }),
+					),
 				);
+				if (result.meta.completeness === "partial") {
+					errors.push(
+						`partial outline for ${hits.path}: ${(result.meta.warnings ?? []).join("; ") || "provider coverage is incomplete"}`,
+					);
+				}
 				bumpLanguage(language, "semantic");
-				const declarations = attributeToSymbols(flattenSymbolTree(result.items), hits, snapshot, terms, kinds);
+				const declarations = attributeToSymbols(
+					flattenSymbolTree(result.items),
+					hits,
+					snapshot,
+					terms,
+					kinds,
+					budget.check,
+				);
+				if (result.meta.completeness === "partial" && !kinds) {
+					const coveredLines = new Set(declarations.map((declaration) => declaration.line));
+					declarations.push(
+						...attributeLexically(snapshot, hits, terms, budget.check).filter(
+							(declaration) => !coveredLines.has(declaration.line),
+						),
+					);
+				}
 				return { hits, declarations, snapshot, pathTerms };
 			} catch (error) {
 				rethrowIfAborted(error, context.signal);
@@ -526,20 +620,49 @@ export async function findExisting(
 			}
 		}
 		if (language) bumpLanguage(language, "lexical");
-		return { hits, declarations: kinds ? [] : attributeLexically(snapshot, hits, terms), snapshot, pathTerms };
+		return {
+			hits,
+			declarations: kinds ? [] : attributeLexically(snapshot, hits, terms, budget.check),
+			snapshot,
+			pathTerms,
+		};
 	};
-	const perFile = await mapWithConcurrency(examined, FILE_CONCURRENCY, examineFile);
-
 	const candidates: DiscoveryCandidate[] = [];
+	const publishCheckpoint = () => {
+		if (context.signal?.aborted) return;
+		onCheckpoint({
+			candidates: [...candidates]
+				.sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+				.slice(0, limit),
+			terms,
+			coverage: {
+				scope,
+				codeFiles: listing.files.length,
+				codeFilesTruncated: listing.truncated,
+				filesWithHits: files.size,
+				filesExamined: snapshots.size,
+				hitsTruncated: search.truncated,
+				languages: new Map(languages),
+				workspaceSymbolQueries: new Map(workspaceSymbolQueries),
+				errors: [...errors],
+			},
+		});
+	};
 	const snapshots = new Map<string, SourceSnapshot | undefined>();
 	const addFileCandidates = ({ hits, declarations, snapshot, pathTerms }: Awaited<ReturnType<typeof examineFile>>) => {
 		snapshots.set(hits.path, snapshot);
+		budget.check();
+		for (let index = candidates.length - 1; index >= 0; index--)
+			if (candidates[index]!.path === hits.path) candidates.splice(index, 1);
 		const scored = declarations
 			.filter((declaration) => primaryTermCount(declaration) >= 1)
-			.map((declaration) => ({
-				declaration,
-				score: scoreDeclaration(declaration, stats, pathTerms ?? [], names, maxIdf, intentTermCount),
-			}))
+			.map((declaration) => {
+				budget.check();
+				return {
+					declaration,
+					score: scoreDeclaration(declaration, stats, pathTerms ?? [], names, maxIdf, intentTermCount),
+				};
+			})
 			.filter((entry) => entry.score > 0)
 			.sort((left, right) => right.score - left.score)
 			.slice(0, MAX_PER_FILE);
@@ -568,7 +691,14 @@ export async function findExisting(
 			});
 		}
 	};
-	for (const file of perFile) addFileCandidates(file);
+	publishCheckpoint();
+	await mapWithConcurrency(examined, FILE_CONCURRENCY, async (hits) => {
+		context.signal?.throwIfAborted();
+		const file = await examineFile(hits);
+		context.signal?.throwIfAborted();
+		addFileCandidates(file);
+		publishCheckpoint();
+	});
 	const examinedPaths = new Set(examined.map((entry) => entry.path));
 
 	// Stage 3: name lookups through every relevant language server.
@@ -589,6 +719,8 @@ export async function findExisting(
 	const workspaceSymbols = context.router.workspaceSymbols;
 	if (typeof workspaceSymbols === "function" && lookupWords.length > 0) {
 		for (const language of lookupLanguages) {
+			context.signal?.throwIfAborted();
+			publishCheckpoint();
 			let found = 0;
 			try {
 				// Several servers (typescript-language-server among them) answer workspace/symbol only for
@@ -600,14 +732,21 @@ export async function findExisting(
 							context.workspaceRoot,
 							context.router,
 							probe,
-							routingOptions(context, { language }),
+							routingOptions(context, { language, timeoutMs: budget.remainingMs() }),
 						);
 				}
 				const lookup = (word: string) =>
-					workspaceSymbols.call(
-						context.router,
-						word,
-						routingOptions(context, { language, limit: 60, ...(options.path ? { path: options.path } : {}) }),
+					budget.run(() =>
+						workspaceSymbols.call(
+							context.router,
+							word,
+							routingOptions(context, {
+								language,
+								limit: 60,
+								timeoutMs: budget.remainingMs(),
+								...(options.path ? { path: options.path } : {}),
+							}),
+						),
 					);
 				let results = [];
 				for (const word of lookupWords) results.push(await lookup(word));
@@ -619,8 +758,16 @@ export async function findExisting(
 					results = [];
 					for (const word of lookupWords) results.push(await lookup(word));
 				}
+				const partialLookup = results.some((result) => result.meta.completeness === "partial");
 				for (const result of results) {
+					budget.check();
+					if (result.meta.completeness === "partial") {
+						errors.push(
+							`partial workspace symbol lookup for ${language}: ${(result.meta.warnings ?? []).join("; ") || result.meta.emptyReason || "provider coverage is incomplete"}`,
+						);
+					}
 					for (const symbol of result.items) {
+						budget.check();
 						if (kinds && !kinds.has(symbol.kind)) continue;
 						if (!isStructuralKind(symbol.kind) && !kinds?.has(symbol.kind)) continue;
 						const line = symbol.selectionRange?.start.line ?? symbol.line ?? 0;
@@ -664,10 +811,13 @@ export async function findExisting(
 						});
 					}
 				}
-				workspaceSymbolQueries.set(language, `ok (${found} new name match(es))`);
+				workspaceSymbolQueries.set(language, `${partialLookup ? "partial" : "ok"} (${found} new name match(es))`);
+				publishCheckpoint();
 			} catch (error) {
 				rethrowIfAborted(error, context.signal);
-				workspaceSymbolQueries.set(language, `failed: ${describeFailure(error)}`);
+				const failure = describeFailure(error);
+				workspaceSymbolQueries.set(language, `failed: ${failure}`);
+				errors.push(`workspace symbol lookup failed for ${language}: ${failure}`);
 			}
 		}
 	}

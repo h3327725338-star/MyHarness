@@ -43,6 +43,9 @@ export interface SemanticBackendQueryOptions {
 	readonly signal?: AbortSignal;
 	readonly timeoutMs?: number;
 	readonly limit?: number;
+	/** Workspace symbol discovery/result scope; not a source position. */
+	readonly path?: string;
+	readonly kinds?: readonly import("../types.ts").CodeSymbolKind[];
 }
 
 export interface SemanticReferencesQueryOptions extends SemanticBackendQueryOptions {

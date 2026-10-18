@@ -49,6 +49,20 @@ describe("semantic LSP converters", () => {
 		});
 	});
 
+	it("validates ranges against a reusable UTF-16 line table without re-splitting source", () => {
+		const text = "a\r\n😀变量\rfinal\n";
+		const lengths = text.split(/\r\n|\n|\r/).map((line) => line.length);
+		for (const value of [
+			{ line: 1, character: 4 },
+			{ line: 1, character: 5 },
+			{ line: 3, character: 0 },
+			{ line: 4, character: 0 },
+		]) {
+			expect(tryCodePosition(value, lengths)).toEqual(tryCodePosition(value, text));
+		}
+		const range = { start: { line: 1, character: 2 }, end: { line: 2, character: 5 } };
+		expect(tryCodeRange(range, lengths)).toEqual(tryCodeRange(range, text));
+	});
 	it("treats CodeRange ends as exclusive", () => {
 		const range = { start: { line: 0, character: 1 }, end: { line: 0, character: 3 } };
 		expect(rangeContainsPosition(range, { line: 0, character: 1 })).toBe(true);

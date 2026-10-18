@@ -203,7 +203,7 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 				definitionId: "ts-server",
 				timeoutMs: 2500,
 				includeDeclaration: false,
-				signal: controller.signal,
+				signal: expect.any(AbortSignal),
 			}),
 		);
 		expect(vi.mocked(router.findReferences).mock.calls[0]?.[1]).not.toHaveProperty("mode");
@@ -226,7 +226,11 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 			const output = await execute(definition, { operation: "find_definition", target: positionTarget() });
 
 			expect(textOf(output)).toContain(`source=semantic completeness=${completeness}`);
-			expect(textOf(output)).toContain("No matching symbols");
+			expect(output.details).toMatchObject({
+				status: completeness === "complete" ? "empty" : "partial",
+				emptyReason: completeness === "complete" ? "no_matches" : "incomplete_query",
+			});
+			expect(textOf(output)).toContain(completeness === "complete" ? "No matches reported" : "not proof of absence");
 		}
 	});
 
@@ -375,9 +379,7 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 
 		expect(router.fileSymbols).toHaveBeenCalledTimes(20);
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(
-			session.systemPrompt.match(/Prefer returned symbol_id values for subsequent precise operations/g),
-		).toHaveLength(1);
+		expect(session.systemPrompt.match(/Prefer flat locators: path plus line and character/g)).toHaveLength(1);
 		session.dispose();
 		expect(router.dispose).not.toHaveBeenCalled();
 	});
@@ -402,14 +404,12 @@ describe("Symbols Tool V2 Final Acceptance", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("symbols");
-		expect(session.systemPrompt).toContain("Prefer returned symbol_id values for subsequent precise operations");
+		expect(session.systemPrompt).toContain("Prefer flat locators: path plus line and character");
 		session.setActiveToolsByName([]);
-		expect(session.systemPrompt).not.toContain("Prefer returned symbol_id values for subsequent precise operations");
+		expect(session.systemPrompt).not.toContain("Prefer flat locators: path plus line and character");
 		session.setActiveToolsByName(["symbols"]);
 		await session.reload();
-		expect(
-			session.systemPrompt.match(/Prefer returned symbol_id values for subsequent precise operations/g),
-		).toHaveLength(1);
+		expect(session.systemPrompt.match(/Prefer flat locators: path plus line and character/g)).toHaveLength(1);
 		session.dispose();
 	});
 

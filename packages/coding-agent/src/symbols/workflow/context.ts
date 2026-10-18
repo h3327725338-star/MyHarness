@@ -69,6 +69,7 @@ export class FileSymbolCache {
 		path: string,
 		options: CodeIntelligenceRoutingOptions,
 	): Promise<FileSymbolsResult> {
+		options.signal?.throwIfAborted();
 		const absolutePath = normalizeDocumentPath(path, workspaceRoot);
 		const key = getDocumentIdentity(absolutePath, workspaceRoot);
 		let info: { mtimeMs: number; size: number } | undefined;
@@ -78,13 +79,16 @@ export class FileSymbolCache {
 		} catch {
 			this.entries.delete(key);
 		}
+		options.signal?.throwIfAborted();
 		const cached = this.entries.get(key);
 		if (cached && info && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
 			this.entries.delete(key);
 			this.entries.set(key, cached);
 			return cached.result;
 		}
+		options.signal?.throwIfAborted();
 		const result = await router.fileSymbols(path, options);
+		options.signal?.throwIfAborted();
 		// A partial answer (server still loading, fallback) is not worth keeping.
 		if (info && result.meta.completeness === "complete") {
 			this.entries.delete(key);

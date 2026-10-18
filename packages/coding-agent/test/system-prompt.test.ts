@@ -113,14 +113,14 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt.toLowerCase()).toContain("symbols");
-			expect(prompt).toContain("Query code symbols and relationships");
+			expect(prompt).toContain("Query code structure with explicit source and completeness");
 			expect(prompt.toLowerCase()).not.toContain("lightweight");
-			expect(prompt.toLowerCase()).not.toContain("lexical");
+			expect(prompt).toContain("semantic versus lexical evidence");
 		});
 
 		test("mentions only active specialized tools", () => {
 			const symbolsOnly = buildToolRoutingPolicy(["read", "grep", "symbols"]);
-			expect(symbolsOnly).toContain("Prefer symbols");
+			expect(symbolsOnly).toContain("Choose symbols when structure helps");
 			expect(symbolsOnly).not.toContain("agent: use");
 			expect(symbolsOnly).not.toContain("workflow: use");
 			expect(symbolsOnly).not.toContain("ultracode: use");

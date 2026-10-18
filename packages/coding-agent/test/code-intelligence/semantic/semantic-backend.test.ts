@@ -60,7 +60,7 @@ afterEach(async () => {
 function definition(scenario: string): LanguageServerDefinitionInput {
 	return {
 		id: "semantic-fixture",
-		languages: ["typescript"],
+		languages: scenario === "upgrade-workspace" ? ["typescript", "javascript"] : ["typescript"],
 		command: process.execPath,
 		args: [FIXTURE, scenario],
 		clientInfo: { name: "myharness-phase5-test", version: "1.0.0" },
@@ -520,6 +520,105 @@ describe("LspSemanticBackend: capabilities and conversion", () => {
 	});
 });
 
+describe("LspSemanticBackend: upgrade regressions", () => {
+	it("routes workspace symbols to observed languages, primes a document, and never picks unrelated clangd", async () => {
+		const environment = await createEnvironment("upgrade-workspace");
+		environment.manager.registry.register({
+			...definition("unsupported-document-symbol"),
+			id: "clangd",
+			languages: ["c", "cpp"],
+			priority: 999,
+		});
+		const result = await environment.backend.workspaceSymbols("Target", {
+			...options(environment.root),
+			path: "src",
+		});
+		expect(result.items.map((item) => item.name)).toEqual(["Target"]);
+		expect(environment.manager.getServers().some((server) => server.definitionId === "clangd")).toBe(false);
+		expect((await state(environment)).counts.didOpen).toBeGreaterThan(0);
+	});
+
+	it("fans out across real languages and deduplicates a shared TS/JS server", async () => {
+		const environment = await createEnvironment("upgrade-workspace");
+		await writeFile(join(environment.root, "src", "helper.js"), sourceText);
+		await writeFile(join(environment.root, "src", "target.py"), "class PythonTarget:\n    pass\n");
+		environment.manager.registry.register({
+			...definition("upgrade-workspace"),
+			id: "pyright",
+			languages: ["python"],
+			env: { SYMBOLS_FIXTURE_PATH: "src/target.py", PHASE5_FIXTURE_LABEL: "PythonTarget" },
+		});
+		const result = await environment.backend.workspaceSymbols("Target", options(environment.root));
+		expect(result.items.map((item) => item.language).sort()).toEqual(["python", "typescript"]);
+		expect((await state(environment)).methodCounts["workspace/symbol"]).toBe(2); // initial + one readiness confirmation, not doubled for JS
+		expect(
+			environment.manager.getServers().filter((server) => server.definitionId === "semantic-fixture"),
+		).toHaveLength(1);
+	});
+
+	it("retains successful languages when another observed server is unsupported", async () => {
+		const environment = await createEnvironment("upgrade-workspace");
+		await writeFile(join(environment.root, "src", "target.py"), "class Target:\n    pass\n");
+		environment.manager.registry.register({
+			...definition("full-sync"),
+			id: "unsupported-python",
+			languages: ["python"],
+		});
+		const result = await environment.backend.workspaceSymbols("Target", options(environment.root));
+		expect(result.items.some((item) => item.language === "typescript")).toBe(true);
+		expect(result.meta.completeness).toBe("partial");
+		expect(result.meta.warnings?.join(" ")).toContain("unsupported-python");
+	});
+	it("keeps explicit file language and server selectors strict", async () => {
+		const environment = await createEnvironment("upgrade-workspace");
+		await expect(
+			environment.backend.workspaceSymbols("Target", {
+				...options(environment.root),
+				path: "src/target.ts",
+				language: "python",
+			}),
+		).rejects.toThrow();
+		await expect(
+			environment.backend.workspaceSymbols("Target", {
+				...options(environment.root),
+				path: "src/target.ts",
+				definitionId: "missing",
+			}),
+		).rejects.toThrow();
+		expect(environment.manager.getServers()).toHaveLength(0);
+	});
+	it.each(["incomingCalls", "outgoingCalls"] as const)(
+		"%s deduplicates edges/sites but preserves same-named distinct symbols and multiple sites",
+		async (operation) => {
+			const environment = await createEnvironment("upgrade-calls-duplicates");
+			const result = await environment.backend[operation](
+				{ type: "position", path: "src/target.ts", position: { line: 0, character: 14 } },
+				options(environment.root),
+			);
+			expect(result.items).toHaveLength(2);
+			expect(result.items.map((edge) => edge.symbol.name)).toEqual(["caller", "caller"]);
+			expect(new Set(result.items.map((edge) => edge.symbol.id)).size).toBe(2);
+			expect(result.items[0]?.callSites).toHaveLength(2);
+			expect(result.items[1]?.callSites).toHaveLength(1);
+			expect(result.items[0]?.callSites.map((site) => site.range?.start.character)).toEqual([7, 1]);
+			if (operation === "outgoingCalls")
+				expect(result.items.flatMap((edge) => edge.callSites).every((site) => site.path === "src/target.ts")).toBe(
+					true,
+				);
+		},
+	);
+
+	it("marks missing diagnostic snapshots explicitly, not as clean diagnostics", async () => {
+		const environment = await createEnvironment("full-sync");
+		const result = await environment.backend.getDiagnostics("src/source.ts", {
+			...options(environment.root),
+			timeoutMs: 40,
+		});
+		expect(result.items).toEqual([]);
+		expect(result.meta).toMatchObject({ completeness: "partial", emptyReason: "diagnostics_not_published" });
+	});
+});
+
 describe("LspSemanticBackend: call hierarchy call sites", () => {
 	const target = { type: "position" as const, path: "src/target.ts", position: { line: 0, character: 14 } };
 
@@ -680,7 +779,7 @@ describe("LspSemanticBackend: diagnostics and failures", () => {
 		const controller = new AbortController();
 		const request = abort.backend.fileSymbols("src/source.ts", { ...options(abort.root), signal: controller.signal });
 		controller.abort();
-		await expect(request).rejects.toMatchObject({ code: "request_failed", cause: expect.anything() });
+		await expect(request).rejects.toMatchObject({ name: "AbortError" });
 	});
 
 	it("recovers after a timeout and ignores the late response", async () => {

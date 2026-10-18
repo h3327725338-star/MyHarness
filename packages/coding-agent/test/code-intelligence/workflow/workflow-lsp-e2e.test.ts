@@ -251,6 +251,65 @@ describe.skipIf(!enabled)("symbols workflow against the real TypeScript language
 	}, 300_000);
 });
 
+describe.skipIf(!enabled)("current diagnostics from installed TS/Python servers", () => {
+	it.each([
+		{
+			language: "typescript",
+			path: "broken.ts",
+			broken: "export const count: number = 'wrong';\n",
+			fixed: "export const count: number = 1;\n",
+			code: "2322",
+		},
+		{
+			language: "python",
+			path: "broken.py",
+			broken: "count: int = 'wrong'\n",
+			fixed: "count: int = 1\n",
+			code: "reportAssignmentType",
+		},
+	])(
+		"opens, diagnoses and re-synchronizes a changed $language file",
+		async ({ language, path, broken, fixed, code }) => {
+			const root = await mkdtemp(join(tmpdir(), "symbols-current-diagnostics-"));
+			await writeTree(
+				root,
+				language === "typescript"
+					? {
+							"tsconfig.json": JSON.stringify({
+								compilerOptions: { strict: true, noEmit: true },
+								include: ["*.ts"],
+							}),
+							[path]: broken,
+						}
+					: {
+							"pyrightconfig.json": JSON.stringify({ typeCheckingMode: "basic", include: ["."] }),
+							[path]: broken,
+						},
+			);
+			const { symbols, dispose } = openSymbols(root);
+			try {
+				if (!(await languageAvailable(symbols, language)))
+					throw new Error(`required installed ${language} server is unavailable`);
+				let before = await run(symbols, { operation: "diagnostics", path });
+				for (let attempt = 0; attempt < 3 && !before.text.includes(code); attempt++)
+					before = await run(symbols, { operation: "diagnostics", path });
+				expect(before.text).toContain(code);
+				expect(before.details.emptyReason).not.toBe("diagnostics_not_published");
+				await writeFile(join(root, path), fixed);
+				let after = await run(symbols, { operation: "diagnostics", path });
+				for (let attempt = 0; attempt < 3 && after.text.includes(code); attempt++)
+					after = await run(symbols, { operation: "diagnostics", path });
+				expect(after.text).not.toContain(code);
+				expect(after.details.emptyReason).not.toBe("diagnostics_not_published");
+			} finally {
+				await dispose();
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+		180_000,
+	);
+});
+
 interface LanguageCase {
 	readonly language: string;
 	readonly files: Record<string, string>;

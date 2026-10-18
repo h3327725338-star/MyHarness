@@ -263,6 +263,8 @@ export class CodeIntelligenceRouter implements CodeIntelligenceRouterAdvancedApi
 			signal: options.signal,
 			timeoutMs: options.timeoutMs,
 			limit: options.limit,
+			...(options.path === undefined ? {} : { path: options.path }),
+			...(options.kinds === undefined ? {} : { kinds: options.kinds }),
 		};
 	}
 

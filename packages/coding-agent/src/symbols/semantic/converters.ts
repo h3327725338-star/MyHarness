@@ -76,19 +76,19 @@ export function rangeWidth(range: CodeRange): number {
 	return range.end.line - range.start.line + (range.end.character - range.start.character) / 1_000_000;
 }
 
-export function tryCodePosition(value: RawLspPosition, text?: string): CodePosition | undefined {
+export function tryCodePosition(value: RawLspPosition, text?: string | readonly number[]): CodePosition | undefined {
 	if (!Number.isInteger(value.line) || !Number.isInteger(value.character) || value.line < 0 || value.character < 0) {
 		return undefined;
 	}
 	if (text !== undefined) {
-		const lengths = lineLengths(text);
+		const lengths = typeof text === "string" ? lineLengths(text) : text;
 		const lineLength = lengths[value.line];
 		if (lineLength === undefined || value.character > lineLength) return undefined;
 	}
 	return { line: value.line, character: value.character };
 }
 
-export function tryCodeRange(value: RawLspRange, text?: string): CodeRange | undefined {
+export function tryCodeRange(value: RawLspRange, text?: string | readonly number[]): CodeRange | undefined {
 	const start = tryCodePosition(value.start, text);
 	const end = tryCodePosition(value.end, text);
 	if (!start || !end || comparePositions(start, end) > 0) return undefined;
@@ -107,7 +107,7 @@ export function convertWorkspaceLocation(
 	uri: string,
 	range: RawLspRange,
 	workspaceRoot: string,
-	text?: string,
+	text?: string | readonly number[],
 ): LocationConversion {
 	let absolutePath: string;
 	if (/^(?:[A-Za-z]:[\\/]|\\\\)/u.test(uri)) {

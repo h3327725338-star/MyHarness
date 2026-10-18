@@ -1,6 +1,7 @@
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
 import type { CodeIntelligenceRoutingOptions } from "../symbols/index/router/types.ts";
+import { createOperationBudget, SymbolsTimeoutError } from "../symbols/operation-budget.ts";
 import type { CodeIntelligenceRuntimeStatus } from "../symbols/runtime/types.ts";
 import type {
 	CallHierarchyResult,
@@ -33,6 +34,7 @@ import type { SourceSnapshot } from "../symbols/workflow/text.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loader/index.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
 import { recordFileReadState, resolveFileStateScope, statFileReadState } from "./files/read-state.ts";
+import { SymbolsOutputPages } from "./symbols-output.ts";
 import {
 	createSymbolsToolRuntime,
 	requireAdvancedRouter,
@@ -360,13 +362,119 @@ const symbolsOperationSchemas = [
 	),
 ];
 
-export type SymbolsToolInput = Static<(typeof symbolsOperationSchemas)[number]>;
+type CanonicalSymbolsInput = Static<(typeof symbolsOperationSchemas)[number]>;
+type CompatibleInput<T> = T extends { target: infer Target }
+	? Omit<T, "target"> & {
+			target?: Target | string;
+			path?: string;
+			line?: number;
+			character?: number;
+			name?: string;
+			symbolId?: string;
+			cursor?: string;
+		}
+	: T & { cursor?: string };
+export type SymbolsToolInput = CompatibleInput<CanonicalSymbolsInput>;
 
-/** Keep a provider-friendly object root while retaining the discriminated anyOf branches. */
-const symbolsSchema = Type.Unsafe<SymbolsToolInput>({
-	type: "object",
-	anyOf: symbolsOperationSchemas,
+/** Keep closed operation branches, but accept both the original target and flat locators. */
+const compatibleOperationSchemas = symbolsOperationSchemas.map((schema) => {
+	const branch = JSON.parse(JSON.stringify(schema)) as Record<string, any>;
+	branch.properties.cursor = {
+		type: "string",
+		minLength: 1,
+		description: "Opaque continuation from this tool instance; repeat the same query with cursor",
+	};
+	if (branch.properties.target) {
+		branch.properties.target = {
+			anyOf: [
+				branch.properties.target,
+				{ type: "string", minLength: 1, description: "Compatibility: JSON-encoded target object" },
+			],
+		};
+		branch.required = branch.required.filter((key: string) => key !== "target");
+		branch.properties.symbolId = { type: "string", minLength: 1 };
+		if (branch.properties.operation.const === "resolve_symbol")
+			branch.anyOf = [{ required: ["target"] }, { required: ["symbolId"] }];
+		else {
+			branch.properties.path = {
+				type: "string",
+				minLength: 1,
+				description: "File of the target; use with 0-based line and character",
+			};
+			branch.properties.line = {
+				type: "integer",
+				minimum: 0,
+				description: "0-based line, not the displayed 1-based line",
+			};
+			branch.properties.character = { type: "integer", minimum: 0, description: "0-based UTF-16 column" };
+			branch.anyOf = [
+				{ required: ["target"] },
+				{ required: ["symbolId"] },
+				{ required: ["path", "line", "character"] },
+			];
+			if (WORKFLOW_OPERATIONS.has(branch.properties.operation.const)) {
+				branch.properties.name = {
+					type: "string",
+					minLength: 1,
+					description: "Declaration name, qualified if needed; use with path instead of position",
+				};
+				branch.anyOf.push({ required: ["path", "name"] });
+			}
+		}
+	}
+	return branch;
 });
+
+/**
+ * Hoist shared scalar/locator validators once. Closed branches still encode the
+ * exact operation matrix; `{}` there inherits the root constraint, not an open
+ * argument. This avoids resending the same target/coordinate schema 12 times.
+ * No $ref/$defs: providers that strip schema declarations keep the contract.
+ */
+function compactOperationSchema() {
+	const properties: Record<string, any> = {};
+	for (const branch of compatibleOperationSchemas) {
+		for (const [key, value] of Object.entries(branch.properties)) properties[key] ??= value;
+	}
+	properties.operation = { enum: symbolsOperationSchemas.map((branch) => branch.properties.operation.const) };
+	properties.target = { anyOf: [workflowTargetSchema, { type: "string", minLength: 1 }] };
+	const constraints = (value: unknown) =>
+		JSON.stringify(value, (key, item) => (key === "description" ? undefined : item));
+	const anyOf = compatibleOperationSchemas.map((branch) => ({
+		...branch,
+		properties: Object.fromEntries(
+			Object.entries(branch.properties).map(([key, value]) => {
+				if (key === "operation") return [key, value];
+				if (key === "target")
+					return [
+						key,
+						{
+							anyOf: [
+								{ type: "string" },
+								{
+									properties: {
+										type: {
+											enum:
+												branch.properties.operation.const === "resolve_symbol"
+													? ["symbol_id"]
+													: WORKFLOW_OPERATIONS.has(branch.properties.operation.const)
+														? ["position", "symbol_id", "symbol"]
+														: ["position", "symbol_id"],
+										},
+									},
+								},
+							],
+						},
+					];
+				return [key, constraints(value) === constraints(properties[key]) ? {} : value];
+			}),
+		),
+	}));
+	return { type: "object", properties, anyOf };
+}
+
+/** Object root remains compatible with providers that do not accept a union root. */
+const symbolsSchema = Type.Unsafe<SymbolsToolInput>(compactOperationSchema());
 
 export type SymbolsToolTarget = Static<typeof preciseTargetSchema>;
 
@@ -377,6 +485,16 @@ export interface SymbolsToolDetails {
 	fallback?: IntelligenceResultMeta["fallback"];
 	warnings?: string[];
 	outputTruncated?: boolean;
+	status?: "ok" | "empty" | "partial" | "unsupported";
+	emptyReason?: IntelligenceResultMeta["emptyReason"];
+	unsupported?: boolean;
+	/** Opaque continuation token bound to this query and tool instance. */
+	nextCursor?: string;
+	/** 0-based entry offset within the returned query snapshot. */
+	offset?: number;
+	totalEntries?: number;
+	/** The underlying server's completeness, distinct from presentation pagination. */
+	queryCompleteness?: ResultCompleteness;
 	semanticConfigured?: boolean;
 	semanticEnabled?: boolean;
 	symbolStoreEntryCount?: number;
@@ -427,7 +545,7 @@ function recordOf(value: unknown): Record<string, unknown> {
 /** Derive runtime argument allowlists from the same operation schemas sent to the model. */
 function createAllowedArguments(): Record<SymbolsOperation, ReadonlySet<string>> {
 	const result = {} as Record<SymbolsOperation, Set<string>>;
-	for (const schema of symbolsOperationSchemas) {
+	for (const schema of compatibleOperationSchemas) {
 		const properties = recordOf(recordOf(schema).properties);
 		const operation = recordOf(properties.operation).const;
 		if (typeof operation !== "string") continue;
@@ -512,6 +630,7 @@ function validateCommonTypes(args: Record<string, unknown>, operation: SymbolsOp
 	if (unsupported.length > 0) {
 		throw new SymbolsToolInputError(operation, `${operation} does not accept: ${unsupported.join(", ")}`);
 	}
+	if (args.cursor !== undefined) requireNonEmpty(args.cursor, operation, "cursor");
 	if (args.language !== undefined) requireNonEmpty(args.language, operation, "language");
 	if (args.definitionId !== undefined) requireNonEmpty(args.definitionId, operation, "definitionId");
 	validateTimeout(args.timeoutMs, operation);
@@ -590,6 +709,78 @@ function validateWorkflowInput(args: Record<string, unknown>, operation: Symbols
 	} else if (operation === "rename_preview") {
 		requireNonEmpty(args.newName, operation, "newName");
 	}
+}
+
+function prepareSymbolsArguments(input: unknown): SymbolsToolInput {
+	const args = { ...recordOf(input) };
+	// Only lossless, named scalar/list compatibility; never infer a target or missing coordinate.
+	for (const key of ["line", "character", "limit", "maxChars", "timeoutMs", "maxLines", "context"]) {
+		if (typeof args[key] === "string" && /^\d+(?:\.\d+)?$/.test(args[key] as string)) args[key] = Number(args[key]);
+	}
+	for (const key of ["kinds", "names", "languages", "include"]) {
+		if (typeof args[key] === "string") {
+			try {
+				const value = JSON.parse(args[key] as string);
+				if (Array.isArray(value)) args[key] = value;
+			} catch {
+				/* validation gives the field-specific error */
+			}
+		}
+	}
+	return args as SymbolsToolInput;
+}
+
+function normalizeSymbolsInput(input: SymbolsToolInput): {
+	args: CanonicalSymbolsInput & { cursor?: string };
+	warnings: string[];
+} {
+	const raw = { ...recordOf(input) };
+	const operation = String(raw.operation ?? "");
+	const warnings: string[] = [];
+	const targetOperation = compatibleOperationSchemas.some(
+		(branch) => branch.properties.operation.const === operation && branch.properties.target,
+	);
+	if (targetOperation) {
+		const flatPosition = hasValue(raw, "line") || hasValue(raw, "character");
+		let flat: unknown;
+		if (flatPosition) {
+			if (!hasValue(raw, "line") || !hasValue(raw, "character") || !hasValue(raw, "path"))
+				throw new SymbolsToolInputError(
+					operation,
+					`${operation} flat position requires path, line and character (both coordinates 0-based)`,
+				);
+			flat = { type: "position", path: raw.path, position: { line: raw.line, character: raw.character } };
+		} else if (hasValue(raw, "name")) {
+			if (!WORKFLOW_OPERATIONS.has(operation))
+				throw new SymbolsToolInputError(
+					operation,
+					`${operation} does not accept a declaration name; use path/line/character or a returned symbolId`,
+				);
+			flat = { type: "symbol", path: raw.path, name: raw.name };
+		} else if (hasValue(raw, "symbolId")) flat = { type: "symbol_id", symbolId: raw.symbolId };
+		if (flat !== undefined) {
+			if (raw.target !== undefined && JSON.stringify(raw.target) !== JSON.stringify(flat))
+				warnings.push("flat target parameters take precedence over the legacy target");
+			raw.target = flat;
+		} else if (typeof raw.target === "string") {
+			try {
+				raw.target = JSON.parse(raw.target);
+			} catch {
+				throw new SymbolsToolInputError(
+					operation,
+					`${operation} target must be a valid JSON object string; prefer flat path/line/character`,
+				);
+			}
+			if (!raw.target || typeof raw.target !== "object" || Array.isArray(raw.target))
+				throw new SymbolsToolInputError(
+					operation,
+					`${operation} target JSON must decode to an object; prefer path/line/character`,
+				);
+		}
+		for (const key of ["line", "character", "name", "symbolId"]) delete raw[key];
+		if (flat !== undefined) delete raw.path;
+	}
+	return { args: raw as CanonicalSymbolsInput & { cursor?: string }, warnings };
 }
 
 function validateSymbolsToolInput(input: SymbolsToolInput): SymbolsToolInput {
@@ -717,7 +908,7 @@ function routingOptions(
 
 	copyIfAllowed("language", raw.language);
 	copyIfAllowed("definitionId", raw.definitionId);
-	copyIfAllowed("timeoutMs", raw.timeoutMs);
+	copyIfAllowed("timeoutMs", raw.timeoutMs ?? 60_000);
 	copyIfAllowed("includeDeclaration", raw.includeDeclaration);
 	copyIfAllowed("limit", raw.limit);
 	if (includeWorkspaceFilters) {
@@ -740,8 +931,8 @@ function positionText(symbol: CodeSymbol): { text: string; precision: string } {
 }
 
 function symbolTargetHint(symbol: CodeSymbol, supportsSymbolIds: boolean): string | undefined {
-	if (supportsSymbolIds) {
-		return JSON.stringify({ type: "symbol_id", symbolId: symbol.id });
+	if (supportsSymbolIds && symbol.selectionRange) {
+		return `symbolId=${JSON.stringify(symbol.id)}`;
 	}
 	if (symbol.selectionRange) {
 		return JSON.stringify({
@@ -762,9 +953,9 @@ function formatRange(
 
 function formatCodeSymbol(symbol: CodeSymbol, indent = "", supportsSymbolIds = false): string {
 	const position = positionText(symbol);
-	const signature = symbol.signature ? ` — ${symbol.signature}` : "";
+	const signature = symbol.signature ? ` — ${symbol.signature.replace(/\r?\n/g, " ")}` : "";
 	const target = symbolTargetHint(symbol, supportsSymbolIds);
-	return `${indent}${position.text} ${symbol.kind} ${symbol.namePath} [${symbol.language}] precision=${position.precision}${signature}${target ? ` target=${target}` : ""}`;
+	return `${indent}${position.text} ${symbol.kind} ${symbol.namePath} [${symbol.language}] precision=${position.precision}${signature}${target ? ` ${supportsSymbolIds ? target : `target=${target}`}` : ""}`;
 }
 
 function formatSymbolTree(node: CodeSymbolTreeNode, depth = 0, supportsSymbolIds = false): string[] {
@@ -841,6 +1032,8 @@ function metaHeader(details: SymbolsToolDetails): string {
 	const completeness = details.completeness ?? "complete";
 	const parts = [`source=${source}`, `completeness=${completeness}`];
 	if (details.fallback) parts.push(`fallback=${details.fallback.reason}`);
+	if (details.status && details.status !== "ok") parts.push(`status=${details.status}`);
+	if (details.emptyReason) parts.push(`emptyReason=${details.emptyReason}`);
 	return `[${parts.join(" ")}]`;
 }
 
@@ -853,22 +1046,6 @@ function composeOutput(details: SymbolsToolDetails, lines: string[], emptyText: 
 	return notices.join("\n");
 }
 
-function safeSlice(value: string, maxChars: number): string {
-	let end = Math.min(value.length, maxChars);
-	if (end > 0) {
-		const last = value.charCodeAt(end - 1);
-		if (last >= 0xd800 && last <= 0xdbff) end--;
-	}
-	return value.slice(0, end);
-}
-
-function finalizeOutput(value: string, maxChars: number): { text: string; outputTruncated: boolean } {
-	if (value.length <= maxChars) return { text: value, outputTruncated: false };
-	const notice = "\nTool output truncated for presentation.";
-	const budget = Math.max(0, maxChars - notice.length);
-	return { text: `${safeSlice(value, budget)}${notice}`, outputTruncated: true };
-}
-
 function detailsFromMeta(operation: SymbolsOperation, meta: IntelligenceResultMeta): SymbolsToolDetails {
 	return {
 		operation,
@@ -876,6 +1053,8 @@ function detailsFromMeta(operation: SymbolsOperation, meta: IntelligenceResultMe
 		completeness: meta.completeness,
 		fallback: meta.fallback,
 		warnings: meta.warnings ? [...meta.warnings] : undefined,
+		...(meta.emptyReason ? { emptyReason: meta.emptyReason } : {}),
+		...(meta.unsupported ? { unsupported: true, status: "unsupported" as const } : {}),
 	};
 }
 
@@ -907,11 +1086,23 @@ function renderDomainResult(
 	} else {
 		lines = (result as DiagnosticsResult).items.map(formatDiagnostic);
 	}
+	if (lines.length === 0)
+		details.emptyReason ??=
+			result.meta.completeness === "partial"
+				? "incomplete_query"
+				: operation === "diagnostics"
+					? "no_diagnostics"
+					: "no_matches";
+	details.status ??= result.meta.completeness === "partial" ? "partial" : lines.length === 0 ? "empty" : "ok";
 	return {
 		text: composeOutput(
 			details,
 			lines,
-			"No matching symbols, references, implementations, hover data, or hierarchy entries found",
+			details.emptyReason === "no_diagnostics"
+				? "No diagnostics reported for this synchronized document snapshot."
+				: details.emptyReason === "no_matches"
+					? "No matches reported within the queried scope."
+					: `No usable results: ${details.emptyReason}. This is not proof of absence; inspect warnings and narrow scope or retry.`,
 		),
 		details,
 	};
@@ -958,7 +1149,15 @@ async function runWorkflowOperation(
 			completeness: partial ? "partial" : "complete",
 			warnings: [...result.coverage.errors],
 			shown: [],
-			details: { candidateCount: result.candidates.length },
+			details: {
+				candidateCount: result.candidates.length,
+				...(result.candidates.length === 0
+					? ({
+							emptyReason: partial ? "incomplete_query" : "no_matches",
+							status: partial ? "partial" : "empty",
+						} as const)
+					: {}),
+			},
 		};
 	}
 	const target = validateWorkflowTarget(args.target, operation);
@@ -1024,6 +1223,7 @@ export function createSymbolsToolDefinition(
 ): BusinessToolDefinition<typeof symbolsSchema, SymbolsToolDetails | undefined> {
 	const runtime = createSymbolsToolRuntime(cwd, options);
 	const fileSymbols = new FileSymbolCache();
+	const pages = new SymbolsOutputPages();
 	return {
 		name: "symbols",
 		label: "symbols",
@@ -1032,144 +1232,215 @@ export function createSymbolsToolDefinition(
 		promptSnippet: loadSystemPrompt("tools/symbols/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/symbols/guidelines.md"),
 		parameters: symbolsSchema,
-		async execute(_toolCallId, args: SymbolsToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
+		prepareArguments: prepareSymbolsArguments,
+		async execute(_toolCallId, input: SymbolsToolInput, parentSignal?: AbortSignal, _onUpdate?, _ctx?) {
+			const normalized = normalizeSymbolsInput(prepareSymbolsArguments(input));
+			const args = normalized.args;
 			validateSymbolsToolInput(args);
 			const operation = args.operation;
 			const maxChars = args.maxChars ?? DEFAULT_OUTPUT_MAX_CHARS;
-			const supportsSymbolIds = runtime.supportsSymbolIds;
-			let text: string;
-			let details: SymbolsToolDetails;
-
-			if (WORKFLOW_OPERATIONS.has(operation)) {
-				const raw = recordOf(args);
-				const context: WorkflowContext = {
-					workspaceRoot: runtime.workspaceRoot,
-					router: runtime.router,
-					semanticLanguages: runtime.semanticLanguages,
-					fileSymbols,
-					...(signal ? { signal } : {}),
-					...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
-				};
-				const outcome = await runWorkflowOperation(operation as WorkflowOperation, raw, context);
-				details = {
-					operation,
-					source: outcome.source as IntelligenceResultMeta["source"],
-					completeness: outcome.completeness,
-					...(outcome.warnings.length > 0 ? { warnings: [...new Set(outcome.warnings)] } : {}),
-					...outcome.details,
-				};
-				text = composeWorkflowOutput(details, outcome.lines);
-				await recordShownFiles(outcome.shown, _ctx);
-				const finalized = finalizeOutput(text, maxChars);
-				details.outputTruncated = finalized.outputTruncated;
-				return { content: [{ type: "text", text: finalized.text }], details };
-			}
-
-			if (operation === "status") {
-				const status = runtime.getStatus();
-				details = {
-					operation,
-					semanticConfigured: status.semanticConfigured,
-					semanticEnabled: status.semanticEnabled,
-					symbolStoreEntryCount: status.symbolStoreEntryCount,
-					languageServerCount: status.languageServers.length,
-				};
-				text = ["[status]", ...formatStatus(status).map((line) => `  ${line}`)].join("\n");
-			} else if (operation === "workspace_symbols") {
-				const advancedRouter = requireAdvancedRouter(runtime.router, operation);
-				const rendered = renderDomainResult(
-					operation,
-					await advancedRouter.workspaceSymbols(
-						requireQuery(operation, args.query),
-						routingOptions(args, signal, true),
-					),
-					supportsSymbolIds,
-				);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "resolve_symbol") {
-				const target = validateTarget(args.target, operation);
-				if (target.type !== "symbol_id")
-					throw new SymbolsToolInputError(operation, "resolve_symbol requires a symbol_id target");
-				const advancedRouter = requireAdvancedRouter(runtime.router, operation);
-				const rendered = renderDomainResult(
-					operation,
-					await advancedRouter.resolveSymbol(target.symbolId, routingOptions(args, signal)),
-					supportsSymbolIds,
-				);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (
-				operation === "hover" ||
-				operation === "incoming_calls" ||
-				operation === "outgoing_calls" ||
-				operation === "supertypes" ||
-				operation === "subtypes"
-			) {
-				const target = validateTarget(args.target, operation);
-				const advancedRouter = requireAdvancedRouter(runtime.router, operation);
-				const result =
-					operation === "hover"
-						? await advancedRouter.hover(target, routingOptions(args, signal))
-						: operation === "incoming_calls"
-							? await advancedRouter.incomingCalls(target, routingOptions(args, signal))
-							: operation === "outgoing_calls"
-								? await advancedRouter.outgoingCalls(target, routingOptions(args, signal))
-								: operation === "supertypes"
-									? await advancedRouter.supertypes(target, routingOptions(args, signal))
-									: await advancedRouter.subtypes(target, routingOptions(args, signal));
-				const rendered = renderDomainResult(operation, result, supportsSymbolIds);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "file_symbols") {
-				const rendered = renderDomainResult(
-					operation,
-					await runtime.router.fileSymbols(
-						requireNonEmpty(args.path, operation, "path"),
-						routingOptions(args, signal),
-					),
-					supportsSymbolIds,
-				);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "find_implementations") {
-				const target = validateTarget(args.target, operation);
-				const rendered = renderDomainResult(
-					operation,
-					await runtime.router.findImplementations(target, routingOptions(args, signal)),
-					supportsSymbolIds,
-				);
-				text = rendered.text;
-				details = rendered.details;
-			} else if (operation === "diagnostics") {
-				const rendered = renderDomainResult(
-					operation,
-					await runtime.router.getDiagnostics(
-						requireNonEmpty(args.path, operation, "path"),
-						routingOptions(args, signal),
-					),
-					supportsSymbolIds,
-				);
-				text = rendered.text;
-				details = rendered.details;
-			} else {
-				const raw = recordOf(args);
-				const target = validateTarget(raw.target, operation);
-				const result =
-					operation === "find_definition"
-						? await runtime.router.findDefinition(target, routingOptions(args, signal))
-						: await runtime.router.findReferences(target, routingOptions(args, signal));
-				const rendered = renderDomainResult(operation, result, supportsSymbolIds);
-				text = rendered.text;
-				details = rendered.details;
-			}
-
-			const finalized = finalizeOutput(text, maxChars);
-			details.outputTruncated = finalized.outputTruncated;
-			return {
-				content: [{ type: "text", text: finalized.text }],
-				details,
+			const finish = (text: string, details: SymbolsToolDetails) => {
+				if (normalized.warnings.length) {
+					details.warnings = [...new Set([...(details.warnings ?? []), ...normalized.warnings])];
+					text = `${text}\n${normalized.warnings.map((warning) => `[warning] ${warning}`).join("\n")}`;
+				}
+				const rendered = pages.create(args, text, details, maxChars);
+				return { content: [{ type: "text" as const, text: rendered.text }], details: rendered.details };
 			};
+			parentSignal?.throwIfAborted();
+			if (args.cursor) {
+				try {
+					const page = pages.continue(args, args.cursor, maxChars);
+					return { content: [{ type: "text" as const, text: page.text }], details: page.details };
+				} catch (error) {
+					throw new SymbolsToolInputError(operation, error instanceof Error ? error.message : String(error));
+				}
+			}
+			const budget = createOperationBudget(
+				(recordOf(args).timeoutMs as number | undefined) ?? (operation === "find_existing" ? 30_000 : 60_000),
+				parentSignal,
+			);
+			const signal = budget.signal;
+			const progressTimer = setTimeout(
+				() =>
+					_onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `symbols ${operation}: language server query in progress; budget=${budget.timeoutMs}ms, cancellable`,
+							},
+						],
+						details: { operation, status: "partial" },
+					}),
+				1_000,
+			);
+			try {
+				return await budget.run(async () => {
+					const supportsSymbolIds = runtime.supportsSymbolIds;
+					let text: string;
+					let details: SymbolsToolDetails;
+
+					if (WORKFLOW_OPERATIONS.has(operation)) {
+						const raw = recordOf(args);
+						const context: WorkflowContext = {
+							workspaceRoot: runtime.workspaceRoot,
+							router: runtime.router,
+							semanticLanguages: runtime.semanticLanguages,
+							fileSymbols,
+							...(signal ? { signal } : {}),
+							// Leave bounded time to render retained coverage before the outer deadline.
+							timeoutMs: Math.max(1, budget.remainingMs() - Math.min(2_000, budget.timeoutMs / 10)),
+						};
+						const outcome = await runWorkflowOperation(operation as WorkflowOperation, raw, context);
+						details = {
+							operation,
+							source: outcome.source as IntelligenceResultMeta["source"],
+							completeness: outcome.completeness,
+							...(outcome.warnings.length > 0 ? { warnings: [...new Set(outcome.warnings)] } : {}),
+							...outcome.details,
+						};
+						details.status ??= outcome.completeness === "partial" ? "partial" : "ok";
+						text = composeWorkflowOutput(details, outcome.lines);
+						const output = finish(text, details);
+						if (!output.details.outputTruncated) await recordShownFiles(outcome.shown, _ctx);
+						return output;
+					}
+
+					if (operation === "status") {
+						const status = runtime.getStatus();
+						details = {
+							operation,
+							semanticConfigured: status.semanticConfigured,
+							semanticEnabled: status.semanticEnabled,
+							symbolStoreEntryCount: status.symbolStoreEntryCount,
+							languageServerCount: status.languageServers.length,
+						};
+						text = ["[status]", ...formatStatus(status).map((line) => `  ${line}`)].join("\n");
+					} else if (operation === "workspace_symbols") {
+						const advancedRouter = requireAdvancedRouter(runtime.router, operation);
+						const rendered = renderDomainResult(
+							operation,
+							await advancedRouter.workspaceSymbols(
+								requireQuery(operation, args.query),
+								routingOptions(args, signal, true),
+							),
+							supportsSymbolIds,
+						);
+						text = rendered.text;
+						details = rendered.details;
+					} else if (operation === "resolve_symbol") {
+						const target = validateTarget(args.target, operation);
+						if (target.type !== "symbol_id")
+							throw new SymbolsToolInputError(operation, "resolve_symbol requires a symbol_id target");
+						const advancedRouter = requireAdvancedRouter(runtime.router, operation);
+						const rendered = renderDomainResult(
+							operation,
+							await advancedRouter.resolveSymbol(target.symbolId, routingOptions(args, signal)),
+							supportsSymbolIds,
+						);
+						text = rendered.text;
+						details = rendered.details;
+					} else if (
+						operation === "hover" ||
+						operation === "incoming_calls" ||
+						operation === "outgoing_calls" ||
+						operation === "supertypes" ||
+						operation === "subtypes"
+					) {
+						const target = validateTarget(args.target, operation);
+						const advancedRouter = requireAdvancedRouter(runtime.router, operation);
+						const result =
+							operation === "hover"
+								? await advancedRouter.hover(target, routingOptions(args, signal))
+								: operation === "incoming_calls"
+									? await advancedRouter.incomingCalls(target, routingOptions(args, signal))
+									: operation === "outgoing_calls"
+										? await advancedRouter.outgoingCalls(target, routingOptions(args, signal))
+										: operation === "supertypes"
+											? await advancedRouter.supertypes(target, routingOptions(args, signal))
+											: await advancedRouter.subtypes(target, routingOptions(args, signal));
+						const rendered = renderDomainResult(operation, result, supportsSymbolIds);
+						text = rendered.text;
+						details = rendered.details;
+					} else if (operation === "file_symbols") {
+						const rendered = renderDomainResult(
+							operation,
+							await runtime.router.fileSymbols(
+								requireNonEmpty(args.path, operation, "path"),
+								routingOptions(args, signal),
+							),
+							supportsSymbolIds,
+						);
+						text = rendered.text;
+						details = rendered.details;
+					} else if (operation === "find_implementations") {
+						const target = validateTarget(args.target, operation);
+						const rendered = renderDomainResult(
+							operation,
+							await runtime.router.findImplementations(target, routingOptions(args, signal)),
+							supportsSymbolIds,
+						);
+						text = rendered.text;
+						details = rendered.details;
+					} else if (operation === "diagnostics") {
+						const rendered = renderDomainResult(
+							operation,
+							await runtime.router.getDiagnostics(
+								requireNonEmpty(args.path, operation, "path"),
+								routingOptions(args, signal),
+							),
+							supportsSymbolIds,
+						);
+						text = rendered.text;
+						details = rendered.details;
+					} else {
+						const raw = recordOf(args);
+						const target = validateTarget(raw.target, operation);
+						const result =
+							operation === "find_definition"
+								? await runtime.router.findDefinition(target, routingOptions(args, signal))
+								: await runtime.router.findReferences(target, routingOptions(args, signal));
+						const rendered = renderDomainResult(operation, result, supportsSymbolIds);
+						text = rendered.text;
+						details = rendered.details;
+					}
+
+					return finish(text, details);
+				});
+			} catch (error) {
+				if (parentSignal?.aborted) throw new DOMException("The operation was aborted", "AbortError");
+				if (budget.timedOut() || error instanceof SymbolsTimeoutError)
+					return finish(
+						`[source=semantic completeness=partial status=partial emptyReason=timeout]\nQuery timed out after ${budget.timeoutMs}ms; narrow path or retry after server warmup. No absence or clean-code claim can be made.`,
+						{ operation, source: "semantic", completeness: "partial", status: "partial", emptyReason: "timeout" },
+					);
+				let current: unknown = error;
+				const seen = new Set<unknown>();
+				while (current instanceof Error && !seen.has(current)) {
+					seen.add(current);
+					if (
+						["unsupported_capability", "unsupported_operation"].includes(
+							String((current as Error & { code?: unknown }).code),
+						)
+					)
+						return finish(
+							`[source=semantic completeness=partial status=unsupported emptyReason=unsupported]\nUnsupported: ${current.message}. ${operation === "supertypes" || operation === "subtypes" ? "Do not infer an empty hierarchy. Use definitions/implementations and source to inspect relations; these are not an exact hierarchy." : "This is not a successful empty result. Configure a supporting language server, or inspect source/text matches and verify with project checks."}`,
+							{
+								operation,
+								source: "semantic",
+								completeness: "partial",
+								status: "unsupported",
+								unsupported: true,
+								emptyReason: "unsupported",
+							},
+						);
+					current = current.cause;
+				}
+				throw error;
+			} finally {
+				clearTimeout(progressTimer);
+				budget.dispose();
+			}
 		},
 	};
 }

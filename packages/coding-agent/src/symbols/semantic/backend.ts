@@ -7,10 +7,13 @@ import { LspResponseError } from "../lsp/errors.ts";
 import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type { ManagedLanguageServer } from "../lsp/language-server/types.ts";
 import type { JsonObject, JsonValue } from "../lsp/types.ts";
+import { createOperationBudget } from "../operation-budget.ts";
 import {
 	getDocumentIdentity,
 	getWorkspaceIdentity,
 	getWorkspaceRelativeIdentity,
+	isInsideWorkspace,
+	normalizeDocumentPath,
 	samePath,
 	toFileUri,
 } from "../path-semantics.ts";
@@ -112,6 +115,7 @@ interface DocumentState {
 }
 
 interface DiagnosticSnapshot {
+	readonly observedVersion: number | undefined;
 	readonly items: readonly CodeDiagnostic[];
 	readonly version: number | undefined;
 	readonly completeness: "complete" | "partial";
@@ -246,7 +250,7 @@ function isCodePositionValid(position: CodePosition, text: string): boolean {
 
 const DEFAULT_ADVANCED_LIMIT = 100;
 const MAX_ADVANCED_LIMIT = 500;
-const MAX_PUSH_DIAGNOSTIC_WAIT_MS = 1_000;
+const MAX_PUSH_DIAGNOSTIC_WAIT_MS = 5_000;
 /** Upper bound for waiting on a server that reports it is still indexing. */
 const MAX_READY_WAIT_MS = 20_000;
 /** A server this young that never reported progress may still be indexing. */
@@ -341,38 +345,310 @@ export class LspSemanticBackend implements SemanticBackendApi {
 	}
 
 	async workspaceSymbols(query: string, options: SemanticBackendQueryOptions): Promise<WorkspaceSymbolsResult> {
+		const budget = createOperationBudget(Math.max(1, (options.timeoutMs ?? 60_000) - 100), options.signal);
+		let checkpoint: WorkspaceSymbolsResult = { items: [], meta: semanticMeta("partial") };
+		try {
+			return await budget.run(() =>
+				this.workspaceSymbolsWithinBudget(
+					query,
+					{ ...options, signal: budget.signal, timeoutMs: budget.remainingMs() },
+					(result) => {
+						checkpoint = result;
+					},
+				),
+			);
+		} catch (error) {
+			if (options.signal?.aborted || !budget.timedOut()) throw error;
+			return {
+				items: checkpoint.items,
+				meta: {
+					...semanticMeta("partial", [
+						...(checkpoint.meta.warnings ?? []),
+						"workspace symbol query timed out; retained successful servers only. Narrow path/language or retry after warmup",
+					]),
+					...(checkpoint.items.length ? {} : { emptyReason: "timeout" as const }),
+				},
+			};
+		} finally {
+			budget.dispose();
+		}
+	}
+
+	private async workspaceSymbolsWithinBudget(
+		query: string,
+		options: SemanticBackendQueryOptions,
+		onCheckpoint: (result: WorkspaceSymbolsResult) => void,
+	): Promise<WorkspaceSymbolsResult> {
 		this.ensureActive();
 		throwIfAborted(options.signal);
 		if (query.trim() === "")
 			throw new SemanticBackendError("invalid_server_response", "workspace symbol query must not be empty");
-		let managed: ManagedLanguageServer;
+		const scope = normalizeDocumentPath(options.path ?? ".", options.workspaceRoot);
+		if (!isInsideWorkspace(options.workspaceRoot, scope))
+			throw new SemanticDocumentOutsideWorkspaceError(scope, options.workspaceRoot);
+		let fileLanguage: string | undefined;
+		let files: readonly string[] = [];
+		const warnings: string[] = [];
 		try {
-			managed = await this.manager.acquireForWorkspace({
-				workspaceRoot: options.workspaceRoot,
-				language: options.language,
-				definitionId: options.definitionId,
-			});
+			if ((await stat(scope)).isFile()) {
+				fileLanguage = getCodeLanguage(scope);
+				files = [scope];
+			}
 		} catch (cause) {
-			throw new SemanticBackendError(
-				"server_unavailable",
-				"language server could not be acquired for workspace symbols",
-				{
-					workspaceRoot: options.workspaceRoot,
-					cause,
-				},
-			);
+			throw new SemanticDocumentReadError(scope, cause);
 		}
-		const session = await this.ensureSession(managed);
+		if (files.length === 0) {
+			const listing = await listWorkspaceFiles({
+				workspaceRoot: options.workspaceRoot,
+				path: options.path,
+				maxFiles: MAX_WATCHED_FILES,
+				signal: options.signal,
+				timeoutMs: Math.min(5_000, options.timeoutMs ?? 5_000),
+			});
+			files = listing.files;
+			if (listing.error) warnings.push(`workspace language discovery: ${listing.error}`);
+			if (listing.truncated)
+				warnings.push("workspace language discovery was truncated; narrow path for full language coverage");
+		}
+		const language = options.language ?? fileLanguage;
+		const seeds = new Map<string, string>();
+		const seedRank = (file: string) =>
+			(/(?:^|[\\/])src[\\/]/i.test(file)
+				? 0
+				: /(?:^|[\\/])(lib|app|packages)[\\/]/i.test(file)
+					? 1
+					: /(?:^|[\\/])(test|tests|scripts|build|\.github)[\\/]/i.test(file)
+						? 3
+						: 2) + (/\.d\.[cm]?ts$/i.test(file) ? 4 : 0);
+		for (const file of [...files].sort(
+			(left, right) => seedRank(left) - seedRank(right) || left.localeCompare(right),
+		)) {
+			const found = getCodeLanguage(file);
+			if (found && !seeds.has(found)) seeds.set(found, file);
+		}
+		const routes =
+			language !== undefined || options.definitionId !== undefined
+				? [{ language, definitionId: options.definitionId }]
+				: [...seeds.keys()]
+						.sort(
+							(left, right) =>
+								Number(right === "typescript") - Number(left === "typescript") || left.localeCompare(right),
+						)
+						.filter((found) => this.manager.registry.getCandidates(found).length > 0)
+						.map((found) => ({ language: found, definitionId: undefined }));
+		if (routes.length === 0) {
+			if (seeds.size > 0)
+				return {
+					items: [],
+					meta: {
+						...semanticMeta("partial", [
+							...warnings,
+							"no language server is configured for the observed workspace languages; configure a module or use source/text search",
+						]),
+						emptyReason: "unsupported",
+						unsupported: true,
+					},
+				};
+			return {
+				items: [],
+				meta: {
+					...semanticMeta(warnings.length ? "partial" : "complete", warnings),
+					emptyReason: warnings.length ? "incomplete_query" : "no_matches",
+				},
+			};
+		}
+		const seenServers = new Set<string>();
+		const combined: CodeSymbol[] = [];
+		let succeeded = 0;
+		let firstFailure: unknown;
+		let partial = warnings.length > 0;
+		// Start relevant acquisitions together, but never start arbitrary registered languages.
+		const acquisitions = routes.map((route) =>
+			(async () => {
+				try {
+					return {
+						route,
+						managed: await this.manager.acquireForWorkspace({ workspaceRoot: options.workspaceRoot, ...route }),
+					};
+				} catch (error) {
+					return { route, error };
+				}
+			})(),
+		);
+		const kinds = options.kinds ? new Set(options.kinds) : undefined;
+		const scoped = () =>
+			[
+				...new Map(
+					combined
+						.filter(
+							(item) =>
+								isInsideWorkspace(scope, normalizeDocumentPath(item.path, options.workspaceRoot)) &&
+								(!kinds || kinds.has(item.kind)),
+						)
+						.map((item) => [item.id, item]),
+				).values(),
+			].sort(
+				(left, right) =>
+					Number(right.name.toLowerCase() === query.toLowerCase()) -
+						Number(left.name.toLowerCase() === query.toLowerCase()) ||
+					left.path.localeCompare(right.path) ||
+					(left.line ?? 0) - (right.line ?? 0) ||
+					left.namePath.localeCompare(right.namePath),
+			);
+		const publish = () => {
+			if (!options.signal?.aborted)
+				onCheckpoint({
+					items: scoped().slice(0, queryLimit(options.limit)),
+					meta: semanticMeta(
+						"partial",
+						uniqueWarnings([...warnings, "workspace symbol coverage/name selection is not yet fully confirmed"]),
+					),
+				});
+		};
+		await Promise.all(
+			acquisitions.map(async (pending) => {
+				const acquired = await pending;
+				if (!acquired.managed) {
+					firstFailure ??= acquired.error;
+					partial = true;
+					warnings.push(
+						`workspace symbols ${acquired.route.language ?? acquired.route.definitionId}: server unavailable`,
+					);
+					return;
+				}
+				throwIfAborted(options.signal);
+				const managed = acquired.managed;
+				if (seenServers.has(managed.key)) return;
+				seenServers.add(managed.key);
+				try {
+					const session = await this.ensureSession(managed);
+					this.requireCapability("workspaceSymbol", session.capabilities.workspaceSymbolProvider);
+					// TS and some other servers search only projects associated with an open document.
+					const seedLanguage =
+						acquired.route.language ?? managed.definition.languages.find((found) => seeds.has(found));
+					const openDocument = [...session.documents.values()].find(
+						(document) =>
+							document.open &&
+							document.languageId === seedLanguage &&
+							isInsideWorkspace(scope, document.absolutePath),
+					);
+					const seed = openDocument?.absolutePath ?? (seedLanguage ? seeds.get(seedLanguage) : undefined);
+					if (seed) {
+						const document = this.resolveDocument(options.workspaceRoot, seed);
+						await this.runSynchronizedQuery(session, document, seedLanguage!, options, async (state) => {
+							// Touch the intended document: TS navto uses the most recently accessed open file.
+							// Merely reusing didOpen does not select it after another project's query.
+							if (session.capabilities.documentSymbolProvider)
+								await this.request(
+									session,
+									"textDocument/documentSymbol",
+									asJsonObject({ textDocument: asJsonObject({ uri: state.uri }) }),
+									options,
+								);
+						});
+					}
+					const result = await this.queryWorkspaceSymbols(query, { ...options, language: seedLanguage }, managed);
+					combined.push(...result.items);
+					succeeded++;
+					partial ||= result.meta.completeness === "partial";
+					warnings.push(...(result.meta.warnings ?? []));
+					publish();
+				} catch (error) {
+					throwIfAborted(options.signal);
+					firstFailure ??= error;
+					partial = true;
+					warnings.push(
+						`workspace symbols ${managed.definition.id}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}),
+		);
+		throwIfAborted(options.signal);
+		if (succeeded === 0 && firstFailure) throw firstFailure;
+		const items = scoped();
+		const capped = limited(items, queryLimit(options.limit));
+		if (capped.truncated)
+			warnings.push(
+				`workspace symbols were truncated to ${queryLimit(options.limit)} items; narrow query/path or increase limit`,
+			);
+		// workspace/symbol often returns a whole declaration range, not the name.
+		// Reuse authoritative document symbols so IDs resolve to real name selections.
+		const byPath = new Map<string, Promise<FileSymbolsResult>>();
+		const resolved: CodeSymbol[] = [];
+		for (const item of capped.items) {
+			throwIfAborted(options.signal);
+			try {
+				let outline = byPath.get(item.path);
+				if (!outline) {
+					outline = this.queryFileSymbolsInternal(item.path, { ...options, language: item.language });
+					byPath.set(item.path, outline);
+				}
+				const result = await outline;
+				const matches = flattenSymbols(result.items).filter(
+					(candidate) =>
+						candidate.name === item.name &&
+						candidate.kind === item.kind &&
+						candidate.selectionRange &&
+						item.bodyRange &&
+						rangesOverlap(candidate.selectionRange, item.bodyRange),
+				);
+				if (matches.length === 1) {
+					resolved.push({ ...matches[0]!, path: item.path });
+					warnings.push(...(result.meta.warnings ?? []));
+					partial ||= result.meta.completeness === "partial";
+					continue;
+				}
+			} catch (error) {
+				throwIfAborted(options.signal);
+				warnings.push(
+					`workspace symbol name selection unavailable for ${item.path}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			partial = true;
+			warnings.push(
+				"some workspace symbols only have declaration-line precision; inspect file_symbols/read_symbol before precise edits",
+			);
+			resolved.push(item);
+		}
+		return {
+			items: [...new Map(resolved.map((item) => [item.id, item])).values()],
+			meta: {
+				...semanticMeta(partial || capped.truncated ? "partial" : "complete", uniqueWarnings(warnings)),
+				...(items.length === 0
+					? { emptyReason: partial ? ("incomplete_query" as const) : ("no_matches" as const) }
+					: {}),
+			},
+		};
+	}
+
+	private async queryWorkspaceSymbols(
+		query: string,
+		options: SemanticBackendQueryOptions,
+		selected: ManagedLanguageServer,
+	): Promise<WorkspaceSymbolsResult> {
+		this.ensureActive();
+		throwIfAborted(options.signal);
+		if (query.trim() === "")
+			throw new SemanticBackendError("invalid_server_response", "workspace symbol query must not be empty");
+		const session = await this.ensureSession(selected);
 		this.requireCapability("workspaceSymbol", session.capabilities.workspaceSymbolProvider);
-		const readinessWarnings = (await this.runCrossFile(session, options, async () => undefined)).warnings;
-		const raw = await this.request<unknown>(session, "workspace/symbol", asJsonObject({ query }), options);
-		if (raw === null) return { items: [], meta: semanticMeta("complete") };
+		const response = await this.runCrossFile(
+			session,
+			options,
+			() => this.request<unknown>(session, "workspace/symbol", asJsonObject({ query }), options),
+			(value) => JSON.stringify(value),
+		);
+		const readinessWarnings = response.warnings;
+		const raw = response.value;
+		if (raw === null)
+			return { items: [], meta: semanticMeta(readinessWarnings.length ? "partial" : "complete", readinessWarnings) };
 		if (!Array.isArray(raw)) {
 			throw new SemanticBackendError("invalid_server_response", "workspace/symbol result must be an array or null");
 		}
 		const warnings: string[] = [...readinessWarnings];
 		const items: CodeSymbol[] = [];
 		for (const value of raw) {
+			throwIfAborted(options.signal);
 			let parsed = readWorkspaceSymbol(value);
 			if (!parsed) {
 				warnings.push("skipped malformed workspace symbol item");
@@ -416,18 +692,16 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				kind,
 				language,
 				path: converted.location.path,
-				selectionRange: converted.location.range,
+				bodyRange: converted.location.range,
 				line: converted.location.range.start.line,
 				parentNamePath: parsed.containerName,
 			});
 		}
 		const deduped = [...new Map(items.map((item) => [item.id, item])).values()];
-		const capped = limited(deduped, queryLimit(options.limit));
-		if (capped.truncated) warnings.push(`workspace symbols were truncated to ${queryLimit(options.limit)} items`);
 		const stableWarnings = uniqueWarnings(warnings);
 		return {
-			items: capped.items,
-			meta: semanticMeta(capped.truncated || stableWarnings.length > 0 ? "partial" : "complete", stableWarnings),
+			items: deduped,
+			meta: semanticMeta(stableWarnings.length > 0 ? "partial" : "complete", stableWarnings),
 		};
 	}
 
@@ -709,10 +983,20 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			const warnings = session.diagnosticWarnings.get(documentKey) ?? [];
 			return {
 				items: [],
-				meta: semanticMeta("partial", [...warnings, "no diagnostics snapshot has been published for the document"]),
+				meta: {
+					...semanticMeta("partial", [
+						...warnings,
+						"no diagnostics snapshot has been published for the document within the wait budget; this is not evidence that the file is clean. Retry when the server is ready or run the project's type check/tests",
+					]),
+					emptyReason: "diagnostics_not_published",
+				},
 			};
 		}
 		const warnings = [...(session.diagnosticWarnings.get(documentKey) ?? []), ...snapshot.warnings];
+		if (snapshot.observedVersion !== query.version)
+			warnings.push(
+				"diagnostics were received before the current document version was synchronized; retry or run project checks",
+			);
 		let completeness = warnings.length > 0 ? "partial" : snapshot.completeness;
 		if (snapshot.version === undefined) {
 			completeness = "partial";
@@ -839,6 +1123,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				cause,
 			});
 		}
+		throwIfAborted(options.signal);
 		return this.ensureSession(managed);
 	}
 
@@ -950,12 +1235,14 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		}
 		const queued = state.tail.then(
 			async () => {
+				throwIfAborted(options.signal);
 				const currentText = await this.readDocumentText(document);
 				await this.synchronizeState(state!, currentText);
 				throwIfAborted(options.signal);
 				return operation(state!);
 			},
 			async () => {
+				throwIfAborted(options.signal);
 				const currentText = await this.readDocumentText(document);
 				await this.synchronizeState(state!, currentText);
 				throwIfAborted(options.signal);
@@ -1016,7 +1303,12 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		while (Date.now() < deadline) {
 			throwIfAborted(signal);
 			const snapshot = session.diagnostics.get(documentKey);
-			if (snapshot && (snapshot.version === undefined || snapshot.version >= expectedVersion)) return;
+			if (
+				snapshot &&
+				snapshot.observedVersion === expectedVersion &&
+				(snapshot.version === undefined || snapshot.version >= expectedVersion)
+			)
+				return;
 			await delay(Math.min(25, Math.max(1, deadline - Date.now())));
 		}
 	}
@@ -1409,11 +1701,14 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			throw new SemanticBackendError("invalid_server_response", "documentSymbol result must be an array or null");
 		}
 		const warnings: string[] = [];
+		// One UTF-16 line table for the whole tree. Re-splitting a multi-MB source
+		// for every endpoint made checker.ts conversion quadratic and blocked timers.
+		const lengths = state.text.split(/\r\n|\n|\r/).map((line) => line.length);
 		const items: CodeSymbolTreeNode[] = [];
 		for (const item of raw) {
 			const documentSymbol = readDocumentSymbol(item);
 			if (documentSymbol) {
-				const converted = this.convertDocumentSymbolNode(documentSymbol, state, [], undefined, warnings);
+				const converted = this.convertDocumentSymbolNode(documentSymbol, state, [], undefined, warnings, lengths);
 				if (converted) items.push(converted);
 				continue;
 			}
@@ -1435,12 +1730,13 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		parentComponents: readonly string[],
 		parent: CodeSymbol | undefined,
 		warnings: string[],
+		lengths: readonly number[],
 	): CodeSymbolTreeNode | undefined {
 		if (raw.malformedChildCount > 0) {
 			warnings.push(`skipped ${raw.malformedChildCount} malformed document symbol child(ren) under ${raw.name}`);
 		}
-		const selectionRange = tryCodeRange(raw.selectionRange, state.text);
-		const bodyRange = tryCodeRange(raw.range, state.text);
+		const selectionRange = tryCodeRange(raw.selectionRange, lengths);
+		const bodyRange = tryCodeRange(raw.range, lengths);
 		if (!selectionRange || !bodyRange || raw.name.length === 0) {
 			warnings.push(`skipped malformed document symbol: ${raw.name || "<unnamed>"}`);
 			return undefined;
@@ -1473,6 +1769,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 				[...parentComponents, raw.name],
 				symbol,
 				warnings,
+				lengths,
 			);
 			if (converted) children.push(converted);
 		}
@@ -1734,7 +2031,18 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			// (the selected item), explicitly not relative to `to`.
 			const callSiteUri = direction === "incoming" ? hierarchyItem.uri : selected.uri;
 			const callSites = this.convertRanges(callSiteUri, parsed.fromRanges, session.workspaceRoot, warnings);
-			items.push({ symbol: convertedSymbol, callSites });
+			const existing = items.find((edge) => edge.symbol.id === convertedSymbol.id);
+			if (existing) {
+				const merged = [
+					...new Map(
+						[...existing.callSites, ...callSites].map((site) => [
+							normalizeLocationKey({ path: site.path, range: site.range! }),
+							site,
+						]),
+					).values(),
+				];
+				items[items.indexOf(existing)] = { symbol: existing.symbol, callSites: merged };
+			} else items.push({ symbol: convertedSymbol, callSites });
 		}
 		const capped = limited(items, queryLimit(options.limit));
 		if (capped.truncated) warnings.push(`call hierarchy was truncated to ${queryLimit(options.limit)} items`);
@@ -1915,7 +2223,14 @@ export class LspSemanticBackend implements SemanticBackendApi {
 			if (converted.kind === "skip") warnings.push(converted.warning);
 			else locations.push(converted.location);
 		}
-		return locations;
+		return [
+			...new Map(
+				locations.map((location) => [
+					normalizeLocationKey({ path: location.path, range: location.range! }),
+					location,
+				]),
+			).values(),
+		];
 	}
 
 	private handleDiagnostics(session: ClientSession, params: JsonValue | undefined): void {
@@ -1943,13 +2258,9 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		const currentState = documentKey === undefined ? undefined : session.documents.get(documentKey);
 		if (currentState && parsed.version !== undefined && parsed.version < currentState.version) return;
 		const items: CodeDiagnostic[] = [];
+		const lengths = currentState?.text.split(/\r\n|\n|\r/).map((line) => line.length);
 		for (const diagnostic of parsed.diagnostics) {
-			const converted = convertWorkspaceLocation(
-				parsed.uri,
-				diagnostic.range,
-				session.workspaceRoot,
-				currentState?.text,
-			);
+			const converted = convertWorkspaceLocation(parsed.uri, diagnostic.range, session.workspaceRoot, lengths);
 			if (converted.kind === "skip") {
 				warnings.push(converted.warning);
 				continue;
@@ -1964,6 +2275,7 @@ export class LspSemanticBackend implements SemanticBackendApi {
 		}
 		const stableWarnings = uniqueWarnings(warnings);
 		session.diagnostics.set(documentKey ?? "<protocol>", {
+			observedVersion: currentState?.version,
 			items,
 			version: parsed.version,
 			completeness: stableWarnings.length > 0 ? "partial" : "complete",

@@ -228,9 +228,18 @@ export interface IntelligenceResultMeta {
 	};
 
 	warnings?: string[];
+	/** Why an empty answer is not necessarily an authoritative absence. Additive SDK metadata. */
+	emptyReason?:
+		| "no_matches"
+		| "incomplete_query"
+		| "diagnostics_not_published"
+		| "no_diagnostics"
+		| "unsupported"
+		| "timeout";
+	unsupported?: boolean;
 }
 
-/** 统一查询结果：items 为空只表示"查询成功且确实没有结果"。 */
+/** Unified result. Empty items require checking completeness/emptyReason; they are not always proof of absence. */
 export interface IntelligenceResult<T> {
 	items: T[];
 	meta: IntelligenceResultMeta;

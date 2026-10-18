@@ -147,6 +147,17 @@ function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
 }
 
 describe("LanguageServerManager: startup and routing", () => {
+	it("requires an explicit workspace language when multiple unrelated servers are registered", async () => {
+		const workspaceRoot = await createWorkspace();
+		const manager = createManager([
+			createDefinition("clangd", "standard", ["c", "cpp"], 999),
+			createDefinition("typescript-server"),
+		]);
+		await expect(manager.acquireForWorkspace({ workspaceRoot })).rejects.toBeInstanceOf(UnsupportedLanguageError);
+		expect(manager.getServers()).toHaveLength(0);
+		const selected = await manager.acquireForWorkspace({ workspaceRoot, language: "typescript" });
+		expect(selected.definition.id).toBe("typescript-server");
+	});
 	it("starts and initializes a real Phase 3 client", async () => {
 		const workspaceRoot = await createWorkspace();
 		const manager = createManager([createDefinition("typescript-server")]);

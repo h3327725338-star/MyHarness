@@ -28,6 +28,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Security](security.md) — Project Trust, sandbox boundaries, and vulnerability reporting.
 - [Containerization](containerization.md) — isolate MyHarness with Gondolin, Docker, or OpenShell.
 - [Settings](settings.md) — global and project settings.
+- [Symbols contract](symbols.md) — structured navigation, routing, coordinates, partial results, deadlines, and continuation.
 - [Windows](windows.md) — Bash and Windows-specific setup.
 - [Web Search](web-search.md) — optional built-in web search (Google/Bing first, with optional DuckDuckGo, Brave, Brave Search API and a Firefox/Chrome/Edge browser fallback) and page reading.
 - [Sessions](sessions.md) — Session management, branching, and navigation.

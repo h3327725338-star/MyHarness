@@ -33,7 +33,7 @@
 | `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合。symbols 规则仅在 symbols 启用时出现 |
 | `tools/no-snippets.md` | 有工具但无简短说明时的提示 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |
-| `tools/routing/symbols.md`、`evidence-heading.md` | symbols 启用时加载的证据工具路由及标题 |
+| `tools/routing/symbols.md`、`evidence-heading.md` | symbols 启用时加载的证据工具路由及标题；自然选择，不强制每次查询都调用 |
 | `tools/routing/{agent,workflow,ultracode}.md` | 各编排工具启用时的选择规则 |
 | `tools/routing/organization-heading.md`、`organization-boundary.md` | 至少一个编排工具启用时的标题与组合约束 |
 | `compaction/coding-agent/system.md` | 编程会话压缩、分支摘要、长回合前缀摘要的系统职责 |

@@ -100,8 +100,35 @@ describe("Symbols operation-specific tool schema", () => {
 		expect([...actual.keys()].sort()).toEqual(Object.keys(expected).sort());
 		expect(actual.size).toBe(17);
 		for (const [operation, properties] of Object.entries(expected)) {
-			expect([...actual.get(operation)!].sort()).toEqual([...properties].sort());
+			const compatible = [...properties, "cursor"];
+			if (properties.includes("target")) {
+				compatible.push("symbolId");
+				if (operation !== "resolve_symbol") compatible.push("path", "line", "character");
+				if (["read_symbol", "impact", "rename_preview"].includes(operation)) compatible.push("name");
+			}
+			expect([...actual.get(operation)!].sort()).toEqual(compatible.sort());
 		}
+	});
+
+	it("shares repeated constraints without changing the closed operation matrix", () => {
+		const definition = createSymbolsToolDefinition(process.cwd());
+		const serialized = JSON.stringify(definition.parameters);
+		expect(serialized.length).toBeLessThan(14_000);
+		expect(serialized).not.toContain('"$ref"');
+		for (const args of [
+			{ operation: "file_symbols", path: "" },
+			{ operation: "find_definition", path: "a.ts", line: -1, character: 0 },
+			{ operation: "find_definition", target: { type: "symbol", path: "a.ts", name: "run" } },
+			{
+				operation: "resolve_symbol",
+				target: { type: "position", path: "a.ts", position: { line: 0, character: 0 } },
+			},
+			{ operation: "read_symbol", path: "a.ts", name: "run", maxLines: 2 },
+			{ operation: "find_existing", intent: "run", limit: 31 },
+			{ operation: "status", timeoutMs: 100 },
+		])
+			expect(() => validate(definition, args)).toThrow();
+		expect(() => validate(definition, { operation: "read_symbol", path: "a.ts", name: "run" })).not.toThrow();
 	});
 
 	it("keeps the model-visible definition free of lightweight-index vocabulary", () => {

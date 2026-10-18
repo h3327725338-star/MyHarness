@@ -73,7 +73,7 @@ describe("Code Intelligence Phase 8 final integration", () => {
 		const options = semanticOptions(environment.root);
 
 		const workspace = await environment.backend.workspaceSymbols("Target", options);
-		expect(workspace.items[0]).toMatchObject({ name: "Target", path: "src/target.ts", namePath: "Container/Target" });
+		expect(workspace.items[0]).toMatchObject({ name: "Target", path: "src/target.ts", namePath: "Target" });
 		expect(workspace.items[0]?.selectionRange).toBeDefined();
 
 		const hover = await environment.backend.hover(

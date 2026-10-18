@@ -10,7 +10,7 @@ import { buildSubAgentArgs, hasSuccessfulInvestigationEvidence } from "../src/to
 import { createHarness } from "./suite/harness.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
-const SYMBOLS_GUIDELINE = "call find_existing with the intent in plain words";
+const SYMBOLS_GUIDELINE = "consider find_existing with a short intent";
 
 function toolsArgument(args: string[]): string[] {
 	const index = args.indexOf("--tools");
