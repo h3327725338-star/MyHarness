@@ -1,10 +1,16 @@
 // Files panel: workspace tree and viewer, with rendered editing for Markdown only.
-import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, CopyButton, Collapse, VirtualRows } from "./ui.js";
-import { api, state, useStore } from "./store.js";
+import { html, memo, useEffect, useMemo, useRef, useState, Icon, Spinner, Collapse, Menu, MenuItem, MenuSep, VirtualRows } from "./ui.js";
+import { api, slotUrl, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { highlightLines } from "./markdown.js";
 import { languageFor } from "./diff.js";
 import { MarkdownEditor } from "./markdown-editor.js";
+import { PdfViewer } from "./viewer-pdf.js";
+import { HexViewer } from "./viewer-hex.js";
+import { LargeTextViewer } from "./viewer-text-large.js";
+import { OfficeViewer } from "./viewer-office.js";
+import { HtmlModeSwitch, HtmlPreview, isHtmlPath } from "./viewer-html.js";
+import { localFileAction } from "./local-files.js";
 import { basename, dirname, fmtBytes } from "./util.js";
 import { t } from "./i18n.js";
 import { createReadCache } from "./scheduling.js";
@@ -217,10 +223,14 @@ function FileViewer({ viewing, file, error, onBack, onSaved, onReload }) {
 	const findInput = useRef(null);
 	const matchRef = useRef(null);
 	const canEdit = file?.kind === "text" && !isMarkdown && !file.truncated;
+	// HTML opens as a page; the bar switches to its source (and editing always shows the source).
+	const [htmlSource, setHtmlSource] = useState(false);
+	const htmlPage = isHtmlPath(path) && file?.kind === "text" && !file.truncated && !htmlSource && !editing;
 	const back = () => {
 		if ((!dirty && !editing) || window.confirm(t("Discard unsaved changes?"))) onBack?.();
 	};
 	const startEdit = () => {
+		setHtmlSource(true);
 		setDraft(file.content);
 		setSaveError("");
 		setEditing(true);
@@ -303,8 +313,8 @@ function FileViewer({ viewing, file, error, onBack, onSaved, onReload }) {
 		const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
 		return () => cancelAnimationFrame(frame);
 	}, [file, viewing.line]);
-	const rawUrl = file?.rawUrl || `/api/files/raw?path=${encodeURIComponent(path)}`;
-	const downloadUrl = `/api/files/raw?path=${encodeURIComponent(path)}&download=1`;
+	const rawUrl = slotUrl(file?.rawUrl || `/api/files/raw?path=${encodeURIComponent(path)}`);
+	const downloadUrl = slotUrl(`/api/files/raw?path=${encodeURIComponent(path)}&download=1`);
 	const image = file?.kind === "image" || (file?.kind === "large" && IMAGE_EXTENSIONS.test(path));
 	const openExternally = async () => {
 		const host = window.myHarnessDesktop;
@@ -320,23 +330,50 @@ function FileViewer({ viewing, file, error, onBack, onSaved, onReload }) {
 		}
 		setSaveError(t("This file can only be opened by an application outside MyHarness, which is not available here."));
 	};
-	const head = html`<div class="panel-toolbar">
+	// Which viewer shows the file: its natural one, or the hex / paged-text view the user picked (binary files open in
+	// hex, text too large to load whole opens paged).
+	const [mode, setMode] = useState("auto");
+	const view = mode !== "auto" ? mode : file?.kind === "binary" ? "hex" : file?.kind === "text" && file.truncated ? "text" : "native";
+	const reveal = () => localFileAction(file?.absolutePath || path, "reveal").catch((e) => setSaveError(e.message));
+	const desktop = !!window.myHarnessDesktop?.openPath;
+	// One bar for the whole tab: the file's name (folder and size on hover), the tools of the viewer that shows it, the
+	// edit/save controls, and everything else in one "more" menu. A viewer passes its own tools through bar(tools).
+	const bar = (tools, reload = onReload) => html`<div class="file-bar">
 		${onBack ? html`<button class="icon-btn sm" onClick=${back} title=${t("Back to files")} aria-label=${t("Back to files")}><${Icon} name="chevronLeft" size=${16} /></button>` : null}
-		<span class="truncate grow" title=${path}><span class="dim">${dirname(path)}${dirname(path) ? "/" : ""}</span><strong>${basename(path)}</strong></span>
-		${file ? html`<span class="dim">${fmtBytes(file.size)}</span>` : null}
-		${searchable ? html`<button class=${`icon-btn sm ${findOpen ? "active" : ""}`} title=${t("Find in file")} aria-label=${t("Find in file")} aria-pressed=${findOpen} onClick=${() => (findOpen ? setFindOpen(false) : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>` : null}
-		${image ? html`<button class="icon-btn sm" title=${t("Zoom out")} aria-label=${t("Zoom out")} onClick=${() => setZoom((value) => Math.max(0.25, Math.round((value - 0.25) * 100) / 100))}><${Icon} name="zoomOut" size=${14} /></button>
-			<button class="icon-btn sm" title=${t("Reset zoom")} aria-label=${t("Reset zoom")} onClick=${() => { setZoom(1); setRotation(0); }}><span class="dim">${Math.round(zoom * 100)}%</span></button>
-			<button class="icon-btn sm" title=${t("Zoom in")} aria-label=${t("Zoom in")} onClick=${() => setZoom((value) => Math.min(4, Math.round((value + 0.25) * 100) / 100))}><${Icon} name="zoomIn" size=${14} /></button>
-			<button class="icon-btn sm" title=${t("Rotate left")} aria-label=${t("Rotate left")} onClick=${() => setRotation((value) => (value + 270) % 360)}><${Icon} name="rotateLeft" size=${14} /></button>
-			<button class="icon-btn sm" title=${t("Rotate right")} aria-label=${t("Rotate right")} onClick=${() => setRotation((value) => (value + 90) % 360)}><${Icon} name="rotateRight" size=${14} /></button>` : null}
-		${canEdit ? (editing ? html`<button class="btn sm" disabled=${saving} onClick=${save}>${saving ? t("Saving…") : t("Save")}</button><button class="btn sm" disabled=${saving} onClick=${cancelEdit}>${t("Cancel")}</button>` : html`<button class="icon-btn sm" title=${t("Edit text")} aria-label=${t("Edit text")} onClick=${startEdit}><${Icon} name="edit" size=${14} /></button>`) : null}
-		${file ? html`<a class="icon-btn sm" href=${downloadUrl} title=${t("Download")} aria-label=${t("Download")}><${Icon} name="download" size=${14} /></a>` : null}
-		<${CopyButton} text=${path} label=${t("Copy path")} />
-		<button class="icon-btn sm" title=${t("Reload from disk")} aria-label=${t("Reload from disk")} onClick=${() => onReload?.()}><${Icon} name="refresh" size=${14} /></button>
-		<button class="icon-btn sm" title=${t("Mention in the prompt (@)")} aria-label=${t("Mention in prompt")} onClick=${() => actions.insertIntoComposer(`@${path} `)}><${Icon} name="paperclip" size=${14} /></button>
+		<span class="file-name" title=${`${path}${file ? `
+${fmtBytes(file.size)}` : ""}`}>
+			<strong class="truncate">${basename(path)}</strong>
+			${dirname(path) ? html`<span class="file-dir truncate">${dirname(path)}</span>` : null}
+		</span>
+		${tools}
+		${canEdit ? (editing ? html`<span class="file-tools"><button class="btn sm primary" disabled=${saving} onClick=${save}>${saving ? t("Saving…") : t("Save")}</button><button class="btn sm" disabled=${saving} onClick=${cancelEdit}>${t("Cancel")}</button></span>` : html`<button class="icon-btn sm" title=${t("Edit text")} aria-label=${t("Edit text")} onClick=${startEdit}><${Icon} name="edit" size=${14} /></button>`) : null}
+		<${Menu} align="end" trigger=${({ toggle, open }) => html`<button class=${`icon-btn sm ${open ? "active" : ""}`} title=${t("More")} aria-label=${t("More file actions")} aria-haspopup="menu" aria-expanded=${open} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`}>
+			${(close) => html`
+				<${MenuItem} icon="refresh" label=${t("Reload from disk")} onClick=${() => (close(), reload?.())} />
+				<${MenuItem} icon="download" label=${t("Download")} disabled=${!file} onClick=${() => { close(); const a = document.createElement("a"); a.href = downloadUrl; a.click(); }} />
+				<${MenuItem} icon="copy" label=${t("Copy path")} onClick=${() => (close(), navigator.clipboard?.writeText(file?.absolutePath || path))} />
+				<${MenuItem} icon="paperclip" label=${t("Mention in the prompt (@)")} onClick=${() => (close(), actions.insertIntoComposer(`@${path} `))} />
+				<${MenuSep} />
+				${view !== "hex" ? html`<${MenuItem} icon="hash" label=${t("Open as hex")} disabled=${!file} onClick=${() => (close(), setMode("hex"))} />` : null}
+				${view !== "text" && file && file.kind !== "pdf" ? html`<${MenuItem} icon="file" label=${t("Open as plain text")} onClick=${() => (close(), setMode("text"))} />` : null}
+				${mode !== "auto" ? html`<${MenuItem} icon="eye" label=${t("Back to the normal view")} onClick=${() => (close(), setMode("auto"))} />` : null}
+				<${MenuSep} />
+				${desktop ? html`<${MenuItem} icon="externalLink" label=${t("Open with the default application")} disabled=${!file} onClick=${() => (close(), openExternally())} />` : null}
+				<${MenuItem} icon="folderOpen" label=${t("Show in File Explorer")} onClick=${() => (close(), reveal())} />`}
+		<//>
 	</div>`;
-	const findBar = findOpen && searchable ? html`<form class="panel-toolbar file-find" onSubmit=${(event) => { event.preventDefault(); step(1); }}>
+	const findTool = searchable ? html`<button class=${`icon-btn sm ${findOpen ? "active" : ""}`} title=${t("Find in file")} aria-label=${t("Find in file")} aria-pressed=${findOpen} onClick=${() => setFindOpen(!findOpen)}><${Icon} name="search" size=${14} /></button>` : null;
+	const imageTools = html`<span class="file-tools">
+		<button class="icon-btn sm" title=${t("Zoom out")} aria-label=${t("Zoom out")} onClick=${() => setZoom((value) => Math.max(0.1, Math.round((value - 0.25) * 100) / 100))}><${Icon} name="zoomOut" size=${14} /></button>
+		<button class="btn sm file-zoom" title=${t("Reset zoom")} aria-label=${t("Reset zoom")} onClick=${() => { setZoom(1); setRotation(0); }}>${Math.round(zoom * 100)}%</button>
+		<button class="icon-btn sm" title=${t("Zoom in")} aria-label=${t("Zoom in")} onClick=${() => setZoom((value) => Math.min(8, Math.round((value + 0.25) * 100) / 100))}><${Icon} name="zoomIn" size=${14} /></button>
+		<button class="icon-btn sm" title=${t("Rotate left")} aria-label=${t("Rotate left")} onClick=${() => setRotation((value) => (value + 270) % 360)}><${Icon} name="rotateLeft" size=${14} /></button>
+		<button class="icon-btn sm" title=${t("Rotate right")} aria-label=${t("Rotate right")} onClick=${() => setRotation((value) => (value + 90) % 360)}><${Icon} name="rotateRight" size=${14} /></button>
+	</span>`;
+	const htmlTools = isHtmlPath(path) && file?.kind === "text" && !file.truncated && !editing ? html`<${HtmlModeSwitch} source=${htmlSource} onChange=${setHtmlSource} />` : null;
+	const head = bar(image ? imageTools : html`${htmlTools}${htmlPage ? null : findTool}`);
+	const fallback = (message) => html`<div class="file-fallback"><${Icon} name="file" size=${28} class="c-dim" /><p>${message}</p><div class="row"><a class="btn sm" href=${downloadUrl}>${t("Download")}</a>${desktop ? html`<button class="btn sm" onClick=${openExternally}>${t("Open with the default application")}</button>` : null}</div></div>`;
+	const findBar = findOpen && searchable ? html`<form class="file-find" onSubmit=${(event) => { event.preventDefault(); step(1); }}>
 		<input class="field grow" ref=${findInput} aria-label=${t("Find in file")} placeholder=${t("Find in file")} value=${findText}
 			onInput=${(event) => setFindText(event.target.value)}
 			onKeyDown=${(event) => {
@@ -350,18 +387,20 @@ function FileViewer({ viewing, file, error, onBack, onSaved, onReload }) {
 	</form>` : null;
 	if (error) return html`<div class="file-viewer">${head}${findBar}<div class="panel-scroll"><div class="notice danger">${error}</div></div></div>`;
 	if (!file) return html`<div class="file-viewer">${head}${findBar}<div class="panel-scroll"><div class="empty"><${Spinner} /></div></div></div>`;
+	if (view === "hex") return html`<div class="file-viewer hex-viewer"><${HexViewer} path=${path} bar=${bar} onSaved=${onReload} /></div>`;
+	if (view === "text") return html`<div class="file-viewer"><${LargeTextViewer} path=${path} bar=${bar} onSaved=${onReload} /></div>`;
+	if (file.kind === "pdf") return html`<div class="file-viewer pdf-viewer">${saveError ? html`<div class="notice danger">${saveError}</div>` : null}<${PdfViewer} key=${rawUrl} url=${rawUrl} path=${path} bar=${bar} fallback=${fallback} /></div>`;
+	if (file.kind === "office")
+		return html`<div class="file-viewer office-viewer">${saveError ? html`<div class="notice danger">${saveError}</div>` : null}<${OfficeViewer} path=${path} file=${file} bar=${bar} fallback=${fallback} onReload=${onReload} openExternally=${openExternally} desktop=${desktop} /></div>`;
+	if (htmlPage && view === "native")
+		return html`<div class="file-viewer">${head}<${HtmlPreview} path=${path} version=${`${file.size}-${file.mtime}`} /></div>`;
 	const body = (() => {
-		if (file.kind === "pdf") return html`<iframe class="file-frame" src=${rawUrl} title=${path}></iframe>`;
 		if (file.kind === "audio")
 			return html`<div class="media-view"><audio controls src=${rawUrl} preload="metadata"></audio><div class="dim">${t("Audio playback uses the browser's own player. Download keeps the original bytes.")}</div><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
 		if (file.kind === "video")
 			return html`<div class="media-view"><video controls src=${rawUrl} preload="metadata"></video><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
-		if (file.kind === "office")
-			return html`<div class="office-view"><${Icon} name="file" size=${28} class="c-dim" /><h3>${basename(path)}</h3><p>${t("Office documents are shown read-only: MyHarness has no Office engine, so the file is not rendered or converted here. Open it in its system application, or download the original file.")}</p><div class="row"><button class="btn sm" onClick=${openExternally}>${t("Open with the default application")}</button><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div></div>`;
 		if (image)
 			return html`<div class="image-view"><img class="zoomed" src=${file.kind === "image" ? `data:${file.mimeType};base64,${file.data}` : rawUrl} alt=${path} style=${{ transform: `scale(${zoom}) rotate(${rotation}deg)` }} /></div>`;
-		if (file.kind === "binary")
-			return html`<div class="empty"><p>${t("Binary file ({fmtBytes}) — no preview.", { fmtBytes: fmtBytes(file.size) })}</p><a class="btn sm" href=${downloadUrl}>${t("Download")}</a><button class="btn sm" onClick=${openExternally}>${t("Open with the default application")}</button></div>`;
 		if (file.kind === "large")
 			return html`<div class="empty"><p>${t("File is too large to preview ({fmtBytes}).", { fmtBytes: fmtBytes(file.size) })}</p><a class="btn sm" href=${downloadUrl}>${t("Download")}</a></div>`;
 		if (isMarkdown) return html`<${MarkdownEditor} file=${file} path=${path} onDirty=${setDirty} />`;

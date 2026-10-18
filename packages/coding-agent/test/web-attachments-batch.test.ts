@@ -34,6 +34,10 @@ vi.mock("../web/js/store.js", () => ({
 	api: (path: string, options: unknown) => mocks.apiImpl!(path, options),
 }));
 
+// The card renders Markdown previews and opens files in the workspace; neither is part of the batching contract.
+vi.mock("../web/js/markdown.js", () => ({ Markdown: () => null }));
+vi.mock("../web/js/local-files.js", () => ({ openWorkspaceFile: () => {} }));
+
 const webDir = new URL("../web/js/", import.meta.url);
 const attachments = await import(new URL("attachments.js", webDir).href);
 
@@ -145,7 +149,9 @@ describe("useAttachmentMeta batching", () => {
 		await tick();
 		expect(mocks.apiCalls).toHaveLength(1);
 		expect(mocks.apiCalls[0]!.path).toBe("/api/uploads/info-batch");
-		expect(mocks.hookStates.map((record) => (record.value as { error?: unknown }).error).filter(Boolean).length).toBe(2);
+		expect(mocks.hookStates.map((record) => (record.value as { error?: unknown }).error).filter(Boolean).length).toBe(
+			2,
+		);
 	});
 
 	it("caches 404 failures with their status and does not retry them", async () => {

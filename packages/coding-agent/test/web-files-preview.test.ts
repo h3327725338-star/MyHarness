@@ -104,6 +104,32 @@ describe("Files panel text saves are safe", () => {
 		expect(readFileSync(join(root, "binary.dat")).length).toBe(3);
 	});
 
+	it("opens absolute local files outside the workspace (chat links, attachments) but not relative escapes", async () => {
+		const { root, read, raw, save } = await setup();
+		const outside = mkdtempSync(join(tmpdir(), "myharness-outside-"));
+		roots.push(outside);
+		writeFileSync(join(outside, "paper.pdf"), Buffer.from("%PDF-1.4\n"));
+		writeFileSync(join(outside, "deck.pptx"), Buffer.from("PK\u0003\u0004fake pptx", "latin1"));
+		writeFileSync(join(outside, "notes.txt"), "before\n");
+		const pdf = await read(join(outside, "paper.pdf"));
+		expect(pdf.status).toBe(200);
+		expect(pdf.data).toMatchObject({ kind: "pdf", path: join(outside, "paper.pdf") });
+		expect(pdf.data.rawUrl).toBe(`/api/files/raw?path=${encodeURIComponent(join(outside, "paper.pdf"))}`);
+		expect(await (await raw(join(outside, "paper.pdf"))).text()).toBe("%PDF-1.4\n");
+		expect((await read(join(outside, "deck.pptx"))).data).toMatchObject({ kind: "office" });
+		expect((await save({ path: join(outside, "notes.txt"), original: "before\n", content: "after\n" })).status).toBe(
+			200,
+		);
+		expect(readFileSync(join(outside, "notes.txt"), "utf8")).toBe("after\n");
+		expect((await save({ path: join(outside, "notes.txt"), original: "stale\n", content: "lost\n" })).status).toBe(
+			409,
+		);
+		expect((await read(join(outside, "missing.txt"))).status).toBe(404);
+		// An absolute path inside the workspace is the same file tab as its workspace-relative path.
+		expect((await read(join(root, "notes.txt"))).data.path).toBe("notes.txt");
+		expect((await read("../escape.txt")).status).toBe(403);
+	});
+
 	it("rejects non-UTF-8 files instead of rewriting them", async () => {
 		const { root, save } = await setup();
 		writeFileSync(join(root, "latin1.txt"), Buffer.from([0xe9, 0x0a]));

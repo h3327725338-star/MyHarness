@@ -255,7 +255,7 @@
 /* Workspace tabs: the right panel keeps several things open (panels, files, website tabs). The strip scrolls when it
    does not fit, a tab can be dragged to reorder, and middle-click or its × closes it without touching the others. */
 .panel-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 40px; padding: 0 calc(var(--pad-panel) + 26px) 0 6px; border-bottom: 1px solid var(--border); flex: none; }
-.ws-tabs { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; padding: 2px 0; }
+.ws-tabs { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 2px 0; mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
 .ws-tab { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 200px; height: 28px; padding: 0 4px 0 9px; border-radius: var(--r-md); color: var(--text-2); }
 .ws-tab:hover { background: var(--surface-hover); color: var(--text); }
 .ws-tab.active { background: var(--surface-active); color: var(--text); }
@@ -273,8 +273,6 @@
 .media-view { display: flex; flex-direction: column; gap: 12px; padding: var(--pad-panel); }
 .media-view video { width: 100%; max-height: 70vh; border-radius: var(--r-md); background: #000; }
 .media-view audio { width: 100%; }
-.office-view { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: var(--pad-panel); }
-.office-view h3 { margin: 0; }
 .text-editor { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; padding: 8px; }
 .text-editor textarea { flex: 1 1 auto; min-height: 50vh; padding: 10px; resize: none; overflow: auto; font-size: var(--fs-sm); line-height: 1.5; white-space: pre; tab-size: 2; }
 /* Site permission decisions: a request is a question in the tab, never an automatic grant; the list shows the
@@ -293,3 +291,17 @@
 /* File search: matching lines stay highlighted and the current match is outlined; no line content is rewritten. */
 .code-lines .cl.find-hit { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .code-lines .cl.find-current { background: color-mix(in srgb, var(--accent) 26%, transparent); outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* Collaboration mode (actions.toggleWorkspaceMax): the workspace takes the room of the sidebar and the conversation, and
+   the conversation becomes a resizable column on its right, so the user keeps talking to the Agent while the file or page
+   it works on fills the window. The sidebar stays hidden unless the user shows it. Columns swap places instantly. */
+.app.ws-max.panel-open { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--chat-col); }
+.app.ws-max.panel-open:has(> .sidebar.is-collapsed) { grid-template-columns: 0px minmax(0, 1fr) var(--chat-col); }
+.app.ws-max { --chat-col: min(calc(var(--chat-w) + 6px), max(326px, calc(100vw - 480px))); }
+.app.ws-switching, .app.ws-switching * { transition: none !important; }
+.app.ws-max .panel-slot { order: 1; box-shadow: none; }
+.app.ws-max .main { order: 2; margin: 6px 6px 6px 6px; border-radius: var(--r-lg); }
+.app.ws-max .panel { --panel-width: 100%; width: 100%; margin: 6px 0 6px 0; border-left: 1px solid var(--border); border-radius: var(--r-lg); }
+.app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
+.app.ws-max .main > .resizer { left: 0; }
+.panel-max.active { color: var(--accent); }

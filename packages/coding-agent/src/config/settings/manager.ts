@@ -1254,6 +1254,27 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getOfficeServerUrl(): string | undefined {
+		const value = this.globalSettings.officeServerUrl?.trim();
+		return value ? value.replace(/\/+$/, "") : undefined;
+	}
+
+	setOfficeServerUrl(url: string | undefined): void {
+		this.globalSettings.officeServerUrl = url?.trim() || undefined;
+		this.markModified("officeServerUrl");
+		this.save();
+	}
+
+	getOfficeJwtSecret(): string | undefined {
+		return this.globalSettings.officeJwtSecret || undefined;
+	}
+
+	setOfficeJwtSecret(secret: string | undefined): void {
+		this.globalSettings.officeJwtSecret = secret || undefined;
+		this.markModified("officeJwtSecret");
+		this.save();
+	}
+
 	getShellPath(): string | undefined {
 		const shellPath = this.settings.shellPath;
 		return shellPath ? normalizePath(shellPath) : shellPath;

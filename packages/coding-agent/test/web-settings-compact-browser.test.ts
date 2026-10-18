@@ -171,7 +171,7 @@ const runChecks=async()=>{
   if(sel.scrollWidth>sel.clientWidth+1)throw Error('transport select clipped: '+sel.textContent.trim());}
  setView({settingsSection:'shortcuts'});await wait(150);
 	 const si=[...document.querySelectorAll('[data-shortcut-editor]')];
-	 if(si.length!==6)throw Error('shortcut editors not six: '+si.length);
+	 if(si.length!==7)throw Error('shortcut editors not seven: '+si.length);
 	 widthsEqual(si,'shortcut editors');rightsEqual(si,'shortcut editors');
 	 const sw=rect(si[0]).width;if(sw<110||sw>160)throw Error('shortcut editor width outside 110-160: '+Math.round(sw));
 	 const overflowPages=['appearance','agent','search','network','shortcuts','providers'];

@@ -116,10 +116,18 @@ export function exportTooLargeMessage(status, body) {
 	});
 }
 
+/** The view patch that ends collaboration mode and gives the sidebar back its state from before (empty when not in it). */
+function leaveWorkspaceMax() {
+	if (!state.view.wsMax) return {};
+	const sidebar = state.view.wsMaxSidebar;
+	return { wsMax: false, wsMaxSidebar: null, ...(sidebar === null ? {} : { sidebarOpen: sidebar }) };
+}
+
 export const actions = {
 	/**
-	 * The right-hand panel opens, closes and switches only from its own buttons in the header (and their keyboard
-	 * shortcuts): nothing in the conversation, no event of a running task and no command opens it.
+	 * The right-hand panel opens, closes and switches from its own buttons in the header (and their keyboard
+	 * shortcuts), and from the user clicking a file link or an attachment in the conversation, which opens that file
+	 * as a tab. No event of a running task and no command opens it.
 	 *
 	 * The four panel tabs are singletons inside the workspace: pressing their button focuses the open tab, adds it when
 	 * it is not open, and closes the panel when it is already the active one. Closing the panel keeps the tabs.
@@ -136,7 +144,23 @@ export const actions = {
 	/** Hide the panel and every native browser view it was showing; the tabs stay open and come back as they were. */
 	closePanel() {
 		hideBrowserViews();
-		setView({ panelOpen: false });
+		setView({ panelOpen: false, ...leaveWorkspaceMax() });
+	},
+
+	/**
+	 * Collaboration mode: the workspace takes the room of the sidebar and the conversation, and the conversation becomes
+	 * a column on its right, so the user can keep talking to the Agent while watching the file or page it works on. The
+	 * sidebar is hidden for the duration (it can still be shown) and comes back as it was on exit.
+	 */
+	toggleWorkspaceMax(force) {
+		const next = typeof force === "boolean" ? force : !state.view.wsMax;
+		if (next === state.view.wsMax) return;
+		if (next) {
+			if (!state.view.wsActive && !state.view.wsTabs.length) return;
+			setView({ wsMax: true, panelOpen: true, wsMaxSidebar: state.view.sidebarOpen, sidebarOpen: false });
+			return;
+		}
+		setView(leaveWorkspaceMax());
 	},
 
 	/** Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. */
@@ -179,7 +203,7 @@ export const actions = {
 			patch.wsActive = next ? next.id : null;
 			if (next && PANEL_TAB_TYPES.includes(next.type)) patch.panelTab = next.type;
 		}
-		if (rest.length === 0) patch.panelOpen = false;
+		if (rest.length === 0) Object.assign(patch, { panelOpen: false }, leaveWorkspaceMax());
 		setView(patch);
 	},
 

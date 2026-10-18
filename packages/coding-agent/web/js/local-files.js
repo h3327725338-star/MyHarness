@@ -1,4 +1,6 @@
-import { post, toast, activeSlotId, subscribe } from "./store.js";
+import { post, toast, activeSlotId, subscribe, state } from "./store.js";
+import { actions } from "./actions.js";
+import { normPath } from "./util.js";
 import { h, render, Icon } from "./ui.js";
 import { t } from "./i18n.js";
 import { isLocalAutolinkBlocked, pathCandidates } from "./local-file-links.js";
@@ -26,6 +28,33 @@ function targetFor(candidatePath, resolved) {
 
 export const localFileAction = (path, action, handler, slot) => post("/api/files/local", { path, action, handler }, slot);
 export const openLocalFile = (path, slot) => localFileAction(path, "open", undefined, slot).catch((error) => toast(error.message, "error"));
+
+/** Workspace tab path of an absolute local file: relative inside the current workspace (same tab as the Files panel), absolute elsewhere. */
+export function workspaceFilePath(absolute, cwd) {
+	const file = normPath(absolute);
+	const root = normPath(cwd || "").replace(/\/+$/, "");
+	if (root && file.toLowerCase().startsWith(`${root.toLowerCase()}/`)) return file.slice(root.length + 1);
+	return file;
+}
+
+/** Open (or focus) one local file as a tab of the right-hand workspace. */
+export const openWorkspaceFile = (absolute) => actions.openWorkspace({ type: "file", path: workspaceFilePath(absolute, state.snap?.cwd) });
+
+/**
+ * Left click on a file link in the chat: the file opens (or is focused) as a tab of the right-hand workspace, which
+ * picks the viewer or editor for its type. A folder has no viewer there and still opens in the system file manager;
+ * the other ways to open a file stay in the right-click menu.
+ */
+export async function openLocalFileInWorkspace(path, slot) {
+	try {
+		const target = await localFileAction(path, "resolve", undefined, slot);
+		if (activeSlotId() !== slot) return;
+		if (target.directory) await localFileAction(target.path, "open", undefined, slot);
+		else openWorkspaceFile(target.path);
+	} catch (error) {
+		toast(error.message, "error");
+	}
+}
 let closeMenu;
 // A dismissed menu stays mounted for --t-close (composer.css) so it fades out instead of vanishing; opening a new menu drops every fading one at once.
 const MENU_EXIT_MS = 110;

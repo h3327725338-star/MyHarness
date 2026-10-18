@@ -9,7 +9,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
@@ -74,6 +75,10 @@ export async function startWebBootstrap(options: { port?: number }): Promise<Web
 		directory: join(getExportTemplateDir(), "vendor"),
 		files: ["marked.min.js", "highlight.min.js"],
 	});
+	// The workspace's PDF viewer: pdf.js (a runtime dependency) with its viewer layer, fonts, character maps and decoders.
+	const pdfjs = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
+	for (const folder of ["build", "web", "cmaps", "standard_fonts", "wasm", "iccs"])
+		server.mount({ prefix: `/vendor-pdf/${folder}/`, directory: join(pdfjs, folder) });
 	server.setIndexFile(join(getWebUiDir(), "index.html"));
 	const copyIdentity = worktreeServiceIdentity();
 	const serviceIdentity = () =>

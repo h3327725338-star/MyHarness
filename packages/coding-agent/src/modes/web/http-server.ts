@@ -286,7 +286,12 @@ export class WebHttpServer {
 			throw new HttpError(403, "Forbidden host");
 		}
 		const fetchSite = req.headers["sec-fetch-site"];
-		if (typeof fetchSite === "string" && fetchSite !== "same-origin" && fetchSite !== "none") {
+		// A sandboxed HTML preview has an opaque origin, so the files it loads from its own folder arrive as cross-site.
+		// That route serves only the previewed folder, behind an unguessable token, and never to fetch/XHR.
+		// Judge the normalized path (what routing sees), so `site/x/%2e%2e/…` cannot reach another route this way.
+		const previewFile =
+			req.method === "GET" && new URL(req.url ?? "/", "http://host").pathname.startsWith("/api/files/site/");
+		if (typeof fetchSite === "string" && fetchSite !== "same-origin" && fetchSite !== "none" && !previewFile) {
 			throw new HttpError(403, "Cross-site request rejected");
 		}
 		if (req.method !== "GET" && req.method !== "HEAD") {
@@ -294,7 +299,12 @@ export class WebHttpServer {
 			if (typeof origin === "string" && origin !== `http://${host}`) {
 				throw new HttpError(403, "Cross-origin request rejected");
 			}
-			if (req.headers["x-myharness-web"] !== "1") {
+			// An Office document server reports saves here; it cannot send the Web UI header. The route checks its own
+			// unguessable session token (and the server's JWT when one is set up).
+			const officeCallback =
+				req.method === "POST" &&
+				new URL(req.url ?? "/", "http://host").pathname.startsWith("/api/office/callback/");
+			if (req.headers["x-myharness-web"] !== "1" && !officeCallback) {
 				throw new HttpError(403, "Missing Web UI request header");
 			}
 		}

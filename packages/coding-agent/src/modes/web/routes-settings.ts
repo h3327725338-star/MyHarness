@@ -65,6 +65,8 @@ interface SettingDef {
 	options?: Array<{ value: string; label: string }>;
 	min?: number;
 	max?: number;
+	/** A text value the Web UI masks while it is typed and shown (a password field). */
+	secret?: boolean;
 	/**
 	 * Unit a number is shown and typed in (`tokens`: "K", with `unitSize` tokens each). The value itself always stays the
 	 * exact stored number; the unit only changes how the Web UI shows and takes it.
@@ -671,6 +673,25 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				max: 3600,
 				unit: "seconds",
 			},
+			// Office documents
+			{
+				id: "officeServerUrl",
+				section: "Tools",
+				label: "Office editing server",
+				description:
+					"Address of an ONLYOFFICE Docs server (for example http://127.0.0.1:8701). With it, Word, Excel and PowerPoint files open for editing in the workspace; without it they open as a read-only preview when Microsoft Office or LibreOffice is installed.",
+				type: "text",
+				value: s.getOfficeServerUrl() ?? "",
+			},
+			{
+				id: "officeJwtSecret",
+				section: "Tools",
+				label: "Office server JWT secret",
+				description: "The JWT secret of that server. Leave empty only when its JWT check is turned off.",
+				type: "text",
+				secret: true,
+				value: s.getOfficeJwtSecret() ?? "",
+			},
 			// Shell
 			{
 				id: "shellPath",
@@ -1108,6 +1129,16 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				return;
 			case "worktreeShutdownGraceSeconds":
 				s.setWorktreeShutdownGraceSeconds(Math.floor(numberValue(value, id, 0, 3600)));
+				return;
+			case "officeServerUrl": {
+				const url = typeof value === "string" ? value.trim() : "";
+				if (url && !/^https?:\/\/[^\s/]+(?::\d+)?(?:\/[^\s]*)?$/i.test(url))
+					throw new HttpError(400, "Enter an http:// or https:// address.");
+				s.setOfficeServerUrl(url || undefined);
+				return;
+			}
+			case "officeJwtSecret":
+				s.setOfficeJwtSecret(typeof value === "string" && value.trim() ? value.trim() : undefined);
 				return;
 			case "shellPath":
 				s.setShellPath(typeof value === "string" && value.trim() ? value.trim() : undefined);

@@ -45,7 +45,14 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 		setDragging(null);
 		if (from && target && from !== target) onMove(from, target);
 	};
-	return html`<div class="ws-tabs" role="tablist" ref=${strip}>
+	// The strip has no visible scrollbar: a vertical wheel scrolls it sideways.
+	const onWheel = (event) => {
+		const element = strip.current;
+		if (!element || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || element.scrollWidth <= element.clientWidth) return;
+		event.preventDefault();
+		element.scrollLeft += event.deltaY;
+	};
+	return html`<div class="ws-tabs" role="tablist" ref=${strip} onWheel=${onWheel}>
 		${tabs.map(
 			(tab) => html`<div key=${tab.id} role="tab" tabindex="0" draggable="true"
 			class=${`ws-tab ${activeId === tab.id ? "active" : ""}`} aria-selected=${activeId === tab.id}

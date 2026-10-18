@@ -27,6 +27,7 @@ export const NAV = [
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
+	{ id: "files", label: N_("Files & Office"), icon: "file" },
 	{ id: "network", label: N_("Network & shell"), icon: "globe" },
 	{ id: "safety", label: N_("Safety & privacy"), icon: "shield" },
 	{ id: "shortcuts", label: N_("Keyboard shortcuts"), icon: "gear" },
@@ -37,6 +38,7 @@ export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent"
 export function sectionOf(item) {
 	if (item.id.startsWith("codeIntelligence.")) return "code";
 	if (item.id.startsWith("webSearch.")) return "search";
+	if (item.id.startsWith("office")) return "files";
 	if (["steeringMode", "followUpMode"].includes(item.id)) return "conversation";
 	return SECTION_OF[item.section];
 }
@@ -48,6 +50,7 @@ const PAGE_NOTE = {
 	agent: N_("How the agent runs, compacts its context and retries."),
 	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
+	files: N_("How the workspace opens and edits Office documents."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and how it notifies you."),
 	terminal: N_("These settings only change the terminal UI. They are shared with /settings in the terminal."),
@@ -269,7 +272,7 @@ function SettingControl({ item, models, onApply }) {
 			return html`<${TokensField} item=${item} onApply=${onApply} />`;
 		case "text":
 			if (item.id === "enabledModels") return html`<${EnabledModelsField} item=${item} models=${models} onApply=${onApply} />`;
-			return html`<input class="field wide" aria-label=${serverText(item.label)} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => draft !== item.value && onApply(item.id, draft)} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
+			return html`<input class="field wide" type=${item.secret ? "password" : "text"} autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${() => draft !== item.value && onApply(item.id, draft)} onKeyDown=${(e) => e.key === "Enter" && e.target.blur()} />`;
 		case "multi":
 			return html`<${SearchableMultiSelect}
 				ariaLabel=${serverText(item.label)}

@@ -49,10 +49,22 @@ import {
 	setCachedWorktreeChanges,
 	WORKTREE_CACHE_TTL_MS,
 } from "./changes-stats.ts";
+import {
+	lineIndex,
+	readBytes,
+	readLines,
+	readSegment,
+	searchBytes,
+	searchLines,
+	writeBytes,
+	writeSegment,
+} from "./file-pages.ts";
 import { folderDialogOpen, nativeFolderDialogAvailable, pickFolderWithSystemDialog } from "./folder-dialog.ts";
 import type { WebHost } from "./host.ts";
+import { registerHtmlPreview } from "./html-preview.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { resolveLocalFile, runLocalFileAction } from "./local-files.ts";
+import { registerOfficePreview, registerOfficeRoutes } from "./office.ts";
 import { collectSessionChanges } from "./session-changes.ts";
 import { RUN_CHANGES_ENTRY, splitAttachmentText } from "./wire.ts";
 
@@ -183,6 +195,36 @@ function resolveInside(root: string, relative: string): string {
 			throw new HttpError(403, "Path resolves outside the workspace");
 	}
 	return absolute;
+}
+
+/**
+ * Target of a file tab in the right-hand workspace. A workspace-relative path stays confined to the workspace
+ * (resolveInside); an absolute local path, which is what a file link in the chat or a chat attachment opens, may name a
+ * file anywhere on this machine, but never a network or device path.
+ */
+function resolveFileTab(root: string, input: string): string {
+	if (
+		!path.isAbsolute(input) ||
+		/^(?:\\\\|\/\/)/.test(input) ||
+		(process.platform === "win32" && !/^[a-z]:[\\/]/i.test(input))
+	)
+		return resolveInside(root, input);
+	const absolute = path.resolve(input);
+	const rel = path.relative(root, absolute);
+	if (!rel.startsWith("..") && !path.isAbsolute(rel)) return resolveInside(root, rel);
+	if (
+		existsSync(absolute) &&
+		/^(?:\\\\|\/\/)/.test(realpathSync(absolute)) &&
+		!/^\\\\\?\\[a-z]:\\/i.test(realpathSync(absolute))
+	)
+		throw new HttpError(400, "Network and device paths are not supported");
+	return absolute;
+}
+
+/** The path a file tab shows and sends back: workspace-relative inside the workspace, absolute outside it. */
+function fileTabPath(root: string, absolute: string): string {
+	const rel = path.relative(root, absolute);
+	return rel.startsWith("..") || path.isAbsolute(rel) ? absolute : rel.split(path.sep).join("/");
 }
 
 function loadIgnore(root: string) {
@@ -762,12 +804,12 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const cwd = root();
 		const rel = url.searchParams.get("path");
 		if (!rel) throw new HttpError(400, "Missing path");
-		const absolute = resolveInside(cwd, rel);
+		const absolute = resolveFileTab(cwd, rel);
 		if (!existsSync(absolute)) throw new HttpError(404, "File not found");
 		const stat = statSync(absolute);
 		if (!stat.isFile()) throw new HttpError(400, "Not a file");
 		const ext = path.extname(absolute).toLowerCase();
-		const base = { path: relPosix(cwd, absolute), absolutePath: absolute, size: stat.size, mtime: stat.mtimeMs };
+		const base = { path: fileTabPath(cwd, absolute), absolutePath: absolute, size: stat.size, mtime: stat.mtimeMs };
 		const imageType = IMAGE_TYPES[ext];
 		if (imageType && ext !== ".svg") {
 			if (stat.size > MAX_IMAGE_BYTES) return { ...base, kind: "large" as const };
@@ -784,7 +826,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				...base,
 				kind: media.kind,
 				mimeType: media.mime,
-				rawUrl: `/api/files/raw?path=${encodeURIComponent(relPosix(cwd, absolute))}`,
+				rawUrl: `/api/files/raw?path=${encodeURIComponent(fileTabPath(cwd, absolute))}`,
 			};
 		}
 		if (OFFICE_EXTENSIONS.has(ext)) {
@@ -818,7 +860,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const cwd = root();
 		const rel = url.searchParams.get("path");
 		if (!rel) throw new HttpError(400, "Missing path");
-		const absolute = resolveInside(cwd, rel);
+		const absolute = resolveFileTab(cwd, rel);
 		if (!existsSync(absolute)) throw new HttpError(404, "File not found");
 		const stat = statSync(absolute);
 		if (!stat.isFile()) throw new HttpError(400, "Not a file");
@@ -875,7 +917,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		)
 			throw new HttpError(400, "Invalid text save request");
 		const cwd = root();
-		const absolute = resolveInside(cwd, payload.path);
+		const absolute = resolveFileTab(cwd, payload.path);
 		if (!existsSync(absolute) || !statSync(absolute).isFile()) throw new HttpError(404, "File not found");
 		if (
 			MEDIA_TYPES[path.extname(absolute).toLowerCase()] ||
@@ -897,7 +939,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			throw new HttpError(403, `Cannot write the file: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		const written = statSync(absolute);
-		return { path: relPosix(cwd, absolute), size: written.size, mtime: written.mtimeMs, content: payload.content };
+		return { path: fileTabPath(cwd, absolute), size: written.size, mtime: written.mtimeMs, content: payload.content };
 	});
 
 	// Only Markdown gets an editor; compare the complete source before writing so Agent/external edits are not lost.
@@ -905,7 +947,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const payload = (body ?? {}) as { path?: unknown; original?: unknown; blocks?: unknown };
 		if (typeof payload.path !== "string" || typeof payload.original !== "string" || !Array.isArray(payload.blocks))
 			throw new HttpError(400, "Invalid Markdown save request");
-		const absolute = resolveInside(root(), payload.path);
+		const absolute = resolveFileTab(root(), payload.path);
 		if (!/\.(md|markdown)$/iu.test(absolute)) throw new HttpError(400, "Only Markdown files can be edited here");
 		if (!existsSync(absolute) || !statSync(absolute).isFile()) throw new HttpError(404, "File not found");
 		const bytes = readFileSync(absolute);
@@ -932,6 +974,92 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		writeFileSync(absolute, content, "utf8");
 		return { content, blocks };
 	});
+
+	// Paged access for the hex view/editor and the large-text view/editor (file-pages.ts): no whole-file reads, and every
+	// write is checked against the bytes the user saw.
+	const pageTarget = (value: unknown) => {
+		if (typeof value !== "string" || !value) throw new HttpError(400, "Missing path");
+		return resolveFileTab(root(), value);
+	};
+	const intParam = (url: URL, name: string, fallback = 0) => {
+		const value = Number(url.searchParams.get(name) ?? fallback);
+		return Number.isFinite(value) ? Math.floor(value) : fallback;
+	};
+	server.route("GET", "/api/files/bytes", ({ url }) =>
+		readBytes(pageTarget(url.searchParams.get("path")), intParam(url, "offset"), intParam(url, "length", 65536)),
+	);
+	server.route("POST", "/api/files/bytes", ({ body }) => {
+		const payload = (body ?? {}) as { path?: unknown; size?: unknown; edits?: unknown };
+		if (!Number.isSafeInteger(payload.size)) throw new HttpError(400, "Expected the file size");
+		return writeBytes(pageTarget(payload.path), payload.size as number, payload.edits as never);
+	});
+	server.route("GET", "/api/files/bytes-search", ({ url }) => {
+		const hex = url.searchParams.get("hex");
+		const text = url.searchParams.get("text");
+		const pattern =
+			hex !== null ? Buffer.from(hex.replace(/[^0-9a-f]/gi, ""), "hex") : Buffer.from(text ?? "", "utf8");
+		return searchBytes(
+			pageTarget(url.searchParams.get("path")),
+			pattern,
+			intParam(url, "from"),
+			url.searchParams.get("dir") === "back",
+		);
+	});
+	server.route("GET", "/api/files/text-index", async ({ url }) => {
+		const index = await lineIndex(pageTarget(url.searchParams.get("path")));
+		return { size: index.size, mtime: index.mtime, lines: index.lines };
+	});
+	server.route("GET", "/api/files/text-lines", ({ url }) =>
+		readLines(pageTarget(url.searchParams.get("path")), intParam(url, "start"), intParam(url, "count", 500)),
+	);
+	server.route("GET", "/api/files/text-search", ({ url }) =>
+		searchLines(
+			pageTarget(url.searchParams.get("path")),
+			url.searchParams.get("q") ?? "",
+			intParam(url, "from"),
+			intParam(url, "limit", 200),
+		),
+	);
+	server.route("GET", "/api/files/text-segment", ({ url }) =>
+		readSegment(pageTarget(url.searchParams.get("path")), intParam(url, "start"), intParam(url, "count", 1000)),
+	);
+	server.route("POST", "/api/files/text-segment", ({ body }) => {
+		const payload = (body ?? {}) as Record<string, unknown>;
+		if (
+			!Number.isSafeInteger(payload.size) ||
+			typeof payload.original !== "string" ||
+			typeof payload.content !== "string"
+		)
+			throw new HttpError(400, "Invalid text segment save request");
+		const absolute = pageTarget(payload.path);
+		const ext = path.extname(absolute).toLowerCase();
+		if (MEDIA_TYPES[ext] || OFFICE_EXTENSIONS.has(ext))
+			throw new HttpError(400, "Binary files cannot be edited as text");
+		return writeSegment(
+			absolute,
+			payload.size as number,
+			Number(payload.startByte),
+			Number(payload.endByte),
+			payload.original,
+			payload.content,
+		);
+	});
+
+	const officeTarget = (input: unknown) => {
+		const absolute = pageTarget(input);
+		if (!OFFICE_EXTENSIONS.has(path.extname(absolute).toLowerCase()))
+			throw new HttpError(400, "Not an Office document");
+		return absolute;
+	};
+	registerOfficeRoutes(server, {
+		settings: () => ({
+			url: host.session.settingsManager.getOfficeServerUrl(),
+			secret: host.session.settingsManager.getOfficeJwtSecret(),
+		}),
+		resolve: officeTarget,
+	});
+	registerOfficePreview(server, officeTarget);
+	registerHtmlPreview(server, pageTarget);
 
 	server.route("GET", "/api/files/search", ({ url }) => {
 		const cwd = root();

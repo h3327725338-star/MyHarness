@@ -5,7 +5,7 @@ import { Component } from "/vendor/preact.js";
 import { t } from "./i18n.js";
 import { looseStrong } from "./util.js";
 import { localLinkPath } from "./local-file-links.js";
-import { linkifyLocalFiles, openLocalFile, showLocalFileMenu } from "./local-files.js";
+import { linkifyLocalFiles, openLocalFileInWorkspace, showLocalFileMenu } from "./local-files.js";
 import { exportReadOnly } from "./export-mode.js";
 import { activeSlotId } from "./store.js";
 
@@ -263,7 +263,8 @@ export class Markdown extends Component {
 	}
 	onClick = (event) => {
 		const link = event.target.closest?.("[data-local-path]");
-		if (link) { event.preventDefault(); void openLocalFile(link.dataset.localPath, this.slot); return; }
+		// Left click opens the file in the right-hand workspace; the right-click menu keeps the other ways to open it.
+		if (link) { event.preventDefault(); void openLocalFileInWorkspace(link.dataset.localPath, this.slot); return; }
 		const copy = event.target.closest?.(".code-copy");
 		if (copy) {
 			const code = copy.closest(".code-block")?.querySelector("code");

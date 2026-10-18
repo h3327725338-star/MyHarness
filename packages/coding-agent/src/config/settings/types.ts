@@ -288,6 +288,8 @@ export interface Settings {
 	hideThinkingBlock?: boolean; // default: true; collapse transcript details until expanded with Ctrl+O
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
+	officeServerUrl?: string; // Global only: ONLYOFFICE Docs server the Web UI edits Office files with (e.g. http://127.0.0.1:8701)
+	officeJwtSecret?: string; // Global only: that server's JWT secret; empty when its JWT check is off
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only

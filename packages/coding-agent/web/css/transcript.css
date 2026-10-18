@@ -337,3 +337,8 @@ button.status-pill { cursor: pointer; }
 .attach-thumb { max-width: 220px; max-height: 160px; border-radius: var(--r-md); border: 1px solid var(--border); object-fit: cover; cursor: zoom-in; }
 .attach-preview, .attach-full { flex-basis: 100%; margin: 0; padding: 6px 8px; background: var(--code-bg); border-radius: var(--r-sm); font-size: var(--fs-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; overscroll-behavior: contain; }
 .attach-full { max-height: 320px; }
+/* A Markdown attachment previews rendered, not as source; the card name opens the file in the right-hand workspace. */
+.attach-preview.attach-md { white-space: normal; font-family: inherit; font-size: var(--fs-sm); background: var(--bg-inset); border: 1px solid var(--border); }
+.attach-main.is-openable { cursor: pointer; border-radius: var(--r-sm); }
+.attach-main.is-openable:hover .attach-name { text-decoration: underline; }
+.attach-main.is-openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

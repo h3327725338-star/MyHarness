@@ -67,7 +67,7 @@ function createHarness() {
 		looseStrong: () => null,
 		localLinkPath: () => null,
 		linkifyLocalFiles: async () => {},
-		openLocalFile: async () => {},
+		openLocalFileInWorkspace: async () => {},
 		showLocalFileMenu: async () => {},
 		exportReadOnly: () => false,
 		activeSlotId: () => null,

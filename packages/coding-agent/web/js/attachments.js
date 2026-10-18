@@ -6,8 +6,20 @@ import { html, useEffect, useState, Icon, Spinner, Collapse } from "./ui.js";
 import { activeSlotId, api } from "./store.js";
 import { basename, clip, fmtBytes } from "./util.js";
 import { serverText, t } from "./i18n.js";
-import { getFetch } from "./export-mode.js";
+import { exportReadOnly, getFetch } from "./export-mode.js";
 import { openImageLightbox } from "./lightbox.js";
+import { Markdown } from "./markdown.js";
+import { openWorkspaceFile } from "./local-files.js";
+
+const MARKDOWN_NAME = /\.(md|markdown)$/i;
+const PREVIEW_CHARS = 2000;
+
+/** The first part of a Markdown file for the card preview, cut at a line end so a block is not split mid-line. */
+function markdownHead(content) {
+	if (content.length <= PREVIEW_CHARS) return content;
+	const cut = content.lastIndexOf("\n", PREVIEW_CHARS);
+	return content.slice(0, cut > PREVIEW_CHARS / 2 ? cut : PREVIEW_CHARS);
+}
 
 export const ATTACH_HEADER = "Attached files (use read to inspect):";
 
@@ -212,7 +224,18 @@ export function AttachmentCard({ path, name, compact = false }) {
 			.catch((error) => setPreview({ error }));
 	};
 
+	// The whole file opens as a tab of the right-hand workspace, which has the viewer (and, where the type has one, the
+	// editor) for it. A read-only export copy has no workspace and keeps the inline full text.
+	const openInWorkspace = () => {
+		if (info?.path) openWorkspaceFile(info.path);
+	};
+	const workspace = !exportReadOnly();
+
 	const toggleFull = () => {
+		if (workspace) {
+			openInWorkspace();
+			return;
+		}
 		if (fullOpen) {
 			setFullOpen(false);
 			return;
@@ -248,8 +271,13 @@ export function AttachmentCard({ path, name, compact = false }) {
 			const src = `data:${data.mimeType};base64,${data.data}`;
 			return html`<img class="attach-thumb" src=${src} alt=${display} role="button" tabindex="0" aria-label=${t("Preview image {name}", { name: display })} onClick=${() => openZoom(src)} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), openZoom(src))} />`;
 		}
+		if (data.kind === "text" && typeof data.content === "string" && MARKDOWN_NAME.test(display)) {
+			const head = markdownHead(data.content);
+			const cut = head.length < data.content.length || data.truncated;
+			return html`<div class="attach-preview attach-md"><${Markdown} text=${head} /></div>${cut ? html`<div class="attach-note dim">${t("Preview is truncated.")}</div>` : null}`;
+		}
 		if (data.kind === "text" && typeof data.content === "string") {
-			const head = data.content.length > 2000 ? `${data.content.slice(0, 2000)}…` : data.content;
+			const head = data.content.length > PREVIEW_CHARS ? `${data.content.slice(0, PREVIEW_CHARS)}…` : data.content;
 			return html`<pre class="attach-preview">${head}</pre>${data.truncated ? html`<div class="attach-note dim">${t("Preview is truncated.")}</div>` : null}`;
 		}
 		if (data.kind === "binary") return html`<div class="attach-note dim">${t("Binary file — no text preview.")}</div>`;
@@ -275,7 +303,9 @@ export function AttachmentCard({ path, name, compact = false }) {
 
 	return html`<div class=${`attach-card${missing ? " is-missing" : ""}${compact ? " is-compact" : ""}`} title=${path}>
 		<span class="attach-ico"><${Icon} name=${missing ? "alertTriangle" : "file"} size=${15} class=${missing ? "c-warn" : "c-dim"} /></span>
-		<span class="attach-main">
+		<span class=${`attach-main${workspace && info ? " is-openable" : ""}`} role=${workspace && info ? "button" : undefined} tabindex=${workspace && info ? 0 : undefined}
+			onClick=${workspace && info ? openInWorkspace : undefined}
+			onKeyDown=${workspace && info ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), openInWorkspace()) : undefined}>
 			<span class="attach-name truncate">${display}</span>
 			<span class="attach-sub dim">${missing ? t("Deleted") : info ? fmtBytes(info.size) : meta?.error ? serverText(meta.error.message, t("Unavailable")) : t("Loading…")}</span>
 		</span>
@@ -284,7 +314,7 @@ export function AttachmentCard({ path, name, compact = false }) {
 			: info
 				? html`<span class="attach-btns">
 					<button class="icon-btn sm" title=${t("Preview")} aria-label=${t("Preview {name}", { name: display })} aria-expanded=${previewOpen} onClick=${togglePreview}><${Icon} name="eye" size=${14} /></button>
-					<button class="icon-btn sm" title=${t("Read full content")} aria-label=${t("Read full content")} aria-expanded=${fullOpen} onClick=${toggleFull}><${Icon} name="book" size=${14} /></button>
+					<button class="icon-btn sm" title=${t("Read full content")} aria-label=${t("Read full content")} aria-expanded=${workspace ? undefined : fullOpen} onClick=${toggleFull}><${Icon} name="book" size=${14} /></button>
 					<button class="icon-btn sm" title=${t("Download")} aria-label=${t("Download {name}", { name: display })} disabled=${downloading} onClick=${download}>${downloading ? html`<${Spinner} />` : html`<${Icon} name="download" size=${14} />`}</button>
 				</span>`
 				: meta?.error

@@ -204,3 +204,107 @@
 .cu-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: cu-pulse 1.2s ease-in-out infinite; flex: none; }
 @keyframes cu-pulse { 50% { opacity: 0.35; } }
 .cu-actions { display: flex; gap: 8px; margin-top: 2px; }
+
+/* File tabs: one bar per tab. The name stays readable (the folder after it, dimmer, gives way first), the viewer's own
+   tools follow, then edit/save and one "more" menu. Tools that matter less fold away as the bar narrows. */
+.panel-pane:not([hidden]):has(> .file-viewer) { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.file-bar { container-type: inline-size; display: flex; align-items: center; gap: 4px; height: 38px; min-height: 38px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); flex: none; min-width: 0; }
+.file-name { display: flex; align-items: baseline; gap: 8px; flex: 1 1 auto; min-width: 48px; overflow: hidden; }
+.file-name strong { flex: 0 1 auto; max-width: 100%; min-width: 0; font-weight: 600; font-size: var(--fs-md); color: var(--text); }
+.file-dir { flex: 0 100000 auto; min-width: 0; color: var(--text-4); font-size: var(--fs-xs); direction: rtl; text-align: left; unicode-bidi: plaintext; }
+.file-tools { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.file-tools-sep { width: 1px; height: 16px; margin: 0 4px; background: var(--border); flex: none; }
+.file-zoom, .pdf-zoom { min-width: 58px; justify-content: center; gap: 2px; padding: 0 6px; font-variant-numeric: tabular-nums; border-color: transparent; background: transparent; }
+.file-find { display: flex; align-items: center; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); flex: none; }
+.file-find .field { height: 26px; }
+.file-fallback { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; flex: 1; min-height: 200px; padding: 24px; text-align: center; color: var(--text-2); }
+.file-fallback p { margin: 0; max-width: 46ch; }
+@container (max-width: 660px) { .file-dir { display: none; } }
+@container (max-width: 520px) { .pdf-rotate, .pdf-fit { display: none; } }
+@container (max-width: 400px) { .pdf-tools .file-tools-sep, .pdf-page .dim { display: none; } }
+
+/* PDF: the rail (thumbnails or outline) on the left, as wide as the user drags it, and the pages filling the rest. */
+.pdf-viewer { overflow: hidden; }
+.pdf-page { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.pdf-page-input { width: 3.2em; height: 24px; padding: 0 4px; text-align: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--text); font: inherit; }
+.pdf-page-input:focus { outline: none; border-color: var(--border-focus); }
+.pdf-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.pdf-rail { position: relative; display: flex; flex-direction: column; flex: none; min-width: 0; border-right: 1px solid var(--border); background: var(--bg-panel); }
+.pdf-rail > .resizer { left: auto; right: -4px; }
+.pdf-rail-tabs { display: flex; gap: 2px; padding: 6px 6px 0; flex: none; }
+.pdf-rail-tabs button { flex: 1; height: 24px; border-radius: var(--r-sm); color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; }
+.pdf-rail-tabs button.on { background: var(--surface-active); color: var(--text); }
+.pdf-rail-scroll { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 8px 10px 16px; display: flex; flex-direction: column; gap: 10px; }
+.pdf-thumb { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; background: none; }
+.pdf-thumb-page { display: block; width: 100%; border-radius: 3px; overflow: hidden; outline: 2px solid transparent; outline-offset: 2px; box-shadow: 0 0 0 1px var(--border); background: #fff; transition: outline-color var(--t-fast); }
+.pdf-thumb-page img { display: block; width: 100%; height: auto; }
+.pdf-thumb-blank { display: block; width: 100%; aspect-ratio: 0.77; background: var(--bg-inset); }
+.pdf-thumb:hover .pdf-thumb-page { outline-color: var(--border-strong); }
+.pdf-thumb.current .pdf-thumb-page { outline-color: var(--accent); }
+.pdf-thumb-no { font-size: var(--fs-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.pdf-thumb.current .pdf-thumb-no { color: var(--accent); font-weight: 600; }
+.pdf-outline-list { list-style: none; margin: 0; padding: 0; }
+.pdf-outline-item { display: block; width: 100%; padding: 4px 8px; border-radius: var(--r-sm); text-align: left; font-size: var(--fs-sm); color: var(--text-2); }
+.pdf-outline-item:hover { background: var(--surface-hover); color: var(--text); }
+.pdf-stage-wrap { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; background: var(--bg-inset); }
+.pdf-stage { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; outline: none; }
+.pdf-stage .pdfViewer { padding: 12px 0 24px; }
+.pdf-stage .pdfViewer .page { margin: 0 auto 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.06); border: 0; }
+.pdf-loading { position: absolute; inset: 0; display: grid; place-content: center; grid-auto-flow: column; gap: 8px; color: var(--text-3); pointer-events: none; }
+
+/* Hex view: offset | bytes | text, one fixed-height row per 16 (or, when narrow, 8) bytes, drawn only where visible. */
+.hex-goto { width: 92px; height: 24px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+.hex-goto:focus { outline: none; border-color: var(--border-focus); }
+.hex-dirty { font-size: var(--fs-sm); color: var(--warn); white-space: nowrap; margin-right: 4px; }
+.hex-find-mode { width: auto; flex: none; }
+.hex-head, .hex-row { display: grid; grid-template-columns: calc(var(--hex-digits) * 1ch + 20px) auto minmax(0, 1fr); align-items: center; column-gap: 14px; padding: 0 12px; font-size: var(--fs-code); }
+.hex-head { height: 24px; flex: none; color: var(--text-4); border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+.hex-head .hex-b.col { color: var(--accent); }
+.hex-scroll { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: auto; overscroll-behavior: contain; background: var(--code-bg); outline: none; }
+.hex-spacer, .lt-spacer { position: relative; min-width: 100%; }
+.hex-rows, .lt-rows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+.hex-row { height: 20px; line-height: 20px; }
+.hex-off { color: var(--text-4); font-variant-numeric: tabular-nums; user-select: none; }
+.hex-bytes { display: grid; grid-template-columns: repeat(var(--hex-cols), 2.6ch); }
+.hex-bytes > .hex-b:nth-child(8n):not(:last-child) { margin-right: 1ch; }
+.hex-b, .hex-c { cursor: text; border-radius: 2px; text-align: center; }
+.hex-ascii { display: flex; white-space: pre; color: var(--text-2); min-width: 0; }
+.hex-c { width: 1ch; }
+.hex-b.changed, .hex-c.changed { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.hex-scroll:focus .hex-b.cursor, .hex-scroll:focus .hex-c.cursor { background: var(--accent); color: var(--on-accent); }
+.hex-b.cursor, .hex-c.cursor { outline: 1px solid var(--accent); outline-offset: -1px; }
+.hex-scroll:focus .hex-b.cursor.low { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent) 50%, var(--accent) 50%); }
+.file-status { display: flex; align-items: center; gap: 14px; height: 24px; flex: none; padding: 0 12px; border-top: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+
+/* Paged text: the same line look as the code view, rows of a fixed height, long lines scroll sideways. */
+.lt-scroll { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; outline: none; }
+.lt-rows { padding: 0; }
+.lt-row { height: 20px; line-height: 20px; content-visibility: visible; grid-template-columns: calc(var(--lt-digits) * 1ch + 24px) max-content; }
+.lt-row .cl-text { white-space: pre; overflow-wrap: normal; }
+.lt-row .cl-text.cut::after { content: " …"; color: var(--text-4); }
+.lt-pending { display: inline-block; width: 40%; height: 8px; border-radius: 4px; background: var(--surface-hover); vertical-align: middle; }
+.file-viewer > .text-editor { flex: 1 1 auto; min-height: 0; }
+.file-viewer > .text-editor textarea { min-height: 0; height: 100%; }
+
+/* Office: the editor of the document server filling the tab, or the converted preview in the PDF viewer. */
+.office-viewer { overflow: hidden; }
+.office-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.office-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg-panel); }
+.office-loading { position: absolute; inset: 0; display: grid; place-content: center; grid-auto-flow: column; gap: 8px; color: var(--text-3); pointer-events: none; }
+.office-viewer > .office-loading { position: static; flex: 1; }
+.office-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-xs, 11px); background: var(--bg-inset); color: var(--text-3); white-space: nowrap; }
+.office-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.office-badge.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.office-notice { display: flex; align-items: center; gap: 10px; margin: 6px 8px 0; }
+.office-notice span { flex: 1; min-width: 0; }
+.office-setup ul { margin: 0; padding-left: 18px; max-width: 52ch; text-align: left; font-size: var(--fs-sm); }
+.office-setup .file-fallback { flex: none; min-height: 0; padding: 0; }
+.office-setup .file-fallback > svg, .office-setup .file-fallback > p:empty { display: none; }
+
+/* HTML files: the page in a sandboxed frame filling the tab (pages assume a white canvas), and the page/source switch. */
+.html-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.html-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+.seg { display: inline-flex; flex: none; padding: 2px; gap: 2px; border-radius: var(--r-md); background: var(--bg-inset); border: 1px solid var(--border); }
+.seg button { height: 22px; padding: 0 9px; border-radius: var(--r-sm); color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--surface-active); color: var(--text); }

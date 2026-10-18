@@ -635,6 +635,19 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 - 写入过程中出错时，已写入的文件会尽量恢复到修改前的内容；返回的错误信息会列出已恢复、无法恢复和未写入的文件。
 - 修改已存在的文件时保持原文件的换行风格（CRLF）和 BOM。
 
+### Office 文档（Web 文件标签）
+
+| Setting | Type | Default | 说明 |
+|---------|------|---------|-------------|
+| `officeServerUrl` | string | 未设置 | ONLYOFFICE Docs 服务器地址（`http://` 或 `https://`，末尾的 `/` 会被去掉）。设置且 `<地址>/healthcheck` 可达时，Word、Excel、PowerPoint 文件在工作区标签内用它编辑并保存回原文件。 |
+| `officeJwtSecret` | string | 未设置 | 该服务器的 JWT 密钥：编辑器配置用它做 HS256 签名，保存回调也用它校验。服务器开启了 JWT 校验（ONLYOFFICE 默认开启）时必须填写。 |
+
+两项都只读写全局 `settings.json`，项目设置不能改它们；Web UI 在 设置 → 文件与 Office 中编辑（密钥输入框以密码形式显示）。MyHarness 不附带也不安装 ONLYOFFICE。未设置服务器时，若本机装有 Microsoft Office 或 LibreOffice，Office 文件以转换出的 PDF 只读预览；都没有时只提供下载和外部打开。文档服务器要能直接访问本机的 MyHarness 端口（它从浏览器使用的同一地址读取文件并回调保存）。行为细节见 [Web UI](web-ui.md)。
+
+```json
+{ "officeServerUrl": "http://127.0.0.1:8701", "officeJwtSecret": "<the server's JWT secret>" }
+```
+
 ### Sessions
 
 | Setting | Type | Default | 说明 |

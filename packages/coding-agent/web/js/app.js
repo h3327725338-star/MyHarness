@@ -104,6 +104,7 @@ function PanelContainer() {
 	const tabs = useStore((s) => s.view.wsTabs);
 	const activeId = useStore((s) => s.view.wsActive);
 	const closedCount = useStore((s) => s.view.wsClosed.length);
+	const wsMax = useStore((s) => s.view.wsMax);
 	const panelRef = useRef(null);
 	const active = tabs.find((item) => item.id === activeId) || tabs[0] || null;
 	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
@@ -126,10 +127,11 @@ function PanelContainer() {
 		return null;
 	};
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
-		<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />
+		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
 		<div class="panel-head">
 			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
 			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
+			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
 			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="x" size=${15} /></button>
 		</div>
 		<div class="panel-body">
@@ -235,11 +237,39 @@ function useShortcuts() {
 			else if (item.id === "sidebar") setView({ sidebarOpen: !state.view.sidebarOpen });
 			else if (item.id === "settings") setView({ settingsOpen: true });
 			else if (item.id === "focus") document.querySelector(".composer-input")?.focus();
+			else if (item.id === "workspaceMax") actions.toggleWorkspaceMax();
 			else if (item.id === "filter") { setView({ sidebarOpen: true }); document.querySelector(".sidebar-search input")?.focus(); }
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, []);
+}
+
+/** In collaboration mode the chat column is as wide as the user dragged it, within the room the workspace leaves. */
+function onChatWidth(value) {
+	const w = Math.round(Math.min(value, Math.max(320, window.innerWidth - 480)));
+	state.view = { ...state.view, chatW: w };
+	document.documentElement.style.setProperty("--chat-w", `${w}px`);
+}
+
+/**
+ * Esc leaves collaboration mode, unless something else is using it: a dialog or menu that is open, a field or editor that
+ * has the focus, or a handler that already took the key.
+ */
+function useWorkspaceMaxEscape(active) {
+	useEffect(() => {
+		if (!active) return undefined;
+		const onKey = (event) => {
+			if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+			const target = event.target;
+			if (target?.closest?.("input, textarea, select, [contenteditable='true'], .xterm, [role='menu'], [aria-modal='true']")) return;
+			if (document.querySelector(".overlay-host [aria-modal='true'], .local-file-menu, .ws-menu, .popover, .lightbox-scrim, .composer.expanded")) return;
+			event.preventDefault();
+			actions.toggleWorkspaceMax(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [active]);
 }
 
 function useWidthClass(ref, deps, limits = [430, 620]) {
@@ -277,6 +307,7 @@ export function App() {
 	const snap = useStore((s) => s.snap);
 	const panelOpen = useStore((s) => s.view.panelOpen);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
+	const wsMax = useStore((s) => s.view.wsMax);
 	const connected = useStore((s) => s.connected);
 	const everConnected = useStore((s) => s.everConnected);
 	const restarting = useStore((s) => s.restarting);
@@ -285,7 +316,20 @@ export function App() {
 	// The panel stays mounted while it slides out, and only turns "open" a frame after it is mounted, so both directions animate.
 	const panel = usePresence(panelOpen, 320);
 	const mainRef = useRef(null);
-	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen]);
+	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen, wsMax]);
+	useWorkspaceMaxEscape(wsMax);
+	// Entering or leaving collaboration mode swaps the order of the columns; their widths must not animate across the
+	// swap (the conversation would sweep through the middle), so the switch is instant.
+	const appRef = useRef(null);
+	const wasMax = useRef(wsMax);
+	useLayoutEffect(() => {
+		if (wasMax.current === wsMax || !appRef.current) return undefined;
+		wasMax.current = wsMax;
+		const app = appRef.current;
+		app.classList.add("ws-switching");
+		const timer = setTimeout(() => app.classList.remove("ws-switching"), 60);
+		return () => clearTimeout(timer);
+	}, [wsMax]);
 	useWorkspaceTitle();
 
 
@@ -295,10 +339,11 @@ export function App() {
 			${bootPhase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${bootDetail}</div>` : html`<${Spinner} /><div>${bootPhase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
 		</div><${BootDialogHost} /></div>`;
 	}
-	const layoutClass = `app ${panel.shown ? "panel-open" : ""}`;
-	return html`<div class=${layoutClass}>
+	const layoutClass = `app ${panel.shown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
+	return html`<div class=${layoutClass} ref=${appRef}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
+			${wsMax ? html`<${Resizer} invert min=${320} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
 			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />

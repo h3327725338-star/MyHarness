@@ -7,6 +7,7 @@ export const SHORTCUTS = [
 	{ id: "focus", label: "Focus the input box", key: "Ctrl+Alt+L" },
 	{ id: "settings", label: "Settings", key: "Ctrl+Alt+," },
 	{ id: "filter", label: "Filter chats", key: "Ctrl+Alt+F" },
+	{ id: "workspaceMax", label: "Maximize or restore the workspace", key: "Ctrl+Alt+M" },
 ];
 export function eventShortcut(event) {
 	if (event.isComposing || event.getModifierState?.("AltGraph")) return "";

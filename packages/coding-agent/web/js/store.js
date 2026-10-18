@@ -167,6 +167,16 @@ export { runFor as inSlot };
 
 export const activeSlotId = () => activeSlot;
 
+/**
+ * A server URL the browser loads by itself (a PDF, media, a download): it cannot send the `x-myharness-slot` header
+ * `api()` sends, so it names the chat in the query instead, and a relative path resolves in that chat's folder.
+ */
+export function slotUrl(url) {
+	const slot = targetSlot ?? activeSlot;
+	if (!slot || String(slot).startsWith("pending:")) return url;
+	return `${url}${url.includes("?") ? "&" : "?"}slot=${encodeURIComponent(slot)}`;
+}
+
 const restoredWorkspaceTabs = normalizeWorkspaceTabs(prefs.wsTabs, prefs.panelTab);
 const restoredWorkspaceActive = restoredWorkspaceTabs.some((tab) => tab.id === prefs.wsActive)
 	? prefs.wsActive
@@ -212,6 +222,11 @@ export const state = {
 		/** Tabs closed in this page session, newest last ("restore closed tab"). */
 		wsClosed: [],
 		panelW: prefs.panelW ?? 560,
+		/** Collaboration mode: the workspace fills the window and the chat becomes a column on its right (never restored). */
+		wsMax: false,
+		/** Whether the sidebar was open before collaboration mode hid it; it comes back on exit. */
+		wsMaxSidebar: null,
+		chatW: prefs.chatW ?? 420,
 		expanded: prefs.expanded ?? {},
 		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
 		expandedGeneral: prefs.expandedGeneral ?? {},
@@ -335,10 +350,12 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "wsTabs", "wsActive", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "chatW", "wsTabs", "wsActive", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
+	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before.
+	if (state.view.wsMax && state.view.wsMaxSidebar !== null) out.sidebarOpen = state.view.wsMaxSidebar;
 	savePrefs(out);
 	applyAppearance();
 }
@@ -358,6 +375,7 @@ export function applyAppearance() {
 	setCssVar(root, "--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
 	setCssVar(root, "--sidebar-w", `${state.view.sidebarW}px`);
 	setCssVar(root, "--panel-w", `${state.view.panelW}px`);
+	setCssVar(root, "--chat-w", `${state.view.chatW}px`);
 }
 
 // Every setView() funnels through applyAppearance(), so each write below first reads the live DOM value and skips

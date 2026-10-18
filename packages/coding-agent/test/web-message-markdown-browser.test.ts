@@ -33,7 +33,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {Markdown,renderMarkdown} from '/js/markdown.js';
-import {set} from '/js/store.js';
+import {set,state} from '/js/store.js';
 const app=document.getElementById('app');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const waitFor=(cond,timeoutMs=8000,stepMs=25)=>new Promise((resolve,reject)=>{const start=Date.now();const poll=async()=>{for(;;){try{if(cond())return resolve();}catch(e){}if(Date.now()-start>=timeoutMs)return reject(Error('waitFor timeout after '+timeoutMs+'ms: waiting for '+String(cond)));await wait(stepMs);}};poll();});
@@ -57,7 +57,10 @@ try {
  await waitFor(()=>app.querySelectorAll('[data-local-path]').length===3);
  const links=app.querySelectorAll('[data-local-path]');
  if(links.length!==3) throw Error('local links missing: '+links.length);
- links[0].click(); await wait(100);
+ links[0].click();
+ await waitFor(()=>state.view.wsActive==='file:C:/Docs/report.pptx');
+ if(!state.view.panelOpen || document.querySelector('.local-file-menu')) throw Error('left click must open the file in the right-hand workspace, without a menu');
+ if(!state.view.wsTabs.some(t=>t.id==='file:C:/Docs/report.pptx')) throw Error('file tab missing');
  links[0].dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:20,clientY:20}));
  await waitFor(()=>{const m=document.querySelector('.local-file-menu');return !!m&&m.querySelectorAll('button').length===3;});
  const menu=document.querySelector('.local-file-menu');
