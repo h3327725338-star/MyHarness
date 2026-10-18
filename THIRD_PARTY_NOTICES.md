@@ -7,8 +7,6 @@ relicense third-party or inherited material.
 The repository retains third-party notices in the location closest to the
 material they cover:
 
-- `packages/tui/src/stdin-buffer.ts` and its test retain the OpenTUI MIT
-  attribution.
 - `packages/coding-agent/src/utils/ansi.ts` retains the ansi-regex and
   strip-ansi MIT attribution from Sindre Sorhus.
 - `packages/coding-agent/src/exports/html/vendor/marked.min.js` retains the
