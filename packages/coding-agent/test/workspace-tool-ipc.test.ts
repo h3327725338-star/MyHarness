@@ -136,7 +136,11 @@ it("the workspace tool reaches the host over real IPC and reports the answers of
 			return {};
 		}
 	})();
-	expect(errors).toBe("");
+	// Node prints an ExperimentalWarning for its built-in SQLite on stderr; only other output is an error.
+	const unexpectedErrors = errors
+		.split(String.fromCharCode(10))
+		.filter((line) => line.trim() && !/ExperimentalWarning|--trace-warnings/.test(line));
+	expect(unexpectedErrors).toEqual([]);
 	expect(report.ok, `${errors}\n${output}`).toBe(true);
 	expect(code).toBe(0);
 	expect(report.results.join("\n")).toContain("desktop_host=connected");

@@ -86,7 +86,7 @@ it("does not overlay the header and guards both click and keyboard sending durin
 	expect(app).toContain("!restarting && everConnected && !connected");
 	expect(panel).toContain("useStore((s) => s.restarting)");
 	expect(panel).toContain('class="ctx-foot service-restart"');
-	expect(composer).toContain("if (state.restarting || !state.connected) return;");
-	expect(composer).toContain("const canSend = !restarting && connected");
+	expect(composer).toContain("if (state.restarting || !state.connected || !canSendToActive()) return;");
+	expect(composer).toContain("const canSend = !switching && !restarting && connected");
 	expect(css.match(/\.conn-banner \{[^}]+\}/)?.[0]).not.toContain("position: absolute");
 });

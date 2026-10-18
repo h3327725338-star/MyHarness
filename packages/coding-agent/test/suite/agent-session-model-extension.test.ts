@@ -5,6 +5,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
+/** The runtime appends a dynamic-context reminder as its own user message; tests look at the real prompt. */
+const isPromptUserMessage = (message: { role: string; content: unknown }): boolean => {
+	if (message.role !== "user") return false;
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: (message.content as Array<{ type: string; text?: string }>)
+					.filter((part) => part.type === "text")
+					.map((part) => part.text ?? "")
+					.join("\n");
+	return !text.startsWith("[system-reminder]");
+};
+
 describe("AgentSession model and extension characterization", () => {
 	const harnesses: Harness[] = [];
 
@@ -243,7 +256,7 @@ describe("AgentSession model and extension characterization", () => {
 		let providerUserText = "";
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find(isPromptUserMessage);
 				providerUserText =
 					user && typeof user.content !== "string"
 						? user.content
@@ -284,7 +297,7 @@ describe("AgentSession model and extension characterization", () => {
 		let providerUserText = "";
 		transformedHarness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find(isPromptUserMessage);
 				providerUserText =
 					user && typeof user.content !== "string"
 						? user.content

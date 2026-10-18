@@ -11,6 +11,19 @@ import type { PromptTemplate } from "../../src/prompts/loader/index.ts";
 import { createTestResourceLoader } from "../utilities.ts";
 import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
+/** The runtime appends a dynamic-context reminder as its own user message; tests look at the real prompt. */
+const isPromptUserMessage = (message: { role: string; content: unknown }): boolean => {
+	if (message.role !== "user") return false;
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: (message.content as Array<{ type: string; text?: string }>)
+					.filter((part) => part.type === "text")
+					.map((part) => part.text ?? "")
+					.join("\n");
+	return !text.startsWith("[system-reminder]");
+};
+
 describe("AgentSession prompt characterization", () => {
 	const harnesses: Harness[] = [];
 	const tempDirs: string[] = [];
@@ -223,7 +236,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find(isPromptUserMessage);
 				sawImage =
 					user?.role === "user" &&
 					typeof user.content !== "string" &&
@@ -279,7 +292,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find(isPromptUserMessage);
 				expandedPrompt = user ? getMessageText(user) : "";
 				return fauxAssistantMessage("ok");
 			},
@@ -314,7 +327,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find(isPromptUserMessage);
 				expandedPrompt = user ? getMessageText(user) : "";
 				return fauxAssistantMessage("ok");
 			},

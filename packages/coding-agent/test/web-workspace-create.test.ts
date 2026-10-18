@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@myharness/ai/compat";
-import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
+import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@myharness/ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -13,6 +12,7 @@ import {
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
 import { WebHttpServer } from "../src/modes/web/http-server.ts";
 import { WebHostHub } from "../src/modes/web/hub.ts";
+import { registerCoreRoutes } from "../src/modes/web/routes-core.ts";
 import { registerSessionRoutes } from "../src/modes/web/routes-sessions.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
@@ -43,7 +43,13 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 			process.chdir(previousCwd);
 			// Session runtimes may leave terminal handles alive briefly on Windows. Keep task-owned
 			// artifact fixtures for inspection; only disposable OS-temp fixtures are removed here.
-			if (!process.env.MYHARNESS_TEMP_DIR && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+			if (!process.env.MYHARNESS_TEMP_DIR && existsSync(dir)) {
+				try {
+					rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+				} catch {
+					// A handle still held by the runtime on Windows (EBUSY); the OS temp directory is cleaned later.
+				}
+			}
 		});
 		return dir;
 	}
