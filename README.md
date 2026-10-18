@@ -11,7 +11,7 @@ MyHarness is an early-stage, source-based Web AI coding assistant for working in
 ## Core capabilities
 
 - **Code collaboration**: file, shell, PowerShell, editing, writing, Symbols, Git, and GitHub workflows exposed through the Coding Agent product layer.
-- **Entry points**: a local browser **Web UI** (`myharness`, loopback only) and a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed.
+- **Entry points**: a local browser **Web UI** (`myharness`, loopback only) and a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed; the Web Terminal panel is retained.
 - **Project context**: project trust, `AGENTS.md` / `CLAUDE.md` context files, Workspace and Session management, Git integration, and context compaction.
 - **Extensibility**: TypeScript extensions, skills, prompt templates, themes, custom Providers, and MyHarness packages.
 - **Code Intelligence**: semantic Symbols navigation is available through optional Windows language-server modules installed per language. The `symbols` tool is disabled by default and can be enabled with `codeIntelligence.symbolsEnabled`; changes take effect after restart.

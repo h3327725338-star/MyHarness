@@ -19,6 +19,7 @@ cp permission-gate.ts ~/.myharness/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `permission-gate.ts` | Prompts for confirmation before dangerous bash commands (rm -rf, sudo, etc.) |
+| `bash-spawn-hook.ts` | Adjusts command, cwd, and env before bash execution |
 | `project-trust.ts` | Demonstrates the `project_trust` event for user/global and CLI extensions |
 | `protected-paths.ts` | Blocks writes to protected paths (.env, .git/, node_modules/) |
 | `confirm-destructive.ts` | Confirms before destructive session actions (clear, switch, fork) |
@@ -30,52 +31,29 @@ cp permission-gate.ts ~/.myharness/agent/extensions/
 
 | Extension | Description |
 |-----------|-------------|
-| `todo.ts` | Todo list tool with custom rendering and state persistence |
 | `hello.ts` | Minimal custom tool example |
-| `question.ts` | Demonstrates `ctx.ui.custom()` for asking the user questions with custom UI |
-| `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
 | `tool-override.ts` | Override built-in tools (e.g., add logging/access control to `read`) |
 | `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command, with prompt snippets and tool-specific prompt guidelines |
 | `kimi-deferred-tools.ts` | Search for and progressively activate tools for Kimi's deferred-tool loading protocol |
-| `structured-output.ts` | Final structured-output tool that returns `terminate: true` so the agent can end on the tool call |
-| `built-in-tool-renderer.ts` | Custom compact rendering for built-in tools (read, bash, edit, write) while keeping original behavior |
-| `minimal-mode.ts` | Override built-in tool rendering for minimal display (only tool calls, no output in collapsed mode) |
-| `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
-| `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
 | `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
 
 ### Commands & UI
 
 | Extension | Description |
 |-----------|-------------|
-| `preset.ts` | Named presets for model, thinking level, tools, and instructions via the `--preset` flag |
+| `commands.ts` | Lists all available slash commands via a `/commands` command |
 | `plan-mode/` | Two-phase planning example with full tools, a Phase 2 Bash allowlist, and step tracking |
-| `tools.ts` | Interactive tool enable/disable UI with session persistence |
-| `handoff.ts` | Transfer context to a new focused session |
-| `qna.ts` | Extracts questions from last response into editor via `ctx.ui.setEditorText()` |
-| `status-line.ts` | Shows turn progress in footer via `ctx.ui.setStatus()` with themed colors |
-| `github-issue-autocomplete.ts` | Adds `#1234` issue completions by stacking a custom autocomplete provider that preloads open issues from `gh issue list` |
 | `widget-placement.ts` | Shows widgets above and below the editor via `ctx.ui.setWidget()` placement |
 | `hidden-thinking-label.ts` | Customizes the collapsed thinking label via `ctx.ui.setHiddenThinkingLabel()` |
-| `working-indicator.ts` | Customizes the streaming working indicator via `ctx.ui.setWorkingIndicator()` |
 | `model-status.ts` | Shows model changes in status bar via `model_select` hook |
-| `snake.ts` | Snake game with custom UI, keyboard handling, and session persistence |
-| `tic-tac-toe.ts` | Tic-tac-toe vs the agent with `executionMode: "sequential"` tools to prevent race conditions on shared cursor state |
 | `send-user-message.ts` | Demonstrates `pi.sendUserMessage()` for sending user messages from extensions |
 | `timed-confirm.ts` | Demonstrates AbortSignal for auto-dismissing `ctx.ui.confirm()` and `ctx.ui.select()` dialogs |
-| `modal-editor.ts` | Custom vim-like modal editor via `ctx.ui.setEditorComponent()` |
-| `rainbow-editor.ts` | Animated rainbow text effect via custom editor |
 | `notify.ts` | Desktop notifications via OSC 777 when agent finishes (Ghostty, iTerm2, WezTerm) |
 | `titlebar-spinner.ts` | Braille spinner animation in terminal title while the agent is working |
-| `summarize.ts` | Summarize conversation with deepseek-v4-pro and show in transient UI |
-| `custom-footer.ts` | Custom footer with git branch and token stats via `ctx.ui.setFooter()` |
-| `custom-header.ts` | Custom header via `ctx.ui.setHeader()` |
-| `overlay-test.ts` | Test overlay compositing with inline text inputs and edge cases |
-| `overlay-qa-tests.ts` | Comprehensive overlay QA tests: anchors, margins, stacking, overflow, animation |
-| `doom-overlay/` | DOOM game running as an overlay at 35 FPS (demonstrates real-time game rendering) |
+| `working-message-test.ts` | Sets a custom working message/indicator to verify they survive loader recreations |
 | `shutdown-command.ts` | Demonstrates `ctx.shutdown()` |
+| `input-transform.ts` | Intercepts user input via the `input` event (`?quick`, `ping`, `time`) |
 | `reload-runtime.ts` | Adds a `reload_runtime` tool showing safe reload flow |
-| `interactive-shell.ts` | Run interactive commands (vim, htop) with full terminal via `user_bash` hook |
 | `inline-bash.ts` | Expands `!{command}` patterns in prompts via `input` event transformation |
 | `input-transform-streaming.ts` | Skips expensive input preprocessing for mid-stream steering via `streamingBehavior` |
 
@@ -84,6 +62,7 @@ cp permission-gate.ts ~/.myharness/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `git-checkpoint.ts` | Creates git stash checkpoints at each turn for code restoration on fork |
+| `git-merge-and-resolve.ts` | Fetches/merges the upstream tracking ref after each turn and surfaces conflict blocks for resolution |
 | `auto-commit-on-exit.ts` | Deprecated no-op; use the built-in `/commit` command |
 
 ### System Prompt & Compaction
@@ -94,12 +73,14 @@ cp permission-gate.ts ~/.myharness/agent/extensions/
 | `claude-rules.ts` | Scans `.claude/rules/` folder and lists rules in system prompt |
 | `custom-compaction.ts` | Custom compaction that summarizes entire conversation |
 | `trigger-compact.ts` | Triggers compaction when context usage exceeds 100k tokens |
+| `prompt-customizer.ts` | Adds tool- and skill-aware guidance to the system prompt via systemPromptOptions |
+| `system-prompt-header.ts` | Shows system prompt length via `ctx.getSystemPrompt()` |
 
 ### System Integration
 
 | Extension | Description |
 |-----------|-------------|
-| `mac-system-theme.ts` | Syncs MyHarness theme with macOS dark/light mode |
+| `provider-payload.ts` | Logs (and optionally replaces) the provider request payload via `before_provider_request` |
 
 ### Resources
 
@@ -111,8 +92,6 @@ cp permission-gate.ts ~/.myharness/agent/extensions/
 
 | Extension | Description |
 |-----------|-------------|
-| `message-renderer.ts` | Custom message rendering with colors and expandable details via `registerMessageRenderer` |
-| `entry-renderer.ts` | TUI-only session entry rendering via `appendEntry` and `registerEntryRenderer` |
 | `event-bus.ts` | Inter-extension communication via `pi.events` |
 
 ### Session Metadata

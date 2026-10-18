@@ -17,6 +17,8 @@
 - Workspace / Session 作用域：`getWorkspaceDir()`、`getSessionDir()`、`getSessionConversationPath()`、`getSessionMetadataPath()`、`parseSessionDataPath()` 等
 - 未绑定会话：`UNBOUND_WORKSPACE_ID`、`getDefaultWorkingDir()`
 
+`attachments.ts`：附件清单（`guessAttachmentMime()`、`sanitizeAttachmentName()`、`toAttachmentRelativePath()`、`writeAttachmentManifest()` / `readAttachmentManifest()`、`writeLegacyAttachmentManifest()`）。
+
 ### settings/
 
 | 文件 | 内容 |

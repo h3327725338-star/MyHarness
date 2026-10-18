@@ -119,6 +119,7 @@ packages/
   ai/           # LLM Provider abstraction
   agent/        # Agent loop、harness 和 session abstractions
   coding-agent/ # Web UI、启动入口和产品 runtime
+  desktop/      # Windows Electron host
   storage/
     sqlite-node/ # node:sqlite session storage backend
 ```

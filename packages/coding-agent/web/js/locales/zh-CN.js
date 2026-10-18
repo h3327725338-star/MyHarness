@@ -2255,7 +2255,7 @@ export const serverTextEn = {
 		["全面处理复杂任务", "Handle a complex task end to end"],
 		["重启本地服务", "Restart the local service"],
 		["任务", "task"],
-		// The /settings menu (src/startup/settings-menu.ts): Web menu definition
+		// The /settings menu (packages/coding-agent/src/startup/settings-menu.ts): Web menu definition
 		["管理模型服务和密钥", "Manage model services and keys"],
 		["在终端显示图片", "Show images in the terminal"],
 		["调整图片显示宽度", "Width of images in the terminal"],

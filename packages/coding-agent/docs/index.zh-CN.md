@@ -28,12 +28,14 @@ npm.cmd run build
 - [安全](security.md) — Project Trust、sandbox 边界和漏洞报告。
 - [Containerization](containerization.md) — 使用 Gondolin、Docker 或 OpenShell 隔离 MyHarness。
 - [设置](settings.md) — 全局和项目级设置。
+- [Symbols 契约](symbols.md) — 结构化导航、路由、坐标、部分结果、deadline 和 continuation。
 - [Windows](windows.md) — Bash 和 Windows 专用设置。
-- [Web Search](web-search.md) — 可选的内置联网搜索（DuckDuckGo、Brave、Tavily API）和网页读取。
+- [Web Search](web-search.md) — 可选的内置联网搜索（默认 Google/Bing，可选 DuckDuckGo、Brave、Tavily API 和 Firefox/Chrome/Edge 浏览器兜底）和网页读取。
 - [Sessions](sessions.md) — Session 管理、分支和导航。
 - [Compaction](compaction.md) — context compaction 和 branch summaries。
 - [Git Worktrees](worktrees.md) — 通过 `/git` 管理开发 worktree。
 - [快捷键](keybindings.md) — 默认快捷键和自定义方式。
+- [交互指南](interaction-guidelines.md) — 设置、导航、操作、对话框、反馈和键盘行为的共享契约。
 
 ## 扩展能力
 

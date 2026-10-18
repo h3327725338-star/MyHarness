@@ -23,6 +23,7 @@
 | `assistant-model.ts` | 辅助模型（Auto Memory、Sub-agent、Vision）“跟随主模型”的解析 |
 | `conversation-naming.ts` | `ConversationNaming`：后台按节流命名的调度（只在空闲时跑，写 `conversation-naming` 自定义条目），`conversationNamingWork()` 决定是否需要命名 |
 | `role.ts` | `AgentRole`（main / delegated / reviewer）、角色提示和按角色限制工具名 |
+| `prompt-correlation.ts` | `correlatePrompt()` / `promptCorrelation()`：prompt 与客户端消息 ID 的关联 |
 | `defaults.ts` | `DEFAULT_THINKING_LEVEL` |
 
 ### delegation/
@@ -30,6 +31,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `event-parser.ts` | 解析子进程（Sub-agent）输出的 JSON 事件流，供 `tools/sub-agent.ts` 使用 |
+| `non-git-sandbox.ts` | 非 Git 工作区的委托沙箱镜像：排除规则（`nonGitMirrorExclusion()`）与工作进程登记（`registerDelegatedSandboxWorker()`） |
 | `worker.ts` | 隔离 Explore 子进程入口 `runDelegatedWorker()` 与 stdin 的 `prompt` / `steer` 行协议（`parseDelegatedWorkerLine()`） |
 | `worktree-sandbox.ts` | 读写子代理的单任务 Git worktree 沙箱：`prepareDelegatedWorktree()` 建分支并带入工作区快照，`finalizeDelegatedWorktree()` 按是否脏决定保留或删除 |
 | `background-work.ts` | `SessionBackgroundWork`：一个会话的主任务启动的后台工作（后台 Explore 批次、运行中的 workflow/ultracode）。登记、进度限流、批次完成后把结果交回模型；主任务失败、被停止时一并取消。主任务想正常收尾而后台 Explore 批次还没回来时，由 `AgentSession`（`_holdForBackgroundExplore`）保持任务打开，等结果回来再跑一轮后才结算 |

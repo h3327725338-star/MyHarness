@@ -21,6 +21,7 @@
 | `storage/jsonl/write-batch.ts` | user/assistant 消息 75ms / 256KiB 合批 durable append；关键条目、读操作、正常关闭、轮次结束和 bridge 公告边界 flush |
 | `storage/jsonl/tail-window.ts` | 有明确完整性与缺失父节点标记的原始尾窗，仅预览/诊断，不可替代完整会话或模型上下文 |
 | `storage/jsonl/file-operations.ts` | `deleteSessionFile()`，删除聊天时保留独立 memory 目录 |
+| `storage/jsonl/sessions-index.ts` | 每个 Workspace 会话目录下的持久列表边车（`.sessions-index.json`）：写入时标脏、读取时刷新，供列表扫描用 |
 | `memory/store.ts` | Data 内总层/Workspace/Conversation 记忆、归档、引用索引、迁移和恢复 |
 | `migrations/index.ts` | 条目版本迁移到当前版本 |
 | `migrations/storage.ts` | 旧会话目录迁入数据目录 |

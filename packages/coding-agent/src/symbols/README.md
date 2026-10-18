@@ -15,6 +15,8 @@
 | 文件 | 内容 |
 | --- | --- |
 | `types.ts` | 统一数据模型：位置、范围、符号、引用、诊断、各类查询结果及其来源/完整度标记。位置一律 0-based |
+| `language.ts` | `LANGUAGE_BY_EXTENSION` / `getCodeLanguage()`：按文件路径推断代码语言 |
+| `operation-budget.ts` | `OperationBudget` / `createOperationBudget()`：符号查询的超时与取消预算（`SymbolsTimeoutError`） |
 | `path-semantics.ts` | 路径契约：一律按 Windows 语义处理 workspace、文档路径和 `file://` URI，大小写不敏感的 identity |
 | `symbol-identity.ts` | `namePath` 的构造与解析、`SymbolId` 生成 |
 | `api.ts` | 本目录的统一出口 |

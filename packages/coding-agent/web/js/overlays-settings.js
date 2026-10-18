@@ -1,4 +1,4 @@
-// Settings: Web UI appearance (browser-local) plus the same agent settings the TUI /settings menu edits. Every page uses
+// Settings: Web UI appearance (browser-local) plus the same agent settings the terminal /settings menu edits. Every page uses
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
 import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy, motionEnabled, usePresence } from "./ui.js";

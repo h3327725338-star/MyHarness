@@ -1,7 +1,7 @@
 /**
  * Web API routes for Git: repository status, task checkpoint decisions (keep /
- * undo), /commit, /push, /restore, local branches and Worktrees. Every operation calls the same
- * use cases and Git primitives as the TUI commands.
+ * undo), /commit, /push, /restore, local branches and Worktrees. Every operation calls the shared
+ * application use cases and Git primitives.
  */
 
 import { statSync } from "node:fs";

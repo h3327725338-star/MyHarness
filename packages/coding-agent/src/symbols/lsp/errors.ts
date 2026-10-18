@@ -3,7 +3,7 @@
  *
  * 所有错误都继承 LspError，调用方可用 instanceof LspError 统一捕获；
  * 底层 Node 错误（ENOENT / EPIPE 等）通过 cause 与 code 保留，
- * 方便未来 LanguageServerManager 判断 "not installed" / "crashed"。
+ * 方便 LanguageServerManager 判断 "not installed" / "crashed"。
  */
 
 import type { LspClientState, LspProcessState } from "./types.ts";

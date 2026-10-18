@@ -17,7 +17,9 @@ export interface InvestigationToolProfile {
  * `system-prompts/common/tools/<workflow|ultracode>/` Markdown files via the
  * logical IDs `tools/<kind>/snippet.md` and `tools/<kind>/guidelines.md`.
  * `minPhases` is the only sequencing difference enforced by the engine
- * (`workflow` >= 1, `ultracode` >= 2); sub-tasks stay read-only.
+ * (`workflow` >= 1, `ultracode` >= 2); the static profiles describe
+ * read-only sub-tasks, and the engine rewrites those clauses for
+ * read-write mode (see READ_WRITE_CAPABILITY_WORDING in engine.ts).
  */
 export const INVESTIGATION_TOOL_PROFILES: Record<InvestigationToolKind, InvestigationToolProfile> = {
 	workflow: {

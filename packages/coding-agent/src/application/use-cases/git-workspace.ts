@@ -1,5 +1,5 @@
 /**
- * Git operations on the current Workspace, as hosts (TUI, Web) need them:
+ * Git operations on the current Workspace, as hosts (Web) need them:
  * checking whether a command can run, setting a repository up, settling a
  * task checkpoint, detecting what a task changed and discarding changes.
  *

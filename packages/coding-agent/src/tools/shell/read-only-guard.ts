@@ -2,7 +2,7 @@
  * Delegated（Sub Agent / Explore）会话的只读 Bash 守卫。
  *
  * 这是普通 delegated agent（sub-agent.ts 的 Explore 任务）的 bash 边界，
- * 不是 Auto Review 的安全机制。Auto Review 已不再使用 bash（见 review-check-*）。
+ * 不是 Auto Review 的安全机制。Auto Review 已不再使用 bash。
  *
  * 安全边界：denylist + read-only allowlist + 可选 AI adjudicator。
  * 注意：AI adjudicator 只用于 delegated 会话的未知只读形状裁决，

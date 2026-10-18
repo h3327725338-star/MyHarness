@@ -115,7 +115,7 @@ export interface SymbolIdInput {
 	kind: CodeSymbolKind;
 	/** namePath（如 "Api/UserService/load"） */
 	namePath: string;
-	/** 0-based 声明行（行级精度即可；未来 LSP 同样以 selection start 行参与） */
+	/** 0-based 声明行（行级精度即可；LSP 同样以 selection start 行参与） */
 	line: number;
 	/**
 	 * Optional 0-based UTF-16 selection character. Semantic providers use this

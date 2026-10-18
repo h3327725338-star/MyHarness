@@ -90,11 +90,16 @@ By default, MyHarness gives the model these built-in tools:
 - `read` - read files
 - `bash` - run shell commands
 - `pwsh` - run PowerShell commands
+- `job_list`, `job_output`, `job_kill` - manage background shell jobs
 - `edit` - patch files
 - `write` - create or overwrite files
 - `github` - use the configured GitHub integration
+- `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write` - long-term memory (when enabled)
+- `ask_user_question`, `todo_write` - user interaction and task tracking
+- `apply_rename` - apply a `symbols rename_preview` plan (gated with `symbols`)
+- `web_search`, `web_fetch` - only when Web Search is enabled in Settings
 
-Additional built-in tools (`grep`, `find`, `ls`) are available through tool options. The `symbols` tool is disabled by default; enable `codeIntelligence.symbolsEnabled` in Settings and restart the runtime to make semantic source navigation available. The `agent`, `workflow`, and `ultracode` tools are optional and disabled by default. MyHarness runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
+`grep`, `find`, and `ls` are built-in but not in the default set; select them through tool options. The `symbols` tool is disabled by default; enable `codeIntelligence.symbolsEnabled` in Settings and restart the runtime to make semantic source navigation available. The `agent`, `workflow`, `ultracode`, and `agent_tasks` tools are optional and stay off while **Sub Agent** is disabled (the default) in global settings. MyHarness runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
 
 ## Give MyHarness project instructions
 

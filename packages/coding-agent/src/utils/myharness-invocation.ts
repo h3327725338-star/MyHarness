@@ -56,7 +56,7 @@ export function getMyHarnessInvocation(args: string[]): { command: string; args:
 	const execName = path.basename(process.execPath).toLowerCase();
 	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
 	// Flags that come before the script path (process.execArgv) decide how the runtime resolves the workspace: the
-	// Windows dev launcher starts the app with `node --import scripts/dev-fast-loader.mjs src/web.ts`, and that
+	// Windows dev launcher starts the app with `node --import scripts/dev-fast-loader.mjs packages/coding-agent/src/web.ts`, and that
 	// loader rewrites every `@myharness/*` specifier to the current sources. A spawned child that loses the flags
 	// resolves the same specifiers through package.json to the compiled dist instead, so it either runs a different
 	// version than the parent or crashes at module-link time when the sources import something the dist predates.

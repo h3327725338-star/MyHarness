@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Process entry point for the local Web UI and internal delegated workers.
- * Development: npx tsx src/web.ts [args...]
+ * Development: node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts [args...]
  */
 import { APP_NAME } from "./config.ts";
 import { main } from "./main.ts";

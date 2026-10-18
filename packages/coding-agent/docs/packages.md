@@ -169,7 +169,7 @@ If no `MyHarness` manifest is present, MyHarness auto-discovers resources from t
 
 Third party runtime dependencies belong in `dependencies` in `package.json`. Dependencies that do not register extensions, skills, prompt templates, or themes also belong in `dependencies`. When MyHarness installs a package from npm or git, it runs `npm install`, so those dependencies are installed automatically.
 
-MyHarness bundles core packages for extensions and skills. If you import any of these, list them in `peerDependencies` with a `"*"` range and do not bundle them: `@myharness/ai`, `@myharness/agent-core`, `@myharness/coding-agent`, `@myharness/tui`, `typebox`.
+MyHarness bundles core packages for extensions and skills. If you import any of these, list them in `peerDependencies` with a `"*"` range and do not bundle them: `@myharness/ai`, `@myharness/agent-core`, `@myharness/coding-agent`, `typebox`.
 
 Other MyHarness packages must be bundled in your tarball. Add them to `dependencies` and `bundledDependencies`, then reference their resources through `node_modules/` paths. MyHarness loads packages with separate module roots, so separate installs do not collide or share modules.
 

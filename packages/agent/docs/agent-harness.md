@@ -232,7 +232,7 @@ Preferred future structure:
 - `agent-harness-tools.test.ts`: tool registry getters, active-tool semantics, and update events.
 - `agent-harness-lifecycle.test.ts`: phase/save-point/settled/reentrancy behavior.
 
-Use the `myharness-ai` faux provider (`registerFauxProvider`, `fauxAssistantMessage`) for deterministic harness/provider tests. Faux response factories can inspect `StreamOptions`, invoke `options.onPayload`, and return scripted assistant messages without real provider APIs or network access.
+Use the `myharness-ai` faux provider (`fauxProvider`, `fauxAssistantMessage`) for deterministic harness/provider tests. Faux response factories can inspect `StreamOptions`, invoke `options.onPayload`, and return scripted assistant messages without real provider APIs or network access.
 
 Harness coverage is configured separately from the default package test run:
 
@@ -326,10 +326,11 @@ Remaining:
 
 ### 4. Implement generic hook/event extension mechanism
 
-Status: Designed in [hooks.md](./hooks.md), not implemented
+Status: Partially implemented (`on()` + `AgentHarnessEventResultMap` exist; full `AgentHarnessHooks` class with `observe`/`emit`/facades still pending)
 
 Done:
 
+- Added `subscribe()` for observational listeners and `on()` for result-producing event handlers, typed by `AgentHarnessEventResultMap` (covers `before_agent_start`, `context`, `before_provider_request`, `before_provider_payload`, `tool_call`, `tool_result`, `session_before_compact`, `session_before_tree`, etc.).
 - Removed `AgentHarnessContext`.
 - Hooks receive only event payloads.
 - `emitHook(event)` derives the hook type from `event.type`.

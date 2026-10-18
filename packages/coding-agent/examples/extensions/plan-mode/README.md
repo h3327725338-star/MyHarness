@@ -1,5 +1,7 @@
 # Plan Mode Extension
 
+> Current state: this directory now contains only `utils.ts` (pure helpers: `isSafeCommand()`, `extractTodoItems()`, `extractDoneSteps()`, `markCompletedSteps()`, `cleanStepText()`); there is no extension entry file (`index.ts`). The load command (`--extension`), the `/plan` command, the `Ctrl+Alt+P` shortcut, the two-phase execution flow and the session-resume behavior described below cannot be verified against this directory's code; add the entry implementation and sync this document before using the example. What `utils.ts` does cover and is verifiable: `Plan:` extraction, `[DONE:n]` marker parsing, and destructive/check command classification.
+
 Two-phase planning example with plan extraction and execution progress tracking.
 
 This example is not a read-only mode. Both phases retain the normal `read`, `bash`, `edit`, and `write` tools, plus any active tools not managed by the extension. During Phase 2 only, Bash commands are filtered through the allowlist in `utils.ts`; `edit` and `write` remain available.

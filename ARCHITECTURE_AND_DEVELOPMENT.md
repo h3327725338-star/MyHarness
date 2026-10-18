@@ -14,11 +14,11 @@ MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用�
 
 | Package | 职责 | 公共入口 |
 | --- | --- | --- |
-| `packages/ai` | Provider、模型、认证、API adapter、流式消息和 usage | `src/index.ts` 及 manifest subpath |
-| `packages/agent` | Provider 无关的 Agent loop、工具队列、通用 Session 与 Harness contract | `src/index.ts`、`./node` |
-| `packages/storage/sqlite-node` | 通用存储 contract 的 Node SQLite backend 和 migration | `src/index.ts` |
+| `packages/ai` | Provider、模型、认证、API adapter、流式消息和 usage | `packages/ai/src/index.ts` 及 manifest subpath |
+| `packages/agent` | Provider 无关的 Agent loop、工具队列、通用 Session 与 Harness contract | `packages/agent/src/index.ts`、`./node` |
+| `packages/storage/sqlite-node` | 通用存储 contract 的 Node SQLite backend 和 migration | `packages/storage/sqlite-node/src/index.ts` |
 | `packages/desktop` | 私有 Electron Windows 宿主、服务进程所有权、原生第三方浏览器视图与分发 | `main.cjs`；`build.mjs` |
-| `packages/coding-agent` | 产品编排、Web、Session、Settings、Trust、资源、Provider runtime、工具、Git、扩展 | `src/index.ts`；进程入口 `src/web.ts` |
+| `packages/coding-agent` | 产品编排、Web、Session、Settings、Trust、资源、Provider runtime、工具、Git、扩展 | `packages/coding-agent/src/index.ts`；进程入口 `packages/coding-agent/src/web.ts` |
 
 依赖方向：`coding-agent → agent → ai`；产品层也直接依赖 ai 和 storage。不存在 `packages/tui` workspace。底层业务不得依赖浏览器页面或终端展示组件。
 
@@ -42,16 +42,16 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
 - `npm run desktop:dev` 启动独立 Electron 宿主，`npm run desktop:pack` 构建免安装目录；宿主复用 Web 服务与数据；第三方网页每个标签一个主进程 `WebContentsView`（不用 iframe/webview），共用持久化第三方分区，右侧面板是同时承载面板、文件与网页的多标签工作区。原生视图的可见性与尺寸由页面侧的 `web/js/browser-view-sync.js` 和宿主不变量共同保证：切换标签先隐藏，只有活动标签带新 bounds 时才显示，关闭标签清理视图、定时器、下载和权限回调。站点权限由页面内用户按应用会话显式允许或拒绝，Agent 不能授予。Agent 侧的 `workspace` 工具只在宿主内注册，经子进程 IPC 控制浏览器标签，并把页面级命令转发给前端页面后以其回报状态为准。桌面重启由 IPC 交回宿主监督，浏览器重启路径不变。
 - 日常使用走桌面端：双击仓库根目录 `dev-desktop.cmd`。原先用系统浏览器打开的启动脚本（`dev-web.cmd`、`dev-web.vbs`、`dev-web.ps1`、`web-runtime.ps1`、`web-source.ps1`、`web-source.sh`）已移除，界面代码历史另存于私有仓库 `MyHarness-WebArchive`。
 - 需要直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`（参数原样转发，保留调用者工作目录）。服务启动后不打开任何浏览器，只在日志里打印 `MyHarness Web UI: <url>`；`--no-open` 仍被接受（桌面端在传），仅为兼容保留。
-- Worktree 的“启动副本”和“生成启动文件”都用 Node 直接运行副本自己的 `src/web.ts` 与 `scripts/dev-fast-loader.mjs`，同样打印地址、不打开浏览器。
+- Worktree 的“启动副本”和“生成启动文件”都用 Node 直接运行副本自己的 `packages/coding-agent/src/web.ts` 与 `scripts/dev-fast-loader.mjs`，同样打印地址、不打开浏览器。
 - npm `myharness` 指向 `dist/web.js`；它是 Web 服务启动命令，不提供第二套交互。
-- Bun 编译入口为 `src/bun/web.ts`，保留 OAuth、sandbox 环境恢复与 Bedrock 注册。
-- `src/web.ts` 也分发内部 `--internal-delegated-worker`。Explore 使用内部 NDJSON 协议，不能将它当作公开 JSON 输出模式。
-- `main.ts` 装配 Settings、Trust、ResourceLoader、SessionManager、模型与代码智能，然后创建 `AgentSessionRuntime` / `AgentSession`。启动信任询问通过浏览器处理。
+- Bun 编译入口为 `packages/coding-agent/src/bun/web.ts`，保留 OAuth、sandbox 环境恢复与 Bedrock 注册。
+- `packages/coding-agent/src/web.ts` 也分发内部 `--internal-delegated-worker`。Explore 使用内部 NDJSON 协议，不能将它当作公开 JSON 输出模式。
+- `packages/coding-agent/src/main.ts` 装配 Settings、Trust、ResourceLoader、SessionManager、模型与代码智能，然后创建 `AgentSessionRuntime` / `AgentSession`。启动信任询问通过浏览器处理。
 - Web 在慢初始化前监听 loopback；页面可显示启动状态。服务生命周期、重启、旧实例退出及日志规则以 [Web UI](packages/coding-agent/docs/web-ui.md) 为准。
 
 ## 产品源码归属
 
-| 路径 | 职责 |
+| 路径（均位于 `packages/coding-agent/src/` 下，另有说明除外） | 职责 |
 | --- | --- |
 | `startup/` | Web 启动参数、帮助、文件与初始消息输入、浏览器命令、设置表与延迟启动维护（`deferred-maintenance.ts`：延后清理原子写临时文件、空会话目录与确认无活动所有者的委托沙箱） |
 | `agent/runtime/` | Agent 生命周期、运行时服务与 SDK、会话桥 |
@@ -71,13 +71,13 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
 | `platform/` | HTTP dispatcher 与进程执行等平台能力 |
 | `web/`（package 根） | 浏览器页面、样式、前端状态和交互 |
 
-没有 `src/core/`、`frontend/`、`shared/` 或 `application/bootstrap/`。不要创建承载任意业务的万能目录。
+没有 `packages/coding-agent/src/core/`、`frontend/`、`shared/` 或 `application/bootstrap/`。不要创建承载任意业务的万能目录。
 
 ## 公共 contract 与兼容
 
-- 正式 import/export 以各 package manifest 和 `src/index.ts` 为准。源码内部路径不是新的公共 API。
+- 正式 import/export 以各 package manifest 和各包 `src/index.ts` 为准。源码内部路径不是新的公共 API。
 - Symbols 的兼容输入、结果状态/分页、workspace 多语言路由、总时限与单独 `apply_rename` 的契约见 [Symbols](packages/coding-agent/docs/symbols.md)。旧嵌套 target / 0-based symbolId 保留；多 server 的低层 `acquireForWorkspace` 必须指定 language 或 definitionId，自动语言发现/合并由 semantic 层负责。
-- `Args` / `parseArgs` 与斜杠命令公开导出保留，其实现移动到 `startup/`。不再解析旧终端输出参数或多界面切换参数。
+- `Args` / `parseArgs` 与斜杠命令公开导出保留，其实现移动到 `packages/coding-agent/src/startup/`（`args.ts`）。不再解析旧终端输出参数或多界面切换参数。
 - Extension host 只有 `web` 与 `headless`（SDK/worker，无浏览器 UI）；用 `hasUI` 判断实际对话框能力。
 - 不提供终端输入 handler、TUI component、Theme renderer、custom editor/overlay factories 或 Tool terminal render callbacks。Web dialogs、纯文本 widgets、消息/entry 文本 renderer、工具执行和业务事件保留。
 - Session JSONL、Settings、credentials、resource loader 的旧持久化兼容仍保留。不要删除用户 Theme 文件、终端历史设置或旧格式数据来达到“无 CLI”目标；这些兼容不意味着仍有终端前端。

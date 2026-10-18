@@ -46,7 +46,7 @@ export interface WireImage {
 	data: string;
 }
 
-/** One file the composer uploaded for a user message (see composer.js `Attached files`). */
+/** One file the composer uploaded for a user message (see ATTACH_HEADER below and web/js/attachments.js). */
 export interface WireAttachment {
 	path: string;
 	name: string;

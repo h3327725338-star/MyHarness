@@ -12,7 +12,7 @@
 | `agent-loop.ts` | 底层循环：请求模型、流式接收、执行工具、处理 steering/follow-up 队列、停止与错误。全程使用 `AgentMessage`，只在调用模型前转换成 LLM 消息 |
 | `agent.ts` | `Agent`：有状态的门面。持有 state、订阅者、队列、取消信号；`prompt()` / `continue()` / `abort()` |
 | `proxy.ts` | `streamProxy()`：经由服务端转发模型请求的流函数 |
-| `index.ts` | 包根出口（也原样导出 `@myharness/ai`） |
+| `index.ts` | 包根出口（另转导出 `@myharness/ai` 的 `uuidv7`） |
 | `node.ts` | `./node` 出口：根出口 + Node 执行环境 |
 
 ### harness/ — 通用 Harness

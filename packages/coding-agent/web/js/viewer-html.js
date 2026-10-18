@@ -1,4 +1,4 @@
-// An HTML file shown as a page. The server serves the page's folder behind a token (src/modes/web/html-preview.ts);
+// An HTML file shown as a page. The server serves the page's folder behind a token (packages/coding-agent/src/modes/web/html-preview.ts);
 // the frame is sandboxed without same-origin access, so the page cannot reach the Web UI or its API.
 import { html, Spinner, useEffect, useState } from "./ui.js";
 import { api } from "./store.js";

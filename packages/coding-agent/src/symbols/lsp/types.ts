@@ -5,7 +5,7 @@
  * - 这里只定义 JSON-RPC 2.0 与 LSP over stdio 通信所需的最小类型 subset。
  * - 不与 Code Intelligence 领域模型（CodePosition / CodeRange / CodeLocation /
  *   CodeSymbol 等）混用：LSP Position/Range/Location 是协议结构，即使字段相似
- *   也保持概念边界，未来由 Semantic Backend adapter 负责转换。
+ *   也保持概念边界，由 Semantic Backend 负责转换。
  * - 不复制完整 LSP 规范类型；只定义本阶段真正需要的最小字段。
  */
 

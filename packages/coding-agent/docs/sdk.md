@@ -518,8 +518,8 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `pwsh`, `edit`, `write`, `grep`, `find`, `ls`, `symbols`, `agent`, `workflow`, `ultracode`. The `agent`, `workflow`, and `ultracode` tools are active only when **Sub Agent** is enabled in global settings and the explicit tool allowlist permits them.
-- Default built-ins: `read`, `bash`, `pwsh`, `edit`, `write`; `symbols` is opt-in through `codeIntelligence.symbolsEnabled` and is disabled by default. Enabling or disabling it takes effect after the runtime restarts.
+- Built-in tool names include `read`, `bash`, `pwsh`, `edit`, `write`, `grep`, `find`, `ls`, `symbols`, `apply_rename`, `agent`, `workflow`, `ultracode`, `agent_tasks`, `github`, `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write`, `ask_user_question`, `todo_write`, `web_search`, `web_fetch`, `job_list`, `job_output`, `job_kill` (plus `apply_patch` and the desktop-only `workspace`). The `agent`, `workflow`, `ultracode`, and `agent_tasks` tools are active only when **Sub Agent** is enabled in global settings and the explicit tool allowlist permits them.
+- Default built-ins for a main session: `read`, `bash`, `pwsh`, `job_list`, `job_output`, `job_kill`, `edit`, `write`, `symbols`, `apply_rename`, `github`, `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write`, `ask_user_question`, `todo_write` (plus `web_search`/`web_fetch` when Web Search is enabled and `workspace` on the desktop host). `symbols` is opt-in through `codeIntelligence.symbolsEnabled` and is disabled by default. Enabling or disabling it takes effect after the runtime restarts.
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
@@ -564,7 +564,7 @@ const { session } = await createAgentSession({
 
 // Disable one tool while keeping the rest available
 const { session } = await createAgentSession({
-  excludeTools: ["ask_question"],
+  excludeTools: ["ask_user_question"],
 });
 ```
 

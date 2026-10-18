@@ -178,7 +178,7 @@
       /**
        * Flatten tree into list with indentation and connector info.
        * Returns array of { node, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots }.
-       * Matches tree-selector.ts logic exactly.
+       * Matches the branch/indent rules used by the renderers below in this file.
        */
       function flattenTree(roots, activePathIds) {
         const result = [];
@@ -221,7 +221,7 @@
             Number(containsActive.get(b)) - Number(containsActive.get(a))
           );
 
-          // Calculate child indent (matches tree-selector.ts)
+          // Calculate child indent (same single-child-chain rules as above)
           let childIndent;
           if (multipleChildren) {
             // Parent branches: children get +1

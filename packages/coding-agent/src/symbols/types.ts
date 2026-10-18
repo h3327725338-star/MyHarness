@@ -1,11 +1,11 @@
 /**
  * Code Intelligence 统一数据模型。
  *
- * 这是 Lightweight Backend / Semantic LSP Backend / Symbol Store 共用的领域模型。
+ * 这是 Semantic LSP Backend / 词法检索 / Symbol Store 共用的领域模型。
  * 任何 backend 的原始响应进入 Code Intelligence domain 之前都必须转换为这里的类型。
  *
  * 坐标与路径不变量（invariants）：
- * - 内部位置一律 0-based（line / character 从 0 开始），与未来 LSP 坐标一致；
+ * - 内部位置一律 0-based（line / character 从 0 开始），与 LSP 坐标一致；
  *   需要 1-based 展示（例如 symbols tool 的 "path:line" 输出）时由展示层转换。
  * - CodeRange.end 为 exclusive（区间为 [start, end)），与 LSP 一致。
  * - CodeSymbol.path / CodeLocation.path 一律为项目根目录相对路径，POSIX 风格 "/"。
@@ -22,8 +22,8 @@
  *
  * 结果语义不变量（invariants）：
  * - items: [] 只表示"查询成功且确实没有结果"；失败/降级必须通过 meta 表达。
- * - "lightweight" 不等于 "partial"（search_code 天然 lightweight 但可以 complete）。
- * - "fallback" 不等于 "lightweight"（search_code 本来就是 lightweight，不是 fallback）。
+ * - "lightweight" 不等于 "partial"（词法结果天然 lightweight 但可以 complete）。
+ * - "fallback" 不等于 "lightweight"（词法结果本来就是 lightweight，不是 fallback）。
  */
 
 // =============================================================================
@@ -46,7 +46,7 @@ export interface CodeRange {
 export interface CodeLocation {
 	/** 项目根目录相对路径（POSIX 风格） */
 	path: string;
-	/** 精确范围。行级精度的数据源（如 legacy lightweight parser）不提供时缺省。 */
+	/** 精确范围。行级精度的数据源不提供时缺省。 */
 	range?: CodeRange;
 	/** 0-based 行级精度；仅当数据源知道行号但不知道精确 column 时使用。 */
 	line?: number;
@@ -57,8 +57,8 @@ export interface CodeLocation {
 // =============================================================================
 
 /**
- * 符号种类。前 12 种与 legacy lightweight parser 输出完全兼容；
- * 其余为未来 LSP documentSymbol 常见且含义明确的种类。
+ * 符号种类。前 12 种与历史轻量解析输出兼容；
+ * 其余为 LSP documentSymbol 常见且含义明确的种类。
  * 无法映射的 backend kind 一律归为 "unknown"，不允许 crash。
  */
 export type CodeSymbolKind =
@@ -117,7 +117,7 @@ export interface CodeSymbol {
 	 * 此时 selectionRange 保持 undefined，两者同时存在只是精度不同，不是互相替代。
 	 */
 	line?: number;
-	/** 0-based、inclusive body 结束行（行级精度；legacy endLine 转换而来） */
+	/** 0-based、inclusive body 结束行（行级精度） */
 	bodyEndLine?: number;
 
 	/** 父符号 id；未知时缺省 */
@@ -246,7 +246,7 @@ export interface IntelligenceResult<T> {
 }
 
 // =============================================================================
-// 诊断模型（未来 LSP diagnostics 的最小领域形态）
+// 诊断模型（LSP diagnostics 的最小领域形态）
 // =============================================================================
 
 export type DiagnosticSeverity = "error" | "warning" | "information" | "hint" | "unknown";

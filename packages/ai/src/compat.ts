@@ -6,8 +6,8 @@
  *
  * Existing apps switch imports from "@myharness/ai" to
  * "@myharness/ai/compat" unchanged; new code uses `createModels()`
- * and the provider factories. This module is deleted with the coding-agent
- * ModelManager migration.
+ * and the provider factories. This module is temporary and will be removed
+ * once callers migrate off the legacy surface.
  */
 
 export * from "./api/anthropic-messages.lazy.ts";

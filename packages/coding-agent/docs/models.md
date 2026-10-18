@@ -140,14 +140,19 @@ The `baseUrl` is required when adding custom models to the `google-generative-ai
 
 ## Supported APIs
 
+Set `api` at provider level (default for all models) or model level (override per model). Known values (see [custom-provider.md](custom-provider.md) for streaming details and migration notes):
+
 | API | Description |
 |-----|-------------|
 | `openai-completions` | OpenAI Chat Completions (most compatible) |
 | `openai-responses` | OpenAI Responses API |
+| `azure-openai-responses` | Azure OpenAI Responses API |
 | `anthropic-messages` | Anthropic Messages API |
 | `google-generative-ai` | Google Generative AI |
-
-Set `api` at provider level (default for all models) or model level (override per model).
+| `google-vertex` | Google Vertex AI API |
+| `mistral-conversations` | Mistral SDK Conversations/Chat streaming |
+| `bedrock-converse-stream` | Amazon Bedrock Converse API |
+| `myharness-messages` | MyHarness's own messages protocol: a single POST of `{ model, context, options }` to `<baseUrl>/messages`, returning an SSE stream of serialized assistant events |
 
 ## Provider Configuration
 
@@ -498,7 +503,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |
 | `requiresThinkingAsText` | Convert thinking blocks to plain text |
 | `requiresReasoningContentOnAssistantMessages` | Include empty `reasoning_content` on all replayed assistant messages when reasoning is enabled |
-| `thinkingFormat` | Use `reasoning_effort`, `openrouter`, `deepseek`, `together`, `zai`, `qwen`, `chat-template`, or `qwen-chat-template` thinking parameters |
+| `thinkingFormat` | Use `openai`, `openrouter`, `deepseek`, `together`, `zai`, `qwen`, `chat-template`, `qwen-chat-template`, `string-thinking`, or `ant-ling` thinking parameters |
 | `chatTemplateKwargs` | `chat_template_kwargs` values for `thinkingFormat: "chat-template"`; use `{ "$var": "thinking.enabled" }` or `{ "$var": "thinking.effort" }` for myharness-controlled thinking values |
 | `cacheControlFormat` | Use Anthropic-style `cache_control` markers on the system prompt, last tool definition, and last user/assistant text content. Currently only `anthropic` is supported. |
 | `sendSessionAffinityHeaders` | For `openai-completions`, send session-affinity headers from the session id when caching is enabled. Default: `false`. |

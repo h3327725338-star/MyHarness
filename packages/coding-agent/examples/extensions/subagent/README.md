@@ -1,5 +1,7 @@
 # Subagent Example
 
+> Current state: this directory now contains only `agents.ts` (agent discovery and configuration: `AgentScope`, `AgentConfig`, `loadAgentsFromDir`, …), `agents/*.md` (4 example definitions) and `prompts/*.md` (3 workflow presets); there is no extension entry file (`index.ts`). The tool modes (Single/Parallel/Chain), concurrency limits, streaming output / usage display / 50 KB truncation beyond `[DONE]`, and the `agentScope` / `confirmProjectAgents` runtime behaviors described below cannot be verified against this directory's code; `agents.ts` alone covers discovery logic, the `AgentScope` type and the frontmatter fields (`name`/`description`/`tools`/`model`). The `index.ts` references in the structure tree and install commands take effect only once an entry implementation is added.
+
 Delegate tasks to specialized subagents with isolated context windows.
 
 ## Features
@@ -16,8 +18,7 @@ Delegate tasks to specialized subagents with isolated context windows.
 ```
 subagent/
 ├── README.md            # This file
-├── index.ts             # The extension (entry point)
-├── agents.ts            # Agent discovery logic
+├── agents.ts            # Agent discovery logic (entry-point tool implementation not present)
 ├── agents/              # Sample agent definitions
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans

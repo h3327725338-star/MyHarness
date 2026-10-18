@@ -3,7 +3,7 @@
 ## 项目事实
 
 - 这是一个 npm/TypeScript/ESM monorepo。
-- 产品层在 packages/coding-agent/；Agent Core 在 packages/agent/；Provider/AI API 在 packages/ai/；浏览器界面在 packages/coding-agent/web/，服务端在 src/modes/web/。终端 CLI/TUI 已移出本仓库。
+- 产品层在 packages/coding-agent/；Agent Core 在 packages/agent/；Provider/AI API 在 packages/ai/；浏览器界面在 packages/coding-agent/web/，服务端在 packages/coding-agent/src/modes/web/。终端 CLI/TUI 已移出本仓库。
 - 当前整体架构和模块归属见 ARCHITECTURE_AND_DEVELOPMENT.md。
 - 当前源码没有 packages/coding-agent/src/core/、frontend/、shared/ 或 application/bootstrap/。
 
@@ -76,14 +76,14 @@
 - 根 `system-prompts/` 是 MyHarness 产品运行时使用的静态 System Prompt 资源，面向所有使用 MyHarness 的项目。
 - MyHarness 仓库自己的开发规则、CI 版本固定和维护流程只放在根 `AGENTS.md` 及其路由到的仓库文档中。
 - 用户/项目的 `SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、`CLAUDE.md` 和 skills 由 Coding Agent 各自的 loader 处理，不要建立第二套项目规则系统。
-- 当前实现中，受信任项目的 `.myharness/SYSTEM.md` 覆盖全局 `SYSTEM.md`；不受信任时回退全局文件。`APPEND_SYSTEM.md` 使用同样的项目优先级并作为追加内容，不与全局和项目文件简单合并。`AGENTS.md`/`CLAUDE.md` 是独立的项目上下文，除非显式关闭 context loading，否则不因 Project Trust 被跳过。
+- 当前实现中，受信任项目的 `.myharness/SYSTEM.md` 覆盖全局 `SYSTEM.md`；不受信任时回退全局文件。`APPEND_SYSTEM.md` 使用同样的项目优先级并作为追加内容，不与全局和项目文件简单合并。`AGENTS.md`/`CLAUDE.md` 是独立的项目上下文，除非使用 `--no-context-files` 显式关闭，否则不因 Project Trust 被跳过。
 
 ## 修改规则
 
 - 只修改完成当前任务所必须的内容，不顺手重构无关区域。
 - 不创建承载任意业务的万能目录，也不把业务逻辑塞进 utils/ 或具体展示组件。
 - Agent 生命周期放 agent/runtime/；Session 格式和 persistence 放 session/；Context/Compact 放 context/；Git 原语放 git/；Provider runtime、Model 和 credential 放 providers/；Tool 放 tools/；Extension 放 extensions/。
-- 产品页面放 coding-agent 的 web/；Web 服务与交互桥接放 src/modes/web/，不得重新引入已移出的终端组件包。
+- 产品页面放 coding-agent 的 web/；Web 服务与交互桥接放 packages/coding-agent/src/modes/web/，不得重新引入已移出的终端组件包。
 - Tool execution contract 与 presentation 分开；底层业务逻辑不要依赖具体展示组件。
 - Application use case 用于跨领域业务流程，不用于替代底层领域模块，也不导入具体展示组件。
 - 通过正式 contract、runtime 或 API entry 连接模块，不要为了方便直接依赖不稳定的内部实现。
@@ -100,7 +100,7 @@
 
 ## 兼容性和安全
 
-- 修改前检查 Public API、package.json exports、src/index.ts、Session JSONL、Settings、Credentials、migration、Extension API、Git metadata 和 Prompt 行为。
+- 修改前检查 Public API、package.json exports、各包 src/index.ts、Session JSONL、Settings、Credentials、migration、Extension API、Git metadata 和 Prompt 行为。
 - 不因为名称旧就删除 compat、deprecated alias、旧 Session/Settings 格式或 migration。
 - 不输出 API Key、OAuth Token、Credential、Cookie、Session 私密内容或用户目录中的敏感数据。
 - 非必要不要删除或覆盖 Session、Git metadata、用户配置、cache、Trace 或其他持久化数据。

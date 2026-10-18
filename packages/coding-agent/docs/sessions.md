@@ -66,7 +66,7 @@ Set the name at startup with `--name` or `-n`:
 
 ```bash
 myharness --name "Refactor auth module"
-myharness --name "CI audit" -p "Review this build failure"
+myharness --name "CI audit" "Review this build failure"
 ```
 
 Named sessions are easier to find in `MyHarness -r`.

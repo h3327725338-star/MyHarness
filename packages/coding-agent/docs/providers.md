@@ -24,7 +24,7 @@
 
 在 Web UI 中，打开 Settings → **Providers**，选择一个已配置或注册的 Provider，然后管理它的 **API Keys**。Enabled Providers 和 saved-but-disabled Providers 会分组显示。一个 Provider 可以保存多个带名称的 keys，但该 Provider 下的所有 models 只使用手动选中的 current key；MyHarness 不会自动 rotate 或 fail over。Values 会以 plain text 保存在 `~/.myharness/agent/auth.json` 中，因此不要分享这个 file。legacy `vision-auth.json` 中已有的 entries 会被导入，但旧 file 不会删除。
 
-可以通过 environment variable 设置 credentials。下面的 mapping 只会在对应的 configured、custom 或 extension Provider 已存在时生效；它本身不会创建 Provider。
+可以通过 environment variable 提供 credentials，但只在对应 Provider 已通过 `models.json`、Settings 或 extension 配置好之后才会被引用：`models.json`/`auth.json` 中的 `$VAR`/`${VAR}` 插值会从进程环境读取（见 [models.md](models.md) Value Resolution）。`packages/ai/src/env-api-keys.ts` 当前是显式 stub（`findEnvKeys`/`getEnvApiKey` 恒返回 `undefined`，注释写明不再维护上游 Provider 到环境变量的映射），因此不存在按 Provider ID 自动读取下表的集中映射。下表是各 Provider 惯用的环境变量名：只有当它们被已配置 Provider 的 `apiKey`/`headers`/`env` 引用时才会生效，单独设置不会创建 Provider 或 model。
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -70,7 +70,7 @@ myharness
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
 
-Environment-variable mappings 定义在 [`packages/ai/src/env-api-keys.ts`](../../ai/src/env-api-keys.ts) 中，并使用 [`packages/ai/src/auth/helpers.ts`](../../ai/src/auth/helpers.ts) 里的 authentication helpers。
+上表是惯用名而非集中映射：`packages/ai/src/env-api-keys.ts` 是显式 stub，不再提供按 Provider 的环境变量映射；`$VAR` 插值解析见 `packages/coding-agent/src/providers/credentials/value-resolution.ts`，认证 helpers 见 [`packages/ai/src/auth/helpers.ts`](../../ai/src/auth/helpers.ts)。
 
 对于 Anthropic，同时设置 `ANTHROPIC_OAUTH_TOKEN` 和 `ANTHROPIC_API_KEY` 时，前者优先。
 

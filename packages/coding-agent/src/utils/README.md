@@ -11,7 +11,7 @@
 | 文件写入 | `atomic-write.ts`（原子替换、临时文件清理）、`fs-watch.ts`（带错误处理的监听） |
 | 路径 | `paths.ts`（规范化、identity key、相对路径显示、Git 仓库根） |
 | 进程与 Shell | `child-process.ts`（spawn、进程树终止）、`shell.ts`（Shell 配置、环境、分离子进程跟踪）、`shell-command-lexer.ts`（保守的 Shell 命令词法切分）、`sleep.ts`（可取消等待） |
-| 文本与解析 | `frontmatter.ts`、`json.ts`（去注释）、`html.ts`（实体解码）、`ansi.ts`（去 ANSI）、`syntax-highlight.ts`、`changelog.ts` |
+| 文本与解析 | `frontmatter.ts`、`json.ts`（去注释）、`html.ts`（实体解码）、`ansi.ts`（去 ANSI）、`syntax-highlight.ts`（含 `highlight-js-lib-index.d.ts` 类型声明）、`changelog.ts` |
 | 图片 | `image-resize.ts` / `image-resize-core.ts` / `image-resize-worker.ts`、`image-convert.ts`、`image-process.ts`、`exif-orientation.ts`、`mime.ts`、`photon.ts`、`jxl-decode-worker.ts` |
 | 输入文件 | `file-preprocess.ts`（富文档转文本/页图）、`input-image-attachments.ts` |
 | 桌面集成 | `open-browser.ts`、`popup-notification.ts`（任务结束弹窗的内容与命令） |

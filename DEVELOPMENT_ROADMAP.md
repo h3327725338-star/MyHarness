@@ -4,7 +4,7 @@
 
 ## 当前基线
 
-- 产品入口是 `packages/coding-agent/src/web.ts` → `main.ts`；跨领域装配由 `application/resource-loader.ts` 和 `AgentSession` 完成。
+- 产品入口是 `packages/coding-agent/src/web.ts` → `src/main.ts`；跨领域装配由 `packages/coding-agent/src/application/resource-loader.ts` 和 `AgentSession` 完成。
 - Agent Core 只处理 Agent state、event、loop、tool lifecycle、取消和队列，不拥有 Provider catalog、TUI 或 Node SQLite。
 - AI 包提供 Provider/Models/API/auth contract，但 `providers/all.ts` 不提供上游 Provider catalog；应用必须注册或配置 Provider。
 - Coding Agent 的 model runtime 负责 `models.json`、credential、模型 store 和 extension/native Provider 组合。
@@ -36,7 +36,7 @@
 
 目标：保持 `agent/runtime`、`session`、`context`、`providers`、`tools`、`extensions`、`git`、`modes` 等领域边界。
 
-验收条件：新逻辑放入职责最接近的现有目录；公共能力通过正式 API entry/runtime 连接；`src/utils` 不吸收领域业务；新 CLI mode 必须有参数、生命周期和 output contract 测试。
+验收条件：新逻辑放入职责最接近的现有目录；公共能力通过正式 API entry/runtime 连接；`packages/coding-agent/src/utils` 不吸收领域业务；新增运行模式必须有参数、生命周期和 output contract 测试。
 
 ### Prompt、skills 与 extensions
 
@@ -44,11 +44,11 @@
 
 验收条件：修改 Prompt 时同步 loader/composer 文档和相关测试；区分静态文本生效、Project Trust、extension transform 与真实 Provider 请求；不要新增不存在的“隐式”资源文件。
 
-### 工具、Symbols 与 TUI
+### 工具、Symbols 与展示层
 
-目标：保持工具执行 contract、presentation、symbols backend 和 TUI 展示层解耦。
+目标：保持工具执行 contract、presentation、symbols backend 和展示层解耦。
 
-验收条件：工具结果可脱敏、可持久化；symbols 明确 semantic/LSP/runtime source；纯文本检索使用 grep/find/ls；TUI component 遵守 render/invalidate/focus/overlay contract，并有对应终端测试。
+验收条件：工具结果可脱敏、可持久化；symbols 明确 semantic/LSP/runtime source；纯文本检索使用 grep/find/ls；展示层沿用 Web dialogs 与纯文本 widgets，不重新引入已移出的终端组件包，并有对应 Web 交互测试。
 
 ## 每项后续开发都必须留下的记录
 

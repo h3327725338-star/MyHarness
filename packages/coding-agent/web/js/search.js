@@ -1,6 +1,7 @@
 // One search rule for every list of candidates (commands, settings, workspaces, chats, models): relevance first, usage
-// second. It is the same rule the terminal uses (packages/tui/src/fuzzy.ts `rankedFilter`); no DOM here, so it is tested
-// directly.
+// second. It keeps the historical terminal rule's tiers (exact > prefix > contains > keywords > letters in order,
+// formerly shared with the removed `packages/tui` package as `rankedFilter`); this file is now the only implementation;
+// no DOM here, so it is tested directly.
 
 import { yieldToMain } from "./scheduling.js";
 

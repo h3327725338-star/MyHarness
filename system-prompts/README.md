@@ -6,7 +6,7 @@
 
 ## Coding / General 模式
 
-共享正文位于 `common/`，两个模式的身份分别位于 `coding/identity.md` 和 `general/identity.md`。以下表格保留 loader 的逻辑资源名；实际共享路径加 `common/` 前缀。loader 兼容旧布局的替代目录，但只在同一指定目录内查找，不回退安装目录。共用资源按原条件注入，不遍历目录。General 可追加用户个性化内容，Project Context、工具、设置和长期记忆继续沿用现有机制。后端接口和前端接入边界见 [双模式后端约定](../packages/coding-agent/docs/chat-modes-backend.md)。
+共享正文位于 `common/`，两个模式的身份分别位于 `coding/identity.md` 和 `general/identity.md`。以下表格保留 loader 的逻辑资源名；实际共享路径加 `common/` 前缀。loader 兼容旧布局的替代目录，但只在同一指定目录内查找，不回退安装目录。共用资源按原条件注入，不遍历目录。各模式可追加各自的用户个性化内容，Project Context、工具、设置和长期记忆继续沿用现有机制。后端接口和前端接入边界见 [双模式后端约定](../packages/coding-agent/docs/chat-modes-backend.md)。
 
 ## 文件与作用域
 
@@ -31,7 +31,7 @@
 | `harness/default.md` | 通用 AgentHarness 未提供自定义 systemPrompt 时的默认身份 |
 | `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,apply-rename,find,grep,ls,github,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,ask-user-question,todo-write,workspace}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 与 apply-rename 说明仅在 symbols 启用时出现，workspace 说明仅在桌面宿主连接时出现 |
 | `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合。symbols 规则仅在 symbols 启用时出现 |
-| `tools/no-snippets.md` | 有工具但无简短说明时的提示 |
+| `tools/no-snippets.md` | 历史占位说明；当前组合对缺 snippet 使用行内占位 `(no description available)`，不加载此文件 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |
 | `tools/routing/symbols.md`、`evidence-heading.md` | symbols 启用时加载的证据工具路由及标题；自然选择，不强制每次查询都调用 |
 | `tools/routing/{agent,workflow,ultracode}.md` | 各编排工具启用时的选择规则 |
@@ -66,7 +66,7 @@ Extension Prompt 由 Coding Agent 的 ResourceLoader/context loader 独立处理
 
 唯一文本入口：`packages/ai/src/api/system-prompt-loader.ts` 的 `loadSystemPrompt` / `loadSystemPromptLines`。编程会话的组合入口是 `packages/coding-agent/src/system-prompts/composer/index.ts`，本地 loader 边界是 `packages/coding-agent/src/system-prompts/loader/index.ts`；各独立任务只加载自己的文件，不遍历目录或按字母序自动注入。
 
-主聊天稳定顺序为：当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → 当前工具规则 → General 个性化内容（有配置时）→ 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 回复语言 → 角色边界（顺序冻结；工具按名确定性排序，缺 snippet 时占位不断条目）。工作目录与当前模型不再进 system，改走 messages 提醒：插在最后一条 user 之前、时间戳为 0 的 transient user 消息，不写盘、不占缓存前缀，内容不变；压缩 fork 原样复用父 system/tools 引用。
+主聊天稳定顺序为：用户个性化内容（有配置时）→ 当前模式身份 → 共用核心 → 当前工具说明 → 工具路由 → slash 命令 → 当前工具规则 → 自定义 Prompt → append Prompt → 项目上下文 → 技能 → 回复语言 → 角色边界（顺序冻结；工具按名确定性排序，缺 snippet 时行内占位不断条目）。工作目录与当前模型不再进 system，改走 messages 提醒：插在最后一条 user 之前、时间戳为 0 的 transient user 消息，不写盘、不占缓存前缀，内容不变；压缩 fork 原样复用父 system/tools 引用。
 
 扩展按原注册顺序变换 Prompt；随后按原条件追加 Auto Memory 规则，在持久化结构化 Session 中追加对话产出规则和实际目录，再去除旧角色块并重新追加当前角色边界。这保留了原来的角色块去重逻辑。Anthropic OAuth 身份由 adapter 单独放在以上文本前面。显式 `/commit` 的授权、失败恢复和 Git 事务由 `packages/coding-agent/src/agent/runtime/agent-session.ts`、`modes/web/` 等源码处理，不对应一个本目录中的静态 Prompt 文件。
 
@@ -86,7 +86,7 @@ system prompt，后者作为 composer 的追加内容。
 
 ## 注入链路与保留内容
 
-主链路：Web 启动命令/SDK → ResourceLoader 加载用户自定义与项目上下文 → AgentSession `_rebuildSystemPrompt` 收集有效工具 → `buildSystemPrompt` → `before_agent_start` 扩展变换 → `_getTurnSystemPrompt` 重施角色及 commit 边界 → Agent state → agent-loop 的 `Context.systemPrompt` → ModelRuntime / provider stream → adapter 组包 → SDK HTTP 请求。`onPayload` 扩展仍可按原接口变换最终请求。
+主链路：Web 启动命令/SDK → ResourceLoader 加载用户自定义与项目上下文 → AgentSession `_rebuildSystemPrompt` 收集有效工具 → `buildStableSystemPrompt`（稳定前缀；工作目录与模型身份改走 messages 尾部提醒，不进 system）→ `before_agent_start` 扩展变换 → `_getTurnSystemPrompt` 重施个性化、产物目录、workspace 上下文及角色边界 → Agent state → agent-loop 的 `Context.systemPrompt` → ModelRuntime / provider stream → adapter 组包 → SDK HTTP 请求。`onPayload` 扩展仍可按原接口变换最终请求。
 
 请求映射：OpenAI Completions/Responses 使用原来的 system/developer 角色判断；Anthropic 使用 system text blocks；Google Generative AI/Vertex 使用 systemInstruction；Bedrock 使用 system text 与缓存块；Mistral 在 messages 首部插入 system。Kimi 延迟工具的 system 消息只有动态工具 schema，没有固定自然语言正文。
 
@@ -101,7 +101,7 @@ system prompt，后者作为 composer 的追加内容。
 下面的迁移数字和测试结果是历史记录，不代表每次 checkout 都重新执行过；当前结论必须以源码、测试和实际命令输出为准。
 
 - 原迁移时目录共有 55 个 Prompt 正文 `.md` 文件；另有 `README.md`、`maintenance.md`、`roadmap.md` 维护文档，这三者不在 loader 的 Prompt 资源清单中。`session/commit-authorization.md` 不在其中。
-- 相关测试入口包括 `packages/ai/test/system-prompt-loader.test.ts`、`system-prompt-provider-scope.test.ts` 和 `packages/coding-agent/test/system-prompt-files.test.ts`。
+- 相关测试入口包括 `packages/ai/test/system-prompt-loader.test.ts`、`packages/ai/test/system-prompt-provider-scope.test.ts` 和 `packages/coding-agent/test/system-prompt-files.test.ts`。
 - 这些测试文件的存在只能证明测试入口和覆盖意图；本次文档核对没有把它们的历史记录写成新的测试通过结论。
 - 历史终端 smoke 曾验证本地 Provider、429 恢复、read 工具与会话续接；对应终端测试脚本已随旧入口移除，这不是当前 Web 启动的验证结果。
 - `npm run build:offline`、全仓只读 Biome 检查、`node scripts/run-checks-parallel.mjs`（typecheck、浏览器打包、模型数据、依赖及锁文件等）通过。Biome 仅报告原有文件的两条 info；新增 HTTP 测试曾有类型错误，已修正并复验通过。

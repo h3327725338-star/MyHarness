@@ -12,7 +12,7 @@ The project is Early-stage / Work in Progress. Read
 maintenance guide before changing a public contract. Long-lived design choices
 are recorded in `docs/decisions/`.
 
-## Local checls
+## Local checks
 
 
 

@@ -114,7 +114,7 @@ await session.prompt("Hello");
 | `agentDir` | `~/.myharness/agent` | Config directory |
 | `model` | From settings/first available | Model to use |
 | `thinkingLevel` | From settings/`"medium"` | off, minimal, low, medium, high, xhigh, max |
-| `tools` | `["read", "bash", "edit", "write", "symbols"]` built-ins | Allowlist tool names across built-in, extension, and custom tools |
+| `tools` | Default active set computed per agent role and settings (see the default tool computation in `src/agent/runtime/sdk.ts`); when unspecified it is not a fixed five-item list | Allowlist tool names across built-in, extension, and custom tools |
 | `customTools` | `[]` | Additional tool definitions |
 | `resourceLoader` | DefaultResourceLoader | Resource loader for extensions, skills, prompts, themes, and context files |
 | `sessionManager` | `SessionManager.create(cwd)` | Persistence |

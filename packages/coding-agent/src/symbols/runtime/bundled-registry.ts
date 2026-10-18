@@ -363,7 +363,7 @@ export interface BundledLanguageServerRegistryOptions {
 
 /**
  * Build the private registry used by normal runtime construction. An absent
- * bundle returns undefined so a source checkout can still use the legacy
+ * bundle returns undefined so a source checkout can still use the
  * built-in registry until its distribution assets are staged.
  */
 export function createBundledLanguageServerRegistry(

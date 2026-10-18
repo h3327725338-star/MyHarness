@@ -25,7 +25,11 @@
 | `generation-speed.ts`、`request-cache.ts` | 输出速度和每次请求的缓存命中率，只用 Provider 报告的真实数据 |
 | `terminal.ts` | Terminal 面板的真实 Shell（伪终端） |
 | `folder-dialog.ts` | 调用系统的文件夹选择窗口 |
-| `routes-core.ts`、`routes-sessions.ts`、`routes-files.ts`、`routes-git.ts`、`routes-settings.ts`、`routes-providers.ts`、`routes-accounts.ts`、`routes-terminal.ts` | 各组 API 路由 |
+| `routes-core.ts`、`routes-sessions.ts`、`routes-files.ts`、`routes-git.ts`、`routes-settings.ts`、`routes-providers.ts`、`routes-accounts.ts`、`routes-terminal.ts`、`routes-modes.ts` | 各组 API 路由 |
+| `session-changes.ts` | 从会话条目收集文件差异（供变更展示用） |
+| `change-claims.ts`、`changes-stats.ts` | 变更认领登记与 worktree 变更统计/列表缓存（numstat 解析、行数与二进制判断） |
+| `file-pages.ts`、`local-files.ts`、`office.ts`、`html-preview.ts` | 文件内容服务：分页读取、本地文件、Office 文档、HTML 预览 |
+| `slot-budget.ts`、`transcript-cache.ts`、`web-prefs.ts`、`worktree-launch.ts` | 会话 slot 预算、转录缓存、Web 偏好、worktree 启动 |
 | `index.ts` | 出口 |
 
 ### 依赖

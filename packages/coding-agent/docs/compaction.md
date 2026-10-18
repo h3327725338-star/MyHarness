@@ -29,17 +29,16 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-activeTokens >= floor(effectiveContextWindow * 0.85)
+activeTokens >= floor(effectiveContextWindow * 0.9)
 ```
 
 `effectiveContextWindow` is the minimum of the configured context window
 (`contextWindow.main` / `contextWindow.subagent` in settings, or a CLI
 `--context-window` override) and the model metadata `contextWindow`.
 
-`reserveTokens` is runtime-adapted from the configured base (`compaction.reserveTokens`,
-default 16384) and is never a fixed number: the effective reserve is
-`max(baseReserve, 15% × effectiveContextWindow, model.maxTokens + 1024)`, capped just
-below the window. The normal automatic trigger remains 85%; the provider budget guard
+The runtime reserve is derived from the effective window (`reserveTokens =
+ceil(effectiveContextWindow * 0.05)`); the configured `compaction.reserveTokens`
+base and the model `maxTokens` are not part of this computation. The normal automatic trigger remains 90%; the provider budget guard
 and provider overflow recovery are separate checks.
 
 The same `activeTokens` measurement is the single runtime source of truth shared by the

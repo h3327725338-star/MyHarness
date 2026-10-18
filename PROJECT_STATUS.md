@@ -19,9 +19,11 @@ release.
 - `packages/ai` provides Provider/API adapters, model types, credentials and
   authentication contracts. The default Provider catalog is intentionally
   empty; users configure `models.json`, Settings or an extension.
-- `packages/coding-agent` provides the CLI, Interactive/Print/JSON modes,
-  AgentSession, built-in file/shell/symbol/GitHub tools, extensions, skills,
-  prompts, Settings, Git integration, sessions and context compaction.
+- `packages/coding-agent` provides the Web service (`myharness`, loopback-only
+  Web UI) and a Node.js SDK for in-process integrations, AgentSession, built-in
+  file/shell/symbol/GitHub tools, extensions, skills, prompts, Settings, Git
+  integration, sessions and context compaction. Terminal Interactive, Print and
+  JSON modes have been removed; the Web Terminal panel is retained.
 - Workspace records and product sessions use the JSONL/JSON storage under the
   current project `data/workspaces/` tree. SQLite is a separate backend and is
   not the confirmed default Coding Agent storage path.
@@ -29,8 +31,8 @@ release.
   `symbols` tool is disabled by default and controlled by
   `codeIntelligence.symbolsEnabled`; optional Windows modules are managed per
   language. Plain-text search remains available through `grep`, `find` and `ls`.
-- The repository can build and run targeted source CLI smoke tests with a
-  synthetic local Provider fixture; that does not prove any external Provider
+- The repository can build and run targeted source smoke tests (`--help` against
+  the Web entry) with a synthetic local Provider fixture; that does not prove any external Provider
   or OAuth integration.
 - The release/privacy audit is available as `npm run audit:release`, with
   staged and prepared-public-ref variants; the pre-commit and pre-push hooks

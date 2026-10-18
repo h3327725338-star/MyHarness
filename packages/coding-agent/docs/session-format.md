@@ -28,7 +28,7 @@ Sessions have a version field in the header:
 
 Existing sessions are automatically migrated to the current version (v3) when loaded.
 
-Message entries may additionally carry optional `timing` metadata: `requestMs`, `firstOutputMs`, `generationMs` for assistant requests and `toolMs` for tool results. Durations use a monotonic runtime clock and are recorded before the message is persisted. The first output must be a non-empty text, thinking, or tool-call delta; block-start events do not count. This metadata is outside `message` and is never sent to the model. The format remains v3; old entries without timing remain valid and their missing durations are unknown, not zero. Session speed uses only requests with paired output counts and generation durations, with incomplete coverage disclosed as approximate.
+Message entries may additionally carry optional `timing` metadata: `providerRequestMs`, `requestMs`, `firstOutputMs`, `generationMs` for assistant requests and `toolMs` for tool results. Durations use a monotonic runtime clock and are recorded before the message is persisted. The first output must be a non-empty text, thinking, or tool-call delta; block-start events do not count. This metadata is outside `message` and is never sent to the model. The format remains v3; old entries without timing remain valid and their missing durations are unknown, not zero. Session speed uses only requests with paired output counts and generation durations, with incomplete coverage disclosed as approximate.
 
 Usage may carry `totalReported`, indicating that the total comes from upstream total/input-output counters rather than a sum of potentially incomplete buckets. This permits an exact prompt-cache hit rate when the provider omits the cache-write bucket but reports a reliable total and cache reads.
 
@@ -103,6 +103,9 @@ interface AssistantMessage {
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
   timestamp: number;
+  // Optional provider detail fields (absent in older sessions):
+  // responseModel, responseId, requestDurationMs, diagnostics,
+  // compactionCheckpoints (OpenAI Responses encrypted checkpoints)
 }
 
 interface ToolResultMessage {
@@ -129,6 +132,8 @@ interface Usage {
     cacheWrite: number;
     total: number;
   };
+  // Optional provider detail fields (absent in older sessions):
+  // reported, cacheReported, cacheWrite1h, reasoning, totalReported
 }
 ```
 
@@ -142,6 +147,7 @@ interface BashExecutionMessage {
   exitCode: number | undefined;
   cancelled: boolean;
   truncated: boolean;
+  // Optional: timedOut; fullOutputPath locates spilled output
   fullOutputPath?: string;
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
@@ -153,6 +159,7 @@ interface CustomMessage {
   content: string | (TextContent | ImageContent)[];
   display: boolean;              // Show in Web UI
   details?: any;                 // Extension-specific metadata
+  // Optional: excludeFromContext keeps it persisted but out of the LLM context
   timestamp: number;
 }
 

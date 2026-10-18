@@ -17,8 +17,7 @@
 | `compat.ts` | 旧的全局 API 兼容入口（`getModel`、`stream`、`complete`、API 注册表等），对应 `./compat` 子路径 |
 | `legacy-api-aliases.ts`、`env-api-keys.ts` | 兼容入口用到的旧别名与环境变量 Key 查找 |
 | `oauth.ts`、`bun-oauth.ts`、`bedrock-provider.ts` | 对应 `./oauth`、`./bun-oauth`、`./bedrock-provider` 子路径的入口 |
-| `models.generated.ts`、`image-models.generated.ts` | 生成文件；当前内容为空目录 |
-| `cli.ts` | 包自带的 OAuth 登录命令行；只列出 `builtinProviders()` 中带 OAuth 的 Provider，而该列表当前为空 |
+| `models.generated.ts`、`image-models.generated.ts` | 生成文件；当前导出空记录（不打包上游目录） |
 
 ### api/ — 各协议的请求实现
 

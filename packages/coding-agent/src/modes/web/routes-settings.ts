@@ -2,8 +2,7 @@
  * Web API routes for Settings, Project Trust and loaded resources (tools,
  * skills, prompt templates, extensions, slash commands).
  *
- * The settings list mirrors what the TUI /settings menu exposes for
- * Web-relevant items and applies each change through the same
+ * The settings list exposes the Web-relevant items and applies each change through the same
  * SettingsManager / AgentSession calls.
  */
 
@@ -128,7 +127,7 @@ const QUEUE_MODES = [
 ];
 
 /**
- * Which setting of this API a row of the shared `/settings` menu (src/startup/settings-menu.ts) edits in the browser. A row
+ * Which setting of this API a row of the shared `/settings` menu (../../startup/settings-menu.ts) edits in the browser. A row
  * without an entry opens a page of its own there (Providers, Git, Web Search …). The menu itself (rows, order, names,
  * descriptions, choices) is never repeated here.
  */
@@ -871,8 +870,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 	};
 
 	/**
-	 * The `/settings` menu as the terminal shows it: the same rows and the same order by how often each row was used
-	 * (the counts are shared with the terminal through settings.json).
+	 * The `/settings` menu as the Web UI shows it: the same rows and the same order by how often each row was used
+	 * (the counts persist in settings.json).
 	 */
 	const buildSettingsMenu = () => {
 		const counts = settings().getSettingsItemUsageCounts();

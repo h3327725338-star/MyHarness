@@ -272,7 +272,7 @@ Dynamically listed models are typed `Model<Api>`. Narrow with the `hasApi()` gua
 import { hasApi } from '@myharness/ai';
 
 const m = models.getModel('configured-provider', 'configured-model');
-if (m && hasApi(m, 'anthropic-messages')) {
+if (m && hasApi(m, 'openai-completions')) {
   // m: Model<'openai-completions'> — stream options fully typed
   models.stream(m, context, { reasoningEffort: 'high' });
 }
@@ -1032,6 +1032,7 @@ Bundled API implementations live under `./api/<api-id>`:
 | `google-vertex` | `GoogleVertexOptions` |
 | `mistral-conversations` | `MistralOptions` |
 | `bedrock-converse-stream` | `BedrockOptions` |
+| `myharness-messages` | `MyHarnessMessagesOptions` |
 
 Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers (used by the provider factories) defer that load to the first request when the runtime or bundler supports dynamic import chunking. Legacy raw API subpaths from older releases (`./anthropic`, `./google`, `./mistral`, `./openai-completions`, ...) were removed; use `@myharness/ai/api/<api-id>`.
 

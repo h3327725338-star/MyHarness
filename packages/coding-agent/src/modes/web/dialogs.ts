@@ -1,8 +1,8 @@
 /**
  * Bridges Extension UI dialogs (select / confirm / input / editor) to the browser.
  *
- * Extensions call these through ExtensionUIContext, exactly as they do in the
- * TUI. The bridge keeps the request pending until a browser answers it, the
+ * Extensions call these through ExtensionUIContext, the same context the
+ * extension host provides. The bridge keeps the request pending until a browser answers it, the
  * dialog's own timeout/abort fires, or the owning runtime is torn down.
  */
 

@@ -11,6 +11,8 @@
 | `workspace-store.ts` | `WorkspaceStore`：读写 `data/workspaces/registry.json` 和每个 Workspace 的 `metadata/workspace.json`；路径规范化、稳定 ID、增删、搬迁、一致性检查；`resolveWorkspaceDataContext()` / `findWorkspaceDataContext()` 把工作目录映射到 Workspace 数据目录 |
 | `workspace-registry-migration.ts` | `migrateWorkspaceRegistry()`：把旧位置的 Workspace 记录迁入当前布局，带 marker 和归档 |
 | `workspace-reconcile.ts` | 启动后分片后台核对 registry 与 `metadata/workspace.json`（可取消、不抛错、timer 带 `unref()`，写修复走原子写） |
+| `workspace-sources.ts` | Workspace 数据源：`WorkspaceSource` / `WorkspaceSourceNode` 类型、`listWorkspaceSources()` / `readWorkspaceSourceTree()` 读取源树、分阶段上传（`StagedWorkspaceSourceUpload`） |
+| `upload-chunks.ts` | 分片上传：`MAX_UPLOAD_BYTES`（500 MiB） / `MAX_UPLOAD_CHUNK_BYTES`（8 MiB）上限、`decodeUploadChunk()` / `writeUploadChunk()` |
 
 ### 对外接口
 

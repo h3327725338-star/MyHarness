@@ -1,4 +1,4 @@
-// One terminal on screen: xterm.js draws a shell that runs on the server (src/modes/web/terminal.ts) and sends it what is
+// One terminal on screen: xterm.js draws a shell that runs on the server (packages/coding-agent/src/modes/web/terminal.ts) and sends it what is
 // typed. The shell outlives this view: showing it again starts from what it has written so far.
 import { activeSlotId, onTerminalEvent, post } from "./store.js";
 

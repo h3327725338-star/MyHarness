@@ -39,7 +39,7 @@ npm.cmd run build
 
 启动后，在 `/settings` 中配置 Provider 和 model，再输入任务。配置说明见 [Providers](packages/coding-agent/docs/providers.md) 和 [Settings](packages/coding-agent/docs/settings.md)。
 
-没有 Provider 凭据时，可以先检查Web 源码入口 是否能够启动：
+没有 Provider 凭据时，可以先检查 Web 源码入口是否能够启动：
 
 ```powershell
 node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts --help

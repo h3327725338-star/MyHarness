@@ -336,7 +336,7 @@ export class WebHost {
 	private bashCountAtRunStart = 0;
 	private baselinePromise: Promise<WorkspaceBaseline | undefined> | undefined;
 	private baselineFailureReason: string | undefined;
-	/** An open checkpoint left by an earlier run of this session (same recovery as the TUI's startup check). */
+	/** An open checkpoint left by an earlier run of this session (recovered at startup). */
 	pendingStartupCheckpoint: GitCheckpoint | undefined;
 	private lastTerminalRunState: RunStateSnapshot | undefined;
 	private lastAgentEnd: { succeeded: boolean; willRetry: boolean; messages: AgentMessage[] } | undefined;

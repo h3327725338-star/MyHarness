@@ -2,14 +2,14 @@
 //
 // These strings are display-only. They are keyed by tool *name*, never by the tool's model-facing
 // description, so nothing here is compared against or written back to a tool definition: the name,
-// description and parameters the model receives stay exactly as src/tools/ defines them.
+// description and parameters the model receives stay exactly as packages/coding-agent/src/tools/ defines them.
 //
 // This file lives in locales/ on purpose: test/web-i18n.test.ts keeps Chinese characters out of
 // web/js/*.js (it does not descend into locales/), and the translations must not leak into English
 // mode, so the lookup happens behind `isZh()` in panel-context.js. Extension / MCP / third-party
 // tools are never looked up here; they keep their own English description.
 //
-// Every name in src/tools/registry.ts `allToolNames` must have an entry here — test/web-tool-descriptions-zh.test.ts
+// Every name in packages/coding-agent/src/tools/registry.ts `allToolNames` must have an entry here — test/web-tool-descriptions-zh.test.ts
 // reads that set and fails the build when a new built-in tool is added without a Chinese sentence.
 
 export const zhToolDescriptions = {

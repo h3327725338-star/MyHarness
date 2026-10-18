@@ -2,7 +2,7 @@
  * 源码变更检测（Source Change Detection）。
  *
  * 扩展 API 只能热重载配置与扩展（jiti moduleCache: false 每次重新编译），
- * 核心模块（interactive-mode、settings-selector 等）由 tsx 静态加载，
+ * 核心模块由静态 import 加载，
  * ESM import cache 无法在进程内清除，因此核心代码改动必须重启进程才能生效。
  * 本模块用于在扩展触发热重载时检测“进程启动后是否修改过核心源码”，
  * 从而明确提示用户重启，而不是让代码改动静默不生效。
