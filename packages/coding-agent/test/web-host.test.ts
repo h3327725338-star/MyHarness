@@ -108,6 +108,36 @@ describe("Web host (real runtime with a faux provider)", () => {
 		complete.mockRestore();
 	});
 
+	it("names a new chat that only ran a commit from the commit message it recorded", async () => {
+		const fx = await start();
+		const state = await fx.get("/api/state");
+		const owner = fx.hub.slotsShowing(state.session.file)[0]!;
+		const model = owner.session.model!;
+		await fx.post("/api/settings", {
+			id: "conversationNaming",
+			value: { enabled: true, provider: model.provider, model: model.id, thinkingLevel: "off" },
+		});
+		const complete = vi
+			.spyOn(owner.session.modelRuntime, "completeSimple")
+			.mockResolvedValue(fauxAssistantMessage([fauxText("任务通知细分与提示音")]));
+		// The chat has no user message and no reply: only the Commit card the route saves.
+		await fx.post("/api/git/record", {
+			operation: "commit",
+			tone: "ok",
+			title: "Commit succeeded",
+			hash: "2f49e92",
+			detail: "feat(coding-agent): 任务通知按完成/提问/确认细分",
+			lines: "feat(coding-agent): 任务通知按完成/提问/确认细分并新增提示音与桌面原生通知",
+		});
+		await fx.waitFor("session_info", (data) => data.name === "任务通知细分与提示音");
+		expect((await fx.get("/api/state")).session.name).toBe("任务通知细分与提示音");
+		// The naming request carries the commit message, not the card's UI labels.
+		const prompt = String(complete.mock.calls[0]?.[1]?.messages?.[0]?.content);
+		expect(prompt).toContain("[Commit]");
+		expect(prompt).toContain("任务通知按完成/提问/确认细分");
+		complete.mockRestore();
+	});
+
 	it("opens isolated modes, saves drafts and keeps personalization out of Coding", async () => {
 		const fx = await start();
 		const coding = await fx.get("/api/state");

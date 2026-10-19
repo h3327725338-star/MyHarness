@@ -4,11 +4,13 @@ import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import { sessionEntryToContextMessages } from "../../session/projection/index.ts";
-import type { SessionInfo } from "../../session/types.ts";
+import type { SessionEntry, SessionInfo } from "../../session/types.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 
 /** Maximum prompt size used for one AI title request. */
 export const CONVERSATION_TITLE_CONTEXT_MAX_CHARS = 6000;
+/** UI-only Session entry the web app saves after each Git operation (see `POST /api/git/record`). */
+const WEB_GIT_STATUS_CUSTOM_TYPE = "web-git-status";
 /** Maximum persisted title length after model output is normalized. */
 export const CONVERSATION_TITLE_MAX_CHARS = 80;
 const CONVERSATION_TITLE_MAX_MESSAGE_CHARS = 1800;
@@ -108,24 +110,47 @@ function normalizeTranscriptText(text: string): string {
 }
 
 /**
+ * The commit message a saved Git record stands for, or undefined when the entry is not a
+ * successful commit. A chat that only ran `/commit` has no user or assistant text, so this
+ * record is its only naming material; push, restore and failed-commit records carry UI labels
+ * ("Commit succeeded", CI status, hook errors) instead of a topic and never title a chat.
+ */
+export function gitCommitNamingText(entry: SessionEntry): string | undefined {
+	if (entry.type !== "custom" || entry.customType !== WEB_GIT_STATUS_CUSTOM_TYPE) return undefined;
+	const record = entry.data;
+	if (!record || typeof record !== "object") return undefined;
+	const data = record as Record<string, unknown>;
+	if (data.operation !== "commit" || data.tone !== "ok") return undefined;
+	const source = [data.lines, data.detail].find((value) => typeof value === "string" && value.trim());
+	if (typeof source !== "string") return undefined;
+	const text = normalizeTranscriptText(source);
+	return text ? clipText(text, CONVERSATION_TITLE_MAX_MESSAGE_CHARS) : undefined;
+}
+
+/**
  * Select a bounded, compaction-aware title context.
  *
  * The first few messages explain the original goal, while the last few expose
  * the conversation's current topic. Middle messages are intentionally omitted
- * once the hard character budget is reached.
+ * once the hard character budget is reached. Commit messages replace the
+ * conversation only when it has no user or assistant text at all.
  */
 export function buildConversationTitleContext(sessionManager: Pick<SessionManager, "buildContextEntries">): string {
-	const sections: string[] = [];
+	const messages: string[] = [];
+	const commits: string[] = [];
 	for (const entry of sessionManager.buildContextEntries()) {
+		const commitText = gitCommitNamingText(entry);
+		if (commitText) commits.push(`[Commit]\n${commitText}`);
 		for (const message of sessionEntryToContextMessages(entry)) {
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			const text = normalizeTranscriptText(contentText(message.content, "\n"));
 			if (!text) continue;
 			const role = message.role === "user" ? "User" : "Assistant";
-			sections.push(`[${role}]\n${clipText(text, CONVERSATION_TITLE_MAX_MESSAGE_CHARS)}`);
+			messages.push(`[${role}]\n${clipText(text, CONVERSATION_TITLE_MAX_MESSAGE_CHARS)}`);
 		}
 	}
 
+	const sections = messages.length > 0 ? messages : commits;
 	if (sections.length === 0) return "";
 	const whole = sections.join("\n\n");
 	if (whole.length <= CONVERSATION_TITLE_CONTEXT_MAX_CHARS) return whole;
@@ -231,7 +256,7 @@ function normalizeGeneratedTitle(rawText: string): string {
 function buildFallbackTitle(conversationText: string): string {
 	for (const line of conversationText.split(/\r?\n/)) {
 		const candidate = line.trim();
-		if (!candidate || /^\[(?:User|Assistant)\]$/.test(candidate) || /^[… .]+$/.test(candidate)) continue;
+		if (!candidate || /^\[(?:User|Assistant|Commit)\]$/.test(candidate) || /^[… .]+$/.test(candidate)) continue;
 		const title = cleanGeneratedTitleCandidate(candidate);
 		if (title) return title;
 	}

@@ -197,6 +197,8 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (JSON.stringify(record).length > 100_000) throw new HttpError(400, "Git status record is too large");
 		const id = host.session.sessionManager.appendCustomEntry("web-git-status", record);
 		host.broadcast("entry_appended", { id, item: { kind: "gitStatus", id, ts: Date.now(), result: record } });
+		// A chat that only committed has no reply to settle, so the record itself queues background naming.
+		host.refreshConversationNaming();
 		return { id };
 	});
 

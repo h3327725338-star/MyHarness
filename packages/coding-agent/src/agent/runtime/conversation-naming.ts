@@ -1,7 +1,8 @@
 /**
  * Background conversation naming (lifecycle-adjacent, never on the task critical path).
  *
- * Intent: throttle and retry title generation for settled assistant replies only.
+ * Intent: throttle and retry title generation for settled work only (a finished reply, or the commit
+ * a chat that only ran `/commit` ended with).
  * Boundary: runs only when the host reports idle, writes `conversation-naming` custom
  * entries, and never mutates user/assistant history. User- or extension-written titles
  * stay protected (`conversationNamingWork()` returns undefined for them).
@@ -11,7 +12,7 @@
 import type { SessionManager } from "../../session/manager/index.ts";
 import type { AgentSession } from "./agent-session.ts";
 import { resolveAssistantModel } from "./assistant-model.ts";
-import { generateConversationTitle } from "./conversation-title.ts";
+import { generateConversationTitle, gitCommitNamingText } from "./conversation-title.ts";
 
 export const CONVERSATION_NAMING_INTERVAL_MS = 10 * 60_000;
 export const CONVERSATION_NAMING_RETRY_MS = 5_000;
@@ -55,17 +56,17 @@ export function conversationNamingWork(manager: SessionManager, now = Date.now()
 		.find((entry) => entry.type === "session_info");
 	// Titles written by a user, extension or explicit AI rename must remain protected.
 	if (title && title.id !== data?.titleEntryId) return undefined;
-	const reply = manager
-		.buildContextEntries()
-		.slice()
-		.reverse()
-		.find(
-			(entry) =>
-				entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "stop",
-		);
-	if (!reply || reply.id === data?.checkedReplyId) return undefined;
+	const branch = manager.buildContextEntries().slice().reverse();
+	const reply = branch.find(
+		(entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "stop",
+	);
+	// A chat that only ran `/commit` never produced a settled reply, so its commit record is the
+	// newest naming material. It is only a fallback: a chat with a settled reply keeps being named
+	// from the conversation, so committing after a task does not rename it again.
+	const source = reply ?? branch.find((entry) => gitCommitNamingText(entry) !== undefined);
+	if (!source || source.id === data?.checkedReplyId) return undefined;
 	return {
-		replyId: reply.id,
+		replyId: source.id,
 		titleEntryId: title?.id,
 		delay: title && !data?.catchUp ? Math.max(0, (data?.checkedAt ?? 0) + CONVERSATION_NAMING_INTERVAL_MS - now) : 0,
 	};

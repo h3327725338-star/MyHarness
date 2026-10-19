@@ -57,7 +57,17 @@ function reply(text = "answer", stopReason: AssistantMessage["stopReason"] = "st
 		},
 	};
 }
-function fixture() {
+/** The record `POST /api/git/record` saves for a successful `/commit`. */
+const COMMIT_RECORD = {
+	operation: "commit",
+	tone: "ok",
+	title: "Commit succeeded",
+	hash: "abc1234",
+	detail: "feat(coding-agent): 任务通知按完成与提问细分",
+	lines: "feat(coding-agent): 任务通知按完成与提问细分\n\n- 新增任务结束提示音\n- 桌面通知按类别区分",
+};
+
+function fixture(seed: "reply" | "commit" = "reply") {
 	const manager = SessionManager.inMemory();
 	const settings = SettingsManager.inMemory();
 	settings.setConversationNamingSettings({ enabled: true, provider: "test", model: "namer", thinkingLevel: "low" });
@@ -77,8 +87,11 @@ function fixture() {
 			manager.appendSessionInfo(name);
 		},
 	};
-	manager.appendMessage({ role: "user", content: "Implement automatic naming", timestamp: Date.now() });
-	manager.appendMessage(reply());
+	if (seed === "commit") manager.appendCustomEntry("web-git-status", COMMIT_RECORD);
+	else {
+		manager.appendMessage({ role: "user", content: "Implement automatic naming", timestamp: Date.now() });
+		manager.appendMessage(reply());
+	}
 	const worker = new ConversationNaming(session as unknown as AgentSession, () => true);
 	return { manager, settings, session, worker, completeSimple, model };
 }
@@ -105,6 +118,43 @@ describe("background conversation naming", () => {
 		expect(f.completeSimple).toHaveBeenCalledTimes(2);
 		expect(f.completeSimple.mock.calls[1][1].messages[0].content).toContain("main topic has materially changed");
 		expect(conversationNamingWork(f.manager)).toBeUndefined();
+		f.worker.dispose();
+	});
+
+	it("names a chat that only ran /commit from its commit message", async () => {
+		vi.useFakeTimers();
+		const f = fixture("commit");
+		expect(conversationNamingWork(f.manager)?.delay).toBe(0);
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.session.sessionName).toBe("对话自动命名");
+		const prompt = String(f.completeSimple.mock.calls[0][1].messages[0].content);
+		expect(prompt).toContain("[Commit]");
+		expect(prompt).toContain("任务通知按完成与提问细分");
+		expect(conversationNamingWork(f.manager)).toBeUndefined();
+		f.worker.dispose();
+	});
+
+	it("never names a chat from push, restore or failed-commit records", () => {
+		const manager = SessionManager.inMemory();
+		for (const record of [
+			{ operation: "push", tone: "ok", title: "Push succeeded", detail: "CI: build passed." },
+			{ operation: "commit", tone: "error", title: "Commit failed", detail: "hook failed" },
+			{ operation: "restore", tone: "ok", title: "Restored to abc1234" },
+		]) {
+			manager.appendCustomEntry("web-git-status", record);
+		}
+		expect(conversationNamingWork(manager)).toBeUndefined();
+	});
+
+	it("keeps naming from the conversation when a commit follows its settled reply", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.worker.refresh();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(f.session.sessionName).toBe("对话自动命名");
+		f.manager.appendCustomEntry("web-git-status", COMMIT_RECORD);
+		expect(conversationNamingWork(f.manager, Date.now() + CONVERSATION_NAMING_INTERVAL_MS)).toBeUndefined();
 		f.worker.dispose();
 	});
 

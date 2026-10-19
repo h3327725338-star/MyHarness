@@ -87,6 +87,65 @@ describe("conversation title generation", () => {
 		expect(context).toContain("middle messages omitted");
 	});
 
+	it("names a chat that only committed from its commit message", async () => {
+		const session = SessionManager.inMemory();
+		session.appendCustomEntry("web-git-status", {
+			operation: "commit",
+			tone: "ok",
+			title: "Commit succeeded",
+			hash: "abc1234",
+			detail: "feat: 自动命名仅提交的会话",
+			lines: "feat: 自动命名仅提交的会话\n\n- 侧栏标题随提交更新",
+		});
+		expect(buildConversationTitleContext(session)).toBe(
+			"[Commit]\nfeat: 自动命名仅提交的会话\n\n- 侧栏标题随提交更新",
+		);
+
+		// A real conversation keeps its own text: committing after a task never feeds the commit message in.
+		session.appendMessage({ role: "user", content: "实现自动命名", timestamp: Date.now() });
+		session.appendMessage(assistantMessage("已完成"));
+		expect(buildConversationTitleContext(session)).toBe("[User]\n实现自动命名\n\n[Assistant]\n已完成");
+
+		// Push, restore and failed-commit records carry UI labels instead of a topic.
+		const recordsOnly = SessionManager.inMemory();
+		recordsOnly.appendCustomEntry("web-git-status", {
+			operation: "push",
+			tone: "ok",
+			title: "Push succeeded",
+			detail: "CI: build passed.",
+		});
+		recordsOnly.appendCustomEntry("web-git-status", {
+			operation: "commit",
+			tone: "error",
+			title: "Commit failed",
+			detail: "hook failed",
+		});
+		expect(buildConversationTitleContext(recordsOnly)).toBe("");
+	});
+
+	it("never uses the commit label itself as a fallback title", async () => {
+		const session = SessionManager.inMemory();
+		session.appendCustomEntry("web-git-status", {
+			operation: "commit",
+			tone: "ok",
+			lines: "fix(coding-agent): 修复提交会话标题",
+		});
+		const result = await generateConversationTitle({
+			sessionManager: session,
+			modelRuntime: {
+				getModel: () => undefined,
+				completeSimple: async () => assistantMessageWithContent([]),
+			} as unknown as ConversationTitleModelRuntime,
+			settingsManager: settingsManager(),
+			fallbackModel: fakeModel,
+		});
+		expect(result).toEqual({
+			status: "renamed",
+			title: "fix(coding-agent): 修复提交会话标题",
+			usedFallback: true,
+		});
+	});
+
 	it("cleans the model response and returns a reusable title", async () => {
 		const session = SessionManager.inMemory();
 		session.appendMessage({ role: "user", content: "修复 Workspace 侧栏中的会话管理", timestamp: Date.now() });

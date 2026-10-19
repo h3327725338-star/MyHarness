@@ -8,11 +8,12 @@ import { clip, plural, reasonLine } from "./util.js";
 
 let sequence = 0;
 
-/** Shows the outcome of an operation in the chat it ran in. */
-function show(slot, result) {
-	const item = { kind: "gitStatus", id: `git-${++sequence}`, ts: Date.now(), result };
+/** Shows the outcome of an operation in the chat it ran in, tagged with the operation it came from. */
+function show(slot, operation, result) {
+	const record = { ...result, operation };
+	const item = { kind: "gitStatus", id: `git-${++sequence}`, ts: Date.now(), result: record };
 	inSlot(slot, () => set({ items: [...state.items, item] }));
-	return post("/api/git/record", result, slot).then(({ id }) => {
+	return post("/api/git/record", record, slot).then(({ id }) => {
 		inSlot(slot, () => {
 			const hasPreview = state.items.some((entry) => entry.id === item.id);
 			set({ items: hasPreview
@@ -54,11 +55,11 @@ export function commitChanges() {
 		try {
 			result = await post("/api/git/commit", {}, slot);
 		} catch (error) {
-			return show(slot, failure(t("Commit failed"), error));
+			return show(slot, "commit", failure(t("Commit failed"), error));
 		}
-		if (result.status === "no-changes") return show(slot, { tone: "info", title: t("Nothing to commit"), detail: t("There are no local changes to commit.") });
+		if (result.status === "no-changes") return show(slot, "commit", { tone: "info", title: t("Nothing to commit"), detail: t("There are no local changes to commit.") });
 		if (result.status === "failed") {
-			return show(slot, {
+			return show(slot, "commit", {
 				tone: "error",
 				title: t("Commit failed"),
 				detail: reasonLine(result.failure),
@@ -66,7 +67,7 @@ export function commitChanges() {
 
 			});
 		}
-		return show(slot, {
+		return show(slot, "commit", {
 			tone: "ok",
 			title: t("Commit succeeded"),
 			hash: result.commitHash ? result.commitHash.slice(0, 7) : undefined,
@@ -116,9 +117,9 @@ function pushOutcome(r) {
 export function pushChanges() {
 	return runGitTask("push", "Checking the repository, branch and upstream", async (slot) => {
 		try {
-			await show(slot, pushOutcome(await post("/api/git/push", {}, slot)));
+			await show(slot, "push", pushOutcome(await post("/api/git/push", {}, slot)));
 		} catch (error) {
-			await show(slot, failure(t("Push did not complete"), error));
+			await show(slot, "push", failure(t("Push did not complete"), error));
 		}
 	});
 }
@@ -129,9 +130,9 @@ export async function keepTaskChanges() {
 	const slot = activeSlotId();
 	try {
 		await post("/api/git/undo/keep", {}, slot);
-		show(slot, { tone: "ok", title: t("Changes kept"), detail: t("The task's changes stay as they are; its checkpoint was closed.") });
+		show(slot, "keep", { tone: "ok", title: t("Changes kept"), detail: t("The task's changes stay as they are; its checkpoint was closed.") });
 	} catch (error) {
-		show(slot, failure(t("The changes were not kept"), error));
+		show(slot, "keep", failure(t("The changes were not kept"), error));
 	}
 	loadGitStatus();
 }
@@ -142,9 +143,9 @@ export async function undoTaskChanges() {
 	try {
 		const result = await post("/api/git/undo/restore", {}, slot);
 		const notes = [result.externalSideEffectsUnknown ? t("Shell commands ran during the task: their external side effects could not be verified or undone.") : "", result.cleanupError || ""].filter(Boolean);
-		show(slot, { tone: notes.length ? "warn" : "ok", title: t("Task changes were undone"), detail: notes.join(" "), lines: undefined });
+		show(slot, "undo", { tone: notes.length ? "warn" : "ok", title: t("Task changes were undone"), detail: notes.join(" "), lines: undefined });
 	} catch (error) {
-		show(slot, failure(t("The task was not undone"), error));
+		show(slot, "undo", failure(t("The task was not undone"), error));
 	}
 	loadGitStatus();
 }
@@ -155,14 +156,14 @@ export async function restoreToLatestCommit() {
 	try {
 		const result = await post("/api/git/restore/apply", {}, slot);
 		const failed = result.failedPaths || [];
-		show(slot, {
+		show(slot, "restore", {
 			tone: failed.length ? "warn" : "ok",
 			title: t("Restored to {headLabel}", { headLabel: result.headLabel }),
 			detail: failed.length ? t("Some untracked paths could not be deleted: {paths}", { paths: plural(failed.length, "path") }) : "",
 			lines: failed.length ? failed.map((f) => `${f.path}: ${f.error}`).join("\n") : undefined,
 		});
 	} catch (error) {
-		show(slot, failure(t("The restore did not complete"), error));
+		show(slot, "restore", failure(t("The restore did not complete"), error));
 	}
 	loadGitStatus();
 }
