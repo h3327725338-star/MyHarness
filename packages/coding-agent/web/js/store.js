@@ -14,7 +14,7 @@ import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.j
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
-import { normalizeWorkspaceTabs } from "./workspace-model.js";
+import { normalizePanelTabs, PANEL_TAB_TYPES } from "./workspace-model.js";
 import { startInteraction, measureInteraction } from "./interaction-timing.js";
 
 const listeners = new Set();
@@ -177,10 +177,44 @@ export function slotUrl(url) {
 	return `${url}${url.includes("?") ? "&" : "?"}slot=${encodeURIComponent(slot)}`;
 }
 
-const restoredWorkspaceTabs = normalizeWorkspaceTabs(prefs.wsTabs, prefs.panelTab);
-const restoredWorkspaceActive = restoredWorkspaceTabs.some((tab) => tab.id === prefs.wsActive)
-	? prefs.wsActive
-	: (restoredWorkspaceTabs[0]?.id ?? null);
+// ---- The right panel belongs to one conversation ---------------------------------------------------
+// The tabs a conversation has open, which one is on screen and which changes scope it reads are that conversation's own
+// state: switching chats shows the panel of the chat on screen, a chat that never opened a tab starts with an empty
+// panel, and coming back restores what was open there. The live values stay in `state.view` so every component keeps
+// reading them; this module remembers them per session and swaps them when the chat on screen changes. The panel width
+// and the collaboration layout stay the window's: a screen does not get narrower because another chat was on it.
+const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsClosed", "changesScope"];
+const PANEL_STATES_MAX = 40;
+/** The panel of a conversation that has nothing open: where a new chat starts. */
+function emptyPanel() {
+	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsClosed: [], changesScope: "session" };
+}
+/** A saved panel of one conversation, with the tabs that cannot be shown any more dropped and the active one resolved. */
+function normalizePanel(value) {
+	const source = value && typeof value === "object" ? value : {};
+	const wsTabs = normalizePanelTabs(source.wsTabs);
+	const wsActive = wsTabs.some((tab) => tab.id === source.wsActive) ? source.wsActive : (wsTabs[0]?.id ?? null);
+	const active = wsTabs.find((tab) => tab.id === wsActive);
+	return {
+		panelOpen: source.panelOpen === true && wsTabs.length > 0,
+		panelTab: PANEL_TAB_TYPES.includes(active?.id)
+			? active.id
+			: PANEL_TAB_TYPES.includes(source.panelTab)
+				? source.panelTab
+				: "changes",
+		wsTabs,
+		wsActive,
+		// The restore-closed-tab list is a page-session convenience, not a conversation's saved layout.
+		wsClosed: [],
+		changesScope: source.changesScope === "worktree" ? "worktree" : "session",
+	};
+}
+const panelStates = new Map(); // session id -> the panel that conversation had open
+let panelKey = null; // the session whose panel is on screen
+for (const [id, value] of Object.entries(prefs.wsPanels && typeof prefs.wsPanels === "object" ? prefs.wsPanels : {})) {
+	if (id) panelStates.set(id, normalizePanel(value));
+}
+
 export const state = {
 	boot: { phase: "connecting", detail: null, dialogs: [] },
 	connected: false,
@@ -213,14 +247,14 @@ export const state = {
 		sidebarOpen: prefs.sidebarOpen ?? true,
 		sidebarW: prefs.sidebarW ?? 272,
 		panelOpen: false,
-		panelTab: prefs.panelTab ?? "changes",
-		/** Open workspace tabs (panels, files, browser pages) and the active one; restored from the saved preferences. */
-		wsTabs: restoredWorkspaceTabs,
-		// A saved active id for a tab that the saved list no longer contains (or that normalization rejected) must not
-		// leave the panel showing a tab that is not in the strip; fall back to the first restored tab.
-		wsActive: restoredWorkspaceActive,
+		panelTab: "changes",
+		/** The tabs of the chat on screen (panels, files, browser pages) and the active one; swapped with the chat. */
+		wsTabs: [],
+		wsActive: null,
 		/** Tabs closed in this page session, newest last ("restore closed tab"). */
 		wsClosed: [],
+		/** Changes panel scope of this chat: its own saved edits, or the folder's working tree. */
+		changesScope: "session",
 		panelW: prefs.panelW ?? 560,
 		/** Collaboration mode: the workspace fills the window and the chat becomes a column on its right (never restored). */
 		wsMax: false,
@@ -240,7 +274,6 @@ export const state = {
 		providerSel: null,
 		palette: false,
 		dialog: null,
-		changesScope: "session",
 		selectedTerminal: null,
 		// Terminal panel: the real shell ("shell") or the list of commands run in this chat ("commands").
 		termView: "shell",
@@ -261,6 +294,46 @@ export const state = {
 };
 
 setLang(state.view.lang);
+
+/** The panel on screen right now, in the shape one conversation's state is kept in. */
+function panelOnScreen() {
+	const panel = {};
+	for (const key of PANEL_KEYS) panel[key] = state.view[key];
+	return panel;
+}
+
+/**
+ * Keep the panel on screen as the state of the conversation it belongs to. Every panel change goes through `setView`,
+ * so switching away and back always finds what was last on screen there.
+ */
+function rememberPanel() {
+	if (!panelKey) return;
+	const panel = panelOnScreen();
+	panelStates.delete(panelKey);
+	// A conversation that ended up with nothing open is the default again; saving it would only grow the preferences.
+	if (panel.wsTabs.length > 0 || panel.panelOpen) panelStates.set(panelKey, panel);
+	while (panelStates.size > PANEL_STATES_MAX) panelStates.delete(panelStates.keys().next().value);
+}
+
+/**
+ * Show the panel of `sessionId`: the one that conversation had open, or an empty one for a chat that never opened a
+ * tab. A chat in collaboration mode that has nothing open leaves it, since there would be no workspace to fill.
+ */
+function applyPanel(sessionId) {
+	const key = sessionId ?? null;
+	if (key === panelKey) return;
+	rememberPanel();
+	const panel = key ? (panelStates.get(key) ?? emptyPanel()) : emptyPanel();
+	panelKey = key;
+	// A native browser view is drawn above the page: the one of the tab that is leaving must go before the panel of
+	// the other conversation is rendered over it.
+	const leaving = state.view.wsTabs.find((tab) => tab.id === state.view.wsActive);
+	const staying = panel.panelOpen && panel.wsTabs.some((tab) => tab.id === leaving?.id);
+	if (state.view.panelOpen && leaving?.type === "browser" && !staying)
+		globalThis.myHarnessDesktop?.browser?.({ action: "hide" })?.catch?.(() => undefined);
+	const layout = state.view.wsMax && (!panel.panelOpen || panel.wsTabs.length === 0) ? { wsMax: false, wsMaxSidebar: null } : {};
+	state.view = { ...state.view, ...panel, ...layout };
+}
 
 // Start-up choice of preferences (boot-theme.js): move a newer local copy to the shared one, and say so when saved
 // preferences could not be read, so defaults are never shown as if they were the user's settings. The desktop host
@@ -349,11 +422,14 @@ export function readWidthValue(value) {
 	return Math.max(620, Math.min(1100, Math.round(n)));
 }
 
-// The right panel is not remembered: it always starts closed, and only its own buttons open it.
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelTab", "panelW", "chatW", "wsTabs", "wsActive", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+// The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
+// had open is saved with `wsPanels` (see rememberPanel).
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
+	rememberPanel();
+	out.wsPanels = Object.fromEntries(panelStates);
 	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before.
 	if (state.view.wsMax && state.view.wsMaxSidebar !== null) out.sidebarOpen = state.view.wsMaxSidebar;
 	savePrefs(out);
@@ -1074,6 +1150,8 @@ export async function restoreAfterRestart(snap, boot) {
 	turnsCacheLru.clear();
 	activeSlot = snap.slot;
 	state.activeSlot = snap.slot;
+	// The panel on screen still belongs to this chat; only the runtime it was read with is gone.
+	panelKey = snap.session?.id ?? null;
 	setChatMode(snap.mode);
 	set({ snap, boot });
 	await refreshAll();
@@ -1293,6 +1371,8 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 	if (!slot || !isLatestSwitch(seq)) return;
 	const bag = bagOf(slot);
 	const info = state.slots.find((item) => item.slot === slot);
+	// The right panel belongs to the chat: show that chat's own tabs (a chat that never opened one has an empty panel).
+	applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
 	let mode = chatModeOf(bag.snap?.mode ?? info?.mode ?? pending?.mode ?? uiMode());
 	if (!bag.loaded) {
 		if (pending?.seq !== seq) pending = beginSwitch({ mode, path: info?.sessionFile ?? bag.snap?.session?.file, name: info?.name ?? bag.snap?.session?.name, sessionId: info?.sessionId ?? bag.snap?.session?.id, retry: () => activateSlot(slot) }, seq);
@@ -1310,6 +1390,8 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 	const show = () => {
 		activeSlot = slot;
 		state.activeSlot = slot;
+		// A chat opened cold only reveals its session id with its snapshot: its panel follows it now.
+		applyPanel(bag.snap?.session?.id ?? null);
 		measureInteraction(timing, "visibleMs");
 		measureInteraction(timing, "contentMs");
 		state.switching = null;
@@ -1400,6 +1482,8 @@ function tellTerminals(type, data) {
 // ---- Boot + SSE ------------------------------------------------------------------------------
 let source = null;
 let booted = false;
+/** One recovery at a time: two sends in a row must not rebuild the stream twice. */
+let recoveringStream = false;
 /** The browser gives up on a stream whose (re)connect failed with a status; this watchdog rebuilds those, always. */
 const sseWatchdog = createSseWatchdog({
 	isClosed: () => isDeadStream(source),
@@ -1504,6 +1588,50 @@ export async function boot() {
 	poll();
 }
 
+/**
+ * A sent message must show up at once. The page only knows what changed through the event stream, so a stream that went
+ * quiet leaves it on stale content until the next full reload — which is what a manual service restart does. This waits
+ * once for an event after a send and, when none arrives, rebuilds the stream and reads everything again, so the message
+ * and the answer appear without a restart.
+ */
+export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000) {
+	if (recoveringStream || !booted) return true;
+	// The message counts as shown once a real entry carries it, by its client id or by its text (a read back from the
+	// session does not keep the client id). The optimistic row does not count: the page can drop it and show nothing.
+	const shown = () =>
+		state.items.some(
+			(item) =>
+				item.kind === "user" &&
+				!item.pending &&
+				((clientMessageId && item.clientMessageId === clientMessageId) || (!!text && item.text === text)),
+		);
+	if (shown()) return true;
+	recoveringStream = true;
+	try {
+		// Watch for the entry instead of waiting the whole budget: a message that lands in 300 ms is confirmed in 300 ms.
+		const deadline = Date.now() + (state.connected ? timeoutMs : 0);
+		while (Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			if (shown()) return true;
+		}
+		// A queued steer message never becomes a transcript entry straight away: reading everything again is what shows
+		// it, so one recovery per send is enough and no further check follows.
+		if (source) {
+			try {
+				source.close();
+			} catch {
+				/* already gone */
+			}
+		}
+		source = null;
+		connectEvents();
+		await attempt(refreshAll, { quiet: true });
+		return true;
+	} finally {
+		recoveringStream = false;
+	}
+}
+
 function connectEvents() {
 	if (source) return;
 	const EventSourceFactory = getEventSourceFactory();
@@ -1591,7 +1719,9 @@ function connectEvents() {
 		if (d.clientMessageId) pendingRejections.delete(d.clientMessageId);
 		const index = d.clientMessageId ? state.items.findIndex((entry) => entry.pending && entry.clientMessageId === d.clientMessageId) : -1;
 		if (index >= 0) {
-			state.items = state.items.map((entry, at) => at === index ? item : entry);
+			// Keep the client id on the real entry: the send can then be recognised as shown even after the optimistic row
+			// is gone, which is what tells a silent stream apart from one that is merely slow.
+			state.items = state.items.map((entry, at) => (at === index ? { ...item, clientMessageId: entry.clientMessageId } : entry));
 			emit();
 		} else appendStreamedItem(item);
 	});

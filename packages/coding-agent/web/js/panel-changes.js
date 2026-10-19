@@ -209,18 +209,24 @@ export function ChangesPanel() {
 		go(key);
 	};
 	const setScope = (value) => (setView({ changesScope: value }), setChosen(""));
-	const head = gitStatus?.head?.sha?.slice(0, 7);
+	// The uncommitted count belongs to the folder's Git, so it rides on the Working tree scope itself: the button that
+	// shows those files also carries their count. A general chat does not report the folder's Git at all.
+	const general = useStore((s) => s.view.chatMode) === "general";
+	const worktreeDirty = general ? 0 : gitStatus?.preview?.total || 0;
+	const scopeOptions = [
+		{ value: "session", label: t("Current conversation") },
+		{ value: "worktree", label: worktreeDirty ? `${t("Working tree")} ${worktreeDirty}` : t("Working tree") },
+	];
 
 	return html`<div class="changes-panel">
 		<div class="panel-toolbar">
-			<${Segmented} value=${scope} onChange=${setScope} options=${[{ value: "session", label: t("Current conversation") }, { value: "worktree", label: t("Working tree") }]} />
+			<${Segmented} value=${scope} onChange=${setScope} options=${scopeOptions} />
 			<span class="grow" />
 			${loading && data ? html`<span class="changes-toolbar-spinner dim" aria-busy="true"><${Spinner} size=${13} /></span>` : null}
 			<${Segmented} value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
 			<button class="icon-btn sm" disabled=${loading} title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${() => load(true)}><${Icon} name="refresh" size=${15} /></button>
 		</div>
 		<${GitBar} gitStatus=${gitStatus} active=${active} />
-		<div class="changes-basis">${scope === "session" ? t("Files changed in this conversation. Counts and diffs include saved edits from each task, including committed or undone edits.") : head ? t("Uncommitted changes, compared with the latest commit {sha}.", { sha: head }) : t("Uncommitted changes, compared with the latest commit.")}</div>
 		<div class="changes-notes">
 			${error ? html`<div class="notice danger">${error}</div>` : null}
 		</div>
@@ -260,18 +266,20 @@ export function GitBar({ gitStatus, active }) {
 	const [more, setMore] = useState(false);
 	const closeMore = useCallback(() => setMore(false), []);
 	const gitTask = useStore((s) => s.gitTask);
+	// A general chat is not a code session: the folder's Git belongs to the folder, and the bar that reports it would read
+	// as this conversation's own state. The panel and the composer chip still show the branch on their own.
+	const general = useStore((s) => s.view.chatMode) === "general";
+	if (general) return null;
 	if (!gitStatus) return null;
 	if (!gitStatus.gitAvailable) return html`<div class="gitbar dim"><${Icon} name="gitBranch" size=${14} />${t("Git is not available on this computer.")}</div>`;
 	if (!gitStatus.isRepository) {
 		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitSetup()}>${t("Set up Git")}</button></div>`;
 	}
-	const dirty = gitStatus.preview?.total || 0;
 	const busy = active || !!gitStatus.task || !!gitTask;
 	return html`<div class="gitbar">
 		<span class="row gitbar-ctx"><${Icon} name="gitBranch" size=${14} /><strong class="truncate">${gitStatus.branch || t("detached HEAD")}</strong>
 			${gitStatus.head ? html`<span class="mono dim" title=${gitStatus.head.subject}>${gitStatus.head.sha.slice(0, 7)}</span>` : null}
 			${gitStatus.linkedWorktree ? html`<span class="badge" title=${t("This folder is a linked Git worktree")}>${t("worktree")}</span>` : null}
-			${dirty ? html`<span class="badge warn">${t("{dirty} uncommitted", { dirty })}</span>` : html`<span class="badge ok">${t("clean")}</span>`}
 			${gitStatus.integrationEnabled ? null : html`<span class="badge" title=${t("MyHarness does not create task checkpoints while Git integration is off")}>${t("integration off")}</span>`}
 		</span>
 		<span class="grow" />

@@ -1,6 +1,6 @@
 // Workspace tab model, kept free of UI imports so the store can normalize saved tabs without loading components.
 import { t } from "./i18n.js";
-import { basename } from "./util.js";
+import { basename, uid } from "./util.js";
 
 export const PANEL_TAB_TYPES = ["changes", "files", "terminal", "context"];
 
@@ -29,6 +29,26 @@ export function normalizeWorkspaceTab(value) {
 	}
 	if (!PANEL_TAB_TYPES.includes(type)) return null;
 	return { id: type, type };
+}
+
+/**
+ * The tabs of one conversation's panel: unlike saved page preferences, a conversation may legitimately have none, so an
+ * empty list stays empty instead of falling back to a panel tab.
+ */
+export function normalizePanelTabs(value) {
+	const list = Array.isArray(value) ? value.map(normalizeWorkspaceTab).filter(Boolean) : [];
+	const seen = new Set();
+	return list.filter((tab) => (seen.has(tab.id) ? false : (seen.add(tab.id), true)));
+}
+
+/**
+ * The id a website tab gets when it is opened in the panel holding `tabs`: the tab already showing that address, or a
+ * new one. The id is what the desktop host keys the native view by, so two conversations showing the same address get
+ * two views instead of sharing one.
+ */
+export function browserTabId(tabs, url) {
+	const same = (Array.isArray(tabs) ? tabs : []).find((tab) => tab?.type === "browser" && tab.url === url);
+	return same?.id ?? `browser:${uid("b")}`;
 }
 
 /** Saved tabs with duplicates removed; an empty or unusable list falls back to one panel tab. */

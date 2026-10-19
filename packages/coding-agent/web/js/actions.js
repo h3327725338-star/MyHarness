@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -7,7 +7,7 @@ import { loadPrefs, normPath } from "./util.js";
 import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
 import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
-import { normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
+import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
 
 let dialogResolver = null;
 
@@ -165,9 +165,15 @@ export const actions = {
 
 	/** Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. */
 	openWorkspace(descriptor) {
-		const tab = normalizeWorkspaceTab(descriptor);
-		if (!tab) return null;
 		const tabs = state.view.wsTabs;
+		// A website tab is this conversation's own: the same address opened again in this panel is that tab, while the
+		// same address in another conversation is another tab with its own native view (the host keys views by id).
+		const wanted =
+			descriptor && typeof descriptor === "object" && descriptor.type === "browser" && !descriptor.id && typeof descriptor.url === "string"
+				? { ...descriptor, id: browserTabId(tabs, descriptor.url) }
+				: descriptor;
+		const tab = normalizeWorkspaceTab(wanted);
+		if (!tab) return null;
 		const existing = tabs.find((item) => item.id === tab.id);
 		// The native view of the tab that is on screen right now must disappear before another tab is rendered.
 		if (state.view.panelOpen && state.view.wsActive && state.view.wsActive !== tab.id) hideBrowserViews();
@@ -272,6 +278,8 @@ export const actions = {
 		if (state.snap?.active) await new Promise((resolve) => setTimeout(resolve, COMPOSER_QUEUE_DEBOUNCE_MS));
 		const result = await attempt(() => post("/api/prompt", { text, images, attachments, mode, clientMessageId: id }, slot));
 		if (!result) removePendingMessage(id, slot);
+		// The message is on its way: if it never lands, show it (and the answer) without a reload.
+		else verifyLiveUpdates(id, text).catch(() => undefined);
 		return result;
 	},
 

@@ -9,7 +9,7 @@ exports.httpUrl = (value) => {
 // One persistent partition for every tab: pages keep cookies, localStorage and logins across restarts and across the
 // tabs that the workspace opens. Nothing here mirrors the system browser's profiles.
 const PARTITION = 'persist:myharness-third-party';
-const MAX_TABS = 12;
+const MAX_TABS = 40;
 const DEFAULT_TAB = 'main';
 // Agent-driven file uploads may only pick files inside the current workspace and only up to this size. The page's own
 // file picker is the normal path; this limit is for the programmatic `upload` command and never exposes other files.

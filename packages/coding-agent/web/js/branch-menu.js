@@ -88,12 +88,14 @@ export function BranchChip({ gitStatus }) {
 		return () => observer.disconnect();
 	}, []);
 	const linked = !!gitStatus.linkedWorktree;
+	// A general chat keeps the branch itself, but the uncommitted count is the folder's Git, not this conversation's.
+	const general = useStore((s) => s.view.chatMode) === "general";
 	const branch = gitStatus.branch || t("detached HEAD");
 	return html`<span ref=${anchor} class="branch-anchor">
 		<button class=${`env-chip branch-chip ${linked ? "wt" : ""}`} onClick=${() => setOpen(!open)} aria-haspopup="dialog" aria-expanded=${open}
 			title=${linked ? t("Branch {branch} in an isolated copy (Git worktree). Click to manage branches", { branch }) : t("Branch {branch}. Click to manage branches", { branch })}>
 			<${Icon} name=${linked ? "layers" : "gitBranch"} size=${12} /><span class="truncate">${branch}</span>
-			${gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}
+			${!general && gitStatus.preview?.total ? html`<span class="badge warn">${gitStatus.preview.total}</span>` : null}
 			${linked ? html`<span class="wt-tag">${t("worktree")}</span>` : null}
 			<${Chevron} />
 		</button>

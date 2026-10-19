@@ -79,7 +79,10 @@ function Header() {
 		const next = value.trim();
 		if (save && next && next !== snap?.session?.name && snap?.session?.file) await actions.renameSession(snap.session.file, next);
 	};
-	const changeCount = useStore((s) => s.gitStatus?.preview?.total || 0);
+	// The badge counts the working tree's uncommitted files, which belong to the folder: a general chat does not show it.
+	const dirtyCount = useStore((s) => s.gitStatus?.preview?.total || 0);
+	const generalMode = useStore((s) => s.view.chatMode) === "general";
+	const changeCount = generalMode ? 0 : dirtyCount;
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && wsActive === tab ? "active" : ""}`} aria-pressed=${panelOpen && wsActive === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	const browserActive = panelOpen && wsTabs.some((tab) => tab.id === wsActive && tab.type === "browser");
 	return html`<header class="main-header">
