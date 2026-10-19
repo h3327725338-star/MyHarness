@@ -242,7 +242,12 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 		streamFunction: streamSimple,
 	});
 
-	const sessionManager = options.inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir);
+	const sessionManager = options.inMemory
+		? SessionManager.inMemory()
+		: SessionManager.create(tempDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			});
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
 
 	if (options.settingsOverrides) {

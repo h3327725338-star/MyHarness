@@ -180,7 +180,10 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		const profileDir = join(tempDir, "chrome-profile");
 		exportHtmlPath = join(tempDir, "replay-export.html");
 
-		const sm = SessionManager.create(tempDir);
+		const sm = SessionManager.create(tempDir, undefined, undefined, {
+			dataRoot: join(tempDir, "data"),
+			agentDir: tempDir,
+		});
 		sm.appendSessionInfo("完整性信息对账会话 W25b");
 
 		// 1. 添加 62 轮普通问答以触发「显示更早的消息」按钮 (transcript.js limit=60)

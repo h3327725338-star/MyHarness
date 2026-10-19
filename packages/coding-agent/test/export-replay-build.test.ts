@@ -196,7 +196,10 @@ describe("buildReplayHtml assembly", () => {
 	});
 
 	it("builds replay HTML directly from an in-memory SessionManager", async () => {
-		const sm = SessionManager.create(tempDirectory);
+		const sm = SessionManager.create(tempDirectory, undefined, undefined, {
+			dataRoot: join(tempDirectory, "data"),
+			agentDir: tempDirectory,
+		});
 		sm.appendSessionInfo("In-memory Session");
 		sm.appendMessage({
 			role: "user",

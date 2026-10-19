@@ -306,7 +306,10 @@ describe("W25c: web export replay security", () => {
 
 	beforeAll(async () => {
 		tempDir = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR || tmpdir(), "w25c-security-"));
-		sessionManager = SessionManager.create(tempDir);
+		sessionManager = SessionManager.create(tempDir, undefined, undefined, {
+			dataRoot: join(tempDir, "data"),
+			agentDir: tempDir,
+		});
 
 		// 1. Session name
 		sessionManager.appendSessionInfo(maliciousPayloads.sessionName);
@@ -690,7 +693,10 @@ describe("W25c: web export replay security", () => {
 
 			// Page 1: user messages carrying the codespan breakout, the
 			// `<script` + unclosed `<!--` combo, and a ~100k-char single line.
-			const sm1 = SessionManager.create(join(w128TempDir, "combo"));
+			const sm1 = SessionManager.create(join(w128TempDir, "combo"), undefined, undefined, {
+				dataRoot: join(w128TempDir, "data"),
+				agentDir: w128TempDir,
+			});
 			sm1.appendSessionInfo("W128 combo session");
 			sm1.appendMessage({
 				role: "user",
@@ -711,7 +717,10 @@ describe("W25c: web export replay security", () => {
 
 			// Page 2: session name and prefs.lang carrying the combo (they land in
 			// the embedded data block; the boot script reads prefs at runtime).
-			const sm2 = SessionManager.create(join(w128TempDir, "nameprefs"));
+			const sm2 = SessionManager.create(join(w128TempDir, "nameprefs"), undefined, undefined, {
+				dataRoot: join(w128TempDir, "data"),
+				agentDir: w128TempDir,
+			});
 			sm2.appendSessionInfo(maliciousPayloads.w128NameCombo);
 			sm2.appendMessage({
 				role: "user",
@@ -728,7 +737,10 @@ describe("W25c: web export replay security", () => {
 			// script verbatim (W122 fields), while user text stays benign. If the
 			// boot block itself is not escaped, this page whites out even after
 			// the data block is fixed.
-			const sm3 = SessionManager.create(join(w128TempDir, "boot"));
+			const sm3 = SessionManager.create(join(w128TempDir, "boot"), undefined, undefined, {
+				dataRoot: join(w128TempDir, "data"),
+				agentDir: w128TempDir,
+			});
 			sm3.appendSessionInfo("W128 boot probe");
 			sm3.appendMessage({
 				role: "user",

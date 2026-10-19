@@ -102,7 +102,10 @@ describe("regression #2860: replaced session callbacks", () => {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: SessionManager.create(tempDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir: tempDir,
+			}),
 		});
 
 		const rebindSession = async (): Promise<void> => {

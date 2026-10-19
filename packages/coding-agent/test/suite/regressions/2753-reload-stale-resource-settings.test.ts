@@ -82,7 +82,10 @@ describe("issue #2753 reload stale resource settings", () => {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: SessionManager.create(tempDir, undefined, undefined, {
+				dataRoot: join(tempDir, "data"),
+				agentDir,
+			}),
 		});
 
 		cleanups.push(() => {

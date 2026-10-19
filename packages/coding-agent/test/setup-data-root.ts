@@ -98,11 +98,32 @@ if (!state.cleanupRegistered) {
 	process.once("exit", cleanupOwnedRoot);
 }
 
+/**
+ * An inherited `MYHARNESS_DATA_ROOT` is only trusted when it points inside the
+ * system temporary directory, i.e. some outer test wrapper created it for this
+ * run. The desktop and Web hosts export their real data root to every child
+ * process they spawn, so honouring that value would make default-storage tests
+ * register fixture Workspaces and Sessions in the user's live data directory.
+ */
+function isIsolatedInheritedRoot(root: string): boolean {
+	try {
+		const relativeRoot = relative(resolve(tmpdir()), resolve(root));
+		return (
+			Boolean(relativeRoot) &&
+			!isAbsolute(relativeRoot) &&
+			relativeRoot !== ".." &&
+			!relativeRoot.startsWith(`..${sep}`)
+		);
+	} catch {
+		return false;
+	}
+}
+
 // Default Workspace/Session storage is project-local. Tests that intentionally
 // provide dataRoot still bypass this setting, while default-storage tests get an
 // isolated root instead of registering temporary fixture directories in the
 // repository's data/workspaces registry.
-if (!process.env.MYHARNESS_DATA_ROOT) {
+if (!process.env.MYHARNESS_DATA_ROOT || !isIsolatedInheritedRoot(process.env.MYHARNESS_DATA_ROOT)) {
 	cleanupStaleOwnedRoots();
 	state.ownedRoot ??= mkdtempSync(join(tmpdir(), DATA_ROOT_PREFIX));
 	process.env.MYHARNESS_DATA_ROOT = state.ownedRoot;
