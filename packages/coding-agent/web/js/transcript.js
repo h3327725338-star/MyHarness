@@ -1067,11 +1067,12 @@ export function Transcript() {
 			programmatic.current = false;
 		}
 	};
-	// Opening a file's diff makes the page taller below the row that was clicked. Following the bottom would scroll that
-	// row up (and the first pixels of the growth would count as "still at the bottom"), so while a diff is open the page
-	// holds its place: the row stays where it is and the diff grows downwards. Scrolling by hand, or closing the diff, ends it.
+	// Opening a file's diff, or an attachment card's preview, makes the page taller below the row that was clicked.
+	// Following the bottom would scroll that row up (and the first pixels of the growth would count as "still at the
+	// bottom"), so while one of them is open the page holds its place: the row stays where it is and the content grows
+	// downwards. Scrolling by hand, or closing it, ends that.
 	const holdOnOpen = (event) => {
-		const row = event.target.closest?.(".change-file");
+		const row = event.target.closest?.(".change-file, .attach-card [aria-expanded]");
 		if (!row) return;
 		holdPlace.current = row.getAttribute("aria-expanded") !== "true";
 		if (holdPlace.current) stick.current = false;

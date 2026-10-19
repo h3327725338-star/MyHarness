@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Web UI: an attachment card no longer has the preview (eye) button. The card offers reading the file — in the right-hand workspace, or as the inline full text in a read-only export copy — and download, and the file name still opens it. That inline full text grows into place through the same measured height motion every other in-place swap uses (`useHeightGlide`) instead of appearing in one frame, and opening it holds the reader's place the way an opened diff row does. Card layout, the deleted and downloading states and the closing motion are unchanged, and animation-off still shows the content at once.
+
 - Web UI: dialogs no longer spill past the right edge of a narrow window. Dialog widths are clamped to the viewport with 24px margins on each side, which only takes effect when a dialog would otherwise overflow — normal sizes are unchanged, as are the open/close animations and the close linger; the command palette already fits narrow windows and needed no change.
 
 - Web UI: sidebar toggling and appearance changes no longer restyle the whole document — the collapsed marker lives on the sidebar itself, and appearance and language writes skip values that did not change. Each root overlay now subscribes only to its own state instead of the whole view object, cutting redundant renders while dialogs open and close; dialog close completion time is unchanged, bounded by the 110 ms exit animation. Toggle entries, timing, reduced-motion behaviour, persisted state and focus return are unchanged.
