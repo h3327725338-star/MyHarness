@@ -125,18 +125,43 @@ try {
 	check(await until(()=>calls.some(c=>c.action==='ensure'&&c.tabId===tabId)),'the tab was never ensured in the host');
 	check(await until(()=>calls.some(c=>c.action==='activate'&&c.tabId===tabId)),'the tab was never activated in the host');
 	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.width>0&&last.rect.height>0}),'the mounted tab never sent a usable rectangle: '+JSON.stringify(lastBounds()));
-	const address=document.querySelector('.desktop-browser-panel input[aria-label="Website URL"]');
+	const address=document.querySelector('.desktop-browser-panel input[aria-label="Address and search bar"]');
 	check(address&&address.value==='https://example.com/','the address bar does not show the tab URL: '+(address&&address.value));
 	const back=document.querySelector('.desktop-browser-panel button[title="Back"]');
 	check(back,'the toolbar back button is missing');
 	back.click();
 	check(await until(()=>calls.some(c=>c.action==='back'&&c.tabId===tabId)),'the back button did not address the current browser tab: '+JSON.stringify(calls.slice(-4)));
 
+	// 4a. The address bar is also a search box: words that are not an address go to the chosen engine, and the engine
+	//     menu switches it for every tab of this browser.
+	const bar=document.querySelector('.desktop-browser-panel form input');
+	const form=document.querySelector('.desktop-browser-panel form');
+	check(bar&&form,'the address bar is missing');
+	// The back button's answer also refreshes the bar; let it land so this block only measures what it types.
+	await wait(150);
+	const submit=async value=>{bar.value=value;bar.dispatchEvent(new Event('input',{bubbles:true}));await wait(80);check(bar.value===value,'the typed text was dropped from the address bar: '+bar.value);bar.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))};
+	await submit('deepseek pricing');
+	check(await until(()=>calls.some(c=>c.action==='navigate'&&c.url==='https://www.google.com/search?q=deepseek%20pricing')),'a query was not searched with Google: '+JSON.stringify(calls.slice(-4)));
+	// One magnifier only, and the new tab button follows it: the engine picker is a caret inside the address field.
+	const labels=[...document.querySelectorAll('.ws-browser-bar > button')].map(b=>b.getAttribute('aria-label'));
+	check(labels.indexOf('New browser tab')===labels.indexOf('Find in page')+1,'the new tab button must follow the find button: '+JSON.stringify(labels));
+	const engineTrigger=document.querySelector('.ws-browser-bar form button[aria-label="Search engine"]');
+	check(!!engineTrigger,'the search engine picker is not inside the address bar');
+	engineTrigger.click();
+	check(await until(()=>!!document.querySelector('.popover .menu-item')),'the search engine menu did not open');
+	const bing=[...document.querySelectorAll('.popover .menu-item')].find(item=>/Bing/.test(item.textContent));
+	check(!!bing,'the search engine menu does not offer Bing');
+	bing.click();
+	check(await until(()=>localStorage.getItem('myharness.browserEngine')==='bing'),'the chosen search engine was not remembered');
+	await submit('another query');
+	check(await until(()=>calls.some(c=>c.action==='navigate'&&c.url==='https://www.bing.com/search?q=another%20query')),'the switched engine was not used: '+JSON.stringify(calls.slice(-4)));
+
 	// 4b. Ctrl+F opens the find bar; typing runs a real find and shows the match count; closing stops it.
 	window.dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true}));
 	check(await until(()=>!!document.querySelector('.ws-find input')),'Ctrl+F did not open the find bar');
 	const findInput=document.querySelector('.ws-find input');
-	check(findInput&&document.activeElement===findInput,'the find input is not focused when the bar opens');
+	// The bar focuses its field in the next frame, so wait for the focus instead of reading it in the same tick.
+	check(await until(()=>!!findInput&&document.activeElement===findInput),'the find input is not focused when the bar opens');
 	findInput.value='alpha';
 	findInput.dispatchEvent(new Event('input',{bubbles:true}));
 	check(await until(()=>calls.some(c=>c.action==='find'&&c.text==='alpha'&&c.tabId===tabId)),'typing in the find bar did not search the page: '+JSON.stringify(calls.slice(-4)));
@@ -163,6 +188,9 @@ try {
 	check(!!revoke,'the permission list has no revoke button');
 	revoke.click();
 	check(await until(()=>calls.some(c=>c.action==='revokePermission'&&c.origin==='https://example.com'&&c.permissions?.includes('notifications'))),'revoking did not reach the host');
+	// The list is a bubble, not a panel: a click anywhere else puts it away.
+	document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+	check(await until(()=>!document.querySelector('.ws-permissions')),'clicking outside did not close the site permission list');
 
 	// 4d. A navigation inside the tab updates the saved URL (stable tab id), so a restart restores the last page and
 	//     the strip names the current host instead of the first one.

@@ -268,6 +268,12 @@
 .panel-empty { padding: 24px var(--pad-panel); color: var(--text-3); }
 .ws-page-title { padding: 4px var(--pad-panel); color: var(--text-3); font-size: var(--fs-sm); }
 .ws-browser-bar { gap: 2px; }
+/* The search engine belongs to the bar it searches with: a caret at the address field's right edge opens Google / Bing,
+   so the toolbar keeps one magnifier (page find) instead of two. */
+.ws-address { position: relative; }
+.ws-address-input { width: 0; padding-right: 26px; }
+.ws-address .menu-wrap { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); }
+.ws-address .ws-address-engine { width: 20px; height: 20px; color: var(--text-3); }
 /* File viewers: PDF pages are rendered by the engine itself, media by the native elements; both fill the panel. */
 .file-frame { width: 100%; height: 100%; min-height: 60vh; border: 0; background: var(--bg); }
 .media-view { display: flex; flex-direction: column; gap: 12px; padding: var(--pad-panel); }
@@ -275,12 +281,18 @@
 .media-view audio { width: 100%; }
 .text-editor { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; padding: 8px; }
 .text-editor textarea { flex: 1 1 auto; min-height: 50vh; padding: 10px; resize: none; overflow: auto; font-size: var(--fs-sm); line-height: 1.5; white-space: pre; tab-size: 2; }
-/* Site permission decisions: a request is a question in the tab, never an automatic grant; the list shows the
-   session-scoped decisions and can revoke each one. */
+/* Site permission decisions: a request is a question in the tab, never an automatic grant; the list is a compact bubble
+   under the shield that shows the session-scoped decisions, colours each answer and can revoke it. */
 .ws-permission-ask { margin: 0 0 6px; }
 .ws-permission-ask p { margin: 0 0 8px; }
-.ws-permissions { display: flex; flex-direction: column; gap: 6px; margin: 0 var(--pad-panel) 8px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-raised); box-shadow: var(--shadow-pop); }
-.ws-permission-row { gap: 8px; }
+.ws-permissions { display: flex; flex-direction: column; gap: 6px; align-self: flex-end; box-sizing: border-box; width: fit-content; min-width: 200px; max-width: min(320px, calc(100% - var(--pad-panel) - var(--pad-panel))); margin: 0 var(--pad-panel) 8px 0; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-raised); box-shadow: var(--shadow-pop); }
+.ws-permissions-head { gap: 4px; }
+.ws-permissions-head strong { font-size: var(--fs-sm); }
+.ws-permissions-note { font-size: var(--fs-sm); }
+.ws-permission-row { gap: 8px; font-size: var(--fs-sm); }
+.ws-permission-state { flex: none; }
+.ws-permission-state.on { color: var(--ok); }
+.ws-permission-state.off { color: var(--danger); }
 
 .ws-find, .file-find { gap: 6px; height: 38px; min-height: 38px; padding-right: var(--pad-panel); }
 .ws-find-count, .file-find-count { flex: none; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }

@@ -210,7 +210,7 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 }
 
 export function MenuItem({ icon, label, hint, onClick, danger, disabled, active, sub }) {
-	return html`<button class=${`menu-item ${danger ? "danger" : ""} ${active ? "active" : ""}`} disabled=${disabled} onClick=${onClick} role="menuitem">
+	return html`<button type="button" class=${`menu-item ${danger ? "danger" : ""} ${active ? "active" : ""}`} disabled=${disabled} onClick=${onClick} role="menuitem">
 		${icon ? html`<${Icon} name=${icon} size=${15} />` : html`<span class="menu-icon-gap" />`}
 		<span class="menu-label"><span class="truncate">${label}</span>${sub ? html`<span class="menu-sub truncate">${sub}</span>` : null}</span>
 		${active ? html`<${Icon} name="check" size=${14} />` : hint ? html`<span class="menu-hint">${hint}</span>` : null}

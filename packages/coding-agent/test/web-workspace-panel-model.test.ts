@@ -24,3 +24,44 @@ it("gives one conversation one website tab per address, and another conversation
 	// The id keys the native browser view in the desktop host: two conversations must never share one view.
 	expect(first).not.toBe(second);
 });
+
+it("opens new browser tabs without an address, and names a website tab after its page", () => {
+	// The + button always adds a tab: an empty address is a new tab, never a second view of the one already open.
+	const openBlank = [{ id: "browser:b-2", type: "browser", url: "" }];
+	expect(model.browserTabId(openBlank, "")).not.toBe("browser:b-2");
+	expect(model.browserTabId([], "")).toMatch(/^browser:/);
+
+	// A saved new tab keeps its id but has no address yet; without an id it could not be told apart from another one.
+	expect(model.normalizePanelTabs([{ type: "browser", url: "", id: "browser:b-3" }])).toEqual([
+		{ id: "browser:b-3", type: "browser", url: "" },
+	]);
+	expect(model.normalizeWorkspaceTab({ type: "browser", url: "" })).toBe(null);
+	expect(model.workspaceTabTitle({ id: "browser:b-3", type: "browser", url: "" })).toBe("New tab");
+
+	// Once the page has a title, the tab reads like a browser tab instead of a bare host; the host is still the fallback.
+	expect(
+		model.workspaceTabTitle({
+			id: "browser:b-4",
+			type: "browser",
+			url: "https://example.com/x",
+			title: "Example Domain",
+		}),
+	).toBe("Example Domain");
+	expect(model.workspaceTabTitle({ id: "browser:b-4", type: "browser", url: "https://example.com/x" })).toBe(
+		"example.com",
+	);
+	// The title survives a reload of the app, so a restored tab does not flash its host first.
+	expect(
+		model.normalizeWorkspaceTab({
+			id: "browser:b-5",
+			type: "browser",
+			url: "https://example.com/",
+			title: "Example Domain",
+		}),
+	).toEqual({
+		id: "browser:b-5",
+		type: "browser",
+		url: "https://example.com/",
+		title: "Example Domain",
+	});
+});

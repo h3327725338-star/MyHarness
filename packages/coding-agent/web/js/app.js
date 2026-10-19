@@ -99,7 +99,7 @@ function Header() {
 		${tabBtn("files", "folder", t("Files"))}
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
-		${window.myHarnessDesktop && !exportReadOnly() ? html`<button class=${`icon-btn ${browserActive ? "active" : ""}`} aria-pressed=${browserActive} title=${t("Browser")} aria-label=${t("Browser")} onClick=${() => actions.openWorkspace({ type: "browser", url: "https://github.com" })}><${Icon} name="globe" size=${17} /></button>` : null}
+		${window.myHarnessDesktop && !exportReadOnly() ? html`<button class=${`icon-btn ${browserActive ? "active" : ""}`} aria-pressed=${browserActive} title=${t("Browser")} aria-label=${t("Browser")} onClick=${() => actions.openBrowser()}><${Icon} name="globe" size=${17} /></button>` : null}
 	</header>`;
 }
 

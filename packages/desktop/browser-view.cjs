@@ -323,13 +323,18 @@ exports.createBrowser = (window, log, options = {}) => {
       if (isMainFrame && code !== -3 && live()) fail(tab, `${description} (${code})`, target || tab.url);
     });
     contents.on('render-process-gone', (_event, detail) => { if (live()) fail(tab, `页面进程退出：${detail.reason}`, tab.url); });
-    // The workspace owns the find UI (the native view has none of its own). Ctrl+F inside the page asks the page to
-    // open its find bar; Escape there stops the search. Results are pushed for the bar and returned to the caller.
+    // The workspace owns the find bar, the new-tab button and the tab strip (the native view has none of its own).
+    // Ctrl+F inside the page asks the page to open its find bar; Ctrl+T / Ctrl+W ask for a new tab or to close this one,
+    // so those shortcuts do the same thing whether the keyboard is in the panel or in the page.
     contents.on('before-input-event', (event, input) => {
       const key = String(input.key || '').toLowerCase();
-      if (input.type === 'keyDown' && input.control && !input.alt && !input.shift && key === 'f') {
+      if (input.type !== 'keyDown' || !input.control || input.alt || input.shift) return;
+      if (key === 'f') {
         event.preventDefault();
         if (live()) emit(tab.id, { type: 'find-open' });
+      } else if (key === 't' || key === 'w') {
+        event.preventDefault();
+        if (live()) emit(tab.id, { type: 'shortcut', shortcut: key === 't' ? 'new-tab' : 'close-tab' });
       }
     });
     contents.on('found-in-page', (_event, result) => {

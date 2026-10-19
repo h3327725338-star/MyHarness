@@ -2,10 +2,11 @@
 // (packages/desktop/browser-view.cjs): a real Chromium document with its own history, cookies and storage, drawn above
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
-import { html, Icon, useEffect, useRef, useState } from "./ui.js";
+import { html, Icon, Menu, MenuItem, useClickOutside, useEffect, useRef, useState } from "./ui.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
+import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
 import { t } from "./i18n.js";
 
 function navIcon(Icon, name, label, disabled, onClick) {
@@ -21,6 +22,12 @@ export function BrowserPanel({ tabId, url }) {
 	const findInput = useRef(null);
 	const mountedUrl = useRef(url || "");
 	const [address, setAddress] = useState(url || "");
+	// The search engine belongs to this browser, not to the conversation: the choice is kept in the page's storage.
+	const [engine, setEngine] = useState(() => savedSearchEngine(window.localStorage).id);
+	const engineLabel = SEARCH_ENGINES.find((item) => item.id === engine)?.label || SEARCH_ENGINES[0].label;
+	// A new tab has no page in the desktop host until something is opened in it; until then the panel shows its own
+	// placeholder, which keeps the themed surface instead of an empty native view painted over it.
+	const [hasView, setHasView] = useState(() => !!url);
 	const [status, setStatus] = useState({ url: url || "", title: "", loading: false, error: "", canGoBack: false, canGoForward: false });
 	const [notice, setNotice] = useState("");
 	const [snapshot, setSnapshot] = useState(null);
@@ -30,6 +37,9 @@ export function BrowserPanel({ tabId, url }) {
 	const [permissionAsk, setPermissionAsk] = useState(null);
 	const [permissionOpen, setPermissionOpen] = useState(false);
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
+	// The bubble and the shield that opened it: a click on either one is not "somewhere else".
+	const permissionCard = useRef(null);
+	const permissionButton = useRef(null);
 	const siteOrigin = (() => {
 		try {
 			return new URL(status.url || address).origin;
@@ -37,6 +47,7 @@ export function BrowserPanel({ tabId, url }) {
 			return "";
 		}
 	})();
+	const siteDecisions = siteOrigin ? permissionList.permissions.filter((entry) => entry.origin === siteOrigin) : [];
 	const loadPermissions = async () => {
 		try {
 			const value = await send({ action: "permissions", tabId });
@@ -86,6 +97,10 @@ export function BrowserPanel({ tabId, url }) {
 		if (!host?.browser) throw new Error(t("The built-in browser is available in the desktop app only."));
 		return host.browser({ tabId, ...command });
 	};
+	const chooseEngine = (id) => {
+		rememberSearchEngine(window.localStorage, id);
+		setEngine(id);
+	};
 	const closeFind = () => {
 		setFindOpen(false);
 		setFindText("");
@@ -106,18 +121,49 @@ export function BrowserPanel({ tabId, url }) {
 		}
 	};
 	// Ctrl+F inside the page is forwarded by the host (a native view has no find bar of its own); Ctrl+F with the page
-	// UI focused opens the same bar. Escape closes it and clears the page's selection.
+	// UI focused opens the same bar. The same two paths handle Ctrl+T / Ctrl+W, so a new tab or closing one works whether
+	// the keyboard is in this panel or in the page. Escape closes the find bar and clears the page's selection.
 	useEffect(() => {
 		if (!active || !open) return undefined;
 		const onKey = (event) => {
-			if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+			if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+			// A dialog owns the keyboard, so these browser shortcuts do not reach a page nobody can see.
+			if (document.querySelector("[aria-modal='true']")) return;
+			const key = event.key.toLowerCase();
+			if (key === "f") {
 				event.preventDefault();
-				setFindOpen(true);
+				if (hasView) setFindOpen(true);
+				return;
+			}
+			if (key === "t") {
+				event.preventDefault();
+				actions.openBrowserTab();
+				return;
+			}
+			if (key === "w") {
+				event.preventDefault();
+				actions.closeWorkspaceTab(tabId);
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [active, open]);
+	}, [active, open, tabId, hasView]);
+	// The permission list belongs to the shield that opened it: a click anywhere else, Escape, or the window losing
+	// focus puts it away, the way a browser's own site bubble closes.
+	useClickOutside([permissionCard, permissionButton], () => setPermissionOpen(false), permissionOpen);
+	useEffect(() => {
+		if (!permissionOpen) return undefined;
+		const close = () => setPermissionOpen(false);
+		const onKey = (event) => {
+			if (event.key === "Escape") close();
+		};
+		window.addEventListener("blur", close);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("blur", close);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [permissionOpen]);
 	useEffect(() => {
 		if (!findOpen) return undefined;
 		const focus = requestAnimationFrame(() => {
@@ -138,6 +184,8 @@ export function BrowserPanel({ tabId, url }) {
 			if (!value || value.tabId !== tabId) return;
 			if (value.type === "state") {
 				setStatus(value.state);
+				// The tab strip names a website tab after its page, like a browser does.
+				if (value.state.title) actions.updateWorkspaceTabTitle(tabId, value.state.title);
 				if (value.state.url) {
 					setAddress(value.state.url);
 					if (value.state.url !== mountedUrl.current) {
@@ -146,6 +194,12 @@ export function BrowserPanel({ tabId, url }) {
 					}
 				}
 				if (value.state.error) setSnapshot(null);
+				return;
+			}
+			if (value.type === "shortcut") {
+				// Ctrl+T / Ctrl+W pressed while the page itself had the keyboard.
+				if (value.shortcut === "new-tab") actions.openBrowserTab();
+				else if (value.shortcut === "close-tab") actions.closeWorkspaceTab(tabId);
 				return;
 			}
 			if (value.type === "find") {
@@ -194,10 +248,12 @@ export function BrowserPanel({ tabId, url }) {
 	}, [host, tabId]);
 	// The native view is placed from the tab's real box by browser-view-sync.js. Activating the tab first clears any
 	// rectangle left by an earlier activation, so the page is never shown at a stale position while the first bounds are
-	// being measured. The cleanup reports a null rectangle for this tab only: a new active tab's view is not disturbed,
+	// being measured. A tab that starts empty has no view to place yet: the first navigation creates it (openFirstPage)
+	// and `hasView` then brings this effect back for the ensure/activate/sync sequence.
+	// The cleanup reports a null rectangle for this tab only: a new active tab's view is not disturbed,
 	// while a view that is going away can never stay visible over the tab that replaces it.
 	useEffect(() => {
-		if (!host?.browser || !active || !open) return undefined;
+		if (!host?.browser || !active || !open || !hasView) return undefined;
 		let cancelled = false;
 		const sync = createBrowserViewSync({
 			host,
@@ -228,24 +284,45 @@ export function BrowserPanel({ tabId, url }) {
 			send({ action: "stopFind" }).catch(() => undefined);
 			send({ action: "denyPending" }).catch(() => undefined);
 		};
-	}, [host, tabId, active, open]);
+	}, [host, tabId, active, open, hasView]);
+	/** The first page of a tab that started empty: the desktop host learns this tab's id together with its address. */
+	const openFirstPage = async (url) => {
+		const created = await send({ action: "ensure", tabId, url });
+		await send({ action: "activate", tabId });
+		mountedUrl.current = url;
+		actions.updateWorkspaceTabUrl(tabId, url);
+		setAddress(url);
+		setStatus((current) => ({ ...current, ...created, url: created?.url || url, error: "" }));
+		// Starting the native view's sync is the mount effect's job: it runs again for this tab once it has a page.
+		setHasView(true);
+	};
+	// Enter in the address bar: a real address opens as it is, anything else becomes a search in the chosen engine.
+	// The resolution happens here because the engine is a page preference; the desktop host still takes http/https only.
 	const navigate = async (event) => {
 		event?.preventDefault?.();
 		setNotice("");
+		const wanted = resolveBrowserAddress(address, engine);
+		if (!wanted) return;
 		setSnapshot(null);
 		try {
-			const state = await send({ action: "navigate", url: address });
+			if (!hasView) {
+				await openFirstPage(wanted.url);
+				return;
+			}
+			const state = await send({ action: "navigate", url: wanted.url });
 			if (state?.url) {
 				setAddress(state.url);
 				mountedUrl.current = state.url;
 				actions.updateWorkspaceTabUrl(tabId, state.url);
 			}
-			setStatus((current) => ({ ...current, ...state }));
+			setStatus((current) => ({ ...current, ...state, error: "" }));
 		} catch (error) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
 	const act = async (action) => {
+		// A tab that has not opened anything yet has no history, nothing to reload and nothing to stop.
+		if (!hasView) return;
 		try {
 			await send({ action });
 			const state = await send({ action: "state" });
@@ -262,11 +339,14 @@ export function BrowserPanel({ tabId, url }) {
 		<div class="panel-toolbar ws-browser-bar">
 			${navIcon(Icon, "chevronLeft", t("Back"), !status.canGoBack, () => act("back"))}
 			${navIcon(Icon, "chevronRight", t("Forward"), !status.canGoForward, () => act("forward"))}
-			${status.loading ? navIcon(Icon, "x", t("Stop"), false, () => act("stop")) : navIcon(Icon, "refresh", t("Reload"), false, () => act("reload"))}
-			<form class="row grow" onSubmit=${navigate}><input class="field grow" aria-label=${t("Website URL")} value=${address} onInput=${(e) => setAddress(e.target.value)} placeholder="https://" /><button class="btn sm" type="submit">${t("Open")}</button></form>
-			<button class="icon-btn sm" title=${t("Find in page")} aria-label=${t("Find in page")} aria-pressed=${findOpen} onClick=${() => (findOpen ? closeFind() : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>
-			<button class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
-			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} onClick=${() => host.external(status.url || address).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
+			${status.loading ? navIcon(Icon, "x", t("Stop"), !hasView, () => act("stop")) : navIcon(Icon, "refresh", t("Reload"), !hasView, () => act("reload"))}
+			<form class="row grow ws-address" onSubmit=${navigate}><input class="field grow ws-address-input" aria-label=${t("Address and search bar")} value=${address} onInput=${(e) => setAddress(e.target.value)} onKeyDown=${(event) => { if (event.key === "Enter") { event.preventDefault(); void navigate(); } }} placeholder=${t("Search {engine} or enter an address", { engine: engineLabel })} /><${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-address-engine ${expanded ? "active" : ""}`} title=${t("Search engine: {engine}", { engine: engineLabel })} aria-label=${t("Search engine")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="chevronDown" size=${12} /></button>`}>
+				${(close) => SEARCH_ENGINES.map((item) => html`<${MenuItem} key=${item.id} label=${item.label} active=${item.id === engine} onClick=${() => { close(); chooseEngine(item.id); }} />`)}
+			</${Menu}></form>
+			<button class="icon-btn sm" title=${t("Find in page")} aria-label=${t("Find in page")} aria-pressed=${findOpen} disabled=${!hasView} onClick=${() => (findOpen ? closeFind() : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>
+			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
+			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
+			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 		</div>
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
@@ -289,23 +369,25 @@ export function BrowserPanel({ tabId, url }) {
 				<button class="btn sm" onClick=${() => answerPermission(false)}>${t("Deny")}</button>
 			</div>
 		</div>` : null}
-		${permissionOpen ? html`<div class="ws-permissions">
-			<div class="row"><strong class="grow">${t("Site permissions")}</strong><button class="icon-btn sm" title=${t("Close")} aria-label=${t("Close")} onClick=${() => setPermissionOpen(false)}><${Icon} name="x" size=${13} /></button></div>
-			<div class="dim">${siteOrigin ? t("Decisions for {origin} last for this app session only.", { origin: siteOrigin }) : t("Open a page to review its permissions.")}</div>
-			${permissionList.permissions.filter((entry) => entry.origin === siteOrigin).length
-				? permissionList.permissions
-						.filter((entry) => entry.origin === siteOrigin)
-						.map((entry) => html`<div class="row ws-permission-row" key=${entry.permission}>
-					<span class="grow truncate">${entry.permission} · ${entry.allowed ? t("Allowed") : t("Denied")}</span>
+		${permissionOpen ? html`<div class="ws-permissions" ref=${permissionCard}>
+			<div class="row ws-permissions-head">
+				<strong class="grow truncate">${t("Site permissions")}</strong>
+				<button class="icon-btn sm" title=${t("Close")} aria-label=${t("Close")} onClick=${() => setPermissionOpen(false)}><${Icon} name="x" size=${13} /></button>
+			</div>
+			<div class="dim ws-permissions-note">${siteOrigin ? t("Decisions for {origin} last for this app session only.", { origin: siteOrigin }) : t("Open a page to review its permissions.")}</div>
+			${!siteOrigin ? null : siteDecisions.length
+				? siteDecisions.map((entry) => html`<div class="row ws-permission-row" key=${entry.permission}>
+					<span class="grow truncate">${entry.permission}</span>
+					<span class=${`ws-permission-state ${entry.allowed ? "on" : "off"}`}>${entry.allowed ? t("Allowed") : t("Denied")}</span>
 					<button class="btn sm" onClick=${() => revokePermission(entry.permission)}>${t("Revoke")}</button>
 				</div>`)
-				: html`<div class="dim">${t("No permission decisions for this site yet.")}</div>`}
+				: html`<div class="dim ws-permissions-note">${t("No permission decisions for this site yet.")}</div>`}
 		</div>` : null}
 		${status.title ? html`<div class="ws-page-title truncate" title=${status.title}>${status.title}</div>` : null}
 		<div class="desktop-browser-target" ref=${target}>
 			<div class="pad">
-				<p role="status">${status.error || (status.loading ? t("Loading…") : t("Enter a URL to open it in this tab."))}</p>
-				<button class="btn sm" onClick=${() => host.external(status.url || address).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>
+				<p role="status">${status.error || (status.loading ? t("Loading…") : hasView && !status.url ? t("Enter a URL to open it in this tab.") : "")}</p>
+				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
 			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot} alt="" draggable="false" />` : null}
 		</div>

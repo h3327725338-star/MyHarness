@@ -332,3 +332,29 @@ test('window resize re-clamps the native view and a zero-sized window hides it',
   browser.destroy();
 });
 
+
+test('Ctrl+T, Ctrl+W and Ctrl+F pressed inside the page reach the workspace', async () => {
+  const { browser, contents, events } = loadBrowser();
+  const tab = await browser.command({ action: 'open', url: 'https://example.com/' });
+  const press = (input) => {
+    const event = { prevented: false, preventDefault() { this.prevented = true; } };
+    contents[0].handlers.get('before-input-event')(event, input);
+    return event;
+  };
+  const shortcuts = () => events.filter((event) => event.value?.type === 'shortcut').map((event) => event.value);
+  // The native view has no tab strip of its own: the panel owns both buttons, so the page only reports the key.
+  const newTab = press({ type: 'keyDown', key: 't', control: true });
+  assert.equal(newTab.prevented, true);
+  assert.equal(shortcuts().some((value) => value.shortcut === 'new-tab' && value.tabId === tab.tabId), true);
+  const closeTab = press({ type: 'keyDown', key: 'w', control: true });
+  assert.equal(closeTab.prevented, true);
+  assert.equal(shortcuts().some((value) => value.shortcut === 'close-tab'), true);
+  assert.equal(press({ type: 'keyDown', key: 'f', control: true }).prevented, true);
+  assert.equal(events.some((event) => event.value?.type === 'find-open'), true);
+  // Modified keys and key releases are left to the page.
+  assert.equal(press({ type: 'keyDown', key: 't', control: true, alt: true }).prevented, false);
+  assert.equal(press({ type: 'keyDown', key: 'w', control: true, shift: true }).prevented, false);
+  assert.equal(press({ type: 'keyUp', key: 't', control: true }).prevented, false);
+  assert.equal(shortcuts().length, 2);
+  browser.destroy();
+});

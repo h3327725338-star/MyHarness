@@ -200,7 +200,8 @@ export const actions = {
 		// A view being closed, or hidden while the next tab is shown, must not survive the switch for a single frame.
 		if (state.view.wsActive === id) hideBrowserViews();
 		const patch = { wsTabs: rest, wsClosed: [...state.view.wsClosed.slice(-19), closed] };
-		if (closed.type === "browser") {
+		// A new browser tab has no page in the host until something is opened in it; closing it has nothing to close there.
+		if (closed.type === "browser" && closed.url) {
 			const desktop = window.myHarnessDesktop;
 			if (desktop?.browser) desktop.browser({ action: "close", tabId: closed.id }).catch(() => undefined);
 		}
@@ -219,7 +220,7 @@ export const actions = {
 		const closed = state.view.wsTabs.filter((item) => item.id !== id);
 		if (state.view.wsActive !== keep.id) hideBrowserViews();
 		const desktop = window.myHarnessDesktop;
-		for (const item of closed) if (item.type === "browser" && desktop?.browser) desktop.browser({ action: "close", tabId: item.id }).catch(() => undefined);
+		for (const item of closed) if (item.type === "browser" && item.url && desktop?.browser) desktop.browser({ action: "close", tabId: item.id }).catch(() => undefined);
 		setView({
 			wsTabs: [keep],
 			wsActive: keep.id,
@@ -257,6 +258,36 @@ export const actions = {
 		const index = tabs.findIndex((item) => item.id === id);
 		if (index < 0 || tabs[index].type !== "browser" || tabs[index].url === url) return;
 		setView({ wsTabs: tabs.map((tab, position) => (position === index ? { ...tab, url } : tab)) });
+	},
+
+	/**
+	 * The page's own title, which the tab strip shows instead of the bare host while the page is open. It arrives with
+	 * every state event, so an unchanged title must not rewrite (and re-save) the workspace.
+	 */
+	updateWorkspaceTabTitle(id, title) {
+		const next = String(title || "").trim();
+		if (!next) return;
+		const tabs = state.view.wsTabs;
+		const index = tabs.findIndex((item) => item.id === id);
+		if (index < 0 || tabs[index].type !== "browser" || tabs[index].title === next) return;
+		setView({ wsTabs: tabs.map((tab, position) => (position === index ? { ...tab, title: next } : tab)) });
+	},
+
+	/** A new, empty browser tab in this conversation's panel: nothing loads until something is typed into its bar. */
+	openBrowserTab() {
+		return actions.openWorkspace({ type: "browser", url: "" });
+	},
+
+	/**
+	 * The header's Browser button: show this conversation's browser (the one on screen, else the last browser tab in
+	 * the strip) or start one. It never picks an address for the user — the earlier version opened one fixed site every
+	 * time, which left no way to reach a second page.
+	 */
+	openBrowser() {
+		const tabs = state.view.wsTabs;
+		const current = tabs.find((tab) => tab.id === state.view.wsActive);
+		const recent = current?.type === "browser" ? current : [...tabs].reverse().find((tab) => tab.type === "browser");
+		return recent ? actions.openWorkspace(recent) : actions.openBrowserTab();
 	},
 
 	insertIntoComposer(text, { replace = false } = {}) {
