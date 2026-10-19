@@ -42,7 +42,7 @@ import {
 	migrateLegacyMemories,
 	restoreMemoryArchive,
 } from "../../session/memory/store.ts";
-import type { RunChangeCardFile } from "./changes.ts";
+import type { FileChangeSummary, RunChangeCardFile } from "./changes.ts";
 import {
 	getCachedWorktreeChangesSync,
 	invalidateWorktreeCache,
@@ -66,6 +66,7 @@ import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { resolveLocalFile, runLocalFileAction } from "./local-files.ts";
 import { registerOfficePreview, registerOfficeRoutes } from "./office.ts";
 import { collectSessionChanges } from "./session-changes.ts";
+import { attributeConversationFiles, type ConversationAttribution, isElsewhereOwned } from "./session-ownership.ts";
 import { RUN_CHANGES_ENTRY, splitAttachmentText } from "./wire.ts";
 
 const MAX_TEXT_BYTES = 1.5 * 1024 * 1024;
@@ -1154,39 +1155,56 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const requestedScope = url.searchParams.get("scope");
 		const scope = requestedScope === "worktree" ? "worktree" : requestedScope === "session" ? "session" : "run";
 		const fresh = url.searchParams.get("fresh") === "1";
-		// The number on the "Current conversation" button: the files this chat recorded as changed that are still
-		// uncommitted. Both scopes answer it, because both buttons show their number at the same time. `freshList` is false
-		// where the request just re-listed the working tree itself.
-		const conversationUncommitted = async (files: { path: string }[], freshList: boolean) =>
-			host.tracker
-				.countUncommitted(
-					files.map((file) => file.path),
-					{ fresh: freshList },
-				)
-				.catch(() => undefined);
+		// The number on the "Current conversation" button: the uncommitted files this chat changed last. A file another
+		// conversation changed more recently belongs to that conversation, so the list keeps it as history while the number
+		// and the commit leave it out (see session-ownership.ts). Both scopes answer the number, because both buttons show
+		// their number at the same time.
+		const attributionOf = async (changes: readonly { path: string }[]) => {
+			const conversation = collectSessionChanges(host.session.sessionManager.getBranch()).files;
+			return attributeConversationFiles({
+				sessionKey: host.session.sessionId,
+				conversationPaths: conversation.map((file) => file.path),
+				cwd: currentCwd(),
+				dirtyPaths: changes.map((change) => change.path),
+				registry: host.changeClaims,
+			}).catch(() => undefined);
+		};
+		const withElsewhereMark = (files: FileChangeSummary[], attribution: ConversationAttribution | undefined) => {
+			if (!attribution || attribution.elsewhere.size === 0) return files;
+			const cwd = currentCwd();
+			return files.map((file) =>
+				isElsewhereOwned(attribution.elsewhere, cwd, file.path) ? { ...file, lastChangeElsewhere: true } : file,
+			);
+		};
 		if (scope === "session") {
 			const { files } = collectSessionChanges(host.session.sessionManager.getBranch());
+			// A conversation that recorded no change yet is the common case: answer without reading Git at all.
+			if (files.length === 0) return { scope, files, total: 0, uncommitted: 0 };
+			const listed = await host.tracker
+				.listWorktreeChanges(fresh ? { forceRefresh: true } : undefined)
+				.catch(() => undefined);
+			const attribution = listed?.repositoryRoot ? await attributionOf(listed.changes) : undefined;
 			return {
 				scope,
-				files,
+				files: withElsewhereMark(files, attribution),
 				total: files.length,
-				uncommitted: await conversationUncommitted(files, fresh),
+				uncommitted: attribution?.own.length,
 			};
 		}
 		// The conversation's own count rides on both scopes' answers, so its button keeps the number while the other scope
 		// is on screen instead of blanking on every switch.
-		const sessionFiles = () => collectSessionChanges(host.session.sessionManager.getBranch()).files;
 		const checkpoint = host.session.getGitCheckpoint();
 		if (scope === "worktree") {
 			const cwd = currentCwd();
 			const cached = fresh ? undefined : getCachedWorktreeChangesSync(cwd);
 			if (cached?.files) {
+				const attribution = cached.repositoryRoot ? await attributionOf(cached.changes) : undefined;
 				return {
 					scope,
 					files: cached.files,
 					total: cached.changes.length,
 					error: cached.error ?? null,
-					uncommitted: await conversationUncommitted(sessionFiles(), false),
+					uncommitted: attribution?.own.length,
 				};
 			}
 			const listed = await host.tracker.listWorktreeChanges(fresh ? { forceRefresh: true } : undefined);
@@ -1204,7 +1222,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				files,
 				total: listed.changes.length,
 				error: listed.error ?? null,
-				uncommitted: await conversationUncommitted(sessionFiles(), false),
+				uncommitted: (root ? await attributionOf(listed.changes) : undefined)?.own.length,
 			};
 		}
 		const runParam = url.searchParams.get("runId");

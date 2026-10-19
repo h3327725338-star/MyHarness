@@ -44,3 +44,17 @@ it.each(["committed", "no-changes"])("refreshes actual uncommitted status after 
 	expect(store.loadGitStatus).toHaveBeenCalledTimes(1);
 	expect(store.toast).not.toHaveBeenCalled();
 });
+it("asks the server for this conversation's own files when the Current conversation tab commits", async () => {
+	store.post.mockImplementation(async (route: string) =>
+		route === "/api/git/record" ? { id: "saved" } : { status: "committed", message: "saved", commitHash: "abcdefg" },
+	);
+	await commitChanges({ scope: "session" });
+	expect(store.post.mock.calls[0]).toEqual(["/api/git/commit", { scope: "session" }, "slot"]);
+});
+it("keeps committing the whole working tree for every other entry", async () => {
+	store.post.mockImplementation(async (route: string) =>
+		route === "/api/git/record" ? { id: "saved" } : { status: "committed", message: "saved", commitHash: "abcdefg" },
+	);
+	await commitChanges();
+	expect(store.post.mock.calls[0]).toEqual(["/api/git/commit", {}, "slot"]);
+});

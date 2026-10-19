@@ -766,7 +766,11 @@ export const zhCN = {
 	"Set up Git": "设置 Git",
 	"MyHarness does not create task checkpoints while Git integration is off": "Git 集成关闭时，MyHarness 不会创建任务检查点",
 	"integration off": "集成已关闭",
-	"Commit the task's changes locally": "在本地 Commit 任务的改动",
+	"Commit only this conversation's uncommitted changes": "只 Commit 本对话里还没提交的改动",
+	"Commit all uncommitted changes in the workspace": "Commit 工作区里全部未提交的改动",
+	"Another conversation": "另一个对话",
+	"Another conversation changed this file more recently, so it commits it and this conversation's commit leaves it out.": "另一个对话最近改过这个文件，所以它由那个对话提交，本对话提交时不包括它。",
+	"This conversation has no uncommitted changes.": "本对话没有未提交的改动。",
 	"Push commits to the upstream and verify CI": "把 Commit Push 到上游并核对 CI",
 	"More Git actions": "更多 Git 操作",
 

@@ -59,6 +59,8 @@ import { completeWithNetworkPolicy, failureOf } from "../../providers/recovery/n
 import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { collectSessionChanges } from "./session-changes.ts";
+import { attributeConversationFiles, repositoryRelative } from "./session-ownership.ts";
 import { WorktreeLauncher } from "./worktree-launch.ts";
 
 function asObject(body: unknown): Record<string, unknown> {
@@ -402,7 +404,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// ---- /commit -----------------------------------------------------------------------
-	server.route("POST", "/api/git/commit", async () => {
+	server.route("POST", "/api/git/commit", async ({ body }) => {
+		// The Changes panel commits what its tab shows: "Current conversation" commits this chat's own files, and the
+		// default (the slash command, the /git panel) keeps committing the whole working tree.
+		const scope =
+			body && typeof body === "object" && (body as { scope?: unknown }).scope === "session" ? "session" : "worktree";
 		requireIdle("commit");
 		requireTrusted();
 		const state = inspectGitRepository(cwd());
@@ -423,7 +429,30 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (preview.total === 0) {
 			if (checkpoint) completeCheckpoint(checkpoint);
 			host.broadcast("checkpoint_changed", {});
-			return { status: "no-changes" };
+			return { status: "no-changes", scope };
+		}
+		// Only the files this conversation changed last among the uncommitted ones: a file another conversation changed more
+		// recently belongs to that conversation's view of it, so this commit leaves it alone.
+		let only: string[] | undefined;
+		if (scope === "session") {
+			const conversation = collectSessionChanges(host.session.sessionManager.getBranch()).files.map(
+				(file) => file.path,
+			);
+			const listed = await host.tracker.listWorktreeChanges();
+			const attribution = listed.repositoryRoot
+				? await attributeConversationFiles({
+						sessionKey: host.session.sessionId,
+						conversationPaths: conversation,
+						cwd: cwd(),
+						dirtyPaths: listed.changes.map((change) => change.path),
+						registry: host.changeClaims,
+					})
+				: undefined;
+			only = (attribution?.own ?? [])
+				.map((candidate) => repositoryRelative(repositoryRoot, path.resolve(cwd(), candidate)))
+				.filter((candidate): candidate is string => !!candidate);
+			// Nothing of this conversation is left to save: opening it to the checkpoint would spend an Undo on nothing.
+			if (only.length === 0) return { status: "no-changes", scope };
 		}
 		const task: GitTaskState = {
 			kind: "commit",
@@ -537,12 +566,13 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 					}
 				},
 			});
-			const result = await useCase.execute({ repositoryRoot, checkpoint });
+			const result = await useCase.execute({ repositoryRoot, checkpoint, ...(only ? { only } : {}) });
 			if (result.status === "read-error")
 				throw new HttpError(500, `Cannot read the Git working tree: ${result.error}`);
 			if (result.status === "failed") {
 				return {
 					status: "failed",
+					scope,
 					message: result.message.full,
 					paths: result.paths,
 					failure: failureText(result.failure),
@@ -551,9 +581,10 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			}
 			if (checkpoint) completeCheckpoint(checkpoint);
 			host.broadcast("checkpoint_changed", {});
-			if (result.status === "no-changes") return { status: "no-changes" };
+			if (result.status === "no-changes") return { status: "no-changes", scope };
 			return {
 				status: "committed",
+				scope,
 				message: result.message.full,
 				paths: result.paths,
 				commitHash: result.commitHash ?? null,

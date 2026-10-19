@@ -10,8 +10,9 @@
  * Every session records here what it changed itself - direct file operations
  * (edit / write / apply_patch) and the windows during which it ran shell
  * commands, which change files opaquely. A finished run then drops the files
- * another session's record explains, and an undo lists the files it would roll
- * back that another conversation changed.
+ * another session's record explains, an undo lists the files it would roll
+ * back that another conversation changed, and the Changes panel asks who changed
+ * an uncommitted file last (see session-ownership.ts).
  *
  * The registry is process-local: it knows the sessions of this app instance.
  * Another MyHarness process, or any unrelated program, on the same workspace
@@ -61,6 +62,20 @@ export class ChangeClaimRegistry {
 	recordShell(window: ShellWindow): void {
 		this.shellWindows.push(window);
 		this.maybePrune();
+	}
+
+	/** The newest direct change of `path` on record, whoever made it, or undefined when nobody recorded one. */
+	latestClaim(path: string): ChangeClaim | undefined {
+		const list = this.claims.get(pathIdentityKey(path));
+		if (!list || list.length === 0) return undefined;
+		let latest = list[0];
+		for (const claim of list) if (claim.at > latest.at) latest = claim;
+		return latest;
+	}
+
+	/** The shell windows of any session that cover `at`; a command run then may have written the file. */
+	windowsCovering(at: number): ShellWindow[] {
+		return this.shellWindows.filter((window) => window.startedAt <= at && at <= window.endedAt);
 	}
 
 	/** Whether a session other than `sessionKey` claimed `path` at a time inside [from, to]. */

@@ -27,6 +27,7 @@
 | `folder-dialog.ts` | 调用系统的文件夹选择窗口 |
 | `routes-core.ts`、`routes-sessions.ts`、`routes-files.ts`、`routes-git.ts`、`routes-settings.ts`、`routes-providers.ts`、`routes-accounts.ts`、`routes-terminal.ts`、`routes-modes.ts` | 各组 API 路由 |
 | `session-changes.ts` | 从会话条目收集文件差异（供变更展示用） |
+| `session-ownership.ts` | 未提交文件归哪个对话：最新一次改动说了算（谁最后改的谁提交） |
 | `change-claims.ts`、`changes-stats.ts` | 变更认领登记与 worktree 变更统计/列表缓存（numstat 解析、行数与二进制判断） |
 | `file-pages.ts`、`local-files.ts`、`office.ts`、`html-preview.ts` | 文件内容服务：分页读取、本地文件、Office 文档、HTML 预览 |
 | `slot-budget.ts`、`transcript-cache.ts`、`web-prefs.ts`、`worktree-launch.ts` | 会话 slot 预算、转录缓存、Web 偏好、worktree 启动 |

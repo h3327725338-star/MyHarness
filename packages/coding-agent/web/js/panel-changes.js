@@ -246,7 +246,7 @@ export function ChangesPanel() {
 			<${Segmented} value=${mode} onChange=${(v) => (localStorage.setItem("myharness.diffmode", v), setMode(v))} options=${[{ value: "unified", icon: "rows", title: t("Unified"), label: "" }, { value: "split", icon: "columns", title: t("Side by side"), label: "" }]} />
 			<button class="icon-btn sm" disabled=${loading} title=${t("Refresh")} aria-label=${t("Refresh changes")} onClick=${() => load(true)}><${Icon} name="refresh" size=${15} /></button>
 		</div>
-		<${GitBar} gitStatus=${gitStatus} active=${active} />
+		<${GitBar} gitStatus=${gitStatus} active=${active} scope=${scope} committable=${chatUncommitted} />
 		<div class="changes-notes">
 			${error ? html`<div class="notice danger">${error}</div>` : null}
 		</div>
@@ -271,6 +271,7 @@ export function ChangesPanel() {
 							${files.map((file) => html`<div class=${`cfile ${file === selected ? "sel" : ""}`} key=${file.path} role="option" aria-selected=${file === selected} title=${file.path} onClick=${() => setChosen(file.path)}>
 								<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
 								<${FilePath} file=${file} />
+								${file.lastChangeElsewhere ? html`<span class="badge" title=${t("Another conversation changed this file more recently, so it commits it and this conversation's commit leaves it out.")}>${t("Another conversation")}</span>` : null}
 								${fileCounts(file)}
 							</div>`)}
 						</div>
@@ -282,7 +283,7 @@ export function ChangesPanel() {
 	</div>`;
 }
 
-export function GitBar({ gitStatus, active }) {
+export function GitBar({ gitStatus, active, scope = "worktree", committable = 0 }) {
 	const [more, setMore] = useState(false);
 	const closeMore = useCallback(() => setMore(false), []);
 	const gitTask = useStore((s) => s.gitTask);
@@ -296,6 +297,12 @@ export function GitBar({ gitStatus, active }) {
 		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitSetup()}>${t("Set up Git")}</button></div>`;
 	}
 	const busy = active || !!gitStatus.task || !!gitTask;
+	// The Commit button commits what the tab shows: on "Current conversation" only this chat's own files (nothing when it
+	// has none left), on "Working tree" everything uncommitted in the folder.
+	const conversationScope = scope === "session";
+	const commitTitle = conversationScope
+		? t("Commit only this conversation's uncommitted changes")
+		: t("Commit all uncommitted changes in the workspace");
 	return html`<div class="gitbar">
 		<span class="row gitbar-ctx"><${Icon} name="gitBranch" size=${14} /><strong class="truncate">${gitStatus.branch || t("detached HEAD")}</strong>
 			${gitStatus.head ? html`<span class="mono dim" title=${gitStatus.head.subject}>${gitStatus.head.sha.slice(0, 7)}</span>` : null}
@@ -303,7 +310,7 @@ export function GitBar({ gitStatus, active }) {
 			${gitStatus.integrationEnabled ? null : html`<span class="badge" title=${t("MyHarness does not create task checkpoints while Git integration is off")}>${t("integration off")}</span>`}
 		</span>
 		<span class="grow" />
-		<button class="btn sm" disabled=${busy} onClick=${commitChanges} title=${t("Commit the task's changes locally")}>${t("Commit")}</button>
+		<button class="btn sm" disabled=${busy || (conversationScope && committable <= 0)} onClick=${() => commitChanges({ scope })} title=${commitTitle}>${t("Commit")}</button>
 		<button class="btn sm" disabled=${busy} onClick=${pushChanges} title=${t("Push commits to the upstream and verify CI")}>${t("Push")}</button>
 		<button class="icon-btn sm" title=${t("More Git actions")} aria-label=${t("More Git actions")} data-git-menu-trigger aria-expanded=${more} onClick=${() => setMore((value) => !value)}><${Icon} name="more" size=${15} /></button>
 		${more ? html`<div class="gitbar-menu"><${PanelBody} cmd=${{ name: "git" }} onClose=${closeMore} /></div>` : null}

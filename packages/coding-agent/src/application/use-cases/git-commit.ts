@@ -12,6 +12,11 @@ export type GitCommitTaskPhase = "checking" | "generating" | "submitting" | "rep
 export interface GitCommitTarget {
 	repositoryRoot: string;
 	checkpoint?: GitCheckpoint;
+	/**
+	 * Only these repository-relative paths (forward slashes) may be committed. A conversation-scoped commit runs the
+	 * same workflow restricted to the files that conversation changed, instead of the whole working tree.
+	 */
+	only?: readonly string[];
 }
 
 export type GitCommitWorkflowResult =
@@ -60,6 +65,11 @@ export function isGitNoChangesFailure(result: GitCommandResult): boolean {
 		text.includes("nothing added to commit") ||
 		text.includes("no changes added to commit")
 	);
+}
+
+/** One spelling for a repository-relative path, whichever of the two separators the caller used. */
+function normalizeCommitPath(value: string): string {
+	return value.replace(/\\/gu, "/").replace(/^\.\//u, "");
 }
 
 /**
@@ -134,9 +144,12 @@ export class GitCommitUseCase {
 		targetOrCheckpoint: GitCommitTarget | GitCheckpoint,
 	): Promise<{ paths?: string[]; error?: string }> {
 		const target = normalizeGitCommitTarget(targetOrCheckpoint);
-		return target.checkpoint
-			? getGitCheckpointPendingTaskPathsAsync(target.checkpoint, this.host.signal, { fresh: true })
-			: getGitWorkingTreePathsAsync(target.repositoryRoot, [], this.host.signal, { fresh: true });
+		const pending = target.checkpoint
+			? await getGitCheckpointPendingTaskPathsAsync(target.checkpoint, this.host.signal, { fresh: true })
+			: await getGitWorkingTreePathsAsync(target.repositoryRoot, [], this.host.signal, { fresh: true });
+		if (!target.only || pending.error || !pending.paths) return pending;
+		const allowed = new Set(target.only.map(normalizeCommitPath));
+		return { paths: pending.paths.filter((candidate) => allowed.has(normalizeCommitPath(candidate))) };
 	}
 
 	/**

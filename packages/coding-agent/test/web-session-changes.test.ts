@@ -56,8 +56,14 @@ describe("conversation change review", () => {
 			} as never,
 			{
 				session: { sessionManager: { getBranch: () => branch } },
-				// The conversation's uncommitted count is a Working tree read; here it only has to be answered, not computed.
-				tracker: { countUncommitted: async (paths: string[]) => (paths.length ? 2 : 0) },
+				// The conversation's uncommitted count is the Working tree list intersected with this chat's files; a host
+				// without change claims answers it from one listing.
+				tracker: {
+					listWorktreeChanges: async () => ({
+						repositoryRoot: "/repo",
+						changes: [{ path: "a.ts", status: "modified" }],
+					}),
+				},
 			} as never,
 		);
 		const request = (route: string, query: string) =>
@@ -66,7 +72,7 @@ describe("conversation change review", () => {
 			scope: "session",
 			total: 1,
 			files: [{ path: "a.ts" }],
-			uncommitted: 2,
+			uncommitted: 1,
 		});
 		expect(await request("/api/changes/diff", "scope=session&path=a.ts")).toMatchObject({
 			history: [{ entryId: "saved", patch: "saved diff" }],

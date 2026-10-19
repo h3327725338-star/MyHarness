@@ -48,16 +48,26 @@ async function runGitTask(kind, activity, work) {
 const failure = (title, error) => ({ tone: "error", title, detail: serverText(error?.message, t("The operation failed.")) });
 
 // ---- /commit -----------------------------------------------------------------------------------------------------
-/** Commits the workspace's changes the way the terminal's /commit does: no choice is needed, so it starts at once. */
-export function commitChanges() {
+/**
+ * Commits the way the terminal's /commit does: no choice is needed, so it starts at once. The Changes panel passes its
+ * scope, so "Current conversation" commits only the files this chat changed; every other entry (the slash command, the
+ * /git panel) keeps committing the whole working tree.
+ */
+export function commitChanges(options = {}) {
+	const scope = options?.scope === "session" ? "session" : undefined;
 	return runGitTask("commit", "Checking changes", async (slot) => {
 		let result;
 		try {
-			result = await post("/api/git/commit", {}, slot);
+			result = await post("/api/git/commit", scope ? { scope } : {}, slot);
 		} catch (error) {
 			return show(slot, "commit", failure(t("Commit failed"), error));
 		}
-		if (result.status === "no-changes") return show(slot, "commit", { tone: "info", title: t("Nothing to commit"), detail: t("There are no local changes to commit.") });
+		if (result.status === "no-changes")
+			return show(slot, "commit", {
+				tone: "info",
+				title: t("Nothing to commit"),
+				detail: scope ? t("This conversation has no uncommitted changes.") : t("There are no local changes to commit."),
+			});
 		if (result.status === "failed") {
 			return show(slot, "commit", {
 				tone: "error",
