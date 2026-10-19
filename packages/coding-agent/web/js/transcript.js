@@ -2,7 +2,7 @@
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
-import { retrySwitch, activeSlotId, api, fetchMoreTranscript, getTurnsCache, setTurnsCache, setView, useStore } from "./store.js";
+import { retrySwitch, activeSlotId, api, fetchMoreTranscript, getTurnsCache, notePaintedTurns, setTurnsCache, setView, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
@@ -949,7 +949,7 @@ export function Transcript() {
 	// back to the tail preview it had just replaced.
 	const build = useRef({ running: false, dirty: false, token: null, slot: null, items: null, toolRuns: null });
 	const buildRequest = useRef(null);
-	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching, hasMore: transcriptHasMore, fullNeeded: previewing.current };
+	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching };
 	const startBuild = () => {
 		const request = buildRequest.current;
 		const state = build.current;
@@ -958,15 +958,27 @@ export function Transcript() {
 				// The bag moved on: the running build describes another session and must not be published.
 				if (state.token) state.token.cancelled = true;
 				state.running = false;
-			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns) state.dirty = true;
-			else return;
+			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns) {
+				// Newer data arrived while a build runs: remember that one more build is owed and leave the single-flight
+				// gate alone. Falling through started a second full projection next to the running one (and reset the dirty
+				// flag), which is what let an older build land last and stay on screen.
+				state.dirty = true;
+				return;
+			} else return;
 		}
 		if (request.switching) return;
-		// A full build runs while the screen shows the tail preview, while the window is over-long, or while a
-		// rebuild of an over-long window is pending (`fullNeeded`/`previewing` — set by the preview branch
-		// above). Small complete transcripts build synchronously and never need one.
-		if (!(previewing.current === true || request.fullNeeded || request.items.length > 400)) return;
-		if (cachedTurns(getTurnsCache(request.slot), request.items, request.toolRuns, request.cwd)) return;
+		// A loading shell has nothing to project (the memo returns an empty list): building it would only add work to
+		// a switch that already invalidates the next build.
+		if (request.items.length === 0) return;
+		// One rule for every session, never a size guess: rebuild exactly while the turns on screen were not built from
+		// these references. A paged first page can come back shorter than its limit (the server aligns the window to a
+		// user message), so "more items than one page" skipped the rebuild for exactly those chats and their new messages
+		// never reached the screen. The cache hit below is what keeps small sessions (built synchronously under the frame
+		// budget) from ever reaching the async path.
+		if (cachedTurns(getTurnsCache(request.slot), request.items, request.toolRuns, request.cwd)) {
+			state.dirty = false;
+			return;
+		}
 		state.running = true;
 		state.dirty = false;
 		state.slot = request.slot;
@@ -974,7 +986,11 @@ export function Transcript() {
 		state.toolRuns = request.toolRuns;
 		const token = state.token = { cancelled: false };
 		void buildTurnsAsync(request.items, { cwd: request.cwd, toolRuns: request.toolRuns }, request.slot === prevOwner.current.slot ? prevTurns.current : null, () => token.cancelled).then((built) => {
-			if (token.cancelled || !built) return;
+			if (token.cancelled || !built) {
+				// A cancelled build must not leave the gate closed for the build that replaced it.
+				if (state.token === token) state.running = false;
+				return;
+			}
 			state.running = false;
 			// The cold-load preview is about to be replaced: take the height before the swap so the reader's place can be
 			// kept (pinned to the bottom, the follow below holds its place anyway).
@@ -993,7 +1009,7 @@ export function Transcript() {
 				swapHeight.current = scroller.current?.scrollHeight || 0;
 			setTurnsCache({ items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built }, request.slot);
 			setAsyncTurns({ slot: request.slot, session: request.session, items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built });
-			if (state.dirty) startBuild();
+			if (state.dirty) scheduleBuild();
 		}).catch(() => {
 			// A failed background build must not wedge the single-flight gate: clear it so the next render can
 			// start a fresh build. The tail preview or the previous turns stay on screen until then.
@@ -1001,11 +1017,27 @@ export function Transcript() {
 			state.dirty = false;
 		});
 	};
-	// Runs after every render: a no-op while a build for the newest references is already running, otherwise it starts one.
+	// Runs after every render. A build is scheduled for the next task, so the several store writes one switch makes
+	// (snapshot, transcript, mode) land in one build instead of one each; while a build runs, newer data is merged
+	// into a single follow-up build by the dirty flag above.
+	const buildTimer = useRef(0);
+	const scheduleBuild = () => {
+		if (buildTimer.current) return;
+		buildTimer.current = setTimeout(() => {
+			buildTimer.current = 0;
+			startBuild();
+		}, 0);
+	};
 	useEffect(() => {
-		startBuild();
+		scheduleBuild();
 	});
+	// What the send check reads: the turns the screen was last given, so a message that sits in the data without ever
+	// being drawn is not mistaken for one that is already visible.
+	useEffect(() => {
+		notePaintedTurns(turns);
+	}, [items, turns]);
 	useEffect(() => () => {
+		if (buildTimer.current) clearTimeout(buildTimer.current);
 		if (build.current.token) build.current.token.cancelled = true;
 	}, []);
 

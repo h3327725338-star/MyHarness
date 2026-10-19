@@ -1589,6 +1589,28 @@ export async function boot() {
 }
 
 /**
+ * What the transcript last drew, in the order it drew it: the items it was given and the turns it built from them.
+ * `verifyLiveUpdates` needs this because data alone proves nothing — a session whose rebuild never runs holds the
+ * message in `state.items` while the screen still shows the older turns.
+ */
+let painted = { turns: null };
+export function notePaintedTurns(turns) {
+	painted = { turns };
+}
+/** Whether a real (not optimistic) user message is drawn in the turns on screen, by its client id or by its text. */
+function paintedUserMessage(clientMessageId, text) {
+	const turns = painted.turns;
+	if (!turns) return false;
+	for (const turn of turns) {
+		const user = turn.user;
+		if (!user || user.pending) continue;
+		if (clientMessageId && user.clientMessageId === clientMessageId) return true;
+		if (text && user.text === text) return true;
+	}
+	return false;
+}
+
+/**
  * A sent message must show up at once. The page only knows what changed through the event stream, so a stream that went
  * quiet leaves it on stale content until the next full reload — which is what a manual service restart does. This waits
  * once for an event after a send and, when none arrives, rebuilds the stream and reads everything again, so the message
@@ -1596,15 +1618,17 @@ export async function boot() {
  */
 export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000) {
 	if (recoveringStream || !booted) return true;
-	// The message counts as shown once a real entry carries it, by its client id or by its text (a read back from the
-	// session does not keep the client id). The optimistic row does not count: the page can drop it and show nothing.
-	const shown = () =>
+	// The message counts as shown once a real entry carries it AND the transcript has actually drawn it. Reading the
+	// data alone hid a real defect: a long session kept the message in `state.items` but never rebuilt its turns, so
+	// this check passed while the screen stayed stale until a reload. The optimistic row counts for neither half.
+	const landed = () =>
 		state.items.some(
 			(item) =>
 				item.kind === "user" &&
 				!item.pending &&
 				((clientMessageId && item.clientMessageId === clientMessageId) || (!!text && item.text === text)),
 		);
+	const shown = () => landed() && paintedUserMessage(clientMessageId, text);
 	if (shown()) return true;
 	recoveringStream = true;
 	try {
