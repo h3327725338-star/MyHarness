@@ -13,6 +13,8 @@ import { StepCounts } from "./step-counts.js";
 import { basename, clip, splitFirstSentence, dirname, fmtBytes, fmtDuration, fmtShortDuration, fmtTokens, plural, formatData, ansiSegments } from "./util.js";
 import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
+import { MessageRail } from "./message-rail.js";
+import { jumpToQuote, registerScroller } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
@@ -603,7 +605,17 @@ function UserText({ text }) {
 		return () => observer?.disconnect();
 	}, []);
 	const folded = fold.foldable && !open;
-	return html`<div class=${`user-fold ${fold.foldable ? "is-foldable" : ""} ${folded ? "folded" : ""}`} ref=${box} style=${fold.foldable ? { maxHeight: `${open ? fold.full : fold.line * FOLDED_LINES}px` } : undefined}>
+	// A quote in a sent message leads back to the passage it was taken from.
+	const onQuote = (event) => {
+		const quote = event.target.closest?.("blockquote");
+		if (!quote || event.target.closest("a") || window.getSelection?.()?.toString()) return;
+		void jumpToQuote(quote);
+	};
+	const onQuoteHover = (event) => {
+		const quote = event.target.closest?.("blockquote");
+		if (quote && !quote.title) quote.title = t("Jump to the quoted passage");
+	};
+	return html`<div class=${`user-fold ${fold.foldable ? "is-foldable" : ""} ${folded ? "folded" : ""}`} ref=${box} onClick=${onQuote} onMouseOver=${onQuoteHover} style=${fold.foldable ? { maxHeight: `${open ? fold.full : fold.line * FOLDED_LINES}px` } : undefined}>
 		<${Markdown} text=${text} class="user-text" breaks=${true} />
 	</div>
 	${fold.foldable ? html`<button class="link-btn user-fold-toggle" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Show less") : t("Show more")}</button>` : null}`;
@@ -771,7 +783,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	const pending = working && !turn.final && (!tail || tail.type === "text");
 	const lastBlock = pending ? undefined : segments.filter((segment) => segment.type === "process").pop();
 	const expanded = processDefault === "expanded";
-	return html`<section class=${`turn ${live ? "live" : ""}`}>
+	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		${segments.map((segment) =>
 			segment.type === "text"
@@ -1159,6 +1171,8 @@ export function Transcript() {
 			ro.disconnect();
 		};
 	}, []);
+	// The message index and the quote jumps scroll through this controller, so "follow the bottom" lets go when they move.
+	useLayoutEffect(() => registerScroller({ el: scroller.current, release: () => { stick.current = false; holdPlace.current = false; } }), []);
 	useLayoutEffect(() => {
 		stick.current = true;
 		// The cached height belongs to the previous session; the first follow after a switch reads once.
@@ -1300,6 +1314,7 @@ export function Transcript() {
 				<div class="transcript-end" />
 			</div>
 		</div>
+		${!switching && !empty ? html`<${MessageRail} turns=${rendered.filter((turn) => !turn.standalone && turn.user)} contentRef=${content} />` : null}
 		${jump.mounted ? html`<button class=${`jump-btn ${away ? "" : "leaving"}`} onClick=${() => { stick.current = true; toBottom(true); }} title=${active ? t("Follow live output") : t("Jump to latest")} aria-label=${active ? t("Follow live output") : t("Jump to latest")}><${Icon} name="arrowDown" size=${16} /></button>` : null}
 	</div>`;
 }

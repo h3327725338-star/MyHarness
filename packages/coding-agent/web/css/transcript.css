@@ -339,3 +339,34 @@ button.status-pill { cursor: pointer; }
 .attach-main.is-openable { cursor: pointer; border-radius: var(--r-sm); }
 .attach-main.is-openable:hover .attach-name { text-decoration: underline; }
 .attach-main.is-openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Message index: a rail of ticks at the right edge, one per message the user wrote, spread like the messages sit in the
+   conversation. The current message is lit in the accent colour; near the pointer the ticks widen and a card names the
+   message that a click would go to. */
+.msg-rail { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 40px; padding: 14px 0; z-index: 3; cursor: pointer; touch-action: none; user-select: none; outline: none; }
+.msg-rail-inner { position: relative; width: 100%; }
+.msg-tick { position: absolute; right: 6px; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--text-4); opacity: 0.6; pointer-events: none; transition: width var(--t-base) var(--ease), height var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+.msg-tick.on { background: var(--accent); opacity: 1; }
+.msg-rail.aiming .msg-tick { opacity: 0.85; }
+.msg-tick.aimed { background: var(--text); opacity: 1; height: 4px; margin-top: -2px; }
+.msg-tick.on.aimed { background: var(--accent-strong); }
+.msg-rail:focus-visible .msg-rail-inner { box-shadow: 0 0 0 1px var(--accent-line); border-radius: 3px; }
+.msg-tip { font-weight: 400; line-height: 1.4; text-align: left; position: absolute; right: calc(100% + 8px); transform: translateY(-50%); width: max-content; min-width: 110px; max-width: 260px; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); color: var(--text); font-size: var(--fs-sm); pointer-events: none; animation: fade-only var(--t-fast) var(--ease); }
+.msg-tip-n { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.msg-tip-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; overflow-wrap: anywhere; }
+.main[data-w="xs"] .msg-rail { display: none; }
+
+/* After a jump to a quote's source: back to the place the reader came from, for a few seconds. */
+.nav-back { position: absolute; left: 0; right: 0; bottom: 12px; margin: 0 auto; width: max-content; display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px 5px 9px; border-radius: 999px; background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); color: var(--text-2); font-size: var(--fs-sm); z-index: 4; animation: fade-only var(--t-base) var(--ease); transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.nav-back:hover { background: var(--surface-hover); color: var(--text); }
+
+/* A quote inside a sent message leads to its source: it answers the pointer and shows the way. */
+.user-bubble blockquote { position: relative; cursor: pointer; padding-right: 1.7em; transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
+.user-bubble blockquote::after { content: "97"; position: absolute; top: 0.25em; right: 0.55em; font-size: 0.85em; color: var(--accent); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+.user-bubble blockquote:hover { border-left-color: var(--accent); background: var(--accent-soft); }
+.user-bubble blockquote:hover::after { opacity: 1; }
+/* The landing flash of a jump: strong first, then fading (flashRange in quote-highlight.js). */
+::highlight(myharness-jump) { background-color: var(--quote-hl-edge); color: inherit; }
+::highlight(myharness-jump-fade) { background-color: var(--quote-hl-bg); color: inherit; }
+/* The way back takes the place of the "jump to latest" button while it is offered: never both at once. */
+.nav-back ~ .jump-btn { display: none; }

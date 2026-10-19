@@ -1103,6 +1103,11 @@ export const zhCN = {
 	"Show earlier messages ({hidden} hidden)": "显示更早的消息（已隐藏 {hidden} 条）",
 	"Follow live output": "跟随实时输出",
 	"Jump to latest": "跳到最新",
+	"Message index": "消息索引",
+	Message: "消息",
+	"Back to where you were": "回到原来的位置",
+	"Jump to the quoted passage": "跳转到引用的原文",
+	"The quoted passage is not in the part of the conversation that is loaded.": "引用的原文不在当前已加载的对话范围内。",
 
 	// ---- Action verbs (turns.js)
 	Reading: "正在读取",

@@ -47,11 +47,11 @@ function surface() {
 
 /** All text of the reading surface, plus a whitespace-collapsed copy with a map back: a selection copied out of rendered
  *  text can differ from the stored quote by newlines and indentation, and both spellings must find the same fragment. */
-function buildIndex(el) {
+function buildIndex(el, accept) {
 	const nodes = [];
 	let text = "";
 	const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-		acceptNode: (node) => (node.parentElement && !node.parentElement.closest("script, style, textarea") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+		acceptNode: (node) => (node.parentElement && !node.parentElement.closest("script, style, textarea") && (!accept || accept(node)) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
 	});
 	for (let node = walker.nextNode(); node; node = walker.nextNode()) {
 		if (!node.nodeValue) continue;
@@ -334,4 +334,53 @@ export function clearQuoteHighlights() {
 	retryTimer = 0;
 	if (root) changeDom(() => unwrap(spansOf(root)));
 	if (typeof globalThis.CSS !== "undefined" && globalThis.CSS.highlights) globalThis.CSS.highlights.delete(HL_NAME);
+}
+
+/** Where a quote shown in a sent message came from: the closest earlier occurrence of its words in the conversation
+ *  (a message's own quote blocks are never the origin). A long passage that no longer matches whole is looked for by its
+ *  opening, which is what the reader recognises it by. Null when the text is not on screen (older turns are not mounted). */
+export function findQuoteOrigin(blockquote, text) {
+	const el = surface();
+	const needle = normalise(text);
+	if (!el || !needle) return null;
+	const index = buildIndex(el, (node) => {
+		if (node.parentElement.closest(".user-bubble blockquote")) return false;
+		return !!(blockquote.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING);
+	});
+	for (const probe of needle.length > 80 ? [needle, needle.slice(0, 80).trim()] : [needle]) {
+		let best = -1;
+		for (let at = index.norm.indexOf(probe); at !== -1; at = index.norm.indexOf(probe, at + 1)) best = at;
+		if (best >= 0) return rangeFor(index.nodes, index.map[best], index.map[best + probe.length - 1] + 1);
+	}
+	return null;
+}
+
+const JUMP_STRONG = "myharness-jump";
+const JUMP_FADE = "myharness-jump-fade";
+let jumpTimers = [];
+let jumpSpans = null;
+
+/** A short flash on the passage a jump landed on: strong at first, then fading out. Never touches the DOM when the
+ *  browser can paint a range; otherwise the span painter is used and removed again. */
+export function flashRange(range) {
+	jumpTimers.forEach(clearTimeout);
+	jumpTimers = [];
+	if (jumpSpans) {
+		changeDom(() => unwrap(jumpSpans));
+		jumpSpans = null;
+	}
+	if (nativeHighlights()) {
+		const set = (name) => globalThis.CSS.highlights.set(name, new globalThis.Highlight(range));
+		set(JUMP_STRONG);
+		jumpTimers.push(setTimeout(() => (globalThis.CSS.highlights.delete(JUMP_STRONG), set(JUMP_FADE)), 1100));
+		jumpTimers.push(setTimeout(() => globalThis.CSS.highlights.delete(JUMP_FADE), 1900));
+		return;
+	}
+	changeDom(() => wrapRange(range, "__jump__"));
+	const root = surface();
+	jumpSpans = root ? spansOf(root, "__jump__") : null;
+	jumpTimers.push(setTimeout(() => {
+		if (jumpSpans) changeDom(() => unwrap(jumpSpans));
+		jumpSpans = null;
+	}, 1900));
 }
