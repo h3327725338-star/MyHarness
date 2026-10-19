@@ -65,6 +65,14 @@ function place(rect, width, height) {
 	return placeCardAtPoint(end.right, end.bottom, width, height);
 }
 
+/** Only a scroll that can move the passage moves the box: the conversation itself, or something holding it. Scrolling
+ *  inside the note (its own textarea), a code block, a panel or the sidebar leaves the box where it is. */
+function scrollMovesPassage(target) {
+	const el = target instanceof Element ? target : target === document ? document.documentElement : null;
+	const surface = document.querySelector(".transcript");
+	return !!el && !!surface && (el === surface || el.contains(surface));
+}
+
 export function FloatingQuoteToolbar() {
 	const [bar, setBar] = useState(null);
 	const [draft, setDraft] = useState(null);
@@ -77,7 +85,13 @@ export function FloatingQuoteToolbar() {
 	const pressed = useRef(false);
 	// The selection the quote came from, kept for the box: it follows the text when the conversation scrolls.
 	const anchor = useRef(null);
-	const draftPos = useRef({ left: 0, top: 0, up: false });
+	// Where the box sits. State, not a ref: a scroll has to move it in that frame. A ref would only reach the card on the
+	// next render - the next keystroke - and the box would jump under the user's hands while typing.
+	const [pos, setPos] = useState({ left: 0, top: 0, up: false });
+	// The entrance pop plays once per opening; a box that only moves must not blink on every flip.
+	const [settled, setSettled] = useState(false);
+	const moveCard = (next) =>
+		setPos((old) => (old.left === next.left && old.top === next.top && old.up === next.up ? old : next));
 	// Where the mouse lifted: the bubble anchors here, not at the selection centre.
 	const release = useRef({ x: 0, y: 0, at: 0 });
 	const freshRelease = () => Date.now() - release.current.at < 600;
@@ -149,7 +163,9 @@ export function FloatingQuoteToolbar() {
 			if (!pressed.current) updateSelection();
 		};
 		let scrollFrame = 0;
-		const onScroll = () => {
+		const onScroll = (event) => {
+			// The note box grows its own scrollbar as it is typed into; that is not the passage moving.
+			if (draft && !scrollMovesPassage(event?.target)) return;
 			if (scrollFrame) return;
 			scrollFrame = requestAnimationFrame(() => {
 				scrollFrame = 0;
@@ -158,7 +174,7 @@ export function FloatingQuoteToolbar() {
 					const range = anchor.current;
 					if (range?.startContainer?.isConnected && range?.endContainer?.isConnected) {
 						const end = endRectOf(range);
-						if (end.width || end.height) draftPos.current = placeCardAtPoint(end.right, end.bottom);
+						if (end.width || end.height) moveCard(placeCardAtPoint(end.right, end.bottom));
 					}
 					return;
 				}
@@ -188,6 +204,15 @@ export function FloatingQuoteToolbar() {
 
 	useEffect(() => () => clearDraftPreview(), []);
 
+	// The entrance pop plays once per opening; after it, a box that only follows the passage must not blink on every flip.
+	// (The card's div is the bubble's div reused, so it can already carry a finished animation: a timeout, not animationend.)
+	useEffect(() => {
+		if (!draft) return undefined;
+		setSettled(false);
+		const timer = setTimeout(() => setSettled(true), 240);
+		return () => clearTimeout(timer);
+	}, [draft]);
+
 	const openBox = (e) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -197,10 +222,10 @@ export function FloatingQuoteToolbar() {
 		const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
 		if (!range) return close();
 		if (freshRelease()) {
-			draftPos.current = placeCardAtPoint(release.current.x, release.current.y);
+			setPos(placeCardAtPoint(release.current.x, release.current.y));
 		} else {
 			const end = endRectOf(range);
-			draftPos.current = placeCardAtPoint(end.right, end.bottom);
+			setPos(placeCardAtPoint(end.right, end.bottom));
 		}
 		anchor.current = range;
 		// Remember where in the conversation it was picked: the same words can appear more than once.
@@ -265,8 +290,8 @@ export function FloatingQuoteToolbar() {
 
 	return html`<div
 		ref=${cardRef}
-		class=${`quote-note-card minimal ${draftPos.current.up ? "up" : "down"}`}
-		style=${{ top: `${draftPos.current.top}px`, left: `${draftPos.current.left}px` }}
+		class=${`quote-note-card minimal ${pos.up ? "up" : "down"}${settled ? " settled" : ""}`}
+		style=${{ top: `${pos.top}px`, left: `${pos.left}px` }}
 		role="dialog"
 		aria-label=${t("Quote note")}
 		onPaste=${onPaste}

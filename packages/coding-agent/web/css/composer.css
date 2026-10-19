@@ -171,6 +171,8 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .quote-note-card { position: fixed; z-index: 212; display: flex; flex-direction: column; gap: 4px; width: 264px; max-width: calc(100vw - 24px); padding: 8px 8px 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
 .quote-note-card.down { animation: quote-pop-down var(--t-base) var(--ease) both; }
 .quote-note-card.up { transform: translateY(-100%); animation: quote-pop-up var(--t-base) var(--ease) both; }
+/* After the pop, a box that only follows the passage moves without playing the entrance again. */
+.quote-note-card.settled { animation: none; }
 .quote-note-input { width: 100%; box-sizing: border-box; resize: none; min-height: 56px; padding: 2px 0; border: none; background: transparent; color: var(--text); font-size: var(--fs-sm); line-height: 1.5; outline: none; box-shadow: none; font-family: inherit; }
 .quote-note-input:focus { border: none; outline: none; box-shadow: none; }
 .quote-note-input::placeholder { color: var(--text-4); }
