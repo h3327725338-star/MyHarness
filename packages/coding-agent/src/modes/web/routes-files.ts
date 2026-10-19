@@ -1153,17 +1153,41 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("GET", "/api/changes", async ({ url }) => {
 		const requestedScope = url.searchParams.get("scope");
 		const scope = requestedScope === "worktree" ? "worktree" : requestedScope === "session" ? "session" : "run";
+		const fresh = url.searchParams.get("fresh") === "1";
+		// The number on the "Current conversation" button: the files this chat recorded as changed that are still
+		// uncommitted. Both scopes answer it, because both buttons show their number at the same time. `freshList` is false
+		// where the request just re-listed the working tree itself.
+		const conversationUncommitted = async (files: { path: string }[], freshList: boolean) =>
+			host.tracker
+				.countUncommitted(
+					files.map((file) => file.path),
+					{ fresh: freshList },
+				)
+				.catch(() => undefined);
 		if (scope === "session") {
 			const { files } = collectSessionChanges(host.session.sessionManager.getBranch());
-			return { scope, files, total: files.length };
+			return {
+				scope,
+				files,
+				total: files.length,
+				uncommitted: await conversationUncommitted(files, fresh),
+			};
 		}
+		// The conversation's own count rides on both scopes' answers, so its button keeps the number while the other scope
+		// is on screen instead of blanking on every switch.
+		const sessionFiles = () => collectSessionChanges(host.session.sessionManager.getBranch()).files;
 		const checkpoint = host.session.getGitCheckpoint();
 		if (scope === "worktree") {
 			const cwd = currentCwd();
-			const fresh = url.searchParams.get("fresh") === "1";
 			const cached = fresh ? undefined : getCachedWorktreeChangesSync(cwd);
 			if (cached?.files) {
-				return { scope, files: cached.files, total: cached.changes.length, error: cached.error ?? null };
+				return {
+					scope,
+					files: cached.files,
+					total: cached.changes.length,
+					error: cached.error ?? null,
+					uncommitted: await conversationUncommitted(sessionFiles(), false),
+				};
 			}
 			const listed = await host.tracker.listWorktreeChanges(fresh ? { forceRefresh: true } : undefined);
 			const root = listed.repositoryRoot;
@@ -1175,7 +1199,13 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				error: listed.error,
 				cacheVersion: listed.cacheVersion,
 			});
-			return { scope, files, total: listed.changes.length, error: listed.error ?? null };
+			return {
+				scope,
+				files,
+				total: listed.changes.length,
+				error: listed.error ?? null,
+				uncommitted: await conversationUncommitted(sessionFiles(), false),
+			};
 		}
 		const runParam = url.searchParams.get("runId");
 		const runId = runParam ? Number(runParam) : host.tracker.latestRunId();

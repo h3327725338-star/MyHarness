@@ -57,6 +57,12 @@ try{
   if(url.startsWith('/api/workspaces'))return new Response(JSON.stringify({workspaces:[],sessions:[]}));
   if(url.includes('unbound')||url.includes('archived'))return new Response(JSON.stringify({sessions:[]}));
   if(url.startsWith('/api/git/status'))return new Response(JSON.stringify({isRepository:true,gitAvailable:true,branch:'main',head:{sha:'abcdef1234567',subject:'x'},preview:{total:2,lines:[],truncated:false}}));
+  // Two scopes, two numbers: this chat owns one uncommitted file, the folder has two, and either answer carries how much
+  // of the chat is still uncommitted.
+  if(url.startsWith('/api/changes?scope=session'))return new Response(JSON.stringify({scope:'session',files:[{path:'one.ts',status:'modified',additions:1,deletions:0,binary:false}],total:1,uncommitted:3}));
+  if(url.startsWith('/api/changes?scope=worktree'))return new Response(JSON.stringify({scope:'worktree',files:[],total:2,error:null,uncommitted:3}));
+  if(url.startsWith('/api/changes/diff'))return new Response(JSON.stringify({summary:{path:'one.ts',status:'modified',additions:1,deletions:0,binary:false},patch:''}));
+  if(url.startsWith('/api/changes'))return new Response(JSON.stringify({files:[],total:0,uncommitted:0}));
   if(url==='/api/resources')return new Response(JSON.stringify({commands:[]}));
   return new Response('{}');
  };
@@ -113,22 +119,25 @@ try{
  must(JSON.stringify(saved.wsPanels.a.wsTabs.map(tab=>tab.id))===JSON.stringify(inA),'the saved panel of A is wrong');
  must(saved.wsTabs===undefined,'the old global tab list is still written');
 
- // The uncommitted count rides on the Working tree scope button, and there is no separate explanatory row.
+ // The uncommitted count sits on the scope button that owns it: the conversation's own number on Current conversation,
+ // the folder's whole number on Working tree. There is no separate explanatory row.
  setView({chatMode:'coding'});
  setView({changesScope:'session'});
  render(h(ChangesPanel,{}),document.getElementById('app'));
  await wait(80);
  const scopeButton=(label)=>[...document.querySelectorAll('.panel-toolbar .segmented button')].find(b=>b.textContent.trim().startsWith(label));
  must(!!scopeButton('Current conversation'),'the Changes panel lost its conversation scope');
+ must(scopeButton('Current conversation')?.textContent.trim()==='Current conversation 3','the conversation scope does not carry how much of this chat is uncommitted: '+scopeButton('Current conversation')?.textContent);
  must(scopeButton('Working tree')?.textContent.trim()==='Working tree 2','the worktree scope does not carry the uncommitted count: '+scopeButton('Working tree')?.textContent);
  must(!document.querySelector('.changes-basis'),'the Changes panel still shows an explanatory row');
  const gitBadges=[...document.querySelectorAll('.gitbar .badge')].map(node=>node.textContent.trim());
  must(!gitBadges.some(text=>text.includes('uncommitted')),'the Git bar still repeats the uncommitted count: '+JSON.stringify(gitBadges));
 
- // A general chat has no folder Git: the bar is not rendered there at all, and the scope button drops the count.
+ // A general chat has no folder Git: the bar is not rendered there at all, and neither scope button carries a number.
  setView({chatMode:'general'});
  render(h(ChangesPanel,{}),document.getElementById('app'));
  await wait(80);
+ must(scopeButton('Current conversation')?.textContent.trim()==='Current conversation','a general chat still shows the conversation uncommitted count: '+scopeButton('Current conversation')?.textContent);
  must(scopeButton('Working tree')?.textContent.trim()==='Working tree','a general chat still shows the folder uncommitted count: '+scopeButton('Working tree')?.textContent);
  must(!document.querySelector('.gitbar'),'a general chat still shows the folder Git bar');
 

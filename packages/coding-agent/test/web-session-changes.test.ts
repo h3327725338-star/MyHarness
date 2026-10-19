@@ -54,7 +54,11 @@ describe("conversation change review", () => {
 				route: (_method: string, route: string, handler: (context: { url: URL }) => unknown) =>
 					routes.set(route, handler),
 			} as never,
-			{ session: { sessionManager: { getBranch: () => branch } } } as never,
+			{
+				session: { sessionManager: { getBranch: () => branch } },
+				// The conversation's uncommitted count is a Working tree read; here it only has to be answered, not computed.
+				tracker: { countUncommitted: async (paths: string[]) => (paths.length ? 2 : 0) },
+			} as never,
 		);
 		const request = (route: string, query: string) =>
 			routes.get(route)!({ url: new URL(`http://localhost${route}?${query}`) });
@@ -62,12 +66,13 @@ describe("conversation change review", () => {
 			scope: "session",
 			total: 1,
 			files: [{ path: "a.ts" }],
+			uncommitted: 2,
 		});
 		expect(await request("/api/changes/diff", "scope=session&path=a.ts")).toMatchObject({
 			history: [{ entryId: "saved", patch: "saved diff" }],
 		});
 		branch = [];
-		expect(await request("/api/changes", "scope=session")).toMatchObject({ total: 0, files: [] });
+		expect(await request("/api/changes", "scope=session")).toMatchObject({ total: 0, files: [], uncommitted: 0 });
 		await expect(request("/api/changes/diff", "scope=session&path=a.ts")).rejects.toThrow("No such change");
 	});
 });

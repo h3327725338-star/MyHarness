@@ -609,6 +609,24 @@ export class ChangeTracker {
 		);
 	}
 
+	/**
+	 * How many of `paths` (relative to the runtime cwd) are uncommitted right now. It reads the same Working tree list the
+	 * Working tree scope shows, so the conversation's count and the folder's count describe one Git state; the shared short
+	 * cache serves repeated asks and `fresh` re-reads. Undefined when the folder is not a Git repository (or Git cannot be
+	 * read), so the caller can leave the number out instead of claiming zero.
+	 */
+	async countUncommitted(paths: readonly string[], options: { fresh?: boolean } = {}): Promise<number | undefined> {
+		if (paths.length === 0) return 0;
+		const listed = await this.listWorktreeChanges(options.fresh ? { forceRefresh: true } : undefined);
+		if (!listed.repositoryRoot) return undefined;
+		const dirty = new Set(listed.changes.map((change) => pathIdentityKey(path.resolve(this.cwd, change.path))));
+		let count = 0;
+		for (const candidate of paths) {
+			if (dirty.has(pathIdentityKey(path.resolve(this.cwd, candidate)))) count += 1;
+		}
+		return count;
+	}
+
 	async diffForWorktreeFile(
 		repositoryRoot: string,
 		change: ReviewChange,

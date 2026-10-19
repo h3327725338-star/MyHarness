@@ -388,7 +388,7 @@ describe("fresh=1 query parameter bypasses the worktree cache", () => {
 		expect(current.patch ?? "").toContain("+++ /dev/null");
 	});
 
-	it("4. fresh=1 leaves the session scope untouched", async () => {
+	it("4. a chat without recorded changes never reads Git for the session scope", async () => {
 		const repo = createTempDir("myharness-fresh-session-");
 		initRepo(repo);
 		const routes = setupFreshRoutes(repo);
@@ -396,10 +396,97 @@ describe("fresh=1 query parameter bypasses the worktree cache", () => {
 
 		const res = (await routes.get("GET /api/changes")!({
 			url: new URL("http://localhost/api/changes?scope=session&fresh=1"),
-		})) as { scope: string; files: unknown[]; total: number };
+		})) as { scope: string; files: unknown[]; total: number; uncommitted?: number };
 		expect(res.scope).toBe("session");
 		expect(res.files).toEqual([]);
 		expect(res.total).toBe(0);
+		expect(res.uncommitted).toBe(0);
 		expect(spy).not.toHaveBeenCalled();
+	});
+});
+
+describe("the conversation's uncommitted count", () => {
+	function setupChatRoutes(repo: string, paths: string[]) {
+		const tracker = new ChangeTracker(repo);
+		const routes = new Map<string, (ctx: { url: URL }) => Promise<unknown> | unknown>();
+		const serverMock = {
+			route: (method: string, pattern: string, handler: (ctx: { url: URL }) => Promise<unknown> | unknown) => {
+				routes.set(`${method} ${pattern}`, handler);
+			},
+		};
+		const branch = [
+			{
+				type: "custom",
+				customType: "web-run-changes",
+				id: "saved",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00Z",
+				data: {
+					runId: 1,
+					files: paths.map((path) => ({ path, status: "modified", additions: 1, deletions: 0, binary: false })),
+				},
+			},
+		];
+		const hostMock = {
+			cwd: repo,
+			tracker,
+			session: {
+				sessionManager: { getCwd: () => repo, getBranch: () => branch },
+				getGitCheckpoint: () => undefined,
+			},
+			broadcast: vi.fn(),
+		};
+		registerFileRoutes(serverMock as never, hostMock as never);
+		return routes;
+	}
+
+	it("counts only this chat's files that are still uncommitted, and does not re-read Git within the cache window", async () => {
+		const repo = createTempDir("myharness-chat-uncommitted-");
+		initRepo(repo);
+		writeFileSync(path.join(repo, "kept.ts"), "v1\n", "utf8");
+		writeFileSync(path.join(repo, "committed.ts"), "v1\n", "utf8");
+		runGitSync(["add", "."], { cwd: repo });
+		runGitSync(["commit", "-q", "-m", "init"], { cwd: repo });
+		// kept.ts is this chat's and still uncommitted, committed.ts is this chat's but already committed, and
+		// other.ts was changed by someone else: only the first one is the conversation's uncommitted count.
+		writeFileSync(path.join(repo, "kept.ts"), "v2\n", "utf8");
+		writeFileSync(path.join(repo, "other.ts"), "new\n", "utf8");
+
+		const routes = setupChatRoutes(repo, ["kept.ts", "committed.ts"]);
+		const list = (query: string) =>
+			routes.get("GET /api/changes")!({ url: new URL(`http://localhost/api/changes?${query}`) }) as Promise<{
+				uncommitted?: number;
+				total?: number;
+			}>;
+		const spy = vi.spyOn(gitCommand, "runGit");
+
+		expect((await list("scope=session")).uncommitted).toBe(1);
+		const callsAfterFirst = spy.mock.calls.length;
+		expect(callsAfterFirst).toBeGreaterThanOrEqual(1);
+
+		// The same answer within the short cache window, without another Git read.
+		expect((await list("scope=session")).uncommitted).toBe(1);
+		expect(spy.mock.calls.length).toBe(callsAfterFirst);
+
+		// The Working tree scope reports the folder's two files and the conversation's one, from one listing.
+		const worktree = await list("scope=worktree&fresh=1");
+		expect(worktree.total).toBe(2);
+		expect(worktree.uncommitted).toBe(1);
+
+		// Once this chat's file is committed, it stops counting even though its record stays in the chat.
+		runGitSync(["add", "kept.ts"], { cwd: repo });
+		runGitSync(["commit", "-q", "-m", "keep"], { cwd: repo });
+		invalidateWorktreeCache();
+		expect((await list("scope=session")).uncommitted).toBe(0);
+	});
+
+	it("leaves the count out when the folder is not a Git repository", async () => {
+		const dir = createTempDir("myharness-chat-no-git-");
+		writeFileSync(path.join(dir, "kept.ts"), "v1\n", "utf8");
+		const routes = setupChatRoutes(dir, ["kept.ts"]);
+		const res = (await routes.get("GET /api/changes")!({
+			url: new URL("http://localhost/api/changes?scope=session"),
+		})) as { uncommitted?: number };
+		expect(res.uncommitted).toBeUndefined();
 	});
 });

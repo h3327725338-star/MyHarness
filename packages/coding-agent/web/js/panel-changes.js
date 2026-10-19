@@ -108,6 +108,9 @@ export function ChangesPanel() {
 	const data = loadedData?.key === dataKey ? loadedData.value : null;
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
+	// How much of this chat is still uncommitted. Either scope's answer carries it, so it is kept with the chat instead of
+	// blanking while the next payload loads.
+	const [chatDirty, setChatDirty] = useState({ key: "", value: 0 });
 	const [mode, setMode] = useState(() => localStorage.getItem("myharness.diffmode") || "unified");
 	const [listOpen, setListOpen] = useState(true);
 	const [chosen, setChosen] = useState("");
@@ -134,6 +137,10 @@ export function ChangesPanel() {
 			if (slotRef.current !== targetSlot) return;
 			freshLoadRef.current = !!fresh;
 			setData({ key: dataKey, value: result });
+			setChatDirty({
+				key: `${targetSlot}|${sessionId}`,
+				value: typeof result?.uncommitted === "number" ? result.uncommitted : 0,
+			});
 			setError("");
 			setNonce((n) => n + 1);
 		} catch (e) {
@@ -171,6 +178,17 @@ export function ChangesPanel() {
 	useEffect(() => {
 		if (!isPendingSlot(slot)) loadGitStatus();
 	}, [slot, lastRunId, active]);
+	// A commit, a restore or another checkout changes how much of this chat is still uncommitted: re-read the panel when
+	// the folder's uncommitted count moves, so both numbers and the list follow without a manual refresh.
+	const firstDirtyEffect = useRef(true);
+	useEffect(() => {
+		if (firstDirtyEffect.current) {
+			firstDirtyEffect.current = false;
+			return;
+		}
+		if (isPendingSlot(slotRef.current)) return;
+		load();
+	}, [gitStatus?.preview?.total]);
 
 	const files = data?.files || [];
 	const total = files.reduce((acc, f) => ({ add: acc.add + f.additions, del: acc.del + f.deletions }), { add: 0, del: 0 });
@@ -209,13 +227,15 @@ export function ChangesPanel() {
 		go(key);
 	};
 	const setScope = (value) => (setView({ changesScope: value }), setChosen(""));
-	// The uncommitted count belongs to the folder's Git, so it rides on the Working tree scope itself: the button that
-	// shows those files also carries their count. A general chat does not report the folder's Git at all.
+	// Two numbers, two owners: the conversation's own files that are still uncommitted, and the folder's whole uncommitted
+	// list. Each sits on the button that shows those files. A general chat reports neither (the folder's Git is not its).
 	const general = useStore((s) => s.view.chatMode) === "general";
+	const chatUncommitted = general || chatDirty.key !== `${slot}|${sessionId}` ? 0 : chatDirty.value;
 	const worktreeDirty = general ? 0 : gitStatus?.preview?.total || 0;
+	const withCount = (label, count) => (count > 0 ? `${label} ${count}` : label);
 	const scopeOptions = [
-		{ value: "session", label: t("Current conversation") },
-		{ value: "worktree", label: worktreeDirty ? `${t("Working tree")} ${worktreeDirty}` : t("Working tree") },
+		{ value: "session", label: withCount(t("Current conversation"), chatUncommitted) },
+		{ value: "worktree", label: withCount(t("Working tree"), worktreeDirty) },
 	];
 
 	return html`<div class="changes-panel">
