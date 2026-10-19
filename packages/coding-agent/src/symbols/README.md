@@ -39,6 +39,8 @@
 | `process.ts` | `LspProcess`：语言服务器子进程 |
 | `client.ts` | `LspClient`：JSON-RPC 请求/通知、超时与取消 |
 | `types.ts`、`errors.ts`、`uri.ts` | 协议类型、错误、URI 工具 |
+| `client-capabilities.ts` | `DEFAULT_LSP_CLIENT_CAPABILITIES`：`initialize` 时声明的客户端能力，只包含语义后端真正使用的特性 |
+| `index.ts` | LSP 基础设施出口：只转出协议通信层，不含语义操作 |
 | `language-server/` | `LanguageServerRegistry`（定义与选择）和 `LanguageServerManager`（进程生命周期、按 workspace 复用）。细节见 [language-server/README.md](lsp/language-server/README.md) |
 
 ### semantic/
@@ -76,6 +78,8 @@
 | `installation.ts` | `CodeIntelligenceInstallationManager`：读取 manifest，按语言下载、校验（大小和 SHA-256）、安装模块，报告状态 |
 | `bundled-registry.ts` | 随包/已安装语言服务器的目录与 registry 创建 |
 | `configuration.ts` | 由设置中的 `servers` 创建 registry |
+| `server-options.ts` | `initializationOptionsForServer()`：按 launcher key 给私有语言服务器提供 `initializationOptions` |
+| `index.ts` | runtime/ 出口（转出 registry、installation、runtime 与类型） |
 | `types.ts` | 运行时状态与服务接口 |
 
 模块安装位置：`%USERPROFILE%\.myharness\agent\code-intelligence\`；语义 workspace 数据在其下按 workspace hash 分目录。正常启动不会下载模块。
@@ -86,8 +90,8 @@
 
 ### 依赖
 
-- 依赖：`config/settings`、`src/config.ts`、`utils/shell.ts`、`tools/symbols-runtime.ts`（服务接口类型）。
-- 被依赖：`tools/symbols.ts`、`tools/symbols-runtime.ts`、`agent/runtime/services.ts`、`modes/web`（安装状态界面）。
+- 依赖：`config/settings`、`src/config.ts`、`utils/shell.ts`。本目录不导入 `tools/` 下的任何文件；接口方向是 `tools/` 单向依赖 `symbols/`。
+- 被依赖：`tools/symbols.ts`、`tools/symbols-runtime.ts`、`tools/registry.ts`、`agent/runtime/services.ts`、`modes/web`（安装状态界面）。
 
 ## 维护
 
@@ -96,5 +100,4 @@
 - workflow 操作只给建议，不拦截任何正常编辑；`rename_preview` 被拒绝时说明原因，不自动重试。
 - 不假设机器上装了任何语言服务器。没有大小和 SHA-256 的归档一律拒绝下载。
 - 路径处理统一走 `path-semantics.ts`，不要在各处自己拼 URI 或比较路径。
-- 本目录和 `tools/symbols-runtime.ts` 之间存在已知的静态循环引用（类型层面），改动时注意不要变成运行时初始化问题。
 - 相关测试：`test/code-intelligence/`（lsp、language-server、semantic、router、runtime-manager、集成、`workflow/`）、`symbols-tool-*.test.ts`、`workflow.test.ts`（调查工具侧的 symbols 门控）。真实语言服务器的端到端验证需要已安装的语言模块，静态测试不能替代：`test/code-intelligence/workflow/workflow-lsp-e2e.test.ts` 在设置 `MYHARNESS_SYMBOLS_LSP_E2E=1` 时用本机已安装的服务器跑 TypeScript 全流程和 Python/Go/Rust/PHP/Java/C# 冷启动跨文件检查（未安装的语言跳过，不下载）。

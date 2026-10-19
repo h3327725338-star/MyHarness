@@ -128,7 +128,7 @@ Session replacement APIs such as new-session, resume, fork, and import live on `
 ### createAgentSessionRuntime() and AgentSessionRuntime
 
 Use the runtime API when you need to replace the active session and rebuild cwd-bound runtime state.
-This is the same layer used by the built-in interactive, print, and JSON event-stream modes.
+This is the same layer used by the built-in Web mode (`modes/web`, HTTP + SSE).
 
 `createAgentSessionRuntime()` takes a runtime factory plus the initial cwd/session target. The factory closes over process-global fixed inputs, recreates cwd-bound services for the effective cwd, resolves session options against those services, and returns a full runtime result.
 

@@ -9,7 +9,6 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { runGit, runGitAsync } from "../repository/integration.ts";
@@ -176,107 +175,6 @@ function buildTitle(type: string, scope: string | undefined, changes: FileChange
 	}
 	const target = scope ?? "项目";
 	return `${type}${scopePart}: ${verb} ${target}（${changes.length} 个文件）`;
-}
-
-/**
- * 异步版 generateCommitMessageForPaths：基于真实 git diff 生成提交信息，
- * git 命令并行异步执行，不阻塞事件循环（供后台提交任务使用）。
- */
-export async function generateCommitMessageForPathsAsync(
-	repositoryRoot: string,
-	paths: string[],
-	signal?: AbortSignal,
-): Promise<GeneratedCommitMessage> {
-	const filter = paths.length > 0 ? ["--", ...paths] : [];
-	const [nameStatusResult, numstatResult, untrackedResult, diffResult] = await Promise.all([
-		runGitAsync(repositoryRoot, ["diff", "--name-status", "HEAD", ...filter], undefined, signal),
-		runGitAsync(repositoryRoot, ["diff", "--numstat", "HEAD", ...filter], undefined, signal),
-		runGitAsync(repositoryRoot, ["ls-files", "--others", "--exclude-standard", ...filter], undefined, signal),
-		runGitAsync(repositoryRoot, ["diff", "HEAD", ...filter], undefined, signal),
-	]);
-
-	const statusByPath = new Map<string, "A" | "M" | "D">();
-	if (nameStatusResult.ok) {
-		for (const line of nameStatusResult.stdout.split(/\r?\n/)) {
-			if (!line.trim()) continue;
-			const match = line.match(/^([AMD])\s+(.+)$/);
-			if (match) statusByPath.set(match[2].replace(/^"|"$/g, ""), match[1] as "A" | "M" | "D");
-		}
-	}
-	let changes: FileChange[] = [];
-	if (numstatResult.ok) {
-		changes = parseNumstat(numstatResult.stdout, statusByPath);
-	}
-	if (changes.length === 0 && nameStatusResult.ok) {
-		// 二进制或解析失败时退化为 name-status 列表
-		changes = [...statusByPath.entries()].map(([path, status]) => ({
-			status,
-			path,
-			added: 0,
-			deleted: 0,
-			points: [],
-		}));
-	}
-
-	// 未暂存的新文件（untracked）不在 git diff 中，单独收集并统计行数。
-	if (untrackedResult.ok) {
-		for (const line of untrackedResult.stdout.split(/\r?\n/)) {
-			const path = line.trim();
-			if (!path || changes.some((change) => change.path === path)) continue;
-			let added = 0;
-			let points: string[] = [];
-			try {
-				const fileStats = await stat(join(repositoryRoot, path));
-				if (fileStats.isFile() && fileStats.size <= 1024 * 1024) {
-					const content = await readFile(join(repositoryRoot, path), "utf8");
-					added = content.split(/\r?\n/).filter(Boolean).length;
-					points = extractPointsFromLines(content.split(/\r?\n/).slice(0, 200));
-				}
-			} catch {
-				// 无法读取（目录/权限/大小超限）时不统计行数。
-			}
-			changes.push({ status: "A", path, added, deleted: 0, points });
-		}
-	}
-
-	// 内容扫描：提取真实变更要点（限定大小，防止超大 diff 拖慢提交）
-	let diffText = "";
-	if (diffResult.ok && Buffer.byteLength(diffResult.stdout, "utf8") <= MAX_DIFF_SCAN_BYTES) {
-		diffText = diffResult.stdout;
-	}
-	if (diffText.length > 0) {
-		const fileHunks = diffText.split(/^diff --git /m).slice(1);
-		const pointsByPath = new Map<string, string[]>();
-		for (const hunk of fileHunks) {
-			const pathMatch = hunk.match(/^a\/(.+?)\s+b\//);
-			if (!pathMatch) continue;
-			const filePath = pathMatch[1].replace(/^"|"$/g, "");
-			pointsByPath.set(filePath, extractChangePoints(hunk));
-		}
-		let totalPoints = 0;
-		for (const change of changes) {
-			const points = pointsByPath.get(change.path)!;
-			if (!points) continue;
-			const remaining = MAX_POINTS_TOTAL - totalPoints;
-			change.points = points.slice(0, Math.max(0, Math.min(remaining, MAX_POINTS_PER_FILE)));
-			totalPoints += change.points.length;
-			if (totalPoints >= MAX_POINTS_TOTAL) break;
-		}
-	}
-
-	const type = inferType(changes, diffText);
-	const scope = inferScope(changes);
-	const title = buildTitle(type, scope, changes);
-	const body: string[] = [];
-	for (const change of changes) {
-		const statText = change.added === 0 && change.deleted === 0 ? "" : ` (+${change.added}/-${change.deleted})`;
-		body.push(`- ${change.status} ${change.path}${statText}`);
-		for (const point of change.points) {
-			body.push(`  - ${point}`);
-		}
-	}
-	if (body.length === 0) body.push("- 无文件级变更统计（可能为二进制或重命名）");
-	return { title, body, full: [title, "", ...body].join("\n") };
 }
 
 /**

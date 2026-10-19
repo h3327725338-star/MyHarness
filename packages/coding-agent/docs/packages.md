@@ -19,37 +19,35 @@ MyHarness packages bundle extensions, skills, prompt templates, and themes so yo
 
 > **Security:** MyHarness packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
-```bash
-myharness install npm:@foo/bar@1.0.0
-myharness install git:github.com/user/repo@v1
-myharness install https://github.com/user/repo  # raw URLs work too
-myharness install /absolute/path/to/package
-myharness install ./relative/path/to/package
+Packages are declared in the `packages` array of `settings.json`. User settings
+(`~/.myharness/agent/settings.json`) apply everywhere; project settings
+(`.myharness/settings.json`) apply to that project and are shared with your team.
+On startup MyHarness installs missing packages and reconciles existing clones
+after the project is trusted. The full shape is documented in
+[settings.md](settings.md#packages).
 
-myharness remove npm:@foo/bar
-myharness list                     # show installed packages from settings
-myharness update                   # update packages only
-myharness update --all             # update all installed packages (same effect as --extensions)
-myharness update --extensions      # update all installed packages only
-myharness update --models          # refresh model catalogs only (skips project trust check)
-myharness update npm:@foo/bar      # update one package
-myharness update --extension npm:@foo/bar
+```json
+{
+  "packages": ["npm:@foo/bar@1.0.0", "git:github.com/user/repo@v1", "./local/package"]
+}
 ```
 
-These commands manage MyHarness packages. To uninstall MyHarness itself, see [Quickstart](quickstart.md#uninstall).
-
-By default, `install` and `remove` write to user settings (`~/.myharness/agent/settings.json`). Use `-l` to write to project settings (`.myharness/settings.json`) instead. Project settings can be shared with your team, and MyHarness installs any missing packages automatically on startup after the project is trusted.
-
-To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
+To try a package without adding it to settings, use `--extension` or `-e`. It is
+loaded for the current run only:
 
 ```bash
 myharness -e npm:@foo/bar
 myharness -e git:github.com/user/repo
 ```
 
+There are no `myharness install`, `remove`, `list`, `update` or `config` CLI
+subcommands. The same operations exist only as library calls on
+`DefaultPackageManager` (`install`, `remove`, `update`, `listConfiguredPackages`).
+To uninstall MyHarness itself, see [Quickstart](quickstart.md#uninstall).
+
 ## Package Sources
 
-MyHarness accepts three source types in settings and `MyHarness install`.
+MyHarness accepts three source types in the `packages` setting and in `--extension`.
 
 ### npm
 
@@ -58,7 +56,7 @@ npm:@scope/pkg@1.2.3
 npm:pkg
 ```
 
-- Versioned specs are pinned and skipped by package updates (`MyHarness update`, `MyHarness update --extensions`, `MyHarness update --all`).
+- Versioned specs are pinned: startup resolution keeps the pinned version instead of moving to newer ones.
 - User installs go under `~/.myharness/agent/npm/`.
 - Project installs go under `.myharness/npm/`.
 - Set `npmCommand` in `settings.json` to pin npm package lookup and install operations to a specific wrapper command such as `mise` or `asdf`.
@@ -85,21 +83,21 @@ ssh://git@github.com/user/repo@v1
 - HTTPS and SSH URLs are both supported.
 - SSH URLs use your configured SSH keys automatically (respects `~/.ssh/config`).
 - For non-interactive runs (for example CI), you can set `GIT_TERMINAL_PROMPT=0` to disable credential prompts and set `GIT_SSH_COMMAND` (for example `ssh -o BatchMode=yes -o ConnectTimeout=5`) to fail fast.
-- Refs are pinned tags or commits. `MyHarness update --extensions` and `MyHarness update --all` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
-- Use `MyHarness install git:host/user/repo@new-ref` to update settings and move an existing package to a new pinned ref.
+- Refs are pinned tags or commits: startup reconciliation keeps an existing clone on the configured ref instead of moving it to a newer one.
+- To move a package to a new pinned ref, edit its entry in the `packages` setting; the clone is reconciled to the new ref on next startup.
 - Cloned to `~/.myharness/agent/git/<host>/<path>` (global) or `.myharness/git/<host>/<path>` (project).
 - When reconciliation changes the checkout, MyHarness resets and cleans the clone, then runs `npm install` if `package.json` exists.
 
 **SSH examples:**
 ```bash
 # git@host:path shorthand (requires git: prefix)
-myharness install git:git@github.com:user/repo
+myharness -e git:git@github.com:user/repo
 
 # ssh:// protocol format
-myharness install ssh://git@github.com/user/repo
+myharness -e ssh://git@github.com/user/repo
 
 # With version ref
-myharness install git:git@github.com:user/repo@v1.0.0
+myharness -e git:git@github.com:user/repo@v1.0.0
 ```
 
 ### Local Paths
@@ -218,7 +216,11 @@ Filter what a package loads using the object form in settings:
 
 ## Enable and Disable Resources
 
-Use `MyHarness config` to enable or disable extensions, skills, prompt templates, and themes from installed packages and local directories. `MyHarness config` starts in global settings (`~/.myharness/agent/settings.json`); press Tab to switch between global and project-local modes. Use `MyHarness config -l` to start in project overrides (`.myharness/settings.json`) with inherited global resources dimmed.
+Resources from installed packages and local directories are enabled and disabled
+through the `packages` setting in `settings.json`: drop a package from the array
+to stop loading it, or keep it and pass `autoload: false` with per-type filters
+to load only part of it. There is no `MyHarness config` TUI; edit user settings
+for a global change and project settings for a project-local override.
 
 ## Scope and Deduplication
 

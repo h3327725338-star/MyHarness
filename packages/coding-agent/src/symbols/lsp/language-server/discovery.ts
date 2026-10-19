@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { win32 as windowsPath } from "node:path";
 
 export type ExecutableDiscoverySource = "absolute" | "workspace-bin" | "path" | "unavailable";
@@ -71,9 +71,4 @@ export function discoverExecutable(command: string, workspaceRoot: string): Exec
 		if (resolvedPath) return { command, discovered: true, resolvedPath, source: "path" };
 	}
 	return { command, discovered: false, source: "unavailable" };
-}
-
-/** Read-only helper used by tests and runtime status. */
-export function isExplicitExecutablePath(command: string): boolean {
-	return windowsPath.isAbsolute(command) || existsSync(command);
 }

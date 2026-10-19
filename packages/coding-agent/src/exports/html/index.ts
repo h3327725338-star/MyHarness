@@ -225,7 +225,7 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 		.replace("{{HIGHLIGHT_JS}}", hljsJs);
 }
 
-/** Tools rendered directly by the HTML template (not pre-rendered via TUI→ANSI→HTML pipeline) */
+/** Tools rendered directly by the HTML template (not pre-rendered through a terminal-style ANSI pipeline) */
 const TEMPLATE_RENDERED_TOOLS = new Set(["bash", "read", "write", "edit", "ls"]);
 
 /**

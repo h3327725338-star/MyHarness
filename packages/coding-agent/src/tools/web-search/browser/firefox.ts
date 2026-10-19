@@ -1079,7 +1079,6 @@ export class FirefoxBrowser extends LocalBrowser {
 		super({ ...options, kind: "firefox" });
 	}
 }
-export type FirefoxBrowserOptions = Omit<LocalBrowserOptions, "kind">;
 
 const sharedBrowsers = new Map<BrowserKind, LocalBrowser>();
 

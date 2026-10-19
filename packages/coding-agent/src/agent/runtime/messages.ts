@@ -142,23 +142,6 @@ export function createCompactionSummaryMessage(
 	};
 }
 
-export function createReloadSummaryMessage(options: {
-	ok: boolean;
-	reloadError?: string;
-	error?: string;
-	resources: string;
-	timestamp: string;
-}): ReloadSummaryMessage {
-	return {
-		role: "reloadSummary",
-		ok: options.ok,
-		reloadError: options.reloadError,
-		error: options.error,
-		resources: options.resources,
-		timestamp: new Date(options.timestamp).getTime(),
-	};
-}
-
 /** Convert CustomMessageEntry to AgentMessage format */
 export function createCustomMessage(
 	customType: string,

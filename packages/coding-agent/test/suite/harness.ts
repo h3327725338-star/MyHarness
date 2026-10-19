@@ -230,7 +230,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			session.dispose();
 			fauxProvider.unregister();
 			if (existsSync(tempDir)) {
-				rmSync(tempDir, { recursive: true, maxRetries: 3, retryDelay: 100 });
+				// Parallel Windows suites still hold short-lived handles here (git, log writers),
+				// so retry long enough for them to be released instead of failing the test file.
+				rmSync(tempDir, { recursive: true, maxRetries: 20, retryDelay: 250 });
 			}
 		},
 	};

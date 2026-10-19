@@ -87,7 +87,6 @@ const WORKFLOW_DEADLINE_GRACE_MS = 30 * 1_000;
 const WORKFLOW_BATCH_DRAIN_TIMEOUT_MS = 5_000;
 
 export type WorkflowToolInput = Static<typeof workflowSchema>;
-export type UltracodeToolInput = Static<typeof ultracodeSchema>;
 
 export type { InvestigationToolKind } from "../ultracode/profile.ts";
 

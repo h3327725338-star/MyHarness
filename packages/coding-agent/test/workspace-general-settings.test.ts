@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -119,7 +128,8 @@ describe("General workspace settings and sources", () => {
 	};
 
 	it("stores a folder source in chunks, lists it as one entry, and deletes entries or the whole folder", () => {
-		const root = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "general-sources-folder-"));
+		// The OS temp folder, not MYHARNESS_TEMP_DIR: the Windows path-length guard needs a short root.
+		const root = mkdtempSync(join(tmpdir(), "general-sources-folder-"));
 		try {
 			const data = join(root, "data");
 			const workspaceId = "ws-folder";
@@ -140,14 +150,26 @@ describe("General workspace settings and sources", () => {
 			expect(problems).toEqual([]);
 			const upload = staged[0]!;
 			// Staged folders are listed at once (with what has arrived so far): an interrupted batch keeps its files.
-			sendAll(upload, files.map((file) => file.text), [0]);
+			sendAll(
+				upload,
+				files.map((file) => file.text),
+				[0],
+			);
 			const partial = listWorkspaceSources(data, workspaceId).find((source) => source.id === upload.id);
 			expect(partial).toMatchObject({ kind: "folder", name: "Project", fileCount: 1 });
 			expect(() => finishWorkspaceSourceUpload(upload)).toThrow("Some files have not been uploaded yet.");
 			// Continuing sends only the rest.
-			sendAll(upload, files.map((file) => file.text), [1, 2, 3, 4]);
+			sendAll(
+				upload,
+				files.map((file) => file.text),
+				[1, 2, 3, 4],
+			);
 			const folder = finishWorkspaceSourceUpload(upload);
-			expect(folder).toMatchObject({ kind: "folder", fileCount: 5, size: files.reduce((n, f) => n + Buffer.byteLength(f.text), 0) });
+			expect(folder).toMatchObject({
+				kind: "folder",
+				fileCount: 5,
+				size: files.reduce((n, f) => n + Buffer.byteLength(f.text), 0),
+			});
 			expect(readFileSync(join(folder.path, "deep", "b.zip"), "utf8")).toBe("PK\u0003\u0004 binary");
 			expect(readFileSync(join(folder.path, "deep", "deeper", "c.md"), "utf8")).toBe("");
 			expect(existsSync(join(upload.directory, "staging"))).toBe(false);
@@ -243,7 +265,13 @@ describe("General workspace settings and sources", () => {
 			const workspaceId = "ws-long";
 			const long = "n".repeat(70);
 			const deep = Array.from({ length: 3 }, (_, i) => `${long}${i}`).join("/");
-			const paths = [`${deep}/${"f".repeat(90)}-one.txt`, `${deep}/${"f".repeat(90)}-two.txt`, "CON.txt", "a:b?.md", "a_b_.md"];
+			const paths = [
+				`${deep}/${"f".repeat(90)}-one.txt`,
+				`${deep}/${"f".repeat(90)}-two.txt`,
+				"CON.txt",
+				"a:b?.md",
+				"a_b_.md",
+			];
 			const { problems, staged } = stageWorkspaceSourceUploads(data, workspaceId, [
 				{ kind: "folder", name: "Long", files: paths.map((path) => ({ path, size: 1 })) },
 			]);
@@ -254,7 +282,10 @@ describe("General workspace settings and sources", () => {
 			expect(new Set(targets.map((target) => target.toLowerCase())).size).toBe(targets.length);
 			expect(upload.entries.map((entry) => entry.path)).toEqual(paths);
 			expect(targets[2]).toMatch(/_CON\.txt$/);
-			sendAll(upload, paths.map(() => "x"));
+			sendAll(
+				upload,
+				paths.map(() => "x"),
+			);
 			expect(finishWorkspaceSourceUpload(upload).fileCount).toBe(5);
 			// Too deep for any shortening: the batch is refused with the file named, and nothing is left behind.
 			const tooDeep = Array.from({ length: 90 }, (_, i) => `d${i}`).join("/");
@@ -296,7 +327,11 @@ describe("General workspace settings and sources", () => {
 			});
 			expect(readdirSync(upload.directory).sort()).toEqual(["source-new.pdf", "source.json"]);
 			const listed = listWorkspaceSources(data, workspaceId);
-			expect(listed.find((source) => source.id === legacyId)).toMatchObject({ kind: "file", name: "old.txt", size: 9 });
+			expect(listed.find((source) => source.id === legacyId)).toMatchObject({
+				kind: "file",
+				name: "old.txt",
+				size: 9,
+			});
 			expect(readFileSync(join(legacy, "source.json"), "utf8")).toBe(manifest);
 			deleteWorkspaceSource(data, workspaceId, legacyId);
 			expect(existsSync(legacy)).toBe(false);

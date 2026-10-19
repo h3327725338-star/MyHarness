@@ -4,13 +4,11 @@ import * as path from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit as runGitAsyncImpl, runGitSync } from "./command.ts";
 import {
-	fetchGitIdentity,
 	fetchGitRepositoryState,
 	fetchGitStatusPreview,
 	invalidateGitReadCache,
 	GIT_STATUS_PREVIEW_LIMIT as STATUS_PREVIEW_LIMIT,
 } from "./read-cache.ts";
-import type { AutoReviewMutation, ReviewChange } from "./review-types.ts";
 import { invalidateGitStatusCache } from "./status-cache.ts";
 
 const GIT_TIMEOUT_MS = 15_000;
@@ -150,30 +148,9 @@ export async function inspectGitRepositoryAsync(cwd: string): Promise<GitReposit
 	return fetchGitRepositoryState(cwd);
 }
 
-function readConfig(cwd: string, args: string[]): string | undefined {
+function _readConfig(cwd: string, args: string[]): string | undefined {
 	const result = runGit(cwd, args);
 	return result.ok && result.stdout ? result.stdout : undefined;
-}
-
-export function readGitIdentity(cwd: string, repositoryRoot?: string): GitIdentity {
-	const localName = repositoryRoot
-		? readConfig(repositoryRoot, ["config", "--local", "--get", "user.name"])
-		: undefined;
-	const localEmail = repositoryRoot
-		? readConfig(repositoryRoot, ["config", "--local", "--get", "user.email"])
-		: undefined;
-	return {
-		name: localName ?? readConfig(cwd, ["config", "--global", "--get", "user.name"]),
-		email: localEmail ?? readConfig(cwd, ["config", "--global", "--get", "user.email"]),
-	};
-}
-
-/**
- * 异步版 readGitIdentity：四个配置项并行读取，本地配置优先。
- * 始终直读（决策语义不变）；高频轮询请用 `read-cache.ts` 的 `getCachedGitIdentity`。
- */
-export async function readGitIdentityAsync(cwd: string, repositoryRoot?: string): Promise<GitIdentity> {
-	return fetchGitIdentity(cwd, repositoryRoot);
 }
 
 export function initializeGitRepository(cwd: string): GitCommandResult {
@@ -240,26 +217,6 @@ export async function createInitialGitBaselineAsync(
 	const result = await runGitAsync(repositoryRoot, ["commit", "-m", message], GIT_COMMIT_TIMEOUT_MS, signal);
 	invalidateGitStatusCache(repositoryRoot);
 	invalidateGitReadCache(repositoryRoot);
-	return result;
-}
-
-export function resolveMutationPaths(
-	cwd: string,
-	repositoryRoot: string,
-	items: ReadonlyArray<AutoReviewMutation | ReviewChange>,
-): string[] {
-	const normalizedRoot = path.resolve(repositoryRoot);
-	const result: string[] = [];
-	const seen = new Set<string>();
-	for (const item of items) {
-		const absolutePath = path.resolve(cwd, item.path);
-		const relativePath = path.relative(normalizedRoot, absolutePath);
-		if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) continue;
-		const gitPath = relativePath.split(path.sep).join("/");
-		if (seen.has(gitPath)) continue;
-		seen.add(gitPath);
-		result.push(gitPath);
-	}
 	return result;
 }
 

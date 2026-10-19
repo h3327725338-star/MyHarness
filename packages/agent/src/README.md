@@ -62,7 +62,7 @@ harness/agent-harness.ts → agent-loop.ts、harness/session、harness/compactio
 harness/env/nodejs.ts → harness/types.ts（只有它使用 node: 内置模块做文件与进程操作）
 ```
 
-对外只依赖 `@myharness/ai`。`harness/types.ts` 与 `index.ts` 之间存在类型/re-export 层面的循环引用（已知）。
+对外依赖 `@myharness/ai`、`ignore`、`typebox`、`yaml`（见 `package.json`）。`harness/types.ts` 与 `index.ts` 之间存在类型/re-export 层面的循环引用（已知）。
 
 ## 维护
 

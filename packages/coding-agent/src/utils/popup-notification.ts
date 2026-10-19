@@ -47,12 +47,12 @@ export function popupKindForRunState(state: RunState): PopupNotificationKind | u
 /** Per-line cap so a long provider error does not blow up the popup. */
 const MAX_LINE_LENGTH = 240;
 
-function truncateLine(line: string): string {
+function _truncateLine(line: string): string {
 	return line.length > MAX_LINE_LENGTH ? `${line.slice(0, MAX_LINE_LENGTH)}…` : line;
 }
 
 /** Compact human-readable duration between two wall-clock stamps, if meaningful. */
-function formatRunDuration(startedAt?: number, lastActivityAt?: number): string | undefined {
+function _formatRunDuration(startedAt?: number, lastActivityAt?: number): string | undefined {
 	if (!startedAt || !lastActivityAt || lastActivityAt <= startedAt) return undefined;
 	const totalSeconds = Math.round((lastActivityAt - startedAt) / 1000);
 	if (totalSeconds < 1) return undefined;
@@ -62,22 +62,6 @@ function formatRunDuration(startedAt?: number, lastActivityAt?: number): string 
 	if (minutes < 60) return `用时 ${minutes} 分 ${seconds} 秒`;
 	const hours = Math.floor(minutes / 60);
 	return `用时 ${hours} 小时 ${minutes % 60} 分`;
-}
-
-/** Human-readable popup body for a terminal run-state snapshot. */
-export function describeTerminalRunState(state: RunStateSnapshot): string {
-	const lines: string[] = [];
-	const activity = state.activity?.trim() || RUN_STATE_LABELS[state.state];
-	lines.push(activity);
-	const error = state.error?.trim();
-	if (error && !activity.includes(error)) {
-		lines.push(truncateLine(error));
-	}
-	const duration = formatRunDuration(state.startedAt, state.lastActivityAt);
-	if (duration) {
-		lines.push(duration);
-	}
-	return lines.join("\n");
 }
 
 /** What a finished task actually did, taken from the messages of its run. */
@@ -196,24 +180,6 @@ export function describeRunWork(work: RunWorkSummary): string | undefined {
 	if (work.webPages > 0) parts.push(`打开 ${work.webPages} 个网页`);
 	if (work.otherTools > 0) parts.push(`其他工具 ${work.otherTools} 次`);
 	return parts.length > 0 ? parts.join(" · ") : undefined;
-}
-
-/**
- * Popup body for a task that ended, with what the task did: the outcome and how long it took on the first line, then
- * the start of the final reply, what was changed and run, and the error if there is one. Without anything to add it is
- * the plain describeTerminalRunState text.
- */
-export function describeTaskEnd(state: RunStateSnapshot, work: RunWorkSummary | undefined): string {
-	const did = work ? describeRunWork(work) : undefined;
-	if (!work?.conclusion && !did) return describeTerminalRunState(state);
-	const activity = state.activity?.trim() || RUN_STATE_LABELS[state.state];
-	const duration = formatRunDuration(state.startedAt, state.lastActivityAt);
-	const lines = [duration ? `${activity} · ${duration}` : activity];
-	if (work?.conclusion) lines.push(truncateLine(work.conclusion));
-	if (did) lines.push(did);
-	const error = state.error?.trim();
-	if (error && !activity.includes(error)) lines.push(truncateLine(error));
-	return lines.join("\n");
 }
 
 /** Shared compact body for browser and native desktop notifications; errors outrank work counters. */

@@ -98,39 +98,6 @@ export function failureOf(message: AssistantMessage): ProviderFailureInfo | unde
 	return getProviderFailure(message);
 }
 
-/** Error code the agent loop attaches when a tool ignores cancellation past the abort grace period. */
-export const TOOL_ABORT_TIMEOUT_CODE = "TOOL_ABORT_TIMEOUT";
-/** Error code the bash tool attaches when its process tree was cancelled by the caller. */
-export const TOOL_CANCELLED_CODE = "BASH_ABORTED";
-
-/**
- * P2-11 distinction point for tool outcomes (mirrors the assistant-level
- * aborted-vs-error split in planRetry): a grace-period timeout is a failure
- * (isError, consumes retry budget via the normal tool-error path), while a
- * user cancellation is `aborted` (never counted toward retryAttempts, never
- * triggers fallback). Text match is intentional: tool errors surface as text
- * with a structured `code` in details, and both shapes are checked.
- */
-export function isToolAbortTimeoutError(error: unknown): boolean {
-	if (!error || typeof error !== "object") return false;
-	const record = error as { code?: unknown; details?: unknown; message?: unknown };
-	if (record.code === TOOL_ABORT_TIMEOUT_CODE) return true;
-	const details = record.details as { errorCode?: unknown } | undefined;
-	if (details?.errorCode === TOOL_ABORT_TIMEOUT_CODE) return true;
-	return typeof record.message === "string" && record.message.includes(TOOL_ABORT_TIMEOUT_CODE);
-}
-
-/** Whether a thrown tool error (or tool result text) reports user cancellation rather than failure. */
-export function isUserCancelToolError(error: unknown): boolean {
-	if (!error || typeof error !== "object") return false;
-	const record = error as { code?: unknown; details?: unknown; message?: unknown };
-	if (record.code === TOOL_CANCELLED_CODE) return true;
-	const details = record.details as { errorCode?: unknown } | undefined;
-	if (details?.errorCode === TOOL_CANCELLED_CODE) return true;
-	const message = typeof record.message === "string" ? record.message : "";
-	return /(^|\n)Command aborted\s*$/.test(message) || /\bOperation aborted\b/.test(message) || message === "aborted";
-}
-
 /** What a one-shot completion needs from the model runtime. */
 export interface NetworkPolicyRuntime {
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage>;

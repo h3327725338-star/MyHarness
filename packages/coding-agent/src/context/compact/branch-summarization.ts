@@ -152,8 +152,8 @@ export function collectEntriesForBranchSummary(
 // ============================================================================
 
 /**
- * Extract AgentMessage from a session entry.
- * Similar to getMessageFromEntry in compaction.ts but also handles compaction entries.
+ * Convert a session entry to an `AgentMessage`. Returns `undefined` for entries that carry no conversation message;
+ * compaction entries are converted too.
  */
 function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 	switch (entry.type) {

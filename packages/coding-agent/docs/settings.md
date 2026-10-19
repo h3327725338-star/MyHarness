@@ -94,7 +94,7 @@ Custom Providers 会出现在与其他 configured/extension services 相同的 *
 
 ## Project Trust
 
-交互模式启动时，如果项目文件夹包含 project-local settings、resources 或 project `.agents/skills`，且该文件夹或其 parent folder 在 `~/.myharness/agent/trust.json` 中没有已保存的决定，MyHarness 会先询问是否信任项目。信任项目后，MyHarness 才会加载 `.myharness/settings.json` 和 `.myharness` resources、安装缺少的 project packages，并执行 project extensions。
+Web UI 启动时，如果项目文件夹包含 project-local settings、resources 或 project `.agents/skills`，且该文件夹或其 parent folder 在 `~/.myharness/agent/trust.json` 中没有已保存的决定，MyHarness 会先在浏览器里询问是否信任项目。信任项目后，MyHarness 才会加载 `.myharness/settings.json` 和 `.myharness` resources、安装缺少的 project packages，并执行 project extensions。
 
 `AGENTS.md` 和 `CLAUDE.md` 是单独的项目上下文文件，不属于上述需要信任的
 protected resource；除非使用 `--no-context-files`，否则项目未受信任时也会加载。
@@ -105,9 +105,9 @@ protected resource；除非使用 `--no-context-files`，否则项目未受信�
 
 如果没有适用的 extension 或 saved decision，`defaultProjectTrust` 控制 fallback behavior。可以在 `~/.myharness/agent/settings.json` 中将它设置为 `"ask"`、`"always"` 或 `"never"`，也可以通过 `/settings` 修改。
 
-`MyHarness config` 和 package commands 使用相同的 Project Trust flow，但 `MyHarness update` 不会询问。使用 `--approve` 可在单次 command 中信任 project-local settings，使用 `--no-approve` 可忽略它们。
+Package 资源和 project-local settings 走同一套 Project Trust flow：启动时按 Trust 自动解析，单次运行可用 `--approve` 信任 project-local settings，或用 `--no-approve` 忽略它们。当前没有 `myharness config` / `myharness update` 等 CLI 子命令，包的启用与禁用在浏览器 Settings 中完成。
 
-交互模式启动时的内置 UI 用于为当前项目保存 trust decision。已保存的决定写入 `~/.myharness/agent/trust.json`。`/settings` 只会修改没有 saved decision 的 projects 使用的 global `defaultProjectTrust` fallback；不会添加或删除当前项目在 `trust.json` 中的 entries。
+启动时的信任询问在浏览器里完成，用于为当前项目保存 trust decision。已保存的决定写入 `~/.myharness/agent/trust.json`。`/settings` 只会修改没有 saved decision 的 projects 使用的 global `defaultProjectTrust` fallback；不会添加或删除当前项目在 `trust.json` 中的 entries。
 
 ## All Settings（全部设置）
 
@@ -402,9 +402,9 @@ Project `.myharness/settings.json`:
 | `defaultProjectTrust` | `"ask"\|"always"\|"never"` | `"ask"` | Project Trust 的 fallback behavior。仅适用于 global setting |
 | `collapseChangelog` | boolean | `false` | updates 后显示 condensed changelog |
 | `enableInstallTelemetry` | boolean | `true` | 首次 install 或检测到 changelog update 后发送 anonymous install/update version ping。不控制 update checks |
-| `enableAnalytics` | boolean | `false` | opt-in analytics data sharing。目前只会在 experimental first-time setup（`MYHARNESS_EXPERIMENTAL=1`）期间询问 |
+| `enableAnalytics` | boolean | `false` | opt-in analytics data sharing。通过 Settings → Analytics 手动开关，首次开启时生成 `trackingId`；当前没有 experimental setup 流程，也不读取 `MYHARNESS_EXPERIMENTAL` |
 | `trackingId` | string | - | Analytics tracking identifier；开启 `enableAnalytics` 时生成 |
-| `doubleEscapeAction` | `"fork"\|"tree"\|"none"` | `"tree"` | 保留用于 compatibility 的 setting。当前 interactive escape handler 不会触发 tree 或 fork actions。 |
+| `doubleEscapeAction` | `"fork"\|"tree"\|"none"` | `"tree"` | 保留用于 compatibility 的 setting。当前没有 handler 消费它，Web UI 不会触发 tree 或 fork actions。 |
 | `editorPaddingX` | number | `0` | Input editor 的 horizontal padding（0-3） |
 | `outputPad` | `0\|1` | `1` | User messages、assistant messages 和 thinking 的 horizontal padding（0 或 1） |
 | `autocompleteMaxVisible` | number | `5` | Autocomplete dropdown 的最大可见 items 数量（3-20） |
@@ -443,7 +443,7 @@ Project `.myharness/settings.json`:
 
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
-| `warnings.anthropicExtraUsage` | boolean | `true`（UI fallback） | Anthropic subscription auth 可能产生 paid extra usage 时显示 warning。字段缺失时 interactive UI 会使用 `true`，但 `getWarnings()` 不会强制设置 default。 |
+| `warnings.anthropicExtraUsage` | boolean | `true`（UI fallback） | Anthropic subscription auth 可能产生 paid extra usage 时显示 warning。字段缺失时 UI 会使用 `true`，但 `getWarnings()` 不会强制设置 default。 |
 
 ```json
 {

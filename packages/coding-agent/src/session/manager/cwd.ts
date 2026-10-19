@@ -44,11 +44,6 @@ export function formatMissingSessionCwdError(issue: SessionCwdIssue): string {
 	return `Stored session working directory does not exist: ${issue.sessionCwd}${sessionFile}\nCurrent working directory: ${issue.fallbackCwd}`;
 }
 
-/** Short prompt variant for cwd selection UI. Pure string formatting, no side effects. */
-export function formatMissingSessionCwdPrompt(issue: SessionCwdIssue): string {
-	return `cwd from session file does not exist\n${issue.sessionCwd}\n\ncontinue in current cwd\n${issue.fallbackCwd}`;
-}
-
 /** Error carrying the cwd issue for callers that must stop resume and ask the user where to continue. */
 export class MissingSessionCwdError extends Error {
 	readonly issue: SessionCwdIssue;

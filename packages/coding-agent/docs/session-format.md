@@ -281,7 +281,7 @@ Extension state persistence. Does NOT participate in LLM context.
 {"type":"custom","id":"h8i9j0k1","parentId":"g7h8i9j0","timestamp":"2024-12-03T14:20:00.000Z","customType":"my-extension","data":{"count":42}}
 ```
 
-Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
+Use `customType` to identify your extension's entries on reload. Extensions can register a renderer with `pi.registerEntryRenderer(customType, renderer)`, but no built-in mode consumes it today: Web UI shows a `custom_message` entry only when `display` is `true`. Custom entries do not participate in LLM context.
 
 ### CustomMessageEntry
 

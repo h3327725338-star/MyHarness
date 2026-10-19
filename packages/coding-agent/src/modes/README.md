@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | Web UI | `web/web-mode.ts` 的 `runWebMode()` | 本机回环 HTTP + SSE 服务，浏览器前端。详见 [web/README.md](web/README.md) |
 
-`index.ts` 只导出 Web 模式；由 `main.ts` 按参数创建（`startWebBootstrap()` 先起服务、`runWebMode()` 在 runtime 创建后接管）。
+`modes/` 没有 `index.ts` 出口：`main.ts` 按参数直接调用 `web/web-mode.ts`（`startWebBootstrap()` 先起服务、`runWebMode()` 在 runtime 创建后接管），`src/index.ts` 则从 `web/index.ts` 转出这两个入口。
 
 ### 依赖
 

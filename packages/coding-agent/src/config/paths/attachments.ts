@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAttachmentManifestPath } from "./index.ts";
 
@@ -40,18 +40,6 @@ export function guessAttachmentMime(fileName: string): string {
 	return mime ?? "application/octet-stream";
 }
 
-/** Apply the same filename cleaning as the upload route so manifests stay consistent. */
-export function sanitizeAttachmentName(raw: string): string {
-	const cleaned =
-		raw
-			.replaceAll("\\", "/")
-			.split("/")
-			.pop()!
-			.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
-			.replace(/[. ]+$/g, "") || "file";
-	return cleaned;
-}
-
 /** Data-root-relative posix reference for an absolute attachment file. */
 export function toAttachmentRelativePath(dataRoot: string, absolutePath: string): string {
 	return relative(resolve(dataRoot), resolve(absolutePath)).split(sep).join("/");
@@ -72,34 +60,6 @@ export function writeAttachmentManifest(
 /** Best-effort manifest write for legacy layouts outside the workspace library. */
 export function writeLegacyAttachmentManifest(directory: string, manifest: AttachmentManifest): void {
 	writeFileSync(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-}
-
-/** Read one attachment folder's manifest; undefined when missing or not in the known shape. */
-export function readAttachmentManifest(
-	dataRoot: string,
-	workspaceId: string,
-	sessionId: string,
-	attachmentId: string,
-): AttachmentManifest | undefined {
-	try {
-		const parsed = JSON.parse(
-			readFileSync(getAttachmentManifestPath(dataRoot, workspaceId, sessionId, attachmentId), "utf8"),
-		) as Partial<AttachmentManifest>;
-		if (
-			parsed?.version !== 1 ||
-			typeof parsed.id !== "string" ||
-			typeof parsed.originalName !== "string" ||
-			typeof parsed.storedName !== "string" ||
-			typeof parsed.mime !== "string" ||
-			typeof parsed.size !== "number" ||
-			typeof parsed.createdAt !== "string" ||
-			typeof parsed.relativePath !== "string"
-		)
-			return undefined;
-		return parsed as AttachmentManifest;
-	} catch {
-		return undefined;
-	}
 }
 
 /**

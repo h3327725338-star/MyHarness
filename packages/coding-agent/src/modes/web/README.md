@@ -35,7 +35,7 @@
 ### 依赖
 
 - 依赖：`agent/runtime`、`application`（用例、WorkspaceStore）、`startup`（命令表、设置菜单）、`config`、`context`（用量明细）、`extensions`（UI 契约）、`git/*`（检查点、用例、工作区变更）、`providers/*`、`session/*`、`skills/loader`、`utils`；可选依赖 `@lydell/node-pty`（终端）。
-- 被依赖：`modes/index.ts`。
+- 被依赖：`src/index.ts`（公共出口）与 `web.ts` 启动入口。
 
 ## 维护
 

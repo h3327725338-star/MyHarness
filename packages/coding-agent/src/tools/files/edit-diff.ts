@@ -530,7 +530,7 @@ export interface EditDiffError {
 
 /**
  * Compute the diff for one or more edit operations without applying them.
- * Used for preview rendering in the TUI before the tool executes.
+ * Exported helper: it only reads and returns the diff, never writes.
  */
 export async function computeEditsDiff(
 	path: string,
@@ -561,17 +561,4 @@ export async function computeEditsDiff(
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
-}
-
-/**
- * Compute the diff for a single edit operation without applying it.
- * Kept as a convenience wrapper for single-edit callers.
- */
-export async function computeEditDiff(
-	path: string,
-	oldText: string,
-	newText: string,
-	cwd: string,
-): Promise<EditDiffResult | EditDiffError> {
-	return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }

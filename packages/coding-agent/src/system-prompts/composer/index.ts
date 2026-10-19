@@ -80,36 +80,6 @@ export function personalizationBlock(personalPrompt: string): string {
 	].join("\n");
 }
 
-/**
- * Frozen section order of the composed system prompt (P0-1 prefix-cache stability).
- *
- * personalization → mode identity → core policy → tools → routing → slash commands →
- * guidelines → custom → append → project context → skills → working-directory →
- * model-identity → output language → role boundary.
- *
- * The order is intentionally fixed: provider prefix caches invalidate everything after
- * the first changed byte, so any reordering mid-session would discard the whole cache.
- * Dynamic segments (working-directory, model-identity) live at the stable tail; the
- * session runtime additionally mirrors them as a messages-tail system-reminder so the
- * system string itself can stay byte-stable across turns.
- */
-export const SYSTEM_PROMPT_SECTION_ORDER = [
-	"personalization",
-	"mode",
-	"core",
-	"tools",
-	"routing",
-	"slash",
-	"guidelines",
-	"custom",
-	"append",
-	"context",
-	"skills",
-	"working-directory",
-	"model-identity",
-	"language",
-] as const;
-
 /** Stable placeholder used when a tool has no snippet; the entry is kept, never dropped. */
 export const MISSING_TOOL_SNIPPET_PLACEHOLDER = "(no description available)";
 

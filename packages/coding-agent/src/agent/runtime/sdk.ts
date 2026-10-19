@@ -108,19 +108,8 @@ export interface CreateAgentSessionResult {
 
 // Re-exports
 
-export type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-	ExtensionFactory,
-	InlineExtension,
-	SlashCommandInfo,
-	SlashCommandSource,
-	ToolDefinition,
-} from "../../extensions/compat/types.ts";
+export type { ExtensionFactory, ToolDefinition } from "../../extensions/compat/types.ts";
 export type { PromptTemplate } from "../../prompts/loader/index.ts";
-export type { Skill } from "../../skills/loader/index.ts";
-export type { Tool } from "../../tools/registry.ts";
 export * from "./session-runtime.ts";
 
 export {

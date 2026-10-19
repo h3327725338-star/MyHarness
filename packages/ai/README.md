@@ -1040,14 +1040,14 @@ Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers
 
 The `openai-completions` API is implemented by many providers with minor differences. By default, the library auto-detects compatibility settings based on provider ID and `baseUrl` for known OpenAI-compatible providers (Cerebras, xAI, Chutes, DeepSeek, NVIDIA NIM, Together AI, zAi, OpenCode, Cloudflare Workers AI, etc.).
 
-Unknown custom endpoints use a portable request subset by default: `system` instead of `developer`, `max_tokens` instead of `max_completion_tokens`, and no `store`, `reasoning_effort`, streaming usage options, strict tool schemas, or long-cache retention fields. This conservative default is intended for services that implement only the common Chat Completions surface. Use `compat` to opt into supported fields or override any detected behavior. For `openai-responses` models, the compat field supports Responses-specific flags.
+Unknown custom endpoints use a portable request subset by default: `system` instead of `developer`, `max_tokens` instead of `max_completion_tokens`, and no `store`, `reasoning_effort`, strict tool schemas, or long-cache retention fields. `stream_options: { include_usage: true }` is the exception and is still sent by default (`supportsUsageInStreaming` defaults to `true`); set `compat.supportsUsageInStreaming: false` to opt out. This conservative default is intended for services that implement only the common Chat Completions surface. Use `compat` to opt into supported fields or override any detected behavior. For `openai-responses` models, the compat field supports Responses-specific flags.
 
 ```typescript
 interface OpenAICompletionsCompat {
   supportsStore?: boolean;           // Whether provider supports the `store` field (default: auto-detected)
   supportsDeveloperRole?: boolean;   // Whether provider supports `developer` role vs `system` (default: auto-detected)
   supportsReasoningEffort?: boolean; // Whether provider supports `reasoning_effort` (default: auto-detected)
-  supportsUsageInStreaming?: boolean; // Whether provider supports `stream_options: { include_usage: true }` (default: auto-detected)
+  supportsUsageInStreaming?: boolean; // Whether provider supports `stream_options: { include_usage: true }` (default: true)
   supportsStrictMode?: boolean;      // Whether provider supports `strict` in tool definitions (default: auto-detected)
   sendSessionAffinityHeaders?: boolean; // Send session-affinity data from `sessionId` (default: false)
   sessionAffinityFormat?: 'openai' | 'openai-nosession' | 'openrouter'; // Format for session affinity: 'openai' uses `prompt_cache_key`, `session_id`, `x-client-request-id`, and `x-session-affinity`; 'openai-nosession' uses `prompt_cache_key`, `x-client-request-id`, and `x-session-affinity`; 'openrouter' uses `x-session-id` (default: auto-detected)
@@ -1359,11 +1359,11 @@ Use provider-owned `OAuthAuth`, which composes with `CredentialStore` and gets l
 
 The `google-vertex` API implementation remains available for custom providers registered with `createProvider()`. Vertex AI models support either a Google Cloud API key or Application Default Credentials (ADC):
 
-- **API key**: Set `GOOGLE_CLOUD_API_KEY` or pass `apiKey` in the call options.
+- **API key**: Pass `apiKey` in the call options. The implementation reads no `*_API_KEY` environment variable.
 - **Local development (ADC)**: Run `gcloud auth application-default login`
 - **CI/Production (ADC)**: Set `GOOGLE_APPLICATION_CREDENTIALS` to point to a service account JSON key file
 
-When using ADC, also set `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`. You can also pass `project`/`location` in the call options. When using `GOOGLE_CLOUD_API_KEY`, `project` and `location` are not required.
+When using ADC, also set `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`. You can also pass `project`/`location` in the call options. When passing `apiKey`, `project` and `location` are not required.
 
 ```bash
 # Local (uses your user credentials)

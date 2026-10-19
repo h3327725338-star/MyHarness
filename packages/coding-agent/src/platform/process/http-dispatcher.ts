@@ -31,11 +31,6 @@ export function parseNetworkTimeoutMs(value: unknown): number | undefined {
 	return timeoutMs >= MIN_NETWORK_TIMEOUT_MS && timeoutMs <= MAX_NETWORK_TIMEOUT_MS ? timeoutMs : undefined;
 }
 
-/** Worst case for one model: every attempt waits out a connect, then the longer of first byte and stream idle. */
-export function worstCaseRequestWaitMs(timeouts: NetworkTimeouts, attempts: number): number {
-	return attempts * (timeouts.connectTimeoutMs + Math.max(timeouts.firstByteTimeoutMs, timeouts.streamIdleTimeoutMs));
-}
-
 const originalGlobalFetch = globalThis.fetch;
 let installedGlobalFetch: typeof globalThis.fetch | undefined;
 

@@ -42,7 +42,7 @@ npm.cmd run build
 - [Extensions](extensions.md) — 为 tools、commands、events 和 custom UI 提供 TypeScript modules。
 - [Skills](skills.md) — 可复用、按需调用的 Agent Skills。
 - [Prompt templates](prompt-templates.md) — 通过 command completion 调用的可复用 prompts。
-- [Themes](themes.md) — 内置和自定义 terminal themes。
+- [Themes](themes.md) — Web 外观配色（Settings → Appearance）与旧 Theme 文件的兼容加载。
 - [MyHarness packages](packages.md) — 打包和共享 extensions、skills、prompts 与 themes。
 - [Custom models](models.md) — 为已配置的 Provider API 添加 model entries。
 - [Custom providers](custom-provider.md) — 实现 custom APIs 和 OAuth flows。

@@ -37,20 +37,17 @@ material they cover:
 - `packages/agent/src/harness/compaction/CODEX-NOTICE.md` and
   `CODEX-LICENSE` identify the adapted OpenAI Codex source and its Apache-2.0
   terms.
-- `packages/coding-agent/examples/extensions/doom-overlay/` contains the
-  doomgeneric/WebAssembly demo and identifies id Software, doomgeneric and
-  pi-doom in its README. Those inherited game/demo assets and their terms are
-  not relicensed by the MyHarness Apache-2.0 notice.
 - The optional Windows Code Intelligence catalog and its redistribution files
   are recorded in
   `packages/coding-agent/code-intelligence/DEPENDENCY-MANIFEST.json` and
   `packages/coding-agent/code-intelligence/licenses/`. This includes the
   component-specific MIT, Apache/LLVM, BSD, EPL, Microsoft, and other notices.
 
-The large Code Intelligence archives are not tracked in this source tree and
-the current release manifest is unpublished. The files above are still kept so
-that a future release archive can be accompanied by the notices required by
-its actual contents.
+The large Code Intelligence archives are not tracked in this source tree. The
+manifest at `packages/coding-agent/code-intelligence/runtime-manifest.json`
+records the current `releaseTag` together with each archive's `sizeBytes` and
+`sha256`. The files above are still kept so that a release archive can be
+accompanied by the notices required by its actual contents.
 
 Package names, compatibility aliases, inherited package authors, and old
 changelog entries are provenance or compatibility information; they are not

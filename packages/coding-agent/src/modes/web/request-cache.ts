@@ -15,7 +15,6 @@
  */
 
 import type { AgentMessage } from "@myharness/agent-core";
-import { estimateContextTokens } from "../../context/compact/compaction.ts";
 import { measureCache } from "../../observability/usage-measurements.ts";
 import type { RequestMeterState } from "./generation-speed.ts";
 
@@ -57,40 +56,6 @@ function usageOf(message: AgentMessage, prediction = false): Usage | undefined {
 		write: number(usage.cacheWrite),
 		reported: true,
 	};
-}
-
-/** Prompts shorter than this are not cached by the providers that have a minimum (1024 tokens). */
-const MIN_CACHEABLE_TOKENS = 1024;
-/** Provider caches live for minutes (5 for Anthropic by default); after a longer pause nothing is predicted. */
-const MAX_CACHE_AGE_MS = 10 * 60 * 1000;
-
-/**
- * What the next request is expected to read from the provider's cache: the previous request's whole prompt (the new
- * request starts with it), out of the estimated size of the new prompt. Undefined when no reliable guess exists: no
- * earlier request with a reported prompt, a prompt too short to be cached, or a pause long enough for the cache to expire.
- */
-export function predictCacheHit(
-	messages: AgentMessage[],
-	now = Date.now(),
-): { read: number; input: number } | undefined {
-	let last: AgentMessage | undefined;
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i]!;
-		if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
-		const usage = usageOf(message, true);
-		if (usage && usage.input + usage.read + usage.write > 0) {
-			last = message;
-			break;
-		}
-	}
-	const usage = last ? usageOf(last, true) : undefined;
-	if (!last || !usage) return undefined;
-	const previousPrompt = usage.input + usage.read + usage.write;
-	if (previousPrompt < MIN_CACHEABLE_TOKENS) return undefined;
-	if (typeof last.timestamp === "number" && now - last.timestamp > MAX_CACHE_AGE_MS) return undefined;
-	const total = estimateContextTokens(messages).tokens;
-	if (total <= 0) return undefined;
-	return { read: Math.min(previousPrompt, total), input: Math.max(total, previousPrompt) };
 }
 
 export class RequestCacheMeter {

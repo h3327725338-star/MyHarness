@@ -1167,7 +1167,7 @@ export class SessionManager {
 	 * Append a custom message entry (for extensions) that participates in LLM context.
 	 * @param customType Extension identifier for filtering on reload
 	 * @param content Message content (string or TextContent/ImageContent array)
-	 * @param display Whether to show in TUI (true = styled display, false = hidden)
+	 * @param display Whether to show in the Web UI (true = styled display, false = hidden)
 	 * @param details Optional extension-specific metadata (not sent to LLM)
 	 * @param excludeFromContext Whether to restore the message without adding it to LLM context
 	 * @returns Entry id

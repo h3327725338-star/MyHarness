@@ -230,7 +230,7 @@ function runCheckpointGit(
  *
  * Snapshotting the worktree with `git add -A` re-hashes every tracked and
  * untracked file, which on a large repository takes many seconds. Running it
- * synchronously blocks the event loop for the whole duration, freezing the TUI
+ * synchronously blocks the event loop for the whole duration, freezing the Web UI
  * right after the user authorizes the first mutating tool call. Awaiting an
  * async subprocess keeps the UI responsive while the snapshot is built.
  */
@@ -618,11 +618,6 @@ interface GitCheckpointRefChange {
 	after?: string;
 }
 
-export function collectGitCheckpointLocalRefChanges(checkpoint: GitCheckpoint): GitCheckpointRefChange[] {
-	const current = getLocalRefs(checkpoint.repositoryRoot);
-	return current.refs ? diffLocalRefs(checkpoint.localRefs, current.refs) : [];
-}
-
 /** 异步版：供 async Final ChangeSet 使用，不阻塞事件循环。失败返回空数组并由调用方按 fresh 语义处理。 */
 export async function collectGitCheckpointLocalRefChangesAsync(
 	checkpoint: GitCheckpoint,
@@ -635,21 +630,6 @@ export async function observeGitCheckpointFinalState(
 	checkpoint: GitCheckpoint,
 ): Promise<{ observation?: GitCheckpointObservation; error?: string }> {
 	return getCheckpointObservationAsync(checkpoint.repositoryRoot);
-}
-
-export function collectGitCheckpointHeadChanges(checkpoint: GitCheckpoint): {
-	changes?: GitCheckpointHeadChange[];
-	error?: string;
-} {
-	const current = getHeadState(checkpoint.repositoryRoot);
-	if (!checkpoint.headCommit || !current.commit || checkpoint.headCommit === current.commit) return { changes: [] };
-	const result = runCheckpointGit(
-		checkpoint.repositoryRoot,
-		["diff", "--name-status", "-z", "--no-renames", checkpoint.headCommit, current.commit, "--"],
-		true,
-	);
-	if (!result.ok) return { error: formatGitFailure(result) };
-	return { changes: parseHeadChanges(result.stdout) };
 }
 
 /** 异步版 collectGitCheckpointHeadChanges：同一语义，不阻塞事件循环。 */
@@ -817,7 +797,7 @@ export function collectGitCheckpointWorkingTreeChanges(checkpoint: GitCheckpoint
 	};
 }
 
-/** Async counterpart for interactive recovery decisions; never blocks the TUI on Git subprocesses. */
+/** Async counterpart for interactive recovery decisions; never blocks the UI on Git subprocesses. */
 export async function collectGitCheckpointWorkingTreeChangesAsync(checkpoint: GitCheckpoint): Promise<{
 	changes?: GitCheckpointHeadChange[];
 	error?: string;
@@ -908,49 +888,6 @@ export async function collectGitCheckpointWorkingTreeChangesAsync(checkpoint: Gi
 			)
 			.sort((left, right) => left.path.localeCompare(right.path)),
 	};
-}
-
-/** Materialize the saved worktree tree into an isolated review workspace. */
-export function restoreGitCheckpointBaselineWorkspace(
-	checkpoint: GitCheckpoint,
-	workspacePath: string,
-): { ok: boolean; error?: string } {
-	if (!checkpoint.worktreeTree) return { ok: false, error: "checkpoint 缺少工作区基线树。" };
-	const workspaceRoot = resolve(workspacePath);
-	const repositoryRoot = resolve(checkpoint.repositoryRoot);
-	const changed = collectGitCheckpointWorkingTreeChanges(checkpoint);
-	if (!changed.changes) return { ok: false, error: changed.error };
-
-	try {
-		for (const change of changed.changes) {
-			const target = resolve(workspaceRoot, change.path);
-			const relation = relative(workspaceRoot, target);
-			if (relation === "" || relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
-				return { ok: false, error: `review baseline 路径越界：${change.path}` };
-			}
-			const stat = lstatIfExists(target);
-			if (stat) rmSync(target, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: false });
-		}
-
-		const temporaryIndexPath = join(checkpoint.storagePath, `review-baseline-${randomUUID()}.index`);
-		const env = { GIT_INDEX_FILE: temporaryIndexPath };
-		try {
-			const readTree = runCheckpointGit(repositoryRoot, ["read-tree", checkpoint.worktreeTree], false, env);
-			if (!readTree.ok) return { ok: false, error: formatGitFailure(readTree) };
-			const checkout = runCheckpointGit(
-				repositoryRoot,
-				["--work-tree", workspaceRoot, "checkout-index", "--all", "--force"],
-				false,
-				env,
-			);
-			return checkout.ok ? { ok: true } : { ok: false, error: formatGitFailure(checkout) };
-		} finally {
-			rmSync(temporaryIndexPath, { force: true });
-			rmSync(`${temporaryIndexPath}.lock`, { force: true });
-		}
-	} catch (error) {
-		return { ok: false, error: error instanceof Error ? error.message : String(error) };
-	}
 }
 
 export function getGitCheckpointPendingTaskPaths(checkpoint: GitCheckpoint): { paths?: string[]; error?: string } {

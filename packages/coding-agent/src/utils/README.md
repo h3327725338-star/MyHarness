@@ -8,16 +8,15 @@
 
 | 分组 | 文件 |
 | --- | --- |
-| 文件写入 | `atomic-write.ts`（原子替换、临时文件清理）、`fs-watch.ts`（带错误处理的监听） |
+| 文件写入 | `atomic-write.ts`（原子替换、临时文件清理） |
 | 路径 | `paths.ts`（规范化、identity key、相对路径显示、Git 仓库根） |
 | 进程与 Shell | `child-process.ts`（spawn、进程树终止）、`shell.ts`（Shell 配置、环境、分离子进程跟踪）、`shell-command-lexer.ts`（保守的 Shell 命令词法切分）、`sleep.ts`（可取消等待） |
-| 文本与解析 | `frontmatter.ts`、`json.ts`（去注释）、`html.ts`（实体解码）、`ansi.ts`（去 ANSI）、`syntax-highlight.ts`（含 `highlight-js-lib-index.d.ts` 类型声明）、`changelog.ts` |
+| 文本与解析 | `frontmatter.ts`、`json.ts`（去注释）、`ansi.ts`（去 ANSI）、`changelog.ts` |
 | 图片 | `image-resize.ts` / `image-resize-core.ts` / `image-resize-worker.ts`、`image-convert.ts`、`image-process.ts`、`exif-orientation.ts`、`mime.ts`、`photon.ts`、`jxl-decode-worker.ts` |
 | 输入文件 | `file-preprocess.ts`（富文档转文本/页图）、`input-image-attachments.ts` |
 | 桌面集成 | `open-browser.ts`、`popup-notification.ts`（任务结束弹窗的内容与命令） |
 | 自身信息 | `myharness-invocation.ts`（如何再次启动自己）、`myharness-user-agent.ts` |
 | 外部工具 | `tools-manager.ts`（`fd`、`rg` 等的定位与下载） |
-| 开发辅助 | `source-changes.ts`（进程启动后核心源码是否被改过）、`deprecation.ts` |
 | 兼容入口 | `git.ts`、`git-command.ts`（已废弃，只 re-export `git/repository/`） |
 
 ### 依赖
@@ -32,4 +31,4 @@
 - `git.ts`、`git-command.ts` 是兼容入口，新代码直接从 `git/repository/` 导入。
 - `image-resize-worker.ts` 和 `jxl-decode-worker.ts` 是独立 worker 入口，被 `build:binary` 单独列为编译入口；改名要同步 `package.json`。
 - 原子写、进程树终止是多处依赖的安全基础，改动需要跑 `atomic-write-recovery.test.ts`、`bash-close-hang-windows.test.ts` 等。
-- 相关测试：`paths.test.ts`、`shell-command-lexer.test.ts`、`frontmatter.test.ts`、`image-*.test.ts`、`file-preprocess.test.ts`、`popup-notification.test.ts`、`syntax-highlight.test.ts`、`changelog.test.ts`、`source-changes.test.ts`。
+- 相关测试：`paths.test.ts`、`shell-command-lexer.test.ts`、`frontmatter.test.ts`、`image-*.test.ts`、`file-preprocess.test.ts`、`popup-notification.test.ts`、`changelog.test.ts`。

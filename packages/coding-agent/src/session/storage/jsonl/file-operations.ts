@@ -101,29 +101,6 @@ function attachmentDirsForSessionDir(sessionDir: string, conversationDir?: strin
 	return candidates;
 }
 
-/** True when the session owns real attachment bytes (`.gitignore` scaffolding alone does not count). */
-export function hasSessionAttachments(sessionDirOrFile: string): boolean {
-	try {
-		const scope = parseSessionDataPath(sessionDirOrFile);
-		const sessionDir = scope ? getSessionDir(scope.dataRoot, scope.workspaceId, scope.sessionId) : sessionDirOrFile;
-		let stats: import("node:fs").Stats;
-		try {
-			stats = lstatSync(sessionDir);
-		} catch {
-			return false;
-		}
-		if (stats.isSymbolicLink() || !stats.isDirectory()) return false;
-		const conversationDir = scope?.conversationDir;
-		for (const [dir] of attachmentDirsForSessionDir(sessionDir, conversationDir)) {
-			const summary = summarizeAttachmentDir(dir, "artifacts");
-			if (summary) return true;
-		}
-		return false;
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Inspect attachment ownership before deleting a chat. Pure read-only scan for the delete
  * confirmation prompt: which attachment libraries belong to this session and how large they are.

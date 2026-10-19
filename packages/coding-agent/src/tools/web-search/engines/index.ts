@@ -7,9 +7,6 @@ import { tavily } from "./tavily.ts";
 import type { SearchEngine } from "./types.ts";
 
 export type {
-	BrowserSearch,
-	EngineContext,
-	EngineQuery,
 	EngineResult,
 	SearchEngine,
 	SearchTimeRange,

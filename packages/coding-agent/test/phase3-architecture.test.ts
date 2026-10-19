@@ -61,8 +61,6 @@ describe("Phase 3 architecture boundaries", () => {
 			"packages/coding-agent/src/tools/session-tool-registry.ts",
 			"packages/coding-agent/src/tools/shell/session-bash.ts",
 			"packages/coding-agent/src/application/use-cases/git-workspace.ts",
-			"packages/coding-agent/src/application/use-cases/local-git-repository.ts",
-			"packages/coding-agent/src/application/use-cases/conversation-title.ts",
 		];
 
 		for (const file of files) {

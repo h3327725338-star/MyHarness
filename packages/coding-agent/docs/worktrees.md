@@ -2,14 +2,13 @@
 
 MyHarness 的 `/git` 页面提供 Git Worktree 管理入口。Worktree 是同一个 Git 仓库的独立工作目录，每个目录可以对应一个开发分支；主仓库的 `main` 工作目录不会因为进入开发分支而 checkout 到其他分支。
 
-在交互模式中：
+在 Web UI 中：
 
-1. 执行 `/git`，选择已登记的 Git 仓库。
-2. 按 `W` 打开该仓库的 Worktree 列表。
-3. 使用 `A` 为已有分支创建 Worktree，或使用 `N` 从 `main` 创建新分支及 Worktree。
-4. 选择 Worktree 后按 `Enter` 进入。进入后，新的 Agent session 会以该 Worktree 的实际路径作为工作目录，后续文件修改不会写入其他 Worktree。
-5. 使用 `L` 按用户需要生成该分支的 Windows `.cmd` 启动文件。启动文件集中保存在 agent data 目录的 `worktrees/launchers/` 下，它用 Node 直接运行对应 Worktree 自己的 `packages/coding-agent/src/web.ts`（经 `scripts/dev-fast-loader.mjs`），参数原样转发；PATH 中没有 `node` 时依次尝试 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%LOCALAPPDATA%\Programs` 下的 `nodejs\node.exe`，都找不到时提示安装 Node.js 并以非零码退出。服务不打开浏览器，启动后在窗口里打印实际地址 `MyHarness Web UI: <url>`。Worktree 缺少这两个文件时不生成启动文件。
-6. 分支完成后按 `C`，确认后将指定分支真实合并到 `main`。合并成功才会清理该分支的 Worktree 和专用启动文件；冲突会保留 Git 的真实冲突状态，不会自动覆盖或清理。
+1. 执行 `/git`，选择已登记的 Git 仓库，打开 Worktrees。
+2. 用 Create 为已有分支创建 Worktree，或从 `main` 创建新分支及 Worktree（`POST /api/git/worktrees/create`）。
+3. 用 Enter 进入。进入后，新的 Agent session 会以该 Worktree 的实际路径作为工作目录，后续文件修改不会写入其他 Worktree。
+4. 用「启动副本」在当前浏览器打开新标签页：服务端用 Node 直接运行该副本自己的 `packages/coding-agent/src/web.ts` 与 `scripts/dev-fast-loader.mjs`（`--port 0`），从启动日志的实际地址 `MyHarness Web UI: <url>` 取地址，服务本身不打开浏览器。副本缺少这两个文件时拒绝启动。
+5. 分支完成后可以「合回 `main`」：合并成功后副本标为已合并，作为只读记录保留。用 Combine 则是真实合并到 `main`，合并成功后才清理该分支的 Worktree 和遗留的启动文件；冲突会保留 Git 的真实冲突状态，不会自动覆盖或清理。
 
 Web UI 的分支浮层与输入框上方的「合回 main」按钮提供一键流程（创建并进入副本、合回 main、删除前的三选项确认），详见 [Web UI](web-ui.md) 的「Worktree 副本」一节。那里的合回不会删除副本：合并成功后副本标为已合并，作为只读记录保留。
 

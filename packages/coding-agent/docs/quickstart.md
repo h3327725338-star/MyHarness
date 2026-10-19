@@ -138,7 +138,7 @@ Images or text can be pasted with Ctrl+V; images can also be dragged into the We
 In the Web UI composer:
 
 ```text
-!npm run lint
+!npm run check
 ```
 
 The command output is sent to the model. Use `!!command` to run a command without adding its output to the model context.

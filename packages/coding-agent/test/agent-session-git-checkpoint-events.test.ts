@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@myharness/ai";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Real git work on Windows exceeds the 30s default when several such files run in parallel.
+vi.setConfig({ testTimeout: 90_000 });
+
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import {
 	collectGitCheckpointWorkingTreeChanges,

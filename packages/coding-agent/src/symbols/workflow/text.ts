@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 
-import type { CodePosition, CodeRange } from "../types.ts";
+import type { CodePosition } from "../types.ts";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -74,13 +74,6 @@ export function offsetOf(
 	if (start === undefined || line === undefined) return undefined;
 	if (position.character > line.length) return undefined;
 	return start + position.character;
-}
-
-export function textOfRange(snapshot: SourceSnapshot, range: CodeRange): string | undefined {
-	const start = offsetOf(snapshot, range.start);
-	const end = offsetOf(snapshot, range.end);
-	if (start === undefined || end === undefined || end < start) return undefined;
-	return snapshot.text.slice(start, end);
 }
 
 /** `12| code` lines, 1-based, for a 0-based inclusive line span. */

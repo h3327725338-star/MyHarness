@@ -8,7 +8,7 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 
 ## 设置
 
-在交互模式打开 `/settings` → **Web Search**：
+在 Web UI 打开 `/settings` → **Web Search**：
 
 | 选项 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |

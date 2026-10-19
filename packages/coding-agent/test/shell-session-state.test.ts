@@ -265,7 +265,7 @@ describe("shell session state and guard isolation", () => {
 			await pwshDef.execute(
 				"fail",
 				{
-					command: 'Write-Output "legitimate_pwsh_error"; cmd /c exit 17',
+					command: 'Write-Output "legitimate_pwsh_error"; node -e "process.exit(17)"',
 					preserve_state: true,
 				},
 				undefined,
@@ -528,7 +528,7 @@ describe("shell session state and guard isolation", () => {
 			await pwshDef.execute(
 				"failing-cmd",
 				{
-					command: '$env:PWSH_STABLE="corrupted"; cmd /c exit 21',
+					command: '$env:PWSH_STABLE="corrupted"; node -e "process.exit(21)"',
 					preserve_state: true,
 				},
 				undefined,

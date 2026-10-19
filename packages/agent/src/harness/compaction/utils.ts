@@ -77,33 +77,6 @@ export interface CompactionUserAnchor {
 	text: string;
 }
 
-export const MAX_COMPACTION_USER_ANCHORS = 2;
-
-/** Merge a sticky initial request with the newest folded request. */
-export function mergeCompactionUserAnchors(
-	previous: CompactionUserAnchor[] | undefined,
-	next: CompactionUserAnchor[] | undefined,
-): CompactionUserAnchor[] {
-	const valid = (anchor: unknown): anchor is CompactionUserAnchor =>
-		typeof anchor === "object" &&
-		anchor !== null &&
-		((anchor as CompactionUserAnchor).kind === "initial-request" ||
-			(anchor as CompactionUserAnchor).kind === "recent-request") &&
-		typeof (anchor as CompactionUserAnchor).text === "string" &&
-		(anchor as CompactionUserAnchor).text.length > 0;
-	let initial = previous?.find((anchor) => valid(anchor) && anchor.kind === "initial-request");
-	let recent = previous?.find((anchor) => valid(anchor) && anchor.kind === "recent-request");
-	for (const anchor of next ?? []) {
-		if (!valid(anchor)) continue;
-		if (anchor.kind === "initial-request") initial ??= anchor;
-		else recent = anchor;
-	}
-	if (initial && recent && initial.text === recent.text) return [initial];
-	return [initial, recent]
-		.filter((anchor): anchor is CompactionUserAnchor => anchor !== undefined)
-		.slice(0, MAX_COMPACTION_USER_ANCHORS);
-}
-
 /** Render deterministic continuity metadata into the active compaction message. */
 export function renderCompactionUserAnchors(userAnchors: CompactionUserAnchor[] | undefined): string {
 	if (!userAnchors || userAnchors.length === 0) return "";

@@ -38,7 +38,6 @@ const todoWriteSchema = Type.Object({
 
 export type TodoWriteToolInput = Static<typeof todoWriteSchema>;
 export type TodoWriteItem = Static<typeof todoItemSchema>;
-export type TodoWriteStatus = Static<typeof todoStatusSchema>;
 
 export interface TodoWriteCounts {
 	total: number;

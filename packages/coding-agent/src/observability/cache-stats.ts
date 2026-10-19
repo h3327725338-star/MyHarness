@@ -1,12 +1,6 @@
 import type { AssistantMessage } from "@myharness/ai";
 import type { SessionEntry } from "../session/types.ts";
 
-/**
- * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
- * likely cause of a miss. Anthropic's default cache TTL is 5 minutes.
- */
-export const CACHE_TTL_MS = 5 * 60 * 1000;
-
 /** Per-turn misses at or below this are cache breakpoint granularity noise. */
 const NOISE_FLOOR_TOKENS = 1024;
 

@@ -43,10 +43,6 @@ const DOCUMENT_TYPE: Record<string, "word" | "cell" | "slide"> = {
 	".odp": "slide",
 };
 
-export function isOfficeFile(file: string): boolean {
-	return path.extname(file).toLowerCase() in DOCUMENT_TYPE;
-}
-
 export interface OfficeSettings {
 	url?: string;
 	secret?: string;

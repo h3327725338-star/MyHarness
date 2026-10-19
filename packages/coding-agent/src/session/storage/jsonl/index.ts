@@ -59,8 +59,7 @@ import {
 } from "./sessions-index.ts";
 import { dropPendingSessionWrites, enqueueSessionAppend, flushSessionWrites } from "./write-batch.ts";
 
-export type { SessionAttachmentSummary, SessionDeleteImpact } from "./file-operations.ts";
-export { describeSessionDeleteImpact, hasSessionAttachments } from "./file-operations.ts";
+export { describeSessionDeleteImpact } from "./file-operations.ts";
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
@@ -373,24 +372,10 @@ function sessionCwdMatches(cwd: string | undefined, resolvedCwd: string): boolea
 	return cwd !== undefined && cwd !== "" && pathIdentityKey(cwd) === pathIdentityKey(resolvedCwd);
 }
 
-/** Resolve the old encoded-cwd directory for compatibility callers only. */
-export function getLegacySessionDirPath(cwd: string, agentDir: string = getAgentDir()): string {
-	const resolvedCwd = resolvePath(cwd);
-	const safePath = `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-	return join(resolvePath(agentDir), "sessions", safePath);
-}
-
 /** Resolve the Workspace-scoped Session container for the current Data root. */
 export function getDefaultSessionDirPath(cwd: string): string {
 	const context = resolveWorkspaceDataContext(cwd);
 	return getWorkspaceSessionsDir(context.dataRoot, context.workspace.workspaceId);
-}
-
-/** Default Workspace session container for `cwd`, creating it. Resolves Workspace from Data config. */
-export function getDefaultSessionDir(cwd: string): string {
-	const sessionDir = getDefaultSessionDirPath(cwd);
-	if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
-	return sessionDir;
 }
 
 /** Create `sessionDir` (including parents) when missing. No-op for empty paths. */

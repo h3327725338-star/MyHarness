@@ -117,10 +117,6 @@ function readRange(value: unknown): RawLspRange | undefined {
 	return { start, end };
 }
 
-export function readLspRange(value: unknown): RawLspRange | undefined {
-	return readRange(value);
-}
-
 export function readLspLocation(value: unknown): RawLspLocation | undefined {
 	if (!isJsonObject(value) || typeof value.uri !== "string") return undefined;
 	const range = readRange(value.range);

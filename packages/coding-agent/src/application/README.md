@@ -18,16 +18,13 @@
 | `resource-loader.ts` | `ResourceLoader` 接口和 `DefaultResourceLoader`：加载 Extension、Skill、Prompt Template、Theme、`AGENTS.md`/`CLAUDE.md`、`SYSTEM.md`/`APPEND_SYSTEM.md`，支持 `extendResources()` 和 `reload()` |
 | `project-trust.ts` | `resolveProjectTrusted()`：决定当前项目是否受信任（`AppMode` 当前只有 `web`），必要时经扩展事件或浏览器询问用户 |
 | `workspace-store.ts` | 只做 re-export：`WorkspaceStore` 的实现在 `data/workspace-store.ts` |
-| `experimental.ts` | `areExperimentalFeaturesEnabled()` |
 
 ### use-cases/ — 跨领域用例
 
 | 文件 | 用例 | 涉及的领域 |
 | --- | --- | --- |
 | `git-commit.ts` | `GitCommitUseCase`：`/commit` 的提交目标选择、提交信息生成、失败分类 | `git/checkpoints`、`git/commits`、`git/repository` |
-| `git-workspace.ts` | 当前 Workspace 的 Git 操作（无状态函数）：`/commit`、`/push`、`/restore` 和任务决策前的仓库检查，仓库初始化与身份设置，首次提交，任务检查点的完成/作废/恢复，任务变更检测 | `git/checkpoints`、`git/commits`、`git/repository` |
-| `local-git-repository.ts` | `LocalGitRepositoryUseCase`：本地仓库的添加、初始化、删除 `.git`、重命名、移动；移动正在使用的仓库时把会话、Workspace 记录和仓库记录一起迁移并在失败时回滚 | `git/local-repositories`、`data`（WorkspaceStore） |
-| `conversation-title.ts` | 会话标题：保存标题、用模型生成标题、批量给一个 Workspace 的会话生成标题 | `agent/runtime/conversation-title.ts`、`session/manager` |
+| `git-workspace.ts` | `inspectCommitTargetAsync()`：提交前的仓库状态与检查点归属检查（异步，不阻塞事件循环） | `git/checkpoints`、`git/repository` |
 | `git-push.ts` | `GitPushUseCase`：显式 Push、remote 校验、fast-forward 判断、CI 结果验收 | `git/repository`、`git/ci` |
 | `git-worktree.ts` | `GitWorktreeUseCase`：Worktree 的创建、切换、合并、删除 | `git/worktrees` |
 | `provider-settings.ts` | `ProviderSettingsUseCase`：Provider 启用/禁用后同步当前模型 | `agent/runtime`、`config/settings` |
@@ -35,7 +32,7 @@
 
 每个用例通过自己的 `*Host` 接口或参数向前端要它需要的能力（显示状态、询问用户、切换会话目录），不直接导入任何前端代码。
 
-Web 的变更类 Git 操作只经过这些用例（commit / push / worktree / local-repositories）：路由不直接复制 `git/` 规则。`WebHost` 为展示和收尾可直接读 `git/checkpoints` 与工作区变更检测、以及经 `AgentSessionRuntime` 调用 `SessionManager.open()` / `listAll()`（见 `modes/web/hub.ts`、`routes-sessions.ts`）。
+Web 的变更类 Git 操作只经过这些用例（commit / push / worktree）：路由不直接复制 `git/` 规则。`WebHost` 为展示和收尾可直接读 `git/checkpoints` 与工作区变更检测、以及经 `AgentSessionRuntime` 调用 `SessionManager.open()` / `listAll()`（见 `modes/web/hub.ts`、`routes-sessions.ts`）。
 
 ### 对外接口
 

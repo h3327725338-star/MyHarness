@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	discardChangesToHead,
 	hasChangesToDiscard,
@@ -14,6 +14,10 @@ import {
 	runGit,
 	setLocalGitIdentity,
 } from "../src/git/repository/integration.ts";
+
+// Every case here drives real Git command lines through several repositories. On a busy Windows
+// runner that is an order of magnitude slower than a unit test, so the file gets its own budget.
+vi.setConfig({ testTimeout: 90_000 });
 
 describe("discard changes to HEAD", () => {
 	const directories: string[] = [];

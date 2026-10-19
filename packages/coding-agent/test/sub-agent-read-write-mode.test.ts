@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DELEGATED_TOOL_NAMES,
 	DELEGATED_WRITE_TOOL_NAMES,
@@ -38,6 +38,15 @@ import { createInvestigationToolDefinition } from "../src/workflow/engine.ts";
 function trace(toolName: string, status: "completed" | "failed"): SubAgentToolTrace {
 	return { toolCallId: `call-${toolName}`, toolName, args: {}, status };
 }
+
+// This file spawns worker processes and Git worktrees; both are far slower than unit tests
+// on Windows, so give every test in the file a budget that covers real process startup.
+vi.setConfig({ testTimeout: 90_000 });
+
+// The delegated worker prefers MYHARNESS_PROCESS_ENTRY over MYHARNESS_CLI_ENTRY, and a host
+// process (desktop app, Web host) exports that variable to every child. Clearing it keeps the
+// fake worker entry selected no matter where the suite runs.
+delete process.env.MYHARNESS_PROCESS_ENTRY;
 
 describe("sub-agent runtime settings: capability mode", () => {
 	it("defaults to read-only and only honors the exact read-write value", () => {
@@ -428,7 +437,8 @@ describe("read-write dispatch in non-Git workspaces falls back to temp sandbox",
 		delete process.env.MYHARNESS_INTERNAL_SANDBOX_ORIGIN;
 		while (createdDirectories.length > 0) {
 			const directory = createdDirectories.pop();
-			if (directory) rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+			// Windows keeps handles on freshly created worktrees and Git objects, so retry longer.
+			if (directory) rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 		}
 	});
 
@@ -593,7 +603,8 @@ describe("read-write batch end-to-end through the fake delegated worker", () => 
 		else process.env.MYHARNESS_TEST_WORKER_ENV_DUMP = previousEnvFile;
 		while (createdDirectories.length > 0) {
 			const directory = createdDirectories.pop();
-			if (directory) rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+			// Windows keeps handles on freshly created worktrees and Git objects, so retry longer.
+			if (directory) rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 		}
 	});
 

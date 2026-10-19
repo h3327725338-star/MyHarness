@@ -7,7 +7,6 @@ import { LanguageServerRegistry } from "../lsp/language-server/registry.ts";
 import { initializationOptionsForServer } from "./server-options.ts";
 
 export const BUNDLED_CODE_INTELLIGENCE_VERSION = "0.4.0";
-export const BUNDLED_NODE_VERSION = "22.19.0";
 
 export type BundledServerKind = "node-package" | "native-binary" | "portable-ruby";
 

@@ -32,8 +32,6 @@ const MAX_FILES_WITH_STATS = 300;
 const MAX_CARD_PATCH_CHARS = 200_000;
 const MAX_CARD_PATCH_CHARS_PER_RUN = 1_000_000;
 
-export type ChangeScope = "session" | "run" | "worktree";
-
 /** Tools whose file changes are observed from their own calls: the before/after content of each file they name. */
 export type FileMutationTool = "edit" | "write" | "apply_patch" | "apply_rename";
 

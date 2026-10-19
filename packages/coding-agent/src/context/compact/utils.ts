@@ -235,170 +235,14 @@ export interface CompactionUserAnchor {
 	text: string;
 }
 
-/** Keep the deterministic task anchors small enough that they cannot crowd out
- * the generated handoff summary or the active tool tail. */
-export const MAX_COMPACTION_USER_ANCHORS = 2;
+const _EXECUTION_SCOPE_MAX_CHARS = 200;
+const _EXECUTION_SCOPE_VALUE_MAX_CHARS = 120;
+const _EXECUTION_EVIDENCE_HEAD_CHARS = 160;
+const _EXECUTION_EVIDENCE_TAIL_CHARS = 80;
 
-/** Hard cap on records carried in one compaction entry (carry-forward + new). */
-export const MAX_EXECUTION_RECORDS = 24;
-
-const EXECUTION_SCOPE_MAX_CHARS = 200;
-const EXECUTION_SCOPE_VALUE_MAX_CHARS = 120;
-const EXECUTION_EVIDENCE_HEAD_CHARS = 160;
-const EXECUTION_EVIDENCE_TAIL_CHARS = 80;
-const EXECUTION_ARTIFACT_MAX_CHARS = 400;
-
-function boundExecutionText(text: string, maxChars: number): string {
+function _boundExecutionText(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}…[+${text.length - maxChars} chars]`;
-}
-
-/** Build the bounded invocation scope for a tool call. */
-export function summarizeToolCallScope(args: unknown): string {
-	if (args === undefined || args === null) return "";
-	if (typeof args !== "object") return boundExecutionText(String(args), EXECUTION_SCOPE_MAX_CHARS);
-	const parts: string[] = [];
-	for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
-		let text: string;
-		try {
-			text = typeof value === "string" ? value : JSON.stringify(value);
-		} catch {
-			text = String(value);
-		}
-		if (text.length > EXECUTION_SCOPE_VALUE_MAX_CHARS) {
-			text = `${text.slice(0, EXECUTION_SCOPE_VALUE_MAX_CHARS)}…[+${text.length - EXECUTION_SCOPE_VALUE_MAX_CHARS} chars]`;
-		}
-		parts.push(`${key}=${text}`);
-	}
-	if (parts.length === 0) return "";
-	return boundExecutionText(parts.join("; "), EXECUTION_SCOPE_MAX_CHARS);
-}
-
-/** Build bounded head+tail evidence from a tool result's text. */
-export function summarizeToolResultEvidence(text: string): string {
-	if (text.length <= EXECUTION_EVIDENCE_HEAD_CHARS + EXECUTION_EVIDENCE_TAIL_CHARS) return text;
-	const head = text.slice(0, EXECUTION_EVIDENCE_HEAD_CHARS);
-	const tail = text.slice(-EXECUTION_EVIDENCE_TAIL_CHARS);
-	return `${head}\n…[${text.length - head.length - tail.length} chars omitted]…\n${tail}`;
-}
-
-/**
- * Extract tool execution facts from one message into a keyed record map.
- *
- * The map is keyed by tool call id so an assistant tool-call block and its
- * tool result update the same record. Records without a call id (or results
- * whose call id is missing) are tracked by an empty key.
- */
-export function extractToolExecutionsFromMessage(
-	message: AgentMessage,
-	records: Map<string, ToolExecutionRecord>,
-): void {
-	if (message.role === "assistant" && Array.isArray(message.content)) {
-		for (const block of message.content) {
-			if (typeof block !== "object" || block === null) continue;
-			if (!("type" in block) || block.type !== "toolCall") continue;
-			if (!("name" in block) || typeof block.name !== "string") continue;
-			const callId = "id" in block && typeof block.id === "string" ? block.id : "";
-			const key = `call:${callId}`;
-			const existing = records.get(key);
-			records.set(key, {
-				tool: block.name,
-				status: existing?.status ?? "unknown",
-				scope: existing?.scope ?? summarizeToolCallScope(block.arguments),
-				artifactPath: existing?.artifactPath,
-				evidence: existing?.evidence,
-			});
-		}
-	} else if (message.role === "toolResult") {
-		const result = message as Extract<AgentMessage, { role: "toolResult" }>;
-		const callId = result.toolCallId ?? "";
-		const key = `call:${callId}`;
-		const existing = records.get(key);
-		const content = contentText(result.content, "");
-		const details = (result.details ?? {}) as Record<string, unknown>;
-		const artifactPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
-		records.set(key, {
-			tool: existing?.tool ?? result.toolName ?? "unknown",
-			status: result.isError === true ? "failed" : "completed",
-			scope: existing?.scope ?? "",
-			artifactPath:
-				existing?.artifactPath ??
-				(artifactPath ? boundExecutionText(artifactPath, EXECUTION_ARTIFACT_MAX_CHARS) : undefined),
-			evidence: existing?.evidence ?? (content ? summarizeToolResultEvidence(content) : undefined),
-		});
-	}
-}
-
-/**
- * Merge carried-forward records with newly extracted records.
- *
- * - Carried records come first (older executions stay known).
- * - New records are appended; duplicates (same tool call id, or same
- *   tool + scope when no call id exists) are replaced by the newer record.
- * - The merged list is bounded to {@link MAX_EXECUTION_RECORDS}; when the cap
- *   is exceeded the oldest records are dropped, so the metadata never grows
- *   without bound across repeated compactions.
- */
-export function mergeToolExecutions(
-	previous: ToolExecutionRecord[] | undefined,
-	next: ToolExecutionRecord[] | undefined,
-): ToolExecutionRecord[] {
-	const merged: ToolExecutionRecord[] = [];
-	const seen = new Set<string>();
-	const push = (record: ToolExecutionRecord): void => {
-		const key = `${record.tool}\u0000${record.scope}`;
-		if (seen.has(key)) return;
-		seen.add(key);
-		merged.push(record);
-	};
-	if (Array.isArray(previous)) {
-		for (const record of previous) push(record);
-	}
-	if (Array.isArray(next)) {
-		for (const record of next) push(record);
-	}
-	if (merged.length <= MAX_EXECUTION_RECORDS) return merged;
-	return merged.slice(merged.length - MAX_EXECUTION_RECORDS);
-}
-
-/**
- * Merge user-task anchors across compaction generations.
- *
- * The initial request is sticky, while the recent request is replaced by the
- * newest one.  This prevents the first task/constraints from disappearing on a
- * later compaction without allowing a growing transcript of every user turn.
- */
-export function mergeCompactionUserAnchors(
-	previous: CompactionUserAnchor[] | undefined,
-	next: CompactionUserAnchor[] | undefined,
-): CompactionUserAnchor[] {
-	const valid = (anchor: unknown): anchor is CompactionUserAnchor =>
-		typeof anchor === "object" &&
-		anchor !== null &&
-		((anchor as CompactionUserAnchor).kind === "initial-request" ||
-			(anchor as CompactionUserAnchor).kind === "recent-request") &&
-		typeof (anchor as CompactionUserAnchor).text === "string" &&
-		(anchor as CompactionUserAnchor).text.length > 0;
-	let initial: CompactionUserAnchor | undefined = previous?.find(
-		(anchor) => valid(anchor) && anchor.kind === "initial-request",
-	);
-	let recent: CompactionUserAnchor | undefined = previous?.find(
-		(anchor) => valid(anchor) && anchor.kind === "recent-request",
-	);
-
-	for (const anchor of next ?? []) {
-		if (!valid(anchor)) continue;
-		if (anchor.kind === "initial-request") {
-			initial ??= anchor;
-		} else {
-			recent = anchor;
-		}
-	}
-
-	if (initial && recent && initial.text === recent.text) return [initial];
-	return [initial, recent]
-		.filter((anchor): anchor is CompactionUserAnchor => anchor !== undefined)
-		.slice(0, MAX_COMPACTION_USER_ANCHORS);
 }
 
 /**
@@ -437,16 +281,6 @@ export function renderCompactionContinuity(
 		sections.push(lines.join("\n"));
 	}
 	return sections.join("\n");
-}
-
-/**
- * Deterministic, program-generated context section listing the tool
- * executions that must survive compaction. This is NOT produced by the
- * summary model; it is rendered from structured metadata so the fact "this
- * investigation already ran" cannot be accidentally dropped.
- */
-export function renderExecutionContinuity(executions: ToolExecutionRecord[] | undefined): string {
-	return renderCompactionContinuity(undefined, executions);
 }
 
 // ============================================================================

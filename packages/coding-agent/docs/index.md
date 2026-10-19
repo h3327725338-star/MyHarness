@@ -42,7 +42,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Extensions](extensions.md) — TypeScript modules for tools, commands, events, and custom UI.
 - [Skills](skills.md) — reusable, on-demand Agent Skills.
 - [Prompt templates](prompt-templates.md) — reusable prompts exposed through command completion.
-- [Themes](themes.md) — built-in and custom terminal themes.
+- [Themes](themes.md) — Web 外观配色（Settings → Appearance）与旧 Theme 文件的兼容加载。
 - [MyHarness packages](packages.md) — package extensions, skills, prompts, and themes.
 - [Custom models](models.md) — add model entries for a configured Provider API.
 - [Custom providers](custom-provider.md) — implement custom APIs and OAuth flows.

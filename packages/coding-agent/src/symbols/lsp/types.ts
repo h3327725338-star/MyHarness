@@ -28,19 +28,6 @@ export type JsonRpcId = number | string;
 // JSON-RPC 2.0 消息
 // =============================================================================
 
-export interface JsonRpcRequestMessage {
-	jsonrpc: "2.0";
-	id: JsonRpcId;
-	method: string;
-	params?: JsonValue;
-}
-
-export interface JsonRpcNotificationMessage {
-	jsonrpc: "2.0";
-	method: string;
-	params?: JsonValue;
-}
-
 /** 宽松的 error 结构（type alias：带隐式 index signature，可直接作 JsonValue 使用）。 */
 export type JsonRpcErrorObject = {
 	code: number;
@@ -48,34 +35,9 @@ export type JsonRpcErrorObject = {
 	data?: JsonValue;
 };
 
-/** 宽松的 response 结构：result 与 error 二选一，由接收方校验。 */
-export interface JsonRpcResponseMessage {
-	jsonrpc: "2.0";
-	id: JsonRpcId | null;
-	result?: JsonValue;
-	error?: JsonRpcErrorObject;
-}
-
 // =============================================================================
 // LSP 最小类型 subset（与 Code Intelligence 领域模型严格分离）
 // =============================================================================
-
-/** LSP Position：0-based，character 为 UTF-16 code unit 偏移（协议默认编码）。 */
-export interface LspPosition {
-	line: number;
-	character: number;
-}
-
-/** LSP Range：end 为 exclusive。 */
-export interface LspRange {
-	start: LspPosition;
-	end: LspPosition;
-}
-
-export interface LspLocation {
-	uri: string;
-	range: LspRange;
-}
 
 export type LspClientInfo = {
 	name: string;

@@ -29,9 +29,6 @@ import { createHash } from "node:crypto";
 /** Maximum cached keys; each entry is one small result object, so the table stays trivial. */
 export const MAX_IDEMPOTENCY_ENTRIES = 200;
 
-/** Error code carried in details when a repeat mutating call is refused as a duplicate. */
-export const TOOL_IDEMPOTENT_DUPLICATE_CODE = "TOOL_IDEMPOTENT_DUPLICATE";
-
 /** Separator inside idempotency keys: NUL, which cannot appear in scopes carrying cwd paths. */
 const KEY_SEPARATOR: string = String.fromCharCode(0);
 

@@ -2,11 +2,7 @@ import { accessSync, constants, existsSync, readFileSync, realpathSync } from "f
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import {
-	getGlobalSettingsPath,
-	getDataDir as getProjectDataDir,
-	getSessionsDir as getProjectSessionsDir,
-} from "./config/paths/index.ts";
+import { getDataDir as getProjectDataDir, getSessionsDir as getProjectSessionsDir } from "./config/paths/index.ts";
 import { spawnProcessSync } from "./utils/child-process.ts";
 import { normalizePath } from "./utils/paths.ts";
 
@@ -462,11 +458,6 @@ export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));
 }
 
-/** Get path to CHANGELOG.md */
-export function getChangelogPath(): string {
-	return resolve(join(getPackageDir(), "CHANGELOG.md"));
-}
-
 // =============================================================================
 // App Config (from package.json myHarnessConfig)
 // =============================================================================
@@ -489,9 +480,7 @@ try {
 }
 
 const myHarnessConfigName: string | undefined = pkg.myHarnessConfig?.name;
-export const PACKAGE_NAME: string = pkg.name || "@myharness/coding-agent";
 export const APP_NAME: string = myHarnessConfigName || "myharness";
-export const APP_TITLE: string = myHarnessConfigName ? APP_NAME : "MyHarness";
 export const CONFIG_DIR_NAME: string = pkg.myHarnessConfig?.configDir || ".myharness";
 export const VERSION: string = pkg.version || "0.0.0";
 
@@ -516,39 +505,9 @@ export function getAgentDir(): string {
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
-/** Get path to user's custom themes directory */
-export function getCustomThemesDir(): string {
-	return join(getAgentDir(), "themes");
-}
-
-/** Get path to models.json */
-export function getModelsPath(): string {
-	return join(getAgentDir(), "models.json");
-}
-
-/** Get path to auth.json */
-export function getAuthPath(): string {
-	return join(getAgentDir(), "auth.json");
-}
-
-/** Get path to settings.json */
-export function getSettingsPath(): string {
-	return getGlobalSettingsPath(getAgentDir());
-}
-
-/** Get path to tools directory */
-export function getToolsDir(): string {
-	return join(getAgentDir(), "tools");
-}
-
 /** Get path to managed binaries directory (fd, rg) */
 export function getBinDir(): string {
 	return join(getAgentDir(), "bin");
-}
-
-/** Get path to prompt templates directory */
-export function getPromptsDir(): string {
-	return join(getAgentDir(), "prompts");
 }
 
 /** Get the legacy flat Session root used as the first-stage migration source. */
@@ -559,9 +518,4 @@ export function getSessionsDir(projectRoot?: string): string {
 /** Get the project-local root for user-persisted runtime data (<project root>/data). */
 export function getDataDir(projectRoot?: string): string {
 	return getProjectDataDir(projectRoot);
-}
-
-/** Get path to debug log file */
-export function getDebugLogPath(): string {
-	return join(getAgentDir(), `${APP_NAME}-debug.log`);
 }

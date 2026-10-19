@@ -17,9 +17,6 @@
  */
 
 import { join } from "node:path";
-import { correlatePrompt } from "./prompt-correlation.ts";
-import { WorkspaceStore } from "../../data/workspace-store.ts";
-import { listWorkspaceSources } from "../../data/workspace-sources.ts";
 import type {
 	Agent,
 	AgentEvent,
@@ -51,6 +48,8 @@ import {
 } from "../../context/context-budget.ts";
 import { getModelContextWindow } from "../../context/context-window.ts";
 import { AgentSessionContextCoordinator } from "../../context/coordinator.ts";
+import { listWorkspaceSources } from "../../data/workspace-sources.ts";
+import { WorkspaceStore } from "../../data/workspace-store.ts";
 import { exportAgentSessionToHtml } from "../../exports/html/session-export.ts";
 import { exportSessionBranchToJsonl } from "../../exports/jsonl/session-export.ts";
 import type {
@@ -144,6 +143,7 @@ import {
 import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager, type MemoryMaintenanceStatus } from "./auto-memory.ts";
 import type { CustomMessage } from "./messages.ts";
+import { correlatePrompt } from "./prompt-correlation.ts";
 import {
 	type AgentRole,
 	isGatedBuiltinToolName,
@@ -278,7 +278,7 @@ export interface AgentSessionConfig {
 	codeIntelligence?: SymbolsCodeIntelligenceServices;
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
-	/** Initial active built-in tool names. Default: [read, bash, pwsh, edit, write, symbols, github] */
+	/** Initial active built-in tool names. Default: `SessionToolRegistry.getStartupActiveToolNames()` (see `tools/session-tool-registry.ts`). */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];

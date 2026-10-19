@@ -3,11 +3,11 @@ import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils
  * Shared test utilities for coding-agent tests.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@myharness/agent-core";
-import type { Model, OAuthCredentials } from "@myharness/ai";
+import type { Model } from "@myharness/ai";
 import { streamSimple } from "@myharness/ai/compat";
 import { AgentSession } from "../src/agent/runtime/agent-session.ts";
 import type { ResourceLoader } from "../src/application/resource-loader.ts";
@@ -29,80 +29,6 @@ import { SessionManager } from "../src/session/manager/index.ts";
  * describe.skipIf(!API_KEY)
  */
 export const API_KEY = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
-
-// ============================================================================
-// OAuth API key resolution from ~/.myharness/agent/auth.json
-// ============================================================================
-
-const AUTH_PATH = join(homedir(), ".myharness", "agent", "auth.json");
-
-type ApiKeyCredential = {
-	type: "api_key";
-	key: string;
-};
-
-type OAuthCredentialEntry = {
-	type: "oauth";
-} & OAuthCredentials;
-
-type AuthCredential = ApiKeyCredential | OAuthCredentialEntry;
-
-type AuthStorageData = Record<string, AuthCredential>;
-
-function loadAuthStorage(): AuthStorageData {
-	if (!existsSync(AUTH_PATH)) {
-		return {};
-	}
-	try {
-		const content = readFileSync(AUTH_PATH, "utf-8");
-		return JSON.parse(content);
-	} catch {
-		return {};
-	}
-}
-
-/**
- * Resolve API key for a provider from ~/.myharness/agent/auth.json
- *
- * For API key credentials, returns the key directly.
- * For OAuth credentials, returns the access token (refreshing if expired and saving back).
- *
- */
-export async function resolveApiKey(provider: string): Promise<string | undefined> {
-	const storage = loadAuthStorage();
-	const entry = storage[provider];
-
-	if (!entry) return undefined;
-
-	if (entry.type === "api_key") {
-		return entry.key;
-	}
-
-	if (entry.type === "oauth") {
-		return undefined;
-	}
-
-	return undefined;
-}
-
-/**
- * Check if a provider has credentials in ~/.myharness/agent/auth.json
- */
-export function hasAuthForProvider(provider: string): boolean {
-	const storage = loadAuthStorage();
-	return provider in storage;
-}
-
-/** Path to the real MyHarness agent config directory */
-export const MYHARNESS_AGENT_DIR = join(homedir(), ".myharness", "agent");
-
-/**
- * Get an AuthStorage instance backed by ~/.myharness/agent/auth.json
- * Use this for tests that need real OAuth credentials.
- */
-export function getRealAuthStorage(): AuthStorage {
-	return AuthStorage.create(AUTH_PATH);
-}
 
 /**
  * Create a minimal user message for testing.
@@ -277,41 +203,4 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	};
 
 	return { session, sessionManager, tempDir, cleanup };
-}
-
-/**
- * Build a session tree for testing using SessionManager.
- * Returns the IDs of all created entries.
- *
- * Example tree structure:
- * ```
- * u1 -> a1 -> u2 -> a2
- *          -> u3 -> a3  (branch from a1)
- * u4 -> a4              (another root)
- * ```
- */
-export function buildTestTree(
-	session: SessionManager,
-	structure: {
-		messages: Array<{ role: "user" | "assistant"; text: string; branchFrom?: string }>;
-	},
-): Map<string, string> {
-	const ids = new Map<string, string>();
-
-	for (const msg of structure.messages) {
-		if (msg.branchFrom) {
-			const branchFromId = ids.get(msg.branchFrom);
-			if (!branchFromId) {
-				throw new Error(`Cannot branch from unknown entry: ${msg.branchFrom}`);
-			}
-			session.branch(branchFromId);
-		}
-
-		const id =
-			msg.role === "user" ? session.appendMessage(userMsg(msg.text)) : session.appendMessage(assistantMsg(msg.text));
-
-		ids.set(msg.text, id);
-	}
-
-	return ids;
 }

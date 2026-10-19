@@ -22,6 +22,10 @@
 | `apply-rename.ts` | `apply_rename` 工具：按 rename_preview 的计划写入；与 `symbols` 同受 `codeIntelligence.symbolsEnabled` 控制，复用 apply_patch 的文件队列与整体回滚，任一文件哈希变化则整份拒绝 |
 | `workspace.ts` | `workspace` 工具（仅桌面端）：内置浏览器与右侧工作区的结构化控制。浏览器命令经服务进程到 Electron 主进程的 IPC 通道操作 `WebContentsView`（含导航、DOM/可访问性/交互元素、点击/输入/滚动、页内查找、工作区文件上传、截图、下载取消/重试、网络与站点权限状态），工作区命令转发给页面（页面拥有标签列表和媒体元素）并以其回报的状态为准；只在 `MYHARNESS_DESKTOP_HOST=1` 且 IPC 已连接时注册。站点权限只能由页面里的用户决定，工具不能授予。 |
 | `symbols-runtime.ts` | `symbols` 工具需要的运行时端口：索引、路由、安装状态 |
+| `agent-tasks.ts` | `agent_tasks` 工具：主智能体查看并停止本会话的多智能体派发（`agent` 批次、`workflow`、`ultracode`）；停止会返回任务已经产出的部分结果，工具只负责格式化，派发由会话（`agent/delegation/background-work.ts`）持有 |
+| `dispatch-control.ts` | 多智能体派发工具与会话之间的契约：登记派发、停止单个任务或整次派发、主运行被中断时把仍在工具调用里的派发改到后台 |
+| `symbols-output.ts` | `SymbolsOutputPages`：`symbols` 工具大结果的有界快照分页（最多 8 份、5 分钟过期），续读用快照而不是重跑昂贵的 LSP 查询 |
+| `tool-idempotency.ts` | 变更类工具（`write`/`edit`/`bash`）的幂等键：键是 tool + 会话作用域 + 规范化参数的哈希，在同一会话内重放上一次结果而不重复执行 |
 
 ### contracts/
 
@@ -82,7 +86,8 @@
 | `tool.ts` | `web_search` / `web_fetch` 的 schema 与结果格式 |
 | `service.ts` | `WebSearchService`：多查询 × 多引擎、合并去重排序、下载上限、缓存、引擎测试 |
 | `engine-runner.ts` | 先走 HTTP，被拦截时按规则切到浏览器；引擎冷却 |
-| `engines/` | 各引擎的请求与结果解析：`google.ts`、`bing.ts`、`duckduckgo.ts`、`brave.ts`、`tavily.ts`；`index.ts` 是引擎表 |
+| `engines/` | 各引擎的请求与结果解析：`google.ts`、`bing.ts`、`duckduckgo.ts`、`brave.ts`、`tavily.ts`；`index.ts` 是引擎表，`types.ts` 是引擎查询与结果类型，`common.ts` 是共用的浏览器头、HTML 解码与结果清洗 |
+| `redirect-cookies.ts` | `RedirectCookies`：跟随重定向时按 host 保存并重放 Cookie |
 | `transport.ts` | HTTP 与浏览器两种传输的契约 |
 | `http.ts` | 普通 HTTP 请求与解码 |
 | `browser/` | 本机浏览器兜底：专用 profile、Firefox（扩展 + 本地桥 + RDP）、Chrome/Edge（CDP）、浏览器选择、Cookie 导入、验证窗口置前 |
@@ -115,4 +120,4 @@
 - Shell 执行、输出截断、结果落盘各只有一份实现，新工具复用它们。
 - 文件写操作（`edit`、`write`）修改已存在文件时要求“先读后改”，改前校验读取状态与文件是否过期，写后刷新状态；非本地文件系统（自定义 operations）跳过校验。`apply_patch` 的 Update 与 Delete 同样执行这一检查（它只使用本地文件系统）。
 - Web Search 的搜索规划（搜什么、读哪些页）由 Agent 决定；工具只负责并发、缓存、取消、超时和逐项诊断。任何下载都必须先过 `url.ts` 的检查。
-- 相关测试：`tools.test.ts`、`read-state.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`memory-intelligence.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`tool-execution-*.test.ts`、`ask-user-and-todo-tools.test.ts`。
+- 相关测试：`tools.test.ts`、`read-state.test.ts`、`tool-result-persistence.test.ts`、`bash-executor.test.ts`、`read-only-bash-guard*.test.ts`、`file-mutation-queue.test.ts`、`sub-agent.test.ts`、`symbols-tool-*.test.ts`、`github-tool.test.ts`、`memory-intelligence.test.ts`、`web-search*.test.ts`、`web-fetch-documents.test.ts`、`ask-user-and-todo-tools.test.ts`。

@@ -2,13 +2,11 @@ import type { LspClient } from "../lsp/client.ts";
 import type { LanguageServerManager } from "../lsp/language-server/manager.ts";
 import type {
 	CallHierarchyResult,
-	CodePosition,
 	DefinitionResult,
 	DiagnosticsResult,
 	FileSymbolsResult,
 	HoverResult,
 	ImplementationsResult,
-	IntelligenceResult,
 	ReferencesResult,
 	RenameResult,
 	SymbolTarget,
@@ -135,18 +133,4 @@ export interface SemanticAdvancedBackendApi extends SemanticBackendApi {
 		target: Extract<SymbolTarget, { type: "position" }>,
 		options: SemanticBackendQueryOptions,
 	): Promise<TypeHierarchyResult>;
-}
-
-export type SemanticQueryResult =
-	| DefinitionResult
-	| ReferencesResult
-	| ImplementationsResult
-	| FileSymbolsResult
-	| DiagnosticsResult
-	| IntelligenceResult<unknown>;
-
-export interface SemanticPositionTarget {
-	readonly type: "position";
-	readonly path: string;
-	readonly position: CodePosition;
 }

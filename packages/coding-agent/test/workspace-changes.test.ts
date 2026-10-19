@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Real git work on Windows exceeds the 30s default when several such files run in parallel.
+vi.setConfig({ testTimeout: 90_000 });
+
 import {
 	createGitCheckpoint,
 	type GitCheckpoint,

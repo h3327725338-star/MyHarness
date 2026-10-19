@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBashToolDefinition } from "../src/tools/shell/bash.ts";
 import {
 	BACKGROUND_JOB_MAX_CONCURRENT,
@@ -17,6 +17,9 @@ import {
 import { createPwshToolDefinition } from "../src/tools/shell/pwsh.ts";
 import { resolveSessionScope } from "../src/tools/shell/session-scope.ts";
 import { killProcessTreeAndWait } from "../src/utils/shell.ts";
+
+// Killing real process trees on Windows is slower than the defaults allow when the suite runs in parallel.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 60_000 });
 
 function makeSessionCtx(sessionId: string) {
 	return {

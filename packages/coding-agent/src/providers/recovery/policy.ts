@@ -133,16 +133,6 @@ export function isPermanentProviderFailure(errorMessage: string | undefined): bo
 }
 
 /**
- * Whether the raw error text looks like a recoverable protocol/stream failure.
- * String-only variant, used where only the message is available.
- */
-export function isRecoverableProtocolFailure(errorMessage: string | undefined): boolean {
-	if (!errorMessage) return false;
-	if (isPermanentProviderFailure(errorMessage)) return false;
-	return RECOVERABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(errorMessage));
-}
-
-/**
  * Whether a failed assistant turn should be recovered instead of ending the
  * Task.
  *

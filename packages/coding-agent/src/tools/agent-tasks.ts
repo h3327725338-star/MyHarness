@@ -7,7 +7,7 @@
  */
 
 import type { AgentTool } from "@myharness/agent-core";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import type {
 	DispatchStopReport,
 	DispatchStopTarget,
@@ -30,8 +30,6 @@ const agentTasksSchema = Type.Object({
 	),
 	all: Type.Optional(Type.Boolean({ description: "Stop every running dispatch" })),
 });
-
-export type AgentTasksToolInput = Static<typeof agentTasksSchema>;
 
 export interface AgentTasksToolOptions {
 	list: () => SubAgentDispatchState[];

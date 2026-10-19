@@ -118,12 +118,6 @@ function resolveTemplate(parts: TemplatePart[], env?: Record<string, string>): s
 	return resolved;
 }
 
-export function getConfigValueEnvVarName(config: string): string | undefined {
-	const reference = parseConfigValueReference(config);
-	if (reference.type !== "template") return undefined;
-	return reference.parts.length === 1 && reference.parts[0]?.type === "env" ? reference.parts[0].name : undefined;
-}
-
 export function getConfigValueEnvVarNames(config: string): string[] {
 	const reference = parseConfigValueReference(config);
 	return reference.type === "template" ? getTemplateEnvVarNames(reference.parts) : [];
@@ -272,24 +266,6 @@ export function resolveConfigValueOrThrow(config: string, description: string, e
 	}
 
 	throw new Error(`Failed to resolve ${description}`);
-}
-
-/**
- * Resolve all header values using the same resolution logic as API keys.
- */
-export function resolveHeaders(
-	headers: Record<string, string> | undefined,
-	env?: Record<string, string>,
-): Record<string, string> | undefined {
-	if (!headers) return undefined;
-	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(headers)) {
-		const resolvedValue = resolveConfigValue(value, env);
-		if (resolvedValue) {
-			resolved[key] = resolvedValue;
-		}
-	}
-	return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
 export function resolveHeadersOrThrow(

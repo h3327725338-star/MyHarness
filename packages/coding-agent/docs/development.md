@@ -92,8 +92,14 @@ binary 是独立的未来 release 路径，不能从本地 build 或源码目录
 处理 package assets 时**始终使用 `src/config.ts`**：
 
 ```typescript
-  import { getPackageDir, getThemesDir } from "./config.ts";
+  import { getPackageDir } from "./config.ts";
 ```
+
+包内静态资源用 `src/config.ts` 的 `getPackageDir()`、`getWebUiDir()`、
+`getExportTemplateDir()`、`getDocsPath()` 等 helper 定位。主题 JSON 不从
+`config.ts` 取：它只经 `src/themes/loader/index.ts` 的 `loadThemeResources()`
+从全局/项目/显式路径加载并校验（Web 配色与终端渲染无关，见
+[`themes.md`](themes.md)）。
 
 不要直接使用 `__dirname` 处理 package assets。
 

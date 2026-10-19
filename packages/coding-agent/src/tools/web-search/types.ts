@@ -1,7 +1,5 @@
 import type { ResolvedWebSearchSettings, WebSearchEngineId } from "../../config/settings/types.ts";
 
-export type WebSearchToolName = "web_search" | "web_fetch";
-
 export type WebSearchFailureCode =
 	| "aborted"
 	| "blocked"

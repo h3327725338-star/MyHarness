@@ -44,12 +44,6 @@ export function detectDelegatedWorkspace(cwd: string): { ok: true; isGit: boolea
 	}
 }
 
-/** Compatibility helper for callers that only need a boolean. */
-export function isGitRepository(cwd: string): boolean {
-	const result = detectDelegatedWorkspace(cwd);
-	return result.ok && result.isGit;
-}
-
 /** A single uncommitted file larger than this stays out of the worktree (reported in `importNotes`). */
 const MAX_IMPORTED_FILE_BYTES = 50 * 1024 * 1024;
 /** Longest list of individual skipped paths put into `importNotes`; the rest is summarized as a count. */

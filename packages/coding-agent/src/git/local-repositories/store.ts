@@ -386,11 +386,6 @@ function getRepositoryDirectoryMovePaths(
 	return { source, destination, destinationParent, sameLogicalPath };
 }
 
-/** Validate a directory move without changing the filesystem. */
-export function validateRepositoryDirectoryMove(sourcePath: string, destinationPath: string): void {
-	getRepositoryDirectoryMovePaths(sourcePath, destinationPath);
-}
-
 /**
  * Start a reversible directory move. Same-volume moves use one rename. For an
  * EXDEV move, the source is atomically parked only after a complete temporary

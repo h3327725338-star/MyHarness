@@ -17,7 +17,7 @@
 | 目录 | 当前源码职责 | 修改时保持的边界 | 后续代码应放在哪里 |
 | --- | --- | --- | --- |
 | `agent/` | `AgentSession` 生命周期与运行状态、runtime/sdk、delegation（含后台任务登记）、vision | 复用 AgentSession/runtime；不把展示层 I/O 放进 Agent runtime；板块规则放回各领域目录，`AgentSession` 只编排 | session lifecycle、后台 Explore、delegation/vision |
-| `application/` | 跨领域 use-case（位于 `use-cases/` 下）、`ResourceLoader`、WorkspaceStore facade；`use-cases/git-push.ts` 编排显式 Push、remote 验证和 CI 验收；`use-cases/git-workspace.ts`、`use-cases/local-git-repository.ts`、`use-cases/conversation-title.ts` 是前端访问 Git 与会话标题的入口 | 只编排领域模块；持久化实现留在 `data/`/`session/`；不把 Push 细节塞进展示层 | 跨 Git/Provider/Session/Workspace 的流程 |
+| `application/` | 跨领域 use-case（位于 `use-cases/` 下）、`ResourceLoader`、WorkspaceStore facade；`use-cases/git-push.ts` 编排显式 Push、remote 验证和 CI 验收；`use-cases/git-workspace.ts` 提供提交前的仓库与检查点检查 | 只编排领域模块；持久化实现留在 `data/`/`session/`；不把 Push 细节塞进展示层 | 跨 Git/Provider/Session/Workspace 的流程 |
 | `bun/` | Bun CLI、Bedrock 注册、sandbox 恢复 | Bun-specific 适配不反向污染普通 Node CLI | Bun 编译和运行时兼容 |
 | `startup/` | Web 启动参数、帮助、文件输入、trust、浏览器 slash commands、设置表与延迟启动维护（`deferred-maintenance.ts`） | 不复制 domain/runtime 业务 | Web 启动参数与命令协议 |
 | `config/` | paths、SettingsManager、settings storage/migration、Project Trust | 配置格式、路径和信任语义集中管理 | settings、paths、trust、config migration |

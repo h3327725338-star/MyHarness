@@ -1,8 +1,8 @@
 # llama.cpp
 
-> **状态说明（2026-08）**：当前代码版本尚未实现内置的 llama.cpp router 支持。源码中不存在 `LLAMA_BASE_URL`/`LLAMA_API_KEY` 环境变量处理，也没有 `/login`、`/llama` 命令。本文档描述的目标功能。目前可以通过扩展（`pi.registerProvider`）或 `models.json` 自定义 Provider 的方式接入 llama.cpp，见 [providers.md](providers.md#llamacpp) 和 [extensions.md](extensions.md)。
+> **状态说明（2026-08）**：MyHarness 没有内置的 llama.cpp router 支持。源码中不存在 `LLAMA_BASE_URL`/`LLAMA_API_KEY` 环境变量处理，也没有 `/login`、`/llama` 命令。接入方式是把它当作自定义 Provider（`models.json` 或 `pi.registerProvider`），下文描述这条路，另见 [providers.md](providers.md#llamacpp) 和 [extensions.md](extensions.md)。
 
-MyHarness supports the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server. The router discovers multiple GGUF models and loads or unloads them on demand.
+MyHarness reaches the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server through a custom Provider. The router discovers multiple GGUF models and loads or unloads them on demand.
 
 Use a current llama.cpp build with router support. Follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) or install a [prebuilt release](https://github.com/ggml-org/llama.cpp/releases) for your platform.
 
@@ -47,13 +47,11 @@ Restart the router after manually adding files. For per-model context sizes and 
 
 ## Configure MyHarness
 
-Configure the provider via environment variables:
-
-```bash
-export LLAMA_BASE_URL=http://127.0.0.1:8080
-export LLAMA_API_KEY=optional-secret
-myharness
-```
+Configure the provider as a custom Provider: point a `models.json` entry (or
+`pi.registerProvider`) at the router's OpenAI-compatible endpoint and pass the
+API key as that Provider's credential. MyHarness does not read
+`LLAMA_BASE_URL` / `LLAMA_API_KEY` environment variables. See
+[providers.md](providers.md#llamacpp).
 
 If the server uses an API key, start `llama-server` with the matching `--api-key` value. Keep `--host 127.0.0.1` for local-only access.
 
@@ -61,7 +59,8 @@ If the server uses an API key, start `llama-server` with the matching `--api-key
 
 Only loaded models appear in `/model`. Model management (load, unload, download) is handled through the llama.cpp router API.
 
-Hugging Face search uses `HF_TOKEN` when set. The llama.cpp server performs downloads, so its process must also have `HF_TOKEN` when accessing gated repositories.
+Downloads run inside the llama.cpp process, so a gated Hugging Face repository
+needs `HF_TOKEN` in that process; MyHarness itself does not read it.
 
 ## Troubleshooting
 

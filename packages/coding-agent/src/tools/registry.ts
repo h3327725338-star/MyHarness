@@ -1,12 +1,8 @@
 export {
-	createInvestigationToolDefinition,
 	createUltracodeTool,
 	createUltracodeToolDefinition,
 	createWorkflowTool,
 	createWorkflowToolDefinition,
-	type InvestigationToolKind,
-	type UltracodeToolDetails,
-	type UltracodeToolInput,
 	type UltracodeToolOptions,
 	type WorkflowPhaseDetails,
 	type WorkflowToolDetails,
@@ -73,14 +69,12 @@ export {
 	type AskUserQuestionToolInput,
 	createAskUserQuestionTool,
 	createAskUserQuestionToolDefinition,
-	NO_INTERACTIVE_UI_CODE,
 } from "./interaction/ask-user-question.ts";
 export {
 	createTodoWriteTool,
 	createTodoWriteToolDefinition,
 	type TodoWriteCounts,
 	type TodoWriteItem,
-	type TodoWriteStatus,
 	type TodoWriteToolDetails,
 	type TodoWriteToolInput,
 } from "./interaction/todo-write.ts";
@@ -89,20 +83,12 @@ export {
 	createMemoryClaimToolDefinition,
 	createMemoryDeleteTool,
 	createMemoryDeleteToolDefinition,
-	createSessionMemoryManageOperations,
-	type MemoryClaimToolInput,
-	type MemoryDeleteToolInput,
-	type MemoryManageContext,
-	type MemoryManageOperations,
-	type MemoryManageOptions,
-	type MemoryManageToolDetails,
 } from "./memory/manage.ts";
 export {
 	createMemoryGetTool,
 	createMemoryGetToolDefinition,
 	createMemorySearchTool,
 	createMemorySearchToolDefinition,
-	createSessionMemoryOperations,
 	type MemoryGetToolInput,
 	type MemorySearchToolInput,
 	type MemoryToolDetails,
@@ -146,7 +132,6 @@ export {
 export {
 	createSubAgentTool,
 	createSubAgentToolDefinition,
-	type ExploreTaskResult,
 	type SubAgentBackgroundProgress,
 	type SubAgentBackgroundTask,
 	type SubAgentRuntimeSettings,
@@ -264,9 +249,6 @@ export {
 	createWorkspaceTool,
 	createWorkspaceToolDefinition,
 	desktopWorkspaceAvailable,
-	type WorkspaceTabSummary,
-	type WorkspaceToolDetails,
-	type WorkspaceToolInput,
 } from "./workspace.ts";
 
 export type Tool = AgentTool<any>;
@@ -480,24 +462,6 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
-}
-
-export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
-	return [
-		createReadToolDefinition(cwd, options?.read),
-		createBashToolDefinition(cwd, options?.bash),
-		createEditToolDefinition(cwd, options?.edit),
-		createWriteToolDefinition(cwd, options?.write),
-	];
-}
-
-export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
-	return [
-		createReadToolDefinition(cwd, options?.read),
-		createGrepToolDefinition(cwd, options?.grep),
-		createFindToolDefinition(cwd, options?.find),
-		createLsToolDefinition(cwd, options?.ls),
-	];
 }
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {

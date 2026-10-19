@@ -85,7 +85,6 @@ const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 30;
 const MAX_PER_FILE = 3;
 const FILE_CONCURRENCY = 4;
-const CALLABLE_KINDS: ReadonlySet<string> = new Set(["function", "method", "constructor", "operator"]);
 
 interface FileHits {
 	readonly path: string;
@@ -880,10 +879,6 @@ async function findExistingWithinBudget(
 /** Words of a candidate's name, for callers that want to show why it matched. */
 export function nameWords(name: string): string[] {
 	return splitWords(bareName(name));
-}
-
-export function isCallableKind(kind: string): boolean {
-	return CALLABLE_KINDS.has(kind);
 }
 
 function candidateTarget(candidate: DiscoveryCandidate): string {

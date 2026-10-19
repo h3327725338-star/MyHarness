@@ -36,10 +36,6 @@ export function supportsVision(status: VisionCapabilityStatus): boolean {
 	return status === "declared-supported" || status === "tested-supported";
 }
 
-export function canTestVision(status: VisionCapabilityStatus): boolean {
-	return status === "unknown" || status === "tested-unsupported";
-}
-
 export function withVisionInput(model: Model<any>): Model<any> {
 	if (model.input.includes("image")) return model;
 	return { ...model, input: [...model.input, "image"] };

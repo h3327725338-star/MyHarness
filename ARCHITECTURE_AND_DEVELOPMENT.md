@@ -20,7 +20,7 @@ MyHarness 是 npm / TypeScript / ESM monorepo，面向 Windows 桌面 x64。用�
 | `packages/desktop` | 私有 Electron Windows 宿主、服务进程所有权、原生第三方浏览器视图与分发 | `main.cjs`；`build.mjs` |
 | `packages/coding-agent` | 产品编排、Web、Session、Settings、Trust、资源、Provider runtime、工具、Git、扩展 | `packages/coding-agent/src/index.ts`；进程入口 `packages/coding-agent/src/web.ts` |
 
-依赖方向：`coding-agent → agent → ai`；产品层也直接依赖 ai 和 storage。不存在 `packages/tui` workspace。底层业务不得依赖浏览器页面或终端展示组件。
+依赖方向：`coding-agent → agent → ai`；产品层也直接依赖 ai。`packages/storage/sqlite-node` 提供通用存储 contract 的独立 Node backend，不是产品层直接依赖。不存在 `packages/tui` workspace。底层业务不得依赖浏览器页面或终端展示组件。
 
 ## 启动与运行时
 

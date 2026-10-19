@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSystemPrompt, systemPromptDirectory } from "../src/api/system-prompt-loader.ts";
+import { loadSystemPrompt } from "../src/api/system-prompt-loader.ts";
 
 const directories: string[] = [];
 function fixture(content?: string | Uint8Array): string {
@@ -21,9 +21,22 @@ afterEach(() => {
 });
 
 describe("central system prompt loader", () => {
-	it("loads the repository directory independently of the task cwd", () => {
-		expect(systemPromptDirectory).toBe(fileURLToPath(new URL("../../../system-prompts", import.meta.url)));
-		expect(loadSystemPrompt("global/core.md")).toContain("<global_core_policy>");
+	it("loads the repository directory independently of the task cwd", async () => {
+		// The desktop host exports MYHARNESS_SYSTEM_PROMPT_DIR to its children, so the
+		// default-directory assertion has to run in a module instance that never saw it.
+		const original = process.env.MYHARNESS_SYSTEM_PROMPT_DIR;
+		delete process.env.MYHARNESS_SYSTEM_PROMPT_DIR;
+		vi.resetModules();
+		try {
+			const isolated = await import("../src/api/system-prompt-loader.ts");
+			expect(isolated.systemPromptDirectory).toBe(
+				fileURLToPath(new URL("../../../system-prompts", import.meta.url)),
+			);
+			expect(isolated.loadSystemPrompt("global/core.md")).toContain("<global_core_policy>");
+		} finally {
+			if (original !== undefined) process.env.MYHARNESS_SYSTEM_PROMPT_DIR = original;
+			vi.resetModules();
+		}
 	});
 	it("reads edited files, preserves whitespace, and substitutes data only once", () => {
 		const directory = fixture("\nText {{value}}  \n");

@@ -2,6 +2,10 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Writing hundreds of memory files exceeds the 30s default when the suite runs in parallel.
+vi.setConfig({ testTimeout: 90_000 });
+
 import { stringify as stringifyYaml } from "yaml";
 import {
 	AutoMemoryManager,

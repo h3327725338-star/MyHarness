@@ -108,10 +108,6 @@ export function formatContextWindow(value: number | undefined): string {
 	return String(value);
 }
 
-export function formatContextWindowSettings(settings: ContextWindowSettings): string {
-	return `Main: ${formatContextWindow(settings.main)} · Subagent: ${formatContextWindow(settings.subagent)}`;
-}
-
 /** Estimate the exact provider-shaped context using the project's shared estimator. */
 export function estimateProviderContextTokens(context: Context): number | undefined {
 	try {

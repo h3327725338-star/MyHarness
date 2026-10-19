@@ -128,7 +128,7 @@ export interface SessionInfoEntry extends SessionEntryBase {
 }
 
 /**
- * Extension message that may enter model context. `display` controls TUI visibility only;
+ * Extension message that may enter model context. `display` controls Web UI visibility only;
  * `excludeFromContext` keeps it persisted but out of the LLM context.
  */
 export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
