@@ -188,7 +188,8 @@ export class WebHostHub implements WebHostHubLink {
 			}
 		}
 		// A slot that missed a model update while it was busy catches up once its work has settled.
-		if (this.deferredModelsReconcile.has(host.slotId) && host.session.isIdle) this.reconcileSlot(host, "models_changed");
+		if (this.deferredModelsReconcile.has(host.slotId) && host.session.isIdle)
+			this.reconcileSlot(host, "models_changed");
 	}
 
 	/**

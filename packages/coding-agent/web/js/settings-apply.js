@@ -6,6 +6,7 @@
 //   - the server's answer decides what stays: after the save the real settings are read again, so a failed save puts the
 //     old value back, and the failure is reported.
 import { attempt, emit, loadModels, loadResources, loadSettings, loadSnapshot, post, set, state, toast } from "./store.js";
+import { playNotificationSound } from "./notification-sounds.js";
 import { requestNotificationPermission } from "./notifications.js";
 import { t } from "./i18n.js";
 
@@ -34,7 +35,9 @@ export async function saveSetting(id, value) {
 	showValue(id, value);
 	// Switching the task-end notification on is the click the browser's permission prompt needs: ask before anything is
 	// awaited, while the click still counts.
-	if (id === "popupNotifications" && value === true) allowBrowserNotifications();
+	if (id === "popupNotifications" && value !== "never" && value !== false && !globalThis.myHarnessDesktop?.notify) allowBrowserNotifications();
+	// Choosing a sound plays it, so the choice can be heard before it is used.
+	if (id === "notificationSound") playNotificationSound(value);
 	const result = await attempt(() => post("/api/settings", { id, value }));
 	await loadSettings();
 	await loadSnapshot();

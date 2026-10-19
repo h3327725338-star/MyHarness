@@ -2,8 +2,9 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { bootPrefsState, chatTitle, clip, fmtDuration, loadPrefs, plural, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
+import { bootPrefsState, chatTitle, clip, fmtDuration, loadPrefs, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
+import { playNotificationSound } from "./notification-sounds.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
@@ -287,7 +288,6 @@ export const state = {
 		runMode: runModeOf(prefs.runMode),
 		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
-		notify: prefs.notify ?? false,
 		lang: normalizeLang(prefs.lang),
 		cmd: null,
 	},
@@ -424,7 +424,7 @@ export function readWidthValue(value) {
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
 // had open is saved with `wsPanels` (see rememberPanel).
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "notify", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -1709,7 +1709,6 @@ function connectEvents() {
 	});
 
 	on("agent_start", (d, slot) => {
-		announced.delete(slot);
 		state.currentRunId = d.runId;
 		state.retry = null;
 		state.recovery = null;
@@ -1732,7 +1731,6 @@ function connectEvents() {
 		const run = state.snap?.run ? { ...state.snap.run, startedAt: undefined, turnStartedAt: undefined } : state.snap?.run;
 		state.snap = state.snap ? { ...state.snap, lastRun: d, active: false, run } : state.snap;
 		emit();
-		notifyFinished(d, slot);
 		refreshSoon(slot);
 	});
 	on("task_notification", (d, slot) => notifyTaskEnd(d, slot));
@@ -2007,47 +2005,38 @@ function refreshSessionsSoon() {
 
 /** One notification per chat: a later one about the same chat replaces the earlier one, in every open tab. */
 const taskTag = (slot) => `myharness-task-${slot}`;
-/** Chats whose task end the desktop notification (notifyTaskEnd) has already announced, until their next run starts. */
-const announced = new Set();
 /** The chat a notification is about: its name, else its first message, else its workspace. */
 function chatLabel(slot) {
 	const info = state.slots.find((s) => s.slot === slot);
 	return info?.name || (info?.firstMessage ? chatTitle(info) : "") || bags.get(slot)?.snap?.session?.name || bags.get(slot)?.snap?.workspace?.name || t("New chat");
 }
 
-/** "Browser notification when a task ends" (Appearance): this browser's own, and only while the tab is in the background. */
-function notifyFinished(run, slot) {
-	if (!state.view.notify || document.visibilityState === "visible" || announced.has(slot)) return;
-	const titles = { completed: N_("Task completed"), partial: N_("Task partially completed"), failed: N_("Task failed"), cancelled: N_("Task cancelled") };
-	// What the run record knows: how long it took, how many files it changed and how many commands it ran.
-	const facts = [
-		run.startedAt && run.endedAt - run.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(run.endedAt - run.startedAt) }) : "",
-		run.changeCount ? t("{files} changed", { files: plural(run.changeCount, "file") }) : "",
-		run.bashRuns ? t("ran {count}", { count: plural(run.bashRuns, "command") }) : "",
-	].filter(Boolean).join(" · ");
-	const error = run.outcome === "failed" && run.error ? clip(serverText(run.error, run.error), 240) : "";
-	showNotification({ title: `MyHarness · ${titles[run.outcome] ? t(titles[run.outcome]) : t("Task finished")}`, body: [chatLabel(slot), error, facts].filter(Boolean).join("\n"), tag: taskTag(slot), onClick: () => activateSlot(slot) });
-}
-
 const TASK_END_TITLE ={ waiting: N_("Waiting for your input or confirmation"), completed: N_("Task completed"), failed: N_("Task failed"), blocked: N_("Task failed"), timed_out: N_("Task timed out"), cancelled: N_("Task cancelled"), interrupted: N_("Task interrupted") };
+const WAITING_TITLE = { permission: N_("Your confirmation is needed"), question: N_("Your answer is needed") };
 
 /**
- * "Desktop popup when a task ends" (Settings → Safety & privacy, shared with the terminal UI): the server sends this when
- * a task completed, failed or was interrupted and the setting is on. The page shows a browser notification and tells
+ * The Notifications settings (Settings → Safety & privacy): the server sends this when a task completed, failed or was
+ * interrupted, or when a confirmation or a question waits for an answer, and the matching setting is on. The page plays
+ * the chosen sound, shows a browser notification and tells
  * the server whether it could: without the browser's permission the server shows the system popup instead (see
  * WebHost.announceTaskEnd), so the notification appears either way.
  */
-function notifyTaskEnd(d, slot) {
-	if (d.kind !== "waiting") announced.add(slot);
-	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 240) : "";
-	const took = d.startedAt && d.endedAt - d.startedAt >= 1000 ? t("Worked for {duration}", { duration: fmtDuration(d.endedAt - d.startedAt) }) : "";
-	// What the task did, from the server's summary of the run: the start of its reply, then what it changed and ran.
-	const facts = [took, taskWorkLine(d.work)].filter(Boolean).join(" · ");
-	const chat = chatLabel(slot);
-	const where = d.project && d.project !== chat ? [d.project, chat].filter(Boolean).join(" · ") : chat;
-	const shown = showNotification({
-		title: `MyHarness · ${t(TASK_END_TITLE[d.state] || N_("Task finished"))}`,
-		body: d.body || clip([where, error || d.work?.conclusion, facts].filter(Boolean).join("\n"), 320),
+async function notifyTaskEnd(d, slot) {
+	// The sound always plays. The notification is skipped while the user is looking at that very chat ("Always"), or at
+	// the app at all ("Only when not focused"); a skipped notice counts as shown, so the system popup does not take its place.
+	playNotificationSound(d.sound);
+	const watching = document.hasFocus() && (d.focus === "unfocused" || activeSlot === slot);
+	if (watching) {
+		post("/api/notifications/answer", { id: d.id, shown: true }, slot).catch(() => {});
+		return;
+	}
+	// Short enough to read at a glance: what happened, in which chat, and the one line that matters.
+	const chat = clip(chatLabel(slot), 40);
+	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 120) : "";
+	const line = d.detail || error || d.work?.conclusion || taskWorkLine(d.work) || "";
+	const shown = await showNotification({
+		title: `${t(WAITING_TITLE[d.category] || TASK_END_TITLE[d.state] || N_("Task finished"))} · ${chat}`,
+		body: clip(line, 100),
 		tag: taskTag(slot),
 		onClick: () => activateSlot(slot),
 	});

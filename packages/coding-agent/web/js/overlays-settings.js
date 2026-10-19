@@ -10,7 +10,8 @@ import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES, getLang } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
 import { ModelRefPicker } from "./model-menu.js";
-import { notificationPermission, requestNotificationPermission } from "./notifications.js";
+import { playNotificationSound } from "./notification-sounds.js";
+import { notificationPermission } from "./notifications.js";
 import { ProvidersPage } from "./providers-page.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
@@ -350,7 +351,7 @@ const SHORT_DESCRIPTION = {
 	shellPath: N_("Executable for bash."),
 	shellCommandPrefix: N_("Prefix for every bash command."),
 	defaultProjectTrust: N_("For projects with no saved decision."),
-	popupNotifications: N_("Notify on completion, failure or stop."),
+	popupNotifications: N_("Choose when to be notified after a task completes, fails or is interrupted."),
 };
 const describe = (item) => {
 	if (item.id === "subAgent") {
@@ -367,7 +368,7 @@ const describe = (item) => {
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
 	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off} wide=${item.type === "modelRef" || (item.type === "multi" && item.id === "webSearch.engines")}>
-		${before || (item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
+		${before || notificationExtra(item)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
 
@@ -721,20 +722,17 @@ function Appearance({ conversation = false }) {
 function BrowserNotifications({ on }) {
 	// Read from the browser every time the store changes: the answer to its prompt arrives outside the store.
 	const permission = useStore(() => notificationPermission());
-	if (!on || permission === "granted") return null;
+	// The desktop app shows its own notifications: there is no browser permission to ask for.
+	if (!on || permission === "granted" || globalThis.myHarnessDesktop?.notify) return null;
 	if (permission === "default") return html`<button class="btn sm" onClick=${allowBrowserNotifications} title=${t("Until this browser allows notifications, the system popup is used.")}>${t("Allow in this browser")}</button>`;
 	return html`<span class="badge" title=${permission === "unsupported" ? t("This browser does not support notifications. The system popup is used instead.") : t("This browser does not allow notifications from this page, so the system popup is used instead. To get them in the browser, allow notifications for this page in the browser's site settings.")}>${t("System popup")}</span>`;
 }
 
-function BrowserNotificationSetting() {
-	const view = useStore((s) => s.view);
-	const change = async (on) => {
-		if (!on) return setView({ notify: false });
-		const permission = await requestNotificationPermission();
-		if (permission === "granted") setView({ notify: true });
-		else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
-	};
-	return html`<${Row} label=${t("Browser notification when a task ends")} description=${t("Only while this tab is in the background.")}><${Toggle} checked=${view.notify} label=${t("Notifications")} onChange=${change} /><//>`;
+/** Something shown in front of a notification setting's control: the browser's permission state, or a button that plays the chosen sound. */
+function notificationExtra(item) {
+	if (item.id === "popupNotifications") return html`<${BrowserNotifications} on=${item.value !== "never"} />`;
+	if (item.id === "notificationSound" && item.value !== "off") return html`<button class="btn sm" onClick=${() => playNotificationSound(item.value)}>${t("Play sound")}</button>`;
+	return null;
 }
 
 function Safety({ items, models }) {
@@ -756,7 +754,7 @@ function Safety({ items, models }) {
 			setDeciding(false);
 		}
 	};
-	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} before=${item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${!!item.value} />` : null} />`;
+	const row = (item) => html`<${SettingRow} key=${item.id} item=${item} models=${models} />`;
 	const bySection = (name) => items.filter((item) => item.section === name && item.id !== "defaultProjectTrust");
 	const defaultTrust = items.find((item) => item.id === "defaultProjectTrust");
 	const trust = !info ? null : !info.requiresTrust ? { cls: "", text: t("Nothing to trust") } : info.trusted ? { cls: "ok", text: t("Trusted") } : { cls: "warn", text: t("Not trusted") };
@@ -774,7 +772,6 @@ function Safety({ items, models }) {
 			${defaultTrust ? row(defaultTrust) : null}
 		<//>
 		<${Card} title=${t("Notifications")}>
-			<${BrowserNotificationSetting} />
 			${bySection("Notifications").map(row)}
 		<//>`;
 }

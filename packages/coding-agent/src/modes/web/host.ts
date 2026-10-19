@@ -373,15 +373,17 @@ export class WebHost {
 		this.dialogs.onDialogsChanged = () => {
 			this.broadcast("dialogs", { requests: this.dialogs.requests });
 			const request = this.dialogs.requests.at(-1);
-			if (request && this.session.settingsManager.getPopupNotificationSettings().enabled) {
+			const settings = this.session.settingsManager.getPopupNotificationSettings();
+			// A confirmation is a permission request; select / input / editor dialogs (ask_user_question and the like) are questions.
+			const category = request?.kind === "confirm" ? "permission" : "question";
+			if (request && (category === "permission" ? settings.onPermission : settings.onQuestion)) {
 				const task = this.session.sessionName || this.firstUserText() || "New chat";
-				const settings = this.session.settingsManager.getPopupNotificationSettings();
 				const id = `dialog-${request.id}`;
 				const body = `${task}\n${request.title}\n${request.message || ""}`;
 				const popup = () =>
 					showPopupNotification(settings.style, {
 						kind: "interrupted",
-						title: "MyHarness · 等待输入或确认",
+						title: category === "permission" ? "MyHarness · 需要你的确认" : "MyHarness · 需要你的回答",
 						message: body,
 					});
 				if (this.server.clientCount === 0) popup();
@@ -389,7 +391,18 @@ export class WebHost {
 					const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
 					timer.unref?.();
 					this.taskNotices.set(id, { refused: 0, timer, popup });
-					this.broadcast("task_notification", { id, state: "waiting", taskName: task, body, kind: "waiting" });
+					// A dialog on a focused window needs no extra ping: the page skips it unless the window is in the background.
+					this.broadcast("task_notification", {
+						id,
+						state: "waiting",
+						taskName: task,
+						body,
+						kind: "waiting",
+						category,
+						detail: request.title,
+						focus: "always",
+						sound: settings.sound,
+					});
 				}
 			}
 		};
@@ -764,7 +777,7 @@ export class WebHost {
 		const kind = popupKindForRunState(state.state);
 		if (!kind) return;
 		const settings = this.session.settingsManager.getPopupNotificationSettings();
-		if (!settings.enabled) return;
+		if (settings.turnComplete === "never") return;
 		if (kind === "completed" && !settings.onCompleted) return;
 		if (kind === "failed" && !settings.onError) return;
 		if (kind === "interrupted" && !settings.onInterrupted) return;
@@ -799,6 +812,8 @@ export class WebHost {
 			error: state.error,
 			startedAt: state.startedAt,
 			endedAt: state.lastActivityAt,
+			focus: settings.turnComplete,
+			sound: settings.sound,
 			project: folder,
 			taskName,
 			body,

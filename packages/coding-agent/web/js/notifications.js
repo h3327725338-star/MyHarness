@@ -20,12 +20,29 @@ export async function requestNotificationPermission() {
 	}
 }
 
+const clickHandlers = new Map();
+let listening = false;
+
 /**
- * Shows a notification. Returns false when the browser did not take it (no permission, or it refused), so the caller
+ * Shows a notification. Resolves false when the browser did not take it (no permission, or it refused), so the caller
  * can use another way. Notifications with the same `tag` replace each other, so several open tabs show one. A click
  * brings this tab forward and runs `onClick`.
  */
-export function showNotification({ title, body, tag, onClick }) {
+export async function showNotification({ title, body, tag, onClick }) {
+	// The desktop app shows its own native notification; a click on it comes back by tag and runs `onClick`.
+	const desktop = globalThis.myHarnessDesktop;
+	if (desktop?.notify) {
+		clickHandlers.set(tag, onClick);
+		if (!listening && desktop.onNotificationClick) {
+			listening = true;
+			desktop.onNotificationClick((clicked) => clickHandlers.get(clicked)?.());
+		}
+		try {
+			return (await desktop.notify({ title, body, tag })) === true;
+		} catch {
+			return false;
+		}
+	}
 	if (notificationPermission() !== "granted") return false;
 	try {
 		const notification = new Notification(title, { body, tag });

@@ -68,8 +68,17 @@ export interface TerminalSettings {
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
+/** When a finished task is announced: never, only while the window is not focused, or always. */
+export type TurnCompleteNotifyMode = "never" | "unfocused" | "always";
+/** Built-in notification sounds (synthesised by the page; "off" is silent). */
+export type NotificationSound = "off" | "soft" | "chime" | "glow";
+
 export interface PopupNotificationSettings {
-	enabled?: boolean; // default: true - desktop popup when a task finishes, fails or is interrupted
+	enabled?: boolean; // legacy switch: false means turnComplete "never" when turnComplete is not set
+	turnComplete?: TurnCompleteNotifyMode; // default: "always" - when to announce a finished, failed or interrupted task
+	onQuestion?: boolean; // default: true - notify when the agent asks a question (ask_user_question and other select/input dialogs)
+	onPermission?: boolean; // default: true - notify when a confirmation (permission) is needed
+	sound?: NotificationSound; // default: "soft" - sound played with a notification
 	style?: PopupNotificationStyle; // default: "toast" ("window" shows a classic dialog box instead)
 	onCompleted?: boolean; // default: true - popup when the task finishes successfully
 	onError?: boolean; // default: true - popup when the run fails or times out

@@ -44,6 +44,10 @@ export const SETTINGS_DEFAULTS = {
 	},
 	popupNotifications: {
 		enabled: true,
+		turnComplete: "always",
+		onQuestion: true,
+		onPermission: true,
+		sound: "soft",
 		style: "toast",
 		onCompleted: true,
 		onError: true,

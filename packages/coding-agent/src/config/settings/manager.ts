@@ -34,6 +34,7 @@ import type {
 	DefaultProjectTrust,
 	FallbackModelSettings,
 	GitIntegrationSettings,
+	NotificationSound,
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
@@ -44,6 +45,7 @@ import type {
 	SubAgentSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
+	TurnCompleteNotifyMode,
 	UsageRankingSettings,
 	VisionAssistantSettings,
 	VisionCapabilityTestRecord,
@@ -63,6 +65,7 @@ export type {
 	DefaultProjectTrust,
 	FallbackModelSettings,
 	GitIntegrationSettings,
+	NotificationSound,
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
@@ -73,6 +76,7 @@ export type {
 	SubAgentSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
+	TurnCompleteNotifyMode,
 	UsageRankingSettings,
 	VisionAssistantSettings,
 	VisionCapabilityTestRecord,
@@ -855,8 +859,15 @@ export class SettingsManager {
 
 	getPopupNotificationSettings(): Required<PopupNotificationSettings> {
 		const settings = this.settings.popupNotifications;
+		const turnComplete: TurnCompleteNotifyMode =
+			settings?.turnComplete ??
+			(settings?.enabled === false ? "never" : SETTINGS_DEFAULTS.popupNotifications.turnComplete);
 		return {
-			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.popupNotifications.enabled,
+			enabled: turnComplete !== "never",
+			turnComplete,
+			onQuestion: settings?.onQuestion ?? SETTINGS_DEFAULTS.popupNotifications.onQuestion,
+			onPermission: settings?.onPermission ?? SETTINGS_DEFAULTS.popupNotifications.onPermission,
+			sound: settings?.sound ?? SETTINGS_DEFAULTS.popupNotifications.sound,
 			style: settings?.style ?? SETTINGS_DEFAULTS.popupNotifications.style,
 			onCompleted: settings?.onCompleted ?? SETTINGS_DEFAULTS.popupNotifications.onCompleted,
 			onError: settings?.onError ?? SETTINGS_DEFAULTS.popupNotifications.onError,
@@ -865,12 +876,41 @@ export class SettingsManager {
 	}
 
 	setPopupNotificationsEnabled(enabled: boolean): void {
+		this.setTurnCompleteNotifyMode(enabled ? "always" : "never");
+	}
+
+	setTurnCompleteNotifyMode(mode: TurnCompleteNotifyMode): void {
+		const popup = this.ensurePopupNotifications();
+		popup.turnComplete = mode;
+		popup.enabled = mode !== "never";
+		this.markModified("popupNotifications", "turnComplete");
+		this.markModified("popupNotifications", "enabled");
+		this.save();
+	}
+
+	setNotifyOnQuestion(enabled: boolean): void {
+		this.ensurePopupNotifications().onQuestion = enabled;
+		this.markModified("popupNotifications", "onQuestion");
+		this.save();
+	}
+
+	setNotifyOnPermission(enabled: boolean): void {
+		this.ensurePopupNotifications().onPermission = enabled;
+		this.markModified("popupNotifications", "onPermission");
+		this.save();
+	}
+
+	setNotificationSound(sound: NotificationSound): void {
+		this.ensurePopupNotifications().sound = sound;
+		this.markModified("popupNotifications", "sound");
+		this.save();
+	}
+
+	private ensurePopupNotifications(): PopupNotificationSettings {
 		if (!this.globalSettings.popupNotifications) {
 			this.globalSettings.popupNotifications = {};
 		}
-		this.globalSettings.popupNotifications.enabled = enabled;
-		this.markModified("popupNotifications", "enabled");
-		this.save();
+		return this.globalSettings.popupNotifications;
 	}
 
 	getCodeIntelligenceSettings(): CodeIntelligenceSettings & { symbolsEnabled: boolean } {

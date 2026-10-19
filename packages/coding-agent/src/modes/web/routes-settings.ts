@@ -726,10 +726,45 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			{
 				id: "popupNotifications",
 				section: "Notifications",
-				label: "Desktop popup when a task ends",
-				description: "Native popup on completion, failure or interruption.",
+				label: "Task completion notification",
+				description: "Choose when to be notified after a task completes, fails or is interrupted.",
+				type: "enum",
+				value: popup.turnComplete,
+				options: [
+					{ value: "never", label: "Never" },
+					{ value: "unfocused", label: "Only when not focused" },
+					{ value: "always", label: "Always" },
+				],
+			},
+			{
+				id: "notifyOnPermission",
+				section: "Notifications",
+				label: "Permission notifications",
+				description: "Notify when a confirmation is needed.",
 				type: "boolean",
-				value: popup.enabled,
+				value: popup.onPermission,
+			},
+			{
+				id: "notifyOnQuestion",
+				section: "Notifications",
+				label: "Question notifications",
+				description: "Notify when an answer is needed to continue.",
+				type: "boolean",
+				value: popup.onQuestion,
+			},
+			{
+				id: "notificationSound",
+				section: "Notifications",
+				label: "Notification sound",
+				description: "Sound for task completion, permission and question notifications.",
+				type: "enum",
+				value: popup.sound,
+				options: [
+					{ value: "off", label: "Off" },
+					{ value: "soft", label: "Soft" },
+					{ value: "chime", label: "Chime" },
+					{ value: "glow", label: "Arpeggio" },
+				],
 			},
 			{
 				id: "enableInstallTelemetry",
@@ -1150,7 +1185,22 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				s.setDefaultProjectTrust(value);
 				return;
 			case "popupNotifications":
-				s.setPopupNotificationsEnabled(boolValue(value, id));
+				// A boolean is the old on/off switch.
+				if (typeof value === "boolean") s.setPopupNotificationsEnabled(value);
+				else if (value === "never" || value === "unfocused" || value === "always")
+					s.setTurnCompleteNotifyMode(value);
+				else throw new HttpError(400, "Invalid value");
+				return;
+			case "notifyOnPermission":
+				s.setNotifyOnPermission(boolValue(value, id));
+				return;
+			case "notifyOnQuestion":
+				s.setNotifyOnQuestion(boolValue(value, id));
+				return;
+			case "notificationSound":
+				if (value !== "off" && value !== "soft" && value !== "chime" && value !== "glow")
+					throw new HttpError(400, "Invalid value");
+				s.setNotificationSound(value);
 				return;
 			case "enableInstallTelemetry":
 				s.setEnableInstallTelemetry(boolValue(value, id));

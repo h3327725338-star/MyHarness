@@ -12,7 +12,6 @@ import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-me
 import { serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
-import { requestNotificationPermission } from "./notifications.js";
 import { rankSearchAsync } from "./search.js";
 import { settingsMenuIcon } from "./settings-menu.js";
 import { RUN_MODES } from "./run-modes.js";
@@ -609,18 +608,6 @@ function appearanceScreen() {
 			},
 			choice("colorTheme", "Color theme", "Saved for the current chat mode. Dark colors only; light uses the shared palette.", "colorTheme", COLOR_THEMES),
 			choice("processDefault", "Run steps", "Whether the steps behind a finished answer start expanded.", "processDefault", [{ value: "collapsed", label: "Collapsed" }, { value: "expanded", label: "Expanded" }]),
-			{
-				key: "notify",
-				label: t("Browser notification when a task ends"),
-				desc: t("Only while this tab is in the background."),
-				toggle: !!view.notify,
-				onEnter: async () => {
-					if (state.view.notify) return setView({ notify: false });
-					const permission = await requestNotificationPermission();
-					if (permission === "granted") setView({ notify: true });
-					else toast(permission === "unsupported" ? t("This browser does not support notifications.") : t("Notification permission was not granted."), "warning");
-				},
-			},
 		],
 	};
 }

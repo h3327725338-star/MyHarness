@@ -28,7 +28,10 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
 ```json
 {
   "popupNotifications": {
-    "enabled": true,
+    "turnComplete": "always",
+    "onQuestion": true,
+    "onPermission": true,
+    "sound": "soft",
     "style": "toast",
     "onCompleted": true,
     "onError": true,
@@ -36,6 +39,8 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
   }
 }
 ```
+
+`turnComplete`：任务完成、失败或中断后何时通知，`never` / `unfocused`（仅窗口未聚焦时）/ `always`，默认 `always`；旧的 `enabled: false` 在未设置 `turnComplete` 时等同 `never`。`onQuestion` / `onPermission`：智能体提问（select / input / editor 对话框，如 `ask_user_question`）或需要确认（confirm 对话框）时是否通知。`sound`：`off` / `soft` / `chime` / `glow`，三个内置提示音由网页用 Web Audio 合成，无音频文件；没有页面打开时回退的系统弹窗只有系统自带的提示音。
 
 也可以在会话内通过 `/settings` 切换总开关。`style` 支持默认的 `toast` 和需要手动关闭的 `window`；三个 `on...` 字段分别控制完成、异常和中断提醒。
 

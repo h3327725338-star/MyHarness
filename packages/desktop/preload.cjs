@@ -10,6 +10,13 @@ contextBridge.exposeInMainWorld('myHarnessDesktop', Object.freeze({
     return () => ipcRenderer.removeListener('desktop:workspace', handler);
   },
   replyWorkspace: (payload) => ipcRenderer.invoke('desktop:workspace-reply', payload),
+  // Native notification (a Windows toast owned by MyHarness). Resolves true when it was shown; a click on it arrives as the tag.
+  notify: (payload) => ipcRenderer.invoke('desktop:notify', payload),
+  onNotificationClick(callback) {
+    const handler = (_event, tag) => callback(tag);
+    ipcRenderer.on('desktop:notification-click', handler);
+    return () => ipcRenderer.removeListener('desktop:notification-click', handler);
+  },
   openPath: (target) => ipcRenderer.invoke('desktop:open-path', target),
   revealPath: (target) => ipcRenderer.invoke('desktop:reveal-path', target),
   // Legacy single-view surface (kept for the previous panel and older pages).

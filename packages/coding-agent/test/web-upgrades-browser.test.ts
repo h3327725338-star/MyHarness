@@ -59,9 +59,14 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 					{
 						id: "popupNotifications",
 						section: "Notifications",
-						label: "Desktop popup when a task ends",
-						type: "boolean",
-						value: false,
+						label: "Task completion notification",
+						type: "enum",
+						value: "never",
+						options: [
+							{ value: "never", label: "Never" },
+							{ value: "unfocused", label: "Only when not focused" },
+							{ value: "always", label: "Always" },
+						],
 					},
 				],
 			}));
@@ -136,7 +141,7 @@ try {
  if(!body.textContent.includes('Sub-agent') || !body.textContent.includes('Vision Assistant') || !body.textContent.includes('Auto Memory')) throw Error('assistants grouping');
  setView({settingsSection:'safety'}); await wait(100);
  body=document.querySelector('.settings-body');
- if(!body.textContent.includes('Desktop popup when a task ends') || !body.textContent.includes('Browser notification when a task ends')) throw Error('notifications grouping');
+ if(!body.textContent.includes('Task completion notification')) throw Error('notifications grouping');
  render(null,checks);
  setView({processDefault:'expanded'});
  const editItems=[{kind:'user',id:'edit-user',ts:1,text:'edit',images:[]},{kind:'assistant',id:'edit-msg',liveId:'edit-live',ts:2,blocks:[{type:'toolCall',id:'edit-call',name:'edit',args:{path:'a.ts'}}]}];

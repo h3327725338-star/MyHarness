@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const { spawn } = require('node:child_process');
 const { mkdirSync, appendFileSync, readFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
@@ -142,6 +142,7 @@ else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('before-quit', (event) => { if (!finished) { event.preventDefault(); void stop(); } });
   app.whenReady().then(async () => {
+    app.setAppUserModelId('MyHarness');
     window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
     browser = createBrowser(window, log, { workspaceRoot: cwd });
@@ -156,6 +157,27 @@ else {
       if (!requestId || !pendingUi.has(requestId)) return { ok: false, error: '未知或已超时的工作区请求' };
       settleUi(requestId, payload.ok === true, payload.ok === true ? payload.result : payload.error);
       return { ok: true };
+    });
+    // Native Windows notifications (toasts) owned by this app instead of PowerShell. The page plays the sound itself, so the
+    // toast is silent; a click brings the window forward and tells the page which chat the notification was about.
+    const toasts = new Map();
+    ipcMain.handle('desktop:notify', (event, payload) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      if (!Notification.isSupported() || !payload || typeof payload !== 'object') return false;
+      const text = (value, max) => String(value ?? '').slice(0, max);
+      const tag = text(payload.tag, 200);
+      toasts.get(tag)?.close();
+      const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true, icon: join(__dirname, 'icon.png') });
+      toast.on('click', () => {
+        if (window.isMinimized()) window.restore();
+        window.show();
+        window.focus();
+        if (!window.webContents.isDestroyed()) window.webContents.send('desktop:notification-click', tag);
+      });
+      toast.on('close', () => { if (toasts.get(tag) === toast) toasts.delete(tag); });
+      toasts.set(tag, toast);
+      toast.show();
+      return true;
     });
     ipcMain.handle('desktop:navigate', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return browser.navigate(url); });
     ipcMain.handle('desktop:external', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return shell.openExternal(httpUrl(url)); });
