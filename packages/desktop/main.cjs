@@ -159,7 +159,9 @@ else {
       return { ok: true };
     });
     // Native Windows notifications (toasts) owned by this app instead of PowerShell. The page plays the sound itself, so the
-    // toast is silent; a click brings the window forward and tells the page which chat the notification was about.
+    // toast is silent; a click brings the window forward and tells the page which chat the notification was about. No
+    // `icon` is passed on purpose: that image is a second logo beside the text, and without it the whole content area
+    // belongs to the message. The small app logo in the toast header comes from the app itself, not from this option.
     const toasts = new Map();
     ipcMain.handle('desktop:notify', (event, payload) => {
       if (!trusted(event)) throw new Error('拒绝非应用页面调用');
@@ -167,7 +169,7 @@ else {
       const text = (value, max) => String(value ?? '').slice(0, max);
       const tag = text(payload.tag, 200);
       toasts.get(tag)?.close();
-      const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true, icon: join(__dirname, 'icon.png') });
+      const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true });
       toast.on('click', () => {
         if (window.isMinimized()) window.restore();
         window.show();

@@ -2,7 +2,18 @@
 // The server owns all Agent state; nothing here re-implements Agent behaviour.
 import { useLayoutEffect, useRef, useState } from "/vendor/preact-hooks.js";
 import { normalizeLang, setLang } from "./lang.js";
-import { bootPrefsState, chatTitle, clip, fmtDuration, loadPrefs, reasonLine, savePrefs, taskWorkLine, uid } from "./util.js";
+import {
+	bootPrefsState,
+	chatTitle,
+	clip,
+	fmtDuration,
+	loadPrefs,
+	reasonLine,
+	savePrefs,
+	splitFirstSentence,
+	taskWorkLine,
+	uid,
+} from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 import { playNotificationSound } from "./notification-sounds.js";
 import { showNotification } from "./notifications.js";
@@ -2030,13 +2041,15 @@ async function notifyTaskEnd(d, slot) {
 		post("/api/notifications/answer", { id: d.id, shown: true }, slot).catch(() => {});
 		return;
 	}
-	// Short enough to read at a glance: what happened, in which chat, and the one line that matters.
+	// Short enough to read at a glance: what happened and in which chat is the title, and the body is one sentence of
+	// what matters instead of a paragraph, so the popup says what it is about before it is read line by line.
 	const chat = clip(chatLabel(slot), 40);
 	const error = d.kind === "failed" && d.error ? clip(serverText(d.error, d.error), 120) : "";
 	const line = d.detail || error || d.work?.conclusion || taskWorkLine(d.work) || "";
+	const summary = splitFirstSentence(String(line).replace(/\s+/gu, " ").trim())[0].trim();
 	const shown = await showNotification({
 		title: `${t(WAITING_TITLE[d.category] || TASK_END_TITLE[d.state] || N_("Task finished"))} · ${chat}`,
-		body: clip(line, 100),
+		body: clip(summary, 60),
 		tag: taskTag(slot),
 		onClick: () => activateSlot(slot),
 	});
