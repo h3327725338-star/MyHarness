@@ -358,6 +358,10 @@ export class WebHost {
 		{ refused: number; claimed: boolean; timer: ReturnType<typeof setTimeout>; popup: () => void }
 	>();
 	private lastTaskNoticeKey: string | undefined;
+	/** True while an automatic (threshold / overflow) compaction runs: its run-state settle is not a task end. */
+	private autoCompactionActive = false;
+	/** Dialog ids already announced, so answering one of several stacked dialogs does not announce the rest again. */
+	private readonly announcedDialogIds = new Set<string>();
 	private shutdownRequested = false;
 	onShutdown: (() => void) | undefined;
 	extensionErrors: Array<{ extensionPath: string; event: string; error: string; ts: number }> = [];
@@ -382,7 +386,10 @@ export class WebHost {
 			const settings = this.session.settingsManager.getPopupNotificationSettings();
 			// A confirmation is a permission request; select / input / editor dialogs (ask_user_question and the like) are questions.
 			const category = request?.kind === "confirm" ? "permission" : "question";
-			if (request && (category === "permission" ? settings.onPermission : settings.onQuestion)) {
+			// Only a newly opened dialog is announced: the same hook also fires when a dialog is answered.
+			const isNew = !!request && !this.announcedDialogIds.has(request.id);
+			if (request) this.announcedDialogIds.add(request.id);
+			if (isNew && request && (category === "permission" ? settings.onPermission : settings.onQuestion)) {
 				const task = this.session.sessionName || this.firstUserText() || "New chat";
 				const id = `dialog-${request.id}`;
 				const body = `${task}\n${request.title}\n${request.message || ""}`;
@@ -780,6 +787,8 @@ export class WebHost {
 	private announceTaskEnd(state: RunStateSnapshot): void {
 		// The process that runs a mirrored session shows its own task-end popup.
 		if (this.shutdownRequested || this.session.isMirror) return;
+		// The agent compacting its own context is not a task end: no popup, no sound.
+		if (this.autoCompactionActive) return;
 		const kind = popupKindForRunState(state.state);
 		if (!kind) return;
 		const settings = this.session.settingsManager.getPopupNotificationSettings();
@@ -985,9 +994,13 @@ export class WebHost {
 				this.broadcast("thinking_level", { level: event.level });
 				return;
 			case "compaction_start":
+				this.autoCompactionActive = event.reason !== "manual";
+				// A manual compaction ends with a notice even if the run it follows already announced the same outcome.
+				if (event.reason === "manual") this.lastTaskNoticeKey = undefined;
 				this.broadcast("compaction_start", { reason: event.reason, budget: sanitizeDetails(event.budget) });
 				return;
 			case "compaction_end":
+				this.autoCompactionActive = false;
 				this.broadcast("compaction_end", {
 					reason: event.reason,
 					aborted: event.aborted,
