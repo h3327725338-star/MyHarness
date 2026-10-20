@@ -5,7 +5,7 @@ import { resolvePath } from "../../utils/paths.ts";
 import { worktreeId } from "./display-name.ts";
 
 /** Folders under `<agentDir>/worktrees` that hold MyHarness metadata, never a copy. */
-const METADATA_DIRS = new Set(["names", "services", "launchers", "merged"]);
+const METADATA_DIRS = new Set(["names", "services", "launchers", "merged", "archive"]);
 
 /** `[repo, branch]` folder names of the copy that contains `path`, or undefined outside every copy. */
 function copyRootParts(agentDir: string, path: string): [string, string] | undefined {

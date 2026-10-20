@@ -876,12 +876,15 @@ function worktreesScreen(ctx) {
 	const slot = useRef(state.activeSlot ?? "").current;
 	const { data, error, reload } = useLoaded(() => api("/api/git/worktrees", { slot }));
 	const busy = !!state.snap?.active;
+	// Archived copies are finished work kept on disk; they are restored, listed and cleared from the branch menu only.
+	const activeCopies = (data?.worktrees || []).filter((w) => !w.archived);
+	const archivedCount = (data?.worktrees || []).filter((w) => !w.isMain && w.archived).length;
 	return {
 		title: t("Worktrees"),
 		loading: !data && !error,
 		error,
 		rows: [
-			...(data?.worktrees || []).map((w) => ({
+			...activeCopies.map((w) => ({
 				key: w.path,
 				label: w.branch || t("(detached)"),
 				desc: w.path,
@@ -902,6 +905,15 @@ function worktreesScreen(ctx) {
 						],
 					})),
 			})),
+			...(archivedCount
+				? [
+						{
+							key: "archived",
+							label: t("{count} archived copies are managed in the branch menu", { count: archivedCount }),
+							disabled: true,
+						},
+					]
+				: []),
 			{
 				key: "create",
 				label: t("Create worktree"),

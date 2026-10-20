@@ -126,6 +126,11 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [removing, setRemoving] = useState("");
 	const [worktreesOpen, setWorktreesOpen] = useState(linked);
 	const [agentsOpen, setAgentsOpen] = useState(false);
+	// The active copies fold like the sub-agent group does; archived ones start folded so a long list stays readable.
+	const [mineOpen, setMineOpen] = useState(true);
+	const [archivedOpen, setArchivedOpen] = useState(false);
+	// `{ force, failed, error }` while the clear-archived confirmation is on screen, `null` when it is closed.
+	const [archiveClear, setArchiveClear] = useState(null);
 	const [fresh, setFresh] = useState("");
 	const [naming, setNaming] = useState(null);
 	const [displayName, setDisplayName] = useState("");
@@ -160,13 +165,65 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			setWorktrees({ list: [], error: serverText(e.message, t("Cannot list worktrees.")) });
 		}
 	};
+	// Reading the list already archived finished copies; this releases the branches of the clean ones. Once per open:
+	// a running task or an untrusted project just leaves them attached for the next try.
+	const archiveSynced = useRef(false);
+	const syncArchive = async () => {
+		if (archiveSynced.current) return;
+		archiveSynced.current = true;
+		try {
+			const result = await post("/api/git/worktrees/archive-sync", {}, slot);
+			if (result?.released) await loadWorktrees(true);
+		} catch {
+			archiveSynced.current = false;
+		}
+	};
+	const restoreCopy = async (w) => {
+		if (!w || w.isMain || busy) return;
+		setBusy(`archive:${w.path}`);
+		try {
+			const result = await post("/api/git/worktrees/archive", { path: w.path, archived: false }, slot);
+			if (result?.warning) toast(result.warning, "warning", 7000);
+			await loadWorktrees(true);
+			toast(t("Copy restored to the list"), "info", 3500);
+		} catch (e) {
+			toast(serverText(e.message, t("Cannot restore this copy.")), "error", 8000);
+		} finally {
+			setBusy("");
+		}
+	};
+	// The only step that deletes archived copies; a copy that still holds work is reported first and needs force.
+	const clearArchived = async (force = false) => {
+		if (busy) return;
+		setBusy("archive-clear");
+		try {
+			const result = await post("/api/git/worktrees/archive/clear", { force }, slot);
+			const failed = result?.failed || [];
+			await Promise.all([loadWorktrees(true), load(true)]);
+			if (failed.length) {
+				setArchiveClear({ force, failed, error: "" });
+				toast(
+					t("{count} archived copies still hold uncommitted changes and were kept.", { count: failed.length }),
+					"warning",
+					8000,
+				);
+			} else {
+				setArchiveClear(null);
+				toast(t("Archived copies cleared"), "info", 3500);
+			}
+		} catch (e) {
+			setArchiveClear({ force, failed: [], error: serverText(e.message, t("Cannot clear archived copies.")) });
+		} finally {
+			setBusy("");
+		}
+	};
 	useEffect(() => {
 		load();
 		// Opening the branch popover expresses intent; avoid prefetching every Chat at startup.
-		loadWorktrees();
+		loadWorktrees().then(() => syncArchive());
 	}, []);
 	useEffect(() => {
-		if (worktreesOpen) loadWorktrees();
+		if (worktreesOpen) loadWorktrees().then(() => syncArchive());
 	}, [worktreesOpen]);
 	useEffect(() => {
 		if (!branchDeletion) return;
@@ -332,8 +389,12 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	// The main copy is always first; copies the user made follow (current, with work, clean, merged last); sub-agent
 	// copies sit in their own group at the bottom, folded by default.
 	const rank = (w) => (w.current ? 0 : w.merged ? 3 : holdsWork(w) ? 1 : 2);
-	const mine = copiesList.filter((w) => !w.isMain && !w.subagent).sort((a, b) => rank(a) - rank(b));
-	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent);
+	const mine = copiesList.filter((w) => !w.isMain && !w.subagent && !w.archived).sort((a, b) => rank(a) - rank(b));
+	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent && !w.archived);
+	// Newest archived copy first: the copy finished most recently is the one worth checking first.
+	const archivedCopies = copiesList
+		.filter((w) => !w.isMain && w.archived)
+		.sort((a, b) => String(b.archivedAt || "").localeCompare(String(a.archivedAt || "")));
 	const isTarget = (w) => !!targetCopy && (sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch);
 	const targetWorktree = targetCopy && copiesList.find(isTarget);
 	const targetProtection = targetWorktree?.isMain || targetWorktree?.current
@@ -478,7 +539,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	};
 	const disabled = running || !!busy || !data;
 
-	const copyRow = (w) => {
+	const copyRow = (w, archived = false) => {
 		const work = holdsWork(w);
 		const highlighted = isTarget(w) || (!!fresh && sameCopyPath(w.path, fresh));
 		const rowBusy = busy === `w:${w.path}` || busy === `delete:${w.path}` || busy === `start:${w.path}`;
@@ -486,16 +547,20 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			class=${`pop-item branch-copy ${w.current ? "active" : ""} ${highlighted ? "branch-copy-target" : ""}`} title=${w.path}>
 			<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
 			<span class="col branch-copy-info">
-				<span class="branch-copy-title"><span class="truncate">${copyLabel(w)}</span>${w.merged
-					? html`<span class="copy-state ok" title=${t("Merged into main; kept as a read-only record")}>${t("Merged")}</span>`
-					: work ? html`<span class="copy-state warn" title=${workText(w)}>${t("Unmerged")}</span>` : null}</span>
+				<span class="branch-copy-title"><span class="truncate">${copyLabel(w)}</span>${archived
+					? html`<span class="copy-state" title=${w.archivedAt ? t("Archived {when}: kept on disk, nothing deleted", { when: relTime(w.archivedAt) }) : t("Kept on disk, nothing deleted")}>${t("Archived")}</span>`
+					: w.merged
+						? html`<span class="copy-state ok" title=${t("Merged into main; kept as a read-only record")}>${t("Merged")}</span>`
+						: work ? html`<span class="copy-state warn" title=${workText(w)}>${t("Unmerged")}</span>` : null}</span>
 				<span class="dim truncate branch-copy-path">${shortPath(w.path)}</span>
 			</span>
 			${confirmCopy === w.path ? html`<button class="branch-confirm" disabled=${disabled} onClick=${() => deleteCopy(w)}>${t("Delete?")}</button>` : null}
 			${rowBusy ? html`<${Spinner} size=${13} />` : w.current ? html`<${Icon} name="check" size=${14} class="branch-check" />` : null}
 			<div class="branch-copy-actions">
 				${w.current ? null : html`<button class="icon-btn sm" disabled=${disabled} title=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} aria-label=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} onClick=${() => (w.isMain && linked ? backToMain() : enterCopy(w.path))}><${Icon} name="arrowRight" size=${13} /></button>`}
-				${!w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}><${Icon} name="play" size=${13} /></button>
+				${archived
+					? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Restore copy")} aria-label=${t("Restore copy")} onClick=${() => restoreCopy(w)}><${Icon} name="undo" size=${13} /></button>`
+					: !w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}><${Icon} name="play" size=${13} /></button>
 				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
 				<button class="icon-btn sm" title=${t("Copy path")} aria-label=${t("Copy path")} onClick=${() => copyPath(w)}><${Icon} name="copy" size=${13} /></button>
 				${!w.isMain && confirmCopy !== w.path ? html`<button class="icon-btn sm" disabled=${disabled || w.current} title=${w.current ? t("Return to the main copy before deleting this one") : t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => askDeleteCopy(w)}><${Icon} name="trash" size=${13} /></button>` : null}
@@ -571,11 +636,31 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			<div class="branch-copy-region" ref=${copies}>
 				${!worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
 				${main ? html`<div class="branch-copies">${copyRow(main)}</div>` : null}
-				${mine.length ? html`<div class="pop-group">${t("My copies")}</div><div class="branch-copies">${mine.map(copyRow)}</div>` : null}
+				${mine.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${mineOpen} onClick=${() => setMineOpen(!mineOpen)}>
+					<${Chevron} /><span>${t("My copies")}</span><span class="badge">${mine.length}</span></button>
+					<${Collapse} open=${mineOpen}><div class="branch-copies">${mine.map((w) => copyRow(w))}</div><//>` : null}
 				${agentCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${agentsOpen} onClick=${() => setAgentsOpen(!agentsOpen)}>
 					<${Chevron} /><span>${t("Sub-agent copies")}</span><span class="badge">${agentCopies.length}</span></button>
-					<${Collapse} open=${agentsOpen}><div class="branch-copies">${agentCopies.map(copyRow)}</div><//>` : null}
+					<${Collapse} open=${agentsOpen}><div class="branch-copies">${agentCopies.map((w) => copyRow(w))}</div><//>` : null}
+				${archivedCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${archivedOpen} onClick=${() => setArchivedOpen(!archivedOpen)}>
+					<${Chevron} /><span>${t("Archived copies")}</span><span class="badge">${archivedCopies.length}</span></button>
+					<${Collapse} open=${archivedOpen}>
+						<div class="branch-copies">${archivedCopies.map((w) => copyRow(w, true))}</div>
+						<div class="branch-form"><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({ force: false, failed: [], error: "" })}>${t("Clear archived copies")}</button></div>
+					<//>` : null}
 			</div>
+			${archiveClear ? html`<div class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
+				<strong>${t("Delete every archived copy?")}</strong>
+				<div>${t("Their folders are removed from disk. This is the only action that deletes archived work; archiving itself never does.")}</div>
+				${archiveClear.error ? html`<div class="c-danger" role="alert">${archiveClear.error}</div>` : null}
+				${archiveClear.failed.length ? html`<div class="c-danger" role="alert">${t("{count} copies still hold uncommitted changes and were kept. Force clearing discards them permanently.", { count: archiveClear.failed.length })}</div>` : null}
+				<div class="branch-form">
+					${archiveClear.failed.length
+						? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${() => clearArchived(true)}>${t("Force clear archived copies")}</button>`
+						: html`<button class="btn sm danger" disabled=${disabled} onClick=${() => clearArchived(false)}>${t("Clear archived copies")}</button>`}
+					<button class="btn sm" disabled=${!!busy} onClick=${() => setArchiveClear(null)}>${t("Cancel")}</button>
+				</div>
+			</div>` : null}
 			${deletingCopy ? html`<div ref=${copyDeletionPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Delete copy?")}>
 				<strong>${t("Delete copy “{name}”?", { name: copyLabel(deletingCopy) })}</strong>
 				${copyFailure

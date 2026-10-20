@@ -692,10 +692,10 @@ describe("read-write batch end-to-end through the fake delegated worker", () => 
 		const dump = JSON.parse(readFileSync(envDumpPath, "utf8")) as { cwd: string };
 		const task = result.details.results[0];
 		expect(task.status).toBe("completed");
-		// IV.2: clean worktrees are removed automatically along with the branch.
-		expect(existsSync(dump.cwd)).toBe(false);
-		expect(task.worktreePath).toBeUndefined();
-		expect(task.branchName).toBeUndefined();
+		// A clean copy is archived instead of deleted: the folder stays, the generated branch is released.
+		expect(existsSync(dump.cwd)).toBe(true);
+		expect(task.worktreePath).toBe(dump.cwd);
+		expect(task.branchName).toMatch(/^myharness-subagent-/);
 		expect(task.changedFiles).toBeUndefined();
 		expect(runGit(repoDir, ["branch", "--list", "myharness-subagent-*"]).stdout.trim()).toBe("");
 	});
@@ -812,8 +812,9 @@ describe("read-write batch end-to-end through the fake delegated worker", () => 
 		expect(task.unresolved?.some((item) => item.includes("未带入 Worktree") && item.includes("nested-repo"))).toBe(
 			true,
 		);
-		// The imported files are not the worker's changes: an untouched worktree is still cleaned up.
-		expect(task.worktreePath).toBeUndefined();
+		// The imported files are not the worker's changes: an untouched copy is archived, not cleaned up.
+		expect(task.worktreePath).toBeDefined();
+		expect(existsSync(task.worktreePath!)).toBe(true);
 		expect(task.changedFiles).toBeUndefined();
 		// And the dispatching workspace keeps its own uncommitted state.
 		expect(readFileSync(join(repoDir, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("edited but not committed\n");

@@ -234,6 +234,65 @@ export class GitWorktreeManager {
 		};
 	}
 
+	/**
+	 * Detach a copy from its branch without touching a single file. Archiving a clean copy uses this to release the
+	 * branch: the commit stays reachable through the copy's own HEAD, and the branch name can be freed or reused.
+	 */
+	detach(worktreePath: string): GitWorktreeActionResult {
+		const result = runGitSync(["checkout", "--detach"], {
+			cwd: resolvePath(worktreePath),
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		if (!result.ok) return { ok: false, error: `释放分支失败：${formatGitFailure(result)}` };
+		return { ok: true, message: "副本已脱离分支，该分支不再被占用。" };
+	}
+
+	/**
+	 * Check the archived copy's recorded branch out again. A branch that no longer exists is recreated at the copy's
+	 * own HEAD: the commits an archived copy holds are never dropped, even after its branch was pruned.
+	 */
+	attach(worktreePath: string, branchName: string): GitWorktreeActionResult {
+		const target = resolvePath(worktreePath);
+		const branch = branchName.trim();
+		if (!branch) return { ok: false, error: "没有记录可恢复的分支名。" };
+		const exists = runGitSync(["rev-parse", "--verify", `refs/heads/${branch}`], {
+			cwd: target,
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		const result = runGitSync(["checkout", ...(exists.ok ? [branch] : ["-b", branch])], {
+			cwd: target,
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		if (!result.ok) return { ok: false, error: `恢复分支失败：${formatGitFailure(result)}` };
+		return { ok: true, message: `已回到分支 ${branch}。` };
+	}
+
+	/** Files a copy still carries (staged, unstaged or untracked); `undefined` when Git cannot tell. */
+	readChangeCount(cwd: string): number | undefined {
+		const status = this.readDirtyStatus(cwd);
+		return status.ok ? status.count : undefined;
+	}
+
+	/** Same as `readChangeCount`, off the event loop: archive sweeps read many copies in a row. */
+	async readChangeCountAsync(cwd: string): Promise<number | undefined> {
+		const result = await runGit(["status", "--porcelain", "--untracked-files=all"], {
+			cwd: resolvePath(cwd),
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+			preserveOutput: true,
+		});
+		return result.ok ? result.stdout.split(/\r?\n/).filter((line) => line.trim()).length : undefined;
+	}
+
+	/** Same as `detach`, off the event loop. */
+	async detachAsync(worktreePath: string): Promise<GitWorktreeActionResult> {
+		const result = await runGit(["checkout", "--detach"], {
+			cwd: resolvePath(worktreePath),
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		if (!result.ok) return { ok: false, error: `释放分支失败：${formatGitFailure(result)}` };
+		return { ok: true, message: "副本已脱离分支，该分支不再被占用。" };
+	}
+
 	createLauncher(worktree: GitWorktree): GitWorktreeActionResult {
 		if (!worktree.branch) return { ok: false, error: "Detached HEAD 没有可用于启动文件的分支名称。" };
 		for (const relative of ["packages\\coding-agent\\src\\web.ts", "scripts\\dev-fast-loader.mjs"]) {

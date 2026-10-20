@@ -5,6 +5,7 @@
  */
 
 import { statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@myharness/agent-core";
 import { clampThinkingLevel, contentText } from "@myharness/ai";
@@ -52,6 +53,11 @@ import {
 	getCachedGitStatusPreview,
 	invalidateGitReadCache,
 } from "../../git/repository/read-cache.ts";
+import {
+	autoArchiveReason,
+	SUBAGENT_BRANCH_PREFIX,
+	WorktreeArchiveRecords,
+} from "../../git/worktrees/archive-records.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import { type GitWorktree, GitWorktreeManager } from "../../git/worktrees/manager.ts";
 import { WorktreeMergedRecords } from "../../git/worktrees/merged-records.ts";
@@ -124,6 +130,9 @@ function reasoningOf(thinkingLevel: ThinkingLevel) {
 	return thinkingLevel === "off" ? undefined : thinkingLevel;
 }
 
+/** How long an archived copy that still holds work is left alone before its branch is checked again. */
+const ARCHIVE_BRANCH_RECHECK_MS = 6 * 60 * 60 * 1000;
+
 interface GitTaskState {
 	kind: "commit" | "push";
 	phase: string;
@@ -137,6 +146,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	const cwd = () => host.session.sessionManager.getCwd();
 	const copyNames = () => new WorktreeDisplayNames(host.runtimeHost.services.agentDir);
 	const mergedCopies = () => new WorktreeMergedRecords(host.runtimeHost.services.agentDir);
+	const copyArchive = () => new WorktreeArchiveRecords(host.runtimeHost.services.agentDir);
 	const launchers = new Map<string, WorktreeLauncher>();
 
 	const publishTask = (state: GitTaskState | undefined, result?: unknown) => {
@@ -656,6 +666,29 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
 		const current = path.resolve(cwd());
 		const worktrees = listing.worktrees ?? [];
+		// Archive finished copies on the way out. Only a small record file is written here, never a Git command: the
+		// branch of an archived copy is released later, by the idle-guarded archive sync below.
+		const archive = copyArchive();
+		archive.prune();
+		const tempDir = tmpdir();
+		for (const worktree of worktrees) {
+			// The copy this chat runs in stays an active copy no matter what its folder looks like.
+			if (path.resolve(worktree.path) === current) continue;
+			const reason = autoArchiveReason({
+				path: worktree.path,
+				branch: worktree.branch,
+				isMain: worktree.isMain,
+				record: worktree.isMain ? undefined : archive.get(worktree.path),
+				tempDir,
+			});
+			if (!reason) continue;
+			archive.update(worktree.path, {
+				origin: reason === "subagent" ? "subagent" : "external",
+				archivedAt: new Date().toISOString(),
+				reason,
+				branch: worktree.branch,
+			});
+		}
 		// What each copy holds that main does not (uncommitted files, unmerged commits), read a few at a time so a
 		// long list of sub-agent copies cannot start dozens of Git processes at once.
 		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
@@ -672,14 +705,21 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const merged = mergedCopies();
 		return {
 			repositoryRoot: listing.repositoryRoot ?? root,
-			worktrees: worktrees.map((worktree, index) => ({
-				...worktree,
-				...activity[index],
-				merged: worktree.isMain ? null : (merged.get(worktree.path) ?? null),
-				subagent: !!worktree.branch?.startsWith("myharness-subagent-"),
-				displayName: copyNames().label(worktree),
-				current: path.resolve(worktree.path) === current,
-			})),
+			worktrees: worktrees.map((worktree, index) => {
+				const record = worktree.isMain ? undefined : archive.get(worktree.path);
+				return {
+					...worktree,
+					...activity[index],
+					merged: worktree.isMain ? null : (merged.get(worktree.path) ?? null),
+					subagent: !!worktree.branch?.startsWith(SUBAGENT_BRANCH_PREFIX),
+					origin: record?.origin ?? null,
+					archived: !!record?.archivedAt,
+					archivedAt: record?.archivedAt ?? null,
+					archiveReason: record?.reason ?? null,
+					displayName: copyNames().label(worktree),
+					current: path.resolve(worktree.path) === current,
+				};
+			}),
 		};
 	});
 
@@ -709,6 +749,8 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 				? worktreeCase.createBranch(root, branch, base)
 				: worktreeCase.createFromBranch(root, branch);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to create the worktree.");
+		// Remember who made this copy, so archiving later never has to guess from the folder name.
+		if (result.worktree?.path) copyArchive().update(result.worktree.path, { origin: "manual" });
 		return JSON.parse(JSON.stringify(result));
 	});
 
@@ -796,7 +838,114 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const worktree = findWorktree(root, String(asObject(body).path ?? ""));
 		const result = worktreeCase.delete(root, worktree, asObject(body).force === true);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the worktree.");
+		copyArchive().remove(worktree.path);
 		return { ok: true };
+	});
+
+	// Archiving keeps a finished copy on disk: the folder, its commits and any uncommitted files stay, it only leaves
+	// the active list. Releasing its branch means detaching a clean copy, so this runs under the usual idle guard and
+	// reads each copy off the event loop.
+	server.route("POST", "/api/git/worktrees/archive-sync", async () => {
+		requireIdle("archive copies");
+		requireTrusted();
+		const root = repositoryRootOrThrow();
+		const listing = await worktreeCase.listAsync(root);
+		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
+		const current = path.resolve(cwd());
+		const archive = copyArchive();
+		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
+		const candidates = (listing.worktrees ?? []).filter((worktree) => {
+			if (worktree.isMain || !worktree.branch) return false;
+			if (path.resolve(worktree.path) === current) return false;
+			const record = archive.get(worktree.path);
+			if (!record?.archivedAt) return false;
+			// A copy known to still hold files is looked at again once per window, not on every panel open.
+			return !record.branchKeptAt || Date.now() - Date.parse(record.branchKeptAt) >= ARCHIVE_BRANCH_RECHECK_MS;
+		});
+		const released: string[] = [];
+		const kept: Array<{ path: string; error: string }> = [];
+		let next = 0;
+		await Promise.all(
+			Array.from({ length: Math.min(4, candidates.length) }, async () => {
+				while (next < candidates.length) {
+					const worktree = candidates[next++]!;
+					const changes = await manager.readChangeCountAsync(worktree.path).catch(() => undefined);
+					// A copy that still holds files keeps its branch: detaching it would hide that work behind a detached HEAD.
+					if (changes !== 0) {
+						archive.update(worktree.path, { branchKeptAt: new Date().toISOString() });
+						continue;
+					}
+					const detached = await manager
+						.detachAsync(worktree.path)
+						.catch((error) => ({ ok: false, error: String(error) }));
+					if (detached.ok) released.push(worktree.path);
+					else kept.push({ path: worktree.path, error: detached.error ?? "未知错误" });
+				}
+			}),
+		);
+		return { released: released.length, kept };
+	});
+
+	// Manual archive and restore from the copy list. Nothing is deleted either way.
+	server.route("POST", "/api/git/worktrees/archive", async ({ body }) => {
+		requireIdle("archive a copy");
+		requireTrusted();
+		const root = repositoryRootOrThrow();
+		const payload = asObject(body);
+		const worktree = findWorktree(root, String(payload.path ?? ""));
+		if (worktree.isMain) throw new HttpError(400, "The main copy cannot be archived.");
+		const archive = copyArchive();
+		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
+		const isCurrent = path.resolve(worktree.path) === path.resolve(cwd());
+		if (payload.archived === true) {
+			const record = archive.get(worktree.path);
+			archive.update(worktree.path, {
+				archivedAt: new Date().toISOString(),
+				reason: "manual",
+				branch: worktree.branch ?? record?.branch,
+			});
+			// The copy this chat runs in keeps its branch: other Git commands depend on the current checkout.
+			if (!isCurrent && worktree.branch && manager.readChangeCount(worktree.path) === 0) {
+				const detached = manager.detach(worktree.path);
+				if (!detached.ok) return { ok: true, message: null, warning: detached.error ?? null };
+			}
+			return { ok: true, message: null, warning: null };
+		}
+		const record = archive.get(worktree.path);
+		let warning: string | null = null;
+		if (!isCurrent && record?.branch && !worktree.branch) {
+			const attached = manager.attach(worktree.path, record.branch);
+			if (!attached.ok) warning = attached.error ?? null;
+		}
+		archive.update(worktree.path, { archivedAt: undefined, reason: undefined });
+		return { ok: true, message: null, warning };
+	});
+
+	// Clearing removes archived copies for real. Copies that still hold uncommitted work are reported and only
+	// discarded when the caller passes force after its own confirmation.
+	server.route("POST", "/api/git/worktrees/archive/clear", async ({ body }) => {
+		requireIdle("clear archived copies");
+		requireTrusted();
+		const root = repositoryRootOrThrow();
+		const force = asObject(body).force === true;
+		const listing = await worktreeCase.listAsync(root);
+		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
+		const current = path.resolve(cwd());
+		const archive = copyArchive();
+		const removed: string[] = [];
+		const failed: Array<{ path: string; error: string }> = [];
+		for (const worktree of listing.worktrees ?? []) {
+			if (worktree.isMain || path.resolve(worktree.path) === current) continue;
+			if (!archive.get(worktree.path)?.archivedAt) continue;
+			const result = worktreeCase.delete(root, worktree, force);
+			if (!result.ok) {
+				failed.push({ path: worktree.path, error: result.error ?? "未知错误" });
+				continue;
+			}
+			archive.remove(worktree.path);
+			removed.push(worktree.path);
+		}
+		return { removed: removed.length, failed };
 	});
 
 	server.route("POST", "/api/git/worktrees/combine", ({ body }) => {

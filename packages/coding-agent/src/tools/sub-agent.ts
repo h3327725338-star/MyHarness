@@ -1979,8 +1979,8 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 		}
 		if (normalizedRejectedTask) emitProgress();
 
-		// Finalize every read-write worktree: clean ones are removed automatically,
-		// anything with uncommitted or untracked changes is kept and reported.
+		// Finalize every read-write worktree: each one is archived (its folder, commits and uncommitted files stay on
+		// disk for later inspection) and reported, never deleted.
 		if (mode === "read-write") {
 			for (let index = 0; index < worktreeHandles.length; index++) {
 				const handle = worktreeHandles[index];
@@ -1992,16 +1992,14 @@ export async function runExploreBatch(options: RunExploreBatchOptions): Promise<
 						`未带入 Worktree 的未提交文件：${note}`,
 					);
 				}
-				if (finalized.dirty) {
-					results[index] = {
-						...results[index],
-						worktreePath: handle.worktreePath,
-						branchName: handle.branchName,
-						changedFiles: finalized.changedFiles,
-					};
-					if (finalized.error) {
-						results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
-					}
+				results[index] = {
+					...results[index],
+					worktreePath: handle.worktreePath,
+					branchName: handle.branchName,
+					...(finalized.dirty ? { changedFiles: finalized.changedFiles } : {}),
+				};
+				if (finalized.error) {
+					results[index].unresolved = pushUniqueLimited(results[index].unresolved, finalized.error);
 				}
 			}
 			emitProgress();

@@ -9,6 +9,7 @@ import {
 	runGit,
 	setLocalGitIdentity,
 } from "../src/git/repository/integration.ts";
+import { WorktreeArchiveRecords } from "../src/git/worktrees/archive-records.ts";
 import { pathIdentityKey } from "../src/utils/paths.ts";
 
 function createTemporaryDirectory(prefix: string): string {
@@ -190,10 +191,18 @@ describe("delegated worktree sandbox", () => {
 			const { handle } = prepared;
 
 			const finalized = finalizeDelegatedWorktree(handle);
-			expect(finalized).toEqual({ dirty: false, changedFiles: [], removed: true });
-			expect(existsSync(handle.worktreePath)).toBe(false);
+			expect(finalized).toEqual({ dirty: false, changedFiles: [], removed: false, archived: true });
+			// The copy is archived, not deleted: folder, snapshot commit and uncommitted workspace files all stay put.
+			expect(existsSync(handle.worktreePath)).toBe(true);
+			// Its generated branch is released (and pruned) like before, and the record keeps the name for restoring.
 			expect(runGit(repoDir, ["branch", "--list", "myharness-subagent-*"]).stdout.trim()).toBe("");
-			// Dropping the snapshot loses nothing: the changes are still in the workspace, whose HEAD did not move.
+			expect(runGit(handle.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim()).toBe("HEAD");
+			const record = new WorktreeArchiveRecords(agentDir).get(handle.worktreePath);
+			expect(record?.origin).toBe("subagent");
+			expect(record?.branch).toBe(handle.branchName);
+			expect(typeof record?.archivedAt).toBe("string");
+			// Removing the snapshot from the branch list loses nothing: the same changes are still in the workspace,
+			// whose HEAD did not move, and the copy's own HEAD still anchors the snapshot commit.
 			expect(runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim()).toBe(commit);
 			expect(read(join(repoDir, "a.txt"))).toBe("modified in the workspace\n");
 		});
@@ -266,7 +275,7 @@ describe("delegated worktree sandbox", () => {
 		}, 30_000);
 	});
 
-	it("removes a clean worktree and its generated branch", () => {
+	it("archives a clean worktree and keeps its folder", () => {
 		const { repoDir } = createRepository();
 		track(repoDir);
 		const agentDir = track(createTemporaryDirectory("myharness-wt-agent"));
@@ -276,8 +285,8 @@ describe("delegated worktree sandbox", () => {
 		const handle = prepared.handle;
 
 		const finalized = finalizeDelegatedWorktree(handle);
-		expect(finalized).toEqual({ dirty: false, changedFiles: [], removed: true });
-		expect(existsSync(handle.worktreePath)).toBe(false);
+		expect(finalized).toEqual({ dirty: false, changedFiles: [], removed: false, archived: true });
+		expect(existsSync(handle.worktreePath)).toBe(true);
 		expect(runGit(repoDir, ["branch", "--list", "myharness-subagent-*"]).stdout.trim()).toBe("");
 		// The main worktree is untouched.
 		expect(readFileSync(join(repoDir, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("base\n");

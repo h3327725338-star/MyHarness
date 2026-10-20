@@ -10,14 +10,20 @@
  * copied changes are committed once on the worktree's own generated branch (a
  * "workspace snapshot" commit written with plumbing commands, so no hook runs):
  * the worktree starts clean, and everything `git status` reports later is the
- * worker's own work. On finalization a worktree without any change is removed
- * automatically (its generated branch too); a worktree with uncommitted or
- * untracked changes is always kept for the user.
+ * worker's own work. On finalization the worktree is archived, never deleted:
+ * its folder, its commits and any uncommitted files stay for later inspection.
+ * A clean copy is detached first, so its generated branch is released (and
+ * removed) while the snapshot commit stays reachable through the copy's HEAD.
  */
 import { randomBytes } from "node:crypto";
 import { copyFileSync, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { runGitSync } from "../../git/repository/command.ts";
+import {
+	SUBAGENT_BRANCH_PREFIX,
+	type WorktreeArchiveRecord,
+	WorktreeArchiveRecords,
+} from "../../git/worktrees/archive-records.ts";
 import { GitWorktreeManager } from "../../git/worktrees/manager.ts";
 
 export {
@@ -70,15 +76,19 @@ export interface DelegatedWorktreeHandle {
 	repositoryRoot: string;
 	/** Main worktree path used for Git bookkeeping. */
 	mainPath: string;
+	/** Agent directory holding the archive record of every finished copy. */
+	agentDir: string;
 }
 
 export interface DelegatedWorktreeFinalizeResult {
 	dirty: boolean;
 	/** Uncommitted changes (staged, unstaged, and untracked) relative to the worktree. */
 	changedFiles: string[];
-	/** True when the clean worktree was removed automatically. */
+	/** Always false now: a finished copy is archived instead of removed. Kept for callers that still read it. */
 	removed: boolean;
-	/** Present when cleanup could not be completed; the worktree is kept. */
+	/** True when the copy was archived; its folder and commits stay on disk. */
+	archived: boolean;
+	/** Present when archiving could not be completed; the copy is kept anyway. */
 	error?: string;
 }
 
@@ -114,7 +124,7 @@ export function prepareDelegatedWorktree(options: {
 			error: `无法读取仓库 Worktree 列表：${listing.error ?? "未找到 main 主 Worktree，现有 Worktree 功能依赖它。"}`,
 		};
 	}
-	const branchName = `myharness-subagent-${randomBytes(5).toString("hex")}`;
+	const branchName = `${SUBAGENT_BRANCH_PREFIX}${randomBytes(5).toString("hex")}`;
 	const created = manager.createBranch(repositoryRoot, branchName, baseCommit);
 	if (!created.ok || !created.worktree) {
 		return { ok: false, error: `创建子代理 Worktree 失败：${created.error ?? "未知错误"}` };
@@ -127,6 +137,7 @@ export function prepareDelegatedWorktree(options: {
 		importNotes: [],
 		repositoryRoot,
 		mainPath: listing.main.path,
+		agentDir: options.agentDir,
 	};
 	const imported = importUncommittedChanges(handle);
 	if (!imported.ok) {
@@ -291,10 +302,13 @@ function parsePorcelainPaths(stdout: string): string[] {
 }
 
 /**
- * Finalize one task worktree. Clean worktrees (and their generated branch) are
- * removed; any uncommitted or untracked change keeps the worktree untouched.
+ * Finalize one task worktree. Nothing is deleted any more: the copy is archived, so its folder, its commits and any
+ * uncommitted files stay where they are for later inspection. A clean copy is detached first, which releases the
+ * generated branch (and removes it, exactly as before) while the snapshot commit stays reachable through the copy's
+ * own HEAD; a copy that still holds changes keeps its branch so nothing is hidden behind a detached HEAD.
  */
 export function finalizeDelegatedWorktree(handle: DelegatedWorktreeHandle): DelegatedWorktreeFinalizeResult {
+	const records = new WorktreeArchiveRecords(handle.agentDir);
 	const status = runGitSync(["status", "--porcelain", "--untracked-files=all"], {
 		cwd: handle.worktreePath,
 		timeoutMs: 30_000,
@@ -303,44 +317,53 @@ export function finalizeDelegatedWorktree(handle: DelegatedWorktreeHandle): Dele
 		preserveOutput: true,
 	});
 	if (!status.ok) {
+		records.update(handle.worktreePath, archiveFields(handle));
 		return {
 			dirty: true,
 			changedFiles: [],
 			removed: false,
-			error: `无法读取 Worktree 状态，已保留：${status.error || status.stderr || "未知错误"}`,
+			archived: true,
+			error: `无法读取 Worktree 状态，已归档保留：${status.error || status.stderr || "未知错误"}`,
 		};
 	}
 	const changedFiles = parsePorcelainPaths(status.stdout);
-	if (changedFiles.length > 0) {
-		return { dirty: true, changedFiles, removed: false };
-	}
-	return removeCleanWorktree(handle);
+	const archived = archiveDelegatedWorktree(handle, changedFiles.length === 0);
+	return {
+		dirty: changedFiles.length > 0,
+		changedFiles,
+		removed: false,
+		archived: true,
+		error: archived.error,
+	};
 }
 
-function removeCleanWorktree(handle: DelegatedWorktreeHandle): DelegatedWorktreeFinalizeResult {
-	const removed = runGitSync(["worktree", "remove", handle.worktreePath], {
-		cwd: handle.mainPath,
-		timeoutMs: 30_000,
-	});
-	if (!removed.ok) {
-		return {
-			dirty: true,
-			changedFiles: [],
-			removed: false,
-			error: `删除干净 Worktree 失败，已保留：${removed.error || removed.stderr || removed.stdout || "未知错误"}`,
-		};
+/** What every archived sub-agent copy records: who made it, when it was archived and the branch to restore. */
+function archiveFields(handle: DelegatedWorktreeHandle): WorktreeArchiveRecord {
+	return {
+		path: handle.worktreePath,
+		origin: "subagent",
+		archivedAt: new Date().toISOString(),
+		reason: "subagent",
+		branch: handle.branchName,
+	};
+}
+
+function archiveDelegatedWorktree(handle: DelegatedWorktreeHandle, clean: boolean): { error?: string } {
+	new WorktreeArchiveRecords(handle.agentDir).update(handle.worktreePath, archiveFields(handle));
+	if (!clean) return {};
+	// Detaching keeps every file and commit of the copy; it only stops the copy from being the checkout that owns
+	// the generated branch, so that branch can be pruned like before.
+	const detached = runGitSync(["checkout", "--detach"], { cwd: handle.worktreePath, timeoutMs: 30_000 });
+	if (!detached.ok) {
+		return { error: `副本已归档，但释放分支失败：${detached.error || detached.stderr || "未知错误"}` };
 	}
 	// The worktree was clean, so the generated branch holds at most the workspace snapshot commit, which is only a
 	// copy of changes that still sit in the dispatching workspace: pruning it cannot lose user work. Report a failed
 	// prune instead of silently leaving branches to pile up.
 	const pruned = runGitSync(["branch", "-D", handle.branchName], { cwd: handle.mainPath, timeoutMs: 30_000 });
-	if (!pruned.ok) {
-		return {
-			dirty: false,
-			changedFiles: [],
-			removed: true,
-			error: `干净 Worktree 已删除，但自动分支 ${handle.branchName} 未能删除：${pruned.error || pruned.stderr || "未知错误"}`,
-		};
-	}
-	return { dirty: false, changedFiles: [], removed: true };
+	return pruned.ok
+		? {}
+		: {
+				error: `副本已归档并脱离分支，但自动分支 ${handle.branchName} 未能删除：${pruned.error || pruned.stderr || "未知错误"}`,
+			};
 }
