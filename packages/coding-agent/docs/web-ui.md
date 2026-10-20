@@ -2,6 +2,8 @@
 
 MyHarness 使用统一的 Web UI，可由本机浏览器或独立 Electron Windows 桌面宿主打开；桌面开发、打包、数据锚点与限制见 [Desktop README](../../desktop/README.md)。右侧详情面板是一个统一的多标签工作区：原有四个面板（Changes / Files / Terminal / Session）各占一个标签，还能同时打开任意多个本地文件和网站；Electron 下每个网站标签由主进程的一个 `WebContentsView` 承载（真实 Chromium 文档，不使用 iframe/webview），并共用一个持久化的第三方分区保存 Cookie 与登录态。它使用现有 `AgentSessionRuntime` / `AgentSession`、Session、Settings、Provider、Tool、Git checkpoint 和 Extension，没有第二套 Agent 逻辑。终端 CLI/TUI 已移出本仓库；Web Terminal 面板仍保留。
 
+桌面端窗口没有系统标题栏：顶部栏本身就是标题栏，各栏四周贴满窗口（不留外边距和圆角，栏与栏之间一条 1px 分隔线），对话顶栏与面板标签行同高、底线对齐；最小化 / 最大化（还原）/ 关闭三个按钮按 Windows 原生尺寸（46×44）贴在窗口右上角，最大化时鼠标甩到右上角即可点到关闭，所在的那一行是当前贴着窗口右边的顶部栏（对话顶栏，或右侧面板打开时的面板标签行）；顶部栏空白处拖动窗口、双击最大化/还原。浏览器里打开时没有这三个按钮，也不改变布局。细节见 [Desktop README](../../desktop/README.md#window-frame)。
+
 ## Coding / General 双模式
 
 接口约定见 [chat-modes-backend.md](chat-modes-backend.md)。原 `POST /api/prompt` 的 `mode` 是消息投递策略，与产品模式不同。浏览器接入：

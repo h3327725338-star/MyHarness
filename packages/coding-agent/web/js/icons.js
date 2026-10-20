@@ -102,6 +102,10 @@ const ICONS = {
 	fitPage: [R(5.25, 3, 13.5, 18, 1.5), P("M12 7.5v9m0-9-2.25 2.25M12 7.5l2.25 2.25M12 16.5l-2.25-2.25M12 16.5l2.25-2.25")], // drawn here: fit the page
 	maximize: [P("M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15")], // arrows-pointing-out
 	minimize: [P("M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25")], // arrows-pointing-in
+	// Drawn here: the desktop window's own buttons (window-controls.js), the size of the other header glyphs at 17 px.
+	winMinimize: [P("M6 12h12")],
+	winMaximize: [R(6, 6, 12, 12, 1.5)],
+	winRestore: [R(6, 8.5, 9.5, 9.5, 1.5), P("M8.5 8.5V7.5A1.5 1.5 0 0 1 10 6h6.5A1.5 1.5 0 0 1 18 7.5V14a1.5 1.5 0 0 1-1.5 1.5h-1")],
 	quit: [P("M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9")], // arrow-right-start-on-rectangle
 };
 

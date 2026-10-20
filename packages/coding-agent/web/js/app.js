@@ -18,6 +18,7 @@ import { CommandPalette } from "./palette.js";
 import { FloatingQuoteToolbar } from "./quote-toolbar.js";
 import { ImageLightboxHost } from "./lightbox.js";
 import { useWorkspaceTitle } from "./workspace-title.js";
+import { WindowControls } from "./window-controls.js";
 import { SourcesPageHost } from "./sources-page.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
@@ -135,7 +136,7 @@ function PanelContainer() {
 			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
 			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
 			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
-			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="x" size=${15} /></button>
+			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>
 		</div>
 		<div class="panel-body">
 			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
@@ -336,11 +337,11 @@ export function App() {
 	useWorkspaceTitle();
 
 
-	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div></div>`;
+	if (shutdown) return html`<div class="splash"><div class="splash-card"><${Icon} name="quit" size=${28} /><h2>${t("MyHarness has stopped")}</h2><div class="dim">${t("The local server was shut down. You can close this tab; start MyHarness again to continue.")}</div></div><${WindowControls} bare /></div>`;
 	if ((!restarting && bootPhase !== "ready") || !snap) {
 		return html`<div class="splash"><div class="splash-card">
 			${bootPhase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${bootDetail}</div>` : html`<${Spinner} /><div>${bootPhase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
-		</div><${BootDialogHost} /></div>`;
+		</div><${BootDialogHost} /><${WindowControls} bare /></div>`;
 	}
 	const layoutClass = `app ${panel.shown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
 	return html`<div class=${layoutClass} ref=${appRef}>
@@ -361,6 +362,7 @@ export function App() {
 		<${PaletteOverlayHost} />
 		<${DialogOverlayHost} />
 		<${ImageLightboxHost} />
+		<${WindowControls} />
 	</div>`;
 }
 

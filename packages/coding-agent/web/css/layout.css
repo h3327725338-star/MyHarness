@@ -254,7 +254,7 @@
 
 /* Workspace tabs: the right panel keeps several things open (panels, files, website tabs). The strip scrolls when it
    does not fit, a tab can be dragged to reorder, and middle-click or its × closes it without touching the others. */
-.panel-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 40px; padding: 0 calc(var(--pad-panel) + 26px) 0 6px; border-bottom: 1px solid var(--border); flex: none; }
+.panel-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 44px; padding: 0 calc(var(--pad-panel) + 26px) 0 6px; border-bottom: 1px solid var(--border); flex: none; }
 .ws-tabs { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 2px 0; mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
 .ws-tab { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 200px; height: 28px; padding: 0 4px 0 9px; border-radius: var(--r-md); color: var(--text-2); }
 .ws-tab:hover { background: var(--surface-hover); color: var(--text); }
@@ -317,3 +317,38 @@
 .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
 .app.ws-max .main > .resizer { left: 0; }
 .panel-max.active { color: var(--accent); }
+
+/* Desktop host without a system title bar (window-controls.js sets html.desktop-frameless). The app's top row is the
+   title bar, and the columns fill the window edge to edge: no gap and no rounded corner against the window frame, a
+   1px line between columns. The window buttons are Windows-sized blocks (46px wide, the top row's height) in the
+   window's very corner, so a pointer thrown into the top-right corner of a maximized window lands on close. Whichever
+   top bar ends at the window's right edge keeps room for them: the conversation header, or the workspace panel's head
+   while the panel is the right-hand column. Empty parts of the top bars drag the window and a double-click on them
+   maximizes (both native); every control in them opts out, so a click is never taken for a drag. */
+.desktop-frameless { --wc-btn: 46px; --wc-w: calc(3 * var(--wc-btn) + 7px); --wc-room: calc(var(--wc-w) + 6px); }
+.window-controls { position: fixed; top: 0; right: 0; z-index: 700; height: 44px; display: flex; align-items: center; -webkit-app-region: no-drag; }
+.window-controls .icon-btn { width: var(--wc-btn); height: 44px; border-radius: 0; }
+/* A hairline keeps the window's own buttons apart from the app's. */
+.window-controls::before { content: ""; width: 1px; height: 16px; margin-right: 6px; background: var(--border); }
+.window-controls.bare::before { display: none; }
+.window-controls .window-close:hover:not(:disabled), .window-controls .window-close:active:not(:disabled) { background: var(--danger); color: var(--on-danger); }
+.window-drag { position: fixed; top: 0; left: 0; right: 0; height: 44px; -webkit-app-region: drag; }
+.desktop-frameless .app { --panel-current: 0px; }
+.desktop-frameless .app.panel-open { --panel-current: var(--panel-width); }
+.desktop-frameless .app:has(> .sidebar.is-collapsed).panel-open { --panel-current: min(var(--panel-w), max(340px, calc(100vw - 520px))); }
+.desktop-frameless .app.ws-max { --chat-col: min(var(--chat-w), max(320px, calc(100vw - 480px))); }
+.desktop-frameless .main, .desktop-frameless .app.ws-max .main, .desktop-frameless .panel, .desktop-frameless .app.ws-max .panel { margin: 0; border-width: 0; border-left: 1px solid var(--border); border-radius: 0; }
+.desktop-frameless .sidebar.is-collapsed + .main, .desktop-frameless .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin: 0; border-left-width: 0; }
+.desktop-frameless .app.ws-max .main { border-left-width: 1px; }
+/* The sidebar's brand row is centred on the top row, as the conversation header is. */
+.desktop-frameless .sidebar-top { padding-top: 4px; }
+.desktop-frameless .app:not(.panel-open) .main-header, .desktop-frameless .app.ws-max .main-header { padding-right: var(--wc-room); }
+.desktop-frameless .app.panel-open:not(.ws-max) .panel-head { padding-right: calc(var(--wc-room) + 28px); }
+.desktop-frameless .app.panel-open:not(.ws-max) .panel-close { right: var(--wc-room); }
+.desktop-frameless :is(.main-header, .panel-head, .ws-tabs, .sidebar-top .brand) { -webkit-app-region: drag; }
+.desktop-frameless :is(.main-header, .panel-head, .sidebar-top .brand) > :not(.grow, .ws-tabs),
+.desktop-frameless :is(.main-header, .panel-head, .ws-tabs, .sidebar-top .brand) :is(button, input, textarea, select, a, [role="button"], [role="tab"], [contenteditable]),
+.desktop-frameless :is(.resizer, .ws-menu, .scrim, .composer-scrim, .composer.expanded, .quote-edit-scrim, .quote-edit-pop, .lightbox-scrim, .personal-fullscreen-scrim, .popover, .local-file-menu, .floating-quote-bar, .quote-note-card, .tooltip) { -webkit-app-region: no-drag; }
+/* A column resizer comes before the top bar it overlaps, and a later drag area wins over an earlier no-drag one; these
+   strips come after the top bars and give the resizer's top end back to the resizer. */
+.desktop-frameless .app.panel-open:not(.ws-max) .panel::after, .desktop-frameless .app.ws-max .main::after { content: ""; position: absolute; left: 0; top: 0; width: 8px; height: 44px; pointer-events: none; -webkit-app-region: no-drag; }

@@ -610,6 +610,10 @@ export const zhCN = {
 	back: "返回",
 	close: "关闭",
 	Close: "关闭",
+	Minimize: "最小化",
+	Maximize: "最大化",
+	Restore: "还原",
+	Window: "窗口",
 	"About this computer": "关于这台电脑",
 
 	// ---- Composer

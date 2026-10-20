@@ -19,6 +19,19 @@ contextBridge.exposeInMainWorld('myHarnessDesktop', Object.freeze({
   },
   openPath: (target) => ipcRenderer.invoke('desktop:open-path', target),
   revealPath: (target) => ipcRenderer.invoke('desktop:reveal-path', target),
+  // Buttons of the frameless window: each call resolves to { maximized, fullScreen } after the action; onState reports
+  // changes made any other way (double-click on the drag area, Snap, Win+Up, the taskbar).
+  windowControls: Object.freeze({
+    minimize: () => ipcRenderer.invoke('desktop:window', 'minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('desktop:window', 'toggleMaximize'),
+    close: () => ipcRenderer.invoke('desktop:window', 'close'),
+    state: () => ipcRenderer.invoke('desktop:window', 'state'),
+    onState(callback) {
+      const handler = (_event, value) => callback(value);
+      ipcRenderer.on('desktop:window-state', handler);
+      return () => ipcRenderer.removeListener('desktop:window-state', handler);
+    },
+  }),
   // Legacy single-view surface (kept for the previous panel and older pages).
   navigate: (url) => ipcRenderer.invoke('desktop:navigate', url),
   bounds: (rect) => ipcRenderer.send('desktop:bounds', rect),

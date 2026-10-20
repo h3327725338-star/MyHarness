@@ -50,11 +50,25 @@ const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, r
 app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
 app.setName('MyHarness');
 const escaped = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// The window has no system title bar (frame: false), so the two pages the host shows itself (starting, cannot start) carry
+// their own drag strip and window buttons. They are the only non-service pages allowed to use the window controls: the
+// IPC check compares the sender with the exact page loaded here.
+let shellUrl;
+// Colors are the dark theme's own values (tokens.css is not loaded on these pages).
+const shellGlyph = { min: '<path d="M6 12h12"/>', max: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>', restore: '<rect x="6" y="8.5" width="9.5" height="9.5" rx="1.5"/><path d="M8.5 8.5V7.5A1.5 1.5 0 0 1 10 6h6.5A1.5 1.5 0 0 1 18 7.5V14a1.5 1.5 0 0 1-1.5 1.5h-1"/>', close: '<path d="M6 18 18 6M6 6l12 12"/>' };
+const shellButton = (action, label, glyph, id = '') => `<button ${id ? `id="${id}" ` : ''}aria-label="${label}" title="${label}" onclick="myHarnessDesktop.windowControls.${action}()"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${glyph}</svg></button>`;
+const loadShell = (body) => {
+  const style = '<style>.wc{position:fixed;top:0;right:0;height:44px;display:flex;color:#a8adad;-webkit-app-region:no-drag}.wc button{width:46px;height:44px;border:0;border-radius:0;background:transparent;color:inherit;display:inline-flex;align-items:center;justify-content:center}.wc button:hover{background:#2a2c2c;color:#eee}.wc #wc-close:hover{background:#e8665f;color:#fff}</style>';
+  const sync = `<script>{const b=document.getElementById('wc-max'),c=window.myHarnessDesktop&&myHarnessDesktop.windowControls,g=${JSON.stringify({ max: shellGlyph.max, restore: shellGlyph.restore })},s=(v)=>{b.querySelector('svg').innerHTML=v&&v.maximized?g.restore:g.max;};if(c){c.state().then(s,()=>{});c.onState(s);}}</script>`;
+  const bar = `<div style="position:fixed;top:0;left:0;right:0;height:44px;-webkit-app-region:drag"></div><div class="wc">${shellButton('minimize', '最小化', shellGlyph.min)}${shellButton('toggleMaximize', '最大化/还原', shellGlyph.max, 'wc-max')}${shellButton('close', '关闭', shellGlyph.close, 'wc-close')}</div>`;
+  shellUrl = `data:text/html;charset=utf-8,${encodeURIComponent(`<html lang="zh-CN"><meta charset="utf-8"><title>MyHarness</title>${style}<body style="margin:0;background:#1e1f1f;color:#eee;font:16px system-ui;padding:64px 48px 48px">${bar}${body}${sync}</body></html>`)}`;
+  return window.loadURL(shellUrl);
+};
 const errorPage = async (message) => {
   log(message);
   if (!window || window.isDestroyed()) { dialog.showErrorBox('MyHarness 桌面端启动失败', `${message}\n日志：${logs}`); return; }
   browser?.destroy();
-  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<html lang="zh-CN"><meta charset="utf-8"><title>MyHarness</title><body style="background:#1e1f1f;color:#eee;font:16px system-ui;padding:48px"><h2>MyHarness 无法启动</h2><pre style="white-space:pre-wrap">${escaped(message)}</pre><p>日志：${escaped(logs)}</p><p>请关闭窗口后重新启动。</p></body></html>`)}`);
+  await loadShell(`<h2>MyHarness 无法启动</h2><pre style="white-space:pre-wrap">${escaped(message)}</pre><p>日志：${escaped(logs)}</p><p>请关闭窗口后重新启动。</p>`);
   window.show();
 };
 async function stop() {
@@ -152,10 +166,23 @@ else {
     // removed still claims this id, and Windows may pick it over this app's own shortcut on a toast click. Electron
     // writes its own shortcut again before the next notification, so the ones that cannot start this app are removed.
     if (app.isPackaged) void removeForeignShortcuts({ aumid: notificationAppId, log });
-    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
     browser = createBrowser(window, log, { workspaceRoot: cwd });
     const trusted = (event) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && serviceUrl && new URL(event.senderFrame.url).origin === new URL(serviceUrl).origin;
+    // Window buttons of the frameless window. The app page may use them, and so may the host's own starting/error page
+    // (exactly the page loadShell produced, in the main frame); no other page or frame gets them.
+    const windowCaller = (event) => trusted(event) || (event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && !!shellUrl && event.senderFrame.url === shellUrl);
+    const windowState = () => ({ maximized: window.isMaximized(), fullScreen: window.isFullScreen() });
+    ipcMain.handle('desktop:window', (event, action) => {
+      if (!windowCaller(event)) throw new Error('拒绝非应用页面调用');
+      if (action === 'minimize') window.minimize();
+      else if (action === 'toggleMaximize') { if (window.isMaximized()) window.unmaximize(); else window.maximize(); }
+      // Same path as the system close: the 'close' handler hides the window and stops the local service.
+      else if (action === 'close') window.close();
+      else if (action !== 'state') throw new Error('未知的窗口操作');
+      return windowState();
+    });
     const handleBrowserCommand = async (command) => {
       if (command && typeof command === 'object' && command.action === 'workspace') return workspaceRequest(command.command, Number(command.timeoutMs) || 15000);
       return browser.command(command);
@@ -215,8 +242,11 @@ else {
     // rectangle immediately; the page also re-measures every frame while a browser tab is active.
     for (const event of ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen', 'show'])
       window.on(event, () => browser?.refresh());
+    // The page's maximize/restore button follows the real state, whatever changed it (button, double-click, Snap, Win+Up, taskbar).
+    for (const event of ['maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen'])
+      window.on(event, () => { if (!window.webContents.isDestroyed()) window.webContents.send('desktop:window-state', windowState()); });
     window.on('close', (event) => { if (!finished) { event.preventDefault(); window.hide(); void stop(); } });
-    await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>MyHarness</title><body style="background:#1e1f1f;color:#ccc;font:16px system-ui;padding:40px">正在启动 MyHarness…</body>'));
+    await loadShell('<span style="color:#ccc">正在启动 MyHarness…</span>');
     window.show();
     startService();
   }).catch((error) => void errorPage(error.stack || error.message));
