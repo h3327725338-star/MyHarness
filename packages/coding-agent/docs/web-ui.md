@@ -256,7 +256,7 @@ Agent 正在运行时发送消息有三种行为，直接映射 MyHarness 真实
 | **Interrupt** | 设置里选它后按 Enter / 发送 | 立即中止主 Agent 当前这一轮，然后发送新消息。正在运行的子智能体（`agent` 的前台/后台批次、workflow、ultracode）**不会被取消**：前台派发转入后台继续，结果回来后交给主 Agent 并触发综合（结果在新消息的回答进行中到达时，排到这一轮结束后）。主 Agent 已答完、任务只在等后台子智能体时没有运行可中止，改按 Steer 送达 | `AgentSession.abort({ keepBackground: true })` → `waitForForegroundIdle()` → `prompt()`（等子智能体时：`streamingBehavior: "steer"`，由 `WebHost.submit` 用 `isWaitingForBackground` 判断） |
 | **Stop** | 停止按钮，或输入框为空时按 Esc | 中止当前运行**和全部子智能体**（运行中提示为“停止本次运行和全部子智能体”） | `AgentSession.abort()` |
 
-排队中的消息显示在 Composer 上方，可一键放回输入框。
+排队中的消息显示在 Composer 上方，可一键放回输入框。运行中发送的消息（steer / 运行结束后）不会先作为乐观行画进聊天区，而是立即以本地 `outbox` 条目显示在这个队列里，等服务端 `queue_update` 列出它、或它真正投递（`message_start` 带同一 clientMessageId）时再由服务端状态接管；`verifyLiveUpdates` 对这类消息以"已进服务端队列或已落地"为准，不再每次发送都重建事件流并重读 transcript。
 
 ### 子智能体活动条
 

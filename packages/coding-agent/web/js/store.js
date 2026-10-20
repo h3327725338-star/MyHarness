@@ -42,6 +42,9 @@ const SLOT_DEFAULTS = () => ({
 	toolRuns: {},
 	runs: {},
 	queue: { steering: [], followUp: [] },
+	// Messages sent while a run is active, shown in the queue until the server's queue carries them (or they land):
+	// { clientMessageId, text, mode: "steer" | "followUp" }. They never enter the transcript as an optimistic turn.
+	outbox: [],
 	dialogs: [],
 	surface: { statuses: {}, widgets: {}, workingVisible: true, notices: [] },
 	userBash: {},
@@ -604,6 +607,7 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 		else if (state.gitStatus === undefined && cachedGit !== undefined) state.gitStatus = cachedGit;
 		state.gitTask = snap.gitTask ?? null;
 		state.queue = snap.queue;
+		settleOutbox();
 		state.dialogs = snap.dialogs;
 		state.surface = snap.surface;
 		state.completion = snap.flags.completion ? (snap.flags.completionStatus ?? { startedAt: Date.now() }) : false;
@@ -768,8 +772,21 @@ export async function refreshSlotStaged(slot = activeSlot, seq = switchSeq) {
  * may also rewrite history (compaction); when the page lands it is dropped and the transcript reloads fully.
  */
 const pendingRejections = new Map();
-export function addPendingMessage(clientMessageId, text, images = [], slot = activeSlot, onRejected) {
+/**
+ * Show a sent message before the server confirms it. A message that will be queued behind the active run (`queued` is
+ * "steer" or "followUp") goes to the queue above the composer instead of the transcript: drawing it as a new turn
+ * split the running turn for a moment and was then wiped by the next transcript read, so the message flashed in and
+ * back out before it settled in the queue.
+ */
+export function addPendingMessage(clientMessageId, text, images = [], slot = activeSlot, onRejected, queued = null) {
 	if (onRejected) pendingRejections.set(clientMessageId, onRejected);
+	if (queued) {
+		runFor(slot, () => {
+			state.outbox = [...state.outbox, { clientMessageId, text, mode: queued }];
+			emit();
+		});
+		return;
+	}
 	appendStreamedItem({ kind: "user", text, images, ts: Date.now(), pending: true, clientMessageId }, slot);
 }
 
@@ -777,8 +794,16 @@ export function removePendingMessage(clientMessageId, slot = targetSlot ?? activ
 	pendingRejections.delete(clientMessageId);
 	runFor(slot, () => {
 		state.items = state.items.filter((item) => !(item.pending && item.clientMessageId === clientMessageId));
+		state.outbox = state.outbox.filter((entry) => entry.clientMessageId !== clientMessageId);
 		emit();
 	});
+}
+
+/** Drop the outbox entries the server's queue now lists itself (call inside the slot's runFor, before emit). */
+function settleOutbox() {
+	if (!state.outbox.length) return;
+	const queued = new Set([...(state.queue?.steering ?? []), ...(state.queue?.followUp ?? [])]);
+	state.outbox = state.outbox.filter((entry) => !queued.has(entry.text));
 }
 
 export function appendStreamedItem(item, slot = targetSlot ?? activeSlot) {
@@ -1627,8 +1652,10 @@ function paintedUserMessage(clientMessageId, text) {
  * once for an event after a send and, when none arrives, rebuilds the stream and reads everything again, so the message
  * and the answer appear without a restart.
  */
-export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000) {
+export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000, { queued = false } = {}) {
 	if (recoveringStream || !booted) return true;
+	// A queued message is shown once the server's queue lists it (its outbox entry is then gone) or it has landed.
+	const inOutbox = () => state.outbox.some((entry) => entry.clientMessageId === clientMessageId);
 	// The message counts as shown once a real entry carries it AND the transcript has actually drawn it. Reading the
 	// data alone hid a real defect: a long session kept the message in `state.items` but never rebuilt its turns, so
 	// this check passed while the screen stayed stale until a reload. The optimistic row counts for neither half.
@@ -1639,7 +1666,7 @@ export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000)
 				!item.pending &&
 				((clientMessageId && item.clientMessageId === clientMessageId) || (!!text && item.text === text)),
 		);
-	const shown = () => landed() && paintedUserMessage(clientMessageId, text);
+	const shown = () => (queued && !inOutbox()) || (landed() && paintedUserMessage(clientMessageId, text));
 	if (shown()) return true;
 	recoveringStream = true;
 	try {
@@ -1649,8 +1676,7 @@ export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000)
 			await new Promise((resolve) => setTimeout(resolve, 200));
 			if (shown()) return true;
 		}
-		// A queued steer message never becomes a transcript entry straight away: reading everything again is what shows
-		// it, so one recovery per send is enough and no further check follows.
+		// One recovery per send is enough and no further check follows: the fresh snapshot carries the server's queue.
 		if (source) {
 			try {
 				source.close();
@@ -1661,6 +1687,11 @@ export async function verifyLiveUpdates(clientMessageId, text, timeoutMs = 3000)
 		source = null;
 		connectEvents();
 		await attempt(refreshAll, { quiet: true });
+		// The server's queue is now authoritative; a queued text it rewrote (a prompt template) would never match it.
+		if (queued && inOutbox()) {
+			state.outbox = state.outbox.filter((entry) => entry.clientMessageId !== clientMessageId);
+			emit();
+		}
 		return true;
 	} finally {
 		recoveringStream = false;
@@ -1749,7 +1780,11 @@ function connectEvents() {
 	on("message_start", (d) => {
 		const item = d.liveId ? { ...d.item, liveId: d.liveId } : d.item;
 		if (!item) return;
-		if (d.clientMessageId) pendingRejections.delete(d.clientMessageId);
+		if (d.clientMessageId) {
+			pendingRejections.delete(d.clientMessageId);
+			if (state.outbox.some((entry) => entry.clientMessageId === d.clientMessageId))
+				state.outbox = state.outbox.filter((entry) => entry.clientMessageId !== d.clientMessageId);
+		}
 		const index = d.clientMessageId ? state.items.findIndex((entry) => entry.pending && entry.clientMessageId === d.clientMessageId) : -1;
 		if (index >= 0) {
 			// Keep the client id on the real entry: the send can then be recognised as shown even after the optimistic row
@@ -1814,9 +1849,14 @@ function connectEvents() {
 
 	on("queue_cleared", () => {
 		state.items = state.items.filter((item) => !item.pending);
+		state.outbox = [];
 		emit();
 	});
-	on("queue_update", (d) => set({ queue: d }));
+	on("queue_update", (d) => {
+		state.queue = d;
+		settleOutbox();
+		emit();
+	});
 	on("session_info", (d) => {
 		if (state.snap) state.snap = { ...state.snap, session: { ...state.snap.session, name: d.name } };
 		emit();

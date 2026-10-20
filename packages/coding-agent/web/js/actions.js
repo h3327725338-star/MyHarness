@@ -305,12 +305,14 @@ export const actions = {
 		if (!canSendToActive()) return undefined;
 		const slot = activeSlotId();
 		const id = clientMessageId || crypto.randomUUID();
-		addPendingMessage(id, text, images, slot, onRejected);
+		// While a run is active the server queues everything but an interrupt (steer unless follow-up was asked for).
+		const queued = state.snap?.active && mode !== "interrupt" ? (mode === "followUp" ? "followUp" : "steer") : null;
+		addPendingMessage(id, text, images, slot, onRejected, queued);
 		if (state.snap?.active) await new Promise((resolve) => setTimeout(resolve, COMPOSER_QUEUE_DEBOUNCE_MS));
 		const result = await attempt(() => post("/api/prompt", { text, images, attachments, mode, clientMessageId: id }, slot));
 		if (!result) removePendingMessage(id, slot);
 		// The message is on its way: if it never lands, show it (and the answer) without a reload.
-		else verifyLiveUpdates(id, text).catch(() => undefined);
+		else verifyLiveUpdates(id, text, undefined, { queued: !!queued }).catch(() => undefined);
 		return result;
 	},
 

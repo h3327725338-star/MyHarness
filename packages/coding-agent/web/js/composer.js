@@ -160,13 +160,14 @@ function StatusStrips({ snap }) {
 	return strips.length ? html`<div class="strips">${strips}</div>` : null;
 }
 
-function QueueChips({ queue }) {
-	const n = queue.steering.length + queue.followUp.length;
+function QueueChips({ queue, outbox }) {
+	const n = queue.steering.length + queue.followUp.length + outbox.length;
 	if (!n) return null;
 	return html`<div class="queue">
 		<div class="queue-head dim"><${Icon} name="clock" size=${13} /> ${t("{plural} waiting", { plural: plural(n, "message") })} <button class="link-btn" onClick=${actions.clearQueue}>${t("Move back to editor")}</button></div>
 		${queue.steering.map((text, i) => html`<div class="queue-item" key=${`s${i}`}><span class="badge accent">${t("steer")}</span><span class="truncate">${text}</span></div>`)}
 		${queue.followUp.map((text, i) => html`<div class="queue-item" key=${`f${i}`}><span class="badge">${t("after run")}</span><span class="truncate">${text}</span></div>`)}
+		${outbox.map((entry) => html`<div class="queue-item" key=${`o${entry.clientMessageId}`}><span class=${entry.mode === "steer" ? "badge accent" : "badge"}>${entry.mode === "steer" ? t("steer") : t("after run")}</span><span class="truncate">${entry.text}</span></div>`)}
 	</div>`;
 }
 
@@ -275,6 +276,7 @@ function useSuggestions(text, caret) {
 export function Composer() {
 	const snap = useStore((s) => s.snap);
 	const queue = useStore((s) => s.queue);
+	const outbox = useStore((s) => s.outbox);
 	const dialogs = useStore((s) => s.dialogs);
 	const surface = useStore((s) => s.surface);
 	const editorInsert = useStore((s) => s.editorInsert);
@@ -738,7 +740,7 @@ const send = async (mode) => {
 		<div class="composer-col">
 			<${StatusStrips} snap=${snap} />
 			<${SubAgentBar} />
-			<${QueueChips} queue=${queue} />
+			<${QueueChips} queue=${queue} outbox=${outbox} />
 			${dialogs.map((dialog) => html`<${DialogBar} key=${dialog.id} dialog=${dialog} />`)}
 			<${CommandPanel} />
 			${Object.values(surface.widgets || {}).filter((w) => w.placement === "aboveEditor").map((w, i) => html`<pre class="widget" key=${`wa${i}`}>${w.lines.join("\n")}</pre>`)}
