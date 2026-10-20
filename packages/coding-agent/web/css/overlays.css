@@ -330,3 +330,13 @@
 	:root:not([data-motion="on"]) .personal-fullscreen-dialog { transform: none; }
 }
 :root[data-motion="off"] .personal-fullscreen-dialog { transform: none; }
+
+/* Google Drive sync (SyncPage in sync-page.js): the page reuses .set-card/.set-row; only the field pairs, the
+   review list and the footer need their own layout. Values come from the shared tokens, never a local palette. */
+.sync-field { width: 100%; gap: 8px; align-items: center; min-width: 0; }
+.sync-field .field { min-width: 0; flex: 1 1 auto; }
+.sync-paths { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; max-width: 100%; min-width: 0; }
+.sync-paths .mono { max-width: 100%; }
+.sync-list { display: grid; gap: 6px; padding: 4px 0 12px; line-height: 1.5; }
+.sync-foot { display: flex; align-items: center; gap: 10px; padding: 10px 0 12px; }
+.sync-foot .btn { flex: 0 0 auto; }

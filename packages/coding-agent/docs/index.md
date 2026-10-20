@@ -32,6 +32,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Windows](windows.md) — Bash and Windows-specific setup.
 - [Web Search](web-search.md) — optional built-in web search (Google/Bing first, with optional DuckDuckGo, Brave, Tavily API and a Firefox/Chrome/Edge browser fallback) and page reading.
 - [Sessions](sessions.md) — Session management, branching, and navigation.
+- [Google Drive sync](google-drive-sync.md) — background sync of memories and General-mode data through the user's own Drive folder, with merge, deletion and conflict rules.
 - [Compaction](compaction.md) — context compaction and branch summaries.
 - [Git Worktrees](worktrees.md) — managing development worktrees through `/git`.
 - [Keybindings](keybindings.md) — default shortcuts and customization.

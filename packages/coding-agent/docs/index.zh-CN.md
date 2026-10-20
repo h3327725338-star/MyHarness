@@ -32,6 +32,7 @@ npm.cmd run build
 - [Windows](windows.md) — Bash 和 Windows 专用设置。
 - [Web Search](web-search.md) — 可选的内置联网搜索（默认 Google/Bing，可选 DuckDuckGo、Brave、Tavily API 和 Firefox/Chrome/Edge 浏览器兜底）和网页读取。
 - [Sessions](sessions.md) — Session 管理、分支和导航。
+- [Google Drive 同步](google-drive-sync.md) — 通过用户自己的云端硬盘后台同步记忆与通用模式数据，含合并、删除和冲突规则。
 - [Compaction](compaction.md) — context compaction 和 branch summaries。
 - [Git Worktrees](worktrees.md) — 通过 `/git` 管理开发 worktree。
 - [快捷键](keybindings.md) — 默认快捷键和自定义方式。

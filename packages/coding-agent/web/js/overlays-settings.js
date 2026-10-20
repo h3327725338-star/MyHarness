@@ -17,6 +17,7 @@ import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
 import { SearchableMultiSelect } from "./settings-multiselect.js";
 import { Select } from "./select.js";
+import { SyncPage } from "./sync-page.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -26,6 +27,7 @@ export const NAV = [
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
 	{ id: "personal", label: N_("Personalization"), icon: "chat" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
+	{ id: "sync", label: N_("Google Drive"), icon: "drive" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
 	{ id: "files", label: N_("Files & Office"), icon: "file" },
@@ -51,6 +53,7 @@ const PAGE_NOTE = {
 	agent: N_("How the agent runs, compacts its context and retries."),
 	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
+	sync: N_("Keep chats, memories and attachments in sync through your own Google Drive."),
 	files: N_("How the workspace opens and edits Office documents."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
 	safety: N_("What MyHarness may load and run, and how it notifies you."),
@@ -1013,7 +1016,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

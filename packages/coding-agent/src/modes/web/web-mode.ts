@@ -14,10 +14,12 @@ import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ImageContent } from "@myharness/ai";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
+import { getDataDir } from "../../config/paths/index.ts";
 import { getAgentDir, getExportTemplateDir, getWebUiDir, VERSION } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
 import { WorktreeDisplayNames } from "../../git/worktrees/display-name.ts";
 import { setMirrorSessionsAllowed } from "../../session/manager/index.ts";
+import { SyncService } from "../../sync/service.ts";
 import { WebDialogBridge } from "./dialogs.ts";
 import { WebHttpServer } from "./http-server.ts";
 import { WebHostHub } from "./hub.ts";
@@ -30,6 +32,7 @@ import { registerModeRoutes } from "./routes-modes.ts";
 import { registerProviderRoutes } from "./routes-providers.ts";
 import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
+import { registerSyncRoutes } from "./routes-sync.ts";
 import { registerTerminalRoutes } from "./routes-terminal.ts";
 import { WebTerminals } from "./terminal.ts";
 import { registerWebPrefsRoutes } from "./web-prefs.ts";
@@ -215,6 +218,28 @@ export async function runWebMode(
 	registerSettingsRoutes(server, host);
 	registerProviderRoutes(server, host, hub);
 	registerAccountRoutes(server);
+	// Google Drive sync: the engine polls in the background; the routes only expose status and configuration.
+	const syncService = SyncService.create({
+		agentDir: runtimeHost.services.agentDir,
+		dataRoot: runtimeHost.session.sessionManager.getDataRoot() ?? getDataDir(),
+		isSessionActive: (_workspaceId, sessionId) =>
+			hub
+				.all()
+				.some(
+					(slot) =>
+						slot.session.sessionManager.getSessionId() === sessionId &&
+						slot.session.sessionManager.getDataRoot() === runtimeHost.session.sessionManager.getDataRoot() &&
+						(!slot.session.isIdle || slot.completionActive),
+				),
+		onStatus: (status) => server.broadcast("sync_status", status),
+		onApplied: () => {
+			server.broadcast("sync_applied", {});
+			server.broadcast("workspaces_changed", {});
+			server.broadcast("mode_preferences_changed", {});
+		},
+	});
+	registerSyncRoutes(server, syncService);
+	void syncService.start();
 	// The Terminal panel's shells belong to the server, not to a chat: they outlive the chats that show them.
 	const terminals = new WebTerminals((event, data) => server.broadcast(event, data));
 	registerTerminalRoutes(server, host, terminals);
@@ -253,6 +278,11 @@ export async function runWebMode(
 		} catch (error) {
 			console.error(`Shutdown error: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
+			try {
+				await syncService.dispose();
+			} catch (error) {
+				console.error(`Sync shutdown error: ${error instanceof Error ? error.message : String(error)}`);
+			}
 			try {
 				await server.close();
 			} catch (error) {

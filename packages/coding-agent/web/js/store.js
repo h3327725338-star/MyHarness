@@ -252,6 +252,8 @@ export const state = {
 	models: null,
 	settings: null,
 	providers: null,
+	/** Latest Google Drive sync status (`sync_status`), or null until the settings page has asked once. */
+	syncStatus: null,
 	editorInsert: null,
 	quoteInsert: null,
 	loginEvent: null,
@@ -1949,8 +1951,21 @@ function connectEvents() {
 		else state.resources = null;
 		attempt(() => loadSnapshot(slot), { quiet: true });
 	});
-	// A Tavily search finished somewhere: the settings page reads the remaining count again.
+	// Tavily search finished somewhere: the settings page reads the remaining count again.
 	on("tavily_usage_changed", () => set({ tavilyUsageNonce: (state.tavilyUsageNonce || 0) + 1 }));
+	// Google Drive sync: status is state, not a toast; applied remote changes refresh the lists without a reload.
+	on("sync_status", (d) => {
+		state.syncStatus = d;
+		emit();
+	});
+	on("sync_applied", async (d, slot) => {
+		state.modePreferencesNonce += 1;
+		await attempt(() => loadWorkspaces(), { quiet: true });
+		await attempt(() => loadSnapshot(slot ?? activeSlot), { quiet: true });
+		await attempt(() => loadModeState(), { quiet: true });
+		const roots = Object.keys(state.workspaces?.sessions ?? {});
+		await Promise.all(roots.map((root) => attempt(() => loadSessions(root), { quiet: true })));
+	});
 	on("workspaces_changed", async (d, slot) => {
 		await attempt(() => loadSnapshot(slot), { quiet: true });
 		await attempt(() => loadWorkspaces(), { quiet: true });

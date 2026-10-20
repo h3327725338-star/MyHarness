@@ -76,6 +76,18 @@ export interface RelocateWorkspacesResult {
 	error?: string;
 }
 
+/** A Workspace received from another device through Google Drive sync. */
+export interface ImportWorkspaceInput {
+	workspaceId: string;
+	name: string;
+	rootPath: string;
+	modes: ChatMode[];
+	instructions?: string;
+	memoryEnabled?: boolean;
+	libraryEnabled?: boolean;
+	createdAt?: string;
+}
+
 export interface WorkspaceDataContext {
 	dataRoot: string;
 	workspace: Workspace;
@@ -691,6 +703,86 @@ export class WorkspaceStore {
 	/** Flush batched Workspace metadata after a migration or import. */
 	persist(): void {
 		this.save();
+	}
+
+	/**
+	 * Register or update a Workspace identity received from sync. Identity fields come from the remote record; the
+	 * local root path stays authoritative on this device. An existing identity keeps its local path and createdAt.
+	 */
+	importWorkspace(input: ImportWorkspaceInput): { ok: boolean; workspace?: Workspace; error?: string } {
+		if (!isSafeWorkspaceId(input.workspaceId))
+			return { ok: false, error: `Invalid workspace id: ${input.workspaceId}` };
+		const name = input.name.trim();
+		if (!name) return { ok: false, error: "Workspace name is empty" };
+		let rootPath: string;
+		try {
+			rootPath = normalizeWorkspaceRoot(input.rootPath);
+		} catch {
+			return { ok: false, error: `Invalid workspace path: ${input.rootPath}` };
+		}
+		const modes = input.modes.filter((mode): mode is ChatMode => mode === "coding" || mode === "general");
+		const existing = this.workspaces.find((workspace) => workspace.workspaceId === input.workspaceId);
+		const previous = existing ? { ...existing } : undefined;
+		if (existing) {
+			// A Workspace the user removed from every mode keeps that decision: sync updates its content and name but
+			// must not silently put it back into a sidebar list on this device.
+			const removedEverywhere = (existing.modes ?? ["coding"]).length === 0;
+			existing.name = name;
+			if (!removedEverywhere) existing.modes = [...new Set([...(existing.modes ?? ["coding"]), ...modes])];
+			if (input.instructions !== undefined) existing.instructions = input.instructions;
+			if (input.memoryEnabled !== undefined) existing.memoryEnabled = input.memoryEnabled;
+			if (input.libraryEnabled !== undefined) existing.libraryEnabled = input.libraryEnabled;
+			try {
+				this.save();
+				return { ok: true, workspace: { ...existing } };
+			} catch (error) {
+				Object.assign(existing, previous);
+				return { ok: false, error: `Saving the Workspace list failed: ${String(error)}` };
+			}
+		}
+		const conflict = this.workspaces.find((workspace) => pathsEqual(workspace.rootPath, rootPath));
+		if (conflict) return { ok: false, error: `Workspace path is already used: ${rootPath}` };
+		const workspace: Workspace = {
+			modes: modes.length > 0 ? modes : ["general"],
+			workspaceId: input.workspaceId,
+			id: input.workspaceId,
+			name,
+			rootPath,
+			instructions: input.instructions ?? "",
+			memoryEnabled: input.memoryEnabled !== false,
+			libraryEnabled: input.libraryEnabled !== false,
+			createdAt: input.createdAt || new Date().toISOString(),
+		};
+		this.workspaces.push(workspace);
+		try {
+			this.save();
+			return { ok: true, workspace: { ...workspace } };
+		} catch (error) {
+			this.workspaces = this.workspaces.filter((candidate) => candidate.workspaceId !== input.workspaceId);
+			return { ok: false, error: `Saving the Workspace list failed: ${String(error)}` };
+		}
+	}
+
+	/** Point an existing Workspace identity at a folder on this device. */
+	bindRoot(id: string, rootPath: string): { ok: boolean; workspace?: Workspace; error?: string } {
+		const workspace = this.workspaces.find((candidate) => candidate.workspaceId === id || candidate.id === id);
+		if (!workspace) return { ok: false, error: "Unknown workspace" };
+		const validation = validateWorkspacePath(rootPath, process.cwd());
+		if ("error" in validation) return { ok: false, error: validation.error };
+		const conflict = this.workspaces.find(
+			(candidate) =>
+				candidate.workspaceId !== workspace.workspaceId && pathsEqual(candidate.rootPath, validation.rootPath),
+		);
+		if (conflict) return { ok: false, error: `Workspace path is already used: ${validation.rootPath}` };
+		const previous = workspace.rootPath;
+		workspace.rootPath = validation.rootPath;
+		try {
+			this.save();
+			return { ok: true, workspace: { ...workspace } };
+		} catch (error) {
+			workspace.rootPath = previous;
+			return { ok: false, error: `Saving the Workspace list failed: ${String(error)}` };
+		}
 	}
 
 	/** Change only the display alias; identity, storage and physical paths stay unchanged. */
