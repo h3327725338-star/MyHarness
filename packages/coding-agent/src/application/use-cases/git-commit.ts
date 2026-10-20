@@ -6,6 +6,7 @@ import {
 import { type CommitMessageContext, readCommitMessageContext } from "../../git/commits/ai-message.ts";
 import type { GeneratedCommitMessage } from "../../git/commits/message.ts";
 import { createGitCommitForPathsAsync, type GitCommandResult } from "../../git/repository/integration.ts";
+import { withGitWriteLock } from "../../git/repository/write-lock.ts";
 
 export type GitCommitTaskPhase = "checking" | "generating" | "submitting" | "repairing";
 
@@ -99,14 +100,29 @@ export class GitCommitUseCase {
 		const context = await readCommitMessageContext(target.repositoryRoot, pending.paths, this.host.signal);
 		const message = await this.host.generateMessage(context);
 		this.host.signal?.throwIfAborted();
-		// Do not commit changes made by another chat/editor while the description was being generated.
-		const latest = await this.readPendingPaths(target);
-		if (latest.error || !latest.paths) throw new Error(latest.error ?? "Cannot recheck commit paths.");
-		const current = await readCommitMessageContext(target.repositoryRoot, latest.paths, this.host.signal);
-		if (JSON.stringify(current) !== JSON.stringify(context)) {
+		// Another conversation may be committing the same repository right now: queue behind it, then judge the
+		// state it left behind, instead of colliding on .git/index.lock.
+		const gated = await withGitWriteLock(
+			target.repositoryRoot,
+			async (): Promise<GitCommitSubmissionResult | { status: "stale" }> => {
+				// Do not commit changes made by another chat/editor while the description was being generated.
+				const latest = await this.readPendingPaths(target);
+				if (latest.error || !latest.paths) throw new Error(latest.error ?? "Cannot recheck commit paths.");
+				// Everything this commit meant to save was already committed by someone else.
+				if (latest.paths.length === 0) return { status: "no-changes" };
+				const current = await readCommitMessageContext(target.repositoryRoot, latest.paths, this.host.signal);
+				if (JSON.stringify(current) !== JSON.stringify(context)) return { status: "stale" };
+				return this.submit(target, pending.paths!, message);
+			},
+			{
+				signal: this.host.signal,
+				onWait: () => this.host.updatePhase("submitting", "正在等待另一个提交完成"),
+			},
+		);
+		if (gated.status === "stale") {
 			throw new Error("The repository changed while generating the commit description. Run /commit again.");
 		}
-		const outcome = await this.submit(target, pending.paths, message);
+		const outcome = gated;
 		if (outcome.status === "committed") {
 			return { status: "committed", target, paths: pending.paths, message, commitHash: outcome.commitHash };
 		}
