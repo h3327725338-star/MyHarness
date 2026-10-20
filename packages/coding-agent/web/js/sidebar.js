@@ -524,6 +524,17 @@ export function Sidebar() {
 	const slots = useMemo(() => allSlots.filter((slot) => chatModeOf(slot.mode) === mode), [allSlots, mode]);
 	const activeSlot = useStore((s) => s.activeSlot);
 	const connected = useStore((s) => s.connected);
+	// A drop first reads as "reconnecting" (yellow); only one that lasts turns red.
+	const [gaveUp, setGaveUp] = useState(false);
+	useEffect(() => {
+		if (connected) {
+			setGaveUp(false);
+			return undefined;
+		}
+		const timer = setTimeout(() => setGaveUp(true), 8000);
+		return () => clearTimeout(timer);
+	}, [connected]);
+	const connTone = connected ? "ok" : gaveUp ? "danger" : "warn";
 	// The box shows what is typed at once; the lists are filtered a moment after the last key, not on every key.
 	const [filterText, setFilterText] = useState("");
 	const [filter, setFilter] = useState("");
@@ -630,7 +641,7 @@ export function Sidebar() {
 		${exportReadOnly() ? html`<${ExportSidebarFoot} />` : null}
 		<div class="sidebar-foot">
 			${exportReadOnly() ? null : html`<button class="nav-btn grow" onClick=${() => setView({ settingsOpen: true })}><${Icon} name="gear" size=${16} />${t("Settings")}</button>`}
-			<span class=${`conn ${connected ? "on" : "off"}`} title=${connected ? t("Connected to the local MyHarness server") : t("Disconnected — retrying")}><span class=${`dot ${connected ? "ok" : "danger"}`} /></span>
+			<span class=${`conn ${connected ? "on" : "off"}`} title=${connected ? t("Connected to the local MyHarness server") : gaveUp ? t("Disconnected — retrying") : t("Reconnecting…")}><span class=${`dot ${connTone}`} /></span>
 		</div>
 		<${Resizer} side="right" min=${200} max=${460} getValue=${() => state.view.sidebarW} onChange=${onWidth} onEnd=${() => setView({ sidebarW: state.view.sidebarW })} />
 		${adding ? html`<${AddWorkspaceDialog} onClose=${() => setAdding(false)} />` : null}

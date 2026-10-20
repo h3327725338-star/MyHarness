@@ -94,8 +94,6 @@
 .sidebar-foot { padding: 8px var(--pad-side) 10px; border-top: 1px solid var(--border); display: flex; align-items: center; }
 /* The connection to the local server: a dot in the column of the row-end icons above it. */
 .conn { display: grid; place-items: center; width: var(--h-icon-sm); height: var(--h-icon-sm); margin-right: 4px; flex: none; }
-/* Connected is the normal state and stays neutral; only a lost connection shows its colour. */
-.conn .dot.ok { background: var(--text-4); }
 /* Export pages only: the read-only area between the scrolling list and the settings foot. A fixed block (it never
    scrolls away), stacked vertically: badge, full-width download button, two ellipsized lines — so even at the 200px
    minimum column width nothing overflows and the button is never squeezed out. Colors are theme tokens only. */

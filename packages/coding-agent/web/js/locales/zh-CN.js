@@ -986,6 +986,7 @@ export const zhCN = {
 	"No workspaces": "没有 Workspace",
 	"Connected to the local MyHarness server": "已连接到本地 MyHarness 服务",
 	"Disconnected — retrying": "已断开，正在重试",
+	"Reconnecting…": "正在重新连接…",
 	"Loading": "加载中",
 
 	// ---- Store
@@ -2015,11 +2016,11 @@ export const zhCN = {
 	"Rotate right": "向右旋转",
 	// Right panel: file bar, hex, paged text, PDF and Office viewers
 	"Files & Office": "文件与 Office",
-	"How the workspace opens and edits Office documents.": "工作区如何打开和编辑 Office 文档。",
-	"Office editing server": "Office 编辑服务器",
-	"Address of an ONLYOFFICE Docs server (for example http://127.0.0.1:8701). With it, Word, Excel and PowerPoint files open for editing in the workspace; without it they open as a read-only preview when Microsoft Office or LibreOffice is installed.": "ONLYOFFICE Docs 服务器地址（例如 http://127.0.0.1:8701）。设置后，Word、Excel、PowerPoint 文件在工作区中直接编辑；未设置时，若本机装有 Microsoft Office 或 LibreOffice，则以只读预览打开。",
-	"Office server JWT secret": "Office 服务器 JWT 密钥",
-	"The JWT secret of that server. Leave empty only when its JWT check is turned off.": "该服务器的 JWT 密钥。仅当服务器关闭了 JWT 校验时才留空。",
+	"How the workspace opens and edits Office documents.": "配置 Word、Excel、PowerPoint 文档的预览与编辑方式。",
+	"Office editing server": "ONLYOFFICE 文档服务器",
+	"Address of an ONLYOFFICE Docs server (for example http://127.0.0.1:8701). With it, Word, Excel and PowerPoint files open for editing in the workspace; without it they open as a read-only preview when Microsoft Office or LibreOffice is installed.": "ONLYOFFICE Docs 服务地址，如 http://127.0.0.1:8701。配置后，Office 文档可在工作区内在线编辑并保存；未配置时仅提供只读预览，且需要本机已安装 Microsoft Office 或 LibreOffice。",
+	"Office server JWT secret": "JWT 密钥",
+	"The JWT secret of that server. Leave empty only when its JWT check is turned off.": "与文档服务器配置一致的 JWT 密钥。仅在服务器未启用 JWT 校验时可留空。",
 	"More": "更多",
 	"More file actions": "更多文件操作",
 	"Open as hex": "以十六进制打开",
