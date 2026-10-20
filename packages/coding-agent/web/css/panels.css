@@ -36,9 +36,16 @@
 .gitbar-ctx strong { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .changes-notes { flex: none; }
 .changes-notes:empty { display: none; }
-.changes-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-top: 6px; border-top: 1px solid var(--border); }
-.cfiles { position: relative; flex: none; border-bottom: 1px solid var(--border); }
-.cfiles > .resizer.y { bottom: -5px; }
+.changes-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-top: 6px; border-top: 1px solid var(--border); background: var(--bg-inset); }
+.cfiles { position: relative; flex: none; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+/* While the list is open, a sunken band separates it from the diff: the list and the diff read as two areas, and the band
+   (with its grip) is the one place to drag. */
+.cfiles:has(> .resizer.y) { margin-bottom: 8px; }
+.cfiles:has(> .resizer.y) + .cdiff { border-top: 1px solid var(--border); }
+.cfiles > .resizer.y { bottom: -8px; }
+/* The bar between the list and the diff shows a grip, so it reads as the thing to drag rather than one more row border. */
+.cfiles > .resizer.y::before { content: ""; position: absolute; left: 50%; top: 2px; width: 32px; height: 4px; margin-left: -16px; border-radius: 2px; background: var(--border-strong); transition: background var(--t-fast); }
+.cfiles > .resizer.y:hover::before, .cfiles > .resizer.y.dragging::before { background: var(--accent); }
 .cfiles-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 3px var(--pad-panel); }
 .cfiles-toggle { display: inline-flex; align-items: center; gap: 8px; height: var(--h-control-sm); margin-left: -6px; padding: 0 6px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); }
 .cfiles-toggle:hover { background: var(--surface-hover); color: var(--text); }
@@ -69,9 +76,11 @@
 :root[data-motion="off"] .cfile.sk {
 	animation: none !important;
 }
-.cdiff { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; outline: none; }
+.cdiff { flex: 1 1 auto; min-height: 0; background: var(--bg-panel); overflow: auto; overscroll-behavior: contain; outline: none; }
 .cdiff:focus-visible { box-shadow: inset 0 0 0 1px var(--border-focus); }
-.cdiff-head { position: sticky; top: 0; left: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px var(--pad-panel); background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.cdiff-head { position: sticky; top: 0; left: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px var(--pad-panel); background: var(--bg-raised); border-bottom: 1px solid var(--border); }
+/* The diff's own header is not a list row: a file icon instead of the status letter, on the raised surface. */
+.cdiff-icon { display: inline-grid; place-items: center; flex: none; color: var(--text-3); }
 .file-path { flex: 1 1 auto; min-width: 0; font-size: var(--fs-code); }
 .counts { display: inline-flex; gap: 6px; font-size: var(--fs-sm); flex: none; }
 .st { display: inline-grid; place-items: center; width: 12px; flex: none; font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; line-height: 1; color: var(--text-3); }

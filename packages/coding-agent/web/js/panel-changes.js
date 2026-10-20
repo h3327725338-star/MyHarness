@@ -21,6 +21,8 @@ const isPendingSlot = (slot) => !slot || String(slot).startsWith("pending:");
 /** The file list's height once the bar under it has been dragged (null: the stylesheet's default); kept for the next visit. */
 const LIST_H_KEY = "myharness.changesListH";
 const LIST_H_MIN = 52;
+/** Room the diff keeps under the bar however far the list is dragged down (its header plus a few lines). */
+const DIFF_MIN_H = 140;
 function readListH() {
 	try {
 		const value = Number(localStorage.getItem(LIST_H_KEY));
@@ -96,7 +98,7 @@ function DiffPane({ file, mode, entry, isRefreshing }) {
 						: html`<div class="pad dim">${t("No content changes.")}</div>`;
 	return html`<div class="cdiff" ref=${ref} tabindex="0" role="region" aria-label=${t("Diff of {path}", { path: file.path })}>
 		<div class="cdiff-head">
-			<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
+			<span class="cdiff-icon" title=${t(STATUS_TITLE[file.status])}><${Icon} name="fileDiff" size=${14} /></span>
 			<${FilePath} file=${file} />
 			${fileCounts(file)}
 			${isPending ? html`<span class="cdiff-spin dim" aria-busy="true"><${Spinner} size=${14} /></span>` : null}
@@ -128,6 +130,17 @@ export function ChangesPanel() {
 	const [listH, setListH] = useState(readListH);
 	const listHRef = useRef(listH);
 	const bodyRef = useRef(null);
+	// Once dragged, the list keeps the height the bar was left at (empty space under a short list included), but never so
+	// tall that the diff under it has less than DIFF_MIN_H: measured from the panel as it is now, so a smaller window
+	// shrinks it too.
+	const fitListH = (value) => {
+		const body = bodyRef.current;
+		const list = listRef.current;
+		if (!body || !list) return Math.max(LIST_H_MIN, value);
+		const files = list.closest(".cfiles");
+		const chrome = files.offsetHeight + (Number.parseFloat(getComputedStyle(files).marginBottom) || 0) - list.offsetHeight;
+		return Math.max(LIST_H_MIN, Math.min(value, body.clientHeight - chrome - DIFF_MIN_H));
+	};
 	const [chosen, setChosen] = useState("");
 	const [diffs, setDiffs] = useState({});
 	const [nonce, setNonce] = useState(0);
@@ -282,7 +295,7 @@ export function ChangesPanel() {
 						<button class="icon-btn sm" disabled=${at >= files.length - 1} onClick=${() => go(at + 1)} title=${t("Next file")} aria-label=${t("Next file")}><${Icon} name="chevronDown" size=${15} /></button>
 					</div>
 					<${Collapse} open=${listOpen}>
-						<div class="cfiles-list" ref=${listRef} style=${listH ? { maxHeight: `${listH}px` } : null} role="listbox" tabindex="0" aria-label=${t("Changed files")} onKeyDown=${onListKey}>
+						<div class="cfiles-list" ref=${listRef} style=${listH ? { height: `${fitListH(listH)}px`, maxHeight: "none" } : null} role="listbox" tabindex="0" aria-label=${t("Changed files")} onKeyDown=${onListKey}>
 							${files.map((file) => html`<div class=${`cfile ${file === selected ? "sel" : ""}`} key=${file.path} role="option" aria-selected=${file === selected} title=${file.path} onClick=${() => setChosen(file.path)}>
 								<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
 								<${FilePath} file=${file} />
@@ -291,9 +304,9 @@ export function ChangesPanel() {
 							</div>`)}
 						</div>
 					<//>
-					${listOpen ? html`<${Resizer} axis="y" min=${LIST_H_MIN} max=${Math.max(LIST_H_MIN, (bodyRef.current?.clientHeight || 400) - 140)}
+					${listOpen ? html`<${Resizer} axis="y" min=${LIST_H_MIN}
 						getValue=${() => listRef.current?.offsetHeight || listHRef.current || 216}
-						onChange=${(value) => { listHRef.current = Math.round(value); setListH(listHRef.current); }}
+						onChange=${(value) => { listHRef.current = fitListH(Math.round(value)); setListH(listHRef.current); }}
 						onEnd=${() => { try { localStorage.setItem(LIST_H_KEY, String(listHRef.current)); } catch {} }} />` : null}
 				</div>
 				<${DiffPane} key=${dataKey} file=${selected} mode=${mode} entry=${diffs[diffKey]} isRefreshing=${loading} />
