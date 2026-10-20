@@ -312,8 +312,6 @@ button.status-pill { cursor: pointer; }
 .sub-detail { margin: 2px 0 6px 24px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--r-md); font-size: var(--fs-body); max-height: 360px; overflow: auto; overscroll-behavior: contain; }
 .sub-list { margin: 0; padding-left: 18px; }
 
-.earlier { align-self: center; }
-
 /* One sub-agent's steps (web/js/sub-agents.js SubAgentProcess), under its row in the activity bar and under its task
    row in the dispatch's run step: the main agent's tool rows, then the report. */
 .sa-process { display: flex; flex-direction: column; gap: 6px; }
@@ -342,13 +340,14 @@ button.status-pill { cursor: pointer; }
 
 /* Message index: a rail of ticks at the right edge, one per message the user wrote, spread like the messages sit in the
    conversation. The current message is lit in the accent colour; near the pointer the ticks widen and a card names the
-   message that a click would go to. */
+   message that a click would go to. Every message has a tick, so the tick height comes from the rail's density (set
+   inline by message-rail.js) rather than from this file: the long conversation squeezes it to a single pixel. */
 .msg-rail { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 40px; padding: 14px 0; z-index: 3; cursor: pointer; touch-action: none; user-select: none; outline: none; }
 .msg-rail-inner { position: relative; width: 100%; }
 .msg-tick { position: absolute; right: 6px; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--text-4); opacity: 0.6; pointer-events: none; transition: width var(--t-base) var(--ease), height var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
 .msg-tick.on { background: var(--accent); opacity: 1; }
 .msg-rail.aiming .msg-tick { opacity: 0.85; }
-.msg-tick.aimed { background: var(--text); opacity: 1; height: 4px; margin-top: -2px; }
+.msg-tick.aimed { background: var(--text); opacity: 1; }
 .msg-tick.on.aimed { background: var(--accent-strong); }
 .msg-rail:focus-visible .msg-rail-inner { box-shadow: 0 0 0 1px var(--accent-line); border-radius: 3px; }
 .msg-tip { font-weight: 400; line-height: 1.4; text-align: left; position: absolute; right: calc(100% + 8px); transform: translateY(-50%); width: max-content; min-width: 110px; max-width: 260px; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); color: var(--text); font-size: var(--fs-sm); pointer-events: none; animation: fade-only var(--t-fast) var(--ease); }

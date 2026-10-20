@@ -861,10 +861,12 @@ function Welcome({ snap, models }) {
 
 // ---- Transcript container ------------------------------------------------------------------------
 // Turn mounting arrives in chunks: the first frame paints only the newest turns, then one batch per
-// animation frame is appended above until the whole window is mounted. The reader sees content sooner
-// and no single frame carries the full mount.
+// animation frame is appended above until every turn is mounted. The reader sees content sooner and no single
+// frame carries the full mount.
 const CHUNK_FIRST = 20;
 const CHUNK_NEXT = 20;
+/** How long the transcript waits before asking the server for one more older page (see the fill effect below). */
+const FILL_DELAY = 200;
 /** Whether a build published for `owner` describes the session on screen right now (same slot, same session id). */
 function describesSession(owner, slot, session) {
 	return !!owner && owner.slot === slot && (owner.session == null || owner.session === session);
@@ -1193,14 +1195,15 @@ export function Transcript() {
 		for (let i = turns.length - 1; i >= 0; i--) if (!turns[i].standalone) return i;
 		return -1;
 	})();
-	// Long sessions: render the most recent turns and let the reader load earlier ones on demand.
-	const [limit, setLimit] = useState(60);
-	const hidden = Math.max(0, turns.length - limit);
-	// A paged transcript still has older items on the server once everything in memory is shown.
+	// No display window: every turn is part of the page, so the message index covers the whole conversation and no
+	// turn sits behind a "show more" button. Mounting is still chunked below and every TurnView is memoized, so a long
+	// session pays for its turns once instead of in a single frame.
 	// (transcriptHasMore is subscribed above: the tail-preview useMemo depends on it.)
 	const transcriptFetching = useStore((s) => s.transcriptFetching);
-	const showEarlier = hidden > 0 || transcriptHasMore;
-	const shown = hidden ? turns.slice(hidden) : turns;
+	const shown = turns;
+	// The index is built from the whole conversation, not from the turns mounted so far: its ticks and its jumps must
+	// cover messages the reader has not scrolled to yet.
+	const railTurns = useMemo(() => turns.filter((turn) => !turn.standalone && turn.user), [turns]);
 	// How many of `shown` are mounted so far: mounting starts with the newest CHUNK_FIRST turns and grows
 	// by CHUNK_NEXT per animation frame. When another session is shown (the new bag arrives with a new session
 	// id in the same commit) chunking restarts from the first batch; while one session keeps streaming the
@@ -1213,13 +1216,16 @@ export function Transcript() {
 	const liveBatches = switched ? 1 : batches;
 	const mounted = liveBatches <= 1 ? Math.min(shown.length, CHUNK_FIRST) : Math.min(shown.length, CHUNK_FIRST + (liveBatches - 1) * CHUNK_NEXT);
 	const rendered = mounted >= shown.length ? shown : shown.slice(shown.length - mounted);
-	const renderedStart = hidden + (shown.length - rendered.length);
+	const renderedStart = shown.length - rendered.length;
 	const chunkFrame = useRef(0);
 	const chunkHeightBefore = useRef(0);
 	const cancelChunks = () => {
 		cancelAnimationFrame(chunkFrame.current);
 		chunkFrame.current = 0;
 	};
+	// A jump from the message index to a message that is still mounting asks for the whole mount at once: the reader
+	// named a message, so waiting out the chunked mount would only look like a dead click.
+	const revealAll = () => setBatches(Number.MAX_SAFE_INTEGER);
 	useLayoutEffect(() => {
 		// A switch renders batch 1 from derived state; sync the counter before paint so later frames keep counting up.
 		if (switched && batches !== 1) setBatches(1);
@@ -1241,38 +1247,26 @@ export function Transcript() {
 			chunkHeightBefore.current = 0;
 		}
 	}, [rendered.length]);
-	const heightBefore = useRef(0);
-	// "Show earlier" first shows what is already in memory; once that runs out on a paged transcript it fetches
-	// the next older page from the server and then shows a further window of it. The scroll anchor is taken before
-	// the fetch (older turns mount above) and applied when the limit grows, so the reader keeps their place.
-	const showEarlierNow = () => {
-		cancelChunks();
-		setBatches(Number.MAX_SAFE_INTEGER);
-		heightBefore.current = scroller.current?.scrollHeight || 0;
-		stick.current = false;
-		setLimit((shown) => shown + 60);
-	};
-	const showEarlierClick = () => {
-		if (hidden > 0 || !transcriptHasMore || transcriptFetching) {
-			if (hidden > 0) showEarlierNow();
-			return;
-		}
+	// Older history that is still server-side fills in by itself: the reader never asks for it. One page per idle
+	// beat, so first paint, typing and streaming keep priority; a page lands above the reader and the build that
+	// publishes it already compensates that growth (the full→full prepend anchor in startBuild). Two failures in a
+	// row stop the fill instead of retrying a page that cannot arrive.
+	const fill = useRef({ slot: null, failures: 0, tries: 0, done: false });
+	useEffect(() => {
+		if (fill.current.slot !== turnsSlot) fill.current = { slot: turnsSlot, failures: 0, tries: 0, done: false };
+		if (switching || fill.current.done || fill.current.failures >= 2 || fill.current.tries >= 40) return undefined;
+		if (!transcriptHasMore || transcriptFetching) return undefined;
 		const slot = turnsSlot;
-		heightBefore.current = scroller.current?.scrollHeight || 0;
-		stick.current = false;
-		fetchMoreTranscript(slot).then((result) => {
-			if (result !== "ok") return;
-			cancelChunks();
-			setBatches(Number.MAX_SAFE_INTEGER);
-			setLimit((shown) => shown + 60);
-		});
-	};
-	useLayoutEffect(() => {
-		if (heightBefore.current && scroller.current) {
-			scroller.current.scrollTop += scroller.current.scrollHeight - heightBefore.current;
-			heightBefore.current = 0;
-		}
-	}, [limit]);
+		const timer = setTimeout(() => {
+			fill.current.tries += 1;
+			void fetchMoreTranscript(slot).then((result) => {
+				if (fill.current.slot !== slot) return;
+				if (result === "done") fill.current.done = true;
+				else if (result === "error" || result === "refreshed") fill.current.failures += 1;
+			});
+		}, FILL_DELAY);
+		return () => clearTimeout(timer);
+	}, [switching, transcriptHasMore, transcriptFetching, turnsSlot]);
 	// The cold-load preview is replaced by the first full build here: the height taken before the swap shifts the scroll
 	// by exactly the growth above the reader, so what they were reading stays where it is.
 	useLayoutEffect(() => {
@@ -1281,7 +1275,6 @@ export function Transcript() {
 		swapHeight.current = 0;
 		if (!stick.current && delta) scroller.current.scrollTop += delta;
 	}, [turns]);
-	useEffect(() => setLimit(60), [session]);
 	const waiting = dialogs.length > 0 && active;
 	const compacting = !!compaction || !!snap?.flags?.compacting;
 	const liveBash = order.map((id) => userBash[id]).filter((entry) => entry && entry.status === "running");
@@ -1294,7 +1287,6 @@ export function Transcript() {
 					${switching.name ? html`<h2>${switching.name}</h2>` : null}
 					${switching.error ? html`<p>${switching.error}</p><button class="btn sm" onClick=${retrySwitch}>${t("Retry")}</button>` : html`<span class="dim">${t("Loading…")}</span><div class="switch-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>`}
 				</div>` : empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
-				${!switching && showEarlier ? html`<button class="btn sm ghost earlier" disabled=${!hidden && transcriptFetching} onClick=${showEarlierClick}>${hidden ? t("Show earlier messages ({hidden} hidden)", { hidden }) : transcriptFetching ? t("Loading…") : t("Show more")}</button>` : null}
 				${(switching ? [] : rendered).map((turn, i) => {
 					const index = renderedStart + i;
 					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
@@ -1314,7 +1306,7 @@ export function Transcript() {
 				<div class="transcript-end" />
 			</div>
 		</div>
-		${!switching && !empty ? html`<${MessageRail} turns=${rendered.filter((turn) => !turn.standalone && turn.user)} contentRef=${content} />` : null}
+		${!switching && !empty ? html`<${MessageRail} turns=${railTurns} contentRef=${content} onReveal=${revealAll} />` : null}
 		${jump.mounted ? html`<button class=${`jump-btn ${away ? "" : "leaving"}`} onClick=${() => { stick.current = true; toBottom(true); }} title=${active ? t("Follow live output") : t("Jump to latest")} aria-label=${active ? t("Follow live output") : t("Jump to latest")}><${Icon} name="arrowDown" size=${16} /></button>` : null}
 	</div>`;
 }

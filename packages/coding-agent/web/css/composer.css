@@ -238,6 +238,12 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-wt-text { gap: 1px; min-width: 0; font-size: var(--fs-code); color: var(--text); }
 .branch-wt-text .dim { font-size: var(--fs-xs); line-height: 1.35; }
 .branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
+/* A long copy group is many times taller than the 236 px region that holds it, so the shared 260 ms fold would fill
+   everything you can see within the first frame and read as an instant pop. Capping a long list keeps that fold over
+   the height you actually see, like .branch-list scrolling inside the popover; short groups keep scrolling as a whole. */
+.branch-copies-long { max-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+/* Rows in a capped column would otherwise shrink to fit the max-height and overlap instead of scrolling. */
+.branch-copies-long > * { flex-shrink: 0; }
 .branch-copy { color: var(--text-2); }
 .branch-copy-actions { display: flex; flex: none; opacity: 0; }
 .branch-copy:hover .branch-copy-actions, .branch-copy:focus-within .branch-copy-actions, .branch-copy-target .branch-copy-actions { opacity: 1; }

@@ -3,7 +3,7 @@
 // there, dragging along the rail scrubs through the conversation, and the current message stays lit. A short "back"
 // control appears after a jump to a quote's source.
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon } from "./ui.js";
-import { NAV_ORIGIN_EVENT, cancelScroll, offsetInScroller, scrollToNode, scrollToTop, scrollerElement } from "./message-nav.js";
+import { NAV_ORIGIN_EVENT, cancelScroll, scrollToNode, scrollToTop, scrollerElement } from "./message-nav.js";
 import { clip } from "./util.js";
 import { t } from "./i18n.js";
 
@@ -46,27 +46,31 @@ function spread(tops, height) {
 
 const sameList = (a, b) => a.length === b.length && a.every((value, i) => Math.abs(value - b[i]) < 0.5);
 
-export function MessageRail({ turns, contentRef }) {
+export function MessageRail({ turns, contentRef, onReveal }) {
 	// Turns come with every render; what matters is which messages there are.
 	const signature = turns.map((turn) => turn.key).join("|");
 	const latest = useRef(turns);
 	latest.current = turns;
 	const entries = useMemo(() => latest.current.map((turn) => ({ key: turn.key, preview: previewOf(turn.user) })), [signature]);
-	const [geo, setGeo] = useState({ ys: [], height: 0, active: -1 });
+	const [geo, setGeo] = useState({ ys: [], height: 0, active: -1, tickH: 3 });
 	const [aim, setAim] = useState(null);
 	const [origin, setOrigin] = useState(null);
 	const state = useRef({ tops: [], ys: [], scrubbing: false, startY: 0, pointer: false });
 	const innerRef = useRef(null);
 	const geometry = useRef({ nodes: new Map() });
+	// Measuring again on demand: a jump to a message whose turn was still mounting has to see the new nodes now,
+	// not 200 ms later when the resize observer gets round to it.
+	const remeasure = useRef(null);
 
 	// Measuring: where every message starts, and which one the reader is at. Layout is read at most every MEASURE_MS
 	// (streaming changes the height all the time); scrolling only recomputes the lit tick, which needs no layout read
 	// beyond the scroll position. A layout effect: the ticks of a changed list are placed before it is painted.
 	useLayoutEffect(() => {
-		const el = scrollerElement();
-		if (!el) return undefined;
+		let el = scrollerElement();
 		let timer = 0;
 		let frame = 0;
+		let retryFrame = 0;
+		let tries = 0;
 		let disposed = false;
 		const activeAt = (tops) => {
 			const line = el.scrollTop + 32;
@@ -83,7 +87,13 @@ export function MessageRail({ turns, contentRef }) {
 			const nodes = new Map();
 			for (const node of el.querySelectorAll("section.turn[data-turn-key]")) nodes.set(node.dataset.turnKey, node);
 			geometry.current.nodes = nodes;
-			const tops = entries.map((entry) => (nodes.has(entry.key) ? offsetInScroller(el, nodes.get(entry.key)) : null));
+			// One read of the scroller's box for the whole pass: offsetInScroller would read it once per message, and a
+			// long conversation now has every one of its messages in the list.
+			const base = el.getBoundingClientRect().top - el.scrollTop;
+			const tops = entries.map((entry) => {
+				const node = nodes.get(entry.key);
+				return node ? node.getBoundingClientRect().top - base : null;
+			});
 			const known = tops.filter((top) => top !== null);
 			const height = Math.max(0, Math.min(el.clientHeight - RAIL_MARGIN * 2, Math.max(MIN_HEIGHT, entries.length * PER_MESSAGE)));
 			const ys = spread(known, height);
@@ -93,7 +103,11 @@ export function MessageRail({ turns, contentRef }) {
 			state.current.tops = tops;
 			state.current.ys = full;
 			const active = activeAt(tops);
-			setGeo((prev) => (prev.height === height && prev.active === active && sameList(prev.ys, full) ? prev : { ys: full, height, active }));
+			// Every message has a tick, so a long conversation has far more of them than the rail is tall: they get
+			// thinner with the density instead of piling into one band.
+			const gap = entries.length > 1 ? Math.min(TICK_GAP, height / (entries.length - 1)) : TICK_GAP;
+			const tickH = Math.max(1, Math.min(3, gap - 0.5));
+			setGeo((prev) => (prev.height === height && prev.active === active && prev.tickH === tickH && sameList(prev.ys, full) ? prev : { ys: full, height, active, tickH }));
 		};
 		const queue = (delay = MEASURE_MS) => {
 			if (!timer) timer = setTimeout(measure, delay);
@@ -106,16 +120,32 @@ export function MessageRail({ turns, contentRef }) {
 				setGeo((prev) => (prev.active === active ? prev : { ...prev, active }));
 			});
 		};
-		measure();
-		el.addEventListener("scroll", onScroll, { passive: true });
-		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => queue());
-		if (contentRef?.current) observer?.observe(contentRef.current);
-		observer?.observe(el);
+		let observer = null;
+		const attach = () => {
+			measure();
+			remeasure.current = measure;
+			el.addEventListener("scroll", onScroll, { passive: true });
+			observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => queue());
+			if (contentRef?.current) observer?.observe(contentRef.current);
+			observer?.observe(el);
+		};
+		// The Transcript registers its scroller in its own layout effect, which runs after its children's: a rail that
+		// measured once on the first paint would find no scroller, draw nothing and never try again. Wait a frame for it.
+		const waitForScroller = () => {
+			if (disposed) return;
+			el = scrollerElement();
+			if (el) attach();
+			else if (++tries < 120) retryFrame = requestAnimationFrame(waitForScroller);
+		};
+		if (el) attach();
+		else waitForScroller();
 		return () => {
 			disposed = true;
 			clearTimeout(timer);
 			cancelAnimationFrame(frame);
-			el.removeEventListener("scroll", onScroll);
+			cancelAnimationFrame(retryFrame);
+			if (el) el.removeEventListener("scroll", onScroll);
+			if (remeasure.current === measure) remeasure.current = null;
 			observer?.disconnect();
 		};
 	}, [signature]);
@@ -152,10 +182,21 @@ export function MessageRail({ turns, contentRef }) {
 	const firstKey = turns[0]?.key;
 	useEffect(() => setOrigin(null), [firstKey]);
 
-	const goTo = (index, opts) => {
+	const goTo = (index, opts, attempt = 0) => {
 		const entry = entries[index];
 		const node = geometry.current.nodes.get(entry?.key);
-		if (node) scrollToNode(node, opts);
+		if (node) {
+			scrollToNode(node, opts);
+			return;
+		}
+		// The turn of a message that is still mounting above has no node yet: mount the rest at once and come back
+		// once it is in the page, so a jump from the index never lands nowhere.
+		if (attempt >= 2 || !onReveal) return;
+		onReveal();
+		requestAnimationFrame(() => requestAnimationFrame(() => {
+			remeasure.current?.();
+			goTo(index, opts, attempt + 1);
+		}));
 	};
 	const nearest = (clientY) => {
 		const box = innerRef.current?.getBoundingClientRect();
@@ -231,7 +272,10 @@ export function MessageRail({ turns, contentRef }) {
 				// A dock effect: ticks near the pointer widen, so the one that will be taken is the widest.
 				const reach = shown ? Math.exp(-(((y - shown.y) / 30) ** 2)) : 0;
 				const width = (on ? 17 : 11) + reach * 10;
-				return html`<i key=${entries[i].key} class=${`msg-tick ${on ? "on" : ""} ${shown?.index === i ? "aimed" : ""}`} style=${{ top: `${y}px`, width: `${width}px` }} />`;
+				const aimed = shown?.index === i;
+				// The height comes from the rail's density (see measure), so one message per tick still reads as one tick.
+				const tickH = on || aimed ? Math.min(geo.tickH + 1, 4) : geo.tickH;
+				return html`<i key=${entries[i].key} class=${`msg-tick ${on ? "on" : ""} ${aimed ? "aimed" : ""}`} style=${{ top: `${y}px`, width: `${width}px`, height: `${tickH}px`, marginTop: `${-tickH / 2}px` }} />`;
 			})}
 			${shown ? html`<div class="msg-tip" style=${{ top: `${tipY}px` }} role="presentation">
 				<span class="msg-tip-n">${shown.index + 1}<span class="dim"> / ${entries.length}</span></span>

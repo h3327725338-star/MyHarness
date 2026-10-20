@@ -1098,7 +1098,6 @@ export const zhCN = {
 	"command palette": "命令面板",
 	"No model is available yet. {add} to start.": "目前没有可用的模型。{add}后即可开始。",
 	"Add a provider": "添加一个 Provider",
-	"Show earlier messages ({hidden} hidden)": "显示更早的消息（已隐藏 {hidden} 条）",
 	"Follow live output": "跟随实时输出",
 	"Jump to latest": "跳到最新",
 	"Message index": "消息索引",

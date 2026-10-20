@@ -142,6 +142,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const deletionPanel = useRef(null);
 	const copyDeletionPanel = useRef(null);
 	const copies = useRef(null);
+	const archivedEnd = useRef(null);
 	const known = useRef(null);
 	const list = useRef(null);
 
@@ -246,6 +247,18 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		const cancelPaint = afterPaint(reveal);
 		return () => { observer.disconnect(); cancelPaint(); };
 	}, [targetCopy, worktreesOpen, worktrees]);
+	useEffect(() => {
+		if (!archivedOpen) return;
+		// The opened group is taller than what is left of the copies region; once it has folded open, bring its end (the
+		// clear button) into view so the action is not left below the fold. The fold can end later than COLLAPSE_MS (its
+		// start waits a frame), so follow its own transitionend; the timer covers reduced motion, where none fires.
+		const fold = archivedEnd.current?.closest(".collapse");
+		const reveal = () => archivedEnd.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		const onEnd = (e) => { if (e.target === fold && e.propertyName === "grid-template-rows") reveal(); };
+		fold?.addEventListener("transitionend", onEnd);
+		const timer = setTimeout(reveal, COLLAPSE_MS + 200);
+		return () => { clearTimeout(timer); fold?.removeEventListener("transitionend", onEnd); };
+	}, [archivedOpen]);
 	useEffect(() => {
 		if (!deletingCopy) return;
 		copyDeletionPanel.current?.scrollIntoView({ block: "nearest" });
@@ -389,6 +402,9 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	// The main copy is always first; copies the user made follow (current, with work, clean, merged last); sub-agent
 	// copies sit in their own group at the bottom, folded by default.
 	const rank = (w) => (w.current ? 0 : w.merged ? 3 : holdsWork(w) ? 1 : 2);
+	// A group with a long list grows far taller than the copies region can show, which would make the shared fold fill
+	// the visible area in the first frame; capping the list lets the fold ease over the height you can actually see.
+	const copiesClass = (rows) => `branch-copies${rows.length > 12 ? " branch-copies-long" : ""}`;
 	const mine = copiesList.filter((w) => !w.isMain && !w.subagent && !w.archived).sort((a, b) => rank(a) - rank(b));
 	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent && !w.archived);
 	// Newest archived copy first: the copy finished most recently is the one worth checking first.
@@ -638,15 +654,15 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 				${main ? html`<div class="branch-copies">${copyRow(main)}</div>` : null}
 				${mine.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${mineOpen} onClick=${() => setMineOpen(!mineOpen)}>
 					<${Chevron} /><span>${t("My copies")}</span><span class="badge">${mine.length}</span></button>
-					<${Collapse} open=${mineOpen}><div class="branch-copies">${mine.map((w) => copyRow(w))}</div><//>` : null}
+					<${Collapse} open=${mineOpen}><div class=${copiesClass(mine)}>${mine.map((w) => copyRow(w))}</div><//>` : null}
 				${agentCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${agentsOpen} onClick=${() => setAgentsOpen(!agentsOpen)}>
 					<${Chevron} /><span>${t("Sub-agent copies")}</span><span class="badge">${agentCopies.length}</span></button>
-					<${Collapse} open=${agentsOpen}><div class="branch-copies">${agentCopies.map((w) => copyRow(w))}</div><//>` : null}
+					<${Collapse} open=${agentsOpen}><div class=${copiesClass(agentCopies)}>${agentCopies.map((w) => copyRow(w))}</div><//>` : null}
 				${archivedCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${archivedOpen} onClick=${() => setArchivedOpen(!archivedOpen)}>
 					<${Chevron} /><span>${t("Archived copies")}</span><span class="badge">${archivedCopies.length}</span></button>
 					<${Collapse} open=${archivedOpen}>
-						<div class="branch-copies">${archivedCopies.map((w) => copyRow(w, true))}</div>
-						<div class="branch-form"><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({ force: false, failed: [], error: "" })}>${t("Clear archived copies")}</button></div>
+						<div class=${copiesClass(archivedCopies)}>${archivedCopies.map((w) => copyRow(w, true))}</div>
+						<div class="branch-form" ref=${archivedEnd}><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({ force: false, failed: [], error: "" })}>${t("Clear archived copies")}</button></div>
 					<//>` : null}
 			</div>
 			${archiveClear ? html`<div class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
