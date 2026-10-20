@@ -1398,6 +1398,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 			fauxAssistantMessage([fauxText("one")]),
 			fauxAssistantMessage([fauxText("two")]),
 			fauxAssistantMessage([fauxText("")], { stopReason: "error", errorMessage: "provider exploded" }),
+			fauxAssistantMessage([fauxText("five")]),
 			fauxAssistantMessage([fauxText("four")]),
 		]);
 
@@ -1429,11 +1430,28 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await vi.waitFor(() => expect(popups()).toHaveLength(2), { timeout: 6000, interval: 100 });
 		expect(popups()[1]).toMatchObject({ kind: "failed" });
 		expect(popups()[1].message).toContain("provider exploded");
+		// That notice is settled: a page that was busy showing it wakes up too late and must not show a second popup.
+		expect(await fx.post("/api/notifications/answer", { id: third.id, claim: true }, three)).toMatchObject({
+			claimed: false,
+		});
+
+		// A page that says it is showing the notification keeps the system popup away while it works, and the answer it
+		// sends afterwards still settles the notice without a popup.
+		const five = await run("task five");
+		const fifth = await fx.waitFor("task_notification", (data) => data.slot === five);
+		expect(await fx.post("/api/notifications/answer", { id: fifth.id, claim: true }, five)).toMatchObject({
+			claimed: true,
+		});
+		await new Promise((done) => setTimeout(done, 3000));
+		expect(popups()).toHaveLength(2);
+		await fx.post("/api/notifications/answer", { id: fifth.id, shown: true }, five);
+		await new Promise((done) => setTimeout(done, 300));
+		expect(popups()).toHaveLength(2);
 
 		// With the setting off nothing is announced.
 		await fx.post("/api/settings", { id: "popupNotifications", value: false }, three);
 		const four = await run("task four");
-		expect(announced().map((notice) => notice.slot)).toEqual([one, two, three]);
+		expect(announced().map((notice) => notice.slot)).toEqual([one, two, three, five]);
 		expect(four).not.toBe(three);
 		expect(popups()).toHaveLength(2);
 	});

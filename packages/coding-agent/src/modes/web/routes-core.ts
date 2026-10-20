@@ -151,10 +151,16 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		return { ok: true };
 	});
 
-	/** A page says whether it showed a task-end notification itself (see WebHost.announceTaskEnd). */
+	/**
+	 * A page says whether it showed a task-end notification itself (see WebHost.announceTaskEnd): first that it is
+	 * showing it (`claim`), then whether it could (`shown`). A claim the server no longer holds answers
+	 * `claimed: false`, which means the system popup already took the notification over.
+	 */
 	server.route("POST", "/api/notifications/answer", ({ body }) => {
 		const payload = asObject(body);
-		host.answerTaskNotice(asString(payload.id, "id"), payload.shown === true);
+		const id = asString(payload.id, "id");
+		if (payload.claim === true) return { ok: true, claimed: host.claimTaskNotice(id) };
+		host.answerTaskNotice(id, payload.shown === true);
 		return { ok: true };
 	});
 

@@ -5,7 +5,12 @@ const { join, resolve } = require('node:path');
 const { homedir } = require('node:os');
 const { createBrowser, httpUrl } = require('./browser-view.cjs');
 const { readLegacyPrefs } = require('./legacy-prefs.cjs');
+const { removeForeignShortcuts } = require('./notification-routing.cjs');
 const root = resolve(__dirname, '../..');
+// Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
+// shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
+// path, so sharing the installed app's id would let a click start Electron's default window instead of MyHarness.
+const notificationAppId = app.isPackaged ? 'MyHarness' : 'MyHarness.Dev';
 // The packaged app retains the checkout's data anchor, not the exe's arbitrary directory.
 const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory : root;
 const cwd = resolve(process.env.MYHARNESS_DESKTOP_CWD || anchor);
@@ -142,7 +147,11 @@ else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('before-quit', (event) => { if (!finished) { event.preventDefault(); void stop(); } });
   app.whenReady().then(async () => {
-    app.setAppUserModelId('MyHarness');
+    app.setAppUserModelId(notificationAppId);
+    // A shortcut left by an earlier development run (bare electron.exe, no app path) or by a build folder that was
+    // removed still claims this id, and Windows may pick it over this app's own shortcut on a toast click. Electron
+    // writes its own shortcut again before the next notification, so the ones that cannot start this app are removed.
+    if (app.isPackaged) void removeForeignShortcuts({ aumid: notificationAppId, log });
     window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
     browser = createBrowser(window, log, { workspaceRoot: cwd });

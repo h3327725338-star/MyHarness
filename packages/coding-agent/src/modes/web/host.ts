@@ -71,6 +71,12 @@ const METER_BROADCAST_INTERVAL_MS = 150;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
 /** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
 const TASK_NOTICE_ANSWER_MS = 2500;
+/**
+ * How long a page that said it is showing the notification itself may take before the system popup takes over. A page
+ * that is busy (a long reply still rendering, a native toast being registered) is slow, not absent, and must not end up
+ * with both notifications.
+ */
+const TASK_NOTICE_CLAIM_MS = 15000;
 
 export type RunOutcome = "completed" | "partial" | "failed" | "cancelled";
 
@@ -349,7 +355,7 @@ export class WebHost {
 	/** Task-end notifications the open pages have not answered yet (see announceTaskEnd). */
 	private readonly taskNotices = new Map<
 		string,
-		{ refused: number; timer: ReturnType<typeof setTimeout>; popup: () => void }
+		{ refused: number; claimed: boolean; timer: ReturnType<typeof setTimeout>; popup: () => void }
 	>();
 	private lastTaskNoticeKey: string | undefined;
 	private shutdownRequested = false;
@@ -390,7 +396,7 @@ export class WebHost {
 				else {
 					const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
 					timer.unref?.();
-					this.taskNotices.set(id, { refused: 0, timer, popup });
+					this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup });
 					// A dialog on a focused window needs no extra ping: the page skips it unless the window is in the background.
 					this.broadcast("task_notification", {
 						id,
@@ -804,7 +810,7 @@ export class WebHost {
 		const id = `${this.slotId}:${key}`;
 		const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
 		timer.unref?.();
-		this.taskNotices.set(id, { refused: 0, timer, popup });
+		this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup });
 		this.broadcast("task_notification", {
 			id,
 			kind,
@@ -819,6 +825,24 @@ export class WebHost {
 			body,
 			work,
 		});
+	}
+
+	/**
+	 * A page that received a task-end notification says that it is showing it itself, before it spends the time on the
+	 * notification. The popup therefore only follows when the page reports that it could not show it, or when the answer
+	 * never arrives; a page too busy to answer in time no longer produces a second notification from the server.
+	 * Returns false when the notification is already settled (the system popup took over), so the page can skip it.
+	 */
+	claimTaskNotice(id: string): boolean {
+		const notice = this.taskNotices.get(id);
+		if (!notice) return false;
+		if (!notice.claimed) {
+			notice.claimed = true;
+			clearTimeout(notice.timer);
+			notice.timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_CLAIM_MS);
+			notice.timer.unref?.();
+		}
+		return true;
 	}
 
 	/**

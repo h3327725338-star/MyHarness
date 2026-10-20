@@ -2041,6 +2041,14 @@ async function notifyTaskEnd(d, slot) {
 		post("/api/notifications/answer", { id: d.id, shown: true }, slot).catch(() => {});
 		return;
 	}
+	// The server shows its own popup when no page answers in time. Claiming the notice first says this page is showing
+	// it, so a busy page (a reply still rendering, a native toast starting up) cannot produce a second popup; when the
+	// server already took the notice over, the claim comes back false and the page stays quiet.
+	let claimed = false;
+	try {
+		claimed = (await post("/api/notifications/answer", { id: d.id, claim: true }, slot))?.claimed === true;
+	} catch {}
+	if (!claimed) return;
 	// Short enough to read at a glance: what happened and in which chat is the title, and the body is one sentence of
 	// what matters instead of a paragraph, so the popup says what it is about before it is read line by line.
 	const chat = clip(chatLabel(slot), 40);
