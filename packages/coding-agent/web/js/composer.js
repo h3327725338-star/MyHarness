@@ -815,9 +815,8 @@ const send = async (mode) => {
 				<div class="composer-bar">
 					<${Menu} placement="top" trigger=${({ toggle }) => html`<button class="icon-btn" title=${t("Attach or insert")} aria-label=${t("Attach or insert")} onClick=${toggle}><${Icon} name="plus" size=${17} /></button>`}>
 						${(close) => html`
-							<${MenuItem} icon="file" label=${t("Upload files from Explorer")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = ""; fileInput.current.click(); } }}  />
-							<${MenuItem} icon="image" label=${t("Attach image")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = "image/*"; fileInput.current.click(); } }}  />
-							<${MenuItem} icon="folder" label=${t("Upload folder from Explorer")} disabled=${loadingFiles} onClick=${() => { close(); folderInput.current?.click(); }}  />`}
+							<${MenuItem} icon="file" label=${t("Add files")} disabled=${loadingFiles} onClick=${() => { close(); if (fileInput.current) { fileInput.current.accept = ""; fileInput.current.click(); } }}  />
+							<${MenuItem} icon="folder" label=${t("Add folder")} disabled=${loadingFiles} onClick=${() => { close(); folderInput.current?.click(); }}  />`}
 					<//>
 					<input ref=${fileInput} type="file" multiple hidden onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 					<input ref=${folderInput} type="file" multiple hidden webkitdirectory directory onChange=${(e) => (addFiles(e.target.files), (e.target.value = ""))} />

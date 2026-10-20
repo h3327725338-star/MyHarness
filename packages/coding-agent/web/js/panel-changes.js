@@ -3,7 +3,7 @@
 // numbers, context lines, green additions and red deletions), and ↑/↓ or the arrows in the list switch files without leaving
 // the panel. The panel is opened, closed and switched only by its own buttons in the header: nothing in here opens another
 // panel.
-import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Segmented, Spinner, CopyButton } from "./ui.js";
+import { html, useCallback, useEffect, useRef, useState, Collapse, Counts, Empty, Fold, Icon, Resizer, Segmented, Spinner, CopyButton } from "./ui.js";
 import { api, loadGitStatus, setView, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { PanelBody } from "./command-panel.js";
@@ -17,6 +17,18 @@ const STATUS_TITLE = { added: N_("Added"), modified: N_("Modified"), deleted: N_
 
 /** A slot that cannot serve reads yet: empty or a pending switch target (store.js `api()` throws Loading… for it). */
 const isPendingSlot = (slot) => !slot || String(slot).startsWith("pending:");
+
+/** The file list's height once the bar under it has been dragged (null: the stylesheet's default); kept for the next visit. */
+const LIST_H_KEY = "myharness.changesListH";
+const LIST_H_MIN = 52;
+function readListH() {
+	try {
+		const value = Number(localStorage.getItem(LIST_H_KEY));
+		return value >= LIST_H_MIN ? value : null;
+	} catch {
+		return null;
+	}
+}
 
 const fileCounts = (file) => (file.binary || file.unavailable ? null : html`<${Counts} additions=${file.additions} deletions=${file.deletions} />`);
 
@@ -113,6 +125,9 @@ export function ChangesPanel() {
 	const [chatDirty, setChatDirty] = useState({ key: "", value: 0 });
 	const [mode, setMode] = useState(() => localStorage.getItem("myharness.diffmode") || "unified");
 	const [listOpen, setListOpen] = useState(true);
+	const [listH, setListH] = useState(readListH);
+	const listHRef = useRef(listH);
+	const bodyRef = useRef(null);
 	const [chosen, setChosen] = useState("");
 	const [diffs, setDiffs] = useState({});
 	const [nonce, setNonce] = useState(0);
@@ -254,7 +269,7 @@ export function ChangesPanel() {
 		${loading && !data ? html`<${ChangesSkeleton} />` : null}
 		${data && !files.length && !data.error ? html`<${Empty} icon="fileDiff" title=${scope === "session" ? (active ? t("The task is still running. Changes appear here when it finishes.") : t("No saved file changes in this conversation.")) : t("No uncommitted changes in the Git working tree.")} />` : null}
 		${selected
-			? html`<div class="changes-body">
+			? html`<div class="changes-body" ref=${bodyRef}>
 				<div class="cfiles">
 					<div class="cfiles-head">
 						<button class="cfiles-toggle" aria-expanded=${listOpen} onClick=${() => setListOpen(!listOpen)} title=${listOpen ? t("Hide the file list") : t("Show the file list")}>
@@ -267,7 +282,7 @@ export function ChangesPanel() {
 						<button class="icon-btn sm" disabled=${at >= files.length - 1} onClick=${() => go(at + 1)} title=${t("Next file")} aria-label=${t("Next file")}><${Icon} name="chevronDown" size=${15} /></button>
 					</div>
 					<${Collapse} open=${listOpen}>
-						<div class="cfiles-list" ref=${listRef} role="listbox" tabindex="0" aria-label=${t("Changed files")} onKeyDown=${onListKey}>
+						<div class="cfiles-list" ref=${listRef} style=${listH ? { maxHeight: `${listH}px` } : null} role="listbox" tabindex="0" aria-label=${t("Changed files")} onKeyDown=${onListKey}>
 							${files.map((file) => html`<div class=${`cfile ${file === selected ? "sel" : ""}`} key=${file.path} role="option" aria-selected=${file === selected} title=${file.path} onClick=${() => setChosen(file.path)}>
 								<span class=${`st st-${file.status}`} title=${t(STATUS_TITLE[file.status])}>${STATUS_LETTER[file.status]}</span>
 								<${FilePath} file=${file} />
@@ -276,6 +291,10 @@ export function ChangesPanel() {
 							</div>`)}
 						</div>
 					<//>
+					${listOpen ? html`<${Resizer} axis="y" min=${LIST_H_MIN} max=${Math.max(LIST_H_MIN, (bodyRef.current?.clientHeight || 400) - 140)}
+						getValue=${() => listRef.current?.offsetHeight || listHRef.current || 216}
+						onChange=${(value) => { listHRef.current = Math.round(value); setListH(listHRef.current); }}
+						onEnd=${() => { try { localStorage.setItem(LIST_H_KEY, String(listHRef.current)); } catch {} }} />` : null}
 				</div>
 				<${DiffPane} key=${dataKey} file=${selected} mode=${mode} entry=${diffs[diffKey]} isRefreshing=${loading} />
 			</div>`

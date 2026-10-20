@@ -37,7 +37,8 @@
 .changes-notes { flex: none; }
 .changes-notes:empty { display: none; }
 .changes-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-top: 6px; border-top: 1px solid var(--border); }
-.cfiles { flex: none; border-bottom: 1px solid var(--border); }
+.cfiles { position: relative; flex: none; border-bottom: 1px solid var(--border); }
+.cfiles > .resizer.y { bottom: -5px; }
 .cfiles-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 3px var(--pad-panel); }
 .cfiles-toggle { display: inline-flex; align-items: center; gap: 8px; height: var(--h-control-sm); margin-left: -6px; padding: 0 6px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); }
 .cfiles-toggle:hover { background: var(--surface-hover); color: var(--text); }
@@ -48,7 +49,7 @@
 .cfile.sel { background: var(--surface-select); color: var(--text); }
 .cfiles-list:focus-visible .cfile.sel { box-shadow: inset 0 0 0 1px var(--border-focus); }
 .cfile.sk { cursor: default; pointer-events: none; animation: cfile-pulse var(--t-morph) var(--ease-out) infinite alternate; }
-.cfile-sk-st { width: 18px; height: 18px; border-radius: var(--r-xs); background: var(--bg-inset); border: 1px solid var(--border-soft); flex: none; }
+.cfile-sk-st { width: 12px; height: 12px; border-radius: var(--r-xs); background: var(--bg-inset); border: 1px solid var(--border-soft); flex: none; }
 .cfile-sk-path { height: 12px; border-radius: var(--r-xs); background: var(--bg-inset); flex: none; max-width: 70%; min-width: 48px; }
 .cfile-sk-counts { margin-left: auto; width: 28px; height: 10px; border-radius: var(--r-xs); background: var(--bg-inset); flex: none; }
 .cfile-sk-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -73,8 +74,8 @@
 .cdiff-head { position: sticky; top: 0; left: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px var(--pad-panel); background: var(--bg-panel); border-bottom: 1px solid var(--border); }
 .file-path { flex: 1 1 auto; min-width: 0; font-size: var(--fs-code); }
 .counts { display: inline-flex; gap: 6px; font-size: var(--fs-sm); flex: none; }
-.st { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-xs); font-size: var(--fs-mini); font-weight: 700; flex: none; background: var(--surface-active); color: var(--text-2); }
-.st-added, .st-A { background: var(--ok-soft); color: var(--ok); } .st-modified, .st-M { background: var(--warn-soft); color: var(--warn); } .st-deleted, .st-D { background: var(--danger-soft); color: var(--danger); } .st-renamed, .st-R { background: var(--accent-soft); color: var(--accent); }
+.st { display: inline-grid; place-items: center; width: 12px; flex: none; font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; line-height: 1; color: var(--text-3); }
+.st-added, .st-A { color: var(--ok); } .st-modified, .st-M { color: var(--warn); } .st-deleted, .st-D { color: var(--danger); } .st-renamed, .st-R { color: var(--accent); }
 
 /* Diff */
 /* Long lines wrap inside the panel (the line number stays on the first visual line), so nothing is cut off or scrolled

@@ -612,10 +612,12 @@ export function VirtualRows({ items, rowHeight, renderRow, overscan = 8, thresho
 
 /**
  * Drag-to-resize handle. `getValue()` is read once at drag start; `onChange(v)` gets base ± delta (invert flips the sign).
+ * `axis="y"` makes it a horizontal bar that follows the pointer up and down instead of left and right.
  * The handle captures the pointer for the drag: every move comes to it wherever the pointer is, and nothing it passes
  * over (rows, buttons, the terminal) reacts to it, so a drag costs one layout per frame and no hover restyling.
  */
-export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max = 10000 }) {
+export function Resizer({ getValue, onChange, onEnd, side, invert, axis = "x", min = 0, max = 10000 }) {
+	const vertical = axis === "y";
 	const [dragging, setDragging] = useState(false);
 	const start = useCallback(
 		(event) => {
@@ -623,7 +625,7 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 			event.preventDefault();
 			const handle = event.currentTarget;
 			const pointer = event.pointerId;
-			const startX = event.clientX;
+			const startPos = vertical ? event.clientY : event.clientX;
 			const base = getValue();
 			setDragging(true);
 			// The pointer reports faster than frames are drawn: only the latest position of each frame is applied, so the
@@ -638,7 +640,7 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 				onChange(value);
 			};
 			const move = (e) => {
-				pending = Math.max(min, Math.min(max, base + (invert ? -1 : 1) * (e.clientX - startX)));
+				pending = Math.max(min, Math.min(max, base + (invert ? -1 : 1) * ((vertical ? e.clientY : e.clientX) - startPos)));
 				if (!frame) frame = requestAnimationFrame(flush);
 			};
 			let ended = false;
@@ -662,16 +664,16 @@ export function Resizer({ getValue, onChange, onEnd, side, invert, min = 0, max 
 			} catch {
 				// The pointer is already gone: the drag ends with the first event that says so.
 			}
-			document.body.style.cursor = "col-resize";
+			document.body.style.cursor = vertical ? "row-resize" : "col-resize";
 			document.body.style.userSelect = "none";
 			handle.addEventListener("pointermove", move, { passive: true });
 			handle.addEventListener("pointerup", up);
 			handle.addEventListener("pointercancel", up);
 			handle.addEventListener("lostpointercapture", up);
 		},
-		[getValue, onChange, onEnd, invert, min, max],
+		[getValue, onChange, onEnd, invert, vertical, min, max],
 	);
-	return html`<div class=${`resizer ${side || ""} ${dragging ? "dragging" : ""}`} onPointerDown=${start} role="separator" aria-orientation="vertical" />`;
+	return html`<div class=${`resizer ${vertical ? "y" : ""} ${side || ""} ${dragging ? "dragging" : ""}`} onPointerDown=${start} role="separator" aria-orientation=${vertical ? "horizontal" : "vertical"} />`;
 }
 
 export function CopyButton({ text, label = t("Copy"), size = 14, class: cls }) {

@@ -108,6 +108,8 @@
 .resizer { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
 .resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background var(--t-fast); }
 .resizer:hover::after, .resizer.dragging::after { background: var(--accent-line); }
+.resizer.y { top: auto; left: 0; right: 0; width: auto; height: 8px; cursor: row-resize; }
+.resizer.y::after { top: 3px; bottom: auto; left: 0; right: 0; width: auto; height: 2px; }
 .sidebar .resizer { right: -4px; }
 
 /* Main panel: lifted surface */
