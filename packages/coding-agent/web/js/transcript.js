@@ -2,11 +2,11 @@
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
-import { retrySwitch, activeSlotId, api, fetchMoreTranscript, getTurnsCache, notePaintedTurns, setTurnsCache, setView, useStore } from "./store.js";
+import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSlice, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments } from "./turns.js";
+import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSlice, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments, historySourcesOf } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
@@ -14,7 +14,7 @@ import { basename, clip, splitFirstSentence, dirname, fmtBytes, fmtDuration, fmt
 import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
 import { MessageRail } from "./message-rail.js";
-import { jumpToQuote, registerScroller } from "./message-nav.js";
+import { jumpToQuote, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, turnKeyForEntry } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
@@ -770,6 +770,51 @@ function ChangeCard({ card }) {
 	</div>`;
 }
 
+/**
+ * The earlier chats an answer was built on (what session_get really read), as a quiet line under the answer. Each name
+ * opens that chat at the message that was read, so the source can be checked rather than taken on trust.
+ */
+function HistorySources({ sources }) {
+	if (!sources.length) return null;
+	return html`<div class="history-sources dim">
+		<${Icon} name="clock" size=${12} />
+		<span>${t("From earlier chats:")}</span>
+		${sources.map((source) => html`<button key=${source.sessionId} class="history-source truncate" title=${t("Open this chat at the message that was read")} onClick=${() => actions.openSessionAt(source.path, source.entryId)}>${clip(source.title || t("Untitled chat"), 48)}</button>`)}
+	</div>`;
+}
+
+/** The background block a "continue in a new chat" brought in, without its machine-readable frame. */
+function continuationBody(text) {
+	return String(text || "").replace(/^<continued-from[^>]*>\s*/, "").replace(/\s*<\/continued-from>\s*$/, "");
+}
+
+/**
+ * "Continued from …": a marker line like the compaction one. It names the source chat, opens it at the point the
+ * background was taken from, shows the background on demand, and — only before the first message — takes it back out.
+ */
+function ContinuationMarker({ item }) {
+	const [open, setOpen] = useState(false);
+	const started = useStore((s) => s.items.some((other) => other.kind === "user"));
+	const details = item.details || {};
+	const title = details.sourceTitle || t("Untitled chat");
+	const note = details.summaryState === "current" || details.summaryState === "behind" ? t("with its hand-off note") : t("from its newest messages");
+	return html`<div class="marker continuation-marker">
+		<div class="marker-head">
+			<span class="marker-line" />
+			<span class="marker-text continuation-text">
+				<${Icon} name="chat" size=${13} />
+				<span class="truncate">${t("Continued from “{title}”", { title: clip(title, 60) })}</span>
+				<span class="dim">· ${note}</span>
+				${details.sourcePath ? html`<button class="link-btn" onClick=${() => actions.openSessionAt(details.sourcePath, details.sourceEntryId)}>${t("View source")}</button>` : null}
+				<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide background") : t("Show background")}</button>
+				${!started && item.id ? html`<button class="link-btn" title=${t("Start this chat without the earlier background")} onClick=${() => actions.unlinkContinuation(item.id)}>${t("Unlink")}</button>` : null}
+			</span>
+			<span class="marker-line" />
+		</div>
+		<${Collapse} open=${open}><div class="marker-body"><${Markdown} text=${continuationBody(item.text)} /></div><//>
+	</div>`;
+}
+
 const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd, processDefault, snapRun, compacting }) {
 	const outcome = turnOutcome(turn, { run, live, waiting });
 	const changeCount = run ? run.changeCount : turn.stats.files;
@@ -792,6 +837,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 		)}
 		${pending ? html`<${ProcessSummary} key=${`sum-${turn.key}-pending`} turn=${turn} steps=${[]} outcome=${outcome} live=${working} compacting=${compacting} snapRun=${snapRun} defaultOpen=${false} />` : null}
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
+		${turn.final && !working ? html`<${HistorySources} sources=${historySourcesOf(turn)} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
 		<${OutcomeBanner} turn=${turn} outcome=${outcome} run=${run} changeCount=${changeCount} isLast=${isLast} />
 	</section>`;
@@ -837,6 +883,7 @@ function Standalone({ item, task, snap, runs, processDefault }) {
 			<${Collapse} open=${open}><div class="marker-body">${item.summary?.trim() ? html`<${Markdown} text=${item.summary} />` : html`<div class="dim">${t("This compaction saved no readable summary.")}</div>`}</div><//></div>`;
 	}
 	if (item.kind === "reload") return html`<div class="marker"><span class="marker-text">${item.ok ? t("Configuration reloaded") : t("Reload failed: {error}", { error: item.error })}</span></div>`;
+	if (item.kind === "custom" && item.customType === "session-continuation") return html`<${ContinuationMarker} item=${item} />`;
 	if (item.kind === "custom") {
 		return html`<div class="custom-card"><div class="dim custom-type">${item.customType.replace(/[-_]/g, " ")}</div><${Markdown} text=${item.text} /></div>`;
 	}
@@ -1267,6 +1314,53 @@ export function Transcript() {
 		}, FILL_DELAY);
 		return () => clearTimeout(timer);
 	}, [switching, transcriptHasMore, transcriptFetching, turnsSlot]);
+	// A jump to a message of another chat ("View source", an answer's sources): the chat is opened first, then the
+	// message is looked for in the loaded items. Older pages keep filling in by themselves, so a message that is not
+	// loaded yet is waited for (bounded); a message that is not on the chat's current branch is reported, not guessed.
+	const revealWant = useRef(null);
+	const [revealTick, setRevealTick] = useState(0);
+	useEffect(() => {
+		const onReveal = (event) => {
+			const detail = event.detail || {};
+			revealWant.current = { path: detail.path, entryId: detail.entryId, until: Date.now() + 15_000 };
+			setRevealTick((tick) => tick + 1);
+		};
+		window.addEventListener(REVEAL_ENTRY_EVENT, onReveal);
+		return () => window.removeEventListener(REVEAL_ENTRY_EVENT, onReveal);
+	}, []);
+	const shownFile = snap?.session?.file || "";
+	useEffect(() => {
+		const want = revealWant.current;
+		if (!want || switching || items.length === 0) return undefined;
+		const norm = (path) => String(path || "").replace(/\\/g, "/").toLowerCase();
+		if (norm(shownFile) !== norm(want.path)) return undefined;
+		if (!want.entryId) {
+			revealWant.current = null;
+			return undefined;
+		}
+		const target = turnKeyForEntry(items, want.entryId);
+		if (!target) {
+			if (transcriptHasMore && Date.now() < want.until) {
+				const timer = setTimeout(() => setRevealTick((tick) => tick + 1), 600);
+				return () => clearTimeout(timer);
+			}
+			revealWant.current = null;
+			toast(t("That message is not on this chat's current branch any more."), "info", 4000);
+			return undefined;
+		}
+		revealWant.current = null;
+		revealAll();
+		let frames = 0;
+		let frame = 0;
+		const attempt = () => {
+			frame = 0;
+			void revealEntryIn(content.current, target).then((done) => {
+				if (!done && ++frames < 30) frame = requestAnimationFrame(attempt);
+			});
+		};
+		frame = requestAnimationFrame(attempt);
+		return () => frame && cancelAnimationFrame(frame);
+	}, [revealTick, items, switching, shownFile, transcriptHasMore]);
 	// The cold-load preview is replaced by the first full build here: the height taken before the swap shifts the scroll
 	// by exactly the growth above the reader, so what they were reading stays where it is.
 	useLayoutEffect(() => {

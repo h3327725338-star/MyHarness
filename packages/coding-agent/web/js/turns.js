@@ -16,6 +16,7 @@ const TENSES = {
 	fetch: [N_("Reading page"), N_("Read page"), N_("read the page")],
 	github: [N_("Querying GitHub"), N_("Queried GitHub"), N_("query GitHub")],
 	agent: [N_("Delegating"), N_("Delegated"), N_("delegate")],
+	history: [N_("Looking through earlier chats"), N_("Looked through earlier chats"), N_("look through earlier chats")],
 	tool: [N_("Using"), N_("Used"), N_("use")],
 };
 
@@ -201,6 +202,17 @@ export function describeAction(call, result, run, cwd) {
 			detail = name;
 			break;
 		}
+		case "session_search":
+			kind = "history";
+			target = str(args.query) || t("recent chats");
+			break;
+		case "session_get": {
+			kind = "history";
+			const source = result?.details?.sources?.[0];
+			target = source?.title || str(args.session);
+			detail = t("read");
+			break;
+		}
 		case "github":
 			kind = "github";
 			target = `${str(args.method || "GET")} ${str(args.path || args.url || args.query || "")}`.trim();
@@ -293,6 +305,8 @@ export function groupLabel(kind, actions) {
 		}
 		case "github":
 			return pick(N_("Querying GitHub {times}"), N_("Queried GitHub {times}"), { times: count(n, "time") });
+		case "history":
+			return pick(N_("Looking through earlier chats ({times})"), N_("Looked through earlier chats ({times})"), { times: count(n, "time") });
 		case "agent":
 			return pick(N_("Delegating {tasks}"), N_("Delegated {tasks}"), { tasks: count(n, "task") });
 		default:
@@ -677,3 +691,18 @@ export function actionTitle(step) {
 }
 
 export { basename };
+
+/**
+ * The earlier chats a turn really read (session_get calls that returned a source), newest call last, one per chat:
+ * what the answer's "sources" line offers to open.
+ */
+export function historySourcesOf(turn) {
+	const seen = new Map();
+	for (const step of turn?.steps || []) {
+		if (step.type !== "action" || step.call?.name !== "session_get" || step.result?.isError) continue;
+		for (const source of step.result?.details?.sources || []) {
+			if (source?.path && source?.sessionId) seen.set(source.sessionId, source);
+		}
+	}
+	return [...seen.values()];
+}

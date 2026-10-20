@@ -204,6 +204,7 @@ export class WebHostHub implements WebHostHubLink {
 			await other.session.settingsManager.reload();
 			if (!this.slots.has(other.slotId)) return;
 			other.refreshConversationNaming();
+			other.refreshSessionHandoff();
 			if (event !== "models_changed") return;
 			// Providers added, edited or deleted elsewhere must reach this runtime too (each has its own ModelRuntime).
 			// Credentials go first: a key or login saved in the other session lives in auth.json, and the reload below is
@@ -398,6 +399,7 @@ export class WebHostHub implements WebHostHubLink {
 		rootPath?: string,
 		unbound = false,
 		mode: ChatMode = from.session.sessionManager.getMode(),
+		options: { forceNew?: boolean } = {},
 	): Promise<{ slot: string; created: boolean }> {
 		const manager = from.session.sessionManager;
 		const defaultStorage = manager.usesDefaultSessionDir() && manager.isPersisted();
@@ -443,17 +445,19 @@ export class WebHostHub implements WebHostHubLink {
 			throw new HttpError(400, `工作区 [${name}] 本地路径不是目录`);
 		}
 		// An untouched empty chat of the same kind in the same folder is already what the user asks for.
-		const reusable = [from, ...this.all()].find(
-			(host) =>
-				host.session.sessionManager.getMode() === mode &&
-				pathIdentityKey(host.cwd) === pathIdentityKey(cwd) &&
-				host.session.isIdle &&
-				!host.gitTask &&
-				!host.completionActive &&
-				(!defaultStorage || host.unbound === wantUnbound) &&
-				host.session.sessionManager.buildSessionContext().messages.length === 0 &&
-				!host.hasOperationContent,
-		);
+		const reusable = options.forceNew
+			? undefined
+			: [from, ...this.all()].find(
+					(host) =>
+						host.session.sessionManager.getMode() === mode &&
+						pathIdentityKey(host.cwd) === pathIdentityKey(cwd) &&
+						host.session.isIdle &&
+						!host.gitTask &&
+						!host.completionActive &&
+						(!defaultStorage || host.unbound === wantUnbound) &&
+						host.session.sessionManager.buildSessionContext().messages.length === 0 &&
+						!host.hasOperationContent,
+				);
 		if (reusable) return { slot: reusable.slotId, created: false };
 		const sessionDir = manager.usesDefaultSessionDir() ? undefined : manager.getSessionDir();
 		const sessionManager = !manager.isPersisted()

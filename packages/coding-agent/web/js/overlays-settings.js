@@ -34,7 +34,7 @@ export const NAV = [
 	{ id: "shortcuts", label: N_("Keyboard shortcuts"), icon: "gear" },
 	{ id: "about", label: N_("About"), icon: "info" },
 ];
-export const SECTION_OF = { Agent: "agent", Assistants: "agent", Images: "agent", Network: "network", "Timeouts & retries": "network", Shell: "network", Safety: "safety", Notifications: "safety", Terminal: "terminal" };
+export const SECTION_OF = { Agent: "agent", Assistants: "agent", "Session continuity": "agent", Images: "agent", Network: "network", "Timeouts & retries": "network", Shell: "network", Safety: "safety", Notifications: "safety", Terminal: "terminal" };
 
 export function sectionOf(item) {
 	if (item.id.startsWith("codeIntelligence.")) return "code";
@@ -341,6 +341,7 @@ const SHORT_DESCRIPTION = {
 	fallbackModel: N_("Takes over when the main model keeps failing."),
 	conversationNaming: N_("Name automatically; check new replies every 10 minutes."),
 	autoMemory: N_("Save memory after each task."),
+	"sessionContinuity.autoSearch": N_("Find and read your earlier chats when you continue a topic. Independent of Auto Memory."),
 	visionAssistant: N_("Use a model for image analysis."),
 	"webSearch.enabled": N_("Enable search and page reads."),
 	"webSearch.maxRedirects": N_("Redirects followed per page read; 0 follows none."),
@@ -358,6 +359,10 @@ const describe = (item) => {
 		// The inline number box no longer spells out its range; the description carries it, taken from the item's own bounds.
 		const bounds = { min: item.inlineNumber?.min ?? 1, max: item.inlineNumber?.max ?? 18 };
 		return t(item.value && item.value.mode === "read-write" ? "Writable, limited to their own worktrees. Concurrent tasks: {min}–{max}." : "Delegate read-only investigation. Concurrent tasks: {min}–{max}.", bounds);
+	}
+	if (item.id === "sessionContinuity.handoff") {
+		const base = t("Note where each chat stands, in the background (extra model calls). Unset: compaction model, then main model.");
+		return item.using ? `${base} ${t("Now: {model}", { model: item.using.replace(/ · own model$/, ` · ${t("own model")}`).replace(/ · compaction model$/, ` · ${t("compaction model")}`).replace(/ · main model$/, ` · ${t("main model")}`) })}` : `${base} ${t("No usable model right now.")}`;
 	}
 	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
 	const text = item.section === "Terminal" ? String(item.description || "").replace(/^Terminal UI: /, "") : item.description;

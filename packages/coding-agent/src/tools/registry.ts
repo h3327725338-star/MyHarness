@@ -64,6 +64,17 @@ export {
 	type WriteToolOptions,
 } from "./files/write.ts";
 export {
+	createSessionGetTool,
+	createSessionGetToolDefinition,
+	createSessionSearchTool,
+	createSessionSearchToolDefinition,
+	type SessionGetToolInput,
+	type SessionHistoryOperations,
+	type SessionHistoryToolDetails,
+	type SessionHistoryToolOptions,
+	type SessionSearchToolInput,
+} from "./history/session-history.ts";
+export {
 	type AskUserQuestionAnswer,
 	type AskUserQuestionToolDetails,
 	type AskUserQuestionToolInput,
@@ -199,6 +210,13 @@ import { type AgentTasksToolOptions, createAgentTasksTool, createAgentTasksToolD
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./files/ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./files/read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./files/write.ts";
+import {
+	createSessionGetTool,
+	createSessionGetToolDefinition,
+	createSessionSearchTool,
+	createSessionSearchToolDefinition,
+	type SessionHistoryToolOptions,
+} from "./history/session-history.ts";
 import { createAskUserQuestionTool, createAskUserQuestionToolDefinition } from "./interaction/ask-user-question.ts";
 import { createTodoWriteTool, createTodoWriteToolDefinition } from "./interaction/todo-write.ts";
 import {
@@ -278,6 +296,8 @@ export type ToolName =
 	| "memory_delete"
 	| "memory_claim"
 	| "memory_write"
+	| "session_search"
+	| "session_get"
 	| "ask_user_question"
 	| "todo_write"
 	| "web_search"
@@ -308,6 +328,8 @@ export const allToolNames: Set<ToolName> = new Set([
 	"memory_delete",
 	"memory_claim",
 	"memory_write",
+	"session_search",
+	"session_get",
 	"ask_user_question",
 	"todo_write",
 	"web_search",
@@ -331,6 +353,7 @@ export interface ToolsOptions {
 	agentTasks?: AgentTasksToolOptions;
 	github?: GitHubToolOptions;
 	memory?: MemoryToolOptions;
+	sessionHistory?: SessionHistoryToolOptions;
 	webSearch?: WebSearchToolOptions;
 }
 
@@ -384,6 +407,10 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createMemoryClaimToolDefinition(cwd, options?.memory);
 		case "memory_write":
 			return createMemoryWriteToolDefinition(cwd, options?.memory);
+		case "session_search":
+			return createSessionSearchToolDefinition(cwd, options?.sessionHistory);
+		case "session_get":
+			return createSessionGetToolDefinition(cwd, options?.sessionHistory);
 		case "ask_user_question":
 			return createAskUserQuestionToolDefinition();
 		case "todo_write":
@@ -449,6 +476,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createMemoryClaimTool(cwd, options?.memory);
 		case "memory_write":
 			return createMemoryWriteTool(cwd, options?.memory);
+		case "session_search":
+			return createSessionSearchTool(cwd, options?.sessionHistory);
+		case "session_get":
+			return createSessionGetTool(cwd, options?.sessionHistory);
 		case "ask_user_question":
 			return createAskUserQuestionTool();
 		case "todo_write":
@@ -491,6 +522,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		memory_delete: createMemoryDeleteToolDefinition(cwd, options?.memory),
 		memory_claim: createMemoryClaimToolDefinition(cwd, options?.memory),
 		memory_write: createMemoryWriteToolDefinition(cwd, options?.memory),
+		session_search: createSessionSearchToolDefinition(cwd, options?.sessionHistory),
+		session_get: createSessionGetToolDefinition(cwd, options?.sessionHistory),
 		ask_user_question: createAskUserQuestionToolDefinition(),
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
@@ -543,6 +576,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		memory_delete: createMemoryDeleteTool(cwd, options?.memory),
 		memory_claim: createMemoryClaimTool(cwd, options?.memory),
 		memory_write: createMemoryWriteTool(cwd, options?.memory),
+		session_search: createSessionSearchTool(cwd, options?.sessionHistory),
+		session_get: createSessionGetTool(cwd, options?.sessionHistory),
 		ask_user_question: createAskUserQuestionTool(),
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),

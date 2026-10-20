@@ -21,6 +21,7 @@
 | `auto-memory.ts` | `AutoMemoryManager`：长期记忆的召回、提取、整理 |
 | `conversation-title.ts` | 会话标题生成与批量重命名（`generateConversationTitle()`、`renameConversationsInBatch()`） |
 | `assistant-model.ts` | 辅助模型（Auto Memory、Sub-agent、Vision）“跟随主模型”的解析 |
+| `session-handoff.ts` | `SessionHandoff`：后台交接摘要（只在空闲时跑、45 秒合并连续轮次、有限退避重试；只写会话 `metadata/handoff.json`，不改对话历史，不是压缩）；`handoffWork()` 决定是否有未覆盖的消息，`resolveHandoffModel()` 按“单独设置 → 压缩模型 → 主模型”选模型 |
 | `conversation-naming.ts` | `ConversationNaming`：后台按节流命名的调度（只在空闲时跑，写 `conversation-naming` 自定义条目），`conversationNamingWork()` 决定是否需要命名 |
 | `role.ts` | `AgentRole`（main / delegated / reviewer）、角色提示和按角色限制工具名 |
 | `prompt-correlation.ts` | `correlatePrompt()` / `promptCorrelation()`：prompt 与客户端消息 ID 的关联 |
@@ -87,4 +88,4 @@
 - 测试通过名字访问了少量私有成员：`_runAutoCompaction`、`_checkCompaction`、`_trackBackgroundExploreTask`、`_emitExtensionEvent`、`_extensionRunner`。它们在 `AgentSession` 上保留为薄的转发方法；改名或删除前先看 `test/` 中的用法。
 - `messages.ts` 被 `session/` 和 `context/` 使用，属于会话格式的一部分，不要引入对上层模块的依赖。
 - 会话桥和镜像会话涉及跨进程写锁，修改时同时检查 `session/bridge/descriptor.ts` 和 `session-bridge.test.ts`、`session-writer-lock-owner.test.ts`。
-- 相关测试：`test/agent-session-*.test.ts`、`test/suite/agent-session-*.test.ts`、`test/suite/regressions/`、`auto-memory.test.ts`、`conversation-title.test.ts`、`vision-*.test.ts`、`delegated-event-parser.test.ts`。
+- 相关测试：`test/agent-session-*.test.ts`、`test/suite/agent-session-*.test.ts`、`test/suite/regressions/`、`auto-memory.test.ts`、`conversation-title.test.ts`、`session-handoff.test.ts`、`vision-*.test.ts`、`delegated-event-parser.test.ts`。

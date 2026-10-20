@@ -146,6 +146,19 @@ export interface AutoMemorySettings {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/**
+ * Cross-session continuity: finding earlier chats and the background hand-off note each chat keeps.
+ * Independent of Auto Memory: turning long-term memory off does not stop searching one's own chats.
+ */
+export interface SessionContinuitySettings {
+	autoSearch?: boolean; // default: true — the model may search and read earlier chats (session_search)
+	autoHandoff?: boolean; // default: true — keep a hand-off note per chat in the background (model calls)
+	/** Hand-off model; unset falls back to the compaction model, then the main model. */
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
 /** Background conversation naming; shares the helper-model selection contract. */
 export interface ConversationNamingSettings extends AutoMemorySettings {}
 
@@ -329,6 +342,7 @@ export interface Settings {
 	subAgent?: SubAgentSettings; // Global-only inspection sub-agent configuration; Bash guard is not a sandbox
 	autoMemory?: AutoMemorySettings; // Global-only long-term memory configuration
 	conversationNaming?: ConversationNamingSettings; // Global-only background conversation naming
+	sessionContinuity?: SessionContinuitySettings; // Global-only cross-session search and hand-off notes
 	visionAssistant?: VisionAssistantSettings; // Global-only dedicated image analysis configuration
 	fallbackModel?: FallbackModelSettings; // Global-only model that takes over when the main model keeps failing
 	codeIntelligence?: CodeIntelligenceSettings;

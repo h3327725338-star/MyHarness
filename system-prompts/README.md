@@ -20,6 +20,7 @@
 | `roles/explore.md` | Explore 子进程通过 `--append-system-prompt` 追加的专用职责 |
 | `roles/explore-write.md` | 读写模式 Explore 子进程追加的专用职责，含 worktree 边界与末尾 `## Worktree result` 返回格式 |
 | `session/commit-authorization.md` | 当前不存在；显式 `/commit` 的授权和 Git 事务边界由 Coding Agent 源码处理，不会从本目录加载 |
+| `session/handoff.md` | 后台交接摘要请求的职责与输出格式（话题、当前焦点、必要背景、结论与纠正、未完成事项、来源；区分已确认与未验证，中断回复不写成完成；提示词文件本身不含非英文字符） |
 | `session/auto-memory.md` | 仅 Auto Memory 完整启用时追加的记忆优先级约束 |
 | `session/project-context.md` | 有项目上下文时使用，变量 `projectContext` |
 | `session/artifacts.md` | 持久化结构化 Session 的临时产出存放规则，变量 `artifactsDir`；由 `_getTurnSystemPrompt` 追加实际对话路径，不适用于正式源码或用户指定路径 |
@@ -29,7 +30,7 @@
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
 | `skills/harness.md` | 通用 AgentHarness 的技能说明；原文不同，独立维护 |
 | `harness/default.md` | 通用 AgentHarness 未提供自定义 systemPrompt 时的默认身份 |
-| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,apply-rename,find,grep,ls,github,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,ask-user-question,todo-write,workspace}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 与 apply-rename 说明仅在 symbols 启用时出现，workspace 说明仅在桌面宿主连接时出现 |
+| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,apply-rename,find,grep,ls,github,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,session-search,session-get,ask-user-question,todo-write,workspace}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 与 apply-rename 说明仅在 symbols 启用时出现，workspace 说明仅在桌面宿主连接时出现 |
 | `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合。symbols 规则仅在 symbols 启用时出现 |
 | `tools/no-snippets.md` | 历史占位说明；当前组合对缺 snippet 使用行内占位 `(no description available)`，不加载此文件 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |

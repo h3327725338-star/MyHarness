@@ -18,6 +18,15 @@ Sessions can be removed by deleting the whole Session directory under `<project 
 
 MyHarness supports deleting sessions interactively from the session picker. When available, MyHarness uses the `trash` CLI to avoid permanent deletion.
 
+## Derived history data (cross-session continuity)
+
+Two derived files live in the Session's own `metadata/` directory. Neither is a second copy of record: both can be deleted at any time and are rebuilt from the JSONL, and deleting the chat removes them with the Session directory.
+
+- `metadata/history-index.json` — the searchable text of the conversation: user messages and the visible text of assistant replies (no tool output, reasoning or attachments), each with its entry id, timestamp, whether it is on the current branch (the path from the file's last entry to the root) and whether the reply was interrupted, failed or cut off. A lookup is only served when the file's inode, size, mtime and a 4KB head hash still match the JSONL; otherwise it is rebuilt. Code: `src/session/history/index-store.ts`, `records.ts`.
+- `metadata/handoff.json` — the hand-off note: `{ version: 1, sessionId, summary, coveredEntryId, coveredCount, provider?, model?, updatedAt }`. `coveredEntryId` is the last message the note covers. A note is *current* when that message is the newest one on the branch, *behind* when newer messages follow it, and *stale* when that message is no longer on the current branch (navigation, edit-and-resend); a stale note is not used. Written only by the background hand-off worker (`src/agent/runtime/session-handoff.ts`). Code: `src/session/history/handoff-store.ts`.
+
+"Continue in a new chat" writes one `custom_message` into the **new** chat with `customType: "session-continuation"`, `display: true`, the background text as `content` (it enters the model context once and stays there like any message) and `details`: `{ sourcePath, sourceSessionId, sourceTitle, sourceEntryId, summaryState, summaryCoveredEntryId?, messagesIncluded, createdAt }`. The source chat is never written to. If the user unlinks before sending the first message, the entry stays in the file, the leaf moves above it and a `custom` entry `session-continuation-unlinked` (`data: { entryId }`) is appended so a reload keeps the background out of the context.
+
 ## Session Version
 
 Sessions have a version field in the header:

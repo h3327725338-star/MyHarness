@@ -2783,6 +2783,34 @@ export class AgentSession {
 	}
 
 	/**
+	 * Take back the background a "continue in a new chat" brought in, before the chat has started. The entry itself is
+	 * kept in the file (entries are never edited); the leaf moves above it and a marker entry records the choice, so a
+	 * reload keeps it out of the context too. Refused once a user message follows it or while a task runs.
+	 */
+	detachContextMessage(entryId: string, markerType: string): boolean {
+		if (!this.isIdle) return false;
+		const entry = this.sessionManager.getEntry(entryId);
+		if (!entry || entry.type !== "custom_message") return false;
+		const branch = this.sessionManager.getBranch();
+		const at = branch.findIndex((item) => item.id === entryId);
+		if (at < 0) return false;
+		if (branch.slice(at + 1).some((item) => item.type === "message" && item.message.role === "user")) return false;
+		const abandoned = branch.slice(at + 1);
+		if (entry.parentId) this.sessionManager.branch(entry.parentId);
+		else this.sessionManager.resetLeaf();
+		this.sessionManager.appendCustomEntry(markerType, { entryId });
+		// A model or effort picked after the background arrived stays picked.
+		const lastModel = abandoned.filter((item) => item.type === "model_change").at(-1);
+		if (lastModel?.type === "model_change")
+			this.sessionManager.appendModelChange(lastModel.provider, lastModel.modelId);
+		const lastThinking = abandoned.filter((item) => item.type === "thinking_level_change").at(-1);
+		if (lastThinking?.type === "thinking_level_change")
+			this.sessionManager.appendThinkingLevelChange(lastThinking.thinkingLevel);
+		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+		return true;
+	}
+
+	/**
 	 * Send a user message to the agent. Always triggers a turn.
 	 * When the agent is streaming, use deliverAs to specify how to queue the message.
 	 *

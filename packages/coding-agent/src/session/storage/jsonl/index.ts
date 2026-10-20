@@ -1185,6 +1185,13 @@ async function listSessionFilesFromWorkspaceDir(
 	return hits.filter((info): info is SessionInfo => info !== null);
 }
 
+/** The saved Sessions of one Workspace data directory (registered or not), newest first. */
+export async function listWorkspaceSessions(dataRoot: string, workspaceId: string): Promise<SessionInfo[]> {
+	const sessions = await listSessionFilesFromWorkspaceDir(getWorkspaceSessionsDir(dataRoot, workspaceId));
+	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return sessions;
+}
+
 export async function listSessionsForCwd(
 	cwd: string,
 	sessionDir: string | undefined,

@@ -38,6 +38,7 @@ import type {
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
+	SessionContinuitySettings,
 	Settings,
 	SettingsError,
 	SettingsManagerCreateOptions,
@@ -69,6 +70,7 @@ export type {
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
+	SessionContinuitySettings,
 	Settings,
 	SettingsError,
 	SettingsManagerCreateOptions,
@@ -611,7 +613,7 @@ export class SettingsManager {
 			changed = true;
 		}
 
-		for (const field of ["commitDescription", "worktreeNaming"] as const) {
+		for (const field of ["commitDescription", "worktreeNaming", "sessionContinuity"] as const) {
 			const configured = this.globalSettings[field];
 			if (configured?.provider === providerId && (modelId === undefined || configured.model === modelId)) {
 				delete configured.provider;
@@ -811,6 +813,21 @@ export class SettingsManager {
 	setConversationNamingSettings(settings: AutoMemorySettings): void {
 		this.globalSettings.conversationNaming = { ...settings };
 		this.markModified("conversationNaming");
+		this.save();
+	}
+
+	getSessionContinuitySettings(): SessionContinuitySettings & { autoSearch: boolean; autoHandoff: boolean } {
+		const settings = this.globalSettings.sessionContinuity;
+		return {
+			...settings,
+			autoSearch: settings?.autoSearch ?? true,
+			autoHandoff: settings?.autoHandoff ?? true,
+		};
+	}
+
+	setSessionContinuitySettings(settings: SessionContinuitySettings): void {
+		this.globalSettings.sessionContinuity = { ...settings };
+		this.markModified("sessionContinuity");
 		this.save();
 	}
 

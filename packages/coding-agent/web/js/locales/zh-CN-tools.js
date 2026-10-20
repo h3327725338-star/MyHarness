@@ -38,6 +38,8 @@ export const zhToolDescriptions = {
 	memory_delete: "彻底删除指定的长期记忆",
 	memory_claim: "把待认领记忆收为当前工作区记忆",
 	memory_write: "创建或更新指定的长期记忆",
+	session_search: "查找之前的聊天记录",
+	session_get: "读取之前聊天的交接摘要与原文",
 	ask_user_question: "向用户提问并等待选择或回答",
 	todo_write: "创建并更新任务清单",
 	web_search: "搜索网络并读取结果",

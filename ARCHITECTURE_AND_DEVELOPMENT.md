@@ -94,6 +94,8 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
 
 长期记忆存放在当前 Data root 的总层、Workspace 和 Conversation 的 `memory/`，由稳定 ID 归属；旧 Agent memory 只作为保留的迁移来源。删除聊天或移除工作区不隐式删除记忆，自动替代和更新保留归档。Agent runtime 负责提取/召回编排，Session memory store 负责持久化。记忆维护通过 Conversation memory 内可恢复的待处理快照在后台运行，不纳入 Web Chat completion 或重启保护；runtime 释放时取消，重新打开 Chat 时恢复。每次模型请求只使用当前轮的 recall，旧 recall 的磁盘历史保留但不累积发送。Recall 与 `memory_search` / `memory_get` / `memory_write` 工具共用 `auto-memory.ts` 的类型与排序函数；记忆 frontmatter 有可选的 `importance`、`triggers`，Global 层可有常驻画像条目 `global/用户画像`（整理器可在事实充分时创建初版并每轮整篇重写；主对话模型可用 `memory_write` 在导入或明确更正时直接写入），详见 `packages/coding-agent/docs/settings.md` 的 Auto Memory 一节。
 
+跨会话衔接与长期记忆分开：`session/history/` 在现有会话存储上提供派生的正文检索记录、按消息读取和交接摘要存储（都在会话自己的 `metadata/` 下，可重建、随删除聊天一起移除）；`agent/runtime/session-handoff.ts` 在 Web 会话空闲时后台维护交接摘要（不修改对话、不是压缩）；`session_search` / `session_get` 工具和“在新会话继续”（`/api/sessions/continue`）共用这套服务。设置项为 `sessionContinuity`，详见 settings.md。
+
 Session、cache、trace、credential、memory、Workspace 和代码智能运行时不属于源码清理范围。存储路径与数据安全见 `docs/STORAGE.md`；不可为了清理入口删除运行时数据。
 
 ## 修改与验证

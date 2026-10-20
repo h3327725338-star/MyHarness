@@ -108,6 +108,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 							${(close) => html`
 								<${MenuItem} icon="edit" label=${t("Rename")} onClick=${() => (close(), startEdit())} />
 								<${MenuItem} icon="sparkle" label=${t("Generate title with AI")} disabled=${busy} onClick=${() => (close(), actions.renameSessionWithAi(info.path))} />
+								${info.unsaved ? null : html`<${MenuItem} icon="chat" label=${t("Continue in new chat")} onClick=${() => (close(), actions.continueSession(info.path))} />`}
 								${info.archived || info.unsaved ? null : html`<${MenuItem} icon="pin" label=${info.pinned ? t("Unpin") : t("Pin to top")} onClick=${() => (close(), actions.pinSession(info.path, !info.pinned))} />`}
 								<${MenuItem} icon="folder" label=${info.archived ? t("Unarchive") : t("Archive")} disabled=${busy} onClick=${() => (close(), actions.archiveSession(info.path, !info.archived))} />
 								<${MenuSep} />

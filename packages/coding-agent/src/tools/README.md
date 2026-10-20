@@ -62,6 +62,10 @@
 | `null-redirect-guard.ts` | `findBashNullDeviceRedirect()`：bash 里 `>nul` 会建出真文件并破坏 Git，属引号感知的纯扫描，不执行命令 |
 | `read-only-guard.ts` | 子 Agent 的只读 Bash 守卫：按 shell 序列段（管道、`&&`、`;`）逐段用只读允许列表 + 危险选项/拒绝列表判定，诊断重定向（`2>/dev/null`）与临时路径写入不影响判定，可选的模型裁决；拦截结果带 `[read-only-guard]` 标记和具体原因，不计入连续工具失败 |
 
+### history/ — 历史聊天工具
+
+`session-history.ts`：`session_search`（查找之前保存的聊天：标题、交接摘要和消息正文，默认当前工作区与模式、排除归档和当前会话；无 `query` 时列出最近的聊天及各自停在哪里）和 `session_get`（按会话 id 读交接摘要，以及某条消息前后文或当前分支最新消息，并提示其后是否还有可能的纠正）。两个工具只读、`executionMode: "parallel"`，搜索与读取逻辑在 `session/history/`；读取通过可注入的 `SessionHistoryOperations`，`createSessionHistoryOperations()` 按会话的 Data root / Workspace / 模式定范围。设置 `sessionContinuity.autoSearch` 关闭时 `session_search` 只返回说明，`session_get` 仍可读用户指定的来源。与 `memory_*` 职责分开：记忆工具只查长期记忆。子智能体按 `agent/runtime/role.ts` 白名单拿不到它们。
+
 ### memory/ — 记忆工具
 
 `search.ts`：`memory_search`（无 `query` 列记忆目录，有 `query` 用 `agent/runtime/auto-memory.ts` 的 `selectMemoriesForQuery()` 返回摘要）和 `memory_get`（按 id 取全文，未找到只返回说明）。两个工具只读、`executionMode: "parallel"`；读取通过可注入的 `MemoryToolOperations`，`createSessionMemoryOperations()` 按会话的 Data root / Workspace / Conversation 读取，Auto Memory 关闭或会话不持久化时返回“未启用”说明。`write.ts`：`memory_write`（用户明确要求记住、导入、更正或更新时，一次最多 10 条地创建/更新本轮三层的记忆与常驻画像；省略 `id` 新建，只有 `global/用户画像` 允许带 `id` 首次创建；超 10 KB 拒绝而不截断；`executionMode: "sequential"`，经 `session/memory/store.ts` 的锁写盘并刷新索引、记一笔待整理变化）。`manage.ts`：`memory_delete` 彻底删除、`memory_claim` 认领 `pending/`。子智能体按 `agent/runtime/role.ts` 白名单不会拿到这些工具（写入类同样不给）。

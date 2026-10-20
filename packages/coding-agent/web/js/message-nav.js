@@ -110,3 +110,37 @@ export async function jumpToQuote(blockquote) {
 	}
 	return true;
 }
+
+/** Ask the transcript to show one message of a chat once that chat is on screen (detail: { path, entryId }). */
+export const REVEAL_ENTRY_EVENT = "myharness:reveal-entry";
+
+/**
+ * The turn that shows an entry: its section is keyed by the user message that opens it (see turns.js). Null when the
+ * entry is not among the loaded items; `key` is null when it sits before any user message.
+ */
+export function turnKeyForEntry(items, entryId) {
+	const at = items.findIndex((item) => item.id === entryId);
+	if (at < 0) return null;
+	for (let index = at; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "user") return { key: `t-${item.id || item.ts || index}`, user: index === at };
+	}
+	return { key: null, user: false };
+}
+
+/** Scroll the turn of a message into view and flash the message itself (the user bubble, or the answer). */
+export async function revealEntryIn(container, target) {
+	if (!container || !target?.key) return false;
+	const node = container.querySelector(`[data-turn-key="${CSS.escape(target.key)}"]`);
+	if (!node) return false;
+	await scrollToNode(node);
+	const focus = (target.user ? node.querySelector(".user-bubble") : node.querySelector(".final")) || node;
+	try {
+		const range = document.createRange();
+		range.selectNodeContents(focus);
+		if (focus.isConnected) flashRange(range);
+	} catch {
+		// Re-rendered while scrolling: the scroll already did its job.
+	}
+	return true;
+}

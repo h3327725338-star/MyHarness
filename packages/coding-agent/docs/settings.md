@@ -130,6 +130,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
 | `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `conversationNaming` | object | `{ "enabled": false }` | Global 对话自动命名；设置 → 智能体 → 助手选择模型、思考级别和开关。 |
+| `sessionContinuity` | object | `{ "autoSearch": true, "autoHandoff": true }` | Global 跨会话衔接：查找之前的聊天、后台交接摘要及其模型；见 [sessionContinuity](#sessioncontinuity)。 |
 | `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时注册 `web_search` 和 `web_fetch`，main Agent 与它派出的子智能体都按这个开关。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
@@ -159,6 +160,27 @@ Conversation Naming、Auto Memory、Sub Agent、Vision Assistant、Compact Model
     "enabled": true,
     "provider": "my-provider",
     "model": "my-naming-model",
+    "thinkingLevel": "low"
+  }
+}
+```
+
+<a id="sessioncontinuity"></a>
+#### sessionContinuity（跨会话衔接）
+
+Global，设置 → 智能体 → “跨对话衔接”分组。三个部分共用同一套会话存储，与长期记忆分开：长期记忆负责“了解你”，交接摘要负责“知道聊到哪”，历史检索负责“找回细节”，“在新对话继续”负责“别接错聊天”。关闭 Auto Memory 不影响这里。
+
+- `autoSearch`（默认 `true`，界面“自动查找历史”）：主对话模型可用 `session_search` 查找之前的聊天（标题、交接摘要、用户消息和回复正文；本地关键词与中文相邻字匹配，不调用模型，不建向量库），默认只查当前工作区（无工作区的 Chat 查“对话”分组）、当前模式、未归档、不含当前 Chat；用户明确要求时才扩大到其他工作区、另一模式或归档。命中只说明相关，模型须用 `session_get` 读取原文核对；多段相近聊天时列出候选让用户选，不按最近时间硬猜。关闭后 `session_search` 只返回说明；用户明确给出的来源（会话 id、“在新对话继续”）仍可用 `session_get` 读取。两个工具都只读，子智能体不可用，临时（不保存）会话和自定义会话目录下不可用。
+- `autoHandoff`（默认 `true`，界面“自动生成交接摘要”）：每个 Chat 在后台维护一份简短交接摘要（主要话题、当前焦点、必要背景、结论与纠正、未完成事项、关键来源），保存在该会话 `metadata/handoff.json`，记录覆盖到哪条消息。每轮结束（含失败、中断）后登记，45 秒内连续聊天合并为一次；只在该 Chat 空闲时运行，不阻塞回复或切换会话；增量更新时只发送“已有摘要＋新增消息”，覆盖位置离开当前分支时整份重建。失败后 30 秒、2 分钟、10 分钟各重试一次，之后停止；写入前核对摘要未被更新、覆盖消息仍在当前分支，旧结果不会覆盖新结果。软件退出时取消请求，下次打开该 Chat 时按覆盖位置补齐；不打开的旧 Chat 不会被批量总结。这会产生额外模型调用和 Token 用量；关闭后不再生成，但搜索、读原文和“在新对话继续”照常可用（没有摘要时直接用原文）。
+- `provider` / `model` / `thinkingLevel`：交接摘要使用的模型。未单独设置时先沿用压缩模型（`compaction` 的模型设置），再沿用主模型及其思考级别；设置页描述里显示当前实际使用的模型。
+
+```json
+{
+  "sessionContinuity": {
+    "autoSearch": true,
+    "autoHandoff": true,
+    "provider": "my-provider",
+    "model": "my-summary-model",
     "thinkingLevel": "low"
   }
 }
@@ -195,7 +217,7 @@ Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 
 
 Global 层可以有一条固定的常驻画像 `global/用户画像`（`type: user`、`importance: high`，六节：称呼与身份背景、沟通与语言偏好、工作与授权习惯、长期环境与工具事实、正在推进的事、被纠正过的行为与教训）。整理器每轮整篇重写它；它不存在时，第一批整理任务会授权整理器仅凭同一批里的稳定事实创建初版（事实不足就跳过，绝不臆造）；抽取器对它的写入仍被忽略，模型对它的删除操作也被忽略。主对话模型也可以用 `memory_write` 直接创建或整段更新它（用户导入画像、明确要求记住或更正时），写入立即生效；旧版本进 `archive/`。它存在时每轮都放在 recall message 的最前面，不参与普通排序，因此不会重复注入；不存在时也不阻止目录与卡片注入。单条记忆正文上限为 10 KB（只算正文，标题摘要等头不计；读取与写入一致），画像整篇也必须在这个上限内，超出部分拆成普通记忆而不丢信息。
 
-主对话模型有五个记忆工具（Coding 与 General 都可用，子智能体不可用；Auto Memory 关闭或会话不持久化时只返回一句说明）。`memory_search` 不带 `query` 时列出记忆目录（`id | name | description | importance | type | scope | updatedAt | origin`，本轮可见在前、跨项目/待认领在后，按更新时间倒序，超出 16 KB 时截断并标注），带 `query` 时用与 Recall 相同的排序返回摘要（含跨项目与待认领命中，标来源），不含全文；`memory_get` 按 id 取全文（一次最多 5 个，跨项目与 `pending/` 按需可取并标来源），未找到的 id 返回说明而不报错，不返回 `archive/` 下的归档版本。`memory_delete` 按 id 彻底删除（本轮三层＋待认领区，其他项目的不许删；正文连带归档一起清除，不可恢复；一次最多 5 个，只用于用户明确说要忘记时）。`memory_claim` 把一条 `pending/` 记忆认领为当前工作区记忆（一次一条）。`memory_write` 只用在用户明确要求记住、导入、更正或更新时：一次最多 10 条，省略 `id` 新建，带已存在的 `id` 更新并把旧版收进 `archive/`，只有 `global/用户画像` 允许带 `id` 首次创建；正文超 10 KB 拒绝写入而不截断；忘记仍走 `memory_delete`；写入会记一笔待整理变化，让后台整理随后接手。每次模型请求过滤旧轮次的 recall message，仅保留当前 user message 后的 recall，磁盘对话历史不改写。更新使用乐观冲突检测，已有内容变化后重新提取；相同内容不重复归档。新记忆记录提取来源的 Workspace、Session 和末条 Entry ID。这是批次来源，不是逐句证据标注；没有专用的对话历史搜索工具（记忆工具只查长期记忆，不查历史对话）。Automatic memory 只适用于 persisted sessions；`--no-session` 不读写 long-term memory。
+主对话模型有五个记忆工具（Coding 与 General 都可用，子智能体不可用；Auto Memory 关闭或会话不持久化时只返回一句说明）。`memory_search` 不带 `query` 时列出记忆目录（`id | name | description | importance | type | scope | updatedAt | origin`，本轮可见在前、跨项目/待认领在后，按更新时间倒序，超出 16 KB 时截断并标注），带 `query` 时用与 Recall 相同的排序返回摘要（含跨项目与待认领命中，标来源），不含全文；`memory_get` 按 id 取全文（一次最多 5 个，跨项目与 `pending/` 按需可取并标来源），未找到的 id 返回说明而不报错，不返回 `archive/` 下的归档版本。`memory_delete` 按 id 彻底删除（本轮三层＋待认领区，其他项目的不许删；正文连带归档一起清除，不可恢复；一次最多 5 个，只用于用户明确说要忘记时）。`memory_claim` 把一条 `pending/` 记忆认领为当前工作区记忆（一次一条）。`memory_write` 只用在用户明确要求记住、导入、更正或更新时：一次最多 10 条，省略 `id` 新建，带已存在的 `id` 更新并把旧版收进 `archive/`，只有 `global/用户画像` 允许带 `id` 首次创建；正文超 10 KB 拒绝写入而不截断；忘记仍走 `memory_delete`；写入会记一笔待整理变化，让后台整理随后接手。每次模型请求过滤旧轮次的 recall message，仅保留当前 user message 后的 recall，磁盘对话历史不改写。更新使用乐观冲突检测，已有内容变化后重新提取；相同内容不重复归档。新记忆记录提取来源的 Workspace、Session 和末条 Entry ID。这是批次来源，不是逐句证据标注；记忆工具只查长期记忆，不查历史对话——查找和读取之前的聊天由 `session_search` / `session_get` 负责（见下方 [sessionContinuity](#sessioncontinuity)），与 Auto Memory 开关互相独立。Automatic memory 只适用于 persisted sessions；`--no-session` 不读写 long-term memory。
 
 Memory Markdown files 是 source of truth：
 

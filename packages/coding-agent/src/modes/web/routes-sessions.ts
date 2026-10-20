@@ -26,6 +26,11 @@ import { buildReplayHtml } from "../../exports/html/replay/build.ts";
 import { buildExportTooLargeBody, ReplayExportTooLargeError } from "../../exports/html/replay/limits.ts";
 import { isWorktreeCopyPath } from "../../git/worktrees/merged-records.ts";
 import { deleteWorkspaceArtifacts } from "../../session/artifacts/store.ts";
+import {
+	buildSessionContinuation,
+	SESSION_CONTINUATION_TYPE,
+	SESSION_CONTINUATION_UNLINKED_TYPE,
+} from "../../session/history/continuation.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
 import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
@@ -839,6 +844,47 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const position = payload.position === "at" ? "at" : "before";
 		const result = await host.runtimeHost.fork(entryId, { position });
 		return { cancelled: result.cancelled, selectedText: result.selectedText ?? null };
+	});
+
+	/**
+	 * "Continue in a new chat": a separate, ordinary new chat in the source's Workspace and mode that starts with the
+	 * source's hand-off note and newest messages as background. The source is only read; nothing is sent or run.
+	 */
+	server.route("POST", "/api/sessions/continue", async ({ body }) => {
+		const path = asString(asObject(body).path, "path");
+		await assertKnownSession(path, true);
+		const header = readSessionHeader(path);
+		if (!header) throw new HttpError(404, "Unknown session");
+		const mode: ChatMode = header.mode === "general" ? "general" : "coding";
+		const owner = openSlot(path);
+		const built = buildSessionContinuation(path, { title: owner?.session.sessionName });
+		if (!built || (built.details.messagesIncluded === 0 && built.details.summaryState !== "current"))
+			throw new HttpError(409, "This chat has no messages to continue from yet.");
+		const workspace = header.workspaceId ? host.workspaceStore.getById(header.workspaceId, mode) : undefined;
+		const created = await hub.newSession(host, workspace?.rootPath, !workspace, mode, { forceNew: true });
+		const target = hub.get(created.slot);
+		if (!target) throw new HttpError(500, "The new chat could not be opened.");
+		await target.session.sendCustomMessage({
+			customType: SESSION_CONTINUATION_TYPE,
+			content: built.text,
+			display: true,
+			details: built.details,
+		});
+		host.broadcast("workspaces_changed", {});
+		return { slot: created.slot, rootPath: workspace?.rootPath ?? null, unbound: !workspace };
+	});
+
+	/** Take the continued-from background back out of a chat that has not started yet. */
+	server.route("POST", "/api/sessions/continuation/unlink", async ({ body }) => {
+		requireIdle("change the chat");
+		const entryId = asString(asObject(body).entryId, "entryId");
+		const entry = host.session.sessionManager.getEntry(entryId);
+		if (entry?.type !== "custom_message" || entry.customType !== SESSION_CONTINUATION_TYPE)
+			throw new HttpError(404, "No continued-from background with that id in this chat.");
+		if (!host.session.detachContextMessage(entryId, SESSION_CONTINUATION_UNLINKED_TYPE))
+			throw new HttpError(409, "The chat has already started; the background stays as part of its history.");
+		host.broadcast("session_replaced", { at: Date.now() });
+		return { ok: true };
 	});
 
 	const handleExport = async ({ res, body }: RequestContext) => {

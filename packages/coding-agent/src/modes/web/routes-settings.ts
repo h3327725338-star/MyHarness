@@ -7,6 +7,7 @@
  */
 
 import type { ThinkingLevel } from "@myharness/agent-core";
+import { resolveHandoffModel } from "../../agent/runtime/session-handoff.ts";
 import {
 	MAX_NETWORK_MAX_ATTEMPTS,
 	MIN_NETWORK_MAX_ATTEMPTS,
@@ -64,6 +65,8 @@ interface SettingDef {
 	options?: Array<{ value: string; label: string }>;
 	min?: number;
 	max?: number;
+	/** The model a helper setting really runs on right now ("provider/model · source"); empty when none is usable. */
+	using?: string;
 	/** A text value the Web UI masks while it is typed and shown (a password field). */
 	secret?: boolean;
 	/**
@@ -279,6 +282,24 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const session = host.session;
 		const autoMemory = s.getAutoMemorySettings();
 		const conversationNaming = s.getConversationNamingSettings();
+		const continuity = s.getSessionContinuitySettings();
+		/** Which model hand-off notes really use, since "unset" falls back to the compaction model first. */
+		const handoffUsing = (): string => {
+			const main = session.model;
+			const resolved = resolveHandoffModel(
+				s,
+				main ? { provider: main.provider, id: main.id, thinkingLevel: session.thinkingLevel } : undefined,
+			);
+			const source =
+				continuity.provider || continuity.model
+					? "own model"
+					: s.getCompactionModelSettings().provider
+						? "compaction model"
+						: "main model";
+			// Only a model the runtime can really load counts; a placeholder main model is "no usable model".
+			const usable = resolved && session.modelRuntime.getModel(resolved.provider, resolved.model);
+			return usable ? `${resolved.provider}/${resolved.model} · ${source}` : "";
+		};
 		const subAgent = s.getSubAgentSettings();
 		const vision = s.getVisionAssistantSettings();
 		const fallbackModel = s.getFallbackModelSettings();
@@ -402,6 +423,26 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				description: "Consolidate long-term memory after each task.",
 				type: "modelRef",
 				value: { ...modelRef(autoMemory), enabled: autoMemory.enabled },
+				note: "enabled",
+			},
+			{
+				id: "sessionContinuity.autoSearch",
+				section: "Session continuity",
+				label: "Search earlier chats",
+				description:
+					"Let the agent find and read your earlier chats in this workspace when you continue a topic. Works with Auto Memory off.",
+				type: "boolean",
+				value: continuity.autoSearch,
+			},
+			{
+				id: "sessionContinuity.handoff",
+				section: "Session continuity",
+				label: "Hand-off notes",
+				description:
+					"Keep a short note of where each chat stands, in the background (extra model calls). Unset uses the compaction model, then the main model.",
+				using: handoffUsing(),
+				type: "modelRef",
+				value: { ...modelRef(continuity), enabled: continuity.autoHandoff },
 				note: "enabled",
 			},
 			{
@@ -989,6 +1030,22 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
 				});
 				host.refreshConversationNaming();
+				return;
+			}
+			case "sessionContinuity.autoSearch": {
+				s.setSessionContinuitySettings({ ...s.getSessionContinuitySettings(), autoSearch: value === true });
+				return;
+			}
+			case "sessionContinuity.handoff": {
+				const ref = modelRefValue(value);
+				s.setSessionContinuitySettings({
+					...s.getSessionContinuitySettings(),
+					autoHandoff: (value as { enabled?: unknown } | undefined)?.enabled === true,
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				host.refreshSessionHandoff();
 				return;
 			}
 			case "autoMemory": {

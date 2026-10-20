@@ -4,6 +4,7 @@ import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { loadPrefs, normPath } from "./util.js";
+import { REVEAL_ENTRY_EVENT } from "./message-nav.js";
 import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
 import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
@@ -473,6 +474,45 @@ export const actions = {
 			failSwitch(seq, error);
 			return undefined;
 		}
+	},
+
+	/**
+	 * "Continue in a new chat": a separate new chat in the same workspace and mode that starts with this chat's
+	 * hand-off note and newest messages as background. The source chat is left as it is; nothing is sent.
+	 */
+	async continueSession(path) {
+		const seq = nextSwitch();
+		flushDrafts();
+		const result = await attempt(() => post("/api/sessions/continue", { path }, ""));
+		if (result?.slot && isLatestSwitch(seq)) {
+			const group = result.unbound ? GENERAL_KEY : result.rootPath;
+			const key = expandedKey(uiMode());
+			if (group) setView({ [key]: { ...state.view[key], [group]: true } });
+			void loadSlots().catch(() => {});
+			await showSlot(result.slot, seq);
+			await refreshSessionLists();
+		}
+		return result;
+	},
+
+	/** Show a chat and, once it is on screen, scroll to one of its messages and flash it (see Transcript). */
+	async openSessionAt(path, entryId) {
+		if (!path) return undefined;
+		const onScreen = samePath(state.snap?.session?.file || "", path);
+		window.dispatchEvent(new CustomEvent(REVEAL_ENTRY_EVENT, { detail: { path, entryId } }));
+		if (onScreen) return true;
+		return actions.openSession(path);
+	},
+
+	/** Take the continued-from background back out of the chat on screen (only before its first message). */
+	async unlinkContinuation(entryId) {
+		const ok = await confirmDialog({
+			title: t("Unlink the earlier chat?"),
+			message: t("This chat starts without the earlier chat's background. The earlier chat itself is not changed."),
+			confirmLabel: t("Unlink"),
+		});
+		if (!ok) return undefined;
+		return attempt(() => post("/api/sessions/continuation/unlink", { entryId }), { success: t("Unlinked") });
 	},
 
 	async deleteSession(path, title) {

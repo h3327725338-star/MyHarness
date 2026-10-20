@@ -63,6 +63,7 @@ export function buildRoutes({ projection, prefs = {}, detailsLimit }: BuildRoute
 		unbound: !snapshot.workspace,
 		lastActivityAt: lastActivity,
 		conversationNaming: null,
+		sessionHandoff: null,
 	};
 
 	const sessionSummary = {

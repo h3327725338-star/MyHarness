@@ -17,6 +17,7 @@ import { ConversationNaming, type ConversationNamingStatus } from "../../agent/r
 import type { MirrorAgentSession } from "../../agent/runtime/mirror-agent-session.ts";
 import { promptCorrelation } from "../../agent/runtime/prompt-correlation.ts";
 import { isRunStateActive, isRunStateTerminal, type RunStateSnapshot } from "../../agent/runtime/run-state.ts";
+import { SessionHandoff, type SessionHandoffStatus } from "../../agent/runtime/session-handoff.ts";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
@@ -246,6 +247,7 @@ export interface SlotStatus {
 	 */
 	lastActivityAt: number | null;
 	conversationNaming: ConversationNamingStatus | null;
+	sessionHandoff: SessionHandoffStatus | null;
 }
 
 /** Events that count as activity of a session for the sidebar order (see SlotStatus.lastActivityAt). */
@@ -315,6 +317,17 @@ export class WebHost {
 
 	retryConversationNaming(): void {
 		this.conversationNaming?.retry();
+	}
+
+	/** Background hand-off note of this chat (see session-handoff.ts). */
+	private sessionHandoff: SessionHandoff | undefined;
+
+	refreshSessionHandoff(delay?: number): void {
+		this.sessionHandoff?.refresh(delay);
+	}
+
+	retrySessionHandoff(): void {
+		this.sessionHandoff?.retry();
 	}
 
 	private unsubscribe: (() => void) | undefined;
@@ -492,6 +505,7 @@ export class WebHost {
 			copy: isWorktreeCopyPath(this.runtimeHost.services.agentDir, this.cwd),
 			lastActivityAt: this.lastActivityAt,
 			conversationNaming: this.conversationNaming?.status ?? null,
+			sessionHandoff: this.sessionHandoff?.status ?? null,
 		};
 	}
 
@@ -551,6 +565,7 @@ export class WebHost {
 
 	private async bindSession(): Promise<void> {
 		this.conversationNaming?.dispose();
+		const owedHandoffs = this.sessionHandoff?.dispose() ?? [];
 		this.operationStarted = false;
 		this.inputTouched = false;
 		this.gitTask = null;
@@ -568,6 +583,12 @@ export class WebHost {
 			() => session.isIdle && !this.completionActive && !this.gitTask,
 			(status) => this.broadcast("conversation_naming", status ?? {}),
 		);
+		this.sessionHandoff = new SessionHandoff(
+			session,
+			() => session.isIdle && !this.completionActive && !this.gitTask,
+			(status) => this.broadcast("session_handoff", status ?? {}),
+		);
+		this.sessionHandoff.adopt(owedHandoffs);
 		await session.bindExtensions({
 			uiContext: this.dialogs.createExtensionUiContext({
 				getAllThemes: () => [],
@@ -628,6 +649,8 @@ export class WebHost {
 			}
 		});
 		this.refreshConversationNaming();
+		// Recovery: messages a previous run left uncovered (restart, failure) are found again here.
+		this.refreshSessionHandoff();
 	}
 
 	/**
@@ -757,6 +780,7 @@ export class WebHost {
 	/** Stop forwarding events and release the runtime. Used when the hub closes an idle or deleted slot. */
 	async dispose(): Promise<void> {
 		this.conversationNaming?.dispose();
+		this.sessionHandoff?.dispose();
 		this.generation += 1;
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
@@ -1372,6 +1396,7 @@ export class WebHost {
 			this.completionStatus = undefined;
 			this.broadcast("completion", { active: false, runId });
 			this.refreshConversationNaming();
+			this.refreshSessionHandoff();
 		});
 	}
 

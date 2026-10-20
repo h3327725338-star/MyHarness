@@ -43,6 +43,8 @@ const NON_MUTATING_TOOLS = new Set([
 	"symbols",
 	"memory_search",
 	"memory_get",
+	"session_search",
+	"session_get",
 	"ask_user_question",
 	"todo_write",
 	"job_list",

@@ -95,6 +95,7 @@ By default, MyHarness gives the model these built-in tools:
 - `write` - create or overwrite files
 - `github` - use the configured GitHub integration
 - `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write` - long-term memory (when enabled)
+- `session_search`, `session_get` - find and read earlier saved chats (read-only; `sessionContinuity.autoSearch`)
 - `ask_user_question`, `todo_write` - user interaction and task tracking
 - `apply_rename` - apply a `symbols rename_preview` plan (gated with `symbols`)
 - `web_search`, `web_fetch` - only when Web Search is enabled in Settings
