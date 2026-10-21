@@ -2,7 +2,70 @@
 // or call it) and only talks to the desktop host: it reports a submitted login so the host can save it once the sign-in
 // looked successful, and fills a login form with a login saved for this exact site. It never presses the site's button:
 // signing in stays the site's own flow. Passwords are never written to the console, the DOM attributes or the URL.
-const { ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+
+// ---- Engine identity ---------------------------------------------------------------------------------------------
+// The engine reports itself as Chromium in its client hints, while the user agent of this tab is Chrome's (WhatsApp Web
+// and Teams refuse the Electron token; see chromeUserAgent in browser-view.cjs). A real Chrome lists its own brand next
+// to Chromium, so the two signals disagreed in a way no ordinary browser does, which is one more reason for a site's bot
+// check to distrust the page. The brand is *added* to the engine's own list on `NavigatorUAData.prototype`: every value
+// the page reads is still a real NavigatorUAData with its native type, and only the brand list gains the entry a real
+// Chrome reports. Version, platform, mobile flag and every other value stay exactly what the engine reported.
+const chromeBrand = (() => {
+  const match = /Chrome\/(\d+)\./u.exec(navigator.userAgent || '');
+  return match ? { brand: 'Google Chrome', version: match[1] } : null;
+})();
+if (chromeBrand) {
+  try {
+    contextBridge.executeInMainWorld({
+      func: (brand) => {
+        const proto = typeof NavigatorUAData === 'function' ? NavigatorUAData.prototype : null;
+        if (!proto) return;
+        const addBrand = (list) => {
+          if (!Array.isArray(list)) return list;
+          if (list.some((item) => /Google Chrome/iu.test(String(item && item.brand ? item.brand : '')))) return list;
+          return Object.freeze([...list.map((item) => Object.freeze({ ...item })), Object.freeze({ ...brand })]);
+        };
+        try {
+          const brands = Object.getOwnPropertyDescriptor(proto, 'brands');
+          if (brands && typeof brands.get === 'function') {
+            const native = brands.get;
+            Object.defineProperty(proto, 'brands', {
+              configurable: brands.configurable !== false,
+              enumerable: brands.enumerable,
+              get() {
+                return addBrand(native.call(this));
+              },
+            });
+          }
+          const high = Object.getOwnPropertyDescriptor(proto, 'getHighEntropyValues');
+          if (high && typeof high.value === 'function') {
+            const native = high.value;
+            Object.defineProperty(proto, 'getHighEntropyValues', {
+              configurable: high.configurable !== false,
+              enumerable: high.enumerable,
+              writable: high.writable !== false,
+              // The keys stay the ones the engine answered with; only a list the answer already carries gains the brand.
+              value: async function getHighEntropyValues(hints) {
+                const values = await native.call(this, hints);
+                if (!values || typeof values !== 'object') return values;
+                const next = { ...values };
+                if (Array.isArray(next.brands)) next.brands = addBrand(next.brands);
+                if (Array.isArray(next.fullVersionList)) next.fullVersionList = addBrand(next.fullVersionList);
+                return next;
+              },
+            });
+          }
+        } catch {
+          // A frozen or exotic implementation keeps its own hints; nothing else changes.
+        }
+      },
+      args: [chromeBrand],
+    });
+  } catch {
+    // An engine without the main-world bridge keeps its own client hints; nothing else changes.
+  }
+}
 
 const USERNAME_TYPES = new Set(['', 'text', 'email', 'tel']);
 const USERNAME_HINT = /user|login|email|mail|account|phone|mobile|identifier|帳號|账号|用户名|手机|邮箱/i;

@@ -123,6 +123,17 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 
 - Local file changes are watched and debounced (~0.8 s), then pushed.
 - While the app is connected it checks for remote batches every ~10 s; idle every ~45 s.
+- Every Drive request has a deadline: 30 s for metadata, 3 min for reading an object, 5 min for a write. A request that
+  never answers fails that pass instead of leaving it `running` forever, so the manual buttons come back and the next
+  retry is scheduled by itself. A timeout is not retried inside the same request.
+- A pass applies batches one at a time, in `(createdAt, batchId)` order, because version vectors and file writes depend
+  on that order; the *waiting* is what overlaps. Batch manifests are read in parallel chunks of 6, and the small objects
+  (up to 8 MB) of the next batches are fetched while the current batch is written, with at most 4 object downloads in
+  flight and one download per object even when a prefetch already has it. The limits stay low on purpose: a 429 would
+  cost more than the parallel reads save.
+- A file id learned from a listing or from a lookup is reused, so reading a batch or an object is one download rather
+  than a Drive query followed by a download. The sub-folders of `sync-v1` are also resolved once instead of on every
+  pass.
 - Errors retry after ~30 s; offline changes stay queued because the pending queue is the difference from the last
   committed state. While Drive cannot be reached the queue is still counted from the local files, so "Waiting to
   upload" shows the real number offline, and the next retry after the network returns continues on its own.
@@ -172,8 +183,11 @@ Settings → Google Drive has three buttons in one row:
 Download now and Sync now answer at once (409 when sync is paused, Drive is not connected or a manual run is already
 going) and report progress through the status: `manual = { kind, state: running|done|failed, stage, done, total,
 remainingDownloads?, error? }`. The row shows "Downloading… x / y", "Uploading… x / y", the finish or the failure
-reason; both buttons are disabled while one runs. Pause means nothing is uploaded or applied, so while paused both
-buttons are disabled and the routes refuse; Check now keeps its old behaviour (a pass that does nothing while paused).
+reason; both buttons are disabled while one runs. While the run waits for a pass that is already in flight, the row says
+what that pass is doing and how much is left ("downloading, N batches left" / "uploading, N changes left") instead of
+only "waiting", and the per-request deadlines above guarantee that wait ends. Pause means nothing is uploaded or
+applied, so while paused both buttons are disabled and the routes refuse; Check now keeps its old behaviour (a pass
+that does nothing while paused).
 
 ## HTTP routes
 

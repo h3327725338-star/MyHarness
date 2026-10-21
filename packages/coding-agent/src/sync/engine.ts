@@ -59,6 +59,21 @@ const LOCAL_DEBOUNCE_MS = 800;
 const RETRY_AFTER_ERROR_MS = 30_000;
 /** A process that just exited keeps the lock until it is stale; retry instead of staying off for the session. */
 const LOCK_RETRY_MS = 15_000;
+/**
+ * How many Drive calls one download pass keeps open at once. The protocol itself stays serial per batch (version vectors,
+ * file writes and progress accounting depend on that order), but the *waiting* is not: a first sync of hundreds of
+ * batches used to be one request after another, so it spent almost all its time on round trips. Concurrency is kept low
+ * on purpose — Drive throttles a client that opens many requests at once, and a 429 would cost more than it saves.
+ */
+const MANIFEST_CONCURRENCY = 6;
+const OBJECT_CONCURRENCY = 4;
+/** Objects of the next batches are fetched while the current one is written, so waiting overlaps the local work. */
+const PREFETCH_LOOKAHEAD = 2;
+const PREFETCH_OBJECT_CONCURRENCY = 2;
+/** Small objects are prefetched in parallel; a large one is still read alone so a pass cannot hold hundreds of MB. */
+const PREFETCH_MAX_BYTES = 8 * 1024 * 1024;
+const MAX_OBJECT_CACHE_BYTES = 64 * 1024 * 1024;
+const MAX_CACHED_OBJECTS = 64;
 
 /** A manual download keeps listing until Drive has nothing new; this bounds it when another device keeps writing. */
 const MAX_DRAIN_ROUNDS = 20;
@@ -120,6 +135,14 @@ export class SyncEngine {
 	private fileCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
 	private uploadedObjects = new Set<string>();
 	private objectCache = new Map<string, Uint8Array>();
+	private objectCacheBytes = 0;
+	/** Downloads in flight, so a prefetch and the operation that needs the same object never fetch it twice. */
+	private inFlightObjects = new Map<string, Promise<Uint8Array | undefined>>();
+	/** Objects that were not in Drive during this round: retrying them again in the same round only adds requests. */
+	private missingObjects = new Set<string>();
+	/** One shared limit for every object download, however many prefetches are running. */
+	private objectActive = 0;
+	private objectWaiting: (() => void)[] = [];
 	private pendingUploads = 0;
 	private pendingDownloads = 0;
 	private pendingBytes = 0;
@@ -750,6 +773,7 @@ export class SyncEngine {
 		const drive = this.drive;
 		if (!drive) return 0;
 		let handled = 0;
+		this.missingObjects.clear();
 		this.currentScan = scanLocalEntities({
 			dataRoot: this.options.dataRoot,
 			agentDir: this.options.agentDir,
@@ -773,52 +797,73 @@ export class SyncEngine {
 		this.emitStatus();
 		if (candidates.length === 0) return 0;
 		const batches: { name: string; batch: SyncBatch }[] = [];
-		for (const file of candidates) {
-			const data = await drive.read("batches", file.name);
-			// A file listed but not readable yet is transient: it is retried on the next pass.
-			if (!data) continue;
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(fromUtf8(data));
-			} catch {
-				parsed = undefined;
+		// Manifests are read in small parallel chunks; they are still handled below in the listing order, so the batch
+		// ordering, the idempotent applied list and the progress accounting stay exactly as they were.
+		for (let start = 0; start < candidates.length; start += MANIFEST_CONCURRENCY) {
+			const chunk = candidates.slice(start, start + MANIFEST_CONCURRENCY);
+			const loaded = await Promise.all(
+				chunk.map(async (file) => {
+					try {
+						return { file, data: await drive.read("batches", file.name) };
+					} catch (error) {
+						return { file, error };
+					}
+				}),
+			);
+			for (const entry of loaded) {
+				// A file listed but not readable right now is transient: the pass fails and the next one retries it.
+				if (entry.error) throw entry.error;
+				const file = entry.file;
+				const data = entry.data;
+				if (!data) continue;
+				let parsed: unknown;
+				try {
+					parsed = JSON.parse(fromUtf8(data));
+				} catch {
+					parsed = undefined;
+				}
+				const batch = parsed as SyncBatch | undefined;
+				if (
+					!batch ||
+					batch.version !== 1 ||
+					!Array.isArray(batch.operations) ||
+					typeof batch.batchId !== "string"
+				) {
+					// A batch that cannot be parsed never becomes readable; retrying it would loop forever.
+					this.noteIssue(
+						`batch:${file.name}`,
+						"unreadable-batch",
+						`${file.name} in the Drive batches folder is not a readable sync batch and was skipped.`,
+					);
+					// Remember the name as well as the issue: the issue list is capped, and an evicted entry would be re-read.
+					this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
+					this.store.saveState(this.state);
+					handled += 1;
+					this.advanceManual(1);
+					continue;
+				}
+				if (batch.operations.length > MAX_OPERATIONS_PER_BATCH) {
+					this.noteIssue(
+						`batch:${file.name}`,
+						"batch-too-large",
+						`${file.name} contains more changes than this version can apply in one batch and was skipped.`,
+					);
+					this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
+					this.store.saveState(this.state);
+					handled += 1;
+					this.advanceManual(1);
+					continue;
+				}
+				if (batch.deviceId === this.options.deviceId) {
+					// Our own batch: its operations are already applied here. Replaying it would fight with local state.
+					this.markApplied(file.name, batch.batchId);
+					this.store.saveState(this.state);
+					handled += 1;
+					this.advanceManual(1);
+					continue;
+				}
+				batches.push({ name: file.name, batch });
 			}
-			const batch = parsed as SyncBatch | undefined;
-			if (!batch || batch.version !== 1 || !Array.isArray(batch.operations) || typeof batch.batchId !== "string") {
-				// A batch that cannot be parsed never becomes readable; retrying it would loop forever.
-				this.noteIssue(
-					`batch:${file.name}`,
-					"unreadable-batch",
-					`${file.name} in the Drive batches folder is not a readable sync batch and was skipped.`,
-				);
-				// Remember the name as well as the issue: the issue list is capped, and an evicted entry would be re-read.
-				this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
-				this.store.saveState(this.state);
-				handled += 1;
-				this.advanceManual(1);
-				continue;
-			}
-			if (batch.operations.length > MAX_OPERATIONS_PER_BATCH) {
-				this.noteIssue(
-					`batch:${file.name}`,
-					"batch-too-large",
-					`${file.name} contains more changes than this version can apply in one batch and was skipped.`,
-				);
-				this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
-				this.store.saveState(this.state);
-				handled += 1;
-				this.advanceManual(1);
-				continue;
-			}
-			if (batch.deviceId === this.options.deviceId) {
-				// Our own batch: its operations are already applied here. Replaying it would fight with local state.
-				this.markApplied(file.name, batch.batchId);
-				this.store.saveState(this.state);
-				handled += 1;
-				this.advanceManual(1);
-				continue;
-			}
-			batches.push({ name: file.name, batch });
 		}
 		this.pendingDownloads = batches.length;
 		batches.sort((a, b) =>
@@ -826,7 +871,22 @@ export class SyncEngine {
 				? a.batch.batchId.localeCompare(b.batch.batchId)
 				: a.batch.createdAt.localeCompare(b.batch.createdAt),
 		);
-		for (const { name, batch } of batches) {
+		// Content of the next batches is requested while the current batch is written. Failures are swallowed here; the
+		// operation that needs the content repeats the request and records the deferral as before.
+		const prefetched = new Map<number, Promise<void>>();
+		const prefetchAhead = (index: number): void => {
+			if (index >= batches.length || prefetched.has(index)) return;
+			prefetched.set(
+				index,
+				this.prefetchObjects(batches[index]!.batch.operations).catch(() => undefined),
+			);
+		};
+		for (let index = 0; index < batches.length; index += 1) {
+			const { name, batch } = batches[index]!;
+			prefetchAhead(index);
+			for (let ahead = 1; ahead <= PREFETCH_LOOKAHEAD; ahead += 1) prefetchAhead(index + ahead);
+			await prefetched.get(index);
+			prefetched.delete(index);
 			let deferred = false;
 			let memoriesChanged = false;
 			let sessionsChanged = false;
@@ -903,14 +963,108 @@ export class SyncEngine {
 	private async fetchObject(hash: string): Promise<Uint8Array | undefined> {
 		const cached = this.objectCache.get(hash);
 		if (cached) return cached;
+		// Already known to be absent in this round: asking again only adds a request and delays the deferral.
+		if (this.missingObjects.has(hash)) return undefined;
+		const running = this.inFlightObjects.get(hash);
+		if (running) return running;
+		const pending = this.loadObject(hash).finally(() => this.inFlightObjects.delete(hash));
+		this.inFlightObjects.set(hash, pending);
+		return pending;
+	}
+
+	private async loadObject(hash: string): Promise<Uint8Array | undefined> {
 		const drive = this.drive;
 		if (!drive) return undefined;
-		const data = await drive.downloadObject(hash);
-		if (!data) return undefined;
-		if (sha256(data) !== hash) throw new DeferredBatchError(`Object ${hash.slice(0, 12)} failed its checksum`);
-		if (this.objectCache.size > 64) this.objectCache.clear();
-		this.objectCache.set(hash, data);
+		let data: Uint8Array | undefined;
+		try {
+			data = await this.withObjectSlot(() => drive.downloadObject(hash));
+		} catch (error) {
+			// A transport failure (a deadline, a 429/5xx that survived its own retries, a dropped connection) says nothing
+			// about the change itself: the batch waits for the next pass. Letting it fall into the per-record catch would
+			// mark the batch applied without applying it, which is the one outcome that loses a change for good.
+			throw new DeferredBatchError(
+				`Object ${hash.slice(0, 12)} could not be downloaded yet (${describeError(error)}). Its batch stays waiting and is retried automatically.`,
+			);
+		}
+		if (!data) {
+			this.missingObjects.add(hash);
+			return undefined;
+		}
+		if (sha256(data) !== hash) {
+			this.missingObjects.add(hash);
+			throw new DeferredBatchError(`Object ${hash.slice(0, 12)} failed its checksum`);
+		}
+		this.cacheObject(hash, data);
 		return data;
+	}
+
+	/** At most OBJECT_CONCURRENCY object downloads run at once; everything else waits its turn. */
+	private async withObjectSlot<T>(run: () => Promise<T>): Promise<T> {
+		// A waiter is handed the slot of the run that just finished, so the count can never exceed the limit; incrementing
+		// after waking would let a caller that arrived in between take the freed slot as well.
+		if (this.objectActive < OBJECT_CONCURRENCY) this.objectActive += 1;
+		else
+			await new Promise<void>((resolve) => {
+				this.objectWaiting.push(resolve);
+			});
+		try {
+			return await run();
+		} finally {
+			const next = this.objectWaiting.shift();
+			if (next) next();
+			else this.objectActive -= 1;
+		}
+	}
+
+	/** Keep a bounded amount of object bytes, so a first sync cannot grow the process without limit. */
+	private cacheObject(hash: string, data: Uint8Array): void {
+		if (data.byteLength > MAX_OBJECT_CACHE_BYTES) return;
+		if (this.objectCache.has(hash)) return;
+		if (
+			this.objectCache.size >= MAX_CACHED_OBJECTS ||
+			this.objectCacheBytes + data.byteLength > MAX_OBJECT_CACHE_BYTES
+		) {
+			this.objectCache.clear();
+			this.objectCacheBytes = 0;
+		}
+		this.objectCache.set(hash, data);
+		this.objectCacheBytes += data.byteLength;
+	}
+
+	/**
+	 * Read the small objects of one batch together, at most two at a time. Failures are ignored here: the operation that
+	 * needs the content asks again and reports the deferral the way it always did.
+	 */
+	private async prefetchObjects(operations: SyncOperation[]): Promise<void> {
+		if (!this.drive) return;
+		const wanted: string[] = [];
+		const seen = new Set<string>();
+		for (const operation of operations) {
+			if (operation.op !== "put") continue;
+			if (operation.size > PREFETCH_MAX_BYTES) continue;
+			if (seen.has(operation.hash)) continue;
+			if (this.objectCache.has(operation.hash) || this.missingObjects.has(operation.hash)) continue;
+			const local = this.state.entities[operation.key];
+			if (local && local.hash === operation.hash) continue;
+			seen.add(operation.hash);
+			wanted.push(operation.hash);
+		}
+		if (wanted.length === 0) return;
+		await this.mapLimit(wanted, PREFETCH_OBJECT_CONCURRENCY, (hash) => this.fetchObject(hash).catch(() => undefined));
+	}
+
+	/** Run `run` over `items` with at most `limit` calls in flight, keeping the order of `items`. */
+	private async mapLimit<T>(items: T[], limit: number, run: (item: T) => Promise<unknown>): Promise<void> {
+		let next = 0;
+		const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+			for (;;) {
+				const index = next;
+				next += 1;
+				if (index >= items.length) return;
+				await run(items[index]!);
+			}
+		});
+		await Promise.all(workers);
 	}
 
 	private async applyOperation(operation: SyncOperation, batch: SyncBatch): Promise<ApplyOutcome | undefined> {

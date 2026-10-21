@@ -19,6 +19,8 @@
 .notice.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
 .notice.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .notice.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+/* The browser's own notice and the bot-check bar are rows: the text takes the room, the buttons sit at its end. */
+.notice.ws-notice, .notice.ws-challenge { align-items: center; }
 .modal-body .notice { margin: 4px 0; }
 
 /* In a narrow toolbar the select gives way; a segmented control keeps its labels on one line. */

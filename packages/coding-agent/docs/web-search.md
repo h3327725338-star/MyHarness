@@ -44,7 +44,7 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 
 **Tavily API Key**：在设置页的 Web search 中选中 Tavily API 后，搜索引擎下方出现 Tavily API Key 一行，展开后可以添加（名称可选，Key 用密码框输入，点“保存”或回车）、重命名和删除 Key，可以保存多个。搜索时按列表顺序使用：一个 Key 被拒绝（401/403）、请求过频（429）或额度用完（432/433）时自动换下一个；全部失败时报告每个 Key 的原因（不含 Key 本身）。取消选中 Tavily 只隐藏这一行，不删除已保存的 Key。Key 保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`；早期的单 Key 格式会读成一个名为 “Key 1” 的 Key。没有保存任何 Key 时会读取环境变量 `TAVILY_API_KEY`。旧版本的 `brave_api` 引擎已移除，`settings.json` 中残留的 `brave_api` 会被忽略，不会转成 Tavily。
 
-剩余次数来自 Tavily 官方 `GET api.tavily.com/usage`：每个 Key 取 Key 与所属账户剩余额度中较小者（basic 搜索每次 1 credit）。展开后每个 Key 显示自己的剩余次数，行上显示所有 Key 的合计；某个 Key 查询失败时合计只加能读到的 Key，并注明几个 Key 无法获取。同一账户下的多个 Key 共享账户额度，合计会把账户额度按 Key 重复计算。设置页打开、增删 Key 后、每次 Tavily 搜索完成后会自动重新查询，也可点刷新按钮。查询失败显示“无法获取”，不会显示 0，也不会用本地计数估算。
+剩余次数来自 Tavily 官方 `GET api.tavily.com/usage`：每个 Key 取 Key 与所属账户剩余额度中较小者（basic 搜索每次 1 credit）。展开后每个 Key 显示自己的剩余次数，行上显示所有 Key 的合计；某个 Key 查询失败时合计只加能读到的 Key，并注明几个 Key 无法获取。同一账户下的多个 Key 共享账户额度，合计会把账户额度按 Key 重复计算。设置页打开、增删 Key 后、每次 Tavily 搜索完成后会自动重新查询，也可点刷新按钮。打开时先显示上一次真实读到的数值（保存在页面 `localStorage` 的 `myharness.tavilyUsage.v1`，按当前 Key 列表签名区分，Key 列表一变就丢弃），后台查询返回后替换为新值；等待期间只在刷新按钮里转圈，不出现整行“查询中…”占位，也不改变行高。查询失败时保留上次数值并标注“未更新”（鼠标悬停可看原因）；从未成功读到过才显示“无法获取”。不会显示 0，也不会用本地计数估算。
 
 Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引擎真实搜索一次，显示是否可用、结果数、走的是轻量请求还是 Firefox、耗时；等待时按 Esc 会取消请求并返回。在这个页面测试时如果搜索引擎在 Firefox 中也要求人机验证，会打开 Firefox 窗口让你完成。
 

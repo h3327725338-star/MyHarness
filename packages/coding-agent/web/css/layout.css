@@ -264,6 +264,14 @@
 .ws-tab-label { max-width: 150px; }
 .ws-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); opacity: 0.55; }
 .ws-tab-close:hover { background: var(--surface-hover); opacity: 1; }
+/* A tab pops in when it is opened and folds away when it is closed, with the same motion as the rest of the workspace:
+   --t-pop/--ease-out to arrive, the shared collapse run (COLLAPSE_MS, --ease) to leave. The fold starts from the tab's
+   measured width (workspace-tabs.js); a max-width transition alone would sit still until the cap fell below the content,
+   and the tab keeps its place in the strip for the whole fold. */
+.ws-tab-slot { display: flex; flex: 0 0 auto; max-width: 208px; overflow: hidden; }
+.ws-tab-slot.entering { animation: ws-tab-in var(--t-pop) var(--ease-out) both; }
+.ws-tab-slot.leaving { max-width: 0; opacity: 0; pointer-events: none; }
+@keyframes ws-tab-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } to { opacity: 1; transform: none; } }
 .ws-menu { z-index: 80; display: flex; flex-direction: column; min-width: 140px; padding: 4px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
 .ws-menu button { padding: 6px 10px; border-radius: var(--r-sm); text-align: left; }
 .ws-menu button:hover { background: var(--surface-hover); }
@@ -282,6 +290,10 @@
 .ws-bookmark-icon { width: 16px; height: 16px; flex: none; border-radius: 3px; object-fit: contain; }
 .ws-bookmark-icon.letter { display: inline-grid; place-items: center; background: var(--surface-active); color: var(--text-2); font-size: 10px; font-weight: 600; line-height: 1; }
 .ws-bookmarks-empty { font-size: var(--fs-sm); white-space: nowrap; }
+/* The bookmarks bar opens and folds with the same fold as every other expandable area, so the page box below it moves
+   with the animation instead of jumping; the card inside the permission bubble fades in from its edge. */
+.ws-bookmarks-fold .collapse-inner, .ws-permissions-fold .collapse-inner { display: flex; flex-direction: column; }
+.ws-permissions { animation: pop-in var(--t-pop) var(--ease-out); }
 .ws-bookmark-editor { min-width: 260px; }
 .ws-bookmark-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
 .ws-bookmark-actions { gap: 6px; padding-top: 2px; }

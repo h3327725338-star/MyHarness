@@ -200,6 +200,11 @@
 .tavily-keys { display: flex; flex-direction: column; gap: 8px; padding: 0 0 12px; }
 .tavily-keys > .key-row:first-child { border-top: 1px solid var(--border); }
 .tavily-count { flex: none; font-variant-numeric: tabular-nums; }
+/* The remaining-count line: one line, never wrapping, so a value arriving after the request cannot change the row height.
+   A value that could not be refreshed keeps its place and only gains a quiet marker after it. */
+.tavily-usage { flex-wrap: nowrap; min-width: 0; }
+.tavily-usage > .truncate { flex: 0 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
+.tavily-usage-stale { flex: none; font-size: var(--fs-xs); color: var(--warn); }
 
 /* Palette */
 .palette { width: 600px; max-width: 100%; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden; animation: dialog-in var(--t-pop) var(--ease-out); }

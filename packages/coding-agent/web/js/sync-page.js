@@ -44,9 +44,24 @@ function connectionBadge(status) {
 }
 
 /** One line for the last manual Download now / Sync now run: what is moving, how far, or why it stopped. */
-function manualText(manual) {
+function manualText(manual, status) {
 	if (manual.state === "running") {
-		if (manual.stage === "waiting") return t("Waiting for the current sync pass to finish…");
+		if (manual.stage === "waiting") {
+			// Waiting is not a dead end: say what the pass in flight is doing and how much is left, so the button can be
+			// read as "this is running", not as "this is stuck".
+			const phase = status?.phase;
+			if (phase === "downloading") {
+				return t("Waiting for the current sync pass to finish (downloading, {count} batches left).", {
+					count: Number(status?.pendingDownloads) || 0,
+				});
+			}
+			if (phase === "uploading") {
+				return t("Waiting for the current sync pass to finish (uploading, {count} changes left).", {
+					count: Number(status?.pendingUploads) || 0,
+				});
+			}
+			return t("Waiting for the current sync pass to finish…");
+		}
 		const progress = manual.total > 0 ? ` ${manual.done} / ${manual.total}` : "";
 		return manual.stage === "upload" ? `${t("Uploading…")}${progress}` : `${t("Downloading…")}${progress}`;
 	}
@@ -317,8 +332,8 @@ export function SyncPage() {
 					<${Icon} name="drive" size=${14} />${t("Sync now")}
 				</button>
 				${manual
-					? html`<span class=${`row grow ${manual.state === "failed" ? "c-danger" : "dim"}`} role="status" title=${manualText(manual)}>
-							${manual.state === "running" ? html`<${Spinner} />` : null}<span class="truncate">${manualText(manual)}</span>
+					? html`<span class=${`row grow ${manual.state === "failed" ? "c-danger" : "dim"}`} role="status" title=${manualText(manual, status)}>
+							${manual.state === "running" ? html`<${Spinner} />` : null}<span class="truncate">${manualText(manual, status)}</span>
 						</span>`
 					: html`<span class="dim grow">${t("Everything also runs by itself; this button is for troubleshooting.")}</span>`}
 			</div>

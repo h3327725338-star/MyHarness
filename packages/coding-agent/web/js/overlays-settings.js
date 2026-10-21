@@ -380,6 +380,32 @@ function SettingRow({ item, models, off, before }) {
 	<//>`;
 }
 
+/**
+ * Remaining searches of each key, kept between settings visits so the row can show the last real answer while the new
+ * one is on its way. The values are only ever what Tavily reported: a failed request never turns them into a guess.
+ */
+const TAVILY_USAGE_KEY = "myharness.tavilyUsage.v1";
+
+function savedTavilyUsage(signature) {
+	try {
+		const raw = window.localStorage.getItem(TAVILY_USAGE_KEY);
+		if (!raw) return null;
+		const value = JSON.parse(raw);
+		if (!value || value.signature !== signature || typeof value.byId !== "object" || !value.byId) return null;
+		return { byId: value.byId, total: value.total, unknown: Number(value.unknown) || 0 };
+	} catch {
+		return null;
+	}
+}
+
+function rememberTavilyUsage(value) {
+	try {
+		window.localStorage.setItem(TAVILY_USAGE_KEY, JSON.stringify(value));
+	} catch {
+		// Storage disabled: the row simply starts from "Checking…" again.
+	}
+}
+
 /** Remaining searches of one key, or why they are unknown. */
 function keyCount(entry, loading) {
 	if (!entry) return loading ? t("Checking…") : "";
@@ -411,21 +437,31 @@ function TavilyKeyRow({ off }) {
 		alive.current = false;
 	}, []);
 	const listKey = [...keys.map((k) => k.id), environment?.id || ""].join(",");
+	// What the last visit learned for exactly this key list. It is shown from the first paint, so the row never falls back
+	// to a full-line "Checking…" placeholder while the refresh runs; a changed key list has no cache and is asked again.
+	const cached = useMemo(() => savedTavilyUsage(listKey), [listKey]);
+	const hasValue =
+		usage.signature === listKey &&
+		(usage.total !== undefined || Object.keys(usage.byId || {}).length > 0);
+	const known = hasValue ? usage : cached || usage;
+	// A refresh that failed while a last known value exists: the number stays and is marked as not updated.
+	const stale = usage.stale === true && known !== usage;
 	const refresh = async () => {
 		const id = ++latest.current;
 		if (!configured) {
 			setUsage({ loading: false, byId: {}, total: undefined, unknown: 0 });
 			return;
 		}
-		setUsage((current) => ({ ...current, loading: true }));
+		setUsage((current) => ({ ...current, loading: true, error: undefined, stale: undefined }));
 		let next;
 		try {
 			const result = await api("/api/settings/tavily-usage", { slot: "", timeoutMs: 20_000 });
 			const byId = {};
 			for (const entry of result.keys || []) byId[entry.id] = entry;
-			next = { loading: false, byId, total: result.total, unknown: result.unknown || 0 };
+			next = { loading: false, byId, total: result.total, unknown: result.unknown || 0, signature: listKey };
+			rememberTavilyUsage({ signature: listKey, byId, total: next.total, unknown: next.unknown, at: new Date().toISOString() });
 		} catch (error) {
-			next = { loading: false, byId: {}, total: undefined, unknown: 0, error: error?.message };
+			next = { loading: false, byId: {}, total: undefined, unknown: 0, error: error?.message, stale: true, signature: listKey };
 		}
 		if (alive.current && id === latest.current) setUsage(next);
 	};
@@ -468,14 +504,13 @@ function TavilyKeyRow({ off }) {
 		await act(() => post("/api/settings/tavily-key/delete", { id: key.id }, ""), t("API key deleted"));
 	};
 	const total = !configured ? t("Not configured")
-		: usage.error ? t("Count unavailable")
-		: usage.total === undefined ? (usage.loading || !Object.keys(usage.byId).length ? t("Checking…") : t("Count unavailable"))
-		: usage.total === null ? t("Unlimited")
-		: usage.unknown ? `${t("{count} searches left", { count: usage.total })} · ${t("{n} keys unavailable", { n: usage.unknown })}`
-		: t("{count} searches left", { count: usage.total });
+		: known.total === undefined ? (usage.loading || !Object.keys(known.byId).length ? t("Checking…") : t("Count unavailable"))
+		: known.total === null ? t("Unlimited")
+		: known.unknown ? `${t("{count} searches left", { count: known.total })} · ${t("{n} keys unavailable", { n: known.unknown })}`
+		: t("{count} searches left", { count: known.total });
 	const count = keys.length + (environment ? 1 : 0);
 	const keyRow = (key, name, actions) => {
-		const entry = usage.byId[key.id];
+		const entry = known.byId[key.id];
 		const tone = !entry ? "" : "error" in entry ? "danger" : entry.remaining === 0 ? "warn" : "ok";
 		return html`<div class="key-row" key=${key.id}>
 			<span class=${`dot ${tone}`} />
@@ -487,7 +522,7 @@ function TavilyKeyRow({ off }) {
 	return html`<div class=${`set-row ${off ? "off" : ""}`}>
 		<div class="set-text">
 			<span class="set-label">Tavily API Key</span>
-			<span class="set-desc row" role="status" title=${usage.error ? serverText(usage.error, usage.error) : undefined}>${total}${configured ? html`<button class="icon-btn sm" disabled=${usage.loading} title=${t("Refresh")} aria-label=${t("Refresh")} onClick=${refresh}>${usage.loading ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${12} />`}</button>` : null}</span>
+			<span class="set-desc row tavily-usage" role="status" title=${stale && usage.error ? serverText(usage.error, usage.error) : undefined}><span class="truncate">${total}</span>${stale ? html`<span class="dim tavily-usage-stale">${t("not updated")}</span>` : null}${configured ? html`<button class="icon-btn sm" disabled=${usage.loading} title=${t("Refresh")} aria-label=${t("Refresh")} onClick=${refresh}>${usage.loading ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${12} />`}</button>` : null}</span>
 		</div>
 		<div class="set-control"><button class="btn sm" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${count ? t("Keys ({n})", { n: count }) : t("Add API key")}</button></div>
 	</div>

@@ -12,6 +12,19 @@ const FOLDER_MIME = "application/vnd.google-apps.folder";
 /** Drive answers a large first upload with 429/5xx now and then; a short backoff finishes the pass. */
 const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
 const TRANSIENT_RETRIES = 3;
+/**
+ * Every request has a deadline. Without one a stalled connection never settles, the pass stays "running" forever and
+ * the manual buttons stay disabled behind "waiting for the current pass"; a deadline turns that into one failed pass
+ * that retries on its own schedule. Metadata is small, media is the object itself and an upload is the largest body.
+ */
+const JSON_TIMEOUT_MS = 30_000;
+const MEDIA_TIMEOUT_MS = 180_000;
+const WRITE_TIMEOUT_MS = 300_000;
+
+function isDeadlineError(error: unknown): boolean {
+	const name = (error as { name?: unknown } | undefined)?.name;
+	return name === "TimeoutError" || name === "AbortError";
+}
 
 function transientDelay(attempt: number, retryAfter?: string | null): number {
 	const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
@@ -300,6 +313,13 @@ export class GoogleDriveClient implements DrivePort {
 	private syncFolderId: string | undefined;
 	private syncId: string | undefined;
 	private readmeEnsured = false;
+	/**
+	 * `folder:name` -> Drive file id, learned from `list()` and from every lookup. Every `read()` used to run a Drive
+	 * *query* first, which is the slowest call in the protocol; with the id known the content is one plain download.
+	 * Ids never change for a name in this layout (objects are content-addressed and batches are never rewritten), so a
+	 * cached id is only dropped when Drive answers 404 and the lookup is then repeated once.
+	 */
+	private fileIds = new Map<string, string>();
 	/** One shared refresh for every request that notices an expired token, instead of one per request. */
 	private refreshing: Promise<StoredGoogleCredentials> | undefined;
 
@@ -324,7 +344,16 @@ export class GoogleDriveClient implements DrivePort {
 		return this.credentials.accessToken;
 	}
 
-	private async request(url: string, init: RequestInit = {}, retry = true): Promise<Response> {
+	private fileKey(folder: RemoteFolder, name: string): string {
+		return `${folder}\u0000${name}`;
+	}
+
+	private async request(
+		url: string,
+		init: RequestInit = {},
+		retry = true,
+		timeoutMs = JSON_TIMEOUT_MS,
+	): Promise<Response> {
 		const token = await this.accessToken();
 		const headers = new Headers(init.headers);
 		headers.set("authorization", `Bearer ${token}`);
@@ -332,8 +361,16 @@ export class GoogleDriveClient implements DrivePort {
 		for (let attempt = 0; ; attempt += 1) {
 			let response: Response;
 			try {
-				response = await this.fetchImpl(url, { ...init, headers });
+				// A deadline, not a retry: a request that produced no answer is retried on the next pass, so one dead
+				// connection cannot hold the whole pass (and the manual buttons) for minutes.
+				response = await this.fetchImpl(url, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
 			} catch (error) {
+				if (isDeadlineError(error)) {
+					throw new GoogleDriveError(
+						408,
+						`Google Drive did not answer within ${Math.round(timeoutMs / 1000)} s. This pass stops instead of waiting forever; sync retries on its own.`,
+					);
+				}
 				if (attempt >= TRANSIENT_RETRIES) throw error;
 				await new Promise((resolve) => setTimeout(resolve, transientDelay(attempt)));
 				continue;
@@ -420,9 +457,10 @@ export class GoogleDriveClient implements DrivePort {
 		const root = this.rootId;
 		this.syncFolderId = await this.ensureFolder("sync-v1", root, this.syncFolderId);
 		this.folders.root = this.syncFolderId;
-		this.folders.objects = await this.ensureFolder("objects", this.syncFolderId);
-		this.folders.batches = await this.ensureFolder("batches", this.syncFolderId);
-		this.folders.snapshots = await this.ensureFolder("snapshots", this.syncFolderId);
+		// Pass the id resolved earlier: a pass runs every few seconds and must not look the same three folders up again.
+		this.folders.objects = await this.ensureFolder("objects", this.syncFolderId, this.folders.objects);
+		this.folders.batches = await this.ensureFolder("batches", this.syncFolderId, this.folders.batches);
+		this.folders.snapshots = await this.ensureFolder("snapshots", this.syncFolderId, this.folders.snapshots);
 		await this.ensureReadme(root);
 		const identity = await this.readIdentity();
 		return { folderId: root, folderName: this.rootName, syncId: identity.syncId, url: this.url };
@@ -508,6 +546,7 @@ export class GoogleDriveClient implements DrivePort {
 				const payload = await this.json<{ files?: RemoteFile[]; nextPageToken?: string }>(
 					`${DRIVE_API}/files?${params.toString()}`,
 				);
+				for (const file of payload.files ?? []) this.fileIds.set(this.fileKey(folder, file.name), file.id);
 				files.push(...(payload.files ?? []));
 				if (!payload.nextPageToken) break;
 				pageToken = payload.nextPageToken;
@@ -526,13 +565,41 @@ export class GoogleDriveClient implements DrivePort {
 
 	async read(folder: RemoteFolder, name: string): Promise<Uint8Array | undefined> {
 		const parent = this.folderId(folder);
-		const file = await this.find(name, parent);
-		if (!file || file.mimeType === FOLDER_MIME) return undefined;
+		const key = this.fileKey(folder, name);
+		let id = this.fileIds.get(key);
+		let lookedUp = false;
+		if (!id) {
+			const file = await this.find(name, parent);
+			if (!file || file.mimeType === FOLDER_MIME) return undefined;
+			id = file.id;
+			this.fileIds.set(key, id);
+			lookedUp = true;
+		}
 		const response = await this.request(
-			`${DRIVE_API}/files/${encodeURIComponent(file.id)}?alt=media&supportsAllDrives=true`,
+			`${DRIVE_API}/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`,
+			{},
+			true,
+			MEDIA_TIMEOUT_MS,
 		);
 		if (!response.ok) {
-			if (response.status === 404) return undefined;
+			if (response.status === 404) {
+				this.fileIds.delete(key);
+				// A cached id that no longer resolves is dropped; one fresh lookup keeps this read working.
+				if (lookedUp) return undefined;
+				const file = await this.find(name, parent);
+				if (!file || file.mimeType === FOLDER_MIME) return undefined;
+				this.fileIds.set(key, file.id);
+				const retried = await this.request(
+					`${DRIVE_API}/files/${encodeURIComponent(file.id)}?alt=media&supportsAllDrives=true`,
+					{},
+					true,
+					MEDIA_TIMEOUT_MS,
+				);
+				// A 404 on the fresh id is the object being gone; anything else is a real failure and must be reported.
+				if (retried.status === 404) return undefined;
+				if (!retried.ok) throw new GoogleDriveError(retried.status, `Reading ${name} from Drive failed.`);
+				return new Uint8Array(await retried.arrayBuffer());
+			}
 			throw new GoogleDriveError(response.status, `Reading ${name} from Drive failed.`);
 		}
 		return new Uint8Array(await response.arrayBuffer());
@@ -549,13 +616,18 @@ export class GoogleDriveClient implements DrivePort {
 					headers: { "content-type": "application/octet-stream" },
 					body: data,
 				},
+				true,
+				WRITE_TIMEOUT_MS,
 			);
 			const payload = (await response.json().catch(() => ({}))) as RemoteFile & { error?: { message?: string } };
 			if (!response.ok)
 				throw new GoogleDriveError(response.status, payload.error?.message ?? `Writing ${name} failed.`);
+			this.fileIds.set(this.fileKey(folder, name), existing.id);
 			return { ...existing, ...payload };
 		}
-		return this.createFile(name, parent, data, "application/octet-stream");
+		const created = await this.createFile(name, parent, data, "application/octet-stream");
+		this.fileIds.set(this.fileKey(folder, name), created.id);
+		return created;
 	}
 
 	private async createFile(name: string, parent: string, data: Uint8Array, mime: string): Promise<RemoteFile> {
@@ -576,6 +648,8 @@ export class GoogleDriveClient implements DrivePort {
 				headers: { "content-type": `multipart/related; boundary=${boundary}` },
 				body,
 			},
+			true,
+			WRITE_TIMEOUT_MS,
 		);
 		const payload = (await response.json().catch(() => ({}))) as RemoteFile & { error?: { message?: string } };
 		if (!response.ok || !payload.id) {
@@ -587,8 +661,12 @@ export class GoogleDriveClient implements DrivePort {
 	async uploadObject(hash: string, data: Uint8Array): Promise<void> {
 		const parent = this.folderId("objects");
 		const existing = await this.find(hash, parent);
-		if (existing) return;
-		await this.createFile(hash, parent, data, "application/octet-stream");
+		if (existing) {
+			this.fileIds.set(this.fileKey("objects", hash), existing.id);
+			return;
+		}
+		const created = await this.createFile(hash, parent, data, "application/octet-stream");
+		this.fileIds.set(this.fileKey("objects", hash), created.id);
 	}
 
 	async downloadObject(hash: string): Promise<Uint8Array | undefined> {

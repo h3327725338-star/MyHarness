@@ -2,13 +2,22 @@
 // (packages/desktop/browser-view.cjs): a real Chromium document with its own history, cookies and storage, drawn above
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
-import { html, Icon, Menu, MenuItem, useClickOutside, useEffect, useRef, useState } from "./ui.js";
+import { html, Collapse, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, useRef, useState } from "./ui.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
 import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
 import { BookmarkEditor, BookmarksBar, rememberBookmarksBar, savedBookmarksBar } from "./browser-bookmarks.js";
+import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
 import { t } from "./i18n.js";
+
+/** Names of the notice categories, as the site-permission bubble lists them. */
+const NOTICE_LABELS = {
+	permission: "Permission notices",
+	credential: "Sign-in notices",
+	download: "Download notices",
+	other: "Other notices",
+};
 
 function navIcon(Icon, name, label, disabled, onClick) {
 	return html`<button class="icon-btn sm" title=${label} aria-label=${label} disabled=${disabled} onClick=${onClick}><${Icon} name=${name} size=${15} /></button>`;
@@ -32,12 +41,21 @@ export function BrowserPanel({ tabId, url }) {
 	// placeholder, which keeps the themed surface instead of an empty native view painted over it.
 	const [hasView, setHasView] = useState(() => !!url);
 	const [status, setStatus] = useState({ url: url || "", title: "", loading: false, error: "", canGoBack: false, canGoForward: false });
-	const [notice, setNotice] = useState("");
+	const [notice, setNotice] = useState(null);
+	// Which categories of the browser's own notices are shown. Closing one hides its category from now on; the site's
+	// permission itself is decided by the desktop host and is not touched by this.
+	const [noticesOn, setNoticesOn] = useState(() => savedNoticePrefs(window.localStorage));
+	// The host's status listener is registered once per tab, so it must read the current preference, not the one from
+	// the render that registered it.
+	const noticesRef = useRef(noticesOn);
+	noticesRef.current = noticesOn;
 	const [snapshot, setSnapshot] = useState(null);
 	const [findOpen, setFindOpen] = useState(false);
 	const [findText, setFindText] = useState("");
 	const [found, setFound] = useState({ activeMatch: 0, matches: 0 });
 	const [permissionAsk, setPermissionAsk] = useState(null);
+	// A page that shows a bot check has no control the workspace could press; this bar is the way out of that dead end.
+	const [challengeHidden, setChallengeHidden] = useState(false);
 	const [permissionOpen, setPermissionOpen] = useState(false);
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
 	// Bookmarks are shared by every website tab and kept by the desktop host; the bar's visibility is a page preference.
@@ -58,6 +76,25 @@ export function BrowserPanel({ tabId, url }) {
 		}
 	})();
 	const siteDecisions = siteOrigin ? permissionList.permissions.filter((entry) => entry.origin === siteOrigin) : [];
+	const showNotice = (category, text) => {
+		if (!text || noticesRef.current[category] === false) return;
+		setNotice({ category, text });
+	};
+	const setNoticeCategory = (category, visible) => {
+		setNoticesOn((prefs) => {
+			if (prefs[category] === visible) return prefs;
+			const next = { ...prefs, [category]: visible };
+			rememberNoticePrefs(window.localStorage, next);
+			return next;
+		});
+	};
+	/** Closing a notice puts it away at once and remembers that this category is not wanted again. */
+	const closeNotice = () => {
+		const current = notice;
+		setNotice(null);
+		if (!current) return;
+		setNoticeCategory(current.category, false);
+	};
 	const pageBookmark = status.url ? bookmarks.find((item) => item.url === status.url) : undefined;
 	const shownLogins = allLogins ? logins.logins : logins.logins.filter((entry) => entry.origin === siteOrigin);
 	const loadLogins = async () => {
@@ -94,7 +131,7 @@ export function BrowserPanel({ tabId, url }) {
 			setBookmarks(value?.bookmarks || []);
 			setBookmarkDraft(null);
 		} catch (error) {
-			setNotice(error.message);
+			showNotice("other", error.message);
 		}
 	};
 	const removeBookmark = async () => {
@@ -104,7 +141,7 @@ export function BrowserPanel({ tabId, url }) {
 			setBookmarks(value?.bookmarks || []);
 			setBookmarkDraft(null);
 		} catch (error) {
-			setNotice(error.message);
+			showNotice("other", error.message);
 		}
 	};
 	const loadPermissions = async () => {
@@ -125,7 +162,8 @@ export function BrowserPanel({ tabId, url }) {
 		setPermissionAsk(null);
 		try {
 			await send({ action: "permission", requestId: request.requestId, allow });
-			setNotice(
+			showNotice(
+				"permission",
 				allow
 					? t("Allowed {permission} for {origin} in this session.", { permission: request.permission, origin: request.origin })
 					: t("Denied {permission} for {origin}.", { permission: request.permission, origin: request.origin }),
@@ -220,6 +258,11 @@ export function BrowserPanel({ tabId, url }) {
 	// focus puts it away, the way a browser's own site bubble closes.
 	useClickOutside([permissionCard, permissionButton], () => setPermissionOpen(false), permissionOpen);
 	useEffect(() => {
+		// Every new load brings its own page, so the way out of a bot check is offered again: a retry that fails a second
+		// time must not leave the user without the bar that was already dismissed.
+		if (status.loading) setChallengeHidden(false);
+	}, [status.loading, status.url]);
+	useEffect(() => {
 		if (!permissionOpen) return undefined;
 		const close = () => setPermissionOpen(false);
 		const onKey = (event) => {
@@ -283,7 +326,8 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "credential-saved") {
-				setNotice(
+				showNotice(
+					"credential",
 					value.updated
 						? t("Updated the saved password of {username} on {origin}.", { username: value.username, origin: value.origin })
 						: t("Saved the sign-in of {username} on {origin}. It is filled in next time.", { username: value.username, origin: value.origin }),
@@ -291,7 +335,7 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "credential-error") {
-				setNotice(t("The sign-in for {origin} was not saved: {error}", { origin: value.origin, error: value.error }));
+				showNotice("credential", t("The sign-in for {origin} was not saved: {error}", { origin: value.origin, error: value.error }));
 				return;
 			}
 			if (value.type === "find") {
@@ -315,7 +359,8 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "download") {
-				setNotice(
+				showNotice(
+					"download",
 					value.state === "completed"
 						? t("Downloaded {name} to {path}", { name: value.name, path: value.savePath })
 						: value.state === "failed"
@@ -330,7 +375,8 @@ export function BrowserPanel({ tabId, url }) {
 			}
 			if (value.type === "permission") {
 				setPermissionAsk((current) => (current && current.requestId === value.requestId ? null : current));
-				setNotice(
+				showNotice(
+					"permission",
 					value.allowed
 						? t("Allowed {permission} for {origin} in this session.", { permission: value.permission, origin: value.origin })
 						: t("Denied {permission} for {origin}.", { permission: value.permission, origin: value.origin }),
@@ -392,7 +438,7 @@ export function BrowserPanel({ tabId, url }) {
 	// The resolution happens here because the engine is a page preference; the desktop host still takes http/https only.
 	const navigate = async (event) => {
 		event?.preventDefault?.();
-		setNotice("");
+		setNotice(null);
 		const wanted = resolveBrowserAddress(address, engine);
 		if (!wanted) return;
 		setSnapshot(null);
@@ -418,7 +464,7 @@ export function BrowserPanel({ tabId, url }) {
 			actions.openWorkspace({ type: "browser", url: target });
 			return;
 		}
-		setNotice("");
+		setNotice(null);
 		setSnapshot(null);
 		setAddress(target);
 		try {
@@ -467,7 +513,7 @@ export function BrowserPanel({ tabId, url }) {
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 		</div>
-		${barVisible ? html`<${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} />` : null}
+		<${Collapse} open=${barVisible} class="ws-bookmarks-fold"><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /><//>
 		${bookmarkDraft ? html`<${BookmarkEditor} key=${bookmarkDraft.id || "new"} draft=${bookmarkDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} />` : null}
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
@@ -482,7 +528,16 @@ export function BrowserPanel({ tabId, url }) {
 			<button class="icon-btn sm" type="submit" title=${t("Next match")} aria-label=${t("Next match")} disabled=${!found.matches}><${Icon} name="chevronDown" size=${14} /></button>
 			<button class="icon-btn sm" type="button" title=${t("Close find")} aria-label=${t("Close find")} onClick=${closeFind}><${Icon} name="x" size=${14} /></button>
 		</form>` : null}
-		${notice ? html`<div class="notice warn">${notice}</div>` : null}
+		${notice ? html`<div class="notice warn ws-notice" role="status">
+			<span class="grow">${notice.text}</span>
+			<button class="icon-btn sm" title=${t("Dismiss this notice")} aria-label=${t("Dismiss this notice")} onClick=${closeNotice}><${Icon} name="x" size=${13} /></button>
+		</div>` : null}
+		${status.challenge && !challengeHidden ? html`<div class="notice warn ws-challenge" role="status">
+			<span class="grow">${t("This site is asking for a human check. Complete it in this panel, or open the page in your normal browser.")}</span>
+			<button class="btn sm" disabled=${!hasView} onClick=${() => act("reload")}>${t("Try again")}</button>
+			<button class="btn sm" disabled=${!status.url} onClick=${() => host.external(status.url).catch(() => undefined)}>${t("Open in system browser")}</button>
+			<button class="icon-btn sm" title=${t("Dismiss this notice")} aria-label=${t("Dismiss this notice")} onClick=${() => setChallengeHidden(true)}><${Icon} name="x" size=${13} /></button>
+		</div>` : null}
 		${permissionAsk ? html`<div class="notice warn ws-permission-ask" role="alertdialog" aria-label=${t("Site permission request")}>
 			<p>${t("{origin} asks for {permission}. It is denied unless you allow it for this session.", { origin: permissionAsk.origin || t("This site"), permission: permissionAsk.permission })}</p>
 			<div class="row">
@@ -490,7 +545,7 @@ export function BrowserPanel({ tabId, url }) {
 				<button class="btn sm" onClick=${() => answerPermission(false)}>${t("Deny")}</button>
 			</div>
 		</div>` : null}
-		${permissionOpen ? html`<div class="ws-permissions" ref=${permissionCard}>
+		<${Collapse} open=${permissionOpen} class="ws-permissions-fold"><div class="ws-permissions" ref=${permissionCard}>
 			<div class="row ws-permissions-head">
 				<strong class="grow truncate">${t("Site permissions")}</strong>
 				<button class="icon-btn sm" title=${t("Close")} aria-label=${t("Close")} onClick=${() => setPermissionOpen(false)}><${Icon} name="x" size=${13} /></button>
@@ -503,6 +558,12 @@ export function BrowserPanel({ tabId, url }) {
 					<button class="btn sm" onClick=${() => revokePermission(entry.permission)}>${t("Revoke")}</button>
 				</div>`)
 				: html`<div class="dim ws-permissions-note">${t("No permission decisions for this site yet.")}</div>`}
+			<div class="row ws-permissions-head"><strong class="grow truncate">${t("Notices")}</strong></div>
+			<div class="dim ws-permissions-note">${t("Closing a notice hides its category. Permissions, saved sign-ins and downloads still happen.")}</div>
+			${NOTICE_CATEGORIES.map((category) => html`<div class="row ws-permission-row" key=${category}>
+				<span class="grow truncate">${t(NOTICE_LABELS[category])}</span>
+				<${Toggle} checked=${noticesOn[category] !== false} label=${t(NOTICE_LABELS[category])} onChange=${(value) => setNoticeCategory(category, value)} />
+			</div>`)}
 			<div class="row ws-permissions-head ws-logins-head">
 				<strong class="grow truncate">${t("Saved passwords")}</strong>
 				${logins.logins.length ? html`<button class="btn sm" aria-pressed=${allLogins} onClick=${() => setAllLogins(!allLogins)}>${allLogins ? t("This site") : t("All sites")}</button>` : null}
@@ -516,7 +577,7 @@ export function BrowserPanel({ tabId, url }) {
 					</div>`)
 					: html`<div class="dim ws-permissions-note">${allLogins ? t("No saved passwords yet.") : t("No saved password for this site.")}</div>`}
 			${engineVersion ? html`<div class="dim ws-permissions-note ws-browser-engine">${engineVersion}</div>` : null}
-		</div>` : null}
+		</div><//>}
 		${status.title ? html`<div class="ws-page-title truncate" title=${status.title}>${status.title}</div>` : null}
 		<div class="desktop-browser-target" ref=${target}>
 			<div class="pad">

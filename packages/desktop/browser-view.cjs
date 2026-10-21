@@ -33,6 +33,9 @@ const DEFAULT_TAB = 'main';
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 // A bookmark keeps its site icon inline; a bigger icon falls back to the bookmark's first letter.
 const MAX_ICON_BYTES = 64 * 1024;
+// Titles that a bot check (Cloudflare's interstitial, its "verification failed" page and their kin) shows. Such a page
+// has no control the workspace could press, so recognising it is only used to offer a way forward, never to answer it.
+const VERIFY_PAGE = /just a moment|verification failed|attention required|checking your browser|verify you are human|are you a robot|access denied/i;
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -109,6 +112,56 @@ exports.createBrowser = (window, log, options = {}) => {
   const bookmarksChanged = (list) => { send({ type: 'bookmarks', bookmarks: list }); return list; };
   // Every tab (and every popup, which becomes a tab) shares the partition, so its user agent is set once here.
   if (typeof partition.setUserAgent === 'function') partition.setUserAgent(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
+  // The engine's own client hints list Chromium only, while the user agent above says Chrome (sites such as WhatsApp
+  // Web only accept "Chrome/NN"). A real Chrome lists its own brand next to Chromium, so the two signals disagreed in a
+  // way no ordinary browser does; the same brand is added to navigator.userAgentData in browser-tab-preload.cjs. Nothing
+  // else is changed: version, platform and full version list stay the engine's own.
+  const chromeBrand = (() => {
+    const match = /Chrome\/(\d+)\./u.exec(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
+    return match ? `"Google Chrome";v="${match[1]}"` : undefined;
+  })();
+  /** The last brand list a page reported, so the request headers can mirror exactly what navigator.userAgentData says. */
+  let hintBrands;
+  let hintAsked = false;
+  /**
+   * Electron 45 sends no client hints at all (measured: no sec-ch-ua, sec-ch-ua-mobile or sec-ch-ua-platform on any
+   * secure request), while its user agent says Chrome, which always sends the three low-entropy hints. They are therefore
+   * mirrored from the engine's own list as soon as a page has reported it: the header and navigator.userAgentData can
+   * never disagree. Before that the header is left alone instead of being filled with a guessed brand list, because a
+   * header that does not match what the page reports would be a signal of its own.
+   */
+  const learnClientHints = (contents) => {
+    if (hintAsked || !chromeBrand) return;
+    hintAsked = true;
+    contents
+      .executeJavaScript('navigator.userAgentData ? navigator.userAgentData.brands : null')
+      .then((brands) => {
+        if (Array.isArray(brands) && brands.length) hintBrands = brands;
+        else hintAsked = false;
+      })
+      .catch(() => {
+        hintAsked = false;
+      });
+  };
+  const clientHints = () => {
+    if (!chromeBrand || !Array.isArray(hintBrands) || !hintBrands.length) return undefined;
+    const list = hintBrands.map((item) => `"${item.brand}";v="${item.version}"`).join(', ');
+    const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
+    return { list, platform };
+  };
+  if (chromeBrand && partition.webRequest && typeof partition.webRequest.onBeforeSendHeaders === 'function') {
+    partition.webRequest.onBeforeSendHeaders({ urls: ['https://*/*'] }, (details, callback) => {
+      const headers = details.requestHeaders || {};
+      const hints = clientHints();
+      const has = (want) => Object.keys(headers).some((name) => name.toLowerCase() === want);
+      if (hints && !has('sec-ch-ua')) {
+        headers['sec-ch-ua'] = hints.list;
+        if (!has('sec-ch-ua-mobile')) headers['sec-ch-ua-mobile'] = '?0';
+        if (!has('sec-ch-ua-platform')) headers['sec-ch-ua-platform'] = `"${hints.platform}"`;
+      }
+      callback({ requestHeaders: headers });
+    });
+  }
   const settlePermission = (requestId, allow, options = {}) => {
     const entry = pendingPermissions.get(requestId);
     if (!entry) throw new Error(`没有待处理的网站权限请求 ${requestId}`);
@@ -262,6 +315,9 @@ exports.createBrowser = (window, log, options = {}) => {
       title: tab.title,
       loading: tab.loading,
       error: tab.error || '',
+      // The page looks like a bot check (Cloudflare's interstitial or its failed variant). The workspace then offers the
+      // way out: try again, or finish the check in the normal browser. Nothing here answers a challenge itself.
+      challenge: !!tab.challenge,
       canGoBack: !!history?.canGoBack?.(),
       canGoForward: !!history?.canGoForward?.(),
       visible: tab.view?.getVisible?.() ?? false,
@@ -371,17 +427,22 @@ exports.createBrowser = (window, log, options = {}) => {
       { role: 'paste', enabled: params.isEditable }, { role: 'selectAll' },
       { type: 'separator' }, { label: '用系统浏览器打开', click: () => void shell.openExternal(tab.url) },
     ]).popup({ window }));
+    // The first real page is the moment the engine's own client-hint list can be read (it needs a secure context).
+    contents.on('dom-ready', () => learnClientHints(contents));
     contents.on('did-start-loading', () => {
       if (!live()) return;
       tab.error = '';
-      commit(tab, { loading: true });
+      // A new load starts with no known challenge: the page that is gone must not leave its flag behind.
+      commit(tab, { loading: true, challenge: false });
       clearTimeout(tab.timer);
       tab.timer = later(tab, () => fail(tab, '加载超时（45 秒）', tab.url), 45000);
     });
     contents.on('did-stop-loading', () => {
       if (!live()) return;
       clearTimeout(tab.timer);
-      commit(tab, { loading: false });
+      let challenge = false;
+      try { challenge = VERIFY_PAGE.test(contents.getTitle() || ''); } catch { /* view is going away */ }
+      commit(tab, { loading: false, challenge });
       later(tab, () => void picture(tab), 300);
     });
     contents.on('did-navigate', (_event, target) => {
@@ -391,8 +452,19 @@ exports.createBrowser = (window, log, options = {}) => {
       commit(tab, { url: target, error: '' });
     });
     contents.on('page-favicon-updated', (_event, favicons) => { if (live()) tab.favicon = Array.isArray(favicons) ? favicons[0] : undefined; });
-    contents.on('did-navigate-in-page', (_event, target) => { if (live()) commit(tab, { url: target }); });
-    contents.on('page-title-updated', (_event, title) => { if (live()) commit(tab, { title }); });
+    contents.on('did-navigate-in-page', (_event, target) => {
+      if (!live()) return;
+      // An in-page navigation can resolve (or start) a challenge without a new load: follow the title it leaves behind.
+      let challenge = false;
+      try { challenge = VERIFY_PAGE.test(contents.getTitle() || ''); } catch { /* view is going away */ }
+      commit(tab, { url: target, challenge });
+    });
+    contents.on('page-title-updated', (_event, title) => {
+      // The title is what names a bot check and this event carries it before the load ends, so the flag follows it here
+      // instead of being read only at did-stop-loading; a later in-page title change updates it again.
+      if (!live()) return;
+      commit(tab, { title, challenge: VERIFY_PAGE.test(title || '') });
+    });
     contents.on('did-fail-load', (_event, code, description, target, isMainFrame) => {
       // -3 is a client-side abort (a navigation replaced by another one), not a page error.
       if (isMainFrame && code !== -3 && live()) fail(tab, `${description} (${code})`, target || tab.url);
@@ -455,9 +527,10 @@ exports.createBrowser = (window, log, options = {}) => {
     if (tabs.size >= MAX_TABS) throw new Error(`最多同时打开 ${MAX_TABS} 个浏览器标签`);
     const id = forcedId && !tabs.has(forcedId) ? String(forcedId) : `tab${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     // The sign-in helper runs in the page's isolated world and only when saved logins are available on this host.
-    const preload = passwordManager ? require('node:path').join(__dirname, 'browser-tab-preload.cjs') : undefined;
-    const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, ...(preload ? { preload } : {}) } });
-    const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
+    // It is attached to every tab: besides saved sign-ins it aligns the engine's client hints (see its header).
+    const preload = require('node:path').join(__dirname, 'browser-tab-preload.cjs');
+    const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload } });
+    const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', challenge: false, timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
     tabs.set(id, tab);
     window.contentView.addChildView(view);
     view.setVisible(false);
@@ -507,7 +580,7 @@ exports.createBrowser = (window, log, options = {}) => {
   const navigateTab = async (tab, value) => {
     const url = exports.httpUrl(value);
     if (tab.destroyed) throw new Error(`浏览器标签 ${tab.id} 已关闭`);
-    commit(tab, { url, error: '', loading: true });
+    commit(tab, { url, error: '', loading: true, challenge: false });
     try {
       await tab.view.webContents.loadURL(url);
       if (!tab.destroyed && tabs.get(tab.id) === tab) commit(tab, { url: tab.view.webContents.getURL() || url, loading: false });

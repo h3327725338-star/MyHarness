@@ -1333,6 +1333,7 @@ export const zhCN = {
 	"Unlimited": "不限次数",
 	"Count unavailable": "无法获取",
 	"Checking…": "查询中…",
+	"not updated": "未更新",
 	"Refresh": "刷新",
 	"All models": "全部模型",
 	"Select…": "请选择…",
@@ -2051,6 +2052,17 @@ export const zhCN = {
 	"Updated the saved password of {username} on {origin}.": "已更新 {origin} 上 {username} 的已保存密码。",
 	"The sign-in for {origin} was not saved: {error}": "{origin} 的登录信息未保存：{error}",
 	"Site permissions": "站点权限",
+	"Notices": "通知条",
+	"Dismiss this notice": "关闭这条提示",
+	"Permission notices": "权限提示",
+	"Sign-in notices": "登录保存提示",
+	"Download notices": "下载提示",
+	"Other notices": "其他提示",
+	"Closing a notice hides its category. Permissions, saved sign-ins and downloads still happen.":
+		"关闭提示只会隐藏这一类提示，权限授予、保存的登录和下载仍照常进行。",
+	"This site is asking for a human check. Complete it in this panel, or open the page in your normal browser.":
+		"这个站点要求人工验证。可以在这里手动完成，也可以用你平时用的浏览器打开这一页。",
+	"Try again": "重试",
 	"{active} of {matches}": "{active} / {matches}",
 	"No matches": "没有匹配",
 	"Previous match": "上一个匹配",
@@ -2194,6 +2206,10 @@ export const zhCN = {
 	"Sync is paused. Turn Pause off first.": "同步已暂停，请先关闭“暂停”。",
 	"A manual sync is already running.": "已有一次手动同步正在进行。",
 	"Waiting for the current sync pass to finish…": "等待当前这一轮同步结束…",
+	"Waiting for the current sync pass to finish (downloading, {count} batches left).":
+		"等待当前这一轮同步结束（正在下载，还剩 {count} 个批次）。",
+	"Waiting for the current sync pass to finish (uploading, {count} changes left).":
+		"等待当前这一轮同步结束（正在上传，还剩 {count} 项改动）。",
 	"Uploading…": "正在上传…",
 	"Downloading…": "正在下载…",
 	"Download finished.": "下载完成。",
