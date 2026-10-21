@@ -873,7 +873,7 @@ function Standalone({ item, task, snap, runs, processDefault }) {
 		const latest = repairTurns?.[repairTurns.length - 1];
 		return html`<${GitRecord} result=${item.result} task=${liveTask} activity=${liveTask && latest?.steps ? currentActivity(latest, snap?.run) : undefined}>${repairTurns?.length ? html`${repairTurns.map((turn) => turn.standalone
 			? html`<${Standalone} key=${turn.key} item=${turn.standalone} />`
-			: html`<${TurnView} key=${turn.key} turn=${turn} live=${!!snap?.active && item.kind === "gitRepair"} waiting=${false} run=${runForTurn(turn, runs || {})} processDefault=${processDefault} snapRun=${snap?.run} />`)}` : null}<//>`;
+			: html`<${TurnView} key=${turn.key} turn=${turn} live=${!!snap?.active && !!liveTask} waiting=${false} run=${runForTurn(turn, runs || {})} processDefault=${processDefault} snapRun=${snap?.run} />`)}` : null}<//>`;
 	}
 	if (item.kind === "runChanges") return html`<${ChangeCard} card=${item} />`;
 	if (item.kind === "bash") return html`<${BashCard} item=${item} />`;
@@ -1237,7 +1237,15 @@ export function Transcript() {
 		chunkFrame.current = 0;
 	}, []);
 
-	const repairing = turns.some((turn) => turn.standalone?.kind === "gitRepair");
+	// A commit repairs its own pre-commit failures in rounds, one card each. Only the newest card of the task that is
+	// repairing right now borrows the task's progress; every other card is a finished round with nothing running.
+	const repairTask = gitTask && gitTask.phase === "repairing" ? gitTask : null;
+	const repairing = !!repairTask;
+	const liveRepairKey = (() => {
+		if (!repairing) return null;
+		for (let i = turns.length - 1; i >= 0; i--) if (turns[i].standalone?.kind === "gitRepair") return turns[i].key;
+		return null;
+	})();
 	const lastTurnIndex = (() => {
 		for (let i = turns.length - 1; i >= 0; i--) if (!turns[i].standalone) return i;
 		return -1;
@@ -1383,7 +1391,7 @@ export function Transcript() {
 				</div>` : empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
 				${(switching ? [] : rendered).map((turn, i) => {
 					const index = renderedStart + i;
-					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${gitTask} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
+					if (turn.standalone) return html`<${Standalone} key=${turn.key} item=${turn.standalone} task=${turn.key === liveRepairKey ? repairTask : undefined} snap=${snap} runs=${runs} processDefault=${processDefault} />`;
 					const isLast = index === lastTurnIndex;
 					// A manual compaction runs after the last turn ended: that turn keeps its finished look.
 					const live = isLast && active && !repairing && compaction?.reason !== "manual";

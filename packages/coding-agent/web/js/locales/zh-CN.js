@@ -1825,6 +1825,7 @@ export const zhCN = {
 	"Nothing to commit": "没有可提交的内容",
 	"There are no local changes to commit.": "本地没有需要提交的改动。",
 	"Commit succeeded": "Commit 成功",
+	"Repair finished": "修复已结束",
 	"Push succeeded": "Push 成功",
 	"CI: {workflows} all passed.": "CI：{workflows} 全部通过。",
 	"No CI workflows apply to this commit.": "这次提交没有需要运行的 CI。",

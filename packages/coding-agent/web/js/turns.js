@@ -426,6 +426,9 @@ export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 		// Bookmark labels are projected for the HTML export only; the transcript has nothing to draw for them.
 		if (item.kind === "label") return;
 		if (item.kind === "custom" && item.customType === "git-commit-repair" && !item.display) {
+			// A new repair round replaces the open one, so close it first: its card keeps the steps that round ran
+			// instead of losing them to the accumulator that is about to be dropped.
+			if (repair) repair.turns = buildTurns(repair.items, ctx);
 			turn = null;
 			repair = { kind: "gitRepair", id: item.id || item.ts || index, ts: item.ts, items: [] };
 			standalone(repair, index);

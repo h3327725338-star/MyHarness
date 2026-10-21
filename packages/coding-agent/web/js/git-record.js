@@ -28,13 +28,16 @@ export function GitRecord({ result, task, children, activity }) {
 		: null;
 
 	if (task || !result) {
-		const showActivity = !!activity && !repairOpen;
-		return html`<div class="strip git-result fade-in" role="status">
+		// A repair round that is over has no outcome record of its own (the commit's result card carries that) and no
+		// running task: it must stop at "Repair finished" instead of spinning and claiming work that already ended.
+		const running = !!task;
+		const showActivity = running && !!activity && !repairOpen;
+		return html`<div class="strip git-result fade-in" role=${running ? "status" : undefined}>
 			<div class="strip-line">
-				<${Spinner} />
-				<span class="truncate">${serverText(task?.activity, t("Working…"))}</span>
+				${running ? html`<${Spinner} />` : html`<${Icon} name="checkCircle" size=${14} class="c-dim" />`}
+				<span class="truncate">${running ? serverText(task?.activity, t("Working…")) : t("Repair finished")}</span>
 				<span class="grow" />
-				${task ? html`<button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button>` : null}
+				${running ? html`<button class="link-btn" onClick=${() => post("/api/git/task/abort")}>${t("Cancel")}</button>` : null}
 				${toggleBtn}
 			</div>
 			${showActivity ? html`<div class="strip-activity dim" role="status" title=${activity}>${activity}</div>` : null}
