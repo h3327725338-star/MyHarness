@@ -1974,6 +1974,7 @@ function connectEvents() {
 	});
 	on("sync_applied", async (d, slot) => {
 		state.modePreferencesNonce += 1;
+		window.dispatchEvent(new CustomEvent("myharness:sync-applied"));
 		await attempt(() => loadWorkspaces(), { quiet: true });
 		await attempt(() => loadSnapshot(slot ?? activeSlot), { quiet: true });
 		await attempt(() => loadModeState(), { quiet: true });

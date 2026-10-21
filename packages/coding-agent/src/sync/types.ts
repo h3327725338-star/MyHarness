@@ -213,6 +213,8 @@ export interface SyncStatusSnapshot {
 	externalRisk: { detected: boolean; message?: string };
 	/** The last manual download/sync run, or null when none ran in this process. */
 	manual: SyncManualRun | null;
+	/** The independent workspace file channel; absent until the service is wired with a transport. */
+	files?: import("./files/types.ts").WorkspaceFileSyncStatus;
 }
 
 /** What the scanner found locally. Content is read lazily; unchanged files are not hashed twice. */
@@ -248,7 +250,7 @@ export interface RemoteFile {
 	modifiedTime?: string;
 }
 
-export type RemoteFolder = "root" | "batches" | "objects" | "snapshots";
+export type RemoteFolder = "root" | "batches" | "objects" | "snapshots" | "files";
 
 /** The narrow Drive surface the engine needs; the Google implementation and tests both satisfy it. */
 export interface DrivePort {

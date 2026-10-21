@@ -1,5 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { open } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { WorkspaceUploadResume } from "./files/types.ts";
 import type { DrivePort, RemoteFile, RemoteFolder, StoredGoogleCredentials } from "./types.ts";
 import { fromUtf8 } from "./util.ts";
 
@@ -20,6 +25,8 @@ const TRANSIENT_RETRIES = 3;
 const JSON_TIMEOUT_MS = 30_000;
 const MEDIA_TIMEOUT_MS = 180_000;
 const WRITE_TIMEOUT_MS = 300_000;
+/** One resumable chunk. Large enough to keep the request count low, small enough to stay out of memory. */
+const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 
 function isDeadlineError(error: unknown): boolean {
 	const name = (error as { name?: unknown } | undefined)?.name;
@@ -461,6 +468,7 @@ export class GoogleDriveClient implements DrivePort {
 		this.folders.objects = await this.ensureFolder("objects", this.syncFolderId, this.folders.objects);
 		this.folders.batches = await this.ensureFolder("batches", this.syncFolderId, this.folders.batches);
 		this.folders.snapshots = await this.ensureFolder("snapshots", this.syncFolderId, this.folders.snapshots);
+		this.folders.files = await this.ensureFolder("files", this.syncFolderId, this.folders.files);
 		await this.ensureReadme(root);
 		const identity = await this.readIdentity();
 		return { folderId: root, folderName: this.rootName, syncId: identity.syncId, url: this.url };
@@ -485,7 +493,7 @@ export class GoogleDriveClient implements DrivePort {
 				"can share the same account. Edit or delete it only from MyHarness; deleting it from Drive does not",
 				"delete the local data on your computers.",
 				"",
-				"Layout: sync-v1/identity.json, sync-v1/batches, sync-v1/objects, sync-v1/snapshots.",
+				"Layout: sync-v1/identity.json, sync-v1/batches, sync-v1/objects, sync-v1/snapshots, sync-v1/files.",
 			].join("\n");
 			await this.createFile("README.txt", parent, new TextEncoder().encode(`${text}\n`), "text/plain");
 			this.readmeEnsured = true;
@@ -671,5 +679,194 @@ export class GoogleDriveClient implements DrivePort {
 
 	async downloadObject(hash: string): Promise<Uint8Array | undefined> {
 		return this.read("objects", hash);
+	}
+
+	/** Content-addressed object id; a cached id is reused until Drive answers 404. */
+	private async objectFileId(hash: string): Promise<string | undefined> {
+		const parent = this.folderId("objects");
+		const key = this.fileKey("objects", hash);
+		const cached = this.fileIds.get(key);
+		if (cached) return cached;
+		const file = await this.find(hash, parent);
+		if (!file || file.mimeType === FOLDER_MIME) return undefined;
+		this.fileIds.set(key, file.id);
+		return file.id;
+	}
+
+	async objectExists(hash: string): Promise<boolean> {
+		return (await this.objectFileId(hash)) !== undefined;
+	}
+
+	private async rememberUploaded(hash: string, parent: string): Promise<void> {
+		const file = await this.find(hash, parent);
+		if (file) this.fileIds.set(this.fileKey("objects", hash), file.id);
+	}
+
+	/** Open a resumable upload session; the URI is saved by the caller so a restart continues instead of restarting. */
+	private async beginResumableUpload(name: string, parent: string, size: number): Promise<string> {
+		const response = await this.request(
+			`${UPLOAD_API}?uploadType=resumable&fields=id,name,size&supportsAllDrives=true`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json; charset=UTF-8",
+					"x-upload-content-type": "application/octet-stream",
+					"x-upload-content-length": String(size),
+				},
+				body: JSON.stringify({ name, parents: [parent] }),
+			},
+			true,
+			JSON_TIMEOUT_MS,
+		);
+		const location = response.headers.get("location");
+		if (!response.ok || !location) {
+			const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+			throw new GoogleDriveError(response.status, payload.error?.message ?? "Drive did not open an upload session.");
+		}
+		return location;
+	}
+
+	private static rangeEnd(header: string | null): number {
+		if (!header) return -1;
+		const match = /bytes=\d+-(\d+)/u.exec(header);
+		return match ? Number(match[1]) : -1;
+	}
+
+	/**
+	 * Stream one file into `objects/<hash>` with Drive's resumable protocol: fixed chunks, a saved session URI and
+	 * `Content-Range` continuation. Only one chunk is held in memory and no size limit is applied here, so a large
+	 * file is limited by the account's Drive space rather than by an arbitrary local cap.
+	 */
+	async uploadObjectFromFile(
+		hash: string,
+		path: string,
+		size: number,
+		resume: WorkspaceUploadResume | undefined,
+		onProgress?: (sent: number, sessionUri: string) => void,
+	): Promise<void> {
+		const parent = this.folderId("objects");
+		const existing = await this.find(hash, parent);
+		if (existing) {
+			this.fileIds.set(this.fileKey("objects", hash), existing.id);
+			return;
+		}
+		if (size <= 0) {
+			const created = await this.createFile(hash, parent, new Uint8Array(0), "application/octet-stream");
+			this.fileIds.set(this.fileKey("objects", hash), created.id);
+			return;
+		}
+		let sessionUri = resume?.sessionUri;
+		let offset = Math.max(0, Math.floor(resume?.offset ?? 0));
+		if (sessionUri) {
+			// Ask the old session how much it already has; a session that expired restarts from zero.
+			try {
+				const status = await this.request(
+					sessionUri,
+					{ method: "PUT", headers: { "content-range": `bytes */${size}` } },
+					false,
+					JSON_TIMEOUT_MS,
+				);
+				if (status.status === 308) {
+					offset = Math.max(0, GoogleDriveClient.rangeEnd(status.headers.get("range")) + 1);
+				} else if (status.ok) {
+					await this.rememberUploaded(hash, parent);
+					return;
+				} else {
+					sessionUri = undefined;
+					offset = 0;
+				}
+			} catch {
+				sessionUri = undefined;
+				offset = 0;
+			}
+		}
+		sessionUri ??= await this.beginResumableUpload(hash, parent, size);
+		const handle = await open(path, "r");
+		try {
+			while (offset < size) {
+				const length = Math.min(UPLOAD_CHUNK_BYTES, size - offset);
+				const buffer = Buffer.alloc(length);
+				const read = await handle.read(buffer, 0, length, offset);
+				if (read.bytesRead !== length) {
+					throw new GoogleDriveError(409, "The file changed while it was uploaded.");
+				}
+				const response = await this.request(
+					sessionUri,
+					{
+						method: "PUT",
+						headers: {
+							"content-range": `bytes ${offset}-${offset + length - 1}/${size}`,
+							"content-type": "application/octet-stream",
+						},
+						body: buffer,
+					},
+					true,
+					WRITE_TIMEOUT_MS,
+				);
+				if (response.status === 308) {
+					const end = GoogleDriveClient.rangeEnd(response.headers.get("range"));
+					offset = end >= 0 ? end + 1 : offset + length;
+					onProgress?.(offset, sessionUri);
+					continue;
+				}
+				if (!response.ok) {
+					const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+					if (response.status === 404 || response.status === 410) {
+						throw new GoogleDriveError(
+							response.status,
+							"The upload session expired; the next pass starts a new one.",
+						);
+					}
+					throw new GoogleDriveError(response.status, payload.error?.message ?? `Uploading ${hash} failed.`);
+				}
+				offset = size;
+				onProgress?.(offset, sessionUri);
+			}
+		} finally {
+			await handle.close();
+		}
+		await this.rememberUploaded(hash, parent);
+	}
+
+	/**
+	 * Download one object with `Range`, appending to the caller's temp file. The caller verifies the SHA-256 of the
+	 * finished file before it replaces anything, so an interrupted transfer is never mistaken for a complete one.
+	 */
+	async downloadObjectToFile(
+		hash: string,
+		tempPath: string,
+		offset: number,
+		onProgress?: (received: number) => void,
+	): Promise<void> {
+		const id = await this.objectFileId(hash);
+		if (!id) throw new GoogleDriveError(404, `Object ${hash} is not in the sync space.`);
+		const start = Math.max(0, Math.floor(offset));
+		const response = await this.request(
+			`${DRIVE_API}/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`,
+			{ headers: start > 0 ? { range: `bytes=${start}-` } : {} },
+			true,
+			MEDIA_TIMEOUT_MS,
+		);
+		if (response.status === 416) {
+			await response.arrayBuffer().catch(() => undefined);
+			if (start > 0) return;
+			throw new GoogleDriveError(416, `Downloading ${hash} failed.`);
+		}
+		if (!response.ok || !response.body) throw new GoogleDriveError(response.status, `Downloading ${hash} failed.`);
+		let append = start > 0 && response.status === 206;
+		let written = append ? start : 0;
+		if (start > 0 && response.status === 200) append = false;
+		const counter = new Transform({
+			transform(chunk: Buffer, _encoding, done) {
+				written += chunk.length;
+				onProgress?.(written);
+				done(null, chunk);
+			},
+		});
+		await pipeline(
+			Readable.fromWeb(response.body as never),
+			counter,
+			createWriteStream(tempPath, { flags: append ? "a" : "w" }),
+		);
 	}
 }

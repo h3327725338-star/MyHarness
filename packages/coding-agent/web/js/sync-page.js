@@ -40,6 +40,20 @@ function connectionBadge(status) {
 	if (status.phase === "locked") return { cls: "warn", text: t("Another process") };
 	if (status.paused) return { cls: "warn", text: t("Paused") };
 	if (!status.enabled) return { cls: "", text: t("Connected, sync off") };
+	// A connection that works says nothing about the files: conflicts, blocked deletions or a failed pass must not be
+	// covered by a green "Syncing" badge.
+	const files = status.files;
+	const blocked = (files?.workspaces ?? []).some(
+		(item) =>
+			item.state === "blocked" || item.state === "error" || item.state === "waiting" || item.incomplete === true,
+	);
+	const unresolved =
+		(files?.conflicts?.length ?? 0) +
+		(files?.issues?.length ?? 0) +
+		(status.conflicts?.length ?? 0) +
+		(status.issues?.length ?? 0);
+	if (status.lastError || blocked) return { cls: "warn", text: t("Needs attention") };
+	if (unresolved > 0) return { cls: "warn", text: t("Has unresolved changes") };
 	return { cls: "ok", text: t("Syncing") };
 }
 
@@ -66,10 +80,27 @@ function manualText(manual, status) {
 		return manual.stage === "upload" ? `${t("Uploading…")}${progress}` : `${t("Downloading…")}${progress}`;
 	}
 	if (manual.state === "failed") return `${t("Failed")}: ${t(manual.error || "The operation failed.")}`;
+	const files = status?.files;
+	const pendingFiles = (files?.workspaces ?? []).reduce(
+		(total, item) => total + (item.pendingUploads ?? 0) + (item.pendingDownloads ?? 0),
+		0,
+	);
+	const unresolved =
+		(files?.conflicts?.length ?? 0) +
+		(files?.issues?.length ?? 0) +
+		(status?.conflicts?.length ?? 0) +
+		(status?.issues?.length ?? 0) +
+		(files?.workspaces ?? []).filter(
+			(item) => item.state === "blocked" || item.state === "error" || item.incomplete === true,
+		).length;
+	if ((manual.remainingDownloads ?? 0) > 0 || pendingFiles > 0 || unresolved > 0) {
+		// The pass ended, but "finished" would read as "everything arrived".
+		return t("The pass finished; {count} items are still waiting.", {
+			count: pendingFiles + (manual.remainingDownloads ?? 0) + unresolved,
+		});
+	}
 	const done = manual.kind === "download" ? t("Download finished.") : t("Sync finished.");
-	return manual.remainingDownloads > 0
-		? `${done} ${t("{count} batches are still waiting for files and keep retrying.", { count: manual.remainingDownloads })}`
-		: done;
+	return done;
 }
 
 export function SyncPage() {
@@ -126,7 +157,12 @@ export function SyncPage() {
 	const folder = status.folder;
 	const account = status.account;
 	const risk = status.externalRisk ?? { detected: false };
-	const pendingBindings = status.pendingBindings ?? [];
+	const files = status.files ?? null;
+	const fileWorkspaces = files?.workspaces ?? [];
+	const fileConflicts = files?.conflicts ?? [];
+	// A local workspace that already got its managed copy on this device needs no restore card.
+	const managedIds = new Set(fileWorkspaces.filter((item) => item.managed).map((item) => item.workspaceId));
+	const pendingBindings = (status.pendingBindings ?? []).filter((item) => !managedIds.has(item.workspaceId));
 	const conflicts = status.conflicts ?? [];
 
 	const manual = status.manual ?? null;
@@ -161,13 +197,152 @@ export function SyncPage() {
 
 	const chooseFolder = async (workspaceId) => {
 		setBusy(`bind:${workspaceId}`);
+		let pickedPath = "";
 		try {
 			const picked = await post("/api/fs/pick-folder", { title: t("Choose this workspace's folder") });
-			if (picked?.path) {
-				const result = await post("/api/sync/bind", { workspaceId, rootPath: picked.path });
-				if (result?.status) set({ syncStatus: result.status });
-				toast(t("Workspace folder bound."), "success");
+			if (!picked?.path) return;
+			pickedPath = picked.path;
+			const result = await post("/api/sync/bind", { workspaceId, rootPath: picked.path });
+			if (result?.status) set({ syncStatus: result.status });
+			toast(t("Workspace folder bound."), "success");
+		} catch (error) {
+			// A folder can be held by a Workspace that was removed from the sidebar. Offer the one safe action:
+			// move the hidden record's binding to an internal folder, keep its chats, and retry the bind.
+			if (pickedPath) {
+				const answer = await post("/api/sync/occupancy", { workspaceId, rootPath: pickedPath }).catch(() => null);
+				const occupant = answer?.occupancy;
+				if (occupant?.hidden) {
+					const ok = await confirmDialog({
+						title: t("This folder is held by a hidden workspace"),
+						message: t(
+							"{name} ({id}) was removed from the sidebar but still keeps {count} chats. Releasing it moves only its folder binding to an internal folder; its chats stay reachable and its files do not move.",
+							{ name: occupant.name, id: occupant.workspaceId, count: occupant.chatCount },
+						),
+						confirmLabel: t("Release and bind"),
+					});
+					if (ok) {
+						await post("/api/sync/release-occupant", {
+							workspaceId: occupant.workspaceId,
+							confirmed: true,
+						});
+						const result = await post("/api/sync/bind", { workspaceId, rootPath: pickedPath });
+						if (result?.status) set({ syncStatus: result.status });
+						toast(t("Workspace folder bound."), "success");
+						return;
+					}
+				}
 			}
+			toast(error?.message || t("The operation failed."), "error", 7000);
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const enableFiles = async (workspaceId) => {
+		setBusy(`files:${workspaceId}`);
+		try {
+			const answer = await post("/api/sync/workspace-source", { workspaceId });
+			const source = answer?.source ?? {};
+			if (source.provider) {
+				// Another client already syncs this folder; two writers on the same files is exactly the failure mode we refuse.
+				toast(
+					t("This folder is inside {provider}. Turn that client's sync off for it first, or keep it managed there.", {
+						provider: source.provider,
+					}),
+					"error",
+					9000,
+				);
+				return;
+			}
+			if (source.source === "drive" && source.driveRootId && source.driveRelativePath) {
+				const result = await post("/api/sync/files/enable", {
+					workspaceId,
+					source: "drive",
+					driveRootId: source.driveRootId,
+					driveRelativePath: source.driveRelativePath,
+				});
+				if (result?.status) set({ syncStatus: result.status });
+				toast(t("File sync is on. This folder stays owned by the Google Drive client."), "success", 6000);
+				return;
+			}
+			const preview = await post("/api/sync/files/preflight", { workspaceId });
+			const scan = preview?.preflight;
+			if (!scan?.ok) throw new Error(scan?.error || t("The workspace folder is not available."));
+			const ok = await confirmDialog({
+				title: t("Upload this folder to Google Drive?"),
+				message: t(
+					"{files} files ({size}) will be uploaded from {path}. Excluded: {excluded}. Possible secret files found: {secrets}.",
+					{
+						files: scan.files,
+						size: formatBytes(scan.bytes),
+						path: scan.path,
+						excluded: (scan.excluded ?? []).join(", "),
+						secrets: (scan.secrets ?? []).length,
+					},
+				),
+				confirmLabel: t("Start syncing files"),
+			});
+			if (!ok) return;
+			const result = await post("/api/sync/files/enable", { workspaceId, source: "local", confirmed: true });
+			if (result?.status) set({ syncStatus: result.status });
+			toast(t("File sync is on. The first upload runs in the background."), "success", 6000);
+		} catch (error) {
+			toast(error?.message || t("The operation failed."), "error", 7000);
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const disableFiles = async (workspaceId) => {
+		const ok = await confirmDialog({
+			title: t("Stop syncing this folder's files?"),
+			message: t("Files stay where they are. Changes stop being uploaded or applied on this computer."),
+			confirmLabel: t("Stop syncing files"),
+			danger: true,
+		});
+		if (!ok) return;
+		setBusy(`files:${workspaceId}`);
+		try {
+			const result = await post("/api/sync/files/disable", { workspaceId });
+			if (result?.status) set({ syncStatus: result.status });
+			toast(t("File sync stopped for this workspace."), "info");
+		} catch (error) {
+			toast(error?.message || t("The operation failed."), "error", 7000);
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const resolveFileConflict = async (conflict, choice) => {
+		setBusy(`conflict:${conflict.id}`);
+		try {
+			const result = await post("/api/sync/files/resolve", {
+				workspaceId: conflict.workspaceId,
+				conflictId: conflict.id,
+				choice,
+			});
+			if (result?.status) set({ syncStatus: result.status });
+			toast(t("The choice is saved. This computer publishes it as a new version."), "success");
+		} catch (error) {
+			toast(error?.message || t("The operation failed."), "error", 7000);
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const confirmFileDeletes = async (workspaceId) => {
+		const ok = await confirmDialog({
+			title: t("Confirm the waiting deletions?"),
+			message: t("Other computers will delete these files too. A copy is kept under the agent folder first."),
+			confirmLabel: t("Delete on every computer"),
+			danger: true,
+		});
+		if (!ok) return;
+		setBusy(`deletes:${workspaceId}`);
+		try {
+			const result = await post("/api/sync/files/confirm-deletes", { workspaceId });
+			if (result?.status) set({ syncStatus: result.status });
+			toast(t("The deletions are confirmed and queued for upload."), "info");
 		} catch (error) {
 			toast(error?.message || t("The operation failed."), "error", 7000);
 		} finally {
@@ -338,6 +513,48 @@ export function SyncPage() {
 					: html`<span class="dim grow">${t("Everything also runs by itself; this button is for troubleshooting.")}</span>`}
 			</div>
 		<//>
+		${fileWorkspaces.length
+			? html`<${Card} title=${t("Workspace files")} description=${t("Each workspace records who syncs its files. A finished chat upload never proves that its folder is fully uploaded.")}>
+					${fileWorkspaces.map(
+						(item) => html`<${Row} key=${item.workspaceId} label=${item.name} description=${item.path || ""} stack=${true}>
+							<div class="row sync-field">
+								<span class="dim grow" role="status" title=${item.message}>${item.message}</span>
+								${item.managed
+									? html`<button class="btn" disabled=${busy === `files:${item.workspaceId}`} onClick=${() => disableFiles(item.workspaceId)}>${t("Stop syncing files")}</button>`
+									: item.source === "drive"
+										? null
+										: html`<button class="btn" disabled=${busy === `files:${item.workspaceId}`} onClick=${() => enableFiles(item.workspaceId)}>${t("Sync files")}</button>`}
+							</div>
+							${item.receiving
+								? html`<span class="dim">${t("Receiving {done} of {total} files ({size} so far).", { done: item.receiving.done, total: item.receiving.total, size: formatBytes(item.receiving.bytes) })}</span>`
+								: null}
+							${item.state === "blocked"
+								? html`<button class="btn danger" disabled=${busy === `deletes:${item.workspaceId}`} onClick=${() => confirmFileDeletes(item.workspaceId)}>${t("Confirm the waiting deletions")}</button>`
+								: null}
+						<//>`,
+					)}
+					${files?.historyNote ? html`<div class="set-desc">${t(files.historyNote)}</div>` : null}
+				<//>`
+			: null}
+		${fileConflicts.length
+			? html`<${Card} title=${t("File conflicts")} description=${t("Nothing was overwritten. Choose what becomes the new version; the other computers then receive it.")}>
+					${fileConflicts.slice(0, 20).map(
+						(conflict) => html`<div class="set-row stack" key=${conflict.id}>
+							<div class="set-text">
+								<span class="set-label">${conflict.path}</span>
+								<span class="set-desc">${t(conflict.message)}</span>
+								${conflict.remoteCopyPath ? html`<span class="dim mono truncate" title=${conflict.remoteCopyPath}>${conflict.remoteCopyPath}</span>` : null}
+								<span class="dim">${conflict.deviceName} · ${timeText(conflict.at)}</span>
+							</div>
+							<div class="set-control row">
+								<button class="btn" disabled=${busy === `conflict:${conflict.id}`} onClick=${() => resolveFileConflict(conflict, "keep-local")}>${t("Keep this computer's version")}</button>
+								<button class="btn" disabled=${!conflict.remoteCopyPath || busy === `conflict:${conflict.id}`} onClick=${() => resolveFileConflict(conflict, "take-remote")}>${t("Use the other version")}</button>
+								<button class="btn" disabled=${busy === `conflict:${conflict.id}`} onClick=${() => resolveFileConflict(conflict, "keep-both")}>${t("Keep both")}</button>
+							</div>
+						</div>`,
+					)}
+				<//>`
+			: null}
 		${pendingBindings.length
 			? html`<${Card} title=${t("Workspaces restored to a managed folder")} description=${t("Pick the folder this computer should use. Chats and memories already work; file tools wait for the binding.")}>
 					${pendingBindings.map(

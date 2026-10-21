@@ -1379,6 +1379,20 @@ export class SyncEngine {
 		this.hadChanges = true;
 		return { ok: true };
 	}
+
+	/**
+	 * A restored Workspace turned out to be usable without asking: the file channel bound it to the managed copy
+	 * on this device. Clearing the waiting binding is the only thing left to do; its chats and folder stay as they are.
+	 */
+	clearPendingBinding(workspaceId: string): void {
+		if (!this.state.pendingBindings.some((item) => item.workspaceId === workspaceId)) return;
+		const store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		const workspace = store.getById(workspaceId);
+		if (workspace) this.state.bindings[workspaceId] = workspace.rootPath;
+		this.state.pendingBindings = this.state.pendingBindings.filter((item) => item.workspaceId !== workspaceId);
+		this.store.saveState(this.state);
+		this.hadChanges = true;
+	}
 }
 
 function isLocalEnvironmentError(error: unknown): boolean {

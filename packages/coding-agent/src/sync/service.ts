@@ -1,9 +1,22 @@
+import { WorkspaceStore } from "../data/workspace-store.ts";
 import { openBrowser } from "../utils/open-browser.ts";
+import { pathIdentityKey } from "../utils/paths.ts";
 import { SyncEngine } from "./engine.ts";
+import type { ConflictChoice } from "./files/apply.ts";
+import { WorkspaceFileSync } from "./files/engine.ts";
+import { GoogleWorkspaceFilePort } from "./files/google-port.ts";
+import type { WorkspaceFileSource } from "./files/types.ts";
 import { beginGoogleAuthorization, GoogleDriveClient } from "./google.ts";
 import { SyncLocalStore } from "./store.ts";
 import type { StoredGoogleCredentials, SyncStatusSnapshot } from "./types.ts";
 import { sha256 } from "./util.ts";
+import {
+	detectFolderOwner,
+	discoverDriveRoots,
+	findWorkspaceOccupancy,
+	releaseWorkspaceRoot,
+	sourceForOwner,
+} from "./workspace-location.ts";
 
 export interface SyncServiceOptions {
 	agentDir: string;
@@ -22,6 +35,7 @@ export class SyncService {
 	private readonly options: SyncServiceOptions;
 	private readonly store: SyncLocalStore;
 	private engine: SyncEngine;
+	private fileSync: WorkspaceFileSync;
 	private phase: "authorizing" | null = null;
 	private authError: string | null = null;
 	private connecting = false;
@@ -32,7 +46,9 @@ export class SyncService {
 	private constructor(options: SyncServiceOptions) {
 		this.options = options;
 		this.store = new SyncLocalStore(options.agentDir);
-		this.engine = this.buildEngine(this.store.credentials());
+		const built = this.build(this.store.credentials());
+		this.engine = built.engine;
+		this.fileSync = built.fileSync;
 	}
 
 	static create(options: SyncServiceOptions): SyncService {
@@ -48,7 +64,10 @@ export class SyncService {
 		return "disconnected";
 	}
 
-	private buildEngine(credentials: StoredGoogleCredentials | undefined): SyncEngine {
+	private build(credentials: StoredGoogleCredentials | undefined): {
+		engine: SyncEngine;
+		fileSync: WorkspaceFileSync;
+	} {
 		const config = this.store.config();
 		const engine = new SyncEngine({
 			agentDir: this.options.agentDir,
@@ -61,19 +80,32 @@ export class SyncService {
 			onStatus: () => this.emit(),
 			...(this.options.onApplied ? { onApplied: this.options.onApplied } : {}),
 		});
+		let drive: GoogleDriveClient | undefined;
 		if (credentials) {
-			engine.setDrive(
-				new GoogleDriveClient({
-					credentials,
-					saveCredentials: (next) => this.store.saveCredentials(next),
-					...(config.folderId ? { folderId: config.folderId } : {}),
-					...(config.syncId ? { syncId: config.syncId } : {}),
-					folderName: config.folderName,
-					deviceName: config.deviceName,
-				}),
-			);
+			drive = new GoogleDriveClient({
+				credentials,
+				saveCredentials: (next) => this.store.saveCredentials(next),
+				...(config.folderId ? { folderId: config.folderId } : {}),
+				...(config.syncId ? { syncId: config.syncId } : {}),
+				folderName: config.folderName,
+				deviceName: config.deviceName,
+			});
+			engine.setDrive(drive);
 		}
-		return engine;
+		const fileSync = new WorkspaceFileSync({
+			agentDir: this.options.agentDir,
+			dataRoot: this.options.dataRoot,
+			deviceId: config.deviceId,
+			deviceName: config.deviceName,
+			accountKey: this.accountKey(credentials),
+			port: drive ? new GoogleWorkspaceFilePort(drive) : null,
+			workspaceStore: () => WorkspaceStore.create(this.options.agentDir, this.options.dataRoot),
+			onStatus: () => this.emit(),
+			onApplied: (info) =>
+				this.options.onApplied?.({ workspacesChanged: info.workspacesChanged, sessionsChanged: false }),
+			onWorkspaceLocated: (workspaceId) => this.engine.clearPendingBinding(workspaceId),
+		});
+		return { engine, fileSync };
 	}
 
 	status(): SyncStatusSnapshot {
@@ -85,6 +117,7 @@ export class SyncService {
 			phase: this.phase ?? base.phase,
 			lastError: this.phase === "authorizing" ? this.authError : base.lastError,
 			clientConfigured: Boolean(this.store.config().clientId),
+			files: this.fileSync.status(),
 		};
 	}
 
@@ -97,7 +130,9 @@ export class SyncService {
 	}
 
 	async start(): Promise<void> {
-		if (this.store.credentials()) await this.engine.start();
+		if (!this.store.credentials()) return;
+		await this.engine.start();
+		await this.fileSync.start();
 	}
 
 	async updateConfig(patch: {
@@ -117,10 +152,13 @@ export class SyncService {
 		if (next.enabled && !this.store.credentials()) throw new Error("Connect Google Drive first.");
 		this.store.saveConfig(next);
 		await this.engine.updateConfig({ ...next });
+		this.fileSync.updateDeviceName(next.deviceName);
 		if (next.enabled && !next.paused) {
 			await this.engine.start();
+			await this.fileSync.start();
 		} else {
 			await this.engine.stop();
+			await this.fileSync.stop();
 		}
 		this.emit();
 		return this.status();
@@ -194,11 +232,16 @@ export class SyncService {
 		config.paused = false;
 		this.store.saveConfig(config);
 		await this.engine.stop();
-		this.engine = this.buildEngine(credentials);
+		await this.fileSync.stop();
+		const rebuilt = this.build(credentials);
+		this.engine = rebuilt.engine;
+		this.fileSync = rebuilt.fileSync;
 		this.phase = null;
 		this.authError = null;
 		await this.engine.start();
+		await this.fileSync.start();
 		void this.engine.runOnce();
+		void this.fileSync.runOnce();
 		this.emit();
 	}
 
@@ -207,6 +250,7 @@ export class SyncService {
 		this.connecting = false;
 		this.phase = null;
 		await this.engine.stop();
+		await this.fileSync.stop();
 		this.store.clearCredentials();
 		const config = this.store.config();
 		config.accountEmail = undefined;
@@ -218,7 +262,9 @@ export class SyncService {
 		config.paused = false;
 		config.lastError = undefined;
 		this.store.saveConfig(config);
-		this.engine = this.buildEngine(undefined);
+		const rebuilt = this.build(undefined);
+		this.engine = rebuilt.engine;
+		this.fileSync = rebuilt.fileSync;
 		this.phase = null;
 		this.emit();
 		return this.status();
@@ -227,6 +273,7 @@ export class SyncService {
 	async runNow(): Promise<void> {
 		if (!this.store.credentials()) throw new Error("Connect Google Drive first.");
 		await this.engine.runOnce();
+		await this.fileSync.runOnce();
 		this.emit();
 	}
 
@@ -243,13 +290,130 @@ export class SyncService {
 			.runManual(kind)
 			.catch(() => undefined)
 			.finally(() => this.emit());
+		// The file channel has its own queue and progress; a manual run covers it too.
+		void this.fileSync
+			.runOnce()
+			.catch(() => undefined)
+			.finally(() => this.emit());
 		return this.status();
 	}
 
 	async bindWorkspace(workspaceId: string, rootPath: string): Promise<SyncStatusSnapshot> {
 		const result = await this.engine.bindWorkspace(workspaceId, rootPath);
 		if (!result.ok) throw new Error(result.error ?? "Binding the folder failed.");
+		await this.fileSync.bindWorkspace(workspaceId, rootPath);
 		// The binding was written through the engine's own Workspace store: let the running app pick it up now.
+		this.options.onApplied?.({ workspacesChanged: true, sessionsChanged: false });
+		this.emit();
+		return this.status();
+	}
+
+	/** Which sync engine owns a folder, and who already claims it on this device. */
+	detectWorkspaceSource(workspaceId: string): {
+		workspaceId: string;
+		path: string | null;
+		source: WorkspaceFileSource;
+		driveRootId?: string;
+		driveRelativePath?: string;
+		provider?: string;
+		occupant?: { workspaceId: string; name: string; hidden: boolean; chatCount: number };
+	} {
+		const store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		const workspace = store.getById(workspaceId);
+		if (!workspace) return { workspaceId, path: null, source: "none" };
+		const owner = detectFolderOwner(workspace.rootPath, discoverDriveRoots(), this.options.dataRoot);
+		return {
+			workspaceId,
+			path: workspace.rootPath,
+			source: sourceForOwner(owner),
+			...(owner.kind === "drive"
+				? { driveRootId: owner.driveRootId, driveRelativePath: owner.driveRelativePath }
+				: {}),
+			...(owner.kind === "other-cloud" ? { provider: owner.provider } : {}),
+		};
+	}
+
+	async preflightFiles(workspaceId: string): ReturnType<WorkspaceFileSync["preflight"]> {
+		return this.fileSync.preflight(workspaceId);
+	}
+
+	async enableFiles(
+		workspaceId: string,
+		source: WorkspaceFileSource,
+		provided: { confirmed?: boolean; driveRootId?: string; driveRelativePath?: string } = {},
+	): Promise<SyncStatusSnapshot> {
+		let options = provided;
+		if (source === "local") {
+			// Never let two sync engines write the same files: a Drive or other-cloud root stays owned by its client.
+			const detected = this.detectWorkspaceSource(workspaceId);
+			if (detected.source === "drive") {
+				throw new Error(
+					"This folder is inside a Google Drive sync root. Let the Drive client manage it instead of turning MyHarness file sync on.",
+				);
+			}
+			if (detected.provider) {
+				throw new Error(
+					`This folder is inside ${detected.provider}. Turn that client's sync off for it first, or keep it managed there.`,
+				);
+			}
+		}
+		if (source === "drive") {
+			// Where the folder really is on this computer is decided here, never by the browser.
+			const detected = this.detectWorkspaceSource(workspaceId);
+			if (detected.source !== "drive" || !detected.driveRootId || !detected.driveRelativePath) {
+				throw new Error("This folder is not inside a Google Drive sync root on this computer.");
+			}
+			options = {
+				...provided,
+				driveRootId: detected.driveRootId,
+				driveRelativePath: detected.driveRelativePath,
+			};
+		}
+		const result = await this.fileSync.enableWorkspace(workspaceId, source, options);
+		if (!result.ok) throw new Error(result.error ?? "Enabling file sync failed.");
+		this.emit();
+		return this.status();
+	}
+
+	disableFiles(workspaceId: string): SyncStatusSnapshot {
+		const result = this.fileSync.disableWorkspace(workspaceId);
+		if (!result.ok) throw new Error(result.error ?? "Turning file sync off failed.");
+		this.emit();
+		return this.status();
+	}
+
+	async resolveFileConflict(
+		workspaceId: string,
+		conflictId: string,
+		choice: ConflictChoice,
+	): Promise<SyncStatusSnapshot> {
+		const result = await this.fileSync.resolveConflict(workspaceId, conflictId, choice);
+		if (!result.ok) throw new Error(result.error ?? "Resolving the conflict failed.");
+		this.emit();
+		return this.status();
+	}
+
+	async confirmFileDeletes(workspaceId: string): Promise<SyncStatusSnapshot> {
+		const result = await this.fileSync.confirmBulkDeletes(workspaceId);
+		if (!result.ok) throw new Error(result.error ?? "Confirming the deletions failed.");
+		this.emit();
+		return this.status();
+	}
+
+	occupancyFor(workspaceId: string, rootPath: string): ReturnType<typeof findWorkspaceOccupancy> {
+		const store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		const current = store.getById(workspaceId);
+		if (current?.rootPath && pathIdentityKey(current.rootPath) === pathIdentityKey(rootPath)) return undefined;
+		return findWorkspaceOccupancy(store, this.options.dataRoot, rootPath);
+	}
+
+	/** Move a hidden Workspace off a folder. Only runs with the explicit confirmation the dialog collected. */
+	releaseOccupant(workspaceId: string, confirmed: boolean): SyncStatusSnapshot {
+		if (!confirmed) throw new Error("Releasing the folder needs an explicit confirmation.");
+		const store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		const result = releaseWorkspaceRoot(store, this.options.dataRoot, workspaceId);
+		if (!result.ok) throw new Error(result.error ?? "Releasing the folder failed.");
+		this.engine.clearPendingBinding(workspaceId);
 		this.options.onApplied?.({ workspacesChanged: true, sessionsChanged: false });
 		this.emit();
 		return this.status();
@@ -259,6 +423,7 @@ export class SyncService {
 		if (this.disposed) return;
 		this.disposed = true;
 		await this.engine.dispose();
+		await this.fileSync.dispose();
 	}
 
 	/** Test hook: replace the engine's transport with an in-memory implementation. */

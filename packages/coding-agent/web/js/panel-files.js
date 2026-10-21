@@ -116,7 +116,11 @@ export function FilesPanel({ embedded = false } = {}) {
 			}
 		};
 		window.addEventListener("myharness:git-changed", onGitChanged);
-		return () => window.removeEventListener("myharness:git-changed", onGitChanged);
+		window.addEventListener("myharness:sync-applied", onGitChanged);
+		return () => {
+			window.removeEventListener("myharness:git-changed", onGitChanged);
+			window.removeEventListener("myharness:sync-applied", onGitChanged);
+		};
 	}, [expanded, viewing, cwd, slot]);
 	useEffect(() => {
 		if (!query.trim()) {

@@ -85,4 +85,107 @@ export function registerSyncRoutes(server: WebHttpServer, sync: SyncService): vo
 			throw new HttpError(400, error instanceof Error ? error.message : String(error));
 		}
 	});
+
+	// Workspace file channel: which engine owns a folder, what a first upload would send, and the conflict and
+	// deletion decisions. The background engine still does all scheduling; these routes only answer a question or
+	// apply one explicit choice.
+	server.route("POST", "/api/sync/workspace-source", ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		return { source: sync.detectWorkspaceSource(workspaceId) };
+	});
+
+	server.route("POST", "/api/sync/files/preflight", async ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		return { preflight: await sync.preflightFiles(workspaceId) };
+	});
+
+	server.route("POST", "/api/sync/files/enable", async ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		const source = optionalString(input.source, "source", 16)?.trim();
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		if (source !== "local" && source !== "drive" && source !== "none") {
+			throw new HttpError(400, "source must be local, drive or none");
+		}
+		const confirmed = optionalBoolean(input.confirmed, "confirmed") === true;
+		const driveRootId = optionalString(input.driveRootId, "driveRootId", 200)?.trim();
+		const driveRelativePath = optionalString(input.driveRelativePath, "driveRelativePath", 4096)?.trim();
+		if (source === "local" && !confirmed) {
+			throw new HttpError(400, "The first upload needs an explicit confirmation.");
+		}
+		try {
+			return {
+				status: await sync.enableFiles(workspaceId, source, {
+					...{ confirmed },
+					...(driveRootId ? { driveRootId } : {}),
+					...(driveRelativePath ? { driveRelativePath } : {}),
+				}),
+			};
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
+	});
+
+	server.route("POST", "/api/sync/files/disable", ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		try {
+			return { status: sync.disableFiles(workspaceId) };
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
+	});
+
+	server.route("POST", "/api/sync/files/resolve", async ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		const conflictId = optionalString(input.conflictId, "conflictId", 200)?.trim();
+		const choice = optionalString(input.choice, "choice", 20)?.trim();
+		if (!workspaceId || !conflictId) throw new HttpError(400, "workspaceId and conflictId are required");
+		if (choice !== "keep-local" && choice !== "take-remote" && choice !== "keep-both") {
+			throw new HttpError(400, "choice must be keep-local, take-remote or keep-both");
+		}
+		try {
+			return { status: await sync.resolveFileConflict(workspaceId, conflictId, choice) };
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
+	});
+
+	server.route("POST", "/api/sync/files/confirm-deletes", async ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		try {
+			return { status: await sync.confirmFileDeletes(workspaceId) };
+		} catch (error) {
+			throw new HttpError(400, error instanceof Error ? error.message : String(error));
+		}
+	});
+
+	server.route("POST", "/api/sync/occupancy", ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		const rootPath = optionalString(input.rootPath, "rootPath", 4096)?.trim();
+		if (!workspaceId || !rootPath) throw new HttpError(400, "workspaceId and rootPath are required");
+		return { occupancy: sync.occupancyFor(workspaceId, rootPath) ?? null };
+	});
+
+	server.route("POST", "/api/sync/release-occupant", ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		const confirmed = optionalBoolean(input.confirmed, "confirmed") === true;
+		if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+		if (!confirmed) throw new HttpError(400, "Releasing the folder needs an explicit confirmation.");
+		try {
+			return { status: sync.releaseOccupant(workspaceId, confirmed) };
+		} catch (error) {
+			throw new HttpError(409, error instanceof Error ? error.message : String(error));
+		}
+	});
 }
