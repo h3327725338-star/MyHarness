@@ -72,17 +72,19 @@ describe("concurrent commits of one repository", () => {
 		mkdirSync(join(root, ".git", "hooks"), { recursive: true });
 		for (const name of names) writeFileSync(join(root, name), "changed\n");
 
-		const make = () =>
+		// The full commit describes faster, so it always takes the lock first and the partial one then finds nothing
+		// left to save. Equal delays let either commit win, which makes the outcome depend on scheduling.
+		const make = (delayMs: number) =>
 			new GitCommitUseCase({
 				updatePhase: () => {},
 				generateMessage: async () => {
-					await new Promise((resolve) => setTimeout(resolve, 20));
+					await new Promise((resolve) => setTimeout(resolve, delayMs));
 					return { full: "msg" } as never;
 				},
 			});
 		const [all, some] = await Promise.all([
-			make().execute({ repositoryRoot: root }),
-			make().execute({ repositoryRoot: root, only: ["a.txt"] }),
+			make(20).execute({ repositoryRoot: root }),
+			make(400).execute({ repositoryRoot: root, only: ["a.txt"] }),
 		]);
 		const statuses = [all.status, some.status].sort();
 		expect(statuses).toEqual(["committed", "no-changes"]);
