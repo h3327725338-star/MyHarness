@@ -26,6 +26,27 @@ describe("WorkspaceStore", () => {
 		return dir;
 	}
 
+	it("reload picks up a folder bound through another store instance instead of saving its old copy over it", () => {
+		const agentDir = createTempDir("myharness-reload-agent");
+		const dataRoot = createTempDir("myharness-reload-data");
+		const placeholder = createTempDir("myharness-reload-placeholder");
+		const chosen = createTempDir("myharness-reload-chosen");
+		const unsaved = createTempDir("myharness-reload-unsaved");
+		const longLived = WorkspaceStore.create(agentDir, dataRoot);
+		const workspace = longLived.add(placeholder).workspace!;
+		const pending = longLived.add(unsaved, process.cwd(), false).workspace!;
+		// Google Drive sync binds the real folder through its own store.
+		expect(WorkspaceStore.create(agentDir, dataRoot).bindRoot(workspace.workspaceId, chosen).ok).toBe(true);
+		expect(longLived.getById(workspace.workspaceId)!.rootPath).toBe(placeholder);
+		expect(longLived.reload()).toBe(true);
+		expect(longLived.getById(workspace.workspaceId)!.rootPath).toBe(chosen);
+		// A Workspace this instance has not persisted yet survives the reload.
+		expect(longLived.getById(pending.workspaceId)).toBeTruthy();
+		// The next save of the long-lived store keeps the binding.
+		expect(longLived.rename(workspace.workspaceId, "Renamed")).toBe(true);
+		expect(WorkspaceStore.create(agentDir, dataRoot).getById(workspace.workspaceId)!.rootPath).toBe(chosen);
+	});
+
 	it("persists a display alias without changing identity or any directory", () => {
 		const agentDir = createTempDir("myharness-alias-agent");
 		const dataRoot = createTempDir("myharness-alias-data");

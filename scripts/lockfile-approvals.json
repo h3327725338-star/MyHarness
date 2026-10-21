@@ -28,6 +28,7 @@
 		"@testing-library/dom@10.4.1",
 		"@testing-library/react@16.3.2",
 		"@types/aria-query@5.0.4",
+		"@types/node@24.19.2",
 		"@types/react-dom@19.2.4",
 		"@types/react@19.2.18",
 		"@vitest/expect@4.1.9",
@@ -48,6 +49,7 @@
 		"decimal.js@10.6.0",
 		"dequal@2.0.3",
 		"dom-accessibility-api@0.5.16",
+		"electron@44.8.0",
 		"entities@8.0.0",
 		"es-module-lexer@2.3.1",
 		"html-encoding-sniffer@6.0.0",
@@ -76,6 +78,7 @@
 		"tr46@6.0.0",
 		"tr46@6.0.0",
 		"undici@8.10.0",
+		"undici-types@7.24.6",
 		"vitest@4.1.9",
 		"w3c-xmlserializer@5.0.0",
 		"webidl-conversions@8.0.1",
@@ -126,9 +129,11 @@
 		"semver@7.8.5"
 	],
 	"added": [
+		"@types/node@24.19.2",
 		"boolbase@1.0.0",
 		"cbor@10.0.12",
 		"chai@6.2.2",
+		"electron@45.0.0",
 		"css-select@5.2.2",
 		"css-what@6.2.2",
 		"dom-serializer@2.0.0",
@@ -140,7 +145,8 @@
 		"node-html-markdown@2.0.0",
 		"node-html-parser@6.1.13",
 		"nth-check@2.1.1",
-		"nofilter@3.1.0"
+		"nofilter@3.1.0",
+		"undici-types@7.24.6"
 	],
 	"changed": [
 		"@babel/helper-string-parser 7.27.1 -> 7.29.7",

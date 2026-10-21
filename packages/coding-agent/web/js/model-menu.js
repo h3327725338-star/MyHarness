@@ -215,11 +215,12 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
  * The model of a helper-model setting, with its effort next to it. `value` is { provider, model, thinkingLevel };
  * choosing "Use the main model" clears all three, so the model and its effort are both inherited.
  */
-export function ModelRefPicker({ models, value, onChange, disabled, label, showId = false }) {
+export function ModelRefPicker({ models, value, onChange, disabled, label }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const v = value || {};
-	const text = showId && v.model ? v.model : modelRefName(models, v);
+	// The same name the composer's model chip shows (a renamed model reads the same everywhere); the ID is the tooltip.
+	const text = modelRefName(models, v);
 	const title = v.model || text;
 	const levels = modelEfforts(findModel(models, v.provider, v.model));
 	return html`<span class="model-ref">

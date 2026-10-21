@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('myHarnessDesktop', Object.freeze({
+  // Engine versions of this host, shown in the built-in browser so the user can tell which Chromium it runs.
+  versions: Object.freeze({ chrome: process.versions.chrome, electron: process.versions.electron }),
   // Structured bridge for the workspace: browser tabs, navigation, snapshots, page scripts, accessibility and files.
   browser: (command) => ipcRenderer.invoke('desktop:browser', command),
   // Commands the host process asks the page to run on its workspace tabs (open/close/activate/media), and the answer

@@ -42,11 +42,13 @@ MyHarness/
 - `credentials.json`：OAuth 令牌，0600 原子写；
 - `backups/`、`recovered/`：覆盖前的本机版本与未应用的另一版，按 key 保留最近 20 份。
 
+- `state-*.json` 的 `publishing`：正在发布的批次日志（先写日志、再写云端清单、再本地提交），中断后下次启动先查云端有没有这个清单，有就直接提交、没有就丢弃重发，不会重复发布。
+
 “待上传队列”就是“磁盘现状与已提交状态的差”：批次成功写入云端后才推进 `entities`/`tombstones`，崩溃后重新扫描会重建同一批操作，重复投递因内容哈希与版本向量而幂等。批次按 500 条操作切分发布（接收端上限 5000）；同一设备自己发布的批次到达时只记为已处理、不再重放，避免与本机状态打架。
 
 ### 对外接口
 
-`service.ts` 的 `SyncService` 是 Web 层唯一入口：`status()`、`updateConfig()`、`connect()`、`disconnect()`、`runNow()`、`bindWorkspace()`、`start()`、`dispose()`。同步引擎本身可由测试直接构造：`new SyncEngine({ agentDir, dataRoot, deviceId, deviceName, store, accountKey })` 后 `setDrive()` + `runOnce()`。
+`service.ts` 的 `SyncService` 是 Web 层唯一入口：`status()`、`updateConfig()`、`connect()`、`disconnect()`、`runNow()`、`startManual("download" | "sync")`、`bindWorkspace()`、`start()`、`dispose()`。手动“立即下载 / 立即同步”由引擎的 `runManual()` 执行：等当前一轮结束后再跑，下载会反复列出批次直到没有新的，进度在状态的 `manual` 里；暂停时拒绝。同步引擎本身可由测试直接构造：`new SyncEngine({ agentDir, dataRoot, deviceId, deviceName, store, accountKey })` 后 `setDrive()` + `runOnce()`。
 
 ### 依赖
 
@@ -65,4 +67,5 @@ MyHarness/
 - 工作区恢复只创建受管理占位目录并标记待绑定；不得因为远端记录里的绝对路径在本机存在就自动写进去。扫描以工作区注册表为准：被用户从所有列表移除的工作区不再上传，重新加入后才继续同步。
 - OAuth 使用 `drive.file`（只能访问应用创建/用户明确交给应用的文件），不要升级为全盘权限；令牌只落本机 0600 文件，不能进入日志、聊天或同步内容。
 - 账号切换按账号隔离协议状态；切换账号时清空 folder/sync 指针并要求重新连接。
-- 相关测试：`test/google-drive-sync.test.ts`（假 Drive、双设备恢复、分支合并、删除不复活、并发冲突保留、草稿与指令、缺对象延期、批次不重放、大变更集分批、自身批次忽略、非法身份拒绝、损坏批次与缺失对象上报、归档标记、移除工作区不再发布）。
+- 一轮里下载失败不能挡住上传：`executePass` 先下载，失败也照常上传，再报告下载错误。应用远端内容时遇到磁盘满、文件占用、无权限（`LOCAL_ENVIRONMENT_CODES`）要停下并让批次留在待下载，不能记成 `apply-failed` 后标记已应用。
+- 相关测试：`test/google-drive-sync-resume.test.ts`（中断续传、发布日志、离线计数、下载失败不挡上传、磁盘满、手动按钮）与 `test/google-drive-sync.test.ts`（假 Drive、双设备恢复、分支合并、删除不复活、并发冲突保留、草稿与指令、缺对象延期、批次不重放、大变更集分批、自身批次忽略、非法身份拒绝、损坏批次与缺失对象上报、归档标记、移除工作区不再发布）。

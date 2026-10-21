@@ -35,6 +35,9 @@
 			"!**/models.generated.ts",
 			"!**/*.models.ts",
 			"!packages/mom/data/**/*",
+			"!data/**/*",
+			"!.artifacts/**/*",
+			"!test-artifacts/**/*",
 			"!!**/node_modules"
 		]
 	}

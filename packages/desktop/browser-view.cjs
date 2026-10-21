@@ -1,9 +1,26 @@
-const { WebContentsView, session, Menu, shell, app } = require('electron');
+const { WebContentsView, session, Menu, shell, app, ipcMain, safeStorage } = require('electron');
+// Absolute paths: the tests compile this file outside the normal module loader, where a relative require would not
+// resolve against this folder.
+const { createBookmarkStore } = require(require('node:path').join(__dirname, 'browser-bookmarks.cjs'));
+const { createPasswordStore, attachPasswordManager } = require(require('node:path').join(__dirname, 'browser-passwords.cjs'));
 
 exports.httpUrl = (value) => {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('只允许 http 或 https 网页地址');
   return url.href;
+};
+
+/**
+ * The user agent of a current desktop Chrome on this platform, built from Electron's own. Electron adds `Electron/x` and
+ * the app's `<name>/<version>` tokens, and sites such as WhatsApp Web ("works with Google Chrome 100+") and Microsoft
+ * Teams (blank page: it serves its Electron desktop client) sniff those tokens. Chrome itself reports only the major
+ * version (`Chrome/152.0.0.0`), so the result matches what Chrome sends; the engine version stays the real one.
+ */
+exports.chromeUserAgent = (fallback, chromeVersion) => {
+  const major = String(chromeVersion || '').split('.')[0];
+  const platform = /\(([^)]*)\)/.exec(String(fallback || ''))?.[1] || 'Windows NT 10.0; Win64; x64';
+  if (!/^\d+$/.test(major)) return String(fallback || '');
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 };
 
 // One persistent partition for every tab: pages keep cookies, localStorage and logins across restarts and across the
@@ -14,6 +31,8 @@ const DEFAULT_TAB = 'main';
 // Agent-driven file uploads may only pick files inside the current workspace and only up to this size. The page's own
 // file picker is the normal path; this limit is for the programmatic `upload` command and never exposes other files.
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+// A bookmark keeps its site icon inline; a bigger icon falls back to the bookmark's first letter.
+const MAX_ICON_BYTES = 64 * 1024;
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -71,6 +90,25 @@ exports.createBrowser = (window, log, options = {}) => {
   };
   const emit = (tabId, value) => send({ tabId, ...value });
   const partition = session.fromPartition(PARTITION);
+  // Bookmarks and saved logins belong to this desktop profile (`options.profileDir`, the host's user-data folder),
+  // never to the Data root: they are not synced and not part of any workspace. A host without a profile has neither.
+  const profileDir = options.profileDir ? require('node:path').resolve(options.profileDir) : undefined;
+  const bookmarks = profileDir ? createBookmarkStore(require('node:path').join(profileDir, 'browser-bookmarks.json')) : undefined;
+  const passwords = profileDir && safeStorage
+    ? createPasswordStore({
+      file: require('node:path').join(profileDir, 'browser-logins.bin.json'),
+      crypto: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (text) => safeStorage.encryptString(text),
+        decrypt: (buffer) => safeStorage.decryptString(buffer),
+      },
+    })
+    : undefined;
+  const requireBookmarks = () => { if (!bookmarks) throw new Error('当前桌面宿主不支持书签'); return bookmarks; };
+  const requirePasswords = () => { if (!passwords) throw new Error('当前桌面宿主不支持保存密码'); return passwords; };
+  const bookmarksChanged = (list) => { send({ type: 'bookmarks', bookmarks: list }); return list; };
+  // Every tab (and every popup, which becomes a tab) shares the partition, so its user agent is set once here.
+  if (typeof partition.setUserAgent === 'function') partition.setUserAgent(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
   const settlePermission = (requestId, allow, options = {}) => {
     const entry = pendingPermissions.get(requestId);
     if (!entry) throw new Error(`没有待处理的网站权限请求 ${requestId}`);
@@ -165,6 +203,37 @@ exports.createBrowser = (window, log, options = {}) => {
   const tabFor = (webContents) => {
     for (const tab of tabs.values()) if (tab.view && !tab.view.webContents.isDestroyed() && tab.view.webContents === webContents) return tab;
     return undefined;
+  };
+  const passwordManager = passwords && ipcMain
+    ? attachPasswordManager({ ipcMain, store: passwords, tabFor: (contents) => tabFor(contents), emit, log })
+    : undefined;
+
+  /** The current site icon of a tab as a small data URL, or undefined (the bar then shows the first letter). */
+  const fetchIcon = async (tab) => {
+    if (!tab || typeof partition.fetch !== 'function') return undefined;
+    // Chromium reports the icon only for a page it has painted; otherwise the page's own <link rel=icon> or the
+    // site's /favicon.ico is used.
+    let source = tab.favicon;
+    if (!source) {
+      try {
+        source = await contentsOf(tab).executeJavaScript(`(() => { const link = document.querySelector('link[rel~="icon" i]'); return link ? link.href : new URL('/favicon.ico', location.href).href; })()`, true);
+      } catch {
+        return undefined;
+      }
+    }
+    try {
+      const url = new URL(source);
+      if (!['http:', 'https:', 'data:'].includes(url.protocol)) return undefined;
+      if (url.protocol === 'data:') return source.length <= MAX_ICON_BYTES * 2 ? source : undefined;
+      const response = await partition.fetch(url.href, { signal: AbortSignal.timeout(4000) });
+      const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!response.ok || !type.startsWith('image/')) return undefined;
+      const body = Buffer.from(await response.arrayBuffer());
+      if (!body.length || body.length > MAX_ICON_BYTES) return undefined;
+      return `data:${type === 'image/x-icon' ? 'image/x-icon' : type};base64,${body.toString('base64')}`;
+    } catch {
+      return undefined;
+    }
   };
 
   const tabByContents = (webContentsId) => {
@@ -315,7 +384,13 @@ exports.createBrowser = (window, log, options = {}) => {
       commit(tab, { loading: false });
       later(tab, () => void picture(tab), 300);
     });
-    contents.on('did-navigate', (_event, target) => { if (live()) commit(tab, { url: target, error: '' }); });
+    contents.on('did-navigate', (_event, target) => {
+      if (!live()) return;
+      passwordManager?.navigated(tab);
+      tab.favicon = undefined;
+      commit(tab, { url: target, error: '' });
+    });
+    contents.on('page-favicon-updated', (_event, favicons) => { if (live()) tab.favicon = Array.isArray(favicons) ? favicons[0] : undefined; });
     contents.on('did-navigate-in-page', (_event, target) => { if (live()) commit(tab, { url: target }); });
     contents.on('page-title-updated', (_event, title) => { if (live()) commit(tab, { title }); });
     contents.on('did-fail-load', (_event, code, description, target, isMainFrame) => {
@@ -328,7 +403,15 @@ exports.createBrowser = (window, log, options = {}) => {
     // so those shortcuts do the same thing whether the keyboard is in the panel or in the page.
     contents.on('before-input-event', (event, input) => {
       const key = String(input.key || '').toLowerCase();
-      if (input.type !== 'keyDown' || !input.control || input.alt || input.shift) return;
+      if (input.type !== 'keyDown' || !input.control || input.alt) return;
+      if (input.shift) {
+        // Ctrl+Shift+B shows or hides the workspace's bookmarks bar, as in Chrome.
+        if (key === 'b') {
+          event.preventDefault();
+          if (live()) emit(tab.id, { type: 'shortcut', shortcut: 'bookmarks-bar' });
+        }
+        return;
+      }
       if (key === 'f') {
         event.preventDefault();
         if (live()) emit(tab.id, { type: 'find-open' });
@@ -371,7 +454,9 @@ exports.createBrowser = (window, log, options = {}) => {
   const createTab = (initialUrl, forcedId) => {
     if (tabs.size >= MAX_TABS) throw new Error(`最多同时打开 ${MAX_TABS} 个浏览器标签`);
     const id = forcedId && !tabs.has(forcedId) ? String(forcedId) : `tab${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    // The sign-in helper runs in the page's isolated world and only when saved logins are available on this host.
+    const preload = passwordManager ? require('node:path').join(__dirname, 'browser-tab-preload.cjs') : undefined;
+    const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, ...(preload ? { preload } : {}) } });
     const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
     tabs.set(id, tab);
     window.contentView.addChildView(view);
@@ -407,6 +492,7 @@ exports.createBrowser = (window, log, options = {}) => {
     }
     tab.findPending.clear();
     tabs.delete(tab.id);
+    passwordManager?.forget(tab);
     if (activeTabId === tab.id) { activeTabId = null; rectangle = null; }
     for (let index = networkLog.length - 1; index >= 0; index--) if (networkLog[index].tabId === tab.id) networkLog.splice(index, 1);
     for (let index = downloadLog.length - 1; index >= 0; index--) if (downloadLog[index].tabId === tab.id && downloadLog[index].state !== 'completed') downloadLog.splice(index, 1);
@@ -826,6 +912,26 @@ exports.createBrowser = (window, log, options = {}) => {
       }
       case 'external':
         return shell.openExternal(exports.httpUrl(value.url));
+      case 'bookmarks':
+        return { bookmarks: requireBookmarks().list() };
+      case 'bookmark-add': {
+        const store = requireBookmarks();
+        const tab = value.tabId ? tabs.get(value.tabId) : undefined;
+        const icon = tab && tab.url && safeOrigin(tab.url) === safeOrigin(value.url) ? await fetchIcon(tab) : undefined;
+        return { bookmarks: bookmarksChanged(store.add({ url: value.url, title: value.title, icon })) };
+      }
+      case 'bookmark-update':
+        return { bookmarks: bookmarksChanged(requireBookmarks().update(String(value.id || ''), { url: value.url, title: value.title })) };
+      case 'bookmark-remove':
+        return { bookmarks: bookmarksChanged(requireBookmarks().remove(String(value.id || ''))) };
+      case 'passwords': {
+        // Site and user name only: a saved password never leaves the host towards the workspace page.
+        const store = requirePasswords();
+        const origin = value.origin ? safeOrigin(value.origin) : '';
+        return { available: store.available(), logins: store.list(origin || undefined) };
+      }
+      case 'password-remove':
+        return requirePasswords().remove(String(value.id || ''));
       default:
         throw new Error(`未知的浏览器命令：${action}`);
     }

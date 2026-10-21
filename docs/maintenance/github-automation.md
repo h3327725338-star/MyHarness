@@ -15,6 +15,10 @@
 | `approve-contributor.yml` | `ubuntu-latest` | 贡献者审批相关自动化 |
 | `remove-inprogress-on-close.yml` | `ubuntu-latest` | Issue 关闭后的 label 清理 |
 
+`.github/dependabot.yml` 不是 workflow：它每天检查 `electron` 的新版本，有新版时开一个 PR 把
+`packages/desktop/package.json` 的精确版本和 lockfile 升到最新，CI 照常在该 PR 上运行。只覆盖
+`electron`（桌面宿主和内置浏览器的 Chromium 内核），其他依赖仍按精确版本人工升级。
+
 表中的辅助 workflow 是现有发布、审计和协作自动化，不是本轮新增的 Linux/macOS
 产品 CI。正式 CI 只由 `ci.yml` 的两个固定 Windows x64 runner 构成；如果修改
 runner 或命令，必须同时更新 YAML、相关脚本和本说明。

@@ -7,6 +7,7 @@ import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
 import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
+import { BookmarkEditor, BookmarksBar, rememberBookmarksBar, savedBookmarksBar } from "./browser-bookmarks.js";
 import { t } from "./i18n.js";
 
 function navIcon(Icon, name, label, disabled, onClick) {
@@ -24,6 +25,8 @@ export function BrowserPanel({ tabId, url }) {
 	const [address, setAddress] = useState(url || "");
 	// The search engine belongs to this browser, not to the conversation: the choice is kept in the page's storage.
 	const [engine, setEngine] = useState(() => savedSearchEngine(window.localStorage).id);
+	// The engine this desktop host runs (the page cannot read it from its own user agent, which is Chrome's on purpose).
+	const engineVersion = host?.versions?.chrome ? t("Browser engine: Chromium {chrome} · Electron {electron}", { chrome: host.versions.chrome, electron: host.versions.electron || "?" }) : "";
 	const engineLabel = SEARCH_ENGINES.find((item) => item.id === engine)?.label || SEARCH_ENGINES[0].label;
 	// A new tab has no page in the desktop host until something is opened in it; until then the panel shows its own
 	// placeholder, which keeps the themed surface instead of an empty native view painted over it.
@@ -37,6 +40,13 @@ export function BrowserPanel({ tabId, url }) {
 	const [permissionAsk, setPermissionAsk] = useState(null);
 	const [permissionOpen, setPermissionOpen] = useState(false);
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
+	// Bookmarks are shared by every website tab and kept by the desktop host; the bar's visibility is a page preference.
+	const [bookmarks, setBookmarks] = useState([]);
+	const [barVisible, setBarVisible] = useState(() => savedBookmarksBar(window.localStorage));
+	const [bookmarkDraft, setBookmarkDraft] = useState(null);
+	// Saved sign-ins: site and user name only (the host never hands a password to this page).
+	const [logins, setLogins] = useState({ available: true, logins: [] });
+	const [allLogins, setAllLogins] = useState(false);
 	// The bubble and the shield that opened it: a click on either one is not "somewhere else".
 	const permissionCard = useRef(null);
 	const permissionButton = useRef(null);
@@ -48,6 +58,55 @@ export function BrowserPanel({ tabId, url }) {
 		}
 	})();
 	const siteDecisions = siteOrigin ? permissionList.permissions.filter((entry) => entry.origin === siteOrigin) : [];
+	const pageBookmark = status.url ? bookmarks.find((item) => item.url === status.url) : undefined;
+	const shownLogins = allLogins ? logins.logins : logins.logins.filter((entry) => entry.origin === siteOrigin);
+	const loadLogins = async () => {
+		try {
+			const value = await send({ action: "passwords" });
+			setLogins({ available: value?.available !== false, logins: value?.logins || [] });
+		} catch {
+			setLogins({ available: false, logins: [] });
+		}
+	};
+	const removeLogin = async (id) => {
+		try {
+			await send({ action: "password-remove", id });
+			await loadLogins();
+		} catch (error) {
+			setStatus((current) => ({ ...current, error: error.message }));
+		}
+	};
+	const toggleBar = () => {
+		setBarVisible((current) => {
+			rememberBookmarksBar(window.localStorage, !current);
+			return !current;
+		});
+	};
+	const editBookmark = (bookmark) => {
+		setPermissionOpen(false);
+		setBookmarkDraft(bookmark ? { ...bookmark } : { title: status.title || "", url: status.url || "" });
+	};
+	const saveBookmark = async ({ title, url: target }) => {
+		try {
+			const value = bookmarkDraft?.id
+				? await send({ action: "bookmark-update", id: bookmarkDraft.id, title, url: target })
+				: await send({ action: "bookmark-add", title, url: target });
+			setBookmarks(value?.bookmarks || []);
+			setBookmarkDraft(null);
+		} catch (error) {
+			setNotice(error.message);
+		}
+	};
+	const removeBookmark = async () => {
+		if (!bookmarkDraft?.id) return;
+		try {
+			const value = await send({ action: "bookmark-remove", id: bookmarkDraft.id });
+			setBookmarks(value?.bookmarks || []);
+			setBookmarkDraft(null);
+		} catch (error) {
+			setNotice(error.message);
+		}
+	};
 	const loadPermissions = async () => {
 		try {
 			const value = await send({ action: "permissions", tabId });
@@ -90,8 +149,9 @@ export function BrowserPanel({ tabId, url }) {
 			setPermissionOpen(false);
 			return;
 		}
+		setBookmarkDraft(null);
 		setPermissionOpen(true);
-		await loadPermissions();
+		await Promise.all([loadPermissions(), loadLogins()]);
 	};
 	const send = async (command) => {
 		if (!host?.browser) throw new Error(t("The built-in browser is available in the desktop app only."));
@@ -126,10 +186,18 @@ export function BrowserPanel({ tabId, url }) {
 	useEffect(() => {
 		if (!active || !open) return undefined;
 		const onKey = (event) => {
-			if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+			if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
 			// A dialog owns the keyboard, so these browser shortcuts do not reach a page nobody can see.
 			if (document.querySelector("[aria-modal='true']")) return;
 			const key = event.key.toLowerCase();
+			if (event.shiftKey) {
+				// Ctrl+Shift+B shows or hides the bookmarks bar, as in Chrome.
+				if (key === "b") {
+					event.preventDefault();
+					toggleBar();
+				}
+				return;
+			}
 			if (key === "f") {
 				event.preventDefault();
 				if (hasView) setFindOpen(true);
@@ -178,9 +246,20 @@ export function BrowserPanel({ tabId, url }) {
 		const timer = setTimeout(() => void search(false), 180);
 		return () => clearTimeout(timer);
 	}, [findText, findOpen]);
+	// Bookmarks are read once per mount and follow every change the host reports (another tab, the editor).
+	useEffect(() => {
+		if (!host?.browser) return;
+		send({ action: "bookmarks" })
+			.then((value) => setBookmarks(value?.bookmarks || []))
+			.catch(() => setBookmarks([]));
+	}, [host]);
 	useEffect(() => {
 		if (!host?.browser) return undefined;
 		return host.onStatus((value) => {
+			if (value?.type === "bookmarks" && Array.isArray(value.bookmarks)) {
+				setBookmarks(value.bookmarks);
+				return;
+			}
 			if (!value || value.tabId !== tabId) return;
 			if (value.type === "state") {
 				setStatus(value.state);
@@ -197,9 +276,22 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "shortcut") {
-				// Ctrl+T / Ctrl+W pressed while the page itself had the keyboard.
+				// Ctrl+T / Ctrl+W / Ctrl+Shift+B pressed while the page itself had the keyboard.
 				if (value.shortcut === "new-tab") actions.openBrowserTab();
 				else if (value.shortcut === "close-tab") actions.closeWorkspaceTab(tabId);
+				else if (value.shortcut === "bookmarks-bar") toggleBar();
+				return;
+			}
+			if (value.type === "credential-saved") {
+				setNotice(
+					value.updated
+						? t("Updated the saved password of {username} on {origin}.", { username: value.username, origin: value.origin })
+						: t("Saved the sign-in of {username} on {origin}. It is filled in next time.", { username: value.username, origin: value.origin }),
+				);
+				return;
+			}
+			if (value.type === "credential-error") {
+				setNotice(t("The sign-in for {origin} was not saved: {error}", { origin: value.origin, error: value.error }));
 				return;
 			}
 			if (value.type === "find") {
@@ -320,6 +412,31 @@ export function BrowserPanel({ tabId, url }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
+	/** A bookmark opens in this tab (a tab without a page gets its first one), or in a new tab on a middle click. */
+	const openBookmark = async (target, newTab) => {
+		if (newTab) {
+			actions.openWorkspace({ type: "browser", url: target });
+			return;
+		}
+		setNotice("");
+		setSnapshot(null);
+		setAddress(target);
+		try {
+			if (!hasView) {
+				await openFirstPage(target);
+				return;
+			}
+			const state = await send({ action: "navigate", url: target });
+			if (state?.url) {
+				setAddress(state.url);
+				mountedUrl.current = state.url;
+				actions.updateWorkspaceTabUrl(tabId, state.url);
+			}
+			setStatus((current) => ({ ...current, ...state, error: "" }));
+		} catch (error) {
+			setStatus((current) => ({ ...current, error: error.message }));
+		}
+	};
 	const act = async (action) => {
 		// A tab that has not opened anything yet has no history, nothing to reload and nothing to stop.
 		if (!hasView) return;
@@ -343,11 +460,15 @@ export function BrowserPanel({ tabId, url }) {
 			<form class="row grow ws-address" onSubmit=${navigate}><input class="field grow ws-address-input" aria-label=${t("Address and search bar")} value=${address} onInput=${(e) => setAddress(e.target.value)} onKeyDown=${(event) => { if (event.key === "Enter") { event.preventDefault(); void navigate(); } }} placeholder=${t("Search {engine} or enter an address", { engine: engineLabel })} /><${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-address-engine ${expanded ? "active" : ""}`} title=${t("Search engine: {engine}", { engine: engineLabel })} aria-label=${t("Search engine")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="chevronDown" size=${12} /></button>`}>
 				${(close) => SEARCH_ENGINES.map((item) => html`<${MenuItem} key=${item.id} label=${item.label} active=${item.id === engine} onClick=${() => { close(); chooseEngine(item.id); }} />`)}
 			</${Menu}></form>
+			<button class=${`icon-btn sm ws-star ${pageBookmark ? "on" : ""}`} title=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-label=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-pressed=${!!pageBookmark} disabled=${!status.url} onClick=${() => (bookmarkDraft ? setBookmarkDraft(null) : editBookmark(pageBookmark))}><${Icon} name="star" size=${15} /></button>
 			<button class="icon-btn sm" title=${t("Find in page")} aria-label=${t("Find in page")} aria-pressed=${findOpen} disabled=${!hasView} onClick=${() => (findOpen ? closeFind() : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
+			<button class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-pressed=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 		</div>
+		${barVisible ? html`<${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} />` : null}
+		${bookmarkDraft ? html`<${BookmarkEditor} key=${bookmarkDraft.id || "new"} draft=${bookmarkDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} />` : null}
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
 				onInput=${(e) => { setFindText(e.target.value); if (!e.target.value) { setFound({ activeMatch: 0, matches: 0 }); send({ action: "stopFind" }).catch(() => undefined); } }}
@@ -382,11 +503,25 @@ export function BrowserPanel({ tabId, url }) {
 					<button class="btn sm" onClick=${() => revokePermission(entry.permission)}>${t("Revoke")}</button>
 				</div>`)
 				: html`<div class="dim ws-permissions-note">${t("No permission decisions for this site yet.")}</div>`}
+			<div class="row ws-permissions-head ws-logins-head">
+				<strong class="grow truncate">${t("Saved passwords")}</strong>
+				${logins.logins.length ? html`<button class="btn sm" aria-pressed=${allLogins} onClick=${() => setAllLogins(!allLogins)}>${allLogins ? t("This site") : t("All sites")}</button>` : null}
+			</div>
+			${!logins.available
+				? html`<div class="dim ws-permissions-note">${t("Windows encryption is not available, so passwords are not saved.")}</div>`
+				: shownLogins.length
+					? shownLogins.map((entry) => html`<div class="row ws-permission-row" key=${entry.id}>
+						<span class="grow truncate" title=${allLogins ? `${entry.origin} · ${entry.username}` : entry.username}>${allLogins ? html`<span class="dim">${entry.origin.replace(/^https?:[/][/]/, "")}</span> ` : null}${entry.username || t("(no user name)")}</span>
+						<button class="btn sm" onClick=${() => removeLogin(entry.id)}>${t("Delete")}</button>
+					</div>`)
+					: html`<div class="dim ws-permissions-note">${allLogins ? t("No saved passwords yet.") : t("No saved password for this site.")}</div>`}
+			${engineVersion ? html`<div class="dim ws-permissions-note ws-browser-engine">${engineVersion}</div>` : null}
 		</div>` : null}
 		${status.title ? html`<div class="ws-page-title truncate" title=${status.title}>${status.title}</div>` : null}
 		<div class="desktop-browser-target" ref=${target}>
 			<div class="pad">
 				<p role="status">${status.error || (status.loading ? t("Loading…") : hasView && !status.url ? t("Enter a URL to open it in this tab.") : "")}</p>
+				${hasView && !status.url && !status.loading && engineVersion ? html`<p class="dim ws-browser-engine">${engineVersion}</p>` : null}
 				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
 			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot} alt="" draggable="false" />` : null}

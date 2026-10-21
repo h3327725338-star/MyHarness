@@ -94,6 +94,12 @@ A Workspace is identified by its stable `workspaceId`. Its root folder is bound 
 - the original absolute path from the other machine is only shown as a hint;
 - **Choose folder** in Settings binds the real folder. MyHarness never writes its sync data into an external folder and
   never changes sharing permissions.
+- a binding (or a Workspace applied from another device) takes effect without a restart: the running app re-reads the
+  Workspace registry, so its own copy can never be saved back over the new folder, and open idle chats of that
+  Workspace move onto it, so the Files panel shows the bound folder at once;
+- a chat synced from another device stores that device's folder in its header; when that folder does not exist here
+  (or the chat still sits in the managed placeholder after the real folder was bound) it opens in its Workspace's folder
+  on this device. Other chats, such as a worktree or a sub-folder that exists, keep their own folder.
 
 Coding-mode registrations are not copied when a General workspace is removed; removing a workspace in General leaves the
 physical directory in place. A Workspace the user removed from every list keeps its files here, is not published again,
@@ -118,15 +124,30 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 - Local file changes are watched and debounced (~0.8 s), then pushed.
 - While the app is connected it checks for remote batches every ~10 s; idle every ~45 s.
 - Errors retry after ~30 s; offline changes stay queued because the pending queue is the difference from the last
-  committed state.
+  committed state. While Drive cannot be reached the queue is still counted from the local files, so "Waiting to
+  upload" shows the real number offline, and the next retry after the network returns continues on its own.
+- Each pass downloads first and then uploads. A download that fails (network, a batch that cannot be read, a full disk)
+  no longer holds this device's own changes back: the upload still runs in the same pass and the download error is
+  shown afterwards.
+- Resuming after the app was closed, crashed or the computer lost power needs no button: on the next start the engine
+  rescans, and everything not yet committed is queued again. Large uploads are published in batches of at most 500
+  operations and each batch is committed locally as soon as Drive has it, so the upload continues after the last
+  finished batch. Objects are content-addressed and looked up before upload, so content already in Drive is not sent
+  again; a file that changed between scan and upload is left for the next pass, so an object never differs from its
+  hash.
+- Before a batch manifest is written, the batch is journaled in `state-<account>.json` (`publishing`). If the process
+  stops after Drive accepted the manifest but before the local commit, the next start finds the manifest and commits it
+  instead of publishing the same changes a second time; if the manifest never arrived, the journal is dropped and the
+  changes are published again.
 - Shutdown stops timers and releases the engine lock. There is no tray/auto-start in this implementation, so syncing
-  runs while the MyHarness Web process is running.
+  runs while the MyHarness Web process is running; after a reboot it continues when MyHarness is started again.
 
 ## Failure behavior
 
 | Situation | Behavior |
 | --- | --- |
-| Network down | Local use continues; the failure is shown; retry keeps the pending changes |
+| Network down | Local use continues; the failure is shown; retry keeps the pending changes and resumes on its own |
+| Disk full, file in use or no permission while applying | The batch stays waiting to download (not marked applied, not an issue); the reason is shown; retried automatically |
 | Authorization revoked | One refresh attempt, then an error; local data is untouched; connect again |
 | Cloud folder deleted from Drive | Error “folder no longer available”; local data and pending work stay; no silent re-upload |
 | `identity.json` missing | Error and a request to reconnect; a new space is not created silently |
@@ -137,6 +158,22 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 | Damaged remote batch or missing object | Reported once in Settings, then skipped; other batches still apply |
 | Remote record with an unusable identity | Refused before any path is built; reported once |
 | Remote chat timestamp that is not a plain timestamp | Sanitised into the generated file name; it cannot choose a folder |
+
+## Manual buttons
+
+Settings → Google Drive has three buttons in one row:
+
+- **Check now** — one ordinary pass (download, then upload), the same pass the timer runs.
+- **Download now** — download only. It waits for a pass that is already running, then keeps listing the batches folder
+  until nothing new is left (bounded to 20 rounds), so batches that arrive during a long download are fetched too. It
+  also gives batches skipped earlier for a missing object or a failed apply another chance. Nothing is uploaded.
+- **Sync now** — the same complete download followed by the upload of everything waiting on this computer.
+
+Download now and Sync now answer at once (409 when sync is paused, Drive is not connected or a manual run is already
+going) and report progress through the status: `manual = { kind, state: running|done|failed, stage, done, total,
+remainingDownloads?, error? }`. The row shows "Downloading… x / y", "Uploading… x / y", the finish or the failure
+reason; both buttons are disabled while one runs. Pause means nothing is uploaded or applied, so while paused both
+buttons are disabled and the routes refuse; Check now keeps its old behaviour (a pass that does nothing while paused).
 
 ## HTTP routes
 
@@ -149,13 +186,16 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 | `POST /api/sync/connect` | Start OAuth; answers `{ authUrl }`, completion continues in the background |
 | `POST /api/sync/disconnect` | Stop syncing and forget the token on this device |
 | `POST /api/sync/check` | Run one push + pull pass now |
+| `POST /api/sync/download` | Start "Download now" in the background; progress in the status's `manual` |
+| `POST /api/sync/sync` | Start "Sync now" in the background; progress in the status's `manual` |
 | `POST /api/sync/bind` | `{ workspaceId, rootPath }` bind a restored workspace folder |
 
 ## Limits and not-yet-verified behavior
 
 - Real Google OAuth, two physical machines, folder rename, revoked authorization, quota exhaustion and Drive outage
   behavior have not been run against a live account; only the in-memory Drive tests are executed.
-- Background sync stops when MyHarness quits. Tray support and launch-at-login are not implemented.
+- Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
+  implemented, so after a reboot nothing uploads until MyHarness is opened.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
 - Concurrent conflicts are kept for review but there is no “apply the other version” button yet; the copy path is shown.
 - The `snapshots/` folder is part of the layout but snapshots are not used yet for faster bootstrap.
@@ -174,6 +214,13 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 ```powershell
 npm.cmd --workspace packages/coding-agent run test -- test/google-drive-sync.test.ts
 ```
+
+`test/google-drive-sync-resume.test.ts` covers resuming: a manifest Drive accepted just before the app stopped is
+committed without a second batch or upload, a manifest that never arrived is published again with the objects reused,
+a large upload resumes after its last published batch, offline changes stay counted and upload once the network is
+back, a failing download does not block the upload, a full disk keeps the batch waiting, and the manual Download now /
+Sync now runs (draining batches that arrive during the run, retrying a skipped batch, waiting for a running pass,
+refusing while paused).
 
 The suite covers: first upload and restore on a second device, memory deletion without resurrection, concurrent memory
 conflicts with a recoverable copy, chat branch merge, draft and prompt deletes, concurrent delete-vs-edit, missing

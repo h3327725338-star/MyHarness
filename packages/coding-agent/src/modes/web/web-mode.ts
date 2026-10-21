@@ -233,6 +233,9 @@ export async function runWebMode(
 				),
 		onStatus: (status) => server.broadcast("sync_status", status),
 		onApplied: () => {
+			// Sync writes the Workspace registry through its own store; the hub must re-read it before anyone saves
+			// the old copy, and open chats move onto a folder that was just bound on this device.
+			void hub.reloadWorkspaces().catch(() => undefined);
 			server.broadcast("sync_applied", {});
 			server.broadcast("workspaces_changed", {});
 			server.broadcast("mode_preferences_changed", {});

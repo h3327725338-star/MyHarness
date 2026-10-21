@@ -2,8 +2,8 @@
  * Real-Electron smoke test for the built-in browser (Windows). It is not part of `node --test test/*.test.cjs`
  * because it needs an Electron main process:
  *
- *   node_modules/.bin/electron packages/desktop/test/electron-browser.e2e.cjs --phase=1 --profile=<dir> --downloads=<dir>
- *   node_modules/.bin/electron packages/desktop/test/electron-browser.e2e.cjs --phase=2 --profile=<dir> --downloads=<dir>
+ *   npm exec -w @myharness/desktop -- electron packages/desktop/test/electron-browser.e2e.cjs --phase=1 --profile=<dir> --downloads=<dir>
+ *   npm exec -w @myharness/desktop -- electron packages/desktop/test/electron-browser.e2e.cjs --phase=2 --profile=<dir> --downloads=<dir>
  *
  * Phase 1 creates a tab, drives the full command surface (navigation, text/DOM/interactive, click/type/exec/scroll,
  * screenshot, accessibility tree, downloads, popup windows, permission denial), checks native visibility and bounds and

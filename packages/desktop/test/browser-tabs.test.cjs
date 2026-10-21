@@ -358,3 +358,11 @@ test('Ctrl+T, Ctrl+W and Ctrl+F pressed inside the page reach the workspace', as
   assert.equal(shortcuts().length, 2);
   browser.destroy();
 });
+
+test('website tabs send a Chrome user agent without Electron or app tokens', () => {
+  const { chromeUserAgent } = require('../browser-view.cjs');
+  const fallback = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) MyHarness/0.0.3 Chrome/152.0.7977.167 Electron/44.8.0 Safari/537.36';
+  assert.equal(chromeUserAgent(fallback, '152.0.7977.167'), 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36');
+  // Without a usable Chromium version the original string is kept rather than inventing one.
+  assert.equal(chromeUserAgent(fallback, undefined), fallback);
+});

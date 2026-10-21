@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	finalizeToolCallArguments,
-	parseCompleteToolArguments,
-	parseStreamingJson,
-} from "../src/utils/json-parse.ts";
+import { finalizeToolCallArguments, parseCompleteToolArguments, parseStreamingJson } from "../src/utils/json-parse.ts";
 
 /**
  * P2-4 tool-parameter output-side safety.

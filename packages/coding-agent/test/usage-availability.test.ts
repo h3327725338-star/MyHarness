@@ -92,7 +92,10 @@ describe("usage availability", () => {
 		expect(stats.tokens.input).toBe(100);
 	});
 	it("clears the mark once a later request reports usage again", () => {
-		const stats = collectSessionUsageStats([unreportedMessage(), message({ input: true, output: true, cacheRead: true, cacheWrite: true })]);
+		const stats = collectSessionUsageStats([
+			unreportedMessage(),
+			message({ input: true, output: true, cacheRead: true, cacheWrite: true }),
+		]);
 		expect(stats.usageUnreportedRequests).toBe(1);
 		expect(stats.latestUsageUnreported).toBe(false);
 	});

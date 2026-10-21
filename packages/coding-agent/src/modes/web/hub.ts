@@ -12,7 +12,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
@@ -303,7 +303,16 @@ export class WebHostHub implements WebHostHubLink {
 		const created = !pending;
 		if (!pending) {
 			pending = (async () => {
-				const sessionManager = SessionManager.open(path, undefined, cwdOverride);
+				let sessionManager = SessionManager.open(path, undefined, cwdOverride);
+				if (cwdOverride === undefined) {
+					// A chat synced from another device stores that device's folder; this device's binding wins.
+					const local = this.localWorkspaceRootFor(
+						sessionManager.getCwd(),
+						sessionManager.getWorkspaceId(),
+						sessionManager.getMode(),
+					);
+					if (local) sessionManager = SessionManager.open(path, undefined, local);
+				}
 				const issue = cwdOverride === undefined ? getMissingSessionCwdIssue(sessionManager, from.cwd) : undefined;
 				const missing = issue
 					? this.describeMissingWorkspaceForSession(
@@ -350,6 +359,62 @@ export class WebHostHub implements WebHostHubLink {
 			// the key is removed. Calling it before the delete made the open path never prune, letting idle
 			// background slots pile up until the next create.
 			if (host) this.pruneIdle(host);
+		}
+	}
+
+	/**
+	 * The folder a chat should run in on this device when the one it stored is not usable here: the stored folder is
+	 * gone (it came from another device, or was removed), or it is the managed placeholder a restored Workspace used
+	 * until the user bound its real folder. Only the chat's own Workspace (by id) is consulted, and only an existing
+	 * directory is returned; any other chat keeps its stored folder (a worktree or sub-folder stays as it is).
+	 */
+	private localWorkspaceRootFor(
+		sessionCwd: string,
+		workspaceId: string | undefined,
+		mode: ChatMode,
+	): string | undefined {
+		const store = this.workspaceStore ?? this.all()[0]?.workspaceStore;
+		if (!store || !workspaceId) return undefined;
+		const workspace = store.getById(workspaceId, mode) ?? store.getById(workspaceId);
+		if (!workspace?.rootPath || pathIdentityKey(workspace.rootPath) === pathIdentityKey(sessionCwd)) return undefined;
+		try {
+			if (!statSync(workspace.rootPath).isDirectory()) return undefined;
+		} catch {
+			return undefined;
+		}
+		let usable = false;
+		try {
+			usable = existsSync(sessionCwd);
+		} catch {
+			usable = false;
+		}
+		const dataRoot = store.getDataRoot();
+		const placeholder =
+			usable && dataRoot ? relative(join(resolvePath(dataRoot), "workspace-folders"), resolvePath(sessionCwd)) : "";
+		const inPlaceholder = !!placeholder && !placeholder.startsWith("..") && !/^[A-Za-z]:/.test(placeholder);
+		return !usable || inPlaceholder ? workspace.rootPath : undefined;
+	}
+
+	/**
+	 * Google Drive sync changed the Workspace registry through its own store (a restored Workspace, or a folder the
+	 * user just bound). Re-read it, so the shared store does not save its old copy over the new one, and move every
+	 * idle open chat whose folder is not usable here onto its Workspace's folder, so the panels show it at once.
+	 */
+	async reloadWorkspaces(): Promise<void> {
+		const store = this.workspaceStore ?? this.all()[0]?.workspaceStore;
+		if (!store) return;
+		store.reload();
+		for (const host of this.all()) {
+			const file = host.session.sessionFile;
+			if (!file || !host.session.isIdle || host.completionActive) continue;
+			const manager = host.session.sessionManager;
+			const local = this.localWorkspaceRootFor(host.cwd, manager.getWorkspaceId(), manager.getMode());
+			if (!local) continue;
+			try {
+				await host.runtimeHost.switchSession(file, { cwdOverride: local });
+			} catch {
+				/* The chat stays readable in its old folder; opening it again resolves the folder anew. */
+			}
 		}
 	}
 

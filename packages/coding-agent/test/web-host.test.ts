@@ -1692,6 +1692,56 @@ describe("Web host (real runtime with a faux provider)", () => {
 		).toBe(false);
 	});
 
+	it("shows a renamed model under its new name in every open chat, also one that was running at the time", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const config = {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+			apiKey: "local",
+			models: [{ id: "deepseek-v4.1-flash" }],
+		};
+		await fx.post("/api/providers/custom/save", { id: "opencode-rename", config }, first.slot);
+		const other = await fx.post("/api/sessions/new", {}, first.slot);
+		await fx.post("/api/model", { provider: "opencode-rename", id: "deepseek-v4.1-flash" }, other.slot);
+		// The first chat runs a task (on the faux model) while the other chat renames the model.
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("done")]);
+			},
+		]);
+		const owner = fx.hub.get(first.slot)!;
+		cleanups.push(() => release());
+		const running = owner.submit("work");
+		await vi.waitFor(() => expect(owner.session.isIdle).toBe(false));
+		await fx.post(
+			"/api/providers/custom/save",
+			{
+				id: "opencode-rename",
+				previousId: "opencode-rename",
+				config: { ...config, models: [{ id: "deepseek-v4.1-flash", name: "oc-ds" }] },
+			},
+			other.slot,
+		);
+		expect((await fx.get("/api/state", other.slot)).model?.name).toBe("oc-ds");
+		release();
+		await running;
+		await owner.session.waitForIdle();
+		// Nothing else happens in the first chat: its catalog must still catch up once its run is over.
+		await vi.waitFor(async () => {
+			const models = await fx.get("/api/models", first.slot);
+			const renamed = models.providers
+				.find((provider: any) => provider.id === "opencode-rename")
+				?.models.find((model: any) => model.id === "deepseek-v4.1-flash");
+			expect(renamed?.name).toBe("oc-ds");
+		});
+	});
+
 	/** A local HTTP server standing in for a provider endpoint. */
 	async function startEndpoint(
 		handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,

@@ -119,6 +119,11 @@ export interface SyncState {
 	lastCheckAt?: string;
 	lastUploadAt?: string;
 	lastDownloadAt?: string;
+	/**
+	 * Batch whose objects are uploaded and whose manifest is being written. Saved before the Drive write, so a crash
+	 * in between is resolved on the next start by looking the manifest up instead of publishing the same work twice.
+	 */
+	publishing?: { batchFile: string; operations: SyncOperation[] };
 }
 
 export interface SyncConfig {
@@ -161,6 +166,21 @@ export interface StoredGoogleCredentials {
 	obtainedAt: string;
 }
 
+/** A manual "Download now" / "Sync now" run and its progress, kept until the next manual run replaces it. */
+export interface SyncManualRun {
+	kind: "download" | "sync";
+	state: "running" | "done" | "failed";
+	/** Which half of the run is moving right now. */
+	stage: "waiting" | "download" | "upload";
+	done: number;
+	total: number;
+	startedAt: string;
+	finishedAt?: string;
+	/** Batches still waiting for an object when the run ended (they keep retrying in the background). */
+	remainingDownloads?: number;
+	error?: string;
+}
+
 export type SyncPhase = "idle" | "scanning" | "uploading" | "downloading" | "authorizing" | "error" | "locked";
 
 export interface SyncStatusSnapshot {
@@ -191,6 +211,8 @@ export interface SyncStatusSnapshot {
 	issues: SyncIssue[];
 	/** True when this data root lives inside a cloud-synced folder and a second manager is a real risk. */
 	externalRisk: { detected: boolean; message?: string };
+	/** The last manual download/sync run, or null when none ran in this process. */
+	manual: SyncManualRun | null;
 }
 
 /** What the scanner found locally. Content is read lazily; unchanged files are not hashed twice. */

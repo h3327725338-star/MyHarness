@@ -73,7 +73,9 @@
 .chat-row .ind-retry:hover { color: var(--text-2); background: var(--surface-hover); }
 /* A question waiting for the user: a neutral clock, a different shape from the unread dot (not a different colour only). */
 .ind-warn { display: grid; place-items: center; color: var(--text-2); }
-.chat-row .title { padding: 0 6px; }
+/* Keep .truncate's 4px descender room: without it its -4px bottom margin shifts the centred title 2px below the
+   status glyph. */
+.chat-row .title { padding: 0 6px 4px; }
 .chat-row .slot-end { position: relative; height: 100%; display: flex; align-items: center; justify-content: flex-end; }
 .chat-row .when { font-size: var(--fs-xs); color: var(--text-4); transition: opacity var(--t-fast), color var(--t-fast); }
 /* On the selected row (a lighter surface) the time moves up one text level, so it stays as readable as on the others. */
@@ -268,6 +270,22 @@
 .panel-empty { padding: 24px var(--pad-panel); color: var(--text-3); }
 .ws-page-title { padding: 4px var(--pad-panel); color: var(--text-3); font-size: var(--fs-sm); }
 .ws-browser-bar { gap: 2px; }
+.ws-star.on { color: var(--accent); }
+.ws-star.on svg path { fill: currentColor; }
+/* Bookmarks bar under the toolbar (Chrome's place and weight): one quiet row in the panel's own surface, text in the
+   secondary colour, a hover background like the toolbar's buttons. A long row scrolls sideways instead of wrapping. */
+.ws-bookmarks { display: flex; align-items: center; gap: 2px; height: 32px; min-height: 32px; padding: 0 var(--pad-panel); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: none; border-bottom: 1px solid var(--border); }
+.ws-bookmarks::-webkit-scrollbar { display: none; }
+.ws-bookmark { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 180px; height: 24px; padding: 0 8px; border-radius: var(--r-pill); color: var(--text-2); font-size: var(--fs-sm); }
+.ws-bookmark:hover, .ws-bookmark:focus-visible { background: var(--surface-hover); color: var(--text); }
+.ws-bookmark:first-child { margin-left: -4px; }
+.ws-bookmark-icon { width: 16px; height: 16px; flex: none; border-radius: 3px; object-fit: contain; }
+.ws-bookmark-icon.letter { display: inline-grid; place-items: center; background: var(--surface-active); color: var(--text-2); font-size: 10px; font-weight: 600; line-height: 1; }
+.ws-bookmarks-empty { font-size: var(--fs-sm); white-space: nowrap; }
+.ws-bookmark-editor { min-width: 260px; }
+.ws-bookmark-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
+.ws-bookmark-actions { gap: 6px; padding-top: 2px; }
+.ws-logins-head { padding-top: 6px; border-top: 1px solid var(--border); margin-top: 2px; }
 /* The search engine belongs to the bar it searches with: a caret at the address field's right edge opens Google / Bing,
    so the toolbar keeps one magnifier (page find) instead of two. */
 .ws-address { position: relative; }
@@ -336,7 +354,13 @@
 .desktop-frameless .app { --panel-current: 0px; }
 .desktop-frameless .app.panel-open { --panel-current: var(--panel-width); }
 .desktop-frameless .app:has(> .sidebar.is-collapsed).panel-open { --panel-current: min(var(--panel-w), max(340px, calc(100vw - 520px))); }
-.desktop-frameless .app.ws-max { --chat-col: min(var(--chat-w), max(320px, calc(100vw - 480px))); }
+.desktop-frameless .app.ws-max { --chat-col: max(var(--chat-min-ws), min(var(--chat-w), max(320px, calc(100vw - 480px)))); }
+/* In collaboration mode the conversation column ends at the window's right edge, so its header carries the window
+   buttons' room as well as its own icons (show sidebar, Changes, Files, Terminal, Session, Browser). The column never
+   gets narrower than that row; the workspace column gives up the width. Title and status pill shrink first. */
+.desktop-frameless .app.ws-max { --chat-min-ws: calc(var(--wc-room) + 268px); }
+.desktop-frameless .app.ws-max .main-header .status-pill { flex-shrink: 1; min-width: 0; overflow: hidden; }
+.desktop-frameless .app.ws-max .main-header .status-pill .mem-left { min-width: 0; overflow: hidden; }
 .desktop-frameless .main, .desktop-frameless .app.ws-max .main, .desktop-frameless .panel, .desktop-frameless .app.ws-max .panel { margin: 0; border-width: 0; border-left: 1px solid var(--border); border-radius: 0; }
 .desktop-frameless .sidebar.is-collapsed + .main, .desktop-frameless .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin: 0; border-left-width: 0; }
 .desktop-frameless .app.ws-max .main { border-left-width: 1px; }

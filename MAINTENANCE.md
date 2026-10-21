@@ -22,7 +22,7 @@ npm.cmd install --ignore-scripts
 npm.cmd run build
 ```
 
-Electron 桌面宿主位于独立的 `packages/desktop`，不进入 Coding Agent 的产品依赖。开发使用 `npm.cmd run desktop:dev`，免安装目录打包使用 `npm.cmd run desktop:pack`，宿主测试使用 `npm.cmd run desktop:test`；首次 `--ignore-scripts` 安装后需显式运行 `node node_modules/electron/install.js` 下载 Electron。打包包含现有 root build，写入 timestamped staging/release 目录，数据锚点见 `packages/desktop/README.md`。日常迭代可双击仓库根的 `dev-desktop.cmd`（`packages/desktop/pack-and-run.ps1`）：构建、打包后启动最新产物，产物固定在 `dist\desktop`，成功后清理旧 stage 与多余 release，启动前关闭正在运行的 MyHarness（单实例锁）。原有 build/check/test 语义保持不变。
+Electron 桌面宿主位于独立的 `packages/desktop`，不进入 Coding Agent 的产品依赖。开发使用 `npm.cmd run desktop:dev`，免安装目录打包使用 `npm.cmd run desktop:pack`，宿主测试使用 `npm.cmd run desktop:test`；首次 `--ignore-scripts` 安装后需显式运行 `npm.cmd exec -w @myharness/desktop -- install-electron` 下载 Electron（npm 可能把它装在根或 `packages/desktop/node_modules`，打包脚本按实际安装位置读取版本）。打包包含现有 root build，写入 timestamped staging/release 目录，数据锚点见 `packages/desktop/README.md`。日常迭代可双击仓库根的 `dev-desktop.cmd`（`packages/desktop/pack-and-run.ps1`）：构建、打包后启动最新产物，产物固定在 `dist\desktop`，成功后清理旧 stage 与多余 release，启动前关闭正在运行的 MyHarness（单实例锁）。原有 build/check/test 语义保持不变。
 
 已有模型缓存时可使用 `npm.cmd run build:offline`。根脚本还提供：
 

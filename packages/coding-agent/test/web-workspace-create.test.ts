@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@myharness/ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,6 +9,7 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 } from "../src/agent/runtime/session-runtime.ts";
+import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
 import { WebHttpServer } from "../src/modes/web/http-server.ts";
 import { WebHostHub } from "../src/modes/web/hub.ts";
@@ -147,6 +148,7 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		return {
 			hub,
 			faux,
+			agentDir,
 			get: (path: string) => call("GET", path),
 			post: (path: string, body?: unknown) => call("POST", path, body),
 		};
@@ -320,6 +322,42 @@ describe("General quick-create workspace (real folders, isolated temp dirs)", ()
 		});
 		expect(existsSync(join(parent, "coding-try"))).toBe(false);
 		await resetGeneral(fx);
+	});
+
+	it("opens a chat synced from another device in this device's folder and follows a folder bound later", async () => {
+		const fx = await start();
+		const created = await fx.post("/api/workspaces/create", { name: "synced", mode: "general" });
+		const opened = await fx.post("/api/sessions/new", { rootPath: created.workspace.rootPath, mode: "general" });
+		const owner = fx.hub.get(opened.slot)!;
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
+		await owner.submit("hello");
+		await owner.session.waitForForegroundIdle();
+		const file = owner.session.sessionFile!;
+		// The same Workspace's chat as another device wrote it: its header names that device's folder.
+		const sessionId = "synced-chat";
+		const syncedFile = join(
+			dirname(dirname(dirname(file))),
+			sessionId,
+			"conversation",
+			`2026-01-01T00-00-00-000Z_${sessionId}.jsonl`,
+		);
+		const [headerLine, ...rest] = readFileSync(file, "utf8").split("\n");
+		const header = { ...JSON.parse(headerLine), id: sessionId, cwd: join(tempDir("other-device"), "gone", "folder") };
+		mkdirSync(dirname(syncedFile), { recursive: true });
+		writeFileSync(syncedFile, [JSON.stringify(header), ...rest].join("\n"));
+
+		const result = await fx.hub.openSession(fx.hub.host, syncedFile);
+		expect(result.cwdMissing).toBeUndefined();
+		const synced = fx.hub.get(result.slot)!;
+		expect(synced.cwd).toBe(created.workspace.rootPath);
+
+		// Google Drive sync binds the real folder through its own store; the open chat moves there at once.
+		const chosen = tempDir("bound-folder");
+		const sync = WorkspaceStore.create(fx.agentDir, process.env.MYHARNESS_DATA_ROOT);
+		expect(sync.bindRoot(created.workspace.id, chosen).ok).toBe(true);
+		await fx.hub.reloadWorkspaces();
+		expect(fx.hub.get(result.slot)!.cwd).toBe(chosen);
+		expect(fx.hub.get(result.slot)!.workspace?.rootPath).toBe(chosen);
 	});
 
 	it("rejects blank, illegal and duplicate names without touching disk", async () => {

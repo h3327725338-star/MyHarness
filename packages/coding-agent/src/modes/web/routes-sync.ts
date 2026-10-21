@@ -63,6 +63,17 @@ export function registerSyncRoutes(server: WebHttpServer, sync: SyncService): vo
 		return { status: sync.status() };
 	});
 
+	// Manual runs answer immediately; the page follows progress through the status (`manual`).
+	for (const kind of ["download", "sync"] as const) {
+		server.route("POST", `/api/sync/${kind}`, () => {
+			try {
+				return { status: sync.startManual(kind) };
+			} catch (error) {
+				throw new HttpError(409, error instanceof Error ? error.message : String(error));
+			}
+		});
+	}
+
 	server.route("POST", "/api/sync/bind", async ({ body }) => {
 		const input = object(body);
 		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();

@@ -168,7 +168,7 @@ else {
     if (app.isPackaged) void removeForeignShortcuts({ aumid: notificationAppId, log });
     window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
-    browser = createBrowser(window, log, { workspaceRoot: cwd });
+    browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData') });
     const trusted = (event) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && serviceUrl && new URL(event.senderFrame.url).origin === new URL(serviceUrl).origin;
     // Window buttons of the frameless window. The app page may use them, and so may the host's own starting/error page
     // (exactly the page loadShell produced, in the main frame); no other page or frame gets them.

@@ -43,6 +43,20 @@ function connectionBadge(status) {
 	return { cls: "ok", text: t("Syncing") };
 }
 
+/** One line for the last manual Download now / Sync now run: what is moving, how far, or why it stopped. */
+function manualText(manual) {
+	if (manual.state === "running") {
+		if (manual.stage === "waiting") return t("Waiting for the current sync pass to finish…");
+		const progress = manual.total > 0 ? ` ${manual.done} / ${manual.total}` : "";
+		return manual.stage === "upload" ? `${t("Uploading…")}${progress}` : `${t("Downloading…")}${progress}`;
+	}
+	if (manual.state === "failed") return `${t("Failed")}: ${t(manual.error || "The operation failed.")}`;
+	const done = manual.kind === "download" ? t("Download finished.") : t("Sync finished.");
+	return manual.remainingDownloads > 0
+		? `${done} ${t("{count} batches are still waiting for files and keep retrying.", { count: manual.remainingDownloads })}`
+		: done;
+}
+
 export function SyncPage() {
 	const status = useStore((s) => s.syncStatus);
 	const [busy, setBusy] = useState("");
@@ -99,6 +113,10 @@ export function SyncPage() {
 	const risk = status.externalRisk ?? { detected: false };
 	const pendingBindings = status.pendingBindings ?? [];
 	const conflicts = status.conflicts ?? [];
+
+	const manual = status.manual ?? null;
+	// Pause means nothing is uploaded or applied; the manual runs respect it instead of overriding it.
+	const manualBlocked = !status.connected || status.paused || manual?.state === "running";
 
 	const saveConfig = (patch) => run("config", () => post("/api/sync/config", patch));
 
@@ -292,7 +310,17 @@ export function SyncPage() {
 				<button class="btn" disabled=${!status.connected || busy === "check"} onClick=${() => run("check", () => post("/api/sync/check"))}>
 					<${Icon} name="refresh" size=${14} />${t("Check now")}
 				</button>
-				<span class="dim grow">${t("Everything also runs by itself; this button is for troubleshooting.")}</span>
+				<button class="btn" disabled=${manualBlocked || busy === "download"} title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""} onClick=${() => run("download", () => post("/api/sync/download"))}>
+					<${Icon} name="download" size=${14} />${t("Download now")}
+				</button>
+				<button class="btn" disabled=${manualBlocked || busy === "sync"} title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""} onClick=${() => run("sync", () => post("/api/sync/sync"))}>
+					<${Icon} name="drive" size=${14} />${t("Sync now")}
+				</button>
+				${manual
+					? html`<span class=${`row grow ${manual.state === "failed" ? "c-danger" : "dim"}`} role="status" title=${manualText(manual)}>
+							${manual.state === "running" ? html`<${Spinner} />` : null}<span class="truncate">${manualText(manual)}</span>
+						</span>`
+					: html`<span class="dim grow">${t("Everything also runs by itself; this button is for troubleshooting.")}</span>`}
 			</div>
 		<//>
 		${pendingBindings.length

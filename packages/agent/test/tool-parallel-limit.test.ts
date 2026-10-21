@@ -190,7 +190,9 @@ describe("parallel tool preparation and execution limits", () => {
 		expect(execMaxActive).toBeGreaterThan(1);
 		expect(execMaxActive).toBeLessThanOrEqual(5);
 		const results = messages.filter((m) => m.role === "toolResult");
-		expect(results.map((m) => (m.role === "toolResult" ? m.toolCallId : ""))).toEqual(names.map((_, i) => `call-${i}`));
+		expect(results.map((m) => (m.role === "toolResult" ? m.toolCallId : ""))).toEqual(
+			names.map((_, i) => `call-${i}`),
+		);
 		expect(results.map((m) => (m.role === "toolResult" ? m.toolName : ""))).toEqual(names);
 	});
 });
@@ -227,7 +229,13 @@ describe("tool abandon hook", () => {
 		};
 
 		const events: AgentEvent[] = [];
-		const stream = agentLoop([createUserMessage("run hanging")], context, config, controller.signal, streamToolBatch(names));
+		const stream = agentLoop(
+			[createUserMessage("run hanging")],
+			context,
+			config,
+			controller.signal,
+			streamToolBatch(names),
+		);
 		const messages = await drain(stream, events);
 
 		expect(abandoned).toHaveLength(2);
@@ -264,7 +272,13 @@ describe("tool abandon hook", () => {
 
 		const controller = new AbortController();
 		const events: AgentEvent[] = [];
-		const stream = agentLoop([createUserMessage("run hanging")], context, config, controller.signal, streamToolBatch(["hanging"]));
+		const stream = agentLoop(
+			[createUserMessage("run hanging")],
+			context,
+			config,
+			controller.signal,
+			streamToolBatch(["hanging"]),
+		);
 		const consuming = (async () => {
 			for await (const event of stream) {
 				events.push(event);
@@ -297,7 +311,13 @@ describe("tool abandon hook", () => {
 
 		const controller = new AbortController();
 		const events: AgentEvent[] = [];
-		const stream = agentLoop([createUserMessage("run")], context, config, controller.signal, streamToolBatch(["responsive"]));
+		const stream = agentLoop(
+			[createUserMessage("run")],
+			context,
+			config,
+			controller.signal,
+			streamToolBatch(["responsive"]),
+		);
 		const consuming = (async () => {
 			for await (const event of stream) {
 				events.push(event);

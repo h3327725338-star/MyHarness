@@ -155,7 +155,7 @@ const MENU_PAGES = {
 	"github-connect": { open: (c) => githubScreen(c) },
 	"default-model": {
 		open: (c) => modelScreen(c, ""),
-		value: (snap) => (snap?.model ? `${snap.model.provider}/${snap.model.id}${snap.thinking?.supported ? ` · ${effortName(snap.thinking.level)}` : ""}` : t("Not selected")),
+		value: (snap) => (snap?.model ? `${snap.model.name || snap.model.id}${snap.thinking?.supported ? ` · ${effortName(snap.thinking.level)}` : ""}` : t("Not selected")),
 	},
 	"web-search": { open: groupScreen("Web Search", WEB_SEARCH_SETTINGS), settings: WEB_SEARCH_SETTINGS, value: () => (settingItem("webSearch.enabled") ? onOff(settingItem("webSearch.enabled").value) : "") },
 	"network-timeouts": { open: groupScreen("Timeouts & retries", NETWORK_TIMEOUT_SETTINGS), settings: NETWORK_TIMEOUT_SETTINGS },

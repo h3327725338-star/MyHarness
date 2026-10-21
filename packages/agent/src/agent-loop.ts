@@ -820,11 +820,11 @@ async function executeToolCallsParallel(
 		const validated = validatedCalls[index]!;
 		const preparation =
 			validated.kind === "invalid"
-				? {
+				? ({
 						kind: "immediate",
 						result: validated.result,
 						isError: validated.isError,
-					} satisfies ImmediateToolCallOutcome
+					} satisfies ImmediateToolCallOutcome)
 				: await runBeforeToolCallGate(
 						currentContext,
 						assistantMessage,
@@ -955,10 +955,7 @@ type ValidatedToolCallArguments =
  * schema validation. No hooks and no side effects, so parallel batches can run
  * it concurrently under the parallel cap.
  */
-function validateToolCallArguments(
-	currentContext: AgentContext,
-	toolCall: AgentToolCall,
-): ValidatedToolCallArguments {
+function validateToolCallArguments(currentContext: AgentContext, toolCall: AgentToolCall): ValidatedToolCallArguments {
 	// P2-4 output-side safety: strict final parsing failed (truncated or
 	// non-deterministically repairable JSON). Never execute guessed arguments;
 	// report as an error so the model re-issues the call with complete arguments.
@@ -1220,20 +1217,25 @@ async function executePreparedToolCall(
 	const linked = linkToolSignal(signal);
 
 	try {
-		const execution = prepared.tool.execute(prepared.toolCall.id, prepared.args as never, linked.signal, (partialResult) => {
-			if (!acceptingUpdates) return;
-			updateEvents.push(
-				Promise.resolve(
-					emit({
-						type: "tool_execution_update",
-						toolCallId: prepared.toolCall.id,
-						toolName: prepared.toolCall.name,
-						args: prepared.toolCall.arguments,
-						partialResult,
-					}),
-				),
-			);
-		});
+		const execution = prepared.tool.execute(
+			prepared.toolCall.id,
+			prepared.args as never,
+			linked.signal,
+			(partialResult) => {
+				if (!acceptingUpdates) return;
+				updateEvents.push(
+					Promise.resolve(
+						emit({
+							type: "tool_execution_update",
+							toolCallId: prepared.toolCall.id,
+							toolName: prepared.toolCall.name,
+							args: prepared.toolCall.arguments,
+							partialResult,
+						}),
+					),
+				);
+			},
+		);
 		// Without a signal or with an infinite grace period there is nothing to race:
 		// keep the plain await so behavior matches the pre-grace implementation.
 		const result =

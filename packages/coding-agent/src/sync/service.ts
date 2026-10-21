@@ -230,9 +230,27 @@ export class SyncService {
 		this.emit();
 	}
 
+	/**
+	 * Start a manual "Download now" or "Sync now" run in the background. Refuses at once (paused, not connected,
+	 * already running) so the button can show why; progress and the result arrive through `status().manual`.
+	 */
+	startManual(kind: "download" | "sync"): SyncStatusSnapshot {
+		if (!this.store.credentials()) throw new Error("Connect Google Drive first.");
+		const current = this.engine.status();
+		if (current.paused) throw new Error("Sync is paused. Turn Pause off first.");
+		if (current.manual?.state === "running") throw new Error("A manual sync is already running.");
+		void this.engine
+			.runManual(kind)
+			.catch(() => undefined)
+			.finally(() => this.emit());
+		return this.status();
+	}
+
 	async bindWorkspace(workspaceId: string, rootPath: string): Promise<SyncStatusSnapshot> {
 		const result = await this.engine.bindWorkspace(workspaceId, rootPath);
 		if (!result.ok) throw new Error(result.error ?? "Binding the folder failed.");
+		// The binding was written through the engine's own Workspace store: let the running app pick it up now.
+		this.options.onApplied?.({ workspacesChanged: true, sessionsChanged: false });
 		this.emit();
 		return this.status();
 	}

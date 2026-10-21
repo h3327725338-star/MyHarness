@@ -564,7 +564,11 @@ export function dismissToast(id) {
 /** Lightweight notice when the opened chat's folder is gone. Names the workspace, never a path. */
 export function notifyMissingWorkspace(name) {
 	if (!name) return undefined;
-	return toast(t("Workspace [{name}] local directory is missing or has been removed", { name }), "warning", 6000);
+	const message = t("Workspace [{name}] local directory is missing or has been removed", { name });
+	// Start-up and the chat switch that follows both report the same chat: one notice per workspace is enough.
+	const shown = state.toasts.find((item) => item.message === message);
+	if (shown) return shown.id;
+	return toast(message, "warning", 6000);
 }
 
 export function maybeNotifyMissingResult(result) {
@@ -675,6 +679,8 @@ export async function chooseThinkingLevel(level) {
 }
 
 const transcriptSent = new Map();
+// The server stamps a message when it takes it, after the page drew it; this only absorbs clock rounding.
+const PENDING_LANDED_SLACK_MS = 2000;
 export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } = {}) {
 	const requestKey = slot ?? "";
 	const requestSeq = (transcriptSent.get(requestKey) ?? 0) + 1;
@@ -710,6 +716,14 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 				if (item.kind === "toolResult" && item.toolCallId && persistedToolCalls.has(item.toolCallId)) continue;
 				carry.push(item);
 			}
+		}
+		// A message the user just sent is drawn before the server has it. A reload in between (a run ending, or context
+		// compaction finishing while the message waits for it) must not wipe it: it stays at the tail until its own
+		// message_start replaces it, unless the page already holds it (same text, sent no earlier than this bubble).
+		for (const item of state.items) {
+			if (!item.pending || item.kind !== "user") continue;
+			const landed = data.items.some((entry) => entry.kind === "user" && entry.text === item.text && (entry.ts ?? 0) >= (item.ts ?? 0) - PENDING_LANDED_SLACK_MS);
+			if (!landed) carry.push(item);
 		}
 		state.items = carry.length ? [...data.items, ...carry] : data.items;
 		state.toolRuns = toolRuns;

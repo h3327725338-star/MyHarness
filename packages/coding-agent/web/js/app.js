@@ -249,9 +249,18 @@ function useShortcuts() {
 	}, []);
 }
 
+/**
+ * Narrowest chat column in collaboration mode. On the frameless desktop window the column's header also holds the
+ * window buttons, so it keeps their width plus its own icon row (the `--chat-min-ws` floor in layout.css).
+ */
+function chatColumnMin() {
+	const controls = document.querySelector(".window-controls");
+	return controls ? Math.max(320, controls.offsetWidth + 6 + 268) : 320;
+}
+
 /** In collaboration mode the chat column is as wide as the user dragged it, within the room the workspace leaves. */
 function onChatWidth(value) {
-	const w = Math.round(Math.min(value, Math.max(320, window.innerWidth - 480)));
+	const w = Math.round(Math.max(chatColumnMin(), Math.min(value, Math.max(320, window.innerWidth - 480))));
 	state.view = { ...state.view, chatW: w };
 	document.documentElement.style.setProperty("--chat-w", `${w}px`);
 }
@@ -347,7 +356,7 @@ export function App() {
 	return html`<div class=${layoutClass} ref=${appRef}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
-			${wsMax ? html`<${Resizer} invert min=${320} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
+			${wsMax ? html`<${Resizer} invert min=${chatColumnMin()} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
 			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />

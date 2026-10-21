@@ -445,6 +445,24 @@ export class WorkspaceStore {
 		return store;
 	}
 
+	/**
+	 * Re-read the registry from disk. Another store instance (Google Drive sync binding a restored Workspace, or
+	 * applying one from another device) may have written it; without this, a long-lived store keeps its old copy and
+	 * its next save writes that copy back over the newer one. Workspaces this instance holds that are not on disk yet
+	 * (added without persisting) are kept.
+	 */
+	reload(): boolean {
+		const current = readWorkspaceFile(this.filePath, !this.dataRoot);
+		if (!current.readable) return false;
+		const onDisk = new Set(current.workspaces.map((workspace) => workspace.workspaceId));
+		this.workspaces = [
+			...current.workspaces,
+			...this.workspaces.filter((workspace) => !onDisk.has(workspace.workspaceId)),
+		];
+		if (this.dataRoot) rememberWorkspaceRegistry(this.filePath, { workspaces: current.workspaces, migrated: false });
+		return true;
+	}
+
 	/** The registry's resolved data root, fixed when this store was opened. */
 	getDataRoot(): string | undefined {
 		return this.dataRoot;

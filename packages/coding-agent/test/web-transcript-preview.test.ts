@@ -219,7 +219,11 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 					releaseTranscript = resolve;
 				});
 				return new Response(
-					JSON.stringify({ items: [{ kind: "user", id: "old-1", ts: 1, text: "history" }], hasMore: false, nextCursor: null }),
+					JSON.stringify({
+						items: [{ kind: "user", id: "old-1", ts: 1, text: "history" }],
+						hasMore: false,
+						nextCursor: null,
+					}),
 					{ status: 200 },
 				);
 			}
@@ -227,7 +231,8 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 		};
 		const pending = staged.refreshSlotStaged("staged-s6", staged.nextSwitch());
 		// The snapshot resolves on its own; wait until the transcript fetch is in flight.
-		for (let i = 0; i < 100 && !fetchCalls.some((call) => call.startsWith("/api/transcript")); i++) await Promise.resolve();
+		for (let i = 0; i < 100 && !fetchCalls.some((call) => call.startsWith("/api/transcript")); i++)
+			await Promise.resolve();
 		expect(fetchCalls.some((call) => call.startsWith("/api/transcript"))).toBe(true);
 		// Live output streams into the fresh target bag while the transcript is in flight.
 		staged.inSlot("staged-s6", () => {
@@ -237,7 +242,9 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 		releaseTranscript!();
 		await pending;
 		const bag = staged.inSlot("staged-s6", () => ({ items: staged.state.items as Array<Record<string, unknown>> }));
-		const keys = bag.items.map((item) => (item.id as string) ?? (item.liveId as string) ?? (item.toolCallId as string));
+		const keys = bag.items.map(
+			(item) => (item.id as string) ?? (item.liveId as string) ?? (item.toolCallId as string),
+		);
 		expect(keys).toEqual(["old-1", "live-1", "call-1"]);
 	});
 
@@ -252,14 +259,19 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 					releaseTranscript = resolve;
 				});
 				return new Response(
-					JSON.stringify({ items: [{ kind: "assistant", id: "old-2", ts: 5, text: "persisted" }], hasMore: false, nextCursor: null }),
+					JSON.stringify({
+						items: [{ kind: "assistant", id: "old-2", ts: 5, text: "persisted" }],
+						hasMore: false,
+						nextCursor: null,
+					}),
 					{ status: 200 },
 				);
 			}
 			return new Response(JSON.stringify(snapOf("staged-s7")), { status: 200 });
 		};
 		const pending = staged.refreshSlotStaged("staged-s7", staged.nextSwitch());
-		for (let i = 0; i < 100 && !fetchCalls.some((call) => call.startsWith("/api/transcript")); i++) await Promise.resolve();
+		for (let i = 0; i < 100 && !fetchCalls.some((call) => call.startsWith("/api/transcript")); i++)
+			await Promise.resolve();
 		expect(fetchCalls.some((call) => call.startsWith("/api/transcript"))).toBe(true);
 		// entry_appended already attached the persisted id to the live copy before the page landed.
 		staged.inSlot("staged-s7", () => {

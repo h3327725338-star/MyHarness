@@ -2125,6 +2125,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		refreshSlot: (slot: string, options?: { full?: boolean }) => Promise<void>;
 		fetchMoreTranscript: (slot: string) => Promise<string>;
 		appendStreamedItem: (item: unknown, slot?: string) => void;
+		addPendingMessage: (clientMessageId: string, text: string, images?: unknown[], slot?: string) => void;
 		inSlot: <T>(slot: string, run: () => T) => T;
 		state: Record<string, unknown>;
 		TRANSCRIPT_FIRST_PAGE: number;
@@ -2181,6 +2182,31 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		expect(bag.hasMore).toBe(true);
 		expect(bag.cursor).toBe("w175-60");
 		expect(bag.fetching).toBe(false);
+	});
+
+	it("keeps a message sent during compaction on screen across the reload, and drops it once the server has it", async () => {
+		handler = () => ({ items: range(0, 3) });
+		await pageStore.loadTranscript("page-compact");
+		pageStore.addPendingMessage("client-1", "sent while compacting", [], "page-compact");
+		// compaction_end reloads the transcript before the server has taken the message.
+		handler = () => ({ items: [...range(0, 2), { kind: "compaction", id: "c1", ts: 5 }] });
+		await pageStore.loadTranscript("page-compact");
+		const during = bagState("page-compact").items as { kind?: string; text?: string; pending?: boolean }[];
+		expect(during.map((entry) => entry.kind)).toEqual(["user", "user", "compaction", "user"]);
+		expect(during.at(-1)).toMatchObject({ pending: true, text: "sent while compacting" });
+		// Once the server holds it, a reload shows it exactly once.
+		handler = () => ({
+			items: [
+				...range(0, 2),
+				{ kind: "compaction", id: "c1", ts: 5 },
+				{ kind: "user", id: "u9", ts: Date.now(), text: "sent while compacting", images: [] },
+			],
+		});
+		await pageStore.loadTranscript("page-compact");
+		const after = bagState("page-compact").items as { text?: string; pending?: boolean }[];
+		const copies = after.filter((entry) => entry.text === "sent while compacting");
+		expect(copies).toHaveLength(1);
+		expect(copies[0].pending).toBeUndefined();
 	});
 
 	it("② the default load stays full (no query) and reads as complete", async () => {

@@ -80,7 +80,9 @@ it("stores a large file sent in ordered chunks and refuses gaps, oversize files 
 		expect(readFileSync(done.data.path)).toEqual(bytes);
 		expect(host.inputTouched).toBe(true);
 		expect((await call("/api/files/upload/finish", { uploadId })).status).toBe(404);
-		expect((await call("/api/files/upload/begin", { name: "big.iso", size: 500 * 1024 * 1024 + 1 })).status).toBe(413);
+		expect((await call("/api/files/upload/begin", { name: "big.iso", size: 500 * 1024 * 1024 + 1 })).status).toBe(
+			413,
+		);
 		const empty = await call("/api/files/upload/begin", { name: "empty.txt", size: 0 });
 		const emptyDone = await call("/api/files/upload/finish", { uploadId: empty.data.uploadId });
 		expect(readFileSync(emptyDone.data.path)).toEqual(Buffer.alloc(0));
