@@ -9,6 +9,7 @@ import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
 import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
 import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
+import { morphLayout } from "./layout-morph.js";
 
 let dialogResolver = null;
 
@@ -117,11 +118,28 @@ export function exportTooLargeMessage(status, body) {
 	});
 }
 
-/** The view patch that ends collaboration mode and gives the sidebar back its state from before (empty when not in it). */
+/**
+ * The view patch that ends collaboration mode (empty when not in it). Collaboration mode hid the sidebar; leaving gives
+ * back the state it had before, unless the user opened the sidebar while in it: that newer choice stands, instead of the
+ * sidebar the user just opened vanishing again on exit.
+ */
 function leaveWorkspaceMax() {
 	if (!state.view.wsMax) return {};
 	const sidebar = state.view.wsMaxSidebar;
-	return { wsMax: false, wsMaxSidebar: null, ...(sidebar === null ? {} : { sidebarOpen: sidebar }) };
+	return { wsMax: false, wsMaxSidebar: null, ...(sidebar === null || state.view.sidebarOpen ? {} : { sidebarOpen: sidebar }) };
+}
+
+/**
+ * Close the panel with `patch`. Out of collaboration mode the panel slides out on its own; in it the columns change
+ * places, so the change runs as a layout morph: the workspace fades where it is while the conversation grows over the
+ * whole window (layout-morph.js, the `:only-child` rules in layout.css).
+ */
+function closeLayout(patch) {
+	if (!state.view.wsMax) {
+		setView(patch);
+		return;
+	}
+	morphLayout(() => setView({ ...patch, ...leaveWorkspaceMax() }), { beforeCapture: hideBrowserViews });
 }
 
 export const actions = {
@@ -145,7 +163,7 @@ export const actions = {
 	/** Hide the panel and every native browser view it was showing; the tabs stay open and come back as they were. */
 	closePanel() {
 		hideBrowserViews();
-		setView({ panelOpen: false, ...leaveWorkspaceMax() });
+		closeLayout({ panelOpen: false });
 	},
 
 	/**
@@ -156,12 +174,12 @@ export const actions = {
 	toggleWorkspaceMax(force) {
 		const next = typeof force === "boolean" ? force : !state.view.wsMax;
 		if (next === state.view.wsMax) return;
-		if (next) {
-			if (!state.view.wsActive && !state.view.wsTabs.length) return;
-			setView({ wsMax: true, panelOpen: true, wsMaxSidebar: state.view.sidebarOpen, sidebarOpen: false });
-			return;
-		}
-		setView(leaveWorkspaceMax());
+		if (next && !state.view.wsActive && !state.view.wsTabs.length) return;
+		// The columns swap places: layout-morph.js moves each one from its old box to its new one.
+		morphLayout(
+			() => setView(next ? { wsMax: true, panelOpen: true, wsMaxSidebar: state.view.sidebarOpen, sidebarOpen: false } : leaveWorkspaceMax()),
+			{ beforeCapture: hideBrowserViews },
+		);
 	},
 
 	/** Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. */
@@ -211,7 +229,11 @@ export const actions = {
 			patch.wsActive = next ? next.id : null;
 			if (next && PANEL_TAB_TYPES.includes(next.type)) patch.panelTab = next.type;
 		}
-		if (rest.length === 0) Object.assign(patch, { panelOpen: false }, leaveWorkspaceMax());
+		if (rest.length === 0) {
+			patch.panelOpen = false;
+			closeLayout(patch);
+			return;
+		}
 		setView(patch);
 	},
 

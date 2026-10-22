@@ -25,8 +25,8 @@ const TYPE_ICONS = {
 	file: "file",
 };
 
-/** A tab pops in over --t-pop and folds away with the shared collapse motion (COLLAPSE_MS, as every other fold). */
-const ENTER_MS = 180;
+/** A tab unfolds from its left edge and folds away with the same motion; the enter flag is cleared after it. */
+const ENTER_MS = COLLAPSE_MS + 20;
 const EXIT_MS = COLLAPSE_MS + 20;
 
 /** Drag a tab onto another to move it there; the order is the user's and is saved with the rest of the workspace. */
@@ -137,12 +137,32 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			fill: "forwards",
 		});
 	};
+	/**
+	 * A new tab grows from zero width to its own, its left edge fixed, so it is revealed from left to right while the
+	 * tabs after it slide over (the mirror of `foldAway`). An element that was folding away and is reopened inside the
+	 * fold is the same keyed element: its fold is cancelled first.
+	 */
+	const growIn = (element) => {
+		if (!element || element.dataset.growing) return;
+		element.dataset.growing = "1";
+		delete element.dataset.folding;
+		for (const animation of element.getAnimations?.() || []) animation.cancel();
+		if (!motionEnabled() || typeof element.animate !== "function") return;
+		const width = element.scrollWidth;
+		if (!width) return;
+		const animation = element.animate([{ maxWidth: "0px", opacity: 0 }, { maxWidth: `${width}px`, opacity: 1 }], {
+			duration: COLLAPSE_MS,
+			easing: "cubic-bezier(0.2, 0, 0, 1)",
+		});
+		// The strip scrolled the new active tab into view while it was still zero wide; finish that once it has its width.
+		animation.onfinish = () => element.querySelector(".ws-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+	};
 	return html`<div class="ws-tabs" role="tablist" ref=${strip} onWheel=${onWheel}>
 		${display.map(({ tab, leaving: isLeaving, width }) => {
 			return html`<div key=${tab.id} data-tab-id=${tab.id}
 			class=${`ws-tab-slot ${isLeaving ? "leaving" : ""} ${!isLeaving && entering.has(tab.id) ? "entering" : ""}`}
 			style=${isLeaving && width ? { maxWidth: `${width}px` } : null}
-			ref=${isLeaving ? (element) => foldAway(element, width) : null}>
+			ref=${isLeaving ? (element) => foldAway(element, width) : entering.has(tab.id) ? growIn : null}>
 			<div role="tab" tabindex=${isLeaving ? -1 : 0} draggable=${!isLeaving}
 			aria-hidden=${isLeaving ? "true" : null}
 			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""}`} aria-selected=${!isLeaving && activeId === tab.id}

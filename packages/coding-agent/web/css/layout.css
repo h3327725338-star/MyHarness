@@ -264,14 +264,12 @@
 .ws-tab-label { max-width: 150px; }
 .ws-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); opacity: 0.55; }
 .ws-tab-close:hover { background: var(--surface-hover); opacity: 1; }
-/* A tab pops in when it is opened and folds away when it is closed, with the same motion as the rest of the workspace:
-   --t-pop/--ease-out to arrive, the shared collapse run (COLLAPSE_MS, --ease) to leave. The fold starts from the tab's
-   measured width (workspace-tabs.js); a max-width transition alone would sit still until the cap fell below the content,
-   and the tab keeps its place in the strip for the whole fold. */
+/* A tab unfolds from its left edge when it is opened and folds back into it when it is closed: the shared collapse run
+   (COLLAPSE_MS) on the slot's width, driven from the tab's measured width (workspace-tabs.js `growIn` / `foldAway`); a
+   max-width transition alone would sit still until the cap fell below the content. The slot clips its tab, so the tab is
+   revealed left to right, and the tab keeps its place in the strip for the whole fold. */
 .ws-tab-slot { display: flex; flex: 0 0 auto; max-width: 208px; overflow: hidden; }
-.ws-tab-slot.entering { animation: ws-tab-in var(--t-pop) var(--ease-out) both; }
 .ws-tab-slot.leaving { max-width: 0; opacity: 0; pointer-events: none; }
-@keyframes ws-tab-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } to { opacity: 1; transform: none; } }
 .ws-menu { z-index: 80; display: flex; flex-direction: column; min-width: 140px; padding: 4px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
 .ws-menu button { padding: 6px 10px; border-radius: var(--r-sm); text-align: left; }
 .ws-menu button:hover { background: var(--surface-hover); }
@@ -293,18 +291,22 @@
 .ws-bookmark-icon { width: 16px; height: 16px; flex: none; border-radius: 3px; object-fit: contain; }
 .ws-bookmark-icon.letter { display: inline-grid; place-items: center; background: var(--surface-active); color: var(--text-2); font-size: 10px; font-weight: 600; line-height: 1; }
 .ws-bookmarks-empty { font-size: var(--fs-sm); white-space: nowrap; }
-/* The card inside the permission bubble fades in from its edge. */
-.ws-permissions-fold .collapse-inner { display: flex; flex-direction: column; }
-.ws-permissions { animation: pop-in var(--t-pop) var(--ease-out); }
-.ws-bookmark-editor { min-width: 260px; }
+/* The site bubble (shield) and the bookmark editor (star) hang from the same zero-height slot, right-aligned under the
+   toolbar buttons that open them: they cover the page instead of pushing it down. Too tall for the panel, they scroll. */
+.ws-side-pop { position: absolute; top: 0; right: var(--pad-panel); display: flex; max-width: calc(100% - 2 * var(--pad-panel)); animation: pop-in var(--t-pop) var(--ease-out) both; transform-origin: top right; }
+.ws-side-pop.closing { animation: pop-out var(--t-close) var(--ease-out) both; pointer-events: none; }
+.ws-side-pop > .ws-permissions { margin: 0; max-width: min(320px, 100%); max-height: min(560px, calc(100vh - 140px)); overflow-y: auto; overscroll-behavior: contain; }
+.ws-permissions.ws-bookmark-editor { min-width: 260px; }
 .ws-bookmark-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
 .ws-bookmark-actions { gap: 6px; padding-top: 2px; }
 .ws-logins-head { padding-top: 6px; border-top: 1px solid var(--border); margin-top: 2px; }
 /* The search engine belongs to the bar it searches with: a caret at the address field's right edge opens Google / Bing,
-   so the toolbar keeps one magnifier (page find) instead of two. */
+   and the toolbar has no magnifier at all: find in page is Ctrl+F (a magnifier next to a search field reads as "search"). */
 .ws-address { position: relative; }
 .ws-address-input { width: 0; padding-right: 26px; }
-.ws-address .menu-wrap { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); }
+/* Centred with top/bottom, never with a transform: a transformed ancestor becomes the containing block of the menu's
+   position:fixed popover, which then lands far off screen and the caret looks dead. */
+.ws-address .menu-wrap { position: absolute; right: 2px; top: 0; bottom: 0; display: flex; align-items: center; }
 .ws-address .ws-address-engine { width: 20px; height: 20px; color: var(--text-3); }
 /* File viewers: PDF pages are rendered by the engine itself, media by the native elements; both fill the panel. */
 .file-frame { width: 100%; height: 100%; min-height: 60vh; border: 0; background: var(--bg); }
@@ -349,6 +351,31 @@
 .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
 .app.ws-max .main > .resizer { left: 0; }
 .panel-max.active { color: var(--accent); }
+/* The swap itself is a View Transition (layout-morph.js): each column's picture moves from its old box to its new one.
+   The pictures keep their own size and hang from the top-left corner of the moving, clipping box (a resize, not a zoom),
+   and the root does not take part (the circular mode reveal's clip on the new root does not apply here). */
+html.ws-morph .app > .sidebar { view-transition-name: ws-sidebar; }
+html.ws-morph .app > .main { view-transition-name: ws-main; }
+/* Only an open panel is named: closing the panel in collaboration mode leaves it in the old picture only, so it fades
+   out where it was instead of sweeping across the window to its closed place at the right edge. */
+html.ws-morph .app.panel-open > .panel-slot { view-transition-name: ws-panel; }
+html.ws-morph::view-transition-new(root) { clip-path: none; }
+html.ws-morph::view-transition-group(ws-sidebar), html.ws-morph::view-transition-group(ws-main), html.ws-morph::view-transition-group(ws-panel) { overflow: clip; animation-duration: var(--t-slow); animation-timing-function: var(--ease); }
+html.ws-morph::view-transition-old(ws-sidebar), html.ws-morph::view-transition-new(ws-sidebar),
+html.ws-morph::view-transition-old(ws-main), html.ws-morph::view-transition-new(ws-main),
+html.ws-morph::view-transition-old(ws-panel), html.ws-morph::view-transition-new(ws-panel) { width: 100%; height: 100%; object-fit: none; object-position: left top; mix-blend-mode: normal; }
+/* Old and new layouts of a column differ (the conversation re-wraps), so they are never cross-faded (that doubled the text
+   or dipped the screen to black halfway). The conversation and the workspace show their new layout at once, moving and
+   resizing from the old box to the new one; only the sidebar, which appears or disappears, fades. */
+html.ws-morph::view-transition-old(ws-main), html.ws-morph::view-transition-old(ws-panel) { animation: none; opacity: 0; }
+html.ws-morph::view-transition-new(ws-main), html.ws-morph::view-transition-new(ws-panel) { animation: none; opacity: 1; }
+html.ws-morph::view-transition-old(ws-sidebar) { animation: ws-morph-out var(--t-slow) var(--ease) both; }
+/* The closed workspace (old picture without a new one): fades and sinks back slightly toward the conversation. */
+html.ws-morph::view-transition-old(ws-panel):only-child { opacity: 1; transform-origin: right center; animation: ws-panel-close var(--t-slow) var(--ease) both; }
+@keyframes ws-panel-close { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.97); } }
+html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-slow) var(--ease) both; }
+@keyframes ws-morph-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes ws-morph-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* Desktop host without a system title bar (window-controls.js sets html.desktop-frameless). The app's top row is the
    title bar, and the columns fill the window edge to edge: no gap and no rounded corner against the window frame, a

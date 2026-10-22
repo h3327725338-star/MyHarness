@@ -2,7 +2,7 @@
 // (packages/desktop/browser-view.cjs): a real Chromium document with its own history, cookies and storage, drawn above
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
-import { html, Collapse, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
+import { html, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
@@ -57,6 +57,7 @@ export function BrowserPanel({ tabId, url }) {
 	// A page that shows a bot check has no control the workspace could press; this bar is the way out of that dead end.
 	const [challengeHidden, setChallengeHidden] = useState(false);
 	const [permissionOpen, setPermissionOpen] = useState(false);
+	const permissionPresence = usePresence(permissionOpen, 110);
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
 	// Bookmarks are shared by every website tab and kept by the desktop host.
 	const [bookmarks, setBookmarks] = useState([]);
@@ -68,6 +69,12 @@ export function BrowserPanel({ tabId, url }) {
 	const barSlot = useRef(null);
 	const barButton = useRef(null);
 	const [bookmarkDraft, setBookmarkDraft] = useState(null);
+	// The bookmark editor and the site bubble float over the page like the bookmarks bar (opening them used to push
+	// the page down). A closing editor keeps showing the draft it had while it fades out.
+	const editorPresence = usePresence(!!bookmarkDraft, 110);
+	const lastDraft = useRef(null);
+	if (bookmarkDraft) lastDraft.current = bookmarkDraft;
+	const shownDraft = bookmarkDraft || lastDraft.current;
 	// Saved sign-ins: site and user name only (the host never hands a password to this page).
 	const [logins, setLogins] = useState({ available: true, logins: [] });
 	const [allLogins, setAllLogins] = useState(false);
@@ -362,7 +369,11 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "snapshot") {
-				setSnapshot(value.snapshot || null);
+				// The picture is taken while the native view fills the page box, so it is exactly that box's size. It is drawn
+				// at that size from the top-left corner: when the panel then narrows or widens (sidebar, collaboration mode) the
+				// picture is cut or uncovered at the edge, like a real browser before it repaints, instead of being squashed.
+				const box = target.current?.getBoundingClientRect();
+				setSnapshot(value.snapshot ? { src: value.snapshot, width: Math.round(box?.width || 0), height: Math.round(box?.height || 0) } : null);
 				return;
 			}
 			if (value.type === "newTab") {
@@ -500,6 +511,21 @@ export function BrowserPanel({ tabId, url }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
+	// The first click into the address bar selects the whole address (Chrome's behaviour), so typing replaces it; the
+	// mouseup of that click would otherwise drop the selection again. Later clicks place the caret as usual.
+	const freshFocus = useRef(false);
+	const selectAddress = (event) => {
+		freshFocus.current = true;
+		event.currentTarget.select();
+	};
+	const keepAddressSelection = (event) => {
+		if (!freshFocus.current) return;
+		freshFocus.current = false;
+		if (event.currentTarget.selectionStart === event.currentTarget.selectionEnd) {
+			event.preventDefault();
+			event.currentTarget.select();
+		}
+	};
 	const act = async (action) => {
 		// A tab that has not opened anything yet has no history, nothing to reload and nothing to stop.
 		if (!hasView) return;
@@ -520,17 +546,19 @@ export function BrowserPanel({ tabId, url }) {
 			${navIcon(Icon, "chevronLeft", t("Back"), !status.canGoBack, () => act("back"))}
 			${navIcon(Icon, "chevronRight", t("Forward"), !status.canGoForward, () => act("forward"))}
 			${status.loading ? navIcon(Icon, "x", t("Stop"), !hasView, () => act("stop")) : navIcon(Icon, "refresh", t("Reload"), !hasView, () => act("reload"))}
-			<form class="row grow ws-address" onSubmit=${navigate}><input class="field grow ws-address-input" aria-label=${t("Address and search bar")} value=${address} onInput=${(e) => setAddress(e.target.value)} onKeyDown=${(event) => { if (event.key === "Enter") { event.preventDefault(); void navigate(); } }} placeholder=${t("Search {engine} or enter an address", { engine: engineLabel })} /><${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-address-engine ${expanded ? "active" : ""}`} title=${t("Search engine: {engine}", { engine: engineLabel })} aria-label=${t("Search engine")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="chevronDown" size=${12} /></button>`}>
+			<form class="row grow ws-address" onSubmit=${navigate}><input class="field grow ws-address-input" aria-label=${t("Address and search bar")} value=${address} onInput=${(e) => setAddress(e.target.value)} onFocus=${selectAddress} onMouseUp=${keepAddressSelection} onKeyDown=${(event) => {
+					if (event.key === "Enter") { event.preventDefault(); void navigate(); }
+					// Escape puts back the address of the page on screen (an edit that was not opened is dropped), as in Chrome.
+					if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); setAddress(status.url || mountedUrl.current || ""); event.currentTarget.blur(); }
+				}} placeholder=${t("Search {engine} or enter an address", { engine: engineLabel })} /><${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-address-engine ${expanded ? "active" : ""}`} title=${t("Search engine: {engine}", { engine: engineLabel })} aria-label=${t("Search engine")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="chevronDown" size=${12} /></button>`}>
 				${(close) => SEARCH_ENGINES.map((item) => html`<${MenuItem} key=${item.id} label=${item.label} active=${item.id === engine} onClick=${() => { close(); chooseEngine(item.id); }} />`)}
 			</${Menu}></form>
 			<button class=${`icon-btn sm ws-star ${pageBookmark ? "on" : ""}`} title=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-label=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-pressed=${!!pageBookmark} disabled=${!status.url} onClick=${() => (bookmarkDraft ? setBookmarkDraft(null) : editBookmark(pageBookmark))}><${Icon} name="star" size=${15} /></button>
-			<button class="icon-btn sm" title=${t("Find in page")} aria-label=${t("Find in page")} aria-pressed=${findOpen} disabled=${!hasView} onClick=${() => (findOpen ? closeFind() : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
 			<button ref=${barButton} class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-expanded=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 		</div>
-		${bookmarkDraft ? html`<${BookmarkEditor} key=${bookmarkDraft.id || "new"} draft=${bookmarkDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} />` : null}
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
 				onInput=${(e) => { setFindText(e.target.value); if (!e.target.value) { setFound({ activeMatch: 0, matches: 0 }); send({ action: "stopFind" }).catch(() => undefined); } }}
@@ -561,7 +589,14 @@ export function BrowserPanel({ tabId, url }) {
 				<button class="btn sm" onClick=${() => answerPermission(false)}>${t("Deny")}</button>
 			</div>
 		</div>` : null}
-		<${Collapse} open=${permissionOpen} class="ws-permissions-fold"><div class="ws-permissions" ref=${permissionCard}>
+		<div class="ws-bookmarks-anchor">
+			${barPresence.mounted
+				? html`<div class=${`ws-bookmarks-pop ${barPresence.shown ? "" : "closing"}`} ref=${barSlot}><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /></div>`
+				: null}
+			${editorPresence.mounted && shownDraft
+				? html`<div class=${`ws-side-pop ${editorPresence.shown ? "" : "closing"}`}><${BookmarkEditor} key=${shownDraft.id || "new"} draft=${shownDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} /></div>`
+				: null}
+			${permissionPresence.mounted ? html`<div class=${`ws-side-pop ${permissionPresence.shown ? "" : "closing"}`} inert=${!permissionOpen}><div class="ws-permissions" ref=${permissionCard}>
 			<div class="row ws-permissions-head">
 				<strong class="grow truncate">${t("Site permissions")}</strong>
 				<button class="icon-btn sm" title=${t("Close")} aria-label=${t("Close")} onClick=${() => setPermissionOpen(false)}><${Icon} name="x" size=${13} /></button>
@@ -593,11 +628,7 @@ export function BrowserPanel({ tabId, url }) {
 					</div>`)
 					: html`<div class="dim ws-permissions-note">${allLogins ? t("No saved passwords yet.") : t("No saved password for this site.")}</div>`}
 			${engineVersion ? html`<div class="dim ws-permissions-note ws-browser-engine">${engineVersion}</div>` : null}
-		</div><//>
-		<div class="ws-bookmarks-anchor">
-			${barPresence.mounted
-				? html`<div class=${`ws-bookmarks-pop ${barPresence.shown ? "" : "closing"}`} ref=${barSlot}><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /></div>`
-				: null}
+			</div></div>` : null}
 		</div>
 		<div class="desktop-browser-target" ref=${target}>
 			<div class="pad">
@@ -605,7 +636,7 @@ export function BrowserPanel({ tabId, url }) {
 				${hasView && !status.url && !status.loading && engineVersion ? html`<p class="dim ws-browser-engine">${engineVersion}</p>` : null}
 				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
-			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot} alt="" draggable="false" />` : null}
+			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}
 		</div>
 	</div>`;
 }

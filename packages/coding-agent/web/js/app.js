@@ -332,7 +332,8 @@ export function App() {
 	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen, wsMax]);
 	useWorkspaceMaxEscape(wsMax);
 	// Entering or leaving collaboration mode swaps the order of the columns; their widths must not animate across the
-	// swap (the conversation would sweep through the middle), so the switch is instant.
+	// swap (the conversation would sweep through the middle), so the layout switches at once and the motion is the View
+	// Transition of layout-morph.js, which moves each column's picture from its old box to its new one.
 	const appRef = useRef(null);
 	const wasMax = useRef(wsMax);
 	useLayoutEffect(() => {

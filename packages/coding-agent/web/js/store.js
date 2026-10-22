@@ -447,8 +447,9 @@ function persistView() {
 	for (const key of PERSISTED) out[key] = state.view[key];
 	rememberPanel();
 	out.wsPanels = Object.fromEntries(panelStates);
-	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before.
-	if (state.view.wsMax && state.view.wsMaxSidebar !== null) out.sidebarOpen = state.view.wsMaxSidebar;
+	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before, unless
+	// the user opened it again while in it (the same rule as leaving the mode, actions.js `leaveWorkspaceMax`).
+	if (state.view.wsMax && state.view.wsMaxSidebar !== null && !state.view.sidebarOpen) out.sidebarOpen = state.view.wsMaxSidebar;
 	savePrefs(out);
 	applyAppearance();
 }

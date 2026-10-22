@@ -14,7 +14,7 @@
 
 // Layers that float above the layout. Several ignore the pointer (tooltips, toasts), so hit testing cannot find them.
 const FLOATING =
-	".overlay-host, [aria-modal='true'], .scrim, .lightbox-scrim, .personal-fullscreen-scrim, .composer-scrim, .composer.expanded, .popover, .local-file-menu, .tooltip, .quote-edit-scrim, .quote-edit-pop, .floating-quote-bar, .quote-note-card, .toast";
+	".overlay-host, [aria-modal='true'], .scrim, .lightbox-scrim, .personal-fullscreen-scrim, .composer-scrim, .composer.expanded, .popover, .local-file-menu, .tooltip, .quote-edit-scrim, .quote-edit-pop, .floating-quote-bar, .quote-note-card, .toast, .ws-bookmarks-pop, .ws-side-pop";
 // Transitions that move, resize, clip or fade the box (a color change on an ancestor does not).
 const MOVING =
 	/^(all|transform|translate|scale|rotate|opacity|filter|clip-path|inset|left|right|top|bottom|width|height|min-width|max-width|min-height|max-height|margin.*|padding.*|grid-template-.*|flex.*)$/;

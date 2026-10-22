@@ -142,13 +142,20 @@ try {
 	const submit=async value=>{bar.value=value;bar.dispatchEvent(new Event('input',{bubbles:true}));await wait(80);check(bar.value===value,'the typed text was dropped from the address bar: '+bar.value);bar.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))};
 	await submit('deepseek pricing');
 	check(await until(()=>calls.some(c=>c.action==='navigate'&&c.url==='https://www.google.com/search?q=deepseek%20pricing')),'a query was not searched with Google: '+JSON.stringify(calls.slice(-4)));
-	// One magnifier only, and the new tab button follows it: the engine picker is a caret inside the address field.
+	// No magnifier in the toolbar (find in page is Ctrl+F; a magnifier beside the address field reads as "search"),
+	// and the new tab button follows the star: the engine picker is a caret inside the address field.
 	const labels=[...document.querySelectorAll('.ws-browser-bar > button')].map(b=>b.getAttribute('aria-label'));
-	check(labels.indexOf('New browser tab')===labels.indexOf('Find in page')+1,'the new tab button must follow the find button: '+JSON.stringify(labels));
+	check(!labels.includes('Find in page'),'the toolbar must not carry a find-in-page magnifier: '+JSON.stringify(labels));
+	check(labels.indexOf('New browser tab')===labels.indexOf('Bookmark this page')+1,'the new tab button must follow the star: '+JSON.stringify(labels));
 	const engineTrigger=document.querySelector('.ws-browser-bar form button[aria-label="Search engine"]');
 	check(!!engineTrigger,'the search engine picker is not inside the address bar');
 	engineTrigger.click();
 	check(await until(()=>!!document.querySelector('.popover .menu-item')),'the search engine menu did not open');
+	// The menu is a fixed popover: it must open next to the caret, inside the window (a transformed ancestor once moved
+	// it far off screen, so the caret looked dead).
+	const enginePop=document.querySelector('.popover').getBoundingClientRect();
+	const caret=engineTrigger.getBoundingClientRect();
+	check(enginePop.right<=innerWidth&&enginePop.left>=0&&Math.abs(enginePop.top-caret.bottom)<40,'the search engine menu opened away from its caret: '+JSON.stringify({enginePop,caret}));
 	const bing=[...document.querySelectorAll('.popover .menu-item')].find(item=>/Bing/.test(item.textContent));
 	check(!!bing,'the search engine menu does not offer Bing');
 	bing.click();
