@@ -33,7 +33,12 @@ import { resolveWorkspaceDataContext, WorkspaceStore } from "../../data/workspac
 import { getCwdRelativePath, normalizePath, resolvePath } from "../../utils/paths.ts";
 import { readSessionBridgeDescriptor } from "../bridge/descriptor.ts";
 import { migrateToCurrentVersion } from "../migrations/index.ts";
-import { buildContextEntries, buildSessionContext, walkSessionPath } from "../projection/index.ts";
+import {
+	branchHasContextMessages,
+	buildContextEntries,
+	buildSessionContext,
+	walkSessionPath,
+} from "../projection/index.ts";
 import type { SessionDeleteImpact } from "../storage/jsonl/file-operations.ts";
 import {
 	describeSessionDeleteImpact,
@@ -87,6 +92,7 @@ import {
 
 export { migrateSessionEntries } from "../migrations/index.ts";
 export {
+	branchHasContextMessages,
 	buildContextEntries,
 	buildSessionContext,
 	getLatestCompactionEntry,
@@ -1305,6 +1311,15 @@ export class SessionManager {
 	 */
 	buildSessionContext(): SessionContext {
 		return buildSessionContext(this.getEntries(), this.leafId, this.byId, { sessionFile: this.sessionFile });
+	}
+
+	/**
+	 * Whether the active branch holds any message, without building the context.
+	 * The web layer asks this of every idle chat when it decides whether a chat is still an untouched draft; building
+	 * the full context for each of them materialised every message in every open chat just to read one length.
+	 */
+	hasContextMessages(): boolean {
+		return branchHasContextMessages(this.getEntries(), this.leafId, this.byId, { sessionFile: this.sessionFile });
 	}
 
 	/**

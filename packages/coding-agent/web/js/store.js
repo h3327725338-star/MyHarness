@@ -504,6 +504,9 @@ export function useStore(selector = (s) => s) {
 }
 
 // ---- HTTP ------------------------------------------------------------------------------------
+// Requests that can wait on a half-dead server pass a budget. Without one an await can hang forever and the only
+// feedback is a spinner or a button that does nothing, so every request that gates a screen carries a timeout.
+export const REQUEST_TIMEOUT = { snapshot: 20_000, transcript: 60_000, session: 60_000, status: 15_000, worktrees: 20_000, branches: 15_000 };
 export async function api(path, options = {}) {
 	const slot = options.slot ?? targetSlot ?? activeSlot;
 	if (String(slot ?? "").startsWith("pending:")) throw new Error(t("Loading…"));
@@ -519,8 +522,17 @@ export async function api(path, options = {}) {
 	try {
 		res = await getFetch()(path, init);
 	} catch (error) {
-		const err = new Error(exportReadOnly() ? t("This is a read-only copy: the conversation cannot be changed.") : t("Cannot reach the MyHarness server."));
+		// A deadline is not the same as a dead server: say which one happened, or the user cannot tell whether to retry.
+		const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+		const err = new Error(
+			timedOut
+				? t("The MyHarness server did not answer in time.")
+				: exportReadOnly()
+					? t("This is a read-only copy: the conversation cannot be changed.")
+					: t("Cannot reach the MyHarness server."),
+		);
 		err.cause = error;
+		err.timedOut = timedOut;
 		throw err;
 	}
 	let data = null;
@@ -547,7 +559,8 @@ export async function api(path, options = {}) {
 	return data;
 }
 
-export const post = (path, body, slot) => api(path, { method: "POST", body: body ?? {}, slot });
+export const post = (path, body, slot, options = {}) =>
+	api(path, { ...options, method: "POST", body: body ?? {}, slot });
 
 export function toast(message, type = "info", ttl = 6000) {
 	const id = uid("toast");
@@ -598,7 +611,7 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 	const key = slot ?? "";
 	const seq = (snapshotSent.get(key) || 0) + 1;
 	snapshotSent.set(key, seq);
-	let snap = await api("/api/state", { slot: key });
+	let snap = await api("/api/state", { slot: key, timeoutMs: REQUEST_TIMEOUT.snapshot });
 	const id = slot ?? snap.slot;
 	if ((snapshotShown.get(key) || 0) > seq) return snap;
 	snapshotShown.set(key, seq);
@@ -685,7 +698,10 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 	const requestKey = slot ?? "";
 	const requestSeq = (transcriptSent.get(requestKey) ?? 0) + 1;
 	transcriptSent.set(requestKey, requestSeq);
-	const data = await api(limit ? `/api/transcript?limit=${limit}` : "/api/transcript", { slot: slot ?? "" });
+	const data = await api(limit ? `/api/transcript?limit=${limit}` : "/api/transcript", {
+		slot: slot ?? "",
+		timeoutMs: REQUEST_TIMEOUT.transcript,
+	});
 	if (transcriptSent.get(requestKey) !== requestSeq) return data;
 	const toolRuns = {};
 	for (const item of data.items) {
@@ -850,7 +866,10 @@ export async function fetchMoreTranscript(slot = activeSlot) {
 	const cursor = bag.transcriptCursor;
 	let data;
 	try {
-		data = await api(`/api/transcript?limit=${TRANSCRIPT_FIRST_PAGE}&before=${encodeURIComponent(cursor)}`, { slot });
+		data = await api(`/api/transcript?limit=${TRANSCRIPT_FIRST_PAGE}&before=${encodeURIComponent(cursor)}`, {
+			slot,
+			timeoutMs: REQUEST_TIMEOUT.transcript,
+		});
 	} catch (error) {
 		if (!bags.has(slot) || bag.transcriptSeq !== seq) return "stale";
 		bag.transcriptFetching = false;
@@ -1169,18 +1188,25 @@ export async function loadStats() {
 
 const gitStatusRequests = new Map();
 const workspaceGitRequests = new Map();
-export async function loadGitStatus() {
-	const slot = targetSlot ?? activeSlot;
+export async function loadGitStatus({ retry = 1, slot: slotOverride } = {}) {
+	const slot = slotOverride ?? targetSlot ?? activeSlot;
 	const request = {};
 	const cwdKey = workspaceKey(bagOf(slot).snap);
 	gitStatusRequests.set(slot, request);
 	if (cwdKey) workspaceGitRequests.set(cwdKey, request);
 	let status = null;
 	try {
-		status = await api("/api/git/status", { slot });
+		status = await api("/api/git/status", { slot, timeoutMs: REQUEST_TIMEOUT.status });
 	} catch {
-		// A transient failure is not evidence that the repository or branch disappeared.
-		if (gitStatusRequests.get(slot) === request) gitStatusRequests.delete(slot);
+		// A transient failure is not evidence that the repository or branch disappeared, but after a copy switch it is
+		// exactly what leaves the chip on the previous copy: try once more shortly, quietly.
+		if (gitStatusRequests.get(slot) === request) {
+			gitStatusRequests.delete(slot);
+			if (retry > 0) setTimeout(() => {
+				// Retry the Chat that failed, not whichever Chat happens to be on screen 1.2s later.
+				if (!gitStatusRequests.has(slot)) loadGitStatus({ retry: retry - 1, slot });
+			}, 1200);
+		}
 		return;
 	}
 	// A slow pre-commit query must not overwrite a newer post-commit result.

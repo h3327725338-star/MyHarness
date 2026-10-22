@@ -2,7 +2,7 @@
 // this chat into an isolated copy of the repository (a Git worktree) or back to the main copy. Every action calls the
 // server's Git routes (routes-git.ts), which use Git's own rules; nothing here decides what Git allows.
 import { html, useEffect, useMemo, useRef, useState, afterPaint, Chevron, Collapse, COLLAPSE_MS, Icon, Popover, Spinner, Toggle } from "./ui.js";
-import { api, attempt, loadGitStatus, post, state, toast, useStore } from "./store.js";
+import { api, attempt, loadGitStatus, post, REQUEST_TIMEOUT, state, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
 import { getLang, serverText, t } from "./i18n.js";
@@ -52,7 +52,7 @@ export function BranchChip({ gitStatus }) {
 		source.load = (force = false) => {
 			if (!force && source.data && Date.now() - source.loadedAt < 1000) return Promise.resolve(source.data);
 			if (!source.pending) {
-				source.pending = api("/api/git/branches", { slot }).then((data) => {
+				source.pending = api("/api/git/branches", { slot, timeoutMs: REQUEST_TIMEOUT.branches }).then((data) => {
 					source.data = data;
 					source.loadedAt = Date.now();
 					return data;
@@ -63,10 +63,14 @@ export function BranchChip({ gitStatus }) {
 		return source;
 	}, [slot]);
 	useEffect(() => {
-		// Start before the first click; status updates also refresh changes made outside this menu.
+		// Read once when the chip mounts; the list is re-read when the menu opens (see below), not on every status tick.
 		branchSource.load().catch(() => {});
-	}, [branchSource, gitStatus]);
+	}, [branchSource]);
 	const [open, setOpen] = useState(false);
+	useEffect(() => {
+		// A Git status tick while the menu is closed does not need a new branch list; opening it does.
+		if (open) branchSource.load(true).catch(() => {});
+	}, [branchSource, open]);
 	// The shared Popover hands the keyboard back when its open prop flips, but the exit animation keeps this menu
 	// mounted through the fade, so its search input is still the focus at that moment and the restore is skipped.
 	// Watch for the popover actually leaving the page and hand the keyboard back then (and only if focus was lost to
@@ -160,7 +164,9 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	// `fresh`: read again even if a read is in flight (it may have started before a copy was created or removed).
 	const loadWorktrees = async (fresh = false) => {
 		try {
-			const data = fresh ? await api("/api/git/worktrees", { slot }) : await worktreeReads.load(slot, () => api("/api/git/worktrees", { slot }));
+			const data = fresh
+				? await api("/api/git/worktrees", { slot, timeoutMs: REQUEST_TIMEOUT.worktrees })
+				: await worktreeReads.load(slot, () => api("/api/git/worktrees", { slot, timeoutMs: REQUEST_TIMEOUT.worktrees }));
 			setWorktrees({ list: data.worktrees || [] });
 		} catch (e) {
 			setWorktrees({ list: [], error: serverText(e.message, t("Cannot list worktrees.")) });
@@ -275,7 +281,8 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	}, [sel]);
 
 	const done = async (message) => {
-		await loadGitStatus();
+		// In parallel: both read small payloads, and serially the toast could wait out a status timeout before appearing.
+		await Promise.all([loadGitStatus(), loadWorktrees(true)]);
 		// Switching branches or deleting a copy rewrites files on disk; tell the mounted panels to reload them.
 		window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } }));
 		if (message) toast(message, "info", 3500);
@@ -284,7 +291,11 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const enterCopy = async (path, message, carryHistory = false) => {
 		setBusy(`w:${path}`);
 		if (carryHistory) carryDraftFrom(state.snap?.session?.id);
-		const ok = await attempt(() => post("/api/git/worktrees/enter", { path, ...(carryHistory ? { carryHistory: true } : {}) }));
+		const ok = await attempt(() =>
+			post("/api/git/worktrees/enter", { path, ...(carryHistory ? { carryHistory: true } : {}) }, undefined, {
+				timeoutMs: REQUEST_TIMEOUT.session,
+			}),
+		);
 		setBusy("");
 		if (!ok) {
 			dropCarriedDraft();
@@ -426,7 +437,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		try {
 			const result = await post("/api/git/worktrees/name-ai", { path: w.path, language: getLang() }, slot);
 			if (!result?.name) return;
-			const listing = await api("/api/git/worktrees", { slot });
+			const listing = await api("/api/git/worktrees", { slot, timeoutMs: REQUEST_TIMEOUT.worktrees });
 			const now = listing.worktrees?.find((item) => sameCopyPath(item.path, w.path));
 			if (!now || (now.displayName && now.displayName !== now.branch)) return;
 			await post("/api/git/worktrees/rename", { path: w.path, name: result.name }, slot);
@@ -443,7 +454,11 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		const taken = new Set([...(data?.branches || []).map((b) => b.name), ...copiesList.map((w) => w.branch).filter(Boolean)]);
 		const branch = copyBranchName(taken);
 		setBusy("copy");
-		const created = await attempt(() => post("/api/git/worktrees/create", { branch, newBranch: true, base: "head" }));
+		const created = await attempt(() =>
+			post("/api/git/worktrees/create", { branch, newBranch: true, base: "head" }, undefined, {
+				timeoutMs: REQUEST_TIMEOUT.session,
+			}),
+		);
 		if (!created?.worktree?.path) {
 			setBusy("");
 			return;
@@ -453,7 +468,9 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		setWorktreesOpen(true);
 		await loadWorktrees(true);
 		carryDraftFrom(state.snap?.session?.id);
-		const entered = await attempt(() => post("/api/git/worktrees/enter", { path, carryHistory: true }));
+		const entered = await attempt(() =>
+			post("/api/git/worktrees/enter", { path, carryHistory: true }, undefined, { timeoutMs: REQUEST_TIMEOUT.session }),
+		);
 		setBusy("");
 		if (!entered) {
 			dropCarriedDraft();
@@ -465,7 +482,6 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			return;
 		}
 		await done(t("Now working in an isolated copy on {branch}", { branch }));
-		await loadWorktrees(true);
 		nameInBackground(created.worktree);
 	};
 	const backToMain = () => main && enterCopy(main.path, t("Back in the main copy"), true);
@@ -493,7 +509,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		setDiscarding(false);
 		setTargetCopy(null);
 		if (naming?.path === w.path) setNaming(null);
-		await Promise.all([loadWorktrees(true), load(true)]);
+		await load(true);
 		await done(t("Copy deleted"));
 	};
 	const cancelCopyDeletion = () => {
@@ -503,8 +519,11 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		setConfirmCopy("");
 	};
 	// A merged or clean copy is deleted after one confirming click; a copy that holds work opens the choices panel.
+	// An archived copy no longer carries change counts (reading them cost two Git processes per archived copy), so
+	// "unknown" there must not open the choices panel: a plain delete is refused by Git when the copy is dirty, and
+	// the failure path then offers the explicit force confirmation.
 	const askDeleteCopy = (w) => {
-		if (holdsWork(w)) {
+		if (!w.archived && holdsWork(w)) {
 			setConfirmCopy("");
 			setCopyFailure(null);
 			setDiscarding(false);

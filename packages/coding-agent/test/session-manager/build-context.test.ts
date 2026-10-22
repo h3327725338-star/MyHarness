@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	type BranchSummaryEntry,
+	branchHasContextMessages,
 	buildContextEntries,
 	buildSessionContext,
 	type CompactionEntry,
@@ -380,5 +381,64 @@ describe("history vs compacted agent context separation", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("branchHasContextMessages", () => {
+	it("agrees with buildSessionContext on an empty branch", () => {
+		expect(branchHasContextMessages([])).toBe(false);
+		expect(buildSessionContext([]).messages).toEqual([]);
+	});
+
+	it("ignores entries that project no message", () => {
+		const entries: SessionEntry[] = [
+			thinkingLevel("1", null, "high"),
+			custom("2", "1", "web-git-status", { dirty: true }),
+			modelChange("3", "2", "anthropic", "claude-test"),
+		];
+		expect(buildSessionContext(entries).messages).toEqual([]);
+		expect(branchHasContextMessages(entries)).toBe(false);
+	});
+
+	it("sees a message and a compaction checkpoint", () => {
+		expect(branchHasContextMessages([msg("1", null, "user", "hi")])).toBe(true);
+		const compacted: SessionEntry[] = [msg("1", null, "user", "hi"), compaction("2", "1", "summary", "1")];
+		expect(branchHasContextMessages(compacted)).toBe(true);
+	});
+
+	it("is false when the leaf was reset to the root, like the context itself", () => {
+		const entries: SessionEntry[] = [msg("1", null, "user", "hi")];
+		expect(buildSessionContext(entries, null).messages).toEqual([]);
+		expect(branchHasContextMessages(entries, null)).toBe(false);
+	});
+
+	it("counts a hidden custom message, exactly like the context does", () => {
+		const note: SessionEntry = {
+			type: "custom_message",
+			id: "1",
+			parentId: null,
+			timestamp: "2025-01-01T00:00:00Z",
+			customType: "note",
+			content: "hidden",
+			display: false,
+			excludeFromContext: true,
+		};
+		expect(buildSessionContext([note]).messages).toHaveLength(1);
+		expect(branchHasContextMessages([note])).toBe(true);
+	});
+
+	it("treats an empty branch summary the same way as the context does", () => {
+		const blank: SessionEntry[] = [branchSummary("1", null, "", "from")];
+		expect(buildSessionContext(blank).messages).toEqual([]);
+		expect(branchHasContextMessages(blank)).toBe(false);
+		const filled: SessionEntry[] = [branchSummary("1", null, "summed up", "from")];
+		expect(buildSessionContext(filled).messages).toHaveLength(1);
+		expect(branchHasContextMessages(filled)).toBe(true);
+	});
+
+	it("treats an empty replacement history as empty, like the context does", () => {
+		const empty: SessionEntry[] = [{ ...compaction("1", null, "summary", "1"), replacementHistory: [] }];
+		expect(buildSessionContext(empty).messages).toEqual([]);
+		expect(branchHasContextMessages(empty)).toBe(false);
 	});
 });

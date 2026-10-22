@@ -58,6 +58,7 @@ const manualCopyPath = path.join(fixtureRoot, "manual-copy");
 const subagentCopyPath = path.join(fixtureRoot, "subagent-copy");
 const userArchivedPath = path.join(fixtureRoot, "user-archived-copy");
 const temporaryCopyPath = path.join(tmpdir(), "myharness-archive-route-fixture", "run-1");
+const prunableCopyPath = path.join(fixtureRoot, "prunable-copy");
 
 const mainWorktree: GitWorktree = { path: repositoryRoot, branch: "main", isMain: true, locked: false };
 const manualCopy: GitWorktree = { path: manualCopyPath, branch: "task-0101-0900", isMain: false, locked: false };
@@ -74,6 +75,14 @@ const userArchivedCopy: GitWorktree = {
 	locked: false,
 };
 const temporaryCopy: GitWorktree = { path: temporaryCopyPath, isMain: false, locked: false };
+// Git reports `prunable` for a copy whose folder is gone: there is nothing left to read there.
+const prunableCopy: GitWorktree = {
+	path: prunableCopyPath,
+	branch: "feature/gone",
+	isMain: false,
+	locked: false,
+	prunable: "gitdir file points to non-existent location",
+};
 
 let agentDir = "";
 
@@ -116,11 +125,25 @@ function fixtureListing(worktrees: GitWorktree[]) {
 beforeEach(() => {
 	vi.resetAllMocks();
 	agentDir = mkdtempSync(path.join(tmpdir(), "myharness-archive-agent-"));
-	for (const copyPath of [repositoryRoot, manualCopyPath, subagentCopyPath, userArchivedPath, temporaryCopyPath]) {
+	for (const copyPath of [
+		repositoryRoot,
+		manualCopyPath,
+		subagentCopyPath,
+		userArchivedPath,
+		temporaryCopyPath,
+		prunableCopyPath,
+	]) {
 		mkdirSync(copyPath, { recursive: true });
 	}
 	const state = { gitAvailable: true, isRepository: true, hasBaseline: true, root: repositoryRoot };
-	const listing = fixtureListing([mainWorktree, manualCopy, subagentCopy, userArchivedCopy, temporaryCopy]);
+	const listing = fixtureListing([
+		mainWorktree,
+		manualCopy,
+		subagentCopy,
+		userArchivedCopy,
+		temporaryCopy,
+		prunableCopy,
+	]);
 	mocks.inspectRepository.mockReturnValue(state);
 	mocks.inspectRepositoryAsync.mockResolvedValue(state);
 	mocks.listWorktrees.mockReturnValue(listing);
@@ -134,6 +157,8 @@ beforeEach(() => {
 	mocks.deleteWorktree.mockReturnValue({ ok: true });
 	// A copy the app created on purpose: its origin record keeps it out of the automatic archive rule.
 	new WorktreeArchiveRecords(agentDir).update(manualCopyPath, { origin: "manual" });
+	// Same for the prunable copy: it must stay an active entry so the test proves the prunable skip, not the archive one.
+	new WorktreeArchiveRecords(agentDir).update(prunableCopyPath, { origin: "manual" });
 	// A copy the user archived by hand, with work still in it.
 	new WorktreeArchiveRecords(agentDir).update(userArchivedPath, {
 		origin: "manual",
@@ -171,6 +196,14 @@ describe("worktree archive routes", () => {
 		});
 		expect(copies.get(manualCopyPath)?.archived).toBe(false);
 		expect(copies.get(repositoryRoot)?.archived).toBe(false);
+	});
+
+	it("reads Git activity only for copies that can still be edited", async () => {
+		mocks.readActivity.mockClear();
+		await listCopies();
+		// Two Git processes per copy: archived copies, the main copy and prunable ones must not pay it on every menu open.
+		const read = mocks.readActivity.mock.calls.map(([worktree]) => (worktree as GitWorktree).path);
+		expect(read).toEqual([manualCopyPath]);
 	});
 
 	it("records the archive time and the branch that restoring has to check out again", async () => {

@@ -157,6 +157,28 @@ export function buildContextEntries(
 	return contextEntries;
 }
 
+/**
+ * Whether the active branch projects at least one message, without building any of them.
+ * `buildSessionContext()` materialises an AgentMessage per entry and renders compaction continuity; callers that only
+ * ask "is this chat still empty?" (for example reusing an untouched draft) do not need that work.
+ */
+export function branchHasContextMessages(
+	entries: SessionEntry[],
+	leafId?: string | null,
+	byId?: Map<string, SessionEntry>,
+	options: { sessionFile?: string } = {},
+): boolean {
+	for (const entry of buildContextEntries(entries, leafId, byId, options)) {
+		if (entry.type === "message" || entry.type === "custom_message") return true;
+		if (entry.type === "branch_summary" && entry.summary) return true;
+		if (entry.type === "compaction") {
+			if (!entry.replacementHistory) return true;
+			if (entry.replacementHistory.length > 0) return true;
+		}
+	}
+	return false;
+}
+
 /** Project persisted entries into the runtime context and model state. */
 export function buildSessionContext(
 	entries: SessionEntry[],

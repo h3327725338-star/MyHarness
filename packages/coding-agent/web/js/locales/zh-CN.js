@@ -995,6 +995,7 @@ export const zhCN = {
 
 	// ---- Store
 	"Cannot reach the MyHarness server.": "无法连接到 MyHarness 服务。",
+	"The MyHarness server did not answer in time.": "MyHarness 服务长时间没有响应（已超时）。",
 	"This is a read-only copy: the conversation cannot be changed.": "这是只读副本：无法修改对话。",
 	"Request failed ({status})": "请求失败（{status}）",
 	"The operation failed.": "操作失败。",

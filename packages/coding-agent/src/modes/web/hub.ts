@@ -520,7 +520,8 @@ export class WebHostHub implements WebHostHubLink {
 						!host.gitTask &&
 						!host.completionActive &&
 						(!defaultStorage || host.unbound === wantUnbound) &&
-						host.session.sessionManager.buildSessionContext().messages.length === 0 &&
+						// Asks "no messages?" without projecting every message of every open chat just to read a length.
+						host.session.sessionManager.hasContextMessages() === false &&
 						!host.hasOperationContent,
 				);
 		if (reusable) return { slot: reusable.slotId, created: false };

@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -416,7 +416,7 @@ export const actions = {
 	async newSession(rootPath, { unbound = false } = {}) {
 		const mode = uiMode();
 		const seq = nextSwitch();
-		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound, mode }));
+		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound, mode }, undefined, { timeoutMs: REQUEST_TIMEOUT.session }));
 		if (result?.slot && isLatestSwitch(seq)) {
 			const group = unbound ? GENERAL_KEY : rootPath;
 			const key = expandedKey(mode);
@@ -464,7 +464,7 @@ export const actions = {
 		const info = findListed(path);
 		const pending = beginSwitch({ path, mode: uiMode(), name: info?.name, sessionId: info?.id ?? open?.sessionId, retry: () => actions.openSession(path) }, seq);
 		try {
-			const result = await post("/api/sessions/open", { path }, "");
+			const result = await post("/api/sessions/open", { path }, "", { timeoutMs: REQUEST_TIMEOUT.session });
 			if (result?.slot && isLatestSwitch(seq)) {
 				void loadSlots().catch(() => {});
 				await activateSlot(result.slot, seq, pending);

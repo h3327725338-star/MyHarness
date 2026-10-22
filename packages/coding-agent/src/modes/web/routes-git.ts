@@ -671,6 +671,11 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const archive = copyArchive();
 		archive.prune();
 		const tempDir = tmpdir();
+		// One record read per copy: `archive.get` touches the disk on every call, and this list can hold hundreds of
+		// archived copies. Updated in place below so the response never reads a stale copy of a record written here.
+		const records = new Map<string, ReturnType<typeof archive.get>>();
+		for (const worktree of worktrees)
+			records.set(worktree.path, worktree.isMain ? undefined : archive.get(worktree.path));
 		for (const worktree of worktrees) {
 			// The copy this chat runs in stays an active copy no matter what its folder looks like.
 			if (path.resolve(worktree.path) === current) continue;
@@ -678,27 +683,38 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 				path: worktree.path,
 				branch: worktree.branch,
 				isMain: worktree.isMain,
-				record: worktree.isMain ? undefined : archive.get(worktree.path),
+				record: records.get(worktree.path),
 				tempDir,
 			});
 			if (!reason) continue;
-			archive.update(worktree.path, {
-				origin: reason === "subagent" ? "subagent" : "external",
-				archivedAt: new Date().toISOString(),
-				reason,
-				branch: worktree.branch,
-			});
+			records.set(
+				worktree.path,
+				archive.update(worktree.path, {
+					origin: reason === "subagent" ? "subagent" : "external",
+					archivedAt: new Date().toISOString(),
+					reason,
+					branch: worktree.branch,
+				}),
+			);
 		}
 		// What each copy holds that main does not (uncommitted files, unmerged commits), read a few at a time so a
-		// long list of sub-agent copies cannot start dozens of Git processes at once.
+		// long list of sub-agent copies cannot start dozens of Git processes at once. An archived copy is a finished
+		// record and the main copy cannot hold unmerged work, so neither is read: reading them cost two Git processes
+		// per archived copy on every menu open, and hundreds of them pile up over time. Their `changes`/`ahead` stay
+		// unknown, which every reader already treats as "cannot tell" rather than "clean".
 		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
 		const activity = new Array<Awaited<ReturnType<GitWorktreeManager["readActivityAsync"]>>>(worktrees.length);
+		const needsActivity = (worktree: GitWorktree): boolean =>
+			!worktree.isMain && !worktree.prunable && !records.get(worktree.path)?.archivedAt;
 		let next = 0;
 		await Promise.all(
 			Array.from({ length: Math.min(6, worktrees.length) }, async () => {
 				while (next < worktrees.length) {
 					const index = next++;
-					activity[index] = await manager.readActivityAsync(worktrees[index]!).catch(() => ({}));
+					const worktree = worktrees[index]!;
+					activity[index] = needsActivity(worktree)
+						? await manager.readActivityAsync(worktree).catch(() => ({}))
+						: {};
 				}
 			}),
 		);
@@ -706,7 +722,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		return {
 			repositoryRoot: listing.repositoryRoot ?? root,
 			worktrees: worktrees.map((worktree, index) => {
-				const record = worktree.isMain ? undefined : archive.get(worktree.path);
+				const record = records.get(worktree.path);
 				return {
 					...worktree,
 					...activity[index],
@@ -934,16 +950,24 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const archive = copyArchive();
 		const removed: string[] = [];
 		const failed: Array<{ path: string; error: string }> = [];
-		for (const worktree of listing.worktrees ?? []) {
-			if (worktree.isMain || path.resolve(worktree.path) === current) continue;
-			if (!archive.get(worktree.path)?.archivedAt) continue;
-			const result = worktreeCase.delete(root, worktree, force);
-			if (!result.ok) {
-				failed.push({ path: worktree.path, error: result.error ?? "未知错误" });
-				continue;
+		const targets = (listing.worktrees ?? []).filter((worktree) => {
+			if (worktree.isMain || path.resolve(worktree.path) === current) return false;
+			return !!archive.get(worktree.path)?.archivedAt;
+		});
+		// Removing a copy is a synchronous Git call. Clearing every archived copy in one pass held the event loop for
+		// seconds, which stalled other requests and the event stream; small batches leave room to answer in between.
+		const CLEAR_BATCH = 4;
+		for (let index = 0; index < targets.length; index += CLEAR_BATCH) {
+			for (const worktree of targets.slice(index, index + CLEAR_BATCH)) {
+				const result = worktreeCase.delete(root, worktree, force);
+				if (!result.ok) {
+					failed.push({ path: worktree.path, error: result.error ?? "未知错误" });
+					continue;
+				}
+				archive.remove(worktree.path);
+				removed.push(worktree.path);
 			}
-			archive.remove(worktree.path);
-			removed.push(worktree.path);
+			if (index + CLEAR_BATCH < targets.length) await new Promise<void>((resolve) => setImmediate(resolve));
 		}
 		return { removed: removed.length, failed };
 	});

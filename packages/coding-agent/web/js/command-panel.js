@@ -2,7 +2,7 @@
 // input, instead of a separate page. Everything works from the keyboard: ↑/↓ move, Enter or → go in or apply, ← / Esc go back,
 // Space toggles, and typing filters the searchable lists. The mouse works too, but is never required.
 import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Spinner, UnitField, useDelayedBusy, usePresence, useDebouncedValue } from "./ui.js";
-import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
+import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore, REQUEST_TIMEOUT } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
 import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoImpact, undoTaskChanges } from "./git-flow.js";
@@ -895,7 +895,7 @@ function worktreesScreen(ctx) {
 						title: w.branch || w.path,
 						subtitle: w.path,
 						rows: [
-							{ key: "enter", label: t("Enter"), disabled: w.current || busy, onEnter: async (cc) => { if (await attempt(() => post("/api/git/worktrees/enter", { path: w.path }))) cc.close(); } },
+							{ key: "enter", label: t("Enter"), disabled: w.current || busy, onEnter: async (cc) => { if (await attempt(() => post("/api/git/worktrees/enter", { path: w.path }, undefined, { timeoutMs: REQUEST_TIMEOUT.session }))) { cc.close(); await loadGitStatus(); window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } })); reload(); } } },
 							...(!w.isMain
 								? [
 										{ key: "combine", label: t("Combine into main"), disabled: busy, onEnter: async (cc) => { const r = await attempt(() => post("/api/git/worktrees/combine", { branch: w.branch })); if (r) { toast(r.message || (r.status === "merged" ? t("Merged into main and removed.") : r.error || r.status), r.ok ? "info" : "error", 8000); reload(); cc.pop(); } } },
