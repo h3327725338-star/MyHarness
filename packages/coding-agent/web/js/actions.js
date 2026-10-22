@@ -416,8 +416,30 @@ export const actions = {
 	async newSession(rootPath, { unbound = false } = {}) {
 		const mode = uiMode();
 		const seq = nextSwitch();
-		const result = await attempt(() => post("/api/sessions/new", { rootPath, unbound, mode }, undefined, { timeoutMs: REQUEST_TIMEOUT.session }));
-		if (result?.slot && isLatestSwitch(seq)) {
+		// The empty chat is on screen before the request leaves. A new chat has nothing to read, so the click must not
+		// sit behind whatever else the service is doing (a session-list scan can hold it for a second or more). The
+		// shell is a real pending switch, not a fake transcript: sends stay locked until the slot's snapshot arrives,
+		// and the same timing record now separates the shell appearing (visibleMs) from the chat being usable
+		// (contentMs).
+		flushDrafts();
+		// The request keeps addressing the chat that was on screen: the pending shell is a browser-only id, and the
+		// API refuses requests for it.
+		const fromSlot = activeSlotId();
+		const requestSlot = String(fromSlot ?? "").startsWith("pending:") ? "" : fromSlot;
+		const pending = beginSwitch({ mode, retry: () => actions.newSession(rootPath, { unbound }) }, seq);
+		let result;
+		try {
+			result = await post("/api/sessions/new", { rootPath, unbound, mode }, requestSlot, { timeoutMs: REQUEST_TIMEOUT.session });
+		} catch (error) {
+			if (pending) failSwitch(seq, error);
+			toast(serverText(error?.message || String(error), t("The operation failed.")), "error", 9000);
+			return undefined;
+		}
+		if (!result?.slot) {
+			if (pending) failSwitch(seq, new Error(t("The operation failed.")));
+			return result;
+		}
+		if (isLatestSwitch(seq)) {
 			const group = unbound ? GENERAL_KEY : rootPath;
 			const key = expandedKey(mode);
 			if (group) setView({ [key]: { ...state.view[key], [group]: true } });

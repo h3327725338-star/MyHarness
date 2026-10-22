@@ -633,7 +633,9 @@ export class WebHost {
 			},
 		});
 		// A checkpoint of a session another process owns belongs to that process.
-		if (!session.isMirror) void this.recoverStartupCheckpoint(generation);
+		// Opening a chat must not wait for the checkpoint scan: it runs git synchronously, and the new chat's response
+		// is only sent after bindSession returns. A host disposed before the timer fires is caught by the generation.
+		if (!session.isMirror) setTimeout(() => void this.recoverStartupCheckpoint(generation), 0);
 		else this.watchMirror(session as MirrorAgentSession, generation);
 		this.unsubscribe = session.subscribe((event) => {
 			if (generation !== this.generation) return;
@@ -683,6 +685,8 @@ export class WebHost {
 	 */
 	private async recoverStartupCheckpoint(generation: number): Promise<void> {
 		try {
+			// Deferred by its caller, so the slot can already be closed again by the time it runs.
+			if (generation !== this.generation) return;
 			const listed = listGitCheckpoints({ cwd: this.cwd, sessionId: this.session.sessionManager.getSessionId() });
 			if (!listed.ok) return;
 			for (const checkpoint of listed.checkpoints) {

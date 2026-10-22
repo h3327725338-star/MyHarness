@@ -5,6 +5,8 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@myharness/ai";
 import chalk from "chalk";
 import type { CreateAgentSessionOptions } from "./agent/runtime/sdk.ts";
@@ -24,7 +26,7 @@ import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import type { WebBootstrap } from "./modes/web/web-mode.ts";
 import { printTimings, resetTimings, time } from "./observability/timings.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./platform/process/http-dispatcher.ts";
-import type { ModelRuntime } from "./providers/runtime/index.ts";
+import { ModelRuntime } from "./providers/runtime/index.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./providers/runtime/model-resolver.ts";
 import { getMissingSessionCwdIssue, MissingSessionCwdError } from "./session/manager/cwd.ts";
 import { assertValidSessionId, SessionManager, setMirrorSessionsAllowed } from "./session/manager/index.ts";
@@ -516,6 +518,50 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
+	// A new chat used to rebuild the whole provider catalog from the same files (~10 ms each time). One catalog per
+	// effective cwd is enough: it is dropped when auth.json / models.json / models-store.json change on disk, and
+	// every sibling still refreshes credentials and availability on the shared instance.
+	const modelRuntimeCacheMax = 8;
+	const modelRuntimeCache = new Map<string, { stamp: string; runtime: Promise<ModelRuntime> }>();
+	const modelRuntimeStamp = (targetAgentDir: string): string => {
+		try {
+			return ["auth.json", "models.json", "models-store.json"]
+				.map((name) => {
+					const stats = statSync(join(targetAgentDir, name));
+					return `${stats.mtimeMs}:${stats.size}`;
+				})
+				.join("|");
+		} catch {
+			// A missing file is never "unchanged": an unmatched stamp rebuilds the runtime instead of reusing one.
+			return `missing:${Date.now()}:${Math.random()}`;
+		}
+	};
+	const sharedModelRuntime = (targetCwd: string, targetAgentDir: string): Promise<ModelRuntime> => {
+		const stamp = modelRuntimeStamp(targetAgentDir);
+		// The agent dir is part of the key: a copied workspace service keeps its own credentials and catalog.
+		const cacheKey = `${targetAgentDir}\u0000${targetCwd}`;
+		const cached = modelRuntimeCache.get(cacheKey);
+		if (cached && cached.stamp === stamp) {
+			// Refresh insertion order so the least recently used key is the one dropped.
+			modelRuntimeCache.delete(cacheKey);
+			modelRuntimeCache.set(cacheKey, cached);
+			return cached.runtime;
+		}
+		const runtime = ModelRuntime.create({
+			authPath: join(targetAgentDir, "auth.json"),
+			modelsPath: join(targetAgentDir, "models.json"),
+		}).catch((error) => {
+			if (modelRuntimeCache.get(cacheKey)?.runtime === runtime) modelRuntimeCache.delete(cacheKey);
+			throw error;
+		});
+		modelRuntimeCache.delete(cacheKey);
+		modelRuntimeCache.set(cacheKey, { stamp, runtime });
+		if (modelRuntimeCache.size > modelRuntimeCacheMax) {
+			const oldest = modelRuntimeCache.keys().next();
+			if (!oldest.done) modelRuntimeCache.delete(oldest.value);
+		}
+		return runtime;
+	};
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -543,6 +589,7 @@ export async function main(args: string[], options?: MainOptions) {
 			cwd,
 			agentDir,
 			settingsManager: runtimeSettingsManager,
+			modelRuntime: await sharedModelRuntime(cwd, agentDir),
 			extensionFlagValues: parsed.unknownFlags,
 			resourceLoaderReloadOptions: shouldResolveProjectTrust
 				? {
