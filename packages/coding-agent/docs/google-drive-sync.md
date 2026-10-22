@@ -80,7 +80,13 @@ Each record has a stable key (`kind:id`) and a per-device version vector.
 - Concurrent edits of a chat: the JSONL files are merged by entry id, preserving both branches. An entry, or the
   header, that both devices changed differently keeps the local version and saves one copy of the remote file — even
   when the merge itself changed nothing else.
-- Concurrent edits of a memory, attachment or workspace: the local version stays in use and the other version is saved
+- Concurrent edits of a memory of any scope (global, workspace, session, archived, pending, profile): the two versions
+  are merged line by line against the last version both devices committed (three-way merge). YAML frontmatter is
+  merged by field: a timestamp keeps the later value, list fields keep the sorted union, and other fields keep the more
+  detailed text. Overlapping body edits keep
+  both blocks in a deterministic order, so every device computes the same text and the next pass converges without a
+  review entry. Edits win over a concurrent deletion: the version that still has content is restored and re-published.
+- Concurrent edits of an attachment or workspace: the local version stays in use and the other version is saved
   under `<agentDir>/sync/recovered/…`; the conflict is listed in Settings.
 - Delete vs edit: the deletion is not silently undone, but the edited content is kept as a recoverable copy.
 - Re-creating a record after the deletion has been seen is a newer version and is applied; an old offline copy that
@@ -96,6 +102,9 @@ A Workspace is identified by its stable `workspaceId`. Its root folder is bound 
 - an existing local Workspace keeps its own folder;
 - a restored Workspace is created under `<dataRoot>/workspace-folders/<name>-<id8>` and marked as waiting for a folder;
 - the original absolute path from the other machine is only shown as a hint;
+- a restored Workspace whose original folder sits inside a Drive root is bound automatically to the same relative
+  folder on this device when exactly one such folder exists and no other Workspace claims it; the placeholder is used
+  only when that folder is missing or ambiguous;
 - **Choose folder** in Settings binds the real folder. MyHarness never writes its sync data into an external folder and
   never changes sharing permissions.
 - a binding (or a Workspace applied from another device) takes effect without a restart: the running app re-reads the
@@ -109,6 +118,23 @@ Coding-mode registrations are not copied when a General workspace is removed; re
 physical directory in place. A Workspace the user removed from every list keeps its files here, is not published again,
 and is published again only after it is added back on that device; removing it on one device removes it from the other
 device's General list without deleting chats or memories.
+
+## Opening links created on another computer
+
+A chat synced from another device keeps the absolute path that device used. The file itself may live under a different
+user folder or Drive root here, so a click on that link is resolved read-only by `/api/files/local` in this order:
+
+1. the direct path, exactly as before;
+2. progressively shorter trailing segments of the original path under the current Workspace root and then under this
+device's Data root (artifacts, notes and attachments live there), longest first, with the `My Drive`/`Google Drive`
+part stripped so the other device's user-folder prefix cannot block the match;
+3. an exact-basename search under the Workspace root, accepted only when exactly one file matches (heavy folders are
+skipped and the search is capped);
+4. otherwise a precise error: the file is still inside a Google Drive folder the Drive client has not delivered, or it
+was created on another computer and has not been synced here.
+
+Suffix and basename candidates never leave the Workspace root, `..` and absolute suffixes are refused, and nothing is
+created or modified. The resolved local path is what gets opened or revealed.
 
 ## Workspace file channel
 
@@ -223,6 +249,8 @@ Everything device-specific lives below `<agentDir>/sync/`:
 
 - `config.json` — device name/id, enabled, paused, OAuth client id and secret, cloud folder id, account label;
 - `state-<account>.json` — vectors, tombstones, applied batches, conflicts, bindings (one file per Google account);
+- `bases-<account>/` — the last content both devices committed for each memory, used as the common ancestor of a
+  three-way merge. Never uploaded; one content file per hash plus an index.
 - `credentials.json` — access/refresh token, written with mode 0600 and atomic replace;
 - `backups/`, `recovered/` — previous and unapplied versions, at most 20 per key.
 
@@ -330,7 +358,8 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 - Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
   implemented, so after a reboot nothing uploads until MyHarness is opened.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
-- Concurrent conflicts are kept for review but there is no “apply the other version” button yet; the copy path is shown.
+- Conflicts for chats and drafts are kept for review but there is no “apply the other version” button yet; the copy
+  path is shown. Memories no longer create review entries: they merge automatically.
 - The `snapshots/` folder is part of the layout but snapshots are not used yet for faster bootstrap.
 - Workspace files that live outside the MyHarness Data root are synced by the file channel only when the user turns it
   on; a Drive-managed folder is never uploaded by MyHarness, because `drive.file` only grants access to files this app
@@ -381,8 +410,10 @@ back, a failing download does not block the upload, a full disk keeps the batch 
 Sync now runs (draining batches that arrive during the run, retrying a skipped batch, waiting for a running pass,
 refusing while paused).
 
-The suite covers: first upload and restore on a second device, memory deletion without resurrection, concurrent memory
-conflicts with a recoverable copy, chat branch merge, draft and prompt deletes, concurrent delete-vs-edit, missing
+The suite covers: first upload and restore on a second device, memory deletion without resurrection, automatic
+three-way merge of concurrent memory edits until both devices hold the same text (and no further batch is published),
+an edit restoring a memory deleted concurrently, a legacy review copy merged on the next pass, chat branch merge, draft
+and prompt deletes, concurrent delete-vs-edit for chats and drafts, missing
 objects deferring a batch, no re-reading of already applied batches, a large change set split into several batches, an
 ignored self-batch, refused hostile identities, a damaged batch reported once, an object that never arrives reported
 and skipped, archive markers and ordinary JSON files beside artifacts, a Workspace removed from every list, a chat

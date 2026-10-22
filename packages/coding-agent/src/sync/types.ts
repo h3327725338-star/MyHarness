@@ -116,6 +116,11 @@ export interface SyncState {
 	issues?: Record<string, SyncIssue>;
 	/** Consecutive passes that waited for a batch whose objects never arrived. */
 	deferredBatches?: Record<string, number>;
+	/**
+	 * Keys whose local content must be published even though its hash equals the committed record (the result of a
+	 * merge that already contains the remote text). Persisted so a restart cannot leave the other device without it.
+	 */
+	forceUploads?: string[];
 	lastCheckAt?: string;
 	lastUploadAt?: string;
 	lastDownloadAt?: string;

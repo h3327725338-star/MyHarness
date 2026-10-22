@@ -58,6 +58,8 @@ const commitRecord = {
 };
 
 type Node = unknown;
+/** The part of a built turn these tests read; `turns.js` is plain JavaScript, so the shape is declared here. */
+type RepairTurn = { standalone?: { kind?: string } };
 /** Every component type and every piece of text a rendered tree contains. */
 function inspect(node: Node, out: { types: string[]; text: string } = { types: [], text: "" }): typeof out {
 	if (node == null) return out;
@@ -90,7 +92,7 @@ describe("Web UI: a commit's repair rounds", () => {
 
 	it("keeps every round on its own card with the steps that round ran", () => {
 		const turns = buildTurns([repairMessage(1), repairAnswer(1), repairMessage(2), repairAnswer(2)], ctx);
-		const cards = turns.filter((turn) => turn.standalone?.kind === "gitRepair");
+		const cards = turns.filter((turn: RepairTurn) => turn.standalone?.kind === "gitRepair");
 		expect(cards).toHaveLength(2);
 		expect(cards[0].standalone.turns).toHaveLength(1);
 		expect(cards[0].standalone.turns[0].final?.text).toBe("round 1 done");

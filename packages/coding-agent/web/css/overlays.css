@@ -345,3 +345,14 @@
 .sync-list { display: grid; gap: 6px; padding: 4px 0 12px; line-height: 1.5; }
 .sync-foot { display: flex; align-items: center; gap: 10px; padding: 10px 0 12px; }
 .sync-foot .btn { flex: 0 0 auto; }
+/* The "Show details" row of the What-syncs card: a button is as wide as its text unless it is told otherwise, so the
+   whole row - not just the two words - is the hit area, with a tint that says it is clickable. The negative margins undo
+   the card body's padding, so the row spans the card and its label lines up with the card head above it. */
+.set-card-body > .set-card-toggle { width: calc(100% + 32px); margin: 0 -16px; padding: 0 16px; min-height: 40px; border-radius: var(--r-md); }
+.set-card-body > .set-card-toggle:hover { background: var(--surface-hover); }
+/* Where a jump button landed. The page is often already scrolled as far as it goes, so the outline - not the scroll -
+   is what shows the click did something; sync-page.js removes the class after a moment. */
+.sync-hit { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The manual-run message on its own line under the buttons: full width and readable, with the Review jump kept beside it. */
+.sync-runline { display: flex; align-items: center; gap: 8px; padding: 2px 0 12px; color: var(--text-2); }
+.sync-runline .btn { flex: none; }

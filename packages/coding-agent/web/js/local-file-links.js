@@ -1,3 +1,7 @@
+// Chat links keep their original (possibly other-computer) text here; existence and the
+// cross-computer remap (workspace suffix, incl. `My Drive` with its space, then unique
+// basename) are decided server-side by /api/files/local, so this classifier must not
+// reject absolute Windows paths or file: URLs just because the prefix looks foreign.
 export function localLinkPath(href) {
 	if (!href || /[\x00-\x1f]/.test(href)) return null;
 	if (/^\/api\/artifacts\/download\?/i.test(href)) {

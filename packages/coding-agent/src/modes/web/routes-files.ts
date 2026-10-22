@@ -328,6 +328,10 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		};
 	}
 
+	// Chat file links land here from markdown data-local-path clicks (resolve/open/reveal/menu).
+	// All actions share resolveLocalFile, so a link created on another computer remaps the same
+	// way everywhere: direct path first, then workspace-root suffix (Drive-aware), then a unique
+	// basename fallback, else a precise 404. The resolved absolute path is what gets opened.
 	server.route("POST", "/api/files/local", async ({ body }) => {
 		const payload = body as { path?: unknown; action?: unknown; handler?: unknown } | null;
 		if (!payload || !["resolve", "choices", "open", "reveal", "handler"].includes(String(payload.action)))
@@ -341,7 +345,8 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				throw new HttpError(404, "Unknown artifact");
 			}
 		}
-		const target = await resolveLocalFile(root(), localPath);
+		const dataRoot = host.session?.sessionManager?.getDataRoot?.() ?? getDataDir();
+		const target = await resolveLocalFile(root(), localPath, [dataRoot]);
 		if (payload.action === "resolve") return target;
 		if (payload.action === "handler" && typeof payload.handler !== "string")
 			throw new HttpError(400, "Expected an opening method");

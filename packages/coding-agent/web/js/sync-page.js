@@ -1,12 +1,13 @@
 // Google Drive sync settings: connection, background status, restored-workspace bindings and versions kept for review.
 // Every row uses the same pieces as the rest of Settings: cards for groups, one compact line per setting.
-import { html, useEffect, useState, Icon, Spinner, Toggle } from "./ui.js";
+import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle } from "./ui.js";
 import { api, post, set, toast, useStore } from "./store.js";
 import { t } from "./i18n.js";
+import { connectionBadge, deriveSync, footLine, reviewTitle, stateLine } from "./sync-status.js";
 import { confirmDialog } from "./actions.js";
 
-function Card({ title, description, action, children }) {
-	return html`<section class="set-card">
+function Card({ title, description, action, children, id }) {
+	return html`<section class="set-card" id=${id || undefined}>
 		<div class="set-card-head"><div class="col grow"><strong>${title}</strong>${description ? html`<span class="set-card-desc">${description}</span>` : null}</div>${action || null}</div>
 		<div class="set-card-body">${children}</div>
 	</section>`;
@@ -33,74 +34,17 @@ function timeText(value) {
 	}
 }
 
-function connectionBadge(status) {
-	if (!status.connected) return { cls: "", text: t("Not connected") };
-	if (status.phase === "authorizing") return { cls: "warn", text: t("Waiting for Google") };
-	if (status.phase === "error") return { cls: "danger", text: t("Needs attention") };
-	if (status.phase === "locked") return { cls: "warn", text: t("Another process") };
-	if (status.paused) return { cls: "warn", text: t("Paused") };
-	if (!status.enabled) return { cls: "", text: t("Connected, sync off") };
-	// A connection that works says nothing about the files: conflicts, blocked deletions or a failed pass must not be
-	// covered by a green "Syncing" badge.
-	const files = status.files;
-	const blocked = (files?.workspaces ?? []).some(
-		(item) =>
-			item.state === "blocked" || item.state === "error" || item.state === "waiting" || item.incomplete === true,
-	);
-	const unresolved =
-		(files?.conflicts?.length ?? 0) +
-		(files?.issues?.length ?? 0) +
-		(status.conflicts?.length ?? 0) +
-		(status.issues?.length ?? 0);
-	if (status.lastError || blocked) return { cls: "warn", text: t("Needs attention") };
-	if (unresolved > 0) return { cls: "warn", text: t("Has unresolved changes") };
-	return { cls: "ok", text: t("Syncing") };
-}
-
-/** One line for the last manual Download now / Sync now run: what is moving, how far, or why it stopped. */
-function manualText(manual, status) {
-	if (manual.state === "running") {
-		if (manual.stage === "waiting") {
-			// Waiting is not a dead end: say what the pass in flight is doing and how much is left, so the button can be
-			// read as "this is running", not as "this is stuck".
-			const phase = status?.phase;
-			if (phase === "downloading") {
-				return t("Waiting for the current sync pass to finish (downloading, {count} batches left).", {
-					count: Number(status?.pendingDownloads) || 0,
-				});
-			}
-			if (phase === "uploading") {
-				return t("Waiting for the current sync pass to finish (uploading, {count} changes left).", {
-					count: Number(status?.pendingUploads) || 0,
-				});
-			}
-			return t("Waiting for the current sync pass to finish…");
-		}
-		const progress = manual.total > 0 ? ` ${manual.done} / ${manual.total}` : "";
-		return manual.stage === "upload" ? `${t("Uploading…")}${progress}` : `${t("Downloading…")}${progress}`;
-	}
-	if (manual.state === "failed") return `${t("Failed")}: ${t(manual.error || "The operation failed.")}`;
-	const files = status?.files;
-	const pendingFiles = (files?.workspaces ?? []).reduce(
-		(total, item) => total + (item.pendingUploads ?? 0) + (item.pendingDownloads ?? 0),
-		0,
-	);
-	const unresolved =
-		(files?.conflicts?.length ?? 0) +
-		(files?.issues?.length ?? 0) +
-		(status?.conflicts?.length ?? 0) +
-		(status?.issues?.length ?? 0) +
-		(files?.workspaces ?? []).filter(
-			(item) => item.state === "blocked" || item.state === "error" || item.incomplete === true,
-		).length;
-	if ((manual.remainingDownloads ?? 0) > 0 || pendingFiles > 0 || unresolved > 0) {
-		// The pass ended, but "finished" would read as "everything arrived".
-		return t("The pass finished; {count} items are still waiting.", {
-			count: pendingFiles + (manual.remainingDownloads ?? 0) + unresolved,
-		});
-	}
-	const done = manual.kind === "download" ? t("Download finished.") : t("Sync finished.");
-	return done;
+let jumpTimer = 0;
+function jumpTo(id) {
+	const el = (id && document.getElementById(id)) || null;
+	if (!el) return;
+	el.scrollIntoView({ block: "start", behavior: "smooth" });
+	// The settings page is often already scrolled as far as it goes, so the jump itself can look like nothing happened.
+	// Outlining the section for a moment shows where the click went even then.
+	clearTimeout(jumpTimer);
+	for (const node of document.querySelectorAll(".sync-hit")) node.classList.remove("sync-hit");
+	el.classList.add("sync-hit");
+	jumpTimer = setTimeout(() => el.classList.remove("sync-hit"), 1600);
 }
 
 export function SyncPage() {
@@ -111,6 +55,7 @@ export function SyncPage() {
 	const [deviceName, setDeviceName] = useState("");
 	const [clientTouched, setClientTouched] = useState(false);
 	const [deviceTouched, setDeviceTouched] = useState(false);
+	const [detailsOpen, setDetailsOpen] = useState(false);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -153,17 +98,17 @@ export function SyncPage() {
 
 	if (!status) return html`<div class="row"><${Spinner} /></div>`;
 
-	const badge = connectionBadge(status);
+	const sync = deriveSync(status);
+	const badge = connectionBadge(status, sync);
+	const state = stateLine(status, sync);
 	const folder = status.folder;
 	const account = status.account;
 	const risk = status.externalRisk ?? { detected: false };
-	const files = status.files ?? null;
-	const fileWorkspaces = files?.workspaces ?? [];
-	const fileConflicts = files?.conflicts ?? [];
-	// A local workspace that already got its managed copy on this device needs no restore card.
-	const managedIds = new Set(fileWorkspaces.filter((item) => item.managed).map((item) => item.workspaceId));
-	const pendingBindings = (status.pendingBindings ?? []).filter((item) => !managedIds.has(item.workspaceId));
-	const conflicts = status.conflicts ?? [];
+	const files = sync.files;
+	const fileWorkspaces = sync.workspaces;
+	const fileConflicts = sync.fileConflicts;
+	const pendingBindings = sync.pendingBindings;
+	const conflicts = sync.review;
 
 	const manual = status.manual ?? null;
 	// Pause means nothing is uploaded or applied; the manual runs respect it instead of overriding it.
@@ -350,12 +295,25 @@ export function SyncPage() {
 		}
 	};
 
+	const foot = footLine(manual, status, sync);
+
 	return html`
 		${risk.detected ? html`<div class="notice danger">${t(risk.message ?? "The operation failed.")}</div>` : null}
 		<${Card}
+			title=${t("Status")}
+			description=${t("What is moving, what is stuck, and what needs you.")}
+			action=${html`<span class=${`badge ${badge.cls}`}>${badge.text}</span>`}
+		>
+			<${Row}
+				label=${t("Current state")}
+				description=${t("{up} to upload · {down} to download · {count} to review", { up: sync.up, down: sync.down, count: sync.unresolved })}
+			>
+				<strong>${state}</strong>
+			<//>
+		<//>
+		<${Card}
 			title=${t("Google Drive")}
 			description=${t("Chats, memories and attachments sync through MyHarness's own folder in your Drive.")}
-			action=${html`<span class=${`badge ${badge.cls}`}>${badge.text}</span>`}
 		>
 			<${Row}
 				label=${t("Account")}
@@ -378,7 +336,7 @@ export function SyncPage() {
 				: null}
 			<${Row}
 				label=${t("OAuth client id")}
-				description=${t("Create a Desktop app OAuth client in Google Cloud, then paste its client id here. The secret is optional.")}
+				description=${t("Paste the client ID of a Google Cloud desktop OAuth client.")}
 				stack=${true}
 			>
 				<div class="row sync-field">
@@ -474,26 +432,26 @@ export function SyncPage() {
 					onChange=${(value) => saveConfig({ paused: value })}
 				/>
 			<//>
-			<${Row} label=${t("Waiting to upload")} description=${t("Changes already saved on this computer.")}>
-				<span class="mono">${status.pendingUploads} · ${formatBytes(status.pendingBytes)}</span>
+			<${Row} label=${t("Waiting to upload")} description=${t("Saved on this computer, not uploaded yet.")}>
+				<span class="mono">${sync.up > 0 ? `${sync.up} · ${formatBytes(status.pendingBytes)}` : t("Nothing waiting")}</span>
 			<//>
-			<${Row} label=${t("Waiting to download")} description=${t("Batches not applied yet; an object still in transit shows a download and never pretends a file is ready.")}>
-				<span class="mono">${status.pendingDownloads}</span>
+			<${Row} label=${t("Waiting to download")} description=${t("Changes from other computers, not applied here yet.")}>
+				<span class="mono">${sync.down > 0 ? `${sync.down}` : t("Nothing waiting")}</span>
 			<//>
-			<${Row} label=${t("Last check")} description=${t("When this computer last talked to Drive.")}>
+			<${Row} label=${t("Last check")}>
 				<span class="dim">${timeText(status.lastCheckAt)}</span>
 			<//>
 			<${Row} label=${t("Last upload")} description=${t("Uploaded is not the same as received by another computer.")}>
 				<span class="dim">${timeText(status.lastUploadAt)}</span>
 			<//>
-			<${Row} label=${t("Last download")} description=${t("When another computer's changes were applied here.")}>
+			<${Row} label=${t("Last download")}>
 				<span class="dim">${timeText(status.lastDownloadAt)}</span>
 			<//>
 			${status.lastError ? html`<div class="notice danger">${t(status.lastError)}</div>` : null}
 			${(status.issues ?? []).length > 0
-				? html`<div class="notice warn sync-list">
+				? html`<div class="notice warn sync-list" id="sync-issues">
 						<strong>${t("Some changes are waiting for a manual look")}</strong>
-						${(status.issues ?? []).slice(-5).map((issue) => html`<div key=${issue.key} class="dim">${issue.detail || issue.reason}</div>`)}
+						${sync.issues.slice(-5).map((issue) => html`<div key=${issue.key}>${issue.detail || issue.reason} <span class="dim">· ${timeText(issue.at)}</span></div>`)}
 					</div>`
 				: null}
 			<div class="row sync-foot">
@@ -506,19 +464,20 @@ export function SyncPage() {
 				<button class="btn" disabled=${manualBlocked || busy === "sync"} title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""} onClick=${() => run("sync", () => post("/api/sync/sync"))}>
 					<${Icon} name="drive" size=${14} />${t("Sync now")}
 				</button>
-				${manual
-					? html`<span class=${`row grow ${manual.state === "failed" ? "c-danger" : "dim"}`} role="status" title=${manualText(manual, status)}>
-							${manual.state === "running" ? html`<${Spinner} />` : null}<span class="truncate">${manualText(manual, status)}</span>
-						</span>`
-					: html`<span class="dim grow">${t("Everything also runs by itself; this button is for troubleshooting.")}</span>`}
 			</div>
+				${foot
+					? html`<div class="sync-runline" role="status" title=${foot.text}>
+							${foot.spinning ? html`<${Spinner} />` : null}<span class=${`grow truncate ${foot.tone === "danger" ? "c-danger" : foot.tone === "warn" ? "c-warn" : ""}`}>${foot.text}</span>
+							${foot.review ? html`<button class="btn sm" onClick=${() => jumpTo(foot.target)}>${t("Review")}</button>` : null}
+						</div>`
+					: html`<div class="sync-runline dim" role="status">${t("Everything also runs by itself; this button is for troubleshooting.")}</div>`}
 		<//>
 		${fileWorkspaces.length
-			? html`<${Card} title=${t("Workspace files")} description=${t("Each workspace records who syncs its files. A finished chat upload never proves that its folder is fully uploaded.")}>
+			? html`<${Card} title=${t("Workspace files")} id="sync-files" description=${t("Each workspace records who syncs its files. A finished chat upload never proves that its folder is fully uploaded.")}>
 					${fileWorkspaces.map(
 						(item) => html`<${Row} key=${item.workspaceId} label=${item.name} description=${item.path || ""} stack=${true}>
 							<div class="row sync-field">
-								<span class="dim grow" role="status" title=${item.message}>${item.message}</span>
+								<span class="dim grow truncate" role="status" title=${item.message}>${item.message}</span>
 								${item.managed
 									? html`<button class="btn" disabled=${busy === `files:${item.workspaceId}`} onClick=${() => disableFiles(item.workspaceId)}>${t("Stop syncing files")}</button>`
 									: item.source === "drive"
@@ -537,7 +496,7 @@ export function SyncPage() {
 				<//>`
 			: null}
 		${fileConflicts.length
-			? html`<${Card} title=${t("File conflicts")} description=${t("Nothing was overwritten. Choose what becomes the new version; the other computers then receive it.")}>
+			? html`<${Card} title=${t("File conflicts")} id="sync-conflicts" description=${t("Nothing was overwritten. Choose what becomes the new version; the other computers then receive it.")}>
 					${fileConflicts.slice(0, 20).map(
 						(conflict) => html`<div class="set-row stack" key=${conflict.id}>
 							<div class="set-text">
@@ -556,7 +515,7 @@ export function SyncPage() {
 				<//>`
 			: null}
 		${pendingBindings.length
-			? html`<${Card} title=${t("Workspaces restored to a managed folder")} description=${t("Pick the folder this computer should use. Chats and memories already work; file tools wait for the binding.")}>
+			? html`<${Card} title=${t("Workspaces restored to a managed folder")} id="sync-bindings" description=${t("Pick the folder this computer should use. Chats and memories already work; file tools wait for the binding.")}>
 					${pendingBindings.map(
 						(item) => html`<${Row} key=${item.workspaceId} label=${item.name} description=${item.hint || item.path} stack=${true}>
 							<div class="row sync-field"><span class="dim mono truncate grow" title=${item.path}>${item.path}</span>
@@ -567,10 +526,10 @@ export function SyncPage() {
 				<//>`
 			: null}
 		${conflicts.length
-			? html`<${Card} title=${t("Kept for review")} description=${t("Nothing was overwritten. The local version is in use; the other version is saved beside the agent data.")}>
+			? html`<${Card} title=${t("Kept for review")} id="sync-review" description=${t("Nothing was overwritten. The local version is in use; the other version is saved beside the agent data.")}>
 					${conflicts.slice(0, 20).map(
 						(conflict) => html`<div class="set-row stack" key=${conflict.id}>
-							<div class="set-text"><span class="set-label">${conflict.key}</span><span class="set-desc">${t(conflict.message)}</span></div>
+							<div class="set-text"><span class="set-label">${reviewTitle(conflict)}</span><span class="set-desc">${t(conflict.message)}</span></div>
 							<div class="set-control sync-paths">
 								<span class="dim mono truncate" title=${conflict.localPath || ""}>${conflict.localPath || ""}</span>
 								${conflict.remoteCopyPath ? html`<span class="dim mono truncate" title=${conflict.remoteCopyPath}>${conflict.remoteCopyPath}</span>` : null}
@@ -581,12 +540,17 @@ export function SyncPage() {
 				<//>`
 			: null}
 		<${Card} title=${t("What syncs")} description=${t("Scanned by meaning, never by copying the whole Data folder.")}>
-			<div class="set-desc sync-list">
-				<div>${t("All memories: global, workspace, session, archived, pending and the profile.")}</div>
-				<div>${t("General mode: workspaces, chats and branches, attachments, artifacts, library files, drafts and the general personal prompt.")}</div>
-				<div>${t("Coding-mode chats and repositories are not uploaded; their memories are.")}</div>
-				<div>${t("API keys, Google tokens, trust decisions, locks and running tasks never leave this computer.")}</div>
-				<div>${t("The Google token is kept in an owner-only file (Windows user permissions). It is not OS-encrypted or end-to-end encrypted.")}</div>
-			</div>
+			<button class="set-card-toggle" aria-expanded=${detailsOpen} onClick=${() => setDetailsOpen(!detailsOpen)}>
+				<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="set-label">${detailsOpen ? t("Hide details") : t("Show details")}</span>
+			</button>
+			<${Collapse} open=${detailsOpen}>
+				<div class="set-desc sync-list">
+					<div>${t("All memories: global, workspace, session, archived, pending and the profile.")}</div>
+					<div>${t("General mode: workspaces, chats and branches, attachments, artifacts, library files, drafts and the general personal prompt.")}</div>
+					<div>${t("Coding-mode chats and repositories are not uploaded; their memories are.")}</div>
+					<div>${t("API keys, Google tokens, trust decisions, locks and running tasks never leave this computer.")}</div>
+					<div>${t("The Google token is kept in an owner-only file (Windows user permissions). It is not OS-encrypted or end-to-end encrypted.")}</div>
+				</div>
+			<//>
 		<//>`;
 }

@@ -43,7 +43,9 @@ export const openWorkspaceFile = (absolute) => actions.openWorkspace({ type: "fi
 /**
  * Left click on a file link in the chat: the file opens (or is focused) as a tab of the right-hand workspace, which
  * picks the viewer or editor for its type. A folder has no viewer there and still opens in the system file manager;
- * the other ways to open a file stay in the right-click menu.
+ * the other ways to open a file stay in the right-click menu. `resolve` remaps a path created on another computer
+ * to the local copy (direct, workspace suffix, Drive-aware, unique basename); `open`/`reveal` then act on the
+ * resolved absolute path, and a miss toasts the backend's precise reason.
  */
 export async function openLocalFileInWorkspace(path, slot) {
 	try {

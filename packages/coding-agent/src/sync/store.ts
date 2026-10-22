@@ -56,6 +56,9 @@ function normalizeState(value: SyncState | undefined, accountKey: string): SyncS
 		pendingBindings: Array.isArray(value.pendingBindings) ? value.pendingBindings : [],
 		issues: value.issues && typeof value.issues === "object" ? value.issues : {},
 		deferredBatches: value.deferredBatches && typeof value.deferredBatches === "object" ? value.deferredBatches : {},
+		forceUploads: Array.isArray(value.forceUploads)
+			? value.forceUploads.filter((item): item is string => typeof item === "string")
+			: [],
 	};
 }
 

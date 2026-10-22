@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { Stats } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -8,7 +8,206 @@ import { HttpError } from "./http-server.ts";
 
 const execute = promisify(execFile);
 
-export async function resolveLocalFile(root: string, input: unknown): Promise<{ path: string; directory: boolean }> {
+/** Folders never descended into by the bounded basename fallback (read-only search). */
+const REMAP_SKIP_DIRS = new Set([
+	".git",
+	"node_modules",
+	"dist",
+	"build",
+	"out",
+	".next",
+	".cache",
+	"coverage",
+	".venv",
+	"venv",
+	"__pycache__",
+]);
+
+/** Cap on visited entries for the basename fallback so a huge workspace cannot stall the click. */
+const REMAP_SEARCH_CAP = 20000;
+
+const DRIVE_SEGMENTS = new Set(["my drive", "google drive"]);
+
+/** Split a requested path on both separators so Windows paths remap on any platform. */
+function splitRequestedSegments(value: string): string[] {
+	return value.split(/[\\/]+/).filter((part) => part.length > 0 && part !== ".");
+}
+
+function isDriveSegment(name: string): boolean {
+	return DRIVE_SEGMENTS.has(name.toLowerCase());
+}
+
+function isWindowsDriveSegment(name: string): boolean {
+	return /^[a-z]:$/i.test(name);
+}
+
+/** True when `candidate` stays inside `root` (never escapes, even via `..`). */
+function staysInside(root: string, candidate: string): boolean {
+	const rel = path.relative(root, candidate);
+	return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+async function statIfInside(
+	root: string,
+	realRoot: string | null,
+	candidate: string,
+): Promise<{ path: string; directory: boolean } | null> {
+	// Reject `..` and absolute suffixes before touching the disk: path.join normalizes
+	// `..` so `join(root, "..", "x")` would escape the workspace.
+	const rel = path.relative(root, candidate);
+	if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+	let info: Stats;
+	try {
+		info = await stat(candidate);
+	} catch {
+		return null;
+	}
+	if (!info.isFile() && !info.isDirectory()) return null;
+	try {
+		const actual = await realpath(candidate);
+		if (/^(?:\\\\|\/\/)/.test(actual) && !/^\\\\\?\\[a-z]:\\/i.test(actual)) return null;
+		if (realRoot) {
+			const realRel = path.relative(realRoot, actual);
+			if (realRel.startsWith("..") && actual.toLowerCase() !== realRoot.toLowerCase()) {
+				// Symlink inside the workspace points outside: never follow it out.
+				return null;
+			}
+		}
+	} catch {
+		// realpath failed but stat succeeded (rare race): still treat as a hit, it stays inside root.
+	}
+	return { path: candidate, directory: info.isDirectory() };
+}
+
+/**
+ * Cross-computer suffix remap (read-only): try progressively shorter trailing segments of
+ * the requested path as `<workspaceRoot>/<suffix>`, longest first. Never escapes the
+ * workspace root; suffixes containing `..` or drive letters are skipped. Case sensitivity
+ * follows the host filesystem (case-insensitive on Windows).
+ */
+async function resolveBySuffix(
+	root: string,
+	realRoot: string | null,
+	segments: string[],
+): Promise<{ path: string; directory: boolean } | null> {
+	const base = segments[0] && isWindowsDriveSegment(segments[0]) ? segments.slice(1) : segments;
+	// A path through Google Drive (`.../My Drive/<rest>`) is tried from `<rest>` first so the
+	// user-folder prefix from the other computer never blocks the match.
+	const marker = base.findIndex((part) => isDriveSegment(part));
+	const ordered: string[][] = [];
+	if (marker >= 0) {
+		const stripped = base.slice(marker + 1);
+		for (let start = 0; start < stripped.length; start++) ordered.push(stripped.slice(start));
+	}
+	for (let start = 0; start < base.length; start++) ordered.push(base.slice(start));
+	const seen = new Set<string>();
+	for (const suffix of ordered) {
+		if (suffix.length < 2) continue; // a bare file name goes through the unique-basename fallback instead
+		if (suffix.some((part) => part === "..")) continue;
+		if (suffix.some((part) => isWindowsDriveSegment(part))) continue;
+		const key = suffix.join("\0");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const candidate = path.join(root, ...suffix);
+		if (!staysInside(root, candidate) && candidate !== root) continue;
+		const hit = await statIfInside(root, realRoot, candidate);
+		if (hit) return hit;
+	}
+	return null;
+}
+
+/**
+ * Bounded read-only basename search under the workspace root. Skips heavy folders and
+ * caps visited entries; accepts only exactly one match so an ambiguous link never opens
+ * the wrong file. Returns null when capped (cannot prove uniqueness).
+ */
+async function resolveByBasename(
+	root: string,
+	realRoot: string | null,
+	basename: string,
+): Promise<{ path: string; directory: boolean } | null> {
+	if (!basename || basename === "." || basename === ".." || basename === "") return null;
+	const want = process.platform === "win32" ? basename.toLowerCase() : basename;
+	const matches: string[] = [];
+	const stack: string[] = [root];
+	let visited = 0;
+	let capped = false;
+	while (stack.length > 0) {
+		if (visited > REMAP_SEARCH_CAP) {
+			capped = true;
+			break;
+		}
+		const dir = stack.pop()!;
+		let entries: import("node:fs").Dirent[];
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			visited += 1;
+			if (visited > REMAP_SEARCH_CAP) {
+				capped = true;
+				break;
+			}
+			const name = entry.name;
+			const same = process.platform === "win32" ? name.toLowerCase() === want : name === want;
+			if (same) {
+				const full = path.join(dir, name);
+				const hit = await statIfInside(root, realRoot, full);
+				if (hit) {
+					matches.push(full);
+					if (matches.length > 1) {
+						throw new HttpError(
+							404,
+							`Multiple files named "${basename}" exist under the current workspace, so the link is ambiguous. Open the file from the Files panel instead.`,
+						);
+					}
+				}
+			}
+			if (entry.isDirectory()) {
+				if (REMAP_SKIP_DIRS.has(name)) continue;
+				stack.push(path.join(dir, name));
+			}
+		}
+	}
+	if (capped) return null;
+	if (matches.length === 1) {
+		const only = matches[0]!;
+		let info: Stats;
+		try {
+			info = await stat(only);
+		} catch {
+			return null;
+		}
+		return { path: only, directory: info.isDirectory() };
+	}
+	return null;
+}
+
+function missingFileError(value: string, segments: string[]): HttpError {
+	const hasDrive = segments.some((part) => isDriveSegment(part));
+	if (hasDrive)
+		throw new HttpError(
+			404,
+			'This file is inside a Google Drive folder ("My Drive"/"Google Drive") and Google Drive has not delivered it to this computer yet. Check that Drive sync finished for this folder.',
+		);
+	const absoluteLike =
+		/^[a-z]:[\\/]/i.test(value) || /^[a-z]:$/i.test(value.split(/[\\/]+/)[0] ?? "") || /^[\\/]/.test(value);
+	if (absoluteLike)
+		throw new HttpError(
+			404,
+			"This file was created on another computer and has not been synced to this computer, so it was not found under the current workspace.",
+		);
+	throw new HttpError(404, "Local file or folder does not exist");
+}
+
+export async function resolveLocalFile(
+	root: string,
+	input: unknown,
+	/** App-managed roots a synced link may point into (the Data root: artifacts, notes and attachments). */
+	extraRoots: string[] = [],
+): Promise<{ path: string; directory: boolean }> {
 	if (typeof input !== "string" || !input.trim() || input.length > 32768 || /[\x00-\x1f]/.test(input))
 		throw new HttpError(400, "Expected a local file path");
 	let value = input.trim();
@@ -23,19 +222,39 @@ export async function resolveLocalFile(root: string, input: unknown): Promise<{ 
 	}
 	if (/^(?:\\\\|\/\/)/.test(value)) throw new HttpError(400, "Network and device paths are not supported");
 	const full = path.resolve(root, value);
-	const actual = await realpath(full).catch(() => {
-		throw new HttpError(404, "Local file or folder does not exist");
-	});
-	if (/^(?:\\\\|\/\/)/.test(actual) && !/^\\\\\?\\[a-z]:\\/i.test(actual))
-		throw new HttpError(400, "Network and device paths are not supported");
-	let info: Stats;
 	try {
-		info = await stat(full);
-	} catch {
-		throw new HttpError(404, "Local file or folder does not exist");
+		const actual = await realpath(full);
+		if (/^(?:\\\\|\/\/)/.test(actual) && !/^\\\\\?\\[a-z]:\\/i.test(actual))
+			throw new HttpError(400, "Network and device paths are not supported");
+		const info = await stat(full);
+		if (!info.isFile() && !info.isDirectory()) throw new HttpError(400, "Not a regular file or folder");
+		return { path: full, directory: info.isDirectory() };
+	} catch (error) {
+		if (error instanceof HttpError && error.status !== 404) throw error;
+		// Missing locally: fall through to the cross-computer remap below.
 	}
-	if (!info.isFile() && !info.isDirectory()) throw new HttpError(400, "Not a regular file or folder");
-	return { path: full, directory: info.isDirectory() };
+	const segments = splitRequestedSegments(value);
+	const searched = [root, ...extraRoots.filter((item) => item && item !== root)];
+	const roots: { path: string; real: string | null }[] = [];
+	for (const candidate of searched) {
+		let real: string | null = null;
+		try {
+			real = await realpath(candidate);
+		} catch {
+			real = null;
+		}
+		roots.push({ path: candidate, real });
+	}
+	const basename = segments[segments.length - 1] ?? "";
+	for (const candidate of roots) {
+		const suffixHit = await resolveBySuffix(candidate.path, candidate.real, segments);
+		if (suffixHit) return suffixHit;
+	}
+	for (const candidate of roots) {
+		const baseHit = await resolveByBasename(candidate.path, candidate.real, basename);
+		if (baseHit) return baseHit;
+	}
+	throw missingFileError(value, segments);
 }
 
 // PowerShell 5.1 C# interop: enumerate Windows Open With associations and invoke the

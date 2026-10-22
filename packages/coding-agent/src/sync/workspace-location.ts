@@ -296,6 +296,41 @@ export function locateDriveFolder(
 	return { ok: true, path };
 }
 
+/**
+ * Follow a Workspace to this computer without a manual folder pick.
+ *
+ * The hint is the absolute path another device used. Only the part below a Drive root is trusted: the same relative
+ * folder is looked up under every Drive root found here, and the result is accepted only when exactly one exists and
+ * no other Workspace already claims it. A plain local path is never adopted, because the same drive letter on another
+ * machine does not describe this one.
+ */
+export function locateHintUnderDriveRoots(
+	store: WorkspaceStore,
+	hint: string | undefined,
+	workspaceId: string,
+	driveRoots: DriveRootCandidate[] = discoverDriveRoots(),
+): string | undefined {
+	if (!hint) return undefined;
+	const normalized = hint.replace(/\//gu, "\\");
+	const parts = normalized.split(/\\+/u).filter(Boolean);
+	if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) return undefined;
+	const marker = parts.findIndex((part) => /^(?:my drive|google drive|googledrive)$/iu.test(part));
+	// Below a recognised Drive folder the whole relative path is trustworthy. A root declared through
+	// MYHARNESS_DRIVE_ROOTS has no such marker, so only the last two segments are used; that is enough to identify the
+	// Workspace folder without matching an unrelated folder that merely shares a leaf name.
+	const suffix = marker >= 0 ? parts.slice(marker + 1) : parts.slice(-2);
+	if (suffix.length === 0) return undefined;
+	const candidates: string[] = [];
+	for (const root of driveRoots) {
+		const candidate = join(root.path, ...suffix);
+		if (!readableDirectory(candidate)) continue;
+		const occupant = store.getByRootPath(candidate);
+		if (occupant && occupant.workspaceId !== workspaceId) continue;
+		candidates.push(candidate);
+	}
+	return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 export function locateLocalFolder(
 	store: WorkspaceStore,
 	dataRoot: string,

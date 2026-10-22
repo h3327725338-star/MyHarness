@@ -16,8 +16,12 @@ import {
 	applySession,
 	applyWorkspace,
 	DeferredSessionError,
+	readMemoryText,
 	refreshMemoryCatalog,
+	writeMergedMemory,
 } from "./apply.ts";
+import { MemoryBaseStore, memoryBaseDir } from "./memory-bases.ts";
+import { mergeMemoryText } from "./memory-merge.ts";
 import { type HeaderCacheEntry, scanLocalEntities } from "./scope.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type {
@@ -117,6 +121,11 @@ export class SyncEngine {
 	private readonly options: SyncEngineOptions;
 	private readonly store: SyncLocalStore;
 	private readonly modeState: ModeStateStore;
+	/** Last common content per memory, so a three-way merge does not have to guess the ancestor. */
+	private readonly bases: MemoryBaseStore;
+	/** A merge produced local content the other device has not seen; publish it even though its hash equals the record. */
+	private readonly forceUpload = new Set<string>();
+	private legacyMemoryConflictsMerged = false;
 	private config: SyncConfig;
 	private state: SyncState;
 	private drive: DrivePort | null = null;
@@ -157,8 +166,10 @@ export class SyncEngine {
 		this.options = options;
 		this.store = options.store;
 		this.modeState = new ModeStateStore(options.agentDir);
+		this.bases = new MemoryBaseStore(memoryBaseDir(this.store.dir, options.accountKey));
 		this.config = this.store.config();
 		this.state = this.store.state(options.accountKey);
+		this.restoreForceUploads();
 		if (!this.state.syncId && this.config.syncId) this.state.syncId = this.config.syncId;
 		if (!this.state.folderId && this.config.folderId) this.state.folderId = this.config.folderId;
 	}
@@ -174,7 +185,24 @@ export class SyncEngine {
 	/** Persisted work is the difference between the last committed state and the files on disk. */
 	loadState(): SyncState {
 		this.state = this.store.state(this.state.accountKey);
+		this.restoreForceUploads();
 		return this.state;
+	}
+
+	/** A forced publish survives a restart; without it, a merge that equals the local text would never reach Drive. */
+	private restoreForceUploads(): void {
+		this.forceUpload.clear();
+		for (const key of this.state.forceUploads ?? []) this.forceUpload.add(key);
+	}
+
+	private markForceUpload(key: string): void {
+		this.forceUpload.add(key);
+		this.state.forceUploads = [...this.forceUpload];
+	}
+
+	private clearForceUpload(key: string): void {
+		if (!this.forceUpload.delete(key)) return;
+		this.state.forceUploads = [...this.forceUpload];
 	}
 
 	async updateConfig(patch: Partial<SyncConfig>): Promise<SyncStatusSnapshot> {
@@ -355,6 +383,7 @@ export class SyncEngine {
 		try {
 			const space = await this.drive.ensureSpace();
 			this.adoptSpace(space);
+			await this.resolveMemoryConflictsFromCopies();
 			await this.resolvePendingPublish();
 			this.phase = mode === "auto" ? "scanning" : "downloading";
 			this.emitStatus();
@@ -608,7 +637,7 @@ export class SyncEngine {
 		for (const entity of scan.values()) {
 			const previous = this.state.entities[entity.key];
 			const { hash, data } = this.hashEntity(entity);
-			if (previous && previous.hash === hash) {
+			if (previous && previous.hash === hash && !this.forceUpload.has(entity.key)) {
 				this.clearIssue(`file:${entity.key}`);
 				continue;
 			}
@@ -722,10 +751,14 @@ export class SyncEngine {
 					kind: operation.kind,
 				};
 				this.fileCache.delete(operation.key);
+				this.clearForceUpload(operation.key);
+				if (operation.kind === "memory") this.bases.remove(operation.key);
 				continue;
 			}
 			this.state.entities[operation.key] = recordFrom(operation);
+			this.clearForceUpload(operation.key);
 			delete this.state.tombstones[operation.key];
+			if (operation.kind === "memory") this.rememberMemoryBase(operation.key, operation.id);
 		}
 		delete this.state.publishing;
 	}
@@ -1094,9 +1127,24 @@ export class SyncEngine {
 				return undefined;
 			}
 			if (!covers(operation.vector, tombstone.vector)) {
-				// Concurrent delete-vs-edit: keep both, never silently resurrect and never throw the edit away.
 				const data = await this.fetchObject(operation.hash);
 				if (!data) throw new DeferredBatchError(`Waiting for object ${operation.hash.slice(0, 12)}`);
+				if (operation.kind === "memory") {
+					// Edits win over deletions for memories: the version that still has content is the accurate one, and
+					// resurrecting it here is what makes two machines converge without a manual decision.
+					const outcome = await this.applyPut(operation, data);
+					this.state.entities[operation.key] = recordFrom({
+						...operation,
+						vector: mergeVectors(operation.vector, tombstone.vector),
+					});
+					delete this.state.tombstones[operation.key];
+					this.bases.set(operation.key, fromUtf8(data));
+					this.currentScan.delete(operation.key);
+					this.hadChanges = true;
+					this.store.saveState(this.state);
+					return outcome;
+				}
+				// Concurrent delete-vs-edit: keep both, never silently resurrect and never throw the edit away.
 				const copy = this.store.recoverCopy(operation.kind, operation.key, displayName(operation), data);
 				this.store.addConflict(this.state, this.conflictFor(operation, batch, "deleted-locally", copy));
 				tombstone.vector = mergeVectors(tombstone.vector, operation.vector);
@@ -1126,13 +1174,22 @@ export class SyncEngine {
 		const concurrent =
 			operation.hash !== local?.hash && Boolean(local) && (drifted || !covers(operation.vector, local!.vector));
 		if (concurrent) {
-			// Concurrent edits: sessions merge, every other kind keeps both versions.
+			// Concurrent edits: sessions merge, memories merge, every other kind keeps both versions.
+			if (operation.kind === "memory" && data) {
+				if (await this.mergeRemoteMemory(operation, data, local)) return undefined;
+				this.recordConflict(operation, batch, "both-modified", data);
+				return undefined;
+			}
 			if (operation.kind !== "session") {
 				this.recordConflict(operation, batch, "both-modified", data);
 				return undefined;
 			}
 		} else if (!local && drifted && operation.kind !== "session") {
-			// A local file exists that was never synced (first connection on a device with data): keep both.
+			// A local file exists that was never synced (first connection on a device with data): merge a memory instead
+			// of asking the user which side to keep.
+			if (operation.kind === "memory" && data) {
+				if (await this.mergeRemoteMemory(operation, data, undefined)) return undefined;
+			}
 			this.recordConflict(operation, batch, "both-modified", data);
 			return undefined;
 		}
@@ -1160,6 +1217,8 @@ export class SyncEngine {
 		});
 		delete this.state.tombstones[operation.key];
 		this.currentScan.delete(operation.key);
+		if (operation.kind === "memory" && data) this.bases.set(operation.key, fromUtf8(data));
+		this.clearForceUpload(operation.key);
 		if (operation.kind === "workspace") {
 			const binding = outcome.binding;
 			if (binding) {
@@ -1312,6 +1371,21 @@ export class SyncEngine {
 			};
 			return undefined;
 		}
+		if (operation.kind === "memory") {
+			// A memory that still has local content is not deleted from this device. Keeping the local text and
+			// re-publishing it is the only choice that cannot lose the edit, and the other device accepts it because
+			// the merged vector moves past the deletion.
+			if (this.localDrift(operation.key, local) || !covers(operation.vector, local.vector)) {
+				this.markForceUpload(operation.key);
+				this.state.entities[operation.key] = {
+					...local,
+					vector: mergeVectors(local.vector, operation.vector),
+				};
+				this.hadChanges = true;
+				this.store.saveState(this.state);
+				return undefined;
+			}
+		}
 		if (this.localDrift(operation.key, local)) {
 			// The local item changed after the last sync: deleting it would silently lose that edit. A deletion is not a
 			// version this device accepts, so the local record keeps its own vector and the user decides.
@@ -1335,9 +1409,126 @@ export class SyncEngine {
 		};
 		this.fileCache.delete(operation.key);
 		this.currentScan.delete(operation.key);
+		this.clearForceUpload(operation.key);
+		if (operation.kind === "memory") this.bases.remove(operation.key);
 		this.hadChanges = true;
 		this.store.saveState(this.state);
 		return outcome;
+	}
+
+	/**
+	 * Merge a remote memory into the local file and publish the result back.
+	 *
+	 * The merge itself is deterministic (memory-merge.ts), so the other device produces the same text and the next pass
+	 * sees equal content. When the remote version already contains everything local had, it is simply applied; when the
+	 * local version is the superset, it is re-published with a vector that dominates both sides.
+	 */
+	private async mergeRemoteMemory(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+	): Promise<boolean> {
+		const context = this.context();
+		const remoteText = fromUtf8(data);
+		const localText = readMemoryText(context, operation.id);
+		const merged = mergeMemoryText(this.bases.get(operation.key)?.text, localText ?? "", remoteText);
+		// A local memory file that disappeared (deleted outside the app) cannot win over a remote edit: the edit is the
+		// only content left, so it is applied instead of opening a review entry nobody can resolve.
+		if (localText === undefined || merged.text === remoteText) {
+			const outcome = await this.applyPut(operation, data);
+			this.state.entities[operation.key] = recordFrom({
+				...operation,
+				vector: mergeVectors(operation.vector, local?.vector ?? {}),
+			});
+			delete this.state.tombstones[operation.key];
+			this.bases.set(operation.key, remoteText);
+			this.currentScan.delete(operation.key);
+			this.clearForceUpload(operation.key);
+			this.clearMemoryConflicts(operation.key);
+			this.hadChanges = true;
+			this.store.saveState(this.state);
+			return outcome.applied;
+		}
+		if (merged.text !== localText) {
+			const written = await writeMergedMemory(context, operation.id, merged.text);
+			if (!written) return false;
+			this.fileCache.delete(operation.key);
+			this.currentScan.delete(operation.key);
+		}
+		// The local text (merged, or already the superset) has not been published yet. Force one upload so the other
+		// device receives it even though the file hash may still equal the record's hash.
+		this.markForceUpload(operation.key);
+		this.state.entities[operation.key] = local
+			? { ...local, vector: mergeVectors(local.vector, operation.vector) }
+			: recordFrom({ ...operation, vector: mergeVectors(operation.vector, {}) });
+		this.clearMemoryConflicts(operation.key);
+		this.hadChanges = true;
+		this.store.saveState(this.state);
+		return true;
+	}
+
+	/** Remember the content a device just committed as this memory's common ancestor. */
+	private rememberMemoryBase(key: string, id: string): void {
+		const text = readMemoryText(this.context(), id);
+		if (text !== undefined) this.bases.set(key, text);
+	}
+
+	/** An automatic merge supersedes any older review entry for the same memory. */
+	private clearMemoryConflicts(key: string): void {
+		const remaining = this.state.conflicts.filter(
+			(conflict) => !(conflict.kind === "memory" && conflict.key === key),
+		);
+		if (remaining.length === this.state.conflicts.length) return;
+		this.state.conflicts = remaining;
+		this.hadChanges = true;
+	}
+
+	/**
+	 * Older versions of this app left concurrent memory edits as review entries with a recovered copy. Merge those
+	 * copies into the local files once per start, so an existing "unresolved" badge does not survive the upgrade.
+	 */
+	private async resolveMemoryConflictsFromCopies(): Promise<void> {
+		if (this.legacyMemoryConflictsMerged) return;
+		this.legacyMemoryConflictsMerged = true;
+		const context = this.context();
+		const conflicts = this.state.conflicts.filter((conflict) => conflict.kind === "memory");
+		if (conflicts.length === 0) return;
+		let changed = false;
+		for (const conflict of conflicts) {
+			const id = conflict.key.startsWith("memory:") ? conflict.key.slice("memory:".length) : "";
+			let remoteText: string | undefined;
+			if (conflict.remoteCopyPath) {
+				try {
+					remoteText = readFileSync(conflict.remoteCopyPath, "utf8");
+				} catch {
+					remoteText = undefined;
+				}
+			}
+			const localText = id.endsWith(".md") ? readMemoryText(context, id) : undefined;
+			let resolved = true;
+			if (remoteText !== undefined && id.endsWith(".md")) {
+				const merged = mergeMemoryText(this.bases.get(conflict.key)?.text, localText ?? "", remoteText);
+				if ((localText === undefined || merged.changed) && merged.text.trim()) {
+					const written = await writeMergedMemory(context, id, merged.text);
+					if (written) {
+						this.markForceUpload(conflict.key);
+						this.fileCache.delete(conflict.key);
+						this.currentScan.delete(conflict.key);
+						changed = true;
+					} else {
+						// The copy could not be written (locked file, full disk): keep the entry so nothing is hidden.
+						resolved = false;
+					}
+				}
+			}
+			if (!resolved) continue;
+			this.state.conflicts = this.state.conflicts.filter((item) => item !== conflict);
+			changed = true;
+		}
+		if (changed) {
+			this.hadChanges = true;
+			this.store.saveState(this.state);
+		}
 	}
 
 	private conflictFor(

@@ -101,7 +101,7 @@ function device(drive: FakeDrive, name: string, deviceId: string): Device {
 	return { root, agentDir, dataRoot, engine, store };
 }
 
-function writeWorkspace(root: string, workspaceId = "ws1"): void {
+function writeWorkspace(root: string, workspaceId = "ws1", rootPath = join(root, "workspace-folders", "study")): void {
 	const metadata = join(root, "workspaces", workspaceId, "metadata");
 	mkdirSync(metadata, { recursive: true });
 	writeFileSync(
@@ -113,7 +113,7 @@ function writeWorkspace(root: string, workspaceId = "ws1"): void {
 				id: workspaceId,
 				modes: ["general"],
 				name: "Study",
-				rootPath: join(root, "workspace-folders", "study"),
+				rootPath,
 				createdAt: "2026-01-01T00:00:00.000Z",
 				instructions: "Keep answers short.",
 				memoryEnabled: true,
@@ -169,6 +169,7 @@ async function sync(...devices: Device[]): Promise<void> {
 
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+	delete process.env.MYHARNESS_DRIVE_ROOTS;
 });
 
 describe("Google Drive sync engine", () => {
@@ -225,7 +226,7 @@ describe("Google Drive sync engine", () => {
 		expect(existsSync(join(b.dataRoot, "memory", "profile.md"))).toBe(false);
 	});
 
-	it("keeps both versions and records a conflict when both devices edit the same memory", async () => {
+	it("merges both edits of the same memory until both devices hold the same text", async () => {
 		const drive = new FakeDrive();
 		const a = device(drive, "desktop", "device-a");
 		const b = device(drive, "laptop", "device-b");
@@ -235,13 +236,20 @@ describe("Google Drive sync engine", () => {
 		writeMemory(b.dataRoot, "edited on laptop");
 
 		await sync(a, b);
+		await sync(a, b);
 
-		expect(readFileSync(join(a.dataRoot, "memory", "profile.md"), "utf8")).toContain("edited on desktop");
-		expect(readFileSync(join(b.dataRoot, "memory", "profile.md"), "utf8")).toContain("edited on laptop");
-		const status = b.engine.status();
-		expect(status.conflicts.some((conflict) => conflict.key === "memory:memory/profile.md")).toBe(true);
-		expect(status.conflicts[0]?.remoteCopyPath).toBeTruthy();
-		expect(existsSync(status.conflicts[0]!.remoteCopyPath!)).toBe(true);
+		const desktop = readFileSync(join(a.dataRoot, "memory", "profile.md"), "utf8");
+		const laptop = readFileSync(join(b.dataRoot, "memory", "profile.md"), "utf8");
+		expect(desktop).toContain("edited on desktop");
+		expect(desktop).toContain("edited on laptop");
+		expect(laptop).toBe(desktop);
+		// Automatic merging converges: no review entry is left behind and neither device keeps a stale warning.
+		expect(a.engine.status().conflicts).toHaveLength(0);
+		expect(b.engine.status().conflicts).toHaveLength(0);
+		// Converged: another pass must not publish anything, or the two machines would keep rewriting the same file.
+		const batches = drive.batchNames().length;
+		await sync(a, b);
+		expect(drive.batchNames()).toHaveLength(batches);
 	});
 
 	it("merges two chat branches instead of replacing one with the other", async () => {
@@ -304,6 +312,31 @@ describe("Google Drive sync engine", () => {
 		expect(b.engine.status().conflicts.some((conflict) => conflict.key === "draft:s1")).toBe(true);
 	});
 
+	it("keeps a forced publish across a restart so a merged memory is not left only on this computer", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		writeMemory(a.dataRoot, "same content");
+		await a.engine.runOnce();
+		const before = drive.batchNames().length;
+
+		const state = a.store.state("account-1");
+		state.forceUploads = ["memory:memory/profile.md"];
+		a.store.saveState(state);
+		const restarted = new SyncEngine({
+			agentDir: a.agentDir,
+			dataRoot: a.dataRoot,
+			deviceId: "device-a",
+			deviceName: "desktop",
+			store: a.store,
+			accountKey: "account-1",
+		});
+		restarted.setDrive(drive);
+		await restarted.runOnce();
+
+		expect(drive.batchNames().length).toBe(before + 1);
+		expect(restarted.loadState().forceUploads).toHaveLength(0);
+	});
+
 	it("uploads nothing when nothing changed, and waits for a missing object instead of applying half a batch", async () => {
 		const drive = new FakeDrive();
 		const a = device(drive, "desktop", "device-a");
@@ -342,7 +375,7 @@ describe("Google Drive sync engine", () => {
 		expect(existsSync(join(b.dataRoot, "memory", "profile.md"))).toBe(true);
 	});
 
-	it("keeps the edit made on another device when this device deleted the memory at the same time", async () => {
+	it("restores the edit made on another device when this device deleted the memory at the same time", async () => {
 		const drive = new FakeDrive();
 		const a = device(drive, "desktop", "device-a");
 		const b = device(drive, "laptop", "device-b");
@@ -354,11 +387,12 @@ describe("Google Drive sync engine", () => {
 		await sync(a, b);
 		await sync(a, b);
 
-		expect(existsSync(join(a.dataRoot, "memory", "profile.md"))).toBe(false);
+		// An edit wins over a concurrent deletion, so the deleted copy comes back instead of a review entry that both
+		// devices would have to resolve by hand.
+		expect(readFileSync(join(a.dataRoot, "memory", "profile.md"), "utf8")).toContain("edited on laptop");
 		expect(readFileSync(join(b.dataRoot, "memory", "profile.md"), "utf8")).toContain("edited on laptop");
-		const conflict = a.engine.status().conflicts.find((item) => item.reason === "deleted-locally");
-		expect(conflict).toBeTruthy();
-		expect(readFileSync(conflict!.remoteCopyPath!, "utf8")).toContain("edited on laptop");
+		expect(a.engine.status().conflicts).toHaveLength(0);
+		expect(b.engine.status().conflicts).toHaveLength(0);
 	});
 
 	it("restores an unknown Workspace into a managed folder and binds the real folder only when the user picks it", async () => {
@@ -383,6 +417,59 @@ describe("Google Drive sync engine", () => {
 		// The binding is remembered locally, so a later pass keeps the chosen folder.
 		await b.engine.runOnce();
 		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")!.rootPath).toBe(chosen);
+	});
+
+	it("merges a memory conflict left by an older version instead of keeping the warning forever", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		writeMemory(a.dataRoot, "# Notes\n- kept locally\n");
+		const copy = join(a.root, "recovered-copy.md");
+		writeFileSync(copy, "# Notes\n- from the other device\n");
+		const state = a.store.state("account-1");
+		state.conflicts.push({
+			id: "legacy-1",
+			key: "memory:memory/profile.md",
+			kind: "memory",
+			reason: "both-modified",
+			at: new Date().toISOString(),
+			deviceName: "laptop",
+			remoteCopyPath: copy,
+			localPath: join(a.dataRoot, "memory", "profile.md"),
+			message: "Both devices changed this item.",
+		});
+		a.store.saveState(state);
+		a.engine.loadState();
+
+		await a.engine.runOnce();
+
+		const text = readFileSync(join(a.dataRoot, "memory", "profile.md"), "utf8");
+		expect(text).toContain("kept locally");
+		expect(text).toContain("from the other device");
+		expect(a.engine.status().conflicts).toHaveLength(0);
+	});
+
+	it("follows a Drive-backed Workspace to the same relative folder on the second device without asking", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const b = device(drive, "laptop", "device-b");
+		const driveRootA = mkdtempSync(join(tmpdir(), "myharness-drive-a-"));
+		const driveRootB = mkdtempSync(join(tmpdir(), "myharness-drive-b-"));
+		roots.push(driveRootA, driveRootB);
+		const folderA = join(driveRootA, "Study", "OS");
+		const folderB = join(driveRootB, "Study", "OS");
+		mkdirSync(folderA, { recursive: true });
+		mkdirSync(folderB, { recursive: true });
+		writeWorkspace(a.dataRoot, "ws1", folderA);
+
+		process.env.MYHARNESS_DRIVE_ROOTS = driveRootA;
+		await a.engine.runOnce();
+		process.env.MYHARNESS_DRIVE_ROOTS = driveRootB;
+		await b.engine.runOnce();
+
+		const restored = WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1");
+		expect(restored).toBeTruthy();
+		expect(restored!.rootPath).toBe(folderB);
+		expect(b.engine.status().pendingBindings).toHaveLength(0);
 	});
 
 	it("refuses to run when the Data root sits inside a cloud-synced folder", async () => {

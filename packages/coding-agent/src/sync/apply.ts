@@ -9,6 +9,7 @@ import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type { SyncRecord } from "./types.ts";
 import { ensureDir, fromUtf8, stableJson } from "./util.ts";
+import { locateHintUnderDriveRoots } from "./workspace-location.ts";
 
 /** A Session file is being written by a running chat on this device; retry on the next pass. */
 export class DeferredSessionError extends Error {
@@ -116,6 +117,31 @@ export async function applyMemory(ctx: ApplyContext, record: SyncRecord, data: U
 	outcome.applied = true;
 	outcome.memoriesChanged = true;
 	return outcome;
+}
+
+/** Read a memory file for a three-way merge; undefined when it is missing or the id is unsafe. */
+export function readMemoryText(ctx: ApplyContext, id: string): string | undefined {
+	const target = resolveInsideRoot(ctx.dataRoot, id);
+	if (!target || !id.endsWith(".md") || !existsSync(target)) return undefined;
+	try {
+		return readFileSync(target, "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+/** Write the result of a memory merge through the memory lock, keeping the replaced version as a backup. */
+export async function writeMergedMemory(ctx: ApplyContext, id: string, text: string): Promise<boolean> {
+	const target = resolveInsideRoot(ctx.dataRoot, id);
+	if (!target || !id.endsWith(".md")) return false;
+	assertDirectTarget(target, ctx.dataRoot);
+	const name = id.split("/").pop() ?? "memory.md";
+	backupIfExists(ctx, "memory", `memory:${id}`, name, target);
+	await withMemoryLock(ctx.dataRoot, async () => {
+		ensureDir(dirname(target));
+		await writeMemoryFile(target, text);
+	});
+	return true;
 }
 
 /** Merge two append-only Session trees: every entry id survives once, and both branches stay reachable. */
@@ -294,10 +320,17 @@ export async function applyWorkspace(
 		pending = true;
 	}
 	if (!rootPath) {
-		// Never write into a folder just because another machine used the same absolute path: the identity of a local
-		// folder is the user's decision. Chats and memories work in the managed placeholder until the folder is chosen.
-		rootPath = workspacePlaceholder(ctx.dataRoot, record);
-		pending = true;
+		// A Workspace that lives inside a Drive root follows the same relative folder on this computer when exactly one
+		// such folder exists. A plain absolute path from another machine is still never adopted: the same drive letter
+		// here does not describe the same directory.
+		const followed = locateHintUnderDriveRoots(store, hint, record.id);
+		if (followed) {
+			rootPath = followed;
+		} else {
+			// Chats and memories work in the managed placeholder until a folder can be identified.
+			rootPath = workspacePlaceholder(ctx.dataRoot, record);
+			pending = true;
+		}
 	}
 	assertManagedPath(rootPath, ctx.dataRoot);
 	mkdirSync(rootPath, { recursive: true });
