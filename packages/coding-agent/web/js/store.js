@@ -23,6 +23,7 @@ import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
 import { createSseWatchdog, isDeadStream } from "./sse-watchdog.js";
 import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.js";
+import { readResponse } from "./http-transport.js";
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
@@ -511,16 +512,18 @@ export async function api(path, options = {}) {
 	const slot = options.slot ?? targetSlot ?? activeSlot;
 	if (String(slot ?? "").startsWith("pending:")) throw new Error(t("Loading…"));
 	const init = { method: options.method || "GET", headers: { "x-myharness-web": "1" } };
-	// A half-dead server would otherwise hold one await forever; callers that poll pass a per-attempt budget.
-	if (options.timeoutMs) init.signal = AbortSignal.timeout(options.timeoutMs);
 	if (slot) init.headers["x-myharness-slot"] = slot;
 	if (options.body !== undefined) {
 		init.headers["content-type"] = "application/json";
 		init.body = JSON.stringify(options.body);
 	}
 	let res;
+	let text;
 	try {
-		res = await getFetch()(path, init);
+		({ response: res, text } = await readResponse(getFetch(), path, init, {
+			timeoutMs: options.timeoutMs ?? (init.method === "GET" ? REQUEST_TIMEOUT.transcript : undefined),
+			retryReads: !exportReadOnly(),
+		}));
 	} catch (error) {
 		// A deadline is not the same as a dead server: say which one happened, or the user cannot tell whether to retry.
 		const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
@@ -536,7 +539,6 @@ export async function api(path, options = {}) {
 		throw err;
 	}
 	let data = null;
-	const text = await res.text();
 	if (text) {
 		try {
 			data = JSON.parse(text);
@@ -1565,6 +1567,7 @@ let recoveringStream = false;
 /** The browser gives up on a stream whose (re)connect failed with a status; this watchdog rebuilds those, always. */
 const sseWatchdog = createSseWatchdog({
 	isClosed: () => isDeadStream(source),
+	isConnecting: () => source?.readyState === 0,
 	rebuild: () => {
 		if (source) {
 			try {
@@ -1749,6 +1752,7 @@ function connectEvents() {
 		source = new EventSourceFactory("/api/events");
 	}
 	source.onopen = async () => {
+		sseWatchdog.cancel();
 		const reconnect = state.everConnected;
 		set({ connected: true, everConnected: true });
 		if (reconnect) tellTerminals("reconnect");
@@ -1756,7 +1760,7 @@ function connectEvents() {
 	};
 	source.onerror = () => {
 		set({ connected: false });
-		// Only a stream the browser abandoned for good needs this: while it still retries, readyState is CONNECTING.
+		// Native retry can stall in CONNECTING too; the watchdog gives it a bounded chance before rebuilding.
 		sseWatchdog.watch();
 	};
 	// Handlers receive (data, slot) and run with the state accessors bound to that session.

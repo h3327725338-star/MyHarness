@@ -36,6 +36,7 @@ import {interactionTimings} from '/js/interaction-timing.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const must=(x,m)=>{if(!x)throw Error(m)};
 const calls=[]; let fail=true;
+const interrupted=new Set();
 const realFetch=window.fetch.bind(window);
 window.addEventListener('error',event=>{document.body.insertAdjacentHTML('beforeend','<p id="ready">'+event.message+'</p>')});
 window.addEventListener('unhandledrejection',event=>{document.body.insertAdjacentHTML('beforeend','<p id="ready">'+String(event.reason?.stack||event.reason)+'</p>')});
@@ -50,6 +51,8 @@ window.fetch=async(url,init={})=>{
  }
  if(url==='/api/modes/open'){await wait(160);return new Response(JSON.stringify({slot:JSON.parse(init.body).mode,state:{drafts:{}}}));}
  if(url==='/api/state'){
+  // Every cold target loses its first read, as a reused local socket can during rapid navigation.
+  if(!interrupted.has(slot)){interrupted.add(slot);throw new TypeError('Failed to fetch');}
   await wait(100);
   return new Response(JSON.stringify({slot,mode:slot==='general'?'general':'coding',cwd:'C:/fixture',session:{id:slot,file:slot,persisted:true,name:slot},active:false,flags:{},queue:{steering:[],followUp:[]},dialogs:[],surface:{widgets:{},statuses:{}},model:{id:'m',input:['text']},thinking:{level:'off',levels:[]},trust:{trusted:true},run:{},app:{}}));
  }
@@ -108,6 +111,11 @@ try{
   await back;await wait(650);
   must(state.snap.mode==='coding'&&!state.switching,'animated mode switch failed');
  }
+ // Repeated navigation with overlapping failed reads must settle on the last click, not strand the page.
+ const switching=[];
+ for(let i=0;i<30;i++){switching.push(actions.openSession('burst-'+i));await wait(8);}
+ await Promise.all(switching);
+ must(state.snap.session.file==='burst-29'&&!state.switching&&canSendToActive(),'rapid switching stranded or selected wrong chat');
  // A large uncached transcript must paint a bounded tail immediately, never Welcome.
  const large=[];
  for(let i=0;i<500;i++)large.push({kind:'user',id:'large-'+i,ts:i,text:'large message '+i,images:[]});
@@ -117,6 +125,7 @@ try{
  await wait(200);
  must(document.querySelector('.transcript-inner').textContent.includes('large message 499'),'large tail missing');
  must(interactionTimings().some(s=>s.visibleMs<100&&s.contentMs>100),'missing separate visual/content measurements');
+ must(!state.toasts.some(t=>t.message.includes('Cannot reach the MyHarness server')),'transient reads surfaced as service outage');
  const timingResponse=await realFetch('/api/test/timing',{method:'POST',headers:{'content-type':'application/json','x-myharness-web':'1'},body:JSON.stringify(interactionTimings())});
  must(timingResponse.ok,'failed to record timing samples');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
