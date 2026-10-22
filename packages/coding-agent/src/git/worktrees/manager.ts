@@ -235,6 +235,27 @@ export class GitWorktreeManager {
 	}
 
 	/**
+	 * Remove one copy the caller already found in a fresh listing, without reading the list again. Git runs
+	 * asynchronously, so deleting a long row of copies never holds the event loop: the web server keeps answering and
+	 * the event stream keeps flowing while hundreds of folders are removed.
+	 */
+	async removeAsync(mainWorktreePath: string, worktree: GitWorktree, force = false): Promise<GitWorktreeActionResult> {
+		if (worktree.isMain) return { ok: false, error: "不能删除 main 主 Worktree。" };
+		const result = await runGit(["worktree", "remove", ...(force ? ["--force"] : []), worktree.path], {
+			cwd: resolvePath(mainWorktreePath),
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		if (!result.ok) return { ok: false, error: `删除 Worktree 失败：${formatGitFailure(result)}` };
+		const launcher = this.removeLauncher(worktree);
+		return {
+			ok: true,
+			worktree,
+			warning: launcher.warning,
+			message: launcher.warning ? `Worktree 已删除，但启动文件清理失败：${launcher.warning}` : "Worktree 已删除。",
+		};
+	}
+
+	/**
 	 * Detach a copy from its branch without touching a single file. Archiving a clean copy uses this to release the
 	 * branch: the commit stays reachable through the copy's own HEAD, and the branch name can be freed or reused.
 	 */

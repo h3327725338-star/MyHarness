@@ -971,21 +971,36 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			if (worktree.isMain || path.resolve(worktree.path) === current) return false;
 			return !!archive.get(worktree.path)?.archivedAt;
 		});
-		// Removing a copy is a synchronous Git call. Clearing every archived copy in one pass held the event loop for
-		// seconds, which stalled other requests and the event stream; small batches leave room to answer in between.
-		const CLEAR_BATCH = 4;
-		for (let index = 0; index < targets.length; index += CLEAR_BATCH) {
-			for (const worktree of targets.slice(index, index + CLEAR_BATCH)) {
-				const result = worktreeCase.delete(root, worktree, force);
-				if (!result.ok) {
-					failed.push({ path: worktree.path, error: result.error ?? "未知错误" });
-					continue;
-				}
+		// One copy at a time, every `git worktree remove` awaited: the event loop stays free, so the event stream and
+		// every other request keep answering while hundreds of folders are deleted. Progress is broadcast so the menu
+		// can show how many are done and how many are left instead of looking frozen.
+		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
+		const mainWorktreePath = listing.main?.path ?? root;
+		const total = targets.length;
+		let done = 0;
+		const report = (phase: "start" | "progress" | "done") =>
+			host.broadcast("worktree_clear", {
+				phase,
+				total,
+				done,
+				removed: removed.length,
+				failed: failed.length,
+			});
+		report("start");
+		for (const worktree of targets) {
+			const result = await manager
+				.removeAsync(mainWorktreePath, worktree, force)
+				.catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+			if (result.ok) {
 				archive.remove(worktree.path);
 				removed.push(worktree.path);
+			} else {
+				failed.push({ path: worktree.path, error: result.error ?? "未知错误" });
 			}
-			if (index + CLEAR_BATCH < targets.length) await new Promise<void>((resolve) => setImmediate(resolve));
+			done += 1;
+			report("progress");
 		}
+		report("done");
 		return { removed: removed.length, failed };
 	});
 

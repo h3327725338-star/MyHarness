@@ -20,12 +20,20 @@ const mocks = vi.hoisted(() => ({
 	detach: vi.fn(),
 	detachAsync: vi.fn(),
 	attach: vi.fn(),
+	removeAsync: vi.fn(),
 }));
 
 vi.mock("../src/git/repository/integration.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../src/git/repository/integration.ts")>()),
 	inspectGitRepository: mocks.inspectRepository,
 	inspectGitRepositoryAsync: mocks.inspectRepositoryAsync,
+}));
+
+// The worktree list reads through the Git read cache (read-cache.ts), which runs Git itself instead of calling the
+// integration helpers above. In the fixture folder that would always answer "not a repository".
+vi.mock("../src/git/repository/read-cache.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/git/repository/read-cache.ts")>()),
+	getCachedGitInspect: (...args: unknown[]) => mocks.inspectRepositoryAsync(...args),
 }));
 
 vi.mock("../src/application/use-cases/git-worktree.ts", () => ({
@@ -47,6 +55,7 @@ vi.mock("../src/git/worktrees/manager.ts", async (importOriginal) => ({
 		detach = (...args: unknown[]) => mocks.detach(...args);
 		detachAsync = (...args: unknown[]) => mocks.detachAsync(...args);
 		attach = (...args: unknown[]) => mocks.attach(...args);
+		removeAsync = (...args: unknown[]) => mocks.removeAsync(...args);
 	},
 }));
 
@@ -115,6 +124,7 @@ function createHarness(options: { trusted?: boolean; streaming?: boolean } = {})
 	return {
 		get: (route: string) => call(route),
 		post: (route: string, body: unknown = {}) => call(route, body),
+		broadcast: host.broadcast,
 	};
 }
 
@@ -218,18 +228,21 @@ describe("worktree archive routes", () => {
 		await listCopies();
 		mocks.readChangeCountAsync.mockImplementation(async (copy: string) => (copy === subagentCopyPath ? 0 : 2));
 		const result = await createHarness().post("/api/git/worktrees/archive-sync");
-		expect(result).toEqual({ released: 1, kept: [] });
+		expect(result).toEqual({ released: 1, kept: [], remaining: 0 });
 		expect(mocks.detachAsync).toHaveBeenCalledExactlyOnceWith(subagentCopyPath);
 	});
 
 	it("clears only clean archived copies until force is explicit", async () => {
 		await listCopies();
-		mocks.deleteWorktree.mockImplementation((_root: string, copy: GitWorktree) =>
-			copy.path === subagentCopyPath
-				? { ok: true }
-				: { ok: false, error: "fatal: contains modified or untracked files, use --force to delete it" },
+		mocks.removeAsync.mockImplementation((_main: string, copy: GitWorktree) =>
+			Promise.resolve(
+				copy.path === subagentCopyPath
+					? { ok: true }
+					: { ok: false, error: "fatal: contains modified or untracked files, use --force to delete it" },
+			),
 		);
-		const safe = (await createHarness().post("/api/git/worktrees/archive/clear", {})) as {
+		const harness = createHarness();
+		const safe = (await harness.post("/api/git/worktrees/archive/clear", {})) as {
 			removed: number;
 			failed: Array<{ path: string }>;
 		};
@@ -238,13 +251,25 @@ describe("worktree archive routes", () => {
 		expect(new WorktreeArchiveRecords(agentDir).get(subagentCopyPath)).toBeUndefined();
 		expect(new WorktreeArchiveRecords(agentDir).get(temporaryCopyPath)).toBeDefined();
 
-		mocks.deleteWorktree.mockReturnValue({ ok: true });
-		const forced = (await createHarness().post("/api/git/worktrees/archive/clear", { force: true })) as {
+		mocks.removeAsync.mockResolvedValue({ ok: true });
+		const forced = (await harness.post("/api/git/worktrees/archive/clear", { force: true })) as {
 			removed: number;
 		};
 		expect(forced.removed).toBe(2);
-		expect(mocks.deleteWorktree).toHaveBeenCalledWith(repositoryRoot, userArchivedCopy, true);
-		expect(mocks.deleteWorktree).toHaveBeenCalledWith(repositoryRoot, temporaryCopy, true);
+		expect(mocks.removeAsync).toHaveBeenCalledWith(repositoryRoot, userArchivedCopy, true);
+		expect(mocks.removeAsync).toHaveBeenCalledWith(repositoryRoot, temporaryCopy, true);
+	});
+
+	it("reports live progress while clearing", async () => {
+		await listCopies();
+		mocks.removeAsync.mockResolvedValue({ ok: true });
+		const harness = createHarness();
+		await harness.post("/api/git/worktrees/archive/clear", { force: true });
+		const events = harness.broadcast.mock.calls
+			.filter(([name]) => name === "worktree_clear")
+			.map(([, data]) => data as { phase: string; total: number; done: number; removed: number });
+		expect(events[0]).toMatchObject({ phase: "start", total: 3, done: 0 });
+		expect(events.at(-1)).toMatchObject({ phase: "done", total: 3, done: 3, removed: 3, failed: 0 });
 	});
 
 	it("restores an archived copy and asks Git to check out the recorded branch again", async () => {

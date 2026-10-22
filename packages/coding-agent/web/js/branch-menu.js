@@ -2,10 +2,10 @@
 // this chat into an isolated copy of the repository (a Git worktree) or back to the main copy. Every action calls the
 // server's Git routes (routes-git.ts), which use Git's own rules; nothing here decides what Git allows.
 import { html, useEffect, useMemo, useRef, useState, afterPaint, Chevron, Collapse, COLLAPSE_MS, Icon, Popover, Spinner, Toggle } from "./ui.js";
-import { api, attempt, loadGitStatus, post, REQUEST_TIMEOUT, state, toast, useStore } from "./store.js";
+import { api, attempt, loadGitStatus, post, REQUEST_TIMEOUT, set, state, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
-import { getLang, serverText, t } from "./i18n.js";
+import { count, getLang, serverText, t } from "./i18n.js";
 import { openWorktreeTab } from "./worktree-tabs.js";
 import { explainDeleteFailure } from "./git-delete.js";
 import { createReadCache } from "./scheduling.js";
@@ -135,6 +135,8 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [archivedOpen, setArchivedOpen] = useState(false);
 	// `{ force, failed, error }` while the clear-archived confirmation is on screen, `null` when it is closed.
 	const [archiveClear, setArchiveClear] = useState(null);
+	// Live counts of a running clear (`{ phase, total, done, removed, failed }`), fed by the server's event stream.
+	const clearProgress = useStore((s) => s.worktreeClear);
 	const [fresh, setFresh] = useState("");
 	const [naming, setNaming] = useState(null);
 	const [displayName, setDisplayName] = useState("");
@@ -145,6 +147,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [targetCopy, setTargetCopy] = useState(null);
 	const deletionPanel = useRef(null);
 	const copyDeletionPanel = useRef(null);
+	const archiveClearPanel = useRef(null);
 	const copies = useRef(null);
 	const archivedEnd = useRef(null);
 	const known = useRef(null);
@@ -216,6 +219,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const clearArchived = async (force = false) => {
 		if (busy) return;
 		setBusy("archive-clear");
+		set({ worktreeClear: null });
 		try {
 			const result = await post("/api/git/worktrees/archive/clear", { force }, slot);
 			const failed = result?.failed || [];
@@ -229,6 +233,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 				);
 			} else {
 				setArchiveClear(null);
+				set({ worktreeClear: null });
 				toast(t("Archived copies cleared"), "info", 3500);
 			}
 		} catch (e) {
@@ -280,6 +285,14 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		const timer = setTimeout(reveal, COLLAPSE_MS + 200);
 		return () => { clearTimeout(timer); fold?.removeEventListener("transitionend", onEnd); };
 	}, [archivedOpen]);
+	useEffect(() => {
+		if (!archiveClear) return;
+		// The button sits at the end of the capped copies region, so the confirmation lands below the region and below
+		// the popover's own edge: without this the click looks dead because the confirm buttons stay out of view.
+		archiveClearPanel.current?.scrollIntoView({ block: "nearest" });
+		// Opening the confirmation removes the trigger that had the focus, so the panel takes it (on its safe option).
+		archiveClearPanel.current?.querySelector(".branch-delete-cancel")?.focus({ preventScroll: true });
+	}, [archiveClear]);
 	useEffect(() => {
 		if (!deletingCopy) return;
 		copyDeletionPanel.current?.scrollIntoView({ block: "nearest" });
@@ -588,6 +601,10 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		if (event.key === "Enter") return event.preventDefault(), rows[sel] && activate(rows[sel]);
 	};
 	const disabled = running || !!busy || !data;
+	// The archived group's clear button only opens the confirmation. While that confirmation is open the button steps
+	// aside: two red buttons with the same words, one right under the other, read as "the click opened a second clear
+	// button" instead of "confirm this clear".
+	const archivedClearTrigger = archiveClear ? null : html`<div class="branch-form" ref=${archivedEnd}><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({ force: false, failed: [], error: "" })}>${t("Clear archived copies")}</button></div>`;
 
 	const copyRow = (w, archived = false) => {
 		const work = holdsWork(w);
@@ -696,19 +713,27 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 					<${Chevron} /><span>${t("Archived copies")}</span><span class="badge">${archivedCopies.length}</span></button>
 					<${Collapse} open=${archivedOpen}>
 						<div class=${copiesClass(archivedCopies)}>${archivedCopies.map((w) => copyRow(w, true))}</div>
-						<div class="branch-form" ref=${archivedEnd}><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({ force: false, failed: [], error: "" })}>${t("Clear archived copies")}</button></div>
+						${archivedClearTrigger}
 					<//>` : null}
 			</div>
-			${archiveClear ? html`<div class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
+			${archiveClear ? html`<div ref=${archiveClearPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
 				<strong>${t("Delete every archived copy?")}</strong>
 				<div>${t("Their folders are removed from disk. This is the only action that deletes archived work; archiving itself never does.")}</div>
+				${archiveClear && clearProgress?.total
+					? html`<div class="branch-progress" role="progressbar" aria-valuemin="0" aria-valuemax=${clearProgress.total} aria-valuenow=${clearProgress.done} aria-label=${t("Deleting archived copies")}>
+						<div class="branch-progress-track"><i style=${`width:${Math.round((clearProgress.done / Math.max(1, clearProgress.total)) * 100)}%`}></i></div>
+						<div class="branch-progress-label">${busy === "archive-clear"
+							? t("{done} of {total} deleted, {left} left", { done: clearProgress.done, total: clearProgress.total, left: Math.max(0, clearProgress.total - clearProgress.done) })
+							: t("{done} of {total} deleted", { done: clearProgress.done, total: clearProgress.total })}</div>
+					</div>`
+					: null}
 				${archiveClear.error ? html`<div class="c-danger" role="alert">${archiveClear.error}</div>` : null}
 				${archiveClear.failed.length ? html`<div class="c-danger" role="alert">${t("{count} copies still hold uncommitted changes and were kept. Force clearing discards them permanently.", { count: archiveClear.failed.length })}</div>` : null}
 				<div class="branch-form">
 					${archiveClear.failed.length
-						? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${() => clearArchived(true)}>${t("Force clear archived copies")}</button>`
-						: html`<button class="btn sm danger" disabled=${disabled} onClick=${() => clearArchived(false)}>${t("Clear archived copies")}</button>`}
-					<button class="btn sm" disabled=${!!busy} onClick=${() => setArchiveClear(null)}>${t("Cancel")}</button>
+						? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${() => clearArchived(true)}>${t("Force delete {copies}", { copies: count(archivedCopies.length, "copy") })}</button>`
+						: html`<button class="btn sm danger" disabled=${disabled} onClick=${() => clearArchived(false)}>${t("Permanently delete {copies}", { copies: count(archivedCopies.length, "copy") })}</button>`}
+					<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${() => { setArchiveClear(null); set({ worktreeClear: null }); }}>${t("Cancel")}</button>
 				</div>
 			</div>` : null}
 			${deletingCopy ? html`<div ref=${copyDeletionPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Delete copy?")}>

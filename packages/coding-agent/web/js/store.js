@@ -1953,6 +1953,12 @@ function connectEvents() {
 		if (d.phase === "end") loadSnapshot(slot);
 	});
 	on("git_task", (d) => set({ gitTask: d.active ? d : null }));
+	// Live counts for "Clear archived copies": total, how many are gone, how many are left. The menu reads this to
+	// animate a progress bar while the server deletes the folders one by one.
+	on("worktree_clear", (d, slot) => {
+		if (slot && slot !== activeSlot) return;
+		set({ worktreeClear: d });
+	});
 	on("code_intelligence_installation", (d) => set({ codeIntelligenceInstallation: d }));
 	on("checkpoint_changed", (d, slot) => {
 		loadSnapshot(slot);

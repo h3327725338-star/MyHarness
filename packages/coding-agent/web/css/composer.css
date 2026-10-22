@@ -221,6 +221,11 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-confirm { flex: none; height: 20px; padding: 0 7px; border-radius: var(--r-pill); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-xs); font-weight: 600; animation: fade-in var(--t-fast) var(--ease) both; }
 .branch-note { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--fs-xs); }
 .branch-delete-panel { flex-direction: column; align-items: stretch; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+/* Live counts while archived copies are deleted: one narrow bar plus "deleted / total, left". */
+.branch-progress { padding: 4px 6px 2px; }
+.branch-progress-track { height: 4px; border-radius: var(--r-pill); background: var(--surface-hover); overflow: hidden; }
+.branch-progress-track > i { display: block; height: 100%; background: var(--danger); border-radius: inherit; transition: width 240ms var(--ease); }
+.branch-progress-label { margin-top: 4px; color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .branch-delete-panel .branch-form { flex-wrap: wrap; padding: 0; }
 .branch-delete-details summary { cursor: pointer; color: var(--text-3); }
 .branch-delete-details .pre-wrap { max-height: 120px; overflow-y: auto; margin-top: 4px; }
