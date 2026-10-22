@@ -4,6 +4,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { getSessionConversationDir } from "../config/paths/index.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
+import { listMemoryFilesAsync } from "../session/memory/store.ts";
 import { ModeStateStore } from "../session/mode-state.ts";
 import {
 	type ApplyContext,
@@ -140,6 +141,7 @@ export class SyncEngine {
 	private stateWatcher: FSWatcher | undefined;
 	private lockRelease: (() => Promise<void>) | undefined;
 	private headerCache = new Map<string, HeaderCacheEntry>();
+	private memoryMetadataCache = new Map<string, { signature: string; id: string; name: string }>();
 	private currentScan = new Map<string, ScannedEntity>();
 	private fileCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
 	private uploadedObjects = new Set<string>();
@@ -414,7 +416,7 @@ export class SyncEngine {
 			if (!this.pushPlanned && mode !== "download") {
 				// Drive was not reached (offline, expired sign-in): still show what is waiting to upload.
 				try {
-					this.planUploads();
+					await this.planUploads();
 				} catch {
 					// Counting is best effort; the next pass rebuilds the queue anyway.
 				}
@@ -519,7 +521,18 @@ export class SyncEngine {
 
 	private installWatchers(): void {
 		try {
-			this.watcher = watch(this.options.dataRoot, { recursive: true }, () => this.scheduleSoon());
+			this.watcher = watch(this.options.dataRoot, { recursive: true }, (_event, filename) => {
+				if (filename) {
+					const name = filename.replace(/\\/g, "/");
+					// Derived catalogs, memory maintenance and Coding traces are local-only. Watching our own
+					// index writes (or shell output) used to wake a full sync scan again immediately.
+					if (/^(?:cache|logs|traces|tool-traces|\.git)(?:\/|$)/u.test(name)) return;
+					if (/(?:^|\/)memory\/(?:index\.json|state\.json|maintenance\.[^/]+|migration-[^/]+\.json)$/u.test(name))
+						return;
+					if (/\.(?:tmp|part|crdownload|lock|bridge)$/u.test(name)) return;
+				}
+				this.scheduleSoon();
+			});
 			this.watcher.on("error", () => {});
 		} catch {
 			// A filesystem without recursive watch still gets the polling pass.
@@ -600,7 +613,7 @@ export class SyncEngine {
 	private async push(): Promise<void> {
 		if (!this.drive) return;
 		this.pushPlanned = true;
-		const operations = this.planUploads();
+		const operations = await this.planUploads();
 		this.setManualStage("upload", 0, operations.length);
 		this.emitStatus();
 		if (operations.length === 0) return;
@@ -625,12 +638,13 @@ export class SyncEngine {
 	 * The upload queue: everything on disk that differs from the last committed state. Needs no network, so the
 	 * count stays visible while offline and is rebuilt the same way after a restart.
 	 */
-	private planUploads(): SyncOperation[] {
+	private async planUploads(): Promise<SyncOperation[]> {
 		const scan = scanLocalEntities({
 			dataRoot: this.options.dataRoot,
 			agentDir: this.options.agentDir,
 			modeState: this.modeState,
 			headerCache: this.headerCache,
+			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
 		});
 		this.currentScan = scan;
 		const operations: SyncOperation[] = [];
@@ -812,6 +826,7 @@ export class SyncEngine {
 			agentDir: this.options.agentDir,
 			modeState: this.modeState,
 			headerCache: this.headerCache,
+			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
 		});
 		const files = await drive.list("batches");
 		const known = new Set(this.state.appliedBatches);

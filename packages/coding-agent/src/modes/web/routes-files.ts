@@ -38,7 +38,7 @@ import { SessionManager } from "../../session/manager/index.ts";
 import {
 	claimPendingMemory,
 	deleteMemoryPermanently,
-	listMemoryFiles,
+	listMemoryFilesAsync,
 	migrateLegacyMemories,
 	restoreMemoryArchive,
 } from "../../session/memory/store.ts";
@@ -394,12 +394,18 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!["session", "workspace", "global"].includes(level)) throw new HttpError(400, "Unknown memory scope");
 		const manager = host.session.sessionManager;
 		return {
-			entries: listMemoryFiles(dataRoot).filter(
-				(entry) =>
-					level === "global" ||
-					(entry.workspaceId === manager.getWorkspaceId() &&
-						(level === "workspace" || entry.sessionId === manager.getSessionId())),
-			),
+			entries:
+				level !== "global" && !manager.getWorkspaceId()
+					? []
+					: await listMemoryFilesAsync(
+							dataRoot,
+							level === "global"
+								? {}
+								: {
+										workspaceId: manager.getWorkspaceId(),
+										...(level === "session" ? { sessionId: manager.getSessionId() } : {}),
+									},
+						),
 		};
 	});
 	server.route("POST", "/api/memory/restore", async ({ body }) => {

@@ -24,12 +24,7 @@ import {
 import { generateAICommitMessage } from "../../git/commits/ai-message.ts";
 import { generateInitialCommitMessageAsync } from "../../git/commits/message.ts";
 import { LocalGitRepositoryStore, validateLocalGitDirectory } from "../../git/local-repositories/store.ts";
-import {
-	createBranchAsync,
-	deleteBranchAsync,
-	listLocalBranchesAsync,
-	switchBranchAsync,
-} from "../../git/repository/branches.ts";
+import { createBranchAsync, deleteBranchAsync, switchBranchAsync } from "../../git/repository/branches.ts";
 import {
 	discardChangesToHead,
 	hasChangesToDiscard,
@@ -46,6 +41,7 @@ import {
 	setLocalGitIdentity,
 } from "../../git/repository/integration.ts";
 import {
+	getCachedGitBranches,
 	getCachedGitHead,
 	getCachedGitIdentity,
 	getCachedGitInspect,
@@ -132,6 +128,7 @@ function reasoningOf(thinkingLevel: ThinkingLevel) {
 
 /** How long an archived copy that still holds work is left alone before its branch is checked again. */
 const ARCHIVE_BRANCH_RECHECK_MS = 6 * 60 * 60 * 1000;
+const archiveSyncRunning = new Set<string>();
 
 interface GitTaskState {
 	kind: "commit" | "push";
@@ -659,7 +656,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	};
 
 	server.route("GET", "/api/git/worktrees", async () => {
-		const state = await inspectGitRepositoryAsync(cwd());
+		const state = await getCachedGitInspect(cwd());
 		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
 		const root = state.root;
 		const listing = await worktreeCase.listAsync(root);
@@ -861,45 +858,65 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	// Archiving keeps a finished copy on disk: the folder, its commits and any uncommitted files stay, it only leaves
 	// the active list. Releasing its branch means detaching a clean copy, so this runs under the usual idle guard and
 	// reads each copy off the event loop.
-	server.route("POST", "/api/git/worktrees/archive-sync", async () => {
+	server.route("POST", "/api/git/worktrees/archive-sync", async ({ body }) => {
 		requireIdle("archive copies");
 		requireTrusted();
-		const root = repositoryRootOrThrow();
-		const listing = await worktreeCase.listAsync(root);
-		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
-		const current = path.resolve(cwd());
-		const archive = copyArchive();
-		const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
-		const candidates = (listing.worktrees ?? []).filter((worktree) => {
-			if (worktree.isMain || !worktree.branch) return false;
-			if (path.resolve(worktree.path) === current) return false;
-			const record = archive.get(worktree.path);
-			if (!record?.archivedAt) return false;
-			// A copy known to still hold files is looked at again once per window, not on every panel open.
-			return !record.branchKeptAt || Date.now() - Date.parse(record.branchKeptAt) >= ARCHIVE_BRANCH_RECHECK_MS;
-		});
-		const released: string[] = [];
-		const kept: Array<{ path: string; error: string }> = [];
-		let next = 0;
-		await Promise.all(
-			Array.from({ length: Math.min(4, candidates.length) }, async () => {
-				while (next < candidates.length) {
-					const worktree = candidates[next++]!;
-					const changes = await manager.readChangeCountAsync(worktree.path).catch(() => undefined);
-					// A copy that still holds files keeps its branch: detaching it would hide that work behind a detached HEAD.
-					if (changes !== 0) {
-						archive.update(worktree.path, { branchKeptAt: new Date().toISOString() });
-						continue;
-					}
-					const detached = await manager
-						.detachAsync(worktree.path)
-						.catch((error) => ({ ok: false, error: String(error) }));
-					if (detached.ok) released.push(worktree.path);
-					else kept.push({ path: worktree.path, error: detached.error ?? "未知错误" });
+		const state = await getCachedGitInspect(cwd());
+		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
+		const root = state.root;
+		const key = process.platform === "win32" ? path.resolve(root).toLowerCase() : path.resolve(root);
+		if (archiveSyncRunning.has(key)) return { released: 0, kept: [], remaining: 1 };
+		archiveSyncRunning.add(key);
+		try {
+			const listing = await worktreeCase.listAsync(root);
+			if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
+			const current = path.resolve(cwd());
+			const archive = copyArchive();
+			const manager = new GitWorktreeManager(host.runtimeHost.services.agentDir);
+			const candidates = (listing.worktrees ?? []).filter((worktree) => {
+				if (worktree.isMain || !worktree.branch) return false;
+				if (path.resolve(worktree.path) === current) return false;
+				const record = archive.get(worktree.path);
+				if (!record?.archivedAt) return false;
+				// A copy known to still hold files is looked at again once per window, not on every panel open.
+				return !record.branchKeptAt || Date.now() - Date.parse(record.branchKeptAt) >= ARCHIVE_BRANCH_RECHECK_MS;
+			});
+			// Menu maintenance is incremental and serial: never flood Git with hundreds of subprocesses.
+			// Existing explicit callers can still request a full pass by omitting batchSize.
+			const batchSize = (body as { batchSize?: unknown } | null)?.batchSize;
+			const targets =
+				typeof batchSize === "number" && Number.isFinite(batchSize)
+					? candidates.slice(0, Math.max(1, Math.min(4, Math.floor(batchSize))))
+					: candidates;
+			const released: string[] = [];
+			const kept: Array<{ path: string; error: string }> = [];
+			for (const worktree of targets) {
+				requireIdle("archive copies");
+				requireTrusted();
+				const changes = await manager.readChangeCountAsync(worktree.path).catch(() => undefined);
+				// Unknown or dirty copies keep their branch and all files.
+				if (changes !== 0) {
+					archive.update(worktree.path, { branchKeptAt: new Date().toISOString() });
+					continue;
 				}
-			}),
-		);
-		return { released: released.length, kept };
+				requireIdle("archive copies");
+				requireTrusted();
+				const detached = await manager
+					.detachAsync(worktree.path)
+					.catch((error) => ({ ok: false, error: String(error) }));
+				if (detached.ok) {
+					released.push(worktree.path);
+					invalidateGitReadCache(root);
+				} else {
+					kept.push({ path: worktree.path, error: detached.error ?? "未知错误" });
+					archive.update(worktree.path, { branchKeptAt: new Date().toISOString() });
+				}
+			}
+			if (released.length) invalidateGitReadCache(root);
+			return { released: released.length, kept, remaining: candidates.length - targets.length };
+		} finally {
+			archiveSyncRunning.delete(key);
+		}
 	});
 
 	// Manual archive and restore from the copy list. Nothing is deleted either way.
@@ -1019,7 +1036,9 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	};
 
 	server.route("GET", "/api/git/branches", async () => {
-		const listing = await listLocalBranchesAsync(await branchRootOrThrow());
+		const state = await getCachedGitInspect(cwd());
+		if (!state.isRepository || !state.root) throw new HttpError(400, "The workspace is not a Git repository.");
+		const listing = await getCachedGitBranches(state.root);
 		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list branches.");
 		return { current: listing.current ?? null, branches: listing.branches };
 	});
@@ -1037,8 +1056,10 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 	server.route("POST", "/api/git/branches/create", async ({ body }) => {
 		requireIdle("create a branch");
 		requireTrusted();
-		const result = await createBranchAsync(await branchRootOrThrow(), branchName(body));
+		const root = await branchRootOrThrow();
+		const result = await createBranchAsync(root, branchName(body));
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to create the branch.");
+		invalidateGitReadCache(root);
 		return { ok: true };
 	});
 
@@ -1056,6 +1077,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 				? await worktreeCase.deleteBranchAndCopies(root, name)
 				: await deleteBranchAsync(root, name, payload.force === true);
 		if (!result.ok) throw new HttpError(400, result.error ?? "Failed to delete the branch.");
+		invalidateGitReadCache(root);
 		return { ok: true };
 	});
 

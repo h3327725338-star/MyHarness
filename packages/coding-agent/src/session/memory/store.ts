@@ -91,8 +91,8 @@ export async function archiveMemoryFile(file: string, reason: string): Promise<s
 	return archive;
 }
 
-function directories(directory: string): string[] {
-	assertDirectPath(directory);
+function directories(directory: string, checked?: Set<string>): string[] {
+	assertDirectPath(directory, checked);
 	if (!fs.existsSync(directory)) return [];
 	return fs
 		.readdirSync(directory, { withFileTypes: true })
@@ -101,8 +101,17 @@ function directories(directory: string): string[] {
 }
 
 /** Includes retained memories from deleted chats and unregistered workspaces. Never used as recall input. */
-export function listMemoryFiles(dataRoot: string): MemoryFile[] {
+export interface MemoryListOptions {
+	workspaceId?: string;
+	sessionId?: string;
+	/** Sync needs identity and paths, not thousands of parsed bodies on every poll. */
+	metadataCache?: Map<string, { signature: string; id: string; name: string }>;
+}
+
+export function listMemoryFiles(dataRoot: string, options: MemoryListOptions = {}): MemoryFile[] {
 	const result: MemoryFile[] = [];
+	const checked = new Set<string>();
+	const seen = new Set<string>();
 	const visit = (
 		directory: string,
 		scope: MemoryFile["scope"],
@@ -110,35 +119,137 @@ export function listMemoryFiles(dataRoot: string): MemoryFile[] {
 		sessionId?: string,
 		archived = false,
 	): void => {
-		assertDirectPath(directory);
+		assertDirectPath(directory, checked);
 		if (!fs.existsSync(directory)) return;
 		for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
 			if (!item.isFile() || !item.name.endsWith(".md")) continue;
 			const file = path.join(directory, item.name);
-			assertDirectPath(file);
-			const parsed = parseFrontmatter<Record<string, unknown>>(fs.readFileSync(file, "utf8"));
+			assertDirectPath(file, checked);
+			seen.add(file);
+			const stat = options.metadataCache ? fs.statSync(file) : undefined;
+			const signature = stat ? `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}` : "";
+			const cached = options.metadataCache?.get(file);
+			const parsed =
+				cached?.signature === signature
+					? undefined
+					: parseFrontmatter<Record<string, unknown>>(fs.readFileSync(file, "utf8"));
+			const name = parsed ? String(parsed.frontmatter.name ?? item.name) : cached!.name;
+			const id = parsed ? String(parsed.frontmatter.id ?? "") : cached!.id;
+			options.metadataCache?.set(file, { signature, name, id });
 			result.push({
 				path: path.relative(dataRoot, file).replace(/\\/g, "/"),
 				scope,
 				workspaceId,
 				sessionId,
 				archived,
-				name: String(parsed.frontmatter.name ?? item.name),
-				id: String(parsed.frontmatter.id ?? ""),
-				content: parsed.body,
+				name,
+				id,
+				content: options.metadataCache ? "" : parsed!.body,
 			});
 		}
 		if (!archived) visit(path.join(directory, "archive"), scope, workspaceId, sessionId, true);
 	};
 	const root = path.join(dataRoot, "memory");
-	visit(root, "global");
-	for (const key of directories(path.join(root, "pending"))) visit(path.join(root, "pending", key), "pending");
-	for (const workspaceId of directories(getWorkspacesDir(dataRoot))) {
+	if (options.workspaceId === undefined) {
+		visit(root, "global");
+		for (const key of directories(path.join(root, "pending"), checked))
+			visit(path.join(root, "pending", key), "pending");
+	}
+	for (const workspaceId of options.workspaceId === undefined
+		? directories(getWorkspacesDir(dataRoot), checked)
+		: [options.workspaceId]) {
 		const workspace = getWorkspaceDir(dataRoot, workspaceId);
-		visit(path.join(workspace, "memory"), "workspace", workspaceId);
-		for (const sessionId of directories(path.join(workspace, "sessions")))
+		if (options.sessionId === undefined) visit(path.join(workspace, "memory"), "workspace", workspaceId);
+		for (const sessionId of options.sessionId === undefined
+			? directories(path.join(workspace, "sessions"), checked)
+			: [options.sessionId])
 			visit(path.join(getSessionDir(dataRoot, workspaceId, sessionId), "memory"), "session", workspaceId, sessionId);
 	}
+	if (options.metadataCache)
+		for (const file of options.metadataCache.keys()) {
+			if (!seen.has(file)) options.metadataCache.delete(file);
+		}
+	return result;
+}
+
+/** Request-facing traversal: scoped at the directory level, with asynchronous I/O even for the global view. */
+export async function listMemoryFilesAsync(dataRoot: string, options: MemoryListOptions = {}): Promise<MemoryFile[]> {
+	const result: MemoryFile[] = [];
+	const checked = new Set<string>();
+	const seen = new Set<string>();
+	const entries = async (directory: string): Promise<fs.Dirent[]> => {
+		// Reuse ancestor checks only within this traversal, never across requests.
+		assertDirectPath(directory, checked);
+		try {
+			return await fs.promises.readdir(directory, { withFileTypes: true });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+			throw error;
+		}
+	};
+	const dirs = async (directory: string) =>
+		(await entries(directory))
+			.filter((item) => item.isDirectory() && !item.isSymbolicLink())
+			.map((item) => item.name);
+	const visit = async (
+		directory: string,
+		scope: MemoryFile["scope"],
+		workspaceId?: string,
+		sessionId?: string,
+		archived = false,
+	): Promise<void> => {
+		for (const item of await entries(directory)) {
+			if (!item.isFile() || !item.name.endsWith(".md")) continue;
+			const file = path.join(directory, item.name);
+			assertDirectPath(file, checked);
+			seen.add(file);
+			const stat = options.metadataCache ? await fs.promises.stat(file) : undefined;
+			const signature = stat ? `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}` : "";
+			const cached = options.metadataCache?.get(file);
+			const parsed =
+				cached?.signature === signature
+					? undefined
+					: parseFrontmatter<Record<string, unknown>>(await fs.promises.readFile(file, "utf8"));
+			const name = parsed ? String(parsed.frontmatter.name ?? item.name) : cached!.name;
+			const id = parsed ? String(parsed.frontmatter.id ?? "") : cached!.id;
+			options.metadataCache?.set(file, { signature, name, id });
+			result.push({
+				path: path.relative(dataRoot, file).replace(/\\/g, "/"),
+				scope,
+				workspaceId,
+				sessionId,
+				archived,
+				name,
+				id,
+				content: options.metadataCache ? "" : parsed!.body,
+			});
+		}
+		if (!archived) await visit(path.join(directory, "archive"), scope, workspaceId, sessionId, true);
+	};
+	const root = path.join(dataRoot, "memory");
+	if (options.workspaceId === undefined) {
+		await visit(root, "global");
+		for (const key of await dirs(path.join(root, "pending"))) await visit(path.join(root, "pending", key), "pending");
+	}
+	for (const workspaceId of options.workspaceId === undefined
+		? await dirs(getWorkspacesDir(dataRoot))
+		: [options.workspaceId]) {
+		const workspace = getWorkspaceDir(dataRoot, workspaceId);
+		if (options.sessionId === undefined) await visit(path.join(workspace, "memory"), "workspace", workspaceId);
+		for (const sessionId of options.sessionId === undefined
+			? await dirs(path.join(workspace, "sessions"))
+			: [options.sessionId])
+			await visit(
+				path.join(getSessionDir(dataRoot, workspaceId, sessionId), "memory"),
+				"session",
+				workspaceId,
+				sessionId,
+			);
+	}
+	if (options.metadataCache)
+		for (const file of options.metadataCache.keys()) {
+			if (!seen.has(file)) options.metadataCache.delete(file);
+		}
 	return result;
 }
 
@@ -195,7 +306,7 @@ export async function recordMemoryWriteConsolidation(
 
 /** Rebuild global and workspace reference catalogs without copying memory bodies. Caller owns the lock. */
 export async function refreshMemoryIndexes(dataRoot: string): Promise<void> {
-	const entries = listMemoryFiles(dataRoot).map(({ content: _content, ...entry }) => entry);
+	const entries = (await listMemoryFilesAsync(dataRoot)).map(({ content: _content, ...entry }) => entry);
 	await writeMemoryFile(
 		path.join(dataRoot, "memory", "index.json"),
 		`${JSON.stringify({ version: 2, entries }, null, 2)}\n`,
@@ -227,7 +338,7 @@ export async function deleteMemoryPermanently(
 		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md"))
 			throw new Error("Invalid memory path");
 		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error("Unknown memory");
-		const entry = listMemoryFiles(resolved).find((item) => path.resolve(resolved, item.path) === file);
+		const entry = (await listMemoryFilesAsync(resolved)).find((item) => path.resolve(resolved, item.path) === file);
 		if (!entry || entry.archived) throw new Error("Unknown memory");
 		const base = path.basename(file);
 		const baseNoExt = base.slice(0, -3);
@@ -276,7 +387,7 @@ export async function claimPendingMemory(
 		assertDirectPath(file);
 		if (path.relative(resolved, file).startsWith("..") || !file.endsWith(".md"))
 			throw new Error("Invalid memory path");
-		const entry = listMemoryFiles(resolved).find(
+		const entry = (await listMemoryFilesAsync(resolved)).find(
 			(item) => path.resolve(resolved, item.path) === file && !item.archived && item.scope === "pending",
 		);
 		if (!entry) throw new Error("Unknown pending memory");
@@ -313,7 +424,7 @@ export async function claimPendingMemory(
 
 export async function restoreMemoryArchive(dataRoot: string, relativePath: string): Promise<void> {
 	await withMemoryLock(dataRoot, async () => {
-		const entry = listMemoryFiles(dataRoot).find(
+		const entry = (await listMemoryFilesAsync(dataRoot)).find(
 			(item) => item.path === relativePath && item.archived && item.scope !== "pending",
 		);
 		if (!entry) throw new Error("Unknown memory archive");

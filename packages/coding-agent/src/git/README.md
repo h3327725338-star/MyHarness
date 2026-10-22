@@ -16,7 +16,7 @@
 | `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹（Final ChangeSet 全异步：worktree/head/refs/pending/index 均走 async Git，pending 用 fresh 读） |
 | `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行；同步与异步各一套，恢复决策始终读最新状态） |
 | `status-cache.ts` | `git status --porcelain=v1 -z` 短 TTL（1s）缓存 + 并发去重；失败不入缓存、不抛错（`{ error }` 返回）。写入后由提交/丢弃/恢复调用 `invalidateGitStatusCache()` 失效；关键写操作前的读取用 `fresh: true` |
-| `read-cache.ts` | 高频轮询的只读查询短 TTL + 同 key 在途合并：版本检测进程复用（5 分钟）、仓库检查（2 秒）、身份（10 秒）、状态预览（1 秒）、HEAD（2 秒）、Git 目录布局（60 秒）。失败不缓存、旧请求不覆盖新结果，`fresh: true` 强制重验，写操作后调 `invalidateGitReadCache()` 失效；提交/恢复决策仍走 `integration.ts` 直读，不改变写语义 |
+| `read-cache.ts` | 高频轮询的只读查询短 TTL + 同 key 在途合并：版本检测进程复用（5 分钟）、仓库检查（2 秒）、身份（10 秒）、状态预览（1 秒）、HEAD（2 秒）、分支展示（2 秒）、Git 目录布局（60 秒）。分支占用跨 checkout 共享，任意写失效会清除全部分支展示快照。失败不缓存、旧请求不覆盖新结果，`fresh: true` 强制重验，写操作后调 `invalidateGitReadCache()` 失效；提交/恢复决策仍走 `integration.ts` 直读，不改变写语义 |
 | `failure-diagnosis.ts` | 把因具体路径导致的 Git 失败翻译成可读原因（如 Windows 保留名） |
 | `bash-command-classifier.ts` | 保守判断一条 Bash 命令是否只读，用来决定是否需要先建检查点 |
 | `source.ts` | `parseGitUrl()`：解析 Git 源地址 |

@@ -752,9 +752,9 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 	return data;
 }
 
-// How many transcript items the first screen downloads: the newest page only (W175). About twice the 60-turn
-// display cap in items, so "Show earlier" usually finds more in memory before asking the server for older pages.
-export const TRANSCRIPT_FIRST_PAGE = 400;
+// Load a small tail first; older pages remain available through the existing history loader and message navigation.
+// Keep first paint independent of hundreds of tool results in a long-running conversation.
+export const TRANSCRIPT_FIRST_PAGE = 120;
 
 /** Load one session's snapshot and transcript into its bag. The first load pages (`TRANSCRIPT_FIRST_PAGE`); an explicit refresh takes the full transcript. */
 const slotLoads = new Map();
@@ -866,7 +866,7 @@ export async function fetchMoreTranscript(slot = activeSlot) {
 	const cursor = bag.transcriptCursor;
 	let data;
 	try {
-		data = await api(`/api/transcript?limit=${TRANSCRIPT_FIRST_PAGE}&before=${encodeURIComponent(cursor)}`, {
+		data = await api(`/api/transcript?limit=400&before=${encodeURIComponent(cursor)}`, {
 			slot,
 			timeoutMs: REQUEST_TIMEOUT.transcript,
 		});

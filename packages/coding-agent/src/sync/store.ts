@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import type { StoredGoogleCredentials, SyncConfig, SyncConflict, SyncState } from "./types.ts";
-import { ensureDir, nowIso, readJsonFile, shortHash, writeJsonFile, writePrivateJsonFile } from "./util.ts";
+import { ensureDir, nowIso, readJsonFile, sha256, shortHash, writeJsonFile, writePrivateJsonFile } from "./util.ts";
 
 const STATE_VERSION = 1;
 const CONFIG_VERSION = 1;
@@ -102,6 +102,12 @@ function accountFileKey(accountKey: string): string {
  */
 export class SyncLocalStore {
 	readonly dir: string;
+	private stateFingerprints = new Map<string, string>();
+
+	private protocolFingerprint(state: SyncState): string {
+		const { lastCheckAt: _lastCheckAt, ...protocol } = state;
+		return sha256(JSON.stringify(protocol));
+	}
 
 	constructor(agentDir: string) {
 		this.dir = join(agentDir, "sync");
@@ -143,12 +149,27 @@ export class SyncLocalStore {
 	}
 
 	state(accountKey: string): SyncState {
-		return normalizeState(readJsonFile<SyncState>(this.statePath(accountKey)), accountKey);
+		const state = normalizeState(readJsonFile<SyncState>(this.statePath(accountKey)), accountKey);
+		const check = readJsonFile<{ lastCheckAt?: string }>(`${this.statePath(accountKey)}.check.json`);
+		if (typeof check?.lastCheckAt === "string" && check.lastCheckAt > (state.lastCheckAt ?? ""))
+			state.lastCheckAt = check.lastCheckAt;
+		this.stateFingerprints.set(accountKey, this.protocolFingerprint(state));
+		return state;
 	}
 
 	saveState(state: SyncState): void {
 		ensureDir(this.dir);
-		writeJsonFile(this.statePath(state.accountKey), state);
+		const file = this.statePath(state.accountKey);
+		const fingerprint = this.protocolFingerprint(state);
+		if (this.stateFingerprints.get(state.accountKey) === fingerprint && existsSync(file)) {
+			// A successful no-op poll changes only its check time, not megabytes of protocol state.
+			writeJsonFile(`${file}.check.json`, { lastCheckAt: state.lastCheckAt });
+			return;
+		}
+		writeJsonFile(file, state);
+		this.stateFingerprints.set(state.accountKey, fingerprint);
+		while (this.stateFingerprints.size > 4)
+			this.stateFingerprints.delete(this.stateFingerprints.keys().next().value!);
 	}
 
 	credentials(): StoredGoogleCredentials | undefined {

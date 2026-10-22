@@ -2,7 +2,7 @@ import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, statSync
 import { join, relative, sep } from "node:path";
 import { getSessionDir, getWorkspaceDir, getWorkspaceMetadataPath, getWorkspacesDir } from "../config/paths/index.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
-import { listMemoryFiles } from "../session/memory/store.ts";
+import { listMemoryFiles, type MemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
 import type { ScannedEntity } from "./types.ts";
@@ -26,6 +26,9 @@ export interface ScanOptions {
 	agentDir: string;
 	modeState: ModeStateStore;
 	headerCache?: Map<string, HeaderCacheEntry>;
+	memoryMetadataCache?: Map<string, { signature: string; id: string; name: string }>;
+	/** Async callers supply an already traversed memory listing. */
+	memories?: MemoryFile[];
 }
 
 function toPosix(value: string): string {
@@ -136,7 +139,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 	const entities = new Map<string, ScannedEntity>();
 
 	// 1. All memories, including archives and pending quarantine entries.
-	for (const memory of listMemoryFiles(dataRoot)) {
+	for (const memory of options.memories ?? listMemoryFiles(dataRoot, { metadataCache: options.memoryMetadataCache })) {
 		const absolute = join(dataRoot, memory.path);
 		if (!isFile(absolute) || !memory.path.endsWith(".md")) continue;
 		const stat = statSync(absolute);

@@ -1,6 +1,6 @@
 /**
  * W175: the frontend consumes the paged transcript (W172 server): a cold switch downloads only the
- * newest page (limit=400), and "Show earlier" fetches older pages from the server once memory runs out.
+ * newest page (limit=120), and "Show earlier" fetches older pages from the server once memory runs out.
  * Each case drives the real store.js + transcript.js in a real browser against a stub server that speaks
  * the W172 paging dialect (limit / before / hasMore / nextCursor).
  */
@@ -17,7 +17,7 @@ const installed = detectInstalledBrowsers();
 const targeted = process.env.MYHARNESS_TARGETED_BROWSER_E2E === "1" && installed.length > 0;
 
 const pad3 = (n: number) => String(n).padStart(3, "0");
-// ~1.1KB per item: the full 500-item transcript exceeds 500KB while the 400-item first page stays below it.
+// ~1.1KB per item: the full 500-item transcript exceeds 500KB while the 120-item first page stays below it.
 const bigUser = (n: number) => ({
 	kind: "user",
 	id: `p-${2 * n}`,
@@ -176,15 +176,16 @@ const earlier=()=>document.querySelector('.transcript .earlier');
 try {
  setView({lang:'en',motion:'on',processDefault:'collapsed'});
  await activateSlot('slot-a');
+ if(state.items.length!==120) throw Error('first screen items '+state.items.length);
+ if(state.transcriptHasMore!==true) throw Error('hasMore not set');
+ if(state.transcriptCursor!=='p-380') throw Error('cursor '+state.transcriptCursor);
  render(h(Transcript,{}),document.getElementById('app'));
  await wait(800);
- if(state.items.length!==400) throw Error('first screen items '+state.items.length);
- if(state.transcriptHasMore!==true) throw Error('hasMore not set');
- if(state.transcriptCursor!=='p-100') throw Error('cursor '+state.transcriptCursor);
  if(!document.querySelector('.transcript').textContent.includes('QUESTION-249')) throw Error('newest turn missing');
  let clicks=0;
  while(earlier() && clicks<20) { earlier().click(); clicks++; await wait(400); }
  if(earlier()) throw Error('earlier button still there after '+clicks+' clicks');
+ for(let n=0;n<80 && (state.items.length!==500 || document.querySelectorAll('.transcript .turn').length!==250);n++) await wait(100);
  const ids=state.items.map(i=>i.id);
  if(ids.length!==500) throw Error('items '+ids.length);
  if(new Set(ids).size!==500) throw Error('duplicate items');
@@ -197,8 +198,8 @@ try {
 			pagingRoutes,
 		);
 		const first = calls.filter((call) => call.slot === "slot-a");
-		expect(first[0]?.url).toBe("/api/transcript?limit=400");
-		expect(first[0]?.bytes).toBeLessThan(500_000);
+		expect(first[0]?.url).toBe("/api/transcript?limit=120");
+		expect(first[0]?.bytes).toBeLessThan(180_000);
 		expect(JSON.stringify({ items: fullItems }).length).toBeGreaterThan(500_000);
 	},
 	120000,
@@ -212,21 +213,16 @@ it.skipIf(!targeted)(
 			`
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
-import {activateSlot,setView,state} from '/js/store.js';
+import {activateSlot,fetchMoreTranscript,setView,state} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-const earlier=()=>document.querySelector('.transcript .earlier');
 try {
  setView({lang:'en',motion:'on',processDefault:'collapsed'});
  await activateSlot('slot-a');
- render(h(Transcript,{}),document.getElementById('app'));
- await wait(800);
- let guard=0;
- while(earlier() && earlier().textContent.includes('hidden') && guard<10) { earlier().click(); guard++; await wait(300); }
- if(!earlier() || earlier().textContent.includes('hidden')) throw Error('did not reach the server page');
  const realFetch=globalThis.fetch;
  let held=null;
  globalThis.fetch=(url,init)=>String(url).includes('before=')?new Promise((resolve)=>{held=()=>resolve(realFetch(url,init));}):realFetch(url,init);
- earlier().click();
+ void fetchMoreTranscript('slot-a');
+ render(h(Transcript,{}),document.getElementById('app'));
  await wait(300);
  if(state.transcriptFetching!==true) throw Error('older page not fetching');
  await activateSlot('slot-b');
@@ -261,21 +257,16 @@ it.skipIf(!targeted)(
 			`
 import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
-import {activateSlot,appendStreamedItem,setView,state} from '/js/store.js';
+import {activateSlot,fetchMoreTranscript,appendStreamedItem,setView,state} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-const earlier=()=>document.querySelector('.transcript .earlier');
 try {
  setView({lang:'en',motion:'on',processDefault:'collapsed'});
  await activateSlot('slot-a');
- render(h(Transcript,{}),document.getElementById('app'));
- await wait(800);
- let guard=0;
- while(earlier() && earlier().textContent.includes('hidden') && guard<10) { earlier().click(); guard++; await wait(300); }
- if(!earlier() || earlier().textContent.includes('hidden')) throw Error('did not reach the server page');
  const realFetch=globalThis.fetch;
  let held=null;
  globalThis.fetch=(url,init)=>String(url).includes('before=')?new Promise((resolve)=>{held=()=>resolve(realFetch(url,init));}):realFetch(url,init);
- earlier().click();
+ void fetchMoreTranscript('slot-a');
+ render(h(Transcript,{}),document.getElementById('app'));
  await wait(300);
  if(state.transcriptFetching!==true) throw Error('older page not fetching');
  appendStreamedItem({kind:'user',id:'w175-live',ts:99999,text:'LIVE QUESTION',images:[]});
@@ -335,7 +326,7 @@ try {
 			},
 		);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.url).toBe("/api/transcript?limit=400");
+		expect(calls[0]?.url).toBe("/api/transcript?limit=120");
 	},
 	120000,
 );

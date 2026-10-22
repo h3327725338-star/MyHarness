@@ -71,6 +71,15 @@ My Drive/
   then skipped, so one bad file cannot keep the sync loop busy forever. A damaged or oversized batch is also remembered
   by name, so a full issue list cannot make it readable again.
 
+## Local polling cost
+
+Memory scans reuse ancestor safety checks within each traversal and retain only file identity metadata between polls.
+Unchanged Markdown is not read or YAML-parsed again; replacement, modification and deletion are checked on the next scan.
+A successful poll that changes only `lastCheckAt` writes a small `state-<hash>.json.check.json` sidecar rather than
+rewriting the complete protocol state. Protocol changes still commit synchronously and atomically before proceeding;
+restart loads the latest check time from either file. Local-only memory catalogs, maintenance files, temporary files
+and root-level traces do not trigger an extra watcher-driven scan; periodic reconciliation remains enabled.
+
 ## Merge rules
 
 Each record has a stable key (`kind:id`) and a per-device version vector.

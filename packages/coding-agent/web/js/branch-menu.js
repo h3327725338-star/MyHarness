@@ -175,12 +175,25 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	// Reading the list already archived finished copies; this releases the branches of the clean ones. Once per open:
 	// a running task or an untrusted project just leaves them attached for the next try.
 	const archiveSynced = useRef(false);
+	const archiveTimer = useRef(null);
+	const archiveDisposed = useRef(false);
+	useEffect(() => () => {
+		archiveDisposed.current = true;
+		clearTimeout(archiveTimer.current);
+	}, []);
 	const syncArchive = async () => {
 		if (archiveSynced.current) return;
 		archiveSynced.current = true;
 		try {
-			const result = await post("/api/git/worktrees/archive-sync", {}, slot);
+			const result = await post("/api/git/worktrees/archive-sync", { batchSize: 2 }, slot);
+			if (archiveDisposed.current) return;
 			if (result?.released) await loadWorktrees(true);
+			if (result?.remaining > 0 && !archiveDisposed.current) {
+				archiveTimer.current = setTimeout(() => {
+					archiveSynced.current = false;
+					syncArchive();
+				}, 2000);
+			}
 		} catch {
 			archiveSynced.current = false;
 		}
@@ -227,10 +240,12 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	useEffect(() => {
 		load();
 		// Opening the branch popover expresses intent; avoid prefetching every Chat at startup.
-		loadWorktrees().then(() => syncArchive());
+		loadWorktrees().then(() => {
+			archiveTimer.current = setTimeout(() => syncArchive(), 2000);
+		});
 	}, []);
 	useEffect(() => {
-		if (worktreesOpen) loadWorktrees().then(() => syncArchive());
+		if (worktreesOpen) loadWorktrees();
 	}, [worktreesOpen]);
 	useEffect(() => {
 		if (!branchDeletion) return;

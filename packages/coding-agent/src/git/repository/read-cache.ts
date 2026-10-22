@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { resolveGitRepositoryRoot } from "../../utils/paths.ts";
+import { type GitBranchListResult, listLocalBranchesAsync } from "./branches.ts";
 import { type GitCommandResult, runGit } from "./command.ts";
 import type { GitIdentity, GitRepositoryState, GitStatusPreview } from "./integration.ts";
 
@@ -72,6 +73,7 @@ const identityScope = createScope<GitIdentity>();
 const previewScope = createScope<GitStatusPreview | undefined>();
 const headScope = createScope<GitHeadInfo | null>();
 const dirsScope = createScope<boolean>();
+const branchesScope = createScope<GitBranchListResult>();
 
 /** 与 `status-cache.ts` 同一键归一化：绝对路径，Windows 下不区分大小写。 */
 function normalizeTarget(target: string): string {
@@ -89,7 +91,7 @@ export function getGitReadCacheUnderlyingCallCount(): number {
 
 /** 测试重置底层调用计数与缓存内容；生产代码不调用它。 */
 export function resetGitReadCacheForTests(): void {
-	for (const scope of [versionScope, inspectScope, identityScope, previewScope, headScope, dirsScope]) {
+	for (const scope of [versionScope, inspectScope, identityScope, previewScope, headScope, dirsScope, branchesScope]) {
 		scope.cache.clear();
 		scope.inflight.clear();
 		scope.versions.clear();
@@ -401,6 +403,18 @@ export function getCachedGitLinkedWorktree(
 	);
 }
 
+/** UI-only branch snapshot; mutations and safety decisions still read Git directly. */
+export function getCachedGitBranches(
+	repositoryRoot: string,
+	options: GitReadCacheOptions = {},
+): Promise<GitBranchListResult> {
+	return readThrough(branchesScope, `branches\0${normalizeTarget(repositoryRoot)}`, 2_000, options, async () => {
+		underlyingCalls++;
+		const value = await listLocalBranchesAsync(repositoryRoot);
+		return { value, cacheable: value.ok };
+	});
+}
+
 function keyTargets(key: string, normalized: string): boolean {
 	return key.split("\0").slice(1).includes(normalized);
 }
@@ -426,7 +440,15 @@ function dropKeysFor<T>(scope: Scope<T>, predicate: (key: string) => boolean): v
  */
 export function invalidateGitReadCache(target?: string): void {
 	if (target === undefined) {
-		for (const scope of [versionScope, inspectScope, identityScope, previewScope, headScope, dirsScope]) {
+		for (const scope of [
+			versionScope,
+			inspectScope,
+			identityScope,
+			previewScope,
+			headScope,
+			dirsScope,
+			branchesScope,
+		]) {
 			for (const key of new Set([...scope.cache.keys(), ...scope.inflight.keys(), ...scope.versions.keys()])) {
 				scope.versions.set(key, (scope.versions.get(key) ?? 0) + 1);
 			}
@@ -445,6 +467,8 @@ export function invalidateGitReadCache(target?: string): void {
 	dropKeysFor(previewScope, matches);
 	dropKeysFor(headScope, matches);
 	dropKeysFor(dirsScope, matches);
+	// Branch occupancy is shared by every checkout, so invalidate all branch snapshots on a write.
+	dropKeysFor(branchesScope, () => true);
 	dropKeysFor(inspectScope, (key) => {
 		if (matches(key)) return true;
 		// An unfinished inspect may not have resolved its root yet. Drop it conservatively rather than accept a pre-write branch.

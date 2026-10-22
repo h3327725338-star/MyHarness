@@ -166,7 +166,7 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 
 	it("① reads the snapshot before the transcript and applies both", async () => {
 		await staged.refreshSlotStaged("staged-s1", staged.nextSwitch());
-		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=400"]);
+		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=120"]);
 		const bag = staged.inSlot("staged-s1", () => ({
 			items: staged.state.items,
 			snap: staged.state.snap,
@@ -184,7 +184,7 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 	it("③ a transcript failure rejects (loaded stays unset, the caller routes it to failSwitch)", async () => {
 		failPaths.add("/api/transcript");
 		await expect(staged.refreshSlotStaged("staged-s3", staged.nextSwitch())).rejects.toThrow();
-		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=400"]);
+		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=120"]);
 		// The snapshot landed but the transcript did not: nothing may read as a complete session.
 		const bag = staged.inSlot("staged-s3", () => ({ items: staged.state.items }));
 		expect(bag.items).toEqual([]);
