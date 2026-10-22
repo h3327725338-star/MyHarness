@@ -2,12 +2,12 @@
 // (packages/desktop/browser-view.cjs): a real Chromium document with its own history, cookies and storage, drawn above
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
-import { html, Collapse, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, useRef, useState } from "./ui.js";
+import { html, Collapse, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
 import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
-import { BookmarkEditor, BookmarksBar, rememberBookmarksBar, savedBookmarksBar } from "./browser-bookmarks.js";
+import { BookmarkEditor, BookmarksBar } from "./browser-bookmarks.js";
 import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
 import { t } from "./i18n.js";
 
@@ -58,9 +58,15 @@ export function BrowserPanel({ tabId, url }) {
 	const [challengeHidden, setChallengeHidden] = useState(false);
 	const [permissionOpen, setPermissionOpen] = useState(false);
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
-	// Bookmarks are shared by every website tab and kept by the desktop host; the bar's visibility is a page preference.
+	// Bookmarks are shared by every website tab and kept by the desktop host.
 	const [bookmarks, setBookmarks] = useState([]);
-	const [barVisible, setBarVisible] = useState(() => savedBookmarksBar(window.localStorage));
+	// The bookmarks bar is a bubble over the page, not a row of it: opening the bar must never move the page under it.
+	// It also starts folded, because a bubble left open when the app closed would cover the page it came back to.
+	const [barVisible, setBarVisible] = useState(false);
+	const barPresence = usePresence(barVisible, 110);
+	// The bubble and the button that opened it: a click on either one is not "somewhere else".
+	const barSlot = useRef(null);
+	const barButton = useRef(null);
 	const [bookmarkDraft, setBookmarkDraft] = useState(null);
 	// Saved sign-ins: site and user name only (the host never hands a password to this page).
 	const [logins, setLogins] = useState({ available: true, logins: [] });
@@ -113,12 +119,7 @@ export function BrowserPanel({ tabId, url }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
-	const toggleBar = () => {
-		setBarVisible((current) => {
-			rememberBookmarksBar(window.localStorage, !current);
-			return !current;
-		});
-	};
+	const toggleBar = () => setBarVisible((current) => !current);
 	const editBookmark = (bookmark) => {
 		setPermissionOpen(false);
 		setBookmarkDraft(bookmark ? { ...bookmark } : { title: status.title || "", url: status.url || "" });
@@ -257,6 +258,20 @@ export function BrowserPanel({ tabId, url }) {
 	// The permission list belongs to the shield that opened it: a click anywhere else, Escape, or the window losing
 	// focus puts it away, the way a browser's own site bubble closes.
 	useClickOutside([permissionCard, permissionButton], () => setPermissionOpen(false), permissionOpen);
+	useClickOutside([barSlot, barButton], () => setBarVisible(false), barVisible);
+	useEffect(() => {
+		if (!barVisible) return undefined;
+		const close = () => setBarVisible(false);
+		const onKey = (event) => {
+			if (event.key === "Escape") close();
+		};
+		window.addEventListener("blur", close);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("blur", close);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [barVisible]);
 	useEffect(() => {
 		// Every new load brings its own page, so the way out of a bot check is offered again: a retry that fails a second
 		// time must not leave the user without the bar that was already dismissed.
@@ -460,6 +475,8 @@ export function BrowserPanel({ tabId, url }) {
 	};
 	/** A bookmark opens in this tab (a tab without a page gets its first one), or in a new tab on a middle click. */
 	const openBookmark = async (target, newTab) => {
+		// Choosing one answers the bubble's question, so it puts itself away.
+		setBarVisible(false);
 		if (newTab) {
 			actions.openWorkspace({ type: "browser", url: target });
 			return;
@@ -509,11 +526,10 @@ export function BrowserPanel({ tabId, url }) {
 			<button class=${`icon-btn sm ws-star ${pageBookmark ? "on" : ""}`} title=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-label=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-pressed=${!!pageBookmark} disabled=${!status.url} onClick=${() => (bookmarkDraft ? setBookmarkDraft(null) : editBookmark(pageBookmark))}><${Icon} name="star" size=${15} /></button>
 			<button class="icon-btn sm" title=${t("Find in page")} aria-label=${t("Find in page")} aria-pressed=${findOpen} disabled=${!hasView} onClick=${() => (findOpen ? closeFind() : setFindOpen(true))}><${Icon} name="search" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
-			<button class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-pressed=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
+			<button ref=${barButton} class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-expanded=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 		</div>
-		<${Collapse} open=${barVisible} class="ws-bookmarks-fold"><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /><//>
 		${bookmarkDraft ? html`<${BookmarkEditor} key=${bookmarkDraft.id || "new"} draft=${bookmarkDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} />` : null}
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
@@ -577,8 +593,12 @@ export function BrowserPanel({ tabId, url }) {
 					</div>`)
 					: html`<div class="dim ws-permissions-note">${allLogins ? t("No saved passwords yet.") : t("No saved password for this site.")}</div>`}
 			${engineVersion ? html`<div class="dim ws-permissions-note ws-browser-engine">${engineVersion}</div>` : null}
-		</div><//>}
-		${status.title ? html`<div class="ws-page-title truncate" title=${status.title}>${status.title}</div>` : null}
+		</div><//>
+		<div class="ws-bookmarks-anchor">
+			${barPresence.mounted
+				? html`<div class=${`ws-bookmarks-pop ${barPresence.shown ? "" : "closing"}`} ref=${barSlot}><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /></div>`
+				: null}
+		</div>
 		<div class="desktop-browser-target" ref=${target}>
 			<div class="pad">
 				<p role="status">${status.error || (status.loading ? t("Loading…") : hasView && !status.url ? t("Enter a URL to open it in this tab.") : "")}</p>

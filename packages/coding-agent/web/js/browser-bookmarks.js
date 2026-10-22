@@ -1,26 +1,8 @@
-// Bookmarks bar of the built-in browser, under the website tab's toolbar like Chrome's. The bookmarks live in the
-// desktop host (packages/desktop/browser-bookmarks.cjs, in its user-data folder); this module only draws them and
-// remembers whether the bar is shown, which is a preference of this page.
+// Bookmarks bar of the built-in browser: the bubble the toolbar's bookmark button opens over the page. The bookmarks
+// live in the desktop host (packages/desktop/browser-bookmarks.cjs, in its user-data folder); this module only draws
+// them.
 import { html, Icon, useEffect, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
-
-const BAR_KEY = "myharness.browserBookmarksBar";
-
-export function savedBookmarksBar(storage) {
-	try {
-		return storage?.getItem?.(BAR_KEY) !== "0";
-	} catch {
-		return true;
-	}
-}
-
-export function rememberBookmarksBar(storage, visible) {
-	try {
-		storage?.setItem?.(BAR_KEY, visible ? "1" : "0");
-	} catch {
-		// Private windows and blocked storage keep the default.
-	}
-}
 
 /** The letter shown when a site has no icon or its icon cannot be drawn. */
 export function bookmarkLetter(bookmark) {

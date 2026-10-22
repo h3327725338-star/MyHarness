@@ -276,13 +276,16 @@
 .ws-menu button { padding: 6px 10px; border-radius: var(--r-sm); text-align: left; }
 .ws-menu button:hover { background: var(--surface-hover); }
 .panel-empty { padding: 24px var(--pad-panel); color: var(--text-3); }
-.ws-page-title { padding: 4px var(--pad-panel); color: var(--text-3); font-size: var(--fs-sm); }
 .ws-browser-bar { gap: 2px; }
 .ws-star.on { color: var(--accent); }
 .ws-star.on svg path { fill: currentColor; }
-/* Bookmarks bar under the toolbar (Chrome's place and weight): one quiet row in the panel's own surface, text in the
-   secondary colour, a hover background like the toolbar's buttons. A long row scrolls sideways instead of wrapping. */
-.ws-bookmarks { display: flex; align-items: center; gap: 2px; height: 32px; min-height: 32px; padding: 0 var(--pad-panel); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: none; border-bottom: 1px solid var(--border); }
+/* The bookmarks bar is a bubble over the page (Chrome's bookmarks bubble, not its persistent bar): it hangs from a
+   zero-height slot at the page box's top edge, so opening it never moves the page. Text in the secondary colour, a
+   hover background like the toolbar's buttons, and a long row scrolls sideways instead of wrapping. */
+.ws-bookmarks-anchor { position: relative; z-index: 20; flex: none; height: 0; }
+.ws-bookmarks-pop { margin: 0 6px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); overflow: hidden; animation: pop-in var(--t-pop) var(--ease-out) both; }
+.ws-bookmarks-pop.closing { animation: pop-out var(--t-close) var(--ease-out) both; pointer-events: none; }
+.ws-bookmarks { display: flex; align-items: center; gap: 2px; height: 32px; min-height: 32px; padding: 0 var(--pad-panel); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: none; }
 .ws-bookmarks::-webkit-scrollbar { display: none; }
 .ws-bookmark { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 180px; height: 24px; padding: 0 8px; border-radius: var(--r-pill); color: var(--text-2); font-size: var(--fs-sm); }
 .ws-bookmark:hover, .ws-bookmark:focus-visible { background: var(--surface-hover); color: var(--text); }
@@ -290,9 +293,8 @@
 .ws-bookmark-icon { width: 16px; height: 16px; flex: none; border-radius: 3px; object-fit: contain; }
 .ws-bookmark-icon.letter { display: inline-grid; place-items: center; background: var(--surface-active); color: var(--text-2); font-size: 10px; font-weight: 600; line-height: 1; }
 .ws-bookmarks-empty { font-size: var(--fs-sm); white-space: nowrap; }
-/* The bookmarks bar opens and folds with the same fold as every other expandable area, so the page box below it moves
-   with the animation instead of jumping; the card inside the permission bubble fades in from its edge. */
-.ws-bookmarks-fold .collapse-inner, .ws-permissions-fold .collapse-inner { display: flex; flex-direction: column; }
+/* The card inside the permission bubble fades in from its edge. */
+.ws-permissions-fold .collapse-inner { display: flex; flex-direction: column; }
 .ws-permissions { animation: pop-in var(--t-pop) var(--ease-out); }
 .ws-bookmark-editor { min-width: 260px; }
 .ws-bookmark-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
