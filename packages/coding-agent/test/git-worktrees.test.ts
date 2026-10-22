@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -90,6 +90,47 @@ describe("GitWorktreeManager", () => {
 		expect(existsSync(copy.path)).toBe(true);
 		expect(runGit(root, ["branch", "--list", "protected-copy"]).stdout).toContain("protected-copy");
 	});
+	it("finishes a removal that stopped half way, which Git itself refuses to retry", async () => {
+		const { root, manager } = createRepository();
+		for (const [branch, remove] of [
+			[
+				"interrupted-async",
+				(copy: { path: string }) =>
+					manager.removeAsync(root, manager.list(root).worktrees!.find((w) => w.path === copy.path)!),
+			],
+			["interrupted-sync", async (copy: { path: string }) => manager.remove(root, copy.path)],
+		] as const) {
+			const copy = manager.createBranch(root, branch).worktree!;
+			mkdirSync(join(copy.path, "node_modules", "pkg"), { recursive: true });
+			writeFileSync(join(copy.path, "node_modules", "pkg", "index.js"), "leftover\n");
+			// What a stopped `git worktree remove` leaves: the link file and some files gone, Git's record still there.
+			rmSync(join(copy.path, ".git"));
+			rmSync(join(copy.path, "shared.txt"));
+			expect(runGitSync(["worktree", "remove", "--force", copy.path], { cwd: root }).ok).toBe(false);
+			expect(manager.list(root).worktrees?.find((w) => w.path === copy.path)?.prunable).toBeTruthy();
+
+			expect(await remove(copy)).toMatchObject({ ok: true });
+			expect(existsSync(copy.path)).toBe(false);
+			expect(manager.list(root).worktrees?.some((w) => w.path === copy.path)).toBe(false);
+			expect(runGit(root, ["branch", "--list", branch]).stdout).toContain(branch);
+		}
+		expect(readFileSync(join(root, "shared.txt"), "utf8").trim()).toBe("base");
+	});
+
+	it.skipIf(process.platform !== "win32")("removes the folder Git leaves behind around a junction", async () => {
+		const { root, manager } = createRepository();
+		const copy = manager.createBranch(root, "junction-copy").worktree!;
+		const outside = join(root, "..", "outside");
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "keep.txt"), "keep\n");
+		mkdirSync(join(copy.path, "node_modules", "@scope"), { recursive: true });
+		symlinkSync(outside, join(copy.path, "node_modules", "@scope", "link"), "junction");
+		const listed = manager.list(root).worktrees!.find((w) => w.path === copy.path)!;
+		expect(await manager.removeAsync(root, listed, true)).toMatchObject({ ok: true });
+		expect(existsSync(copy.path)).toBe(false);
+		expect(readFileSync(join(outside, "keep.txt"), "utf8").trim()).toBe("keep");
+	});
+
 	it("async listing matches synchronous metadata and yields to the event loop", async () => {
 		const { root, manager } = createRepository();
 		const expected = manager.list(root);

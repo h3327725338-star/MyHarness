@@ -54,16 +54,17 @@ var inside = function (box, host) { return box.top >= host.top - 1 && box.bottom
 		if (header.getAttribute('aria-expanded') !== 'true') header.click();
 		// The group folds open and brings its clear button into the copies region; wait that out like a user does.
 		await wait(900);
-		var clear = await find('.branch-copies-long + .branch-form button', 4000);
+		var clear = await find('.branch-archive-end .branch-form button', 4000);
 		assert(clear, 'clear button missing');
 		assert(!clear.disabled, 'the clear button must be clickable when the chat is idle');
 		clear.click();
 		var panel = await find('.branch-delete-panel[aria-label]', 4000);
 		assert(panel, 'no confirmation appeared after clicking clear');
 		// The trigger must leave the list while its own confirmation is open: two red buttons saying the same thing read
-		// as "the click opened a second clear button".
-		assert(!document.querySelector('.branch-copies-long + .branch-form button'), 'the clear trigger stayed in the list under its own confirmation');
+		// as "the click opened a second clear button". It folds away with the shared motion.
 		await wait(400);
+		assert(!document.querySelector('.branch-archive-end .branch-form button'), 'the clear trigger stayed in the list under its own confirmation');
+		assert(/Cancel/.test(document.activeElement && document.activeElement.textContent), 'the confirmation did not take the keyboard on Cancel');
 		var popover = document.querySelector('.branch-pop').getBoundingClientRect();
 		var box = panel.getBoundingClientRect();
 		var confirm = panel.querySelector('.branch-form button');

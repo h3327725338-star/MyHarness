@@ -260,6 +260,21 @@ describe("worktree archive routes", () => {
 		expect(mocks.removeAsync).toHaveBeenCalledWith(repositoryRoot, temporaryCopy, true);
 	});
 
+	it("forces only the copies the caller names", async () => {
+		await listCopies();
+		mocks.removeAsync.mockResolvedValue({ ok: true });
+		const harness = createHarness();
+		const forced = (await harness.post("/api/git/worktrees/archive/clear", {
+			force: true,
+			paths: [temporaryCopyPath],
+		})) as {
+			removed: number;
+		};
+		expect(forced.removed).toBe(1);
+		expect(mocks.removeAsync).toHaveBeenCalledExactlyOnceWith(repositoryRoot, temporaryCopy, true);
+		expect(new WorktreeArchiveRecords(agentDir).get(userArchivedPath)).toBeDefined();
+	});
+
 	it("reports live progress while clearing", async () => {
 		await listCopies();
 		mocks.removeAsync.mockResolvedValue({ ok: true });

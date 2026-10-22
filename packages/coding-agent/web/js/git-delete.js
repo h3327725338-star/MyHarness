@@ -24,7 +24,7 @@ export function explainDeleteFailure(error, kind, force = false) {
 		return { message: t("The main copy or the copy used by this chat cannot be deleted here. Return to the main copy before deleting another copy; the main copy itself must be kept.") };
 	if (/Unknown worktree|does not exist|no longer exists|\u5df2\u4e0d\u5b58\u5728|\u5206\u652f.*\u4e0d\u5b58\u5728/i.test(text))
 		return { message: t("The selected branch or copy is no longer in the repository. Cancel, close and reopen this menu to refresh the list.") };
-	if (/\bis (?:a )?locked\b|cannot lock ref|Permission denied|access.*denied|unable to unlink|\u62d2\u7edd\u8bbf\u95ee/i.test(text))
+	if (/\bis (?:a )?locked\b|cannot lock ref|Permission denied|access.*denied|unable to unlink|EBUSY|EPERM|\u62d2\u7edd\u8bbf\u95ee/i.test(text))
 		return { message: t("The branch or copy is locked, or a file cannot be changed. Close programs using it and check your access permissions, then click 'Retry delete'. See 'Error details' for the affected file.") };
 	if (/Cannot reach the MyHarness server|\u65e0\u6cd5\u8fde\u63a5.*\u670d\u52a1/i.test(text))
 		return { message: t("The local service could not be reached, so deletion was not confirmed. Reconnect or restart MyHarness, reopen this menu to check the list, then retry if the item is still there.") };

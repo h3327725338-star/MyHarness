@@ -152,11 +152,17 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		if (placement === "bottom" && top + p.height > window.innerHeight - 8) top = Math.max(8, a.top - p.height - margin);
 		let left = align === "end" ? a.right - p.width : a.left;
 		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
-		const next = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px`, visibility: "visible" };
 		const landed = top < a.top ? "top" : "bottom";
+		// Above the anchor the popover is pinned by its bottom edge: content that folds open or closed inside it then grows
+		// and shrinks upward in the same frame. Pinned by `top`, every height change pushed the popover over the anchor
+		// until the re-measure two frames later pulled it back, so each fold shook the whole popover.
+		const vertical = landed === "top"
+			? { top: "auto", bottom: `${Math.round(document.documentElement.clientHeight - top - p.height)}px` }
+			: { top: `${Math.round(top)}px`, bottom: "auto" };
+		const next = { ...vertical, left: `${Math.round(left)}px`, visibility: "visible" };
 		const apply = () => {
 			writeFrame.current = 0;
-			setStyle((old) => old.top === next.top && old.left === next.left && old.visibility === next.visibility ? old : next);
+			setStyle((old) => old.top === next.top && old.bottom === next.bottom && old.left === next.left && old.visibility === next.visibility ? old : next);
 			setSide((old) => (old === landed ? old : landed));
 		};
 		if (initial) apply();

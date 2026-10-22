@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getCwdRelativePath, pathIdentityKey, resolvePath } from "../../utils/paths.ts";
 import { type GitCommandResult, runGit, runGitSync } from "../repository/command.ts";
 
 const WORKTREE_TIMEOUT_MS = 30_000;
+// Deleting a copy with a full node_modules can take minutes on Windows (Git retries every locked file). Stopping Git
+// half way leaves a copy it can no longer remove, so removal gets far more time than other worktree commands.
+const WORKTREE_REMOVE_TIMEOUT_MS = 10 * 60_000;
+
+function interruptedRemovalFailure(error: unknown): string {
+	const reason = error instanceof Error ? error.message : String(error);
+	return `删除 Worktree 失败：上次中断的删除留下的文件夹仍有文件删不掉（可能仍被程序占用）：${reason}`;
+}
 const MERGE_TIMEOUT_MS = 120_000;
 
 export interface GitWorktree {
@@ -218,13 +227,35 @@ export class GitWorktreeManager {
 		if (!worktree) return { ok: false, error: "选中的 Worktree 已不存在。" };
 		if (worktree.isMain) return { ok: false, error: "不能删除 main 主 Worktree。" };
 
+		const mainPath = listing.main?.path ?? resolvePath(repositoryRoot);
+		const record = this.interruptedRemovalRecord(mainPath, worktree);
+		if (record) {
+			try {
+				rmSync(worktree.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+				rmSync(record, { recursive: true, force: true });
+			} catch (error) {
+				return { ok: false, error: interruptedRemovalFailure(error) };
+			}
+			return this.removed(worktree);
+		}
+
 		// `git worktree remove` 默认拒脏副本；force 是用户在确认文案里明确要求的丢弃。
 		const result = runGitSync(["worktree", "remove", ...(force ? ["--force"] : []), worktree.path], {
-			cwd: listing.main?.path,
-			timeoutMs: WORKTREE_TIMEOUT_MS,
+			cwd: mainPath,
+			timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS,
 		});
 		if (!result.ok) return { ok: false, error: `删除 Worktree 失败：${formatGitFailure(result)}` };
+		if (this.isOwnFolder(mainPath, worktree) && existsSync(worktree.path)) {
+			try {
+				rmSync(worktree.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+			} catch {
+				// Git already unregistered the copy; a leftover folder is only disk space.
+			}
+		}
+		return this.removed(worktree);
+	}
 
+	private removed(worktree: GitWorktree): GitWorktreeActionResult {
 		const launcher = this.removeLauncher(worktree);
 		return {
 			ok: true,
@@ -241,18 +272,71 @@ export class GitWorktreeManager {
 	 */
 	async removeAsync(mainWorktreePath: string, worktree: GitWorktree, force = false): Promise<GitWorktreeActionResult> {
 		if (worktree.isMain) return { ok: false, error: "不能删除 main 主 Worktree。" };
+		const mainPath = resolvePath(mainWorktreePath);
+		const record = this.interruptedRemovalRecord(mainPath, worktree);
+		if (record) {
+			try {
+				await rm(worktree.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+				await rm(record, { recursive: true, force: true });
+			} catch (error) {
+				return { ok: false, error: interruptedRemovalFailure(error) };
+			}
+			return this.removed(worktree);
+		}
 		const result = await runGit(["worktree", "remove", ...(force ? ["--force"] : []), worktree.path], {
-			cwd: resolvePath(mainWorktreePath),
-			timeoutMs: WORKTREE_TIMEOUT_MS,
+			cwd: mainPath,
+			timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS,
 		});
 		if (!result.ok) return { ok: false, error: `删除 Worktree 失败：${formatGitFailure(result)}` };
-		const launcher = this.removeLauncher(worktree);
-		return {
-			ok: true,
-			worktree,
-			warning: launcher.warning,
-			message: launcher.warning ? `Worktree 已删除，但启动文件清理失败：${launcher.warning}` : "Worktree 已删除。",
-		};
+		// Git for Windows reports success yet leaves a junction (and the folders above it) behind, for example the
+		// workspace links npm puts in node_modules. The copy is already unregistered, so the leftover folder goes too.
+		if (this.isOwnFolder(mainPath, worktree) && existsSync(worktree.path)) {
+			await rm(worktree.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(() => {});
+		}
+		return this.removed(worktree);
+	}
+
+	/** A copy folder that may be deleted with the filesystem: never the main copy, nor a folder that contains it. */
+	private isOwnFolder(mainWorktreePath: string, worktree: GitWorktree): boolean {
+		return (
+			!worktree.isMain &&
+			!pathsEqual(worktree.path, mainWorktreePath) &&
+			!isPathInside(mainWorktreePath, worktree.path)
+		);
+	}
+
+	/**
+	 * Git's own record (`<common dir>/worktrees/<id>`) of a copy whose `.git` link file is gone, when that record points
+	 * at exactly this folder. Git deletes the link first, so a removal stopped half way (a timeout while Windows kept
+	 * retrying a locked file, a crash, a restart) leaves a half-deleted folder that every later `git worktree remove`
+	 * refuses ("validation failed ... .git does not exist"); Git lists it as prunable. Nothing in it can be checked for
+	 * uncommitted work any more and its commits live in the shared repository, so the removal is finished directly.
+	 */
+	private interruptedRemovalRecord(mainWorktreePath: string, worktree: GitWorktree): string | undefined {
+		if (!worktree.prunable || !this.isOwnFolder(mainWorktreePath, worktree)) return undefined;
+		const link = join(worktree.path, ".git");
+		if (existsSync(link)) return undefined;
+		const common = runGitSync(["rev-parse", "--git-common-dir"], {
+			cwd: mainWorktreePath,
+			timeoutMs: WORKTREE_TIMEOUT_MS,
+		});
+		if (!common.ok) return undefined;
+		const records = join(resolvePath(common.stdout.trim(), mainWorktreePath), "worktrees");
+		let names: string[];
+		try {
+			names = readdirSync(records);
+		} catch {
+			return undefined;
+		}
+		for (const name of names) {
+			try {
+				const gitdir = readFileSync(join(records, name, "gitdir"), "utf8").trim();
+				if (gitdir && pathsEqual(resolvePath(gitdir, mainWorktreePath), link)) return join(records, name);
+			} catch {
+				// A record without a readable gitdir file belongs to no folder we could match.
+			}
+		}
+		return undefined;
 	}
 
 	/**

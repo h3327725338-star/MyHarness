@@ -960,7 +960,18 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		requireIdle("clear archived copies");
 		requireTrusted();
 		const root = repositoryRootOrThrow();
-		const force = asObject(body).force === true;
+		const request = asObject(body);
+		const force = request.force === true;
+		// `paths` narrows the clear to the copies the caller names (the ones a safe clear refused and the user then
+		// confirmed to force); without it every archived copy is a target. A copy archived after the confirmation
+		// therefore never gets force-deleted unseen.
+		const only = Array.isArray(request.paths)
+			? new Set(
+					request.paths
+						.filter((entry): entry is string => typeof entry === "string")
+						.map((entry) => path.resolve(entry)),
+				)
+			: null;
 		const listing = await worktreeCase.listAsync(root);
 		if (!listing.ok) throw new HttpError(500, listing.error ?? "Cannot list worktrees.");
 		const current = path.resolve(cwd());
@@ -969,6 +980,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const failed: Array<{ path: string; error: string }> = [];
 		const targets = (listing.worktrees ?? []).filter((worktree) => {
 			if (worktree.isMain || path.resolve(worktree.path) === current) return false;
+			if (only && !only.has(path.resolve(worktree.path))) return false;
 			return !!archive.get(worktree.path)?.archivedAt;
 		});
 		// One copy at a time, every `git worktree remove` awaited: the event loop stays free, so the event stream and
