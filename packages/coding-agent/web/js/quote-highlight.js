@@ -107,7 +107,9 @@ function locate(index, needle, hint) {
 	let best = -1;
 	let bestDistance = Infinity;
 	for (let at = index.norm.indexOf(needle); at !== -1; at = index.norm.indexOf(needle, at + 1)) {
-		const distance = Math.abs(index.map[at] - hint);
+		// Both sides in collapsed-text units: raw offsets carry every newline and indent, which pulls the hint towards
+		// an earlier copy of the same words.
+		const distance = Math.abs(at - hint);
 		if (distance < bestDistance) {
 			bestDistance = distance;
 			best = at;
@@ -121,6 +123,23 @@ export function selectionHint(range) {
 	const el = surface();
 	if (!el || !range) return 0;
 	try {
+		// Counted on the same index the finder searches, so text it skips (scripts, styles, inputs) cannot shift it.
+		const index = buildIndex(el);
+		const first = range.startContainer.nodeType === Node.TEXT_NODE
+			? index.nodes.find((entry) => entry.node === range.startContainer)
+			: null;
+		const entry = first || index.nodes.find((item) => range.comparePoint(item.node, 0) !== -1);
+		if (entry) {
+			const raw = entry.start + (first ? range.startOffset : 0);
+			let lo = 0;
+			let hi = index.map.length;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (index.map[mid] < raw) lo = mid + 1;
+				else hi = mid;
+			}
+			return lo;
+		}
 		const before = document.createRange();
 		before.selectNodeContents(el);
 		before.setEnd(range.startContainer, range.startOffset);

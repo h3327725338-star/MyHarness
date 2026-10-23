@@ -305,6 +305,8 @@ export const state = {
 		colorTheme: modeColorThemesOf(prefs)[chatModeOf(prefs.chatMode)],
 		motion: prefs.motion ?? "system",
 		processDefault: prefs.processDefault ?? "collapsed",
+		// Where web links open in the desktop app: "builtin" (a website tab) or "system" (see link-target.js).
+		linkTarget: prefs.linkTarget === "system" ? "system" : "builtin",
 		runMode: runModeOf(prefs.runMode),
 		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
@@ -476,7 +478,7 @@ export function readWidthValue(value) {
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
 // had open is saved with `wsPanels` (see rememberPanel).
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell", "savedPrompts", "wsTabIconsOnly"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "linkTarget", "runMode", "readWidth", "lang", "termShell", "savedPrompts", "wsTabIconsOnly"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];
@@ -748,7 +750,8 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 	const requestKey = slot ?? "";
 	const requestSeq = (transcriptSent.get(requestKey) ?? 0) + 1;
 	transcriptSent.set(requestKey, requestSeq);
-	const data = await api(limit ? `/api/transcript?limit=${limit}` : "/api/transcript", {
+	// Large images come by address (`src`), so a page of screenshots stays small to download, parse and keep.
+	const data = await api(limit ? `/api/transcript?images=ref&limit=${limit}` : "/api/transcript?images=ref", {
 		slot: slot ?? "",
 		timeoutMs: REQUEST_TIMEOUT.transcript,
 	});
@@ -831,11 +834,14 @@ export async function refreshSlotStaged(slot = activeSlot, seq = switchSeq) {
 	bag.stagedLoading = true;
 	bag.stagedLoadingSeq = seq;
 	try {
+		// Both reads start together; the snapshot is still applied first, so the target shell shows before its messages.
+		const sentBefore = transcriptSent.get(slot ?? "") ?? 0;
+		const transcript = loadTranscript(slot, { limit: TRANSCRIPT_FIRST_PAGE });
+		transcript.catch(() => {});
 		await loadSnapshot(slot);
 		if (!isLatestSwitch(seq)) return;
 		runFor(slot, () => emit());
-		const sentBefore = transcriptSent.get(slot ?? "") ?? 0;
-		await loadTranscript(slot, { limit: TRANSCRIPT_FIRST_PAGE });
+		await transcript;
 		if (!isLatestSwitch(seq)) return;
 		// Only mark loaded when this request's transcript actually landed: a concurrent full refresh for
 		// the same slot silently supersedes this one inside loadTranscript, and that path sets `loaded`
@@ -916,7 +922,7 @@ export async function fetchMoreTranscript(slot = activeSlot) {
 	const cursor = bag.transcriptCursor;
 	let data;
 	try {
-		data = await api(`/api/transcript?limit=400&before=${encodeURIComponent(cursor)}`, {
+		data = await api(`/api/transcript?images=ref&limit=400&before=${encodeURIComponent(cursor)}`, {
 			slot,
 			timeoutMs: REQUEST_TIMEOUT.transcript,
 		});
@@ -1286,7 +1292,9 @@ export async function restoreAfterRestart(snap, boot) {
 }
 
 export async function refreshAll({ full = true } = {}) {
-	for (const [id, bag] of bags) if (id !== activeSlot) bag.loaded = false;
+	// The other chats may have missed events: each is read again the next time it is shown. It keeps what it held, so
+	// that switch still shows it at once instead of a loading page (see activateSlot).
+	for (const [id, bag] of bags) if (id !== activeSlot && bag.loaded) bag.stale = true;
 	await Promise.all([refreshSlot(activeSlot, { full }), loadWorkspaces(), loadSlots()]);
 }
 
@@ -1546,6 +1554,11 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 		} });
 	} else show();
 	if (!isLatestSwitch(seq) || activeSlot !== slot) return;
+	// Shown from what it held before the event stream broke: read it again behind what is on screen.
+	if (bag.stale) {
+		bag.stale = false;
+		refreshSlot(slot).catch(() => { bag.stale = true; });
+	}
 	markActiveSeen();
 	rememberChat(slot);
 	// A folder removed externally never blocks the switch: name it once in a lightweight toast.

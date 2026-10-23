@@ -67,6 +67,11 @@ interface SessionsIndexFile {
 export interface WorkspaceSessionsIndex {
 	sessionsDir: string;
 	entries: Map<string, SessionIndexEntry>;
+	/**
+	 * The sessions dir's mtime as seen when this memory last matched the disk (read or written). Not the value stored
+	 * in the file: writing the index renames it into that same dir, which moves the dir's mtime past the stored one,
+	 * and comparing against that would re-read the whole index on every lookup.
+	 */
 	sessionsDirMtimeMs: number;
 	dirty: boolean;
 	timer: ReturnType<typeof setTimeout> | undefined;
@@ -190,18 +195,20 @@ export function loadWorkspaceIndexSync(sessionsDir: string): WorkspaceSessionsIn
 	const cached = loadedIndexes.get(key);
 	if (cached) {
 		// Our own dirty memory is newest; otherwise refresh when the directory changed under us.
-		if (!cached.dirty && cached.sessionsDirMtimeMs !== readSessionsDirMtimeMs(key)) {
-			const fresh = loadIndexFileFromDisk(key);
-			cached.entries = fresh.entries;
-			cached.sessionsDirMtimeMs = fresh.sessionsDirMtimeMs;
+		const dirMtimeMs = readSessionsDirMtimeMs(key);
+		if (!cached.dirty && cached.sessionsDirMtimeMs !== dirMtimeMs) {
+			cached.entries = loadIndexFileFromDisk(key).entries;
+			cached.sessionsDirMtimeMs = dirMtimeMs;
 		}
 		return cached;
 	}
+	// Stat before reading: a change that lands while the file is read shows as a newer mtime on the next lookup.
+	const dirMtimeMs = readSessionsDirMtimeMs(key);
 	const fresh = loadIndexFileFromDisk(key);
 	const loaded: WorkspaceSessionsIndex = {
 		sessionsDir: key,
 		entries: fresh.entries,
-		sessionsDirMtimeMs: fresh.sessionsDirMtimeMs,
+		sessionsDirMtimeMs: dirMtimeMs,
 		dirty: false,
 		timer: undefined,
 	};
@@ -471,7 +478,8 @@ function persistWorkspaceIndex(index: WorkspaceSessionsIndex): void {
 		return;
 	}
 	writeFileAtomicallySync(getSessionsIndexPath(index.sessionsDir), JSON.stringify(payload));
-	index.sessionsDirMtimeMs = payload.sessionsDirMtimeMs;
+	// The write itself moved the dir's mtime: what is in memory is what is on disk as of now.
+	index.sessionsDirMtimeMs = readSessionsDirMtimeMs(index.sessionsDir);
 	index.dirty = false;
 }
 

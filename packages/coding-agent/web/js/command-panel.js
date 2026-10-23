@@ -5,6 +5,7 @@ import { html, InlineFrame, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { GENERAL_KEY, api, attempt, chooseThinkingLevel, loadGitStatus, loadModels, loadProviders, loadSessions, loadSettings, loadSnapshot, loadUnbound, loadWorkspaces, post, readWidthValue, setView, state, toast, useStore, REQUEST_TIMEOUT } from "./store.js";
 import { actions, closeCommand } from "./actions.js";
 import { GitInline } from "./overlays-git.js";
+import { openSystemLink } from "./link-target.js";
 import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoImpact, undoTaskChanges } from "./git-flow.js";
 import { explainDeleteFailure } from "./git-delete.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
@@ -270,7 +271,7 @@ function githubScreen() {
 		});
 	const rows = [];
 	if (busy) {
-		if (pendingPrompt) rows.push({ key: "code", label: t("Enter the code {code} on GitHub", { code: pendingPrompt.code }), desc: pendingPrompt.url, icon: "externalLink", onEnter: () => window.open(pendingPrompt.url, "_blank", "noopener") });
+		if (pendingPrompt) rows.push({ key: "code", label: t("Enter the code {code} on GitHub", { code: pendingPrompt.code }), desc: pendingPrompt.url, icon: "externalLink", onEnter: () => openSystemLink(pendingPrompt.url) });
 		else rows.push({ key: "wait", label: t("Waiting for GitHub…"), disabled: true });
 		rows.push({ key: "cancel", label: t("Cancel"), icon: "x", onEnter: async () => (await attempt(() => post("/api/github/cancel")), setWaiting(false), setPrompt(null), reload()) });
 	} else if (account) {
@@ -287,7 +288,7 @@ function githubScreen() {
 					rows: [
 						{ key: "keep", label: t("Keep the connection"), onEnter: (cc) => cc.pop() },
 						{ key: "remove", label: t("Disconnect"), danger: true, onEnter: async (cc) => { if (await attempt(() => post("/api/github/disconnect"))) { reload(); cc.pop(); } } },
-						{ key: "revoke", label: t("Open GitHub authorization settings"), icon: "externalLink", onEnter: () => window.open("https://github.com/settings/applications", "_blank", "noopener") },
+						{ key: "revoke", label: t("Open GitHub authorization settings"), icon: "externalLink", onEnter: () => openSystemLink("https://github.com/settings/applications") },
 					],
 				})),
 		});
@@ -297,7 +298,7 @@ function githubScreen() {
 		rows.push({ key: "connect", label: t("Connect GitHub"), desc: t("Authorize this device in the browser"), icon: "gitBranch", ...(data.clientIdConfigured ? { onEnter: () => start(false) } : { chevron: true, onEnter: (c) => c.push(clientIdScreen) }) });
 	}
 	rows.push({ key: "client", label: "Client ID", desc: data.clientIdFromEnvironment ? t("Set by MYHARNESS_GITHUB_CLIENT_ID, which takes precedence.") : t("First setup or a different app"), value: data.clientIdConfigured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(clientIdScreen) });
-	rows.push({ key: "new-app", label: t("Create a GitHub app"), icon: "externalLink", onEnter: () => window.open("https://github.com/settings/applications/new", "_blank", "noopener") });
+	rows.push({ key: "new-app", label: t("Create a GitHub app"), icon: "externalLink", onEnter: () => openSystemLink("https://github.com/settings/applications/new") });
 	return {
 		title: "GitHub Connect",
 		subtitle: [

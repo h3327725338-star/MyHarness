@@ -395,8 +395,11 @@ export function BrowserPanel({ tabId, url }) {
 				// The picture is taken while the native view fills the page box, so it is exactly that box's size. It is drawn
 				// at that size from the top-left corner: when the panel then narrows or widens (sidebar, collaboration mode) the
 				// picture is cut or uncovered at the edge, like a real browser before it repaints, instead of being squashed.
+				// The host sends the native view's box with it: the Agent's scaled desktop view covers only the top-left part.
 				const box = target.current?.getBoundingClientRect();
-				setSnapshot(value.snapshot ? { src: value.snapshot, width: Math.round(box?.width || 0), height: Math.round(box?.height || 0) } : null);
+				const width = Math.round(value.width || box?.width || 0);
+				const height = Math.round(value.height || box?.height || 0);
+				setSnapshot(value.snapshot ? { src: value.snapshot, width, height } : null);
 				return;
 			}
 			if (value.type === "newTab") {

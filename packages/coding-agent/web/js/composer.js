@@ -174,6 +174,8 @@ function QueueChips({ queue, outbox }) {
 // ---- Model and thinking effort: two separate text chips, each opening its own small popover above itself ------
 function ModelPicker() {
 	const snap = useStore((s) => s.snap);
+	// A chat that is still being opened has no snapshot yet: that is not "no model".
+	const opening = useStore((s) => !!s.switching && !s.snap?.model);
 	const models = useStore((s) => s.models);
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
@@ -195,7 +197,7 @@ function ModelPicker() {
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
 		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model")} aria-haspopup="listbox" aria-expanded=${open}>
-			<span class="truncate chip-text">${model ? model.name || model.id : t("No model")}</span><${Chevron} />
+			<span class="truncate chip-text">${model ? model.name || model.id : opening ? "…" : t("No model")}</span><${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${300} maxHeight=${380} class="model-pop">
 			<${ModelMenu} models=${models} disabled=${busy || running}
@@ -297,7 +299,8 @@ export function Composer() {
 		if (snap?.cwd && !active) loadGitStatus();
 	}, [snap?.cwd, active, activeSlot]);
 	const busyCompact = !!snap?.flags?.compacting;
-	const noModel = !snap?.model;
+	// While a chat is being opened its model is not known yet; the placeholder must not ask for a provider meanwhile.
+	const noModel = !snap?.model && !switching;
 	const [text, setText] = useState("");
 	const [caret, setCaret] = useState(0);
 	const [images, setImages] = useState([]);

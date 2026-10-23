@@ -2172,11 +2172,13 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 	it("① the first screen passes limit=400 and keeps the paging cursor", async () => {
 		expect(pageStore.TRANSCRIPT_FIRST_PAGE).toBe(400);
 		handler = (url: string) => {
-			expect(url).toBe("/api/transcript?limit=400");
+			expect(url).toBe(`/api/transcript?images=ref&limit=${pageStore.TRANSCRIPT_FIRST_PAGE}`);
 			return { items: range(60, 100), hasMore: true, nextCursor: "w175-60" };
 		};
 		await pageStore.loadTranscript("page-s1", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
-		expect(fetchCalls).toEqual([{ url: "/api/transcript?limit=400", slot: "page-s1" }]);
+		expect(fetchCalls).toEqual([
+			{ url: `/api/transcript?images=ref&limit=${pageStore.TRANSCRIPT_FIRST_PAGE}`, slot: "page-s1" },
+		]);
 		const bag = bagState("page-s1");
 		expect(bag.items.map((entry) => entry.id)).toEqual(range(60, 100).map((entry) => entry.id));
 		expect(bag.hasMore).toBe(true);
@@ -2211,7 +2213,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 
 	it("② the default load stays full (no query) and reads as complete", async () => {
 		handler = (url: string) => {
-			expect(url).toBe("/api/transcript");
+			expect(url).toBe("/api/transcript?images=ref");
 			return { items: range(0, 10) };
 		};
 		await pageStore.loadTranscript("page-s2");
@@ -2234,7 +2236,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		handler = () => ({ items: range(60, 100), hasMore: true, nextCursor: "w175-60" });
 		await pageStore.loadTranscript("page-s4", { limit: pageStore.TRANSCRIPT_FIRST_PAGE });
 		handler = (url: string) => {
-			expect(url).toBe("/api/transcript?limit=400&before=w175-60");
+			expect(url).toBe("/api/transcript?images=ref&limit=400&before=w175-60");
 			// Five entries overlap the window head (a tolerant server resent the boundary); the rest is older.
 			return {
 				items: [
@@ -2319,7 +2321,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 				? { items: range(60, 100), hasMore: true, nextCursor: "w175-60" }
 				: { items: range(0, 100) };
 		expect(await pageStore.fetchMoreTranscript("page-s7")).toBe("refreshed");
-		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(fetchCalls.some((call) => call.url === "/api/transcript?images=ref")).toBe(true);
 		const bag = bagState("page-s7");
 		expect(bag.items).toHaveLength(100);
 		expect(bag.hasMore).toBe(false);
@@ -2339,7 +2341,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		expect(await pageStore.fetchMoreTranscript("page-s8")).toBe("error");
 		expect(bagState("page-s8").hasMore).toBe(true);
 		expect(await pageStore.fetchMoreTranscript("page-s8")).toBe("refreshed");
-		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(fetchCalls.some((call) => call.url === "/api/transcript?images=ref")).toBe(true);
 		expect(bagState("page-s8").items).toHaveLength(100);
 		expect(bagState("page-s8").hasMore).toBe(false);
 	});
@@ -2358,7 +2360,7 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		pageStore.appendStreamedItem(tItem("w175-live"), "page-s9");
 		release({ items: range(20, 60), hasMore: false, nextCursor: null });
 		expect(await fetching).toBe("refreshed");
-		expect(fetchCalls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(fetchCalls.some((call) => call.url === "/api/transcript?images=ref")).toBe(true);
 		expect(bagState("page-s9").items).toHaveLength(101);
 	});
 
@@ -2378,10 +2380,10 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 			};
 		};
 		await pageStore.refreshSlot("page-s10");
-		expect(seen).toContain("/api/transcript?limit=400");
+		expect(seen).toContain(`/api/transcript?images=ref&limit=${pageStore.TRANSCRIPT_FIRST_PAGE}`);
 		seen.length = 0;
 		await pageStore.refreshSlot("page-s10b", { full: true });
-		expect(seen).toContain("/api/transcript");
+		expect(seen).toContain("/api/transcript?images=ref");
 		expect(seen.some((url) => url.includes("limit="))).toBe(false);
 	});
 });

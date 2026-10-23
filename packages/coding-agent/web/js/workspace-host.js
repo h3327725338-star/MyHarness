@@ -5,6 +5,7 @@
 import { actions } from "./actions.js";
 import { panelSessionId, saveStoredPanel, state, storedPanel } from "./store.js";
 import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
+import { externalWebUrl, linkTargetOf } from "./link-target.js";
 
 const PANE = ".panel-pane";
 
@@ -166,6 +167,13 @@ export async function runWorkspaceCommand(command) {
 			return workspaceState();
 		case "open": {
 			const tab = value.tab || {};
+			// A link the user clicked inside an HTML preview opens where Settings → Interface says, not always as a tab.
+			if (value.link === true && tab.type === "browser" && linkTargetOf(state.view.linkTarget) === "system") {
+				const url = externalWebUrl(String(tab.url || ""), "http://invalid.localhost");
+				if (!url || typeof window.myHarnessDesktop?.external !== "function") throw new Error("workspace: this link cannot be opened");
+				await window.myHarnessDesktop.external(url);
+				return workspaceState();
+			}
 			const id = actions.openWorkspace({ type: tab.type, path: tab.path, url: tab.url }, { background: value.background === true });
 			if (!id)
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");

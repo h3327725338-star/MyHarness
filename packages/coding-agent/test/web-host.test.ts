@@ -307,6 +307,49 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(owner.usage().stats.usageEstimated).toBe(false);
 	});
 
+	it("sends large transcript images by address when the page asks, and serves their bytes", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const owner = fx.hub.get(initial.slot)!;
+		const large = Buffer.alloc(40 * 1024, 7).toString("base64");
+		const small = Buffer.from("tiny").toString("base64");
+		owner.session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "read-1",
+			toolName: "read",
+			content: [
+				{ type: "text", text: "slides" },
+				{ type: "image", mimeType: "image/png", data: large },
+				{ type: "image", mimeType: "image/png", data: small },
+			],
+			isError: false,
+			timestamp: Date.now(),
+		} as any);
+		const inline = (await fx.get("/api/transcript?limit=10")).items.find((item: any) => item.kind === "toolResult");
+		expect(inline.images.map((image: any) => image.data)).toEqual([large, small]);
+		const page = await fx.get("/api/transcript?images=ref&limit=10");
+		const item = page.items.find((entry: any) => entry.kind === "toolResult");
+		expect(item.images[0]).toEqual({
+			mimeType: "image/png",
+			data: "",
+			src: `/api/transcript/image?entry=${encodeURIComponent(item.id)}&index=0`,
+		});
+		expect(item.images[1]).toEqual({ mimeType: "image/png", data: small });
+		// The cached projection keeps its inline copy for everyone else.
+		expect((await fx.get("/api/transcript?limit=10")).items.at(-1).images[0].data).toBe(large);
+		const response = await fetch(`http://127.0.0.1:${fx.port}${item.images[0].src}&slot=${initial.slot}`, {
+			headers: { "x-myharness-web": "1" },
+		});
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toBe("image/png");
+		expect(Buffer.from(await response.arrayBuffer()).toString("base64")).toBe(large);
+		const missing = await fetch(
+			`http://127.0.0.1:${fx.port}/api/transcript/image?entry=${encodeURIComponent(item.id)}&index=5&slot=${initial.slot}`,
+			{ headers: { "x-myharness-web": "1" } },
+		);
+		expect(missing.status).toBe(404);
+	});
+
 	it("keeps an in-flight Commit slot and restores its progress snapshot", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");
@@ -464,7 +507,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(slots.slots.some((slot: any) => slot.sessionFile === initial.session.file && slot.hasContent)).toBe(true);
 	});
 
-	async function start(): Promise<Fixture> {
+	async function start(options: { authFile?: boolean } = {}): Promise<Fixture> {
 		const project = tempDir("myharness-web-project");
 		const dataRoot = tempDir("myharness-web-data");
 		const agentDir = tempDir("myharness-web-agent");
@@ -474,7 +517,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		process.env.MYHARNESS_CODING_AGENT_DIR = agentDir;
 
 		const faux = registerFauxProvider();
-		const authStorage = AuthStorage.inMemory();
+		// authFile: credentials live in the agent dir's auth.json, so another runtime can write to them as a session does.
+		const authStorage = options.authFile ? AuthStorage.create(join(agentDir, "auth.json")) : AuthStorage.inMemory();
 		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
 		const modelRuntime = await ModelRuntime.create({
 			credentials: authStorage,
@@ -1654,6 +1698,29 @@ describe("Web host (real runtime with a faux provider)", () => {
 			"plus",
 			"second",
 		]);
+	});
+
+	it("offers the models of a provider whose key another runtime saved to auth.json", async () => {
+		const fx = await start({ authFile: true });
+		await fx.post("/api/providers/custom/save", {
+			id: "elsewhere",
+			config: {
+				name: "elsewhere",
+				baseUrl: "https://example.com/v1",
+				api: "openai-completions",
+				authMode: "apiKey",
+				models: [{ id: "elsewhere-model", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+			},
+		});
+		expect((await fx.get("/api/models")).providers.some((provider: any) => provider.id === "elsewhere")).toBe(false);
+
+		// Another session's runtime stores the key: it is in auth.json, not in this runtime's memory.
+		const other = AuthStorage.create(join(process.env.MYHARNESS_CODING_AGENT_DIR!, "auth.json"));
+		await other.addApiKey("elsewhere", "Default key", { type: "api_key", key: "sk-elsewhere-placeholder" });
+
+		// The model picker is asked first, before the Providers page has read auth.json again.
+		const listed = (await fx.get("/api/models")).providers.find((provider: any) => provider.id === "elsewhere");
+		expect(listed?.models.map((model: any) => model.id)).toEqual(["elsewhere-model"]);
 	});
 
 	it("announces a background slot only after its deleted model has been reconciled", async () => {

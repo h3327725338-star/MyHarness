@@ -82,6 +82,10 @@ async function main() {
   const window = new BrowserWindow({ width: 1400, height: 1000, x: -20000, y: -20000, show: false, skipTaskbar: true, focusable: false, frame: false });
   window.showInactive();
   const { createBrowser } = require('../browser-view.cjs');
+  // The host's status messages go to the window's page; the snapshots among them are collected here.
+  const pictures = [];
+  const sendStatus = window.webContents.send.bind(window.webContents);
+  window.webContents.send = (channel, value) => { if (value?.type === 'snapshot') pictures.push(value); return sendStatus(channel, value); };
   const browser = createBrowser(window, () => {}, { profileDir: profile });
   const page = (command) => browser.command(command);
   const agent = (command) => browser.command(command, { agent: true });
@@ -106,6 +110,12 @@ async function main() {
   check(during?.w === 1280 && during?.h === 800, 'the page is laid out at 1280×800 for the Agent', during);
   const state = await page({ action: 'state', tabId: 'narrow' });
   check(state.agentView && state.bounds?.width === 426 && state.bounds?.height === 266, 'the panel shows the desktop page scaled down to its width', { agentView: state.agentView, bounds: state.bounds });
+
+  // The fallback picture drawn under the native view has the scaled view's box, not the whole panel.
+  pictures.length = 0;
+  const fallback = await until(() => pictures.find((event) => event.width === 426), 4000);
+  const fallbackSize = fallback && nativeImage.createFromDataURL(fallback.snapshot).getSize();
+  check(fallback?.height === 266 && fallbackSize?.width === 426 && fallbackSize?.height === 266, 'the fallback picture covers only the scaled view', { event: fallback && { width: fallback.width, height: fallback.height }, image: fallbackSize, sizes: pictures.map((event) => [event.width, event.height]) });
 
   const clicked = await agent({ action: 'mouse', tabId: 'narrow', kind: 'click', x: 1010, y: 50 });
   check(clicked.target?.text === 'Far', 'the click reports the control at that desktop point', clicked.target);

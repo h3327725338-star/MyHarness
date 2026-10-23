@@ -2,7 +2,7 @@
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
-import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, useStore } from "./store.js";
+import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, slotUrl, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
@@ -20,6 +20,12 @@ import { exportReadOnly } from "./export-mode.js";
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 import { AttachmentList, splitAttachments } from "./attachments.js";
 import { SubAgentProcess, dispatchFor, runningSince, runningTasks, useSubAgents } from "./sub-agents.js";
+
+/**
+ * Where a transcript image is drawn from: large ones come by address from the server (`src`, same origin, which the
+ * page CSP allows like data: and blob:), small ones inline. The address names this chat in its query.
+ */
+const imageSrc = (img) => (img.src ? slotUrl(img.src) : `data:${img.mimeType};base64,${img.data}`);
 
 // ---- Small pieces ----------------------------------------------------------------------------
 function Ansi({ text }) {
@@ -185,9 +191,9 @@ function RawDetails({ step }) {
 				${bigRead ? html`<${BigReadOutput} text=${output} />` : isMdRead ? html`<${MarkdownOutput} text=${output} />` : html`<${Output} text=${output} tail=${step.kind === "run"} />`}
 			</div>` : null}
 			${result?.images?.length ? html`<div class="raw-images">${result.images.map((img, i) => {
-				const src = `data:${img.mimeType};base64,${img.data}`;
+				const src = imageSrc(img);
 				const name = t("tool image");
-				const zoomable = src.startsWith("data:") || src.startsWith("blob:"); // the page CSP only allows these two
+				const zoomable = !!src;
 				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
 			})}</div>` : null}
 			${details && Object.keys(details).length
@@ -633,9 +639,9 @@ function UserMessage({ item, turn }) {
 			${item.command ? html`<div class="chip-line"><span class="badge accent">/${item.command.name}</span></div>` : null}
 			${item.skill ? html`<div class="chip-line"><span class="badge accent">${t("skill: {name}", { name: item.skill.name })}</span></div>` : null}
 			${item.images?.length ? html`<div class="user-images">${item.images.map((img, i) => {
-				const src = `data:${img.mimeType};base64,${img.data}`;
+				const src = imageSrc(img);
 				const name = t("attached image");
-				const zoomable = src.startsWith("data:") || src.startsWith("blob:"); // the page CSP only allows these two
+				const zoomable = !!src;
 				return html`<img key=${i} src=${src} alt=${name} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name }) : undefined} onClick=${zoomable ? () => openImageLightbox(src, name) : undefined} onKeyDown=${zoomable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openImageLightbox(src, name); } } : undefined} />`;
 			})}</div>` : null}
 			${attachments.length ? html`<${AttachmentList} attachments=${attachments} />` : null}

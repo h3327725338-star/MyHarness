@@ -18,6 +18,7 @@ import {
 	getIndexedSessionMarkers,
 	getSessionsIndexPath,
 	getSessionsIndexStatsForTests,
+	loadWorkspaceIndexSync,
 	patchIndexMarker,
 	resetSessionsIndexStateForTests,
 	resetSessionsIndexStatsForTests,
@@ -183,6 +184,22 @@ describe("sessions-index.json persistent session list index", () => {
 		const listed = await SessionManager.listAll();
 		expect(listed.map((info) => info.id).sort()).toEqual(["saaa0001", "sccc0003"]);
 		expect(Object.keys(readIndexJson().entries)).toHaveLength(2);
+	});
+
+	it("does not re-read its own sidecar after writing it, but still sees a change made from outside", async () => {
+		writeSession("saaa0001", "alpha question", 1000);
+		await SessionManager.listAll();
+		// Writing the sidecar renames it into the sessions dir, which moves that dir's mtime.
+		flushAllWorkspaceIndexes();
+		const entries = loadWorkspaceIndexSync(sessionsDir).entries;
+		for (let i = 0; i < 3; i++) {
+			getIndexedSessionMarkers(join(getSessionConversationDir(dataRoot, workspaceId, "saaa0001"), "saaa0001.jsonl"));
+			expect(loadWorkspaceIndexSync(sessionsDir).entries).toBe(entries);
+		}
+		// Another process adds a chat folder: the dir changes and the next lookup reads the sidecar again.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		mkdirSync(join(sessionsDir, "sexternal"));
+		expect(loadWorkspaceIndexSync(sessionsDir).entries).not.toBe(entries);
 	});
 
 	it("rebuilds a deleted sidecar from disk", async () => {

@@ -324,6 +324,75 @@ try {
 );
 
 /**
+ * The same words twice (a table that says "同上" in two cells, laid out with newlines and indents between the cells):
+ * the passage painted must be the copy that was selected, not the first copy on the page.
+ */
+it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
+	"paints the selected copy of a repeated passage, not an earlier one",
+	async () => {
+		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
+		const base = artifacts ? join(artifacts, "tests") : tmpdir();
+		mkdirSync(base, { recursive: true });
+		const root = mkdtempSync(join(base, "quote-repeat-"));
+		const server = new WebHttpServer();
+		const browser = new LocalBrowser({
+			kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind,
+			rootDir: join(root, "browser"),
+		});
+		try {
+			for (const dir of ["js", "vendor", "css"])
+				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
+			writeFileSync(
+				join(root, "repeat.js"),
+				`
+const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+const check=(c,m)=>{if(!c) throw Error(m);};
+const tell=(m)=>document.body.insertAdjacentHTML('beforeend','<p id="ready">'+m+'</p>');
+try {
+ window.Highlight=undefined;
+ const painter=await import('/js/quote-highlight.js');
+ const target=document.querySelector('#second').firstChild;
+ const range=document.createRange();
+ range.setStart(target,0);range.setEnd(target,2);
+ const hint=painter.selectionHint(range);
+ painter.paintQuotes([{id:'q1',text:'同上',hint}]);
+ await wait(150);
+ const marked=[...document.querySelectorAll('.transcript .quote-hl')];
+ check(marked.length===1,'expected one mark, got '+marked.length);
+ check(marked[0].closest('td')?.id==='second','painted the wrong copy: '+(marked[0].closest('td')?.id||'none'));
+ tell('passed');
+} catch(e) { tell('failed: '+((e&&e.message)||String(e))); }
+`,
+			);
+			const pad = "\n            ";
+			const filler = Array.from(
+				{ length: 40 },
+				(_, i) => `<tr>${pad}<td>row ${i}</td>${pad}<td>text ${i}</td>${pad}</tr>`,
+			).join(pad);
+			writeFileSync(
+				join(root, "index.html"),
+				`<!doctype html><meta charset="utf-8"><div class="transcript"><div class="final"><table>${pad}<tr>${pad}<td>新闻（同上，同一篇里的另一个家庭）</td>${pad}<td id="first">同上</td>${pad}</tr>${pad}${filler}${pad}<tr>${pad}<td>新闻</td>${pad}<td id="second">同上</td>${pad}</tr>${pad}</table></div></div><script type="module" src="/test/repeat.js"></script>`,
+			);
+			server.mount({ prefix: "/test/", directory: root });
+			server.setIndexFile(join(root, "index.html"));
+			const { port } = await server.listen(0);
+			const page = await browser.solveChallenge({
+				url: `http://127.0.0.1:${port}/`,
+				readySelector: "#ready",
+				label: "Quote repeat test",
+				isSolved: (p) => p.text.includes('id="ready">'),
+			});
+			expect(page.text).toContain('id="ready">passed');
+		} finally {
+			await browser.shutdown();
+			await server.close();
+			rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+		}
+	},
+	180000,
+);
+
+/**
  * The same quote UI under every colour theme the product has (classic / forest / amber in dark, plus the light display):
  * the bubble and the annotation box must sit on the theme's own surface, stay inside the window, keep the quoted passage
  * readable, and the highlight must really follow the palette instead of one hard-coded colour. The span painter is forced

@@ -154,8 +154,8 @@ function KeyManager({ provider, onBack }) {
 function LoginNotice() {
 	const login = useStore((s) => s.loginEvent);
 	if (!login) return null;
-	if (login.type === "device_code") return html`<div class="notice">${tNodes("Open {url} and enter the code {code}.", { url: html`<a href=${login.verificationUri} target="_blank" rel="noopener noreferrer">${login.verificationUri}</a>`, code: html`<strong class="mono">${login.userCode}</strong>` })}</div>`;
-	if (login.type === "auth_url") return html`<div class="notice">${t("Waiting for the browser sign-in…")} <a href=${login.url} target="_blank" rel="noopener noreferrer">${t("Open the sign-in page")}</a>${login.instructions ? html` — ${login.instructions}` : null}</div>`;
+	if (login.type === "device_code") return html`<div class="notice">${tNodes("Open {url} and enter the code {code}.", { url: html`<a href=${login.verificationUri} target="_blank" rel="noopener noreferrer" data-link-system>${login.verificationUri}</a>`, code: html`<strong class="mono">${login.userCode}</strong>` })}</div>`;
+	if (login.type === "auth_url") return html`<div class="notice">${t("Waiting for the browser sign-in…")} <a href=${login.url} target="_blank" rel="noopener noreferrer" data-link-system>${t("Open the sign-in page")}</a>${login.instructions ? html` — ${login.instructions}` : null}</div>`;
 	if (login.type === "info") return html`<div class="notice">${login.message}</div>`;
 	return null;
 }

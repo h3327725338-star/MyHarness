@@ -442,8 +442,13 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!tab.view.getVisible()) return;
     if (!tabs.has(tab.id) || tab.id !== activeTabId) return;
     try {
-      const image = await tab.view.webContents.capturePage();
-      if (!image.isEmpty() && tabs.get(tab.id) === tab) emit(tab.id, { type: 'snapshot', snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}` });
+      let image = await tab.view.webContents.capturePage();
+      if (image.isEmpty() || tabs.get(tab.id) !== tab) return;
+      // The picture stands in for the native view, so it carries the view's own box: while the Agent's desktop-size view
+      // is shown scaled down, that box is only the top-left part of the panel, and the rest of the panel stays empty.
+      const frame = tab.view.getBounds?.() || {};
+      if (tab.agentView && frame.width > 0 && frame.height > 0) image = image.resize({ width: frame.width, height: frame.height });
+      emit(tab.id, { type: 'snapshot', snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`, width: frame.width, height: frame.height });
     } catch (error) {
       log(`网页截图失败：${error.message}`);
     }
@@ -566,6 +571,8 @@ exports.createBrowser = (window, log, options = {}) => {
     const place = () => {
       const bounds = tab.id === activeTabId ? boundsForRectangle() : null;
       if (bounds && tab.view.getVisible()) { try { tab.view.setBounds(agentFrame(tab, bounds)); } catch { /* view is going away */ } }
+      // The fallback picture of the old box would otherwise show around the resized view until the next refresh.
+      void picture(tab);
     };
     if (want) {
       if (!debuggerApi.isAttached()) {

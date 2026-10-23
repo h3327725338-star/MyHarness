@@ -343,7 +343,7 @@ export function SyncPage() {
 			<//>
 			${folder
 				? html`<${Row} label=${t("Cloud folder")} description=${t("Renaming it in Drive does not break the connection.")}>
-						<a class="btn" href=${folder.url} target="_blank" rel="noreferrer"><${Icon} name="drive" size=${14} />${folder.name}</a>
+						<a class="btn" href=${folder.url} target="_blank" rel="noreferrer" data-link-system><${Icon} name="drive" size=${14} />${folder.name}</a>
 					<//>`
 				: null}
 			<${Row}

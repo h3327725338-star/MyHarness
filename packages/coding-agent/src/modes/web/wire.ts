@@ -43,7 +43,64 @@ export interface WireChangeFile {
 
 export interface WireImage {
 	mimeType: string;
+	/** Base64 bytes. Empty when the image is served by `src` instead (transcript reads with `images=ref`). */
 	data: string;
+	/** Same-origin address of the image bytes (`/api/transcript/image`), set instead of `data` for large images. */
+	src?: string;
+}
+
+/** Raster types the transcript image route serves as they are; anything else stays inline (SVG could run script). */
+export const TRANSCRIPT_IMAGE_TYPES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/bmp",
+	"image/avif",
+]);
+/** Base64 length from which a transcript image is sent by address instead of inline (~24 KB of image bytes). */
+export const TRANSCRIPT_IMAGE_INLINE_MAX = 32 * 1024;
+
+/**
+ * The images of one persisted entry, in the order its wire item lists them (see contentParts): the transcript image
+ * route finds an image by entry id and this index.
+ */
+export function entryImages(entry: SessionEntry | undefined): WireImage[] {
+	if (!entry) return [];
+	if (entry.type === "message") return contentParts((entry.message as { content?: unknown }).content).images;
+	if (entry.type === "custom_message") return contentParts(entry.content).images;
+	return [];
+}
+
+/**
+ * The browser's copy of a transcript page: large images are replaced by their address so a page with screenshots or
+ * extracted slides stays small (one page once carried 51 MB of base64 and froze the chat switch). Items without an
+ * id keep their images inline, since the route could not find them again. Never mutates the (cached) input items.
+ */
+export function withTranscriptImageRefs<T extends { items: WireItem[] }>(page: T): T {
+	let changed = false;
+	const items = page.items.map((item) => {
+		const images = (item as { images?: WireImage[] }).images;
+		if (!item.id || !images?.some((image) => isLargeImage(image))) return item;
+		changed = true;
+		return {
+			...item,
+			images: images.map((image, index) =>
+				isLargeImage(image)
+					? {
+							mimeType: image.mimeType,
+							data: "",
+							src: `/api/transcript/image?entry=${encodeURIComponent(item.id as string)}&index=${index}`,
+						}
+					: image,
+			),
+		} as WireItem;
+	});
+	return changed ? { ...page, items } : page;
+}
+
+function isLargeImage(image: WireImage): boolean {
+	return image.data.length > TRANSCRIPT_IMAGE_INLINE_MAX && TRANSCRIPT_IMAGE_TYPES.has(image.mimeType);
 }
 
 /** One file the composer uploaded for a user message (see ATTACH_HEADER below and web/js/attachments.js). */

@@ -12,7 +12,13 @@ import { collectInputImageAttachments } from "../../utils/input-image-attachment
 import type { WebHost } from "./host.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { HttpError } from "./http-server.ts";
-import { subAgentStateToWire, toWireModel } from "./wire.ts";
+import {
+	entryImages,
+	subAgentStateToWire,
+	TRANSCRIPT_IMAGE_TYPES,
+	toWireModel,
+	withTranscriptImageRefs,
+} from "./wire.ts";
 
 const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const BASH_CHUNK_INTERVAL_MS = 60;
@@ -61,9 +67,31 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 
 	server.route("GET", "/api/state", () => host.snapshot());
 	// Optional `limit` (newest items) and `before` (item-id cursor) page the transcript; without them the response is unchanged.
-	server.route("GET", "/api/transcript", ({ url }) =>
-		host.transcript({ limit: url.searchParams.get("limit"), before: url.searchParams.get("before") }),
-	);
+	server.route("GET", "/api/transcript", ({ url }) => {
+		const page = host.transcript({ limit: url.searchParams.get("limit"), before: url.searchParams.get("before") });
+		// The page asks for large images by address (`images=ref`); everyone else keeps the inline response.
+		return url.searchParams.get("images") === "ref" ? withTranscriptImageRefs(page) : page;
+	});
+
+	/** One image of a persisted transcript entry (the `src` that `images=ref` hands out). */
+	server.route("GET", "/api/transcript/image", ({ url, res }) => {
+		const entryId = url.searchParams.get("entry") ?? "";
+		const index = Number(url.searchParams.get("index"));
+		const image =
+			Number.isInteger(index) && index >= 0
+				? entryImages(host.session.sessionManager.getEntry(entryId))[index]
+				: undefined;
+		if (!image || !TRANSCRIPT_IMAGE_TYPES.has(image.mimeType)) throw new HttpError(404, "Image not found");
+		const bytes = Buffer.from(image.data, "base64");
+		res.writeHead(200, {
+			"content-type": image.mimeType,
+			"content-length": bytes.length,
+			// A persisted entry never changes; the address names the chat, the entry and the position.
+			"cache-control": "private, max-age=86400, immutable",
+			"x-content-type-options": "nosniff",
+		});
+		res.end(bytes);
+	});
 
 	server.route("POST", "/api/prompt", async ({ body }) => {
 		requireWritableCopy();
@@ -181,6 +209,9 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	// ---- Models -----------------------------------------------------------------
 	server.route("GET", "/api/models", async () => {
 		const runtime = host.session.modelRuntime;
+		// Each session's runtime keeps the credentials it read from auth.json in memory. A key saved by another runtime is
+		// on disk only: read the file again, so a provider the Providers page shows as configured is offered here too.
+		runtime.reloadCredentials();
 		// Only what is already known (models.json and earlier detections): opening a model list never contacts a
 		// provider. Models are checked only from Providers → Detect, for the Model IDs the user names.
 		const available = await runtime.getAvailable();

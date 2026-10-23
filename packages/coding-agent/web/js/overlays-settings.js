@@ -2,6 +2,7 @@
 // the same pieces: cards for groups, one compact line per setting with the name and (in a weaker colour) its description
 // on the left and the control on the right.
 import { html, useEffect, useMemo, useRef, useState, Collapse, Icon, Modal, Segmented, Spinner, Toggle, UnitGroup, useDelayedBusy, motionEnabled, usePresence } from "./ui.js";
+import { builtinBrowserAvailable, linkTargetOf } from "./link-target.js";
 import { api, attempt, loadModels, loadSettings, loadSnapshot, post, readWidthValue, setView, state, toast, useStore } from "./store.js";
 import { actions, confirmDialog, inputDialog } from "./actions.js";
 import { SHORTCUTS, eventShortcut, shortcutConflict, shortcutFor } from "./shortcuts.js";
@@ -751,6 +752,7 @@ function Appearance({ conversation = false }) {
 			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
 			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><${Select} ariaLabel=${t("Color theme")} value=${view.colorTheme} onChange=${(next) => set({ colorTheme: next })} options=${COLOR_THEMES.map((theme) => ({ value: theme.value, label: t(theme.label) }))} /><//>
+			${builtinBrowserAvailable() ? html`<${Row} label=${t("Open web links in")} description=${t("Links in chats and file previews. Sign-in pages always use the system browser.")}><${Segmented} value=${linkTargetOf(view.linkTarget)} onChange=${(v) => set({ linkTarget: v })} options=${[{ value: "builtin", label: t("Built-in browser") }, { value: "system", label: t("System browser") }]} /><//>` : null}
 		<//>` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>

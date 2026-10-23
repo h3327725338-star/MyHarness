@@ -236,10 +236,18 @@ else {
     });
     ipcMain.on('desktop:bounds', (event, rect) => { if (trusted(event)) browser.bounds(rect); });
     ipcMain.on('desktop:destroy', (event) => { if (trusted(event)) browser.destroy(); });
-    window.webContents.setWindowOpenHandler(({ url }) => { try { void shell.openExternal(httpUrl(url)); } catch {} return { action: 'deny' }; });
+    // A new-window link (`target="_blank"`, in an HTML preview or a chat) opens where Settings → Interface says; the page
+    // opens sign-in links in the system browser itself. Without an answer from the page it still reaches the system browser.
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      let target;
+      try { target = httpUrl(url); } catch { return { action: 'deny' }; }
+      workspaceRequest({ action: 'open', tab: { type: 'browser', url: target }, link: true }).catch(() => shell.openExternal(target).catch(() => undefined));
+      return { action: 'deny' };
+    });
     window.webContents.on('will-navigate', (event, url) => { if (serviceUrl && new URL(url).origin !== new URL(serviceUrl).origin) event.preventDefault(); });
-    // A link in an HTML file shown in a file tab opens as a website tab instead of blanking the preview frame.
-    attachPreviewLinks(window.webContents, { serviceUrl: () => serviceUrl, open: (url) => workspaceRequest({ action: 'open', tab: { type: 'browser', url } }), log });
+    // A link in an HTML file shown in a file tab never blanks the preview frame: the page opens it as a website tab, or in
+    // the system browser when Settings → Interface says so (`link: true` lets the page apply that choice).
+    attachPreviewLinks(window.webContents, { serviceUrl: () => serviceUrl, open: (url) => workspaceRequest({ action: 'open', tab: { type: 'browser', url }, link: true }), log });
     window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) { failPendingUi('页面已重新加载，工作区请求已取消'); browser.destroy(); } });
     // Moving, resizing or maximizing the window changes the content area that the page measured. Re-clamp the last
     // rectangle immediately; the page also re-measures every frame while a browser tab is active.
