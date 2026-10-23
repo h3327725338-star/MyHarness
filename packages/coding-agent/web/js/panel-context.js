@@ -8,6 +8,7 @@ import { CacheValue, ContextDetails, fmtSpeed, sessionCache } from "./context-us
 import { N_, isZh, t } from "./i18n.js";
 import { zhToolDescription } from "./locales/zh-CN-tools.js";
 import { basename, fmtCost, fmtTokens } from "./util.js";
+import { promptTitleFrom } from "./saved-prompts.js";
 
 const TOOL_DESCRIPTIONS = {
 	agent: N_("Delegate tasks to sub-agents."),
@@ -36,16 +37,12 @@ export const toolDescription = (tool) => {
 	return TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
 };
 
-function Section({ title, count, children, defaultOpen = true, action, openWhen = false }) {
+function Section({ title, count, children, defaultOpen = true }) {
 	const [open, setOpen] = useState(defaultOpen);
-	// Something in the head (e.g. Add) needs the body on screen.
-	useEffect(() => {
-		if (openWhen) setOpen(true);
-	}, [openWhen]);
 	const toggle = () => setOpen(!open);
 	return html`<section class="ctx-section">
 		<div class="ctx-head" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
-			<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="grow">${title}${count != null ? html` <span class="dim">${count}</span>` : null}</span>${action ? html`<span onClick=${(e) => e.stopPropagation()}>${action}</span>` : null}
+			<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="grow">${title}${count != null ? html` <span class="dim">${count}</span>` : null}</span>
 		</div>
 		<${Collapse} open=${open}><div class="ctx-body">${children}</div><//>
 	</section>`;
@@ -73,35 +70,47 @@ export function formatSessionTokenCount(stats, key) {
 /**
  * The user's own prompts: written once, kept with the page preferences (shared by every window), and put into the input
  * with one click, where Enter sends them like typed text. Text already in the input stays; the prompt goes under it.
+ * The list shows each prompt's title only; the pencil opens the title and the text for editing.
  */
 function SavedPrompts({ prompts, editing, setEditing }) {
 	const save = () => {
 		const text = editing.text.trim();
 		if (!text) return;
 		const next = [...prompts];
-		if (editing.index >= 0) next[editing.index] = text;
-		else next.push(text);
+		const prompt = { title: editing.title.trim() || promptTitleFrom(text), text };
+		if (editing.index >= 0) next[editing.index] = prompt;
+		else next.push(prompt);
 		setView({ savedPrompts: next });
 		setEditing(null);
 	};
 	const remove = (index) => {
 		setView({ savedPrompts: prompts.filter((_, position) => position !== index) });
-		if (editing?.index === index) setEditing(null);
+		setEditing(null);
 	};
-	const editor = html`<div class="prompt-edit">
-		<textarea class="field" rows="4" autofocus ref=${autofocusOnMount} placeholder=${t("Write a prompt you use often")} value=${editing?.text ?? ""}
-			onInput=${(e) => setEditing({ ...editing, text: e.target.value })}
-			onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } else if (e.key === "Escape") { e.preventDefault(); setEditing(null); } }} />
-		<div class="ctx-actions"><button class="btn sm primary" disabled=${!editing?.text.trim()} onClick=${save}>${t("Save")}</button><button class="btn sm" onClick=${() => setEditing(null)}>${t("Cancel")}</button><span class="dim prompt-hint">${t("Ctrl+Enter saves")}</span></div>
+	const keys = (e) => {
+		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+		else if (e.key === "Escape") { e.preventDefault(); setEditing(null); }
+	};
+	const editor = html`<div class="prompt-edit" onKeyDown=${keys}>
+		<input class="field prompt-title-field" autofocus ref=${autofocusOnMount} maxlength="60" placeholder=${t("Title")} aria-label=${t("Title")} value=${editing?.title ?? ""}
+			onInput=${(e) => setEditing({ ...editing, title: e.target.value })} />
+		<textarea class="field" rows="5" placeholder=${t("Write a prompt you use often")} aria-label=${t("Prompt")} value=${editing?.text ?? ""}
+			onInput=${(e) => setEditing({ ...editing, text: e.target.value })} />
+		<div class="prompt-edit-actions">
+			${editing?.index >= 0 ? html`<button class="btn sm ghost prompt-delete" onClick=${() => remove(editing.index)}><${Icon} name="trash" size=${13} />${t("Delete")}</button>` : null}
+			<span class="dim prompt-hint">${t("Ctrl+Enter saves")}</span>
+			<button class="btn sm" onClick=${() => setEditing(null)}>${t("Cancel")}</button>
+			<button class="btn sm primary" disabled=${!editing?.text.trim()} onClick=${save}>${t("Save")}</button>
+		</div>
 	</div>`;
 	return html`
-		${prompts.map((text, index) => editing?.index === index ? html`<div key=${`e${index}`}>${editor}</div>` : html`<div class="res-row prompt-row" key=${`p${index}`}>
-			<button class="prompt-use grow" title=${t("Put into the input")} onClick=${() => actions.insertIntoComposer(text)}><span class="prompt-text">${text}</span></button>
-			<button class="icon-btn sm" title=${t("Edit")} aria-label=${t("Edit")} onClick=${() => setEditing({ index, text })}><${Icon} name="edit" size=${13} /></button>
-			<button class="icon-btn sm" title=${t("Delete")} aria-label=${t("Delete")} onClick=${() => remove(index)}><${Icon} name="trash" size=${13} /></button>
+		${prompts.map((prompt, index) => editing?.index === index ? html`<div key=${`e${index}`}>${editor}</div>` : html`<div class="prompt-row" key=${`p${index}`}>
+			<button class="prompt-use" title=${prompt.text} onClick=${() => actions.insertIntoComposer(prompt.text)}><${Icon} name="quote" size=${13} class="prompt-mark" /><span class="prompt-title">${prompt.title}</span></button>
+			<button class="icon-btn sm" title=${t("Edit")} aria-label=${t("Edit")} onClick=${() => setEditing({ index, title: prompt.title, text: prompt.text })}><${Icon} name="edit" size=${13} /></button>
 		</div>`)}
 		${editing?.index === -1 ? editor : null}
-		${!prompts.length && !editing ? html`<div class="dim">${t("No saved prompts yet. Add the ones you use often; a click puts one into the input.")}</div>` : null}`;
+		${!prompts.length && !editing ? html`<div class="dim prompt-empty">${t("No saved prompts yet. Add the ones you use often; a click puts one into the input.")}</div>` : null}
+		${editing ? null : html`<button class="prompt-add" onClick=${() => setEditing({ index: -1, title: "", text: "" })}><${Icon} name="plus" size=${13} />${t("New prompt")}</button>`}`;
 }
 
 export function ContextPanel() {
@@ -188,15 +197,15 @@ export function ContextPanel() {
 			</div>
 			<div class="ctx-actions"><button class="btn sm" disabled=${exportReadOnly()} title=${exportReadOnly() ? t("This page is already the export") : undefined} onClick=${actions.exportSession}><${Icon} name="download" size=${13} />${t("Export HTML")}</button></div>
 		<//>
+		<${Section} title=${t("My prompts")} count=${savedPrompts.length}>
+			<${SavedPrompts} prompts=${savedPrompts} editing=${editingPrompt} setEditing=${setEditingPrompt} />
+		<//>
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => {
 				const needsAgent = isDelegatedChild(tool.name) && !agentActive;
 				const disabled = snap.active || needsAgent;
 				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("Enable the agent tool first") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><span title=${needsAgent ? t("Enable the agent tool first") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
 			})}
-		<//>
-		<${Section} title=${t("My prompts")} count=${savedPrompts.length} openWhen=${!!editingPrompt} action=${html`<button class="link-btn" onClick=${() => setEditingPrompt({ index: -1, text: "" })}>${t("Add")}</button>`}>
-			<${SavedPrompts} prompts=${savedPrompts} editing=${editingPrompt} setEditing=${setEditingPrompt} />
 		<//>
 		<${Section} title=${t("Project context files")} count=${resources?.contextFiles.length} defaultOpen=${false}>
 			${resources?.contextFiles.map((f) => html`<div class="res-row" key=${f.path}><span class="truncate grow mono" title=${f.path}>${f.path}</span><span class="dim">${t("{fmtTokens} chars", { fmtTokens: fmtTokens(f.chars) })}</span></div>`)}

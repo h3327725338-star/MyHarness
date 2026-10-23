@@ -25,6 +25,8 @@
 .sd-letter { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--bg-raised); color: var(--text-2); font-weight: 600; font-size: 13px; line-height: 1; }
 .sd-favicon.mini, .sd-letter.mini { width: 16px; height: 16px; font-size: 9px; border-radius: 3px; }
 .sd-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+/* A shortcut saved without a name keeps the label's height, so icon-only tiles line up with named ones. */
+.sd-label:empty::before { content: "\00a0"; }
 .sd-hint { margin: 14px 0 0; font-size: var(--fs-sm); text-align: center; }
 .sd-group-backdrop { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--bg-panel) 60%, transparent); }
 .sd-group, .sd-editor { display: flex; flex-direction: column; gap: 10px; max-width: min(560px, 100%); max-height: 100%; overflow: auto; padding: 16px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-pop); }
@@ -217,17 +219,28 @@
 .kv > span:nth-child(odd) { color: var(--text-3); white-space: nowrap; }
 .res-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; min-height: 32px; }
 .res-desc { font-size: var(--fs-sm); white-space: normal; overflow-wrap: anywhere; }
-/* My prompts: the whole row puts the prompt into the input; edit and delete sit at its end. */
-.prompt-row { gap: 2px; padding: 2px 0; }
-.prompt-use { display: flex; min-width: 0; padding: 6px 8px; margin-left: -8px; border-radius: var(--r-sm); text-align: left; color: var(--text); font-size: var(--fs-body); }
-.prompt-use:hover { background: var(--surface-hover); }
-.prompt-text { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
-.prompt-row > .icon-btn { color: var(--text-3); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+/* My prompts: one title per row; the row puts the prompt into the input, the pencil at its end edits it. */
+.prompt-row { display: flex; align-items: center; gap: 2px; margin: 0 -8px; border-radius: var(--r-sm); transition: background var(--t-fast) var(--ease); }
+.prompt-row:hover { background: var(--surface-hover); }
+.prompt-use { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 32px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; color: var(--text); font-size: var(--fs-body); }
+.prompt-mark { flex: none; color: var(--text-4); transition: color var(--t-fast) var(--ease); }
+.prompt-row:hover .prompt-mark { color: var(--accent); }
+.prompt-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-row > .icon-btn { flex: none; margin-right: 4px; color: var(--text-3); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
 .prompt-row:hover > .icon-btn, .prompt-row > .icon-btn:focus-visible { opacity: 1; }
 .prompt-row > .icon-btn:hover { color: var(--text); }
-.prompt-edit { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
-.prompt-edit textarea { width: 100%; min-height: 80px; resize: vertical; font: inherit; line-height: 1.45; padding: 8px 10px; box-sizing: border-box; }
-.prompt-hint { font-size: var(--fs-xs); margin-left: auto; }
+.prompt-empty { font-size: var(--fs-sm); line-height: 1.5; }
+/* The add button belongs to the list: a quiet dashed row under the last prompt that takes the accent on hover. */
+.prompt-add { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; margin-top: 2px; border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm); transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+.prompt-add:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.prompt-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.prompt-edit { display: flex; flex-direction: column; gap: 8px; padding: 10px; margin: 2px -2px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-raised, transparent); }
+.prompt-edit .prompt-title-field { width: 100%; box-sizing: border-box; font-weight: 600; }
+.prompt-edit textarea { width: 100%; min-height: 96px; resize: vertical; font: inherit; line-height: 1.45; padding: 8px 10px; box-sizing: border-box; }
+.prompt-edit-actions { display: flex; align-items: center; gap: 8px; }
+.prompt-delete { color: var(--text-3); padding-left: 6px; padding-right: 8px; }
+.prompt-delete:hover:not(:disabled) { color: var(--danger, #e5484d); }
+.prompt-hint { font-size: var(--fs-xs); margin-left: auto; white-space: nowrap; }
 
 /* Rendered Markdown editing is isolated from code viewers. */
 .markdown-edit-body { padding: 16px 20px; overflow-wrap: anywhere; }

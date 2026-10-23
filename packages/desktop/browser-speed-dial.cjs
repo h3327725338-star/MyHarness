@@ -16,14 +16,14 @@ const webUrl = (value) => {
 };
 
 const cleanTitle = (value, fallback) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE) || fallback;
-const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
 const cleanId = (value) => (typeof value === 'string' && /^[\w-]{1,64}$/.test(value) ? value : randomUUID());
 
 const cleanSite = (value) => {
   if (!value || typeof value !== 'object') return null;
   let url;
   try { url = webUrl(value.url); } catch { return null; }
-  const site = { id: cleanId(value.id), type: 'site', title: cleanTitle(value.title, hostOf(url)), url };
+  // A shortcut without a name is shown as its icon alone (the page names it by its host in the tooltip).
+  const site = { id: cleanId(value.id), type: 'site', title: cleanTitle(value.title, ''), url };
   if (typeof value.icon === 'string' && value.icon.length <= MAX_ICON_CHARS && ICON_PATTERN.test(value.icon)) site.icon = value.icon;
   // The icon was looked for and the site has none: the letter is shown and nobody asks again.
   else if (value.noIcon === true) site.noIcon = true;

@@ -623,26 +623,40 @@ export function Composer() {
 	importFiles.current = addFiles;
 	useEffect(() => {
 		const isFileDrag = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+		// The highlight must never outlive the drag. A drop that another area handles (and stops), a drag that leaves
+		// over the built-in browser's native view or is cancelled may send no event here, but a drag still over the
+		// page repeats `dragover` several times a second, so missing it for a moment means the drag is gone.
+		let idle = 0;
+		const clear = () => { clearTimeout(idle); setDragOver(false); };
 		const over = (event) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
 			event.dataTransfer.dropEffect = "copy";
 			setDragOver(true);
+			clearTimeout(idle);
+			idle = setTimeout(clear, 700);
 		};
-		const leave = (event) => { if (!event.relatedTarget) setDragOver(false); };
+		const leave = (event) => { if (!event.relatedTarget) clear(); };
 		const drop = (event) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
-			setDragOver(false);
+			clear();
 			importFiles.current(event.dataTransfer.files);
 		};
+		// Capture phase: seen even when the element under the pointer handles the drop itself.
+		const dropped = () => clear();
 		window.addEventListener("dragover", over);
 		window.addEventListener("dragleave", leave);
 		window.addEventListener("drop", drop);
+		window.addEventListener("drop", dropped, true);
+		window.addEventListener("dragend", clear, true);
 		return () => {
+			clearTimeout(idle);
 			window.removeEventListener("dragover", over);
 			window.removeEventListener("dragleave", leave);
 			window.removeEventListener("drop", drop);
+			window.removeEventListener("drop", dropped, true);
+			window.removeEventListener("dragend", clear, true);
 		};
 	}, []);
 

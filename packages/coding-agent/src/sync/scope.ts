@@ -1,10 +1,12 @@
 import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { getSessionDir, getWorkspaceDir, getWorkspaceMetadataPath, getWorkspacesDir } from "../config/paths/index.ts";
+import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
 import { listMemoryFiles, type MemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
+import { readSavedPrompts } from "./saved-prompts.ts";
 import type { ScannedEntity } from "./types.ts";
 import { stableJson } from "./util.ts";
 
@@ -297,6 +299,30 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 			mtimeMs: stateMtime,
 			size: Buffer.byteLength(content),
 			meta: { name: `Draft ${sessionId}` },
+		});
+	}
+
+	// 5. The saved prompts of the Web UI (My prompts). Only that list leaves the preferences file; an empty list is the
+	// absence of a value, so clearing it becomes an explicit delete, as for the personal prompt.
+	const savedPrompts = readSavedPrompts(agentDir);
+	if (savedPrompts.length > 0) {
+		const prefsFile = join(agentDir, WEB_PREFS_FILE);
+		let prefsMtime = Date.now();
+		try {
+			prefsMtime = statSync(prefsFile).mtimeMs;
+		} catch {
+			// The list was just read; a vanished file only loses the time stamp.
+		}
+		const content = stableJson(savedPrompts);
+		entities.set("saved-prompts:web", {
+			key: "saved-prompts:web",
+			kind: "saved-prompts",
+			id: "web",
+			inline: content,
+			updatedAt: new Date(prefsMtime).toISOString(),
+			mtimeMs: prefsMtime,
+			size: Buffer.byteLength(content),
+			meta: { name: "Saved prompts" },
 		});
 	}
 

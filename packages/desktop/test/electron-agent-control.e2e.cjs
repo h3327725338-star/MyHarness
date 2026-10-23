@@ -114,7 +114,7 @@ async function main() {
   check(await loaded('front', 'Agent Control'), 'the first tab loads');
   check(await loaded('back', 'Agent Control'), 'the background tab loads');
   const viewport = (await run({ action: 'exec', tabId: 'back', code: '({ w: innerWidth, h: innerHeight })' })).result;
-  check(viewport && viewport.w === 900 && viewport.h === 700, 'the background tab has the viewport of the visible tab', viewport);
+  check(viewport && viewport.w === 1280 && viewport.h === 800, 'the background tab has a desktop-size viewport even beside a smaller visible tab', viewport);
 
   // --- mouse --------------------------------------------------------------------------------------------------
   const onCanvas = await run({ action: 'mouse', tabId: 'back', kind: 'click', x: 70, y: 45 });
@@ -160,7 +160,7 @@ async function main() {
   const shot = await run({ action: 'snapshot', tabId: 'back' });
   const image = nativeImage.createFromDataURL(shot.snapshot);
   const size = image.getSize();
-  check(size.width === 900 && size.height === 700 && shot.width === 900, 'a hidden tab is captured at its CSS size', { size, reported: [shot.width, shot.height] });
+  check(size.width === 1280 && size.height === 800 && shot.width === 1280, 'a hidden tab is captured at its CSS size', { size, reported: [shot.width, shot.height] });
   const bitmap = image.toBitmap();
   const pixel = (x, y) => { const at = (y * size.width + x) * 4; return [bitmap[at + 2], bitmap[at + 1], bitmap[at]]; };
   const red = pixel(120, 90);

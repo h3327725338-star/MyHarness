@@ -3,6 +3,7 @@ import { existsSync, type FSWatcher, readdirSync, readFileSync, watch } from "no
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { getSessionConversationDir } from "../config/paths/index.ts";
+import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
 import { listMemoryFilesAsync } from "../session/memory/store.ts";
 import { ModeStateStore } from "../session/mode-state.ts";
@@ -14,6 +15,7 @@ import {
 	applyFile,
 	applyMemory,
 	applyPrompt,
+	applySavedPrompts,
 	applySession,
 	applyWorkspace,
 	DeferredSessionError,
@@ -684,7 +686,8 @@ export class SyncEngine {
 		}
 		try {
 			this.stateWatcher = watch(this.options.agentDir, (_event, filename) => {
-				if (!filename || filename === "chat-mode-state.json") this.scheduleSoon();
+				// The preferences file also holds the saved prompts; a pass only uploads when that list changed.
+				if (!filename || filename === "chat-mode-state.json" || filename === WEB_PREFS_FILE) this.scheduleSoon();
 			});
 			this.stateWatcher.on("error", () => {});
 		} catch {
@@ -1532,6 +1535,9 @@ export class SyncEngine {
 			case "prompt":
 				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
 				return applyPrompt(context, data);
+			case "saved-prompts":
+				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
+				return applySavedPrompts(context, data);
 			default:
 				return { applied: false, workspacesChanged: false, sessionsChanged: false, memoriesChanged: false };
 		}
@@ -1852,7 +1858,12 @@ function isSafeRecordIdentity(operation: SyncOperation): boolean {
 		const [workspaceId, sessionId, ...rest] = operation.id.split("/");
 		return rest.length === 0 && Boolean(workspaceId && sessionId) && part.test(workspaceId!) && part.test(sessionId!);
 	}
-	if (operation.kind === "workspace" || operation.kind === "draft" || operation.kind === "prompt")
+	if (
+		operation.kind === "workspace" ||
+		operation.kind === "draft" ||
+		operation.kind === "prompt" ||
+		operation.kind === "saved-prompts"
+	)
 		return part.test(operation.id);
 	return true;
 }

@@ -6,6 +6,7 @@ import { refreshMemoryIndexes, withMemoryLock, writeMemoryFile } from "../sessio
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
+import { savedPromptsOf, writeSavedPrompts } from "./saved-prompts.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type { SyncRecord } from "./types.ts";
 import { ensureDir, fromUtf8, stableJson } from "./util.ts";
@@ -392,6 +393,12 @@ export async function applyPrompt(ctx: ApplyContext, data: Uint8Array): Promise<
 	return { applied: true, workspacesChanged: false, sessionsChanged: false, memoriesChanged: false };
 }
 
+/** Apply the saved prompts of the Web UI: the list in the preferences file is replaced, other preferences stay. */
+export async function applySavedPrompts(ctx: ApplyContext, data: Uint8Array): Promise<ApplyOutcome> {
+	writeSavedPrompts(ctx.agentDir, savedPromptsOf(JSON.parse(fromUtf8(data)) as unknown));
+	return { ...emptyOutcome(), applied: true };
+}
+
 /** Apply a deletion that the remote device recorded explicitly. Archives and folders the user did not delete stay. */
 export async function applyDelete(ctx: ApplyContext, record: SyncRecord): Promise<ApplyOutcome> {
 	const outcome = emptyOutcome();
@@ -454,6 +461,11 @@ export async function applyDelete(ctx: ApplyContext, record: SyncRecord): Promis
 	}
 	if (record.kind === "prompt") {
 		ctx.modeState.setPersonalPrompts({ general: "" });
+		outcome.applied = true;
+		return outcome;
+	}
+	if (record.kind === "saved-prompts") {
+		writeSavedPrompts(ctx.agentDir, []);
 		outcome.applied = true;
 		return outcome;
 	}

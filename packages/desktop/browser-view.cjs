@@ -39,13 +39,22 @@ const MAX_ICON_BYTES = 64 * 1024;
 // has no control the workspace could press, so recognising it is only used to offer a way forward, never to answer it.
 const VERIFY_PAGE = /just a moment|verification failed|attention required|checking your browser|verify you are human|are you a robot|access denied/i;
 // A tab that has never been on screen still needs a viewport, so the Agent can read, click and screenshot it in the
-// background; it gets the size the visible tab last had, or this one.
+// background; it gets the size the visible tab last had (this one before any), never less than AGENT_VIEWPORT.
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 // The isolated world that draws the Agent's mouse pointer: the site's own scripts cannot reach it.
 const CURSOR_WORLD = 1207;
 // A hidden page is throttled by Chromium and then ignores input events (a wheel event never even completes). While the
 // Agent acts on a tab it is kept awake, and throttled again after this long without an Agent action.
 const AGENT_AWAKE_MS = 20000;
+// The Agent browses at a desktop size whatever the panel's width: a background tab is laid out at least this large, and
+// the visible tab the Agent drives in a panel narrower than NARROW_PANEL is laid out at this size and drawn scaled down
+// to fit the panel. Sites then give the Agent their desktop layout instead of the phone layout a narrow panel gets.
+const AGENT_VIEWPORT = { width: 1280, height: 800 };
+const NARROW_PANEL = 1024;
+// A clicked control whose text or link names a download or a file: the click waits a few seconds for a download to start.
+const DOWNLOAD_HINT = /download|下载|下載|\.(pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|7z|gz|png|jpe?g|gif|mp3|mp4|mov|apk|exe|msi)\b/i;
+// Agent commands that read or act on a page's layout; each gives the tab the Agent's desktop-size view first.
+const AGENT_TAB_ACTIONS = new Set(['snapshot', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download']);
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -247,7 +256,7 @@ exports.createBrowser = (window, log, options = {}) => {
     const downloads = app.getPath('downloads');
     const name = uniqueDownloadName(downloads, item.getFilename());
     item.setSavePath(require('node:path').join(downloads, name));
-    const record = { id: `download${++downloadSeq}`, name, savePath: item.getSavePath(), url: item.getURL(), tabId: tab.id, total: item.getTotalBytes(), received: 0, state: 'started', at: Date.now() };
+    const record = { id: `download${++downloadSeq}`, seq: downloadSeq, name, savePath: item.getSavePath(), url: item.getURL(), tabId: tab.id, total: item.getTotalBytes(), received: 0, state: 'started', at: Date.now() };
     tab.downloads.set(record.id, { item, record });
     emit(tab.id, { type: 'download', state: 'started', ...record });
     item.on('updated', (_event, state) => {
@@ -417,6 +426,8 @@ exports.createBrowser = (window, log, options = {}) => {
       visible: tab.view?.getVisible?.() ?? false,
       // The rectangle the native view actually occupies (null while hidden); lets the page and the Agent verify placement.
       bounds: tab.view?.getVisible?.() ? (() => { try { return tab.view.getBounds(); } catch { return null; } })() : null,
+      // Set while the Agent drives this tab at a desktop size, drawn scaled down in a narrow panel.
+      agentView: tab.agentView || null,
       active: tab.id === activeTabId,
       // Site permission questions of this tab that nobody has answered yet (the Agent can answer them).
       pendingPermissions: [...pendingPermissions.entries()]
@@ -469,16 +480,32 @@ exports.createBrowser = (window, log, options = {}) => {
    */
   const placeActive = () => {
     const bounds = boundsForRectangle();
+    if (bounds) lastViewport = { width: bounds.width, height: bounds.height };
     for (const tab of tabs.values()) {
       if (!tab.view || tab.destroyed) continue;
       const visible = tab.id === activeTabId && !!bounds;
-      try { tab.view.setVisible(visible); } catch { /* view is going away */ }
-      if (visible) {
-        try { tab.view.setBounds(bounds); } catch { /* view is going away */ }
-        lastViewport = { width: bounds.width, height: bounds.height };
+      if (!visible) conceal(tab);
+      else {
+        try { tab.view.setBounds(agentFrame(tab, bounds)); } catch { /* view is going away */ }
+        try { tab.view.setVisible(true); } catch { /* view is going away */ }
       }
       updatePictureTimer(tab);
+      if (tab.agentDriven || tab.agentView) void fitAgentView(tab);
     }
+  };
+
+  /** A background tab's viewport: the panel's size, but never smaller than the Agent's desktop size. */
+  const backgroundViewport = () => ({
+    width: Math.max(lastViewport.width, AGENT_VIEWPORT.width),
+    height: Math.max(lastViewport.height, AGENT_VIEWPORT.height),
+  });
+
+  /** Hide one view. A view leaving the screen first gets the background size: a hidden view ignores new bounds. */
+  const conceal = (tab) => {
+    try {
+      if (tab.view.getVisible()) tab.view.setBounds({ x: 0, y: 0, ...backgroundViewport() });
+      tab.view.setVisible(false);
+    } catch { /* view is going away */ }
   };
 
   /** Hide every view and forget the rectangle: the next activation always starts from a fresh measurement. */
@@ -486,9 +513,99 @@ exports.createBrowser = (window, log, options = {}) => {
     rectangle = null;
     for (const tab of tabs.values()) {
       if (!tab.view || tab.destroyed) continue;
-      try { tab.view.setVisible(false); } catch { /* view is going away */ }
+      conceal(tab);
       updatePictureTimer(tab);
+      if (tab.agentView) void fitAgentView(tab);
     }
+  };
+
+  // ---- The Agent's desktop-size view in a narrow panel ------------------------------------------------------------
+  // While the Agent drives the visible tab and the panel is narrow, the page is laid out at AGENT_VIEWPORT through the
+  // DevTools protocol's device metrics override and drawn scaled down; the native view shrinks to the scaled picture,
+  // so the panel shows exactly what the Agent works on. The override only lives while a debugger session is attached,
+  // so the tab keeps one attached for that time. A person's own click or key press in the page hands the tab back: the
+  // page returns to the panel's size until the Agent acts on it again.
+
+  /** The device metrics the tab should have now, or null for the plain panel size. */
+  const wantedAgentView = (tab) => {
+    if (!tab.agentDriven || tab.id !== activeTabId) return null;
+    const bounds = boundsForRectangle();
+    if (!bounds || bounds.width >= NARROW_PANEL) return null;
+    const scale = Math.min(bounds.width / AGENT_VIEWPORT.width, bounds.height / AGENT_VIEWPORT.height);
+    if (!(scale > 0)) return null;
+    return { width: AGENT_VIEWPORT.width, height: AGENT_VIEWPORT.height, scale: Math.round(scale * 10000) / 10000 };
+  };
+
+  /** Where the visible view goes: the panel's box, or the scaled desktop picture at its top-left corner. */
+  const agentFrame = (tab, bounds) => {
+    const view = tab.agentView;
+    if (!view) return bounds;
+    return {
+      x: bounds.x,
+      y: bounds.y,
+      width: Math.max(1, Math.min(bounds.width, Math.round(view.width * view.scale))),
+      height: Math.max(1, Math.min(bounds.height, Math.round(view.height * view.scale))),
+    };
+  };
+
+  const sameView = (a, b) => (!a && !b) || (!!a && !!b && a.width === b.width && a.height === b.height && a.scale === b.scale);
+
+  /** Bring the tab's device metrics in line with `wantedAgentView`; calls for one tab run one after another. */
+  const fitAgentView = (tab) => {
+    tab.fitChain = (tab.fitChain || Promise.resolve()).then(() => applyAgentView(tab)).catch((error) => log(`无法调整 Agent 浏览视口：${error.message}`));
+    return tab.fitChain;
+  };
+
+  const applyAgentView = async (tab) => {
+    if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return;
+    const want = wantedAgentView(tab);
+    if (sameView(want, tab.agentView)) return;
+    const debuggerApi = tab.view.webContents.debugger;
+    const place = () => {
+      const bounds = tab.id === activeTabId ? boundsForRectangle() : null;
+      if (bounds && tab.view.getVisible()) { try { tab.view.setBounds(agentFrame(tab, bounds)); } catch { /* view is going away */ } }
+    };
+    if (want) {
+      if (!debuggerApi.isAttached()) {
+        // The page's own DevTools may hold the debugger; the Agent then keeps the panel's size.
+        try { debuggerApi.attach('1.3'); } catch (error) { log(`无法附加网页调试器，Agent 使用面板尺寸：${error.message}`); return; }
+      }
+      tab.agentDebugger = true;
+      await debuggerApi.sendCommand('Emulation.setDeviceMetricsOverride', { width: want.width, height: want.height, deviceScaleFactor: 0, mobile: false, scale: want.scale });
+      tab.agentView = want;
+      tab.inputScale = undefined;
+      place();
+    } else {
+      const had = tab.agentView;
+      tab.agentView = null;
+      tab.inputScale = undefined;
+      place();
+      if (had && debuggerApi.isAttached()) {
+        try { await debuggerApi.sendCommand('Emulation.clearDeviceMetricsOverride'); } catch { /* debugger already gone */ }
+      }
+      if (tab.agentDebugger) {
+        tab.agentDebugger = false;
+        try { debuggerApi.detach(); } catch { /* already gone */ }
+      }
+    }
+    commit(tab, {});
+  };
+
+  /** The Agent is about to act on the tab: keep it awake and give it the desktop-size view. */
+  const prepareAgent = async (tab) => {
+    keepAwake(tab);
+    tab.agentDriven = true;
+    tab.agentInputAt = Date.now();
+    await fitAgentView(tab);
+  };
+
+  /** A person's own click or key press in a tab the Agent was driving gives the page its panel size back. */
+  const userTookOver = (tab, type) => {
+    if (!tab.agentDriven) return;
+    if (type !== 'mouseDown' && type !== 'keyDown' && type !== 'rawKeyDown') return;
+    if (Date.now() - (tab.agentInputAt || 0) < 1500) return;
+    tab.agentDriven = false;
+    void fitAgentView(tab);
   };
 
   const commit = (tab, patch) => {
@@ -530,6 +647,15 @@ exports.createBrowser = (window, log, options = {}) => {
     ]).popup({ window }));
     // The first real page is the moment the engine's own client-hint list can be read (it needs a secure context).
     contents.on('dom-ready', () => learnClientHints(contents));
+    contents.on('input-event', (_event, input) => { if (live()) userTookOver(tab, input?.type); });
+    // Something else ended the debugger session that kept the Agent's view (the page crashed, DevTools took over).
+    contents.debugger.on('detach', () => {
+      tab.agentDebugger = false;
+      if (!tab.agentView || !live()) return;
+      tab.agentView = null;
+      tab.inputScale = undefined;
+      placeActive();
+    });
     contents.on('did-start-loading', () => {
       if (!live()) return;
       tab.error = '';
@@ -637,7 +763,7 @@ exports.createBrowser = (window, log, options = {}) => {
     tabs.set(id, tab);
     // A hidden view keeps a real viewport: background tabs lay out, take input and can be captured like the visible one.
     // The size must be set before the view is hidden: Electron does not pass bounds set on a hidden view to its page.
-    try { view.setBounds({ x: 0, y: 0, ...lastViewport }); } catch { /* view is going away */ }
+    try { view.setBounds({ x: 0, y: 0, ...backgroundViewport() }); } catch { /* view is going away */ }
     view.setVisible(false);
     window.contentView.addChildView(view);
     wire(tab);
@@ -754,9 +880,33 @@ exports.createBrowser = (window, log, options = {}) => {
 
   const viewportOf = (tab) => runInPage(tab, '({ width: innerWidth, height: innerHeight })');
 
+  /**
+   * Page pixels to input pixels. Under the Agent's scaled view the engine takes input either in page pixels or in the
+   * view's own pixels, depending on how the view is composited, so it is measured once per view: one pointer move to a
+   * known point, and the page reports where it landed.
+   */
+  const inputScaleOf = async (tab, debuggerApi) => {
+    if (!tab.agentView) return 1;
+    if (tab.inputScale) return tab.inputScale;
+    const probe = 100;
+    const contents = contentsOf(tab);
+    const listen = `(() => { if (!window.__myharnessProbe) { window.__myharnessProbe = {}; addEventListener('mousemove', (event) => { window.__myharnessProbe.x = event.clientX; }, true); } window.__myharnessProbe.x = undefined; return true; })()`;
+    await contents.executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code: listen }]);
+    await withTimeout(debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: probe, y: probe, button: 'none', buttons: 0, pointerType: 'mouse' }), 5000, '页面没有响应鼠标移动');
+    const landed = Number(await contents.executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code: 'window.__myharnessProbe.x' }]));
+    if (!(landed > 0)) return 1;
+    const measured = probe / landed;
+    // Snap to 1 or to the view's scale when the measurement is near one of them (the page rounds clientX).
+    if (Math.abs(measured - 1) < 0.05) tab.inputScale = 1;
+    else if (Math.abs(measured - tab.agentView.scale) < 0.05) tab.inputScale = tab.agentView.scale;
+    else tab.inputScale = measured;
+    return tab.inputScale;
+  };
+
   /** Keep a tab's page running at full speed for a while, so a background tab takes the Agent's input and paints. */
   const keepAwake = (tab) => {
     const contents = contentsOf(tab);
+    tab.agentInputAt = Date.now();
     if (!tab.awake) {
       try { contents.setBackgroundThrottling(false); } catch { /* older engine: input may wait for the tab to show */ }
       tab.awake = true;
@@ -803,6 +953,7 @@ exports.createBrowser = (window, log, options = {}) => {
   const mouse = async (tab, value) => {
     const kind = String(value.kind || 'click');
     keepAwake(tab);
+    const downloadsBefore = downloadSeq;
     const x = Number(value.x);
     const y = Number(value.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('mouse 需要 x 与 y（页面 CSS 像素坐标）');
@@ -816,7 +967,11 @@ exports.createBrowser = (window, log, options = {}) => {
     const modifiers = modifierBits(value.modifiers);
     const target = kind === 'move' || kind === 'wheel' || kind === 'up' ? undefined : await describePoint(tab, x, y);
     await withDebugger(tab, async (debuggerApi) => {
-      const send = (params) => debuggerApi.sendCommand('Input.dispatchMouseEvent', { modifiers, pointerType: 'mouse', ...params });
+      const scale = await inputScaleOf(tab, debuggerApi);
+      const send = (params) => {
+        tab.agentInputAt = Date.now();
+        return debuggerApi.sendCommand('Input.dispatchMouseEvent', { modifiers, pointerType: 'mouse', ...params, x: params.x * scale, y: params.y * scale });
+      };
       const press = async (px, py, clickCount) => {
         await send({ type: 'mousePressed', x: px, y: py, button, buttons: BUTTON_BITS[button], clickCount });
         await send({ type: 'mouseReleased', x: px, y: py, button, buttons: 0, clickCount });
@@ -840,7 +995,31 @@ exports.createBrowser = (window, log, options = {}) => {
     const endX = kind === 'drag' ? toX : x;
     const endY = kind === 'drag' ? toY : y;
     showCursor(tab, endX, endY, kind !== 'move' && kind !== 'wheel');
-    return { ok: true, kind, x, y, ...(kind === 'drag' ? { toX, toY } : {}), viewport, target: target || undefined };
+    // A click may start a download: report it (and wait for it) right here, so the Agent learns where the file went
+    // without searching for it. A control that names a download or a file is given longer to start one.
+    let downloads = [];
+    if (kind === 'click' || kind === 'double_click' || kind === 'up') {
+      const looksLikeFile = DOWNLOAD_HINT.test(`${target?.text || ''} ${target?.href || ''}`);
+      downloads = await awaitDownloads(tab, downloadsBefore, looksLikeFile ? 6000 : 400, 30000);
+    }
+    return { ok: true, kind, x, y, ...(kind === 'drag' ? { toX, toY } : {}), viewport, target: target || undefined, ...(downloads.length ? { downloads } : {}) };
+  };
+
+  /**
+   * Downloads the tab started after download number `since`: waits up to `startMs` for the first one to begin, then up
+   * to `doneMs` for all of them to finish. Each entry says where the file is (or why it did not arrive).
+   */
+  const awaitDownloads = async (tab, since, startMs, doneMs) => {
+    const mine = () => [
+      ...downloadLog.filter((record) => record.tabId === tab.id && record.seq > since),
+      ...[...tab.downloads.values()].map((entry) => entry.record).filter((record) => record.seq > since),
+    ];
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const startBy = Date.now() + startMs;
+    while (!mine().length && Date.now() < startBy && !tab.destroyed) await sleep(100);
+    const doneBy = Date.now() + doneMs;
+    while (mine().some((record) => tab.downloads.has(record.id)) && Date.now() < doneBy && !tab.destroyed) await sleep(150);
+    return mine().map((record) => ({ ...record, state: tab.downloads.has(record.id) ? 'progressing' : record.state }));
   };
 
   const focusedElement = (tab) => runInPage(tab, `(() => {
@@ -858,7 +1037,7 @@ exports.createBrowser = (window, log, options = {}) => {
     keepAwake(tab);
     await withDebugger(tab, async (debuggerApi) => {
       for (let round = 0; round < repeat; round++) {
-        for (const sequence of events) for (const event of sequence) await debuggerApi.sendCommand('Input.dispatchKeyEvent', event);
+        for (const sequence of events) for (const event of sequence) { tab.agentInputAt = Date.now(); await debuggerApi.sendCommand('Input.dispatchKeyEvent', event); }
       }
     });
     return { ok: true, keys: list, repeat, focused: await focusedElement(tab) };
@@ -897,7 +1076,9 @@ exports.createBrowser = (window, log, options = {}) => {
       };
       return nodes.map(pick);
     } finally {
-      if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
+      // The Agent's scaled view lives on this debugger session; it outlives the call that happened to attach it.
+      if (attached && tab.agentView) tab.agentDebugger = true;
+      else if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
     }
   };
 
@@ -919,7 +1100,9 @@ exports.createBrowser = (window, log, options = {}) => {
     try {
       return await fn(debuggerApi);
     } finally {
-      if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
+      // The Agent's scaled view lives on this debugger session; it outlives the call that happened to attach it.
+      if (attached && tab.agentView) tab.agentDebugger = true;
+      else if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
     }
   };
 
@@ -1068,9 +1251,17 @@ exports.createBrowser = (window, log, options = {}) => {
     });
   })()`);
 
-  const command = async (input) => {
+  /**
+   * One browser command. `context.agent` marks a command from the Agent's workspace tool: before it reads or acts on a
+   * tab, that tab gets the Agent's desktop-size view.
+   */
+  const command = async (input, context = {}) => {
     const value = input && typeof input === 'object' ? input : {};
     const action = String(value.action || '');
+    if (context.agent === true && AGENT_TAB_ACTIONS.has(action)) {
+      const tab = tabs.get(value.tabId || activeTabId || DEFAULT_TAB);
+      if (tab && !tab.destroyed) await prepareAgent(tab);
+    }
     switch (action) {
       case 'open': {
         // The page owns the tab id (`browser:<url>`); the host view is created under that id so both sides agree, and a
@@ -1244,7 +1435,21 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'downloads': {
         // Finished downloads and the ones still running, so a long download is visible while it happens.
         const running = [...tabs.values()].flatMap((tab) => [...tab.downloads.values()].map((entry) => ({ ...entry.record, state: 'progressing' })));
-        return { downloads: [...downloadLog.slice(-50), ...running].filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+        return { folder: app.getPath('downloads'), downloads: [...downloadLog.slice(-50), ...running].filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+      }
+      case 'download': {
+        // Fetch one link as a download in the tab's own session (its cookies and sign-in), the way "Save link as" does.
+        // A blob: or data: link the page made itself is accepted too; the answer waits for the file to arrive.
+        const tab = requireTab(value.tabId);
+        const raw = String(value.url || '').trim();
+        if (!raw) throw new Error('download 需要 url');
+        const url = /^(blob|data):/i.test(raw) ? raw : exports.httpUrl(raw);
+        const before = downloadSeq;
+        contentsOf(tab).downloadURL(url);
+        const timeout = Math.max(5000, Math.min(600000, Number(value.timeoutMs) || 120000));
+        const started = await awaitDownloads(tab, before, 15000, timeout);
+        if (!started.length) throw new Error('这个链接没有开始下载（可能需要页面里的点击、登录，或链接已失效）');
+        return { folder: app.getPath('downloads'), downloads: started };
       }
       case 'download-cancel': {
         for (const tab of tabs.values()) {

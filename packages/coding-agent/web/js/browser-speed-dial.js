@@ -9,6 +9,15 @@ import { dissolveGroup, groupWith, moveEntry, moveInGroup, removeEntry, renameGr
 
 // ---- Drawing ---------------------------------------------------------------------------------------------------
 
+/** The host a shortcut saved without a name goes by in its tooltip. */
+const siteHost = (url) => {
+	try {
+		return new URL(url).hostname.replace(/^www\./, "");
+	} catch {
+		return url;
+	}
+};
+
 function SiteIcon({ site, size = "" }) {
 	const [failed, setFailed] = useState(null);
 	if (site.icon && failed !== site.icon) return html`<img class=${`sd-favicon ${size}`} src=${site.icon} alt="" draggable="false" onError=${() => setFailed(site.icon)} />`;
@@ -26,6 +35,8 @@ function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenG
 	const isGroup = entry.type === "group";
 	const zone = drag && drag.over === entry.id && drag.id !== entry.id ? drag.zone : "";
 	const title = isGroup ? entry.title || t("Group") : entry.title;
+	// A site saved without a name shows its icon alone; the tooltip and the accessible name still say what it is.
+	const name = isGroup ? title : entry.title || siteHost(entry.url);
 	return html`<div class=${`sd-tile ${zone ? `drop-${zone}` : ""} ${drag?.id === entry.id ? "dragging" : ""}`}
 		draggable="true"
 		onDragStart=${(event) => {
@@ -49,7 +60,7 @@ function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenG
 			if (drag && drag.id !== entry.id) onDropOn(drag, entry, drag.zone || "before");
 			setDrag(null);
 		}}>
-		<button type="button" class="sd-button" title=${isGroup ? title : `${entry.title}\n${entry.url}`}
+		<button type="button" class="sd-button" title=${isGroup ? title : `${name}\n${entry.url}`} aria-label=${name}
 			onClick=${() => (isGroup ? onOpenGroup(entry.id) : onOpen(entry.url, false))}
 			onAuxClick=${(event) => {
 				if (event.button !== 1 || isGroup) return;
@@ -65,7 +76,7 @@ function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenG
 					? entry.items.slice(0, 4).map((site) => html`<${SiteIcon} key=${site.id} site=${site} size="mini" />`)
 					: html`<${SiteIcon} site=${entry} />`}
 			</span>
-			<span class="sd-label">${title}</span>
+			${title ? html`<span class="sd-label">${title}</span>` : html`<span class="sd-label" aria-hidden="true"></span>`}
 		</button>
 	</div>`;
 }
@@ -83,7 +94,8 @@ function ShortcutEditor({ draft, bookmarks, present, onSave, onCancel }) {
 	const submit = (event) => {
 		event.preventDefault();
 		if (!href) return;
-		onSave({ title: title.trim() || new URL(href).hostname.replace(/^www\./, ""), url: href });
+		// An empty name is kept empty: the shortcut then shows its icon alone.
+		onSave({ title: title.trim(), url: href });
 	};
 	return html`<form class="sd-editor" onSubmit=${submit} onKeyDown=${(event) => {
 		if (event.key === "Escape") {
@@ -92,7 +104,7 @@ function ShortcutEditor({ draft, bookmarks, present, onSave, onCancel }) {
 		}
 	}}>
 		<strong>${draft.id ? t("Edit shortcut") : t("Add shortcut")}</strong>
-		<label class="sd-field"><span class="dim">${t("Name")}</span><input class="field" ref=${nameRef} value=${title} maxlength="80" onInput=${(event) => setTitle(event.target.value)} /></label>
+		<label class="sd-field"><span class="dim">${t("Name")}</span><input class="field" ref=${nameRef} value=${title} maxlength="80" placeholder=${t("Leave empty to show only the icon")} onInput=${(event) => setTitle(event.target.value)} /></label>
 		<label class="sd-field"><span class="dim">${t("Address")}</span><input class="field" value=${url} spellcheck="false" placeholder="https://" onInput=${(event) => setUrl(event.target.value)} /></label>
 		${choices.length
 			? html`<div class="sd-choices"><span class="dim">${t("From bookmarks")}</span><div class="sd-choice-row">${choices.map(

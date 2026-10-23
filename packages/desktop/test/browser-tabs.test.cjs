@@ -27,7 +27,7 @@ function loadBrowser() {
       isLoading: () => false,
       getURL() { return this.url; },
       reload() {}, stop() {},
-      debugger: { isAttached: () => false, attach() {}, detach() {}, sendCommand: async () => ({ nodes: [] }) },
+      debugger: { isAttached: () => false, attach() {}, detach() {}, on() {}, sendCommand: async () => ({ nodes: [] }) },
       close() { webContents.closed = true; },
       handlers,
     };

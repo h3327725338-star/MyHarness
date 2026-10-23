@@ -138,7 +138,7 @@ function startService(restart) {
     if (message?.type === 'myharness:browser-command') {
       const requestId = String(message.requestId || '');
       Promise.resolve()
-        .then(() => (message.action === 'workspace' ? workspaceRequest(message.command, Number(message.timeoutMs) || 15000) : browser.command(message.command)))
+        .then(() => (message.action === 'workspace' ? workspaceRequest(message.command, Number(message.timeoutMs) || 15000) : browser.command(message.command, { agent: true })))
         .then((value) => { try { child.send({ type: 'myharness:browser-result', requestId, ok: true, value }); } catch (error) { log(`无法回传浏览器命令结果：${error.message}`); } })
         .catch((error) => { try { child.send({ type: 'myharness:browser-result', requestId, ok: false, error: error?.message || String(error) }); } catch { /* child already gone */ } });
       return;

@@ -22,7 +22,8 @@ function loadHost() {
     const webContents = {
       id: nextId++,
       url: '',
-      on() { return this; },
+      handlers: {},
+      on(name, handler) { this.handlers[name] = handler; return this; },
       setWindowOpenHandler() {},
       async loadURL(url) { this.url = url; },
       executeJavaScript: async (code) => {
@@ -31,7 +32,11 @@ function loadHost() {
         if (code.includes('activeElement')) return { tag: 'input', value: 'typed' };
         return null;
       },
-      executeJavaScriptInIsolatedWorld: async (world, scripts) => { webContents.isolated.push({ world, code: scripts[0].code }); },
+      executeJavaScriptInIsolatedWorld: async (world, scripts) => {
+        webContents.isolated.push({ world, code: scripts[0].code });
+        // Where the input-scale probe landed: set by a test, undefined (no measurement) otherwise.
+        return scripts[0].code === 'window.__myharnessProbe.x' ? webContents.probeX : undefined;
+      },
       capturePage: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('visible'), toJPEG: () => Buffer.from('jpg') }),
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       isDestroyed: () => false,
@@ -43,6 +48,7 @@ function loadHost() {
         isAttached() { return this.attached; },
         attach() { this.attached = true; },
         detach() { this.attached = false; },
+        on() {},
         sendCommand: async (method, params) => {
           cdp.push({ id: webContents.id, method, params });
           if (method === 'Page.captureScreenshot') return { data: Buffer.from('cdp-png').toString('base64') };
@@ -57,7 +63,7 @@ function loadHost() {
   const desktopSession = {
     setPermissionRequestHandler(handler) { permission.request = handler; },
     setPermissionCheckHandler(handler) { permission.check = handler; },
-    on() {},
+    on(name, handler) { desktopSession[name] = handler; },
     webRequest: { onCompleted() {}, onErrorOccurred() {} },
   };
   const electron = {
@@ -93,7 +99,7 @@ function loadHost() {
   };
   const browser = module.exports.createBrowser(window, () => {}, { profileDir });
   const cleanup = () => { browser.destroy(); fs.rmSync(profileDir, { recursive: true, force: true }); };
-  return { browser, events, cdp, permission, cleanup };
+  return { browser, events, cdp, permission, desktopSession, cleanup };
 }
 
 test('keys: names and combinations become the key events of a real key press', () => {
@@ -126,7 +132,7 @@ test('speed dial: seeds from bookmarks, keeps groups, drops unsafe entries and r
     ]);
     assert.equal(saved.length, 2);
     assert.equal(saved[0].items.length, 1);
-    assert.equal(saved[1].title, 'news.example');
+    assert.equal(saved[1].title, '', 'a shortcut saved without a name stays icon-only');
     assert.deepEqual(store.missingIcons().map((site) => site.url), ['https://docs.example/', 'https://news.example/']);
     assert.equal(store.setIcon(saved[1].id, null), true);
     assert.equal(store.setIcon(saved[0].items[0].id, 'data:image/png;base64,AA=='), true);
@@ -146,7 +152,7 @@ test('a background tab has a real viewport and is captured through the page comp
     const hidden = await browser.command({ action: 'ensure', tabId: 'bg', url: 'https://b.example/' });
     const view = browser.tabs.find((tab) => tab.id === 'bg').view;
     assert.equal(view.getVisible(), false);
-    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 900, height: 700 }, 'the hidden tab gets the size the visible tab has');
+    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 1280, height: 800 }, 'a hidden tab is never laid out smaller than the Agent desktop size');
     const shot = await browser.command({ action: 'snapshot', tabId: hidden.tabId });
     assert.equal(Buffer.from(shot.snapshot.split(',')[1], 'base64').toString(), 'cdp-png');
     assert.equal(shot.width, 800);
@@ -234,6 +240,88 @@ test('speed dial commands save the layout and tell every page', async () => {
     const saved = await browser.command({ action: 'speeddial-save', items: [{ type: 'site', title: 'A', url: 'https://a.example/' }] });
     assert.equal(saved.items.length, 1);
     assert.equal(events.some((event) => event.type === 'speeddial' && event.items.length === 1), true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('in a narrow panel the Agent drives the visible tab at a desktop size drawn scaled down; a person taking over hands it back', async () => {
+  const { browser, cdp, cleanup } = loadHost();
+  try {
+    const rect = { x: 700, y: 10, width: 426, height: 780 };
+    const opened = await browser.command({ action: 'open', url: 'https://a.example/', rect });
+    const tab = browser.tabs.find((entry) => entry.id === opened.tabId);
+    const metrics = () => cdp.filter((entry) => entry.method.startsWith('Emulation.'));
+    await browser.command({ action: 'exec', tabId: tab.id, code: '1' });
+    assert.equal(metrics().length, 0, 'the page itself never switches the view');
+    await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
+    const scale = Math.round((426 / 1280) * 10000) / 10000;
+    assert.deepEqual(metrics()[0], { id: tab.view.webContents.id, method: 'Emulation.setDeviceMetricsOverride', params: { width: 1280, height: 800, deviceScaleFactor: 0, mobile: false, scale } });
+    assert.deepEqual(tab.view.bounds, { x: 700, y: 10, width: 426, height: 266 }, 'the view shrinks to the scaled desktop picture');
+    assert.equal(tab.view.webContents.debugger.isAttached(), true, 'the override lives on a debugger session that stays attached');
+    assert.deepEqual((await browser.command({ action: 'state', tabId: tab.id })).agentView, { width: 1280, height: 800, scale });
+
+    // The engine takes input in the view's own pixels here: the probe lands at 3x the point it was sent to.
+    tab.view.webContents.probeX = 300;
+    cdp.length = 0;
+    await browser.command({ action: 'mouse', tabId: tab.id, kind: 'click', x: 600, y: 300 }, { agent: true });
+    const pressed = cdp.find((entry) => entry.params?.type === 'mousePressed').params;
+    assert.ok(Math.abs(pressed.x - 600 * scale) < 1e-6 && Math.abs(pressed.y - 300 * scale) < 1e-6, `page point mapped to view pixels: ${pressed.x},${pressed.y}`);
+
+    // A person's own click (not one of the Agent's) gives the page its panel size back.
+    tab.agentInputAt = 0;
+    cdp.length = 0;
+    tab.view.webContents.handlers['input-event']({}, { type: 'mouseDown' });
+    await tab.fitChain;
+    assert.deepEqual(metrics().map((entry) => entry.method), ['Emulation.clearDeviceMetricsOverride']);
+    assert.deepEqual(tab.view.bounds, { x: 700, y: 10, width: 426, height: 780 });
+    assert.equal(tab.view.webContents.debugger.isAttached(), false);
+
+    // A wide panel needs no scaled view even while the Agent drives the tab.
+    await browser.command({ action: 'bounds', tabId: tab.id, rect: { x: 100, y: 10, width: 1080, height: 780 } });
+    cdp.length = 0;
+    await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
+    assert.equal(metrics().length, 0);
+    assert.deepEqual(tab.view.bounds, { x: 100, y: 10, width: 1080, height: 780 });
+  } finally {
+    cleanup();
+  }
+});
+
+test('a click that starts a download waits for the file and reports where it was saved', async () => {
+  const { browser, desktopSession, cleanup } = loadHost();
+  try {
+    await browser.command({ action: 'ensure', tabId: 't1', url: 'https://a.example/' });
+    const tab = browser.tabs.find((entry) => entry.id === 't1');
+    tab.view.webContents.executeJavaScript = async (code) => {
+      if (code.includes('innerWidth')) return { width: 800, height: 600 };
+      if (code.includes('elementFromPoint')) return { tag: 'div', role: 'button', text: '下载“report.docx”' };
+      return null;
+    };
+    const listeners = {};
+    const item = {
+      getFilename: () => 'report.docx', getURL: () => 'https://a.example/report.docx', getTotalBytes: () => 10, getReceivedBytes: () => 10,
+      setSavePath(value) { this.path = value; }, getSavePath() { return this.path; }, cancel() {},
+      on(name, handler) { listeners[name] = handler; }, once(name, handler) { listeners[name] = handler; },
+    };
+    // The page starts the download a moment after the click and it finishes shortly after.
+    setTimeout(() => {
+      desktopSession['will-download']({}, item, tab.view.webContents);
+      setTimeout(() => listeners.done({}, 'completed'), 300);
+    }, 500);
+    const clicked = await browser.command({ action: 'mouse', tabId: 't1', kind: 'click', x: 30, y: 40 }, { agent: true });
+    assert.equal(clicked.downloads.length, 1);
+    assert.equal(clicked.downloads[0].state, 'completed');
+    assert.equal(path.basename(clicked.downloads[0].savePath), clicked.downloads[0].name);
+    assert.match(clicked.downloads[0].name, /^report.*\.docx$/);
+
+    // An ordinary click does not wait long for a download that never comes.
+    tab.view.webContents.executeJavaScript = async (code) => (code.includes('innerWidth') ? { width: 800, height: 600 } : code.includes('elementFromPoint') ? { tag: 'div', text: 'Inbox' } : null);
+    const started = Date.now();
+    const plain = await browser.command({ action: 'mouse', tabId: 't1', kind: 'click', x: 30, y: 40 }, { agent: true });
+    assert.equal(plain.downloads, undefined);
+    assert.ok(Date.now() - started < 1500);
+    assert.equal((await browser.command({ action: 'downloads' })).folder, os.tmpdir());
   } finally {
     cleanup();
   }

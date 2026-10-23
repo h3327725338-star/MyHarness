@@ -20,13 +20,18 @@ an in-memory Drive, and no live Google account is used by the automated checks.
 | Files inside a Drive-managed workspace | No, the Google Drive client syncs them |
 | Coding-mode repository files, worktrees and build output | No |
 | General-mode drafts and the General personal prompt | Yes |
+| Saved prompts of the Web UI (Session panel → My prompts) | Yes, only that list; other Web UI preferences stay on each device |
 | Coding-mode chats, repositories, worktrees | No |
 | API keys, OAuth tokens, trust decisions, tool permissions, locks, running tasks | No |
 | Memory catalogs (`memory/index.json`, `memory/state.json`, `maintenance.*`), bridge descriptors and write locks | No |
 
 Archive and pin markers (`<conversation>.jsonl.archived`, `.pinned`) travel with the chat, so the other device shows
 the same archived and pinned state. An empty General prompt or draft is represented as a deletion, so clearing it on one
-device clears it on the others; retyping it afterwards is a newer version and is applied again.
+device clears it on the others; retyping it afterwards is a newer version and is applied again. The saved prompts work the same way (record
+`saved-prompts:web`): an emptied list is a deletion. An arriving list replaces `prefs.savedPrompts` in
+`<agentDir>/web-ui-prefs.json` with a newer `updatedAt` and keeps every other preference; open pages read it again on
+`sync_applied`. Devices running an older version ignore this record. Both devices changing the list before syncing is
+a conflict like any other non-chat record: the local list stays and the other one is kept as a copy.
 
 ## Setup
 

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readWebPrefs, writeWebPrefs } from "../src/config/web-prefs.ts";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { ModeStateStore } from "../src/session/mode-state.ts";
 import { detectExternalSyncRisk, SyncEngine } from "../src/sync/engine.ts";
@@ -774,6 +775,45 @@ describe("Google Drive sync engine", () => {
 		aState.setPersonalPrompt("general", "second");
 		await sync(a, b);
 		expect(new ModeStateStore(b.agentDir).getPersonalPrompt("general")).toBe("second");
+	});
+
+	it("carries the saved prompts list between devices and leaves every other preference alone", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const b = device(drive, "laptop", "device-b");
+		const prefsOf = (agentDir: string) => readWebPrefs(agentDir)!;
+		writeWebPrefs(a.agentDir, {
+			prefs: {
+				theme: "dark",
+				savedPrompts: ["Review this\nby severity", { title: "Translate", text: "Into English" }],
+			},
+			updatedAt: 1000,
+		});
+		writeWebPrefs(b.agentDir, { prefs: { theme: "light", panelW: 480 }, updatedAt: 5000 });
+		await sync(a, b);
+		const onB = prefsOf(b.agentDir);
+		expect(onB.prefs.savedPrompts).toEqual([
+			{ title: "Review this", text: "Review this\nby severity" },
+			{ title: "Translate", text: "Into English" },
+		]);
+		expect(onB.prefs.theme).toBe("light");
+		expect(onB.prefs.panelW).toBe(480);
+		// A page that saved its preferences before the list arrived must not be able to write the old list back.
+		expect(onB.updatedAt).toBeGreaterThan(5000);
+		// The personal prompt is a different record and stays untouched.
+		expect(new ModeStateStore(b.agentDir).getPersonalPrompt("general")).toBe("");
+
+		// Edited on the second device, emptied on the first one: both changes travel.
+		writeWebPrefs(b.agentDir, {
+			prefs: { ...onB.prefs, savedPrompts: [{ title: "Only", text: "One left" }] },
+			updatedAt: Date.now(),
+		});
+		await sync(b, a);
+		expect(prefsOf(a.agentDir).prefs.savedPrompts).toEqual([{ title: "Only", text: "One left" }]);
+		writeWebPrefs(a.agentDir, { prefs: { ...prefsOf(a.agentDir).prefs, savedPrompts: [] }, updatedAt: Date.now() });
+		await sync(a, b);
+		expect(prefsOf(b.agentDir).prefs.savedPrompts).toEqual([]);
+		expect(prefsOf(b.agentDir).prefs.theme).toBe("light");
 	});
 });
 

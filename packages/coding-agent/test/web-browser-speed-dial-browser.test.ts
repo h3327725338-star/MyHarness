@@ -142,10 +142,11 @@ try {
 	fields[1].dispatchEvent(new Event('input',{bubbles:true}));
 	await wait(30);
 	document.querySelector('.sd-editor button[type=submit]').click();
-	check(await until(()=>saves().length===5&&saves()[4].items.some(i=>i.url==='https://example.org/')),'the typed shortcut was not saved: '+JSON.stringify(saves().at(-1)));
+	check(await until(()=>saves().length===5&&saves()[4].items.some(i=>i.url==='https://example.org/'&&i.title==='')),'the typed shortcut without a name was not saved icon-only: '+JSON.stringify(saves().at(-1)));
 
 	mark('open-site');
-	const alphaLess=tiles().find(tile=>label(tile)==='example.org');
+	const alphaLess=tiles().find(tile=>tile.querySelector('.sd-button')?.getAttribute('aria-label')==='example.org');
+	check(alphaLess&&label(alphaLess)==='','a shortcut without a name should show its icon alone, named by its host for assistive technology');
 	alphaLess.querySelector('.sd-button').click();
 	check(await until(()=>calls.some(c=>c.action==='ensure'&&c.url==='https://example.org/')),'clicking a shortcut did not open it in this tab');
 

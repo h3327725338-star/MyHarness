@@ -13,7 +13,7 @@
 | `types.ts` | 同步协议：实体种类、版本向量、记录、批次、墓碑、冲突、本机状态、状态快照、`DrivePort` 窄接口 |
 | `util.ts` | SHA-256、原子 JSON 写、0600 私有写、版本向量比较/合并、稳定 JSON、字节与文本转换 |
 | `store.ts` | 本机持久化：`<agentDir>/sync/config.json`、按账号隔离的 `state-<hash>.json`、`credentials.json`（0600）、备份与恢复副本 |
-| `scope.ts` | 扫描同步范围：全部记忆（含归档、pending）、通用模式工作区/会话/附件/产物/资料/工具结果、通用个人指令与草稿 |
+| `scope.ts` | 扫描同步范围：全部记忆（含归档、pending）、通用模式工作区/会话/附件/产物/资料/工具结果、通用个人指令与草稿、Web UI 常用提示词列表（`saved-prompts.ts`，只同步 `web-ui-prefs.json` 里的 `savedPrompts`） |
 | `apply.ts` | 应用远端内容：记忆写入（memory 锁）、会话 JSONL 按 entry id 合并、文件原子写、工作区身份导入与本机绑定、草稿/指令写入、显式删除 |
 | `engine.ts` | 同步引擎：拉取→推送、批次发布、对象上传/校验、版本向量判定、墓碑、冲突保留、活动会话延期、后台定时与文件监听、引擎锁 |
 | `google.ts` | Google OAuth（桌面应用 + PKCE + loopback）与 Drive v3 客户端（可见 `MyHarness` 文件夹、`sync-v1` 布局、multipart 上传、媒体下载） |
@@ -54,7 +54,7 @@ MyHarness/
 
 ### 依赖
 
-- 依赖：`config/paths`、`data/workspace-store.ts`（工作区身份导入与绑定）、`session/mode-state.ts`（通用指令与草稿）、`session/memory/store.ts`（记忆锁、归档与索引）、`session/storage/jsonl`（会话头与条目解析）、`utils/atomic-write`、`utils/open-browser`。
+- 依赖：`config/paths`、`config/web-prefs.ts`（常用提示词所在的 Web UI 偏好文件）、`data/workspace-store.ts`（工作区身份导入与绑定）、`session/mode-state.ts`（通用指令与草稿）、`session/memory/store.ts`（记忆锁、归档与索引）、`session/storage/jsonl`（会话头与条目解析）、`utils/atomic-write`、`utils/open-browser`。
 - 被依赖：`modes/web/web-mode.ts`（创建服务、注册路由、关闭时释放）、`modes/web/routes-sync.ts`。
 - 不依赖：Agent runtime、模型调用、工具执行。应用远端内容只写文件与状态，不触发模型、记忆提取或命令执行。
 

@@ -364,6 +364,25 @@ const workspaceParametersUnion = Type.Union([
 	),
 	Type.Object({ operation: Type.Literal("screenshot"), tabId: tabIdSchema }, { additionalProperties: false }),
 	Type.Object({ operation: Type.Literal("downloads"), tabId: tabIdSchema }, { additionalProperties: false }),
+	Type.Object(
+		{
+			operation: Type.Literal("download"),
+			tabId: tabIdSchema,
+			url: Type.String({
+				minLength: 1,
+				description:
+					"Link to save as a file with the tab's cookies and sign-in (http/https, or a blob:/data: link of that page)",
+			}),
+			timeoutMs: Type.Optional(
+				Type.Integer({
+					minimum: 5000,
+					maximum: 600000,
+					description: "Wait for the file up to this long (default 120000)",
+				}),
+			),
+		},
+		{ additionalProperties: false },
+	),
 	Type.Object({ operation: Type.Literal("network"), tabId: tabIdSchema }, { additionalProperties: false }),
 	Type.Object(
 		{
@@ -563,7 +582,9 @@ export function createWorkspaceToolDefinition(
 		description: [
 			"Control the MyHarness desktop workspace: the right-hand panel, the file and media tabs in it, and the built-in browser.",
 			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open (`background: true` keeps the user's view where it is); `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
-			"Every browser command takes a `tabId` and works on that tab whether or not it is on screen, so several tabs can be driven side by side: navigate/back/forward/reload/stop, text/dom/ax/interactive, find/stop_find, upload, exec, screenshot, downloads and network.",
+			"Every browser command takes a `tabId` and works on that tab whether or not it is on screen, so several tabs can be driven side by side: navigate/back/forward/reload/stop, text/dom/ax/interactive, find/stop_find, upload, exec, screenshot, downloads, download and network.",
+			"You browse at a desktop size (at least 1280×800) whatever the width of the user's panel, so sites give you their desktop layout; a narrow panel only shows your page scaled down.",
+			"Files: a click that starts a download waits for it and its result gives the saved file's path (files go to the user's Downloads folder, so there is nothing to search for). `download` saves a link directly with the tab's sign-in and returns the path; `downloads` lists recent ones. Move or copy the file afterwards if it belongs elsewhere.",
 			'Your own mouse and keyboard: `screenshot` returns the picture of the tab; its pixels are the page\'s CSS pixels, so `mouse` (click/double_click/right_click/move/drag/wheel at x,y) hits exactly the point seen in it - images, canvases and custom controls included. `key` presses keys or combinations ("Control+A", "Enter"), `type` types into the focused element (or clicks x,y first). Selector/index clicks from `interactive` still work.',
 			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",
@@ -751,29 +772,41 @@ export function createWorkspaceToolDefinition(
 				case "mouse": {
 					const id = await resolveBrowserTab(tabId);
 					const fieldsIn = input as Record<string, unknown>;
-					const value = (await browser({
-						action: "mouse",
-						tabId: id,
-						kind: fieldsIn.action,
-						x: fieldsIn.x,
-						y: fieldsIn.y,
-						toX: fieldsIn.toX,
-						toY: fieldsIn.toY,
-						deltaX: fieldsIn.deltaX,
-						deltaY: fieldsIn.deltaY,
-						button: fieldsIn.button,
-						modifiers: fieldsIn.modifiers,
-					})) as { ok?: boolean; target?: Record<string, unknown>; viewport?: { width: number; height: number } };
+					const value = (await browser(
+						{
+							action: "mouse",
+							tabId: id,
+							kind: fieldsIn.action,
+							x: fieldsIn.x,
+							y: fieldsIn.y,
+							toX: fieldsIn.toX,
+							toY: fieldsIn.toY,
+							deltaX: fieldsIn.deltaX,
+							deltaY: fieldsIn.deltaY,
+							button: fieldsIn.button,
+							modifiers: fieldsIn.modifiers,
+							// A click that starts a download waits for the file, so it may take longer than other commands.
+						},
+						SLOW_TIMEOUT_MS,
+					)) as {
+						ok?: boolean;
+						target?: Record<string, unknown>;
+						viewport?: { width: number; height: number };
+						downloads?: unknown[];
+					};
 					if (!value?.ok) throw new Error("workspace: the mouse action returned no result");
 					const where =
 						fieldsIn.action === "drag"
 							? `(${fieldsIn.x}, ${fieldsIn.y}) → (${fieldsIn.toX}, ${fieldsIn.toY})`
 							: `(${fieldsIn.x}, ${fieldsIn.y})`;
+					const started = value.downloads?.length
+						? `\n  downloads started by this click=${value.downloads.length}\n${JSON.stringify(value.downloads, null, 1)}`
+						: "";
 					return {
 						content: [
 							{
 								type: "text",
-								text: `[workspace] mouse ${String(fieldsIn.action)} ${where} in ${id}${value.target ? ` on ${JSON.stringify(value.target)}` : ""}`,
+								text: `[workspace] mouse ${String(fieldsIn.action)} ${where} in ${id}${value.target ? ` on ${JSON.stringify(value.target)}` : ""}${started}`,
 							},
 						],
 						details: { operation, activeId: id, result: value },
@@ -1210,13 +1243,37 @@ export function createWorkspaceToolDefinition(
 					};
 				}
 				case "downloads": {
-					const value = await browser({ action: "downloads", tabId });
-					const list = (value as { downloads?: unknown[] })?.downloads || [];
+					const value = (await browser({ action: "downloads", tabId })) as {
+						downloads?: unknown[];
+						folder?: string;
+					};
+					const list = value?.downloads || [];
 					return {
 						content: [
-							{ type: "text", text: `[workspace] downloads=${list.length}\n${JSON.stringify(list, null, 1)}` },
+							{
+								type: "text",
+								text: `[workspace] downloads=${list.length} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
+							},
 						],
 						details: { operation, result: list },
+					};
+				}
+				case "download": {
+					const id = await resolveBrowserTab(tabId);
+					const wait = Number((input as { timeoutMs?: number }).timeoutMs) || 120_000;
+					const value = (await browser(
+						{ action: "download", tabId: id, url: (input as { url?: string }).url, timeoutMs: wait },
+						wait + 30_000,
+					)) as { downloads?: unknown[]; folder?: string };
+					const list = value?.downloads || [];
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] download in ${id} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
+							},
+						],
+						details: { operation, activeId: id, result: list },
 					};
 				}
 				case "network": {

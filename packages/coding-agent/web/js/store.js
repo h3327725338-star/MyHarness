@@ -19,6 +19,7 @@ import { playNotificationSound } from "./notification-sounds.js";
 import { showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
+import { savedPromptsOf } from "./saved-prompts.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
 import { createSseWatchdog, isDeadStream } from "./sse-watchdog.js";
@@ -307,7 +308,7 @@ export const state = {
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
 		lang: normalizeLang(prefs.lang),
 		/** The user's own prompts (Session panel → My prompts); a click puts one into the input. */
-		savedPrompts: Array.isArray(prefs.savedPrompts) ? prefs.savedPrompts.filter((text) => typeof text === "string" && text.trim()) : [],
+		savedPrompts: savedPromptsOf(prefs.savedPrompts),
 		/** Website tabs show only their site icon (the name stays in the tooltip). */
 		wsTabIconsOnly: prefs.wsTabIconsOnly === true,
 		/** Site icons of website tabs by origin, as the desktop host reported them (not saved: they come back on load). */
@@ -537,6 +538,18 @@ export function useStore(selector = (s) => s) {
 // Requests that can wait on a half-dead server pass a budget. Without one an await can hang forever and the only
 // feedback is a spinner or a button that does nothing, so every request that gates a screen carries a timeout.
 export const REQUEST_TIMEOUT = { snapshot: 20_000, transcript: 60_000, session: 60_000, status: 15_000, worktrees: 20_000, branches: 15_000 };
+/**
+ * Saved prompts another device sent through Google Drive sync land in the shared preferences copy. Take that list, so
+ * a later save of this page's preferences keeps it instead of writing the old one back.
+ */
+async function loadSyncedPrompts() {
+	const stored = await api("/api/web-prefs");
+	if (!stored?.prefs) return;
+	const next = savedPromptsOf(stored.prefs.savedPrompts);
+	if (JSON.stringify(next) === JSON.stringify(state.view.savedPrompts)) return;
+	setView({ savedPrompts: next });
+}
+
 export async function api(path, options = {}) {
 	const slot = options.slot ?? targetSlot ?? activeSlot;
 	if (String(slot ?? "").startsWith("pending:")) throw new Error(t("Loading…"));
@@ -2043,6 +2056,7 @@ function connectEvents() {
 		await attempt(() => loadWorkspaces(), { quiet: true });
 		await attempt(() => loadSnapshot(slot ?? activeSlot), { quiet: true });
 		await attempt(() => loadModeState(), { quiet: true });
+		await attempt(() => loadSyncedPrompts(), { quiet: true });
 		const roots = Object.keys(state.workspaces?.sessions ?? {});
 		await Promise.all(roots.map((root) => attempt(() => loadSessions(root), { quiet: true })));
 	});

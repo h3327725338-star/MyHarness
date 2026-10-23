@@ -7,33 +7,11 @@
  * (the page's clock); a write older than the stored one is ignored so a late request cannot undo a newer change.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { writeFileAtomicallySync } from "../../utils/atomic-write.ts";
+import { isRecord, readWebPrefs, type StoredWebPrefs, writeWebPrefs } from "../../config/web-prefs.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
-export const WEB_PREFS_FILE = "web-ui-prefs.json";
-
-export interface StoredWebPrefs {
-	prefs: Record<string, unknown>;
-	updatedAt: number;
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** The stored preferences, or null when there are none yet or the file cannot be read. */
-export function readWebPrefs(agentDir: string): StoredWebPrefs | null {
-	const file = join(agentDir, WEB_PREFS_FILE);
-	if (!existsSync(file)) return null;
-	try {
-		const data = JSON.parse(readFileSync(file, "utf8")) as unknown;
-		if (!isRecord(data) || !isRecord(data.prefs) || typeof data.updatedAt !== "number") return null;
-		return { prefs: data.prefs, updatedAt: data.updatedAt };
-	} catch {
-		return null;
-	}
-}
+// The file itself lives in config/web-prefs.ts, shared with Google Drive sync (saved prompts travel between devices).
+export { readWebPrefs, type StoredWebPrefs, WEB_PREFS_FILE } from "../../config/web-prefs.ts";
 
 export function registerWebPrefsRoutes(server: WebHttpServer, agentDir: () => string): void {
 	server.route("GET", "/api/web-prefs", () => readWebPrefs(agentDir()) ?? { prefs: null, updatedAt: 0 });
@@ -56,9 +34,7 @@ export function registerWebPrefsRoutes(server: WebHttpServer, agentDir: () => st
 		const current = readWebPrefs(agentDir());
 		if (current && current.updatedAt > payload.updatedAt) return { ok: false, stale: true, ...current };
 		const next: StoredWebPrefs = { prefs: payload.prefs, updatedAt: payload.updatedAt };
-		const file = join(agentDir(), WEB_PREFS_FILE);
-		mkdirSync(dirname(file), { recursive: true });
-		writeFileAtomicallySync(file, `${JSON.stringify(next, null, "\t")}\n`);
+		writeWebPrefs(agentDir(), next);
 		return { ok: true, ...next };
 	});
 }
