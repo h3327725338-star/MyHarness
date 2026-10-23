@@ -17,6 +17,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@myharness/agent-core";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt } from "../system-prompts/loader/index.ts";
+import { processImage } from "../utils/image-process.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -165,12 +166,25 @@ const workspaceParametersUnion = Type.Union([
 			operation: Type.Literal("open"),
 			type: Type.Union([Type.Literal("browser"), Type.Literal("file")]),
 			url: Type.Optional(Type.String({ minLength: 1, description: "http(s) URL for type=browser" })),
+			bookmark: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description:
+						"type=browser: open a bookmark instead of a url (its id, or its exact title; see operation bookmarks)",
+				}),
+			),
+			background: Type.Optional(
+				Type.Boolean({
+					description: "type=browser: open without switching the user's view to it (default false)",
+				}),
+			),
 			path: Type.Optional(
 				Type.String({ minLength: 1, description: "File path for type=file (workspace relative or absolute)" }),
 			),
 		},
 		{ additionalProperties: false },
 	),
+	Type.Object({ operation: Type.Literal("bookmarks") }, { additionalProperties: false }),
 	Type.Object(
 		{ operation: Type.Literal("close"), tabId: Type.String({ minLength: 1 }) },
 		{ additionalProperties: false },
@@ -231,7 +245,64 @@ const workspaceParametersUnion = Type.Union([
 			tabId: tabIdSchema,
 			selector: Type.Optional(Type.String({ minLength: 1 })),
 			index: Type.Optional(Type.Integer({ minimum: 0 })),
-			text: Type.String(),
+			x: Type.Optional(Type.Number({ description: "Click this point first (CSS px of the screenshot), then type" })),
+			y: Type.Optional(Type.Number()),
+			text: Type.String({
+				description:
+					"With selector/index the field's value is set; otherwise the text is typed into the focused element",
+			}),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("mouse"),
+			tabId: tabIdSchema,
+			action: Type.Union(
+				[
+					Type.Literal("click"),
+					Type.Literal("double_click"),
+					Type.Literal("right_click"),
+					Type.Literal("move"),
+					Type.Literal("down"),
+					Type.Literal("up"),
+					Type.Literal("drag"),
+					Type.Literal("wheel"),
+				],
+				{ description: "move = hover" },
+			),
+			x: Type.Number({ description: "CSS px from the left of the page viewport (same frame as screenshot)" }),
+			y: Type.Number({ description: "CSS px from the top of the page viewport" }),
+			toX: Type.Optional(Type.Number({ description: "drag: end point" })),
+			toY: Type.Optional(Type.Number()),
+			deltaX: Type.Optional(Type.Number({ description: "wheel: horizontal scroll in px" })),
+			deltaY: Type.Optional(Type.Number({ description: "wheel: vertical scroll in px (positive = down)" })),
+			button: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right"), Type.Literal("middle")])),
+			modifiers: Type.Optional(
+				Type.Array(
+					Type.Union([Type.Literal("Control"), Type.Literal("Shift"), Type.Literal("Alt"), Type.Literal("Meta")]),
+				),
+			),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("key"),
+			tabId: tabIdSchema,
+			keys: Type.String({
+				minLength: 1,
+				description: 'Space-separated keys or combinations, e.g. "Enter", "Control+A Backspace", "Shift+Tab"',
+			}),
+			repeat: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("login"),
+			tabId: tabIdSchema,
+			submit: Type.Optional(Type.Boolean({ description: "Submit the form after filling it (default true)" })),
 		},
 		{ additionalProperties: false },
 	),
@@ -262,6 +333,14 @@ const workspaceParametersUnion = Type.Union([
 			operation: Type.Literal("permissions"),
 			tabId: tabIdSchema,
 			origin: Type.Optional(Type.String({ minLength: 1, description: "Only this origin; omit for every origin" })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("answer_permission"),
+			requestId: Type.String({ minLength: 1, description: "A pending request id from permissions or state" }),
+			allow: Type.Boolean(),
 		},
 		{ additionalProperties: false },
 	),
@@ -337,7 +416,13 @@ export interface WorkspaceToolDetails {
 	page?: Record<string, unknown>;
 	browser?: unknown;
 	result?: unknown;
-	screenshot?: { path: string; bytes: number };
+	screenshot?: { path: string; bytes: number; width?: number; height?: number };
+}
+
+interface WorkspaceBookmark {
+	id: string;
+	title: string;
+	url: string;
 }
 
 function truncate(text: string, maxChars: number): { text: string; truncated: boolean } {
@@ -447,6 +532,11 @@ export function createWorkspaceToolDefinition(
 		);
 	};
 
+	const bookmarkList = async (): Promise<WorkspaceBookmark[]> => {
+		const value = (await browser({ action: "bookmarks" })) as { bookmarks?: WorkspaceBookmark[] };
+		return (value?.bookmarks || []).map((entry) => ({ id: entry.id, title: entry.title, url: entry.url }));
+	};
+
 	const mergedTabs = async (): Promise<{
 		tabs: WorkspaceTabSummary[];
 		activeId: string | null;
@@ -472,17 +562,22 @@ export function createWorkspaceToolDefinition(
 		label: "workspace",
 		description: [
 			"Control the MyHarness desktop workspace: the right-hand panel, the file and media tabs in it, and the built-in browser.",
-			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open; `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
-			"Browser tabs support navigate/back/forward/reload/stop, text/dom/ax/interactive, click/type/scroll by CSS selector or by the index from `interactive`, find/stop_find for in-page search, upload (a workspace file into the page's file input), exec (page JavaScript), screenshot (saved as a PNG file and returned by path), downloads and network. `permissions` reads the session's site-permission decisions and pending requests; granting or revoking them is a user action in the tab, never an Agent action.",
+			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open (`background: true` keeps the user's view where it is); `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
+			"Every browser command takes a `tabId` and works on that tab whether or not it is on screen, so several tabs can be driven side by side: navigate/back/forward/reload/stop, text/dom/ax/interactive, find/stop_find, upload, exec, screenshot, downloads and network.",
+			'Your own mouse and keyboard: `screenshot` returns the picture of the tab; its pixels are the page\'s CSS pixels, so `mouse` (click/double_click/right_click/move/drag/wheel at x,y) hits exactly the point seen in it - images, canvases and custom controls included. `key` presses keys or combinations ("Control+A", "Enter"), `type` types into the focused element (or clicks x,y first). Selector/index clicks from `interactive` still work.',
+			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",
-			"What it cannot do: grant site permissions (they are denied and reported), bypass CAPTCHAs, login walls or payment confirmations, or drive anything outside this app's workspace.",
+			"What it cannot do: solve CAPTCHAs or bot checks, see or type a saved password, confirm payments, or drive anything outside this app's workspace.",
 		].join("\n"),
 		promptSnippet: loadSystemPrompt("tools/workspace/snippet.md"),
 		parameters,
 		async execute(
 			_toolCallId,
 			input: WorkspaceToolInput,
-		): Promise<{ content: { type: "text"; text: string }[]; details: WorkspaceToolDetails }> {
+		): Promise<{
+			content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+			details: WorkspaceToolDetails;
+		}> {
 			const operation = String(input?.operation || "");
 			const fields = input as Record<string, unknown>;
 			const tabId = typeof fields.tabId === "string" ? fields.tabId : undefined;
@@ -521,19 +616,39 @@ export function createWorkspaceToolDefinition(
 				case "open": {
 					const type = String((input as { type?: string }).type || "");
 					if (type === "browser") {
-						const url = String((input as { url?: string }).url || "");
+						const wanted = String((input as { bookmark?: string }).bookmark || "");
+						let url = String((input as { url?: string }).url || "");
+						if (wanted) {
+							const list = await bookmarkList();
+							const match =
+								list.find((entry) => entry.id === wanted) ||
+								list.find((entry) => entry.title === wanted) ||
+								list.find((entry) => entry.title.toLowerCase() === wanted.toLowerCase());
+							if (!match)
+								throw new Error(
+									`workspace: there is no bookmark ${JSON.stringify(wanted)}; list them with operation=bookmarks`,
+								);
+							url = match.url;
+						}
 						let parsed: URL;
 						try {
 							parsed = new URL(url);
 						} catch {
-							throw new Error("workspace: open with type=browser needs a valid http(s) url");
+							throw new Error("workspace: open with type=browser needs a valid http(s) url or a bookmark");
 						}
 						if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
 							throw new Error("workspace: only http and https addresses are allowed");
-						const opened = await page({ action: "open", tab: { type: "browser", url: parsed.href } });
+						const background = (input as { background?: boolean }).background === true;
+						const opened = await page({
+							action: "open",
+							tab: { type: "browser", url: parsed.href },
+							...(background ? { background: true } : {}),
+						});
 						const state = opened as { tabs?: WorkspaceTabSummary[]; activeId?: string | null };
-						const tab =
-							(state?.tabs || []).find((entry) => entry.id === state?.activeId) || (state?.tabs || []).at(-1);
+						const tabs = state?.tabs || [];
+						const tab = background
+							? tabs.filter((entry) => entry.type === "browser" && entry.url === parsed.href).at(-1)
+							: tabs.find((entry) => entry.id === state?.activeId) || tabs.at(-1);
 						if (!tab) throw new Error("workspace: the page did not report the browser tab it opened");
 						// The page owns the tab id and its panel creates the host view on mount; ensure is idempotent, so this
 						// call creates the view now when the panel has not mounted yet and never loads the page twice.
@@ -543,7 +658,7 @@ export function createWorkspaceToolDefinition(
 							content: [
 								{
 									type: "text",
-									text: `[workspace] opened browser tab ${tab.id}\n  ${parsed.href}\n  state=${JSON.stringify(live)}`,
+									text: `[workspace] opened browser tab ${tab.id}${background ? " (background)" : ""}\n  ${parsed.href}\n  state=${JSON.stringify(live)}`,
 								},
 							],
 							details: { operation, activeId: tab.id, page: state as Record<string, unknown>, browser: live },
@@ -572,6 +687,116 @@ export function createWorkspaceToolDefinition(
 						};
 					}
 					throw new Error("workspace: open needs type=browser with url, or type=file with path");
+				}
+				case "bookmarks": {
+					const list = await bookmarkList();
+					const lines = list.map((entry) => `  ${entry.id} ${JSON.stringify(entry.title)} ${entry.url}`);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] bookmarks=${list.length} (trusted sites: full control, saved-login sign-in, permissions allowed)\n${lines.join("\n") || "  (none yet; the user adds them with the star in the browser bar)"}`,
+							},
+						],
+						details: { operation, result: list },
+					};
+				}
+				case "login": {
+					const id = await resolveBrowserTab(tabId);
+					const value = (await browser({
+						action: "login",
+						tabId: id,
+						submit: (input as { submit?: boolean }).submit !== false,
+					})) as {
+						ok?: boolean;
+						username?: string;
+						filledPassword?: boolean;
+						submitted?: boolean;
+						reason?: string;
+					};
+					if (!value?.ok) throw new Error(`workspace: the sign-in did not run: ${value?.reason || "no answer"}`);
+					// A submit starts a navigation: report where the page went instead of assuming the sign-in worked.
+					if (value.submitted) await new Promise((resolve) => setTimeout(resolve, 1200));
+					const live = value.submitted
+						? await settle(id).catch((error: Error) => ({ error: error.message }))
+						: undefined;
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] login ${id} as ${JSON.stringify(value.username || "")} password=${value.filledPassword ? "filled" : "not on this page (two-step sign-in: call login again on the next page)"} submitted=${value.submitted ? "yes" : "no"}${live ? `\n  state=${JSON.stringify(live)}` : ""}\n  Check the page (screenshot/text) to confirm the sign-in.`,
+							},
+						],
+						details: { operation, activeId: id, result: value, browser: live },
+					};
+				}
+				case "answer_permission": {
+					const requestId = String((input as { requestId?: string }).requestId || "");
+					const allow = (input as { allow?: boolean }).allow === true;
+					const value = (await browser({ action: "permission", requestId, allow, by: "agent" })) as {
+						allowed?: boolean;
+						origin?: string;
+						permission?: string;
+					};
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] ${value?.allowed ? "allowed" : "denied"} ${value?.permission ?? ""} for ${value?.origin ?? ""} (this app session)`,
+							},
+						],
+						details: { operation, result: value },
+					};
+				}
+				case "mouse": {
+					const id = await resolveBrowserTab(tabId);
+					const fieldsIn = input as Record<string, unknown>;
+					const value = (await browser({
+						action: "mouse",
+						tabId: id,
+						kind: fieldsIn.action,
+						x: fieldsIn.x,
+						y: fieldsIn.y,
+						toX: fieldsIn.toX,
+						toY: fieldsIn.toY,
+						deltaX: fieldsIn.deltaX,
+						deltaY: fieldsIn.deltaY,
+						button: fieldsIn.button,
+						modifiers: fieldsIn.modifiers,
+					})) as { ok?: boolean; target?: Record<string, unknown>; viewport?: { width: number; height: number } };
+					if (!value?.ok) throw new Error("workspace: the mouse action returned no result");
+					const where =
+						fieldsIn.action === "drag"
+							? `(${fieldsIn.x}, ${fieldsIn.y}) → (${fieldsIn.toX}, ${fieldsIn.toY})`
+							: `(${fieldsIn.x}, ${fieldsIn.y})`;
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] mouse ${String(fieldsIn.action)} ${where} in ${id}${value.target ? ` on ${JSON.stringify(value.target)}` : ""}`,
+							},
+						],
+						details: { operation, activeId: id, result: value },
+					};
+				}
+				case "key": {
+					const id = await resolveBrowserTab(tabId);
+					const keys = String((input as { keys?: string }).keys || "");
+					const value = (await browser({
+						action: "keys",
+						tabId: id,
+						keys,
+						repeat: (input as { repeat?: number }).repeat,
+					})) as { ok?: boolean; focused?: Record<string, unknown> | null };
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] pressed ${keys} in ${id} → focused ${JSON.stringify(value?.focused ?? null)}`,
+							},
+						],
+						details: { operation, activeId: id, result: value },
+					};
 				}
 				case "close":
 				case "activate":
@@ -738,10 +963,14 @@ export function createWorkspaceToolDefinition(
 						elements?: Array<Record<string, unknown>>;
 					};
 					const elements = Array.isArray(value?.elements) ? value.elements : [];
-					const lines = elements.map(
-						(element) =>
-							`  ${element.index} ${element.tag}${element.type ? `[${element.type}]` : ""} ${JSON.stringify(element.label || element.name || element.href || "")}${element.disabled ? " (disabled)" : ""}`,
-					);
+					const lines = elements.map((element) => {
+						const rect = element.rect as { x?: number; y?: number; width?: number; height?: number } | undefined;
+						const at =
+							rect && Number(rect.width) > 0 && Number(rect.height) > 0
+								? ` @(${Math.round(Number(rect.x) + Number(rect.width) / 2)},${Math.round(Number(rect.y) + Number(rect.height) / 2)})`
+								: "";
+						return `  ${element.index} ${element.tag}${element.type ? `[${element.type}]` : ""} ${JSON.stringify(element.label || element.name || element.href || "")}${at}${element.disabled ? " (disabled)" : ""}`;
+					});
 					return {
 						content: [
 							{
@@ -778,6 +1007,29 @@ export function createWorkspaceToolDefinition(
 					const selector = (input as { selector?: string }).selector;
 					const index = (input as { index?: number }).index;
 					const text = String((input as { text?: string }).text ?? "");
+					if (!selector && !Number.isInteger(index)) {
+						// No element named: type where the keyboard is, after clicking the given point if there is one.
+						const x = (input as { x?: number }).x;
+						const y = (input as { y?: number }).y;
+						if (Number.isFinite(x) !== Number.isFinite(y)) throw new Error("workspace: type needs both x and y");
+						if (Number.isFinite(x)) await browser({ action: "mouse", tabId: id, kind: "click", x, y });
+						const typed = (await browser({ action: "insertText", tabId: id, text })) as {
+							focused?: Record<string, unknown> | null;
+						};
+						if (!typed?.focused)
+							throw new Error(
+								"workspace: nothing on the page has the keyboard focus; click the field first (mouse click, or type with x/y)",
+							);
+						return {
+							content: [
+								{
+									type: "text",
+									text: `[workspace] typed into the focused element of ${id} → ${JSON.stringify(typed.focused)}`,
+								},
+							],
+							details: { operation, activeId: id, result: typed },
+						};
+					}
 					const value = (await browser({ action: "type", tabId: id, selector, index, text })) as {
 						ok?: boolean;
 						error?: string;
@@ -924,6 +1176,8 @@ export function createWorkspaceToolDefinition(
 					const id = await resolveBrowserTab(tabId);
 					const value = (await browser({ action: "snapshot", tabId: id }, SLOW_TIMEOUT_MS)) as {
 						snapshot?: string;
+						width?: number;
+						height?: number;
 					};
 					const data = String(value?.snapshot || "");
 					if (!data.startsWith("data:image/"))
@@ -935,11 +1189,24 @@ export function createWorkspaceToolDefinition(
 					const file = join(dir, `workspace-${id.replace(/[^a-z0-9.-]+/gi, "_")}-${Date.now()}.png`);
 					await writeFile(file, bytes);
 					await pruneScreenshots(dir);
+					const width = Number(value?.width) || undefined;
+					const height = Number(value?.height) || undefined;
+					// The picture itself goes to the model, so it can point the mouse at what it sees. A resize for the model
+					// changes the scale: the note says how to map back to page coordinates.
+					const processed = await processImage(bytes, "image/png");
+					const scaleNote =
+						processed.ok && width && processed.hints.length
+							? `\n  ${processed.hints.join(" ")} Page coordinates = picture coordinates scaled to ${width}×${height}.`
+							: "";
+					const header = `[workspace] screenshot ${id}\n  path=${file}\n  bytes=${bytes.length}${width && height ? `\n  size=${width}×${height} CSS px (mouse x/y use this frame)` : ""}${scaleNote}`;
 					return {
-						content: [
-							{ type: "text", text: `[workspace] screenshot ${id}\n  path=${file}\n  bytes=${bytes.length}` },
-						],
-						details: { operation, activeId: id, screenshot: { path: file, bytes: bytes.length } },
+						content: processed.ok
+							? [
+									{ type: "text", text: header },
+									{ type: "image", data: processed.data, mimeType: processed.mimeType },
+								]
+							: [{ type: "text", text: `${header}\n  (picture not attached: ${processed.message})` }],
+						details: { operation, activeId: id, screenshot: { path: file, bytes: bytes.length, width, height } },
 					};
 				}
 				case "downloads": {

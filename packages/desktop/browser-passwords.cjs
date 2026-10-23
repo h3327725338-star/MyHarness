@@ -191,7 +191,49 @@ exports.attachPasswordManager = ({ ipcMain, store, tabFor, emit, log }) => {
     const from = sender(event);
     if (from && typeof value?.id === 'string') store.markUsed(value.id);
   });
+  // The answer of a tab to `agentLogin`: what was filled and pressed, never a password.
+  const loginWaits = new Map();
+  let loginSeq = 0;
+  ipcMain.on('mh-browser:agent-login-result', (event, value) => {
+    const from = sender(event);
+    const wait = from && typeof value?.requestId === 'string' ? loginWaits.get(value.requestId) : undefined;
+    if (!wait || wait.tab !== from.tab) return;
+    loginWaits.delete(value.requestId);
+    clearTimeout(wait.timer);
+    wait.resolve({
+      ok: value.ok === true,
+      origin: from.origin,
+      username: typeof value.username === 'string' ? value.username.slice(0, MAX_FIELD) : '',
+      filledPassword: value.filledPassword === true,
+      submitted: value.submitted === true,
+      ...(typeof value.reason === 'string' ? { reason: value.reason.slice(0, 300) } : {}),
+    });
+  });
   return {
+    /**
+     * Sign in with the login saved for the tab's site: the tab's helper fills the saved user name and password into the
+     * page's form and, when asked, submits it the way the form's own button would. The result names the account and what
+     * happened; the password stays between this store and the page.
+     */
+    agentLogin(tab, { submit = true } = {}) {
+      const contents = tab?.view?.webContents;
+      if (!contents || contents.isDestroyed()) return Promise.reject(new Error('浏览器标签已不可用'));
+      const requestId = `login${++loginSeq}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          loginWaits.delete(requestId);
+          reject(new Error('页面没有在 10 秒内回应自动登录'));
+        }, 10_000);
+        loginWaits.set(requestId, { tab, resolve, timer });
+        try {
+          contents.send('mh-browser:agent-login', { requestId, submit: submit !== false });
+        } catch (error) {
+          loginWaits.delete(requestId);
+          clearTimeout(timer);
+          reject(error);
+        }
+      });
+    },
     /** A main-frame navigation of the tab: the next form report decides whether the pending sign-in worked. */
     navigated(tab) {
       const attempt = attempts.get(tab.id);

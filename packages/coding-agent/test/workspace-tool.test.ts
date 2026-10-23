@@ -443,3 +443,166 @@ describe("desktop channel", () => {
 		expect(host.channel.pendingCount).toBe(0);
 	});
 });
+
+describe("workspace tool: the Agent's own mouse, keyboard and trusted sites", () => {
+	const tabA = "browser:a";
+	const tabB = "browser:b";
+	const twoTabs = (extra: (command: Record<string, unknown>) => unknown) =>
+		fakeHost((channel, command) => {
+			if (channel === "workspace")
+				return pageState(
+					[
+						{ id: tabA, type: "browser", url: "https://a.example/" },
+						{ id: tabB, type: "browser", url: "https://b.example/" },
+					],
+					tabA,
+				);
+			if (command.action === "list") return [{ tabId: tabA }, { tabId: tabB }];
+			return extra(command);
+		});
+
+	it("clicks at a point of a background tab and reports what was under the pointer", async () => {
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "mouse")
+				return {
+					ok: true,
+					kind: command.kind,
+					target: { tag: "img", src: "/logo.png" },
+					viewport: { width: 800, height: 600 },
+				};
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const result = await call(tool, { operation: "mouse", tabId: tabB, action: "double_click", x: 40, y: 50 });
+		const mouse = sent.find((entry) => entry.command.action === "mouse")!.command;
+		expect(mouse).toMatchObject({ tabId: tabB, kind: "double_click", x: 40, y: 50 });
+		expect(result.content[0]!.text).toContain('mouse double_click (40, 50) in browser:b on {"tag":"img"');
+	});
+
+	it("drags from one point to another", async () => {
+		const { tool, sent } = twoTabs((command) => ({ ok: true, kind: command.kind }));
+		const result = await call(tool, {
+			operation: "mouse",
+			tabId: tabA,
+			action: "drag",
+			x: 1,
+			y: 2,
+			toX: 30,
+			toY: 40,
+		});
+		expect(sent.find((entry) => entry.command.action === "mouse")!.command).toMatchObject({
+			kind: "drag",
+			toX: 30,
+			toY: 40,
+		});
+		expect(result.content[0]!.text).toContain("(1, 2) → (30, 40)");
+	});
+
+	it("presses key combinations and reports the focused element", async () => {
+		const { tool, sent } = twoTabs(() => ({ ok: true, focused: { tag: "input", value: "" } }));
+		const result = await call(tool, { operation: "key", tabId: tabA, keys: "Control+A Backspace", repeat: 2 });
+		expect(sent.find((entry) => entry.command.action === "keys")!.command).toMatchObject({
+			keys: "Control+A Backspace",
+			repeat: 2,
+		});
+		expect(result.content[0]!.text).toContain("pressed Control+A Backspace");
+	});
+
+	it("types into the focused element after clicking a point, and fails when nothing has the focus", async () => {
+		let focused: Record<string, unknown> | null = { tag: "textarea", value: "你好" };
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "mouse") return { ok: true };
+			if (command.action === "insertText") return { ok: true, focused };
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const result = await call(tool, { operation: "type", tabId: tabA, x: 10, y: 20, text: "你好" });
+		const order = sent.filter((entry) => entry.action === "browser").map((entry) => entry.command.action);
+		expect(order.slice(-2)).toEqual(["mouse", "insertText"]);
+		expect(result.content[0]!.text).toContain("typed into the focused element");
+		focused = null;
+		await expect(call(tool, { operation: "type", tabId: tabA, text: "x" })).rejects.toThrow(
+			/nothing on the page has the keyboard focus/,
+		);
+	});
+
+	it("lists bookmarks and opens one by title in the background without switching the user's tab", async () => {
+		const opened: Record<string, unknown>[] = [];
+		const { tool } = fakeHost((channel, command) => {
+			if (channel === "workspace") {
+				opened.push(command);
+				return pageState(
+					[
+						{ id: tabA, type: "browser", url: "https://a.example/" },
+						{ id: "browser:new", type: "browser", url: "https://mail.example/" },
+					],
+					tabA,
+				);
+			}
+			if (command.action === "bookmarks")
+				return { bookmarks: [{ id: "bm1", title: "Mail", url: "https://mail.example/", icon: "data:" }] };
+			if (command.action === "ensure") return { tabId: command.tabId };
+			if (command.action === "state") return { loading: false, url: "https://mail.example/" };
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const list = await call(tool, { operation: "bookmarks" });
+		expect(list.content[0]!.text).toContain('bm1 "Mail" https://mail.example/');
+		const result = await call(tool, { operation: "open", type: "browser", bookmark: "mail", background: true });
+		expect(opened.at(-1)).toMatchObject({ action: "open", background: true, tab: { url: "https://mail.example/" } });
+		expect(result.content[0]!.text).toContain("opened browser tab browser:new (background)");
+		await expect(call(tool, { operation: "open", type: "browser", bookmark: "nope" })).rejects.toThrow(/no bookmark/);
+	});
+
+	it("signs in with the saved login and never prints a password", async () => {
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "login") return { ok: true, username: "ada", filledPassword: true, submitted: true };
+			if (command.action === "state") return { loading: false, url: "https://a.example/home" };
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const result = await call(tool, { operation: "login", tabId: tabA });
+		expect(sent.find((entry) => entry.command.action === "login")!.command).toMatchObject({
+			tabId: tabA,
+			submit: true,
+		});
+		expect(result.content[0]!.text).toContain('login browser:a as "ada" password=filled submitted=yes');
+	});
+
+	it("answers a pending site-permission request as the Agent", async () => {
+		const { tool, sent } = fakeHost((_channel, command) => {
+			if (command.action === "permission")
+				return { allowed: command.allow, origin: "https://a.example", permission: "media" };
+			throw new Error("unexpected");
+		});
+		const result = await call(tool, { operation: "answer_permission", requestId: "p3", allow: true });
+		expect(sent[0]!.command).toEqual({ action: "permission", requestId: "p3", allow: true, by: "agent" });
+		expect(result.content[0]!.text).toContain("allowed media for https://a.example");
+	});
+
+	it("returns the screenshot itself to the model, with its CSS-pixel size", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "myharness-workspace-shot-"));
+		temporaryRoots.push(dir);
+		const previous = process.env.MYHARNESS_TEMP_DIR;
+		process.env.MYHARNESS_TEMP_DIR = dir;
+		try {
+			const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+			const { tool } = twoTabs((command) => {
+				if (command.action === "snapshot") return { snapshot: `data:image/png;base64,${png}`, width: 1, height: 1 };
+				throw new Error("unexpected");
+			});
+			const result = (await call(tool, { operation: "screenshot", tabId: tabB })) as unknown as {
+				content: Array<{ type: string; text?: string; mimeType?: string }>;
+			};
+			expect(result.content[0]!.text).toContain("size=1×1 CSS px");
+			expect(result.content.some((part) => part.type === "image" && part.mimeType === "image/png")).toBe(true);
+		} finally {
+			if (previous === undefined) delete process.env.MYHARNESS_TEMP_DIR;
+			else process.env.MYHARNESS_TEMP_DIR = previous;
+		}
+	});
+
+	it("shows the centre point of each interactive element so it can be clicked by coordinates", async () => {
+		const { tool } = twoTabs(() => ({
+			elements: [{ index: 0, tag: "button", label: "Go", rect: { x: 10, y: 20, width: 40, height: 20 } }],
+		}));
+		const result = await call(tool, { operation: "interactive", tabId: tabA });
+		expect(result.content[0]!.text).toContain('0 button "Go" @(30,30)');
+	});
+});

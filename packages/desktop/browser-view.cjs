@@ -1,7 +1,9 @@
-const { WebContentsView, session, Menu, shell, app, ipcMain, safeStorage } = require('electron');
+const { WebContentsView, session, Menu, shell, app, ipcMain, safeStorage, nativeImage } = require('electron');
 // Absolute paths: the tests compile this file outside the normal module loader, where a relative require would not
 // resolve against this folder.
 const { createBookmarkStore } = require(require('node:path').join(__dirname, 'browser-bookmarks.cjs'));
+const { createSpeedDialStore } = require(require('node:path').join(__dirname, 'browser-speed-dial.cjs'));
+const { keyEvents } = require(require('node:path').join(__dirname, 'browser-input.cjs'));
 const { createPasswordStore, attachPasswordManager } = require(require('node:path').join(__dirname, 'browser-passwords.cjs'));
 
 exports.httpUrl = (value) => {
@@ -36,6 +38,14 @@ const MAX_ICON_BYTES = 64 * 1024;
 // Titles that a bot check (Cloudflare's interstitial, its "verification failed" page and their kin) shows. Such a page
 // has no control the workspace could press, so recognising it is only used to offer a way forward, never to answer it.
 const VERIFY_PAGE = /just a moment|verification failed|attention required|checking your browser|verify you are human|are you a robot|access denied/i;
+// A tab that has never been on screen still needs a viewport, so the Agent can read, click and screenshot it in the
+// background; it gets the size the visible tab last had, or this one.
+const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
+// The isolated world that draws the Agent's mouse pointer: the site's own scripts cannot reach it.
+const CURSOR_WORLD = 1207;
+// A hidden page is throttled by Chromium and then ignores input events (a wheel event never even completes). While the
+// Agent acts on a tab it is kept awake, and throttled again after this long without an Agent action.
+const AGENT_AWAKE_MS = 20000;
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -61,8 +71,9 @@ const cleanRect = (value) => {
  * A multi-tab browser made of one WebContentsView per tab. Each tab has its own history, title, loading state and
  * error; only the active tab is visible, and its rectangle is driven by the page (the view is drawn above the page and
  * cannot take part in its layout). The page can drive every tab through the `browser` command bridge; sites keep the
- * same persistent session. A site permission request waits for an explicit user decision in the workspace and is denied
- * by default; the Agent cannot grant it.
+ * same persistent session. A site permission request waits for an explicit decision (the user in the workspace, or the
+ * Agent through the workspace tool) and is denied by default; a bookmarked site's requests are allowed at once. Every tab,
+ * hidden or not, keeps a real viewport, so the Agent can read, click, type into and capture background tabs.
  *
  * Visibility is an invariant of this module, not of the caller: a view is visible only while it is the active tab and
  * a non-empty rectangle is known. `activate` without a rectangle hides the tab until the page sends fresh bounds, and a
@@ -74,15 +85,17 @@ exports.createBrowser = (window, log, options = {}) => {
   const tabs = new Map();
   let activeTabId = null;
   let rectangle = null;
+  let lastViewport = DEFAULT_VIEWPORT;
   // What the pages did while the workspace watched: recent downloads and request metadata. Both stay small and are
   // only read by the workspace command surface (never persisted), so a page cannot grow them without bound.
   const downloadLog = [];
   const networkLog = [];
   let downloadSeq = 0;
   let permissionSeq = 0;
-  // Session-scoped site permission decisions. Nothing is granted by default and nothing is written to disk: the first
-  // request for an origin/permission is shown to the user in the workspace, an explicit decision is remembered for this
-  // app session only, and a request nobody answers is denied after the timeout. The Agent cannot make this decision.
+  // Session-scoped site permission decisions. Nothing is written to disk: the first request for an origin/permission is
+  // shown in the workspace, a decision (by the user, or by the Agent through the workspace tool) is remembered for this
+  // app session only, and a request nobody answers is denied after the timeout. A bookmarked site is the user's own
+  // choice of a trusted site: its requests are allowed at once and reported as such.
   const permissionDecisions = new Map();
   const pendingPermissions = new Map();
   const PERMISSION_TIMEOUT_MS = 60000;
@@ -110,6 +123,16 @@ exports.createBrowser = (window, log, options = {}) => {
   const requireBookmarks = () => { if (!bookmarks) throw new Error('当前桌面宿主不支持书签'); return bookmarks; };
   const requirePasswords = () => { if (!passwords) throw new Error('当前桌面宿主不支持保存密码'); return passwords; };
   const bookmarksChanged = (list) => { send({ type: 'bookmarks', bookmarks: list }); return list; };
+  /** Whether a bookmark points at this origin: the user marked the site as theirs, so the Agent may drive it fully. */
+  const bookmarkedOrigin = (origin) => {
+    if (!bookmarks || !origin) return false;
+    try { return bookmarks.list().some((item) => safeOrigin(item.url) === origin); } catch { return false; }
+  };
+  const speedDial = profileDir
+    ? createSpeedDialStore(require('node:path').join(profileDir, 'browser-speed-dial.json'), { seed: () => (bookmarks ? bookmarks.list() : []) })
+    : undefined;
+  const requireSpeedDial = () => { if (!speedDial) throw new Error('当前桌面宿主不支持快捷方式'); return speedDial; };
+  const speedDialChanged = (items) => { send({ type: 'speeddial', items }); return items; };
   // Every tab (and every popup, which becomes a tab) shares the partition, so its user agent is set once here.
   if (typeof partition.setUserAgent === 'function') partition.setUserAgent(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
   // The engine's own client hints list Chromium only, while the user agent above says Chrome (sites such as WhatsApp
@@ -168,8 +191,9 @@ exports.createBrowser = (window, log, options = {}) => {
     pendingPermissions.delete(requestId);
     clearTimeout(entry.timer);
     if (options.remember !== false) permissionDecisions.set(permissionKey(entry.origin, entry.permission), allow === true);
-    emit(entry.tabId, { type: 'permission', requestId, permission: entry.permission, origin: entry.origin, allowed: allow === true, remembered: options.remember !== false });
-    log(`网站权限请求${allow ? '已允许' : '已拒绝'}：${entry.permission} ${entry.origin}`);
+    const by = options.by === 'agent' ? 'agent' : undefined;
+    emit(entry.tabId, { type: 'permission', requestId, permission: entry.permission, origin: entry.origin, allowed: allow === true, remembered: options.remember !== false, ...(by ? { by } : {}) });
+    log(`网站权限请求${allow ? '已允许' : '已拒绝'}${by ? '（Agent）' : ''}：${entry.permission} ${entry.origin}`);
     try { entry.callback(allow === true); } catch { /* the page went away */ }
     return { ok: true, requestId, allowed: allow === true, origin: entry.origin, permission: entry.permission };
   };
@@ -188,6 +212,13 @@ exports.createBrowser = (window, log, options = {}) => {
     const tab = tabFor(webContents);
     const origin = safeOrigin(details?.requestingUrl || (tab ? tab.url : ''));
     if (!tab) { callback(false); return; }
+    if (permissionFor(origin, permission) === undefined && bookmarkedOrigin(origin)) {
+      permissionDecisions.set(permissionKey(origin, permission), true);
+      emit(tab.id, { type: 'permission', permission, origin, allowed: true, remembered: true, by: 'bookmark' });
+      log(`网站权限请求自动允许（书签网站）：${permission} ${origin}`);
+      callback(true);
+      return;
+    }
     const known = permissionFor(origin, permission);
     if (known !== undefined) {
       emit(tab ? tab.id : undefined, { type: 'permission', permission, origin, allowed: known === true, remembered: true });
@@ -207,7 +238,8 @@ exports.createBrowser = (window, log, options = {}) => {
   // Checks must agree with the remembered decisions; an undecided request fails its check first and asks afterwards.
   partition.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     const origin = safeOrigin(requestingOrigin || details?.requestingUrl || (webContents && !webContents.isDestroyed() ? webContents.getURL() : ''));
-    return permissionFor(origin, permission) === true;
+    const known = permissionFor(origin, permission);
+    return known === undefined ? bookmarkedOrigin(origin) : known === true;
   });
   partition.on('will-download', (event, item, webContents) => {
     const tab = webContents ? tabFor(webContents) : undefined;
@@ -289,6 +321,68 @@ exports.createBrowser = (window, log, options = {}) => {
     }
   };
 
+  /** Send the tab strip the site icon of a tab once per icon address, so a tab can be shown by its icon alone. */
+  const pushIcon = async (tab) => {
+    const key = tab.favicon || safeOrigin(tab.url);
+    if (!key || tab.iconKey === key) return;
+    tab.iconKey = key;
+    const icon = await fetchIcon(tab);
+    if (icon && !tab.destroyed && tabs.get(tab.id) === tab) emit(tab.id, { type: 'icon', icon, url: tab.url });
+  };
+
+  /** The icon of a site that is not open in any tab: its page's <link rel=icon>, else /favicon.ico. */
+  const siteIcon = async (url) => {
+    if (typeof partition.fetch !== 'function') return undefined;
+    const tryImage = async (href) => {
+      try {
+        const response = await partition.fetch(href, { signal: AbortSignal.timeout(4000) });
+        const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+        if (!response.ok || !type.startsWith('image/')) return undefined;
+        const body = Buffer.from(await response.arrayBuffer());
+        if (!body.length || body.length > MAX_ICON_BYTES) return undefined;
+        return `data:${type};base64,${body.toString('base64')}`;
+      } catch {
+        return undefined;
+      }
+    };
+    try {
+      const page = new URL(url);
+      const response = await partition.fetch(page.href, { signal: AbortSignal.timeout(5000) });
+      const text = response.ok ? (await response.text()).slice(0, 300000) : '';
+      for (const match of text.matchAll(/<link\b[^>]*>/gi)) {
+        const tag = match[0];
+        if (!/rel\s*=\s*["']?[^"'>]*\bicon\b/i.test(tag)) continue;
+        const href = /href\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+        if (!href) continue;
+        const icon = await tryImage(new URL(href, response.url || page.href).href);
+        if (icon) return icon;
+      }
+      return tryImage(new URL('/favicon.ico', page.href).href);
+    } catch {
+      return undefined;
+    }
+  };
+
+  let fillingIcons = false;
+  /** Fetch the icons of shortcuts that have none yet (a bookmark of the same site lends its icon first). */
+  const fillSpeedDialIcons = async (store) => {
+    if (fillingIcons) return;
+    fillingIcons = true;
+    try {
+      const known = new Map((bookmarks ? bookmarks.list() : []).filter((item) => item.icon).map((item) => [safeOrigin(item.url), item.icon]));
+      let changed = false;
+      for (const site of store.missingIcons()) {
+        const icon = known.get(safeOrigin(site.url)) || (await siteIcon(site.url));
+        if (store.setIcon(site.id, icon || null)) changed = true;
+      }
+      if (changed) speedDialChanged(store.list());
+    } catch (error) {
+      log(`快捷方式图标获取失败：${error.message}`);
+    } finally {
+      fillingIcons = false;
+    }
+  };
+
   const tabByContents = (webContentsId) => {
     for (const tab of tabs.values()) if (tab.view && !tab.view.webContents.isDestroyed() && tab.view.webContents.id === webContentsId) return tab;
     return undefined;
@@ -324,6 +418,10 @@ exports.createBrowser = (window, log, options = {}) => {
       // The rectangle the native view actually occupies (null while hidden); lets the page and the Agent verify placement.
       bounds: tab.view?.getVisible?.() ? (() => { try { return tab.view.getBounds(); } catch { return null; } })() : null,
       active: tab.id === activeTabId,
+      // Site permission questions of this tab that nobody has answered yet (the Agent can answer them).
+      pendingPermissions: [...pendingPermissions.entries()]
+        .filter(([, entry]) => entry.tabId === tab.id)
+        .map(([requestId, entry]) => ({ requestId, permission: entry.permission, origin: entry.origin })),
     };
   };
 
@@ -375,7 +473,10 @@ exports.createBrowser = (window, log, options = {}) => {
       if (!tab.view || tab.destroyed) continue;
       const visible = tab.id === activeTabId && !!bounds;
       try { tab.view.setVisible(visible); } catch { /* view is going away */ }
-      if (visible) { try { tab.view.setBounds(bounds); } catch { /* view is going away */ } }
+      if (visible) {
+        try { tab.view.setBounds(bounds); } catch { /* view is going away */ }
+        lastViewport = { width: bounds.width, height: bounds.height };
+      }
       updatePictureTimer(tab);
     }
   };
@@ -444,11 +545,13 @@ exports.createBrowser = (window, log, options = {}) => {
       try { challenge = VERIFY_PAGE.test(contents.getTitle() || ''); } catch { /* view is going away */ }
       commit(tab, { loading: false, challenge });
       later(tab, () => void picture(tab), 300);
+      later(tab, () => void pushIcon(tab), 500);
     });
     contents.on('did-navigate', (_event, target) => {
       if (!live()) return;
       passwordManager?.navigated(tab);
       tab.favicon = undefined;
+      tab.iconKey = undefined;
       commit(tab, { url: target, error: '' });
     });
     contents.on('page-favicon-updated', (_event, favicons) => { if (live()) tab.favicon = Array.isArray(favicons) ? favicons[0] : undefined; });
@@ -532,8 +635,11 @@ exports.createBrowser = (window, log, options = {}) => {
     const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload } });
     const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', challenge: false, timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
     tabs.set(id, tab);
-    window.contentView.addChildView(view);
+    // A hidden view keeps a real viewport: background tabs lay out, take input and can be captured like the visible one.
+    // The size must be set before the view is hidden: Electron does not pass bounds set on a hidden view to its page.
+    try { view.setBounds({ x: 0, y: 0, ...lastViewport }); } catch { /* view is going away */ }
     view.setVisible(false);
+    window.contentView.addChildView(view);
     wire(tab);
     // A load failure is reported through the tab state; the initial navigation must not leave an unhandled rejection.
     if (initialUrl) void navigateTab(tab, initialUrl).catch(() => undefined);
@@ -602,11 +708,167 @@ exports.createBrowser = (window, log, options = {}) => {
     return tab.view.webContents;
   };
 
-  /** Screenshot of the active (visible) tab; other tabs report that they must be activated first. */
+  /**
+   * Screenshot of any tab, on screen or not, through the page's own compositor (DevTools protocol), so a background tab
+   * is captured without being shown. The picture is scaled to the page's CSS pixels: a point in it is the same point
+   * the mouse commands take.
+   */
   const snapshot = async (tab) => {
-    if (tab.destroyed || activeTabId !== tab.id || !tab.view.getVisible()) throw new Error('只能对当前活动的浏览器标签截图；先激活该标签');
-    const image = await contentsOf(tab).capturePage();
-    return `data:image/png;base64,${image.toPNG().toString('base64')}`;
+    if (tab.destroyed) throw new Error(`浏览器标签 ${tab.id} 已关闭`);
+    keepAwake(tab);
+    const viewport = await viewportOf(tab).catch(() => null);
+    let buffer;
+    try {
+      const shot = await withDebugger(tab, (debuggerApi) => withTimeout(debuggerApi.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: true }), 15000, '页面没有在 15 秒内完成截图'));
+      buffer = Buffer.from(String(shot?.data || ''), 'base64');
+    } catch (error) {
+      // A page whose debugger is taken (its own DevTools open) can still be captured while it is on screen.
+      if (!tab.view.getVisible()) throw error;
+      buffer = (await contentsOf(tab).capturePage()).toPNG();
+    }
+    if (!buffer.length) throw new Error('截图没有返回图像');
+    let image = nativeImage?.createFromBuffer ? nativeImage.createFromBuffer(buffer) : undefined;
+    if (image && !image.isEmpty() && viewport?.width > 0 && viewport?.height > 0) {
+      const size = image.getSize();
+      if (size.width !== viewport.width || size.height !== viewport.height) {
+        image = image.resize({ width: Math.round(viewport.width), height: Math.round(viewport.height), quality: 'best' });
+        buffer = image.toPNG();
+      }
+    }
+    const size = image && !image.isEmpty() ? image.getSize() : viewport || { width: 0, height: 0 };
+    return { snapshot: `data:image/png;base64,${buffer.toString('base64')}`, width: size.width, height: size.height };
+  };
+
+  const withTimeout = (promise, ms, message) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
+
+  // ---- The Agent's own mouse and keyboard ------------------------------------------------------------------------
+  // Real input events through the DevTools protocol: the page receives trusted pointer, mouse, wheel and key events at a
+  // CSS-pixel point of its viewport, exactly as from a person, whether the tab is on screen or in the background. Nothing
+  // needs a selector or an index, so images, canvases and custom controls can be clicked like anything else.
+  const MODIFIER_BITS = { alt: 1, control: 2, ctrl: 2, meta: 4, command: 4, shift: 8 };
+  const modifierBits = (list) => (Array.isArray(list) ? list : []).reduce((bits, name) => bits | (MODIFIER_BITS[String(name).toLowerCase()] || 0), 0);
+  const BUTTON_BITS = { left: 1, right: 2, middle: 4 };
+
+  const viewportOf = (tab) => runInPage(tab, '({ width: innerWidth, height: innerHeight })');
+
+  /** Keep a tab's page running at full speed for a while, so a background tab takes the Agent's input and paints. */
+  const keepAwake = (tab) => {
+    const contents = contentsOf(tab);
+    if (!tab.awake) {
+      try { contents.setBackgroundThrottling(false); } catch { /* older engine: input may wait for the tab to show */ }
+      tab.awake = true;
+    }
+    clearTimeout(tab.awakeTimer);
+    tab.awakeTimer = later(tab, () => {
+      tab.awake = false;
+      try { contentsOf(tab).setBackgroundThrottling(true); } catch { /* view is going away */ }
+    }, AGENT_AWAKE_MS);
+  };
+
+  /** What sits at a point of the page: enough for the Agent to know what it is about to click. */
+  const describePoint = (tab, x, y) => runInPage(tab, `(() => {
+    const element = document.elementFromPoint(${x}, ${y});
+    if (!element) return null;
+    const target = element.closest('a,button,input,select,textarea,label,[role],[onclick],[tabindex]') || element;
+    const text = (target.getAttribute('aria-label') || target.getAttribute('alt') || target.getAttribute('title') || target.innerText || target.value || target.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    return { tag: target.tagName.toLowerCase(), id: target.id || undefined, role: target.getAttribute('role') || undefined, type: target.getAttribute('type') || undefined, href: target.getAttribute('href') || undefined, src: target.getAttribute('src') ? String(target.getAttribute('src')).slice(0, 200) : undefined, text: text || undefined, editable: !!(target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) };
+  })()`).catch(() => null);
+
+  /** Draw (or move) the Agent's pointer at a point, so the user sees where it acts; it fades after a short pause. */
+  const showCursor = (tab, x, y, pressed) => {
+    const code = `(() => {
+      const host = document.documentElement;
+      if (!host) return;
+      let el = window.__myharnessCursor;
+      if (!el) {
+        el = document.createElement('myharness-agent-cursor');
+        const root = el.attachShadow({ mode: 'closed' });
+        root.innerHTML = '<style>:host{all:initial;position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;transition:transform .18s cubic-bezier(.2,0,0,1),opacity .4s;opacity:1}svg{display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))}.ring{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;border:2px solid #4f8cff;opacity:0;transform:scale(.4)}.ring.on{animation:p .45s ease-out}@keyframes p{0%{opacity:.9;transform:scale(.4)}100%{opacity:0;transform:scale(1.6)}}</style><div class=ring></div><svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 2l16 9.5-7 1.6-3.6 6.9z" fill="#4f8cff" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+        el.__ring = root.querySelector('.ring');
+        window.__myharnessCursor = el;
+      }
+      if (el.parentNode !== host) host.appendChild(el);
+      el.style.opacity = '1';
+      el.style.transform = 'translate(${x}px, ${y}px)';
+      if (${pressed ? 'true' : 'false'}) { el.__ring.classList.remove('on'); void el.__ring.offsetWidth; el.__ring.classList.add('on'); }
+      clearTimeout(el.__fade);
+      el.__fade = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+    })()`;
+    try { void contentsOf(tab).executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code }]).catch(() => undefined); } catch { /* page is going away */ }
+  };
+
+  const mouse = async (tab, value) => {
+    const kind = String(value.kind || 'click');
+    keepAwake(tab);
+    const x = Number(value.x);
+    const y = Number(value.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('mouse 需要 x 与 y（页面 CSS 像素坐标）');
+    const viewport = await viewportOf(tab);
+    const inside = (px, py) => px >= 0 && py >= 0 && px < viewport.width && py < viewport.height;
+    if (!inside(x, y)) throw new Error(`坐标 (${x}, ${y}) 在页面可视区域 ${viewport.width}×${viewport.height} 之外；先滚动页面或重新截图`);
+    const toX = Number(value.toX);
+    const toY = Number(value.toY);
+    if (kind === 'drag' && (!Number.isFinite(toX) || !Number.isFinite(toY) || !inside(toX, toY))) throw new Error(`drag 需要可视区域 ${viewport.width}×${viewport.height} 内的 toX 与 toY`);
+    const button = ['left', 'right', 'middle'].includes(value.button) ? value.button : kind === 'right_click' ? 'right' : 'left';
+    const modifiers = modifierBits(value.modifiers);
+    const target = kind === 'move' || kind === 'wheel' || kind === 'up' ? undefined : await describePoint(tab, x, y);
+    await withDebugger(tab, async (debuggerApi) => {
+      const send = (params) => debuggerApi.sendCommand('Input.dispatchMouseEvent', { modifiers, pointerType: 'mouse', ...params });
+      const press = async (px, py, clickCount) => {
+        await send({ type: 'mousePressed', x: px, y: py, button, buttons: BUTTON_BITS[button], clickCount });
+        await send({ type: 'mouseReleased', x: px, y: py, button, buttons: 0, clickCount });
+      };
+      if (kind !== 'up') await send({ type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+      if (kind === 'click' || kind === 'right_click') await press(x, y, 1);
+      else if (kind === 'double_click') { await press(x, y, 1); await press(x, y, 2); }
+      else if (kind === 'down') await send({ type: 'mousePressed', x, y, button, buttons: BUTTON_BITS[button], clickCount: 1 });
+      else if (kind === 'up') await send({ type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
+      else if (kind === 'drag') {
+        await send({ type: 'mousePressed', x, y, button, buttons: BUTTON_BITS[button], clickCount: 1 });
+        const steps = Math.max(4, Math.min(24, Math.round(Math.hypot(toX - x, toY - y) / 24)));
+        for (let step = 1; step <= steps; step++) {
+          await send({ type: 'mouseMoved', x: x + ((toX - x) * step) / steps, y: y + ((toY - y) * step) / steps, button, buttons: BUTTON_BITS[button] });
+        }
+        await send({ type: 'mouseReleased', x: toX, y: toY, button, buttons: 0, clickCount: 1 });
+      } else if (kind === 'wheel') {
+        await send({ type: 'mouseWheel', x, y, button: 'none', buttons: 0, deltaX: Number(value.deltaX) || 0, deltaY: Number(value.deltaY) || 0 });
+      } else if (kind !== 'move') throw new Error(`未知的鼠标操作：${kind}`);
+    });
+    const endX = kind === 'drag' ? toX : x;
+    const endY = kind === 'drag' ? toY : y;
+    showCursor(tab, endX, endY, kind !== 'move' && kind !== 'wheel');
+    return { ok: true, kind, x, y, ...(kind === 'drag' ? { toX, toY } : {}), viewport, target: target || undefined };
+  };
+
+  const focusedElement = (tab) => runInPage(tab, `(() => {
+    const element = document.activeElement;
+    if (!element || element === document.body) return null;
+    return { tag: element.tagName.toLowerCase(), id: element.id || undefined, value: String(element.value ?? element.innerText ?? '').slice(0, 200) };
+  })()`).catch(() => null);
+
+  /** Press keys ("Enter", "Control+A", "Shift+Tab") in the tab's focused element, `repeat` times. */
+  const pressKeys = async (tab, value) => {
+    const list = Array.isArray(value.keys) ? value.keys.map(String) : String(value.keys || '').split(/\s+/).filter(Boolean);
+    if (!list.length) throw new Error('keys 需要按键，例如 "Enter" 或 "Control+A"');
+    const repeat = Math.max(1, Math.min(50, Number.isInteger(value.repeat) ? value.repeat : 1));
+    const events = list.map((combo) => keyEvents(combo));
+    keepAwake(tab);
+    await withDebugger(tab, async (debuggerApi) => {
+      for (let round = 0; round < repeat; round++) {
+        for (const sequence of events) for (const event of sequence) await debuggerApi.sendCommand('Input.dispatchKeyEvent', event);
+      }
+    });
+    return { ok: true, keys: list, repeat, focused: await focusedElement(tab) };
+  };
+
+  /** Type text into whatever has the keyboard focus, as an input method would (any language, no per-key mapping). */
+  const insertText = async (tab, text) => {
+    keepAwake(tab);
+    await withDebugger(tab, (debuggerApi) => debuggerApi.sendCommand('Input.insertText', { text }));
+    return { ok: true, focused: await focusedElement(tab) };
   };
 
   const accessibilityTree = async (tab) => {
@@ -858,7 +1120,7 @@ exports.createBrowser = (window, log, options = {}) => {
       }
       case 'permission': {
         if (typeof value.requestId !== 'string' || !value.requestId) throw new Error('permission 需要 requestId');
-        return settlePermission(value.requestId, value.allow === true);
+        return settlePermission(value.requestId, value.allow === true, { by: value.by });
       }
       case 'permissions': {
         const origin = value.origin ? safeOrigin(value.origin) : '';
@@ -926,7 +1188,26 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'stopFind':
         return stopFind(requireTab(value.tabId));
       case 'snapshot':
-        return { snapshot: await snapshot(requireTab(value.tabId)) };
+        return snapshot(requireTab(value.tabId));
+      case 'mouse':
+        return mouse(requireTab(value.tabId), value);
+      case 'keys':
+        return pressKeys(requireTab(value.tabId), value);
+      case 'insertText': {
+        if (typeof value.text !== 'string') throw new Error('insertText 需要 text 字符串');
+        if (value.text.length > 20000) throw new Error('insertText 的文本超过 20000 个字符');
+        return insertText(requireTab(value.tabId), value.text);
+      }
+      case 'login': {
+        // Signing in with a saved login: the host fills and submits it in the page; no password reaches the caller.
+        const tab = requireTab(value.tabId);
+        const origin = safeOrigin(tab.url);
+        if (!bookmarkedOrigin(origin)) throw new Error(`${origin || '这个页面'} 不在书签里；只有书签网站可以用已保存的登录自动登录`);
+        if (!passwordManager || !passwords?.available()) throw new Error('当前桌面宿主没有可用的已保存密码');
+        if (!passwords.list(origin).length) throw new Error(`${origin} 没有已保存的登录；用户需要先在这个网站登录一次并保存`);
+        keepAwake(tab);
+        return passwordManager.agentLogin(tab, { submit: value.submit !== false });
+      }
       case 'exec': {
         if (typeof value.code !== 'string' || value.code.length === 0) throw new Error('exec 需要 code 字符串');
         if (value.code.length > 20000) throw new Error('exec 的代码超过 20000 个字符');
@@ -960,8 +1241,11 @@ exports.createBrowser = (window, log, options = {}) => {
         const target = requireTab(value.tabId);
         return { result: await runInPage(target, 'document.body ? document.body.innerText.slice(0, 100000) : ""') };
       }
-      case 'downloads':
-        return { downloads: downloadLog.slice(-50).filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+      case 'downloads': {
+        // Finished downloads and the ones still running, so a long download is visible while it happens.
+        const running = [...tabs.values()].flatMap((tab) => [...tab.downloads.values()].map((entry) => ({ ...entry.record, state: 'progressing' })));
+        return { downloads: [...downloadLog.slice(-50), ...running].filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+      }
       case 'download-cancel': {
         for (const tab of tabs.values()) {
           const entry = tab.downloads.get(String(value.id || ''));
@@ -997,6 +1281,17 @@ exports.createBrowser = (window, log, options = {}) => {
         return { bookmarks: bookmarksChanged(requireBookmarks().update(String(value.id || ''), { url: value.url, title: value.title })) };
       case 'bookmark-remove':
         return { bookmarks: bookmarksChanged(requireBookmarks().remove(String(value.id || ''))) };
+      case 'bookmarked':
+        return { bookmarked: bookmarkedOrigin(safeOrigin(String(value.url || ''))) };
+      case 'speeddial':
+        return { items: requireSpeedDial().list() };
+      case 'speeddial-save': {
+        const store = requireSpeedDial();
+        const saved = speedDialChanged(store.save(value.items));
+        // New sites get their icon in the background; the page is told again when it arrives.
+        void fillSpeedDialIcons(store);
+        return { items: saved };
+      }
       case 'passwords': {
         // Site and user name only: a saved password never leaves the host towards the workspace page.
         const store = requirePasswords();

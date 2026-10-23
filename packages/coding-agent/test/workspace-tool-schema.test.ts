@@ -44,7 +44,21 @@ describe("Workspace tool parameter schema", () => {
 			const operation = branch.properties?.operation?.const;
 			if (typeof operation === "string") operations.add(operation);
 		}
-		for (const operation of ["status", "tabs", "open", "close", "navigate", "click", "exec", "media"]) {
+		for (const operation of [
+			"status",
+			"tabs",
+			"open",
+			"close",
+			"navigate",
+			"click",
+			"exec",
+			"media",
+			"mouse",
+			"key",
+			"bookmarks",
+			"login",
+			"answer_permission",
+		]) {
 			expect(operations.has(operation)).toBe(true);
 		}
 	});
@@ -59,7 +73,20 @@ describe("Workspace tool parameter schema", () => {
 			url: "https://example.com",
 		});
 
+		expect(validate({ operation: "mouse", action: "click", x: 1, y: 2 })).toEqual({
+			operation: "mouse",
+			action: "click",
+			x: 1,
+			y: 2,
+		});
+		expect(validate({ operation: "open", type: "browser", bookmark: "Mail", background: true })).toMatchObject({
+			bookmark: "Mail",
+		});
 		for (const arguments_ of [
+			{ operation: "mouse", action: "click" },
+			{ operation: "mouse", action: "teleport", x: 1, y: 2 },
+			{ operation: "key" },
+			{ operation: "answer_permission", requestId: "p1" },
 			{ operation: "nope" },
 			{ operation: "close" },
 			{ operation: "status", tabId: "tab-1" },

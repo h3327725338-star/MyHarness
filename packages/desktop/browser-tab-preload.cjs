@@ -1,7 +1,8 @@
 // Sign-in helper of the built-in browser's site tabs. It runs in the tab's isolated world (the site's scripts cannot see
 // or call it) and only talks to the desktop host: it reports a submitted login so the host can save it once the sign-in
-// looked successful, and fills a login form with a login saved for this exact site. It never presses the site's button:
-// signing in stays the site's own flow. Passwords are never written to the console, the DOM attributes or the URL.
+// looked successful, and fills a login form with a login saved for this exact site. On its own it never presses the
+// site's button; only a sign-in the Agent asks for on a bookmarked site submits the form. Passwords are never written to
+// the console, the DOM attributes or the URL, and never sent to the Agent.
 const { contextBridge, ipcRenderer } = require('electron');
 
 // ---- Engine identity ---------------------------------------------------------------------------------------------
@@ -208,6 +209,59 @@ const fill = async () => {
     ipcRenderer.send('mh-browser:filled', { id: entry.id });
   }
 };
+
+// ---- Signing in for the Agent -----------------------------------------------------------------------------------
+// The workspace tool may sign in to a bookmarked site with its saved login. The host asks; this helper fills the saved
+// user name (and the password when the page shows its field) and submits the form like its own button would. Two-step
+// sign-ins work by asking again on the next page. The answer names the account, never the password.
+
+/** The button that sends a form: its own submit button, else a visible "sign in / next" button near the fields. */
+const submitButtonFor = (field) => {
+  const scope = field?.form || field?.closest?.('form, [role="form"], [role="dialog"], main, body') || document;
+  const buttons = [...scope.querySelectorAll('button, input[type="submit"], input[type="image"], [role="button"]')].filter(visible);
+  const typed = buttons.find((button) => (button.getAttribute('type') || '').toLowerCase() === 'submit');
+  if (typed) return typed;
+  return buttons.find((button) => /log ?in|sign ?in|next|continue|submit|登录|登入|下一步|继续|确定/i.test(`${button.textContent || ''} ${button.value || ''} ${button.getAttribute('aria-label') || ''}`)) || null;
+};
+
+const submitFrom = (field) => {
+  const button = submitButtonFor(field);
+  if (button) {
+    button.click();
+    return true;
+  }
+  if (field?.form) {
+    if (typeof field.form.requestSubmit === 'function') field.form.requestSubmit();
+    else field.form.submit();
+    return true;
+  }
+  return false;
+};
+
+ipcRenderer.on('mh-browser:agent-login', async (_event, request) => {
+  const requestId = request?.requestId;
+  const reply = (value) => ipcRenderer.send('mh-browser:agent-login-result', { requestId, ...value });
+  try {
+    let logins = [];
+    try { logins = await ipcRenderer.invoke('mh-browser:credentials'); } catch { logins = []; }
+    if (!Array.isArray(logins) || !logins.length) return reply({ ok: false, reason: 'no saved login for this site' });
+    const password = passwordFields()[0];
+    const user = usernameFieldFor(password || null);
+    const typed = user && user.value.trim();
+    const entry = (typed && logins.find((item) => item.username === typed)) || logins[0];
+    if (!password && !user) return reply({ ok: false, reason: 'no sign-in form on this page' });
+    if (user && user.value.trim() !== entry.username) setValue(user, entry.username);
+    if (password) {
+      setValue(password, entry.password);
+      filled.add(password);
+    }
+    ipcRenderer.send('mh-browser:filled', { id: entry.id });
+    const submitted = request?.submit !== false ? submitFrom(password || user) : false;
+    reply({ ok: true, username: entry.username, filledPassword: !!password, submitted });
+  } catch (error) {
+    reply({ ok: false, reason: String(error?.message || error) });
+  }
+});
 
 let scheduled = 0;
 const schedule = () => {

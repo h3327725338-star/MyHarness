@@ -106,6 +106,8 @@ function Header() {
 
 function PanelContainer() {
 	const tabs = useStore((s) => s.view.wsTabs);
+	const tabIconsOnly = useStore((s) => s.view.wsTabIconsOnly);
+	const browserIcons = useStore((s) => s.view.browserIcons);
 	const activeId = useStore((s) => s.view.wsActive);
 	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const wsMax = useStore((s) => s.view.wsMax);
@@ -133,7 +135,7 @@ function PanelContainer() {
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
 		<div class="panel-head">
-			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
+			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} iconsOnly=${tabIconsOnly} icons=${browserIcons} onToggleIconsOnly=${() => actions.toggleTabIconsOnly()} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
 			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
 			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
 			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>

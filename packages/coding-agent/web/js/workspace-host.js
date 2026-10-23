@@ -92,12 +92,12 @@ function runStoredPanelCommand(sessionId, value, action) {
 		}
 		if (panel.wsTabs.length === 0) panel.panelOpen = false;
 	};
-	const open = (descriptor) => {
+	const open = (descriptor, background = false) => {
 		const wanted = descriptor?.type === "browser" && !descriptor.id && typeof descriptor.url === "string" ? { ...descriptor, id: browserTabId(panel.wsTabs, descriptor.url) } : descriptor;
 		const tab = normalizeWorkspaceTab(wanted);
 		if (!tab) return null;
 		if (!panel.wsTabs.some((item) => item.id === tab.id)) panel.wsTabs.push(tab);
-		activate(tab);
+		if (!background || !panel.wsActive) activate(tab);
 		return tab.id;
 	};
 	switch (action) {
@@ -105,7 +105,7 @@ function runStoredPanelCommand(sessionId, value, action) {
 			return report();
 		case "open": {
 			const tab = value.tab || {};
-			if (!open({ type: tab.type, path: tab.path, url: tab.url }))
+			if (!open({ type: tab.type, path: tab.path, url: tab.url }, value.background === true))
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
 			save();
 			return report();
@@ -166,7 +166,7 @@ export async function runWorkspaceCommand(command) {
 			return workspaceState();
 		case "open": {
 			const tab = value.tab || {};
-			const id = actions.openWorkspace({ type: tab.type, path: tab.path, url: tab.url });
+			const id = actions.openWorkspace({ type: tab.type, path: tab.path, url: tab.url }, { background: value.background === true });
 			if (!id)
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
 			return workspaceState();
@@ -229,7 +229,20 @@ export async function runWorkspaceCommand(command) {
 export function installWorkspaceHost() {
 	const desktop = window.myHarnessDesktop;
 	if (!desktop?.onWorkspace || !desktop?.replyWorkspace) return () => {};
-	return desktop.onWorkspace(async (request) => {
+	// A website tab that is not on screen (the Agent drives it in the background) has no panel listening to it: its
+	// title, address and site icon still reach the tab strip from here.
+	const stopStatus = desktop.onStatus?.((value) => {
+		if (!value || typeof value.tabId !== "string") return;
+		const tab = state.view.wsTabs.find((item) => item.id === value.tabId && item.type === "browser");
+		if (value.type === "icon") {
+			actions.setBrowserIcon(value.url || tab?.url || "", value.icon);
+			return;
+		}
+		if (value.type !== "state" || !tab || tab.id === state.view.wsActive) return;
+		if (value.state?.title) actions.updateWorkspaceTabTitle(tab.id, value.state.title);
+		if (value.state?.url) actions.updateWorkspaceTabUrl(tab.id, value.state.url);
+	});
+	const stopWorkspace = desktop.onWorkspace(async (request) => {
 		if (!request || typeof request.requestId !== "string") return;
 		try {
 			const result = await runWorkspaceCommand(request.command);
@@ -238,4 +251,8 @@ export function installWorkspaceHost() {
 			await desktop.replyWorkspace({ requestId: request.requestId, ok: false, error: error?.message || String(error) });
 		}
 	});
+	return () => {
+		stopWorkspace?.();
+		stopStatus?.();
+	};
 }

@@ -308,6 +308,10 @@ export const state = {
 		lang: normalizeLang(prefs.lang),
 		/** The user's own prompts (Session panel → My prompts); a click puts one into the input. */
 		savedPrompts: Array.isArray(prefs.savedPrompts) ? prefs.savedPrompts.filter((text) => typeof text === "string" && text.trim()) : [],
+		/** Website tabs show only their site icon (the name stays in the tooltip). */
+		wsTabIconsOnly: prefs.wsTabIconsOnly === true,
+		/** Site icons of website tabs by origin, as the desktop host reported them (not saved: they come back on load). */
+		browserIcons: {},
 		cmd: null,
 	},
 };
@@ -465,7 +469,7 @@ export function readWidthValue(value) {
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
 // had open is saved with `wsPanels` (see rememberPanel).
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell", "savedPrompts"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell", "savedPrompts", "wsTabIconsOnly"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];

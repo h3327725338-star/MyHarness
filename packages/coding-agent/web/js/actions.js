@@ -182,8 +182,11 @@ export const actions = {
 		);
 	},
 
-	/** Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. */
-	openWorkspace(descriptor) {
+	/**
+	 * Open (or focus) one workspace tab: a panel, a file, or a browser page. Never replaces an open tab. With
+	 * `{ background: true }` the tab is only added (the Agent works in it while the user keeps looking at theirs).
+	 */
+	openWorkspace(descriptor, options) {
 		const tabs = state.view.wsTabs;
 		// A website tab is this conversation's own: the same address opened again in this panel is that tab, while the
 		// same address in another conversation is another tab with its own native view (the host keys views by id).
@@ -194,6 +197,10 @@ export const actions = {
 		const tab = normalizeWorkspaceTab(wanted);
 		if (!tab) return null;
 		const existing = tabs.find((item) => item.id === tab.id);
+		if (options?.background === true && state.view.wsActive) {
+			if (!existing) setView({ wsTabs: [...tabs, tab] });
+			return tab.id;
+		}
 		// The native view of the tab that is on screen right now must disappear before another tab is rendered.
 		if (state.view.panelOpen && state.view.wsActive && state.view.wsActive !== tab.id) hideBrowserViews();
 		const patch = { panelOpen: true, wsActive: tab.id };
@@ -294,6 +301,23 @@ export const actions = {
 		const index = tabs.findIndex((item) => item.id === id);
 		if (index < 0 || tabs[index].type !== "browser" || tabs[index].title === next) return;
 		setView({ wsTabs: tabs.map((tab, position) => (position === index ? { ...tab, title: next } : tab)) });
+	},
+
+	/** The site icon the desktop host found for a page, kept by origin so every tab of that site shows it. */
+	setBrowserIcon(url, icon) {
+		let origin = "";
+		try {
+			origin = new URL(url).origin;
+		} catch {
+			return;
+		}
+		if (!origin || typeof icon !== "string" || !icon.startsWith("data:image/") || state.view.browserIcons[origin] === icon) return;
+		setView({ browserIcons: { ...state.view.browserIcons, [origin]: icon } });
+	},
+
+	/** Website tabs with or without their names. */
+	toggleTabIconsOnly(force) {
+		setView({ wsTabIconsOnly: typeof force === "boolean" ? force : !state.view.wsTabIconsOnly });
 	},
 
 	/** A new, empty browser tab in this conversation's panel: nothing loads until something is typed into its bar. */

@@ -8,6 +8,7 @@ import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
 import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
 import { BookmarkEditor, BookmarksBar } from "./browser-bookmarks.js";
+import { SpeedDial } from "./browser-speed-dial.js";
 import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
 import { t } from "./i18n.js";
 
@@ -61,6 +62,8 @@ export function BrowserPanel({ tabId, url }) {
 	const [permissionList, setPermissionList] = useState({ permissions: [], pending: [] });
 	// Bookmarks are shared by every website tab and kept by the desktop host.
 	const [bookmarks, setBookmarks] = useState([]);
+	// The new-tab page's shortcuts and groups, also kept by the desktop host and shared by every tab.
+	const [speedDial, setSpeedDial] = useState(null);
 	// The bookmarks bar is a bubble over the page, not a row of it: opening the bar must never move the page under it.
 	// It also starts folded, because a bubble left open when the app closed would cover the page it came back to.
 	const [barVisible, setBarVisible] = useState(false);
@@ -317,12 +320,32 @@ export function BrowserPanel({ tabId, url }) {
 		send({ action: "bookmarks" })
 			.then((value) => setBookmarks(value?.bookmarks || []))
 			.catch(() => setBookmarks([]));
+		send({ action: "speeddial" })
+			.then((value) => setSpeedDial(value?.items || []))
+			.catch(() => setSpeedDial([]));
 	}, [host]);
+	/** Show the user's arrangement at once, then the host's cleaned copy (it also fetches icons for new sites). */
+	const saveSpeedDial = async (items) => {
+		setSpeedDial(items);
+		try {
+			const value = await send({ action: "speeddial-save", items });
+			setSpeedDial(value?.items || items);
+		} catch (error) {
+			showNotice("other", error.message);
+			send({ action: "speeddial" })
+				.then((value) => setSpeedDial(value?.items || []))
+				.catch(() => undefined);
+		}
+	};
 	useEffect(() => {
 		if (!host?.browser) return undefined;
 		return host.onStatus((value) => {
 			if (value?.type === "bookmarks" && Array.isArray(value.bookmarks)) {
 				setBookmarks(value.bookmarks);
+				return;
+			}
+			if (value?.type === "speeddial" && Array.isArray(value.items)) {
+				setSpeedDial(value.items);
 				return;
 			}
 			if (!value || value.tabId !== tabId) return;
@@ -401,11 +424,18 @@ export function BrowserPanel({ tabId, url }) {
 			}
 			if (value.type === "permission") {
 				setPermissionAsk((current) => (current && current.requestId === value.requestId ? null : current));
+				const words = { permission: value.permission, origin: value.origin };
 				showNotice(
 					"permission",
-					value.allowed
-						? t("Allowed {permission} for {origin} in this session.", { permission: value.permission, origin: value.origin })
-						: t("Denied {permission} for {origin}.", { permission: value.permission, origin: value.origin }),
+					value.by === "bookmark"
+						? t("Allowed {permission} for {origin} automatically: it is a bookmarked site.", words)
+						: value.by === "agent"
+							? value.allowed
+								? t("The Agent allowed {permission} for {origin} in this session.", words)
+								: t("The Agent denied {permission} for {origin}.", words)
+							: value.allowed
+								? t("Allowed {permission} for {origin} in this session.", words)
+								: t("Denied {permission} for {origin}.", words),
 				);
 			}
 		});
@@ -631,9 +661,11 @@ export function BrowserPanel({ tabId, url }) {
 			</div></div>` : null}
 		</div>
 		<div class="desktop-browser-target" ref=${target}>
+			${(!hasView || !status.url) && !status.loading && !status.error && speedDial
+				? html`<${SpeedDial} items=${speedDial} bookmarks=${bookmarks} onOpen=${openBookmark} onSave=${saveSpeedDial} />`
+				: null}
 			<div class="pad">
-				<p role="status">${status.error || (status.loading ? t("Loading…") : hasView && !status.url ? t("Enter a URL to open it in this tab.") : "")}</p>
-				${hasView && !status.url && !status.loading && engineVersion ? html`<p class="dim ws-browser-engine">${engineVersion}</p>` : null}
+				<p role="status">${status.error || (status.loading ? t("Loading…") : "")}</p>
 				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
 			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}

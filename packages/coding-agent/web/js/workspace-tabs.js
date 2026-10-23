@@ -29,8 +29,29 @@ const TYPE_ICONS = {
 const ENTER_MS = COLLAPSE_MS + 20;
 const EXIT_MS = COLLAPSE_MS + 20;
 
-/** Drag a tab onto another to move it there; the order is the user's and is saved with the rest of the workspace. */
-export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthers, onMove }) {
+/** The site icon of a website tab, if the desktop host has reported one for its origin. */
+function siteIconOf(tab, icons) {
+	if (tab.type !== "browser" || !tab.url || !icons) return "";
+	try {
+		return icons[new URL(tab.url).origin] || "";
+	} catch {
+		return "";
+	}
+}
+
+/** A website tab's icon: the site's own, or the globe while there is none (or it cannot be drawn). */
+function TabIcon({ tab, icons }) {
+	const src = siteIconOf(tab, icons);
+	const [failed, setFailed] = useState("");
+	if (src && failed !== src) return html`<img class="ws-tab-favicon" src=${src} alt="" draggable="false" onError=${() => setFailed(src)} />`;
+	return html`<${Icon} name=${TYPE_ICONS[tab.type] || "file"} size=${13} class="c-dim" />`;
+}
+
+/**
+ * Drag a tab onto another to move it there; the order is the user's and is saved with the rest of the workspace. With
+ * `iconsOnly`, website tabs show only their site icon (the title stays in the tooltip), the way pinned tabs look.
+ */
+export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthers, onMove, iconsOnly = false, icons = null, onToggleIconsOnly = null }) {
 	const strip = useRef(null);
 	const [dragging, setDragging] = useState(null);
 	const [menu, setMenu] = useState(null);
@@ -165,8 +186,9 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			ref=${isLeaving ? (element) => foldAway(element, width) : entering.has(tab.id) ? growIn : null}>
 			<div role="tab" tabindex=${isLeaving ? -1 : 0} draggable=${!isLeaving}
 			aria-hidden=${isLeaving ? "true" : null}
-			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""}`} aria-selected=${!isLeaving && activeId === tab.id}
-			title=${workspaceTabHint(tab)}
+			aria-label=${iconsOnly && tab.type === "browser" ? workspaceTabTitle(tab) : null}
+			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""} ${iconsOnly && tab.type === "browser" ? "icon-only" : ""}`} aria-selected=${!isLeaving && activeId === tab.id}
+			title=${iconsOnly && tab.type === "browser" ? `${workspaceTabTitle(tab)}\n${workspaceTabHint(tab) || ""}`.trim() : workspaceTabHint(tab)}
 			onClick=${() => !isLeaving && onActivate(tab.id)}
 			onKeyDown=${(event) => {
 				if (isLeaving) return;
@@ -197,9 +219,9 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			}}
 			onContextMenu=${(event) => {
 				event.preventDefault();
-				if (!isLeaving && tabs.length > 1) setMenu({ x: event.clientX, y: event.clientY, id: tab.id });
+				if (!isLeaving && (tabs.length > 1 || onToggleIconsOnly)) setMenu({ x: event.clientX, y: event.clientY, id: tab.id });
 			}}>
-			<${Icon} name=${TYPE_ICONS[tab.type] || "file"} size=${13} class="c-dim" />
+			<${TabIcon} tab=${tab} icons=${icons} />
 			<span class="ws-tab-label truncate">${workspaceTabTitle(tab)}</span>
 			<button class="ws-tab-close" aria-label=${t("Close tab")} title=${t("Close tab")} onClick=${(event) => {
 				event.stopPropagation();
@@ -213,10 +235,14 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 				onClose(menu.id);
 				setMenu(null);
 			}}>${t("Close tab")}</button>
-			<button onClick=${() => {
+			${tabs.length > 1 ? html`<button onClick=${() => {
 				onCloseOthers(menu.id);
 				setMenu(null);
-			}}>${t("Close other tabs")}</button>
+			}}>${t("Close other tabs")}</button>` : null}
+			${onToggleIconsOnly ? html`<button aria-pressed=${iconsOnly} onClick=${() => {
+				onToggleIconsOnly();
+				setMenu(null);
+			}}>${iconsOnly ? t("Show website tab names") : t("Show website tabs as icons only")}</button>` : null}
 		</div>` : null}
 	</div>`;
 }

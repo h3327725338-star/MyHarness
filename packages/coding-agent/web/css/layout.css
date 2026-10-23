@@ -262,6 +262,12 @@
 .ws-tab:hover { background: var(--surface-hover); color: var(--text); }
 .ws-tab.active { background: var(--surface-active); color: var(--text); }
 .ws-tab-label { max-width: 150px; }
+.ws-tab-favicon { width: 14px; height: 14px; flex: none; object-fit: contain; border-radius: 3px; }
+/* Website tabs shown by their site icon alone: the close button appears on hover or on the active tab. */
+.ws-tab.icon-only { gap: 0; padding: 0 7px; }
+.ws-tab.icon-only .ws-tab-label { display: none; }
+.ws-tab.icon-only .ws-tab-close { width: 0; overflow: hidden; margin-left: 0; transition: width 0.12s ease, margin-left 0.12s ease; }
+.ws-tab.icon-only:is(:hover, .active, :focus-within) .ws-tab-close { width: 18px; margin-left: 3px; }
 .ws-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); opacity: 0.55; }
 .ws-tab-close:hover { background: var(--surface-hover); opacity: 1; }
 /* A tab unfolds from its left edge when it is opened and folds back into it when it is closed: the shared collapse run
