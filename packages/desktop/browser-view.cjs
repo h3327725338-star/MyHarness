@@ -479,6 +479,8 @@ exports.createBrowser = (window, log, options = {}) => {
    * Every other view is hidden. Bounds are set before the view is shown so it never appears at the previous box.
    */
   const placeActive = () => {
+    // A popup's contents can be destroyed while the app window itself is closing; there is nothing left to place.
+    if (window.isDestroyed()) return;
     const bounds = boundsForRectangle();
     if (bounds) lastViewport = { width: bounds.width, height: bounds.height };
     for (const tab of tabs.values()) {
@@ -631,13 +633,26 @@ exports.createBrowser = (window, log, options = {}) => {
       try { exports.httpUrl(target); } catch { event.preventDefault(); }
     });
     contents.setWindowOpenHandler(({ url }) => {
-      try {
-        const target = exports.httpUrl(url);
-        // A page-requested window becomes a workspace tab; the page is told and can also open it itself.
-        const created = createTab(target);
-        emit(tab.id, { type: 'newTab', newTabId: created.id, url: target });
-      } catch { /* Non-web schemes are dropped. */ }
-      return { action: 'deny' };
+      // A sign-in popup (Google, Apple, Microsoft…) often starts at about:blank and is steered by its opener.
+      let target = '';
+      if (url && url !== 'about:blank') {
+        try { target = exports.httpUrl(url); } catch { return { action: 'deny' }; /* Non-web schemes are dropped. */ }
+      }
+      if (tabs.size >= MAX_TABS) return { action: 'deny' };
+      // A page-requested window becomes a workspace tab. The engine creates its contents itself (createWindow), so the
+      // popup keeps `window.opener`: "Sign in with Google" and other popup sign-ins post their result back to the page
+      // that opened them and close themselves, which a freshly loaded tab without an opener can never do. The page adopts
+      // the host tab by its id instead of opening a second view of the same address.
+      return {
+        action: 'allow',
+        outlivesOpener: true,
+        createWindow: (options) => {
+          const created = createTab(target, undefined, options.webContents);
+          created.openerId = tab.id;
+          emit(tab.id, { type: 'newTab', newTabId: created.id, url: target });
+          return created.view.webContents;
+        },
+      };
     });
     contents.on('context-menu', (_event, params) => Menu.buildFromTemplate([
       { role: 'undo', enabled: params.isEditable }, { role: 'redo', enabled: params.isEditable },
@@ -752,13 +767,19 @@ exports.createBrowser = (window, log, options = {}) => {
     emit(tab.id, { type: 'snapshot', snapshot: null });
   };
 
-  const createTab = (initialUrl, forcedId) => {
+  /**
+   * `adopted` is the contents the engine made for a page's popup (it inherits the opener's preferences, partition and
+   * preload). Such a tab is loaded by the engine itself, and closing itself (`window.close()` after a sign-in) closes it.
+   */
+  const createTab = (initialUrl, forcedId, adopted) => {
     if (tabs.size >= MAX_TABS) throw new Error(`最多同时打开 ${MAX_TABS} 个浏览器标签`);
     const id = forcedId && !tabs.has(forcedId) ? String(forcedId) : `tab${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     // The sign-in helper runs in the page's isolated world and only when saved logins are available on this host.
     // It is attached to every tab: besides saved sign-ins it aligns the engine's client hints (see its header).
     const preload = require('node:path').join(__dirname, 'browser-tab-preload.cjs');
-    const view = new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload } });
+    const view = adopted
+      ? new WebContentsView({ webContents: adopted })
+      : new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload } });
     const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', challenge: false, timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
     tabs.set(id, tab);
     // A hidden view keeps a real viewport: background tabs lay out, take input and can be captured like the visible one.
@@ -767,6 +788,14 @@ exports.createBrowser = (window, log, options = {}) => {
     view.setVisible(false);
     window.contentView.addChildView(view);
     wire(tab);
+    if (adopted) {
+      view.webContents.once('destroyed', () => {
+        if (tab.destroyed) return;
+        tab.selfClosed = true;
+        destroyTab(tab);
+      });
+      return tab;
+    }
     // A load failure is reported through the tab state; the initial navigation must not leave an unhandled rejection.
     if (initialUrl) void navigateTab(tab, initialUrl).catch(() => undefined);
     return tab;
@@ -805,7 +834,7 @@ exports.createBrowser = (window, log, options = {}) => {
       if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
     } catch (error) { log(`关闭网页失败：${error.message}`); }
     try { window.contentView.removeChildView(tab.view); } catch { /* already detached */ }
-    emit(tab.id, { type: 'closed', tabId: tab.id });
+    emit(tab.id, { type: 'closed', tabId: tab.id, ...(tab.selfClosed ? { selfClosed: true, openerId: tab.openerId || null } : {}) });
     placeActive();
   };
 

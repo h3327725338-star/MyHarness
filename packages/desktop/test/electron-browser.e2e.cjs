@@ -239,7 +239,7 @@ async function main() {
 
   // --- popup windows become workspace tabs ------------------------------------------------------
   const beforePopup = (await browser.command({ action: 'list' })).length;
-  await browser.command({ action: 'exec', tabId: id, code: `window.open('${origin}/popup', '_blank')` });
+  await browser.command({ action: 'exec', tabId: id, code: `void window.open('${origin}/popup', '_blank')` });
   const popupTab = await until(async () => {
     const list = await browser.command({ action: 'list' });
     return list.length > beforePopup ? list.find((entry) => entry.tabId !== id) : undefined;

@@ -109,6 +109,21 @@ try{
  must(state.view.wsActive===inA[2],'A active tab was not restored: '+state.view.wsActive);
  must(state.view.changesScope==='worktree','A changes scope was not restored: '+state.view.changesScope);
 
+ // Collaboration mode survives a trip through a chat that has nothing open: it pauses there and A comes back maximized.
+ actions.toggleWorkspaceMax(true);
+ await wait(400);
+ must(state.view.wsMax===true,'collaboration mode did not start');
+ await activateSlot('c');
+ must(state.view.wsMax===false,'a chat with nothing open is shown maximized');
+ await activateSlot('a');
+ must(state.view.wsMax===true,'A lost collaboration mode after a switch through an empty chat');
+ actions.toggleWorkspaceMax(false);
+ await wait(400);
+ must(state.view.wsMax===false&&state.view.wsMaxPaused===false,'leaving collaboration mode left it paused');
+ await activateSlot('c');
+ await activateSlot('a');
+ must(state.view.wsMax===false,'collaboration mode came back after the user left it');
+
  await activateSlot('b');
  must(JSON.stringify(ids())===JSON.stringify(inB),'B tabs were not restored: '+JSON.stringify(ids()));
  must(state.view.wsActive==='file:two.ts','B active tab was not restored: '+state.view.wsActive);

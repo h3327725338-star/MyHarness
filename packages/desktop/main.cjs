@@ -6,6 +6,7 @@ const { homedir } = require('node:os');
 const { createBrowser, httpUrl } = require('./browser-view.cjs');
 const { readLegacyPrefs } = require('./legacy-prefs.cjs');
 const { removeForeignShortcuts } = require('./notification-routing.cjs');
+const { attachPreviewLinks } = require('./preview-links.cjs');
 const root = resolve(__dirname, '../..');
 // Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
 // shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
@@ -237,6 +238,8 @@ else {
     ipcMain.on('desktop:destroy', (event) => { if (trusted(event)) browser.destroy(); });
     window.webContents.setWindowOpenHandler(({ url }) => { try { void shell.openExternal(httpUrl(url)); } catch {} return { action: 'deny' }; });
     window.webContents.on('will-navigate', (event, url) => { if (serviceUrl && new URL(url).origin !== new URL(serviceUrl).origin) event.preventDefault(); });
+    // A link in an HTML file shown in a file tab opens as a website tab instead of blanking the preview frame.
+    attachPreviewLinks(window.webContents, { serviceUrl: () => serviceUrl, open: (url) => workspaceRequest({ action: 'open', tab: { type: 'browser', url } }), log });
     window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) { failPendingUi('页面已重新加载，工作区请求已取消'); browser.destroy(); } });
     // Moving, resizing or maximizing the window changes the content area that the page measured. Re-clamp the last
     // rectangle immediately; the page also re-measures every frame while a browser tab is active.

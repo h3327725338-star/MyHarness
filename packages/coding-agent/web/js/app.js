@@ -39,19 +39,19 @@ function StatusPill() {
 	const completion = useStore((s) => s.completion);
 	const memory = useStore((s) => s.memoryMaintenance);
 	if (!snap) return null;
-	if (dialogs.length && snap.active) return html`<span class="status-pill" role="status"><${Icon} name="clock" size=${13} />${t("Waiting for you")}</span>`;
-	if (compaction) return html`<span class="status-pill" role="status"><${Spinner} />${t("Compacting context")}</span>`;
+	if (dialogs.length && snap.active) return html`<span class="status-pill" role="status" title=${t("Waiting for you")}><${Icon} name="clock" size=${13} /><span class="pill-text">${t("Waiting for you")}</span></span>`;
+	if (compaction) return html`<span class="status-pill" role="status" title=${t("Compacting context")}><${Spinner} /><span class="pill-text">${t("Compacting context")}</span></span>`;
 	if (snap.active) {
 		const detail = snap.run.state === "recovering" ? t("Recovering") : t("Working");
-		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} />${detail}</span>`;
+		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} /><span class="pill-text">${detail}</span></span>`;
 	}
-	if (completion) return html`<span class="status-pill" role="status"><${Spinner} />${t("Finishing up")}</span>`;
+	if (completion) return html`<span class="status-pill" role="status" title=${t("Finishing up")}><${Spinner} /><span class="pill-text">${t("Finishing up")}</span></span>`;
 	if (memory?.phase === "warning") return html`<span class="status-pill warn memory-warn" role="status" title=${memory.error ? `${t("Last failure reason")}: ${memory.error} · ${t("Open maintenance.log for details")}` : t("Memory maintenance needs attention")}><span class="mem-left"><span class="mem-dot" aria-hidden="true"></span><${Icon} name="alertTriangle" size=${13} />${t("Memory maintenance needs attention")}</span><span class="mem-divider" aria-hidden="true"></span><button class="mem-btn retry" title=${t("Retry memory maintenance")} aria-label=${t("Retry memory maintenance")} onClick=${() => attempt(() => post("/api/memory/maintenance-retry", {}))}><${Icon} name="refresh" size=${12} />${t("Retry")}</button><button class="mem-btn dismiss" title=${t("Dismiss and archive pending memory")} aria-label=${t("Dismiss and archive pending memory")} onClick=${() => attempt(() => post("/api/memory/maintenance-dismiss", {}))}>${t("Archive")}</button></span>`;
-	if (memory?.phase === "processing" || memory?.phase === "pending") return html`<span class="status-pill" role="status" title=${t("Memory runs in the background; you can keep working")}><${Icon} name="clock" size=${13} />${t("Updating memory in background")}</span>`;
+	if (memory?.phase === "processing" || memory?.phase === "pending") return html`<span class="status-pill" role="status" title=${t("Memory runs in the background; you can keep working")}><${Icon} name="clock" size=${13} /><span class="pill-text">${t("Updating memory in background")}</span></span>`;
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {
 		const ui = OUTCOME_UI[last.outcome];
-		return html`<span class=${`status-pill ${ui.cls}`} role="status" title=${last.error || t(ui.label)}><${Icon} name=${ui.icon} size=${13} />${t(ui.label)}</span>`;
+		return html`<span class=${`status-pill ${ui.cls}`} role="status" title=${last.error || t(ui.label)}><${Icon} name=${ui.icon} size=${13} /><span class="pill-text">${t(ui.label)}</span></span>`;
 	}
 	return null;
 }

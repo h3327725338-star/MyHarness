@@ -17,6 +17,7 @@ function loadBrowser() {
       id,
       url: '',
       on(event, handler) { handlers.set(event, handler); return this; },
+      once(event, handler) { handlers.set(event, handler); return this; },
       setWindowOpenHandler(handler) { this.openHandler = handler; },
       async loadURL(url) { this.url = url; webContents.loaded.push(url); },
       downloadURL(url) { webContents.downloaded.push(url); },
@@ -48,7 +49,7 @@ function loadBrowser() {
   };
   const electron = {
     WebContentsView: class {
-      constructor() { this.webContents = makeContents(nextId++); this.visible = false; this.bounds = null; }
+      constructor(options) { this.webContents = options?.webContents || makeContents(nextId++); this.visible = false; this.bounds = null; }
       setVisible(value) { this.visible = value; this.visibleCalls = (this.visibleCalls || 0) + 1; }
       getVisible() { return this.visible; }
       setBounds(bounds) { this.bounds = bounds; }
@@ -365,4 +366,34 @@ test('website tabs send a Chrome user agent without Electron or app tokens', () 
   assert.equal(chromeUserAgent(fallback, '152.0.7977.167'), 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36');
   // Without a usable Chromium version the original string is kept rather than inventing one.
   assert.equal(chromeUserAgent(fallback, undefined), fallback);
+});
+
+test('a page popup keeps its opener as a workspace tab and closes with the page that closed itself', async () => {
+  const { browser, events, contents } = loadBrowser();
+  const opener = await browser.command({ action: 'open', tabId: 'browser:x', url: 'https://x.com/i/flow/login' });
+  const handler = contents.find((item) => item.url === 'https://x.com/i/flow/login').openHandler;
+  assert.deepEqual(handler({ url: 'javascript:alert(1)' }), { action: 'deny' });
+  const answer = handler({ url: 'https://accounts.google.com/gsi/select' });
+  assert.equal(answer.action, 'allow');
+  // The engine's own contents (it carries window.opener) become the tab's page; the host does not load the address again.
+  const popupContents = { ...contents[0], handlers: new Map(), loaded: [], url: '' };
+  popupContents.on = function (event, fn) { this.handlers.set(event, fn); return this; };
+  popupContents.once = popupContents.on;
+  popupContents.isDestroyed = () => false;
+  assert.equal(answer.createWindow({ webContents: popupContents }), popupContents);
+  assert.deepEqual(popupContents.loaded, []);
+  const created = events.find((event) => event.value?.type === 'newTab')?.value;
+  assert.equal(created.tabId, opener.tabId);
+  assert.equal(created.url, 'https://accounts.google.com/gsi/select');
+  assert.equal((await browser.command({ action: 'list' })).length, 2);
+  // A sign-in popup that starts empty is allowed too: its opener steers it.
+  assert.equal(handler({ url: 'about:blank' }).action, 'allow');
+  // window.close() in the popup destroys its contents: the tab goes and the page is told which tab opened it.
+  popupContents.isDestroyed = () => true;
+  popupContents.handlers.get('destroyed')();
+  const closed = events.find((event) => event.value?.type === 'closed' && event.value.tabId === created.newTabId)?.value;
+  assert.equal(closed.selfClosed, true);
+  assert.equal(closed.openerId, opener.tabId);
+  assert.equal((await browser.command({ action: 'list' })).length, 1);
+  browser.destroy();
 });

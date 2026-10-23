@@ -279,6 +279,8 @@ export const state = {
 		wsMax: false,
 		/** Whether the sidebar was open before collaboration mode hid it; it comes back on exit. */
 		wsMaxSidebar: null,
+		/** Collaboration mode was on when a chat with nothing open came on screen; it returns with an open workspace. */
+		wsMaxPaused: false,
 		chatW: prefs.chatW ?? 420,
 		expanded: prefs.expanded ?? {},
 		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
@@ -355,7 +357,11 @@ function applyPanel(sessionId) {
 	const staying = panel.panelOpen && panel.wsTabs.some((tab) => tab.id === leaving?.id);
 	if (state.view.panelOpen && leaving?.type === "browser" && !staying)
 		globalThis.myHarnessDesktop?.browser?.({ action: "hide" })?.catch?.(() => undefined);
-	const layout = state.view.wsMax && (!panel.panelOpen || panel.wsTabs.length === 0) ? { wsMax: false, wsMaxSidebar: null } : {};
+	// Collaboration mode is the window's layout. A chat with no workspace to fill pauses it (the sidebar is left as the
+	// user has it, and the sidebar to give back on exit is kept); the next chat with an open workspace, e.g. the one
+	// the user came from, shows it maximized again instead of the mode being lost on the way through.
+	const empty = !panel.panelOpen || panel.wsTabs.length === 0;
+	const layout = state.view.wsMax && empty ? { wsMax: false, wsMaxPaused: true } : state.view.wsMaxPaused && !empty ? { wsMax: true, wsMaxPaused: false } : {};
 	state.view = { ...state.view, ...panel, ...layout };
 }
 
@@ -478,7 +484,7 @@ function persistView() {
 	out.wsPanels = Object.fromEntries(panelStates);
 	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before, unless
 	// the user opened it again while in it (the same rule as leaving the mode, actions.js `leaveWorkspaceMax`).
-	if (state.view.wsMax && state.view.wsMaxSidebar !== null && !state.view.sidebarOpen) out.sidebarOpen = state.view.wsMaxSidebar;
+	if ((state.view.wsMax || state.view.wsMaxPaused) && state.view.wsMaxSidebar !== null && !state.view.sidebarOpen) out.sidebarOpen = state.view.wsMaxSidebar;
 	savePrefs(out);
 	applyAppearance();
 }

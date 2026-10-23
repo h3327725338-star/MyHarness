@@ -234,6 +234,14 @@ export function installWorkspaceHost() {
 	const stopStatus = desktop.onStatus?.((value) => {
 		if (!value || typeof value.tabId !== "string") return;
 		const tab = state.view.wsTabs.find((item) => item.id === value.tabId && item.type === "browser");
+		// A popup closed itself (a finished sign-in): its tab goes away and the page that opened it comes back.
+		if (value.type === "closed" && value.selfClosed) {
+			if (!tab) return;
+			const wasActive = state.view.wsActive === tab.id;
+			actions.closeWorkspaceTab(tab.id);
+			if (wasActive && state.view.wsTabs.some((item) => item.id === value.openerId)) actions.activateWorkspaceTab(value.openerId);
+			return;
+		}
 		if (value.type === "icon") {
 			actions.setBrowserIcon(value.url || tab?.url || "", value.icon);
 			return;

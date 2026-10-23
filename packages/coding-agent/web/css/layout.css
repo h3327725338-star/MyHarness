@@ -408,6 +408,16 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .desktop-frameless .app.ws-max { --chat-min-ws: calc(var(--wc-room) + 268px); }
 .desktop-frameless .app.ws-max .main-header .status-pill { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .desktop-frameless .app.ws-max .main-header .status-pill .mem-left { min-width: 0; overflow: hidden; }
+/* A narrow conversation column (collaboration mode) cannot fit the title, the status words and the icon row side by
+   side: squeezed together they read as one jumble. The status pill keeps only its icon (its words stay in the tooltip),
+   and below that the title gives way entirely, so what is left are whole, separate controls. The widths are the header's
+   content box, which already leaves out the window buttons' room on the desktop. */
+.app.ws-max .main-header { container: chat-head / inline-size; }
+@container chat-head (max-width: 480px) {
+	.main-header .status-pill:not(.memory-warn) { flex: none; width: 26px; padding: 0; justify-content: center; }
+	.main-header .status-pill .pill-text { display: none; }
+}
+@container chat-head (max-width: 360px) { .main-header :is(.title-btn, .badge) { display: none; } }
 .desktop-frameless .main, .desktop-frameless .app.ws-max .main, .desktop-frameless .panel, .desktop-frameless .app.ws-max .panel { margin: 0; border-width: 0; border-left: 1px solid var(--border); border-radius: 0; }
 .desktop-frameless .sidebar.is-collapsed + .main, .desktop-frameless .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin: 0; border-left-width: 0; }
 .desktop-frameless .app.ws-max .main { border-left-width: 1px; }

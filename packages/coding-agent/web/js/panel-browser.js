@@ -400,7 +400,9 @@ export function BrowserPanel({ tabId, url }) {
 				return;
 			}
 			if (value.type === "newTab") {
-				actions.openWorkspace({ type: "browser", url: value.url });
+				// The host already made the page's window (it keeps its opener); this tab takes that view by its id. A popup
+				// that starts without an address (a sign-in steered by its opener) gets one as soon as it navigates.
+				actions.openWorkspace({ type: "browser", id: value.newTabId, url: value.url || "about:blank" });
 				return;
 			}
 			if (value.type === "closed") {

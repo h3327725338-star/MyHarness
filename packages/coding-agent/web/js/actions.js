@@ -173,6 +173,8 @@ export const actions = {
 	 */
 	toggleWorkspaceMax(force) {
 		const next = typeof force === "boolean" ? force : !state.view.wsMax;
+		// The user's own choice replaces a mode paused by a chat switch (store.js applyPanel).
+		if (state.view.wsMaxPaused) setView({ wsMaxPaused: false });
 		if (next === state.view.wsMax) return;
 		if (next && !state.view.wsActive && !state.view.wsTabs.length) return;
 		// The columns swap places: layout-morph.js moves each one from its old box to its new one.
