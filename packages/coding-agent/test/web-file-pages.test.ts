@@ -72,7 +72,10 @@ describe("paged byte access for the hex editor", () => {
 });
 
 describe("paged lines for large text files", () => {
-	const makeLog = (count: number) => Array.from({ length: count }, (_, i) => `line ${i}`).join("\n") + "\n";
+	const makeLog = (count: number) => {
+		const body = Array.from({ length: count }, (_, i) => `line ${i}`).join("\n");
+		return `${body}\n`;
+	};
 
 	it("indexes lines, reads any page and searches with continuation", async () => {
 		const file = join(tempDir(), "big.log");

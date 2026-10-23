@@ -360,6 +360,11 @@ function formatTab(tab: WorkspaceTabSummary): string {
 export interface WorkspaceToolOptions {
 	/** Where the commands go; tests hand in a fake host, production uses the process IPC channel. */
 	channel?: () => DesktopWorkspaceChannel | undefined;
+	/**
+	 * The conversation this tool works for. Page commands carry it, so a chat running in the background (another mode,
+	 * another chat on screen) changes its own panel instead of the one the user is looking at.
+	 */
+	sessionId?: () => string | undefined;
 }
 
 export function createWorkspaceToolDefinition(
@@ -376,8 +381,10 @@ export function createWorkspaceToolDefinition(
 	};
 	const browser = (command: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS) =>
 		require().request({ ...command }, timeoutMs);
-	const page = (command: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS) =>
-		require().request({ channel: "workspace", ...command }, timeoutMs);
+	const page = (command: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS) => {
+		const sessionId = options?.sessionId?.();
+		return require().request({ channel: "workspace", ...command, ...(sessionId ? { sessionId } : {}) }, timeoutMs);
+	};
 
 	/** The page's tab list (files, media, panel tabs and the browser tabs it opened). */
 	const pageTabs = async (): Promise<{

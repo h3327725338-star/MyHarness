@@ -296,6 +296,7 @@ export class SessionToolRegistry {
 					webSearch: {
 						service: this._webSearchService,
 					},
+					workspace: { sessionId: () => sessionManager.getSessionId() },
 				});
 
 		this._baseToolDefinitions = new Map(

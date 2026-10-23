@@ -103,19 +103,22 @@ export function ContextDetails({ onDone, capacityOnly = false, controls }) {
 		? html`<span class="badge" title=${t("The newest request reported no token usage, so these averages still describe the earlier requests.")}>${t("usage not reported")}</span>`
 		: null;
 	const data = contextCapacity(snap?.context);
-	const window_ = Math.max(data.window ?? 0, 1);
-	const remaining = data.window != null && data.used != null ? Math.max(0, data.window - data.used) : null;
+	// A model without a known window (0 or missing) has no capacity to fill: the bar stays empty and the numbers say "—"
+	// instead of a full bar next to "0%".
+	const knownWindow = data.window != null && data.window > 0;
+	const window_ = knownWindow ? data.window : 1;
+	const remaining = knownWindow && data.used != null ? Math.max(0, data.window - data.used) : null;
 	const tokensText = (value) => value == null ? "—" : fmtK(value);
-	const percentText = data.percent == null ? "—" : fmtPct(data.percent);
+	const percentText = data.percent == null || !knownWindow ? "—" : fmtPct(data.percent);
 	const level = data.percent > 90 ? "danger" : data.percent > 70 ? "warn" : "";
 	const cache = sessionCache(stats);
 
 	return html`<div class="cu">
 		<div class="cu-top">
-			<div class="cu-sub" title=${`${tokensText(data.used)} / ${tokensText(data.window)} ${t("tokens")}`}><strong>${tokensText(data.used)}</strong> / ${tokensText(data.window)}</div>
+			<div class="cu-sub" title=${`${tokensText(data.used)} / ${tokensText(knownWindow ? data.window : null)} ${t("tokens")}`}><strong>${tokensText(data.used)}</strong> / ${tokensText(knownWindow ? data.window : null)}</div>
 			<div class=${`cu-pct ${level}`}>${percentText}</div>
 		</div>
-		<div class="cu-bar" role="img" aria-label=${`${percentText} ${t("used")}`} ><i class=${`cu-fill ${level}`} style=${{ width: `${Math.min(100, pct(data.used ?? 0, window_))}%` }} /></div>
+		<div class="cu-bar" role="img" aria-label=${`${percentText} ${t("used")}`} ><i class=${`cu-fill ${level}`} style=${{ width: `${knownWindow ? Math.min(100, pct(data.used ?? 0, window_)) : 0}%` }} /></div>
 		<div class=${capacityOnly ? "cu-capacity-row" : "cu-stats"}>
 			<div class="cu-stat" title=${tokensText(remaining)}><span class="dim">${t("Remaining")}</span><strong>${tokensText(remaining)}</strong></div>
 			${controls ? html`<div class="cu-controls">${controls}</div>` : null}

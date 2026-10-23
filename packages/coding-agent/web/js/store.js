@@ -306,6 +306,8 @@ export const state = {
 		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
 		lang: normalizeLang(prefs.lang),
+		/** The user's own prompts (Session panel → My prompts); a click puts one into the input. */
+		savedPrompts: Array.isArray(prefs.savedPrompts) ? prefs.savedPrompts.filter((text) => typeof text === "string" && text.trim()) : [],
 		cmd: null,
 	},
 };
@@ -350,6 +352,28 @@ function applyPanel(sessionId) {
 		globalThis.myHarnessDesktop?.browser?.({ action: "hide" })?.catch?.(() => undefined);
 	const layout = state.view.wsMax && (!panel.panelOpen || panel.wsTabs.length === 0) ? { wsMax: false, wsMaxSidebar: null } : {};
 	state.view = { ...state.view, ...panel, ...layout };
+}
+
+/** The session whose panel is on screen: its tabs are the live `state.view` values. */
+export const panelSessionId = () => panelKey;
+
+/** A copy of the saved panel of a conversation that is not on screen (an empty one when it never opened a tab). */
+export function storedPanel(sessionId) {
+	const panel = panelStates.get(sessionId);
+	if (!panel) return emptyPanel();
+	return { ...panel, wsTabs: [...panel.wsTabs], wsClosed: [...(panel.wsClosed ?? [])] };
+}
+
+/**
+ * Save the panel of a conversation that is not on screen, e.g. a tab its Agent opened while the user looks at another
+ * chat or mode. Nothing is rendered: the user finds the tab when that chat is shown again.
+ */
+export function saveStoredPanel(sessionId, panel) {
+	if (!sessionId || sessionId === panelKey) return;
+	panelStates.delete(sessionId);
+	if (panel.wsTabs.length > 0 || panel.panelOpen) panelStates.set(sessionId, panel);
+	while (panelStates.size > PANEL_STATES_MAX) panelStates.delete(panelStates.keys().next().value);
+	persistView();
 }
 
 // Start-up choice of preferences (boot-theme.js): move a newer local copy to the shared one, and say so when saved
@@ -441,7 +465,7 @@ export function readWidthValue(value) {
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
 // had open is saved with `wsPanels` (see rememberPanel).
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell"];
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "runMode", "readWidth", "lang", "termShell", "savedPrompts"];
 function persistView() {
 	const out = {};
 	for (const key of PERSISTED) out[key] = state.view[key];

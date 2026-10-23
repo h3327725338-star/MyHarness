@@ -356,3 +356,7 @@
 /* The manual-run message on its own line under the buttons: full width and readable, with the Review jump kept beside it. */
 .sync-runline { display: flex; align-items: center; gap: 8px; padding: 2px 0 12px; color: var(--text-2); }
 .sync-runline .btn { flex: none; }
+/* A waiting count while its stage moves: "done / total" over a thin bar that fills as the pass goes. */
+.sync-count { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 120px; }
+.sync-meter { display: block; width: 100%; height: 4px; border-radius: 2px; background: var(--bg-inset); overflow: hidden; }
+.sync-meter > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width var(--t-base) var(--ease); }

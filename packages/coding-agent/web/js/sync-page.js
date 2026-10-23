@@ -3,7 +3,7 @@
 import { html, useEffect, useState, Collapse, Icon, Spinner, Toggle } from "./ui.js";
 import { api, post, set, toast, useStore } from "./store.js";
 import { t } from "./i18n.js";
-import { connectionBadge, deriveSync, footLine, reviewTitle, stateLine } from "./sync-status.js";
+import { connectionBadge, deriveSync, footLine, progressText, reviewTitle, stateLine } from "./sync-status.js";
 import { confirmDialog } from "./actions.js";
 
 function Card({ title, description, action, children, id }) {
@@ -45,6 +45,18 @@ function jumpTo(id) {
 	for (const node of document.querySelectorAll(".sync-hit")) node.classList.remove("sync-hit");
 	el.classList.add("sync-hit");
 	jumpTimer = setTimeout(() => el.classList.remove("sync-hit"), 1600);
+}
+
+/** A waiting count; while that stage moves it shows how far the pass got, with a bar that follows it. */
+function SyncCount({ status, stage, text }) {
+	const progress = progressText(status, stage);
+	if (!progress) return html`<span class="mono">${text}</span>`;
+	const { done, total } = status.progress;
+	const percent = Math.round((Math.min(done, total) / total) * 100);
+	return html`<span class="sync-count" role="status" title=${progress}>
+		<span class="mono">${progress}</span>
+		<span class="sync-meter" role="progressbar" aria-valuemin="0" aria-valuemax=${total} aria-valuenow=${Math.min(done, total)}><i style=${{ width: `${percent}%` }} /></span>
+	</span>`;
 }
 
 export function SyncPage() {
@@ -433,10 +445,10 @@ export function SyncPage() {
 				/>
 			<//>
 			<${Row} label=${t("Waiting to upload")} description=${t("Saved on this computer, not uploaded yet.")}>
-				<span class="mono">${sync.up > 0 ? `${sync.up} · ${formatBytes(status.pendingBytes)}` : t("Nothing waiting")}</span>
+				<${SyncCount} status=${status} stage="upload" text=${sync.up > 0 ? `${sync.up} · ${formatBytes(status.pendingBytes)}` : t("Nothing waiting")} />
 			<//>
 			<${Row} label=${t("Waiting to download")} description=${t("Changes from other computers, not applied here yet.")}>
-				<span class="mono">${sync.down > 0 ? `${sync.down}` : t("Nothing waiting")}</span>
+				<${SyncCount} status=${status} stage="download" text=${sync.down > 0 ? `${sync.down}` : t("Nothing waiting")} />
 			<//>
 			<${Row} label=${t("Last check")}>
 				<span class="dim">${timeText(status.lastCheckAt)}</span>

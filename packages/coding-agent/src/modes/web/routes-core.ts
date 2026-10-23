@@ -87,11 +87,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 			: [];
 		const header = "Attached files (use read to inspect):";
 		const refs = attachments.map((ref) => JSON.stringify(ref)).join("\n");
-		const text = attachments.length
-			? rawText
-				? header + "\n" + refs + "\n\n" + rawText
-				: header + "\n" + refs
-			: rawText;
+		const text = attachments.length ? (rawText ? `${header}\n${refs}\n\n${rawText}` : `${header}\n${refs}`) : rawText;
 		if (!text && images.length === 0) throw new HttpError(400, "Empty message");
 		const modeRaw = payload.mode;
 		const mode =

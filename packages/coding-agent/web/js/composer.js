@@ -1,6 +1,6 @@
 // Composer: one stable input card. Model and effort are one click away; a message sent while the agent runs follows the
 // default chosen in Settings (steer / queue / interrupt, see run-modes.js), Alt+Enter queues it.
-import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, Popover, Spinner, usePresence } from "./ui.js";
+import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Chevron, Collapse, Icon, Menu, MenuItem, Popover, Spinner, motionEnabled, usePresence } from "./ui.js";
 import { api, attempt, canSendToActive, chooseThinkingLevel, clearDraft, flushDrafts, loadGitStatus, loadModels, loadResources, loadSnapshot, markDraftSaved, post, scheduleDraftSave, setChatTouched, setView, state, toast, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { CommandPanel } from "./command-panel.js";
@@ -429,19 +429,56 @@ export function Composer() {
 		observer.observe(el);
 		return () => observer.disconnect();
 	}, [editorElement]);
+	// The large editor grows out of the input's own box and folds back into it: the card's box moves between its place
+	// in the column (kept by the ghost) and the middle of the window, so the change of size never jumps. `morphing`
+	// replaces the plain fade of the card while its box moves; without motion the editor still opens and closes at once.
+	const ghostBox = useRef(null);
+	const morphFrom = useRef(null);
+	const morph = useRef(null);
+	const [morphing, setMorphing] = useState(false);
+	const canMorph = () => typeof card.current?.animate === "function" && motionEnabled();
+	const boxOf = (rect) => ({ left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, translate: "0 0" });
+	const morphBox = (from, to, duration, fill = "none") => {
+		morph.current?.cancel();
+		morph.current = null;
+		const el = card.current;
+		if (!el || !from || !to || !canMorph()) return null;
+		const animation = el.animate([boxOf(from), boxOf(to)], { duration, fill, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+		morph.current = animation;
+		return animation;
+	};
 	const expand = () => {
-		ghost.current = card.current?.offsetHeight || 0;
+		const rect = card.current?.getBoundingClientRect();
+		ghost.current = rect?.height || card.current?.offsetHeight || 0;
+		morphFrom.current = rect && canMorph() ? rect : null;
+		setMorphing(!!morphFrom.current);
 		setExpanded(true);
 		setTimeout(() => area.current?.focus(), 0);
 	};
-	const collapse = () => {
-		if (closing) return;
+	useLayoutEffect(() => {
+		if (!expanded || !morphFrom.current) return;
+		const from = morphFrom.current;
+		morphFrom.current = null;
+		const animation = card.current ? morphBox(from, card.current.getBoundingClientRect(), 260) : null;
+		if (!animation) setMorphing(false);
+		else animation.finished.then(() => setMorphing(false), () => undefined);
+	}, [expanded]);
+	const collapse = ({ focus = true } = {}) => {
+		if (closing || !expanded) return;
+		const el = card.current;
+		const target = ghostBox.current?.getBoundingClientRect();
+		const animation = el && target ? morphBox(el.getBoundingClientRect(), { left: target.left, top: target.top, width: target.width, height: Math.max(target.height, 40) }, 220, "forwards") : null;
+		setMorphing(!!animation);
 		setClosing(true);
-		setTimeout(() => {
+		const done = () => {
 			setClosing(false);
 			setExpanded(false);
-			area.current?.focus();
-		}, 180);
+			setMorphing(false);
+			if (focus) area.current?.focus();
+		};
+		// The box keeps its folded place until the column has taken the card back, so nothing flashes in between.
+		if (animation) animation.finished.then(() => { done(); requestAnimationFrame(() => animation.cancel()); }, () => undefined);
+		else setTimeout(done, 180);
 	};
 	useEffect(() => {
 		if (!expanded) return undefined;
@@ -458,7 +495,12 @@ export function Composer() {
 
 	const { token, items: suggestions } = useSuggestions(text, caret);
 	// Another chat starts with the small input.
-	useEffect(() => setExpanded(false), [sessionId]);
+	useEffect(() => {
+		morph.current?.cancel();
+		setExpanded(false);
+		setClosing(false);
+		setMorphing(false);
+	}, [sessionId]);
 	useEffect(() => setSel(0), [token?.type, token?.query]);
 	// Closing the list (Esc, a click outside the input card) only hides it for the token being typed; the draft is untouched.
 	const tokenKey = token ? `${token.type}:${token.start}:${token.query}` : "";
@@ -622,6 +664,8 @@ const send = async (mode) => {
 		setImages([]);
 		setQuotes([]);
 		setHistoryIndex(-1);
+		// What was written in the large editor is on its way: the editor folds back into the input under the conversation.
+		if (expanded) collapse();
 		const restore = () => {
 			if (latest.current.sessionId === target.sessionId) {
 				setText(previousText);
@@ -751,8 +795,8 @@ const send = async (mode) => {
 				${snap?.trust && !snap.trust.trusted && snap.trust.requiresTrust ? html`<button class="env-chip warn" onClick=${() => setView({ settingsOpen: true, settingsSection: "safety" })} title=${t("Project resources are ignored until the project is trusted")}><${Icon} name="shield" size=${12} />${t("Untrusted project")}</button>` : null}
 				${Object.entries(surface.statuses || {}).map(([key, value]) => html`<span class="env-status truncate" key=${key}>${value}</span>`)}
 			</div>
-			${expanded ? html`<div class="composer-ghost" style=${{ height: `${ghost.current}px` }} /><div class=${`composer-scrim ${closing ? "leaving" : ""}`} onMouseDown=${collapse} />` : null}
-			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""} ${expanded ? "expanded" : ""} ${closing ? "leaving" : ""} ${tall || expanded ? "has-expand" : ""}`}
+			${expanded ? html`<div class="composer-ghost" ref=${ghostBox} style=${{ height: `${ghost.current}px` }} /><div class=${`composer-scrim ${closing ? "leaving" : ""}`} onMouseDown=${collapse} />` : null}
+			<div ref=${card} class=${`composer ${dragOver ? "drag" : ""} ${active ? "running" : ""} ${expanded ? "expanded" : ""} ${closing ? "leaving" : ""} ${morphing ? "morphing" : ""} ${tall || expanded ? "has-expand" : ""}`}
 				role=${expanded ? "dialog" : undefined} aria-modal=${expanded ? "true" : undefined} aria-label=${expanded ? t("Message editor") : undefined}>
 				${expanded
 					? html`<button class="icon-btn sm composer-expand" onClick=${collapse} title=${t("Collapse (Esc)")} aria-label=${t("Collapse the editor")}><${Icon} name="minimize" size=${14} /></button>`

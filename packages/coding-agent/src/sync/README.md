@@ -50,7 +50,7 @@ MyHarness/
 
 ### 对外接口
 
-`service.ts` 的 `SyncService` 是 Web 层唯一入口：`status()`、`updateConfig()`、`connect()`、`disconnect()`、`runNow()`、`startManual("download" | "sync")`、`bindWorkspace()`、`start()`、`dispose()`。手动“立即下载 / 立即同步”由引擎的 `runManual()` 执行：等当前一轮结束后再跑，下载会反复列出批次直到没有新的，进度在状态的 `manual` 里；暂停时拒绝。同步引擎本身可由测试直接构造：`new SyncEngine({ agentDir, dataRoot, deviceId, deviceName, store, accountKey })` 后 `setDrive()` + `runOnce()`。
+`service.ts` 的 `SyncService` 是 Web 层唯一入口：`status()`、`updateConfig()`、`connect()`、`disconnect()`、`runNow()`、`startManual("download" | "sync")`、`bindWorkspace()`、`start()`、`dispose()`。手动“立即下载 / 立即同步”由引擎的 `runManual()` 执行：等当前一轮结束后再跑，下载会反复列出批次直到没有新的，进度在状态的 `manual` 里；暂停时拒绝。自动轮次同样反复列出直到没有新批次，任何轮次正在搬运的数量都在状态的 `progress`（`{ stage, done, total }`）里，最多每 250ms 推送一次；搬运过东西的轮次 1.5 秒后接着跑下一轮。已处理批次按设备记水位（`appliedUpTo`，见 `foldAppliedBatches`），不再因 2000 条上限把旧批次当成新的反复下载。同步引擎本身可由测试直接构造：`new SyncEngine({ agentDir, dataRoot, deviceId, deviceName, store, accountKey })` 后 `setDrive()` + `runOnce()`。
 
 ### 依赖
 

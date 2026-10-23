@@ -323,6 +323,13 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 Settings → Google Drive has three buttons in one row:
 
 - **Check now** — one ordinary pass (download, then upload), the same pass the timer runs.
+
+Every pass, automatic or manual, keeps listing the batches folder until nothing new is left (at most 20 rounds), uploads
+up to four file contents at a time, and reports what it moves in the status's `progress = { stage: download|upload,
+done, total }` (null between passes). Settings shows it as "x / y" with a bar next to "Waiting to download" / "Waiting
+to upload" and in the line under the buttons, updated at most four times a second. A pass that downloaded or uploaded
+something is followed by the next one after 1.5 s instead of the normal poll, so a backlog keeps flowing; automatic
+passes also retry batches skipped for a missing object or a failed apply every 10 minutes.
 - **Download now** — download only. It waits for a pass that is already running, then keeps listing the batches folder
   until nothing new is left (bounded to 20 rounds), so batches that arrive during a long download are fetched too. It
   also gives batches skipped earlier for a missing object or a failed apply another chance. Nothing is uploaded.
@@ -394,8 +401,13 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 - A symlinked directory inside the Data root is refused as a safety measure, so a user who deliberately links a folder to
   another disk sees an error instead of a silent write. A Windows junction is not reported as a link by the filesystem
   API, so the Data root should stay on a real directory.
-- The applied-batch log keeps the last 2000 entries; an ancient batch that is re-listed is normally a no-op, but this is
-  not a substitute for the missing snapshot-based bootstrap.
+- Handled batches are remembered per device as a watermark (`appliedUpTo`: the newest batch time up to which every
+  listed batch of that device is handled) plus a short list of handled names above the first batch still waiting. The
+  watermark only passes a time when every batch of that device up to it is handled, so a deferred batch is never
+  skipped, and batches a manual run reopens stay open (`reopenedBatches`) until they are handled again. Before this, the
+  log kept only the last 2000 names, so a Drive folder with more batches than that downloaded its oldest batches again
+  on every pass (shown as a backlog of hundreds of "waiting to download" items). A state written by the old version
+  whose list is already full treats the batches older than each device's oldest remembered one as handled.
 
 ## Tests
 

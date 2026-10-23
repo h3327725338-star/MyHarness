@@ -3,7 +3,8 @@
 // state it actually reached, so the Agent can verify a command instead of assuming it worked. Nothing here creates a
 // new capability: every command is the same action a person triggers from the header, the tab strip or the viewer.
 import { actions } from "./actions.js";
-import { state } from "./store.js";
+import { panelSessionId, saveStoredPanel, state, storedPanel } from "./store.js";
+import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
 
 const PANE = ".panel-pane";
 
@@ -51,10 +52,115 @@ export function workspaceState() {
 	};
 }
 
+const tabSummary = (tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url });
+
+/**
+ * A command from the Agent of a chat that is not on screen (another chat, or the other mode) changes that chat's saved
+ * panel only. Rendering it here would put that chat's file or website into the panel of the chat the user is working
+ * in; the user finds the tab when they open that chat again.
+ */
+function runStoredPanelCommand(sessionId, value, action) {
+	const panel = storedPanel(sessionId);
+	const report = () => ({
+		panelOpen: panel.panelOpen,
+		activeId: panel.wsActive,
+		tabs: panel.wsTabs.map(tabSummary),
+		closed: panel.wsClosed.map(tabSummary),
+		media: null,
+		onScreen: false,
+	});
+	const save = () => saveStoredPanel(sessionId, panel);
+	const activate = (tab) => {
+		panel.wsActive = tab.id;
+		panel.panelOpen = true;
+		if (PANEL_TAB_TYPES.includes(tab.type)) panel.panelTab = tab.type;
+	};
+	const closeHostView = (tab) => {
+		const desktop = window.myHarnessDesktop;
+		if (tab?.type === "browser" && tab.url && desktop?.browser) desktop.browser({ action: "close", tabId: tab.id }).catch(() => undefined);
+	};
+	const remove = (id) => {
+		const index = panel.wsTabs.findIndex((item) => item.id === id);
+		if (index < 0) return;
+		const [closed] = panel.wsTabs.splice(index, 1);
+		panel.wsClosed = [...panel.wsClosed.slice(-19), closed];
+		closeHostView(closed);
+		if (panel.wsActive === id) {
+			const next = panel.wsTabs[Math.min(index, panel.wsTabs.length - 1)];
+			panel.wsActive = next ? next.id : null;
+			if (next && PANEL_TAB_TYPES.includes(next.type)) panel.panelTab = next.type;
+		}
+		if (panel.wsTabs.length === 0) panel.panelOpen = false;
+	};
+	const open = (descriptor) => {
+		const wanted = descriptor?.type === "browser" && !descriptor.id && typeof descriptor.url === "string" ? { ...descriptor, id: browserTabId(panel.wsTabs, descriptor.url) } : descriptor;
+		const tab = normalizeWorkspaceTab(wanted);
+		if (!tab) return null;
+		if (!panel.wsTabs.some((item) => item.id === tab.id)) panel.wsTabs.push(tab);
+		activate(tab);
+		return tab.id;
+	};
+	switch (action) {
+		case "tabs":
+			return report();
+		case "open": {
+			const tab = value.tab || {};
+			if (!open({ type: tab.type, path: tab.path, url: tab.url }))
+				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
+			save();
+			return report();
+		}
+		case "close":
+			remove(String(value.tabId || ""));
+			save();
+			return report();
+		case "activate": {
+			const tab = panel.wsTabs.find((item) => item.id === String(value.tabId || ""));
+			if (tab) activate(tab);
+			save();
+			return report();
+		}
+		case "closeOthers": {
+			const keep = panel.wsTabs.find((item) => item.id === String(value.tabId || ""));
+			if (keep) {
+				const closed = panel.wsTabs.filter((item) => item.id !== keep.id);
+				for (const item of closed) closeHostView(item);
+				panel.wsTabs = [keep];
+				panel.wsClosed = [...panel.wsClosed, ...closed].slice(-20);
+				activate(keep);
+				save();
+			}
+			return report();
+		}
+		case "move": {
+			const from = panel.wsTabs.findIndex((item) => item.id === String(value.fromId || ""));
+			const to = panel.wsTabs.findIndex((item) => item.id === String(value.toId || ""));
+			if (from >= 0 && to >= 0 && from !== to) {
+				const [moved] = panel.wsTabs.splice(from, 1);
+				panel.wsTabs.splice(to, 0, moved);
+				save();
+			}
+			return report();
+		}
+		case "reopen": {
+			const last = panel.wsClosed.pop();
+			if (last) open(last);
+			save();
+			return report();
+		}
+		case "media":
+			throw new Error("workspace: this chat is not on screen, so its media cannot be played; the user has to open the chat first");
+		default:
+			throw new Error(`workspace: unknown command ${action}`);
+	}
+}
+
 /** Apply one command from the host and report the resulting state. Errors are reported, never swallowed. */
 export async function runWorkspaceCommand(command) {
 	const value = command && typeof command === "object" ? command : {};
 	const action = String(value.action || "");
+	const sessionId = typeof value.sessionId === "string" && value.sessionId ? value.sessionId : null;
+	if (sessionId && sessionId !== panelSessionId()) return runStoredPanelCommand(sessionId, value, action);
 	switch (action) {
 		case "tabs":
 			return workspaceState();

@@ -23,7 +23,10 @@ const NO_ANSWER = Symbol("no answer");
  * Stand-in for the Electron host: answers `browser` and `workspace` commands with whatever the test returns, and keeps
  * the commands it received so the test can check what was actually asked.
  */
-function fakeHost(respond: (channel: string, command: Record<string, unknown>) => unknown) {
+function fakeHost(
+	respond: (channel: string, command: Record<string, unknown>) => unknown,
+	sessionId?: () => string | undefined,
+) {
 	const sent: SentCommand[] = [];
 	let deliver: ((message: unknown) => void) | undefined;
 	const channel = new DesktopWorkspaceChannel(
@@ -54,7 +57,7 @@ function fakeHost(respond: (channel: string, command: Record<string, unknown>) =
 			deliver = listen;
 		},
 	);
-	const tool = createWorkspaceToolDefinition({ channel: () => channel });
+	const tool = createWorkspaceToolDefinition({ channel: () => channel, ...(sessionId ? { sessionId } : {}) });
 	return { channel, tool, sent };
 }
 
@@ -125,6 +128,24 @@ describe("workspace tool: reading the workspace", () => {
 });
 
 describe("workspace tool: opening and closing tabs", () => {
+	it("names its own chat on every page command, so a chat in the background never fills the panel on screen", async () => {
+		const { tool, sent } = fakeHost(
+			(channel) =>
+				channel === "workspace"
+					? pageState([{ id: "file:notes.md", type: "file", path: "notes.md" }], "file:notes.md")
+					: [],
+			() => "general-session-1",
+		);
+		await call(tool, { operation: "open", type: "file", path: "notes.md" });
+		await call(tool, { operation: "tabs" });
+		const pageCommands = sent.filter((entry) => entry.action === "workspace");
+		expect(pageCommands.length).toBeGreaterThan(1);
+		for (const entry of pageCommands) expect(entry.command.sessionId).toBe("general-session-1");
+		// Browser commands go to the host's views, which are keyed by tab id; they carry no chat.
+		for (const entry of sent.filter((item) => item.action === "browser"))
+			expect(entry.command.sessionId).toBeUndefined();
+	});
+
 	it("opens a file tab through the page and returns the tab it became", async () => {
 		const { tool, sent } = fakeHost((channel, command) => {
 			if (channel !== "workspace") throw new Error("the page owns file tabs");

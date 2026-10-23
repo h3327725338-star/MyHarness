@@ -90,7 +90,13 @@ export function reviewTarget(sync) {
  * breakdown instead of "the pass finished, N items are still waiting". A stale "finished" never hides open items.
  */
 export function footLine(manual, status, sync) {
+	const moving = status?.progress && status.progress.total > 0 ? status.progress : null;
 	if (manual?.state === "running") {
+		if (manual.stage === "waiting" && moving) {
+			// The pass the run waits for counts its own work: show that instead of a bare "waiting".
+			const text = moving.stage === "upload" ? t("Uploading…") : t("Downloading…");
+			return { text: `${text} ${progressText(status, moving.stage)}`, spinning: true };
+		}
 		if (manual.stage === "waiting") {
 			const phase = status?.phase;
 			if (phase === "downloading") {
@@ -138,6 +144,11 @@ export function footLine(manual, status, sync) {
 			target: reviewTarget(sync),
 		};
 	}
+	if (moving) {
+		// An automatic pass moving a backlog: the same live count a manual run shows.
+		const text = moving.stage === "upload" ? t("Uploading…") : t("Downloading…");
+		return { text: `${text} ${progressText(status, moving.stage)}`, spinning: true };
+	}
 	const waiting = sync.up + sync.down + sync.filePending + (manual?.remainingDownloads ?? 0);
 	if (waiting > 0 || status?.phase === "uploading" || status?.phase === "downloading") {
 		let text = t("Syncing: {up} waiting to upload, {down} waiting to download.", { up: sync.up, down: sync.down });
@@ -146,6 +157,13 @@ export function footLine(manual, status, sync) {
 	}
 	if (!manual) return null;
 	return { text: manual.kind === "download" ? t("Download finished.") : t("Sync finished.") };
+}
+
+/** "12 / 240" for the pass in flight in one stage, or "" when that stage is not moving. */
+export function progressText(status, stage) {
+	const progress = status?.progress;
+	if (!progress || progress.stage !== stage || !(progress.total > 0)) return "";
+	return `${Math.min(progress.done, progress.total)} / ${progress.total}`;
 }
 
 /** A kept-for-review entry is keyed `${kind}:${id}`: show what it is and why it was kept, not the bare key. */

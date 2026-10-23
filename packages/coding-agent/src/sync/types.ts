@@ -129,6 +129,14 @@ export interface SyncState {
 	 * in between is resolved on the next start by looking the manifest up instead of publishing the same work twice.
 	 */
 	publishing?: { batchFile: string; operations: SyncOperation[] };
+	/**
+	 * Per device: the newest batch time (base 36, as in the batch file name) up to which every batch of that device in
+	 * Drive is handled. Names covered here leave `appliedBatches`, so the list stays short however many batches Drive
+	 * keeps; without it, the capped list forgot old batches and they were downloaded again on every pass.
+	 */
+	appliedUpTo?: Record<string, string>;
+	/** Batches under a device's `appliedUpTo` that a manual run asked to try again (skipped earlier). */
+	reopenedBatches?: string[];
 }
 
 export interface SyncConfig {
@@ -172,6 +180,13 @@ export interface StoredGoogleCredentials {
 }
 
 /** A manual "Download now" / "Sync now" run and its progress, kept until the next manual run replaces it. */
+/** Progress of the pass in flight: changes applied from Drive, or files of this computer uploaded. */
+export interface SyncProgress {
+	stage: "download" | "upload";
+	done: number;
+	total: number;
+}
+
 export interface SyncManualRun {
 	kind: "download" | "sync";
 	state: "running" | "done" | "failed";
@@ -218,6 +233,8 @@ export interface SyncStatusSnapshot {
 	externalRisk: { detected: boolean; message?: string };
 	/** The last manual download/sync run, or null when none ran in this process. */
 	manual: SyncManualRun | null;
+	/** What the pass in flight (automatic or manual) is moving right now; null between passes. */
+	progress?: SyncProgress | null;
 	/** The independent workspace file channel; absent until the service is wired with a transport. */
 	files?: import("./files/types.ts").WorkspaceFileSyncStatus;
 }

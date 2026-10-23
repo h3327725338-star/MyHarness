@@ -194,7 +194,7 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./files/grep.ts";
 import { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./shell/bash.ts";
-import { createWorkspaceTool, createWorkspaceToolDefinition } from "./workspace.ts";
+import { createWorkspaceTool, createWorkspaceToolDefinition, type WorkspaceToolOptions } from "./workspace.ts";
 
 export { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
 
@@ -355,6 +355,7 @@ export interface ToolsOptions {
 	memory?: MemoryToolOptions;
 	sessionHistory?: SessionHistoryToolOptions;
 	webSearch?: WebSearchToolOptions;
+	workspace?: WorkspaceToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -420,7 +421,7 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 		case "web_fetch":
 			return createWebFetchToolDefinition(cwd, options?.webSearch);
 		case "workspace":
-			return createWorkspaceToolDefinition();
+			return createWorkspaceToolDefinition(options?.workspace);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -489,7 +490,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 		case "web_fetch":
 			return createWebFetchTool(cwd, options?.webSearch);
 		case "workspace":
-			return createWorkspaceTool();
+			return createWorkspaceTool(options?.workspace);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -528,7 +529,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
-		workspace: createWorkspaceToolDefinition(),
+		workspace: createWorkspaceToolDefinition(options?.workspace),
 	};
 }
 
@@ -582,6 +583,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
-		workspace: createWorkspaceTool(),
+		workspace: createWorkspaceTool(options?.workspace),
 	};
 }

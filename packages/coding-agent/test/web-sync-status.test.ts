@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { connectionBadge, deriveSync, footLine, reviewTarget, reviewTitle, stateLine } = await import(
+const { connectionBadge, deriveSync, footLine, progressText, reviewTarget, reviewTitle, stateLine } = await import(
 	new URL("../web/js/sync-status.js", import.meta.url).href
 );
 
@@ -120,5 +120,22 @@ describe("Google Drive settings status", () => {
 		expect(reviewTitle({ kind: "session", reason: "deleted-remotely" })).toBe(
 			"Session · Deleted elsewhere, changed here",
 		);
+	});
+
+	it("counts an automatic pass live, and a manual run waiting for it shows the same count", () => {
+		const moving = status({
+			phase: "downloading",
+			pendingDownloads: 212,
+			progress: { stage: "download", done: 37, total: 212 },
+		});
+		expect(progressText(moving, "download")).toBe("37 / 212");
+		expect(progressText(moving, "upload")).toBe("");
+		expect(footLine(null, moving, deriveSync(moving))).toEqual({ text: "Downloading… 37 / 212", spinning: true });
+		const waiting = footLine(
+			{ kind: "download", state: "running", stage: "waiting", done: 0, total: 0 },
+			moving,
+			deriveSync(moving),
+		);
+		expect(waiting).toEqual({ text: "Downloading… 37 / 212", spinning: true });
 	});
 });

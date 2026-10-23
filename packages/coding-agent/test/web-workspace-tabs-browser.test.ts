@@ -92,6 +92,15 @@ try {
 	check(opened.tabs.some(t=>t.id==='file:three.ts')&&opened.activeId==='file:three.ts','the open command did not open and activate the tab');
 	const closed=await runWorkspaceCommand({action:'close',tabId:'file:three.ts'});
 	check(!closed.tabs.some(t=>t.id==='file:three.ts'),'the close command left the tab open');
+	// The Agent of a chat that is not on screen (another chat, the other mode) fills its own panel, not this one.
+	const onScreen=JSON.stringify(state.view.wsTabs.map(t=>t.id));
+	const background=await runWorkspaceCommand({action:'open',sessionId:'background-chat',tab:{type:'file',path:'elsewhere.ts'}});
+	check(JSON.stringify(state.view.wsTabs.map(t=>t.id))===onScreen,'a background chat opened a tab in the panel on screen: '+JSON.stringify(state.view.wsTabs.map(t=>t.id)));
+	check(background.onScreen===false&&background.activeId==='file:elsewhere.ts'&&background.panelOpen===true,'the background chat did not get its own tab: '+JSON.stringify(background));
+	const again=await runWorkspaceCommand({action:'tabs',sessionId:'background-chat'});
+	check(again.tabs.length===1&&again.tabs[0].id==='file:elsewhere.ts','the background chat lost its tab: '+JSON.stringify(again));
+	const backgroundClosed=await runWorkspaceCommand({action:'close',sessionId:'background-chat',tabId:'file:elsewhere.ts'});
+	check(backgroundClosed.tabs.length===0&&backgroundClosed.panelOpen===false,'closing the background tab failed: '+JSON.stringify(backgroundClosed));
 	let unknownFailed=false;
 	try{await runWorkspaceCommand({action:'nope'})}catch(error){unknownFailed=/unknown command/.test(error.message)}
 	check(unknownFailed,'an unknown command was not reported as an error');

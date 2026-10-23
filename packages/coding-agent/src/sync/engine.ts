@@ -35,6 +35,7 @@ import type {
 	SyncIssue,
 	SyncManualRun,
 	SyncOperation,
+	SyncProgress,
 	SyncRecord,
 	SyncState,
 	SyncStatusSnapshot,
@@ -82,10 +83,98 @@ const MAX_CACHED_OBJECTS = 64;
 
 /** A manual download keeps listing until Drive has nothing new; this bounds it when another device keeps writing. */
 const MAX_DRAIN_ROUNDS = 20;
+/** Uploads of file contents running at the same time within one published batch. */
+const UPLOAD_CONCURRENCY = 4;
+/** The next pass after one that moved something: the backlog keeps flowing instead of waiting for the next poll. */
+const FOLLOW_UP_MS = 1500;
+/** How often automatic passes retry batches they skipped (manual runs always do). */
+const AUTO_REOPEN_MS = 10 * 60_000;
+/** Smallest gap between two progress updates sent to the page. */
+const PROGRESS_EMIT_MS = 250;
 /**
  * Local conditions that block writing a remote change here (disk full, file in use, no permission). The batch stays
  * waiting to download instead of being recorded as applied with an issue, and the reason is shown.
  */
+/** A batch file name is `<deviceId>-<Date.now() in base 36>-<8 hex>.json` (publishBatch). */
+const BATCH_NAME = /^(.+)-([0-9a-z]{6,12})-([0-9a-f]{8})(?:\.json)?$/u;
+const BATCH_TIME_MIN = Date.UTC(2020, 0, 1);
+const BATCH_TIME_MAX = Date.UTC(2200, 0, 1);
+
+/** The device and creation time a batch file name carries, or undefined for a name this version did not write. */
+export function parseBatchName(name: string): { device: string; time: number } | undefined {
+	const match = BATCH_NAME.exec(name);
+	if (!match) return undefined;
+	const time = Number.parseInt(match[2]!, 36);
+	if (!Number.isSafeInteger(time) || time < BATCH_TIME_MIN || time > BATCH_TIME_MAX) return undefined;
+	return { device: match[1]!, time };
+}
+
+/**
+ * Move the per-device watermark of handled batches forward over the batches Drive lists, and drop the names it now
+ * covers from the applied list. A watermark only passes a time when every listed batch of that device up to it is
+ * handled, so a batch that is still waiting (deferred, or reopened by a manual run) is never skipped.
+ *
+ * `bootstrap` is for a state written before watermarks existed whose applied list was already cut at its cap: the
+ * batches older than a device's oldest remembered one were handled before they fell off the list.
+ */
+export function foldAppliedBatches(
+	state: { appliedBatches: string[]; appliedUpTo?: Record<string, string>; reopenedBatches?: string[] },
+	listed: readonly string[],
+	bootstrap = false,
+): void {
+	const upTo = { ...(state.appliedUpTo ?? {}) };
+	const listedSet = new Set(listed);
+	const reopened = new Set((state.reopenedBatches ?? []).filter((name) => listedSet.has(name)));
+	const applied = new Set(state.appliedBatches);
+	const isApplied = (name: string) =>
+		!reopened.has(name) && (applied.has(name) || applied.has(name.replace(/\.json$/u, "")));
+	const byDevice = new Map<string, Map<number, string[]>>();
+	for (const name of listed) {
+		const parsed = parseBatchName(name);
+		if (!parsed) continue;
+		let times = byDevice.get(parsed.device);
+		if (!times) {
+			times = new Map();
+			byDevice.set(parsed.device, times);
+		}
+		const group = times.get(parsed.time);
+		if (group) group.push(name);
+		else times.set(parsed.time, [name]);
+	}
+	if (bootstrap) {
+		const oldest = new Map<string, number>();
+		for (const name of state.appliedBatches) {
+			const parsed = parseBatchName(name);
+			if (!parsed) continue;
+			oldest.set(parsed.device, Math.min(oldest.get(parsed.device) ?? parsed.time, parsed.time));
+		}
+		for (const [device, time] of oldest) if (upTo[device] === undefined) upTo[device] = (time - 1).toString(36);
+	}
+	for (const [device, times] of byDevice) {
+		let mark = upTo[device] !== undefined ? Number.parseInt(upTo[device]!, 36) : -1;
+		for (const time of [...times.keys()].sort((a, b) => a - b)) {
+			if (time <= mark) continue;
+			if (!times.get(time)!.every(isApplied)) break;
+			mark = time;
+		}
+		if (mark >= 0) upTo[device] = mark.toString(36);
+	}
+	state.appliedUpTo = upTo;
+	state.reopenedBatches = [...reopened];
+	state.appliedBatches = state.appliedBatches.filter((name) => !batchCovered(state, name));
+}
+
+/** Whether a batch is already handled by the watermark of its device (and was not reopened). */
+export function batchCovered(
+	state: { appliedUpTo?: Record<string, string>; reopenedBatches?: string[] },
+	name: string,
+): boolean {
+	if (state.reopenedBatches?.includes(name)) return false;
+	const parsed = parseBatchName(name);
+	const mark = parsed ? state.appliedUpTo?.[parsed.device] : undefined;
+	return parsed !== undefined && mark !== undefined && parsed.time <= Number.parseInt(mark, 36);
+}
+
 const LOCAL_ENVIRONMENT_CODES = new Set([
 	"ENOSPC",
 	"EDQUOT",
@@ -163,6 +252,18 @@ export class SyncEngine {
 	private manual: SyncManualRun | null = null;
 	/** Whether this pass already built the upload queue (and so has a current pending count). */
 	private pushPlanned = false;
+	/** Every batch name of the latest Drive listing: what the applied-batch watermark is folded against. */
+	private listedBatches: string[] | undefined;
+	/** Batches this pass deferred in an earlier listing round (they are not listed again in the same pass). */
+	private waitingInPass = 0;
+	/** What the pass in flight is moving, automatic or manual, so Settings can count it while it runs. */
+	private progress: SyncProgress | null = null;
+	/** Whether the pass in flight downloaded or uploaded anything: then more is likely waiting, so the next one comes soon. */
+	private moved = false;
+	private lastEmitAt = 0;
+	private emitTimer: NodeJS.Timeout | undefined;
+	/** When an automatic pass last tried the batches it skipped earlier (missing content, a change that failed). */
+	private lastReopenAt = 0;
 
 	constructor(options: SyncEngineOptions & { store: SyncLocalStore; accountKey: string }) {
 		this.options = options;
@@ -257,6 +358,7 @@ export class SyncEngine {
 				.slice(-MAX_ISSUES),
 			externalRisk: detectExternalSyncRisk(this.options.dataRoot),
 			manual: this.manual ? { ...this.manual } : null,
+			progress: this.progress ? { ...this.progress } : null,
 		};
 	}
 
@@ -382,6 +484,8 @@ export class SyncEngine {
 		this.running = true;
 		this.hadChanges = false;
 		this.pushPlanned = false;
+		this.moved = false;
+		this.progress = null;
 		try {
 			const space = await this.drive.ensureSpace();
 			this.adoptSpace(space);
@@ -389,10 +493,16 @@ export class SyncEngine {
 			await this.resolvePendingPublish();
 			this.phase = mode === "auto" ? "scanning" : "downloading";
 			this.emitStatus();
-			if (mode !== "auto") this.reopenSkippedBatches();
+			// A manual run tries skipped batches again at once; automatic passes do it now and then by themselves, so a
+			// batch whose content arrived later does not wait for someone to press a button.
+			if (mode !== "auto" || Date.now() - this.lastReopenAt >= AUTO_REOPEN_MS) {
+				this.lastReopenAt = Date.now();
+				this.reopenSkippedBatches();
+			}
 			let pullError: unknown;
 			try {
-				await this.pull(mode !== "auto");
+				// Every pass keeps listing until nothing new is left, so a long backlog is not spread over many polls.
+				await this.pull(true);
 			} catch (error) {
 				// A download that keeps failing must not hold this device's own changes back: upload them anyway, then
 				// report the download failure. Concurrent edits are still detected by the version vectors.
@@ -423,14 +533,17 @@ export class SyncEngine {
 			}
 		} finally {
 			this.running = false;
+			this.progress = null;
 			this.emitStatus();
 			if (!this.stopped)
 				this.schedule(
 					this.phase === "error"
 						? RETRY_AFTER_ERROR_MS
-						: this.hadChanges
-							? this.config.pollActiveMs
-							: this.config.pollIdleMs,
+						: this.moved
+							? FOLLOW_UP_MS
+							: this.hadChanges
+								? this.config.pollActiveMs
+								: this.config.pollIdleMs,
 				);
 		}
 	}
@@ -441,9 +554,39 @@ export class SyncEngine {
 	}
 
 	private advanceManual(count: number): void {
-		if (this.manual?.state !== "running") return;
-		this.manual = { ...this.manual, done: Math.min(this.manual.total, this.manual.done + count) };
-		this.emitStatus();
+		if (this.progress)
+			this.progress = { ...this.progress, done: Math.min(this.progress.total, this.progress.done + count) };
+		if (this.manual?.state === "running")
+			this.manual = { ...this.manual, done: Math.min(this.manual.total, this.manual.done + count) };
+		this.emitProgress();
+	}
+
+	/** Start counting a stage of the pass in flight (downloads add up over the listing rounds of one pass). */
+	private beginProgress(stage: SyncProgress["stage"], total: number): void {
+		const current = this.progress?.stage === stage ? this.progress : null;
+		this.progress = { stage, done: current?.done ?? 0, total: (current?.total ?? 0) + total };
+	}
+
+	/**
+	 * Status while work moves: at most a few times a second, and always once more after the last step, so the
+	 * counters in Settings follow the work without flooding the page with events.
+	 */
+	private emitProgress(): void {
+		const wait = PROGRESS_EMIT_MS - (Date.now() - this.lastEmitAt);
+		if (wait <= 0) {
+			if (this.emitTimer) clearTimeout(this.emitTimer);
+			this.emitTimer = undefined;
+			this.lastEmitAt = Date.now();
+			this.emitStatus();
+			return;
+		}
+		if (this.emitTimer) return;
+		this.emitTimer = setTimeout(() => {
+			this.emitTimer = undefined;
+			this.lastEmitAt = Date.now();
+			this.emitStatus();
+		}, wait);
+		this.emitTimer.unref?.();
 	}
 
 	/**
@@ -488,6 +631,8 @@ export class SyncEngine {
 		this.state.appliedBatches = this.state.appliedBatches.filter(
 			(name) => !reopen.has(name) && !reopen.has(`${name}.json`),
 		);
+		// A reopened batch may already sit under its device's watermark; it stays open until it is handled again.
+		this.state.reopenedBatches = [...new Set([...(this.state.reopenedBatches ?? []), ...reopen])];
 		for (const name of reopen) delete this.state.deferredBatches?.[name.replace(/\.json$/u, "")];
 		this.store.saveState(this.state);
 	}
@@ -615,17 +760,21 @@ export class SyncEngine {
 		this.pushPlanned = true;
 		const operations = await this.planUploads();
 		this.setManualStage("upload", 0, operations.length);
+		if (operations.length > 0) this.beginProgress("upload", operations.length);
 		this.emitStatus();
 		if (operations.length === 0) return;
 		// Publish in bounded batches: one huge batch would exceed the receiver's limit and never be delivered. Each
 		// batch is committed locally as soon as it is in Drive, so an interruption resumes after the last one.
 		for (let index = 0; index < operations.length; index += PUBLISH_CHUNK) {
 			const chunk = operations.slice(index, index + PUBLISH_CHUNK);
-			await this.publishBatch(chunk);
-			this.pendingUploads = Math.max(0, this.pendingUploads - chunk.length);
-			this.pendingBytes = Math.max(0, this.pendingBytes - chunk.reduce((total, item) => total + item.size, 0));
+			await this.publishBatch(chunk, (operation) => {
+				// Counted per file as it reaches Drive, not per published batch of up to PUBLISH_CHUNK changes.
+				this.pendingUploads = Math.max(0, this.pendingUploads - 1);
+				this.pendingBytes = Math.max(0, this.pendingBytes - operation.size);
+				this.advanceManual(1);
+			});
 			this.state.lastUploadAt = nowIso();
-			this.advanceManual(chunk.length);
+			this.moved = true;
 		}
 		this.state.lastUploadAt = nowIso();
 		this.pendingUploads = 0;
@@ -705,30 +854,23 @@ export class SyncEngine {
 		return operations;
 	}
 
-	private async publishBatch(planned: SyncOperation[]): Promise<void> {
+	private async publishBatch(planned: SyncOperation[], onEach?: (operation: SyncOperation) => void): Promise<void> {
 		const drive = this.drive;
 		if (!drive) return;
-		const operations: SyncOperation[] = [];
-		for (const operation of planned) {
-			if (operation.op === "put" && !this.uploadedObjects.has(operation.hash)) {
-				// Content is read only now, one file at a time, instead of holding a whole first upload in memory. A file
-				// that changed since the scan is left for the next pass, so an object never differs from its hash.
-				const entity = this.currentScan.get(operation.key);
-				let data: Uint8Array | undefined;
-				try {
-					data = entity ? this.readEntity(entity) : undefined;
-				} catch {
-					data = undefined;
-				}
-				if (!data || sha256(data) !== operation.hash) {
-					this.fileCache.delete(operation.key);
-					continue;
-				}
-				await drive.uploadObject(operation.hash, data);
-				this.uploadedObjects.add(operation.hash);
+		// Contents go up a few at a time; the manifest keeps the planned order, whatever order the uploads finish in.
+		const kept: (SyncOperation | undefined)[] = new Array(planned.length);
+		const uploading = new Map<string, Promise<void>>();
+		let next = 0;
+		const worker = async (): Promise<void> => {
+			while (next < planned.length) {
+				const index = next++;
+				const operation = planned[index]!;
+				kept[index] = await this.prepareOperation(drive, operation, uploading);
+				onEach?.(operation);
 			}
-			operations.push(operation);
-		}
+		};
+		await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, planned.length) }, () => worker()));
+		const operations = kept.filter((operation): operation is SyncOperation => operation !== undefined);
 		if (operations.length === 0) return;
 		const sequence = this.state.deviceSeq + 1;
 		// Time plus a random suffix: a lost local state must never overwrite an older batch under the same name.
@@ -753,9 +895,50 @@ export class SyncEngine {
 		this.store.saveState(this.state);
 	}
 
+	/**
+	 * Upload the content of one planned change if Drive does not have it yet. Undefined when the file changed since the
+	 * scan: it is left for the next pass, so an object never differs from its hash.
+	 */
+	private async prepareOperation(
+		drive: DrivePort,
+		operation: SyncOperation,
+		uploading: Map<string, Promise<void>>,
+	): Promise<SyncOperation | undefined> {
+		if (operation.op !== "put" || this.uploadedObjects.has(operation.hash)) return operation;
+		const running = uploading.get(operation.hash);
+		if (running) {
+			await running;
+			return this.uploadedObjects.has(operation.hash) ? operation : undefined;
+		}
+		// Content is read only now, a few files at a time, instead of holding a whole first upload in memory.
+		const entity = this.currentScan.get(operation.key);
+		let data: Uint8Array | undefined;
+		try {
+			data = entity ? this.readEntity(entity) : undefined;
+		} catch {
+			data = undefined;
+		}
+		if (!data || sha256(data) !== operation.hash) {
+			this.fileCache.delete(operation.key);
+			return undefined;
+		}
+		const content = data;
+		const upload = drive.uploadObject(operation.hash, content).then(() => {
+			this.uploadedObjects.add(operation.hash);
+		});
+		uploading.set(operation.hash, upload);
+		try {
+			await upload;
+		} finally {
+			uploading.delete(operation.hash);
+		}
+		return operation;
+	}
+
 	/** Record a batch that is in Drive as this device's committed state. */
 	private commitPublished(batchFile: string, operations: SyncOperation[]): void {
-		this.state.appliedBatches = capList([...this.state.appliedBatches, batchFile], MAX_APPLIED_BATCHES);
+		this.listedBatches?.push(batchFile);
+		this.rememberApplied(batchFile);
 		for (const operation of operations) {
 			if (operation.op === "delete") {
 				delete this.state.entities[operation.key];
@@ -780,8 +963,28 @@ export class SyncEngine {
 	/** Mark a batch as handled so it is never read again. */
 	/** Mark a batch as handled by the name it has in Drive, so a later pass never reads it again. */
 	private markApplied(fileName: string, batchId: string): void {
-		this.state.appliedBatches = capList([...this.state.appliedBatches, fileName], MAX_APPLIED_BATCHES);
+		this.rememberApplied(fileName);
 		if (this.state.deferredBatches) delete this.state.deferredBatches[batchId];
+	}
+
+	/**
+	 * Add a handled batch name. The names the watermark covers are folded away first, so the cap below only ever
+	 * trims a list that really holds that many open names, never handled batches that would come back as new.
+	 */
+	private rememberApplied(fileName: string): void {
+		if (this.state.reopenedBatches?.includes(fileName))
+			this.state.reopenedBatches = this.state.reopenedBatches.filter((name) => name !== fileName);
+		this.state.appliedBatches = [...this.state.appliedBatches, fileName];
+		if (this.state.appliedBatches.length > MAX_APPLIED_BATCHES / 2) this.foldApplied();
+		this.state.appliedBatches = capList(this.state.appliedBatches, MAX_APPLIED_BATCHES);
+	}
+
+	/** Fold the applied list against the latest Drive listing (see foldAppliedBatches). */
+	private foldApplied(): void {
+		if (!this.listedBatches) return;
+		// A state from before watermarks whose list already reached the cap has forgotten its oldest handled batches.
+		const bootstrap = this.state.appliedUpTo === undefined && this.state.appliedBatches.length >= MAX_APPLIED_BATCHES;
+		foldAppliedBatches(this.state, this.listedBatches, bootstrap);
 	}
 
 	/** Record a problem retrying cannot fix, so Settings can show it instead of a silent loop. */
@@ -809,6 +1012,7 @@ export class SyncEngine {
 		const rounds = drain ? MAX_DRAIN_ROUNDS : 1;
 		// A batch still waiting for an object is tried once per call, so later rounds cannot use up its deferrals.
 		const seen = new Set<string>();
+		this.waitingInPass = 0;
 		for (let round = 0; round < rounds; round += 1) {
 			const handled = await this.pullRound(seen);
 			if (handled === 0) break;
@@ -829,17 +1033,22 @@ export class SyncEngine {
 			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
 		});
 		const files = await drive.list("batches");
+		this.listedBatches = files.map((file) => file.name);
+		this.foldApplied();
 		const known = new Set(this.state.appliedBatches);
 		const quarantined = this.state.issues ?? {};
 		const candidates = files.filter(
 			(file) =>
+				!batchCovered(this.state, file.name) &&
 				!known.has(file.name) &&
 				!known.has(file.name.replace(/\.json$/u, "")) &&
 				!quarantined[`batch:${file.name}`] &&
 				!seen.has(file.name),
 		);
 		for (const file of candidates) seen.add(file.name);
-		this.pendingDownloads = candidates.length;
+		// Batches an earlier round of this pass left waiting are not listed again, but they are still waiting.
+		this.pendingDownloads = candidates.length + this.waitingInPass;
+		if (candidates.length > 0) this.beginProgress("download", candidates.length);
 		if (this.manual?.state === "running" && this.manual.stage === "download")
 			this.manual = { ...this.manual, total: this.manual.total + candidates.length };
 		this.emitStatus();
@@ -884,7 +1093,7 @@ export class SyncEngine {
 						`${file.name} in the Drive batches folder is not a readable sync batch and was skipped.`,
 					);
 					// Remember the name as well as the issue: the issue list is capped, and an evicted entry would be re-read.
-					this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
+					this.rememberApplied(file.name);
 					this.store.saveState(this.state);
 					handled += 1;
 					this.advanceManual(1);
@@ -896,7 +1105,7 @@ export class SyncEngine {
 						"batch-too-large",
 						`${file.name} contains more changes than this version can apply in one batch and was skipped.`,
 					);
-					this.state.appliedBatches = capList([...this.state.appliedBatches, file.name], MAX_APPLIED_BATCHES);
+					this.rememberApplied(file.name);
 					this.store.saveState(this.state);
 					handled += 1;
 					this.advanceManual(1);
@@ -913,7 +1122,7 @@ export class SyncEngine {
 				batches.push({ name: file.name, batch });
 			}
 		}
-		this.pendingDownloads = batches.length;
+		this.pendingDownloads = batches.length + this.waitingInPass;
 		batches.sort((a, b) =>
 			a.batch.createdAt === b.batch.createdAt
 				? a.batch.batchId.localeCompare(b.batch.batchId)
@@ -983,6 +1192,7 @@ export class SyncEngine {
 					handled += 1;
 				} else {
 					this.pendingDownloads = Math.max(1, this.pendingDownloads);
+					this.waitingInPass += 1;
 				}
 				this.store.saveState(this.state);
 				this.advanceManual(1);
@@ -993,6 +1203,7 @@ export class SyncEngine {
 			this.state.lastDownloadAt = nowIso();
 			this.pendingDownloads = Math.max(0, this.pendingDownloads - 1);
 			this.hadChanges = true;
+			this.moved = true;
 			this.store.saveState(this.state);
 			handled += 1;
 			this.advanceManual(1);

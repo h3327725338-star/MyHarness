@@ -82,6 +82,8 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .composer-scrim.leaving { animation: fade-only-out 180ms var(--ease) both; pointer-events: none; }
 .composer.expanded { position: fixed; z-index: 190; left: 50%; top: 50%; width: min(960px, calc(100vw - 48px)); height: min(78vh, calc(100vh - 48px)); translate: -50% -50%; padding: 18px 18px 10px 20px; box-shadow: var(--shadow-pop); animation: composer-open var(--t-slow) var(--ease) both; }
 .composer.expanded.leaving { animation: composer-close 180ms var(--ease) both; }
+/* While the card's box moves between the column and the middle (composer.js morphBox) it stays opaque and unscaled. */
+.composer.expanded.morphing { animation: none; }
 .composer.expanded .composer-input { flex: 1 1 auto; min-height: 0; max-height: none; }
 .composer.expanded .suggest { max-height: min(300px, calc(11vh - 12px)); }
 @keyframes composer-open { from { opacity: 0; transform: scale(0.94) translateY(12px); } to { opacity: 1; transform: none; } }
