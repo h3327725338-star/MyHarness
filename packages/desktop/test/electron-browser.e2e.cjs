@@ -184,7 +184,8 @@ async function main() {
   const executed = await browser.command({ action: 'exec', tabId: id, code: '({ ready: window.__e2e.ready, title: document.title })' });
   check(executed.result && executed.result.ready === true && executed.result.title === 'E2E Page', 'executes page JavaScript', executed.result);
   const scrolled = await browser.command({ action: 'scroll', tabId: id, x: 0, y: 40 });
-  check(scrolled.result && typeof scrolled.result.y === 'number', 'scrolls the page', scrolled.result);
+  // The page may be too short to scroll; the answer must still say how far it moved and what it tried.
+  check(scrolled.ok && typeof scrolled.moved === 'number' && ['script', 'wheel'].includes(scrolled.how), 'scrolls the page', scrolled);
   let ax = { nodes: [] };
   try {
     ax = await browser.command({ action: 'ax', tabId: id });

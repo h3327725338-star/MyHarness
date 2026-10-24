@@ -528,8 +528,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Pages read per search",
 				type: "number",
 				value: web.pagesPerSearch,
-				min: 0,
-				max: 10,
+				min: WEB_SEARCH_SETTING_RANGES.pagesPerSearch.min,
+				max: WEB_SEARCH_SETTING_RANGES.pagesPerSearch.max,
 			},
 			{
 				id: "webSearch.maxUrlsPerFetch",
@@ -537,8 +537,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Max URLs per fetch",
 				type: "number",
 				value: web.maxUrlsPerFetch,
-				min: 1,
-				max: 20,
+				min: WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch.min,
+				max: WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch.max,
 			},
 			{
 				id: "webSearch.fetchConcurrency",
@@ -546,8 +546,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				label: "Concurrent downloads",
 				type: "number",
 				value: web.fetchConcurrency,
-				min: 1,
-				max: 8,
+				min: WEB_SEARCH_SETTING_RANGES.fetchConcurrency.min,
+				max: WEB_SEARCH_SETTING_RANGES.fetchConcurrency.max,
 			},
 			{
 				id: "webSearch.maxRedirects",
@@ -1157,9 +1157,27 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					next.engines = value.filter(
 						(entry): entry is (typeof current.engines)[number] => typeof entry === "string",
 					);
-				} else if (id === "webSearch.pagesPerSearch") next.pagesPerSearch = numberValue(value, id, 0, 10);
-				else if (id === "webSearch.maxUrlsPerFetch") next.maxUrlsPerFetch = numberValue(value, id, 1, 20);
-				else if (id === "webSearch.fetchConcurrency") next.fetchConcurrency = numberValue(value, id, 1, 8);
+				} else if (id === "webSearch.pagesPerSearch")
+					next.pagesPerSearch = numberValue(
+						value,
+						id,
+						WEB_SEARCH_SETTING_RANGES.pagesPerSearch.min,
+						WEB_SEARCH_SETTING_RANGES.pagesPerSearch.max,
+					);
+				else if (id === "webSearch.maxUrlsPerFetch")
+					next.maxUrlsPerFetch = numberValue(
+						value,
+						id,
+						WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch.min,
+						WEB_SEARCH_SETTING_RANGES.maxUrlsPerFetch.max,
+					);
+				else if (id === "webSearch.fetchConcurrency")
+					next.fetchConcurrency = numberValue(
+						value,
+						id,
+						WEB_SEARCH_SETTING_RANGES.fetchConcurrency.min,
+						WEB_SEARCH_SETTING_RANGES.fetchConcurrency.max,
+					);
 				else if (id === "webSearch.maxRedirects") {
 					const range = WEB_SEARCH_SETTING_RANGES.maxRedirects;
 					next.maxRedirects = Math.floor(numberValue(value, id, range.min, range.max));

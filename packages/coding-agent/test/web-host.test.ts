@@ -1234,9 +1234,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 			).toBe(value);
 		}
 		for (const [id, min, max] of [
-			["webSearch.pagesPerSearch", 0, 10],
-			["webSearch.maxUrlsPerFetch", 1, 20],
-			["webSearch.fetchConcurrency", 1, 8],
+			["webSearch.pagesPerSearch", 0, 30],
+			["webSearch.maxUrlsPerFetch", 1, 60],
+			["webSearch.fetchConcurrency", 1, 24],
 		] as const) {
 			expect(settings.items.find((item: any) => item.id === id)).toMatchObject({ min, max });
 			await expect(fx.post("/api/settings", { id, value: max + 1 })).rejects.toThrow();

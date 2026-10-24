@@ -298,6 +298,9 @@ export class WebHostHub implements WebHostHubLink {
 				? { slot: existing.slotId, created: false, ...missing }
 				: { slot: existing.slotId, created: false };
 		}
+		// A chat that is in no slot and not on disk was deleted: opening its path would start an empty chat there in the
+		// default mode (Coding), inside a folder that is gone.
+		if (!existsSync(resolvePath(path))) throw new HttpError(404, "This chat no longer exists.");
 		const key = pathIdentityKey(path);
 		let pending = this.opening.get(key);
 		const created = !pending;

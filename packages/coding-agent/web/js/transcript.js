@@ -441,7 +441,8 @@ function CustomStep({ step }) {
  * two steps breaks it), so the line is only ever drawn between steps that really exist and follows how tall they are.
  */
 function StepList({ steps }) {
-	const groups = useMemo(() => groupSteps(steps.filter((step) => step.type !== "note")), [steps]);
+	// Texts the model wrote along the way are here only when a finished turn folds them in (turnSegments `fold`).
+	const groups = useMemo(() => groupSteps(steps), [steps]);
 	return html`<div class="steps">
 		${groups.map((entry, index) => {
 			const next = groups[index + 1];
@@ -825,15 +826,17 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	const outcome = turnOutcome(turn, { run, live, waiting });
 	const changeCount = run ? run.changeCount : turn.stats.files;
 	const duration = turnDuration(turn, run);
-	// Reasoning and tool calls fold into blocks between the texts the model wrote, in the order they happened.
-	const segments = useMemo(() => turnSegments(turn), [turn]);
 	const working = live || waiting;
+	const expanded = processDefault === "expanded";
+	// Reasoning and tool calls fold into blocks between the texts the model wrote, in the order they happened. Once the
+	// turn is done and steps start folded, those texts go into the one block too, leaving only the answer in view.
+	const fold = !working && !expanded;
+	const segments = useMemo(() => turnSegments(turn, { fold }), [turn, fold]);
 	const tail = segments[segments.length - 1];
 	// Nothing is being written into a block (no block yet, or the model last wrote text): the working state is a row of
 	// its own at the end, the way the turn starts.
 	const pending = working && !turn.final && (!tail || tail.type === "text");
 	const lastBlock = pending ? undefined : segments.filter((segment) => segment.type === "process").pop();
-	const expanded = processDefault === "expanded";
 	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		${segments.map((segment) =>

@@ -39,7 +39,7 @@ const webSearchSchema = Type.Object({
 		Type.Integer({
 			minimum: 0,
 			maximum: WEB_SEARCH_SETTING_RANGES.pagesPerSearch.max,
-			description: "搜索后读取前几个结果的网页正文；0 表示只要结果列表。默认且最多为用户设置的数量",
+			description: "只在只要结果列表时传 0；其他值无效，读取网页数固定为用户设置的数量",
 		}),
 	),
 	fresh: Type.Optional(Type.Boolean({ description: "跳过会话内缓存" })),

@@ -44,8 +44,15 @@ async function runGitTask(kind, activity, work) {
 	}
 }
 
-/** The error of a request as an outcome: the server's own reason, in the interface language. */
-const failure = (title, error) => ({ tone: "error", title, detail: serverText(error?.message, t("The operation failed.")) });
+/**
+ * The error of a request as an outcome: the server's own reason, in the interface language. A reason longer than one
+ * line (the parser's message, the model's answer) keeps its first line on the strip and the whole text under Details.
+ */
+const failure = (title, error) => {
+	const message = String(error?.rawMessage || error?.message || "");
+	const lead = firstLine(message);
+	return { tone: "error", title, detail: serverText(lead, t("The operation failed.")), lines: message.trim() !== lead ? message : undefined };
+};
 
 // ---- /commit -----------------------------------------------------------------------------------------------------
 /**

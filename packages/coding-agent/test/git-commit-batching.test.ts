@@ -1,6 +1,6 @@
 import { estimateTextTokens } from "@myharness/ai";
 import { expect, it, vi } from "vitest";
-import { generateAICommitMessage } from "../src/git/commits/ai-message.ts";
+import { generateAICommitMessage, INVALID_MODEL_JSON } from "../src/git/commits/ai-message.ts";
 
 const final = JSON.stringify({
 	title: "feat: connect interface and caller",
@@ -127,4 +127,14 @@ it("rejects unknown raw-evidence references", async () => {
 				: JSON.stringify({ read: ["unknown"] });
 		}),
 	).rejects.toThrow("invalid diff references");
+});
+it("explains a malformed model answer in plain words and keeps the answer for the details", async () => {
+	const small = { ...large, diff: "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-a\n+b\n", paths: ["a.ts"] };
+	const answer = '{"title":"feat: mail","body":[「新增 mail 内容」]}';
+	const error = await generateAICommitMessage(small, async () => answer).catch((caught: Error) => caught);
+	expect(error).toBeInstanceOf(Error);
+	const lines = (error as Error).message.split("\n");
+	expect(lines[0]).toBe(INVALID_MODEL_JSON);
+	expect((error as Error).message).toContain("not valid JSON");
+	expect((error as Error).message).toContain(answer);
 });

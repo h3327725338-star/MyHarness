@@ -4,7 +4,8 @@ rem Builds the current sources, packages the Electron app, then starts the newes
 rem packaged executable. The visible window shows real progress and closes by itself
 rem on success; on failure it stays open with the error.
 rem
-rem The packaged output lands in dist\desktop\release-<timestamp>\win-unpacked\.
+rem The packaged app is started from dist\desktop\current\win-unpacked\ (a fixed
+rem path, so Windows Firewall asks only once).
 rem See packages\desktop\README.md for details.
 
 title MyHarness Desktop Build

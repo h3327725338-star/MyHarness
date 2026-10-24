@@ -62,7 +62,11 @@ describe("ask_user_question", () => {
 			{ questions: [{ question: "选哪个方案？", options: ["方案 A", "方案 B"] }] },
 			{ hasUI: true, ui: { select, input } },
 		);
-		expect(input).toHaveBeenCalledWith("选哪个方案？", "请输入你的回答", { signal: undefined });
+		expect(input).toHaveBeenCalledWith(
+			"选哪个方案？",
+			"请输入你的回答（可粘贴图片）",
+			expect.objectContaining({ signal: undefined, onImages: expect.any(Function) }),
+		);
 		expect(result.details.answers).toEqual([{ question: "选哪个方案？", answer: "自己写的方案", source: "other" }]);
 	});
 
@@ -477,6 +481,44 @@ describe("ask_user_question through the real WebDialogBridge", () => {
 		bridge.respond(bridge.requests[0].id, "手写的答案");
 		const result = await pending;
 		expect(result.details.answers).toEqual([{ question: "选哪个？", answer: "手写的答案", source: "other" }]);
+	});
+
+	it("returns images pasted into the typed answer to the model", async () => {
+		const bridge = new WebDialogBridge();
+		const pending = definition.execute(
+			"call-browser-images",
+			{ questions: [{ question: "哪里不对？", options: ["A", "B"] }] },
+			undefined,
+			undefined,
+			browserContext(bridge),
+		);
+		bridge.respond(bridge.requests[0].id, OTHER_CHOICE);
+		await vi.waitFor(() => {
+			expect(bridge.requests[0]).toMatchObject({ kind: "input", acceptsImages: true });
+		});
+		const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+		bridge.respond(bridge.requests[0].id, "", [image]);
+		const result = await pending;
+		expect(result.details.answers).toEqual([
+			{ question: "哪里不对？", answer: "（用户只附上了图片，见下方图片）", source: "other", images: 1 },
+		]);
+		expect(result.content).toEqual([expect.objectContaining({ type: "text" }), image]);
+		expect(textOf(result)).toContain("附图：1 张");
+	});
+
+	it("drops images that come with a closed dialog", async () => {
+		const bridge = new WebDialogBridge();
+		const pending = definition.execute(
+			"call-browser-images-closed",
+			{ questions: [{ question: "说说看" }] },
+			undefined,
+			undefined,
+			browserContext(bridge),
+		);
+		bridge.respond(bridge.requests[0].id, undefined, [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
+		const result = await pending;
+		expect(result.details.answers).toEqual([{ question: "说说看", source: "dismissed" }]);
+		expect(result.content).toHaveLength(1);
 	});
 
 	it("reports no answer when the user closes the browser dialog", async () => {

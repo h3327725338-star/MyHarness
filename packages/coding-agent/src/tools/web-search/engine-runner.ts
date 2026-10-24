@@ -17,7 +17,7 @@ export const ENGINE_RUNNER_LIMITS = {
 	/** An engine that refused us on every usable path is not asked again for this long. */
 	engineCooldownMs: 2 * 60_000,
 	/** Minimum gap between two browser loads for the same engine, so bursts do not look like a bot. */
-	browserSpacingMs: 1_500,
+	browserSpacingMs: 600,
 } as const;
 
 /** How one engine answered one query. */

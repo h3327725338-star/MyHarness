@@ -2,13 +2,15 @@
  * ask_user_question: asks the user one to four questions through the host's dialogs and returns the answers.
  *
  * Questions are asked in order. A question with options opens a single-choice dialog; unless `allowOther` is false
- * it also offers an "other" choice that opens a text dialog. A question without options opens a text dialog.
+ * it also offers an "other" choice that opens a text dialog. A question without options opens a text dialog. Where the
+ * host allows it, a text answer may carry images (pasted screenshots); they are returned to the model as images.
  * Closing a dialog never produces an invented answer: the tool stops asking and tells the model that the user gave
  * no answer. A host without a dialog-capable UI (SDK, delegated or headless runs) makes the tool throw
  * NO_INTERACTIVE_UI. A stopped run withdraws the open dialog and throws instead of answering.
  */
 
 import type { AgentTool } from "@myharness/agent-core";
+import type { ImageContent } from "@myharness/ai";
 import { type Static, Type } from "typebox";
 import type { ExtensionUIContextPort } from "../../extensions/contracts/ui.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
@@ -20,7 +22,8 @@ const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 6;
 const MAX_HEADER_CHARS = 12;
 const OTHER_CHOICE = "其他（自己输入）";
-const TEXT_PLACEHOLDER = "请输入你的回答";
+const TEXT_PLACEHOLDER = "请输入你的回答（可粘贴图片）";
+const IMAGES_ONLY_ANSWER = "（用户只附上了图片，见下方图片）";
 export const NO_INTERACTIVE_UI_CODE = "NO_INTERACTIVE_UI";
 
 const questionSchema = Type.Object({
@@ -59,6 +62,8 @@ export interface AskUserQuestionAnswer {
 	answer?: string;
 	/** "option": a listed choice; "other": typed text; "dismissed": the user gave no answer. */
 	source: "option" | "other" | "dismissed";
+	/** Number of images the user attached to a typed answer; the images themselves are in the tool result. */
+	images?: number;
 }
 
 export interface AskUserQuestionToolDetails {
@@ -115,30 +120,40 @@ async function askQuestion(
 	ui: ExtensionUIContextPort,
 	planned: PlannedQuestion,
 	signal: AbortSignal | undefined,
+	images: ImageContent[],
 ): Promise<AskUserQuestionAnswer> {
 	const base = { question: planned.question, ...(planned.header ? { header: planned.header } : {}) };
-	if (!planned.options) {
-		const text = await ui.input(planned.question, TEXT_PLACEHOLDER, { signal });
-		return answerFromText(base, text);
-	}
+	const askText = async () => {
+		let attached: ImageContent[] = [];
+		const text = await ui.input(planned.question, TEXT_PLACEHOLDER, {
+			signal,
+			onImages: (received) => {
+				attached = received.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
+			},
+		});
+		const answer = answerFromText(base, text, attached.length);
+		if (answer.source === "other") images.push(...attached);
+		return answer;
+	};
+	if (!planned.options) return askText();
 	const choices = planned.allowOther ? [...planned.options, OTHER_CHOICE] : planned.options;
 	const picked = await ui.select(planned.question, choices, { signal });
 	if (picked !== undefined && planned.options.includes(picked)) {
 		return { ...base, answer: picked, source: "option" };
 	}
-	if (picked === OTHER_CHOICE && planned.allowOther) {
-		const text = await ui.input(planned.question, TEXT_PLACEHOLDER, { signal });
-		return answerFromText(base, text);
-	}
+	if (picked === OTHER_CHOICE && planned.allowOther) return askText();
 	return { ...base, source: "dismissed" };
 }
 
 function answerFromText(
 	base: Pick<AskUserQuestionAnswer, "question" | "header">,
 	text: string | undefined,
+	imageCount = 0,
 ): AskUserQuestionAnswer {
-	const answer = text?.trim();
-	return answer ? { ...base, answer, source: "other" } : { ...base, source: "dismissed" };
+	// A submitted answer may be images alone; a dismissed dialog (undefined) never counts as an answer.
+	const answer = text?.trim() || (text !== undefined && imageCount ? IMAGES_ONLY_ANSWER : "");
+	if (!answer) return { ...base, source: "dismissed" };
+	return { ...base, answer, source: "other", ...(imageCount ? { images: imageCount } : {}) };
 }
 
 function formatAnswers(answers: AskUserQuestionAnswer[], questionCount: number): string {
@@ -148,6 +163,7 @@ function formatAnswers(answers: AskUserQuestionAnswer[], questionCount: number):
 		const label = numbered ? `${index + 1}. ` : "";
 		const indent = numbered ? "   " : "";
 		lines.push(`${label}问题：${item.question}`, `${indent}回答：${item.answer ?? "（用户没有回答）"}`);
+		if (item.images) lines.push(`${indent}附图：${item.images} 张（按回答顺序附在本结果末尾）`);
 	});
 	if (answers.some((item) => item.source === "dismissed")) {
 		lines.push("", "用户关闭了提问，请不要自行假设答案，改为说明你需要什么信息或选择一个保守的默认方案并告知用户。");
@@ -190,14 +206,15 @@ export function createAskUserQuestionToolDefinition(): BusinessToolDefinition<
 			throwIfAborted(signal);
 			const questions = planQuestions(params);
 			const answers: AskUserQuestionAnswer[] = [];
+			const images: ImageContent[] = [];
 			for (const planned of questions) {
-				const answer = await askQuestion(ui, planned, signal);
+				const answer = await askQuestion(ui, planned, signal, images);
 				throwIfAborted(signal);
 				answers.push(answer);
 				if (answer.source === "dismissed") break;
 			}
 			return {
-				content: [{ type: "text", text: formatAnswers(answers, questions.length) }],
+				content: [{ type: "text", text: formatAnswers(answers, questions.length) }, ...images],
 				details: { answers },
 			};
 		},

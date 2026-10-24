@@ -595,12 +595,18 @@ export function stepStats(steps) {
  * model wrote between them stays in place as reading text. When the model writes, then reasons or calls tools again, a
  * new block starts below that text. Only the presentation is split: the steps, the run and the session are one piece.
  * The final answer (`turn.final`) is not a segment; it follows the last one.
+ * With `fold` (a finished turn whose steps start folded) the texts written along the way go into one block with the
+ * work around them, so only the final answer stays as reading text; texts after the last step stay outside when the
+ * turn has no final answer, since they are then the last thing it said.
  */
-export function turnSegments(turn) {
+export function turnSegments(turn, { fold = false } = {}) {
 	const segments = [];
 	let block = null;
-	for (const step of turn.steps) {
-		if (step.type === "note") {
+	let lastWork = -1;
+	if (fold) for (let i = 0; i < turn.steps.length; i++) if (turn.steps[i].type !== "note") lastWork = i;
+	for (let i = 0; i < turn.steps.length; i++) {
+		const step = turn.steps[i];
+		if (step.type === "note" && (!fold || i > lastWork)) {
 			segments.push({ type: "text", key: `x-${step.key}`, step });
 			block = null;
 			continue;

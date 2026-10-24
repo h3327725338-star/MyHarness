@@ -27,6 +27,8 @@ import { MAX_UPLOAD_BYTES, sendFileInChunks } from "./upload-chunks.js";
 
 /** Images up to this size travel inline with the message (as before); a larger one is attached as a file. */
 const INLINE_IMAGE_BYTES = 32 * 1024 * 1024;
+/** Images one dialog answer can carry (the server takes as many as a message). */
+const MAX_DIALOG_IMAGES = 12;
 
 function fileToImage(file) {
 	return new Promise((resolve, reject) => {
@@ -44,6 +46,21 @@ function fileToImage(file) {
 // ---- Pending dialogs (extension select / confirm / input / editor). Approvals live here, not in a modal.
 function DialogBar({ dialog }) {
 	const [value, setValue] = useState(dialog.initialValue || "");
+	// A text question that takes images (ask_user_question's typed answer): pasted or picked images go with the answer.
+	const [pics, setPics] = useState([]);
+	const picInput = useRef(null);
+	const addPics = async (files) => {
+		const images = [...files].filter((file) => file.type.startsWith("image/"));
+		if (!images.length) return false;
+		for (const file of images) {
+			if (file.size > INLINE_IMAGE_BYTES) { toast(`${file.name}: ${t("Images must be 32 MiB or smaller.")}`, "warning"); continue; }
+			try {
+				const image = await fileToImage(file);
+				setPics((prev) => (prev.length >= MAX_DIALOG_IMAGES ? prev : [...prev, image]));
+			} catch { toast(`${file.name}: ${t("Could not read the file.")}`, "error"); }
+		}
+		return true;
+	};
 	const root = useRef(null);
 	// Choice dialogs (Allow / Deny, a list of options) are answered from the keyboard: ←/→/↑/↓/Tab move, Enter answers,
 	// Esc denies or cancels, 1-9 pick an option. Alt+A brings the keyboard here from anywhere.
@@ -88,7 +105,7 @@ function DialogBar({ dialog }) {
 		const timer = setInterval(() => setLeft(Math.max(0, Math.ceil((dialog.deadline - Date.now()) / 1000))), 500);
 		return () => clearInterval(timer);
 	}, [dialog.id]);
-	const answer = (v) => attempt(() => post("/api/ui/respond", { id: dialog.id, value: v }), { quiet: false });
+	const answer = (v) => attempt(() => post("/api/ui/respond", { id: dialog.id, value: v, ...(v !== undefined && pics.length ? { images: pics.map(({ mimeType, data }) => ({ mimeType, data })) } : {}) }), { quiet: false });
 	const lines = String(dialog.title || "").split("\n");
 	const head = lines[0];
 	const rest = lines.slice(1).join("\n");
@@ -100,7 +117,9 @@ function DialogBar({ dialog }) {
 			: dialog.kind === "select"
 				? html`<div class="dialog-options">${dialog.options.map((option, i) => html`<button class=${`btn sm ${pick === i ? "kbd-sel" : ""}`} tabindex="-1" key=${option} onClick=${() => answer(option)} onMouseMove=${() => setPick(i)}>${i < 9 ? html`<span class="dim">${i + 1}</span> ` : null}${option}</button>`)}<button class=${`btn sm ghost ${pick === dialog.options.length ? "kbd-sel" : ""}`} tabindex="-1" onClick=${() => answer(undefined)} onMouseMove=${() => setPick(dialog.options.length)}>${t("Cancel")}</button></div><div class="dialog-keys dim">${t("↑/↓ choose · Enter answer · 1-9 pick · Esc cancel · Alt+A focus here")}</div>`
 				: dialog.kind === "input"
-					? html`<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field sm grow" autofocus ref=${autofocusOnMount} value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)} /><button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
+					? html`${pics.length ? html`<div class="attachments dialog-pics">${pics.map((img, i) => html`<div class="thumb" key=${i} role="button" tabindex="0" aria-label=${t("Preview image {name}", { name: img.name })} onClick=${(e) => { if (!e.target.closest(".thumb-x")) openImageLightbox(img.url, img.name); }}><img src=${img.url} alt=${img.name} /><button class="thumb-x" type="button" aria-label=${t("Remove attachment")} onClick=${(e) => { e.stopPropagation(); setPics(pics.filter((_, j) => j !== i)); }}><${Icon} name="x" size=${11} /></button></div>`)}</div>` : null}
+					<form class="dialog-input" onSubmit=${(e) => (e.preventDefault(), answer(value))}><input class="field sm grow" autofocus ref=${autofocusOnMount} value=${value} placeholder=${dialog.placeholder || ""} onInput=${(e) => setValue(e.target.value)}
+						onPaste=${dialog.acceptsImages ? (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); void addPics(files); } } : undefined} />${dialog.acceptsImages ? html`<button class="icon-btn sm" type="button" title=${t("Attach images (or paste them)")} aria-label=${t("Attach images (or paste them)")} disabled=${pics.length >= MAX_DIALOG_IMAGES} onClick=${() => picInput.current?.click()}><${Icon} name="image" size=${15} /></button><input ref=${picInput} type="file" accept="image/*" multiple hidden onChange=${(e) => (void addPics(e.target.files), (e.target.value = ""))} />` : null}<button class="btn sm ghost" type="button" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" type="submit">${t("Submit")}</button></form>`
 					: html`<div class="dialog-editor"><textarea class="field" rows="6" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} /><div class="dialog-actions"><button class="btn sm ghost" onClick=${() => answer(undefined)}>${t("Cancel")}</button><button class="btn sm primary" onClick=${() => answer(value)}>${t("Submit")}</button></div></div>`}
 	</div>`;
 }

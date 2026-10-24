@@ -3,6 +3,11 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	timeout?: number;
 	initialValue?: string;
+	/**
+	 * `input` only: the user may also attach images to the answer (pasted or picked). They are handed over here just
+	 * before the answer resolves. A host that cannot take images ignores this and the answer is text only.
+	 */
+	onImages?: (images: Array<{ type: "image"; data: string; mimeType: string }>) => void;
 }
 
 export type WidgetPlacement = "aboveEditor" | "belowEditor";

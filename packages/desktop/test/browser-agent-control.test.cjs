@@ -27,6 +27,9 @@ function loadHost() {
       setWindowOpenHandler() {},
       async loadURL(url) { this.url = url; },
       executeJavaScript: async (code) => {
+        // Page-helper scripts (browser-page-helpers.cjs) carry the shared helpers' source, so they are told apart first.
+        if (code.includes('function pageFocused(')) return { tag: 'input', value: 'typed' };
+        if (code.includes('function pageHelpers(')) return null;
         if (code.includes('innerWidth')) return { width: 800, height: 600 };
         if (code.includes('elementFromPoint')) return { tag: 'img', src: '/logo.png' };
         if (code.includes('activeElement')) return { tag: 'input', value: 'typed' };

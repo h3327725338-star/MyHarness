@@ -3,7 +3,14 @@
 // looked successful, and fills a login form with a login saved for this exact site. On its own it never presses the
 // site's button; only a sign-in the Agent asks for on a bookmarked site submits the form. Passwords are never written to
 // the console, the DOM attributes or the URL, and never sent to the Agent.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
+
+// ---- Window drag areas -------------------------------------------------------------------------------------------
+// A site's `-webkit-app-region: drag` (written for installed web apps and desktop shells) is honoured by the frameless
+// app window as its own title bar: a click there moves the whole window and a double-click maximizes it, so the page
+// never sees either. A user-origin `!important` rule outranks every author rule, inline ones included. It is inserted
+// before the first layout, because the engine only re-reads drag areas on a layout change.
+try { webFrame.insertCSS('*, *::before, *::after { -webkit-app-region: no-drag !important; }', { cssOrigin: 'user' }); } catch { /* frame is going away */ }
 
 // ---- Engine identity ---------------------------------------------------------------------------------------------
 // The engine reports itself as Chromium in its client hints, while on a few sites the user agent of this tab is Chrome's

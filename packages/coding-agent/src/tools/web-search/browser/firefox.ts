@@ -21,6 +21,7 @@ import { keepChallengeForeground } from "./foreground.ts";
 import { type DailyCookies, findDailyCookies, forgetCookieImport, importDailyCookiesOnce } from "./import-cookies.ts";
 import type { BrowserLaunch, PageBridge, PageSnapshot } from "./launch.ts";
 import { mergeProfileCookies } from "./profile-cookies.ts";
+import { isProfileLocked, profileLockFile, profileLockHolders } from "./profile-lock.ts";
 import { installTemporaryAddon } from "./rdp.ts";
 
 /**
@@ -58,8 +59,8 @@ export const FIREFOX_LIMITS = {
 	challengePollMs: 1_000,
 	/** A page that just got past its challenge is read again after this pause, so what is returned has finished loading. */
 	challengeSettleMs: 1_500,
-	/** Tabs loading at the same time. */
-	maxTabs: 3,
+	/** Tabs loading at the same time (enough for two engines' queries and pages at once). */
+	maxTabs: 6,
 	/** How long the bridge holds a poll open with no command. */
 	pollHoldMs: 20_000,
 	/** Profiles of one browser that MyHarness processes can use at the same time (see LocalBrowser.lock). */
@@ -90,6 +91,11 @@ const PROFILE_PREFS: Record<string, boolean | number | string> = {
 	"media.autoplay.default": 5,
 	"permissions.default.desktop-notification": 2,
 	"browser.translations.automaticallyPopup": false,
+	// A start that did not finish (the browser was ended while starting) counts as a startup crash; after a few,
+	// Firefox restarts itself in safe mode. That restart loses the command line, so the copy left running holds the
+	// profile unseen and every later start shows "Firefox is already running". Automatic safe mode stays off.
+	"toolkit.startup.max_resumed_crashes": -1,
+	"toolkit.startup.recent_crashes": 0,
 };
 
 /** Where Firefox usually lives. `MYHARNESS_FIREFOX_PATH` overrides the search. */
@@ -332,6 +338,8 @@ interface Session {
 const EXIT_WAIT_MS = 15_000;
 /** How long a browser that was asked to quit gets to do so (and save its cookies) before its process is ended. */
 const QUIT_WAIT_MS = 5_000;
+/** How long the profile of an ended leftover browser gets to be released before the start is given up. */
+const PROFILE_RELEASE_WAIT_MS = 10_000;
 
 export interface LocalBrowserOptions {
 	/** Which browser to drive. Defaults to Firefox. */
@@ -954,6 +962,7 @@ export class LocalBrowser implements BrowserTransport {
 			if (Number.isSafeInteger(pid) && pid > 0 && isOurBrowser(pid, profileDir)) killTree(pid);
 			rmSync(pidFile, { force: true });
 		}
+		await this.releaseProfile(profileDir, signal);
 		if (this.useDailyCookies) {
 			const imported = importDailyCookiesOnce(this.label, slot.dir, profileDir, this.findDailyCookies());
 			this.cookieNote = imported.ok ? undefined : imported.error;
@@ -1041,6 +1050,24 @@ export class LocalBrowser implements BrowserTransport {
 			);
 		}
 		return session;
+	}
+
+	/**
+	 * End whatever browser still holds this profile (see profile-lock.ts). The slot lock is ours, so no other MyHarness
+	 * uses the profile: a holder is a leftover, e.g. a Firefox that restarted itself and lost its command line. A profile
+	 * that stays held is never launched on, since the browser would then show its "already running" box to the user.
+	 */
+	private async releaseProfile(profileDir: string, signal: AbortSignal | undefined): Promise<void> {
+		const lockFile = profileLockFile(this.kind, profileDir);
+		if (!isProfileLocked(lockFile)) return;
+		for (const pid of await profileLockHolders(lockFile)) killTree(pid);
+		const deadline = Date.now() + PROFILE_RELEASE_WAIT_MS;
+		while (isProfileLocked(lockFile) && Date.now() < deadline) await this.sleep(250, signal);
+		if (!isProfileLocked(lockFile)) return;
+		await this.unlock();
+		throw browserUnavailable(
+			`${this.label} 的 MyHarness 专用配置（${profileDir}）仍被另一个 ${this.label} 进程占用，结束它没有成功，本次不启动浏览器以免弹出"已在运行"提示。可以在任务管理器中结束残留的 ${this.label} 进程后重试。`,
+		);
 	}
 
 	/** Stop one browser and wait until it has exited, so the profile is free for the next start. */

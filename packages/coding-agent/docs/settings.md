@@ -322,9 +322,9 @@ Memory Markdown files 是 source of truth：
 | `browserFallback` | 轻量请求被拦截时，是否允许用本机浏览器（MyHarness 专用配置）打开真实的搜索页或网页 | On / Off | `true` |
 | `browser` | 兜底用哪个浏览器；`auto` = Firefox、Chrome、Edge 中第一个已安装的 | `auto` / `firefox` / `chrome` / `edge` | `"auto"` |
 | `useBrowserCookies` | 是否把日常浏览器的 Cookie 复制一份到专用配置，用来读取已登录的网站 | On / Off | `false` |
-| `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–10 | 3 |
-| `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–20 | 10 |
-| `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–8 | 4 |
+| `pagesPerSearch` | 每次搜索后自动读取前几个结果的网页正文；0 = 只返回结果 | 0–30 | 3 |
+| `maxUrlsPerFetch` | 一次 `web_fetch` 最多读取几个网址 | 1–60 | 10 |
+| `fetchConcurrency` | 同时下载网页的最大数量（所有联网工具共享） | 1–24 | 4 |
 | `maxRedirects` | 直接读取网页时最多跟随的跳转次数；0 = 不跟随。达到上限时产生 `too_many_redirects`，启用浏览器兜底时自动改用浏览器；无法兜底时说明跳转上限及可能的鉴权循环或配置问题 | 0–20 | 5 |
 
 ```json
@@ -677,7 +677,7 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
 
 `ask_user_question` 与 `todo_write` 对主智能体默认启用，无需在 `settings.json` 中额外配置；子智能体不可用。
 
-- **`ask_user_question`**：模型需要用户做选择或补充无法推断的关键信息时，在界面弹出选择框或输入框。一次最多 4 个问题，每题 2 到 6 个选项，默认附加“其他（自己输入）”。用户关闭弹窗时，工具返回“用户没有回答”，不会编造答案；没有可交互界面（SDK 或无头运行）时直接报错 `NO_INTERACTIVE_UI`。
+- **`ask_user_question`**：模型需要用户做选择或补充无法推断的关键信息时，在界面弹出选择框或输入框。一次最多 4 个问题，每题 2 到 6 个选项，默认附加“其他（自己输入）”。Web 界面里输入回答时可以粘贴图片（或点图片按钮选择，最多 12 张），图片随回答作为图片内容交给模型；只附图不写字也算回答。用户关闭弹窗时，工具返回“用户没有回答”，不会编造答案；没有可交互界面（SDK 或无头运行）时直接报错 `NO_INTERACTIVE_UI`。
 - **`todo_write`**：每次传入完整清单并整张替换，最多 50 项，同一时间只能有一项 `in_progress`。清单只保存在对话记录的工具调用中，不写入单独的文件。
 
 ### 可选文件工具（apply_patch）

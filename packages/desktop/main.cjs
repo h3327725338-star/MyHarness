@@ -57,7 +57,8 @@ const prefs = createAppPrefs(app.getPath('userData'));
 // The window comes back from the tray (or from a second start) where it was, restored and in front.
 const showWindow = () => { if (!window || window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); };
 // Closing to the tray keeps the local service and every running task alive; only the window goes away. The tray icon
-// is made the first time it is needed and says once per run where the app went.
+// is made the first time it is needed. Going to the tray is always the user's own choice (the setting or the close
+// question), so it shows no "still running" notice.
 function hideToTray() {
   if (!tray) {
     tray = new Tray(join(__dirname, 'icon.png'));
@@ -65,9 +66,6 @@ function hideToTray() {
     tray.setContextMenu(Menu.buildFromTemplate([{ label: '显示 MyHarness', click: showWindow }, { type: 'separator' }, { label: '退出 MyHarness', click: () => app.quit() }]));
     tray.on('click', showWindow);
     tray.on('double-click', showWindow);
-    window.hide();
-    tray.displayBalloon({ title: 'MyHarness 仍在运行', content: '已最小化到系统托盘，正在进行的任务会继续。点击托盘图标打开，右键可退出。', iconType: 'info' });
-    return;
   }
   window.hide();
 }

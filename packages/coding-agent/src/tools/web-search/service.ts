@@ -34,11 +34,19 @@ export { WebSearchError };
 
 /** Fixed internal limits; the user-facing numbers live in Web Search settings. */
 export const WEB_SEARCH_LIMITS = {
-	maxQueriesPerCall: 5,
-	maxResultsPerCall: 20,
+	maxQueriesPerCall: 10,
+	maxResultsPerCall: 50,
 	defaultResultsPerCall: 10,
-	/** Engine requests in flight at once within one web_search call. */
-	searchConcurrency: 4,
+	/**
+	 * Requests in flight at once per engine within one web_search call. Engines run side by side, so one slow engine
+	 * (a browser load) does not hold back the queries of the others.
+	 */
+	searchConcurrencyPerEngine: 3,
+	/**
+	 * Time the pages read after a search may take together. A page still loading then is dropped and named in
+	 * Diagnostics (web_fetch can still read it), so one slow site cannot hold the whole search for its 20 s timeout.
+	 */
+	searchReadBudgetMs: 8_000,
 	searchCacheTtlMs: 5 * 60 * 1_000,
 	fetchCacheTtlMs: 15 * 60 * 1_000,
 } as const;
@@ -59,13 +67,15 @@ export interface WebSearchServiceOptions {
 	browser?: BrowserTransport | null;
 	/** True when a person can be asked to pass a CAPTCHA or log in in a visible browser window. */
 	interactiveChallenges?: () => boolean;
+	/** Overrides WEB_SEARCH_LIMITS.searchReadBudgetMs (tests). */
+	searchReadBudgetMs?: number;
 }
 
 export interface SearchRequest {
 	queries: string[];
 	timeRange?: SearchTimeRange;
 	maxResults?: number;
-	/** Top results to read after searching; capped by the `pagesPerSearch` setting. */
+	/** 0 skips reading pages; any other value reads the `pagesPerSearch` setting's count. */
 	readPages?: number;
 	fresh?: boolean;
 	/** Short status lines while the search runs (e.g. "waiting for you in the browser window"). */
@@ -358,11 +368,17 @@ export class WebSearchService {
 				"没有启用任何搜索引擎。请在 /settings → Web Search → Search Engines 中至少选择一个。",
 			);
 		}
-		const maxResults = clampInteger(
-			request.maxResults,
-			WEB_SEARCH_LIMITS.defaultResultsPerCall,
-			1,
-			WEB_SEARCH_LIMITS.maxResultsPerCall,
+		// Pages to Read per Search is the person's setting, not a ceiling the Agent picks under: it may only turn
+		// reading off (0). Enough results are kept for that many pages to be read.
+		const pageCount = request.readPages === 0 ? 0 : settings.pagesPerSearch;
+		const maxResults = Math.max(
+			clampInteger(
+				request.maxResults,
+				WEB_SEARCH_LIMITS.defaultResultsPerCall,
+				1,
+				WEB_SEARCH_LIMITS.maxResultsPerCall,
+			),
+			Math.min(pageCount, WEB_SEARCH_LIMITS.maxResultsPerCall),
 		);
 		const fresh = request.fresh === true || queries.some(isFreshnessSensitiveQuery);
 		const failures: WebSearchFailure[] = [];
@@ -389,27 +405,31 @@ export class WebSearchService {
 				});
 				return false;
 			});
-			const tasks = queries.flatMap((query) => activeEngines.map((engine) => ({ query, engine })));
-			const perTask = await mapWithConcurrency(
-				tasks,
-				WEB_SEARCH_LIMITS.searchConcurrency,
-				async ({ query, engine }): Promise<RawResult[] | undefined> => {
-					// An engine that refused an earlier query of this call is not asked again.
-					if (this.runner.cooldown(engine) && failures.some((failure) => failure.engine === engine)) {
-						return undefined;
-					}
-					try {
-						const run = await this.runEngine(engine, query, request.timeRange, signal, request.onProgress);
-						routes.push(run.route);
-						return run.results;
-					} catch (error) {
-						if (signal?.aborted) throw abortError(signal) ?? error;
-						failures.push({ query, engine, ...failureFromError(error, "搜索请求失败。") });
-						return undefined;
-					}
-				},
-				signal,
+			const perEngine = await Promise.all(
+				activeEngines.map((engine) =>
+					mapWithConcurrency(
+						queries,
+						WEB_SEARCH_LIMITS.searchConcurrencyPerEngine,
+						async (query): Promise<RawResult[] | undefined> => {
+							// An engine that refused an earlier query of this call is not asked again.
+							if (this.runner.cooldown(engine) && failures.some((failure) => failure.engine === engine)) {
+								return undefined;
+							}
+							try {
+								const run = await this.runEngine(engine, query, request.timeRange, signal, request.onProgress);
+								routes.push(run.route);
+								return run.results;
+							} catch (error) {
+								if (signal?.aborted) throw abortError(signal) ?? error;
+								failures.push({ query, engine, ...failureFromError(error, "搜索请求失败。") });
+								return undefined;
+							}
+						},
+						signal,
+					),
+				),
 			);
+			const perTask = perEngine.flat();
 			// Report in a stable order (settings engine order, then query order), not completion order.
 			const order = (failure: WebSearchFailure) =>
 				settings.engines.indexOf(failure.engine!) * WEB_SEARCH_LIMITS.maxQueriesPerCall +
@@ -438,19 +458,11 @@ export class WebSearchService {
 			if (results.length > 0) await this.cache.set("search", cacheKey, results);
 		}
 
-		const requestedPages = request.readPages ?? settings.pagesPerSearch;
-		const pageCount = clampInteger(requestedPages, settings.pagesPerSearch, 0, settings.pagesPerSearch);
-		if (requestedPages > settings.pagesPerSearch) {
-			failures.push({
-				code: "limit",
-				message: `设置只允许每次搜索后读取 ${settings.pagesPerSearch} 个网页（Pages to Read per Search），本次按上限读取。`,
-			});
-		}
-		const read = await this.readPages(
-			results.slice(0, pageCount).map((result) => result.url),
+		const read = await this.readSearchPages(
+			results.map((result) => result.url),
+			pageCount,
 			fresh,
 			signal,
-			request.onProgress,
 		);
 		failures.push(...read.failures);
 		return {
@@ -498,6 +510,7 @@ export class WebSearchService {
 		url: string,
 		signal: AbortSignal | undefined,
 		onProgress: ((message: string) => void) | undefined,
+		mayAskPerson = true,
 	): Promise<ReadPageResult> {
 		try {
 			return await readPage(url, {
@@ -524,7 +537,7 @@ export class WebSearchService {
 			}
 			const label = browserLabel(this.browser);
 			try {
-				return await this.pageReader!.read(url, signal, onProgress);
+				return await this.pageReader!.read(url, signal, onProgress, mayAskPerson);
 			} catch (browserError) {
 				if (!(browserError instanceof WebSearchError) || browserError.code === "aborted") throw browserError;
 				throw new WebSearchError(
@@ -534,6 +547,98 @@ export class WebSearchService {
 				);
 			}
 		}
+	}
+
+	/** One already-validated URL through the session cache and the shared download slots. */
+	private async readCachedPage(
+		url: string,
+		fresh: boolean,
+		signal: AbortSignal | undefined,
+		onProgress: ((message: string) => void) | undefined,
+		mayAskPerson = true,
+	): Promise<WebFetchedPage> {
+		const cacheKey = sha256(canonicalizeHttpUrl(url));
+		const cached = await this.cache.get<WebFetchedPage>("fetch", cacheKey, WEB_SEARCH_LIMITS.fetchCacheTtlMs, fresh);
+		if (cached?.finalUrl && validatePublicHttpUrl(cached.finalUrl).ok) return { ...cached, cacheHit: true };
+		const release = await this.downloads.acquire(signal);
+		try {
+			const page = await this.readOnePage(url, signal, onProgress, mayAskPerson);
+			const result: WebFetchedPage = { url, ...page, cacheHit: false };
+			await this.cache.set("fetch", cacheKey, result);
+			return result;
+		} finally {
+			release();
+		}
+	}
+
+	/**
+	 * The pages read after a search: `wanted` readable pages, in result order. A page that cannot be read is replaced
+	 * by the next result, so a 404 or a refusal does not cost the Agent a page. All reads share searchReadBudgetMs;
+	 * pages still loading then are dropped and named, and nobody is asked to pass a check or log in for them (that is
+	 * what web_fetch is for).
+	 */
+	private async readSearchPages(
+		urls: string[],
+		wanted: number,
+		fresh: boolean,
+		signal: AbortSignal | undefined,
+	): Promise<{ pages: WebFetchedPage[]; failures: WebSearchFailure[]; cacheHit: boolean }> {
+		if (wanted <= 0 || urls.length === 0) return { pages: [], failures: [], cacheHit: false };
+		const readBudgetMs = this.options.searchReadBudgetMs ?? WEB_SEARCH_LIMITS.searchReadBudgetMs;
+		const budget = new AbortController();
+		const onParentAbort = () => budget.abort(signal?.reason);
+		if (signal?.aborted) onParentAbort();
+		else signal?.addEventListener("abort", onParentAbort, { once: true });
+		let budgetSpent = false;
+		const timer = setTimeout(() => {
+			budgetSpent = true;
+			budget.abort(new WebSearchError("timeout", "搜索后读取网页的时间用完了。"));
+		}, readBudgetMs);
+		const pages = new Map<number, WebFetchedPage>();
+		const failures = new Map<number, WebSearchFailure>();
+		const unfinished: string[] = [];
+		let next = 0;
+		let inFlight = 0;
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const launch = () => {
+					while (!budget.signal.aborted && next < urls.length && pages.size + inFlight < wanted) {
+						const index = next++;
+						const url = urls[index]!;
+						inFlight += 1;
+						this.readCachedPage(url, fresh, budget.signal, undefined, false)
+							.then(
+								(page) => {
+									pages.set(index, page);
+								},
+								(error) => {
+									if (signal?.aborted) reject(abortError(signal) ?? error);
+									else if (budgetSpent) unfinished.push(url);
+									else failures.set(index, { url, ...failureFromError(error, "网页读取失败。") });
+								},
+							)
+							.finally(() => {
+								inFlight -= 1;
+								launch();
+							});
+					}
+					if (inFlight === 0) resolve();
+				};
+				launch();
+			});
+		} finally {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onParentAbort);
+		}
+		const ordered = [...pages.entries()].sort((a, b) => a[0] - b[0]).map(([, page]) => page);
+		const reported = [...failures.entries()].sort((a, b) => a[0] - b[0]).map(([, failure]) => failure);
+		if (unfinished.length > 0) {
+			reported.push({
+				code: "timeout",
+				message: `为控制搜索耗时，${readBudgetMs / 1_000} 秒内没有读完的网页已跳过，需要时可用 web_fetch 单独读取：${unfinished.join(", ")}`,
+			});
+		}
+		return { pages: ordered, failures: reported, cacheHit: ordered.some((page) => page.cacheHit) };
 	}
 
 	/** Read already-validated URLs through the cache and the shared download slots. */
@@ -546,26 +651,12 @@ export class WebSearchService {
 		const failures: Array<WebSearchFailure | undefined> = urls.map(() => undefined);
 		const pages = await Promise.all(
 			urls.map(async (url, index): Promise<WebFetchedPage | undefined> => {
-				const cacheKey = sha256(canonicalizeHttpUrl(url));
-				const cached = await this.cache.get<WebFetchedPage>(
-					"fetch",
-					cacheKey,
-					WEB_SEARCH_LIMITS.fetchCacheTtlMs,
-					fresh,
-				);
-				if (cached?.finalUrl && validatePublicHttpUrl(cached.finalUrl).ok) return { ...cached, cacheHit: true };
-				const release = await this.downloads.acquire(signal);
 				try {
-					const page = await this.readOnePage(url, signal, onProgress);
-					const result: WebFetchedPage = { url, ...page, cacheHit: false };
-					await this.cache.set("fetch", cacheKey, result);
-					return result;
+					return await this.readCachedPage(url, fresh, signal, onProgress);
 				} catch (error) {
 					if (signal?.aborted) throw abortError(signal) ?? error;
 					failures[index] = { url, ...failureFromError(error, "网页读取失败。") };
 					return undefined;
-				} finally {
-					release();
 				}
 			}),
 		);

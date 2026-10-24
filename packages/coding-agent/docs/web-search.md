@@ -17,9 +17,9 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 | **Browser Fallback** | 轻量请求被拦截时，是否允许用本机浏览器打开真实的搜索页或网页。这一行同时显示实际会用哪个浏览器，或为什么不可用 | On / Off | On |
 | **Browser** | 兜底用哪个浏览器。Auto = 按 Firefox、Chrome、Edge 的顺序用第一个已安装的 | Auto / Firefox / Chrome / Edge | Auto |
 | **Use My Browser's Cookies** | 打开后，把你日常使用的同一种浏览器里的 Cookie 复制一份到 MyHarness 专用的浏览器配置里，这样你已经登录的网站可以直接读取。见下方"复用日常浏览器的 Cookie" | On / Off | Off |
-| **Pages to Read per Search** | 每次 `web_search` 搜完后，自动按排名读取前几个结果的网页正文；0 = 只返回结果列表 | 0–10 | 3 |
-| **Max URLs per Fetch** | 一次 `web_fetch` 最多读取几个网址；超出的网址不读取，并在结果里列出来告诉 Agent | 1–20 | 10 |
-| **Concurrent Downloads** | 同一时间最多下载几个网页。这是整个进程的共享上限：Agent 并行调用多个联网工具时也不会超过它 | 1–8 | 4 |
+| **Pages to Read per Search** | 每次 `web_search` 搜完后，自动按排名读取前几个结果的网页正文；0 = 只返回结果列表 | 0–30 | 3 |
+| **Max URLs per Fetch** | 一次 `web_fetch` 最多读取几个网址；超出的网址不读取，并在结果里列出来告诉 Agent | 1–60 | 10 |
+| **Concurrent Downloads** | 同一时间最多下载几个网页。这是整个进程的共享上限：Agent 并行调用多个联网工具时也不会超过它 | 1–24 | 4 |
 | **Max Redirects** | 直接读取网页时最多跟随几次跳转（重定向）；0 = 不跟随。达到上限时停止读取，并说明已达到设置的上限、可能是登录/鉴权跳转死循环或网站重定向配置有误 | 0–20 | 5 |
 
 四个数字在终端设置页的列表里选择（Web UI 中直接输入），列表里就是全部合法值，列表里就是全部合法值；工具内部用的是同一组上限。手动编辑 `settings.json` 写入超出范围的数字时，会按最近的上下限处理。
@@ -120,7 +120,7 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 调度规则：
 
 - 每次查询都先试轻量请求；一次被拦截只让这一次查询改用 Firefox。同一引擎连续 2 次被拦截后，3 分钟内跳过轻量请求直接用 Firefox，之后再试轻量请求。
-- 同一引擎的 Firefox 访问之间至少间隔 1.5 秒，最多同时开 3 个标签页。
+- 同一引擎的 Firefox 访问之间至少间隔 0.6 秒，最多同时开 6 个标签页。
 - 某个引擎在所有可用方式上都被拒绝后，2 分钟内暂停使用这个引擎，工具结果会写明暂停原因（原始错误）。
 - Google 轻量请求在同一次查询里最多发 2 次（换 UA 重试 1 次）；没有无限重试。
 - Firefox 结果被视为真实用户会看到的结果，不再做 Bing 的"降级"判断。
@@ -134,8 +134,8 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 - **平时无界面**：普通兜底用无界面（headless）Firefox，首次启动约 1–2 秒，之后每次读取约 0.5–1 秒。空闲 3 分钟后自动关闭；MyHarness 退出时一并关闭。
 - **需要人工验证时**：搜索引擎的“是不是验证页”判断读的是页面源码，源码里提到 CAPTCHA 不等于真的在显示验证；所以判断为验证页时，先试着解析结果，能解析出结果就说明页面是正常加载的，直接使用，不弹窗。确实在 Firefox 里也遇到验证码或同意页，并且当前是 Web UI 交互界面时，MyHarness 会打开一个可见的 Firefox 窗口，工具进度里提示你去完成验证；最长等待 3 分钟，Esc 取消。验证通过后搜索自动继续，之后的搜索复用这次验证，窗口关闭，后续恢复无界面。同一时间只开一个可见窗口：其他也需要验证的调用先排队等待；窗口结束后，它们先在无界面浏览器里再试一次，同一网站已经通过就直接复用，不再弹窗。如果同一网站这次没有完成（超时或关掉窗口），排队的调用直接返回 `challenge_required`，不会一个接一个地弹窗。在无人值守的 SDK/后台任务中不会弹窗，工具结果返回 `challenge_required` 并说明需要在 Web UI 交互界面里完成一次。
 - **Chrome / Edge**：不用扩展。MyHarness 用 `--remote-debugging-pipe` 启动浏览器，通过只属于这一对进程的管道发 DevTools 命令（不开任何网络端口），关闭"自动化控制"标记，无界面时把 UA 改回普通浏览器的 UA。配置目录是 `<agent 目录>/web-search/chrome/profile` 或 `.../edge/profile`，同样与你自己的浏览器隔离；其余行为（会话复用、无界面、人工验证、空闲关闭）与 Firefox 相同。
-- **可靠性**：Firefox 未安装、被关闭、崩溃、扩展没连上、页面加载失败或超时，都会以明确的错误返回（`browser_unavailable` / `unavailable` / `timeout`），下一次需要时重新启动 Firefox。上次 MyHarness 异常退出留下的 Firefox（按专用配置文件路径确认，不会误关你自己的 Firefox）会在下次启动前关闭。
-- **同一进程内并发**：同一个 MyHarness 进程里的所有 Agent 和子智能体共用一个浏览器进程。启动、重启和关闭浏览器按顺序进行，并发的调用不会互相抢配置文件锁；限流只有三种排队等待：同一引擎的浏览器访问间隔、共享下载上限（Concurrent Downloads）和最多 3 个标签页。
+- **可靠性**：Firefox 未安装、被关闭、崩溃、扩展没连上、页面加载失败或超时，都会以明确的错误返回（`browser_unavailable` / `unavailable` / `timeout`），下一次需要时重新启动 Firefox。上次 MyHarness 异常退出留下的 Firefox（按专用配置文件路径确认，不会误关你自己的 Firefox）会在下次启动前关闭。启动前还会检查专用配置的锁文件（Firefox 是 `parent.lock`，Chrome/Edge 是 `lockfile`）：仍被占用时，用 Windows Restart Manager 找出正在打开这个锁文件的浏览器进程并结束（只结束 firefox/chrome/msedge 进程；占用 MyHarness 专用配置的不会是你自己的浏览器）；结束后 10 秒内仍未释放就不启动，返回 `browser_unavailable`，因为在被占用的配置上启动 Firefox 会弹出“Firefox 已在运行”的系统提示框。专用配置关闭了 Firefox 的“启动崩溃后自动进入安全模式”（`toolkit.startup.max_resumed_crashes = -1`）：启动中途被结束会被 Firefox 记成启动崩溃，累计几次后它会自己以安全模式重启，重启后的进程命令行里没有配置路径，原来的检查认不出它，它会一直占着配置。
+- **同一进程内并发**：同一个 MyHarness 进程里的所有 Agent 和子智能体共用一个浏览器进程。启动、重启和关闭浏览器按顺序进行，并发的调用不会互相抢配置文件锁；限流只有三种排队等待：同一引擎的浏览器访问间隔、共享下载上限（Concurrent Downloads）和最多 6 个标签页。
 - **多个 MyHarness 进程**：每种浏览器最多有 4 个专用配置：第一个是 `<agent 目录>/web-search/<浏览器>/profile`，其余是同一目录下的 `slots/1`–`slots/3/profile`。每个进程占用第一个空闲的配置（文件锁），所以两个进程同时用浏览器兜底时各自都能用。4 个都被占用时排队等待（最长 2 分钟，Esc 可取消），等不到才返回 `browser_unavailable` 并说明原因。启动前会把其他几个配置里的 Cookie 合并进来：同一网站同名的 Cookie 以最近使用或更新的那份为准，所以在任一个配置里登录或通过验证后，其他进程下次启动浏览器时也会复用。限制：正在运行的浏览器要等下次启动才能拿到其他配置的新 Cookie；某个配置里退出登录不会删除其他配置里的登录 Cookie；Chrome/Edge 只在两个配置的 Cookie 加密密钥相同时合并。异常残留的浏览器只按各自配置的路径识别并关闭。
 
 找浏览器的顺序：环境变量（`MYHARNESS_FIREFOX_PATH`、`MYHARNESS_CHROME_PATH`、`MYHARNESS_EDGE_PATH`）→ `Program Files`/`Program Files (x86)`/`%LOCALAPPDATA%` 下的默认安装位置（`Mozilla Firefox\firefox.exe`、`Google\Chrome\Application\chrome.exe`、`Microsoft\Edge\Application\msedge.exe`）→ `PATH`。
@@ -156,8 +156,8 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 
 | Tool | 参数 | 返回 |
 | --- | --- | --- |
-| `web_search` | `queries`（1–5 个独立问题）、可选 `timeRange`（`day`/`month`/`year`）、`maxResults`（1–20，默认 10）、`readPages`（0–10，默认且最多为 Pages to Read per Search）、`fresh` | `Engines:` 行写明每个引擎实际走的方式（如 `Google (HTTP), Bing (Firefox)`）；合并去重后的结果（标题、URL、来源引擎、摘要、发布日期）；以及前几个结果网页里与问题最相关的片段。`details.routes` 里有每个引擎 × 问题的方式和改用 Firefox 的原因 |
-| `web_fetch` | `urls`（1–20 个，实际最多读取 Max URLs per Fetch 个）、`fresh` | 每个 URL 的 Markdown 正文或独立的失败原因 |
+| `web_search` | `queries`（1–10 个独立问题）、可选 `timeRange`（`day`/`month`/`year`）、`maxResults`（1–50，默认 10，且不少于 Pages to Read per Search）、`readPages`（只有 0 有效，表示不读网页；其他值都按 Pages to Read per Search 读取）、`fresh` | `Engines:` 行写明每个引擎实际走的方式（如 `Google (HTTP), Bing (Firefox)`）；合并去重后的结果（标题、URL、来源引擎、摘要、发布日期）；以及前几个结果网页里与问题最相关的片段。`details.routes` 里有每个引擎 × 问题的方式和改用 Firefox 的原因 |
+| `web_fetch` | `urls`（1–60 个，实际最多读取 Max URLs per Fetch 个）、`fresh` | 每个 URL 的 Markdown 正文或独立的失败原因 |
 
 搜索规划由 Agent 负责：它决定搜什么、搜几次、读哪些网页、证据够不够。
 
@@ -165,10 +165,12 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 
 ```text
 Agent 调用 web_search
-  → 每个 query × 每个已启用引擎并行（最多 4 个同时进行）
+  → 各引擎同时进行，每个引擎内最多 3 个 query 同时进行
       → 轻量请求 →（被拦截时）Firefox →（需要人工时，仅交互界面）可见窗口
   → 按规范化 URL 合并去重、过滤不安全 URL、排序（多个引擎都返回的结果排名更高）
-  → 取前 N 个结果（N = Pages to Read per Search）
+  → 按排名读取 N 个网页（N = Pages to Read per Search）：读不了的（404、拒绝、没有正文等）由下一个结果补上
+      → 所有读取共用 8 秒预算；到时还没读完的网页放弃，在 Diagnostics 里列出网址（可再用 web_fetch 读）
+      → 这一步不弹出人工验证/登录窗口；需要人工处理的网页返回 challenge_required，改用 web_fetch 读取时才会弹窗
   → 通过共享下载上限读取网页正文 → Markdown → 挑出与问题最相关的片段
   → 返回结果列表 + 片段；完整正文进入 Tool Result 持久化文件
 ```
@@ -187,7 +189,7 @@ Agent 调用 web_search
 直接请求被网站拒绝时（HTTP 401/403/407/429/451/503，或返回的是人机验证、登录、Cookie 同意页，或页面没有可读正文），并且 Browser Fallback 打开、找到了浏览器，就改用兜底浏览器打开同一个网址：
 
 - 先无界面打开，沿用专用配置里已有的 Cookie 和登录状态；页面正常就直接转成 Markdown 返回。
-- 在浏览器里仍然是验证码、登录或同意页时：Web UI 交互界面下打开可见窗口，工具进度提示你去完成，最长等 3 分钟，Esc 取消；完成后自动读取正文并继续，不需要重新发起任务。无人值守的 SDK/后台任务不弹窗，返回 `challenge_required`。
+- 在浏览器里仍然是验证码、登录或同意页时：`web_fetch` 在 Web UI 交互界面下打开可见窗口（`web_search` 搜完后的读网页不弹窗，直接返回 `challenge_required`），工具进度提示你去完成，最长等 3 分钟，Esc 取消；完成后自动读取正文并继续，不需要重新发起任务。无人值守的 SDK/后台任务不弹窗，返回 `challenge_required`。
 - 只有人能处理的情况才弹窗。判断“这是不是验证页”（`page.ts` 的 `detectAccessWall`）只看页面真正显示的内容：正文很少且标题是验证/拒绝类标题，或正文几乎为空且页面元素里有验证码组件。脚本里出现的名字不算——很多正常网页都会加载 Cloudflare、reCAPTCHA v3、DataDome 的脚本却从不显示验证。带密码框的短页面只有在几乎没有正文、或标题/网址表明它是登录页时才算“要求登录”。浏览器里正常加载出来的页面直接提取正文，不弹窗也不求助。
 - 浏览器里得到的是单纯的拒绝（HTTP 401/403/429/451/503 且没有验证或登录）时，人去操作也没有用：不弹窗，直接按拒绝报告。
 - 没有完成（超时或关掉窗口）时，同一个网站 2 分钟内不再弹窗。

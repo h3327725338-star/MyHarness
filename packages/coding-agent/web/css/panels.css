@@ -59,6 +59,11 @@
 .notice.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 /* The browser's own notice and the bot-check bar are rows: the text takes the room, the buttons sit at its end. */
 .notice.ws-notice, .notice.ws-challenge { align-items: center; }
+/* The browser's own notice lies over its toolbar for a few seconds: the page below never moves, and nothing of the page
+   is covered (the native view would have to hide under it). Opaque, because the toolbar's controls are behind it. */
+.ws-browser-bar { position: relative; }
+.notice.ws-notice { position: absolute; top: 5px; bottom: 5px; left: var(--pad-panel); right: calc(var(--pad-panel) + 30px); z-index: 3; margin: 0; padding: 0 2px 0 10px; white-space: nowrap; background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--bg-raised); box-shadow: var(--shadow-pop); animation: pop-in var(--t-pop) var(--ease-out) both; }
+.notice.ws-notice.closing { animation: pop-out var(--t-close) var(--ease-out) both; pointer-events: none; }
 .modal-body .notice { margin: 4px 0; }
 
 /* In a narrow toolbar the select gives way; a segmented control keeps its labels on one line. */

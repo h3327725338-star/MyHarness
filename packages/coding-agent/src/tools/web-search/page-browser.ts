@@ -41,6 +41,8 @@ export class BrowserPageReader {
 		url: string,
 		signal: AbortSignal | undefined,
 		onProgress: ((message: string) => void) | undefined,
+		/** False when nobody should be asked for this read even though a person is present (pages read after a search). */
+		mayAskPerson = true,
 	): Promise<ReadPageResult> {
 		const { browser } = this.options;
 		const label = browserLabel(browser);
@@ -59,7 +61,7 @@ export class BrowserPageReader {
 		// A window is only opened for something a person can get past (a robot check, a login, a consent page). A plain
 		// refusal (403, 429, ...) is reported below as what it is, without asking anybody.
 		if (wall && wall.kind !== "blocked") {
-			if (!this.options.interactive()) {
+			if (!mayAskPerson || !this.options.interactive()) {
 				throw new WebSearchError(
 					"challenge_required",
 					`${hostname} 在 ${label} 中也${wall.reason}，需要人工处理一次。在 MyHarness 交互界面中再次读取时会打开 ${label} 窗口让你完成，之后的访问会复用这次的登录或验证。${note()}`,

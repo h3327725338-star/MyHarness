@@ -18,7 +18,7 @@ import {
 } from "../src/tools/web-search/engines/tavily.ts";
 import { plainHttpFetch, requestBytes } from "../src/tools/web-search/http.ts";
 import { htmlToMarkdown } from "../src/tools/web-search/page.ts";
-import { WebSearchService } from "../src/tools/web-search/service.ts";
+import { WEB_SEARCH_LIMITS, WebSearchService } from "../src/tools/web-search/service.ts";
 import { createWebFetchToolDefinition, createWebSearchToolDefinition } from "../src/tools/web-search/tool.ts";
 import { canonicalizeHttpUrl, checkResolvedHost, validatePublicHttpUrl } from "../src/tools/web-search/url.ts";
 
@@ -498,7 +498,7 @@ describe("WebSearchService search", () => {
 		await service.search({ queries: ["a", "b", "c"] });
 		// Only the first DuckDuckGo request is sent in this call; later queries skip it.
 		expect(network.calls.filter((url) => url.hostname === "lite.duckduckgo.com").length).toBeLessThanOrEqual(
-			2, // two requests may already be in flight together
+			WEB_SEARCH_LIMITS.searchConcurrencyPerEngine, // requests to one engine may already be in flight together
 		);
 		const before = network.calls.length;
 		const second = await service.search({ queries: ["d"] });
@@ -604,11 +604,13 @@ describe("WebSearchService search", () => {
 			code: "no_engines",
 		});
 		await expect(
-			createService({}, engineRoutes).service.search({ queries: ["1", "2", "3", "4", "5", "6"] }),
+			createService({}, engineRoutes).service.search({
+				queries: Array.from({ length: WEB_SEARCH_LIMITS.maxQueriesPerCall + 1 }, (_, index) => String(index)),
+			}),
 		).rejects.toMatchObject({ code: "limit" });
 	});
 
-	it("reads at most Pages to Read per Search top results and says when the Agent asked for more", async () => {
+	it("always reads Pages to Read per Search top results unless the Agent turns reading off", async () => {
 		const pageRoutes: Record<string, Route> = {
 			...engineRoutes,
 			"shared.example": () => html(htmlPage("Shared", "<p>shared body about fetch api</p>")),
@@ -621,13 +623,52 @@ describe("WebSearchService search", () => {
 		expect(defaultRead.pages).toHaveLength(2);
 		expect(defaultRead.pages[0]).toMatchObject({ url: defaultRead.results[0]!.url, title: "Shared" });
 
-		const asked = await service.search({ queries: ["fetch api"], readPages: 9, fresh: true });
-		expect(asked.pages).toHaveLength(2);
-		expect(asked.failures).toEqual([expect.objectContaining({ code: "limit" })]);
+		const more = await service.search({ queries: ["fetch api"], readPages: 9, fresh: true });
+		expect(more.pages).toHaveLength(2);
+		expect(more.failures).toEqual([]);
+		const fewer = await service.search({ queries: ["fetch api"], readPages: 1, maxResults: 1, fresh: true });
+		expect(fewer.pages).toHaveLength(2);
+		expect(fewer.results.length).toBeGreaterThanOrEqual(2);
 
 		const none = await service.search({ queries: ["fetch api"], readPages: 0 });
 		expect(none.pages).toEqual([]);
 		expect(none.cacheHit).toBe(true);
+	});
+
+	it("replaces unreadable pages with the next results and drops pages still loading when the read budget ends", async () => {
+		const results = ["a", "b", "c", "d", "e"].map((name) => ({
+			title: `${name} fetch api`,
+			url: `https://${name}.example/`,
+			snippet: "fetch api",
+		}));
+		const network = fakeNetwork({
+			"lite.duckduckgo.com": () => html(ddgHtml(results)),
+			"a.example": () => html("gone", { status: 404 }),
+			"b.example": (_url, init) => hangUntilAborted(init),
+			"c.example": () => html(htmlPage("C", "<p>c body about fetch api</p>")),
+			"d.example": () => html(htmlPage("D", "<p>d body about fetch api</p>")),
+			"e.example": () => html(htmlPage("E", "<p>e body about fetch api</p>")),
+		});
+		const service = new WebSearchService({
+			settings: SettingsManager.inMemory({
+				webSearch: { enabled: true, browserFallback: true, engines: ["duckduckgo"], pagesPerSearch: 3 },
+			}),
+			fetchImpl: network.fetchImpl,
+			lookup: publicLookup,
+			cache: new WebSearchCache(undefined),
+			browser: null,
+			searchReadBudgetMs: 200,
+		});
+		const started = Date.now();
+		const response = await service.search({ queries: ["fetch api"] });
+		expect(Date.now() - started).toBeLessThan(5_000);
+		// a (404) is replaced by d; b never finishes and is named instead of holding the search for 20 s.
+		expect(response.pages.map((page) => page.title)).toEqual(["C", "D"]);
+		expect(network.calls.some((url) => url.hostname === "e.example")).toBe(false);
+		expect(response.failures).toEqual([
+			expect.objectContaining({ url: "https://a.example/", code: "http" }),
+			expect.objectContaining({ code: "timeout", message: expect.stringContaining("https://b.example/") }),
+		]);
 	});
 
 	it("propagates cancellation to in-flight engine requests", async () => {

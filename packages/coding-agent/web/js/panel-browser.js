@@ -12,6 +12,9 @@ import { SpeedDial } from "./browser-speed-dial.js";
 import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
 import { t } from "./i18n.js";
 
+/** How long the browser's own notice stays on the toolbar. */
+const NOTICE_MS = 5000;
+
 /** Names of the notice categories, as the site-permission bubble lists them. */
 const NOTICE_LABELS = {
 	permission: "Permission notices",
@@ -43,6 +46,20 @@ export function BrowserPanel({ tabId, url }) {
 	const [hasView, setHasView] = useState(() => !!url);
 	const [status, setStatus] = useState({ url: url || "", title: "", loading: false, error: "", canGoBack: false, canGoForward: false });
 	const [notice, setNotice] = useState(null);
+	// A notice only echoes what already happened, so it lies over the toolbar (never over the page, which would have to
+	// give way) and goes away by itself; the pointer resting on it keeps it.
+	const [noticeHeld, setNoticeHeld] = useState(false);
+	const noticePresence = usePresence(!!notice, 160);
+	const lastNotice = useRef(null);
+	if (notice) lastNotice.current = notice;
+	const shownNotice = notice || lastNotice.current;
+	useEffect(() => {
+		// A notice that went away under the pointer never reports the pointer leaving.
+		if (!notice) setNoticeHeld(false);
+		if (!notice || noticeHeld) return undefined;
+		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [notice, noticeHeld]);
 	// Which categories of the browser's own notices are shown. Closing one hides its category from now on; the site's
 	// permission itself is decided by the desktop host and is not touched by this.
 	const [noticesOn, setNoticesOn] = useState(() => savedNoticePrefs(window.localStorage));
@@ -176,7 +193,7 @@ export function BrowserPanel({ tabId, url }) {
 			showNotice(
 				"permission",
 				allow
-					? t("Allowed {permission} for {origin} in this session.", { permission: request.permission, origin: request.origin })
+					? t("Allowed {permission} for {origin}. You will not be asked again.", { permission: request.permission, origin: request.origin })
 					: t("Denied {permission} for {origin}.", { permission: request.permission, origin: request.origin }),
 			);
 			await loadPermissions();
@@ -429,6 +446,8 @@ export function BrowserPanel({ tabId, url }) {
 			}
 			if (value.type === "permission") {
 				setPermissionAsk((current) => (current && current.requestId === value.requestId ? null : current));
+				// A saved decision applied again was already announced once, when it was made.
+				if (value.reused) return;
 				const words = { permission: value.permission, origin: value.origin };
 				showNotice(
 					"permission",
@@ -436,10 +455,10 @@ export function BrowserPanel({ tabId, url }) {
 						? t("Allowed {permission} for {origin} automatically: it is a bookmarked site.", words)
 						: value.by === "agent"
 							? value.allowed
-								? t("The Agent allowed {permission} for {origin} in this session.", words)
+								? t("The Agent allowed {permission} for {origin}. You will not be asked again.", words)
 								: t("The Agent denied {permission} for {origin}.", words)
 							: value.allowed
-								? t("Allowed {permission} for {origin} in this session.", words)
+								? t("Allowed {permission} for {origin}. You will not be asked again.", words)
 								: t("Denied {permission} for {origin}.", words),
 				);
 			}
@@ -593,6 +612,11 @@ export function BrowserPanel({ tabId, url }) {
 			<button ref=${barButton} class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-expanded=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
+			${noticePresence.mounted && shownNotice ? html`<div class=${`notice warn ws-notice ${noticePresence.shown ? "" : "closing"}`} role="status" title=${shownNotice.text}
+				onMouseEnter=${() => setNoticeHeld(true)} onMouseLeave=${() => setNoticeHeld(false)}>
+				<span class="grow truncate">${shownNotice.text}</span>
+				<button class="icon-btn sm" title=${t("Do not show notices like this again")} aria-label=${t("Do not show notices like this again")} onClick=${closeNotice}><${Icon} name="x" size=${13} /></button>
+			</div>` : null}
 		</div>
 		${findOpen ? html`<form class="panel-toolbar ws-find" onSubmit=${(event) => { event.preventDefault(); void search(true); }}>
 			<input class="field grow" ref=${findInput} aria-label=${t("Find in page")} placeholder=${t("Find in page")} value=${findText}
@@ -607,10 +631,6 @@ export function BrowserPanel({ tabId, url }) {
 			<button class="icon-btn sm" type="submit" title=${t("Next match")} aria-label=${t("Next match")} disabled=${!found.matches}><${Icon} name="chevronDown" size=${14} /></button>
 			<button class="icon-btn sm" type="button" title=${t("Close find")} aria-label=${t("Close find")} onClick=${closeFind}><${Icon} name="x" size=${14} /></button>
 		</form>` : null}
-		${notice ? html`<div class="notice warn ws-notice" role="status">
-			<span class="grow">${notice.text}</span>
-			<button class="icon-btn sm" title=${t("Dismiss this notice")} aria-label=${t("Dismiss this notice")} onClick=${closeNotice}><${Icon} name="x" size=${13} /></button>
-		</div>` : null}
 		${status.challenge && !challengeHidden ? html`<div class="notice warn ws-challenge" role="status">
 			<span class="grow">${t("This site is asking for a human check. Complete it in this panel, or open the page in your normal browser.")}</span>
 			<button class="btn sm" disabled=${!hasView} onClick=${() => act("reload")}>${t("Try again")}</button>
@@ -618,9 +638,9 @@ export function BrowserPanel({ tabId, url }) {
 			<button class="icon-btn sm" title=${t("Dismiss this notice")} aria-label=${t("Dismiss this notice")} onClick=${() => setChallengeHidden(true)}><${Icon} name="x" size=${13} /></button>
 		</div>` : null}
 		${permissionAsk ? html`<div class="notice warn ws-permission-ask" role="alertdialog" aria-label=${t("Site permission request")}>
-			<p>${t("{origin} asks for {permission}. It is denied unless you allow it for this session.", { origin: permissionAsk.origin || t("This site"), permission: permissionAsk.permission })}</p>
+			<p>${t("{origin} asks for {permission}. It is denied unless you allow it; the answer is remembered for this site.", { origin: permissionAsk.origin || t("This site"), permission: permissionAsk.permission })}</p>
 			<div class="row">
-				<button class="btn sm primary" onClick=${() => answerPermission(true)}>${t("Allow for this session")}</button>
+				<button class="btn sm primary" onClick=${() => answerPermission(true)}>${t("Allow for this site")}</button>
 				<button class="btn sm" onClick=${() => answerPermission(false)}>${t("Deny")}</button>
 			</div>
 		</div>` : null}
@@ -636,7 +656,7 @@ export function BrowserPanel({ tabId, url }) {
 				<strong class="grow truncate">${t("Site permissions")}</strong>
 				<button class="icon-btn sm" title=${t("Close")} aria-label=${t("Close")} onClick=${() => setPermissionOpen(false)}><${Icon} name="x" size=${13} /></button>
 			</div>
-			<div class="dim ws-permissions-note">${siteOrigin ? t("Decisions for {origin} last for this app session only.", { origin: siteOrigin }) : t("Open a page to review its permissions.")}</div>
+			<div class="dim ws-permissions-note">${siteOrigin ? t("Decisions for {origin} are remembered until you revoke them.", { origin: siteOrigin }) : t("Open a page to review its permissions.")}</div>
 			${!siteOrigin ? null : siteDecisions.length
 				? siteDecisions.map((entry) => html`<div class="row ws-permission-row" key=${entry.permission}>
 					<span class="grow truncate">${entry.permission}</span>

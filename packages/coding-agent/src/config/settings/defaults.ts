@@ -115,9 +115,9 @@ export const PREVIOUS_DEFAULT_WEB_SEARCH_ENGINES = ["duckduckgo", "brave"] as co
  * the settings page offers exactly these values and the tools never exceed them.
  */
 export const WEB_SEARCH_SETTING_RANGES = {
-	pagesPerSearch: { min: 0, max: 10 },
-	maxUrlsPerFetch: { min: 1, max: 20 },
-	fetchConcurrency: { min: 1, max: 8 },
+	pagesPerSearch: { min: 0, max: 30 },
+	maxUrlsPerFetch: { min: 1, max: 60 },
+	fetchConcurrency: { min: 1, max: 24 },
 	maxRedirects: { min: 0, max: 20 },
 } as const;
 

@@ -137,9 +137,9 @@ describe("SettingsManager", () => {
 				webSearch: { enabled: true, pagesPerSearch: 99, maxUrlsPerFetch: 0, fetchConcurrency: 1000 },
 			});
 			expect(manager.getWebSearchSettings()).toMatchObject({
-				pagesPerSearch: 10,
+				pagesPerSearch: 30,
 				maxUrlsPerFetch: 1,
-				fetchConcurrency: 8,
+				fetchConcurrency: 24,
 			});
 			const invalid = SettingsManager.inMemory({
 				webSearch: { pagesPerSearch: "5" as never, maxUrlsPerFetch: Number.NaN, engines: "brave" as never },
@@ -222,7 +222,7 @@ describe("SettingsManager", () => {
 			});
 			expect(manager.getWebSearchSettings().engines).toEqual(["google", "bing"]);
 			const huge = SettingsManager.inMemory({ webSearch: { parallelPages: { mode: "manual", value: 500 } } });
-			expect(huge.getWebSearchSettings().maxUrlsPerFetch).toBe(20);
+			expect(huge.getWebSearchSettings().maxUrlsPerFetch).toBe(60);
 		});
 
 		it("moves the untouched previous default engine list to Google and Bing, but keeps real choices", async () => {

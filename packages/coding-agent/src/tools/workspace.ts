@@ -360,7 +360,10 @@ const workspaceParametersUnion = Type.Union([
 				}),
 			),
 			replace: Type.Optional(
-				Type.Boolean({ description: "Replace what the field holds (default true); false appends at the end" }),
+				Type.Boolean({
+					description:
+						"Replace what the field holds (default true; without a target this applies to a focused form field, and to a rich-text editor only when true is given); false appends at the end",
+				}),
 			),
 			enter: Type.Optional(Type.Boolean({ description: "Press Enter after typing (submit a search or form)" })),
 			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
@@ -481,9 +484,42 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("scroll"),
 			tabId: tabIdSchema,
-			x: Type.Optional(Type.Number({ description: "Scroll by this many px to the right" })),
-			y: Type.Optional(Type.Number({ description: "Scroll by this many px down" })),
-			selector: Type.Optional(Type.String({ minLength: 1, description: "Scroll this element into view instead" })),
+			deltaY: Type.Optional(
+				Type.Union([Type.Number(), Type.Literal("page")], {
+					description:
+						"Scroll down by this many px (negative = up), or \"page\" for most of the area's height. The area scrolled is the one under x,y, the one holding the selector/index/label element, or else the page's main scrolling list",
+				}),
+			),
+			deltaX: Type.Optional(
+				Type.Union([Type.Number(), Type.Literal("page")], { description: "Scroll right by this many px" }),
+			),
+			until: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description:
+						"Keep scrolling (down unless deltaY is negative) until these words are on screen; the result gives where they are, or says they never appeared",
+				}),
+			),
+			maxSteps: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 60, description: "until: at most this many scrolls (default 20)" }),
+			),
+			x: Type.Optional(
+				Type.Number({
+					description:
+						"With deltaY/deltaX/until: the point (screenshot CSS px) whose scrolling area is scrolled. Alone (older form): scroll the page right by this many px",
+				}),
+			),
+			y: Type.Optional(
+				Type.Number({
+					description: "With deltaY/deltaX/until: the point's y. Alone (older form): scroll down by this many px",
+				}),
+			),
+			selector: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Alone: scroll this element into view. With deltaY/until: scroll the area holding it",
+				}),
+			),
 			index: Type.Optional(Type.Integer({ minimum: 0 })),
 			label: Type.Optional(
 				Type.String({
@@ -887,7 +923,7 @@ export function createWorkspaceToolDefinition(
 					content: [
 						{
 							type: "text",
-							text: `[workspace] ${value?.allowed ? "allowed" : "denied"} ${value?.permission ?? ""} for ${value?.origin ?? ""} (this app session)`,
+							text: `[workspace] ${value?.allowed ? "allowed" : "denied"} ${value?.permission ?? ""} for ${value?.origin ?? ""} (remembered for this site)`,
 						},
 					],
 					details: { operation, result: value },
@@ -1259,14 +1295,20 @@ export function createWorkspaceToolDefinition(
 					const y = (input as { y?: number }).y;
 					if (Number.isFinite(x) !== Number.isFinite(y)) throw new Error("workspace: type needs both x and y");
 					if (Number.isFinite(x)) await browser({ action: "mouse", tabId: id, kind: "click", x, y });
-					const typed = (await browser({ action: "insertText", tabId: id, text })) as {
+					const replace = (input as { replace?: boolean }).replace;
+					const typed = (await browser({
+						action: "insertText",
+						tabId: id,
+						text,
+						replace: replace === false ? false : replace === true ? true : "fields",
+					})) as {
 						focused?: Record<string, unknown> | null;
 					};
 					if (typed?.focused && (input as { enter?: boolean }).enter === true)
 						await browser({ action: "keys", tabId: id, keys: "Enter" });
 					if (!typed?.focused)
 						throw new Error(
-							"workspace: nothing on the page has the keyboard focus; click the field first (mouse click, or type with x/y)",
+							"workspace: nothing on the page has the keyboard focus; name the field instead (type with label, selector or index), or click it first (mouse click, or type with x/y)",
 						);
 					return {
 						content: [
@@ -1348,18 +1390,30 @@ export function createWorkspaceToolDefinition(
 					forward: (input as { forward?: boolean }).forward !== false,
 					findNext: (input as { findNext?: boolean }).findNext === true,
 					matchCase: (input as { matchCase?: boolean }).matchCase === true,
-				})) as { matches?: number; activeMatch?: number; timeout?: boolean };
+				})) as {
+					matches?: number;
+					activeMatch?: number;
+					timeout?: boolean;
+					elements?: Array<{ tag?: string; text?: string; x?: number; y?: number; inView?: boolean }>;
+				};
 				if (value?.timeout) throw new Error("workspace: the page did not report find results before the timeout");
 				const matches = value?.matches ?? 0;
 				const active = value?.activeMatch ?? 0;
+				const elements = value?.elements ?? [];
+				// Where the words are: elements to click (label/x,y) or to scroll to (scroll with label), on-screen ones first.
+				const where = elements.length
+					? `\n${elements.map((element) => `  ${element.tag ?? ""} ${JSON.stringify(element.text ?? "")} @(${element.x}, ${element.y})${element.inView ? "" : " (off screen: scroll with label to reach it)"}`).join("\n")}`
+					: matches
+						? "\n  (no element with these words found in the page's own text; they may be inside a frame)"
+						: "";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `[workspace] find ${JSON.stringify(text)} in ${id} → ${matches} match(es)${matches ? `, active ${active}` : ""}`,
+							text: `[workspace] find ${JSON.stringify(text)} in ${id} → ${matches} match(es)${matches ? `, active ${active}` : ""}${where}`,
 						},
 					],
-					details: { operation, activeId: id, result: { text, matches, activeMatch: active } },
+					details: { operation, activeId: id, result: { text, matches, activeMatch: active, elements } },
 				};
 			}
 			case "stop_find": {
@@ -1393,7 +1447,7 @@ export function createWorkspaceToolDefinition(
 					content: [
 						{
 							type: "text",
-							text: `[workspace] site permissions=${permissions.length} pending=${pending.length}\n${lines.join("\n") || "  (none in this app session)"}`,
+							text: `[workspace] site permissions=${permissions.length} pending=${pending.length}\n${lines.join("\n") || "  (none)"}`,
 						},
 					],
 					details: { operation, result: { permissions, pending } },
@@ -1401,27 +1455,63 @@ export function createWorkspaceToolDefinition(
 			}
 			case "scroll": {
 				const id = await resolveBrowserTab(tabId);
-				const target = input as { selector?: string; index?: number; label?: string };
-				const value = (await browser({
-					action: "scroll",
-					tabId: id,
-					x: Number((input as { x?: number }).x) || 0,
-					y: Number((input as { y?: number }).y) || 0,
-					selector: target.selector,
-					index: target.index,
-					label: target.label,
-				})) as { result?: { x?: number; y?: number }; element?: Record<string, unknown> };
-				const element = value?.element
-					? ` (${value.element.tag} ${JSON.stringify(value.element.text ?? "")} now at (${value.element.x}, ${value.element.y}))`
-					: "";
+				const target = input as {
+					selector?: string;
+					index?: number;
+					label?: string;
+					x?: number;
+					y?: number;
+					deltaX?: number | "page";
+					deltaY?: number | "page";
+					until?: string;
+					maxSteps?: number;
+				};
+				// With an amount or `until`, x/y name the point whose scrolling area moves; alone they are the amounts.
+				const aimed = target.deltaX !== undefined || target.deltaY !== undefined || !!target.until;
+				const value = (await browser(
+					{
+						action: "scroll",
+						tabId: id,
+						...(aimed
+							? { atX: target.x, atY: target.y, deltaX: target.deltaX, deltaY: target.deltaY }
+							: { x: Number(target.x) || 0, y: Number(target.y) || 0 }),
+						until: target.until,
+						maxSteps: target.maxSteps,
+						selector: target.selector,
+						index: target.index,
+						label: target.label,
+					},
+					target.until ? SLOW_TIMEOUT_MS : undefined,
+				)) as {
+					element?: Record<string, unknown>;
+					moved?: number;
+					atEnd?: boolean;
+					how?: string;
+					changed?: boolean;
+					container?: Record<string, unknown> | null;
+					found?: { tag?: string; text?: string; x?: number; y?: number } | null;
+					steps?: number;
+				};
+				const area = value?.container
+					? value.container.page
+						? "the page"
+						: `${value.container.tag ?? ""} ${JSON.stringify(value.container.text ?? "")}`.trim()
+					: "no scrolling area";
+				let text: string;
+				if (value?.element)
+					text = `brought ${value.element.tag} ${JSON.stringify(value.element.text ?? "")} into view at (${value.element.x}, ${value.element.y})`;
+				else if (target.until)
+					text = value?.found
+						? `found ${JSON.stringify(target.until)} after ${value.steps ?? 0} scroll(s): ${value.found.tag ?? ""} ${JSON.stringify(value.found.text ?? "")} at (${value.found.x}, ${value.found.y})`
+						: `${JSON.stringify(target.until)} did not appear after ${value?.steps ?? 0} scroll(s) of ${area}${value?.atEnd ? " (reached the end)" : ""}`;
+				else
+					text =
+						value?.how === "wheel"
+							? `${area} did not scroll by script; sent a mouse wheel at its centre, the visible content ${value.changed ? "changed" : "did not change"}`
+							: `scrolled ${area} by ${value?.moved ?? 0} px${value?.atEnd ? " (reached the end)" : ""}`;
 				return {
-					content: [
-						{
-							type: "text",
-							text: `[workspace] scrolled ${id} → ${JSON.stringify(value?.result ?? null)}${element}`,
-						},
-					],
-					details: { operation, activeId: id, result: value?.result },
+					content: [{ type: "text", text: `[workspace] ${id}: ${text}` }],
+					details: { operation, activeId: id, result: value },
 				};
 			}
 			case "exec": {
@@ -1679,7 +1769,8 @@ export function createWorkspaceToolDefinition(
 			"A tab on screen has exactly the size of the user's panel (a narrow panel can get a site's phone layout); a background tab is laid out at least 1280×800.",
 			"Files: a click that starts a download waits for it and its result gives the saved file's path (files go to the user's Downloads folder, so there is nothing to search for). `download` saves a link directly with the tab's sign-in and returns the path; `downloads` lists recent ones. Move or copy the file afterwards if it belongs elsewhere.",
 			'Your own mouse and keyboard: `screenshot` returns the picture of the tab; its pixels are the page\'s CSS pixels, so `mouse` (click/double_click/right_click/move/drag/wheel at x,y) hits exactly the point seen in it - images, canvases and custom controls included. `key` presses keys or combinations ("Control+A", "Enter"), `type` types into the focused element (or clicks x,y first). Selector/index clicks from `interactive` still work.',
-			"Point at elements like a person: `click`, `type`, `mouse` and `scroll` take `label` (the words on the element, its placeholder or accessible name), `selector` or `index`; the element is scrolled into view and pressed with the real mouse (a covered or hidden one falls back to its own click(), and the result says so). `type` with a target clicks the field, replaces its text (`replace: false` appends), picks the matching option of a <select>, and `enter: true` submits. A click or Enter that starts a navigation is followed and the result says where the page went. `wait` waits for a selector, text or label to appear (or with `gone` to disappear), or for the page to load and go quiet.",
+			"Point at elements like a person: `click`, `type`, `mouse` and `scroll` take `label` (the words on the element, its placeholder or accessible name), `selector` or `index`; the element is scrolled into view and pressed with the real mouse (a covered or hidden one falls back to its own click(), and the result says so). `type` with a target clicks the field, replaces its text (`replace: false` appends), picks the matching option of a <select>, and `enter: true` submits. A label copied from a screenshot may be cut off or miss punctuation; when nothing matches, the error lists the closest visible texts. Elements inside web components (shadow DOM) are found too. A click or Enter that starts a navigation is followed and the result says where the page went. `wait` waits for a selector, text or label to appear (or with `gone` to disappear), or for the page to load and go quiet.",
+			'Lists that scroll inside the page (chat lists, mail, feeds): `scroll` with `deltaY` (px or "page") at x,y or at a label scrolls the area under that point; `until: "words"` keeps scrolling until they are on screen and says where. `find` returns the elements that hold the words with their positions. `exec` errors come back with the page\'s real message.',
 			"Fewer round trips: add `screenshot: true` to an action to get the picture of the page after it, and use `batch` with `steps` (click/type/mouse/key/scroll/wait/navigate/back/forward/reload/text/interactive/find/exec/screenshot/state, at most 30) to run a sequence in one call; it stops at the first failing step and ends with one screenshot unless `screenshot: false`.",
 			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",

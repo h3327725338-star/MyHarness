@@ -3,8 +3,10 @@
 #
 # 行为：
 #   * 依次运行根 package.json 里的 build（全部包）和 electron-builder 打包，产物写入 dist\desktop。
-#   * 打包完成后清理更早的中间产物（stage-*）和旧产物（release-*，保留最新 2 个），
-#     删不掉的（例如旧版本还在运行）只提示并跳过，不会中断流程。
+#   * 新版本总是从固定目录 dist\desktop\current 启动：关闭旧实例后，把刚打好的 release-<时间戳> 改名为 current，
+#     原来的 current 改名为 previous（上一个版本，留作回退）。Windows 防火墙和开机自启都按 exe 路径记，
+#     路径不变，「允许公用和专用网络访问」只会在第一次问，开机自启也不会指向已删除的旧目录。
+#   * 然后清理中间产物（stage-*）和其余 release-* 目录，删不掉的只提示并跳过，不会中断流程。
 #   * 启动最新产物前会关闭正在运行的 MyHarness，否则单实例锁会让新版本直接退出、看到的还是旧窗口。
 #     关闭走的是窗口关闭（和点右上角 X 一样），服务与子进程随之正常退出。
 #     20 秒后仍有残留（如无窗口的孤儿子进程）时，只强制结束位于 dist\desktop 下的 MyHarness 进程。
@@ -22,7 +24,8 @@ Set-Location -LiteralPath $Root
 $OutputRoot = Join-Path $Root "dist\desktop"
 $env:MYHARNESS_DESKTOP_OUTPUT = $OutputRoot
 $ExecutableName = "MyHarness"
-$KeepReleases = 2
+$CurrentDir = Join-Path $OutputRoot "current"
+$PreviousDir = Join-Path $OutputRoot "previous"
 
 function Write-Step([string]$Text) {
 	Write-Host ""
@@ -74,10 +77,10 @@ function Get-Packaging {
 	@(Get-Process -Name $ExecutableName -ErrorAction SilentlyContinue)
 }
 
-function Remove-OldArtifacts([object[]]$Releases) {
-	Write-Step "清理旧构建产物（保留最新 $KeepReleases 个）"
+function Remove-OldArtifacts([string]$Keep) {
+	Write-Step "清理旧构建产物"
 	$targets = @()
-	$targets += @($Releases | Select-Object -Skip $KeepReleases)
+	$targets += @(Get-ChildItem -LiteralPath $OutputRoot -Directory -Filter "release-*" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $Keep })
 	$targets += @(Get-ChildItem -LiteralPath $OutputRoot -Directory -Filter "stage-*" -ErrorAction SilentlyContinue)
 
 	foreach ($item in $targets) {
@@ -94,6 +97,31 @@ function Remove-OldArtifacts([object[]]$Releases) {
 		} catch {
 			Write-Host "  跳过 $($item.Name)：$($_.Exception.Message)" -ForegroundColor DarkYellow
 		}
+	}
+}
+
+function Test-PlainDirectory([string]$Path) {
+	$item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+	return $item -and $item.PSIsContainer -and -not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+}
+
+# 把新版本放到固定的 current 目录（改名，同一磁盘上是瞬间完成的）。任何一步失败都返回 $null，调用方改从
+# release-<时间戳> 原地启动：能用，只是防火墙会把它当新程序再问一次。
+function Install-Current([string]$Release) {
+	Write-Step "把新版本放到固定目录 current"
+	try {
+		foreach ($path in @($CurrentDir, $PreviousDir)) {
+			if ((Test-Path -LiteralPath $path) -and -not (Test-PlainDirectory $path)) { throw "$path 不是普通目录（可能是链接），不自动改动" }
+		}
+		if (Test-Path -LiteralPath $PreviousDir) { Remove-Item -LiteralPath $PreviousDir -Recurse -Force -ErrorAction Stop }
+		if (Test-Path -LiteralPath $CurrentDir) { Rename-Item -LiteralPath $CurrentDir -NewName "previous" -ErrorAction Stop }
+		Rename-Item -LiteralPath $Release -NewName "current" -ErrorAction Stop
+		Write-Host "  $CurrentDir"
+		return (Join-Path $CurrentDir "win-unpacked\$ExecutableName.exe")
+	} catch {
+		Write-Host "  没能放到 current：$($_.Exception.Message)" -ForegroundColor DarkYellow
+		Write-Host "  改从新构建目录直接启动（Windows 防火墙可能会把它当新程序再询问一次）" -ForegroundColor DarkYellow
+		return $null
 	}
 }
 
@@ -146,17 +174,21 @@ try {
 			Sort-Object LastWriteTime -Descending
 	)
 	if ($releases.Count -eq 0) { throw "打包结束但没有找到 win-unpacked\$ExecutableName.exe（$OutputRoot）。" }
-	$exe = Join-Path $releases[0].FullName "win-unpacked\$ExecutableName.exe"
-
-	Remove-OldArtifacts -Releases $releases
+	$release = $releases[0].FullName
+	$exe = Join-Path $release "win-unpacked\$ExecutableName.exe"
 
 	if ($env:MYHARNESS_DESKTOP_SKIP_LAUNCH -eq "1") {
 		Write-Host ""
+		Remove-OldArtifacts -Keep $release
 		Write-Host "已按 MYHARNESS_DESKTOP_SKIP_LAUNCH=1 跳过关闭与启动。产物：$exe" -ForegroundColor Yellow
 		exit 0
 	}
 
 	Stop-RunningInstance
+
+	$installed = Install-Current -Release $release
+	if ($installed) { $exe = $installed; $release = $CurrentDir }
+	Remove-OldArtifacts -Keep $release
 
 	Write-Step "启动最新版本"
 	Write-Host "  $exe"

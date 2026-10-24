@@ -755,6 +755,28 @@ describe("Web UI: reasoning and answer segments", () => {
 		// Block keys follow their first step, so a block keeps its open or folded state while later output arrives.
 		const [again] = buildTurns(items.slice(0, 4), { cwd: "", toolRuns: {} });
 		expect(turnSegments(again)[2].key).toBe(segments[2].key);
+		// A finished turn with folded steps: the texts along the way go into one block, only the answer stays out.
+		const folded = turnSegments(turn, { fold: true });
+		expect(
+			folded.map((s: any) => `${s.type}:${s.type === "process" ? s.steps.map((x: any) => x.type).join("+") : ""}`),
+		).toEqual(["process:thinking+note+action+note+thinking+action"]);
+		expect(folded[0].key).toBe(segments[0].key);
+		expect(folded[0].stats.actions).toBe(2);
+		// Without a final answer, text after the last step is the last thing the turn said and stays in view.
+		const [unfinished] = buildTurns(items.slice(0, 2), { cwd: "", toolRuns: {} });
+		expect(turnSegments(unfinished, { fold: true }).map((s: any) => s.type)).toEqual(["process"]);
+		const trailing = [
+			items[0],
+			assistant(
+				[
+					{ type: "toolCall", id: "c1", name: "ls", args: {} },
+					{ type: "text", text: "Stopped here." },
+				],
+				{ stopReason: "aborted", ts: 2 },
+			),
+		];
+		const [cut] = buildTurns(trailing, { cwd: "", toolRuns: {} });
+		expect(turnSegments(cut, { fold: true }).map((s: any) => s.type)).toEqual(["process", "text"]);
 	});
 });
 

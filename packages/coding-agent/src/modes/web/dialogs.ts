@@ -20,6 +20,8 @@ export interface WebDialogRequest {
 	options?: string[];
 	placeholder?: string;
 	initialValue?: string;
+	/** `input` only: the browser may attach images to the answer (see ExtensionUIDialogOptions.onImages). */
+	acceptsImages?: boolean;
 	/** Absolute deadline (ms epoch) when the dialog auto-dismisses. */
 	deadline?: number;
 	createdAt: number;
@@ -39,7 +41,10 @@ interface PendingDialog {
 	request: WebDialogRequest;
 	resolve: (value: unknown) => void;
 	cleanup: () => void;
+	onImages?: ExtensionUIDialogOptions["onImages"];
 }
+
+export type DialogImage = { type: "image"; data: string; mimeType: string };
 
 type DialogValue = string | boolean | undefined;
 
@@ -85,6 +90,7 @@ export class WebDialogBridge {
 			kind,
 			...fields,
 			...(opts?.initialValue !== undefined ? { initialValue: opts.initialValue } : {}),
+			...(kind === "input" && opts?.onImages ? { acceptsImages: true } : {}),
 			...(opts?.timeout ? { deadline: Date.now() + opts.timeout } : {}),
 			createdAt: Date.now(),
 		};
@@ -110,15 +116,22 @@ export class WebDialogBridge {
 				}
 				opts.signal.addEventListener("abort", onAbort, { once: true });
 			}
-			this.pending.set(id, { request, resolve: (value) => finish(value as DialogValue), cleanup });
+			this.pending.set(id, {
+				request,
+				resolve: (value) => finish(value as DialogValue),
+				cleanup,
+				...(opts?.onImages ? { onImages: opts.onImages } : {}),
+			});
 			this.onDialogsChanged?.();
 		});
 	}
 
 	/** Answer a pending dialog from the browser. Returns false when it is no longer pending. */
-	respond(id: string, value: DialogValue): boolean {
+	respond(id: string, value: DialogValue, images: DialogImage[] = []): boolean {
 		const entry = this.pending.get(id);
 		if (!entry) return false;
+		// Images only go with an answer (never with a dismissal) to a dialog that asked for them.
+		if (images.length && value !== undefined && entry.request.acceptsImages) entry.onImages?.(images);
 		entry.resolve(value);
 		return true;
 	}

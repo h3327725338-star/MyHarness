@@ -194,11 +194,16 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 		return { steering: cleared.steering, followUp: cleared.followUp };
 	});
 
-	server.route("POST", "/api/ui/respond", ({ body }) => {
+	server.route("POST", "/api/ui/respond", async ({ body }) => {
 		const payload = asObject(body);
 		const id = asString(payload.id, "id");
 		const value = payload.value;
-		const ok = host.dialogs.respond(id, typeof value === "string" || typeof value === "boolean" ? value : undefined);
+		const images = await toImageContent(host, payload.images);
+		const ok = host.dialogs.respond(
+			id,
+			typeof value === "string" || typeof value === "boolean" ? value : undefined,
+			images,
+		);
 		return { ok };
 	});
 	server.route("POST", "/api/editor-text", ({ body }) => {

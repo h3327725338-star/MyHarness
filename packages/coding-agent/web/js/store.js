@@ -1584,17 +1584,25 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 const recovering = new Set();
 function recoverLostSlot(slot, retryTarget) {
 	if (recovering.has(slot)) return;
-	const file = retryTarget?.file ?? bags.get(slot)?.snap?.session?.file;
+	const lost = bags.get(slot)?.snap;
+	const file = retryTarget?.file ?? lost?.session?.file;
 	bags.delete(slot);
 	turnsCacheLru.delete(slot);
 	if (activeSlot !== slot && !retryTarget) return;
 	recovering.add(slot);
 	const seq = nextSwitch();
-	const mode = retryTarget?.mode ?? uiMode();
+	const mode = chatModeOf(retryTarget?.mode ?? lost?.mode ?? uiMode());
 	const pending = beginSwitch({ path: file, mode, retry: () => recoverLostSlot(slot, { file, mode }) }, seq);
+	// A chat deleted elsewhere (another window, the sidebar) is gone for good: show its mode's latest chat instead, so
+	// the page stays in the mode it was in.
+	const openLatest = async () => {
+		const opened = await post("/api/modes/open", { mode }, "");
+		setModeState(mode, opened.state);
+		return opened;
+	};
 	(async () => {
 		try {
-			const result = file ? await post("/api/sessions/open", { path: file }, "") : await post("/api/sessions/new", { mode }, "");
+			const result = file ? await post("/api/sessions/open", { path: file }, "").catch((error) => (error.status === 404 ? openLatest() : Promise.reject(error))) : await post("/api/sessions/new", { mode }, "");
 			if (!isLatestSwitch(seq)) return;
 			await activateSlot(result.slot, seq, pending);
 			void loadSlots();

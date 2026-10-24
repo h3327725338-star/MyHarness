@@ -182,6 +182,24 @@ function splitDiff(context: CommitMessageContext, maxTokens: number): DiffPart[]
 	return parts.sort((a, b) => root(groupKey(a.path)).localeCompare(root(groupKey(b.path))));
 }
 
+/** First line of the error when the model's answer is not JSON; the web UI translates it and shows the rest as details. */
+export const INVALID_MODEL_JSON =
+	"The model returned a commit description that is not valid JSON, so no commit was created. Try again.";
+
+/** Parse one answer of the model. A malformed answer says so in plain words, with the parser's reason and the answer. */
+function parseModelJson(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		const excerpt = text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
+		throw new Error(`${INVALID_MODEL_JSON}
+${reason}
+Model output:
+${excerpt}`);
+	}
+}
+
 async function describeInBatches(
 	context: CommitMessageContext,
 	prompt: string,
@@ -240,7 +258,7 @@ async function describeInBatches(
 		return groups;
 	};
 	const analyze = async (input: unknown, expected: string[], allowed: Set<string>): Promise<Analysis> => {
-		const result = JSON.parse(await ask(input)) as Omit<Analysis, "id">;
+		const result = parseModelJson(await ask(input)) as Omit<Analysis, "id">;
 		if (
 			!result ||
 			!Array.isArray(result.covered) ||
@@ -313,7 +331,7 @@ async function describeInBatches(
 		summaries = await compact(summaries);
 		options.onProgress?.("正在核对关联并汇总提交说明");
 		const text = await ask({ stage: "synthesize", overview, history, summaries });
-		const response = JSON.parse(text) as { read?: unknown };
+		const response = parseModelJson(text) as { read?: unknown };
 		if (!response.read) return text;
 		if (
 			!Array.isArray(response.read) ||
@@ -360,7 +378,7 @@ export async function generateAICommitMessage(
 	const prompt = loadSystemPrompt("tasks/commit-message.md");
 	if (!prompt.trim()) throw new Error("Commit description prompt is unavailable.");
 	const text = await describeInBatches(context, prompt, complete, options);
-	const value: unknown = JSON.parse(text);
+	const value: unknown = parseModelJson(text);
 	if (!value || typeof value !== "object") throw new Error("Invalid generated commit description.");
 	const { title, body } = value as { title?: unknown; body?: unknown };
 	if (

@@ -28,7 +28,8 @@ function loadBrowser() {
       isLoading: () => false,
       getURL() { return this.url; },
       reload() {}, stop() {},
-      debugger: { isAttached: () => false, attach() {}, detach() {}, on() {}, sendCommand: async () => ({ nodes: [] }) },
+      // `exec` runs through Runtime.evaluate; it answers with the expression it was given.
+      debugger: { isAttached: () => false, attach() {}, detach() {}, on() {}, sendCommand: async (method, params) => (method === 'Runtime.evaluate' ? { result: { type: 'object', objectId: params.expression } } : method === 'Runtime.callFunctionOn' ? { result: { value: { ok: true, code: params.objectId } } } : { nodes: [] }) },
       close() { webContents.closed = true; },
       handlers,
     };

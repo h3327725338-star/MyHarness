@@ -5,6 +5,9 @@ const { createBookmarkStore } = require(require('node:path').join(__dirname, 'br
 const { createSpeedDialStore } = require(require('node:path').join(__dirname, 'browser-speed-dial.cjs'));
 const { keyEvents } = require(require('node:path').join(__dirname, 'browser-input.cjs'));
 const { createPasswordStore, attachPasswordManager } = require(require('node:path').join(__dirname, 'browser-passwords.cjs'));
+const { createPermissionStore } = require(require('node:path').join(__dirname, 'browser-permissions.cjs'));
+const page = require(require('node:path').join(__dirname, 'browser-page-helpers.cjs'));
+const { INTERACTIVE_QUERY } = page;
 
 exports.httpUrl = (value) => {
   const url = new URL(value);
@@ -110,11 +113,11 @@ exports.createBrowser = (window, log, options = {}) => {
   const networkLog = [];
   let downloadSeq = 0;
   let permissionSeq = 0;
-  // Session-scoped site permission decisions. Nothing is written to disk: the first request for an origin/permission is
-  // shown in the workspace, a decision (by the user, or by the Agent through the workspace tool) is remembered for this
-  // app session only, and a request nobody answers is denied after the timeout. A bookmarked site is the user's own
+  // Site permission decisions: the first request for an origin/permission is shown in the workspace, a decision (by the
+  // user, or by the Agent through the workspace tool) is kept in the desktop profile until the user revokes it, and a
+  // request nobody answers is denied after the timeout without being remembered. A bookmarked site is the user's own
   // choice of a trusted site: its requests are allowed at once and reported as such.
-  const permissionDecisions = new Map();
+  const permissionDecisions = createPermissionStore(options.profileDir ? require('node:path').join(require('node:path').resolve(options.profileDir), 'browser-permissions.json') : undefined, log);
   const pendingPermissions = new Map();
   const PERMISSION_TIMEOUT_MS = 60000;
   const permissionKey = (origin, permission) => `${origin || ''}\0${permission || ''}`;
@@ -255,8 +258,9 @@ exports.createBrowser = (window, log, options = {}) => {
     }
     const known = permissionFor(origin, permission);
     if (known !== undefined) {
-      emit(tab ? tab.id : undefined, { type: 'permission', permission, origin, allowed: known === true, remembered: true });
-      log(`网站权限请求沿用本会话决定：${permission} ${origin} → ${known ? '允许' : '拒绝'}`);
+      // A decision that is already known is applied silently: the user was told once, when it was made.
+      emit(tab ? tab.id : undefined, { type: 'permission', permission, origin, allowed: known === true, remembered: true, reused: true });
+      log(`网站权限请求沿用已保存决定：${permission} ${origin} → ${known ? '允许' : '拒绝'}`);
       callback(known === true);
       return;
     }
@@ -856,12 +860,14 @@ exports.createBrowser = (window, log, options = {}) => {
 
   /** What sits at a point of the page: enough for the Agent to know what it is about to click. */
   const describePoint = (tab, x, y) => runInPage(tab, `(() => {
-    const element = document.elementFromPoint(${x}, ${y});
+    // The innermost element, inside open shadow roots too (web components would otherwise report only their host).
+    let element = document.elementFromPoint(${x}, ${y});
+    while (element && element.shadowRoot) { const inner = element.shadowRoot.elementFromPoint(${x}, ${y}); if (!inner || inner === element) break; element = inner; }
     if (!element) return null;
     const clickable = 'a,button,input,select,textarea,label,[role],[onclick],[tabindex]';
     const pressable = element.closest(clickable);
     const target = pressable || element;
-    const textOf = (node) => (node.getAttribute('aria-label') || node.getAttribute('alt') || node.getAttribute('title') || node.innerText || node.value || node.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    const textOf = (node) => (node.getAttribute('aria-label') || node.getAttribute('alt') || node.getAttribute('title') || node.innerText || node.value || node.getAttribute('placeholder') || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
     const text = textOf(target);
     // The point fell on a plain container (often the gap between two links): name the control right next to it and its
     // centre, so a near miss is visible in the result instead of looking like a click that did nothing.
@@ -999,11 +1005,7 @@ exports.createBrowser = (window, log, options = {}) => {
     return mine().map((record) => ({ ...record, state: tab.downloads.has(record.id) ? 'progressing' : record.state }));
   };
 
-  const focusedElement = (tab) => runInPage(tab, `(() => {
-    const element = document.activeElement;
-    if (!element || element === document.body) return null;
-    return { tag: element.tagName.toLowerCase(), id: element.id || undefined, value: String(element.value ?? element.innerText ?? '').slice(0, 200) };
-  })()`).catch(() => null);
+  const focusedElement = (tab) => runInPage(tab, page.inPage(page.pageFocused)).catch(() => null);
 
   /** Press keys ("Enter", "Control+A", "Shift+Tab") in the tab's focused element, `repeat` times. */
   const pressKeys = async (tab, value) => {
@@ -1021,9 +1023,17 @@ exports.createBrowser = (window, log, options = {}) => {
   };
 
   /** Type text into whatever has the keyboard focus, as an input method would (any language, no per-key mapping). */
-  const insertText = async (tab, text) => {
+  /**
+   * Type into whatever has the keyboard focus. `replace` first selects what a form field holds (and a rich editor's
+   * content only when `replace` is exactly true), so the text replaces it instead of being appended.
+   */
+  const insertText = async (tab, text, options = {}) => {
     keepAwake(tab);
-    await withDebugger(tab, (debuggerApi) => debuggerApi.sendCommand('Input.insertText', { text }));
+    if (options.replace) await runInPage(tab, page.inPage(page.pageSelectFocused, { richToo: options.replace === true }));
+    await withDebugger(tab, async (debuggerApi) => {
+      if (text) await debuggerApi.sendCommand('Input.insertText', { text });
+      else if (options.replace) for (const event of keyEvents('Delete')) await debuggerApi.sendCommand('Input.dispatchKeyEvent', event);
+    });
     return { ok: true, focused: await focusedElement(tab) };
   };
 
@@ -1146,7 +1156,7 @@ exports.createBrowser = (window, log, options = {}) => {
   const uploadFile = async (tab, info, selector, index) => {
     return withDebugger(tab, async (debuggerApi) => {
       const expression = Number.isInteger(index)
-        ? `document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)})[${index}]`
+        ? `(${page.pageHelpers})(${JSON.stringify(INTERACTIVE_QUERY)}).all(${JSON.stringify(INTERACTIVE_QUERY)})[${index}]`
         : `document.querySelector(${JSON.stringify(selector)})`;
       const found = await debuggerApi.sendCommand('Runtime.evaluate', { expression, objectGroup: 'myharness-upload' });
       const objectId = found?.result?.objectId;
@@ -1178,57 +1188,15 @@ exports.createBrowser = (window, log, options = {}) => {
     });
   };
 
-  /** Interactive elements in document order; `index` addresses the same list for click/type without a CSS selector. */
-  const INTERACTIVE_QUERY = 'a,button,input,select,textarea,summary,[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],[role="menuitem"],[role="option"],[role="combobox"],[role="textbox"],[contenteditable="true"],[contenteditable=""],[contenteditable="plaintext-only"]';
-
   /**
    * Find one element the way a person would point at it: by the index from `interactive`, a CSS selector, or its visible
-   * text / accessible name (`label`: exact match first, then prefix, then substring, visible elements only; plain text
-   * that is not inside a control counts too, so a clickable <div> is found by its words). The element is scrolled to the
-   * middle of the viewport and its centre is returned, with what covers that point if it is not the element itself.
-   * The element stays reachable for the follow-up step as a hidden page property.
+   * text / accessible name (`label`: exact, then the same letters and digits, then prefix, then substring; visible
+   * elements only, open shadow roots included; plain text that is not inside a control counts too, so a clickable <div>
+   * is found by its words). The element is scrolled to the middle of the viewport (unless `scroll: false`) and its centre
+   * is returned, with what covers that point if it is not the element itself. A label that matches nothing answers with
+   * the closest visible texts. The element stays reachable for the follow-up step as a hidden page property.
    */
-  const locate = (tab, target) => runInPage(tab, `((q) => {
-    const all = () => Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)}));
-    const shown = (el) => { const r = el.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return false; const s = getComputedStyle(el); return s.visibility !== 'hidden' && s.display !== 'none'; };
-    const clean = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
-    const nameOf = (el) => clean(el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].innerText) || el.innerText || (el.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(el.type) ? el.value : '') || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (el.querySelector && el.querySelector('img[alt]') ? el.querySelector('img[alt]').alt : ''));
-    const describe = (el) => ({ tag: el.tagName.toLowerCase(), id: el.id || undefined, text: nameOf(el).slice(0, 80) || undefined });
-    let el;
-    if (Number.isInteger(q.index)) el = all()[q.index];
-    else if (q.selector) el = document.querySelector(q.selector);
-    else if (q.label) {
-      const want = clean(q.label).toLowerCase();
-      let best = null, bestScore = 0;
-      for (const candidate of all()) {
-        if (!shown(candidate)) continue;
-        const name = nameOf(candidate).toLowerCase();
-        const score = name === want ? 3 : name.startsWith(want) ? 2 : name.includes(want) ? 1 : 0;
-        if (score > bestScore) { best = candidate; bestScore = score; if (score === 3) break; }
-      }
-      if (bestScore < 3 && document.body) {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        let exact = null, partial = null;
-        for (let node = walker.nextNode(); node && !exact; node = walker.nextNode()) {
-          const text = clean(node.nodeValue).toLowerCase();
-          if (!text || !text.includes(want) || !node.parentElement || !shown(node.parentElement)) continue;
-          const owner = node.parentElement.closest('a,button,label,summary,[role],[onclick],[tabindex]') || node.parentElement;
-          if (text === want) exact = owner; else if (!partial) partial = owner;
-        }
-        if (exact) best = exact; else if (!best && partial) best = partial;
-      }
-      el = best;
-    }
-    if (!el) return { ok: false, error: Number.isInteger(q.index) ? 'no interactive element at index ' + q.index : q.selector ? 'no element matches ' + q.selector : 'nothing visible on the page reads ' + JSON.stringify(q.label) };
-    Object.defineProperty(window, '__myharnessTarget', { value: el, configurable: true, writable: true, enumerable: false });
-    if (q.scroll !== false) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-    const r = el.getBoundingClientRect();
-    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-    const inView = r.width > 0 && r.height > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
-    const hit = inView ? document.elementFromPoint(x, y) : null;
-    const covered = inView && hit && !(hit === el || el.contains(hit) || hit.contains(el)) ? describe(hit) : undefined;
-    return { ok: true, x, y, inView, covered, ...describe(el), disabled: !!el.disabled, select: el.tagName === 'SELECT', editable: !!(el.isContentEditable || /^(INPUT|TEXTAREA)$/.test(el.tagName)) };
-  })(${JSON.stringify({ selector: target.selector || undefined, index: Number.isInteger(target.index) ? target.index : undefined, label: target.label || undefined, scroll: target.scroll })})`);
+  const locate = (tab, target) => runInPage(tab, page.inPage(page.pageLocate, { selector: target.selector || undefined, index: Number.isInteger(target.index) ? target.index : undefined, label: target.label || undefined, scroll: target.scroll }));
 
   const hasTarget = (value) => Number.isInteger(value.index) || (typeof value.selector === 'string' && !!value.selector) || (typeof value.label === 'string' && !!value.label.trim());
   const requireTarget = async (tab, value, verb) => {
@@ -1323,13 +1291,9 @@ exports.createBrowser = (window, log, options = {}) => {
     keepAwake(tab);
     while (Date.now() - started < timeout && !tab.destroyed) {
       if (condition) {
-        const present = await runInPage(tab, `((q) => {
-          const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
-          if (q.selector) { const el = document.querySelector(q.selector); if (!el || !shown(el)) return false; }
-          if (q.text && !(document.body && document.body.innerText.includes(q.text))) return false;
-          if (q.label) { const want = q.label.trim().toLowerCase(); const hit = Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)})).some((el) => shown(el) && String(el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.value || '').trim().toLowerCase().includes(want)); if (!hit) return false; }
-          return true;
-        })(${JSON.stringify(query)})`).catch(() => null);
+        const present = await runInPage(tab, page.inPage(page.pageWaitCondition, query)).catch(() => null);
+        // An invalid selector never becomes valid by waiting.
+        if (present && present.ok === false) throw new Error(present.error);
         if (present !== null && !!present !== gone) return { ok: true, waitedMs: Date.now() - started, url: tab.url };
       } else {
         const last = networkLog.reduce((latest, entry) => (entry.tabId === tab.id && entry.at > latest ? entry.at : latest), 0);
@@ -1340,31 +1304,106 @@ exports.createBrowser = (window, log, options = {}) => {
     return { ok: false, timeout: true, waitedMs: Date.now() - started, url: tab.url };
   };
 
-  const interactive = (tab) => runInPage(tab, `(() => {
-    const nodes = Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)}));
-    return nodes.slice(0, 600).map((element, index) => {
-      const rect = element.getBoundingClientRect();
-      const style = rect.width > 0 && rect.height > 0 ? getComputedStyle(element) : null;
-      const visible = !!style && style.visibility !== 'hidden' && style.display !== 'none';
-      const label = String(element.getAttribute('aria-label') || (element.labels && element.labels[0] && element.labels[0].innerText) || element.innerText || (element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.type) ? element.value : '') || element.getAttribute('placeholder') || element.getAttribute('title') || element.getAttribute('alt') || (element.querySelector('img[alt]') ? element.querySelector('img[alt]').alt : '') || element.getAttribute('name') || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
-      return {
-        index,
-        tag: element.tagName.toLowerCase(),
-        type: element.getAttribute('type') || '',
-        role: element.getAttribute('role') || '',
-        label,
-        name: element.getAttribute('name') || '',
-        id: element.id || '',
-        href: element.getAttribute('href') || '',
-        value: /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName) && element.type !== 'password' ? String(element.value ?? '').slice(0, 80) : undefined,
-        checked: element.type === 'checkbox' || element.type === 'radio' ? !!element.checked : element.getAttribute('aria-checked') === 'true' ? true : undefined,
-        disabled: !!element.disabled || element.getAttribute('aria-disabled') === 'true',
-        visible,
-        inView: visible && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
-        rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
-      };
-    });
-  })()`);
+  /**
+   * The Agent's own script in the page, through the DevTools protocol: the result of its last expression (top-level
+   * await allowed), and when it throws, the page's real error message instead of the engine's generic "Script failed".
+   */
+  const evaluateScript = (tab, code) => withDebugger(tab, async (debuggerApi) => {
+    const group = 'myharness-exec';
+    const failed = (answer) => {
+      const details = answer?.exceptionDetails;
+      if (details) throw new Error(`页面脚本出错：${details.exception?.description || details.exception?.value || details.text || '未知错误'}`);
+      return answer?.result;
+    };
+    try {
+      let result = failed(await debuggerApi.sendCommand('Runtime.evaluate', { expression: code, objectGroup: group, awaitPromise: true, userGesture: true, replMode: true }));
+      // A script whose value is a promise is answered with what the promise resolves to, as executeJavaScript did.
+      if (result?.subtype === 'promise' && result.objectId) result = failed(await debuggerApi.sendCommand('Runtime.awaitPromise', { promiseObjectId: result.objectId, returnByValue: true }));
+      else if (result?.objectId) result = failed(await debuggerApi.sendCommand('Runtime.callFunctionOn', { objectId: result.objectId, functionDeclaration: 'function () { return this; }', returnByValue: true }));
+      return result?.value ?? null;
+    } finally {
+      await debuggerApi.sendCommand('Runtime.releaseObjectGroup', { objectGroup: group }).catch(() => undefined);
+    }
+  });
+
+  /**
+   * Scroll the way a person does, where the content is. Without an amount and with an element: bring the element to the
+   * middle of the view. With `deltaY`/`deltaX` (px, or 'page' for most of the area's height): scroll the area under the
+   * point `atX`/`atY`, the area holding the element, or the page's main scrolling area (apps such as Teams or Gmail
+   * scroll an inner list, not the document). An area that scrolls only through wheel handlers gets a real wheel at its
+   * centre. With `until`: keep scrolling (at most `maxSteps`) until those words are on screen, and answer where they are.
+   */
+  const scrollTab = async (tab, value) => {
+    keepAwake(tab);
+    const until = typeof value.until === 'string' ? value.until.trim() : '';
+    const amountOf = (field) => (value[field] === 'page' ? 'page' : Number.isFinite(Number(value[field])) ? Number(value[field]) : 0);
+    let dx = amountOf('deltaX');
+    let dy = amountOf('deltaY');
+    const point = value.atX !== undefined && value.atY !== undefined && Number.isFinite(Number(value.atX)) && Number.isFinite(Number(value.atY)) ? { x: Number(value.atX), y: Number(value.atY) } : undefined;
+    let located;
+    if (hasTarget(value)) {
+      located = await requireTarget(tab, { ...value, scroll: !(dx || dy || until) }, 'scroll');
+      // Bringing an element into view is the whole request when no amount and no words are given.
+      if (!dx && !dy && !until) return { ok: true, element: located };
+    }
+    if (!dx && !dy) {
+      // The older form: x/y are the amounts to scroll by.
+      dx = Number(value.x) || 0;
+      dy = Number(value.y) || 0;
+      if (!dx && !dy) dy = 'page';
+    }
+    const query = { dx, dy, point, target: !!located };
+    const sign = (amount) => (amount === 'page' ? 1 : Math.sign(amount));
+    // Measures the same area again without moving it, judging "the end" in the direction asked for.
+    const measure = () => runInPage(tab, page.inPage(page.pageScroll, { ...query, dx: 0, dy: 0, dirX: sign(dx), dirY: sign(dy) }));
+    const once = async () => {
+      const result = await runInPage(tab, page.inPage(page.pageScroll, query));
+      if (!result || result.ok === false) throw new Error(result?.error || '页面没有返回滚动结果');
+      if (result.moved || result.atEnd) return { ...result, how: 'script' };
+      // Nothing moved by script: the area scrolls through its own wheel handlers (or is not a scroll area at all). A
+      // real wheel at its centre, then the visible text tells whether anything changed.
+      const pixels = (amount) => (amount === 'page' ? 600 : amount);
+      await mouse(tab, { kind: 'wheel', x: result.x, y: result.y, deltaX: pixels(dx), deltaY: pixels(dy) });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const after = await measure();
+      return { ...result, how: 'wheel', changed: !!after && after.text !== result.text };
+    };
+    if (!until) {
+      const { text, ...rest } = await once();
+      return rest;
+    }
+    const maxSteps = Math.max(1, Math.min(60, Number.isInteger(Number(value.maxSteps)) ? Number(value.maxSteps) : 20));
+    let last;
+    for (let step = 0; step <= maxSteps; step++) {
+      const hit = await runInPage(tab, page.inPage(page.pageTextOnScreen, { text: until }));
+      if (hit && hit.ok !== false) return { ok: true, found: hit, steps: step, ...(last ? { container: last.container } : {}) };
+      if (step === maxSteps) break;
+      last = await once();
+      // A list that renders more rows when it reaches its end grows a moment later: only an end that stays an end
+      // (or a wheel that changed nothing) means scrolling further cannot reveal anything new.
+      if (last.atEnd && !(last.how === 'wheel' && !last.changed)) {
+        for (let waited = 0; waited < 1500 && last.atEnd; waited += 250) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const again = await measure();
+          if (again && again.ok !== false && !again.atEnd) last = { ...last, atEnd: false };
+        }
+      }
+      if (last.atEnd || (last.how === 'wheel' && !last.changed)) {
+        const final = await runInPage(tab, page.inPage(page.pageTextOnScreen, { text: until }));
+        if (final && final.ok !== false) return { ok: true, found: final, steps: step + 1, container: last.container };
+        return { ok: true, found: null, steps: step + 1, atEnd: true, container: last.container };
+      }
+      // Lists that render rows as they come into view need a moment before the new rows can be read.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return { ok: true, found: null, steps: maxSteps, atEnd: false, ...(last ? { container: last.container } : {}) };
+  };
+
+  const interactive = async (tab) => {
+    const list = await runInPage(tab, page.inPage(page.pageInteractive));
+    if (list && list.ok === false) throw new Error(list.error);
+    return list;
+  };
 
   /**
    * One browser command. `context.agent` marks a command from the Agent's workspace tool: before it reads or acts on a
@@ -1484,12 +1523,16 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'find': {
         if (typeof value.text !== 'string') throw new Error('find 需要 text 字符串');
         if (value.text.length > 500) throw new Error('find 的文本超过 500 个字符');
-        const result = await findInTab(requireTab(value.tabId), value.text, {
+        const tab = requireTab(value.tabId);
+        const result = await findInTab(tab, value.text, {
           forward: value.forward !== false,
           findNext: value.findNext === true,
           matchCase: value.matchCase === true,
         });
-        return { ok: true, text: value.text, ...result };
+        // The engine's find counts matches and highlights one; the elements that hold the words (with their centres,
+        // on-screen first, open shadow roots included) are what the Agent can click or scroll to.
+        const elements = await runInPage(tab, page.inPage(page.pageFindText, { text: value.text, limit: 10, matchCase: value.matchCase === true })).catch(() => null);
+        return { ok: true, text: value.text, ...result, elements: Array.isArray(elements) ? elements : [] };
       }
       case 'stopFind':
         return stopFind(requireTab(value.tabId));
@@ -1502,7 +1545,7 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'insertText': {
         if (typeof value.text !== 'string') throw new Error('insertText 需要 text 字符串');
         if (value.text.length > 20000) throw new Error('insertText 的文本超过 20000 个字符');
-        return insertText(requireTab(value.tabId), value.text);
+        return insertText(requireTab(value.tabId), value.text, { replace: value.replace === true ? true : value.replace === 'fields' ? 'fields' : false });
       }
       case 'login': {
         // Signing in with a saved login: the host fills and submits it in the page; no password reaches the caller.
@@ -1517,7 +1560,7 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'exec': {
         if (typeof value.code !== 'string' || value.code.length === 0) throw new Error('exec 需要 code 字符串');
         if (value.code.length > 20000) throw new Error('exec 的代码超过 20000 个字符');
-        return { result: await runInPage(requireTab(value.tabId), value.code) };
+        return { result: await evaluateScript(requireTab(value.tabId), value.code) };
       }
       case 'ax':
         return { nodes: await accessibilityTree(requireTab(value.tabId)) };
@@ -1582,13 +1625,8 @@ exports.createBrowser = (window, log, options = {}) => {
       }
       case 'network':
         return { requests: networkLog.slice(-200).filter((entry) => !value.tabId || entry.tabId === value.tabId) };
-      case 'scroll': {
-        const target = requireTab(value.tabId);
-        // Scroll an element into the middle of the view, the way a person scrolls to what they want to see.
-        if (hasTarget(value)) { const found = await requireTarget(target, value, 'scroll'); return { result: await runInPage(target, '({x: window.scrollX, y: window.scrollY})'), element: found }; }
-        const x = Number(value.x || 0), y = Number(value.y || 0);
-        return { result: await runInPage(target, `window.scrollBy(${Number.isFinite(x) ? x : 0}, ${Number.isFinite(y) ? y : 0}); ({x: window.scrollX, y: window.scrollY})`) };
-      }
+      case 'scroll':
+        return scrollTab(requireTab(value.tabId), value);
       case 'external':
         return shell.openExternal(exports.httpUrl(value.url));
       case 'bookmarks':
