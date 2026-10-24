@@ -70,3 +70,39 @@ test('legacy desktop preferences: the last change of each preference across earl
     assert.equal(readLegacyPrefs(dir), null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+test('desktop preferences: close action defaults to ask, saves valid choices and refuses unknown ones', () => {
+  const os = require('node:os');
+  const { createAppPrefs, loginItem } = require('../app-prefs.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-prefs-'));
+  try {
+    const prefs = createAppPrefs(dir);
+    assert.deepEqual(prefs.get(), { closeAction: 'ask' });
+    assert.deepEqual(prefs.set({ closeAction: 'tray' }), { closeAction: 'tray' });
+    assert.throws(() => prefs.set({ closeAction: 'explode' }), /未知的关闭方式/);
+    assert.equal(createAppPrefs(dir).get().closeAction, 'tray', 'the choice survives a restart');
+    fs.writeFileSync(path.join(dir, 'desktop-prefs.json'), '{ broken');
+    assert.equal(createAppPrefs(dir).get().closeAction, 'ask', 'a damaged file falls back to asking');
+    assert.deepEqual(loginItem({ isPackaged: true, getAppPath: () => 'x' }).args, ['--autostart']);
+    assert.deepEqual(loginItem({ isPackaged: false, getAppPath: () => 'C:/app' }).args, ['C:/app', '--autostart']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('preload exposes the desktop preferences only through the fixed IPC channel', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
+  assert.match(source, /appPrefs: Object\.freeze/);
+  assert.match(source, /ipcRenderer\.invoke\('desktop:app-prefs', patch\)/);
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  assert.match(main, /ipcMain\.handle\('desktop:app-prefs', \(event, patch\) => \{\n\s+if \(!trusted\(event\)\)/);
+});
+test('the packaged build copies every local module the host loads', () => {
+  const build = fs.readFileSync(path.join(__dirname, '../build.mjs'), 'utf8');
+  const copied = new Set([...build.match(/for \(const name of \[([^\]]+)\]\) cpSync/)[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
+  const seen = new Set();
+  const visit = (name) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const source = fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
+    for (const match of source.matchAll(/require\((?:require\('node:path'\)\.join\(__dirname, )?'(?:\.\/)?([\w.-]+\.cjs)'\)?\)/g)) visit(match[1]);
+  };
+  visit('main.cjs');
+  for (const name of seen) assert.ok(copied.has(name), `${name} is loaded by the host but not copied by build.mjs`);
+});

@@ -19,6 +19,7 @@ import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
 import { SearchableMultiSelect } from "./settings-multiselect.js";
 import { Select } from "./select.js";
 import { SyncPage } from "./sync-page.js";
+import { ConnectPage } from "./connect-page.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -28,6 +29,7 @@ export const NAV = [
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
 	{ id: "personal", label: N_("Personalization"), icon: "chat" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
+	{ id: "connect", label: N_("Connections"), icon: "plug" },
 	{ id: "sync", label: N_("Google Drive"), icon: "drive" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
@@ -54,6 +56,7 @@ const PAGE_NOTE = {
 	agent: N_("How the agent runs, compacts its context and retries."),
 	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
+	connect: N_("Accounts the agent works with on your behalf: GitHub and your Gmail or Outlook mailboxes."),
 	sync: N_("Keep chats, memories and attachments in sync through your own Google Drive."),
 	files: N_("How the workspace opens and edits Office documents."),
 	network: N_("Connections to providers and the shell the agent runs commands in."),
@@ -740,6 +743,27 @@ function CodeIntelligence({ items }) {
 	<//>` : null}`;
 }
 
+/**
+ * Settings of the desktop host itself (only inside the desktop app): start at Windows sign-in, and what the window's
+ * close button does. The host keeps them (packages/desktop/app-prefs.cjs); a choice remembered in its close dialog
+ * arrives here as a change.
+ */
+function DesktopApp() {
+	const bridge = globalThis.myHarnessDesktop?.appPrefs;
+	const [prefs, setPrefs] = useState(null);
+	useEffect(() => {
+		if (!bridge) return undefined;
+		bridge.get().then(setPrefs, () => {});
+		return bridge.onChange(setPrefs);
+	}, []);
+	if (!bridge) return null;
+	const set = (patch) => attempt(async () => setPrefs(await bridge.set(patch)));
+	return html`<${Card} title=${t("Desktop app")}>
+		<${Row} label=${t("Start with Windows")} description=${t("Opens MyHarness when you sign in to Windows.")}>${prefs ? html`<${Toggle} checked=${prefs.openAtLogin} label=${t("Start with Windows")} onChange=${(v) => set({ openAtLogin: v })} />` : html`<${Spinner} />`}<//>
+		<${Row} label=${t("Close button")} description=${t("Minimize to tray keeps running tasks going in the background.")}>${prefs ? html`<${Select} ariaLabel=${t("Close button")} value=${prefs.closeAction} onChange=${(v) => set({ closeAction: v })} options=${[{ value: "ask", label: t("Ask every time") }, { value: "tray", label: t("Minimize to tray") }, { value: "quit", label: t("Quit MyHarness") }]} />` : html`<${Spinner} />`}<//>
+	<//>`;
+}
+
 function Appearance({ conversation = false }) {
 	const view = useStore((s) => s.view);
 	const runMode = runModeOf(view.runMode);
@@ -753,7 +777,7 @@ function Appearance({ conversation = false }) {
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
 			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><${Select} ariaLabel=${t("Color theme")} value=${view.colorTheme} onChange=${(next) => set({ colorTheme: next })} options=${COLOR_THEMES.map((theme) => ({ value: theme.value, label: t(theme.label) }))} /><//>
 			${builtinBrowserAvailable() ? html`<${Row} label=${t("Open web links in")} description=${t("Links in chats and file previews. Sign-in pages always use the system browser.")}><${Segmented} value=${linkTargetOf(view.linkTarget)} onChange=${(v) => set({ linkTarget: v })} options=${[{ value: "builtin", label: t("Built-in browser") }, { value: "system", label: t("System browser") }]} /><//>` : null}
-		<//>` : html`<${Card} title=${t("Conversation")}>
+		<//><${DesktopApp} />` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
 			<${Row} label=${t("Run steps")} description=${t("Default state after a reply.")}><${Segmented} value=${view.processDefault} onChange=${(v) => set({ processDefault: v })} options=${[{ value: "collapsed", label: t("Collapsed") }, { value: "expanded", label: t("Expanded") }]} /><//>
 		<//>`}`;
@@ -1053,7 +1077,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "connect" ? html`<${ConnectPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

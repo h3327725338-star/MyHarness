@@ -2,7 +2,7 @@
 // the Agent's tool to this page, because the page owns the open tabs and the media elements; the page answers with the
 // state it actually reached, so the Agent can verify a command instead of assuming it worked. Nothing here creates a
 // new capability: every command is the same action a person triggers from the header, the tab strip or the viewer.
-import { actions } from "./actions.js";
+import { actions, closeAppDialog } from "./actions.js";
 import { panelSessionId, saveStoredPanel, state, storedPanel } from "./store.js";
 import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
 import { externalWebUrl, linkTargetOf } from "./link-target.js";
@@ -165,6 +165,11 @@ export async function runWorkspaceCommand(command) {
 	switch (action) {
 		case "tabs":
 			return workspaceState();
+		// The window's close button: the host asks here so the question looks like the rest of the app.
+		case "askClose": {
+			const answer = await closeAppDialog();
+			return answer && typeof answer === "object" ? answer : { choice: "cancel", remember: false };
+		}
 		case "open": {
 			const tab = value.tab || {};
 			// A link the user clicked inside an HTML preview opens where Settings → Interface says, not always as a tab.

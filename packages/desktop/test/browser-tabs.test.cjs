@@ -154,12 +154,19 @@ test('the page owns the tab id: ensure creates it once, keeps its page and does 
 test('click and type address elements by interactive index as well as by selector', async () => {
   const { browser, contents } = loadBrowser();
   const tab = await browser.command({ action: 'open', url: 'https://example.com/form' });
+  const cdp = [];
+  contents[0].debugger.sendCommand = async (method, params) => { cdp.push({ method, params }); return {}; };
   await browser.command({ action: 'click', tabId: tab.tabId, index: 2 });
   await browser.command({ action: 'type', tabId: tab.tabId, index: 1, text: 'hello' });
+  await browser.command({ action: 'click', tabId: tab.tabId, label: 'Sign in' });
   const codes = contents[0].executed || [];
-  assert.equal(codes.some((code) => /querySelectorAll\([^)]*\)\[2\]/.test(code)), true);
-  assert.equal(codes.some((code) => /querySelectorAll\([^)]*\)\[1\]/.test(code) && /hello/.test(code)), true);
-  await assert.rejects(() => browser.command({ action: 'click', tabId: tab.tabId }), /selector 或 index/);
+  // The element is located in the page by the same index list (or by its visible text), then acted on.
+  assert.equal(codes.some((code) => code.includes('"index":2')), true);
+  assert.equal(codes.some((code) => code.includes('"index":1')), true);
+  assert.equal(codes.some((code) => code.includes('"label":"Sign in"')), true);
+  // The text arrives through the input method, like a person typing, not as a value assigned by a script.
+  assert.deepEqual(cdp.find((entry) => entry.method === 'Input.insertText')?.params, { text: 'hello' });
+  await assert.rejects(() => browser.command({ action: 'click', tabId: tab.tabId }), /selector、index 或 label/);
   browser.destroy();
 });
 
@@ -366,6 +373,12 @@ test('website tabs send a Chrome user agent without Electron or app tokens', () 
   assert.equal(chromeUserAgent(fallback, '152.0.7977.167'), 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36');
   // Without a usable Chromium version the original string is kept rather than inventing one.
   assert.equal(chromeUserAgent(fallback, undefined), fallback);
+});
+
+test('only the sites that refuse Electron get the Chrome user agent; bot checks see the engine itself', () => {
+  const { wantsChromeAgent } = require('../browser-view.cjs');
+  for (const url of ['https://web.whatsapp.com/', 'https://teams.microsoft.com/v2/', 'https://teams.live.com/', 'https://teams.cloud.microsoft/']) assert.equal(wantsChromeAgent(url), true, url);
+  for (const url of ['https://sudocode.chat/sign-in', 'https://challenges.cloudflare.com/x', 'https://notwhatsapp.com/', 'not a url']) assert.equal(wantsChromeAgent(url), false, url);
 });
 
 test('a page popup keeps its opener as a workspace tab and closes with the page that closed itself', async () => {

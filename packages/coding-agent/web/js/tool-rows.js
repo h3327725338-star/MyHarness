@@ -5,7 +5,7 @@ import { html, Collapse, Icon, Spinner, useHeightGlide, useState } from "./ui.js
 import { count, serverText, t } from "./i18n.js";
 import { clip } from "./util.js";
 
-export const KIND_ICON = { read: "file", list: "folder", find: "search", search: "search", run: "terminal", edit: "edit", write: "fileDiff", web: "globe", fetch: "globe", github: "gitBranch", agent: "layers", history: "clock", tool: "wrench" };
+export const KIND_ICON = { read: "file", list: "folder", find: "search", search: "search", run: "terminal", edit: "edit", write: "fileDiff", web: "globe", fetch: "globe", github: "gitBranch", mail: "mail", agent: "layers", history: "clock", tool: "wrench" };
 
 /** The glyph at the start of a tool row: working, failed, stopped, or the icon of its kind. */
 export function StatusGlyph({ step }) {

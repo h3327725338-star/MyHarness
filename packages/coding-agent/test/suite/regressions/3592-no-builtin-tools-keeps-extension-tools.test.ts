@@ -90,6 +90,7 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			"job_list",
 			"job_output",
 			"ls",
+			"mail",
 			"memory_claim",
 			"memory_delete",
 			"memory_get",

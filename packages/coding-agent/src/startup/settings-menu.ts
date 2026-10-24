@@ -98,6 +98,7 @@ export const SETTINGS_MENU: ReadonlyArray<SettingsMenuItem> = [
 	{ id: "terminal-progress", label: "Terminal progress", description: "显示任务运行状态", kind: "toggle" },
 	{ id: "popup-notifications", label: "Popup notifications", description: "任务结束弹窗提醒", kind: "toggle" },
 	{ id: "github-connect", label: "GitHub Connect", description: "连接 GitHub", kind: "submenu" },
+	{ id: "mail-connect", label: "Mail Connect", description: "连接 Gmail、Outlook 邮箱", kind: "submenu" },
 	{ id: "default-model", label: "Default Model", description: "选择主用模型", kind: "submenu" },
 	{ id: "fallback-model", label: "Fallback Model", description: "主模型故障时自动接管", kind: "submenu" },
 	{ id: "auto-memory", label: "Auto Memory", description: "记忆偏好和项目事实", kind: "submenu" },

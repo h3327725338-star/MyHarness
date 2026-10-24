@@ -81,6 +81,10 @@
 
 `tool.ts`：`github` 工具，使用已连接的 GitHub 账号（`providers/credentials/account-connections.ts`）调用 GitHub API。
 
+### mail/
+
+`tool.ts`：`mail` 工具，使用已连接的 Gmail / Outlook 邮箱（`providers/credentials/mail-connections.ts`）调用 Gmail API 或 Microsoft Graph，并处理附件保存。`message.ts`：把纯字段写成的邮件编码为 Gmail 的 RFC 5322 `raw` 或 Graph message（含附件）。
+
 ### web-search/ — 联网搜索与读网页
 
 可选能力，默认引擎是 Google 和 Bing，不依赖外部搜索服务。

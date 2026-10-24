@@ -47,6 +47,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `api-key-collection.ts` | 一个 Provider 多个 API Key 的存储契约 |
 | `value-resolution.ts` | 配置值解析：字面量、环境变量、`!命令` |
 | `account-connections.ts` | `AccountConnections`：GitHub Connect（设备码登录），存 `account-connections.json` |
+| `mail-connections.ts` | `MailConnections`：Mail Connect（Gmail、Outlook、世纪互联 Outlook；授权码 + PKCE + 本机回环重定向），存 `mail-connections.json` |
 | `index.ts` | credentials/ 出口 |
 | `web-search-keys.ts` | `WebSearchApiKeys`：搜索引擎 API Key 的独立私有文件 |
 
@@ -79,4 +80,4 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 - `models.json`、`auth.json` 的写入必须保留现有的锁和原子替换。
 - 恢复策略有预算上限，改动时确认不会把同一个 Provider 故障变成无限循环（`agent-session-provider-recovery.test.ts`）。
 - 用户文档：`docs/providers.md`、`docs/models.md`、`docs/custom-provider.md`、`docs/security.md`。
-- 相关测试：`model-runtime-*.test.ts`、`model-resolver.test.ts`、`model-registry.test.ts`、`models-store.test.ts`、`configured-providers.test.ts`、`custom-provider-manager.test.ts`、`auth-storage.test.ts`、`runtime-credentials.test.ts`、`resolve-config-value.test.ts`、`account-connections.test.ts`、`thinking-probe.test.ts`、`official-effort.test.ts`、`balance-tracker.test.ts`、`phase7-provider-architecture.test.ts`。
+- 相关测试：`model-runtime-*.test.ts`、`model-resolver.test.ts`、`model-registry.test.ts`、`models-store.test.ts`、`configured-providers.test.ts`、`custom-provider-manager.test.ts`、`auth-storage.test.ts`、`runtime-credentials.test.ts`、`resolve-config-value.test.ts`、`account-connections.test.ts`、`mail-connections.test.ts`、`thinking-probe.test.ts`、`official-effort.test.ts`、`balance-tracker.test.ts`、`phase7-provider-architecture.test.ts`。

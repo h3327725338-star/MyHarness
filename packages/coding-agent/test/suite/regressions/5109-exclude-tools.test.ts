@@ -59,6 +59,7 @@ describe("regression #5109: exclude tools", () => {
 				"job_kill",
 				"job_list",
 				"job_output",
+				"mail",
 				"memory_claim",
 				"memory_delete",
 				"memory_get",

@@ -40,6 +40,17 @@ export function confirmDialog({ title, message, confirmLabel = t("Confirm"), can
 		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice, memoryChoice } });
 	});
 }
+/**
+ * The desktop window's close button asks what to do until the user picks a standing answer (rendered by app.js).
+ * Resolves `{ choice: "tray" | "quit" | "cancel", remember }`.
+ */
+export function closeAppDialog() {
+	return new Promise((resolve) => {
+		releasePendingDialog(false);
+		dialogResolver = resolve;
+		setView({ dialog: { type: "close-app" } });
+	});
+}
 /** Promise-based text prompt (rendered by app.js). Resolves undefined when cancelled. */
 export function inputDialog({ title, label, initial = "", confirmLabel = t("Save"), placeholder = "" }) {
 	return new Promise((resolve) => {

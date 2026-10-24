@@ -356,6 +356,9 @@
 .app.ws-max .panel { --panel-width: 100%; width: 100%; margin: 6px 0 6px 0; border-left: 1px solid var(--border); border-radius: var(--r-lg); }
 .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
 .app.ws-max .main > .resizer { left: 0; }
+/* The close-panel button sits at the end of the conversation header here, and the sidebar button opens the tab row. */
+.app.ws-max .panel-head { padding-right: var(--pad-panel); }
+.panel-head .panel-sidebar { flex: none; margin-right: 2px; }
 .panel-max.active { color: var(--accent); }
 /* The swap itself is a View Transition (layout-morph.js): each column's picture moves from its old box to its new one.
    The pictures keep their own size and hang from the top-left corner of the moving, clipping box (a resize, not a zoom),

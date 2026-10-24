@@ -214,6 +214,7 @@ export class SessionToolRegistry {
 					"symbols",
 					"apply_rename",
 					"github",
+					"mail",
 					"memory_search",
 					"memory_get",
 					"memory_delete",

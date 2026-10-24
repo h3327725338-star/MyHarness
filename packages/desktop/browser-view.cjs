@@ -17,12 +17,23 @@ exports.httpUrl = (value) => {
  * the app's `<name>/<version>` tokens, and sites such as WhatsApp Web ("works with Google Chrome 100+") and Microsoft
  * Teams (blank page: it serves its Electron desktop client) sniff those tokens. Chrome itself reports only the major
  * version (`Chrome/152.0.0.0`), so the result matches what Chrome sends; the engine version stays the real one.
+ * It is only used on CHROME_UA_SITES (see `wantsChromeAgent`): everywhere else the engine's own string is sent.
  */
 exports.chromeUserAgent = (fallback, chromeVersion) => {
   const major = String(chromeVersion || '').split('.')[0];
   const platform = /\(([^)]*)\)/.exec(String(fallback || ''))?.[1] || 'Windows NT 10.0; Win64; x64';
   if (!/^\d+$/.test(major)) return String(fallback || '');
   return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+};
+
+// Sites that refuse Electron's own user agent and get Chrome's instead. Everywhere else a tab keeps the engine's string:
+// Cloudflare Turnstile fails every check ("Verification failed") on a page whose user agent claims Chrome while the
+// engine is Electron (measured on Electron 45: the engine's own string passed 3 of 3 runs; Chrome's string, with or
+// without the added client-hint brand, and the engine's string minus only `Electron/x` failed 6 of 6).
+const CHROME_UA_SITES = /(^|\.)(whatsapp\.com|teams\.microsoft\.com|teams\.live\.com|teams\.cloud\.microsoft)$/i;
+/** Whether a page at `url` is one of CHROME_UA_SITES. */
+exports.wantsChromeAgent = (url) => {
+  try { return CHROME_UA_SITES.test(new URL(url).hostname); } catch { return false; }
 };
 
 // One persistent partition for every tab: pages keep cookies, localStorage and logins across restarts and across the
@@ -46,15 +57,13 @@ const CURSOR_WORLD = 1207;
 // A hidden page is throttled by Chromium and then ignores input events (a wheel event never even completes). While the
 // Agent acts on a tab it is kept awake, and throttled again after this long without an Agent action.
 const AGENT_AWAKE_MS = 20000;
-// The Agent browses at a desktop size whatever the panel's width: a background tab is laid out at least this large, and
-// the visible tab the Agent drives in a panel narrower than NARROW_PANEL is laid out at this size and drawn scaled down
-// to fit the panel. Sites then give the Agent their desktop layout instead of the phone layout a narrow panel gets.
+// A background tab is laid out at least this large, so sites give the Agent their desktop layout there. The tab on
+// screen always has exactly the panel's size: what the user sees is never a scaled-down picture of a bigger page.
 const AGENT_VIEWPORT = { width: 1280, height: 800 };
-const NARROW_PANEL = 1024;
 // A clicked control whose text or link names a download or a file: the click waits a few seconds for a download to start.
 const DOWNLOAD_HINT = /download|下载|下載|\.(pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|7z|gz|png|jpe?g|gif|mp3|mp4|mov|apk|exe|msi)\b/i;
-// Agent commands that read or act on a page's layout; each gives the tab the Agent's desktop-size view first.
-const AGENT_TAB_ACTIONS = new Set(['snapshot', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download']);
+// Agent commands that read or act on a page's layout; each keeps the tab awake first.
+const AGENT_TAB_ACTIONS = new Set(['snapshot', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download', 'locate', 'wait']);
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -142,15 +151,24 @@ exports.createBrowser = (window, log, options = {}) => {
     : undefined;
   const requireSpeedDial = () => { if (!speedDial) throw new Error('当前桌面宿主不支持快捷方式'); return speedDial; };
   const speedDialChanged = (items) => { send({ type: 'speeddial', items }); return items; };
-  // Every tab (and every popup, which becomes a tab) shares the partition, so its user agent is set once here.
-  if (typeof partition.setUserAgent === 'function') partition.setUserAgent(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
-  // The engine's own client hints list Chromium only, while the user agent above says Chrome (sites such as WhatsApp
-  // Web only accept "Chrome/NN"). A real Chrome lists its own brand next to Chromium, so the two signals disagreed in a
-  // way no ordinary browser does; the same brand is added to navigator.userAgentData in browser-tab-preload.cjs. Nothing
-  // else is changed: version, platform and full version list stay the engine's own.
+  // A tab sends the engine's own user agent, except on CHROME_UA_SITES, which get Chrome's. The choice is made per
+  // top-level navigation (`agentFor`, applied in `wire` and to the navigation request's header below), so a tab that
+  // moves between such a site and any other site always presents the identity that belongs to the page it shows.
+  const engineAgent = app.userAgentFallback;
+  const chromeAgent = exports.chromeUserAgent(engineAgent, process.versions.chrome);
+  const agentFor = (url) => (exports.wantsChromeAgent(url) ? chromeAgent : engineAgent);
+  const setAgent = (contents, url) => {
+    const want = agentFor(url);
+    try { if (contents.getUserAgent() !== want) contents.setUserAgent(want); } catch { /* contents are going away */ }
+    return want;
+  };
+  // On a page that sends Chrome's user agent the engine's own client hints (Chromium only) disagree with it in a way no
+  // ordinary browser does. A real Chrome lists its own brand next to Chromium, so on those pages the same brand is added
+  // to navigator.userAgentData in browser-tab-preload.cjs. Nothing else is changed: version, platform and full version
+  // list stay the engine's own.
   const chromeBrand = (() => {
-    const match = /Chrome\/(\d+)\./u.exec(exports.chromeUserAgent(app.userAgentFallback, process.versions.chrome));
-    return match ? `"Google Chrome";v="${match[1]}"` : undefined;
+    const match = /Chrome\/(\d+)\./u.exec(chromeAgent);
+    return match && chromeAgent !== engineAgent ? `"Google Chrome";v="${match[1]}"` : undefined;
   })();
   /** The last brand list a page reported, so the request headers can mirror exactly what navigator.userAgentData says. */
   let hintBrands;
@@ -160,10 +178,11 @@ exports.createBrowser = (window, log, options = {}) => {
    * secure request), while its user agent says Chrome, which always sends the three low-entropy hints. They are therefore
    * mirrored from the engine's own list as soon as a page has reported it: the header and navigator.userAgentData can
    * never disagree. Before that the header is left alone instead of being filled with a guessed brand list, because a
-   * header that does not match what the page reports would be a signal of its own.
+   * header that does not match what the page reports would be a signal of its own. Only a page with Chrome's user agent
+   * is asked (its list carries the added brand) and only its requests get the headers.
    */
   const learnClientHints = (contents) => {
-    if (hintAsked || !chromeBrand) return;
+    if (hintAsked || !chromeBrand || !exports.wantsChromeAgent(contents.getURL())) return;
     hintAsked = true;
     contents
       .executeJavaScript('navigator.userAgentData ? navigator.userAgentData.brands : null')
@@ -181,11 +200,17 @@ exports.createBrowser = (window, log, options = {}) => {
     const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
     return { list, platform };
   };
-  if (chromeBrand && partition.webRequest && typeof partition.webRequest.onBeforeSendHeaders === 'function') {
-    partition.webRequest.onBeforeSendHeaders({ urls: ['https://*/*'] }, (details, callback) => {
+  if (partition.webRequest && typeof partition.webRequest.onBeforeSendHeaders === 'function') {
+    partition.webRequest.onBeforeSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
       const headers = details.requestHeaders || {};
-      const hints = clientHints();
-      const has = (want) => Object.keys(headers).some((name) => name.toLowerCase() === want);
+      const nameOf = (want) => Object.keys(headers).find((name) => name.toLowerCase() === want);
+      const has = (want) => !!nameOf(want);
+      // The navigation request itself already leaves with the agent of the page it opens; the tab follows in `wire`.
+      if (details.resourceType === 'mainFrame') {
+        const agent = details.webContents ? setAgent(details.webContents, details.url) : agentFor(details.url);
+        headers[nameOf('user-agent') || 'User-Agent'] = agent;
+      }
+      const hints = /^https:/i.test(details.url) && headers[nameOf('user-agent')] === chromeAgent ? clientHints() : undefined;
       if (hints && !has('sec-ch-ua')) {
         headers['sec-ch-ua'] = hints.list;
         if (!has('sec-ch-ua-mobile')) headers['sec-ch-ua-mobile'] = '?0';
@@ -426,8 +451,6 @@ exports.createBrowser = (window, log, options = {}) => {
       visible: tab.view?.getVisible?.() ?? false,
       // The rectangle the native view actually occupies (null while hidden); lets the page and the Agent verify placement.
       bounds: tab.view?.getVisible?.() ? (() => { try { return tab.view.getBounds(); } catch { return null; } })() : null,
-      // Set while the Agent drives this tab at a desktop size, drawn scaled down in a narrow panel.
-      agentView: tab.agentView || null,
       active: tab.id === activeTabId,
       // Site permission questions of this tab that nobody has answered yet (the Agent can answer them).
       pendingPermissions: [...pendingPermissions.entries()]
@@ -442,12 +465,10 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!tab.view.getVisible()) return;
     if (!tabs.has(tab.id) || tab.id !== activeTabId) return;
     try {
-      let image = await tab.view.webContents.capturePage();
+      const image = await tab.view.webContents.capturePage();
       if (image.isEmpty() || tabs.get(tab.id) !== tab) return;
-      // The picture stands in for the native view, so it carries the view's own box: while the Agent's desktop-size view
-      // is shown scaled down, that box is only the top-left part of the panel, and the rest of the panel stays empty.
+      // The picture stands in for the native view, so it carries the view's own box.
       const frame = tab.view.getBounds?.() || {};
-      if (tab.agentView && frame.width > 0 && frame.height > 0) image = image.resize({ width: frame.width, height: frame.height });
       emit(tab.id, { type: 'snapshot', snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`, width: frame.width, height: frame.height });
     } catch (error) {
       log(`网页截图失败：${error.message}`);
@@ -493,11 +514,10 @@ exports.createBrowser = (window, log, options = {}) => {
       const visible = tab.id === activeTabId && !!bounds;
       if (!visible) conceal(tab);
       else {
-        try { tab.view.setBounds(agentFrame(tab, bounds)); } catch { /* view is going away */ }
+        try { tab.view.setBounds(bounds); } catch { /* view is going away */ }
         try { tab.view.setVisible(true); } catch { /* view is going away */ }
       }
       updatePictureTimer(tab);
-      if (tab.agentDriven || tab.agentView) void fitAgentView(tab);
     }
   };
 
@@ -522,99 +542,7 @@ exports.createBrowser = (window, log, options = {}) => {
       if (!tab.view || tab.destroyed) continue;
       conceal(tab);
       updatePictureTimer(tab);
-      if (tab.agentView) void fitAgentView(tab);
     }
-  };
-
-  // ---- The Agent's desktop-size view in a narrow panel ------------------------------------------------------------
-  // While the Agent drives the visible tab and the panel is narrow, the page is laid out at AGENT_VIEWPORT through the
-  // DevTools protocol's device metrics override and drawn scaled down; the native view shrinks to the scaled picture,
-  // so the panel shows exactly what the Agent works on. The override only lives while a debugger session is attached,
-  // so the tab keeps one attached for that time. A person's own click or key press in the page hands the tab back: the
-  // page returns to the panel's size until the Agent acts on it again.
-
-  /** The device metrics the tab should have now, or null for the plain panel size. */
-  const wantedAgentView = (tab) => {
-    if (!tab.agentDriven || tab.id !== activeTabId) return null;
-    const bounds = boundsForRectangle();
-    if (!bounds || bounds.width >= NARROW_PANEL) return null;
-    const scale = Math.min(bounds.width / AGENT_VIEWPORT.width, bounds.height / AGENT_VIEWPORT.height);
-    if (!(scale > 0)) return null;
-    return { width: AGENT_VIEWPORT.width, height: AGENT_VIEWPORT.height, scale: Math.round(scale * 10000) / 10000 };
-  };
-
-  /** Where the visible view goes: the panel's box, or the scaled desktop picture at its top-left corner. */
-  const agentFrame = (tab, bounds) => {
-    const view = tab.agentView;
-    if (!view) return bounds;
-    return {
-      x: bounds.x,
-      y: bounds.y,
-      width: Math.max(1, Math.min(bounds.width, Math.round(view.width * view.scale))),
-      height: Math.max(1, Math.min(bounds.height, Math.round(view.height * view.scale))),
-    };
-  };
-
-  const sameView = (a, b) => (!a && !b) || (!!a && !!b && a.width === b.width && a.height === b.height && a.scale === b.scale);
-
-  /** Bring the tab's device metrics in line with `wantedAgentView`; calls for one tab run one after another. */
-  const fitAgentView = (tab) => {
-    tab.fitChain = (tab.fitChain || Promise.resolve()).then(() => applyAgentView(tab)).catch((error) => log(`无法调整 Agent 浏览视口：${error.message}`));
-    return tab.fitChain;
-  };
-
-  const applyAgentView = async (tab) => {
-    if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return;
-    const want = wantedAgentView(tab);
-    if (sameView(want, tab.agentView)) return;
-    const debuggerApi = tab.view.webContents.debugger;
-    const place = () => {
-      const bounds = tab.id === activeTabId ? boundsForRectangle() : null;
-      if (bounds && tab.view.getVisible()) { try { tab.view.setBounds(agentFrame(tab, bounds)); } catch { /* view is going away */ } }
-      // The fallback picture of the old box would otherwise show around the resized view until the next refresh.
-      void picture(tab);
-    };
-    if (want) {
-      if (!debuggerApi.isAttached()) {
-        // The page's own DevTools may hold the debugger; the Agent then keeps the panel's size.
-        try { debuggerApi.attach('1.3'); } catch (error) { log(`无法附加网页调试器，Agent 使用面板尺寸：${error.message}`); return; }
-      }
-      tab.agentDebugger = true;
-      await debuggerApi.sendCommand('Emulation.setDeviceMetricsOverride', { width: want.width, height: want.height, deviceScaleFactor: 0, mobile: false, scale: want.scale });
-      tab.agentView = want;
-      tab.inputScale = undefined;
-      place();
-    } else {
-      const had = tab.agentView;
-      tab.agentView = null;
-      tab.inputScale = undefined;
-      place();
-      if (had && debuggerApi.isAttached()) {
-        try { await debuggerApi.sendCommand('Emulation.clearDeviceMetricsOverride'); } catch { /* debugger already gone */ }
-      }
-      if (tab.agentDebugger) {
-        tab.agentDebugger = false;
-        try { debuggerApi.detach(); } catch { /* already gone */ }
-      }
-    }
-    commit(tab, {});
-  };
-
-  /** The Agent is about to act on the tab: keep it awake and give it the desktop-size view. */
-  const prepareAgent = async (tab) => {
-    keepAwake(tab);
-    tab.agentDriven = true;
-    tab.agentInputAt = Date.now();
-    await fitAgentView(tab);
-  };
-
-  /** A person's own click or key press in a tab the Agent was driving gives the page its panel size back. */
-  const userTookOver = (tab, type) => {
-    if (!tab.agentDriven) return;
-    if (type !== 'mouseDown' && type !== 'keyDown' && type !== 'rawKeyDown') return;
-    if (Date.now() - (tab.agentInputAt || 0) < 1500) return;
-    tab.agentDriven = false;
-    void fitAgentView(tab);
   };
 
   const commit = (tab, patch) => {
@@ -638,6 +566,10 @@ exports.createBrowser = (window, log, options = {}) => {
     const live = () => !tab.destroyed && tabs.get(tab.id) === tab;
     contents.on('will-navigate', (event, target) => {
       try { exports.httpUrl(target); } catch { event.preventDefault(); }
+    });
+    // Every new top-level document gets the user agent that belongs to its site (see CHROME_UA_SITES).
+    contents.on('did-start-navigation', (details) => {
+      if (details?.isMainFrame && !details.isSameDocument && details.url) setAgent(contents, details.url);
     });
     contents.setWindowOpenHandler(({ url }) => {
       // A sign-in popup (Google, Apple, Microsoft…) often starts at about:blank and is steered by its opener.
@@ -669,15 +601,6 @@ exports.createBrowser = (window, log, options = {}) => {
     ]).popup({ window }));
     // The first real page is the moment the engine's own client-hint list can be read (it needs a secure context).
     contents.on('dom-ready', () => learnClientHints(contents));
-    contents.on('input-event', (_event, input) => { if (live()) userTookOver(tab, input?.type); });
-    // Something else ended the debugger session that kept the Agent's view (the page crashed, DevTools took over).
-    contents.debugger.on('detach', () => {
-      tab.agentDebugger = false;
-      if (!tab.agentView || !live()) return;
-      tab.agentView = null;
-      tab.inputScale = undefined;
-      placeActive();
-    });
     contents.on('did-start-loading', () => {
       if (!live()) return;
       tab.error = '';
@@ -850,7 +773,7 @@ exports.createBrowser = (window, log, options = {}) => {
     if (tab.destroyed) throw new Error(`浏览器标签 ${tab.id} 已关闭`);
     commit(tab, { url, error: '', loading: true, challenge: false });
     try {
-      await tab.view.webContents.loadURL(url);
+      await tab.view.webContents.loadURL(url, { userAgent: setAgent(tab.view.webContents, url) });
       if (!tab.destroyed && tabs.get(tab.id) === tab) commit(tab, { url: tab.view.webContents.getURL() || url, loading: false });
     } catch (error) {
       if (!tab.destroyed && tabs.get(tab.id) === tab) fail(tab, error.message, url);
@@ -916,29 +839,6 @@ exports.createBrowser = (window, log, options = {}) => {
 
   const viewportOf = (tab) => runInPage(tab, '({ width: innerWidth, height: innerHeight })');
 
-  /**
-   * Page pixels to input pixels. Under the Agent's scaled view the engine takes input either in page pixels or in the
-   * view's own pixels, depending on how the view is composited, so it is measured once per view: one pointer move to a
-   * known point, and the page reports where it landed.
-   */
-  const inputScaleOf = async (tab, debuggerApi) => {
-    if (!tab.agentView) return 1;
-    if (tab.inputScale) return tab.inputScale;
-    const probe = 100;
-    const contents = contentsOf(tab);
-    const listen = `(() => { if (!window.__myharnessProbe) { window.__myharnessProbe = {}; addEventListener('mousemove', (event) => { window.__myharnessProbe.x = event.clientX; }, true); } window.__myharnessProbe.x = undefined; return true; })()`;
-    await contents.executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code: listen }]);
-    await withTimeout(debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: probe, y: probe, button: 'none', buttons: 0, pointerType: 'mouse' }), 5000, '页面没有响应鼠标移动');
-    const landed = Number(await contents.executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code: 'window.__myharnessProbe.x' }]));
-    if (!(landed > 0)) return 1;
-    const measured = probe / landed;
-    // Snap to 1 or to the view's scale when the measurement is near one of them (the page rounds clientX).
-    if (Math.abs(measured - 1) < 0.05) tab.inputScale = 1;
-    else if (Math.abs(measured - tab.agentView.scale) < 0.05) tab.inputScale = tab.agentView.scale;
-    else tab.inputScale = measured;
-    return tab.inputScale;
-  };
-
   /** Keep a tab's page running at full speed for a while, so a background tab takes the Agent's input and paints. */
   const keepAwake = (tab) => {
     const contents = contentsOf(tab);
@@ -958,9 +858,29 @@ exports.createBrowser = (window, log, options = {}) => {
   const describePoint = (tab, x, y) => runInPage(tab, `(() => {
     const element = document.elementFromPoint(${x}, ${y});
     if (!element) return null;
-    const target = element.closest('a,button,input,select,textarea,label,[role],[onclick],[tabindex]') || element;
-    const text = (target.getAttribute('aria-label') || target.getAttribute('alt') || target.getAttribute('title') || target.innerText || target.value || target.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
-    return { tag: target.tagName.toLowerCase(), id: target.id || undefined, role: target.getAttribute('role') || undefined, type: target.getAttribute('type') || undefined, href: target.getAttribute('href') || undefined, src: target.getAttribute('src') ? String(target.getAttribute('src')).slice(0, 200) : undefined, text: text || undefined, editable: !!(target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) };
+    const clickable = 'a,button,input,select,textarea,label,[role],[onclick],[tabindex]';
+    const pressable = element.closest(clickable);
+    const target = pressable || element;
+    const textOf = (node) => (node.getAttribute('aria-label') || node.getAttribute('alt') || node.getAttribute('title') || node.innerText || node.value || node.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    const text = textOf(target);
+    // The point fell on a plain container (often the gap between two links): name the control right next to it and its
+    // centre, so a near miss is visible in the result instead of looking like a click that did nothing.
+    let nearest;
+    if (!pressable) {
+      let best = Infinity;
+      for (const node of document.querySelectorAll('a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[onclick]')) {
+        const r = node.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        const dx = Math.max(r.left - ${x}, 0, ${x} - r.right);
+        const dy = Math.max(r.top - ${y}, 0, ${y} - r.bottom);
+        const distance = Math.hypot(dx, dy);
+        if (distance <= 24 && distance < best) {
+          best = distance;
+          nearest = { tag: node.tagName.toLowerCase(), text: textOf(node) || undefined, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), distance: Math.round(distance) };
+        }
+      }
+    }
+    return { tag: target.tagName.toLowerCase(), id: target.id || undefined, role: target.getAttribute('role') || undefined, type: target.getAttribute('type') || undefined, href: target.getAttribute('href') || undefined, src: target.getAttribute('src') ? String(target.getAttribute('src')).slice(0, 200) : undefined, text: text || undefined, editable: !!(target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)), ...(nearest ? { missed: true, nearest } : {}) };
   })()`).catch(() => null);
 
   /** Draw (or move) the Agent's pointer at a point, so the user sees where it acts; it fades after a short pause. */
@@ -986,13 +906,35 @@ exports.createBrowser = (window, log, options = {}) => {
     try { void contentsOf(tab).executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code }]).catch(() => undefined); } catch { /* page is going away */ }
   };
 
+  /**
+   * Move the pointer to a point and wait until the page has seen it. A page that has just loaded (or a tab that has not
+   * painted yet) drops input until its first frame, so a click sent at once would vanish without an error; the move is
+   * repeated, about every 80 ms for up to 2 s, until a mousemove arrives, and only then may the caller press.
+   */
+  const moveUntilSeen = async (tab, send, x, y) => {
+    const isolated = (code) => contentsOf(tab).executeJavaScriptInIsolatedWorld(CURSOR_WORLD, [{ code }]).catch(() => undefined);
+    const before = Number(await isolated(`(() => { if (!window.__myharnessMoves) { window.__myharnessMoves = { n: 0 }; addEventListener('mousemove', () => { window.__myharnessMoves.n++; }, true); } return window.__myharnessMoves.n; })()`));
+    const deadline = Date.now() + 2000;
+    for (let attempt = 0; ; attempt++) {
+      // A repeated move to the very same point may be coalesced away; the retries wiggle by one pixel and come back.
+      if (attempt > 0 && attempt % 2 === 1) await send({ type: 'mouseMoved', x: x > 0 ? x - 1 : x + 1, y, button: 'none', buttons: 0 });
+      await send({ type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+      if (!Number.isFinite(before)) return;
+      const seen = Number(await isolated('window.__myharnessMoves ? window.__myharnessMoves.n : 0'));
+      if (seen > before || Date.now() > deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  };
+
   const mouse = async (tab, value) => {
     const kind = String(value.kind || 'click');
     keepAwake(tab);
     const downloadsBefore = downloadSeq;
-    const x = Number(value.x);
-    const y = Number(value.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('mouse 需要 x 与 y（页面 CSS 像素坐标）');
+    let x = Number(value.x);
+    let y = Number(value.y);
+    // No point given: aim at an element (selector, index or visible label) like the click command does.
+    if ((!Number.isFinite(x) || !Number.isFinite(y)) && hasTarget(value)) ({ x, y } = await requireTarget(tab, value, 'mouse'));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('mouse 需要 x 与 y（页面 CSS 像素坐标），或 selector、index、label');
     const viewport = await viewportOf(tab);
     const inside = (px, py) => px >= 0 && py >= 0 && px < viewport.width && py < viewport.height;
     if (!inside(x, y)) throw new Error(`坐标 (${x}, ${y}) 在页面可视区域 ${viewport.width}×${viewport.height} 之外；先滚动页面或重新截图`);
@@ -1003,16 +945,15 @@ exports.createBrowser = (window, log, options = {}) => {
     const modifiers = modifierBits(value.modifiers);
     const target = kind === 'move' || kind === 'wheel' || kind === 'up' ? undefined : await describePoint(tab, x, y);
     await withDebugger(tab, async (debuggerApi) => {
-      const scale = await inputScaleOf(tab, debuggerApi);
       const send = (params) => {
         tab.agentInputAt = Date.now();
-        return debuggerApi.sendCommand('Input.dispatchMouseEvent', { modifiers, pointerType: 'mouse', ...params, x: params.x * scale, y: params.y * scale });
+        return debuggerApi.sendCommand('Input.dispatchMouseEvent', { modifiers, pointerType: 'mouse', ...params });
       };
       const press = async (px, py, clickCount) => {
         await send({ type: 'mousePressed', x: px, y: py, button, buttons: BUTTON_BITS[button], clickCount });
         await send({ type: 'mouseReleased', x: px, y: py, button, buttons: 0, clickCount });
       };
-      if (kind !== 'up') await send({ type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+      if (kind !== 'up') await moveUntilSeen(tab, send, x, y);
       if (kind === 'click' || kind === 'right_click') await press(x, y, 1);
       else if (kind === 'double_click') { await press(x, y, 1); await press(x, y, 2); }
       else if (kind === 'down') await send({ type: 'mousePressed', x, y, button, buttons: BUTTON_BITS[button], clickCount: 1 });
@@ -1112,9 +1053,7 @@ exports.createBrowser = (window, log, options = {}) => {
       };
       return nodes.map(pick);
     } finally {
-      // The Agent's scaled view lives on this debugger session; it outlives the call that happened to attach it.
-      if (attached && tab.agentView) tab.agentDebugger = true;
-      else if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
+      if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
     }
   };
 
@@ -1136,9 +1075,7 @@ exports.createBrowser = (window, log, options = {}) => {
     try {
       return await fn(debuggerApi);
     } finally {
-      // The Agent's scaled view lives on this debugger session; it outlives the call that happened to attach it.
-      if (attached && tab.agentView) tab.agentDebugger = true;
-      else if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
+      if (attached) { try { debuggerApi.detach(); } catch { /* already gone */ } }
     }
   };
 
@@ -1242,36 +1179,174 @@ exports.createBrowser = (window, log, options = {}) => {
   };
 
   /** Interactive elements in document order; `index` addresses the same list for click/type without a CSS selector. */
-  const INTERACTIVE_QUERY = 'a,button,input,select,textarea,[role="button"],[role="link"],[contenteditable="true"]';
+  const INTERACTIVE_QUERY = 'a,button,input,select,textarea,summary,[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],[role="menuitem"],[role="option"],[role="combobox"],[role="textbox"],[contenteditable="true"],[contenteditable=""],[contenteditable="plaintext-only"]';
 
-  const click = (tab, selector, index) => runInPage(tab, `(() => {
-    const element = ${Number.isInteger(index) ? `document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)})[${index}]` : `document.querySelector(${JSON.stringify(selector)})`};
-    if (!element) return { ok: false, error: ${Number.isInteger(index) ? `'no interactive element at index ' + ${index}` : `'no element matches ' + ${JSON.stringify(selector)}`} };
-    element.scrollIntoView({ block: 'center' });
-    element.click();
-    return { ok: true, tag: element.tagName, text: (element.textContent || '').trim().slice(0, 200) };
-  })()`);
-
-  const typeText = (tab, selector, text, index) => runInPage(tab, `(() => {
-    const element = ${Number.isInteger(index) ? `document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)})[${index}]` : `document.querySelector(${JSON.stringify(selector)})`};
-    if (!element) return { ok: false, error: ${Number.isInteger(index) ? `'no interactive element at index ' + ${index}` : `'no element matches ' + ${JSON.stringify(selector)}`} };
-    element.focus();
-    if (element.isContentEditable) {
-      element.textContent = ${JSON.stringify(text)};
-    } else {
-      const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, 'value').set.call(element, ${JSON.stringify(text)});
+  /**
+   * Find one element the way a person would point at it: by the index from `interactive`, a CSS selector, or its visible
+   * text / accessible name (`label`: exact match first, then prefix, then substring, visible elements only; plain text
+   * that is not inside a control counts too, so a clickable <div> is found by its words). The element is scrolled to the
+   * middle of the viewport and its centre is returned, with what covers that point if it is not the element itself.
+   * The element stays reachable for the follow-up step as a hidden page property.
+   */
+  const locate = (tab, target) => runInPage(tab, `((q) => {
+    const all = () => Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)}));
+    const shown = (el) => { const r = el.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return false; const s = getComputedStyle(el); return s.visibility !== 'hidden' && s.display !== 'none'; };
+    const clean = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
+    const nameOf = (el) => clean(el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].innerText) || el.innerText || (el.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(el.type) ? el.value : '') || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (el.querySelector && el.querySelector('img[alt]') ? el.querySelector('img[alt]').alt : ''));
+    const describe = (el) => ({ tag: el.tagName.toLowerCase(), id: el.id || undefined, text: nameOf(el).slice(0, 80) || undefined });
+    let el;
+    if (Number.isInteger(q.index)) el = all()[q.index];
+    else if (q.selector) el = document.querySelector(q.selector);
+    else if (q.label) {
+      const want = clean(q.label).toLowerCase();
+      let best = null, bestScore = 0;
+      for (const candidate of all()) {
+        if (!shown(candidate)) continue;
+        const name = nameOf(candidate).toLowerCase();
+        const score = name === want ? 3 : name.startsWith(want) ? 2 : name.includes(want) ? 1 : 0;
+        if (score > bestScore) { best = candidate; bestScore = score; if (score === 3) break; }
+      }
+      if (bestScore < 3 && document.body) {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let exact = null, partial = null;
+        for (let node = walker.nextNode(); node && !exact; node = walker.nextNode()) {
+          const text = clean(node.nodeValue).toLowerCase();
+          if (!text || !text.includes(want) || !node.parentElement || !shown(node.parentElement)) continue;
+          const owner = node.parentElement.closest('a,button,label,summary,[role],[onclick],[tabindex]') || node.parentElement;
+          if (text === want) exact = owner; else if (!partial) partial = owner;
+        }
+        if (exact) best = exact; else if (!best && partial) best = partial;
+      }
+      el = best;
     }
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-    return { ok: true, tag: element.tagName, value: String(element.value ?? element.textContent ?? '').slice(0, 200) };
-  })()`);
+    if (!el) return { ok: false, error: Number.isInteger(q.index) ? 'no interactive element at index ' + q.index : q.selector ? 'no element matches ' + q.selector : 'nothing visible on the page reads ' + JSON.stringify(q.label) };
+    Object.defineProperty(window, '__myharnessTarget', { value: el, configurable: true, writable: true, enumerable: false });
+    if (q.scroll !== false) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const r = el.getBoundingClientRect();
+    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+    const inView = r.width > 0 && r.height > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
+    const hit = inView ? document.elementFromPoint(x, y) : null;
+    const covered = inView && hit && !(hit === el || el.contains(hit) || hit.contains(el)) ? describe(hit) : undefined;
+    return { ok: true, x, y, inView, covered, ...describe(el), disabled: !!el.disabled, select: el.tagName === 'SELECT', editable: !!(el.isContentEditable || /^(INPUT|TEXTAREA)$/.test(el.tagName)) };
+  })(${JSON.stringify({ selector: target.selector || undefined, index: Number.isInteger(target.index) ? target.index : undefined, label: target.label || undefined, scroll: target.scroll })})`);
+
+  const hasTarget = (value) => Number.isInteger(value.index) || (typeof value.selector === 'string' && !!value.selector) || (typeof value.label === 'string' && !!value.label.trim());
+  const requireTarget = async (tab, value, verb) => {
+    if (!hasTarget(value)) throw new Error(`${verb} 需要 selector、index 或 label`);
+    const found = await locate(tab, value);
+    if (!found?.ok) throw new Error(found?.error || '页面没有返回元素位置');
+    return found;
+  };
+
+  /**
+   * Click an element with the Agent's real mouse at its centre, as a person would, so pages that listen for pointer
+   * events (menus, React/Vue controls, canvases inside buttons) react. When something else covers that point, or the
+   * element has no box on screen, the element's own click() is used instead and the answer says why.
+   */
+  const click = async (tab, value) => {
+    const found = await requireTarget(tab, value, 'click');
+    const base = { ok: true, tag: found.tag, text: found.text || '', x: found.x, y: found.y };
+    if (found.inView && !found.covered) {
+      const pressed = await mouse(tab, { kind: value.double ? 'double_click' : 'click', x: found.x, y: found.y, button: value.button, modifiers: value.modifiers });
+      return { ...base, how: 'mouse', ...(pressed.downloads ? { downloads: pressed.downloads } : {}) };
+    }
+    await runInPage(tab, 'window.__myharnessTarget && window.__myharnessTarget.click()');
+    return { ...base, how: 'script', ...(found.covered ? { covered: found.covered } : { offscreen: true }) };
+  };
+
+  /**
+   * Type into an element the way a person does: click it (or focus it when it cannot be clicked), select what is in it
+   * unless `replace` is false, and enter the text through the input method, so every key/input/beforeinput handler
+   * runs. A <select> gets the option whose value or label matches. When the page refused the typed text (masked or
+   * framework-controlled fields), the value is set directly as a last resort. `enter` presses Enter afterwards.
+   */
+  const typeText = async (tab, value) => {
+    const text = String(value.text ?? '');
+    const found = await requireTarget(tab, value, 'type');
+    if (found.disabled) throw new Error(`目标元素已禁用：${found.tag}${found.text ? ` "${found.text}"` : ''}`);
+    if (found.select) {
+      const chosen = await runInPage(tab, `((want) => {
+        const el = window.__myharnessTarget; const w = want.trim().toLowerCase();
+        const option = Array.from(el.options).find((o) => o.value.toLowerCase() === w || o.label.trim().toLowerCase() === w) || Array.from(el.options).find((o) => o.label.trim().toLowerCase().includes(w));
+        if (!option) return { ok: false, error: 'no option matches ' + JSON.stringify(want) + '; options: ' + Array.from(el.options).map((o) => o.label.trim()).slice(0, 30).join(' | ') };
+        el.value = option.value; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, tag: 'select', value: option.label.trim(), how: 'select' };
+      })(${JSON.stringify(text)})`);
+      if (!chosen?.ok) throw new Error(chosen?.error || '无法选择选项');
+      return chosen;
+    }
+    if (found.inView && !found.covered) await mouse(tab, { kind: 'click', x: found.x, y: found.y });
+    const replace = value.replace !== false;
+    await runInPage(tab, `(() => {
+      const el = window.__myharnessTarget; if (!el) return;
+      if (document.activeElement !== el && !el.contains(document.activeElement)) el.focus();
+      if (${replace}) {
+        if (typeof el.select === 'function' && /^(INPUT|TEXTAREA)$/.test(el.tagName)) el.select();
+        else if (el.isContentEditable) { const range = document.createRange(); range.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+      } else if (/^(INPUT|TEXTAREA)$/.test(el.tagName) && typeof el.setSelectionRange === 'function') { try { const end = el.value.length; el.setSelectionRange(end, end); } catch {} }
+    })()`);
+    keepAwake(tab);
+    await withDebugger(tab, async (debuggerApi) => {
+      if (text) await debuggerApi.sendCommand('Input.insertText', { text });
+      else if (replace) for (const event of keyEvents('Delete')) await debuggerApi.sendCommand('Input.dispatchKeyEvent', event);
+    });
+    const valueOf = 'String(window.__myharnessTarget ? (window.__myharnessTarget.value ?? window.__myharnessTarget.innerText ?? "") : "")';
+    let how = 'keyboard';
+    let now = String((await runInPage(tab, valueOf)) ?? '');
+    if (text && !now.includes(text) && found.editable) {
+      // The page dropped the typed text; set the value itself and announce it like an edit.
+      await runInPage(tab, `((text) => {
+        const el = window.__myharnessTarget;
+        if (el.isContentEditable) el.textContent = text;
+        else { const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${replace} ? text : el.value + text); }
+        el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+      })(${JSON.stringify(text)})`);
+      now = String((await runInPage(tab, valueOf)) ?? '');
+      how = 'script';
+    }
+    if (value.enter === true) await pressKeys(tab, { keys: 'Enter' });
+    return { ok: true, tag: found.tag, value: now.slice(0, 200), how };
+  };
+
+  /**
+   * Wait until the page shows (or, with `gone`, no longer shows) a CSS selector, a visible text or a labelled element;
+   * without any of them, until the page has loaded and its network has been quiet for half a second. Never throws on a
+   * timeout: the answer says it timed out, so the caller decides.
+   */
+  const waitFor = async (tab, value) => {
+    const timeout = Math.max(200, Math.min(60000, Number(value.timeoutMs) || 10000));
+    const started = Date.now();
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const gone = value.gone === true;
+    const query = { selector: value.selector || undefined, text: value.text || undefined, label: value.label || undefined };
+    const condition = query.selector || query.text || query.label;
+    keepAwake(tab);
+    while (Date.now() - started < timeout && !tab.destroyed) {
+      if (condition) {
+        const present = await runInPage(tab, `((q) => {
+          const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
+          if (q.selector) { const el = document.querySelector(q.selector); if (!el || !shown(el)) return false; }
+          if (q.text && !(document.body && document.body.innerText.includes(q.text))) return false;
+          if (q.label) { const want = q.label.trim().toLowerCase(); const hit = Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)})).some((el) => shown(el) && String(el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.value || '').trim().toLowerCase().includes(want)); if (!hit) return false; }
+          return true;
+        })(${JSON.stringify(query)})`).catch(() => null);
+        if (present !== null && !!present !== gone) return { ok: true, waitedMs: Date.now() - started, url: tab.url };
+      } else {
+        const last = networkLog.reduce((latest, entry) => (entry.tabId === tab.id && entry.at > latest ? entry.at : latest), 0);
+        if (!tab.loading && Date.now() - last >= 500) return { ok: true, waitedMs: Date.now() - started, url: tab.url };
+      }
+      await sleep(150);
+    }
+    return { ok: false, timeout: true, waitedMs: Date.now() - started, url: tab.url };
+  };
 
   const interactive = (tab) => runInPage(tab, `(() => {
     const nodes = Array.from(document.querySelectorAll(${JSON.stringify(INTERACTIVE_QUERY)}));
-    return nodes.slice(0, 400).map((element, index) => {
+    return nodes.slice(0, 600).map((element, index) => {
       const rect = element.getBoundingClientRect();
-      const label = (element.getAttribute('aria-label') || element.textContent || element.getAttribute('placeholder') || element.getAttribute('name') || '').trim().slice(0, 120);
+      const style = rect.width > 0 && rect.height > 0 ? getComputedStyle(element) : null;
+      const visible = !!style && style.visibility !== 'hidden' && style.display !== 'none';
+      const label = String(element.getAttribute('aria-label') || (element.labels && element.labels[0] && element.labels[0].innerText) || element.innerText || (element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.type) ? element.value : '') || element.getAttribute('placeholder') || element.getAttribute('title') || element.getAttribute('alt') || (element.querySelector('img[alt]') ? element.querySelector('img[alt]').alt : '') || element.getAttribute('name') || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
       return {
         index,
         tag: element.tagName.toLowerCase(),
@@ -1281,7 +1356,11 @@ exports.createBrowser = (window, log, options = {}) => {
         name: element.getAttribute('name') || '',
         id: element.id || '',
         href: element.getAttribute('href') || '',
-        disabled: !!element.disabled,
+        value: /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName) && element.type !== 'password' ? String(element.value ?? '').slice(0, 80) : undefined,
+        checked: element.type === 'checkbox' || element.type === 'radio' ? !!element.checked : element.getAttribute('aria-checked') === 'true' ? true : undefined,
+        disabled: !!element.disabled || element.getAttribute('aria-disabled') === 'true',
+        visible,
+        inView: visible && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
         rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
       };
     });
@@ -1289,14 +1368,14 @@ exports.createBrowser = (window, log, options = {}) => {
 
   /**
    * One browser command. `context.agent` marks a command from the Agent's workspace tool: before it reads or acts on a
-   * tab, that tab gets the Agent's desktop-size view.
+   * tab, that tab is kept awake (a background tab would otherwise ignore its input).
    */
   const command = async (input, context = {}) => {
     const value = input && typeof input === 'object' ? input : {};
     const action = String(value.action || '');
     if (context.agent === true && AGENT_TAB_ACTIONS.has(action)) {
       const tab = tabs.get(value.tabId || activeTabId || DEFAULT_TAB);
-      if (tab && !tab.destroyed) await prepareAgent(tab);
+      if (tab && !tab.destroyed) keepAwake(tab);
     }
     switch (action) {
       case 'open': {
@@ -1448,16 +1527,16 @@ exports.createBrowser = (window, log, options = {}) => {
       }
       case 'interactive':
         return { elements: await interactive(requireTab(value.tabId)) };
-      case 'click': {
-        const index = Number.isInteger(value.index) ? value.index : undefined;
-        if (index === undefined && (typeof value.selector !== 'string' || !value.selector)) throw new Error('click 需要 selector 或 index');
-        return click(requireTab(value.tabId), value.selector, index);
-      }
+      case 'click':
+        return click(requireTab(value.tabId), value);
       case 'type': {
-        const index = Number.isInteger(value.index) ? value.index : undefined;
-        if (index === undefined && (typeof value.selector !== 'string' || !value.selector)) throw new Error('type 需要 selector 或 index');
-        return typeText(requireTab(value.tabId), value.selector, String(value.text ?? ''), index);
+        if (String(value.text ?? '').length > 20000) throw new Error('type 的文本超过 20000 个字符');
+        return typeText(requireTab(value.tabId), value);
       }
+      case 'locate':
+        return requireTarget(requireTab(value.tabId), value, 'locate');
+      case 'wait':
+        return waitFor(requireTab(value.tabId), value);
       case 'upload': {
         const index = Number.isInteger(value.index) ? value.index : undefined;
         if (index === undefined && (typeof value.selector !== 'string' || !value.selector)) throw new Error('upload 需要 selector 或 index');
@@ -1505,6 +1584,8 @@ exports.createBrowser = (window, log, options = {}) => {
         return { requests: networkLog.slice(-200).filter((entry) => !value.tabId || entry.tabId === value.tabId) };
       case 'scroll': {
         const target = requireTab(value.tabId);
+        // Scroll an element into the middle of the view, the way a person scrolls to what they want to see.
+        if (hasTarget(value)) { const found = await requireTarget(target, value, 'scroll'); return { result: await runInPage(target, '({x: window.scrollX, y: window.scrollY})'), element: found }; }
         const x = Number(value.x || 0), y = Number(value.y || 0);
         return { result: await runInPage(target, `window.scrollBy(${Number.isFinite(x) ? x : 0}, ${Number.isFinite(y) ? y : 0}); ({x: window.scrollX, y: window.scrollY})`) };
       }

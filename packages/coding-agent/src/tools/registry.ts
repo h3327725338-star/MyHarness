@@ -193,10 +193,12 @@ import { createEditTool, createEditToolDefinition, type EditToolOptions } from "
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./files/find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./files/grep.ts";
 import { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
+import { createMailTool, createMailToolDefinition, type MailToolOptions } from "./mail/tool.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./shell/bash.ts";
 import { createWorkspaceTool, createWorkspaceToolDefinition, type WorkspaceToolOptions } from "./workspace.ts";
 
 export { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
+export { createMailTool, createMailToolDefinition, type MailToolOptions } from "./mail/tool.ts";
 
 import {
 	createUltracodeTool,
@@ -291,6 +293,7 @@ export type ToolName =
 	| "ultracode"
 	| "agent_tasks"
 	| "github"
+	| "mail"
 	| "memory_search"
 	| "memory_get"
 	| "memory_delete"
@@ -323,6 +326,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"ultracode",
 	"agent_tasks",
 	"github",
+	"mail",
 	"memory_search",
 	"memory_get",
 	"memory_delete",
@@ -352,6 +356,7 @@ export interface ToolsOptions {
 	ultracode?: UltracodeToolOptions;
 	agentTasks?: AgentTasksToolOptions;
 	github?: GitHubToolOptions;
+	mail?: MailToolOptions;
 	memory?: MemoryToolOptions;
 	sessionHistory?: SessionHistoryToolOptions;
 	webSearch?: WebSearchToolOptions;
@@ -362,6 +367,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 	switch (toolName) {
 		case "github":
 			return createGitHubToolDefinition(cwd, options?.github);
+		case "mail":
+			return createMailToolDefinition(cwd, options?.mail);
 		case "read":
 			return createReadToolDefinition(cwd, options?.read);
 		case "bash":
@@ -431,6 +438,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 	switch (toolName) {
 		case "github":
 			return createGitHubTool(cwd, options?.github);
+		case "mail":
+			return createMailTool(cwd, options?.mail);
 		case "read":
 			return createReadTool(cwd, options?.read);
 		case "bash":
@@ -518,6 +527,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		ultracode: createUltracodeToolDefinition(cwd, options?.ultracode),
 		agent_tasks: createAgentTasksToolDefinition(options?.agentTasks),
 		github: createGitHubToolDefinition(cwd, options?.github),
+		mail: createMailToolDefinition(cwd, options?.mail),
 		memory_search: createMemorySearchToolDefinition(cwd, options?.memory),
 		memory_get: createMemoryGetToolDefinition(cwd, options?.memory),
 		memory_delete: createMemoryDeleteToolDefinition(cwd, options?.memory),
@@ -572,6 +582,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		ultracode: createUltracodeTool(cwd, options?.ultracode),
 		agent_tasks: createAgentTasksTool(options?.agentTasks),
 		github: createGitHubTool(cwd, options?.github),
+		mail: createMailTool(cwd, options?.mail),
 		memory_search: createMemorySearchTool(cwd, options?.memory),
 		memory_get: createMemoryGetTool(cwd, options?.memory),
 		memory_delete: createMemoryDeleteTool(cwd, options?.memory),

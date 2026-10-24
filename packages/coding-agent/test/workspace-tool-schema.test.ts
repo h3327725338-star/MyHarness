@@ -79,11 +79,23 @@ describe("Workspace tool parameter schema", () => {
 			x: 1,
 			y: 2,
 		});
+		expect(validate({ operation: "mouse", action: "click", label: "Sign in", screenshot: true })).toMatchObject({
+			label: "Sign in",
+		});
+		expect(validate({ operation: "type", label: "Search", text: "cats", enter: true })).toMatchObject({
+			enter: true,
+		});
+		expect(validate({ operation: "wait", text: "Results", timeoutMs: 5000 })).toMatchObject({ text: "Results" });
+		expect(
+			validate({ operation: "batch", steps: [{ operation: "click", label: "Next" }, { operation: "wait" }] }),
+		).toMatchObject({ operation: "batch" });
 		expect(validate({ operation: "open", type: "browser", bookmark: "Mail", background: true })).toMatchObject({
 			bookmark: "Mail",
 		});
 		for (const arguments_ of [
-			{ operation: "mouse", action: "click" },
+			{ operation: "mouse", x: 1, y: 2 },
+			{ operation: "batch", steps: [] },
+			{ operation: "wait", timeoutMs: 1 },
 			{ operation: "mouse", action: "teleport", x: 1, y: 2 },
 			{ operation: "key" },
 			{ operation: "answer_permission", requestId: "p1" },

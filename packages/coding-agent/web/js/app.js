@@ -62,6 +62,9 @@ function Header() {
 	const items = useStore((s) => s.items);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const panelOpen = useStore((s) => s.view.panelOpen);
+	// Collaboration mode puts the workspace at the window's left edge and this column at its right edge: the sidebar
+	// button then lives in the workspace's header and the close-panel button here, so each stays in its window corner.
+	const maxed = useStore((s) => s.view.wsMax) && panelOpen;
 	const wsActive = useStore((s) => s.view.wsActive);
 	const wsTabs = useStore((s) => s.view.wsTabs);
 	const runningBash = useStore((s) => s.snap?.flags?.bashRunning);
@@ -87,7 +90,7 @@ function Header() {
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && wsActive === tab ? "active" : ""}`} aria-pressed=${panelOpen && wsActive === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	const browserActive = panelOpen && wsTabs.some((tab) => tab.id === wsActive && tab.type === "browser");
 	return html`<header class="main-header">
-		${!sidebarOpen ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
+		${!sidebarOpen && !maxed ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { ended.current = false; setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
@@ -101,6 +104,7 @@ function Header() {
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
 		${window.myHarnessDesktop && !exportReadOnly() ? html`<button class=${`icon-btn ${browserActive ? "active" : ""}`} aria-pressed=${browserActive} title=${t("Browser")} aria-label=${t("Browser")} onClick=${() => actions.openBrowser()}><${Icon} name="globe" size=${17} /></button>` : null}
+		${maxed ? html`<button class="icon-btn" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${17} /></button>` : null}
 	</header>`;
 }
 
@@ -111,6 +115,7 @@ function PanelContainer() {
 	const activeId = useStore((s) => s.view.wsActive);
 	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const wsMax = useStore((s) => s.view.wsMax);
+	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const panelRef = useRef(null);
 	const active = tabs.find((item) => item.id === activeId) || tabs[0] || null;
 	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
@@ -135,10 +140,11 @@ function PanelContainer() {
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
 		<div class="panel-head">
+			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${16} /></button>` : null}
 			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} iconsOnly=${tabIconsOnly} icons=${browserIcons} onToggleIconsOnly=${() => actions.toggleTabIconsOnly()} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
 			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
 			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
-			<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>
+			${wsMax ? null : html`<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>`}
 		</div>
 		<div class="panel-body">
 			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
@@ -170,6 +176,25 @@ export function ConfirmModal({ dialog }) {
 		${dialog.artifactChoice ? html`<label class="row"><input type="checkbox" checked=${deleteArtifacts} onChange=${(e) => setDeleteArtifacts(e.target.checked)} />${t("Also permanently delete artifacts")}</label><p class="dim">${deleteArtifacts ? t("Artifact files and their workspace/global references will be removed. Project files are not affected.") : t("Artifacts and their origin remain available in workspace/global indexes.")}</p>` : null}
 		${dialog.memoryChoice ? html`<label class="row"><input type="checkbox" checked=${deleteMemory} onChange=${(e) => setDeleteMemory(e.target.checked)} />${t("Also delete this chat's memories")}</label><p class="dim">${deleteMemory ? t("This chat's memory folder (including archives) will be permanently removed and cannot be recovered.") : t("This chat's memories stay on disk and remain usable by memory tools.")}</p>` : null}
 		${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
+	<//>`;
+}
+
+/** What the desktop window's close button does: keep running in the tray, quit, or nothing. */
+function CloseAppModal() {
+	const [remember, setRemember] = useState(false);
+	const pick = (choice) => resolveConfirm({ choice, remember: choice !== "cancel" && remember });
+	const option = (choice, icon, label, detail) => html`<button class=${`close-choice ${choice}`} autofocus=${choice === "tray"} onClick=${() => pick(choice)}>
+		<span class="close-choice-icon"><${Icon} name=${icon} size=${20} /></span>
+		<span class="close-choice-text"><span class="close-choice-label">${label}</span><span class="close-choice-detail">${detail}</span></span>
+		<${Icon} name="chevronRight" size=${15} class="close-choice-go" />
+	</button>`;
+	return html`<${Modal} title=${t("Close MyHarness?")} onClose=${() => pick("cancel")} width=${440} class="close-app"
+		footer=${html`<label class="close-remember"><input type="checkbox" checked=${remember} onChange=${(e) => setRemember(e.target.checked)} />${t("Remember my choice")}</label><span class="grow" /><button class="btn" onClick=${() => pick("cancel")}>${t("Cancel")}</button>`}>
+		<div class="close-choices">
+			${option("tray", "desktop", t("Minimize to tray"), t("The window hides in the taskbar corner; running tasks keep going."))}
+			${option("quit", "quit", t("Quit MyHarness"), t("Ends MyHarness and every task it is running."))}
+		</div>
+		<p class="close-hint">${t("You can change this later in Settings → Appearance → Desktop app.")}</p>
 	<//>`;
 }
 
@@ -207,7 +232,8 @@ function DialogOverlayHost() {
 	const type = dialog?.type;
 	return html`<${Overlay} show=${type === "git-setup"}>${type === "git-setup" ? html`<${GitSetupDialog} />` : null}<//>
 		<${Overlay} show=${type === "confirm"}>${type === "confirm" ? html`<${ConfirmModal} dialog=${dialog} />` : null}<//>
-		<${Overlay} show=${type === "input"}>${type === "input" ? html`<${InputModal} dialog=${dialog} />` : null}<//>`;
+		<${Overlay} show=${type === "input"}>${type === "input" ? html`<${InputModal} dialog=${dialog} />` : null}<//>
+		<${Overlay} show=${type === "close-app"}>${type === "close-app" ? html`<${CloseAppModal} />` : null}<//>`;
 }
 
 function BootDialogHost() {

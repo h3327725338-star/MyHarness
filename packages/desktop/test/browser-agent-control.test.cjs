@@ -245,44 +245,21 @@ test('speed dial commands save the layout and tell every page', async () => {
   }
 });
 
-test('in a narrow panel the Agent drives the visible tab at a desktop size drawn scaled down; a person taking over hands it back', async () => {
+test('the visible tab keeps exactly the panel size while the Agent drives it, and its clicks are page pixels', async () => {
   const { browser, cdp, cleanup } = loadHost();
   try {
     const rect = { x: 700, y: 10, width: 426, height: 780 };
     const opened = await browser.command({ action: 'open', url: 'https://a.example/', rect });
     const tab = browser.tabs.find((entry) => entry.id === opened.tabId);
     const metrics = () => cdp.filter((entry) => entry.method.startsWith('Emulation.'));
-    await browser.command({ action: 'exec', tabId: tab.id, code: '1' });
-    assert.equal(metrics().length, 0, 'the page itself never switches the view');
     await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
-    const scale = Math.round((426 / 1280) * 10000) / 10000;
-    assert.deepEqual(metrics()[0], { id: tab.view.webContents.id, method: 'Emulation.setDeviceMetricsOverride', params: { width: 1280, height: 800, deviceScaleFactor: 0, mobile: false, scale } });
-    assert.deepEqual(tab.view.bounds, { x: 700, y: 10, width: 426, height: 266 }, 'the view shrinks to the scaled desktop picture');
-    assert.equal(tab.view.webContents.debugger.isAttached(), true, 'the override lives on a debugger session that stays attached');
-    assert.deepEqual((await browser.command({ action: 'state', tabId: tab.id })).agentView, { width: 1280, height: 800, scale });
-
-    // The engine takes input in the view's own pixels here: the probe lands at 3x the point it was sent to.
-    tab.view.webContents.probeX = 300;
+    assert.equal(metrics().length, 0, 'no device metrics override: the page is never a scaled-down picture');
+    assert.deepEqual(tab.view.bounds, rect);
     cdp.length = 0;
-    await browser.command({ action: 'mouse', tabId: tab.id, kind: 'click', x: 600, y: 300 }, { agent: true });
+    await browser.command({ action: 'mouse', tabId: tab.id, kind: 'click', x: 200, y: 300 }, { agent: true });
     const pressed = cdp.find((entry) => entry.params?.type === 'mousePressed').params;
-    assert.ok(Math.abs(pressed.x - 600 * scale) < 1e-6 && Math.abs(pressed.y - 300 * scale) < 1e-6, `page point mapped to view pixels: ${pressed.x},${pressed.y}`);
-
-    // A person's own click (not one of the Agent's) gives the page its panel size back.
-    tab.agentInputAt = 0;
-    cdp.length = 0;
-    tab.view.webContents.handlers['input-event']({}, { type: 'mouseDown' });
-    await tab.fitChain;
-    assert.deepEqual(metrics().map((entry) => entry.method), ['Emulation.clearDeviceMetricsOverride']);
-    assert.deepEqual(tab.view.bounds, { x: 700, y: 10, width: 426, height: 780 });
-    assert.equal(tab.view.webContents.debugger.isAttached(), false);
-
-    // A wide panel needs no scaled view even while the Agent drives the tab.
-    await browser.command({ action: 'bounds', tabId: tab.id, rect: { x: 100, y: 10, width: 1080, height: 780 } });
-    cdp.length = 0;
-    await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
-    assert.equal(metrics().length, 0);
-    assert.deepEqual(tab.view.bounds, { x: 100, y: 10, width: 1080, height: 780 });
+    assert.deepEqual([pressed.x, pressed.y], [200, 300]);
+    assert.equal(tab.view.webContents.debugger.isAttached(), false, 'the debugger is released after the click');
   } finally {
     cleanup();
   }

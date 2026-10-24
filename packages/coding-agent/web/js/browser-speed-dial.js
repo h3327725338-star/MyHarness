@@ -2,12 +2,45 @@
 // grid of site icons in the middle, like a browser's start page, and shortcuts can be gathered into groups the way the
 // Windows Start menu makes folders (drag one onto another). The layout lives in the desktop host
 // (packages/desktop/browser-speed-dial.cjs); this module draws it and sends back every change the user makes.
-import { html, Icon, useEffect, useRef, useState } from "./ui.js";
+import { html, Icon, motionEnabled, useEffect, useLayoutEffect, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
 import { bookmarkLetter } from "./browser-bookmarks.js";
 import { dissolveGroup, groupWith, moveEntry, moveInGroup, removeEntry, renameGroup, shortcutUrl, ungroupSite, upsertSite } from "./browser-speed-dial-model.js";
 
 // ---- Drawing ---------------------------------------------------------------------------------------------------
+
+// A group opens out of its tile and folds back into it, like a folder on a phone's home screen.
+const GROUP_MS = 260;
+const GROUP_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+
+/** The transform that puts `box` (the open group) onto `from` (the group's tile icon). */
+function tileTransform(from, box) {
+	const scale = Math.max(0.08, Math.min(from.width / Math.max(1, box.width), from.height / Math.max(1, box.height)));
+	const dx = from.left + from.width / 2 - (box.left + box.width / 2);
+	const dy = from.top + from.height / 2 - (box.top + box.height / 2);
+	return `translate(${dx}px, ${dy}px) scale(${scale})`;
+}
+
+/**
+ * Animate the open group between its tile and its place: `opening` grows it out of the tile, otherwise it folds back.
+ * The promise settles when the motion is done (at once when animations are off).
+ */
+function animateGroup(backdrop, panel, tile, opening) {
+	if (!panel || !backdrop || !motionEnabled() || typeof panel.animate !== "function") return Promise.resolve();
+	const box = panel.getBoundingClientRect();
+	const shut = tile ? { transform: tileTransform(tile, box), opacity: 0 } : { transform: "scale(0.92)", opacity: 0 };
+	const open = { transform: "none", opacity: 1 };
+	const options = { duration: GROUP_MS, easing: GROUP_EASE };
+	backdrop.animate(opening ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], { ...options, fill: opening ? "none" : "forwards" });
+	const motion = panel.animate(opening ? [shut, open] : [open, shut], { ...options, fill: opening ? "none" : "forwards" });
+	// The shortcuts inside appear a moment after the box starts to grow, so they are never seen squeezed.
+	if (opening) {
+		for (const [index, node] of [...panel.querySelectorAll(".sd-tile")].entries()) {
+			node.animate([{ opacity: 0, transform: "scale(0.85)" }, { opacity: 1, transform: "none" }], { duration: 200, delay: 60 + Math.min(index, 8) * 18, easing: GROUP_EASE, fill: "backwards" });
+		}
+	}
+	return motion.finished.then(() => undefined, () => undefined);
+}
 
 /** The host a shortcut saved without a name goes by in its tooltip. */
 const siteHost = (url) => {
@@ -37,7 +70,7 @@ function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenG
 	const title = isGroup ? entry.title || t("Group") : entry.title;
 	// A site saved without a name shows its icon alone; the tooltip and the accessible name still say what it is.
 	const name = isGroup ? title : entry.title || siteHost(entry.url);
-	return html`<div class=${`sd-tile ${zone ? `drop-${zone}` : ""} ${drag?.id === entry.id ? "dragging" : ""}`}
+	return html`<div data-sd-id=${entry.id} class=${`sd-tile ${zone ? `drop-${zone}` : ""} ${drag?.id === entry.id ? "dragging" : ""}`}
 		draggable="true"
 		onDragStart=${(event) => {
 			event.dataTransfer?.setData("text/plain", entry.type === "site" ? entry.url : entry.title || "");
@@ -133,15 +166,35 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 	const [openGroup, setOpenGroup] = useState(null);
 	const group = openGroup ? items.find((item) => item.id === openGroup && item.type === "group") : null;
 	const present = new Set(items.flatMap((item) => (item.type === "group" ? item.items : [item])).map((site) => site.url));
+	const backdropRef = useRef(null);
+	const panelRef = useRef(null);
+	const closing = useRef(false);
+	// Where the open group's tile icon is now (the grid may have moved since it was clicked); null when it is not shown.
+	const groupTile = (id) => {
+		const icon = id ? panelRef.current?.closest(".sd")?.querySelector(`:scope > .sd-grid > [data-sd-id="${CSS.escape(id)}"] .sd-icon`) : null;
+		const box = icon?.getBoundingClientRect();
+		return box && box.width > 0 ? box : null;
+	};
 	useEffect(() => {
 		if (openGroup && !group) setOpenGroup(null);
 	}, [openGroup, group]);
+	useLayoutEffect(() => {
+		closing.current = false;
+		if (openGroup) void animateGroup(backdropRef.current, panelRef.current, groupTile(openGroup), true);
+	}, [openGroup]);
+	const closeGroup = () => {
+		if (!openGroup || closing.current) return;
+		closing.current = true;
+		const id = openGroup;
+		void animateGroup(backdropRef.current, panelRef.current, groupTile(id), false).then(() => setOpenGroup((current) => (current === id ? null : current)));
+	};
+
 	useEffect(() => {
 		if (!menu && !group) return undefined;
 		const onKey = (event) => {
 			if (event.key !== "Escape") return;
 			if (menu) setMenu(null);
-			else setOpenGroup(null);
+			else closeGroup();
 		};
 		const close = () => setMenu(null);
 		window.addEventListener("keydown", onKey);
@@ -209,8 +262,8 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 		</div>
 		${!items.length ? html`<p class="dim sd-hint">${t("Add shortcuts here. Drag one onto another to make a group.")}</p>` : null}
 		${group
-			? html`<div class="sd-group-backdrop" onPointerDown=${(event) => {
-					if (event.target === event.currentTarget) setOpenGroup(null);
+			? html`<div class="sd-group-backdrop" ref=${backdropRef} onPointerDown=${(event) => {
+					if (event.target === event.currentTarget) closeGroup();
 				}}
 				onDragOver=${(event) => {
 					if (drag?.from === group.id && event.target === event.currentTarget) event.preventDefault();
@@ -221,7 +274,7 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 					save(ungroupSite(items, drag.id));
 					setDrag(null);
 				}}>
-				<div class="sd-group" role="dialog" aria-label=${group.title || t("Group")}>
+				<div class="sd-group" ref=${panelRef} role="dialog" aria-label=${group.title || t("Group")}>
 					<input class="sd-group-title" value=${group.title} placeholder=${t("Name this group")} aria-label=${t("Group name")} maxlength="80"
 						onChange=${(event) => save(renameGroup(items, group.id, event.target.value.trim()))}
 						onKeyDown=${(event) => {

@@ -605,4 +605,131 @@ describe("workspace tool: the Agent's own mouse, keyboard and trusted sites", ()
 		const result = await call(tool, { operation: "interactive", tabId: tabA });
 		expect(result.content[0]!.text).toContain('0 button "Go" @(30,30)');
 	});
+
+	it("leaves hidden elements out of the listing but keeps their index, and marks off-screen ones", async () => {
+		const { tool } = twoTabs(() => ({
+			elements: [
+				{ index: 0, tag: "a", label: "Menu", visible: false, rect: { x: 0, y: 0, width: 0, height: 0 } },
+				{
+					index: 1,
+					tag: "input",
+					type: "checkbox",
+					label: "Remember me",
+					checked: true,
+					visible: true,
+					inView: false,
+				},
+			],
+		}));
+		const text = (await call(tool, { operation: "interactive", tabId: tabA })).content[0]!.text;
+		expect(text).toContain("count=1 (+1 hidden)");
+		expect(text).not.toContain('"Menu"');
+		expect(text).toContain('1 input[checkbox] "Remember me" (checked, off-screen)');
+	});
+
+	it("clicks an element by its visible text and follows the navigation the click started", async () => {
+		let url = "https://a.example/";
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "state") return { url, loading: false };
+			if (command.action === "click") {
+				url = "https://a.example/next";
+				return { ok: true, tag: "button", text: "Next", x: 100, y: 200, how: "mouse" };
+			}
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const result = await call(tool, { operation: "click", tabId: tabA, label: "Next" });
+		expect(sent.find((entry) => entry.command.action === "click")!.command).toMatchObject({ label: "Next" });
+		expect(result.content[0]!.text).toContain('label="Next" → button "Next" at (100, 200)');
+		expect(result.content[0]!.text).toContain("page → https://a.example/next");
+	});
+
+	it("says when a click had to fall back to the element's own click()", async () => {
+		const { tool } = twoTabs((command) => {
+			if (command.action === "state") return { url: "https://a.example/" };
+			return { ok: true, tag: "a", text: "Docs", how: "script", covered: { tag: "div", id: "cookie-banner" } };
+		});
+		const text = (await call(tool, { operation: "click", tabId: tabA, selector: "a.docs" })).content[0]!.text;
+		expect(text).toContain('script click: covered by {"tag":"div","id":"cookie-banner"}');
+	});
+
+	it("types into a field found by its label and presses Enter", async () => {
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "state") return { url: "https://a.example/" };
+			return { ok: true, tag: "input", value: "cats", how: "keyboard" };
+		});
+		const text = (await call(tool, { operation: "type", tabId: tabA, label: "Search", text: "cats", enter: true }))
+			.content[0]!.text;
+		expect(sent.find((entry) => entry.command.action === "type")!.command).toMatchObject({
+			label: "Search",
+			text: "cats",
+			enter: true,
+		});
+		expect(text).toContain('value="cats" + Enter');
+	});
+
+	it("waits for text and reports a timeout as an error", async () => {
+		let ok = true;
+		const { tool, sent } = twoTabs(() =>
+			ok ? { ok: true, waitedMs: 420 } : { ok: false, timeout: true, waitedMs: 1000 },
+		);
+		const done = await call(tool, { operation: "wait", tabId: tabA, text: "Results", timeoutMs: 1000 });
+		expect(done.content[0]!.text).toContain('waited 420 ms for text="Results"');
+		expect(sent.find((entry) => entry.command.action === "wait")!.command).toMatchObject({
+			text: "Results",
+			timeoutMs: 1000,
+		});
+		ok = false;
+		await expect(call(tool, { operation: "wait", tabId: tabA, selector: "#done" })).rejects.toThrow(/did not happen/);
+	});
+
+	it("attaches a picture after an action when asked, and runs a batch of steps with one picture at the end", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "myharness-workspace-shot-"));
+		temporaryRoots.push(dir);
+		const previous = process.env.MYHARNESS_TEMP_DIR;
+		process.env.MYHARNESS_TEMP_DIR = dir;
+		try {
+			const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+			const { tool, sent } = twoTabs((command) => {
+				if (command.action === "snapshot") return { snapshot: `data:image/png;base64,${png}`, width: 1, height: 1 };
+				if (command.action === "state") return { url: "https://b.example/" };
+				if (command.action === "keys") return { ok: true, focused: { tag: "input" } };
+				if (command.action === "click") return { ok: true, tag: "button", text: "Go", x: 5, y: 5, how: "mouse" };
+				if (command.action === "type") throw new Error("no element matches #missing");
+				throw new Error(`unexpected ${String(command.action)}`);
+			});
+			const looked = (await call(tool, {
+				operation: "key",
+				tabId: tabB,
+				keys: "Tab",
+				screenshot: true,
+			})) as unknown as {
+				content: Array<{ type: string; text?: string }>;
+			};
+			expect(looked.content.some((part) => part.type === "image")).toBe(true);
+
+			const batch = (await call(tool, {
+				operation: "batch",
+				tabId: tabB,
+				steps: [
+					{ operation: "click", label: "Go" },
+					{ operation: "type", selector: "#missing", text: "x" },
+					{ operation: "key", keys: "Enter" },
+				],
+			})) as unknown as { content: Array<{ type: string; text?: string }> };
+			const text = batch.content[0]!.text!;
+			expect(text).toContain('1. clicked browser:b label="Go"');
+			expect(text).toContain("2. FAILED:");
+			expect(text).toContain("steps 3..3 did not run");
+			expect(
+				sent.filter((entry) => entry.command.action === "click").every((entry) => entry.command.tabId === tabB),
+			).toBe(true);
+			expect(batch.content.filter((part) => part.type === "image")).toHaveLength(1);
+			await expect(call(tool, { operation: "batch", steps: [{ operation: "close", tabId: tabA }] })).rejects.toThrow(
+				/allowed/,
+			);
+		} finally {
+			if (previous === undefined) delete process.env.MYHARNESS_TEMP_DIR;
+			else process.env.MYHARNESS_TEMP_DIR = previous;
+		}
+	});
 });

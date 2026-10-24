@@ -46,13 +46,42 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
 
 ## GitHub Connect
 
-打开 `/settings` → **GitHub Connect** → **连接 GitHub**。在 GitHub 中输入界面显示的 code 并确认授权。这里没有 third-party account list 或多页 wizard。如果缺少 Client ID，单个 setup screen 会提供所需的表单字段和注册 OAuth App 的链接。已有 Client IDs 仍可使用；`MYHARNESS_GITHUB_CLIENT_ID` 会覆盖已保存的值。不需要 Client Secret。
+打开设置 → **连接** → GitHub，或 `/settings` → **GitHub Connect** → **连接 GitHub**。在 GitHub 中输入界面显示的 code 并确认授权。这里没有 third-party account list 或多页 wizard。如果缺少 Client ID，单个 setup screen 会提供所需的表单字段和注册 OAuth App 的链接。已有 Client IDs 仍可使用；`MYHARNESS_GITHUB_CLIENT_ID` 会覆盖已保存的值。不需要 Client Secret。
 
 连接会请求以下 broad scopes：`repo`、`workflow`、`user`、`admin:org`、`admin:repo_hook`、`admin:org_hook`、`admin:public_key`、`admin:gpg_key`、`admin:ssh_signing_key`、`gist`、`notifications`、`delete_repo`、`write:packages`、`delete:packages`、`codespace` 和 `project`。这些权限包含 private repositories、account email addresses 以及管理/删除权限。实际访问仍受用户自身权限、GitHub 已授予的 permissions 和组织 SSO policy 限制。GitHub email APIs 只会列出地址，不会读取 email inbox。通过以前的 identity-only flow 创建的连接需要**重新授权**才能获得扩展后的 permissions。
 
 默认的 main-agent `github` tool 会使用已保存的 credentials 发送 authenticated REST 和 GraphQL JSON requests，不需要 GitHub CLI。例如，`/user/repos?visibility=private&per_page=100` 用于列出 private repositories，`/user/emails` 用于列出 account email addresses。分页时继续请求返回的 `next` path。Requests 仅允许访问 `api.github.com`，会拒绝 redirects，tokens 也不会出现在 tool arguments 或 shell environments 中。Tool 支持 GET、POST、PUT、PATCH 和 DELETE；写操作仍需要用户针对具体操作给出 instruction。它不会改变系统 Git/SSH 或 `gh` login state。显式的 tool allowlists 和 delegated-session restrictions 仍然有效。
 
 即将过期的 credentials 会在 API access 或**验证连接**前自动 refresh。已保存的 accounts 会标记为**已保存**，不会被表述为远程有效。Refresh 失败可通过**重新授权**解决。Credentials 仍保存在现有的 `~/.myharness/agent/account-connections.json` 文件（或配置的 agent directory）中，依靠 filesystem permissions、locking 和 atomic writes 保护，不使用 keychain encryption。**断开连接…** 会删除本地 credentials；**打开 GitHub 授权管理**可以单独撤销远程 OAuth grant。
+
+## Mail Connect（Gmail / Outlook）
+
+打开设置 → **连接**（或 `/settings` → **Mail Connect**），可以连接任意多个邮箱，供默认的 main-agent `mail` 工具使用。页面按服务分卡片（GitHub、Gmail、Outlook、Outlook（世纪互联）），每张卡片标题旁是状态（需要设置 / 未连接 / 已连接 N 个），右侧是主操作（**开始设置**、**连接**或**添加账号**），已连接的账号逐行列出，各自带**验证**、**重新授权**、**断开连接**：
+
+| 入口 | 覆盖的邮箱 | 登录与 API |
+| --- | --- | --- |
+| **连接 Gmail** | `@gmail.com` / `@googlemail.com` 个人邮箱和 Google Workspace（自定义域名）邮箱 | Google OAuth，scope `https://mail.google.com/`；Gmail API（`gmail.googleapis.com`） |
+| **连接 Outlook** | 个人 Microsoft 账号（outlook.com、hotmail.com、live.com、msn.com 等）和任意组织的 Microsoft 365 / Exchange Online 工作或学校邮箱 | Microsoft identity platform `/common`；Microsoft Graph（`graph.microsoft.com`），scope `User.Read Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite offline_access` |
+| **连接 Outlook（世纪互联）** | 由世纪互联运营的中国区 Microsoft 365 工作或学校邮箱 | `login.chinacloudapi.cn/organizations`；`microsoftgraph.chinacloudapi.cn` |
+
+每种邮箱第一次使用前要配置一次你自己的 OAuth 应用：点卡片上的**开始设置**展开编号步骤（第一步带注册页面的入口），最后填入 Client ID（Gmail 还要 Client Secret）保存；设置好后这些步骤收进卡片底部的“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开：
+
+- Google：在 Google Cloud Console 启用 Gmail API、配置 OAuth 同意屏幕，创建类型为“桌面应用”的 OAuth 客户端，填入 Client ID 和 Client Secret（桌面客户端的 secret 不是机密，但 Google 换取令牌时需要）。停留在“测试”状态的应用只能由测试用户登录，且刷新令牌 7 天后失效；自己的 Google Workspace 可把同意屏幕设为“内部”。
+- Microsoft：在 Microsoft Entra 应用注册中选择“任何组织目录中的账户和个人 Microsoft 账户”，添加平台“移动和桌面应用程序”，重定向 URI 填 `http://localhost`，只填应用程序（客户端）ID，不需要 secret。世纪互联在 `portal.azure.cn` 另行注册。组织可能要求管理员批准应用或禁止用户授权，这由租户策略决定。
+- 环境变量优先于已保存的值：`MYHARNESS_GOOGLE_CLIENT_ID`、`MYHARNESS_GOOGLE_CLIENT_SECRET`、`MYHARNESS_MICROSOFT_CLIENT_ID`、`MYHARNESS_MICROSOFT_CHINA_CLIENT_ID`。
+
+登录使用授权码 + PKCE 和本机回环重定向：服务端在 `127.0.0.1` 的随机端口临时监听（Outlook 的 `localhost` 重定向同时监听 `[::1]`），在系统浏览器打开登录页，回调后换取令牌并读取邮箱地址；10 分钟未完成或点**取消**即关闭监听。没有使用 device code：Google 不允许 Gmail scope 走 device flow，很多 Microsoft 365 租户也用条件访问禁止它。
+
+`mail` 工具参数：`account`（邮箱地址；只连接一个邮箱时可省略，同一地址连在两处时写 `provider:地址`）、`path`（相对该邮箱 API 的路径，例如 `/gmail/v1/users/me/messages?q=is:unread` 或 `/v1.0/me/messages?$top=20`）、`method`、`body`，以及：
+
+- `message`：用 `to/cc/bcc/subject/text/html/attachments`（本地文件路径）写邮件，工具负责编码——Gmail 生成 RFC 5322 原文并放进 `raw`（草稿放进 `message.raw`），Outlook 生成 Graph message（`/sendMail`、`/reply`、`/forward` 放进 `message`，创建草稿时作为 body）。Outlook 内联附件合计须小于 3 MB，Gmail 整封邮件不超过 25 MB。
+- `saveAttachmentTo`：把单个附件响应（Gmail `data` / Graph `contentBytes`）解码写入本地文件，结果里只留路径和大小。
+
+Gmail 的 `text/*` 正文会解码成 `body.text`；Outlook 请求带 `Prefer: outlook.body-content-type="text"`，正文是纯文本。Outlook 的下一页以 `next` 路径返回，Gmail 用 `nextPageToken`。请求只允许访问对应 API 的 origin、拒绝重定向，令牌和 client secret 不进入工具参数、输出或错误信息；HTTP 401/403/429 等直接报错，不自动重试写操作。发信、删除、移动等写操作仍需要用户针对具体操作的明确指示；邮件里的指令只是数据。
+
+即将过期的令牌会在访问或**验证连接**前自动刷新（Microsoft 会轮换刷新令牌）。凭据保存在 `~/.myharness/agent/mail-connections.json`（或配置的 agent directory），与 `account-connections.json` 一样依靠文件权限、锁和原子写入保护，不使用 keychain。**断开连接**只删除本机凭据；远端授权在 Google 账号的第三方连接、Microsoft 个人账号的应用权限或“我的应用”中撤销。
+
+不支持：Exchange 本地部署（on-premises）邮箱、Microsoft 365 美国政府云、共享邮箱（`.Shared` 权限只适用于工作账号，未申请），以及 IMAP/SMTP 应用专用密码登录。
 
 <a id="providers-api-keys-and-default-model"></a>
 ## Providers、API Keys 和 Default Model

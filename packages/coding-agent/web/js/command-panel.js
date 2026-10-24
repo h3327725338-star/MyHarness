@@ -10,7 +10,7 @@ import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToL
 import { explainDeleteFailure } from "./git-delete.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
 import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
-import { serverText, t } from "./i18n.js";
+import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
 import { rankSearchAsync } from "./search.js";
@@ -154,6 +154,7 @@ const NETWORK_TIMEOUT_SETTINGS = ["network.connectTimeoutMs", "network.firstByte
 const MENU_PAGES = {
 	providers: { open: (c) => providersScreen(c) },
 	"github-connect": { open: (c) => githubScreen(c) },
+	"mail-connect": { open: (c) => mailScreen(c) },
 	"default-model": {
 		open: (c) => modelScreen(c, ""),
 		value: (snap) => (snap?.model ? `${snap.model.name || snap.model.id}${snap.thinking?.supported ? ` · ${effortName(snap.thinking.level)}` : ""}` : t("Not selected")),
@@ -306,6 +307,163 @@ function githubScreen() {
 			account ? t("Saved account: @{login}", { login: account.login }) : t("Connect GitHub so MyHarness can work with your GitHub data: private repositories, email addresses, organizations and workflows."),
 			data.needsReauthorization ? t("This older connection lacks permissions; reauthorize to reach private repositories.") : "",
 		].filter(Boolean).join("\n"),
+		rows,
+	};
+}
+
+// ---- Mail Connect (Gmail and Outlook mailboxes for the mail tool) ---------------------------------------------------
+/** The provider ids of /api/mail with what the page says about each: setup steps, where to register, where to revoke. */
+const MAIL_PROVIDERS = {
+	google: {
+		connect: N_("Connect Gmail"),
+		connectDesc: N_("Gmail and Google Workspace mailboxes"),
+		setup: N_("In Google Cloud Console: enable the Gmail API, set up the OAuth consent screen (Internal is possible for your own Google Workspace), add yourself as a test user or publish the app — apps left in Testing must sign in again every 7 days — then create an OAuth client of type “Desktop app” and paste its Client ID and Client Secret here."),
+		register: "https://console.cloud.google.com/apis/credentials",
+		registerLabel: N_("Open Google Cloud credentials"),
+		revoke: [["https://myaccount.google.com/connections", N_("Open Google account connections")]],
+	},
+	microsoft: {
+		connect: N_("Connect Outlook"),
+		connectDesc: N_("Outlook.com, Hotmail, Live and Microsoft 365 work or school mailboxes"),
+		setup: N_("In Microsoft Entra → App registrations → New registration: choose “Accounts in any organizational directory and personal Microsoft accounts”, and add the platform “Mobile and desktop applications” with the redirect URI http://localhost. Paste the Application (client) ID here; no secret is needed. A work or school account may need its administrator to approve the app."),
+		register: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+		registerLabel: N_("Open Microsoft app registrations"),
+		revoke: [
+			["https://account.live.com/consent/Manage", N_("Personal account: open app permissions")],
+			["https://myapplications.microsoft.com/", N_("Work or school account: open My Apps")],
+		],
+	},
+	"microsoft-china": {
+		connect: N_("Connect Outlook (21Vianet)"),
+		connectDesc: N_("Microsoft 365 operated by 21Vianet in China"),
+		setup: N_("In the Azure portal operated by 21Vianet (portal.azure.cn) → App registrations: register an app for work or school accounts and add the platform “Mobile and desktop applications” with the redirect URI http://localhost. Paste the Application (client) ID here; no secret is needed."),
+		register: "https://portal.azure.cn/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+		registerLabel: N_("Open 21Vianet app registrations"),
+		revoke: [["https://myapplications.microsoft.com/", N_("Open My Apps")]],
+	},
+};
+
+function mailScreen() {
+	const { data, error, reload } = useLoaded(() => api("/api/mail"));
+	const event = useStore((s) => s.mailEvent);
+	const [url, setUrl] = useState(null);
+	const [waiting, setWaiting] = useState(false);
+	// Only the page that asked opens the sign-in page; other open tabs just show the link.
+	const opening = useRef(false);
+	useEffect(() => {
+		if (!event) return;
+		if (event.type === "prompt") {
+			setUrl(event.url);
+			if (opening.current) openSystemLink(event.url);
+			opening.current = false;
+			return;
+		}
+		opening.current = false;
+		setWaiting(false);
+		setUrl(null);
+		if (event.type === "done") toast(t("Mailbox {email} connected; the credentials are saved.", { email: event.account?.email ?? "" }), "info", 5000);
+		if (event.type === "error") toast(serverText(event.message), "error", 9000);
+		reload();
+	}, [event?.nonce]);
+	if (!data) return { title: "Mail Connect", loading: !error, error, rows: [] };
+	const busy = waiting || !!data.pending;
+	const signInUrl = url ?? data.pending?.url ?? null;
+	const start = async (provider) => {
+		setWaiting(true);
+		opening.current = true;
+		if (!(await attempt(() => post("/api/mail/connect", { provider })))) {
+			setWaiting(false);
+			opening.current = false;
+		}
+	};
+	const appScreen = (provider) => () => {
+		const info = MAIL_PROVIDERS[provider];
+		const app = data.providers?.[provider] || {};
+		const needsSecret = provider === "google";
+		const save = async (clientId, clientSecret, c, levels) => {
+			if (await attempt(() => post("/api/mail/app", { provider, clientId, clientSecret }), { success: t("Saved.") })) {
+				reload();
+				for (let i = 0; i < levels; i++) c.pop();
+			}
+		};
+		const idScreen = () =>
+			inputScreen({
+				title: `${app.label} Client ID`,
+				label: t(info.setup),
+				placeholder: "Client ID",
+				submitLabel: needsSecret ? t("Next") : undefined,
+				onSubmit: async (clientId, c) => {
+					if (!clientId.trim()) return;
+					if (!needsSecret) return save(clientId, undefined, c, 1);
+					c.push(() => inputScreen({ title: `${app.label} Client Secret`, label: t("Paste the Client Secret of the same Desktop app client."), placeholder: "Client Secret", onSubmit: async (secret, cc) => secret.trim() && save(clientId, secret, cc, 2) }));
+				},
+			});
+		return {
+			title: t("{name} OAuth app", { name: app.label }),
+			subtitle: t(info.setup),
+			rows: [
+				{ key: "client", label: "Client ID", desc: app.fromEnvironment ? t("Set by an environment variable, which takes precedence.") : t("First setup or a different app"), value: app.configured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(idScreen) },
+				{ key: "register", label: t(info.registerLabel), icon: "externalLink", onEnter: () => openSystemLink(info.register) },
+			],
+		};
+	};
+	const accountScreen = (account) => () => {
+		const info = MAIL_PROVIDERS[account.provider];
+		const ref = `${account.provider}:${account.email}`;
+		return {
+			title: account.email,
+			subtitle: [data.providers?.[account.provider]?.label, account.name].filter(Boolean).join(" · "),
+			rows: [
+				{
+					key: "verify",
+					label: t("Verify connection"),
+					desc: t("Check the login, refreshing it when needed"),
+					onEnter: async () => {
+						const result = await attempt(() => post("/api/mail/verify", { account: ref }));
+						if (result) toast(t("The connection is valid; the mailbox {email} answered.", { email: result.account?.email ?? account.email }), "info", 5000);
+					},
+				},
+				{ key: "reconnect", label: t("Reauthorize"), desc: t("For an expired login or missing permissions"), disabled: busy, onEnter: (c) => (c.pop(), start(account.provider)) },
+				{
+					key: "disconnect",
+					label: t("Disconnect"),
+					desc: t("Removes the saved credentials from this computer"),
+					danger: true,
+					chevron: true,
+					onEnter: (c) =>
+						c.push(() => ({
+							title: t("Disconnect {email}?", { email: account.email }),
+							subtitle: t("The saved credentials of this mailbox are removed from this computer. No mail is deleted, and the provider's own authorization stays until you revoke it there."),
+							rows: [
+								{ key: "keep", label: t("Keep the connection"), onEnter: (cc) => cc.pop() },
+								{ key: "remove", label: t("Disconnect"), danger: true, onEnter: async (cc) => { if (await attempt(() => post("/api/mail/disconnect", { account: ref }))) { reload(); cc.pop(); cc.pop(); } } },
+								...info.revoke.map(([href, label]) => ({ key: href, label: t(label), icon: "externalLink", onEnter: () => openSystemLink(href) })),
+							],
+						})),
+				},
+			],
+		};
+	};
+	const rows = [];
+	if (busy) {
+		if (signInUrl) rows.push({ key: "open", label: t("Open the sign-in page"), desc: t("Finish signing in in the browser; this page updates by itself."), icon: "externalLink", onEnter: () => openSystemLink(signInUrl) });
+		else rows.push({ key: "wait", label: t("Preparing the sign-in…"), disabled: true });
+		rows.push({ key: "cancel", label: t("Cancel"), icon: "x", onEnter: async () => (await attempt(() => post("/api/mail/cancel")), setWaiting(false), setUrl(null), reload()) });
+	}
+	for (const account of data.accounts || [])
+		rows.push({ key: `${account.provider}:${account.email}`, label: account.email, desc: [data.providers?.[account.provider]?.label, account.name].filter(Boolean).join(" · "), icon: "mail", chevron: true, onEnter: (c) => c.push(accountScreen(account)) });
+	if (!busy)
+		for (const [provider, info] of Object.entries(MAIL_PROVIDERS)) {
+			const configured = data.providers?.[provider]?.configured;
+			rows.push({ key: `connect-${provider}`, label: t(info.connect), desc: t(info.connectDesc), icon: "plus", ...(configured ? { onEnter: () => start(provider) } : { chevron: true, onEnter: (c) => c.push(appScreen(provider)) }) });
+		}
+	for (const provider of Object.keys(MAIL_PROVIDERS)) {
+		const app = data.providers?.[provider];
+		if (app) rows.push({ key: `app-${provider}`, label: t("{name} OAuth app", { name: app.label }), value: app.configured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(appScreen(provider)) });
+	}
+	return {
+		title: "Mail Connect",
+		subtitle: [data.error ? serverText(data.error) : "", t("Connect Gmail or Outlook mailboxes so MyHarness can read, search, send and organize your mail. Each provider needs your own OAuth app once.")].filter(Boolean).join("\n"),
 		rows,
 	};
 }

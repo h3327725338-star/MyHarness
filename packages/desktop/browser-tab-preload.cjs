@@ -6,15 +6,16 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 // ---- Engine identity ---------------------------------------------------------------------------------------------
-// The engine reports itself as Chromium in its client hints, while the user agent of this tab is Chrome's (WhatsApp Web
-// and Teams refuse the Electron token; see chromeUserAgent in browser-view.cjs). A real Chrome lists its own brand next
-// to Chromium, so the two signals disagreed in a way no ordinary browser does, which is one more reason for a site's bot
-// check to distrust the page. The brand is *added* to the engine's own list on `NavigatorUAData.prototype`: every value
-// the page reads is still a real NavigatorUAData with its native type, and only the brand list gains the entry a real
-// Chrome reports. Version, platform, mobile flag and every other value stay exactly what the engine reported.
+// The engine reports itself as Chromium in its client hints, while on a few sites the user agent of this tab is Chrome's
+// (WhatsApp Web and Teams refuse the Electron token; see CHROME_UA_SITES in browser-view.cjs). A real Chrome lists its
+// own brand next to Chromium, so on those pages the two signals would disagree in a way no ordinary browser does. The
+// brand is *added* to the engine's own list on `NavigatorUAData.prototype`: every value the page reads is still a real
+// NavigatorUAData with its native type, and only the brand list gains the entry a real Chrome reports. A page that
+// sends the engine's own user agent (it names Electron) is left completely untouched.
 const chromeBrand = (() => {
-  const match = /Chrome\/(\d+)\./u.exec(navigator.userAgent || '');
-  return match ? { brand: 'Google Chrome', version: match[1] } : null;
+  const agent = navigator.userAgent || '';
+  const match = /Chrome\/(\d+)\./u.exec(agent);
+  return match && !/\bElectron\//u.test(agent) ? { brand: 'Google Chrome', version: match[1] } : null;
 })();
 if (chromeBrand) {
   try {

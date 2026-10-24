@@ -6,6 +6,7 @@
 export const SETTINGS_MENU_PAGES = {
 	providers: "key",
 	"github-connect": "gitBranch",
+	"mail-connect": "mail",
 	"default-model": "cpu",
 	"web-search": "globe",
 	"context-window": "layers",

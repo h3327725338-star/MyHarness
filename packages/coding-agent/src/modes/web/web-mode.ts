@@ -28,6 +28,7 @@ import { registerAccountRoutes } from "./routes-accounts.ts";
 import { registerCoreRoutes } from "./routes-core.ts";
 import { registerFileRoutes, registerFolderBrowser } from "./routes-files.ts";
 import { registerGitRoutes } from "./routes-git.ts";
+import { registerMailRoutes } from "./routes-mail.ts";
 import { registerModeRoutes } from "./routes-modes.ts";
 import { registerProviderRoutes } from "./routes-providers.ts";
 import { registerSessionRoutes } from "./routes-sessions.ts";
@@ -218,6 +219,7 @@ export async function runWebMode(
 	registerSettingsRoutes(server, host);
 	registerProviderRoutes(server, host, hub);
 	registerAccountRoutes(server);
+	registerMailRoutes(server);
 	// Google Drive sync: the engine polls in the background; the routes only expose status and configuration.
 	const syncService = SyncService.create({
 		agentDir: runtimeHost.services.agentDir,

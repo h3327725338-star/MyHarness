@@ -63,14 +63,14 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (read, bash, pwsh, edit, write, symbols, github)
+	 * - "builtin": disable the default built-in tools (read, bash, pwsh, edit, write, symbols, github, mail)
 	 *   but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, MyHarness enables the default built-in tools (read, bash, pwsh, edit, write, symbols, github)
+	 * When omitted, MyHarness enables the default built-in tools (read, bash, pwsh, edit, write, symbols, github, mail)
 	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
 	 */
@@ -282,6 +282,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						"symbols",
 						"apply_rename",
 						"github",
+						"mail",
 						"memory_search",
 						"memory_get",
 						"memory_delete",

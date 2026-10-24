@@ -261,6 +261,8 @@ export const state = {
 	loginEvent: null,
 	/** Latest GitHub Connect progress from the server (device code, done, error), with a nonce per event. */
 	githubEvent: null,
+	/** Latest Mail Connect progress from the server (sign-in URL, done, error), with a nonce per event. */
+	mailEvent: null,
 	view: {
 		shortcuts: validShortcuts(prefs.shortcuts),
 		sidebarOpen: prefs.sidebarOpen ?? true,
@@ -2089,6 +2091,7 @@ function connectEvents() {
 	});
 	on("login_event", (d) => set({ loginEvent: d.type === "done" ? null : d }));
 	on("github_event", (d) => set({ githubEvent: { ...d, nonce: Date.now() } }));
+	on("mail_event", (d) => set({ mailEvent: { ...d, nonce: Date.now() } }));
 	on("generation_speed", (d) => {
 		if (state.snap) state.snap = { ...state.snap, speed: d.speed };
 		emit();

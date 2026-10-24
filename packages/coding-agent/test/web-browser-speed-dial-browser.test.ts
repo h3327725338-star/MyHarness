@@ -119,11 +119,13 @@ try {
 	const groupTile=tiles().find(tile=>tile.querySelector('.sd-icon.group'));
 	groupTile.querySelector('.sd-button').click();
 	check(await until(()=>!!document.querySelector('.sd-group')),'the group did not open');
+	check(document.querySelector('.sd-group').getAnimations().length>0,'the group does not grow out of its tile');
 	const title=document.querySelector('.sd-group-title');
 	title.value='Work';
 	title.dispatchEvent(new Event('change',{bubbles:true}));
 	check(await until(()=>saves().length===3&&saves()[2].items.some(i=>i.type==='group'&&i.title==='Work')),'renaming the group did not save');
 	document.querySelector('.sd-group-backdrop').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+	check(!!document.querySelector('.sd-group')&&document.querySelector('.sd-group').getAnimations().length>0,'the group vanished instead of folding back into its tile');
 	check(await until(()=>!document.querySelector('.sd-group')),'clicking outside did not close the group');
 
 	mark('delete');

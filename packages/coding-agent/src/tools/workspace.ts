@@ -24,6 +24,42 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SLOW_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_CHARS = 20_000;
+const MAX_BATCH_STEPS = 30;
+/** Input that may start a navigation: afterwards the tool waits for it and says where the page went. */
+const FOLLOW_OPERATIONS = new Set(["click", "type", "mouse", "key"]);
+/** Operations that take `screenshot: true` and attach the picture of the tab after acting. */
+const LOOK_OPERATIONS = new Set([
+	"click",
+	"type",
+	"mouse",
+	"key",
+	"navigate",
+	"back",
+	"forward",
+	"reload",
+	"scroll",
+	"login",
+	"wait",
+]);
+/** What a batch step may do: page actions and reads, never tab management or anything outside the page. */
+const BATCH_OPERATIONS = new Set([
+	"click",
+	"type",
+	"mouse",
+	"key",
+	"scroll",
+	"wait",
+	"navigate",
+	"back",
+	"forward",
+	"reload",
+	"text",
+	"interactive",
+	"find",
+	"exec",
+	"screenshot",
+	"state",
+]);
 /** Screenshots are debug artifacts in the temp directory; keep the newest ones and delete older ones. */
 const SCREENSHOT_KEEP = 50;
 
@@ -212,12 +248,75 @@ const workspaceParametersUnion = Type.Union([
 			url: Type.String({ minLength: 1 }),
 			tabId: tabIdSchema,
 			timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000 })),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
 	),
-	Type.Object({ operation: Type.Literal("back"), tabId: tabIdSchema }, { additionalProperties: false }),
-	Type.Object({ operation: Type.Literal("forward"), tabId: tabIdSchema }, { additionalProperties: false }),
-	Type.Object({ operation: Type.Literal("reload"), tabId: tabIdSchema }, { additionalProperties: false }),
+	Type.Object(
+		{
+			operation: Type.Literal("back"),
+			tabId: tabIdSchema,
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("forward"),
+			tabId: tabIdSchema,
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("reload"),
+			tabId: tabIdSchema,
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("wait"),
+			tabId: tabIdSchema,
+			selector: Type.Optional(Type.String({ minLength: 1, description: "Until this CSS selector is visible" })),
+			text: Type.Optional(Type.String({ minLength: 1, description: "Until the page shows this text" })),
+			label: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Visible text or accessible name of the element (e.g. a button's words)",
+				}),
+			),
+			gone: Type.Optional(Type.Boolean({ description: "Wait until it disappears instead" })),
+			timeoutMs: Type.Optional(Type.Integer({ minimum: 200, maximum: 60000, description: "Default 10000" })),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
+		},
+		{
+			additionalProperties: false,
+			description: "Without selector/text/label: until the page has loaded and its network is quiet",
+		},
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("batch"),
+			tabId: tabIdSchema,
+			steps: Type.Array(
+				Type.Object(
+					{
+						operation: Type.String({
+							description:
+								"click, type, mouse, key, scroll, wait, navigate, back, forward, reload, text, interactive, find, exec, screenshot or state",
+						}),
+					},
+					{ additionalProperties: true, description: "One step: the same fields as that operation" },
+				),
+				{ minItems: 1, maxItems: MAX_BATCH_STEPS },
+			),
+			screenshot: Type.Optional(Type.Boolean({ description: "Screenshot after the last step (default true)" })),
+		},
+		{ additionalProperties: false },
+	),
 	Type.Object({ operation: Type.Literal("stop"), tabId: tabIdSchema }, { additionalProperties: false }),
 	Type.Object({ operation: Type.Literal("state"), tabId: tabIdSchema }, { additionalProperties: false }),
 	Type.Object(
@@ -236,6 +335,15 @@ const workspaceParametersUnion = Type.Union([
 			tabId: tabIdSchema,
 			selector: Type.Optional(Type.String({ minLength: 1, description: "CSS selector" })),
 			index: Type.Optional(Type.Integer({ minimum: 0, description: "Index in operation interactive" })),
+			label: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Visible text or accessible name of the element (e.g. a button's words)",
+				}),
+			),
+			double: Type.Optional(Type.Boolean({ description: "Double-click" })),
+			button: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right"), Type.Literal("middle")])),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
 	),
@@ -245,11 +353,22 @@ const workspaceParametersUnion = Type.Union([
 			tabId: tabIdSchema,
 			selector: Type.Optional(Type.String({ minLength: 1 })),
 			index: Type.Optional(Type.Integer({ minimum: 0 })),
+			label: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Visible text or accessible name of the element (e.g. a button's words)",
+				}),
+			),
+			replace: Type.Optional(
+				Type.Boolean({ description: "Replace what the field holds (default true); false appends at the end" }),
+			),
+			enter: Type.Optional(Type.Boolean({ description: "Press Enter after typing (submit a search or form)" })),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 			x: Type.Optional(Type.Number({ description: "Click this point first (CSS px of the screenshot), then type" })),
 			y: Type.Optional(Type.Number()),
 			text: Type.String({
 				description:
-					"With selector/index the field's value is set; otherwise the text is typed into the focused element",
+					"With selector/index/label the element is clicked and the text typed into it (a <select> picks the matching option); otherwise it is typed into the focused element",
 			}),
 		},
 		{ additionalProperties: false },
@@ -271,8 +390,21 @@ const workspaceParametersUnion = Type.Union([
 				],
 				{ description: "move = hover" },
 			),
-			x: Type.Number({ description: "CSS px from the left of the page viewport (same frame as screenshot)" }),
-			y: Type.Number({ description: "CSS px from the top of the page viewport" }),
+			x: Type.Optional(
+				Type.Number({ description: "CSS px from the left of the page viewport (same frame as screenshot)" }),
+			),
+			y: Type.Optional(Type.Number({ description: "CSS px from the top of the page viewport" })),
+			selector: Type.Optional(Type.String({ minLength: 1, description: "Aim at this element instead of x,y" })),
+			index: Type.Optional(
+				Type.Integer({ minimum: 0, description: "Aim at this interactive element instead of x,y" }),
+			),
+			label: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Visible text or accessible name of the element (e.g. a button's words)",
+				}),
+			),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 			toX: Type.Optional(Type.Number({ description: "drag: end point" })),
 			toY: Type.Optional(Type.Number()),
 			deltaX: Type.Optional(Type.Number({ description: "wheel: horizontal scroll in px" })),
@@ -295,6 +427,7 @@ const workspaceParametersUnion = Type.Union([
 				description: 'Space-separated keys or combinations, e.g. "Enter", "Control+A Backspace", "Shift+Tab"',
 			}),
 			repeat: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
 	),
@@ -348,8 +481,17 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("scroll"),
 			tabId: tabIdSchema,
-			x: Type.Optional(Type.Number()),
-			y: Type.Optional(Type.Number()),
+			x: Type.Optional(Type.Number({ description: "Scroll by this many px to the right" })),
+			y: Type.Optional(Type.Number({ description: "Scroll by this many px down" })),
+			selector: Type.Optional(Type.String({ minLength: 1, description: "Scroll this element into view instead" })),
+			index: Type.Optional(Type.Integer({ minimum: 0 })),
+			label: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Visible text or accessible name of the element (e.g. a button's words)",
+				}),
+			),
+			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
 	),
@@ -416,6 +558,11 @@ const parameters = Type.Unsafe<WorkspaceToolInput>({
 	type: "object",
 	anyOf: workspaceParametersUnion.anyOf,
 });
+
+type WorkspaceResult = {
+	content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+	details: WorkspaceToolDetails;
+};
 
 export interface WorkspaceTabSummary {
 	id: string;
@@ -576,6 +723,952 @@ export function createWorkspaceToolDefinition(
 		return { tabs, activeId: state.activeId, panelOpen: state.panelOpen };
 	};
 
+	const runOne = async (input: WorkspaceToolInput): Promise<WorkspaceResult> => {
+		const operation = String(input?.operation || "");
+		const fields = input as Record<string, unknown>;
+		const tabId = typeof fields.tabId === "string" ? fields.tabId : undefined;
+		const maxChars = Number(fields.maxChars) || DEFAULT_MAX_CHARS;
+		const slow = operation === "ax" || operation === "screenshot" || operation === "exec" || operation === "navigate";
+		const timeout = slow ? SLOW_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+		const timeoutMs = Number(fields.timeoutMs) || timeout;
+
+		switch (operation) {
+			case "status": {
+				const available = desktopWorkspaceAvailable();
+				const state = available ? await pageTabs().catch(() => null) : null;
+				const known = available ? await browserTabs().catch(() => []) : [];
+				const lines = [
+					`[workspace] desktop_host=${available ? "connected" : "unavailable"}`,
+					`  page_tabs=${state ? state.tabs.length : 0} browser_tabs=${known.length} panel=${state?.panelOpen ? "open" : "closed"}`,
+					available
+						? "  Ready. Use tabs, open, close, activate, navigate, click, type, media and the rest."
+						: "  Only available in the desktop app; nothing can be controlled from this process.",
+				];
+				return { content: [{ type: "text", text: lines.join("\n") }], details: { operation } };
+			}
+			case "tabs": {
+				const state = await mergedTabs();
+				const lines = [
+					`[workspace] tabs=${state.tabs.length} active=${state.activeId ?? "(none)"} panel=${state.panelOpen ? "open" : "closed"}`,
+				];
+				for (const tab of state.tabs) lines.push(formatTab(tab));
+				if (state.tabs.length === 0) lines.push("  (no tabs open yet; use open)");
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { operation, tabs: state.tabs, activeId: state.activeId },
+				};
+			}
+			case "open": {
+				const type = String((input as { type?: string }).type || "");
+				if (type === "browser") {
+					const wanted = String((input as { bookmark?: string }).bookmark || "");
+					let url = String((input as { url?: string }).url || "");
+					if (wanted) {
+						const list = await bookmarkList();
+						const match =
+							list.find((entry) => entry.id === wanted) ||
+							list.find((entry) => entry.title === wanted) ||
+							list.find((entry) => entry.title.toLowerCase() === wanted.toLowerCase());
+						if (!match)
+							throw new Error(
+								`workspace: there is no bookmark ${JSON.stringify(wanted)}; list them with operation=bookmarks`,
+							);
+						url = match.url;
+					}
+					let parsed: URL;
+					try {
+						parsed = new URL(url);
+					} catch {
+						throw new Error("workspace: open with type=browser needs a valid http(s) url or a bookmark");
+					}
+					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+						throw new Error("workspace: only http and https addresses are allowed");
+					const background = (input as { background?: boolean }).background === true;
+					const opened = await page({
+						action: "open",
+						tab: { type: "browser", url: parsed.href },
+						...(background ? { background: true } : {}),
+					});
+					const state = opened as { tabs?: WorkspaceTabSummary[]; activeId?: string | null };
+					const tabs = state?.tabs || [];
+					const tab = background
+						? tabs.filter((entry) => entry.type === "browser" && entry.url === parsed.href).at(-1)
+						: tabs.find((entry) => entry.id === state?.activeId) || tabs.at(-1);
+					if (!tab) throw new Error("workspace: the page did not report the browser tab it opened");
+					// The page owns the tab id and its panel creates the host view on mount; ensure is idempotent, so this
+					// call creates the view now when the panel has not mounted yet and never loads the page twice.
+					await browser({ action: "ensure", tabId: tab.id, url: parsed.href }, SLOW_TIMEOUT_MS);
+					const live = await settle(tab.id);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] opened browser tab ${tab.id}${background ? " (background)" : ""}\n  ${parsed.href}\n  state=${JSON.stringify(live)}`,
+							},
+						],
+						details: { operation, activeId: tab.id, page: state as Record<string, unknown>, browser: live },
+					};
+				}
+				if (type === "file") {
+					const path = String((input as { path?: string }).path || "");
+					if (!path) throw new Error("workspace: open with type=file needs a path");
+					const opened = (await page({ action: "open", tab: { type: "file", path } })) as {
+						tabs?: WorkspaceTabSummary[];
+						activeId?: string | null;
+					};
+					const tab = (opened?.tabs || []).find((entry) => entry.id === opened?.activeId);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] opened file tab ${tab?.id || `file:${path}`}\n  path=${path}\n  tabs=${opened?.tabs?.length ?? 0}`,
+							},
+						],
+						details: {
+							operation,
+							activeId: opened?.activeId ?? null,
+							page: opened as Record<string, unknown>,
+						},
+					};
+				}
+				throw new Error("workspace: open needs type=browser with url, or type=file with path");
+			}
+			case "bookmarks": {
+				const list = await bookmarkList();
+				const lines = list.map((entry) => `  ${entry.id} ${JSON.stringify(entry.title)} ${entry.url}`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] bookmarks=${list.length} (trusted sites: full control, saved-login sign-in, permissions allowed)\n${lines.join("\n") || "  (none yet; the user adds them with the star in the browser bar)"}`,
+						},
+					],
+					details: { operation, result: list },
+				};
+			}
+			case "login": {
+				const id = await resolveBrowserTab(tabId);
+				const value = (await browser({
+					action: "login",
+					tabId: id,
+					submit: (input as { submit?: boolean }).submit !== false,
+				})) as {
+					ok?: boolean;
+					username?: string;
+					filledPassword?: boolean;
+					submitted?: boolean;
+					reason?: string;
+				};
+				if (!value?.ok) throw new Error(`workspace: the sign-in did not run: ${value?.reason || "no answer"}`);
+				// A submit starts a navigation: report where the page went instead of assuming the sign-in worked.
+				if (value.submitted) await new Promise((resolve) => setTimeout(resolve, 1200));
+				const live = value.submitted
+					? await settle(id).catch((error: Error) => ({ error: error.message }))
+					: undefined;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] login ${id} as ${JSON.stringify(value.username || "")} password=${value.filledPassword ? "filled" : "not on this page (two-step sign-in: call login again on the next page)"} submitted=${value.submitted ? "yes" : "no"}${live ? `\n  state=${JSON.stringify(live)}` : ""}\n  Check the page (screenshot/text) to confirm the sign-in.`,
+						},
+					],
+					details: { operation, activeId: id, result: value, browser: live },
+				};
+			}
+			case "answer_permission": {
+				const requestId = String((input as { requestId?: string }).requestId || "");
+				const allow = (input as { allow?: boolean }).allow === true;
+				const value = (await browser({ action: "permission", requestId, allow, by: "agent" })) as {
+					allowed?: boolean;
+					origin?: string;
+					permission?: string;
+				};
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] ${value?.allowed ? "allowed" : "denied"} ${value?.permission ?? ""} for ${value?.origin ?? ""} (this app session)`,
+						},
+					],
+					details: { operation, result: value },
+				};
+			}
+			case "mouse": {
+				const id = await resolveBrowserTab(tabId);
+				const fieldsIn = input as Record<string, unknown>;
+				const value = (await browser(
+					{
+						action: "mouse",
+						tabId: id,
+						kind: fieldsIn.action,
+						x: fieldsIn.x,
+						y: fieldsIn.y,
+						selector: fieldsIn.selector,
+						index: fieldsIn.index,
+						label: fieldsIn.label,
+						toX: fieldsIn.toX,
+						toY: fieldsIn.toY,
+						deltaX: fieldsIn.deltaX,
+						deltaY: fieldsIn.deltaY,
+						button: fieldsIn.button,
+						modifiers: fieldsIn.modifiers,
+						// A click that starts a download waits for the file, so it may take longer than other commands.
+					},
+					SLOW_TIMEOUT_MS,
+				)) as {
+					ok?: boolean;
+					target?: Record<string, unknown>;
+					viewport?: { width: number; height: number };
+					downloads?: unknown[];
+				};
+				if (!value?.ok) throw new Error("workspace: the mouse action returned no result");
+				if (Number.isFinite(fieldsIn.x) !== Number.isFinite(fieldsIn.y))
+					throw new Error("workspace: mouse needs both x and y");
+				const point = {
+					x: (value as { x?: number }).x ?? fieldsIn.x,
+					y: (value as { y?: number }).y ?? fieldsIn.y,
+				};
+				const where =
+					fieldsIn.action === "drag"
+						? `(${point.x}, ${point.y}) → (${fieldsIn.toX}, ${fieldsIn.toY})`
+						: `(${point.x}, ${point.y})`;
+				const started = value.downloads?.length
+					? `\n  downloads started by this click=${value.downloads.length}\n${JSON.stringify(value.downloads, null, 1)}`
+					: "";
+				// The point was on a plain container next to a control (e.g. between two links): say so plainly.
+				const near = value.target?.missed
+					? (value.target.nearest as Record<string, unknown> | undefined)
+					: undefined;
+				const missed = near
+					? `\n  note: the point is not on a control; the nearest one is ${String(near.tag)}${near.text ? ` "${String(near.text)}"` : ""} ${String(near.distance)}px away, centre (${String(near.x)}, ${String(near.y)}). Aim at that centre or use label.`
+					: "";
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] mouse ${String(fieldsIn.action)} ${where} in ${id}${value.target ? ` on ${JSON.stringify(value.target)}` : ""}${missed}${started}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "key": {
+				const id = await resolveBrowserTab(tabId);
+				const keys = String((input as { keys?: string }).keys || "");
+				const value = (await browser({
+					action: "keys",
+					tabId: id,
+					keys,
+					repeat: (input as { repeat?: number }).repeat,
+				})) as { ok?: boolean; focused?: Record<string, unknown> | null };
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] pressed ${keys} in ${id} → focused ${JSON.stringify(value?.focused ?? null)}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "close":
+			case "activate":
+			case "close_others": {
+				if (!tabId) throw new Error(`workspace: ${operation} needs a tabId`);
+				const state = (await page({
+					action: operation === "close_others" ? "closeOthers" : operation,
+					tabId,
+				})) as {
+					tabs?: WorkspaceTabSummary[];
+					activeId?: string | null;
+				};
+				if (operation === "close" && (state.tabs || []).some((entry) => entry.id === tabId))
+					throw new Error(
+						`workspace: ${tabId} is still in the tab list after closing it, so the close did not take effect`,
+					);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] ${operation} ${tabId}\n  tabs=${state.tabs?.length ?? 0} active=${state.activeId ?? "(none)"}`,
+						},
+					],
+					details: { operation, activeId: state.activeId ?? null, page: state as Record<string, unknown> },
+				};
+			}
+			case "move": {
+				if (!tabId) throw new Error("workspace: move needs a tabId");
+				const beforeId = String((input as { beforeId?: string }).beforeId || "");
+				if (!beforeId) throw new Error("workspace: move needs a beforeId");
+				const state = (await page({ action: "move", fromId: tabId, toId: beforeId })) as {
+					tabs?: WorkspaceTabSummary[];
+				};
+				const order = (state.tabs || []).map((entry) => entry.id);
+				const from = order.indexOf(tabId);
+				const before = order.indexOf(beforeId);
+				if (from < 0 || before < 0 || from > before)
+					throw new Error(`workspace: the move did not take effect; the order is ${order.join(" , ")}`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] moved ${tabId} before ${beforeId}\n  order=${order.join(" , ")}`,
+						},
+					],
+					details: { operation, tabs: state.tabs || [], activeId: null },
+				};
+			}
+			case "reopen": {
+				const state = (await page({ action: "reopen" })) as {
+					tabs?: WorkspaceTabSummary[];
+					activeId?: string | null;
+				};
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] reopen → active=${state.activeId ?? "(none)"} tabs=${state.tabs?.length ?? 0}`,
+						},
+					],
+					details: { operation, activeId: state.activeId ?? null, page: state as Record<string, unknown> },
+				};
+			}
+			case "navigate": {
+				const url = String((input as { url?: string }).url || "");
+				let parsed: URL;
+				try {
+					parsed = new URL(url);
+				} catch {
+					throw new Error("workspace: navigate needs a valid http(s) url");
+				}
+				if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+					throw new Error("workspace: only http and https addresses are allowed");
+				const id = await resolveBrowserTab(tabId);
+				const state = await browser({ action: "navigate", tabId: id, url: parsed.href }, timeoutMs);
+				const actual = (state as { url?: string; error?: string }) || {};
+				if (actual.error) throw new Error(`workspace: navigation failed: ${actual.error}`);
+				return {
+					content: [{ type: "text", text: `[workspace] navigate ${id}\n  url=${actual.url || parsed.href}` }],
+					details: { operation, activeId: id, browser: state },
+				};
+			}
+			case "back":
+			case "forward":
+			case "reload":
+			case "stop": {
+				const id = await resolveBrowserTab(tabId);
+				await browser({ action: operation, tabId: id });
+				// The command is asynchronous in the browser: read the state back instead of reporting success blindly.
+				await new Promise((resolve) => setTimeout(resolve, operation === "reload" ? 1000 : 300));
+				const state = await browser({ action: "state", tabId: id });
+				return {
+					content: [{ type: "text", text: `[workspace] ${operation} ${id}\n  state=${JSON.stringify(state)}` }],
+					details: { operation, activeId: id, browser: state },
+				};
+			}
+			case "wait": {
+				const id = await resolveBrowserTab(tabId);
+				const wanted = input as { selector?: string; text?: string; label?: string; gone?: boolean };
+				const limit = Number((input as { timeoutMs?: number }).timeoutMs) || 10_000;
+				const value = (await browser(
+					{
+						action: "wait",
+						tabId: id,
+						selector: wanted.selector,
+						text: wanted.text,
+						label: wanted.label,
+						gone: wanted.gone === true,
+						timeoutMs: limit,
+					},
+					limit + 15_000,
+				)) as { ok?: boolean; timeout?: boolean; waitedMs?: number; url?: string };
+				const what = wanted.selector
+					? `selector=${wanted.selector}`
+					: wanted.text
+						? `text=${JSON.stringify(wanted.text)}`
+						: wanted.label
+							? `label=${JSON.stringify(wanted.label)}`
+							: "page load and quiet network";
+				if (!value?.ok)
+					throw new Error(
+						`workspace: waited ${value?.waitedMs ?? limit} ms for ${wanted.gone ? "the disappearance of " : ""}${what}; it did not happen (url=${value?.url ?? "?"})`,
+					);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] waited ${value.waitedMs} ms for ${wanted.gone ? "the disappearance of " : ""}${what} in ${id}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "state": {
+				const id = await resolveBrowserTab(tabId);
+				const state = await browser({ action: "state", tabId: id });
+				return {
+					content: [{ type: "text", text: `[workspace] state ${id}\n  ${JSON.stringify(state)}` }],
+					details: { operation, activeId: id, browser: state },
+				};
+			}
+			case "text": {
+				const id = await resolveBrowserTab(tabId);
+				const value = (await browser({ action: "text", tabId: id })) as { result?: string };
+				const cut = truncate(String(value?.result ?? ""), maxChars);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] text ${id}${cut.truncated ? " (truncated)" : ""}\n${cut.text}`,
+						},
+					],
+					details: { operation, activeId: id, result: cut.truncated ? `${cut.text}…` : cut.text },
+				};
+			}
+			case "dom": {
+				const id = await resolveBrowserTab(tabId);
+				const value = (await browser({ action: "dom", tabId: id })) as { html?: string; text?: string };
+				const html = truncate(String(value?.html ?? ""), maxChars);
+				const text = truncate(String(value?.text ?? ""), Math.min(maxChars, 4_000));
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] dom ${id}${html.truncated ? " (html truncated)" : ""}\n[text]\n${text.text}\n[html]\n${html.text}`,
+						},
+					],
+					details: {
+						operation,
+						activeId: id,
+						result: { html: html.text, text: text.text, truncated: html.truncated },
+					},
+				};
+			}
+			case "ax": {
+				const id = await resolveBrowserTab(tabId);
+				const value = (await browser({ action: "ax", tabId: id }, SLOW_TIMEOUT_MS)) as {
+					nodes?: Array<Record<string, unknown>>;
+				};
+				const nodes = Array.isArray(value?.nodes) ? value.nodes : [];
+				const visible = nodes.filter((node) => node.ignored !== true && (node.role || node.name));
+				const lines = visible.slice(0, 300).map((node) => {
+					const role = String(node.role ?? "");
+					const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
+					const extra = node.value !== undefined ? ` value=${JSON.stringify(node.value)}` : "";
+					return `  ${role}${name}${extra}`;
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] ax ${id} nodes=${nodes.length} shown=${Math.min(300, visible.length)}${visible.length > 300 ? " (truncated)" : ""}\n${lines.join("\n")}`,
+						},
+					],
+					details: { operation, activeId: id, result: { nodes: visible.length } },
+				};
+			}
+			case "interactive": {
+				const id = await resolveBrowserTab(tabId);
+				const value = (await browser({ action: "interactive", tabId: id })) as {
+					elements?: Array<Record<string, unknown>>;
+				};
+				const elements = Array.isArray(value?.elements) ? value.elements : [];
+				// Hidden elements keep their index (click/type address the same list) but are left out of the listing; the
+				// ones scrolled out of view are marked, since click/type/scroll by index or label bring them into view.
+				const shown = elements.filter((element) => element.visible !== false);
+				const lines = shown.map((element) => {
+					const rect = element.rect as { x?: number; y?: number; width?: number; height?: number } | undefined;
+					const at =
+						rect && Number(rect.width) > 0 && Number(rect.height) > 0
+							? ` @(${Math.round(Number(rect.x) + Number(rect.width) / 2)},${Math.round(Number(rect.y) + Number(rect.height) / 2)})`
+							: "";
+					const state = [
+						element.value ? `value=${JSON.stringify(element.value)}` : "",
+						element.checked === true ? "checked" : element.checked === false ? "unchecked" : "",
+						element.disabled ? "disabled" : "",
+						element.inView === false ? "off-screen" : "",
+					].filter(Boolean);
+					return `  ${element.index} ${element.tag}${element.type ? `[${element.type}]` : ""}${element.role ? `(${element.role})` : ""} ${JSON.stringify(element.label || element.name || element.href || "")}${at}${state.length ? ` (${state.join(", ")})` : ""}`;
+				});
+				const hidden = elements.length - shown.length;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] interactive ${id} count=${shown.length}${hidden ? ` (+${hidden} hidden)` : ""}; click/type/mouse/scroll take an index or label\n${lines.join("\n")}`,
+						},
+					],
+					details: { operation, activeId: id, result: elements },
+				};
+			}
+			case "click": {
+				const id = await resolveBrowserTab(tabId);
+				const selector = (input as { selector?: string }).selector;
+				const index = (input as { index?: number }).index;
+				const label = (input as { label?: string }).label;
+				const value = (await browser(
+					{
+						action: "click",
+						tabId: id,
+						selector,
+						index,
+						label,
+						double: (input as { double?: boolean }).double === true,
+						button: (input as { button?: string }).button,
+					},
+					SLOW_TIMEOUT_MS,
+				)) as {
+					ok?: boolean;
+					error?: string;
+					text?: string;
+					tag?: string;
+					x?: number;
+					y?: number;
+					how?: string;
+					covered?: Record<string, unknown>;
+					downloads?: unknown[];
+				};
+				if (!value?.ok)
+					throw new Error(`workspace: the click failed: ${value?.error || "the page returned no result"}`);
+				const how =
+					value.how === "script"
+						? ` (script click: ${value.covered ? `covered by ${JSON.stringify(value.covered)}` : "not on screen"})`
+						: ` at (${value.x}, ${value.y})`;
+				const started = value.downloads?.length
+					? `\n  downloads started by this click=${value.downloads.length}\n${JSON.stringify(value.downloads, null, 1)}`
+					: "";
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] clicked ${id} ${label ? `label=${JSON.stringify(label)}` : selector ? `selector=${selector}` : `index=${index}`} → ${value.tag ?? ""} ${JSON.stringify(value.text || "")}${how}${started}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "type": {
+				const id = await resolveBrowserTab(tabId);
+				const selector = (input as { selector?: string }).selector;
+				const index = (input as { index?: number }).index;
+				const text = String((input as { text?: string }).text ?? "");
+				const label = (input as { label?: string }).label;
+				if (!selector && !Number.isInteger(index) && !label) {
+					// No element named: type where the keyboard is, after clicking the given point if there is one.
+					const x = (input as { x?: number }).x;
+					const y = (input as { y?: number }).y;
+					if (Number.isFinite(x) !== Number.isFinite(y)) throw new Error("workspace: type needs both x and y");
+					if (Number.isFinite(x)) await browser({ action: "mouse", tabId: id, kind: "click", x, y });
+					const typed = (await browser({ action: "insertText", tabId: id, text })) as {
+						focused?: Record<string, unknown> | null;
+					};
+					if (typed?.focused && (input as { enter?: boolean }).enter === true)
+						await browser({ action: "keys", tabId: id, keys: "Enter" });
+					if (!typed?.focused)
+						throw new Error(
+							"workspace: nothing on the page has the keyboard focus; click the field first (mouse click, or type with x/y)",
+						);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `[workspace] typed into the focused element of ${id} → ${JSON.stringify(typed.focused)}`,
+							},
+						],
+						details: { operation, activeId: id, result: typed },
+					};
+				}
+				const value = (await browser(
+					{
+						action: "type",
+						tabId: id,
+						selector,
+						index,
+						label,
+						text,
+						replace: (input as { replace?: boolean }).replace,
+						enter: (input as { enter?: boolean }).enter === true,
+					},
+					SLOW_TIMEOUT_MS,
+				)) as {
+					ok?: boolean;
+					error?: string;
+					value?: string;
+					how?: string;
+					tag?: string;
+				};
+				if (!value?.ok)
+					throw new Error(`workspace: typing failed: ${value?.error || "the page returned no result"}`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] typed into ${id} ${label ? `label=${JSON.stringify(label)}` : selector ? `selector=${selector}` : `index=${index}`} → ${value.tag ?? ""} value=${JSON.stringify(value.value ?? "")}${value.how === "script" ? " (the page refused keyboard input; the value was set directly)" : ""}${(input as { enter?: boolean }).enter ? " + Enter" : ""}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "upload": {
+				const id = await resolveBrowserTab(tabId);
+				const file = String((input as { path?: string }).path || "");
+				if (!file) throw new Error("workspace: upload needs a workspace file path");
+				const selector = (input as { selector?: string }).selector;
+				const index = (input as { index?: number }).index;
+				if (!selector && !Number.isInteger(index))
+					throw new Error("workspace: upload needs the selector or index of the page's file input");
+				const value = (await browser({ action: "upload", tabId: id, path: file, selector, index })) as {
+					ok?: boolean;
+					name?: string;
+					size?: number;
+					count?: number;
+					path?: string;
+					error?: string;
+				};
+				if (!value?.ok)
+					throw new Error(`workspace: the upload failed: ${value?.error || "the page returned no result"}`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] uploaded ${value.name || file} (${value.size ?? 0} bytes) into ${id}\n  path=${value.path || file} files=${value.count ?? 1}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "find": {
+				const id = await resolveBrowserTab(tabId);
+				const text = String((input as { text?: string }).text || "");
+				if (!text) throw new Error("workspace: find needs text");
+				const value = (await browser({
+					action: "find",
+					tabId: id,
+					text,
+					forward: (input as { forward?: boolean }).forward !== false,
+					findNext: (input as { findNext?: boolean }).findNext === true,
+					matchCase: (input as { matchCase?: boolean }).matchCase === true,
+				})) as { matches?: number; activeMatch?: number; timeout?: boolean };
+				if (value?.timeout) throw new Error("workspace: the page did not report find results before the timeout");
+				const matches = value?.matches ?? 0;
+				const active = value?.activeMatch ?? 0;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] find ${JSON.stringify(text)} in ${id} → ${matches} match(es)${matches ? `, active ${active}` : ""}`,
+						},
+					],
+					details: { operation, activeId: id, result: { text, matches, activeMatch: active } },
+				};
+			}
+			case "stop_find": {
+				const id = await resolveBrowserTab(tabId);
+				await browser({ action: "stopFind", tabId: id });
+				return {
+					content: [{ type: "text", text: `[workspace] stopped the find in ${id}` }],
+					details: { operation, activeId: id },
+				};
+			}
+			case "permissions": {
+				const origin = String((input as { origin?: string }).origin || "");
+				const value = (await browser({
+					action: "permissions",
+					tabId,
+					...(origin ? { origin } : {}),
+				})) as {
+					permissions?: Array<{ origin: string; permission: string; allowed: boolean }>;
+					pending?: Array<{ requestId: string; permission: string; origin: string }>;
+				};
+				const permissions = value?.permissions || [];
+				const pending = value?.pending || [];
+				const lines = permissions.map(
+					(entry) => `  ${entry.allowed ? "allowed" : "denied"} ${entry.permission} ${entry.origin}`,
+				);
+				if (pending.length)
+					lines.push(
+						...pending.map((entry) => `  pending ${entry.permission} ${entry.origin} (${entry.requestId})`),
+					);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] site permissions=${permissions.length} pending=${pending.length}\n${lines.join("\n") || "  (none in this app session)"}`,
+						},
+					],
+					details: { operation, result: { permissions, pending } },
+				};
+			}
+			case "scroll": {
+				const id = await resolveBrowserTab(tabId);
+				const target = input as { selector?: string; index?: number; label?: string };
+				const value = (await browser({
+					action: "scroll",
+					tabId: id,
+					x: Number((input as { x?: number }).x) || 0,
+					y: Number((input as { y?: number }).y) || 0,
+					selector: target.selector,
+					index: target.index,
+					label: target.label,
+				})) as { result?: { x?: number; y?: number }; element?: Record<string, unknown> };
+				const element = value?.element
+					? ` (${value.element.tag} ${JSON.stringify(value.element.text ?? "")} now at (${value.element.x}, ${value.element.y}))`
+					: "";
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] scrolled ${id} → ${JSON.stringify(value?.result ?? null)}${element}`,
+						},
+					],
+					details: { operation, activeId: id, result: value?.result },
+				};
+			}
+			case "exec": {
+				const id = await resolveBrowserTab(tabId);
+				const code = String((input as { code?: string }).code || "");
+				const value = (await browser({ action: "exec", tabId: id, code }, SLOW_TIMEOUT_MS)) as {
+					result?: unknown;
+				};
+				const serialized = typeof value?.result === "string" ? value.result : JSON.stringify(value?.result ?? null);
+				const cut = truncate(serialized ?? "null", maxChars);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] exec ${id}${cut.truncated ? " (truncated)" : ""}\n${cut.text}`,
+						},
+					],
+					details: { operation, activeId: id, result: cut.text },
+				};
+			}
+			case "screenshot":
+				return capture(await resolveBrowserTab(tabId));
+			case "downloads": {
+				const value = (await browser({ action: "downloads", tabId })) as {
+					downloads?: unknown[];
+					folder?: string;
+				};
+				const list = value?.downloads || [];
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] downloads=${list.length} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
+						},
+					],
+					details: { operation, result: list },
+				};
+			}
+			case "download": {
+				const id = await resolveBrowserTab(tabId);
+				const wait = Number((input as { timeoutMs?: number }).timeoutMs) || 120_000;
+				const value = (await browser(
+					{ action: "download", tabId: id, url: (input as { url?: string }).url, timeoutMs: wait },
+					wait + 30_000,
+				)) as { downloads?: unknown[]; folder?: string };
+				const list = value?.downloads || [];
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] download in ${id} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
+						},
+					],
+					details: { operation, activeId: id, result: list },
+				};
+			}
+			case "network": {
+				const value = await browser({ action: "network", tabId });
+				const list = (value as { requests?: unknown[] })?.requests || [];
+				const shown = list.slice(-50);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] network requests=${list.length}\n${JSON.stringify(shown, null, 1)}`,
+						},
+					],
+					details: { operation, result: shown },
+				};
+			}
+			case "media": {
+				const command = String((input as { command?: string }).command || "");
+				const value = Number((input as { value?: number }).value);
+				const state = await page({
+					action: "media",
+					tabId,
+					command,
+					value: Number.isFinite(value) ? value : undefined,
+				});
+				const media = (state as { media?: Record<string, unknown> })?.media;
+				if (!media) throw new Error("workspace: the page has no media element to control");
+				const lines = [
+					`[workspace] media ${command}${Number.isFinite(value) ? `=${value}` : ""}`,
+					`  kind=${media.kind} paused=${media.paused} time=${media.currentTime}/${media.duration ?? "?"} volume=${media.volume} muted=${media.muted} rate=${media.playbackRate}`,
+				];
+				if (command === "play" && media.paused === true)
+					throw new Error("workspace: the media is still paused after play");
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { operation, page: state as Record<string, unknown>, result: media },
+				};
+			}
+			case "open_external": {
+				const url = String((input as { url?: string }).url || "");
+				let parsed: URL;
+				try {
+					parsed = new URL(url);
+				} catch {
+					throw new Error("workspace: open_external needs a valid http(s) url");
+				}
+				if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+					throw new Error("workspace: only http and https addresses are allowed");
+				await browser({ action: "external", url: parsed.href });
+				return {
+					content: [{ type: "text", text: `[workspace] opened ${parsed.href} in the system browser` }],
+					details: { operation, result: parsed.href },
+				};
+			}
+			default:
+				throw new Error(`workspace: unknown operation ${operation || "(empty)"}`);
+		}
+	};
+
+	/** The picture of a browser tab, saved to a temporary file and attached for the model. */
+	const capture = async (id: string): Promise<WorkspaceResult> => {
+		const value = (await browser({ action: "snapshot", tabId: id }, SLOW_TIMEOUT_MS)) as {
+			snapshot?: string;
+			width?: number;
+			height?: number;
+		};
+		const data = String(value?.snapshot || "");
+		if (!data.startsWith("data:image/")) throw new Error("workspace: the screenshot command returned no image data");
+		const base64 = data.slice(data.indexOf(",") + 1);
+		const bytes = Buffer.from(base64, "base64");
+		const dir = process.env.MYHARNESS_TEMP_DIR || join(tmpdir(), "myharness-workspace");
+		await mkdir(dir, { recursive: true });
+		const file = join(dir, `workspace-${id.replace(/[^a-z0-9.-]+/gi, "_")}-${Date.now()}.png`);
+		await writeFile(file, bytes);
+		await pruneScreenshots(dir);
+		const width = Number(value?.width) || undefined;
+		const height = Number(value?.height) || undefined;
+		// The picture itself goes to the model, so it can point the mouse at what it sees. A resize for the model
+		// changes the scale: the note says how to map back to page coordinates.
+		const processed = await processImage(bytes, "image/png");
+		const scaleNote =
+			processed.ok && width && processed.hints.length
+				? `\n  ${processed.hints.join(" ")} Page coordinates = picture coordinates scaled to ${width}×${height}.`
+				: "";
+		const header = `[workspace] screenshot ${id}\n  path=${file}\n  bytes=${bytes.length}${width && height ? `\n  size=${width}×${height} CSS px (mouse x/y use this frame)` : ""}${scaleNote}`;
+		return {
+			content: processed.ok
+				? [
+						{ type: "text", text: header },
+						{ type: "image", data: processed.data, mimeType: processed.mimeType },
+					]
+				: [{ type: "text", text: `${header}\n  (picture not attached: ${processed.message})` }],
+			details: {
+				operation: "screenshot",
+				activeId: id,
+				screenshot: { path: file, bytes: bytes.length, width, height },
+			},
+		};
+	};
+
+	/**
+	 * After an action that can change the page (a click, Enter, a navigation): give the page a moment to react; when it
+	 * started loading, wait for the load, and say where it went. Never fails the action itself.
+	 */
+	const followUp = async (id: string, beforeUrl: string | undefined): Promise<string> => {
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const state = (await browser({ action: "state", tabId: id }).catch(() => undefined)) as
+			| { loading?: boolean; url?: string }
+			| undefined;
+		let reached = state;
+		if (state?.loading) reached = (await settle(id).catch(() => state)) as typeof state;
+		if (reached?.url && beforeUrl && reached.url !== beforeUrl) return `\n  page → ${reached.url}`;
+		return reached?.loading ? "\n  page still loading" : "";
+	};
+
+	/**
+	 * One operation, plus what a person does without thinking after acting: follow the navigation it started, and look
+	 * (`screenshot: true` attaches the picture of the tab as it is afterwards).
+	 */
+	const runActing = async (fields: Record<string, unknown>): Promise<WorkspaceResult> => {
+		const operation = String(fields?.operation || "");
+		// Only input can start a navigation the caller did not ask for; navigate/back/reload report where they went.
+		const acting = FOLLOW_OPERATIONS.has(operation) && (operation !== "type" || fields.enter === true);
+		const look = fields.screenshot === true && LOOK_OPERATIONS.has(operation);
+		const tabIdIn = typeof fields.tabId === "string" ? fields.tabId : undefined;
+		const id = acting ? await resolveBrowserTab(tabIdIn).catch(() => undefined) : undefined;
+		const before = id
+			? ((await browser({ action: "state", tabId: id }).catch(() => undefined)) as { url?: string } | undefined)
+			: undefined;
+		const result = await runOne(fields as WorkspaceToolInput);
+		const resultId = result.details.activeId ?? id;
+		if (acting && resultId) {
+			const moved = await followUp(resultId, before?.url);
+			const first = result.content[0];
+			if (moved && first?.type === "text") first.text += moved;
+		}
+		if (look && resultId) {
+			const picture = await capture(resultId);
+			result.content.push(...picture.content);
+			result.details.screenshot = picture.details.screenshot;
+		}
+		return result;
+	};
+
+	/**
+	 * Several steps in one call, run in order on the same tab (a step's own tabId wins), stopping at the first failure.
+	 * One picture at the end when `screenshot` is not false, so the model sees where the sequence left the page.
+	 */
+	const runBatch = async (fields: Record<string, unknown>): Promise<WorkspaceResult> => {
+		const steps = Array.isArray(fields.steps) ? (fields.steps as Array<Record<string, unknown>>) : [];
+		if (!steps.length) throw new Error("workspace: batch needs steps");
+		if (steps.length > MAX_BATCH_STEPS) throw new Error(`workspace: batch takes at most ${MAX_BATCH_STEPS} steps`);
+		const tabId = typeof fields.tabId === "string" ? fields.tabId : undefined;
+		const lines: string[] = [];
+		const images: WorkspaceResult["content"] = [];
+		let lastId: string | undefined = tabId;
+		for (const [index, raw] of steps.entries()) {
+			const step = { ...(raw && typeof raw === "object" ? raw : {}) } as Record<string, unknown>;
+			const operation = String(step.operation || "");
+			if (!BATCH_OPERATIONS.has(operation))
+				throw new Error(
+					`workspace: batch step ${index + 1} has operation ${JSON.stringify(operation)}; allowed: ${[...BATCH_OPERATIONS].join(", ")}`,
+				);
+			if (!step.tabId && lastId) step.tabId = lastId;
+			step.screenshot = operation === "screenshot" ? undefined : false;
+			try {
+				const result = await runActing(step);
+				lastId = result.details.activeId ?? lastId;
+				for (const part of result.content) {
+					if (part.type === "text") lines.push(`${index + 1}. ${part.text.replace(/^\[workspace\] /, "")}`);
+					else images.push(part);
+				}
+			} catch (error) {
+				lines.push(`${index + 1}. FAILED: ${error instanceof Error ? error.message : String(error)}`);
+				lines.push(`  stopped; steps ${index + 2}..${steps.length} did not run`);
+				break;
+			}
+		}
+		const result: WorkspaceResult = {
+			content: [{ type: "text", text: `[workspace] batch ${steps.length} step(s)\n${lines.join("\n")}` }, ...images],
+			details: { operation: "batch", activeId: lastId ?? null },
+		};
+		if (fields.screenshot !== false && lastId) {
+			const picture = await capture(lastId).catch((error: Error) => ({
+				content: [{ type: "text" as const, text: `[workspace] (no picture: ${error.message})` }],
+				details: { operation: "screenshot" } as WorkspaceToolDetails,
+			}));
+			result.content.push(...picture.content);
+			result.details.screenshot = picture.details.screenshot;
+		}
+		return result;
+	};
+
 	return {
 		name: "workspace",
 		label: "workspace",
@@ -583,754 +1676,21 @@ export function createWorkspaceToolDefinition(
 			"Control the MyHarness desktop workspace: the right-hand panel, the file and media tabs in it, and the built-in browser.",
 			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open (`background: true` keeps the user's view where it is); `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
 			"Every browser command takes a `tabId` and works on that tab whether or not it is on screen, so several tabs can be driven side by side: navigate/back/forward/reload/stop, text/dom/ax/interactive, find/stop_find, upload, exec, screenshot, downloads, download and network.",
-			"You browse at a desktop size (at least 1280×800) whatever the width of the user's panel, so sites give you their desktop layout; a narrow panel only shows your page scaled down.",
+			"A tab on screen has exactly the size of the user's panel (a narrow panel can get a site's phone layout); a background tab is laid out at least 1280×800.",
 			"Files: a click that starts a download waits for it and its result gives the saved file's path (files go to the user's Downloads folder, so there is nothing to search for). `download` saves a link directly with the tab's sign-in and returns the path; `downloads` lists recent ones. Move or copy the file afterwards if it belongs elsewhere.",
 			'Your own mouse and keyboard: `screenshot` returns the picture of the tab; its pixels are the page\'s CSS pixels, so `mouse` (click/double_click/right_click/move/drag/wheel at x,y) hits exactly the point seen in it - images, canvases and custom controls included. `key` presses keys or combinations ("Control+A", "Enter"), `type` types into the focused element (or clicks x,y first). Selector/index clicks from `interactive` still work.',
+			"Point at elements like a person: `click`, `type`, `mouse` and `scroll` take `label` (the words on the element, its placeholder or accessible name), `selector` or `index`; the element is scrolled into view and pressed with the real mouse (a covered or hidden one falls back to its own click(), and the result says so). `type` with a target clicks the field, replaces its text (`replace: false` appends), picks the matching option of a <select>, and `enter: true` submits. A click or Enter that starts a navigation is followed and the result says where the page went. `wait` waits for a selector, text or label to appear (or with `gone` to disappear), or for the page to load and go quiet.",
+			"Fewer round trips: add `screenshot: true` to an action to get the picture of the page after it, and use `batch` with `steps` (click/type/mouse/key/scroll/wait/navigate/back/forward/reload/text/interactive/find/exec/screenshot/state, at most 30) to run a sequence in one call; it stops at the first failing step and ends with one screenshot unless `screenshot: false`.",
 			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",
 			"What it cannot do: solve CAPTCHAs or bot checks, see or type a saved password, confirm payments, or drive anything outside this app's workspace.",
 		].join("\n"),
 		promptSnippet: loadSystemPrompt("tools/workspace/snippet.md"),
 		parameters,
-		async execute(
-			_toolCallId,
-			input: WorkspaceToolInput,
-		): Promise<{
-			content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
-			details: WorkspaceToolDetails;
-		}> {
-			const operation = String(input?.operation || "");
+		async execute(_toolCallId, input: WorkspaceToolInput): Promise<WorkspaceResult> {
 			const fields = input as Record<string, unknown>;
-			const tabId = typeof fields.tabId === "string" ? fields.tabId : undefined;
-			const maxChars = Number(fields.maxChars) || DEFAULT_MAX_CHARS;
-			const slow =
-				operation === "ax" || operation === "screenshot" || operation === "exec" || operation === "navigate";
-			const timeout = slow ? SLOW_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-			const timeoutMs = Number(fields.timeoutMs) || timeout;
-
-			switch (operation) {
-				case "status": {
-					const available = desktopWorkspaceAvailable();
-					const state = available ? await pageTabs().catch(() => null) : null;
-					const known = available ? await browserTabs().catch(() => []) : [];
-					const lines = [
-						`[workspace] desktop_host=${available ? "connected" : "unavailable"}`,
-						`  page_tabs=${state ? state.tabs.length : 0} browser_tabs=${known.length} panel=${state?.panelOpen ? "open" : "closed"}`,
-						available
-							? "  Ready. Use tabs, open, close, activate, navigate, click, type, media and the rest."
-							: "  Only available in the desktop app; nothing can be controlled from this process.",
-					];
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { operation } };
-				}
-				case "tabs": {
-					const state = await mergedTabs();
-					const lines = [
-						`[workspace] tabs=${state.tabs.length} active=${state.activeId ?? "(none)"} panel=${state.panelOpen ? "open" : "closed"}`,
-					];
-					for (const tab of state.tabs) lines.push(formatTab(tab));
-					if (state.tabs.length === 0) lines.push("  (no tabs open yet; use open)");
-					return {
-						content: [{ type: "text", text: lines.join("\n") }],
-						details: { operation, tabs: state.tabs, activeId: state.activeId },
-					};
-				}
-				case "open": {
-					const type = String((input as { type?: string }).type || "");
-					if (type === "browser") {
-						const wanted = String((input as { bookmark?: string }).bookmark || "");
-						let url = String((input as { url?: string }).url || "");
-						if (wanted) {
-							const list = await bookmarkList();
-							const match =
-								list.find((entry) => entry.id === wanted) ||
-								list.find((entry) => entry.title === wanted) ||
-								list.find((entry) => entry.title.toLowerCase() === wanted.toLowerCase());
-							if (!match)
-								throw new Error(
-									`workspace: there is no bookmark ${JSON.stringify(wanted)}; list them with operation=bookmarks`,
-								);
-							url = match.url;
-						}
-						let parsed: URL;
-						try {
-							parsed = new URL(url);
-						} catch {
-							throw new Error("workspace: open with type=browser needs a valid http(s) url or a bookmark");
-						}
-						if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-							throw new Error("workspace: only http and https addresses are allowed");
-						const background = (input as { background?: boolean }).background === true;
-						const opened = await page({
-							action: "open",
-							tab: { type: "browser", url: parsed.href },
-							...(background ? { background: true } : {}),
-						});
-						const state = opened as { tabs?: WorkspaceTabSummary[]; activeId?: string | null };
-						const tabs = state?.tabs || [];
-						const tab = background
-							? tabs.filter((entry) => entry.type === "browser" && entry.url === parsed.href).at(-1)
-							: tabs.find((entry) => entry.id === state?.activeId) || tabs.at(-1);
-						if (!tab) throw new Error("workspace: the page did not report the browser tab it opened");
-						// The page owns the tab id and its panel creates the host view on mount; ensure is idempotent, so this
-						// call creates the view now when the panel has not mounted yet and never loads the page twice.
-						await browser({ action: "ensure", tabId: tab.id, url: parsed.href }, SLOW_TIMEOUT_MS);
-						const live = await settle(tab.id);
-						return {
-							content: [
-								{
-									type: "text",
-									text: `[workspace] opened browser tab ${tab.id}${background ? " (background)" : ""}\n  ${parsed.href}\n  state=${JSON.stringify(live)}`,
-								},
-							],
-							details: { operation, activeId: tab.id, page: state as Record<string, unknown>, browser: live },
-						};
-					}
-					if (type === "file") {
-						const path = String((input as { path?: string }).path || "");
-						if (!path) throw new Error("workspace: open with type=file needs a path");
-						const opened = (await page({ action: "open", tab: { type: "file", path } })) as {
-							tabs?: WorkspaceTabSummary[];
-							activeId?: string | null;
-						};
-						const tab = (opened?.tabs || []).find((entry) => entry.id === opened?.activeId);
-						return {
-							content: [
-								{
-									type: "text",
-									text: `[workspace] opened file tab ${tab?.id || `file:${path}`}\n  path=${path}\n  tabs=${opened?.tabs?.length ?? 0}`,
-								},
-							],
-							details: {
-								operation,
-								activeId: opened?.activeId ?? null,
-								page: opened as Record<string, unknown>,
-							},
-						};
-					}
-					throw new Error("workspace: open needs type=browser with url, or type=file with path");
-				}
-				case "bookmarks": {
-					const list = await bookmarkList();
-					const lines = list.map((entry) => `  ${entry.id} ${JSON.stringify(entry.title)} ${entry.url}`);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] bookmarks=${list.length} (trusted sites: full control, saved-login sign-in, permissions allowed)\n${lines.join("\n") || "  (none yet; the user adds them with the star in the browser bar)"}`,
-							},
-						],
-						details: { operation, result: list },
-					};
-				}
-				case "login": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({
-						action: "login",
-						tabId: id,
-						submit: (input as { submit?: boolean }).submit !== false,
-					})) as {
-						ok?: boolean;
-						username?: string;
-						filledPassword?: boolean;
-						submitted?: boolean;
-						reason?: string;
-					};
-					if (!value?.ok) throw new Error(`workspace: the sign-in did not run: ${value?.reason || "no answer"}`);
-					// A submit starts a navigation: report where the page went instead of assuming the sign-in worked.
-					if (value.submitted) await new Promise((resolve) => setTimeout(resolve, 1200));
-					const live = value.submitted
-						? await settle(id).catch((error: Error) => ({ error: error.message }))
-						: undefined;
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] login ${id} as ${JSON.stringify(value.username || "")} password=${value.filledPassword ? "filled" : "not on this page (two-step sign-in: call login again on the next page)"} submitted=${value.submitted ? "yes" : "no"}${live ? `\n  state=${JSON.stringify(live)}` : ""}\n  Check the page (screenshot/text) to confirm the sign-in.`,
-							},
-						],
-						details: { operation, activeId: id, result: value, browser: live },
-					};
-				}
-				case "answer_permission": {
-					const requestId = String((input as { requestId?: string }).requestId || "");
-					const allow = (input as { allow?: boolean }).allow === true;
-					const value = (await browser({ action: "permission", requestId, allow, by: "agent" })) as {
-						allowed?: boolean;
-						origin?: string;
-						permission?: string;
-					};
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] ${value?.allowed ? "allowed" : "denied"} ${value?.permission ?? ""} for ${value?.origin ?? ""} (this app session)`,
-							},
-						],
-						details: { operation, result: value },
-					};
-				}
-				case "mouse": {
-					const id = await resolveBrowserTab(tabId);
-					const fieldsIn = input as Record<string, unknown>;
-					const value = (await browser(
-						{
-							action: "mouse",
-							tabId: id,
-							kind: fieldsIn.action,
-							x: fieldsIn.x,
-							y: fieldsIn.y,
-							toX: fieldsIn.toX,
-							toY: fieldsIn.toY,
-							deltaX: fieldsIn.deltaX,
-							deltaY: fieldsIn.deltaY,
-							button: fieldsIn.button,
-							modifiers: fieldsIn.modifiers,
-							// A click that starts a download waits for the file, so it may take longer than other commands.
-						},
-						SLOW_TIMEOUT_MS,
-					)) as {
-						ok?: boolean;
-						target?: Record<string, unknown>;
-						viewport?: { width: number; height: number };
-						downloads?: unknown[];
-					};
-					if (!value?.ok) throw new Error("workspace: the mouse action returned no result");
-					const where =
-						fieldsIn.action === "drag"
-							? `(${fieldsIn.x}, ${fieldsIn.y}) → (${fieldsIn.toX}, ${fieldsIn.toY})`
-							: `(${fieldsIn.x}, ${fieldsIn.y})`;
-					const started = value.downloads?.length
-						? `\n  downloads started by this click=${value.downloads.length}\n${JSON.stringify(value.downloads, null, 1)}`
-						: "";
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] mouse ${String(fieldsIn.action)} ${where} in ${id}${value.target ? ` on ${JSON.stringify(value.target)}` : ""}${started}`,
-							},
-						],
-						details: { operation, activeId: id, result: value },
-					};
-				}
-				case "key": {
-					const id = await resolveBrowserTab(tabId);
-					const keys = String((input as { keys?: string }).keys || "");
-					const value = (await browser({
-						action: "keys",
-						tabId: id,
-						keys,
-						repeat: (input as { repeat?: number }).repeat,
-					})) as { ok?: boolean; focused?: Record<string, unknown> | null };
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] pressed ${keys} in ${id} → focused ${JSON.stringify(value?.focused ?? null)}`,
-							},
-						],
-						details: { operation, activeId: id, result: value },
-					};
-				}
-				case "close":
-				case "activate":
-				case "close_others": {
-					if (!tabId) throw new Error(`workspace: ${operation} needs a tabId`);
-					const state = (await page({
-						action: operation === "close_others" ? "closeOthers" : operation,
-						tabId,
-					})) as {
-						tabs?: WorkspaceTabSummary[];
-						activeId?: string | null;
-					};
-					if (operation === "close" && (state.tabs || []).some((entry) => entry.id === tabId))
-						throw new Error(
-							`workspace: ${tabId} is still in the tab list after closing it, so the close did not take effect`,
-						);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] ${operation} ${tabId}\n  tabs=${state.tabs?.length ?? 0} active=${state.activeId ?? "(none)"}`,
-							},
-						],
-						details: { operation, activeId: state.activeId ?? null, page: state as Record<string, unknown> },
-					};
-				}
-				case "move": {
-					if (!tabId) throw new Error("workspace: move needs a tabId");
-					const beforeId = String((input as { beforeId?: string }).beforeId || "");
-					if (!beforeId) throw new Error("workspace: move needs a beforeId");
-					const state = (await page({ action: "move", fromId: tabId, toId: beforeId })) as {
-						tabs?: WorkspaceTabSummary[];
-					};
-					const order = (state.tabs || []).map((entry) => entry.id);
-					const from = order.indexOf(tabId);
-					const before = order.indexOf(beforeId);
-					if (from < 0 || before < 0 || from > before)
-						throw new Error(`workspace: the move did not take effect; the order is ${order.join(" , ")}`);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] moved ${tabId} before ${beforeId}\n  order=${order.join(" , ")}`,
-							},
-						],
-						details: { operation, tabs: state.tabs || [], activeId: null },
-					};
-				}
-				case "reopen": {
-					const state = (await page({ action: "reopen" })) as {
-						tabs?: WorkspaceTabSummary[];
-						activeId?: string | null;
-					};
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] reopen → active=${state.activeId ?? "(none)"} tabs=${state.tabs?.length ?? 0}`,
-							},
-						],
-						details: { operation, activeId: state.activeId ?? null, page: state as Record<string, unknown> },
-					};
-				}
-				case "navigate": {
-					const url = String((input as { url?: string }).url || "");
-					let parsed: URL;
-					try {
-						parsed = new URL(url);
-					} catch {
-						throw new Error("workspace: navigate needs a valid http(s) url");
-					}
-					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-						throw new Error("workspace: only http and https addresses are allowed");
-					const id = await resolveBrowserTab(tabId);
-					const state = await browser({ action: "navigate", tabId: id, url: parsed.href }, timeoutMs);
-					const actual = (state as { url?: string; error?: string }) || {};
-					if (actual.error) throw new Error(`workspace: navigation failed: ${actual.error}`);
-					return {
-						content: [{ type: "text", text: `[workspace] navigate ${id}\n  url=${actual.url || parsed.href}` }],
-						details: { operation, activeId: id, browser: state },
-					};
-				}
-				case "back":
-				case "forward":
-				case "reload":
-				case "stop": {
-					const id = await resolveBrowserTab(tabId);
-					await browser({ action: operation, tabId: id });
-					// The command is asynchronous in the browser: read the state back instead of reporting success blindly.
-					await new Promise((resolve) => setTimeout(resolve, operation === "reload" ? 1000 : 300));
-					const state = await browser({ action: "state", tabId: id });
-					return {
-						content: [{ type: "text", text: `[workspace] ${operation} ${id}\n  state=${JSON.stringify(state)}` }],
-						details: { operation, activeId: id, browser: state },
-					};
-				}
-				case "state": {
-					const id = await resolveBrowserTab(tabId);
-					const state = await browser({ action: "state", tabId: id });
-					return {
-						content: [{ type: "text", text: `[workspace] state ${id}\n  ${JSON.stringify(state)}` }],
-						details: { operation, activeId: id, browser: state },
-					};
-				}
-				case "text": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({ action: "text", tabId: id })) as { result?: string };
-					const cut = truncate(String(value?.result ?? ""), maxChars);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] text ${id}${cut.truncated ? " (truncated)" : ""}\n${cut.text}`,
-							},
-						],
-						details: { operation, activeId: id, result: cut.truncated ? `${cut.text}…` : cut.text },
-					};
-				}
-				case "dom": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({ action: "dom", tabId: id })) as { html?: string; text?: string };
-					const html = truncate(String(value?.html ?? ""), maxChars);
-					const text = truncate(String(value?.text ?? ""), Math.min(maxChars, 4_000));
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] dom ${id}${html.truncated ? " (html truncated)" : ""}\n[text]\n${text.text}\n[html]\n${html.text}`,
-							},
-						],
-						details: {
-							operation,
-							activeId: id,
-							result: { html: html.text, text: text.text, truncated: html.truncated },
-						},
-					};
-				}
-				case "ax": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({ action: "ax", tabId: id }, SLOW_TIMEOUT_MS)) as {
-						nodes?: Array<Record<string, unknown>>;
-					};
-					const nodes = Array.isArray(value?.nodes) ? value.nodes : [];
-					const visible = nodes.filter((node) => node.ignored !== true && (node.role || node.name));
-					const lines = visible.slice(0, 300).map((node) => {
-						const role = String(node.role ?? "");
-						const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
-						const extra = node.value !== undefined ? ` value=${JSON.stringify(node.value)}` : "";
-						return `  ${role}${name}${extra}`;
-					});
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] ax ${id} nodes=${nodes.length} shown=${Math.min(300, visible.length)}${visible.length > 300 ? " (truncated)" : ""}\n${lines.join("\n")}`,
-							},
-						],
-						details: { operation, activeId: id, result: { nodes: visible.length } },
-					};
-				}
-				case "interactive": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({ action: "interactive", tabId: id })) as {
-						elements?: Array<Record<string, unknown>>;
-					};
-					const elements = Array.isArray(value?.elements) ? value.elements : [];
-					const lines = elements.map((element) => {
-						const rect = element.rect as { x?: number; y?: number; width?: number; height?: number } | undefined;
-						const at =
-							rect && Number(rect.width) > 0 && Number(rect.height) > 0
-								? ` @(${Math.round(Number(rect.x) + Number(rect.width) / 2)},${Math.round(Number(rect.y) + Number(rect.height) / 2)})`
-								: "";
-						return `  ${element.index} ${element.tag}${element.type ? `[${element.type}]` : ""} ${JSON.stringify(element.label || element.name || element.href || "")}${at}${element.disabled ? " (disabled)" : ""}`;
-					});
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] interactive ${id} count=${elements.length}\n${lines.join("\n")}`,
-							},
-						],
-						details: { operation, activeId: id, result: elements },
-					};
-				}
-				case "click": {
-					const id = await resolveBrowserTab(tabId);
-					const selector = (input as { selector?: string }).selector;
-					const index = (input as { index?: number }).index;
-					const value = (await browser({ action: "click", tabId: id, selector, index })) as {
-						ok?: boolean;
-						error?: string;
-						text?: string;
-					};
-					if (!value?.ok)
-						throw new Error(`workspace: the click failed: ${value?.error || "the page returned no result"}`);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] clicked ${id} ${selector ? `selector=${selector}` : `index=${index}`} → ${value.text || "(no text)"}`,
-							},
-						],
-						details: { operation, activeId: id, result: value },
-					};
-				}
-				case "type": {
-					const id = await resolveBrowserTab(tabId);
-					const selector = (input as { selector?: string }).selector;
-					const index = (input as { index?: number }).index;
-					const text = String((input as { text?: string }).text ?? "");
-					if (!selector && !Number.isInteger(index)) {
-						// No element named: type where the keyboard is, after clicking the given point if there is one.
-						const x = (input as { x?: number }).x;
-						const y = (input as { y?: number }).y;
-						if (Number.isFinite(x) !== Number.isFinite(y)) throw new Error("workspace: type needs both x and y");
-						if (Number.isFinite(x)) await browser({ action: "mouse", tabId: id, kind: "click", x, y });
-						const typed = (await browser({ action: "insertText", tabId: id, text })) as {
-							focused?: Record<string, unknown> | null;
-						};
-						if (!typed?.focused)
-							throw new Error(
-								"workspace: nothing on the page has the keyboard focus; click the field first (mouse click, or type with x/y)",
-							);
-						return {
-							content: [
-								{
-									type: "text",
-									text: `[workspace] typed into the focused element of ${id} → ${JSON.stringify(typed.focused)}`,
-								},
-							],
-							details: { operation, activeId: id, result: typed },
-						};
-					}
-					const value = (await browser({ action: "type", tabId: id, selector, index, text })) as {
-						ok?: boolean;
-						error?: string;
-						value?: string;
-					};
-					if (!value?.ok)
-						throw new Error(`workspace: typing failed: ${value?.error || "the page returned no result"}`);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] typed into ${id} ${selector ? `selector=${selector}` : `index=${index}`} → ${JSON.stringify(value.value ?? "")}`,
-							},
-						],
-						details: { operation, activeId: id, result: value },
-					};
-				}
-				case "upload": {
-					const id = await resolveBrowserTab(tabId);
-					const file = String((input as { path?: string }).path || "");
-					if (!file) throw new Error("workspace: upload needs a workspace file path");
-					const selector = (input as { selector?: string }).selector;
-					const index = (input as { index?: number }).index;
-					if (!selector && !Number.isInteger(index))
-						throw new Error("workspace: upload needs the selector or index of the page's file input");
-					const value = (await browser({ action: "upload", tabId: id, path: file, selector, index })) as {
-						ok?: boolean;
-						name?: string;
-						size?: number;
-						count?: number;
-						path?: string;
-						error?: string;
-					};
-					if (!value?.ok)
-						throw new Error(`workspace: the upload failed: ${value?.error || "the page returned no result"}`);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] uploaded ${value.name || file} (${value.size ?? 0} bytes) into ${id}\n  path=${value.path || file} files=${value.count ?? 1}`,
-							},
-						],
-						details: { operation, activeId: id, result: value },
-					};
-				}
-				case "find": {
-					const id = await resolveBrowserTab(tabId);
-					const text = String((input as { text?: string }).text || "");
-					if (!text) throw new Error("workspace: find needs text");
-					const value = (await browser({
-						action: "find",
-						tabId: id,
-						text,
-						forward: (input as { forward?: boolean }).forward !== false,
-						findNext: (input as { findNext?: boolean }).findNext === true,
-						matchCase: (input as { matchCase?: boolean }).matchCase === true,
-					})) as { matches?: number; activeMatch?: number; timeout?: boolean };
-					if (value?.timeout)
-						throw new Error("workspace: the page did not report find results before the timeout");
-					const matches = value?.matches ?? 0;
-					const active = value?.activeMatch ?? 0;
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] find ${JSON.stringify(text)} in ${id} → ${matches} match(es)${matches ? `, active ${active}` : ""}`,
-							},
-						],
-						details: { operation, activeId: id, result: { text, matches, activeMatch: active } },
-					};
-				}
-				case "stop_find": {
-					const id = await resolveBrowserTab(tabId);
-					await browser({ action: "stopFind", tabId: id });
-					return {
-						content: [{ type: "text", text: `[workspace] stopped the find in ${id}` }],
-						details: { operation, activeId: id },
-					};
-				}
-				case "permissions": {
-					const origin = String((input as { origin?: string }).origin || "");
-					const value = (await browser({
-						action: "permissions",
-						tabId,
-						...(origin ? { origin } : {}),
-					})) as {
-						permissions?: Array<{ origin: string; permission: string; allowed: boolean }>;
-						pending?: Array<{ requestId: string; permission: string; origin: string }>;
-					};
-					const permissions = value?.permissions || [];
-					const pending = value?.pending || [];
-					const lines = permissions.map(
-						(entry) => `  ${entry.allowed ? "allowed" : "denied"} ${entry.permission} ${entry.origin}`,
-					);
-					if (pending.length)
-						lines.push(
-							...pending.map((entry) => `  pending ${entry.permission} ${entry.origin} (${entry.requestId})`),
-						);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] site permissions=${permissions.length} pending=${pending.length}\n${lines.join("\n") || "  (none in this app session)"}`,
-							},
-						],
-						details: { operation, result: { permissions, pending } },
-					};
-				}
-				case "scroll": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({
-						action: "scroll",
-						tabId: id,
-						x: Number((input as { x?: number }).x) || 0,
-						y: Number((input as { y?: number }).y) || 0,
-					})) as { result?: { x?: number; y?: number } };
-					return {
-						content: [
-							{ type: "text", text: `[workspace] scrolled ${id} → ${JSON.stringify(value?.result ?? null)}` },
-						],
-						details: { operation, activeId: id, result: value?.result },
-					};
-				}
-				case "exec": {
-					const id = await resolveBrowserTab(tabId);
-					const code = String((input as { code?: string }).code || "");
-					const value = (await browser({ action: "exec", tabId: id, code }, SLOW_TIMEOUT_MS)) as {
-						result?: unknown;
-					};
-					const serialized =
-						typeof value?.result === "string" ? value.result : JSON.stringify(value?.result ?? null);
-					const cut = truncate(serialized ?? "null", maxChars);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] exec ${id}${cut.truncated ? " (truncated)" : ""}\n${cut.text}`,
-							},
-						],
-						details: { operation, activeId: id, result: cut.text },
-					};
-				}
-				case "screenshot": {
-					const id = await resolveBrowserTab(tabId);
-					const value = (await browser({ action: "snapshot", tabId: id }, SLOW_TIMEOUT_MS)) as {
-						snapshot?: string;
-						width?: number;
-						height?: number;
-					};
-					const data = String(value?.snapshot || "");
-					if (!data.startsWith("data:image/"))
-						throw new Error("workspace: the screenshot command returned no image data");
-					const base64 = data.slice(data.indexOf(",") + 1);
-					const bytes = Buffer.from(base64, "base64");
-					const dir = process.env.MYHARNESS_TEMP_DIR || join(tmpdir(), "myharness-workspace");
-					await mkdir(dir, { recursive: true });
-					const file = join(dir, `workspace-${id.replace(/[^a-z0-9.-]+/gi, "_")}-${Date.now()}.png`);
-					await writeFile(file, bytes);
-					await pruneScreenshots(dir);
-					const width = Number(value?.width) || undefined;
-					const height = Number(value?.height) || undefined;
-					// The picture itself goes to the model, so it can point the mouse at what it sees. A resize for the model
-					// changes the scale: the note says how to map back to page coordinates.
-					const processed = await processImage(bytes, "image/png");
-					const scaleNote =
-						processed.ok && width && processed.hints.length
-							? `\n  ${processed.hints.join(" ")} Page coordinates = picture coordinates scaled to ${width}×${height}.`
-							: "";
-					const header = `[workspace] screenshot ${id}\n  path=${file}\n  bytes=${bytes.length}${width && height ? `\n  size=${width}×${height} CSS px (mouse x/y use this frame)` : ""}${scaleNote}`;
-					return {
-						content: processed.ok
-							? [
-									{ type: "text", text: header },
-									{ type: "image", data: processed.data, mimeType: processed.mimeType },
-								]
-							: [{ type: "text", text: `${header}\n  (picture not attached: ${processed.message})` }],
-						details: { operation, activeId: id, screenshot: { path: file, bytes: bytes.length, width, height } },
-					};
-				}
-				case "downloads": {
-					const value = (await browser({ action: "downloads", tabId })) as {
-						downloads?: unknown[];
-						folder?: string;
-					};
-					const list = value?.downloads || [];
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] downloads=${list.length} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
-							},
-						],
-						details: { operation, result: list },
-					};
-				}
-				case "download": {
-					const id = await resolveBrowserTab(tabId);
-					const wait = Number((input as { timeoutMs?: number }).timeoutMs) || 120_000;
-					const value = (await browser(
-						{ action: "download", tabId: id, url: (input as { url?: string }).url, timeoutMs: wait },
-						wait + 30_000,
-					)) as { downloads?: unknown[]; folder?: string };
-					const list = value?.downloads || [];
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] download in ${id} folder=${value?.folder ?? "(unknown)"}\n${JSON.stringify(list, null, 1)}`,
-							},
-						],
-						details: { operation, activeId: id, result: list },
-					};
-				}
-				case "network": {
-					const value = await browser({ action: "network", tabId });
-					const list = (value as { requests?: unknown[] })?.requests || [];
-					const shown = list.slice(-50);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `[workspace] network requests=${list.length}\n${JSON.stringify(shown, null, 1)}`,
-							},
-						],
-						details: { operation, result: shown },
-					};
-				}
-				case "media": {
-					const command = String((input as { command?: string }).command || "");
-					const value = Number((input as { value?: number }).value);
-					const state = await page({
-						action: "media",
-						tabId,
-						command,
-						value: Number.isFinite(value) ? value : undefined,
-					});
-					const media = (state as { media?: Record<string, unknown> })?.media;
-					if (!media) throw new Error("workspace: the page has no media element to control");
-					const lines = [
-						`[workspace] media ${command}${Number.isFinite(value) ? `=${value}` : ""}`,
-						`  kind=${media.kind} paused=${media.paused} time=${media.currentTime}/${media.duration ?? "?"} volume=${media.volume} muted=${media.muted} rate=${media.playbackRate}`,
-					];
-					if (command === "play" && media.paused === true)
-						throw new Error("workspace: the media is still paused after play");
-					return {
-						content: [{ type: "text", text: lines.join("\n") }],
-						details: { operation, page: state as Record<string, unknown>, result: media },
-					};
-				}
-				case "open_external": {
-					const url = String((input as { url?: string }).url || "");
-					let parsed: URL;
-					try {
-						parsed = new URL(url);
-					} catch {
-						throw new Error("workspace: open_external needs a valid http(s) url");
-					}
-					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-						throw new Error("workspace: only http and https addresses are allowed");
-					await browser({ action: "external", url: parsed.href });
-					return {
-						content: [{ type: "text", text: `[workspace] opened ${parsed.href} in the system browser` }],
-						details: { operation, result: parsed.href },
-					};
-				}
-				default:
-					throw new Error(`workspace: unknown operation ${operation || "(empty)"}`);
-			}
+			if (String(fields?.operation || "") === "batch") return runBatch(fields);
+			return runActing(fields);
 		},
 	};
 }

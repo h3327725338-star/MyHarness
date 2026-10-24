@@ -59,6 +59,33 @@ function parseAsDeclaredContainer(text: string, kinds: string[]): unknown[] | Re
 	return undefined;
 }
 
+/**
+ * The properties an object may have under a union of object schemas (a tool whose parameters are one object per
+ * operation). Only the branches whose constant fields agree with the value count, so `{ operation: "batch" }` is read
+ * against the batch branch alone; a key declared by several matching branches accepts what any of them declares.
+ */
+function unionProperties(
+	value: Record<string, unknown>,
+	node: SchemaNode | undefined,
+): Record<string, SchemaNode> | undefined {
+	const branches = [...(node?.anyOf ?? []), ...(node?.oneOf ?? [])].filter((branch) => branch?.properties);
+	if (!branches.length) return undefined;
+	const agrees = (branch: SchemaNode) =>
+		Object.entries(branch.properties ?? {}).every(([key, sub]) => {
+			const constant = (sub as { const?: unknown }).const;
+			return constant === undefined || !(key in value) || value[key] === constant;
+		});
+	const matching = branches.filter(agrees);
+	const merged: Record<string, SchemaNode> = {};
+	for (const branch of matching.length ? matching : branches) {
+		for (const [key, sub] of Object.entries(branch.properties ?? {})) {
+			const existing = merged[key];
+			merged[key] = existing ? { anyOf: [...(existing.anyOf ?? [existing]), sub] } : sub;
+		}
+	}
+	return merged;
+}
+
 function coerceNode(value: unknown, node: SchemaNode | undefined, depth: number): unknown {
 	if (depth > MAX_DEPTH) return value;
 	if (typeof value === "string") {
@@ -75,7 +102,7 @@ function coerceNode(value: unknown, node: SchemaNode | undefined, depth: number)
 		return changed ? next : value;
 	}
 	if (value !== null && typeof value === "object") {
-		const properties = node?.properties;
+		const properties = node?.properties ?? unionProperties(value as Record<string, unknown>, node);
 		if (!properties) return value;
 		const record = value as Record<string, unknown>;
 		let changed = false;

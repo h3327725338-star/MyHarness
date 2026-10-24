@@ -15,6 +15,7 @@ const TENSES = {
 	web: [N_("Searching the web"), N_("Searched the web"), N_("search the web")],
 	fetch: [N_("Reading page"), N_("Read page"), N_("read the page")],
 	github: [N_("Querying GitHub"), N_("Queried GitHub"), N_("query GitHub")],
+	mail: [N_("Using mail"), N_("Used mail"), N_("use mail")],
 	agent: [N_("Delegating"), N_("Delegated"), N_("delegate")],
 	history: [N_("Looking through earlier chats"), N_("Looked through earlier chats"), N_("look through earlier chats")],
 	tool: [N_("Using"), N_("Used"), N_("use")],
@@ -217,6 +218,10 @@ export function describeAction(call, result, run, cwd) {
 			kind = "github";
 			target = `${str(args.method || "GET")} ${str(args.path || args.url || args.query || "")}`.trim();
 			break;
+		case "mail":
+			kind = "mail";
+			target = [str(args.account), `${str(args.method || "GET")} ${str(args.path || "")}`.trim()].filter(Boolean).join(" · ");
+			break;
 		default: {
 			kind = "tool";
 			const first = Object.values(args).find((v) => typeof v === "string");
@@ -305,6 +310,8 @@ export function groupLabel(kind, actions) {
 		}
 		case "github":
 			return pick(N_("Querying GitHub {times}"), N_("Queried GitHub {times}"), { times: count(n, "time") });
+		case "mail":
+			return pick(N_("Using mail {times}"), N_("Used mail {times}"), { times: count(n, "time") });
 		case "history":
 			return pick(N_("Looking through earlier chats ({times})"), N_("Looked through earlier chats ({times})"), { times: count(n, "time") });
 		case "agent":

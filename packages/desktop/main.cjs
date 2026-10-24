@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Tray, Menu } = require('electron');
 const { spawn } = require('node:child_process');
 const { mkdirSync, appendFileSync, readFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
@@ -7,10 +7,13 @@ const { createBrowser, httpUrl } = require('./browser-view.cjs');
 const { readLegacyPrefs } = require('./legacy-prefs.cjs');
 const { removeForeignShortcuts } = require('./notification-routing.cjs');
 const { attachPreviewLinks } = require('./preview-links.cjs');
+const { createAppPrefs, loginItem } = require('./app-prefs.cjs');
 const root = resolve(__dirname, '../..');
 // Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
 // shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
 // path, so sharing the installed app's id would let a click start Electron's default window instead of MyHarness.
+// Started by Windows at sign-in (see app-prefs.cjs): the window appears without taking the focus from what the user opened.
+const autostart = process.argv.includes('--autostart');
 const notificationAppId = app.isPackaged ? 'MyHarness' : 'MyHarness.Dev';
 // The packaged app retains the checkout's data anchor, not the exe's arbitrary directory.
 const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory : root;
@@ -19,7 +22,7 @@ const data = resolve(process.env.MYHARNESS_DATA_ROOT || join(cwd, 'data'));
 const logs = join(data, 'logs');
 mkdirSync(logs, { recursive: true });
 const log = (message) => appendFileSync(join(logs, 'web-launch.err.log'), `[desktop ${new Date().toISOString()}] ${message}\n`);
-let window, browser, child, job, serviceUrl, stopping = false, finished = false;
+let window, browser, child, job, serviceUrl, tray, stopping = false, finished = false, asking = false, sessionEnding = false;
 // Workspace commands are executed by the page itself (it owns the tab list and the media elements). One request is one
 // round trip: the page answers with the state it reached, so the caller can verify the result instead of assuming it.
 // A reload, a closed window or a timeout fails the pending request instead of hanging.
@@ -50,6 +53,63 @@ const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, r
 // Host browser storage only; Agent configuration and persisted data are not redirected.
 app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
 app.setName('MyHarness');
+const prefs = createAppPrefs(app.getPath('userData'));
+// The window comes back from the tray (or from a second start) where it was, restored and in front.
+const showWindow = () => { if (!window || window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); };
+// Closing to the tray keeps the local service and every running task alive; only the window goes away. The tray icon
+// is made the first time it is needed and says once per run where the app went.
+function hideToTray() {
+  if (!tray) {
+    tray = new Tray(join(__dirname, 'icon.png'));
+    tray.setToolTip('MyHarness');
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: '显示 MyHarness', click: showWindow }, { type: 'separator' }, { label: '退出 MyHarness', click: () => app.quit() }]));
+    tray.on('click', showWindow);
+    tray.on('double-click', showWindow);
+    window.hide();
+    tray.displayBalloon({ title: 'MyHarness 仍在运行', content: '已最小化到系统托盘，正在进行的任务会继续。点击托盘图标打开，右键可退出。', iconType: 'info' });
+    return;
+  }
+  window.hide();
+}
+const quitApp = () => { window?.hide(); void stop(); };
+// The close button (the page's own or Alt+F4/taskbar) follows Settings → Interface → "Close button". Until the user
+// chose, it asks once; "remember" saves the answer there. While the host's own start/error page is shown there is no
+// service to keep, and a Windows sign-out always quits.
+async function onCloseRequest() {
+  if (asking) return;
+  if (!serviceUrl || stopping || sessionEnding) return quitApp();
+  let action = prefs.get().closeAction;
+  if (action === 'ask') {
+    asking = true;
+    try {
+      // The page asks in the app's own style (a window minimized from the taskbar comes back to show it); a page that
+      // cannot answer (crashed, reloading, an older page) leaves the question to the system dialog.
+      showWindow();
+      let answer;
+      try {
+        if (window.webContents.isCrashed()) throw new Error('页面已崩溃');
+        answer = await workspaceRequest({ action: 'askClose' }, 10 * 60 * 1000);
+        if (!['tray', 'quit', 'cancel'].includes(answer?.choice)) throw new Error('页面没有给出关闭选择');
+      } catch (error) {
+        log(`应用内关闭询问不可用，改用系统对话框：${error.message}`);
+        const { response, checkboxChecked } = await dialog.showMessageBox(window, {
+          type: 'question', title: '关闭 MyHarness', message: '关闭窗口后要做什么？',
+          detail: '最小化到托盘：窗口隐藏到任务栏右下角，正在运行的任务继续进行。\n退出：结束 MyHarness 和它正在运行的所有任务。\n\n以后可以在 设置 → 外观 → 桌面应用 中更改。',
+          buttons: ['最小化到托盘', '退出 MyHarness', '取消'], defaultId: 0, cancelId: 2, noLink: true,
+          checkboxLabel: '记住我的选择，不再询问', checkboxChecked: false,
+        });
+        answer = { choice: ['tray', 'quit', 'cancel'][response], remember: checkboxChecked };
+      }
+      if (answer.choice === 'cancel') return;
+      action = answer.choice;
+      if (answer.remember === true) {
+        try { prefs.set({ closeAction: action }); window.webContents.send('desktop:app-prefs', appPrefs()); } catch (error) { log(`无法保存关闭方式：${error.message}`); }
+      }
+    } finally { asking = false; }
+  }
+  if (action === 'tray') hideToTray(); else quitApp();
+}
+const appPrefs = () => ({ ...prefs.get(), openAtLogin: app.getLoginItemSettings(loginItem(app)).openAtLogin });
 const escaped = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // The window has no system title bar (frame: false), so the two pages the host shows itself (starting, cannot start) carry
 // their own drag strip and window buttons. They are the only non-service pages allowed to use the window controls: the
@@ -76,6 +136,7 @@ async function stop() {
   if (stopping) return;
   stopping = true;
   browser?.destroy();
+  tray?.destroy(); tray = undefined;
   if (child && child.exitCode === null && serviceUrl) {
     try { await fetch(new URL('/api/shutdown', serviceUrl), { method: 'POST', headers: { 'x-myharness-web': '1' }, signal: AbortSignal.timeout(2000) }); } catch (error) { log(`正常退出请求：${error.message}`); }
     await Promise.race([new Promise((done) => child.once('exit', done)), new Promise((done) => setTimeout(done, 8000))]);
@@ -122,7 +183,7 @@ function startService(restart) {
       const found = pending.match(/MyHarness Web UI: (http:\/\/127\.0\.0\.1:\d+\/)/);
       if (found && !serviceUrl) {
         clearTimeout(timeout); serviceUrl = found[1];
-        void migratePrefs(serviceUrl).then((query) => window.loadURL(serviceUrl + query)).then(() => window.show()).catch((error) => errorPage(`界面加载失败：${error.message}`));
+        void migratePrefs(serviceUrl).then((query) => window.loadURL(serviceUrl + query)).then(() => (autostart ? window.showInactive() : window.show())).catch((error) => errorPage(`界面加载失败：${error.message}`));
       }
     });
   }
@@ -159,7 +220,8 @@ function startService(restart) {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
+  app.on('second-instance', showWindow);
+  app.on('session-end', () => { sessionEnding = true; });
   app.on('before-quit', (event) => { if (!finished) { event.preventDefault(); void stop(); } });
   app.whenReady().then(async () => {
     app.setAppUserModelId(notificationAppId);
@@ -179,7 +241,7 @@ else {
       if (!windowCaller(event)) throw new Error('拒绝非应用页面调用');
       if (action === 'minimize') window.minimize();
       else if (action === 'toggleMaximize') { if (window.isMaximized()) window.unmaximize(); else window.maximize(); }
-      // Same path as the system close: the 'close' handler hides the window and stops the local service.
+      // Same path as the system close: the 'close' handler asks, hides to the tray or quits (Settings → Interface).
       else if (action === 'close') window.close();
       else if (action !== 'state') throw new Error('未知的窗口操作');
       return windowState();
@@ -208,15 +270,22 @@ else {
       toasts.get(tag)?.close();
       const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true });
       toast.on('click', () => {
-        if (window.isMinimized()) window.restore();
-        window.show();
-        window.focus();
+        showWindow();
         if (!window.webContents.isDestroyed()) window.webContents.send('desktop:notification-click', tag);
       });
       toast.on('close', () => { if (toasts.get(tag) === toast) toasts.delete(tag); });
       toasts.set(tag, toast);
       toast.show();
       return true;
+    });
+    // Settings → Interface → Desktop app: the close button's action and start at sign-in.
+    ipcMain.handle('desktop:app-prefs', (event, patch) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      if (patch && typeof patch === 'object') {
+        if ('openAtLogin' in patch) app.setLoginItemSettings({ openAtLogin: patch.openAtLogin === true, ...loginItem(app) });
+        if ('closeAction' in patch) prefs.set({ closeAction: patch.closeAction });
+      }
+      return appPrefs();
     });
     ipcMain.handle('desktop:navigate', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return browser.navigate(url); });
     ipcMain.handle('desktop:external', (event, url) => { if (!trusted(event)) throw new Error('拒绝非应用页面调用'); return shell.openExternal(httpUrl(url)); });
@@ -256,9 +325,9 @@ else {
     // The page's maximize/restore button follows the real state, whatever changed it (button, double-click, Snap, Win+Up, taskbar).
     for (const event of ['maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen'])
       window.on(event, () => { if (!window.webContents.isDestroyed()) window.webContents.send('desktop:window-state', windowState()); });
-    window.on('close', (event) => { if (!finished) { event.preventDefault(); window.hide(); void stop(); } });
+    window.on('close', (event) => { if (!finished) { event.preventDefault(); void onCloseRequest(); } });
     await loadShell('<span style="color:#ccc">正在启动 MyHarness…</span>');
-    window.show();
+    if (autostart) window.showInactive(); else window.show();
     startService();
   }).catch((error) => void errorPage(error.stack || error.message));
 }

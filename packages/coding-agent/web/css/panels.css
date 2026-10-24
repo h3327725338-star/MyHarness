@@ -219,6 +219,11 @@
 .kv > span:nth-child(odd) { color: var(--text-3); white-space: nowrap; }
 .res-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; min-height: 32px; }
 .res-desc { font-size: var(--fs-sm); white-space: normal; overflow-wrap: anywhere; }
+/* Connections: one account per row (provider icon, address, who or which service), then the way into Settings. */
+.connect-row { gap: 8px; min-height: 28px; padding: 3px 0; font-size: var(--fs-body); }
+.connect-row .connect-icon { flex: none; color: var(--text-3); }
+.connect-who { flex: none; max-width: 45%; font-size: var(--fs-sm); }
+.connect-empty { padding: 2px 0 6px; font-size: var(--fs-sm); }
 /* My prompts: one title per row; the row puts the prompt into the input, the pencil at its end edits it. */
 .prompt-row { display: flex; align-items: center; gap: 2px; margin: 0 -8px; border-radius: var(--r-sm); transition: background var(--t-fast) var(--ease); }
 .prompt-row:hover { background: var(--surface-hover); }

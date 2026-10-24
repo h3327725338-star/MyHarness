@@ -336,6 +336,56 @@
 }
 :root[data-motion="off"] .personal-fullscreen-dialog { transform: none; }
 
+/* Connections (ConnectPage in connect-page.js): one card per service — logo tile, name with its state, purpose, the
+   main action at the right; connected accounts as rows under it; the OAuth app as numbered steps (open while not set
+   up, folded under one line afterwards). Colors come from the shared tokens; the logo tints are each brand's hue mixed
+   into the surface so they stay quiet in every theme. */
+.svc-page { display: flex; flex-direction: column; gap: 10px; }
+.svc-group-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 8px 0 -2px; font-size: var(--fs-sm); font-weight: 650; color: var(--text-2); }
+.svc-group-title:first-child, .svc-page > .notice + .svc-group-title { margin-top: 0; }
+.svc-group-title span { font-weight: 400; color: var(--text-3); }
+.svc-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); overflow: hidden; }
+.svc-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.svc-logo { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--r-md); background: var(--surface-active); color: var(--text-2); }
+.svc-logo.github { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+.svc-logo.google { background: color-mix(in srgb, #ea4335 16%, transparent); color: #ea4335; }
+.svc-logo.microsoft { background: color-mix(in srgb, #0a78d4 18%, transparent); color: #3b9be8; }
+.svc-logo.microsoft-china { background: color-mix(in srgb, #00a2ad 18%, transparent); color: #1db4be; }
+.svc-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.svc-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.svc-name strong { font-size: var(--fs-body); font-weight: 650; }
+.svc-desc { font-size: var(--fs-sm); color: var(--text-3); }
+.svc-action { flex: none; display: flex; align-items: center; gap: 8px; }
+.svc-account { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.svc-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-sm); font-weight: 650; }
+.svc-account-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: var(--fs-body); }
+.svc-account-sub { font-size: var(--fs-sm); color: var(--text-3); }
+.svc-account-sub.warn { color: var(--warn); }
+.svc-account-actions { flex: none; display: flex; gap: 2px; }
+.svc-note { padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
+.svc-app { border-top: 1px solid var(--border); }
+.svc-app-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 36px; padding: 0 16px; text-align: left; font-size: var(--fs-sm); color: var(--text-3); }
+.svc-app-toggle:hover { background: var(--surface-hover); color: var(--text-2); }
+.svc-setup { padding: 14px 16px 16px; border-top: 1px solid var(--border); }
+.svc-setup-title { margin-bottom: 10px; font-size: var(--fs-sm); font-weight: 650; color: var(--text-2); }
+.svc-steps { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; padding: 0; list-style: none; }
+.svc-steps li { display: flex; align-items: flex-start; gap: 10px; }
+.svc-step-n { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; background: var(--surface-active); color: var(--text-2); font-size: var(--fs-xs); font-weight: 650; }
+.svc-step-text { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; font-size: var(--fs-sm); line-height: 1.55; color: var(--text-2); }
+.svc-step-text .btn { flex: none; }
+.svc-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding-left: 30px; }
+.svc-field { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
+.svc-field .field { width: 100%; }
+.svc-foot { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: var(--fs-sm); color: var(--text-3); }
+@media (max-width: 760px) {
+	/* Too narrow for the action beside the name: it goes under the card head; account buttons go under the address. */
+	.svc-head { flex-wrap: wrap; }
+	.svc-action { width: 100%; padding-left: 48px; }
+	.svc-account { flex-wrap: wrap; }
+	.svc-account-actions { width: 100%; padding-left: 36px; }
+	.svc-fields { padding-left: 0; }
+}
+
 /* Google Drive sync (SyncPage in sync-page.js): the page reuses .set-card/.set-row; only the field pairs, the
    review list and the footer need their own layout. Values come from the shared tokens, never a local palette. */
 .sync-field { width: 100%; gap: 8px; align-items: center; min-width: 0; }
@@ -360,3 +410,18 @@
 .sync-count { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 120px; }
 .sync-meter { display: block; width: 100%; height: 4px; border-radius: 2px; background: var(--bg-inset); overflow: hidden; }
 .sync-meter > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width var(--t-base) var(--ease); }
+/* The desktop window's close question (app.js CloseAppModal): two large choices, the safe one first. */
+.close-choices { display: flex; flex-direction: column; gap: 8px; }
+.close-choice { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 12px 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast); }
+.close-choice:hover, .close-choice:focus-visible { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); outline: none; }
+.close-choice-icon { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+.close-choice.quit .close-choice-icon { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.close-choice.quit:hover, .close-choice.quit:focus-visible { border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.close-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.close-choice-label { font-weight: 600; }
+.close-choice-detail { color: var(--text-2); font-size: var(--fs-sm); line-height: 1.45; }
+.close-choice-go { flex: none; color: var(--text-3); opacity: 0; transform: translateX(-4px); transition: opacity var(--t-fast), transform var(--t-fast); }
+.close-choice:hover .close-choice-go, .close-choice:focus-visible .close-choice-go { opacity: 1; transform: none; }
+.close-hint { margin: 2px 2px 0; color: var(--text-3); font-size: var(--fs-sm); }
+.close-app .modal-foot { align-items: center; }
+.close-remember { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); cursor: pointer; user-select: none; }

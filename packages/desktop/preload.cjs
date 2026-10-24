@@ -34,6 +34,17 @@ contextBridge.exposeInMainWorld('myHarnessDesktop', Object.freeze({
       return () => ipcRenderer.removeListener('desktop:window-state', handler);
     },
   }),
+  // Host preferences: { closeAction: 'ask'|'tray'|'quit', openAtLogin }. `set` takes a partial object and resolves to the
+  // state reached; onChange reports a choice made in the close dialog ("remember my choice").
+  appPrefs: Object.freeze({
+    get: () => ipcRenderer.invoke('desktop:app-prefs'),
+    set: (patch) => ipcRenderer.invoke('desktop:app-prefs', patch),
+    onChange(callback) {
+      const handler = (_event, value) => callback(value);
+      ipcRenderer.on('desktop:app-prefs', handler);
+      return () => ipcRenderer.removeListener('desktop:app-prefs', handler);
+    },
+  }),
   // Legacy single-view surface (kept for the previous panel and older pages).
   navigate: (url) => ipcRenderer.invoke('desktop:navigate', url),
   bounds: (rect) => ipcRenderer.send('desktop:bounds', rect),

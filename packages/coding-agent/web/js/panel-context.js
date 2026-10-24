@@ -9,6 +9,7 @@ import { N_, isZh, t } from "./i18n.js";
 import { zhToolDescription } from "./locales/zh-CN-tools.js";
 import { basename, fmtCost, fmtTokens } from "./util.js";
 import { promptTitleFrom } from "./saved-prompts.js";
+import { ConnectList, connectedCount, useConnections } from "./connect-page.js";
 
 const TOOL_DESCRIPTIONS = {
 	agent: N_("Delegate tasks to sub-agents."),
@@ -113,6 +114,12 @@ function SavedPrompts({ prompts, editing, setEditing }) {
 		${editing ? null : html`<button class="prompt-add" onClick=${() => setEditing({ index: -1, title: "", text: "" })}><${Icon} name="plus" size=${13} />${t("New prompt")}</button>`}`;
 }
 
+/** Connected GitHub account and mailboxes; the same accounts Settings → Connections manages. */
+function ConnectSection() {
+	const c = useConnections();
+	return html`<${Section} title=${t("Connections")} count=${c.github && c.mail ? connectedCount(c) : null} defaultOpen=${false}><${ConnectList} c=${c} /><//>`;
+}
+
 export function ContextPanel() {
 	const snap = useStore((s) => s.snap);
 	const resources = useStore((s) => s.resources);
@@ -200,6 +207,7 @@ export function ContextPanel() {
 		<${Section} title=${t("My prompts")} count=${savedPrompts.length}>
 			<${SavedPrompts} prompts=${savedPrompts} editing=${editingPrompt} setEditing=${setEditingPrompt} />
 		<//>
+		${exportReadOnly() ? null : html`<${ConnectSection} />`}
 		<${Section} title=${t("Tools")} count=${resources ? `${resources.tools.filter((t) => t.active).length}/${resources.tools.length}` : ""} defaultOpen=${false}>
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => {
 				const needsAgent = isDelegatedChild(tool.name) && !agentActive;
