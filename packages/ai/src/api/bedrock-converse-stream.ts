@@ -55,6 +55,7 @@ import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { getClaudeModelTraits } from "./claude-model-traits.ts";
 import {
 	adjustMaxTokensForThinking,
 	buildBaseOptions,
@@ -573,9 +574,9 @@ function handleContentBlockStop(
 }
 
 /**
- * Check if the model supports adaptive thinking (Opus 4.6+, Sonnet 4.6).
- * Checks both model ID and model name to support application inference profiles
- * whose ARNs don't contain the model name.
+ * Candidate spellings of the model ID and name, for matching model families.
+ * Both are checked to support application inference profiles whose ARNs don't
+ * contain the model name.
  */
 function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
 	const values = modelName ? [modelId, modelName] : [modelId];
@@ -586,23 +587,11 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
 }
 
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
-	const candidates = getModelMatchCandidates(modelId, modelName);
-	return candidates.some(
-		(s) =>
-			s.includes("opus-4-6") ||
-			s.includes("opus-4-7") ||
-			s.includes("opus-4-8") ||
-			s.includes("sonnet-4-6") ||
-			s.includes("sonnet-5") ||
-			s.includes("fable-5"),
-	);
+	return getClaudeModelTraits(modelId, modelName).adaptiveThinking;
 }
 
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
-	const candidates = getModelMatchCandidates(model.id, model.name);
-	return candidates.some(
-		(s) => s.includes("opus-4-7") || s.includes("opus-4-8") || s.includes("sonnet-5") || s.includes("fable-5"),
-	);
+	return getClaudeModelTraits(model.id, model.name).nativeXhighEffort;
 }
 
 function mapThinkingLevelToEffort(

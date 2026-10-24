@@ -411,6 +411,7 @@ export class WebHost {
 						kind: "interrupted",
 						title: category === "permission" ? "MyHarness · 需要你的确认" : "MyHarness · 需要你的回答",
 						message: body,
+						tag: `myharness-task-${this.slotId}`,
 					});
 				if (this.server.clientCount === 0) popup();
 				else {
@@ -838,6 +839,7 @@ export class WebHost {
 				kind,
 				title: `MyHarness · ${title} · ${folder}`,
 				message: body,
+				tag: `myharness-task-${this.slotId}`,
 			});
 		};
 		if (this.server.clientCount === 0) {

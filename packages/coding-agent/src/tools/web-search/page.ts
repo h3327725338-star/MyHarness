@@ -38,6 +38,15 @@ const NOISE_SELECTOR =
 
 const markdownConverter = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 });
 
+/**
+ * Parse a fetched page. Unclosed elements are left open, as a browser does: node-html-parser's repair pass for them
+ * moves children one by one and is quadratic, so a forum page with ~100 unclosed <div>s took 26 s of blocked event
+ * loop per parse (stalling every other request and the search read budget) instead of ~30 ms.
+ */
+function parseHtml(html: string): HTMLElement {
+	return parse(html, { comment: false, parseNoneClosedTags: true });
+}
+
 function textLength(element: HTMLElement): number {
 	return element.text.replace(/\s+/gu, " ").trim().length;
 }
@@ -65,7 +74,7 @@ export function htmlToMarkdown(
 	html: string,
 	baseUrl: string,
 ): { title?: string; markdown: string; publishedAt?: string } {
-	const root = parse(html, { comment: false });
+	const root = parseHtml(html);
 	const title =
 		root.querySelector("title")?.text.trim() || metaContent(root, ['meta[property="og:title"]']) || undefined;
 	const publishedAt =
@@ -131,7 +140,7 @@ const LOGIN_HINT = /log[\s-]?in|sign[\s-]?in|signin|passport|\bsso\b|\bauth|ç™»å
  * is never called a wall for mentioning one.
  */
 export function detectAccessWall(html: string, status: number, url: string): AccessWall | undefined {
-	const root = parse(html, { comment: false });
+	const root = parseHtml(html);
 	const title = root.querySelector("title")?.text.trim() ?? "";
 	const hasPassword = root.querySelector('input[type="password"]') !== null;
 	for (const element of root.querySelectorAll("script,style,noscript,template")) element.remove();

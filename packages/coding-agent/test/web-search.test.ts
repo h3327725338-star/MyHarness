@@ -258,6 +258,23 @@ describe("page reading", () => {
 		for (const noise of ["menu", "alert", "foot", "javascript", "#x"]) expect(page.markdown).not.toContain(noise);
 	});
 
+	it("reads a page full of unclosed elements quickly and keeps all of its text", () => {
+		// Shaped like a forum thread whose posts never close their <div>: the parser's repair pass took 13 s here.
+		const posts = Array.from(
+			{ length: 150 },
+			(_, i) => `<div class="post">post ${i} ${"<span>word</span> ".repeat(100)}`,
+		);
+		const startedAt = Date.now();
+		const page = htmlToMarkdown(
+			`<html><head><title>Thread</title></head><body>${posts.join("")}</body></html>`,
+			"https://forum.example/t",
+		);
+		expect(Date.now() - startedAt).toBeLessThan(2_000);
+		expect(page.title).toBe("Thread");
+		expect(page.markdown).toContain("post 0 word");
+		expect(page.markdown).toContain("post 149 word");
+	});
+
 	it("keeps authentication cookies along redirects without sharing them across reads or hosts", async () => {
 		const seen: string[] = [];
 		const { service } = createService(

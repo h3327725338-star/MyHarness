@@ -431,7 +431,7 @@ For providers or proxies using `api: "anthropic-messages"`, use `compat` to cont
 
 By default MyHarness sends per-tool `eager_input_streaming: true`. If a proxy or Anthropic-compatible backend rejects that field, set `supportsEagerToolInputStreaming` to `false`. MyHarness will omit `tools[].eager_input_streaming` and send the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests instead.
 
-Some Anthropic-compatible models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Provider metadata may set this automatically; for custom providers or aliases that route to those models, set `forceAdaptiveThinking` to `true`.
+Some Anthropic-compatible models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Claude model IDs and names are recognized automatically (Opus/Sonnet 4.6 and later, Haiku 5 and later, Fable, Mythos); set `forceAdaptiveThinking` to `true` only for aliases whose ID or name does not name the Claude model, or `false` to opt out.
 
 Some Anthropic-compatible providers emit thinking blocks with empty signatures and still expect them on replay. Set `allowEmptySignature` to `true` only for those providers; real Anthropic rejects empty thinking signatures.
 
@@ -466,7 +466,7 @@ Some Anthropic-compatible providers emit thinking blocks with empty signatures a
 | `supportsLongCacheRetention` | Whether the provider accepts Anthropic long cache retention (`cache_control.ttl: "1h"`) when cache retention is `long`. Default: `true`. |
 | `sendSessionAffinityHeaders` | Whether to send `x-session-affinity` from the session id when caching is enabled. Default: `false`. |
 | `supportsCacheControlOnTools` | Whether the provider accepts Anthropic-style `cache_control` markers on tool definitions. Default: `true`. |
-| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Provider metadata may set this automatically. Default: `false`. |
+| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Default: decided by the Claude model ID or name (see above); `false` for other models. |
 | `allowEmptySignature` | Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: `false`. |
 
 ## OpenAI Compatibility

@@ -19,6 +19,8 @@ export interface PopupNotificationContent {
 	title: string;
 	/** Popup body text; may contain newlines. */
 	message: string;
+	/** Notifications with the same tag replace each other; in the desktop app a click on one brings that chat forward. */
+	tag?: string;
 }
 
 /** A command that renders the popup when spawned, or undefined if unsupported. */
@@ -323,6 +325,32 @@ function buildLinuxCommand(style: PopupNotificationStyle, content: PopupNotifica
 }
 
 /**
+ * In the desktop app the web service is a child of Electron with an IPC link. Its toast is then shown by the app itself
+ * (a native notification under the MyHarness app id, like the ones the page shows), not by a PowerShell toast that
+ * Windows attributes to "Windows PowerShell". Returns false outside the desktop app or when the link is closed.
+ */
+export function sendDesktopNotification(
+	content: PopupNotificationContent,
+	env: NodeJS.ProcessEnv = process.env,
+	link: { send?: (message: unknown) => boolean; connected: boolean } = {
+		send: process.send?.bind(process),
+		connected: process.connected === true,
+	},
+): boolean {
+	if (env.MYHARNESS_DESKTOP_HOST !== "1" || !link.send || !link.connected) return false;
+	try {
+		return link.send({
+			type: "myharness:notify",
+			title: content.title,
+			body: content.message,
+			tag: content.tag ?? "",
+		});
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Fire-and-forget desktop popup. Returns true when a notification process was
  * spawned. Best-effort by design: a missing notifier binary (notify-send,
  * osascript, ...) surfaces as an async spawn error, which is deliberately
@@ -341,6 +369,7 @@ function buildLinuxCommand(style: PopupNotificationStyle, content: PopupNotifica
  * alive.
  */
 export function showPopupNotification(style: PopupNotificationStyle, content: PopupNotificationContent): boolean {
+	if (style === "toast" && sendDesktopNotification(content)) return true;
 	const popup = buildPopupCommand(process.platform, style, content);
 	if (!popup) {
 		return false;

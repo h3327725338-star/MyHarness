@@ -37,6 +37,8 @@ import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { captureFetchErrors, type FetchErrorCapture, recordProviderFailure } from "../utils/provider-failure.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
+import { toAnthropicInputSchema } from "./anthropic-tool-schema.ts";
+import { getClaudeModelTraits } from "./claude-model-traits.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
 import { loadSystemPrompt } from "./system-prompt-loader.ts";
@@ -178,10 +180,20 @@ function getAnthropicCompat(
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
 		sendSessionAffinityHeaders: model.compat?.sendSessionAffinityHeaders ?? false,
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? true,
-		supportsTemperature: model.compat?.supportsTemperature ?? true,
+		supportsTemperature:
+			model.compat?.supportsTemperature ?? !getClaudeModelTraits(model.id, model.name).fixedSampling,
 		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
 		supportsToolReferences: model.compat?.supportsToolReferences ?? defaultSupportsToolReferences(model),
 	};
+}
+
+/**
+ * Whether requests use adaptive thinking (`thinking.type: "adaptive"` + `output_config.effort`) instead of a
+ * `budget_tokens` budget. `compat.forceAdaptiveThinking` decides when set; otherwise the Claude model ID does, since
+ * models.json entries usually carry no compat flags and current Claude models reject `budget_tokens` with HTTP 400.
+ */
+function usesAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
+	return model.compat?.forceAdaptiveThinking ?? getClaudeModelTraits(model.id, model.name).adaptiveThinking;
 }
 
 /**
@@ -787,7 +799,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
  * Note: effort "max" is available on all adaptive-thinking Claude models, while native
- * "xhigh" is only available on Opus 4.7/4.8, Sonnet 5, and Fable 5.
+ * "xhigh" arrived with Opus 4.7 (see claude-model-traits.ts); elsewhere it falls back to "high".
  */
 function mapThinkingLevelToEffort(
 	model: Model<"anthropic-messages">,
@@ -797,6 +809,10 @@ function mapThinkingLevelToEffort(
 	if (typeof mapped === "string") return mapped as AnthropicEffort;
 
 	switch (level) {
+		case "xhigh":
+			return getClaudeModelTraits(model.id, model.name).nativeXhighEffort ? "xhigh" : "high";
+		case "max":
+			return "max";
 		case "minimal":
 		case "low":
 			return "low";
@@ -823,7 +839,7 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 
 	// For models with adaptive thinking: use an effort level.
 	// For older models: use budget-based thinking.
-	if (model.compat?.forceAdaptiveThinking === true) {
+	if (usesAdaptiveThinking(model)) {
 		const effort = mapThinkingLevelToEffort(model, options.reasoning);
 		return stream(model, context, {
 			...base,
@@ -866,7 +882,7 @@ function createClient(
 	fetch?: FetchErrorCapture["fetch"],
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models have interleaved thinking built in, so skip the beta header.
-	const needsInterleavedBeta = interleavedThinking && model.compat?.forceAdaptiveThinking !== true;
+	const needsInterleavedBeta = interleavedThinking && !usesAdaptiveThinking(model);
 	const betaFeatures: string[] = [];
 	if (useFineGrainedToolStreamingBeta) {
 		betaFeatures.push(FINE_GRAINED_TOOL_STREAMING_BETA);
@@ -1030,7 +1046,7 @@ function buildParams(
 			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
 			// older Claude 4 models (whose API default is also "summarized").
 			const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
-			if (model.compat?.forceAdaptiveThinking === true) {
+			if (usesAdaptiveThinking(model)) {
 				// Adaptive thinking: Claude decides when and how much to think.
 				params.thinking = { type: "adaptive", display };
 				if (options.effort) {
@@ -1050,7 +1066,12 @@ function buildParams(
 					display,
 				};
 			}
-		} else if (options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null) {
+		} else if (
+			options?.thinkingEnabled === false &&
+			model.thinkingLevelMap?.off !== null &&
+			!getClaudeModelTraits(model.id, model.name).thinkingAlwaysOn
+		) {
+			// Models whose thinking cannot be turned off reject `disabled`; leaving `thinking` out is their "off".
 			params.thinking = { type: "disabled" };
 		}
 	}
@@ -1305,19 +1326,7 @@ function convertTools(
 
 	return tools.map((tool, index) => {
 		const schema = stripToolSchemaSymbols(tool.parameters) as Record<string, unknown>;
-		const hasUnion = Array.isArray(schema.anyOf) || Array.isArray(schema.oneOf);
-		const inputSchema = hasUnion
-			? {
-					// Preserve operation-specific anyOf/oneOf branches instead of
-					// reducing a discriminated tool schema to one flat object.
-					...schema,
-					type: typeof schema.type === "string" ? schema.type : "object",
-				}
-			: {
-					type: "object",
-					properties: schema.properties ?? {},
-					required: schema.required ?? [],
-				};
+		const inputSchema = toAnthropicInputSchema(schema);
 
 		return {
 			name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,

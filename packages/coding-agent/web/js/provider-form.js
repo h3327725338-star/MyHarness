@@ -7,7 +7,7 @@ import { Select } from "./select.js";
 import { post } from "./store.js";
 import { effortName, fmtTokens } from "./util.js";
 import { N_, t } from "./i18n.js";
-import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, detectOutcome, detectRecord, fmtK, fromK, modelDraft, offeredLevels, parseModelIds } from "./provider-models.js";
+import { BASE_URL_EXAMPLE, aliasPairs, applyDetection, authModeOf, baseUrlProblem, buildModel, connectionReady, detectOutcome, detectRecord, fmtK, fromK, modelDraft, offeredLevels, parseModelIds, parseProviderJson } from "./provider-models.js";
 
 const API_LABELS = {
 	"openai-completions": N_("OpenAI Chat Completions (most compatible services)"),
@@ -289,6 +289,14 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 	const headerProblem = sessionHeaderProblem(draft.sessionHeader);
 	const ipFamilies = defaults?.ipFamilies?.length ? defaults.ipFamilies : Object.keys(IP_FAMILY_NAMES);
 
+	/** The provider entry in the JSON view, or why it cannot be read. */
+	const readJson = () => {
+		const result = parseProviderJson(json, draft.id.trim());
+		if (result.error === "syntax") return { problem: t("Invalid JSON: {message}", { message: result.message }) };
+		if (result.error) return { problem: t("Invalid JSON: {message}", { message: t("The configuration must be a JSON object.") }) };
+		return { config: result.config };
+	};
+
 	const switchView = (next) => {
 		if (next === view) return;
 		if (next === "json") {
@@ -299,13 +307,9 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 			setView("json");
 			return;
 		}
-		let parsed;
-		try {
-			parsed = JSON.parse(json);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(t("The configuration must be a JSON object."));
-		} catch (e) {
-			return setError(t("Invalid JSON: {message}", { message: e.message }));
-		}
+		const read = readJson();
+		if (read.problem) return setError(read.problem);
+		const parsed = read.config;
 		setError("");
 		setDraft((current) => ({ ...draftFromConfig(current.id, parsed, current), apiKey: current.apiKey }));
 		setView("form");
@@ -373,12 +377,9 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 		let config;
 		let problem = "";
 		if (view === "json") {
-			try {
-				config = JSON.parse(json);
-				if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error(t("The configuration must be a JSON object."));
-			} catch (e) {
-				return setError(t("Invalid JSON: {message}", { message: e.message }));
-			}
+			const read = readJson();
+			if (read.problem) return setError(read.problem);
+			config = read.config;
 			if (!ID_PATTERN.test(draft.id.trim())) problem = t("Provider ID may only use lowercase letters, digits, dots, underscores and hyphens.");
 			else problem = sessionHeaderProblem(config.sessionHeader);
 		} else {

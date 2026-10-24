@@ -141,13 +141,19 @@ describe("Anthropic eager tool input streaming compatibility", () => {
 		expect(request.headers["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
 	});
 
-	it("preserves operation-specific union schemas in input_schema", async () => {
+	it("flattens a top-level union into one object schema (the Anthropic API rejects top-level anyOf)", async () => {
 		const request = await captureAnthropicRequest(undefined, createContext([unionTool]));
 		const schema = getFirstTool(request.body).input_schema as Record<string, unknown>;
 
-		expect(schema.type).toBe("object");
-		expect(Array.isArray(schema.anyOf)).toBe(true);
-		expect(schema).not.toHaveProperty("properties");
+		expect(schema).toEqual({
+			type: "object",
+			properties: {
+				operation: { type: "string", enum: ["file_symbols", "search_code"] },
+				path: { type: "string" },
+				query: { type: "string" },
+			},
+			required: ["operation"],
+		});
 	});
 
 	it("does not send the legacy fine-grained tool streaming beta when there are no tools", async () => {

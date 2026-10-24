@@ -2432,3 +2432,32 @@ describe("Web UI: failed-turn text folds to its first sentence", () => {
 		expect(splitFirstSentence(undefined)).toEqual(["", ""]);
 	});
 });
+
+describe("Web UI: provider JSON view accepts an entry copied with its key", () => {
+	const entry = {
+		api: "anthropic-messages",
+		baseUrl: "https://api.anthropic.com",
+		models: [{ id: "claude-haiku-5-5" }],
+	};
+	const body = JSON.stringify(entry, null, 2);
+
+	it("reads the bare entry", () => {
+		expect(models.parseProviderJson(body, "anthropic")).toEqual({ config: entry });
+	});
+
+	it('reads `"id": { ... }` as copied from models.json, with or without a trailing comma', () => {
+		expect(models.parseProviderJson(`"anthropic": ${body}`, "anthropic")).toEqual({ config: entry });
+		expect(models.parseProviderJson(`"anthropic": ${body},\n`, "anthropic")).toEqual({ config: entry });
+	});
+
+	it('unwraps `{ "id": {...} }` and a whole models.json', () => {
+		expect(models.parseProviderJson(JSON.stringify({ anthropic: entry }), "anthropic")).toEqual({ config: entry });
+		const file = JSON.stringify({ providers: { other: { ...entry, baseUrl: "https://x" }, anthropic: entry } });
+		expect(models.parseProviderJson(file, "anthropic")).toEqual({ config: entry });
+	});
+
+	it("still reports broken JSON and non-objects", () => {
+		expect(models.parseProviderJson(`{ "api": `, "anthropic").error).toBe("syntax");
+		expect(models.parseProviderJson("[]", "anthropic")).toEqual({ error: "not-object" });
+	});
+});

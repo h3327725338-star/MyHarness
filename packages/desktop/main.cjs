@@ -23,6 +23,8 @@ const logs = join(data, 'logs');
 mkdirSync(logs, { recursive: true });
 const log = (message) => appendFileSync(join(logs, 'web-launch.err.log'), `[desktop ${new Date().toISOString()}] ${message}\n`);
 let window, browser, child, job, serviceUrl, tray, stopping = false, finished = false, asking = false, sessionEnding = false;
+// Shows a native notification owned by this app; set once the app is ready (see 'desktop:notify').
+let showToast = () => false;
 // Workspace commands are executed by the page itself (it owns the tab list and the media elements). One request is one
 // round trip: the page answers with the state it reached, so the caller can verify the result instead of assuming it.
 // A reload, a closed window or a timeout fails the pending request instead of hanging.
@@ -203,6 +205,9 @@ function startService(restart) {
         .catch((error) => { try { child.send({ type: 'myharness:browser-result', requestId, ok: false, error: error?.message || String(error) }); } catch { /* child already gone */ } });
       return;
     }
+    // The service's own task-end notification (no page took it, e.g. the window is in the tray): shown by this app,
+    // never by a PowerShell toast that Windows would attribute to "Windows PowerShell".
+    if (message?.type === 'myharness:notify') { showToast(message); return; }
     if (message?.type !== 'myharness:restart') return;
     // This message is sent only after runtime disposal and HTTP close. Background
     // handles may still keep Node alive; don't let them strand a completed restart.
@@ -260,8 +265,7 @@ else {
     // `icon` is passed on purpose: that image is a second logo beside the text, and without it the whole content area
     // belongs to the message. The small app logo in the toast header comes from the app itself, not from this option.
     const toasts = new Map();
-    ipcMain.handle('desktop:notify', (event, payload) => {
-      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+    showToast = (payload) => {
       if (!Notification.isSupported() || !payload || typeof payload !== 'object') return false;
       const text = (value, max) => String(value ?? '').slice(0, max);
       const tag = text(payload.tag, 200);
@@ -275,6 +279,10 @@ else {
       toasts.set(tag, toast);
       toast.show();
       return true;
+    };
+    ipcMain.handle('desktop:notify', (event, payload) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      return showToast(payload);
     });
     // Settings → Interface → Desktop app: the close button's action and start at sign-in.
     ipcMain.handle('desktop:app-prefs', (event, patch) => {

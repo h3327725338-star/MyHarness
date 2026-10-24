@@ -289,3 +289,35 @@ export function connectionReady(draft, { hasStoredKey }) {
 	if (draft.auth === "key") return !!draft.apiKey.trim() || hasStoredKey;
 	return true;
 }
+
+/** Fields only a provider entry of models.json has; a value with none of them is a wrapper around one. */
+const PROVIDER_FIELDS = ["api", "baseUrl", "models", "apiKey", "authMode", "headers"];
+const isPlainObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+const isProviderEntry = (value) => isPlainObject(value) && PROVIDER_FIELDS.some((field) => field in value);
+
+/**
+ * The provider entry in what the user typed or pasted in the JSON view. Besides the entry itself, it accepts the forms
+ * an entry is usually copied in: with its key (`"anthropic": { ... }`, as models.json and answers show it), wrapped
+ * in braces with that key, or a whole models.json (`{ "providers": { ... } }`), where the entry named `providerId`, or
+ * the only one, is taken. Returns `{ config }`, `{ error: "not-object" }`, or `{ error: "syntax", message }`.
+ */
+export function parseProviderJson(text, providerId) {
+	const source = String(text ?? "").trim();
+	let value;
+	try {
+		value = JSON.parse(source);
+	} catch (error) {
+		// `"id": { ... }` (perhaps with a trailing comma) is one member of an object: try it with the braces around it.
+		try {
+			value = JSON.parse(`{${source.replace(/,\s*$/u, "")}}`);
+		} catch {
+			return { error: "syntax", message: error.message };
+		}
+	}
+	if (!isPlainObject(value)) return { error: "not-object" };
+	if (isProviderEntry(value)) return { config: value };
+	const map = isPlainObject(value.providers) && !isProviderEntry(value.providers) ? value.providers : value;
+	const keys = Object.keys(map);
+	const key = providerId && keys.includes(providerId) ? providerId : keys.length === 1 ? keys[0] : undefined;
+	return { config: key !== undefined && isProviderEntry(map[key]) ? map[key] : value };
+}

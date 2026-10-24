@@ -22,6 +22,22 @@ export async function requestNotificationPermission() {
 
 const clickHandlers = new Map();
 let listening = false;
+let defaultClick;
+
+function listenForDesktopClicks(desktop) {
+	if (listening || !desktop?.onNotificationClick) return;
+	listening = true;
+	desktop.onNotificationClick((clicked) => (clickHandlers.get(clicked) || defaultClick)?.(clicked));
+}
+
+/**
+ * In the desktop app the service shows a notification itself when no page took it (the window was in the tray, say).
+ * A click on such a notification arrives with a tag this page never registered; `handler(tag)` handles those.
+ */
+export function setDesktopNotificationClick(handler) {
+	defaultClick = handler;
+	listenForDesktopClicks(globalThis.myHarnessDesktop);
+}
 
 /**
  * Shows a notification. Resolves false when the browser did not take it (no permission, or it refused), so the caller
@@ -33,10 +49,7 @@ export async function showNotification({ title, body, tag, onClick }) {
 	const desktop = globalThis.myHarnessDesktop;
 	if (desktop?.notify) {
 		clickHandlers.set(tag, onClick);
-		if (!listening && desktop.onNotificationClick) {
-			listening = true;
-			desktop.onNotificationClick((clicked) => clickHandlers.get(clicked)?.());
-		}
+		listenForDesktopClicks(desktop);
 		try {
 			return (await desktop.notify({ title, body, tag })) === true;
 		} catch {

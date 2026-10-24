@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -599,8 +599,19 @@ export const actions = {
 	async deleteSession(path, title) {
 		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true, artifactChoice: true, memoryChoice: true });
 		if (!ok) return;
+		// The row leaves the sidebar at once, before the server answers and the chat on screen changes; a refusal puts
+		// the lists back.
+		const lists = state.workspaces;
+		const unhide = hideWhileDeleting(path);
+		removeListed(path);
 		const result = await attempt(() => post("/api/sessions/delete", { path, deleteArtifacts: ok.deleteArtifacts === true, deleteMemory: ok.deleteMemory === true }));
-		if (result) await refreshAll();
+		unhide();
+		if (!result) {
+			state.workspaces = { ...state.workspaces, sessions: lists.sessions, unbound: lists.unbound, archived: lists.archived };
+			emit();
+			return;
+		}
+		await refreshAll();
 	},
 
 	/**
@@ -814,6 +825,15 @@ function moveListed(path, archived, info) {
 	} else {
 		state.workspaces = { ...lists, archived: without(lists.archived) };
 	}
+	emit();
+}
+
+/** Take a chat out of every list it is in, without reloading anything. */
+function removeListed(path) {
+	const lists = state.workspaces;
+	const without = (list) => (list && list.some((item) => samePath(item.path, path)) ? list.filter((item) => !samePath(item.path, path)) : list);
+	const sessions = Object.fromEntries(Object.entries(lists.sessions).map(([root, list]) => [root, without(list)]));
+	state.workspaces = { ...lists, sessions, unbound: without(lists.unbound), archived: without(lists.archived) };
 	emit();
 }
 

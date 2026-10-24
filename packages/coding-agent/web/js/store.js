@@ -16,7 +16,7 @@ import {
 } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 import { playNotificationSound } from "./notification-sounds.js";
-import { showNotification } from "./notifications.js";
+import { setDesktopNotificationClick, showNotification } from "./notifications.js";
 import { runModeOf } from "./run-modes.js";
 import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { savedPromptsOf } from "./saved-prompts.js";
@@ -424,7 +424,28 @@ Object.defineProperty(state, "workspaces", {
 	},
 });
 function patchLists(mode, patch) {
-	listsByMode[mode] = { ...listsByMode[mode], ...patch };
+	listsByMode[mode] = { ...listsByMode[mode], ...withoutDeleting(patch) };
+}
+
+// Chats being deleted: the server moves their slot to a new chat before the file goes, so a list read in between
+// still has them. They stay out of every list that arrives until the delete has finished.
+const deletingPaths = new Set();
+const deletingKey = (path) => String(path || "").replace(/\\/g, "/").toLowerCase();
+
+/** Keep a chat out of the sidebar's lists while it is deleted; call the returned function once the delete is done. */
+export function hideWhileDeleting(path) {
+	const key = deletingKey(path);
+	deletingPaths.add(key);
+	return () => deletingPaths.delete(key);
+}
+
+function withoutDeleting(patch) {
+	if (!deletingPaths.size) return patch;
+	const keep = (list) => (Array.isArray(list) ? list.filter((item) => !deletingPaths.has(deletingKey(item.path))) : list);
+	const next = { ...patch };
+	for (const key of ["archived", "unbound"]) if (key in next) next[key] = keep(next[key]);
+	if (next.sessions) next.sessions = Object.fromEntries(Object.entries(next.sessions).map(([root, list]) => [root, keep(list)]));
+	return next;
 }
 
 for (const key of SLOT_KEYS) {
@@ -2195,6 +2216,11 @@ function refreshSessionsSoon() {
 
 /** One notification per chat: a later one about the same chat replaces the earlier one, in every open tab. */
 const taskTag = (slot) => `myharness-task-${slot}`;
+// A notification the service showed itself (WebHost.announceTaskEnd, same tag) opens its chat when clicked.
+setDesktopNotificationClick((tag) => {
+	const slot = String(tag || "").startsWith("myharness-task-") ? String(tag).slice("myharness-task-".length) : "";
+	if (slot && state.slots.some((s) => s.slot === slot)) activateSlot(slot);
+});
 /** The chat a notification is about: its name, else its first message, else its workspace. */
 function chatLabel(slot) {
 	const info = state.slots.find((s) => s.slot === slot);
