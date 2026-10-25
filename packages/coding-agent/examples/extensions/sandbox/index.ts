@@ -44,12 +44,29 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import type { ExtensionAPI } from "@myharness/coding-agent";
 import { type BashOperations, CONFIG_DIR_NAME, createBashTool, getAgentDir } from "@myharness/coding-agent";
 
-interface SandboxConfig extends SandboxRuntimeConfig {
+// sandbox-runtime infers SandboxRuntimeConfig from zod 3 schemas; the repo overrides zod to 4,
+// where that inferred type no longer resolves, so the fields used here are declared locally.
+interface SandboxConfig {
 	enabled?: boolean;
+	network: {
+		allowedDomains: string[];
+		deniedDomains: string[];
+		allowUnixSockets?: string[];
+		allowAllUnixSockets?: boolean;
+		allowLocalBinding?: boolean;
+		httpProxyPort?: number;
+		socksProxyPort?: number;
+	};
+	filesystem: {
+		denyRead: string[];
+		allowWrite: string[];
+		denyWrite: string[];
+		allowGitConfig?: boolean;
+	};
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
