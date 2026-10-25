@@ -21,6 +21,9 @@ it("ignores obsolete Git status responses independently for each Chat", async ()
 		workspaceGitStatus: new Map(),
 		workspaceGitRequests: new Map(),
 		state: { snap: null },
+		REQUEST_TIMEOUT: { status: 15_000 },
+		// Failure retries are scheduled, not run: this test only covers which response may win.
+		setTimeout: () => 0,
 		api: (_path: string, { slot }: { slot: string }) =>
 			new Promise((resolve, reject) => requests.push({ slot, resolve, reject })),
 		runFor: (slot: string, fn: () => void) => {

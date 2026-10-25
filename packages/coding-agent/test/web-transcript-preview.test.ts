@@ -164,9 +164,12 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 		delete (globalThis as Record<string, unknown>).document;
 	});
 
-	it("① reads the snapshot before the transcript and applies both", async () => {
+	// Both reads start together (the snapshot is still applied first); the transcript asks for images by address.
+	const bothReads = ["/api/state", "/api/transcript?images=ref&limit=120"];
+
+	it("① starts the snapshot and transcript reads together and applies both", async () => {
 		await staged.refreshSlotStaged("staged-s1", staged.nextSwitch());
-		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=120"]);
+		expect([...fetchCalls].sort()).toEqual(bothReads);
 		const bag = staged.inSlot("staged-s1", () => ({
 			items: staged.state.items,
 			snap: staged.state.snap,
@@ -175,16 +178,16 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 		expect(bag.snap?.session?.id).toBe("staged-s1");
 	});
 
-	it("② a snapshot failure never reaches the transcript", async () => {
+	it("② a snapshot failure rejects even though the transcript read already started", async () => {
 		failPaths.add("/api/state");
 		await expect(staged.refreshSlotStaged("staged-s2", staged.nextSwitch())).rejects.toThrow();
-		expect(fetchCalls).toEqual(["/api/state"]);
+		expect([...fetchCalls].sort()).toEqual(bothReads);
 	});
 
 	it("③ a transcript failure rejects (loaded stays unset, the caller routes it to failSwitch)", async () => {
 		failPaths.add("/api/transcript");
 		await expect(staged.refreshSlotStaged("staged-s3", staged.nextSwitch())).rejects.toThrow();
-		expect(fetchCalls).toEqual(["/api/state", "/api/transcript?limit=120"]);
+		expect([...fetchCalls].sort()).toEqual(bothReads);
 		// The snapshot landed but the transcript did not: nothing may read as a complete session.
 		const bag = staged.inSlot("staged-s3", () => ({ items: staged.state.items }));
 		expect(bag.items).toEqual([]);
@@ -193,8 +196,9 @@ describe("Web UI: snapshot-first staged switch (store.js refreshSlotStaged)", ()
 	it("④ a superseded switch bails out between the stages", async () => {
 		const seq = staged.nextSwitch();
 		staged.nextSwitch(); // a newer click wins before the snapshot resolves
-		await staged.refreshSlotStaged("staged-s4", seq);
-		expect(fetchCalls).toEqual(["/api/state"]); // no transcript for a dead switch
+		// Resolves without waiting on or rejecting for the dead switch's transcript.
+		await expect(staged.refreshSlotStaged("staged-s4", seq)).resolves.toBeUndefined();
+		expect([...fetchCalls].sort()).toEqual(bothReads);
 	});
 
 	it("⑤ failSwitch keeps the failed target with its retry instead of rolling back", () => {

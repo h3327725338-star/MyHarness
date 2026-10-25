@@ -2252,8 +2252,8 @@ describe("Web UI: paged transcript client (store.js loadTranscript/fetchMoreTran
 		handler = null;
 	});
 
-	it("① the first screen passes limit=400 and keeps the paging cursor", async () => {
-		expect(pageStore.TRANSCRIPT_FIRST_PAGE).toBe(400);
+	it("① the first screen passes limit=120 and keeps the paging cursor", async () => {
+		expect(pageStore.TRANSCRIPT_FIRST_PAGE).toBe(120);
 		handler = (url: string) => {
 			expect(url).toBe(`/api/transcript?images=ref&limit=${pageStore.TRANSCRIPT_FIRST_PAGE}`);
 			return { items: range(60, 100), hasMore: true, nextCursor: "w175-60" };
