@@ -7,7 +7,8 @@ MyHarness is maintained in the repository at
 preserve existing user data and configuration formats, and explain any
 behavioral or compatibility change in the pull request.
 
-The project is Early-stage / Work in Progress. Read
+The project is under active development, with Windows x64 as the maintained
+target. Read
 `ARCHITECTURE_AND_DEVELOPMENT.md`, `PROJECT_STATUS.md` and the relevant package
 maintenance guide before changing a public contract. Long-lived design choices
 are recorded in `docs/decisions/`.
@@ -23,7 +24,7 @@ git clone https://github.com/h3327725338-star/MyHarness.git
 cd MyHarness
 ```
 
-The project is Early-stage / Work in Progress. Node.js `>=22.19.0` and Git
+Node.js `>=22.19.0` and Git
 Bash on Windows are the current maintenance-environment prerequisites.
 
 From the repository root:

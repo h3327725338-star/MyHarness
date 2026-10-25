@@ -24,6 +24,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Usage](usage.md) — browser interaction, slash commands, context files, and Web startup.
 - [Web UI](web-ui.md) — the only user UI (`myharness`): conversation, diffs, files, Terminal, Git, settings, and lifecycle.
 - [Providers](providers.md) — Provider configuration, credentials, and model runtime boundaries.
+- [NVIDIA Nemotron on Nebius Token Factory](nebius-token-factory.md) — endpoint, model IDs, reasoning levels, and a ready-made `models.json` example for Token Factory.
 - [llama.cpp](llama-cpp.md) — run a local router and manage models.
 - [Security](security.md) — Project Trust, sandbox boundaries, and vulnerability reporting.
 - [Containerization](containerization.md) — isolate MyHarness with Gondolin, Docker, or OpenShell.

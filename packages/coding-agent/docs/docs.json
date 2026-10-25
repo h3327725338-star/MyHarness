@@ -20,6 +20,10 @@
           "path": "providers.md"
         },
         {
+          "title": "NVIDIA Nemotron on Nebius Token Factory",
+          "path": "nebius-token-factory.md"
+        },
+        {
           "title": "Security",
           "path": "security.md"
         },

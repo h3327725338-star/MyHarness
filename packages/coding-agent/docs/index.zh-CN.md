@@ -24,6 +24,7 @@ npm.cmd run build
 - [Web UI](web-ui.md) — 唯一用户界面（`myharness`）：对话、Diff、文件、Terminal、Git、设置与生命周期。
 - [使用说明](usage.md) — 浏览器交互、Slash Commands、context files 和 Web 启动。
 - [Providers](providers.md) — Provider 配置、credentials 和 model runtime 边界。
+- [NVIDIA Nemotron on Nebius Token Factory](nebius-token-factory.md) — Token Factory 的 endpoint、model ID、reasoning 档位和可直接使用的 `models.json` 示例。
 - [llama.cpp](llama-cpp.md) — 运行本地 router 和管理 models。
 - [安全](security.md) — Project Trust、sandbox 边界和漏洞报告。
 - [Containerization](containerization.md) — 使用 Gondolin、Docker 或 OpenShell 隔离 MyHarness。

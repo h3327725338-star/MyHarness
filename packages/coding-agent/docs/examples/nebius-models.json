@@ -1,0 +1,117 @@
+{
+  "providers": {
+    "nebius": {
+      "name": "nebius",
+      "baseUrl": "https://api.tokenfactory.nebius.com/v1/",
+      "api": "openai-completions",
+      "apiKey": "$NEBIUS_TOKEN_FACTORY_API_KEY",
+      "models": [
+        {
+          "id": "nvidia/Nemotron-3-Ultra-550b-a55b",
+          "name": "Nemotron 3 Ultra",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536,
+          "cost": {
+            "input": 1,
+            "output": 3,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "currency": "USD"
+          },
+          "compat": {
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "minimal",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "Nemotron 3 Super",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 65536,
+          "cost": {
+            "input": 0.3,
+            "output": 0.9,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "currency": "USD"
+          },
+          "compat": {
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "minimal",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "nvidia/Nemotron-3_5-Lightning",
+          "name": "Nemotron 3.5 Lightning",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536,
+          "cost": {
+            "input": 0.06,
+            "output": 0.24,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "currency": "USD"
+          },
+          "compat": {
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "minimal",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "nvidia/Nemotron-3.5-Super-VL",
+          "name": "Nemotron 3.5 Super VL",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 4096,
+          "cost": {
+            "input": 0.3,
+            "output": 0.9,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "currency": "USD"
+          }
+        }
+      ]
+    }
+  }
+}

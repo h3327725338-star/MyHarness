@@ -7,10 +7,12 @@ binary, the missing runtime evidence is called out explicitly.
 
 ## Current stage
 
-MyHarness is **Early-stage / Work in Progress**. The repository is suitable for
-source contributors who can provide a Provider configuration and review the
-current contracts. It is not yet a polished, zero-configuration product
-release.
+MyHarness is **actively developed and usable on Windows x64**. The maintained
+paths are the Windows desktop app (Electron plus a loopback-only Web UI) and a
+source checkout of the same code. The default Provider catalog is empty by
+design, so a Provider, model and credential must be configured before the first
+model-backed session. Claims that still need runtime evidence are called out
+below.
 
 ## Confirmed in source and targeted tests
 

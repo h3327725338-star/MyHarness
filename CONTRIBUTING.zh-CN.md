@@ -6,7 +6,7 @@ MyHarness 的公开仓库地址是
 <https://github.com/h3327725338-star/MyHarness>。请保持改动聚焦，保留已有
 用户数据和配置格式；如果改变行为或兼容性，请在 Pull Request 中说明。
 
-项目目前处于 Early-stage / Work in Progress。修改公共 contract 前，请先阅读
+项目正在持续开发，维护目标是 Windows x64。修改公共 contract 前，请先阅读
 `ARCHITECTURE_AND_DEVELOPMENT.md`、`PROJECT_STATUS.md` 以及相关 package 的维护手册。
 长期设计选择记录在 `docs/decisions/`。
 
