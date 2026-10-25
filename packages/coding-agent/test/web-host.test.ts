@@ -1435,6 +1435,62 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(session.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
 	});
 
+	it("reports a run stopped by an Interrupt message as redirected and marks it in the session", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const session = fx.hub.get(first.slot)!.session;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("还在回答")]);
+			},
+			fauxAssistantMessage([fauxText("新回答")]),
+		]);
+		void fx.post("/api/prompt", { text: "go" }, first.slot);
+		await fx.waitFor("agent_start", (data) => data.slot === first.slot);
+
+		const interrupted = fx.post("/api/prompt", { text: "换个问题", mode: "interrupt" }, first.slot);
+		await vi.waitFor(() => expect((session as unknown as { _abortRequested: boolean })._abortRequested).toBe(true));
+		release();
+		await interrupted;
+		await vi.waitFor(() => expect(session.isIdle).toBe(true));
+
+		const outcomes = () =>
+			fx.events
+				.filter((event) => event.event === "run_finished" && event.data.slot === first.slot)
+				.map((event) => event.data.outcome);
+		await vi.waitFor(() => expect(outcomes()).toEqual(["redirected", "completed"]));
+		// The marker sits between the stopped reply and the message that stopped it, and reaches the open page.
+		const branch = session.sessionManager.getBranch();
+		const marker = branch.findIndex((entry) => entry.type === "custom" && entry.customType === "web-interrupt");
+		const next = branch.findIndex(
+			(entry) => entry.type === "message" && getMessageText(entry.message) === "换个问题",
+		);
+		expect(marker).toBeGreaterThan(0);
+		expect(next).toBe(marker + 1);
+		expect(
+			fx.events.some((event) => event.event === "entry_appended" && event.data.item?.customType === "web-interrupt"),
+		).toBe(true);
+	});
+
+	it("does not mark a run that was idle when an Interrupt message arrives", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const session = fx.hub.get(first.slot)!.session;
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("答")])]);
+		await fx.post("/api/prompt", { text: "hi", mode: "interrupt" }, first.slot);
+		await vi.waitFor(() => expect(session.isIdle).toBe(true));
+		expect(
+			session.sessionManager
+				.getBranch()
+				.some((entry) => entry.type === "custom" && entry.customType === "web-interrupt"),
+		).toBe(false);
+	});
+
 	it("keeps the sub-agents running when Interrupt mode stops a run whose main agent is answering", async () => {
 		const assistantTexts = (session: { messages: unknown[] }) =>
 			session.messages

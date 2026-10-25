@@ -650,7 +650,7 @@ describe("Web UI: a run ended by an interrupting message", () => {
 	it("is told apart from a stop by the next message starting right where the run stopped", async () => {
 		const { interruptedByNext } = await import(new URL("turns.js", webDir).href);
 		// The stamp chat of 2026-10-25: aborted at 03:38:04.312, the interrupting message saved at 03:38:04.523.
-		const stopped = { startedAt: 1_000, endedAt: 64_312 };
+		const stopped = { startedAt: 1_000, endedAt: 64_312, items: [{ kind: "assistant", id: "a1", ts: 64_312 }] };
 		expect(interruptedByNext(stopped, { user: { ts: 64_523 } })).toBe(true);
 		// The message shown at once on the page is older than the stop it causes.
 		expect(interruptedByNext(stopped, { user: { ts: 63_900, pending: true } })).toBe(true);
@@ -658,6 +658,33 @@ describe("Web UI: a run ended by an interrupting message", () => {
 		expect(interruptedByNext(stopped, { user: { ts: 75_000 } })).toBe(false);
 		expect(interruptedByNext(stopped, undefined)).toBe(false);
 		expect(interruptedByNext(stopped, { standalone: { kind: "bash" } })).toBe(false);
+	});
+
+	it("trusts the server's marker, and never times a reply still on the page from when it started", async () => {
+		const { buildTurns, interruptedByNext } = await import(new URL("turns.js", webDir).href);
+		// The 3090 chat of 2026-10-25: a reply that started at 07:33:39.981 was stopped at 07:34:11 by the next message.
+		const started = Date.parse("2026-10-25T07:33:39.981Z");
+		const sentAt = Date.parse("2026-10-25T07:34:11.464Z");
+		const live = [
+			{ kind: "user", id: "u1", ts: started - 30_000, text: "又快又准" },
+			{
+				kind: "assistant",
+				liveId: "l1",
+				ts: started,
+				stopReason: "aborted",
+				blocks: [{ type: "thinking", text: "…" }],
+			},
+		];
+		const next = { kind: "user", ts: sentAt, text: "3090", pending: true };
+		// No marker yet: a reply on the page carries its start time, so timing cannot tell; it is not guessed either way.
+		let turns = buildTurns([...live, next], { cwd: "" });
+		expect(interruptedByNext(turns[0], turns[1])).toBe(false);
+		// The marker the server writes after the stopped reply decides it, live and after a reload.
+		const marker = { kind: "custom", id: "m1", ts: sentAt - 20, customType: "web-interrupt", display: false };
+		turns = buildTurns([...live, marker, next], { cwd: "" });
+		expect(turns).toHaveLength(2);
+		expect(interruptedByNext(turns[0], turns[1])).toBe(true);
+		expect(turns[0].steps.some((step: any) => step.type === "custom")).toBe(false);
 	});
 
 	it("reads as turning to the message, not as cancelled", async () => {

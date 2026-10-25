@@ -57,6 +57,7 @@ import { TranscriptCache } from "./transcript-cache.ts";
 import {
 	entriesToWire,
 	entryProjectsToWire,
+	INTERRUPT_ENTRY,
 	messageToWire,
 	RUN_CHANGES_ENTRY,
 	runChangesToWire,
@@ -82,7 +83,8 @@ const DIALOG_FOLLOW_UP_MS = 3000;
  */
 const TASK_NOTICE_CLAIM_MS = 15000;
 
-export type RunOutcome = "completed" | "partial" | "failed" | "cancelled";
+/** "redirected": a message sent with "interrupt" ended the run, which then answered that message. */
+export type RunOutcome = "completed" | "partial" | "failed" | "cancelled" | "redirected";
 
 /** Optional query for GET /api/transcript pagination; raw strings straight from the URL (W172). */
 export interface TranscriptQuery {
@@ -1576,7 +1578,7 @@ export class WebHost {
 				break;
 			case "cancelled":
 			case "interrupted":
-				outcome = "cancelled";
+				outcome = this.interruptingForMessage ? "redirected" : "cancelled";
 				break;
 			default:
 				outcome = changeCount > 0 ? "partial" : "failed";
@@ -1852,9 +1854,18 @@ export class WebHost {
 		if (interrupt) {
 			this.interruptingForMessage = true;
 			try {
+				const wasRunning = session.isStreaming;
 				await session.abort({ keepBackground: true });
 				await session.waitForForegroundIdle();
 				await this.waitForCompletion();
+				// Marks the stopped run as switched to this message (see INTERRUPT_ENTRY). A mirrored session is written by
+				// the process that owns it.
+				if (wasRunning && !session.isMirror) {
+					const id = session.sessionManager.appendCustomEntry(INTERRUPT_ENTRY);
+					const entry = session.sessionManager.getEntry(id);
+					const item = entry ? entriesToWire([entry])[0] : undefined;
+					if (item) this.broadcast("entry_appended", { id, item });
+				}
 			} finally {
 				this.interruptingForMessage = false;
 			}

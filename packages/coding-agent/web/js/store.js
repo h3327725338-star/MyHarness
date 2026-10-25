@@ -23,6 +23,7 @@ import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { savedPromptsOf } from "./saved-prompts.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
+import { INTERRUPT_ENTRY } from "./turns.js";
 import { createSseWatchdog, isDeadStream } from "./sse-watchdog.js";
 import { exportReadOnly, getEventSourceFactory, getFetch } from "./export-mode.js";
 import { readResponse } from "./http-transport.js";
@@ -2236,6 +2237,14 @@ function attachEntryId(d) {
 		}
 	}
 	// Not seen yet (e.g. compaction marker): append it.
+	if (item.kind === "custom" && item.customType === INTERRUPT_ENTRY) {
+		// It belongs to the stopped turn: the message that interrupted it may already be on the page as a pending row.
+		let at = items.length;
+		while (at > 0 && items[at - 1].pending) at--;
+		state.items = [...items.slice(0, at), { ...item, id: d.id }, ...items.slice(at)];
+		emit();
+		return;
+	}
 	if (item.kind === "gitStatus" || item.kind === "runChanges" || item.kind === "compaction" || item.kind === "branchSummary") {
 		appendStreamedItem({ ...item, id: d.id });
 	}

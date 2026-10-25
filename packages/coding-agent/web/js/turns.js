@@ -474,6 +474,11 @@ export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 			} else standalone(item, index);
 			return;
 		}
+		if (item.kind === "custom" && item.customType === INTERRUPT_ENTRY) {
+			// Written between a run stopped by a message sent with "interrupt" and that message (see interruptedByNext).
+			if (turn) turn.interrupted = true;
+			return;
+		}
 		if (item.kind === "custom") {
 			if (!item.display) return;
 			if (turn) {
@@ -699,17 +704,25 @@ export function turnOutcome(turn, { run, live, waiting }) {
 	return "completed";
 }
 
+/** The server's marker between a run stopped by a message sent with "interrupt" and that message. */
+export const INTERRUPT_ENTRY = "web-interrupt";
+
 /**
  * A message sent with "interrupt" ends the run it lands in and is answered at once: that run was not given up, the
- * agent turned to the new message. Known from the next turn starting right where this one stopped (the server sends
- * the message within moments of the stop; a person pressing Stop and then typing takes far longer). Read from the
- * saved transcript too, so a reopened chat shows the same thing.
+ * agent turned to the new message. The server says so: it writes INTERRUPT_ENTRY after the stopped reply (kept in the
+ * saved transcript, so a reopened chat shows the same thing) and reports the run as "redirected". Chats saved before
+ * that marker existed fall back to timing: the next message starting right where this turn's last entry was saved (a
+ * person pressing Stop and then typing takes far longer). Only saved entries count there: a reply still on the page
+ * carries the time it started, which for a long answer is long before the stop.
  */
 const INTERRUPT_GAP_MS = 3_000;
 export function interruptedByNext(turn, next) {
+	if (turn?.interrupted) return true;
 	const sentAt = next?.user?.ts;
+	const last = turn?.items?.[turn.items.length - 1];
+	if (!sentAt || !last?.id || last.liveId) return false;
 	const stoppedAt = turn.endedAt || turn.startedAt;
-	return !!(sentAt && stoppedAt && sentAt - stoppedAt <= INTERRUPT_GAP_MS);
+	return !!(stoppedAt && sentAt - stoppedAt <= INTERRUPT_GAP_MS);
 }
 
 export function turnDuration(turn, run) {

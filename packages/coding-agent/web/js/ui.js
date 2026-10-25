@@ -490,17 +490,36 @@ export function useSwapGlide(key) {
  * so a removed row can animate out (see reconcileRows). `key` names the property that identifies a row (or is a function giving it). `present` is the
  * set of rows that are really in the list, `initial` the set that was there when the list first appeared (those are shown
  * at once; a row that arrives later, or comes back, grows in): give both to ListSlot.
+ * `holdExits`: when rows arrive and others leave in the same change, the leaving rows stay present until the new ones
+ * have grown in and only then fold away. Otherwise a row that replaces another in place (a new chat taking the place
+ * of the blank chat left behind) grows while the other folds, the list keeps its height and the new row seems to pop up.
  */
-export function useRetainedRows(items, key = "path") {
+export function useRetainedRows(items, key = "path", { holdExits = false } = {}) {
 	const keyOf = typeof key === "function" ? key : (item) => item[key];
 	const signature = items.map(keyOf).join("\n");
 	const [retained, setRetained] = useState(items);
+	const [, release] = useState(0);
+	// Worked out while rendering, so a held row never renders absent for a frame (that would start its fold).
+	const track = useRef(null);
+	if (track.current === null) track.current = { signature, keys: new Set(items.map(keyOf)), held: new Set() };
+	if (track.current.signature !== signature) {
+		const previous = track.current.keys;
+		const keys = new Set(items.map(keyOf));
+		const arrived = holdExits && [...keys].some((id) => !previous.has(id));
+		const held = new Set(arrived ? [...previous, ...track.current.held].filter((id) => !keys.has(id)) : []);
+		track.current = { signature, keys, held };
+	}
+	const holding = track.current.held.size > 0;
 	useLayoutEffect(() => {
 		setRetained((old) => reconcileRows(old, items, key));
-		const timer = setTimeout(() => setRetained(items), COLLAPSE_MS + 60);
-		return () => clearTimeout(timer);
+		const timers = [setTimeout(() => setRetained(items), (holding ? COLLAPSE_MS : 0) + COLLAPSE_MS + 60)];
+		if (holding) timers.push(setTimeout(() => {
+			track.current.held = new Set();
+			release((n) => n + 1);
+		}, COLLAPSE_MS));
+		return () => timers.forEach(clearTimeout);
 	}, [signature]);
-	const present = new Set(items.map(keyOf));
+	const present = new Set([...items.map(keyOf), ...track.current.held]);
 	const initial = useRef(null);
 	if (initial.current === null) initial.current = new Set(present);
 	for (const id of initial.current) if (!present.has(id)) initial.current.delete(id);

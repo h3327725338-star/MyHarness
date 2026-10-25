@@ -232,7 +232,8 @@ function DraftChat({ info, present, initial, renderRow }) {
 function ChatRows({ items, renderRow, capped = false }) {
 	const signature = items.map(rowKeyOf).join("\n");
 	// Rows that left stay for the length of the fold-away; a row that left is animated in again if it comes back later.
-	const { rows: visible, present, initial } = useRetainedRows(items, rowKeyOf);
+	// A row that leaves as another arrives (the blank chat left behind by a new chat) folds only after the new one grew in.
+	const { rows: visible, present, initial } = useRetainedRows(items, rowKeyOf, { holdExits: true });
 	// Only a pure reorder needs a slide. Inserts/exits already move their neighbours through grid collapse;
 	// measuring those intermediate heights and applying FLIP again caused the second downward nudge.
 	// Fixed row indices give the displacement without reading layout or mixing reads with animation writes.

@@ -569,7 +569,22 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: options?.maxRetries ?? 0,
 			};
-			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+			let response: Response;
+			try {
+				response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+			} catch (error) {
+				if (!isThinkingSignatureRejection(error) || options?.signal?.aborted) throw error;
+				// The endpoint no longer accepts the replayed thinking signatures, typically because a relay
+				// trimmed older history so the signed blocks lost the prefix they were bound to. Retrying the
+				// same history won't help (compaction would fail the same way), so resend once with thinking
+				// kept only as plain text.
+				params = buildParams(model, withoutThinkingSignatures(context), isOAuth, options);
+				const retryParams = await options?.onPayload?.(params, model);
+				if (retryParams !== undefined) {
+					params = retryParams as MessageCreateParamsStreaming;
+				}
+				response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+			}
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -1131,6 +1146,31 @@ function convertToolResult(
 				: typeof convertedContent === "string"
 					? [{ type: "text", text: convertedContent }]
 					: convertedContent,
+	};
+}
+
+/** A 400 saying a replayed thinking signature is invalid, possibly wrapped in a relay's own error JSON. */
+function isThinkingSignatureRejection(error: unknown): boolean {
+	if ((error as { status?: unknown })?.status !== 400) return false;
+	const message = error instanceof Error ? error.message : String(error);
+	return /invalid\W{0,3}signature\W{0,3}in\W{0,3}(redacted_)?thinking\W{0,3}block/i.test(message);
+}
+
+/** The same history with signed and redacted thinking reduced to plain text, so nothing needs a valid signature. */
+function withoutThinkingSignatures(context: Context): Context {
+	return {
+		...context,
+		messages: context.messages.map((msg) => {
+			if (msg.role !== "assistant" || !msg.content.some((block) => block.type === "thinking")) return msg;
+			return {
+				...msg,
+				content: msg.content.flatMap((block) => {
+					if (block.type !== "thinking") return [block];
+					if (block.redacted || !block.thinking.trim()) return [];
+					return [{ type: "text" as const, text: block.thinking }];
+				}),
+			};
+		}),
 	};
 }
 

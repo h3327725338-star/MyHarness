@@ -73,7 +73,7 @@ export function slotSignal(slot) {
 	return null;
 }
 
-const SIGNAL_RANK = { waiting: 0, failed: 1, running: 2, partial: 3, completed: 4, cancelled: 5 };
+const SIGNAL_RANK = { waiting: 0, failed: 1, running: 2, partial: 3, completed: 4, cancelled: 5, redirected: 5 };
 
 /** Open chats of one mode that have something to tell, most urgent first; `exclude` is the slot on screen. */
 export function modeTasks(slots, mode, exclude) {

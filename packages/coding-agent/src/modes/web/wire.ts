@@ -30,6 +30,13 @@ const FAST_DETAILS_MAX_CHARS = 64_000;
  */
 export const RUN_CHANGES_ENTRY = "web-run-changes";
 
+/**
+ * Custom entry written when a message sent with "interrupt" ended the run before it: it sits between the stopped
+ * reply and the new message, so the transcript shows that run as switched to the new message, not cancelled, also
+ * after a reload. It carries no data and never enters the model's messages.
+ */
+export const INTERRUPT_ENTRY = "web-interrupt";
+
 /** One file of a change card as the browser lists it; the diff itself is fetched when the file is opened. */
 export interface WireChangeFile {
 	path: string;
