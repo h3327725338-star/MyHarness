@@ -187,7 +187,7 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			<div role="tab" tabindex=${isLeaving ? -1 : 0} draggable=${!isLeaving}
 			aria-hidden=${isLeaving ? "true" : null}
 			aria-label=${iconsOnly && tab.type === "browser" ? workspaceTabTitle(tab) : null}
-			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""} ${iconsOnly && tab.type === "browser" ? "icon-only" : ""}`} aria-selected=${!isLeaving && activeId === tab.id}
+			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""} ${tab.type === "browser" ? (iconsOnly ? "icon-only" : "site") : ""}`} aria-selected=${!isLeaving && activeId === tab.id}
 			title=${iconsOnly && tab.type === "browser" ? `${workspaceTabTitle(tab)}\n${workspaceTabHint(tab) || ""}`.trim() : workspaceTabHint(tab)}
 			onClick=${() => !isLeaving && onActivate(tab.id)}
 			onKeyDown=${(event) => {

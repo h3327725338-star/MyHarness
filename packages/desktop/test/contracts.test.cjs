@@ -76,14 +76,86 @@ test('desktop preferences: close action defaults to ask, saves valid choices and
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-prefs-'));
   try {
     const prefs = createAppPrefs(dir);
-    assert.deepEqual(prefs.get(), { closeAction: 'ask' });
-    assert.deepEqual(prefs.set({ closeAction: 'tray' }), { closeAction: 'tray' });
+    assert.deepEqual(prefs.get(), { closeAction: 'ask', appZoom: 1 });
+    assert.deepEqual(prefs.set({ closeAction: 'tray' }), { closeAction: 'tray', appZoom: 1 });
+    assert.equal(prefs.set({ appZoom: 1.25 }).appZoom, 1.25);
+    assert.equal(prefs.set({ appZoom: 99 }).appZoom, 5, 'the app zoom is kept within the supported range');
     assert.throws(() => prefs.set({ closeAction: 'explode' }), /未知的关闭方式/);
     assert.equal(createAppPrefs(dir).get().closeAction, 'tray', 'the choice survives a restart');
+    assert.equal(createAppPrefs(dir).get().appZoom, 5, 'the zoom survives a restart');
     fs.writeFileSync(path.join(dir, 'desktop-prefs.json'), '{ broken');
     assert.equal(createAppPrefs(dir).get().closeAction, 'ask', 'a damaged file falls back to asking');
     assert.deepEqual(loginItem({ isPackaged: true, getAppPath: () => 'x' }).args, ['--autostart']);
     assert.deepEqual(loginItem({ isPackaged: false, getAppPath: () => 'C:/app' }).args, ['C:/app', '--autostart']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('zoom: Chrome-like steps, keys and a per-site store', () => {
+  const os = require('node:os');
+  const { stepZoom, zoomKey, cleanZoom, createSiteZoomStore } = require('../zoom.cjs');
+  assert.equal(stepZoom(1, 1), 1.1);
+  assert.equal(stepZoom(1, -1), 0.9);
+  assert.equal(stepZoom(1.05, 1), 1.1, 'an in-between factor goes to the next level');
+  assert.equal(stepZoom(5, 1), 5);
+  assert.equal(stepZoom(0.25, -1), 0.25);
+  assert.equal(stepZoom(2.5, 0), 1);
+  assert.equal(cleanZoom('nope'), 1);
+  const key = (input) => zoomKey({ type: 'keyDown', control: true, ...input });
+  assert.equal(key({ key: '=', code: 'Equal' }), 1);
+  assert.equal(key({ key: '+', code: 'Equal', shift: true }), 1);
+  assert.equal(key({ key: '+', code: 'NumpadAdd' }), 1);
+  assert.equal(key({ key: '-', code: 'Minus' }), -1);
+  assert.equal(key({ key: '0', code: 'Digit0' }), 0);
+  assert.equal(key({ key: 'a', code: 'KeyA' }), undefined);
+  assert.equal(zoomKey({ type: 'keyDown', key: '=', code: 'Equal' }), undefined, 'without Ctrl it is typing');
+  assert.equal(key({ key: '=', code: 'Equal', alt: true }), undefined);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zoom-'));
+  try {
+    const store = createSiteZoomStore(path.join(dir, 'browser-zoom.json'));
+    store.set('https://example.com/a', 1.5);
+    assert.equal(store.get('https://example.com/other'), 1.5, 'the zoom belongs to the host');
+    assert.equal(store.get('https://other.example/'), 1);
+    store.set('https://example.com/', 1);
+    assert.equal(store.get('https://example.com/'), 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('website dark mode: auto follows the app, a site choice wins, settings survive', () => {
+  const os = require('node:os');
+  const { createDarkStore, themeFor } = require('../browser-dark.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dark-'));
+  try {
+    const file = path.join(dir, 'browser-dark.json');
+    const store = createDarkStore(file);
+    assert.equal(store.wanted('https://example.com/', true), true);
+    assert.equal(store.wanted('https://example.com/', false), false);
+    assert.equal(store.wanted('file:///C:/x.html', true), false, 'only web pages are recolored');
+    store.setSite('https://example.com/page', 'off');
+    assert.equal(store.wanted('https://example.com/other', true), false);
+    store.setMode('on');
+    assert.equal(store.wanted('https://news.example/', false), true);
+    assert.throws(() => store.setMode('blue'), /未知的深色模式/);
+    const again = createDarkStore(file);
+    assert.deepEqual(again.get(), { mode: 'on', sites: { 'example.com': 'off' } });
+    assert.equal(themeFor({ background: '#101010', text: 'red' }).darkSchemeTextColor, '#e3e3e3', 'only #rrggbb colors are taken');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('browser language: header and navigator list follow the choice, which survives a restart', () => {
+  const os = require('node:os');
+  const { acceptLanguage, createLanguageStore, languageList } = require('../browser-language.cjs');
+  assert.deepEqual(languageList('zh-CN'), ['zh-CN', 'zh', 'en-US', 'en']);
+  assert.deepEqual(languageList('en-GB'), ['en-GB', 'en']);
+  assert.deepEqual(languageList('ja'), ['ja', 'en-US', 'en']);
+  assert.deepEqual(languageList('xx'), []);
+  assert.equal(acceptLanguage('zh-CN'), 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7');
+  assert.equal(acceptLanguage(''), '');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lang-'));
+  try {
+    const file = path.join(dir, 'browser-language.json');
+    const store = createLanguageStore(file);
+    assert.equal(store.get(), '');
+    assert.equal(store.set('ja'), 'ja');
+    assert.equal(createLanguageStore(file).get(), 'ja');
+    assert.equal(store.set('nonsense'), '', 'an unknown tag goes back to the default');
+    assert.equal(createLanguageStore(file).get(), '');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 test('preload exposes the desktop preferences only through the fixed IPC channel', () => {

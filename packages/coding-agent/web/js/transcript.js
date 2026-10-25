@@ -1,12 +1,12 @@
 // Transcript: quiet reading surface. Each turn = user message, a collapsed run summary, the final answer,
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
-import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide } from "./ui.js";
+import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide, useSwapGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
 import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, slotUrl, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
-import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSlice, changeTotals, groupSteps, groupLabel, runForTurn, turnDuration, turnOutcome, turnSegments, historySourcesOf } from "./turns.js";
+import { buildTurns, buildTurnsAsync, buildTurnsWork, cachedTurns, tailPreviewSlice, changeTotals, groupSteps, groupLabel, runForTurn, interruptedByNext, turnDuration, turnOutcome, turnSegments, historySourcesOf } from "./turns.js";
 import { actions, openCommand } from "./actions.js";
 import { KIND_ICON, StatusGlyph, WebSteps } from "./tool-rows.js";
 import { StepCounts } from "./step-counts.js";
@@ -549,7 +549,7 @@ function BannerText({ lead, rest, open }) {
 
 function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 	const [detailOpen, setDetailOpen] = useState(false);
-	if (outcome === "completed" || outcome === "running") return null;
+	if (outcome === "completed" || outcome === "running" || outcome === "redirected") return null;
 	if (outcome === "waiting") {
 		return html`<div class="banner o-waiting" role="status"><div class="banner-head"><${Icon} name="clock" size=${15} /><strong>${t("Waiting for you")}</strong><span class="dim">${t("The agent is paused until you answer the question above the input box.")}</span></div></div>`;
 	}
@@ -822,8 +822,10 @@ function ContinuationMarker({ item }) {
 	</div>`;
 }
 
-const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd, processDefault, snapRun, compacting }) {
-	const outcome = turnOutcome(turn, { run, live, waiting });
+const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd, processDefault, snapRun, compacting, interrupted }) {
+	const ended = turnOutcome(turn, { run, live, waiting });
+	// Stopped by a message sent with "interrupt": no "cancelled" banner, the answer to that message follows.
+	const outcome = ended === "cancelled" && interrupted ? "redirected" : ended;
 	const changeCount = run ? run.changeCount : turn.stats.files;
 	const duration = turnDuration(turn, run);
 	const working = live || waiting;
@@ -837,14 +839,18 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	// its own at the end, the way the turn starts.
 	const pending = working && !turn.final && (!tail || tail.type === "text");
 	const lastBlock = pending ? undefined : segments.filter((segment) => segment.type === "process").pop();
+	// Folding rebuilds the blocks (texts and later blocks go into the first one): glide to the new height instead of jumping.
+	const processRef = useSwapGlide(fold);
 	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
+		<div class="turn-process" ref=${processRef}>
 		${segments.map((segment) =>
 			segment.type === "text"
 				? html`<div class="final" key=${segment.key}><${Markdown} text=${segment.step.text} /></div>`
 				: html`<${ProcessSummary} key=${`sum-${turn.key}-${segment.key}`} turn=${turn} steps=${segment.steps} stats=${segment === lastBlock ? turn.stats : segment.stats} last=${segment === lastBlock} outcome=${outcome} live=${working} compacting=${compacting} run=${run} changeCount=${segment === lastBlock ? changeCount : segment.stats.files} duration=${duration} snapRun=${snapRun} defaultOpen=${expanded || (working && segment === tail && !turn.final)} />`,
 		)}
 		${pending ? html`<${ProcessSummary} key=${`sum-${turn.key}-pending`} turn=${turn} steps=${[]} outcome=${outcome} live=${working} compacting=${compacting} snapRun=${snapRun} defaultOpen=${false} />` : null}
+		</div>
 		${turn.final ? html`<${FinalMessage} final=${turn.final} />` : null}
 		${turn.final && !working ? html`<${HistorySources} sources=${historySourcesOf(turn)} />` : null}
 		${turn.changes ? html`<${ChangeCard} card=${turn.changes} />` : null}
@@ -899,7 +905,7 @@ function Standalone({ item, task, snap, runs, processDefault }) {
 	return null;
 }
 
-function Welcome({ snap, models }) {
+function Welcome({ snap, models, opening = false }) {
 	const ws = snap?.workspace?.name;
 	const model = snap?.model;
 	return html`<div class="welcome">
@@ -911,7 +917,7 @@ function Welcome({ snap, models }) {
 			<span><span class="kbd">!</span> ${t("run a shell command")}</span>
 			<span><span class="kbd">${t("Ctrl")}</span>+<span class="kbd">K</span> ${t("command palette")}</span>
 		</div>
-		${!model ? html`<div class="welcome-warn"><${Icon} name="alertTriangle" size=${15} /> ${tNodes("No model is available yet. {add} to start.", { add: html`<button class="link-btn" onClick=${() => setView({ settingsOpen: true, settingsSection: "providers" })}>${t("Add a provider")}</button>` })}</div>` : null}
+		${!model && !opening ? html`<div class="welcome-warn"><${Icon} name="alertTriangle" size=${15} /> ${tNodes("No model is available yet. {add} to start.", { add: html`<button class="link-btn" onClick=${() => setView({ settingsOpen: true, settingsSection: "providers" })}>${t("Add a provider")}</button>` })}</div>` : null}
 	</div>`;
 }
 
@@ -1394,7 +1400,7 @@ export function Transcript() {
 	return html`<div class="transcript-wrap">
 		<div class="transcript" ref=${scroller} onScroll=${onScroll} onWheel=${noteInteraction} onClickCapture=${holdOnOpen} onMouseDown=${noteInteraction} onKeyDown=${noteInteraction}>
 			<div class="transcript-inner" ref=${content}>
-				${switching ? html`<div class="switch-placeholder" role="status" aria-live="polite" aria-busy=${!switching.error}>
+				${switching?.fresh && !switching.error ? html`<${Welcome} snap=${snap} models=${models} opening=${true} />` : switching ? html`<div class="switch-placeholder" role="status" aria-live="polite" aria-busy=${!switching.error}>
 					${switching.name ? html`<h2>${switching.name}</h2>` : null}
 					${switching.error ? html`<p>${switching.error}</p><button class="btn sm" onClick=${retrySwitch}>${t("Retry")}</button>` : html`<span class="dim">${t("Loading…")}</span><div class="switch-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>`}
 				</div>` : empty ? html`<${Welcome} snap=${snap} models=${models} />` : null}
@@ -1409,8 +1415,8 @@ export function Transcript() {
 					// Nothing else is faked: the row ends when the real run takes over (or the message is rejected).
 					const awaiting = !live && isLast && !turn.final && !turn.steps?.length && !!turn.user?.pending;
 					const working = live || awaiting;
-					const run = working ? undefined : runForTurn(turn, runs, isLast);
-					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${working} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} />`;
+					const run = working ? undefined : runForTurn(turn, runs, turns[index + 1]);
+					return html`<${TurnView} key=${turn.key} turn=${turn} isLast=${isLast} live=${working} waiting=${live && waiting} run=${run} cwd=${cwd} processDefault=${processDefault} snapRun=${live ? snap?.run : undefined} compacting=${live && compacting} interrupted=${interruptedByNext(turn, turns[index + 1])} />`;
 				})}
 				${(switching ? [] : liveBash).map((entry) => html`<${BashCard} key=${entry.id} item=${entry} />`)}
 				${!switching && gitTask && !repairing ? html`<${GitRecord} task=${gitTask} />` : null}

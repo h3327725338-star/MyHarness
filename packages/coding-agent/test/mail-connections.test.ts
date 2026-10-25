@@ -128,22 +128,6 @@ describe("mail sign-in", () => {
 		expect(String(request.mock.calls[1][0])).toMatch(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me\?/);
 	});
 
-	it("uses the 21Vianet endpoints with Graph scopes qualified by the China resource", async () => {
-		const { connections, request } = service([
-			Response.json({ access_token: "c-access", refresh_token: "c-refresh", expires_in: 3600 }),
-			Response.json({ mail: "someone@contoso.partner.onmschina.cn" }),
-		]);
-		connections.setApp("microsoft-china", "00000000-0000-0000-0000-000000000002");
-		const { authorize, result } = await signIn(connections, "microsoft-china", (url) => ({
-			code: "c",
-			state: url.searchParams.get("state")!,
-		}));
-		await result;
-		expect(authorize.host).toBe("login.chinacloudapi.cn");
-		expect(authorize.searchParams.get("scope")).toContain("https://microsoftgraph.chinacloudapi.cn/Mail.ReadWrite");
-		expect(String(request.mock.calls[1][0])).toMatch(/^https:\/\/microsoftgraph\.chinacloudapi\.cn\/v1\.0\/me/);
-	});
-
 	it("ignores callbacks with another state and reports a refusal", async () => {
 		const { connections, request } = service();
 		connections.setApp("microsoft", "app");

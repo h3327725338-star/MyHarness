@@ -20,6 +20,7 @@ import { SearchableMultiSelect } from "./settings-multiselect.js";
 import { Select } from "./select.js";
 import { SyncPage } from "./sync-page.js";
 import { ConnectPage } from "./connect-page.js";
+import { AppZoomControl } from "./app-zoom.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
 
@@ -759,6 +760,7 @@ function DesktopApp() {
 	if (!bridge) return null;
 	const set = (patch) => attempt(async () => setPrefs(await bridge.set(patch)));
 	return html`<${Card} title=${t("Desktop app")}>
+		${globalThis.myHarnessDesktop?.appZoom ? html`<${Row} label=${t("Interface zoom")} description=${t("Ctrl + / Ctrl − / Ctrl 0, or Ctrl + mouse wheel. A website tab zooms on its own.")}><${AppZoomControl} /><//>` : null}
 		<${Row} label=${t("Start with Windows")} description=${t("Opens MyHarness when you sign in to Windows.")}>${prefs ? html`<${Toggle} checked=${prefs.openAtLogin} label=${t("Start with Windows")} onChange=${(v) => set({ openAtLogin: v })} />` : html`<${Spinner} />`}<//>
 		<${Row} label=${t("Close button")} description=${t("Minimize to tray keeps running tasks going in the background.")}>${prefs ? html`<${Select} ariaLabel=${t("Close button")} value=${prefs.closeAction} onChange=${(v) => set({ closeAction: v })} options=${[{ value: "ask", label: t("Ask every time") }, { value: "tray", label: t("Minimize to tray") }, { value: "quit", label: t("Quit MyHarness") }]} />` : html`<${Spinner} />`}<//>
 	<//>`;

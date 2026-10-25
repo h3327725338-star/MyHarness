@@ -7,10 +7,7 @@
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { ThinkingLevel } from "@myharness/agent-core";
-import { clampThinkingLevel, contentText } from "@myharness/ai";
-import type { Model } from "@myharness/ai/compat";
-import { resolveAssistantModel } from "../../agent/runtime/assistant-model.ts";
+import { contentText } from "@myharness/ai";
 import { buildConversationTitleContext, normalizeConversationTitle } from "../../agent/runtime/conversation-title.ts";
 import { GitCommitUseCase } from "../../application/use-cases/git-commit.ts";
 import { GitPushUseCase } from "../../application/use-cases/git-push.ts";
@@ -59,6 +56,7 @@ import { type GitWorktree, GitWorktreeManager } from "../../git/worktrees/manage
 import { WorktreeMergedRecords } from "../../git/worktrees/merged-records.ts";
 import { completeWithNetworkPolicy, failureOf } from "../../providers/recovery/network-retry.ts";
 import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
+import { reasoningOf, resolveHelperModel } from "./helper-model.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 import { collectSessionChanges } from "./session-changes.ts";
@@ -81,49 +79,6 @@ function toCwdDisplayPath(cwd: string, repositoryRoot: string, repoRelative: str
 	const relative = path.relative(path.resolve(cwd), path.resolve(repositoryRoot, repoRelative));
 	if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return repoRelative;
 	return relative.split(path.sep).join("/");
-}
-
-/** Helper-model reference stored in settings: empty provider/model means "use the main model". */
-interface HelperModelRef {
-	provider?: string;
-	model?: string;
-	thinkingLevel?: ThinkingLevel;
-}
-
-/**
- * Resolve the model a Git helper (commit description, worktree naming) runs on.
- * Default (no provider/model) follows the main chat model and effort, exactly like before;
- * an explicit provider+model uses its own effort ("off" when the level is left empty).
- * A half-filled reference (only one of the two set) is treated as not configured.
- */
-function resolveGitHelperModel(
-	host: WebHost,
-	configured: HelperModelRef,
-	notConfiguredError: string,
-): { model: Model<any>; thinkingLevel: ThinkingLevel } {
-	const mainModel = host.session.model as Model<any> | undefined;
-	if (!mainModel) throw new HttpError(400, notConfiguredError);
-	const mainRef = { provider: mainModel.provider, id: mainModel.id, thinkingLevel: host.session.thinkingLevel };
-	if (!configured.provider && !configured.model) {
-		const level = (configured.thinkingLevel ?? mainRef.thinkingLevel) as ThinkingLevel;
-		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
-	}
-	if (!configured.provider || !configured.model) {
-		const level = (configured.thinkingLevel ?? mainRef.thinkingLevel) as ThinkingLevel;
-		return { model: mainModel, thinkingLevel: clampThinkingLevel(mainModel, level) as ThinkingLevel };
-	}
-	const ref = resolveAssistantModel(configured, mainRef);
-	const selected =
-		ref && host.session.modelRuntime.isProviderEnabled(ref.provider)
-			? host.session.modelRuntime.getModel(ref.provider, ref.model)
-			: undefined;
-	if (!selected) throw new HttpError(400, `Helper model unavailable: ${configured.provider}/${configured.model}`);
-	return { model: selected, thinkingLevel: clampThinkingLevel(selected, ref!.thinkingLevel) as ThinkingLevel };
-}
-
-/** Reasoning option for one-shot completions: 'off' sends nothing. */
-function reasoningOf(thinkingLevel: ThinkingLevel) {
-	return thinkingLevel === "off" ? undefined : thinkingLevel;
 }
 
 /** How long an archived copy that still holds work is left alone before its branch is checked again. */
@@ -502,7 +457,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 					}
 				},
 				generateMessage: async (context) => {
-					const { model, thinkingLevel } = resolveGitHelperModel(
+					const { model, thinkingLevel } = resolveHelperModel(
 						host,
 						host.session.settingsManager.getCommitDescriptionSettings(),
 						"Select a main Agent model before committing.",
@@ -782,7 +737,7 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 		const payload = asObject(body);
 		const worktree = findWorktree(repositoryRootOrThrow(), String(payload.path ?? ""));
 		if (worktree.isMain) throw new HttpError(400, "Select a test copy.");
-		const { model, thinkingLevel } = resolveGitHelperModel(
+		const { model, thinkingLevel } = resolveHelperModel(
 			host,
 			host.session.settingsManager.getWorktreeNamingSettings(),
 			"Select a main Agent model first.",

@@ -48,13 +48,22 @@ function PageList({ label, items, render }) {
 	</div>`;
 }
 
-/** The failures of one call, as the tool listed them. */
+/**
+ * The failures of one call, as the tool listed them. A page that could not be read (the site answered 404 or 521, or
+ * it was still loading when the search's reading time was up) is not a fault of the search, which already read the
+ * next results in its place: those are listed as pages not read, apart from real problems (an engine that failed).
+ */
 function Problems({ failures }) {
 	if (!failures.length) return null;
-	return html`<div class="web-block">
-		<div class="web-label">${t("Problems")}<span class="web-count">${failures.length}</span></div>
-		<ul class="web-problems">${failures.map((failure, i) => html`<li key=${i}>${[failure.query, failure.url && clip(failure.url, 80)].filter(Boolean).join(" · ")}${failure.query || failure.url ? ": " : ""}${serverText(failure.message, failure.code)}</li>`)}</ul>
-	</div>`;
+	const pageLevel = (failure) => !failure.engine && (!!failure.url || failure.code === "timeout");
+	const blocks = [
+		{ label: t("Problems"), items: failures.filter((failure) => !pageLevel(failure)), tone: "" },
+		{ label: t("Pages not read"), items: failures.filter(pageLevel), tone: "quiet" },
+	];
+	return blocks.map(({ label, items, tone }) => items.length ? html`<div class="web-block" key=${label}>
+		<div class="web-label">${label}<span class="web-count">${items.length}</span></div>
+		<ul class=${`web-problems ${tone}`}>${items.map((failure, i) => html`<li key=${i}>${[failure.query, failure.url && clip(failure.url, 80)].filter(Boolean).join(" · ")}${failure.query || failure.url ? ": " : ""}${serverText(failure.message, failure.code)}</li>`)}</ul>
+	</div>` : null);
 }
 
 /**

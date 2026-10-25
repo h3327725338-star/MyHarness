@@ -7,6 +7,7 @@ import type { BusinessToolDefinition } from "../contracts/index.ts";
 import { FULL_TEXT_OUTPUT } from "../tool-result-persistence.ts";
 import { cutAtCharBoundary } from "../truncate.ts";
 import { WEB_SEARCH_ENGINES } from "./engines/index.ts";
+import { abortError } from "./errors.ts";
 import { selectExcerpts } from "./excerpts.ts";
 import {
 	createWebSearchService,
@@ -103,6 +104,27 @@ const disabledSettings = {
 function getService(options?: WebSearchToolOptions): WebSearchService {
 	if (options?.service) return options.service;
 	return createWebSearchService({ ...options, settings: options?.settings ?? disabledSettings });
+}
+
+/**
+ * A stop ends the call at once. The service passes the signal on everywhere it can, but a page or engine stuck in
+ * something that cannot be cancelled (a DNS lookup, a browser command) used to hold the stop for the agent's 20 s
+ * grace; that work now finishes in the background and its result is dropped.
+ */
+function untilStopped<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return work;
+	work.catch(() => undefined);
+	let onAbort: (() => void) | undefined;
+	return Promise.race([
+		work,
+		new Promise<never>((_resolve, reject) => {
+			onAbort = () => reject(abortError(signal));
+			if (signal.aborted) onAbort();
+			else signal.addEventListener("abort", onAbort, { once: true });
+		}),
+	]).finally(() => {
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+	});
 }
 
 function textResult<TDetails>(text: string, details: TDetails, fullText?: string): AgentToolResult<TDetails> {
@@ -244,23 +266,26 @@ export function createWebSearchToolDefinition(
 		promptGuidelines: loadSystemPromptLines("tools/web-search/guidelines.md"),
 		parameters: webSearchSchema,
 		async execute(_toolCallId, params: WebSearchToolInput, signal, onUpdate) {
-			const response = await service.search(
-				{
-					...params,
-					onProgress: (message) =>
-						onUpdate?.({
-							content: [{ type: "text", text: message }],
-							details: {
-								queries: params.queries,
-								engines: [],
-								routes: [],
-								results: [],
-								pages: [],
-								failures: [],
-								cacheHit: false,
-							},
-						}),
-				},
+			const response = await untilStopped(
+				service.search(
+					{
+						...params,
+						onProgress: (message) =>
+							onUpdate?.({
+								content: [{ type: "text", text: message }],
+								details: {
+									queries: params.queries,
+									engines: [],
+									routes: [],
+									results: [],
+									pages: [],
+									failures: [],
+									cacheHit: false,
+								},
+							}),
+					},
+					signal,
+				),
 				signal,
 			);
 			const formatted = formatSearchResponse(response, params.queries);
@@ -295,16 +320,19 @@ export function createWebFetchToolDefinition(
 		promptGuidelines: loadSystemPromptLines("tools/web-fetch/guidelines.md"),
 		parameters: webFetchSchema,
 		async execute(_toolCallId, params: WebFetchToolInput, signal, onUpdate) {
-			const response = await service.fetch(
-				{
-					...params,
-					// Shown while a page waits for the person in a browser window (a check to pass, a login).
-					onProgress: (message) =>
-						onUpdate?.({
-							content: [{ type: "text", text: message }],
-							details: { pages: [], failures: [], cacheHit: false },
-						}),
-				},
+			const response = await untilStopped(
+				service.fetch(
+					{
+						...params,
+						// Shown while a page waits for the person in a browser window (a check to pass, a login).
+						onProgress: (message) =>
+							onUpdate?.({
+								content: [{ type: "text", text: message }],
+								details: { pages: [], failures: [], cacheHit: false },
+							}),
+					},
+					signal,
+				),
 				signal,
 			);
 			const formatted = formatFetchResponse(response);

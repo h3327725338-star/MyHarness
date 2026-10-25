@@ -13,10 +13,9 @@ import { type AuthStorageBackend, FileAuthStorageBackend } from "./auth-storage.
  * - google: every Gmail mailbox, @gmail.com/@googlemail.com and Google Workspace domains.
  * - microsoft: the /common endpoint, so personal Microsoft accounts (outlook.com, hotmail.com, live.com, msn.com …)
  *   and work or school Microsoft 365 / Exchange Online mailboxes of any tenant.
- * - microsoft-china: Microsoft 365 operated by 21Vianet, which has its own sign-in and Graph endpoints.
  */
-export type MailProvider = "google" | "microsoft" | "microsoft-china";
-export const MAIL_PROVIDERS: readonly MailProvider[] = ["google", "microsoft", "microsoft-china"];
+export type MailProvider = "google" | "microsoft";
+export const MAIL_PROVIDERS: readonly MailProvider[] = ["google", "microsoft"];
 
 interface ProviderSpec {
 	label: string;
@@ -55,20 +54,6 @@ export const MAIL_PROVIDER_SPECS: Record<MailProvider, ProviderSpec> = {
 		scopes: [...OIDC_SCOPES, ...MICROSOFT_GRAPH_SCOPES],
 		redirectHost: "localhost",
 		clientIdEnv: "MYHARNESS_MICROSOFT_CLIENT_ID",
-		extraAuthorizeParams: { prompt: "select_account" },
-	},
-	"microsoft-china": {
-		label: "Outlook (21Vianet)",
-		authorizeUrl: "https://login.chinacloudapi.cn/organizations/oauth2/v2.0/authorize",
-		tokenUrl: "https://login.chinacloudapi.cn/organizations/oauth2/v2.0/token",
-		apiOrigin: "https://microsoftgraph.chinacloudapi.cn",
-		// Short scope names resolve to the global Graph; a national cloud needs them qualified with its own resource.
-		scopes: [
-			...OIDC_SCOPES,
-			...MICROSOFT_GRAPH_SCOPES.map((scope) => `https://microsoftgraph.chinacloudapi.cn/${scope}`),
-		],
-		redirectHost: "localhost",
-		clientIdEnv: "MYHARNESS_MICROSOFT_CHINA_CLIENT_ID",
 		extraAuthorizeParams: { prompt: "select_account" },
 	},
 };

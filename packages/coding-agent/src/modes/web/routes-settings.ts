@@ -124,6 +124,20 @@ const SEARCH_BROWSERS = [
 const IMAGE_WIDTHS = ["60", "80", "120"];
 const EDITOR_PADDINGS = ["0", "1", "2", "3"];
 const AUTOCOMPLETE_SIZES = ["3", "5", "7", "10", "15", "20"];
+/** Target languages of selection translation ("auto": the interface language). */
+const TRANSLATION_LANGUAGES = [
+	{ value: "auto", label: "Interface language" },
+	{ value: "zh-CN", label: "Simplified Chinese" },
+	{ value: "zh-TW", label: "Traditional Chinese" },
+	{ value: "en", label: "English" },
+	{ value: "ja", label: "Japanese" },
+	{ value: "ko", label: "Korean" },
+	{ value: "fr", label: "French" },
+	{ value: "de", label: "German" },
+	{ value: "es", label: "Spanish" },
+	{ value: "ru", label: "Russian" },
+];
+
 const QUEUE_MODES = [
 	{ value: "one-at-a-time", label: "One at a time" },
 	{ value: "all", label: "All" },
@@ -308,6 +322,7 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const popup = s.getPopupNotificationSettings();
 		const compaction = s.getCompactionModelSettings();
 		const commitDescription = s.getCommitDescriptionSettings();
+		const translation = s.getTranslationSettings();
 		const worktreeNaming = s.getWorktreeNamingSettings();
 		const branchSummaryModel = s.getBranchSummaryModelSettings();
 		const context = s.getContextWindowSettings();
@@ -486,6 +501,25 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					"Model that writes AI commit messages. “Use the main model” follows the main chat's model and effort.",
 				type: "modelRef",
 				value: { ...modelRef(commitDescription) },
+			},
+			{
+				id: "translation",
+				section: "Assistants",
+				label: "Translation",
+				description:
+					"Model that translates text you select (Translate on the selection toolbar, and in built-in browser pages). “Use the main model” follows the main chat's model and effort.",
+				type: "modelRef",
+				value: { ...modelRef(translation) },
+			},
+			{
+				id: "translation.targetLanguage",
+				section: "Assistants",
+				label: "Translate into",
+				description:
+					"Text already in this language is translated into English (or Chinese when the target is English).",
+				type: "enum",
+				value: translation.targetLanguage,
+				options: TRANSLATION_LANGUAGES,
 			},
 			{
 				id: "worktreeNaming",
@@ -773,8 +807,8 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 				value: popup.turnComplete,
 				options: [
 					{ value: "never", label: "Never" },
-					{ value: "unfocused", label: "Only when not focused" },
-					{ value: "always", label: "Always" },
+					{ value: "unfocused", label: "Only when the app window is in the background" },
+					{ value: "always", label: "Always, except the chat you are viewing" },
 				],
 			},
 			{
@@ -1119,6 +1153,24 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					model: ref.model,
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
 				});
+				return;
+			}
+			case "translation": {
+				const ref = modelRefValue(value);
+				s.setTranslationSettings({
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "translation.targetLanguage": {
+				if (typeof value !== "string" || !TRANSLATION_LANGUAGES.some((option) => option.value === value))
+					throw new HttpError(
+						400,
+						`"${id}" must be one of ${TRANSLATION_LANGUAGES.map((option) => option.value).join(", ")}`,
+					);
+				s.setTranslationSettings({ targetLanguage: value });
 				return;
 			}
 			case "worktreeNaming": {

@@ -12,6 +12,7 @@ import { collectInputImageAttachments } from "../../utils/input-image-attachment
 import type { WebHost } from "./host.ts";
 import type { WebHttpServer } from "./http-server.ts";
 import { HttpError } from "./http-server.ts";
+import { pagePresence } from "./page-presence.ts";
 import {
 	entryImages,
 	subAgentStateToWire,
@@ -180,6 +181,19 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	 * showing it (`claim`), then whether it could (`shown`). A claim the server no longer holds answers
 	 * `claimed: false`, which means the system popup already took the notification over.
 	 */
+	/** A page says which chat it shows and whether its window has the focus (`gone`: the page is closing). */
+	server.route("POST", "/api/presence", ({ body }) => {
+		const payload = asObject(body);
+		const page = asString(payload.page, "page");
+		if (payload.gone === true) pagePresence(server).drop(page);
+		else
+			pagePresence(server).report(
+				page,
+				typeof payload.slot === "string" ? payload.slot : "",
+				payload.focused === true,
+			);
+		return { ok: true };
+	});
 	server.route("POST", "/api/notifications/answer", ({ body }) => {
 		const payload = asObject(body);
 		const id = asString(payload.id, "id");

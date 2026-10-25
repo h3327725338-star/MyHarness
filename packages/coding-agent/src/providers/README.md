@@ -47,7 +47,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `api-key-collection.ts` | 一个 Provider 多个 API Key 的存储契约 |
 | `value-resolution.ts` | 配置值解析：字面量、环境变量、`!命令` |
 | `account-connections.ts` | `AccountConnections`：GitHub Connect（设备码登录），存 `account-connections.json` |
-| `mail-connections.ts` | `MailConnections`：Mail Connect（Gmail、Outlook、世纪互联 Outlook；授权码 + PKCE + 本机回环重定向），存 `mail-connections.json` |
+| `mail-connections.ts` | `MailConnections`：Mail Connect（Gmail、Outlook；授权码 + PKCE + 本机回环重定向），存 `mail-connections.json` |
 | `index.ts` | credentials/ 出口 |
 | `web-search-keys.ts` | `WebSearchApiKeys`：搜索引擎 API Key 的独立私有文件 |
 

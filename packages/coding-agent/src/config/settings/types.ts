@@ -27,6 +27,17 @@ export interface CommitDescriptionSettings {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/**
+ * Selection translation (the Web UI's "Translate" on selected text): its own helper model, empty provider/model means
+ * "use the main model". `targetLanguage` is a BCP 47 tag, or "auto" for the interface language.
+ */
+export interface TranslationSettings {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	targetLanguage?: string;
+}
+
 /** Worktree copy naming helper model: empty provider/model means "use the main model". */
 export interface WorktreeNamingSettings {
 	provider?: string;
@@ -305,6 +316,7 @@ export interface Settings {
 	contextWindow?: ContextWindowSettings;
 	branchSummary?: BranchSummarySettings;
 	commitDescription?: CommitDescriptionSettings;
+	translation?: TranslationSettings;
 	worktreeNaming?: WorktreeNamingSettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean; // default: true; collapse transcript details until expanded with Ctrl+O

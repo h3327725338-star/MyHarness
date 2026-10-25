@@ -117,6 +117,64 @@ async function resolveBySuffix(
 }
 
 /**
+ * How long a folder's file-name index is reused. A chat renders the same links again and again (every open, every
+ * reconnect), and each link to a missing file used to walk up to REMAP_SEARCH_CAP entries of the workspace and of the
+ * Data root on its own: dozens of walks at once kept the file system busy for seconds while every request waited.
+ * One walk per folder now answers every name looked up in it for this long.
+ */
+const BASENAME_INDEX_TTL_MS = 30_000;
+type BasenameIndex = { capped: boolean; names: Map<string, string[]> };
+const basenameIndexes = new Map<string, { at: number; index: Promise<BasenameIndex> }>();
+
+function basenameKey(name: string): string {
+	return process.platform === "win32" ? name.toLowerCase() : name;
+}
+
+function basenameIndex(root: string): Promise<BasenameIndex> {
+	const now = Date.now();
+	const cached = basenameIndexes.get(root);
+	if (cached && now - cached.at < BASENAME_INDEX_TTL_MS) return cached.index;
+	for (const [old, entry] of basenameIndexes) if (now - entry.at >= BASENAME_INDEX_TTL_MS) basenameIndexes.delete(old);
+	const index = walkBasenames(root);
+	basenameIndexes.set(root, { at: now, index });
+	index.catch(() => basenameIndexes.delete(root));
+	return index;
+}
+
+/** Forget the cached file-name indexes (tests, or after files were created on purpose). */
+export function clearLocalFileSearchCache(): void {
+	basenameIndexes.clear();
+}
+
+/** Every name under `root` (heavy folders skipped), up to REMAP_SEARCH_CAP entries. */
+async function walkBasenames(root: string): Promise<BasenameIndex> {
+	const names = new Map<string, string[]>();
+	const stack: string[] = [root];
+	let visited = 0;
+	while (stack.length > 0) {
+		const dir = stack.pop()!;
+		let entries: import("node:fs").Dirent[];
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			visited += 1;
+			if (visited > REMAP_SEARCH_CAP) return { capped: true, names };
+			const name = entry.name;
+			const key = basenameKey(name);
+			const list = names.get(key);
+			const full = path.join(dir, name);
+			if (list) list.push(full);
+			else names.set(key, [full]);
+			if (entry.isDirectory() && !REMAP_SKIP_DIRS.has(name)) stack.push(full);
+		}
+	}
+	return { capped: false, names };
+}
+
+/**
  * Bounded read-only basename search under the workspace root. Skips heavy folders and
  * caps visited entries; accepts only exactly one match so an ambiguous link never opens
  * the wrong file. Returns null when capped (cannot prove uniqueness).
@@ -127,51 +185,20 @@ async function resolveByBasename(
 	basename: string,
 ): Promise<{ path: string; directory: boolean } | null> {
 	if (!basename || basename === "." || basename === ".." || basename === "") return null;
-	const want = process.platform === "win32" ? basename.toLowerCase() : basename;
+	const index = await basenameIndex(root);
 	const matches: string[] = [];
-	const stack: string[] = [root];
-	let visited = 0;
-	let capped = false;
-	while (stack.length > 0) {
-		if (visited > REMAP_SEARCH_CAP) {
-			capped = true;
-			break;
-		}
-		const dir = stack.pop()!;
-		let entries: import("node:fs").Dirent[];
-		try {
-			entries = await readdir(dir, { withFileTypes: true });
-		} catch {
-			continue;
-		}
-		for (const entry of entries) {
-			visited += 1;
-			if (visited > REMAP_SEARCH_CAP) {
-				capped = true;
-				break;
-			}
-			const name = entry.name;
-			const same = process.platform === "win32" ? name.toLowerCase() === want : name === want;
-			if (same) {
-				const full = path.join(dir, name);
-				const hit = await statIfInside(root, realRoot, full);
-				if (hit) {
-					matches.push(full);
-					if (matches.length > 1) {
-						throw new HttpError(
-							404,
-							`Multiple files named "${basename}" exist under the current workspace, so the link is ambiguous. Open the file from the Files panel instead.`,
-						);
-					}
-				}
-			}
-			if (entry.isDirectory()) {
-				if (REMAP_SKIP_DIRS.has(name)) continue;
-				stack.push(path.join(dir, name));
-			}
+	for (const full of index.names.get(basenameKey(basename)) ?? []) {
+		const hit = await statIfInside(root, realRoot, full);
+		if (!hit) continue;
+		matches.push(full);
+		if (matches.length > 1) {
+			throw new HttpError(
+				404,
+				`Multiple files named "${basename}" exist under the current workspace, so the link is ambiguous. Open the file from the Files panel instead.`,
+			);
 		}
 	}
-	if (capped) return null;
+	if (index.capped) return null;
 	if (matches.length === 1) {
 		const only = matches[0]!;
 		let info: Stats;

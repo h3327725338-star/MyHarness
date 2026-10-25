@@ -25,7 +25,7 @@ import {
 } from "./apply.ts";
 import { MemoryBaseStore, memoryBaseDir } from "./memory-bases.ts";
 import { mergeMemoryText } from "./memory-merge.ts";
-import { type HeaderCacheEntry, scanLocalEntities } from "./scope.ts";
+import { type HeaderCacheEntry, scanLocalEntitiesAsync } from "./scope.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type {
 	DrivePort,
@@ -64,6 +64,11 @@ const PUBLISH_CHUNK = 500;
 const MAX_DEFERRALS = 5;
 const MAX_ISSUES = 50;
 const LOCAL_DEBOUNCE_MS = 800;
+/**
+ * A local change starts a pass no sooner than this after the previous pass ended. A running chat writes its file many
+ * times a minute; without a gap every write started a full pass right after the previous one.
+ */
+const LOCAL_MIN_GAP_MS = 5000;
 const RETRY_AFTER_ERROR_MS = 30_000;
 /** A process that just exited keeps the lock until it is stale; retry instead of staying off for the session. */
 const LOCK_RETRY_MS = 15_000;
@@ -232,6 +237,7 @@ export class SyncEngine {
 	private stateWatcher: FSWatcher | undefined;
 	private lockRelease: (() => Promise<void>) | undefined;
 	private headerCache = new Map<string, HeaderCacheEntry>();
+	private lastPassEndedAt = 0;
 	private memoryMetadataCache = new Map<string, { signature: string; id: string; name: string }>();
 	private currentScan = new Map<string, ScannedEntity>();
 	private fileCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
@@ -535,6 +541,7 @@ export class SyncEngine {
 			}
 		} finally {
 			this.running = false;
+			this.lastPassEndedAt = Date.now();
 			this.progress = null;
 			this.emitStatus();
 			if (!this.stopped)
@@ -676,7 +683,14 @@ export class SyncEngine {
 					if (/^(?:cache|logs|traces|tool-traces|\.git)(?:\/|$)/u.test(name)) return;
 					if (/(?:^|\/)memory\/(?:index\.json|state\.json|maintenance\.[^/]+|migration-[^/]+\.json)$/u.test(name))
 						return;
-					if (/\.(?:tmp|part|crdownload|lock|bridge)$/u.test(name)) return;
+					if (/\.(?:tmp|part|crdownload|lock|bridge|owner)$/u.test(name)) return;
+					// A session writer lock is a directory whose time stamp is refreshed while the chat is open.
+					if (/\.lock(?:\/|$)/u.test(name)) return;
+					// Coding chats are not synced: a write to a conversation the last scan found to be one changes nothing.
+					if (/\/conversation\/[^/]+\.jsonl$/u.test(name)) {
+						const known = this.headerCache.get(join(this.options.dataRoot, filename));
+						if (known && !known.general) return;
+					}
 				}
 				this.scheduleSoon();
 			});
@@ -698,10 +712,11 @@ export class SyncEngine {
 	private scheduleSoon(): void {
 		if (this.stopped || this.running) return;
 		if (this.debounceTimer) clearTimeout(this.debounceTimer);
+		const gap = Math.max(LOCAL_DEBOUNCE_MS, this.lastPassEndedAt + LOCAL_MIN_GAP_MS - Date.now());
 		this.debounceTimer = setTimeout(() => {
 			this.debounceTimer = undefined;
 			void this.runOnce();
-		}, LOCAL_DEBOUNCE_MS);
+		}, gap);
 		this.debounceTimer.unref();
 	}
 
@@ -791,7 +806,7 @@ export class SyncEngine {
 	 * count stays visible while offline and is rebuilt the same way after a restart.
 	 */
 	private async planUploads(): Promise<SyncOperation[]> {
-		const scan = scanLocalEntities({
+		const scan = await scanLocalEntitiesAsync({
 			dataRoot: this.options.dataRoot,
 			agentDir: this.options.agentDir,
 			modeState: this.modeState,
@@ -1028,7 +1043,7 @@ export class SyncEngine {
 		if (!drive) return 0;
 		let handled = 0;
 		this.missingObjects.clear();
-		this.currentScan = scanLocalEntities({
+		this.currentScan = await scanLocalEntitiesAsync({
 			dataRoot: this.options.dataRoot,
 			agentDir: this.options.agentDir,
 			modeState: this.modeState,

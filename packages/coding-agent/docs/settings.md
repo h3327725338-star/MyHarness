@@ -56,18 +56,17 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
 
 ## Mail Connect（Gmail / Outlook）
 
-打开设置 → **连接**（或 `/settings` → **Mail Connect**），可以连接任意多个邮箱，供默认的 main-agent `mail` 工具使用。页面按服务分卡片（GitHub、Gmail、Outlook、Outlook（世纪互联）），每张卡片标题旁是状态（需要设置 / 未连接 / 已连接 N 个），右侧是主操作（**开始设置**、**连接**或**添加账号**），已连接的账号逐行列出，各自带**验证**、**重新授权**、**断开连接**：
+打开设置 → **连接**（或 `/settings` → **Mail Connect**），可以连接任意多个邮箱，供默认的 main-agent `mail` 工具使用。页面按服务分卡片（GitHub、Gmail、Outlook），每张卡片标题旁是状态（需要设置 / 未连接 / 已连接 N 个），右侧是主操作（**开始设置**、**连接**或**添加账号**），已连接的账号逐行列出，各自带**验证**、**重新授权**、**断开连接**：
 
 | 入口 | 覆盖的邮箱 | 登录与 API |
 | --- | --- | --- |
 | **连接 Gmail** | `@gmail.com` / `@googlemail.com` 个人邮箱和 Google Workspace（自定义域名）邮箱 | Google OAuth，scope `https://mail.google.com/`；Gmail API（`gmail.googleapis.com`） |
 | **连接 Outlook** | 个人 Microsoft 账号（outlook.com、hotmail.com、live.com、msn.com 等）和任意组织的 Microsoft 365 / Exchange Online 工作或学校邮箱 | Microsoft identity platform `/common`；Microsoft Graph（`graph.microsoft.com`），scope `User.Read Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite offline_access` |
-| **连接 Outlook（世纪互联）** | 由世纪互联运营的中国区 Microsoft 365 工作或学校邮箱 | `login.chinacloudapi.cn/organizations`；`microsoftgraph.chinacloudapi.cn` |
 
 每种邮箱第一次使用前要配置一次你自己的 OAuth 应用：点卡片上的**开始设置**展开编号步骤（第一步带注册页面的入口），最后填入 Client ID（Gmail 还要 Client Secret）保存；设置好后这些步骤收进卡片底部的“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开：
 
 - Google：在 Google Cloud Console 启用 Gmail API、配置 OAuth 同意屏幕，创建类型为“桌面应用”的 OAuth 客户端，填入 Client ID 和 Client Secret（桌面客户端的 secret 不是机密，但 Google 换取令牌时需要）。停留在“测试”状态的应用只能由测试用户登录，且刷新令牌 7 天后失效；自己的 Google Workspace 可把同意屏幕设为“内部”。
-- Microsoft：在 Microsoft Entra 应用注册中选择“任何组织目录中的账户和个人 Microsoft 账户”，添加平台“移动和桌面应用程序”，重定向 URI 填 `http://localhost`，只填应用程序（客户端）ID，不需要 secret。世纪互联在 `portal.azure.cn` 另行注册。组织可能要求管理员批准应用或禁止用户授权，这由租户策略决定。
+- Microsoft：在 Microsoft Entra 应用注册中选择“任何组织目录中的账户和个人 Microsoft 账户”，添加平台“移动和桌面应用程序”，重定向 URI 填 `http://localhost`，只填应用程序（客户端）ID，不需要 secret。组织可能要求管理员批准应用或禁止用户授权，这由租户策略决定。
 - 环境变量优先于已保存的值：`MYHARNESS_GOOGLE_CLIENT_ID`、`MYHARNESS_GOOGLE_CLIENT_SECRET`、`MYHARNESS_MICROSOFT_CLIENT_ID`、`MYHARNESS_MICROSOFT_CHINA_CLIENT_ID`。
 
 登录使用授权码 + PKCE 和本机回环重定向：服务端在 `127.0.0.1` 的随机端口临时监听（Outlook 的 `localhost` 重定向同时监听 `[::1]`），在系统浏览器打开登录页，回调后换取令牌并读取邮箱地址；10 分钟未完成或点**取消**即关闭监听。没有使用 device code：Google 不允许 Gmail scope 走 device flow，很多 Microsoft 365 租户也用条件访问禁止它。
@@ -164,6 +163,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时注册 `web_search` 和 `web_fetch`，main Agent 与它派出的子智能体都按这个开关。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
 | `commitDescription` | object | `{}` | Global AI 提交描述模型：为空表示使用主模型。设置 → 智能体 → 助手的“提交描述”行选择独立模型与思考档位。 |
+| `translation` | object | `{}` | Global 划词翻译模型与目标语言：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`targetLanguage` 默认 `"auto"`（跟随界面语言），可选 `zh-CN`、`zh-TW`、`en`、`ja`、`ko`、`fr`、`de`、`es`、`ru`。设置 → 智能体 → 助手的“翻译”“翻译成”两行设置。 |
 | `worktreeNaming` | object | `{}` | Global 工作区副本命名模型：为空表示使用主模型。设置 → 智能体 → 助手的“副本命名”行选择独立模型与思考档位。 |
 | `branchSummary` | object | `{}` | Global 分支摘要模型与摘要行为：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`reserveTokens`/`skipPrompt` 保持原有摘要行为。设置 → 智能体 → 助手的“分支摘要”行选择独立模型与思考档位。 |
 | `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
@@ -421,6 +421,16 @@ Memory Markdown files 是 source of truth：
 #### commitDescription（AI 提交描述）与 worktreeNaming（副本命名）
 
 两个都是 global 设置，默认都为空，即“使用主模型”：运行时使用当前主对话模型并继承它当前的 Thinking Effort，与改动前的行为完全一致；显式配置 `provider` + `model` 后改用独立模型，此时没写 `thinkingLevel`（Web UI 里的“默认”）表示不发送 Effort，相当于 `off`，只写其中一个视为没有配置。思考档位透传为一次性模型请求的 `reasoning` 参数（`off` 则不传）。两个请求都不再设置 `maxTokens`，输出上限走 Provider 默认。提交描述用于 `/commit` 从 diff 生成标题与正文，副本命名用于工作区副本的 AI 命名（2–5 词的展示名，只返回名称本身）。配置删除或 Provider 停用时回退到主模型；删除 Provider/模型时会清理指向它的引用。
+
+#### translation（划词翻译）
+
+Global 设置，模型部分与上面两项规则相同：默认为空即“使用主模型”（并继承主对话当前的 Thinking Effort），显式配置 `provider` + `model` 后改用独立模型，删除 Provider/模型时清理引用。`targetLanguage` 为 `"auto"` 时按请求带来的界面语言决定（中文界面译成简体中文，否则英语；桌面端网页里的请求不带界面语言，用 Web UI 偏好里保存的语言）。翻译卡片顶栏的语言菜单改的也是 `targetLanguage`。用于 Web UI 和桌面端内置浏览器的划词翻译（`POST /api/translate`），见 [Web UI](web-ui.md)。
+
+```json
+{
+  "translation": { "provider": "my-provider", "model": "my-fast-model", "thinkingLevel": "off", "targetLanguage": "zh-CN" }
+}
+```
 
 #### gitIntegration
 

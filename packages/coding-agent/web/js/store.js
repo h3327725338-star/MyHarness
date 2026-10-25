@@ -17,6 +17,7 @@ import {
 import { t, N_, serverText } from "./i18n.js";
 import { playNotificationSound } from "./notification-sounds.js";
 import { setDesktopNotificationClick, showNotification } from "./notifications.js";
+import { appFocused } from "./page-presence.js";
 import { runModeOf } from "./run-modes.js";
 import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { savedPromptsOf } from "./saved-prompts.js";
@@ -257,6 +258,8 @@ export const state = {
 	/** Latest Google Drive sync status (`sync_status`), or null until the settings page has asked once. */
 	syncStatus: null,
 	editorInsert: null,
+	/** Chats whose Stop was pressed and whose run has not ended yet: the button shows that the stop is under way. */
+	stopping: {},
 	quoteInsert: null,
 	loginEvent: null,
 	/** Latest GitHub Connect progress from the server (device code, done, error), with a nonce per event. */
@@ -769,6 +772,16 @@ export async function chooseThinkingLevel(level) {
 const transcriptSent = new Map();
 // The server stamps a message when it takes it, after the page drew it; this only absorbs clock rounding.
 const PENDING_LANDED_SLACK_MS = 2000;
+/**
+ * Whether a persisted assistant entry is the same message as a live one. The two carry different timestamps (the
+ * persisted one is stamped when it was saved), so the content decides: the same blocks in order, a tool call by its id.
+ */
+function sameAssistantMessage(persisted, live) {
+	const a = persisted.blocks || [];
+	const b = live.blocks || [];
+	if (a.length === 0 || a.length !== b.length) return false;
+	return a.every((block, i) => block.type === b[i].type && (block.type === "toolCall" ? block.id === b[i].id : block.text === b[i].text));
+}
 export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } = {}) {
 	const requestKey = slot ?? "";
 	const requestSeq = (transcriptSent.get(requestKey) ?? 0) + 1;
@@ -791,23 +804,31 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 	bag.transcriptFetching = false;
 	bag.fetchFailures = 0;
 	runFor(key, () => {
-		// A staged open streams into the fresh target bag while this page is in flight. Carry those live
-		// entries across the replacement so the in-flight turn does not blink away; live copies the
-		// server already persisted (same id / toolCallId) are dropped instead of duplicated.
+		// The server's transcript holds only what it has persisted: the reply being streamed is saved when it ends. Any
+		// read that lands during a run (a staged open, a reconnect, the send check's recovery, a chat deleted elsewhere)
+		// must carry those live entries across the replacement. Dropping them blanked the reply until the next full
+		// reload, and every later update of it was ignored because its live entry was gone. Live copies the server
+		// already has (same id / toolCallId / same assistant message) are dropped instead of duplicated; outside a
+		// staged open an entry that has an id is the server's to keep or drop.
 		const carry = [];
-		if (bag.stagedLoading) {
-			const persistedIds = new Set();
-			const persistedToolCalls = new Set();
-			for (const item of data.items) {
-				if (item.id) persistedIds.add(item.id);
-				if (item.kind === "toolResult" && item.toolCallId) persistedToolCalls.add(item.toolCallId);
-			}
-			for (const item of state.items) {
-				if (!item.liveId && !(item.live && !item.id)) continue;
-				if (item.id && persistedIds.has(item.id)) continue;
-				if (item.kind === "toolResult" && item.toolCallId && persistedToolCalls.has(item.toolCallId)) continue;
-				carry.push(item);
-			}
+		const persistedIds = new Set();
+		const persistedToolCalls = new Set();
+		const persistedAssistants = [];
+		for (const item of data.items) {
+			if (item.id) persistedIds.add(item.id);
+			if (item.kind === "toolResult" && item.toolCallId) persistedToolCalls.add(item.toolCallId);
+			if (item.kind === "assistant") persistedAssistants.push(item);
+		}
+		const runningTools = {};
+		for (const item of state.items) {
+			if (!item.liveId && !(item.live && !item.id)) continue;
+			if (item.id && (persistedIds.has(item.id) || !bag.stagedLoading)) continue;
+			if (item.kind === "toolResult" && item.toolCallId && persistedToolCalls.has(item.toolCallId)) continue;
+			if (item.kind === "assistant" && item.final && persistedAssistants.some((entry) => sameAssistantMessage(entry, item))) continue;
+			carry.push(item);
+			// A tool the carried reply started is still running: keep its state, or its row falls back to "pending".
+			if (item.kind === "assistant")
+				for (const block of item.blocks || []) if (block.type === "toolCall" && state.toolRuns[block.id] && !toolRuns[block.id]) runningTools[block.id] = state.toolRuns[block.id];
 		}
 		// A message the user just sent is drawn before the server has it. A reload in between (a run ending, or context
 		// compaction finishing while the message waits for it) must not wipe it: it stays at the tail until its own
@@ -818,7 +839,7 @@ export async function loadTranscript(slot = targetSlot ?? activeSlot, { limit } 
 			if (!landed) carry.push(item);
 		}
 		state.items = carry.length ? [...data.items, ...carry] : data.items;
-		state.toolRuns = toolRuns;
+		state.toolRuns = { ...runningTools, ...toolRuns };
 		state.runs = {};
 		// Old servers answer without paging fields: that is a complete transcript.
 		state.transcriptHasMore = data.hasMore === true;
@@ -1496,17 +1517,32 @@ let switchSeq = 0;
 export const nextSwitch = () => ++switchSeq;
 export const isLatestSwitch = (seq) => seq === switchSeq;
 
+/**
+ * The sidebar row a new chat was shown in before the service answered, by the slot the service then gave it. The
+ * real row keeps that row's key, so the row that grew in at the click is not folded away and grown in a second time.
+ */
+const freshRowKeys = new Map();
+export function noteFreshRow(slot, key) {
+	if (!slot || !key) return;
+	freshRowKeys.set(slot, key);
+	if (freshRowKeys.size > 50) freshRowKeys.delete(freshRowKeys.keys().next().value);
+}
+export const freshRowKey = (slot) => freshRowKeys.get(slot);
+
 /** Select a real target immediately, before opening it. Synthetic slots cannot make API writes. */
-export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, retry, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
+export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, retry, fresh = null, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
 	if (!isLatestSwitch(seq)) return null;
 	const id = `pending:${seq}`;
 	for (const key of bags.keys()) if (String(key).startsWith("pending:")) bags.delete(key);
 	const bag = bagOf(id);
-	bag.snap = { mode, session: { id: sessionId, file: path, name, persisted: false }, flags: {}, queue: bag.queue, dialogs: [], surface: bag.surface, active: false, thinking: { supported: false, levels: [] }, trust: { trusted: false, requiresTrust: false }, run: {}, app: {} };
+	bag.snap = { mode, session: { id: sessionId, file: path, name, persisted: false }, flags: {}, queue: bag.queue, dialogs: [], surface: bag.surface, active: false, thinking: { supported: false, levels: [] }, trust: { trusted: false, requiresTrust: false }, run: {}, app: {}, ...(fresh?.workspace ? { workspace: fresh.workspace, cwd: fresh.workspace.rootPath } : {}) };
 	activeSlot = id;
 	state.activeSlot = id;
 	state.opening = path;
-	state.switching = { seq, path, mode, name, retry, timing, error: null };
+	// `fresh`: a new chat. There is nothing to read, so the screen shows the empty chat at once, not "Loading…".
+	// `freshRow`: the sidebar lists it at once too, as the current row of the group it goes to (`fresh.group`, a
+	// workspace root or GENERAL_KEY), and the real row takes over that row's place when it arrives (see freshRowKey).
+	state.switching = { seq, path, mode, name, retry, timing, error: null, fresh: !!fresh, freshRow: fresh?.group ? { key: id, group: fresh.group } : null };
 	setChatMode(mode);
 	state.view = { ...state.view, modeIntent: mode, selectedTerminal: null };
 	measureInteraction(timing, "visibleMs");
@@ -1939,7 +1975,12 @@ function connectEvents() {
 	});
 	on("message_update", (d) => {
 		const index = findLive(d.liveId);
-		if (index < 0) return;
+		if (index < 0) {
+			// Its message_start never reached this page (the stream reconnected in between): the reply starts here
+			// instead of staying invisible until the run ends and the transcript is read again.
+			if (d.liveId && d.item) appendStreamedItem({ ...d.item, liveId: d.liveId });
+			return;
+		}
 		const items = state.items.slice();
 		items[index] = { ...d.item, liveId: d.liveId, id: items[index].id };
 		state.items = items;
@@ -1955,6 +1996,11 @@ function connectEvents() {
 				emit();
 				return;
 			}
+			// Missed from its start (see message_update): show the finished reply, unless a transcript read already
+			// brought the saved copy of it.
+			if (d.item?.kind === "assistant" && !state.items.some((entry) => entry.kind === "assistant" && sameAssistantMessage(entry, d.item)))
+				appendStreamedItem({ ...d.item, liveId: d.liveId, final: true });
+			return;
 		}
 		// A user/custom message that was already appended at message_start is replaced by its final form.
 		if (d.item?.kind === "user") return;
@@ -2061,6 +2107,8 @@ function connectEvents() {
 		if (slot === activeSlot) loadGitStatus();
 	});
 	on("session_replaced", async (d, slot) => {
+		// Live entries belong to the session that was replaced; the reload below must not carry them into this one.
+		state.items = state.items.filter((item) => !item.liveId && !item.live);
 		state.userBash = {};
 		state.userBashOrder = [];
 		state.subAgents = {};
@@ -2241,7 +2289,7 @@ async function notifyTaskEnd(d, slot) {
 	// The sound always plays. The notification is skipped while the user is looking at that very chat ("Always"), or at
 	// the app at all ("Only when not focused"); a skipped notice counts as shown, so the system popup does not take its place.
 	playNotificationSound(d.sound);
-	const watching = document.hasFocus() && (d.focus === "unfocused" || activeSlot === slot);
+	const watching = appFocused() && document.visibilityState === "visible" && (d.focus === "unfocused" || activeSlot === slot);
 	if (watching) {
 		post("/api/notifications/answer", { id: d.id, shown: true }, slot).catch(() => {});
 		return;

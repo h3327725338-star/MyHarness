@@ -45,6 +45,7 @@ import type {
 	SettingsScope,
 	SubAgentSettings,
 	ThinkingBudgetsSettings,
+	TranslationSettings,
 	TransportSetting,
 	TurnCompleteNotifyMode,
 	UsageRankingSettings,
@@ -77,6 +78,7 @@ export type {
 	SettingsScope,
 	SubAgentSettings,
 	ThinkingBudgetsSettings,
+	TranslationSettings,
 	TransportSetting,
 	TurnCompleteNotifyMode,
 	UsageRankingSettings,
@@ -613,7 +615,7 @@ export class SettingsManager {
 			changed = true;
 		}
 
-		for (const field of ["commitDescription", "worktreeNaming", "sessionContinuity"] as const) {
+		for (const field of ["commitDescription", "translation", "worktreeNaming", "sessionContinuity"] as const) {
 			const configured = this.globalSettings[field];
 			if (configured?.provider === providerId && (modelId === undefined || configured.model === modelId)) {
 				delete configured.provider;
@@ -1132,6 +1134,19 @@ export class SettingsManager {
 	setCommitDescriptionSettings(settings: CommitDescriptionSettings): void {
 		this.globalSettings.commitDescription = { ...this.globalSettings.commitDescription, ...settings };
 		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("commitDescription", key);
+		this.save();
+	}
+
+	/** Selection translation helper model and target language ("auto": the interface language). */
+	getTranslationSettings(): TranslationSettings & { targetLanguage: string } {
+		const { provider, model, thinkingLevel, targetLanguage } = this.settings.translation ?? {};
+		return { provider, model, thinkingLevel, targetLanguage: targetLanguage || "auto" };
+	}
+
+	setTranslationSettings(settings: TranslationSettings): void {
+		this.globalSettings.translation = { ...this.globalSettings.translation, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel", "targetLanguage"] as const)
+			if (key in settings) this.markModified("translation", key);
 		this.save();
 	}
 

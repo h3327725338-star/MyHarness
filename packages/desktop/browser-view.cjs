@@ -7,6 +7,9 @@ const { keyEvents } = require(require('node:path').join(__dirname, 'browser-inpu
 const { createPasswordStore, attachPasswordManager } = require(require('node:path').join(__dirname, 'browser-passwords.cjs'));
 const { createPermissionStore } = require(require('node:path').join(__dirname, 'browser-permissions.cjs'));
 const page = require(require('node:path').join(__dirname, 'browser-page-helpers.cjs'));
+const { attachZoom, cleanZoom, createSiteZoomStore, stepZoom } = require(require('node:path').join(__dirname, 'zoom.cjs'));
+const dark = require(require('node:path').join(__dirname, 'browser-dark.cjs'));
+const { acceptLanguage, createLanguageStore, languageList } = require(require('node:path').join(__dirname, 'browser-language.cjs'));
 const { INTERACTIVE_QUERY } = page;
 
 exports.httpUrl = (value) => {
@@ -131,6 +134,15 @@ exports.createBrowser = (window, log, options = {}) => {
   // never to the Data root: they are not synced and not part of any workspace. A host without a profile has neither.
   const profileDir = options.profileDir ? require('node:path').resolve(options.profileDir) : undefined;
   const bookmarks = profileDir ? createBookmarkStore(require('node:path').join(profileDir, 'browser-bookmarks.json')) : undefined;
+  // Zoom of each website, by host (Ctrl + "+" / "-" / 0 or Ctrl + wheel inside a tab, or the toolbar's zoom badge).
+  const siteZoom = createSiteZoomStore(profileDir ? require('node:path').join(profileDir, 'browser-zoom.json') : '', log);
+  // The language websites are told the user reads (toolbar → language); '' keeps the engine's default (Windows').
+  const siteLanguage = createLanguageStore(profileDir ? require('node:path').join(profileDir, 'browser-language.json') : '', log);
+  // The app page measures the view's box in its own CSS pixels; with the app window zoomed those are not the window's
+  // pixels any more (a 125 % app has 1.25 window pixels per CSS pixel).
+  const appZoom = () => {
+    try { return window.isDestroyed() ? 1 : window.webContents.getZoomFactor() || 1; } catch { return 1; }
+  };
   const passwords = profileDir && safeStorage
     ? createPasswordStore({
       file: require('node:path').join(profileDir, 'browser-logins.bin.json'),
@@ -213,6 +225,8 @@ exports.createBrowser = (window, log, options = {}) => {
         const agent = details.webContents ? setAgent(details.webContents, details.url) : agentFor(details.url);
         headers[nameOf('user-agent') || 'User-Agent'] = agent;
       }
+      const language = siteLanguage.get();
+      if (language) headers[nameOf('accept-language') || 'Accept-Language'] = acceptLanguage(language);
       const hints = /^https:/i.test(details.url) && headers[nameOf('user-agent')] === chromeAgent ? clientHints() : undefined;
       if (hints && !has('sec-ch-ua')) {
         headers['sec-ch-ua'] = hints.list;
@@ -330,6 +344,143 @@ exports.createBrowser = (window, log, options = {}) => {
   const passwordManager = passwords && ipcMain
     ? attachPasswordManager({ ipcMain, store: passwords, tabFor: (contents) => tabFor(contents), emit, log })
     : undefined;
+
+  // ---- Dark mode (browser-dark.cjs) ----------------------------------------------------------------------------------
+  // "auto" follows the app: the page tells the host whether it is dark and its colors (`darkMode` command).
+  const darkStore = dark.createDarkStore(profileDir ? require('node:path').join(profileDir, 'browser-dark.json') : '', log);
+  let appDark = true;
+  let appColors;
+  // A dark page must not flash white while it loads. Until the engine runs, the document gets a dark canvas: the preload
+  // puts it in before the first paint (`mh-browser:dark-early`), and the host puts the same rules in once the page has
+  // committed if the preload did not (browser-dark.cjs putCanvas / dropCanvas). `body` too, since most pages paint a white body over the html background; `color-scheme` makes the
+  // default text and form controls light meanwhile. The native view itself starts in that color, not white.
+  const canvasColor = () => (typeof appColors?.background === 'string' && /^#[0-9a-f]{6}$/iu.test(appColors.background) ? appColors.background : '#1e1f1f');
+  const darkCanvas = () => `html, body { background-color: ${canvasColor()} !important; } html { color-scheme: dark !important; }`;
+  /** The color a tab's view shows before its page paints: the dark canvas when the page will be dark. */
+  const paintViewBackground = (tab, url = tab.url) => {
+    if (tab.destroyed || !tab.view) return;
+    const darkFirst = url ? darkStore.wanted(url, appDark) : appDark;
+    try { tab.view.setBackgroundColor(darkFirst ? canvasColor() : '#ffffff'); } catch { /* view is going away */ }
+  };
+  const darkState = (tab) => ({ dark: !!tab.dark, darkNative: !!tab.dark && tab.nativeDark === true, darkMode: darkStore.get().mode, darkSite: darkStore.get().sites[darkStore.hostOf(tab.url)] || null });
+  /**
+   * Tell the tab's pages whether the reader prefers dark (`prefers-color-scheme`), so a site with a dark theme of its own
+   * shows it. The emulation lives in the page's debugger session, attached for as long as dark is wanted (the other
+   * debugger users only borrow an attached session and leave it attached). Resolves true when the preference changed.
+   */
+  const setPrefersDark = async (tab, on) => {
+    if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return false;
+    if (!!tab.prefersDark === on) return false;
+    const debuggerApi = tab.view.webContents.debugger;
+    try {
+      if (on && !debuggerApi.isAttached()) {
+        debuggerApi.attach('1.3');
+        tab.schemeDebugger = true;
+        debuggerApi.once('detach', () => { tab.schemeDebugger = false; tab.prefersDark = false; });
+      }
+      if (!debuggerApi.isAttached()) { tab.prefersDark = false; return false; }
+      await debuggerApi.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: on ? 'dark' : '' }] });
+      tab.prefersDark = on;
+      if (!on && tab.schemeDebugger) { tab.schemeDebugger = false; debuggerApi.detach(); }
+      return true;
+    } catch (error) {
+      log?.(`无法设置网页的深色偏好：${error.message}`);
+      return false;
+    }
+  };
+  const syncDark = async (tab) => {
+    if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return;
+    const contents = tab.view.webContents;
+    const wanted = darkStore.wanted(tab.url, appDark);
+    // The site's own dark theme comes first: with the preference told, a page that turns dark by itself keeps its design
+    // and the engine stays off. Asked once per document (and again when the preference changes), before the engine runs;
+    // the check sets the loading canvas aside for its one read.
+    if (await setPrefersDark(tab, wanted)) tab.nativeDark = undefined;
+    if (wanted && tab.nativeDark === undefined && !tab.darkEngine) {
+      tab.nativeDark = await dark.detectNativeDark(contents);
+      if (tab.destroyed || contents.isDestroyed()) return;
+    }
+    const engine = wanted && tab.nativeDark !== true;
+    // `darkTried`: the engine may run in this document even when it did not report back, so turning off always asks it.
+    if (engine || tab.darkEngine || tab.darkTried) {
+      tab.darkTried = engine;
+      tab.darkEngine = await dark.applyDark(contents, engine, appColors);
+    }
+    tab.dark = engine ? tab.darkEngine : wanted && tab.nativeDark === true;
+    // The loading canvas goes: the engine or the site's own theme colors the page now (or it stays in its own colors).
+    await dark.dropCanvas(contents);
+    try { contents.send('mh-browser:dark-settled'); } catch { /* view is going away */ }
+    paintViewBackground(tab);
+    if (!tab.destroyed) emit(tab.id, { type: 'dark', ...darkState(tab) });
+  };
+  const syncDarkAll = () => { for (const tab of tabs.values()) void syncDark(tab); };
+  if (ipcMain) {
+    // The engine in a tab reads cross-origin stylesheets and images through this (see browser-tab-preload.cjs).
+    // Asked by a tab's preload as its document starts (before the first paint): the canvas rules when the page will be
+    // dark. Synchronous on purpose, it costs one round trip and is the only way to beat the first paint.
+    // Asked by a tab's preload as its document starts: navigator.languages for the chosen language (null: the engine's).
+    ipcMain.removeAllListeners('mh-browser:languages');
+    ipcMain.on('mh-browser:languages', (event) => {
+      const language = tabFor(event.sender) ? siteLanguage.get() : '';
+      event.returnValue = language ? languageList(language) : null;
+    });
+    ipcMain.removeAllListeners('mh-browser:dark-early');
+    ipcMain.on('mh-browser:dark-early', (event, url) => {
+      const tab = tabFor(event.sender);
+      let wanted = false;
+      try { wanted = !!tab && !tab.destroyed && darkStore.wanted(String(url || ''), appDark); } catch { wanted = false; }
+      event.returnValue = wanted ? darkCanvas() : '';
+    });
+    ipcMain.removeHandler('mh-browser:dark-fetch');
+    ipcMain.handle('mh-browser:dark-fetch', (event, url) => {
+      const tab = tabFor(event.sender);
+      if (!tab || tab.destroyed || !darkStore.wanted(tab.url, appDark)) return { ok: false, status: 0 };
+      return dark.darkFetch(partition, url);
+    });
+    // Selection translation in a page (see browser-tab-preload.cjs): the app's own service translates, with the model of
+    // Settings → Agents → Translation. Only a site tab may ask; the card takes the app's colors.
+    ipcMain.removeHandler('mh-browser:translate-look');
+    // British / American pronunciation for the card when Windows has no voice of that accent: the bytes of the
+    // service's dictionary voice (GET /api/translate/voice), at most 1 MB.
+    ipcMain.removeHandler('mh-browser:translate-voice');
+    ipcMain.handle('mh-browser:translate-voice', async (event, request) => {
+      if (!tabFor(event.sender) || typeof options.translationVoice !== 'function') return null;
+      const text = String(request?.text || '').trim();
+      const accent = request?.accent === 'uk' || request?.accent === 'us' ? request.accent : '';
+      if (!accent || !/^[A-Za-z][A-Za-z' -]{0,59}$/.test(text)) return null;
+      try {
+        const bytes = await options.translationVoice(text, accent);
+        return bytes && bytes.length <= 1024 * 1024 ? new Uint8Array(bytes) : null;
+      } catch { return null; }
+    });
+    ipcMain.removeHandler('mh-browser:translate-language');
+    ipcMain.handle('mh-browser:translate-language', async (event) => {
+      if (!tabFor(event.sender) || typeof options.translationLanguage !== 'function') return null;
+      try {
+        const saved = await options.translationLanguage();
+        return saved && typeof saved.preference === 'string' ? { preference: saved.preference, target: String(saved.target || '') } : null;
+      } catch { return null; }
+    });
+    ipcMain.handle('mh-browser:translate-look', (event) => (tabFor(event.sender) ? { dark: appDark, ...(appColors || {}) } : null));
+    ipcMain.removeHandler('mh-browser:translate');
+    // `request`: the selected text, or { text, target, remember } when the card's language menu picked a language.
+    ipcMain.handle('mh-browser:translate', async (event, request) => {
+      const tab = tabFor(event.sender);
+      if (!tab || tab.destroyed) return { ok: false, error: '拒绝非网页标签的请求' };
+      if (typeof options.translate !== 'function') return { ok: false, error: '翻译服务还没有就绪' };
+      const asked = request && typeof request === 'object' ? request : { text: request };
+      const value = String(asked.text || '').trim().slice(0, 6000);
+      if (!value) return { ok: false, error: '请先选中要翻译的文字。' };
+      const target = typeof asked.target === 'string' && /^[A-Za-z-]{2,8}$/.test(asked.target) ? asked.target : undefined;
+      try {
+        const answer = await options.translate(value, target ? { target, remember: asked.remember === true } : {});
+        const entry = answer?.entry && typeof answer.entry === 'object' ? answer.entry : undefined;
+        return { ok: true, translation: String(answer?.translation || ''), target: String(answer?.target || ''), preference: String(answer?.preference || ''), ...(entry ? { entry } : {}), model: String(answer?.model || '') };
+      } catch (error) {
+        return { ok: false, error: error.message || String(error) };
+      }
+    });
+  }
 
   /** The current site icon of a tab as a small data URL, or undefined (the bar then shows the first letter). */
   const fetchIcon = async (tab) => {
@@ -450,6 +601,12 @@ exports.createBrowser = (window, log, options = {}) => {
       // The page looks like a bot check (Cloudflare's interstitial or its failed variant). The workspace then offers the
       // way out: try again, or finish the check in the normal browser. Nothing here answers a challenge itself.
       challenge: !!tab.challenge,
+      // The page's zoom (1 = 100 %), shown on the toolbar while it is not 100 %.
+      zoom: tab.zoom ?? 1,
+      // Dark mode: whether the page is recolored now, the general mode and this site's own choice (null: follows it).
+      ...darkState(tab),
+      // The language websites are told the user reads ('' : the engine's default).
+      language: siteLanguage.get(),
       canGoBack: !!history?.canGoBack?.(),
       canGoForward: !!history?.canGoForward?.(),
       visible: tab.view?.getVisible?.() ?? false,
@@ -463,9 +620,13 @@ exports.createBrowser = (window, log, options = {}) => {
     };
   };
 
-  /** Screenshot state pushed to the page: only for a tab that is on screen and has finished loading. */
+  /**
+   * Screenshot state pushed to the page: only for a tab that is on screen and whose page itself has loaded. A page that
+   * keeps loading frames or requests (Google Drive, mail, chat apps) still gets its picture: waiting for `isLoading()`
+   * left those without any, so a menu opened over them showed an empty panel.
+   */
   const picture = async (tab) => {
-    if (!tab || tab.destroyed || !tab.view || tab.view.webContents.isDestroyed() || tab.view.webContents.isLoading()) return;
+    if (!tab || tab.destroyed || !tab.view || tab.view.webContents.isDestroyed() || tab.view.webContents.isLoadingMainFrame()) return;
     if (!tab.view.getVisible()) return;
     if (!tabs.has(tab.id) || tab.id !== activeTabId) return;
     try {
@@ -473,11 +634,15 @@ exports.createBrowser = (window, log, options = {}) => {
       if (image.isEmpty() || tabs.get(tab.id) !== tab) return;
       // The picture stands in for the native view, so it carries the view's own box.
       const frame = tab.view.getBounds?.() || {};
-      emit(tab.id, { type: 'snapshot', snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`, width: frame.width, height: frame.height });
+      const scale = appZoom();
+      emit(tab.id, { type: 'snapshot', snapshot: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`, width: frame.width / scale, height: frame.height / scale });
     } catch (error) {
       log(`网页截图失败：${error.message}`);
     }
   };
+
+  // Bounds requests in the order they came: a hide waiting for its picture is dropped when a newer request arrived.
+  let boundsOrder = 0;
 
   /** The interval that refreshes the fallback picture exists only while the view is actually the visible active tab. */
   const updatePictureTimer = (tab) => {
@@ -496,10 +661,11 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!rectangle) return null;
     const [width, height] = window.getContentSize();
     if (width < 1 || height < 1) return null;
-    const x = Math.max(0, Math.min(width - 1, Math.round(rectangle.x)));
-    const y = Math.max(0, Math.min(height - 1, Math.round(rectangle.y)));
-    const w = Math.max(0, Math.min(width - x, Math.round(rectangle.width)));
-    const h = Math.max(0, Math.min(height - y, Math.round(rectangle.height)));
+    const scale = appZoom();
+    const x = Math.max(0, Math.min(width - 1, Math.round(rectangle.x * scale)));
+    const y = Math.max(0, Math.min(height - 1, Math.round(rectangle.y * scale)));
+    const w = Math.max(0, Math.min(width - x, Math.round(rectangle.width * scale)));
+    const h = Math.max(0, Math.min(height - y, Math.round(rectangle.height * scale)));
     if (w < 1 || h < 1) return null;
     return { x, y, width: w, height: h };
   };
@@ -516,7 +682,9 @@ exports.createBrowser = (window, log, options = {}) => {
     for (const tab of tabs.values()) {
       if (!tab.view || tab.destroyed) continue;
       const visible = tab.id === activeTabId && !!bounds;
-      if (!visible) conceal(tab);
+      // The active tab hidden only because a menu or dialog of the page lies over it keeps its size: resizing it to the
+      // background size and back made the site lay itself out twice, a visible jump each time a menu closed.
+      if (!visible) conceal(tab, { keepSize: tab.id === activeTabId });
       else {
         try { tab.view.setBounds(bounds); } catch { /* view is going away */ }
         try { tab.view.setVisible(true); } catch { /* view is going away */ }
@@ -532,9 +700,9 @@ exports.createBrowser = (window, log, options = {}) => {
   });
 
   /** Hide one view. A view leaving the screen first gets the background size: a hidden view ignores new bounds. */
-  const conceal = (tab) => {
+  const conceal = (tab, { keepSize = false } = {}) => {
     try {
-      if (tab.view.getVisible()) tab.view.setBounds({ x: 0, y: 0, ...backgroundViewport() });
+      if (tab.view.getVisible() && !keepSize) tab.view.setBounds({ x: 0, y: 0, ...backgroundViewport() });
       tab.view.setVisible(false);
     } catch { /* view is going away */ }
   };
@@ -568,12 +736,21 @@ exports.createBrowser = (window, log, options = {}) => {
   const wire = (tab) => {
     const contents = tab.view.webContents;
     const live = () => !tab.destroyed && tabs.get(tab.id) === tab;
+    attachZoom(contents, { current: () => tab.zoom ?? 1, apply: (factor) => setTabZoom(tab, factor, true) });
     contents.on('will-navigate', (event, target) => {
       try { exports.httpUrl(target); } catch { event.preventDefault(); }
     });
     // Every new top-level document gets the user agent that belongs to its site (see CHROME_UA_SITES).
     contents.on('did-start-navigation', (details) => {
-      if (details?.isMainFrame && !details.isSameDocument && details.url) setAgent(contents, details.url);
+      if (details?.isMainFrame && !details.isSameDocument && details.url) {
+        setAgent(contents, details.url);
+        // The next page shows the right color before it paints (a dark site does not flash white), and already knows
+        // whether the reader prefers dark, so a site's own dark theme is there from its first paint.
+        paintViewBackground(tab, details.url);
+        let wantedDark = false;
+        try { wantedDark = darkStore.wanted(details.url, appDark); } catch { wantedDark = false; }
+        void setPrefersDark(tab, wantedDark);
+      }
     });
     contents.setWindowOpenHandler(({ url }) => {
       // A sign-in popup (Google, Apple, Microsoft…) often starts at about:blank and is steered by its opener.
@@ -601,10 +778,16 @@ exports.createBrowser = (window, log, options = {}) => {
       { role: 'undo', enabled: params.isEditable }, { role: 'redo', enabled: params.isEditable },
       { type: 'separator' }, { role: 'cut', enabled: params.isEditable }, { role: 'copy' },
       { role: 'paste', enabled: params.isEditable }, { role: 'selectAll' },
-      { type: 'separator' }, { label: '用系统浏览器打开', click: () => void shell.openExternal(tab.url) },
+      { type: 'separator' },
+      ...(params.selectionText?.trim() && !params.isEditable
+        ? [{ label: '翻译所选文字', click: () => { if (live()) contents.send('mh-browser:translate-selection', { text: params.selectionText, x: params.x, y: params.y }); } }, { type: 'separator' }]
+        : []),
+      { label: '用系统浏览器打开', click: () => void shell.openExternal(tab.url) },
     ]).popup({ window }));
     // The first real page is the moment the engine's own client-hint list can be read (it needs a secure context).
     contents.on('dom-ready', () => learnClientHints(contents));
+    // Each new document starts in its own colors: the engine runs again once its DOM is there.
+    contents.on('dom-ready', () => { if (live()) void syncDark(tab); });
     contents.on('did-start-loading', () => {
       if (!live()) return;
       tab.error = '';
@@ -624,6 +807,13 @@ exports.createBrowser = (window, log, options = {}) => {
     });
     contents.on('did-navigate', (_event, target) => {
       if (!live()) return;
+      // A site opens at the zoom the user chose for it last time.
+      setTabZoom(tab, siteZoom.get(target), false);
+      tab.dark = false;
+      tab.darkEngine = false;
+      tab.darkTried = false;
+      tab.nativeDark = undefined;
+      if (darkStore.wanted(target, appDark)) void dark.putCanvas(contents, darkCanvas());
       passwordManager?.navigated(tab);
       tab.favicon = undefined;
       tab.iconKey = undefined;
@@ -694,6 +884,20 @@ exports.createBrowser = (window, log, options = {}) => {
     });
   };
 
+  /**
+   * Zoom one tab (1 = 100 %). `remember` keeps the factor for the tab's site: a choice the user made, as opposed to the
+   * saved factor being applied when the site opens. The workspace hears the new factor for its toolbar badge.
+   */
+  const setTabZoom = (tab, factor, remember) => {
+    if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return tab.zoom ?? 1;
+    const value = cleanZoom(factor);
+    try { tab.view.webContents.setZoomFactor(value); } catch { return tab.zoom ?? 1; }
+    tab.zoom = value;
+    if (remember) siteZoom.set(tab.url, value);
+    emit(tab.id, { type: 'zoom', zoom: value });
+    return value;
+  };
+
   const fail = (tab, message, url) => {
     if (tab.destroyed || tabs.get(tab.id) !== tab) return;
     log(message);
@@ -720,6 +924,7 @@ exports.createBrowser = (window, log, options = {}) => {
     // The size must be set before the view is hidden: Electron does not pass bounds set on a hidden view to its page.
     try { view.setBounds({ x: 0, y: 0, ...backgroundViewport() }); } catch { /* view is going away */ }
     view.setVisible(false);
+    paintViewBackground(tab);
     window.contentView.addChildView(view);
     wire(tab);
     if (adopted) {
@@ -1455,7 +1660,16 @@ exports.createBrowser = (window, log, options = {}) => {
           if (other?.view) { try { other.view.setVisible(false); } catch { /* going away */ } }
           return { ok: true, ignored: true };
         }
-        rectangle = cleanRect(value.rect);
+        const next = cleanRect(value.rect);
+        const order = ++boundsOrder;
+        // Hiding the view that is on screen (a menu or dialog of the page now lies over it): take its picture first, so the
+        // page shows the site as it was instead of an empty panel. The capture is short; a slow one does not hold it up.
+        const active = tabs.get(activeTabId);
+        if (!next && rectangle && active?.view?.getVisible?.()) {
+          await Promise.race([picture(active).catch(() => undefined), new Promise((done) => setTimeout(done, 250))]);
+          if (order !== boundsOrder) return { ok: true, superseded: true };
+        }
+        rectangle = next;
         placeActive();
         return { ok: true, visible: !!rectangle };
       }
@@ -1520,6 +1734,39 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'forward': { const target = requireTab(value.tabId); contentsOf(target).navigationHistory.goForward(); return { ok: true }; }
       case 'reload': { const target = requireTab(value.tabId); contentsOf(target).reload(); return { ok: true }; }
       case 'stop': { const target = requireTab(value.tabId); contentsOf(target).stop(); return { ok: true }; }
+      case 'darkMode': {
+        // From the app page: whether it is dark and its colors (for "auto"), and/or a new general `mode`.
+        if (typeof value.appDark === 'boolean') appDark = value.appDark;
+        if (value.colors && typeof value.colors === 'object') appColors = { background: value.colors.background, text: value.colors.text };
+        if (value.mode !== undefined) darkStore.setMode(value.mode);
+        for (const tab of tabs.values()) paintViewBackground(tab);
+        syncDarkAll();
+        return { ok: true, ...darkStore.get(), appDark };
+      }
+      case 'language': {
+        // The browser's language for every site. The active tab loads again so its site answers in that language at
+        // once; other tabs follow on their next page.
+        const before = siteLanguage.get();
+        const language = siteLanguage.set(typeof value.language === 'string' ? value.language : '');
+        const active = tabs.get(activeTabId);
+        if (language !== before && active?.view && !active.view.webContents.isDestroyed() && active.url) active.view.webContents.reload();
+        for (const tab of tabs.values()) emit(tab.id, { type: 'language', language });
+        return { ok: true, language };
+      }
+      case 'darkSite': {
+        // This tab's site the other way from the general mode ("on" / "off"), or back to following it (null).
+        const target = requireTab(value.tabId);
+        darkStore.setSite(target.url, value.value === 'on' || value.value === 'off' ? value.value : undefined);
+        await syncDark(target);
+        for (const other of tabs.values()) if (other !== target && darkStore.hostOf(other.url) === darkStore.hostOf(target.url)) void syncDark(other);
+        return { ok: true, ...darkState(target) };
+      }
+      case 'zoom': {
+        // `direction` 1 / -1 / 0 (in, out, 100 %) or an exact `factor`; the result is remembered for the site.
+        const target = requireTab(value.tabId);
+        const factor = Number.isFinite(Number(value.factor)) ? Number(value.factor) : stepZoom(target.zoom ?? 1, Math.sign(Number(value.direction) || 0));
+        return { ok: true, zoom: setTabZoom(target, factor, true) };
+      }
       case 'find': {
         if (typeof value.text !== 'string') throw new Error('find 需要 text 字符串');
         if (value.text.length > 500) throw new Error('find 的文本超过 500 个字符');

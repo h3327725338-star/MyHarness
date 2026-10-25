@@ -3,7 +3,7 @@ import { t } from "./i18n.js";
 import { fmtDuration, plural } from "./util.js";
 import { OUTCOME_LABEL } from "./turns.js";
 
-export const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", waiting: "clock", unanswered: "alertTriangle" };
+export const OUTCOME_ICON = { completed: "checkCircle", partial: "alertTriangle", failed: "alertCircle", cancelled: "stopCircle", redirected: "chat", waiting: "clock", unanswered: "alertTriangle" };
 
 function summaryText({ outcome, duration, stats, changeCount }) {
 	const bits = [];
@@ -20,6 +20,8 @@ function summaryText({ outcome, duration, stats, changeCount }) {
 			return `${dur ? t("Failed after {duration}", { duration: dur }) : t("Failed")}${tail}`;
 		case "cancelled":
 			return `${dur ? t("Cancelled after {duration}", { duration: dur }) : t("Cancelled")}${tail}`;
+		case "redirected":
+			return `${dur ? t("Worked for {duration}, then switched to your new message", { duration: dur }) : t("Switched to your new message")}${tail}`;
 		default:
 			return `${OUTCOME_LABEL[outcome] ? t(OUTCOME_LABEL[outcome]) : outcome}${tail}`;
 	}

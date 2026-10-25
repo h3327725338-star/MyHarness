@@ -350,7 +350,6 @@
 .svc-logo.github { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
 .svc-logo.google { background: color-mix(in srgb, #ea4335 16%, transparent); color: #ea4335; }
 .svc-logo.microsoft { background: color-mix(in srgb, #0a78d4 18%, transparent); color: #3b9be8; }
-.svc-logo.microsoft-china { background: color-mix(in srgb, #00a2ad 18%, transparent); color: #1db4be; }
 .svc-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .svc-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .svc-name strong { font-size: var(--fs-body); font-weight: 650; }

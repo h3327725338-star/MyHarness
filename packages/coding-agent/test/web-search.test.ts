@@ -688,6 +688,59 @@ describe("WebSearchService search", () => {
 		]);
 	});
 
+	it("keeps the read budget and answers a stop at once even when a page read ignores cancellation", async () => {
+		const results = ["a", "b"].map((name) => ({
+			title: `${name} fetch api`,
+			url: `https://${name}.example/`,
+			snippet: "fetch api",
+		}));
+		const service = () =>
+			new WebSearchService({
+				settings: SettingsManager.inMemory({
+					webSearch: { enabled: true, browserFallback: true, engines: ["duckduckgo"], pagesPerSearch: 2 },
+				}),
+				fetchImpl: fakeNetwork({
+					"lite.duckduckgo.com": () => html(ddgHtml(results)),
+					"a.example": () => html(htmlPage("A", "<p>a body about fetch api</p>")),
+					// Never settles, whatever its signal says (a stuck lookup or browser load did this in real use).
+					"b.example": () => new Promise<Response>(() => {}),
+				}).fetchImpl,
+				lookup: publicLookup,
+				cache: new WebSearchCache(undefined),
+				browser: null,
+				searchReadBudgetMs: 300,
+			});
+		let started = Date.now();
+		const response = await service().search({ queries: ["fetch api"] });
+		expect(Date.now() - started).toBeLessThan(2_000);
+		expect(response.pages.map((page) => page.title)).toEqual(["A"]);
+		expect(response.failures).toEqual([
+			expect.objectContaining({ code: "timeout", message: expect.stringContaining("https://b.example/") }),
+		]);
+
+		const stopped = new WebSearchService({
+			settings: SettingsManager.inMemory({
+				webSearch: { enabled: true, browserFallback: true, engines: ["duckduckgo"], pagesPerSearch: 2 },
+			}),
+			fetchImpl: fakeNetwork({
+				"lite.duckduckgo.com": () => html(ddgHtml(results)),
+				"a.example": () => new Promise<Response>(() => {}),
+				"b.example": () => new Promise<Response>(() => {}),
+			}).fetchImpl,
+			lookup: publicLookup,
+			cache: new WebSearchCache(undefined),
+			browser: null,
+			searchReadBudgetMs: 60_000,
+		});
+		const controller = new AbortController();
+		const pending = stopped.search({ queries: ["fetch api"] }, controller.signal);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		started = Date.now();
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({ code: "aborted" });
+		expect(Date.now() - started).toBeLessThan(500);
+	});
+
 	it("propagates cancellation to in-flight engine requests", async () => {
 		const { service } = createService(
 			{ engines: ["duckduckgo"] },
@@ -817,6 +870,21 @@ describe("web tools", () => {
 		expect(result.details.pages).toEqual([
 			expect.objectContaining({ url: "https://doc.example/", title: "Doc page" }),
 		]);
+	});
+
+	it("ends a call at once on a stop, even while the search itself is stuck", async () => {
+		const stuck = new Promise<never>(() => {});
+		const service = { search: () => stuck, fetch: () => stuck } as unknown as WebSearchService;
+		for (const definition of [
+			createWebSearchToolDefinition("C:/myharness", { service }),
+			createWebFetchToolDefinition("C:/myharness", { service }),
+		]) {
+			const controller = new AbortController();
+			const args = { queries: ["x"], urls: ["https://site.example/"] };
+			const pending = definition.execute("call-1", args as never, controller.signal, undefined, undefined);
+			setTimeout(() => controller.abort(), 20);
+			await expect(pending).rejects.toMatchObject({ code: "aborted" });
+		}
 	});
 
 	it("previews fetched Markdown and keeps the full text for persistence", async () => {

@@ -646,6 +646,40 @@ describe("Web UI: turns", () => {
 	});
 });
 
+describe("Web UI: a run ended by an interrupting message", () => {
+	it("is told apart from a stop by the next message starting right where the run stopped", async () => {
+		const { interruptedByNext } = await import(new URL("turns.js", webDir).href);
+		// The stamp chat of 2026-10-25: aborted at 03:38:04.312, the interrupting message saved at 03:38:04.523.
+		const stopped = { startedAt: 1_000, endedAt: 64_312 };
+		expect(interruptedByNext(stopped, { user: { ts: 64_523 } })).toBe(true);
+		// The message shown at once on the page is older than the stop it causes.
+		expect(interruptedByNext(stopped, { user: { ts: 63_900, pending: true } })).toBe(true);
+		// Stop pressed, then a new message typed: a stop.
+		expect(interruptedByNext(stopped, { user: { ts: 75_000 } })).toBe(false);
+		expect(interruptedByNext(stopped, undefined)).toBe(false);
+		expect(interruptedByNext(stopped, { standalone: { kind: "bash" } })).toBe(false);
+	});
+
+	it("reads as turning to the message, not as cancelled", async () => {
+		const { processSummaryState } = await import(new URL("process-summary.js", webDir).href);
+		const { getLang, setLang } = await import(new URL("lang.js", webDir).href);
+		const previous = getLang();
+		try {
+			setLang("zh-CN");
+			const summary = processSummaryState({
+				last: true,
+				outcome: "redirected",
+				stats: { actions: 7 },
+				duration: 63_000,
+			});
+			expect(summary.label).toBe("运行 1分3秒 后转去回复你的新消息 · 7 个操作");
+			expect(summary.label).not.toContain("取消");
+		} finally {
+			setLang(previous);
+		}
+	});
+});
+
 describe("Web UI: process summary status", () => {
 	it("keeps earlier blocks neutral for every task outcome, including failed local actions", async () => {
 		const { processSummaryState } = await import(new URL("process-summary.js", webDir).href);

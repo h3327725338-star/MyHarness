@@ -305,6 +305,7 @@ export function Composer() {
 	const items = useStore((s) => s.items);
 	const gitStatus = useStore((s) => s.gitStatus);
 	const activeSlot = useStore((s) => s.activeSlot);
+	const stopping = useStore((s) => !!s.stopping[s.activeSlot]);
 	const restarting = useStore((s) => s.restarting);
 	const connected = useStore((s) => s.connected);
 	const switching = useStore((s) => s.switching);
@@ -905,7 +906,9 @@ const send = async (mode) => {
 					<${MainEffortPicker} />
 					<${ContextMeter} />
 					${showStop
-						? html`<button class="send stop" onClick=${actions.stop} title=${stopTitle} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} /></button>`
+						? stopping
+							? html`<button class="send stop" disabled title=${t("Stopping…")} aria-label=${t("Stopping…")}><${Spinner} /></button>`
+							: html`<button class="send stop" onClick=${actions.stop} title=${stopTitle} aria-label=${t("Stop")}><${Icon} name="stop" size=${13} /></button>`
 						: html`<button class=${`send ${canSend ? "ready" : ""}`} disabled=${!canSend} onClick=${() => sendOrQueue()} title=${switching ? t("Loading…") : active ? t("{long} (Enter)", { long: t(RUN_MODES[runMode].long) }) : t("Send (Enter)")} aria-label=${t("Send")}><${Icon} name="arrowUp" size=${16} sw=${2.2} /></button>`}
 				</div>
 			</div>

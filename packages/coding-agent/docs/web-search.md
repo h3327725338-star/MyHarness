@@ -169,7 +169,7 @@ Agent 调用 web_search
       → 轻量请求 →（被拦截时）Firefox →（需要人工时，仅交互界面）可见窗口
   → 按规范化 URL 合并去重、过滤不安全 URL、排序（多个引擎都返回的结果排名更高）
   → 按排名读取 N 个网页（N = Pages to Read per Search）：读不了的（404、拒绝、没有正文等）由下一个结果补上
-      → 所有读取共用 8 秒预算；到时还没读完的网页放弃，在 Diagnostics 里列出网址（可再用 web_fetch 读）
+      → 所有读取共用 8 秒预算；到时还没读完的网页放弃，在 Diagnostics 里列出网址（可再用 web_fetch 读）。预算到点搜索就返回，不等不响应取消的读取（卡住的 DNS 查询、浏览器命令）收尾；停止时同样立即返回，`web_search` / `web_fetch` 在工具层也不等服务收尾（`tool.ts` 的 `untilStopped`）
       → 这一步不弹出人工验证/登录窗口；需要人工处理的网页返回 challenge_required，改用 web_fetch 读取时才会弹窗
   → 通过共享下载上限读取网页正文 → Markdown → 挑出与问题最相关的片段
   → 返回结果列表 + 片段；完整正文进入 Tool Result 持久化文件

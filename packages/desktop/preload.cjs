@@ -45,6 +45,17 @@ contextBridge.exposeInMainWorld('myHarnessDesktop', Object.freeze({
       return () => ipcRenderer.removeListener('desktop:app-prefs', handler);
     },
   }),
+  // Zoom of the app window (1 = 100 %): `set({ factor })` or `set({ direction: 1 | -1 | 0 })`; onChange also reports a
+  // change made with Ctrl + "+" / "-" / 0 or Ctrl + wheel.
+  appZoom: Object.freeze({
+    get: () => ipcRenderer.invoke('desktop:app-zoom'),
+    set: (change) => ipcRenderer.invoke('desktop:app-zoom', change),
+    onChange(callback) {
+      const handler = (_event, value) => callback(value);
+      ipcRenderer.on('desktop:app-zoom', handler);
+      return () => ipcRenderer.removeListener('desktop:app-zoom', handler);
+    },
+  }),
   // Legacy single-view surface (kept for the previous panel and older pages).
   navigate: (url) => ipcRenderer.invoke('desktop:navigate', url),
   bounds: (rect) => ipcRenderer.send('desktop:bounds', rect),

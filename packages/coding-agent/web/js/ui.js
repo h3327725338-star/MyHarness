@@ -437,20 +437,70 @@ export function useHeightGlide() {
 }
 
 /**
+ * The motion of a block whose content is rebuilt in one step (a finished turn folding its texts and steps into one
+ * block): a still copy of the old content stays on top and fades out while the block's height glides to the new one and
+ * the new content fades in, so what follows the block moves up smoothly instead of jumping. Give `ref` to the block (it
+ * gets `position: relative` from its class); it glides whenever `key` changes after the first render.
+ */
+export function useSwapGlide(key) {
+	const ref = useRef(null);
+	const last = useRef(key);
+	const before = useRef(null);
+	const running = useRef(null);
+	if (last.current !== key) {
+		last.current = key;
+		// Still the old DOM: this render has not been committed yet.
+		const el = ref.current;
+		before.current = el?.animate && motionEnabled() && el.offsetHeight ? { height: el.offsetHeight, copy: el.cloneNode(true) } : null;
+	}
+	useLayoutEffect(() => {
+		const shot = before.current;
+		before.current = null;
+		const el = ref.current;
+		if (!shot || !el) return;
+		running.current?.();
+		const end = el.offsetHeight;
+		const copy = shot.copy;
+		for (const node of copy.querySelectorAll("[id]")) node.removeAttribute("id");
+		copy.removeAttribute("id");
+		copy.setAttribute("aria-hidden", "true");
+		copy.inert = true;
+		copy.classList.add("swap-glide-copy");
+		el.append(copy);
+		const timing = { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" };
+		const height = el.animate([{ height: `${Math.min(shot.height, end + innerHeight)}px`, overflow: "hidden" }, { height: `${Math.min(end, shot.height + innerHeight)}px`, overflow: "hidden" }], timing);
+		const fadeOut = copy.animate([{ opacity: 1 }, { opacity: 0 }], { ...timing, duration: COLLAPSE_MS * 0.7, fill: "forwards" });
+		const fadeIn = [...el.children].filter((child) => child !== copy).map((child) => child.animate([{ opacity: 0 }, { opacity: 1 }], { ...timing, delay: COLLAPSE_MS * 0.25 }));
+		const done = () => {
+			running.current = null;
+			height.cancel();
+			fadeOut.cancel();
+			for (const animation of fadeIn) animation.cancel();
+			copy.remove();
+		};
+		running.current = done;
+		height.onfinish = done;
+	});
+	useEffect(() => () => running.current?.(), []);
+	return ref;
+}
+
+/**
  * The rows of a list whose rows come and go, plus the rows that just left, kept for the length of the fold-away motion
- * so a removed row can animate out (see reconcileRows). `key` names the property that identifies a row. `present` is the
+ * so a removed row can animate out (see reconcileRows). `key` names the property that identifies a row (or is a function giving it). `present` is the
  * set of rows that are really in the list, `initial` the set that was there when the list first appeared (those are shown
  * at once; a row that arrives later, or comes back, grows in): give both to ListSlot.
  */
 export function useRetainedRows(items, key = "path") {
-	const signature = items.map((item) => item[key]).join("\n");
+	const keyOf = typeof key === "function" ? key : (item) => item[key];
+	const signature = items.map(keyOf).join("\n");
 	const [retained, setRetained] = useState(items);
 	useLayoutEffect(() => {
 		setRetained((old) => reconcileRows(old, items, key));
 		const timer = setTimeout(() => setRetained(items), COLLAPSE_MS + 60);
 		return () => clearTimeout(timer);
 	}, [signature]);
-	const present = new Set(items.map((item) => item[key]));
+	const present = new Set(items.map(keyOf));
 	const initial = useRef(null);
 	if (initial.current === null) initial.current = new Set(present);
 	for (const id of initial.current) if (!present.has(id)) initial.current.delete(id);

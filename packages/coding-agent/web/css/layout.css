@@ -262,6 +262,10 @@
 .ws-tab:hover { background: var(--surface-hover); color: var(--text); }
 .ws-tab.active { background: var(--surface-active); color: var(--text); }
 .ws-tab-label { max-width: 150px; }
+/* Website tabs all have one width, whatever their title, like a browser's tabs: each is as easy to hit and its close
+   button stays in the same place. */
+.ws-tab.site { width: 180px; }
+.ws-tab.site .ws-tab-label { flex: 1 1 auto; min-width: 0; max-width: none; }
 .ws-tab-favicon { width: 14px; height: 14px; flex: none; object-fit: contain; border-radius: 3px; }
 /* Website tabs shown by their site icon alone: the close button appears on hover or on the active tab. */
 .ws-tab.icon-only { gap: 0; padding: 0 7px; }
@@ -314,6 +318,13 @@
    position:fixed popover, which then lands far off screen and the caret looks dead. */
 .ws-address .menu-wrap { position: absolute; right: 2px; top: 0; bottom: 0; display: flex; align-items: center; }
 .ws-address .ws-address-engine { width: 20px; height: 20px; color: var(--text-3); }
+/* A narrow panel cannot hold the address field beside the nine buttons: squeezed to nothing it left only its border and
+   caret between Reload and the moon. Below this width the field takes a row of its own under the buttons. */
+.desktop-browser-panel { container: ws-browser / inline-size; }
+@container ws-browser (max-width: 520px) {
+	.panel-toolbar.ws-browser-bar { flex-wrap: wrap; height: auto; min-height: 44px; row-gap: 6px; padding-top: 6px; padding-bottom: 6px; }
+	.ws-browser-bar .ws-address { order: 99; flex: 1 0 100%; height: 30px; }
+}
 /* File viewers: PDF pages are rendered by the engine itself, media by the native elements; both fill the panel. */
 .file-frame { width: 100%; height: 100%; min-height: 60vh; border: 0; background: var(--bg); }
 .media-view { display: flex; flex-direction: column; gap: 12px; padding: var(--pad-panel); }
@@ -436,3 +447,11 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 /* A column resizer comes before the top bar it overlaps, and a later drag area wins over an earlier no-drag one; these
    strips come after the top bars and give the resizer's top end back to the resizer. */
 .desktop-frameless .app.panel-open:not(.ws-max) .panel::after, .desktop-frameless .app.ws-max .main::after { content: ""; position: absolute; left: 0; top: 0; width: 8px; height: 44px; pointer-events: none; -webkit-app-region: no-drag; }
+
+/* Desktop app zoom (app-zoom.js): the new size for a moment after Ctrl + "+" / "-" / 0, and the settings control. */
+.app-zoom-badge { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 61; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); font-size: var(--fs-md); animation: fade-in var(--t-base) var(--ease); }
+.app-zoom-control { gap: 4px; align-items: center; }
+.app-zoom-value { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
+.ws-zoom { font-variant-numeric: tabular-nums; padding: 0 6px; }
+.ws-dark.on, .ws-language.on { color: var(--accent); }
+.menu-caption { padding: 6px 10px 2px; font-size: var(--fs-sm); color: var(--text-3); }

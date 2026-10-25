@@ -21,7 +21,7 @@ const destination = join(output, `release-${stamp}`);
 mkdirSync(stage, { recursive: true });
 const result = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--version'], { stdio: 'inherit' });
 if (result.status !== 0) throw new Error('TypeScript unavailable');
-for (const name of ['main.cjs', 'preload.cjs', 'service-entry.cjs', 'windows-job.cjs', 'browser-view.cjs', 'browser-bookmarks.cjs', 'browser-speed-dial.cjs', 'browser-input.cjs', 'browser-passwords.cjs', 'browser-permissions.cjs', 'browser-page-helpers.cjs', 'browser-tab-preload.cjs', 'legacy-prefs.cjs', 'notification-routing.cjs', 'preview-links.cjs', 'app-prefs.cjs']) cpSync(join(here, name), join(stage, name));
+for (const name of ['main.cjs', 'preload.cjs', 'service-entry.cjs', 'windows-job.cjs', 'browser-view.cjs', 'browser-bookmarks.cjs', 'browser-speed-dial.cjs', 'browser-input.cjs', 'browser-passwords.cjs', 'browser-permissions.cjs', 'browser-page-helpers.cjs', 'browser-tab-preload.cjs', 'legacy-prefs.cjs', 'notification-routing.cjs', 'preview-links.cjs', 'app-prefs.cjs', 'zoom.cjs', 'browser-dark.cjs', 'browser-language.cjs']) cpSync(join(here, name), join(stage, name));
 const runtime = join(stage, 'runtime');
 const copied = new Set();
 const installed = new Map();
@@ -59,14 +59,30 @@ function copyPackage(name, from, base = join(runtime, 'node_modules')) {
 }
 copyPackage('@myharness/coding-agent', root);
 copyPackage('koffi', here, join(stage, 'node_modules'));
+// Website dark mode (browser-dark.cjs) injects Dark Reader's single-file build; its package dependencies are not needed.
+{
+  const darkreader = locate('darkreader', here);
+  if (!darkreader) throw new Error('Missing runtime dependency: darkreader');
+  mkdirSync(join(runtime, 'node_modules', 'darkreader'), { recursive: true });
+  for (const file of ['darkreader.js', 'LICENSE', 'package.json']) cpSync(join(darkreader, file), join(runtime, 'node_modules', 'darkreader', file));
+}
 cpSync(join(root, 'system-prompts'), join(runtime, 'system-prompts'), { recursive: true });
 writeFileSync(join(stage, 'runtime.json'), JSON.stringify({ workingDirectory: resolve(process.env.MYHARNESS_DESKTOP_CWD || root) }));
 writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: 'myharness-desktop', productName: 'MyHarness', version: '0.0.3', main: 'main.cjs', author: 'MyHarness', description: 'MyHarness Windows desktop', license: 'Apache-2.0' }));
-await sharp(join(root, 'packages/coding-agent/web/favicon.svg')).resize(256, 256).png().toFile(join(stage, 'icon.png'));
-// ICO containing PNG, supported by Windows Vista and later.
-const png = readFileSync(join(stage, 'icon.png'));
-const header = Buffer.alloc(22); header.writeUInt16LE(1, 2); header.writeUInt16LE(1, 4); header.writeUInt16LE(1, 10); header.writeUInt16LE(32, 12); header.writeUInt32LE(png.length, 14); header.writeUInt32LE(22, 18);
-writeFileSync(join(stage, 'icon.ico'), Buffer.concat([header, png]));
+// The SVG is drawn at a high density first: at the default 72 dpi its 32-unit box would be scaled up blurry.
+await sharp(join(root, 'packages/coding-agent/web/favicon.svg'), { density: 600 }).resize(256, 256).png().toFile(join(stage, 'icon.png'));
+// ICO of PNG frames (Windows Vista and later). The taskbar, title bar and tray pick the small frames; with only a
+// 256 px frame Windows shrinks it itself and the thin strokes of the logo come out blurred or broken.
+const sizes = [16, 20, 24, 32, 40, 48, 64, 256];
+const frames = await Promise.all(sizes.map((size) => sharp(join(root, 'packages/coding-agent/web/favicon.svg'), { density: 600 }).resize(size, size).png().toBuffer()));
+const header = Buffer.alloc(6 + 16 * sizes.length); header.writeUInt16LE(1, 2); header.writeUInt16LE(sizes.length, 4);
+let offset = header.length;
+sizes.forEach((size, index) => {
+  const entry = 6 + 16 * index;
+  header.writeUInt8(size % 256, entry); header.writeUInt8(size % 256, entry + 1); header.writeUInt16LE(1, entry + 4); header.writeUInt16LE(32, entry + 6);
+  header.writeUInt32LE(frames[index].length, entry + 8); header.writeUInt32LE(offset, entry + 12); offset += frames[index].length;
+});
+writeFileSync(join(stage, 'icon.ico'), Buffer.concat([header, ...frames]));
 console.log(`Desktop runtime: ${copied.size} dependency copies; staging ${stage}`);
 await build({ projectDir: stage, config: { appId: 'com.myharness.desktop', productName: 'MyHarness', electronVersion, electronDist, asar: false, npmRebuild: false, directories: { output: destination }, files: ['*.cjs', '*.json', '*.png', '*.ico'], extraFiles: [{ from: join(stage, 'runtime/system-prompts'), to: 'resources/app/runtime/system-prompts' }, { from: join(stage, 'runtime/node_modules'), to: 'resources/app/runtime/node_modules' }, { from: join(stage, 'node_modules'), to: 'resources/app/node_modules' }], win: { target: [{ target: 'dir', arch: ['x64'] }], icon: join(stage, 'icon.ico'), signExecutable: false } } });
 console.log(`DESKTOP_EXECUTABLE=${join(destination, 'win-unpacked/MyHarness.exe')}`);

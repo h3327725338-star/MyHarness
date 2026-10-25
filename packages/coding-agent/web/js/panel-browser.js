@@ -2,7 +2,7 @@
 // (packages/desktop/browser-view.cjs): a real Chromium document with its own history, cookies and storage, drawn above
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
-import { html, Icon, Menu, MenuItem, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
+import { html, Icon, Menu, MenuItem, MenuSep, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
 import { useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
@@ -11,6 +11,19 @@ import { BookmarkEditor, BookmarksBar } from "./browser-bookmarks.js";
 import { SpeedDial } from "./browser-speed-dial.js";
 import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
 import { t } from "./i18n.js";
+import { BROWSER_LANGUAGES } from "./lang.js";
+
+/** Dark mode of websites (see packages/desktop/browser-dark.cjs): the general mode, then this site's own choice. */
+const DARK_MODES = [
+	{ value: "auto", label: "Follow the interface" },
+	{ value: "on", label: "Always dark" },
+	{ value: "off", label: "Never dark" },
+];
+const DARK_SITE = [
+	{ value: null, label: "Use the general setting" },
+	{ value: "on", label: "Always dark on this site" },
+	{ value: "off", label: "Never dark on this site" },
+];
 
 /** How long the browser's own notice stays on the toolbar. */
 const NOTICE_MS = 5000;
@@ -408,6 +421,19 @@ export function BrowserPanel({ tabId, url }) {
 				setFindOpen(true);
 				return;
 			}
+			if (value.type === "dark") {
+				setStatus((current) => ({ ...current, dark: value.dark, darkNative: value.darkNative, darkMode: value.darkMode, darkSite: value.darkSite }));
+				return;
+			}
+			if (value.type === "language") {
+				setStatus((current) => ({ ...current, language: value.language }));
+				return;
+			}
+			if (value.type === "zoom") {
+				// Ctrl + "+" / "-" / 0 or Ctrl + wheel inside the page (the host zooms it and remembers it for the site).
+				setStatus((current) => ({ ...current, zoom: value.zoom }));
+				return;
+			}
 			if (value.type === "snapshot") {
 				// The picture is taken while the native view fills the page box, so it is exactly that box's size. It is drawn
 				// at that size from the top-left corner: when the panel then narrows or widens (sidebar, collaboration mode) the
@@ -592,6 +618,15 @@ export function BrowserPanel({ tabId, url }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
+	const setDarkMode = (mode) => send({ action: "darkMode", mode }).catch((error) => showNotice("other", error.message));
+	const setDarkSite = (value) =>
+		send({ action: "darkSite", value })
+			.then((state) => setStatus((current) => ({ ...current, ...state })))
+			.catch((error) => showNotice("other", error.message));
+	const setLanguage = (language) =>
+		send({ action: "language", language })
+			.then((state) => setStatus((current) => ({ ...current, language: state?.language ?? language })))
+			.catch((error) => showNotice("other", error.message));
 	if (!host?.browser) {
 		return html`<div class="desktop-browser-panel"><div class="pad"><p>${t("The built-in browser is available in the desktop app only. A web page cannot embed arbitrary sites here; use the system browser instead.")}</p></div></div>`;
 	}
@@ -607,6 +642,20 @@ export function BrowserPanel({ tabId, url }) {
 				}} placeholder=${t("Search {engine} or enter an address", { engine: engineLabel })} /><${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-address-engine ${expanded ? "active" : ""}`} title=${t("Search engine: {engine}", { engine: engineLabel })} aria-label=${t("Search engine")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="chevronDown" size=${12} /></button>`}>
 				${(close) => SEARCH_ENGINES.map((item) => html`<${MenuItem} key=${item.id} label=${item.label} active=${item.id === engine} onClick=${() => { close(); chooseEngine(item.id); }} />`)}
 			</${Menu}></form>
+			${status.zoom && Math.abs(status.zoom - 1) > 0.001 ? html`<button class="btn sm ws-zoom" title=${t("Page zoom {percent}. Click to reset.", { percent: `${Math.round(status.zoom * 100)}%` })} onClick=${() => send({ action: "zoom", factor: 1 }).then((value) => setStatus((current) => ({ ...current, zoom: value?.zoom ?? 1 }))).catch(() => undefined)}>${Math.round(status.zoom * 100)}%</button>` : null}
+			<${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-dark ${status.dark ? "on" : ""} ${expanded ? "active" : ""}`} title=${status.dark ? t(status.darkNative ? "This page uses its own dark theme" : "Dark mode is on for this page") : t("Dark mode for websites")} aria-label=${t("Dark mode for websites")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="moon" size=${14} /></button>`}>
+				${(close) => html`<div class="menu-caption">${t("Dark mode for websites")}</div>
+					${DARK_MODES.map((mode) => html`<${MenuItem} key=${mode.value} label=${t(mode.label)} active=${(status.darkMode || "auto") === mode.value} onClick=${() => { close(); void setDarkMode(mode.value); }} />`)}
+					<${MenuSep} />
+					<div class="menu-caption">${t("This site")}</div>
+					${DARK_SITE.map((choice) => html`<${MenuItem} key=${String(choice.value)} label=${t(choice.label)} disabled=${!status.url} active=${(status.darkSite ?? null) === choice.value} onClick=${() => { close(); void setDarkSite(choice.value); }} />`)}`}
+			</${Menu}>
+			<${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-language ${status.language ? "on" : ""} ${expanded ? "active" : ""}`} title=${t("Website language")} aria-label=${t("Website language")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="language" size=${14} /></button>`}>
+				${(close) => html`<div class="menu-caption">${t("Website language")}</div>
+					<${MenuItem} label=${t("System default")} active=${!status.language} onClick=${() => { close(); if (status.language) void setLanguage(""); }} />
+					<${MenuSep} />
+					${BROWSER_LANGUAGES.map((item) => html`<${MenuItem} key=${item.value} label=${item.label} active=${status.language === item.value} onClick=${() => { close(); if (status.language !== item.value) void setLanguage(item.value); }} />`)}`}
+			</${Menu}>
 			<button class=${`icon-btn sm ws-star ${pageBookmark ? "on" : ""}`} title=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-label=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-pressed=${!!pageBookmark} disabled=${!status.url} onClick=${() => (bookmarkDraft ? setBookmarkDraft(null) : editBookmark(pageBookmark))}><${Icon} name="star" size=${15} /></button>
 			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
 			<button ref=${barButton} class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-expanded=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>

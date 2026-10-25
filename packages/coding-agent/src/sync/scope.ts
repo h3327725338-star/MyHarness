@@ -15,8 +15,11 @@ const CONVERSATION_DIR = "conversation";
 const WORKSPACE_FILE_DIRS = ["uploads", "artifacts"] as const;
 const MAX_SCANNED_FILE_BYTES = 256 * 1024 * 1024;
 const TEMP_FILE_PATTERN = /\.(?:tmp|part|crdownload)$/u;
-/** Local-only bridges and locks. An archive or pin marker is real user state and does travel. */
-const LOCAL_ONLY_FILE_PATTERN = /(?:\.bridge|\.lock)$/u;
+/**
+ * Local-only bridges and locks, including a session writer lock's owner record (rewritten every 30 seconds while the
+ * chat is open) and anything inside a lock directory. An archive or pin marker is real user state and does travel.
+ */
+const LOCAL_ONLY_FILE_PATTERN = /(?:\.bridge|\.lock|\.lock\.owner)$|\.lock\//u;
 
 export interface HeaderCacheEntry {
 	mtimeMs: number;
@@ -136,9 +139,31 @@ function workspaceContent(workspace: Record<string, unknown>): string {
  * scan because memory is shared across modes.
  */
 export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEntity> {
+	const entities = new Map<string, ScannedEntity>();
+	for (const _step of scanSteps(options, entities));
+	return entities;
+}
+
+/**
+ * The same scan in slices of about `sliceMs` of work: a library of thousands of chats takes half a second or more of
+ * synchronous file system calls, which would hold every other request of the server (opening a chat, a new chat)
+ * for that long on each sync pass.
+ */
+export async function scanLocalEntitiesAsync(options: ScanOptions, sliceMs = 12): Promise<Map<string, ScannedEntity>> {
+	const entities = new Map<string, ScannedEntity>();
+	let sliceStart = performance.now();
+	for (const _step of scanSteps(options, entities)) {
+		if (performance.now() - sliceStart < sliceMs) continue;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		sliceStart = performance.now();
+	}
+	return entities;
+}
+
+/** The scan itself; it yields between Workspaces and Sessions so a caller can let other work run. */
+function* scanSteps(options: ScanOptions, entities: Map<string, ScannedEntity>): Generator<void, void, void> {
 	const { dataRoot, agentDir, modeState } = options;
 	const headerCache = options.headerCache ?? new Map<string, HeaderCacheEntry>();
-	const entities = new Map<string, ScannedEntity>();
 
 	// 1. All memories, including archives and pending quarantine entries.
 	for (const memory of options.memories ?? listMemoryFiles(dataRoot, { metadataCache: options.memoryMetadataCache })) {
@@ -155,6 +180,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 			size: stat.size,
 			meta: { memoryId: memory.id || memory.path, scope: memory.scope },
 		});
+		yield;
 	}
 
 	// 2. General Sessions and the Workspaces that own them.
@@ -164,6 +190,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 	const workspacesRoot = getWorkspacesDir(dataRoot);
 	if (existsSync(workspacesRoot)) {
 		for (const workspaceId of readdirSync(workspacesRoot, { withFileTypes: true })) {
+			yield;
 			if (!workspaceId.isDirectory() || workspaceId.isSymbolicLink()) continue;
 			const workspace = workspaceId.name;
 			const registry = registryModes.get(workspace);
@@ -179,6 +206,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 			const sessionsRoot = join(getWorkspaceDir(dataRoot, workspace), SESSIONS_DIR);
 			if (!existsSync(sessionsRoot)) continue;
 			for (const session of readdirSync(sessionsRoot, { withFileTypes: true })) {
+				yield;
 				if (!session.isDirectory() || session.isSymbolicLink()) continue;
 				const sessionId = session.name;
 				const conversationDir = join(getSessionDir(dataRoot, workspace, sessionId), CONVERSATION_DIR);
@@ -215,6 +243,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 
 	// 3. Workspace identity and library files, plus every non-conversation file of its General Sessions.
 	for (const workspaceId of generalWorkspaces) {
+		yield;
 		const metadataPath = getWorkspaceMetadataPath(dataRoot, workspaceId);
 		const metadata = workspaceMeta.get(workspaceId);
 		if (metadata) {
@@ -244,6 +273,7 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 			for (const session of readdirSync(sessionsRoot, { withFileTypes: true })) {
 				if (!session.isDirectory() || session.isSymbolicLink()) continue;
 				if (!entities.has(`session:${workspaceId}/${session.name}`)) continue;
+				yield;
 				for (const category of ["uploads", "artifacts", "metadata", "notes", "files", "tool-results"] as const) {
 					walkFiles(join(getSessionDir(dataRoot, workspaceId, session.name), category), (file) =>
 						addFile(entities, dataRoot, file),
@@ -325,6 +355,4 @@ export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEnti
 			meta: { name: "Saved prompts" },
 		});
 	}
-
-	return entities;
 }

@@ -190,6 +190,11 @@ try {
 	if ($installed) { $exe = $installed; $release = $CurrentDir }
 	Remove-OldArtifacts -Keep $release
 
+	# 新版本的 exe 路径不变（current），资源管理器的图标缓存按路径记，换了图标后任务栏和开始菜单仍显示旧图标；
+	# ie4uinit -show 让资源管理器重新读取图标（Windows 10/11 自带，只刷新缓存，不改任何设置）。
+	$iconRefresher = Join-Path $env:SystemRoot "System32\ie4uinit.exe"
+	if (Test-Path -LiteralPath $iconRefresher) { try { & $iconRefresher -show } catch { Write-Host "  图标缓存刷新失败：$($_.Exception.Message)" -ForegroundColor DarkYellow } }
+
 	Write-Step "启动最新版本"
 	Write-Host "  $exe"
 	Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)

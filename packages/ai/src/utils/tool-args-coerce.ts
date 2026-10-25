@@ -9,6 +9,11 @@ import { repairJson } from "./json-parse.ts";
  * nothing else: it never adds a field, never fills a missing value, never completes truncated
  * JSON, and never touches a string the schema declares as a string. When nothing matches, the
  * original reference is returned so callers can tell that no change happened.
+ *
+ * One narrow exception to "never completes": an array of complete items whose closing `]` alone is
+ * missing (`"[\"a\", \"b\""`). Some gateways drop exactly that bracket when they turn a model's
+ * array into text while the surrounding call arrives whole; every item is there, so the call is
+ * used instead of failing it and costing the model a round trip to resend the same list.
  */
 
 interface SchemaNode {
@@ -34,6 +39,23 @@ function declaredKinds(node: SchemaNode | undefined): string[] {
 	return kinds;
 }
 
+/**
+ * `[` + complete items, with only the final `]` missing: the text must end right after a complete item (a closing
+ * quote or `}`), and adding the one bracket must give an array. Anything cut inside an item stays an error.
+ */
+function closeArrayMissingBracket(text: string): unknown[] | undefined {
+	if (!text.startsWith("[") || text.endsWith("]") || !/["}]$/.test(text)) return undefined;
+	for (const candidate of [`${text}]`, `${repairJson(text)}]`]) {
+		try {
+			const parsed: unknown = JSON.parse(candidate);
+			if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+		} catch {
+			// Try the next form.
+		}
+	}
+	return undefined;
+}
+
 /** Parses only when the text really is the container the schema asks for; otherwise returns undefined. */
 function parseAsDeclaredContainer(text: string, kinds: string[]): unknown[] | Record<string, unknown> | undefined {
 	const trimmed = text.trim();
@@ -44,12 +66,15 @@ function parseAsDeclaredContainer(text: string, kinds: string[]): unknown[] | Re
 		candidates.push(JSON.parse(trimmed));
 	} catch {
 		const repaired = repairJson(trimmed);
-		if (repaired === trimmed) return undefined;
 		try {
-			candidates.push(JSON.parse(repaired));
+			if (repaired !== trimmed) candidates.push(JSON.parse(repaired));
 		} catch {
-			return undefined;
+			// Neither form parses; only the missing-bracket case below may still apply.
 		}
+	}
+	if (candidates.length === 0 && kinds.includes("array")) {
+		const closed = closeArrayMissingBracket(trimmed);
+		if (closed) candidates.push(closed);
 	}
 	for (const candidate of candidates) {
 		if (Array.isArray(candidate) && kinds.includes("array")) return candidate;

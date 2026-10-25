@@ -46,6 +46,19 @@ function startMenuShortcuts() {
     "  Write-Output (@($file.Name, $aumid, $target) -join [char]9)",
     '}',
   ].join('\n');
+  return runPowerShell(script).then((output) =>
+    output
+      .split(/\r?\n/u)
+      .filter((line) => line.includes('\t'))
+      .map((line) => {
+        const [name, aumid, target] = line.split('\t');
+        return { name, aumid, target };
+      }),
+  );
+}
+
+/** Runs a PowerShell script hidden and resolves its standard output ('' when PowerShell cannot run). */
+function runPowerShell(script) {
   return new Promise((resolve) => {
     let output = '';
     const child = spawn(
@@ -68,19 +81,47 @@ function startMenuShortcuts() {
     child.unref();
     child.stdout.unref?.();
     child.stderr.unref?.();
-    child.once('error', () => resolve([]));
-    child.once('close', () =>
-      resolve(
-        output
-          .split(/\r?\n/u)
-          .filter((line) => line.includes('\t'))
-          .map((line) => {
-            const [name, aumid, target] = line.split('\t');
-            return { name, aumid, target };
-          }),
-      ),
-    );
+    child.once('error', () => resolve(''));
+    child.once('close', () => resolve(output));
   });
+}
+
+/**
+ * The taskbar shows a window under the Start Menu shortcut that carries the same AppUserModelId, with that shortcut's
+ * icon. Electron's shortcut takes its icon from the executable, and Explorer caches icons by file path: the executable
+ * keeps its path across builds (dist\desktop\current), so after a logo change the taskbar kept the old picture for good.
+ * The shortcuts of this app (same id, target this executable) get `icon` instead, a file whose name changes with its
+ * content, so a new logo is a path the cache has never seen. Resolves the names of the shortcuts it changed.
+ */
+async function pointShortcutIcons({ aumid, exe, icon, log }) {
+  if (!aumid || !exe || !icon || process.platform !== 'win32') return [];
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$dir = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'",
+    'if (-not (Test-Path $dir)) { return }',
+    `$aumid = ${quote(aumid)}`,
+    `$exe = ${quote(exe)}`,
+    `$icon = ${quote(`${icon},0`)}`,
+    '$shell = New-Object -ComObject Shell.Application',
+    '$wsh = New-Object -ComObject WScript.Shell',
+    '$folder = $shell.Namespace($dir)',
+    'if ($null -eq $folder) { return }',
+    'foreach ($file in Get-ChildItem $dir -Filter *.lnk -File) {',
+    '  $item = $folder.ParseName($file.Name)',
+    '  if ($null -eq $item) { continue }',
+    "  if ([string]$item.ExtendedProperty('System.AppUserModel.ID') -ne $aumid) { continue }",
+    "  if ([string]$item.ExtendedProperty('System.Link.TargetParsingPath') -ne $exe) { continue }",
+    '  $link = $wsh.CreateShortcut($file.FullName)',
+    '  if ($link.IconLocation -eq $icon) { continue }',
+    '  $link.IconLocation = $icon',
+    '  $link.Save()',
+    '  Write-Output $file.Name',
+    '}',
+  ].join('\n');
+  const changed = (await runPowerShell(script)).split(/\r?\n/u).filter(Boolean);
+  for (const name of changed) log?.(`启动菜单快捷方式 ${name} 的图标已改为 ${icon}`);
+  return changed;
 }
 
 /**
@@ -108,3 +149,4 @@ async function removeForeignShortcuts({ aumid, log }) {
 exports.foreignNotificationShortcuts = foreignNotificationShortcuts;
 exports.removeForeignShortcuts = removeForeignShortcuts;
 exports.startMenuShortcuts = startMenuShortcuts;
+exports.pointShortcutIcons = pointShortcutIcons;

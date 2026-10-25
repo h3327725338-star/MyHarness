@@ -51,6 +51,7 @@ import { ChangeTracker, type RunChangeRecord } from "./changes.ts";
 import type { WebDialogBridge } from "./dialogs.ts";
 import { GenerationSpeedMeter } from "./generation-speed.ts";
 import type { WebHttpServer } from "./http-server.ts";
+import { pagePresence } from "./page-presence.ts";
 import { RequestCacheMeter } from "./request-cache.ts";
 import { TranscriptCache } from "./transcript-cache.ts";
 import {
@@ -72,6 +73,8 @@ const METER_BROADCAST_INTERVAL_MS = 150;
 const MAX_PARTIAL_TOOL_TEXT = 200_000;
 /** How long the open pages have to say they showed a task-end notification before the system popup is used instead. */
 const TASK_NOTICE_ANSWER_MS = 2500;
+/** A question dialog that opens this soon after the user answered one belongs to the same ask and does not ping again. */
+const DIALOG_FOLLOW_UP_MS = 3000;
 /**
  * How long a page that said it is showing the notification itself may take before the system popup takes over. A page
  * that is busy (a long reply still rendering, a native toast being registered) is slow, not absent, and must not end up
@@ -368,13 +371,18 @@ export class WebHost {
 	/** Task-end notifications the open pages have not answered yet (see announceTaskEnd). */
 	private readonly taskNotices = new Map<
 		string,
-		{ refused: number; claimed: boolean; timer: ReturnType<typeof setTimeout>; popup: () => void }
+		{ refused: number; claimed: boolean; timer: ReturnType<typeof setTimeout>; popup: () => void; focus: string }
 	>();
 	private lastTaskNoticeKey: string | undefined;
+	/** A message sent with "interrupt" is ending the run: that is the user moving on, not a task to be told about. */
+	private interruptingForMessage = false;
 	/** True while an automatic (threshold / overflow) compaction runs: its run-state settle is not a task end. */
 	private autoCompactionActive = false;
 	/** Dialog ids already announced, so answering one of several stacked dialogs does not announce the rest again. */
 	private readonly announcedDialogIds = new Set<string>();
+	/** Dialogs open at the last change, and when the user last answered one: see onDialogsChanged. */
+	private openDialogIds = new Set<string>();
+	private lastDialogAnsweredAt = 0;
 	private shutdownRequested = false;
 	onShutdown: (() => void) | undefined;
 	extensionErrors: Array<{ extensionPath: string; event: string; error: string; ts: number }> = [];
@@ -402,7 +410,18 @@ export class WebHost {
 			// Only a newly opened dialog is announced: the same hook also fires when a dialog is answered.
 			const isNew = !!request && !this.announcedDialogIds.has(request.id);
 			if (request) this.announcedDialogIds.add(request.id);
-			if (isNew && request && (category === "permission" ? settings.onPermission : settings.onQuestion)) {
+			const open = new Set(this.dialogs.requests.map((item) => item.id));
+			if ([...this.openDialogIds].some((id) => !open.has(id))) this.lastDialogAnsweredAt = Date.now();
+			this.openDialogIds = open;
+			// The next question of the same ask (ask_user_question asks one after another) opens right after the user answered
+			// the previous one: they are at the dialog already, so only the first question pings.
+			const followsAnswer = Date.now() - this.lastDialogAnsweredAt < DIALOG_FOLLOW_UP_MS;
+			if (
+				isNew &&
+				request &&
+				!followsAnswer &&
+				(category === "permission" ? settings.onPermission : settings.onQuestion)
+			) {
 				const task = this.session.sessionName || this.firstUserText() || "New chat";
 				const id = `dialog-${request.id}`;
 				const body = `${task}\n${request.title}\n${request.message || ""}`;
@@ -417,7 +436,7 @@ export class WebHost {
 				else {
 					const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
 					timer.unref?.();
-					this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup });
+					this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup, focus: "always" });
 					// A dialog on a focused window needs no extra ping: the page skips it unless the window is in the background.
 					this.broadcast("task_notification", {
 						id,
@@ -824,7 +843,7 @@ export class WebHost {
 		if (settings.turnComplete === "never") return;
 		if (kind === "completed" && !settings.onCompleted) return;
 		if (kind === "failed" && !settings.onError) return;
-		if (kind === "interrupted" && !settings.onInterrupted) return;
+		if (kind === "interrupted" && (!settings.onInterrupted || this.interruptingForMessage)) return;
 		const key = `${state.runId ?? ""}:${state.state}`;
 		if (this.lastTaskNoticeKey === key) return;
 		this.lastTaskNoticeKey = key;
@@ -849,7 +868,7 @@ export class WebHost {
 		const id = `${this.slotId}:${key}`;
 		const timer = setTimeout(() => this.answerTaskNotice(id, false, true), TASK_NOTICE_ANSWER_MS);
 		timer.unref?.();
-		this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup });
+		this.taskNotices.set(id, { refused: 0, claimed: false, timer, popup, focus: settings.turnComplete });
 		this.broadcast("task_notification", {
 			id,
 			kind,
@@ -897,7 +916,8 @@ export class WebHost {
 		}
 		clearTimeout(notice.timer);
 		this.taskNotices.delete(id);
-		if (!shown) notice.popup();
+		// A page shows this chat in a focused window (it may just be too busy to answer): the user is looking at it already.
+		if (!shown && !pagePresence(this.server).watching(this.slotId, notice.focus)) notice.popup();
 	}
 
 	// ------------------------------------------------------------------
@@ -1826,11 +1846,21 @@ export class WebHost {
 		const mode = options.mode ?? "auto";
 		// A task that only waits for its background sub-agents has no run to interrupt: the message is steered in.
 		// Interrupting a running answer ends that run only; its sub-agents keep running in the background.
-		const interrupt = mode === "interrupt" && !session.isWaitingForBackground;
+		// Context compaction is never interrupted by a message: the message waits for it (only Stop cancels it).
+		const compacting = session.isCompacting;
+		const interrupt = mode === "interrupt" && !session.isWaitingForBackground && !compacting;
 		if (interrupt) {
-			await session.abort({ keepBackground: true });
+			this.interruptingForMessage = true;
+			try {
+				await session.abort({ keepBackground: true });
+				await session.waitForForegroundIdle();
+				await this.waitForCompletion();
+			} finally {
+				this.interruptingForMessage = false;
+			}
+		} else if (compacting && !session.isStreaming) {
+			// A compaction outside a run (/compact) cannot take a queued message; send once it has finished.
 			await session.waitForForegroundIdle();
-			await this.waitForCompletion();
 		}
 		const running = session.isStreaming || session.isCompacting;
 		if (!running && this.completionPromise) await this.completionPromise;

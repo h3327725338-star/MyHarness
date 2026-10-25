@@ -35,6 +35,7 @@ import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
 import { registerSyncRoutes } from "./routes-sync.ts";
 import { registerTerminalRoutes } from "./routes-terminal.ts";
+import { registerTranslateRoutes } from "./routes-translate.ts";
 import { WebTerminals } from "./terminal.ts";
 import { registerWebPrefsRoutes } from "./web-prefs.ts";
 import { worktreeServiceIdentity } from "./worktree-launch.ts";
@@ -217,6 +218,7 @@ export async function runWebMode(
 	registerFolderBrowser(server, host);
 	registerGitRoutes(server, host);
 	registerSettingsRoutes(server, host);
+	registerTranslateRoutes(server, host, () => copyIdentity?.metadataAgentDir ?? getAgentDir());
 	registerProviderRoutes(server, host, hub);
 	registerAccountRoutes(server);
 	registerMailRoutes(server);

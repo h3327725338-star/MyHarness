@@ -24,6 +24,21 @@ describe("coerceToolArgumentsBySchema", () => {
 		expect(coerceToolArgumentsBySchema(schema, args)).toBe(args);
 	});
 
+	it("closes a list whose final bracket alone was dropped", () => {
+		// What a gateway handed over for GLM's web_search calls: every query complete, only `]` missing.
+		const search = Type.Object({ queries: Type.Array(Type.String()) });
+		const args = { queries: '["梁文锋 生平 浙江大学", "幻方量化 萤火二号 万卡"' };
+		expect(coerceToolArgumentsBySchema(search, args)).toEqual({
+			queries: ["梁文锋 生平 浙江大学", "幻方量化 萤火二号 万卡"],
+		});
+	});
+
+	it("leaves a list cut inside an item as it is", () => {
+		const search = Type.Object({ queries: Type.Array(Type.String()) });
+		const args = { queries: '["one", "tw' };
+		expect(coerceToolArgumentsBySchema(search, args)).toBe(args);
+	});
+
 	it("returns the same reference when nothing needs recovery", () => {
 		const args = { operation: "batch", steps: [{ operation: "click" }] };
 		expect(coerceToolArgumentsBySchema(schema, args)).toBe(args);

@@ -4,21 +4,30 @@
 // and everything mounted is sent together with the message you finally submit (see composer.js).
 // Files pasted with Ctrl+V join the box's own file list exactly like paperclip picks: they reach the input's attachment
 // list only when "Save quote" runs them through the composer's import pipeline, and cancelling drops them the same way.
+// "Translate" sits in the same bubble and also appears for text selected anywhere else in the app (a file preview, a
+// panel): it opens a card with the translation by the helper model of Settings → Agents → Translation.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { actions } from "./actions.js";
 import { clearDraftPreview, selectionHint, setDraftPreview } from "./quote-highlight.js";
+import { api, post, state } from "./store.js";
 import { t } from "./i18n.js";
+import { TranslateCard, TRANSLATE_LEAVE_MS, animateLeave } from "./translate-card.js";
 
 /** Where a selection may be quoted: the conversation's own message text, and nothing else on the page. */
 const QUOTABLE = ".transcript .user-text, .transcript .final";
 
 const isQuotable = (el) => !!el?.closest?.(QUOTABLE) && !!el?.closest?.(".transcript");
+/** Text typed by the user, dialogs and menus are never offered for translation; everything else on the page is. */
+const NOT_TRANSLATABLE = ".composer, .composer-input, input, textarea, select, [contenteditable='true'], .modal, .popover, .quote-note-card";
+const isTranslatable = (el) => !!el && !el.closest?.(NOT_TRANSLATABLE);
 
 /** The bubble sits at the mouse release point, up-right in the blank; the box hugs the passage end. Both stay in view. */
 const BAR_W = 96;
+const BAR_W_BOTH = 176;
 const BAR_H = 30;
 const CARD_W = 264;
 const CARD_H = 120;
+const TRANSLATE_W = 340;
 const EDGE = 12;
 
 function clampX(x, width) {
@@ -57,6 +66,14 @@ function endRectOf(range) {
 	return range.getBoundingClientRect();
 }
 
+/** Identity of the current non-empty selection ("" when there is none), to tell a click from a selecting drag. */
+function selectionKey() {
+	const sel = window.getSelection();
+	if (!sel || sel.isCollapsed || sel.rangeCount === 0) return "";
+	const range = sel.getRangeAt(0);
+	return `${sel.toString()}|${range.startOffset}|${range.endOffset}`;
+}
+
 function place(rect, width, height) {
 	const end = rect && rect.right !== undefined && rect.bottom !== undefined ? rect : null;
 	if (!end) return { left: EDGE, top: EDGE, up: false };
@@ -73,9 +90,17 @@ function scrollMovesPassage(target) {
 	return !!el && !!surface && (el === surface || el.contains(surface));
 }
 
+// The language translations go into ({ preference, target }): the last one the server named, so a new card shows it at
+// once; it is read again when a card opens (Settings may have changed it meanwhile).
+let savedLanguage = null;
+
 export function FloatingQuoteToolbar() {
 	const [bar, setBar] = useState(null);
 	const [draft, setDraft] = useState(null);
+	// The translation card: { text, status: "loading" | "done" | "error", result, entry, target, preference, model, error, leaving }.
+	const [translation, setTranslation] = useState(null);
+	const translationSeq = useRef(0);
+	const leaveTimer = useRef(0);
 	const [note, setNote] = useState("");
 	const [files, setFiles] = useState([]);
 	const barRef = useRef(null);
@@ -83,6 +108,9 @@ export function FloatingQuoteToolbar() {
 	const area = useRef(null);
 	const fileInput = useRef(null);
 	const pressed = useRef(false);
+	// The selection when the mouse went down: a click that leaves it unchanged (a button, a settings tab) is not a
+	// selecting gesture and must not pop the bubble up at the click point.
+	const pressedOn = useRef("");
 	// The selection the quote came from, kept for the box: it follows the text when the conversation scrolls.
 	const anchor = useRef(null);
 	// Where the box sits. State, not a ref: a scroll has to move it in that frame. A ref would only reach the card on the
@@ -97,6 +125,9 @@ export function FloatingQuoteToolbar() {
 	const freshRelease = () => Date.now() - release.current.at < 600;
 
 	const close = () => {
+		translationSeq.current += 1;
+		clearTimeout(leaveTimer.current);
+		setTranslation(null);
 		setBar(null);
 		setDraft(null);
 		setNote("");
@@ -105,9 +136,18 @@ export function FloatingQuoteToolbar() {
 		clearDraftPreview();
 	};
 
+	/** Close the translation card with its fade-out (the request it may still wait for is dropped at once). */
+	const dismissTranslation = () => {
+		if (!animateLeave()) return close();
+		translationSeq.current += 1;
+		setTranslation((old) => (old && !old.leaving ? { ...old, leaving: true } : old));
+		clearTimeout(leaveTimer.current);
+		leaveTimer.current = setTimeout(close, TRANSLATE_LEAVE_MS);
+	};
+
 	const updateSelection = () => {
 		// While the annotation box is open its own text is what the user is working on: the bubble stays away.
-		if (pressed.current || draft) return;
+		if (pressed.current || draft || translation) return;
 		const sel = window.getSelection();
 		if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
 			setBar(null);
@@ -118,14 +158,14 @@ export function FloatingQuoteToolbar() {
 			setBar(null);
 			return;
 		}
-		// Both ends must be inside a message's own text: a selection that reaches the sidebars, a panel or a dialog
-		// (or a caret sitting in an input) never offers a quote.
+		// Both ends must be inside a message's own text for a quote: a selection that reaches the sidebars, a panel or a
+		// dialog (or a caret sitting in an input) never offers one. Translation is offered for any text outside inputs.
 		const elementOf = (node) => (node instanceof Element ? node : node?.parentElement);
-		if (!isQuotable(elementOf(sel.anchorNode)) || !isQuotable(elementOf(sel.focusNode))) {
-			setBar(null);
-			return;
-		}
-		if (elementOf(sel.anchorNode)?.closest(".composer, .composer-input, input, textarea, [contenteditable='true']")) {
+		const quotable =
+			isQuotable(elementOf(sel.anchorNode)) &&
+			isQuotable(elementOf(sel.focusNode)) &&
+			!elementOf(sel.anchorNode)?.closest(".composer, .composer-input, input, textarea, [contenteditable='true']");
+		if (!quotable && !(isTranslatable(elementOf(sel.anchorNode)) && isTranslatable(elementOf(sel.focusNode)))) {
 			setBar(null);
 			return;
 		}
@@ -136,11 +176,12 @@ export function FloatingQuoteToolbar() {
 			return;
 		}
 		anchor.current = range.cloneRange();
+		const width = quotable ? BAR_W_BOTH : BAR_W;
 		if (freshRelease()) {
-			setBar(placeBubbleAtPoint(release.current.x, release.current.y));
+			setBar({ ...placeBubbleAtPoint(release.current.x, release.current.y, width), quotable });
 		} else {
-		const end = endRectOf(range);
-			setBar(placeBubbleAtPoint(end.right, end.bottom));
+			const end = endRectOf(range);
+			setBar({ ...placeBubbleAtPoint(end.right, end.bottom, width), quotable });
 		}
 	};
 
@@ -150,14 +191,26 @@ export function FloatingQuoteToolbar() {
 			// The box is abandoned when the mouse lands anywhere else: no preview text is shown,
 			// so the lit passage is the only reference and giving up is one click. Right-click
 			// (context menu) never abandons it; the file picker opens from inside the box anyway.
-			if (draft && e.button !== 2) close();
+			if (translation && e.button !== 2) dismissTranslation();
+			else if (draft && e.button !== 2) close();
 			pressed.current = true;
+			pressedOn.current = selectionKey();
 		};
 		const onMouseUp = (e) => {
+			if (barRef.current?.contains(e?.target) || cardRef.current?.contains(e?.target)) return;
 			if (e?.clientX !== undefined) release.current = { x: e.clientX, y: e.clientY, at: Date.now() };
 			pressed.current = false;
+			// Used once: a mouseup without its own mousedown (a synthetic one) is judged by the selection alone.
+			const before = pressedOn.current;
+			pressedOn.current = "";
 			// One tick to let the selection settle.
-			setTimeout(updateSelection, 10);
+			setTimeout(() => {
+				if (before && selectionKey() === before) {
+					if (!draft && !translation) setBar(null);
+					return;
+				}
+				updateSelection();
+			}, 10);
 		};
 		const onSelectionChange = () => {
 			if (!pressed.current) updateSelection();
@@ -165,16 +218,18 @@ export function FloatingQuoteToolbar() {
 		let scrollFrame = 0;
 		const onScroll = (event) => {
 			// The note box grows its own scrollbar as it is typed into; that is not the passage moving.
-			if (draft && !scrollMovesPassage(event?.target)) return;
+			if ((draft || translation) && !scrollMovesPassage(event?.target)) return;
 			if (scrollFrame) return;
 			scrollFrame = requestAnimationFrame(() => {
 				scrollFrame = 0;
-				if (draft) {
-					// The box belongs to the passage: it travels with the text instead of drifting off it.
+				if (draft || translation) {
+					// The box belongs to the passage: it travels with the text instead of drifting off it, until the user
+					// drags it somewhere else.
+					if (translation && pos.dragged) return;
 					const range = anchor.current;
 					if (range?.startContainer?.isConnected && range?.endContainer?.isConnected) {
 						const end = endRectOf(range);
-						if (end.width || end.height) moveCard(placeCardAtPoint(end.right, end.bottom));
+						if (end.width || end.height) moveCard(placeCardAtPoint(end.right, end.bottom, translation ? TRANSLATE_W : CARD_W, CARD_H));
 					}
 					return;
 				}
@@ -182,17 +237,24 @@ export function FloatingQuoteToolbar() {
 			});
 		};
 		const onKeyDown = (e) => {
-			if (e.key === "Escape" && (bar || draft)) {
+			if (e.key === "Escape" && (bar || draft || translation)) {
 				e.preventDefault();
-				close();
+				if (translation) dismissTranslation();
+				else close();
 			}
+		};
+		// The app losing the focus (another window, a website tab of the desktop app) closes the translation card.
+		const onBlur = () => {
+			if (translation) dismissTranslation();
 		};
 		document.addEventListener("mousedown", onMouseDown, true);
 		document.addEventListener("mouseup", onMouseUp, true);
 		document.addEventListener("selectionchange", onSelectionChange);
 		window.addEventListener("scroll", onScroll, true);
 		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("blur", onBlur);
 		return () => {
+			window.removeEventListener("blur", onBlur);
 			document.removeEventListener("mousedown", onMouseDown, true);
 			document.removeEventListener("mouseup", onMouseUp, true);
 			document.removeEventListener("selectionchange", onSelectionChange);
@@ -200,9 +262,9 @@ export function FloatingQuoteToolbar() {
 			window.removeEventListener("keydown", onKeyDown);
 			if (scrollFrame) cancelAnimationFrame(scrollFrame);
 		};
-	}, [bar, draft]);
+	}, [bar, draft, translation, pos.dragged]);
 
-	useEffect(() => () => clearDraftPreview(), []);
+	useEffect(() => () => { clearDraftPreview(); clearTimeout(leaveTimer.current); }, []);
 
 	// The entrance pop plays once per opening; after it, a box that only follows the passage must not blink on every flip.
 	// (The card's div is the bubble's div reused, so it can already carry a finished animation: a timeout, not animationend.)
@@ -240,6 +302,56 @@ export function FloatingQuoteToolbar() {
 		setTimeout(() => area.current?.focus(), 0);
 	};
 
+	/**
+	 * Translate the selection (or `text` again: a retry, another target language) into a card at the passage end.
+	 * `target` with `remember` makes that language the preference.
+	 */
+	const translate = (e, text, { target, remember = false } = {}) => {
+		e?.preventDefault?.();
+		e?.stopPropagation?.();
+		const sel = window.getSelection();
+		const wanted = text || sel?.toString().trim();
+		if (!wanted) return close();
+		if (!text) {
+			const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
+			anchor.current = range;
+			if (freshRelease()) setPos(placeCardAtPoint(release.current.x, release.current.y, TRANSLATE_W, CARD_H));
+			else if (range) {
+				const end = endRectOf(range);
+				setPos(placeCardAtPoint(end.right, end.bottom, TRANSLATE_W, CARD_H));
+			}
+		}
+		const seq = ++translationSeq.current;
+		clearTimeout(leaveTimer.current);
+		setBar(null);
+		setTranslation((old) => ({
+			text: wanted,
+			status: "loading",
+			preference: target ?? old?.preference ?? savedLanguage?.preference,
+			target: target && target !== "auto" ? target : (old?.target ?? savedLanguage?.target),
+		}));
+		if (!target) {
+			api(`/api/translate?uiLanguage=${encodeURIComponent(state.view.lang || "")}`, { slot: "" }).then(
+				(saved) => {
+					if (!saved?.preference) return;
+					savedLanguage = { preference: saved.preference, target: saved.target };
+					setTranslation((old) => (seq === translationSeq.current && old?.status === "loading" ? { ...old, ...savedLanguage } : old));
+				},
+				() => undefined,
+			);
+		}
+		const body = { text: wanted, uiLanguage: state.view.lang, ...(target ? { target, remember } : {}) };
+		post("/api/translate", body, "", { timeoutMs: 120_000 }).then(
+			(answer) => {
+				if (answer?.preference) savedLanguage = { preference: answer.preference, target: answer.target };
+				if (seq === translationSeq.current) setTranslation({ text: wanted, status: "done", result: answer.translation, entry: answer.entry, target: answer.target, preference: answer.preference, model: answer.model });
+			},
+			(error) => {
+				if (seq === translationSeq.current) setTranslation((old) => ({ ...old, text: wanted, status: "error", error: error?.message || String(error) }));
+			},
+		);
+	};
+
 	const save = () => {
 		if (!draft) return;
 		actions.addQuote(draft.text, { note: note.trim(), files, hint: draft.hint });
@@ -272,7 +384,18 @@ export function FloatingQuoteToolbar() {
 		setFiles((prev) => [...prev, ...pasted]);
 	};
 
-	if (!bar && !draft) return null;
+	if (!bar && !draft && !translation) return null;
+
+	if (translation)
+		return html`<${TranslateCard}
+			translation=${translation}
+			pos=${pos}
+			cardRef=${cardRef}
+			onMove=${(next) => setPos({ ...next, dragged: true })}
+			onClose=${dismissTranslation}
+			onRetarget=${(target) => translate(null, translation.text, { target, remember: true })}
+			onRetry=${() => translate(null, translation.text)}
+		/>`;
 
 	if (!draft)
 		return html`<div
@@ -280,11 +403,17 @@ export function FloatingQuoteToolbar() {
 			class=${`floating-quote-bar ${bar.up ? "up" : "down"}`}
 			style=${{ top: `${bar.top}px`, left: `${bar.left}px` }}
 			role="toolbar"
-			aria-label=${t("Quote")}
+			aria-label=${t("Selection")}
 		>
-			<button class="floating-quote-btn" onMouseDown=${openBox} title=${t("Quote")}>
-				<${Icon} name="quote" size=${13} />
-				<span>${t("Quote")}</span>
+			${bar.quotable
+				? html`<button class="floating-quote-btn" onMouseDown=${openBox} title=${t("Quote")}>
+					<${Icon} name="quote" size=${13} />
+					<span>${t("Quote")}</span>
+				</button>`
+				: null}
+			<button class="floating-quote-btn" onMouseDown=${(e) => translate(e)} title=${t("Translate")}>
+				<${Icon} name="language" size=${13} />
+				<span>${t("Translate")}</span>
 			</button>
 		</div>`;
 

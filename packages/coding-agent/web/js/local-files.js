@@ -254,6 +254,53 @@ export async function showLocalFileMenu(event, path, slot) {
 	menu.querySelector("button")?.focus();
 }
 
+/**
+ * What the server said about a path lately, per chat: a message renders again on every open, reconnect and turn, and
+ * asking for each of its paths again each time kept the server busy (a missing path costs it a folder search).
+ */
+const RESOLVE_TTL_MS = 30_000;
+const resolveCache = new Map();
+/**
+ * Path checks in flight, for the whole page. The browser opens at most six connections to the server: when every
+ * message resolved its paths at once they took all six, and a click (a new chat, another chat) waited behind them.
+ */
+const RESOLVE_LANES = 2;
+let resolveRunning = 0;
+const resolveWaiting = [];
+function inResolveLane(run, wanted) {
+	return new Promise((resolve, reject) => {
+		const start = () => {
+			// Queued for a chat that is no longer on screen: skip it (not cached, so it is asked again when it is shown).
+			if (!wanted()) {
+				reject(new Error("skipped"));
+				resolveWaiting.shift()?.();
+				return;
+			}
+			resolveRunning++;
+			run().then(resolve, reject).finally(() => {
+				resolveRunning--;
+				resolveWaiting.shift()?.();
+			});
+		};
+		if (resolveRunning < RESOLVE_LANES) start();
+		else resolveWaiting.push(start);
+	});
+}
+
+function resolveCached(path, slot, wanted) {
+	const key = `${slot ?? ""}
+${path}`;
+	const now = Date.now();
+	const hit = resolveCache.get(key);
+	if (hit && now - hit.at < RESOLVE_TTL_MS) return hit.result;
+	if (resolveCache.size > 2000) for (const [old, entry] of resolveCache) if (now - entry.at >= RESOLVE_TTL_MS) resolveCache.delete(old);
+	const result = inResolveLane(() => localFileAction(path, "resolve", undefined, slot), wanted);
+	resolveCache.set(key, { at: now, result });
+	// A failed request that was not an answer (offline, server restarting) is asked again next time.
+	result.catch((error) => { if (!(error?.status >= 400 && error.status < 500)) resolveCache.delete(key); });
+	return result;
+}
+
 /** Existing paths only; skip fenced code and existing anchors. Resolve at most four concurrently. */
 export async function linkifyLocalFiles(root, slot, isCurrent) {
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -299,12 +346,13 @@ export async function linkifyLocalFiles(root, slot, isCurrent) {
 	const resolved = new Map();
 	let index = 0;
 	const paths = [...wanted].slice(0, 150);
+	const stillShown = () => isCurrent() && activeSlotId() === slot;
 	const resolveOne = async (path) => {
-		try { resolved.set(path, await localFileAction(path, "resolve", undefined, slot)); } catch { /* Nonexistent paths stay ordinary text. */ }
+		try { resolved.set(path, await resolveCached(path, slot, stillShown)); } catch { /* Nonexistent paths stay ordinary text. */ }
 		if (path !== path.trim()) {
 			try {
 				const trimmed = path.trim();
-				if (trimmed && !resolved.has(trimmed)) resolved.set(trimmed, await localFileAction(trimmed, "resolve", undefined, slot));
+				if (trimmed && !resolved.has(trimmed)) resolved.set(trimmed, await resolveCached(trimmed, slot, stillShown));
 			} catch { /* trimmed variant also missing */ }
 		}
 	};

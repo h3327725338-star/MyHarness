@@ -1,13 +1,15 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Tray, Menu } = require('electron');
 const { spawn } = require('node:child_process');
-const { mkdirSync, appendFileSync, readFileSync } = require('node:fs');
+const { mkdirSync, appendFileSync, readFileSync, existsSync, copyFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
 const { join, resolve } = require('node:path');
 const { homedir } = require('node:os');
 const { createBrowser, httpUrl } = require('./browser-view.cjs');
 const { readLegacyPrefs } = require('./legacy-prefs.cjs');
-const { removeForeignShortcuts } = require('./notification-routing.cjs');
+const { pointShortcutIcons, removeForeignShortcuts } = require('./notification-routing.cjs');
 const { attachPreviewLinks } = require('./preview-links.cjs');
 const { createAppPrefs, loginItem } = require('./app-prefs.cjs');
+const { attachZoom, cleanZoom, stepZoom } = require('./zoom.cjs');
 const root = resolve(__dirname, '../..');
 // Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
 // shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
@@ -56,19 +58,41 @@ const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, r
 app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
 app.setName('MyHarness');
 const prefs = createAppPrefs(app.getPath('userData'));
+// The app's icon for the window, the tray and notifications. The packaged app carries a multi-size icon.ico (build.mjs):
+// with only the 256 px PNG, Windows scaled it down itself for the taskbar, the tray and toasts, and those small icons
+// did not match the new logo. A development run (no .ico beside this file) uses the PNG.
+const APP_ICON = existsSync(join(__dirname, 'icon.ico')) ? join(__dirname, 'icon.ico') : join(__dirname, 'icon.png');
+/**
+ * The icon the Start Menu shortcut (and so the taskbar button) shows: a copy of APP_ICON named after its content in the
+ * profile, because Explorer caches icons by path and the executable's path never changes (see pointShortcutIcons).
+ */
+function taskbarIcon() {
+  try {
+    const bytes = readFileSync(APP_ICON);
+    const dir = join(app.getPath('userData'), 'icons');
+    const file = join(dir, `app-${createHash('sha256').update(bytes).digest('hex').slice(0, 12)}.ico`);
+    if (!existsSync(file)) { mkdirSync(dir, { recursive: true }); copyFileSync(APP_ICON, file); }
+    return file;
+  } catch (error) {
+    log(`无法准备任务栏图标：${error.message}`);
+    return '';
+  }
+}
 // The window comes back from the tray (or from a second start) where it was, restored and in front.
 const showWindow = () => { if (!window || window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); };
-// Closing to the tray keeps the local service and every running task alive; only the window goes away. The tray icon
-// is made the first time it is needed. Going to the tray is always the user's own choice (the setting or the close
-// question), so it shows no "still running" notice.
+// The tray icon is there from the start, like other desktop apps, so the app can be shown or quit from it at any time.
+function createTray() {
+  if (tray) return;
+  tray = new Tray(APP_ICON);
+  tray.setToolTip('MyHarness');
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: '显示 MyHarness', click: showWindow }, { type: 'separator' }, { label: '退出 MyHarness', click: () => app.quit() }]));
+  tray.on('click', showWindow);
+  tray.on('double-click', showWindow);
+}
+// Closing to the tray keeps the local service and every running task alive; only the window goes away. Going to the
+// tray is always the user's own choice (the setting or the close question), so it shows no "still running" notice.
 function hideToTray() {
-  if (!tray) {
-    tray = new Tray(join(__dirname, 'icon.png'));
-    tray.setToolTip('MyHarness');
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: '显示 MyHarness', click: showWindow }, { type: 'separator' }, { label: '退出 MyHarness', click: () => app.quit() }]));
-    tray.on('click', showWindow);
-    tray.on('double-click', showWindow);
-  }
+  createTray();
   window.hide();
 }
 const quitApp = () => { window?.hide(); void stop(); };
@@ -231,15 +255,62 @@ else {
     // A shortcut left by an earlier development run (bare electron.exe, no app path) or by a build folder that was
     // removed still claims this id, and Windows may pick it over this app's own shortcut on a toast click. Electron
     // writes its own shortcut again before the next notification, so the ones that cannot start this app are removed.
-    if (app.isPackaged) void removeForeignShortcuts({ aumid: notificationAppId, log });
-    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: join(__dirname, 'icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    if (app.isPackaged) {
+      void removeForeignShortcuts({ aumid: notificationAppId, log })
+        .then(() => pointShortcutIcons({ aumid: notificationAppId, exe: process.execPath, icon: taskbarIcon(), log }));
+    }
+    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: APP_ICON, webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
-    browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData') });
+    createTray();
+    // Selection translation in website tabs goes to the running service, like the app page's own "Translate".
+    const translate = async (text, choice = {}) => {
+      if (!serviceUrl) throw new Error('本地服务还没有就绪');
+      const response = await fetch(new URL('/api/translate', serviceUrl), {
+        method: 'POST',
+        headers: { 'x-myharness-web': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ text, ...choice }),
+        signal: AbortSignal.timeout(120000),
+      });
+      const answer = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(answer?.error || `翻译失败（${response.status}）`);
+      return answer;
+    };
+    // The saved target language, so a website tab's card shows it before the translation arrives.
+    const translationLanguage = async () => {
+      if (!serviceUrl) return null;
+      const response = await fetch(new URL('/api/translate', serviceUrl), { headers: { 'x-myharness-web': '1' }, signal: AbortSignal.timeout(5000) });
+      return response.ok ? response.json() : null;
+    };
+    // A dictionary pronunciation (British or American) for a website tab's word card, as bytes.
+    const translationVoice = async (text, accent) => {
+      if (!serviceUrl) return null;
+      const address = new URL('/api/translate/voice', serviceUrl);
+      address.searchParams.set('text', text);
+      address.searchParams.set('accent', accent);
+      const response = await fetch(address, { headers: { 'x-myharness-web': '1' }, signal: AbortSignal.timeout(10000) });
+      return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
+    };
+    browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData'), translate, translationLanguage, translationVoice });
+    // Zoom of the app's own window: Ctrl + "+" / "-" / 0 and Ctrl + wheel while the keyboard is in the app (a website tab
+    // zooms itself, see browser-view.cjs), or Settings → Interface. It is kept across restarts and every page load.
+    const setAppZoom = (factor) => {
+      const value = cleanZoom(factor);
+      if (window.isDestroyed()) return value;
+      try { window.webContents.setZoomFactor(value); } catch { /* page is going away */ }
+      try { prefs.set({ appZoom: value }); } catch (error) { log(`无法保存界面缩放：${error.message}`); }
+      browser?.refresh();
+      if (!window.webContents.isDestroyed()) window.webContents.send('desktop:app-zoom', value);
+      return value;
+    };
+    attachZoom(window.webContents, { current: () => prefs.get().appZoom, apply: setAppZoom });
+    window.webContents.on('did-finish-load', () => {
+      try { window.webContents.setZoomFactor(prefs.get().appZoom); } catch { /* page is going away */ }
+    });
     const trusted = (event) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && serviceUrl && new URL(event.senderFrame.url).origin === new URL(serviceUrl).origin;
     // Window buttons of the frameless window. The app page may use them, and so may the host's own starting/error page
     // (exactly the page loadShell produced, in the main frame); no other page or frame gets them.
     const windowCaller = (event) => trusted(event) || (event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && !!shellUrl && event.senderFrame.url === shellUrl);
-    const windowState = () => ({ maximized: window.isMaximized(), fullScreen: window.isFullScreen() });
+    const windowState = () => ({ maximized: window.isMaximized(), fullScreen: window.isFullScreen(), focused: window.isFocused() });
     ipcMain.handle('desktop:window', (event, action) => {
       if (!windowCaller(event)) throw new Error('拒绝非应用页面调用');
       if (action === 'minimize') window.minimize();
@@ -270,7 +341,7 @@ else {
       const text = (value, max) => String(value ?? '').slice(0, max);
       const tag = text(payload.tag, 200);
       toasts.get(tag)?.close();
-      const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true });
+      const toast = new Notification({ title: text(payload.title, 120), body: text(payload.body, 300), silent: true, icon: APP_ICON });
       toast.on('click', () => {
         showWindow();
         if (!window.webContents.isDestroyed()) window.webContents.send('desktop:notification-click', tag);
@@ -283,6 +354,15 @@ else {
     ipcMain.handle('desktop:notify', (event, payload) => {
       if (!trusted(event)) throw new Error('拒绝非应用页面调用');
       return showToast(payload);
+    });
+    // The app window's zoom: no argument reads it; `{ factor }` sets it, `{ direction }` steps it (1, -1, 0 = 100 %).
+    ipcMain.handle('desktop:app-zoom', (event, change) => {
+      if (!trusted(event)) throw new Error('拒绝非应用页面调用');
+      if (change && typeof change === 'object') {
+        if (Number.isFinite(Number(change.factor))) return setAppZoom(change.factor);
+        if ('direction' in change) return setAppZoom(stepZoom(prefs.get().appZoom, Math.sign(Number(change.direction) || 0)));
+      }
+      return prefs.get().appZoom;
     });
     // Settings → Interface → Desktop app: the close button's action and start at sign-in.
     ipcMain.handle('desktop:app-prefs', (event, patch) => {
@@ -329,7 +409,8 @@ else {
     for (const event of ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen', 'show'])
       window.on(event, () => browser?.refresh());
     // The page's maximize/restore button follows the real state, whatever changed it (button, double-click, Snap, Win+Up, taskbar).
-    for (const event of ['maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen'])
+    // `focused` is the window's own focus: the page has none while the user is in a website tab, but the user is in the app.
+    for (const event of ['maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen', 'focus', 'blur'])
       window.on(event, () => { if (!window.webContents.isDestroyed()) window.webContents.send('desktop:window-state', windowState()); });
     window.on('close', (event) => { if (!finished) { event.preventDefault(); void onCloseRequest(); } });
     await loadShell('<span style="color:#ccc">正在启动 MyHarness…</span>');

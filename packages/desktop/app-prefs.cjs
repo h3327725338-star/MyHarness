@@ -1,12 +1,14 @@
-// Preferences of the desktop host itself (not of the Web UI): what the window's close button does, and whether
+// Preferences of the desktop host itself (not of the Web UI): what the window's close button does, the zoom of the app
+// window (Ctrl + "+" / "-" / 0), and whether
 // MyHarness starts when the user signs in to Windows. They live in the host profile next to the browser data, so a
 // development run and the installed app keep their own copies. Start-at-login is not stored here: Windows' own Run
 // entry is the truth, read back through Electron every time.
 const { readFileSync, writeFileSync, renameSync } = require('node:fs');
 const { join } = require('node:path');
+const { cleanZoom } = require('./zoom.cjs');
 
 const CLOSE_ACTIONS = ['ask', 'tray', 'quit'];
-const DEFAULTS = Object.freeze({ closeAction: 'ask' });
+const DEFAULTS = Object.freeze({ closeAction: 'ask', appZoom: 1 });
 
 function createAppPrefs(profileDir) {
   const file = join(profileDir, 'desktop-prefs.json');
@@ -14,6 +16,7 @@ function createAppPrefs(profileDir) {
   try {
     const saved = JSON.parse(readFileSync(file, 'utf8'));
     if (CLOSE_ACTIONS.includes(saved?.closeAction)) prefs.closeAction = saved.closeAction;
+    if (saved && 'appZoom' in saved) prefs.appZoom = cleanZoom(saved.appZoom);
   } catch { /* missing or unreadable: defaults */ }
   return {
     get: () => ({ ...prefs }),
@@ -25,6 +28,7 @@ function createAppPrefs(profileDir) {
         if (!CLOSE_ACTIONS.includes(patch.closeAction)) throw new Error('未知的关闭方式');
         next.closeAction = patch.closeAction;
       }
+      if ('appZoom' in patch) next.appZoom = cleanZoom(patch.appZoom);
       const temp = `${file}.tmp`;
       writeFileSync(temp, JSON.stringify(next, null, 2));
       renameSync(temp, file);

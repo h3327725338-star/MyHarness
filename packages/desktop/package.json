@@ -8,6 +8,7 @@
   "author": "MyHarness",
   "license": "Apache-2.0",
   "dependencies": {
+    "darkreader": "4.9.133",
     "koffi": "3.3.3"
   },
   "devDependencies": {

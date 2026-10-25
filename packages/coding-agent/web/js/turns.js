@@ -658,6 +658,7 @@ export function groupSteps(steps) {
 
 export const OUTCOME_LABEL = {
 	running: N_("Working"),
+	redirected: N_("Switched to your new message"),
 	waiting: N_("Waiting for you"),
 	completed: N_("Completed"),
 	partial: N_("Partially completed"),
@@ -666,18 +667,22 @@ export const OUTCOME_LABEL = {
 	unanswered: N_("No response"),
 };
 
-/** Match a run_finished record to a turn: the newest turn that started at or before the run. */
-export function runForTurn(turn, runs, isLast, latestRun) {
+/**
+ * Match a run_finished record to a turn: the newest turn that started at or before the run. A run that started with
+ * the next turn's message belongs to that turn: a message sent with "interrupt" starts its run within moments of the
+ * one it stopped, well inside the 5 s slack below.
+ */
+export function runForTurn(turn, runs, nextTurn) {
 	if (!turn.startedAt) return undefined;
+	const nextStart = nextTurn?.user?.ts;
 	let best;
 	for (const run of Object.values(runs)) {
 		if (!run.startedAt) continue;
 		if (run.startedAt + 3000 < turn.startedAt) continue;
 		if (turn.endedAt && run.startedAt > turn.endedAt + 5000) continue;
+		if (nextStart && run.startedAt >= nextStart - 250) continue;
 		if (!best || run.startedAt > best.startedAt) best = run;
 	}
-	void isLast;
-	void latestRun;
 	return best;
 }
 
@@ -692,6 +697,19 @@ export function turnOutcome(turn, { run, live, waiting }) {
 	if (stop === "aborted") return "cancelled";
 	if (stop === "error") return turn.stats.files > 0 ? "partial" : "failed";
 	return "completed";
+}
+
+/**
+ * A message sent with "interrupt" ends the run it lands in and is answered at once: that run was not given up, the
+ * agent turned to the new message. Known from the next turn starting right where this one stopped (the server sends
+ * the message within moments of the stop; a person pressing Stop and then typing takes far longer). Read from the
+ * saved transcript too, so a reopened chat shows the same thing.
+ */
+const INTERRUPT_GAP_MS = 3_000;
+export function interruptedByNext(turn, next) {
+	const sentAt = next?.user?.ts;
+	const stoppedAt = turn.endedAt || turn.startedAt;
+	return !!(sentAt && stoppedAt && sentAt - stoppedAt <= INTERRUPT_GAP_MS);
 }
 
 export function turnDuration(turn, run) {

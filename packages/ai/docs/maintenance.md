@@ -20,7 +20,7 @@ Provider 可以额外实现 `logout()` 来清理宿主拥有的认证运行时�
 
 ## 工具参数的预览与执行
 
-`parseStreamingJson` 仅用于流式预览；字符串参数在完整调用结束时使用 `finalizeToolCallArguments`，只接受完整对象及既有确定性字符转义修复，不猜缺失字段、值、字符串或括号。解析失败以可选 `ToolCall.argumentsParseError` 传给宿主，Agent Core 拒绝执行并返回工具错误，供模型重新发出完整调用。`length` / `aborted` / `error` 的执行保护继续生效。原生对象参数（如 Google）沿用原路径，无需转成字符串再解析。
+`parseStreamingJson` 仅用于流式预览；字符串参数在完整调用结束时使用 `finalizeToolCallArguments`，只接受完整对象及既有确定性字符转义修复，不猜缺失字段、值、字符串或括号。解析失败以可选 `ToolCall.argumentsParseError` 传给宿主，Agent Core 拒绝执行并返回工具错误，供模型重新发出完整调用。`length` / `aborted` / `error` 的执行保护继续生效。原生对象参数（如 Google）沿用原路径，无需转成字符串再解析。按工具 schema 把以 JSON 文本传来的数组/对象还原（`utils/tool-args-coerce.ts`）时只有一个补全例外：数组的条目都完整、只缺最后一个 `]`（经某些网关转发的 GLM `web_search` 调用会稳定丢掉这一个字符，而整个调用本身是完整的），补上这个括号；在条目中间断开的文本仍按错误返回。
 
 ## 当前 catalog 规则
 

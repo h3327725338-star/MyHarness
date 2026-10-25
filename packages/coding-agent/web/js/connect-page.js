@@ -27,14 +27,6 @@ export const MAIL_PROVIDERS = {
 		registerLabel: N_("Open Microsoft app registrations"),
 		idPlaceholder: "00000000-0000-0000-0000-000000000000",
 	},
-	"microsoft-china": {
-		connect: N_("Outlook (21Vianet)"),
-		desc: N_("Microsoft 365 operated by 21Vianet in China"),
-		setup: N_("In the Azure portal operated by 21Vianet (portal.azure.cn) → App registrations: register an app for work or school accounts and add the platform “Mobile and desktop applications” with the redirect URI http://localhost. Paste the Application (client) ID here; no secret is needed."),
-		register: "https://portal.azure.cn/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
-		registerLabel: N_("Open 21Vianet app registrations"),
-		idPlaceholder: "00000000-0000-0000-0000-000000000000",
-	},
 };
 
 const providerLabel = (provider) => t(MAIL_PROVIDERS[provider]?.connect ?? provider);
@@ -128,11 +120,6 @@ const SETUP_STEPS = {
 		{ text: N_("Open Microsoft app registrations and add a new registration for “Accounts in any organizational directory and personal Microsoft accounts”."), link: MAIL_PROVIDERS.microsoft.register, linkLabel: MAIL_PROVIDERS.microsoft.registerLabel },
 		{ text: N_("Under Authentication, add the platform “Mobile and desktop applications” with the redirect URI http://localhost.") },
 		{ text: N_("Paste the Application (client) ID below. No secret is needed; a work or school account may need its administrator to approve the app.") },
-	],
-	"microsoft-china": [
-		{ text: N_("Open the Azure portal operated by 21Vianet and register an app for work or school accounts."), link: MAIL_PROVIDERS["microsoft-china"].register, linkLabel: MAIL_PROVIDERS["microsoft-china"].registerLabel },
-		{ text: N_("Under Authentication, add the platform “Mobile and desktop applications” with the redirect URI http://localhost.") },
-		{ text: N_("Paste the Application (client) ID below. No secret is needed.") },
 	],
 };
 

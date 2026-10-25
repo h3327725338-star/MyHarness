@@ -25,6 +25,7 @@ import { registerModeRoutes } from "../src/modes/web/routes-modes.ts";
 import { registerProviderRoutes } from "../src/modes/web/routes-providers.ts";
 import { registerSessionRoutes } from "../src/modes/web/routes-sessions.ts";
 import { registerSettingsRoutes } from "../src/modes/web/routes-settings.ts";
+import { registerTranslateRoutes } from "../src/modes/web/routes-translate.ts";
 import { AuthStorage } from "../src/providers/credentials/auth-storage.ts";
 import { ModelRuntime } from "../src/providers/runtime/index.ts";
 import { SessionManager } from "../src/session/manager/index.ts";
@@ -507,6 +508,47 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(slots.slots.some((slot: any) => slot.sessionFile === initial.session.file && slot.hasContent)).toBe(true);
 	});
 
+	it("translates a selection with the Translation helper model and its target language, keeping chats untouched", async () => {
+		const fx = await start();
+		const seen: string[] = [];
+		fx.faux.setResponses([
+			(context) => {
+				seen.push(String(context.systemPrompt));
+				return fauxAssistantMessage([fauxText("<think>plan</think>\n你好，世界")]);
+			},
+			(context) => {
+				seen.push(String(context.systemPrompt));
+				return fauxAssistantMessage([fauxText("こんにちは")]);
+			},
+		]);
+		const before = fx.hub.host.session.messages.length;
+		const first = await fx.post("/api/translate", {
+			text: "Hello, world. This sentence is long enough.",
+			uiLanguage: "zh-CN",
+		});
+		expect(first).toMatchObject({ translation: "你好，世界", target: "zh-CN" });
+		expect(first.model).toContain("/");
+		expect(seen[0]).toContain("Translate into Simplified Chinese");
+
+		const item = (await fx.get("/api/settings")).items.find((i: any) => i.id === "translation.targetLanguage");
+		expect(item).toMatchObject({ section: "Assistants", value: "auto" });
+		await fx.post("/api/settings", { id: "translation.targetLanguage", value: "ja" });
+		const second = await fx.post("/api/translate", { text: "hello", uiLanguage: "zh-CN" });
+		expect(second).toMatchObject({ translation: "こんにちは", target: "ja" });
+		expect(seen[1]).toContain("Translate into Japanese");
+		expect(seen[1]).toContain("single word or a short phrase");
+		expect(fx.hub.host.session.messages.length).toBe(before);
+		// A new card reads the saved language before it has an answer.
+		expect(await fx.get("/api/translate?uiLanguage=zh-CN")).toEqual({ preference: "ja", target: "ja" });
+		await fx.post("/api/settings", { id: "translation.targetLanguage", value: "auto" });
+		expect(await fx.get("/api/translate?uiLanguage=zh-CN")).toEqual({ preference: "auto", target: "zh-CN" });
+
+		await expect(fx.post("/api/translate", { text: "   " })).rejects.toThrow(/^400:/);
+		// The dictionary voice takes only an English word or a short phrase and a known accent (nothing is fetched here).
+		await expect(fx.get("/api/translate/voice?text=%E4%BD%A0%E5%A5%BD&accent=us")).rejects.toThrow(/^400:/);
+		await expect(fx.get("/api/translate/voice?text=problem&accent=au")).rejects.toThrow(/^400:/);
+	});
+
 	async function start(options: { authFile?: boolean } = {}): Promise<Fixture> {
 		const project = tempDir("myharness-web-project");
 		const dataRoot = tempDir("myharness-web-data");
@@ -583,6 +625,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		registerFileRoutes(server, host);
 		registerGitRoutes(server, host);
 		registerSettingsRoutes(server, host);
+		registerTranslateRoutes(server, host, () => agentDir);
 		// An undecided thinking-effort test is tried again; the tests do not wait between the attempts.
 		registerProviderRoutes(server, host, hub);
 		await hub.addPrimary(runtimeHost, dialogs);
@@ -1358,6 +1401,40 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(session.isIdle).toBe(true);
 	});
 
+	it("never cancels a running context compaction when a message is sent in Interrupt mode", async () => {
+		const fx = await start();
+		const first = await fx.get("/api/state");
+		const session = fx.hub.get(first.slot)!.session;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxText("第一个回答")]),
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("压缩摘要")]);
+			},
+			fauxAssistantMessage([fauxText("压缩后的回答")]),
+		]);
+		await fx.post("/api/prompt", { text: "go" }, first.slot);
+		await vi.waitFor(() => expect(session.isIdle).toBe(true));
+		const compaction = session.compact();
+		await vi.waitFor(() => expect(session.isCompacting).toBe(true));
+
+		const sent = fx.post("/api/prompt", { text: "打错字了", mode: "interrupt" }, first.slot);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// The message waits for the compaction instead of cancelling it.
+		expect(session.isCompacting).toBe(true);
+		release();
+		await expect(compaction).resolves.toBeDefined();
+		await sent;
+		await vi.waitFor(() =>
+			expect(session.messages.some((message) => getMessageText(message) === "压缩后的回答")).toBe(true),
+		);
+		expect(session.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
 	it("keeps the sub-agents running when Interrupt mode stops a run whose main agent is answering", async () => {
 		const assistantTexts = (session: { messages: unknown[] }) =>
 			session.messages
@@ -1498,6 +1575,45 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(announced().map((notice) => notice.slot)).toEqual([one, two, three, five]);
 		expect(four).not.toBe(three);
 		expect(popups()).toHaveLength(2);
+	});
+
+	it("shows no system popup for the chat a focused page shows, and still one for another chat", async () => {
+		const fx = await start();
+		const popups = () =>
+			showPopupMock.mock.calls.map(([, content]) => content).filter((c) => c.title.endsWith(basename(fx.project)));
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("one")]), fauxAssistantMessage([fauxText("two")])]);
+		const { slot } = await fx.get("/api/state");
+		// The page shows this chat in a focused window but is too busy to answer the notice in time.
+		await fx.post("/api/presence", { page: "p1", slot, focused: true }, "");
+		await fx.post("/api/prompt", { text: "task one" }, slot);
+		await fx.waitFor("task_notification", (data) => data.slot === slot);
+		await new Promise((done) => setTimeout(done, 3000));
+		expect(popups()).toHaveLength(0);
+
+		// The same page now shows another chat: the unanswered notice of this one becomes a popup.
+		await fx.post("/api/presence", { page: "p1", slot: "elsewhere", focused: true }, "");
+		await fx.post("/api/prompt", { text: "task two" }, slot);
+		await vi.waitFor(() =>
+			expect(fx.events.filter((e) => e.event === "task_notification" && e.data.slot === slot)).toHaveLength(2),
+		);
+		await vi.waitFor(() => expect(popups()).toHaveLength(1), { timeout: 6000, interval: 100 });
+		await fx.post("/api/presence", { page: "p1", gone: true }, "");
+	});
+
+	it("pings only for the first of several questions asked one after another", async () => {
+		const fx = await start();
+		const { slot } = await fx.get("/api/state");
+		const dialogs = (fx.hub.get(slot) as unknown as { dialogs: WebDialogBridge }).dialogs;
+		const pings = () =>
+			fx.events.filter((entry) => entry.event === "task_notification" && entry.data.state === "waiting");
+		for (const title of ["第一题", "第二题", "第三题"]) {
+			const answer = dialogs.ask("select", { title, options: ["A", "B"] });
+			dialogs.respond(dialogs.requests[0]!.id, "A");
+			await answer;
+		}
+		await vi.waitFor(() => expect(pings().length).toBeGreaterThan(0));
+		await new Promise((done) => setTimeout(done, 200));
+		expect(pings().map((entry) => entry.data.detail)).toEqual(["第一题"]);
 	});
 
 	it("applies a saved project trust decision to the open chat at once", async () => {

@@ -44,6 +44,7 @@ function loadHost() {
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       isDestroyed: () => false,
       isLoading: () => false,
+      isLoadingMainFrame: () => false,
       getURL() { return this.url; },
       setBackgroundThrottling() {},
       debugger: {

@@ -26,6 +26,7 @@ function loadBrowser() {
       navigationHistory: { canGoBack: () => true, canGoForward: () => false, goBack() {}, goForward() {} },
       isDestroyed: () => false,
       isLoading: () => false,
+      isLoadingMainFrame: () => false,
       getURL() { return this.url; },
       reload() {}, stop() {},
       // `exec` runs through Runtime.evaluate; it answers with the expression it was given.

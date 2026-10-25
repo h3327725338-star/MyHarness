@@ -333,14 +333,6 @@ const MAIL_PROVIDERS = {
 			["https://myapplications.microsoft.com/", N_("Work or school account: open My Apps")],
 		],
 	},
-	"microsoft-china": {
-		connect: N_("Connect Outlook (21Vianet)"),
-		connectDesc: N_("Microsoft 365 operated by 21Vianet in China"),
-		setup: N_("In the Azure portal operated by 21Vianet (portal.azure.cn) → App registrations: register an app for work or school accounts and add the platform “Mobile and desktop applications” with the redirect URI http://localhost. Paste the Application (client) ID here; no secret is needed."),
-		register: "https://portal.azure.cn/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
-		registerLabel: N_("Open 21Vianet app registrations"),
-		revoke: [["https://myapplications.microsoft.com/", N_("Open My Apps")]],
-	},
 };
 
 function mailScreen() {

@@ -17,6 +17,9 @@
 .jump-btn.leaving { animation: fade-only-out var(--t-base) var(--ease) both; pointer-events: none; }
 
 .turn { display: flex; flex-direction: column; gap: 10px; }
+.turn-process { position: relative; display: flex; flex-direction: column; gap: 10px; }
+.turn-process:empty { display: none; }
+.swap-glide-copy { position: absolute; inset: 0 0 auto 0; pointer-events: none; z-index: 1; background: var(--bg-panel); }
 
 /* User message */
 .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
@@ -54,7 +57,7 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .summary-ico { display: inline-flex; width: 16px; justify-content: center; flex: none; }
 .summary-body { margin: 2px 0 4px; }
 /* Run glyphs: only the states that need the user (partial, failed) are coloured; done, stopped and waiting stay neutral. */
-.c-completed { color: var(--text-3); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-waiting { color: var(--text-3); }
+.c-completed { color: var(--text-3); } .c-partial { color: var(--warn); } .c-failed { color: var(--danger); } .c-cancelled { color: var(--text-3); } .c-redirected { color: var(--text-3); } .c-waiting { color: var(--text-3); }
 .c-dim { color: var(--text-3); } .c-danger { color: var(--danger); } .c-warn { color: var(--warn); } .c-folder { color: var(--accent); opacity: 0.85; }
 /* The banner under the turn already says how it ended: the summary row keeps its text neutral; the glyph and the
    failed-actions count carry the state colour, the count without a tinted background. */
@@ -265,6 +268,7 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 .web-host { flex: 0 1 auto; min-width: 0; color: var(--text-3); font-size: var(--fs-xs); }
 .web-note { flex: none; margin-left: auto; color: var(--text-4); font-size: var(--fs-xs); }
 .web-problems li { color: var(--warn); font-size: var(--fs-code); overflow-wrap: anywhere; }
+.web-problems.quiet li { color: var(--text-3); }
 .web-more { align-self: flex-start; padding-left: 0; }
 .web-body > .collapse { align-self: stretch; }
 .marker { display: flex; flex-direction: column; align-items: stretch; }

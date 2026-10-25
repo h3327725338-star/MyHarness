@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
 import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Overlay, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
-import { GENERAL_KEY, api, loadArchived, loadSessions, loadUnbound, loadWorkspaces, post, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, api, freshRowKey, loadArchived, loadSessions, loadUnbound, loadWorkspaces, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -15,6 +15,12 @@ import { WorkspaceSettings } from "./workspace-settings.js";
 import { openSourcesPage } from "./sources-page.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
+// A new chat is listed from the click on, under a stand-in key (see Sidebar); its real row, and later its saved row,
+// keep that key, so the row grows in once and is never folded away and grown in again when the service answers.
+const rowAliases = new Map();
+const rowKeyOf = (info) => info.rowKey || rowAliases.get(pathKey(info.path)) || info.path;
+/** The chat on screen; while a new chat is being created that is its stand-in key, which its real row carries too. */
+const isShown = (info, currentFile) => !!currentFile && (pathKey(info.path) === pathKey(currentFile) || rowKeyOf(info) === currentFile);
 /** Chats a group lists before "Show N more", and the height (in rows) a fully expanded group scrolls within. */
 const CHAT_ROWS_SHOWN = 12;
 
@@ -127,7 +133,7 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
  */
 function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, currentFile, drafts }) {
 	// The chat on screen: a new empty chat keeps the first place while it is this one (see chat-order.js).
-	const onScreen = (info) => !!currentFile && pathKey(info.path) === pathKey(currentFile);
+	const onScreen = (info) => isShown(info, currentFile);
 	const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived, onScreen });
 	const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: onScreen(info), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
 	if (!filter) return all;
@@ -203,7 +209,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 				${rendered
 					? html`<div class="ws-children" ref=${glide.ref}>
 						<${FoldIn} content=${note} />
-						<${ChatRows} key=${showAll ? "all" : "head"} capped=${capped} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${!!currentFile && pathKey(info.path) === pathKey(currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
+						<${ChatRows} key=${showAll ? "all" : "head"} capped=${capped} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${isShown(info, currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => glide.run(() => setShowAll(true))}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
@@ -215,7 +221,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 // One chat row of a group. Removed rows stay mounted until their shared fade/collapse transition has finished; rows that
 // are there when the list first appears are simply shown, only rows that arrive later grow in (see ListSlot).
 function DraftChat({ info, present, initial, renderRow }) {
-	return html`<div class="chat-slot" data-path=${info.path}><${ListSlot} present=${present} initial=${initial}>${renderRow(info)}<//></div>`;
+	return html`<div class="chat-slot" data-path=${info.path} data-key=${rowKeyOf(info)}><${ListSlot} present=${present} initial=${initial}>${renderRow(info)}<//></div>`;
 }
 
 /**
@@ -224,17 +230,17 @@ function DraftChat({ info, present, initial, renderRow }) {
  * place. The slide is a transform on that row only: nothing else moves with it, and clicks are never held back.
  */
 function ChatRows({ items, renderRow, capped = false }) {
-	const signature = items.map((item) => item.path).join("\n");
+	const signature = items.map(rowKeyOf).join("\n");
 	// Rows that left stay for the length of the fold-away; a row that left is animated in again if it comes back later.
-	const { rows: visible, present, initial } = useRetainedRows(items);
+	const { rows: visible, present, initial } = useRetainedRows(items, rowKeyOf);
 	// Only a pure reorder needs a slide. Inserts/exits already move their neighbours through grid collapse;
 	// measuring those intermediate heights and applying FLIP again caused the second downward nudge.
 	// Fixed row indices give the displacement without reading layout or mixing reads with animation writes.
 	const box = useRef(null);
-	const order = useRef(items.map((item) => item.path));
+	const order = useRef(items.map(rowKeyOf));
 	useLayoutEffect(() => {
 		const previous = order.current;
-		const next = items.map((item) => item.path);
+		const next = items.map(rowKeyOf);
 		order.current = next;
 		const el = box.current;
 		if (!el) return;
@@ -242,13 +248,13 @@ function ChatRows({ items, renderRow, capped = false }) {
 		const indices = new Map(previous.map((path, index) => [path, index]));
 		if (!motionEnabled() || previous.length !== next.length || next.some((path) => !indices.has(path)) || visible.length !== items.length) return;
 		for (const [index, node] of [...el.children].entries()) {
-			const delta = indices.get(node.dataset.path) - index;
+			const delta = indices.get(node.dataset.key) - index;
 			if (delta && node.animate) node.animate([
 				{ transform: `translateY(calc(${delta} * var(--h-row)))` }, { transform: "none" },
 			], { duration: COLLAPSE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
 		}
 	}, [signature]);
-	const rows = html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${info.path} info=${info} present=${present.has(info.path)} initial=${initial.has(info.path)} renderRow=${renderRow} />`)}</div>`;
+	const rows = html`<div class="chat-rows" ref=${box}>${visible.map((info) => html`<${DraftChat} key=${rowKeyOf(info)} info=${info} present=${present.has(rowKeyOf(info))} initial=${initial.has(rowKeyOf(info))} renderRow=${renderRow} />`)}</div>`;
 	return capped ? html`<div class="chat-rows-capped">${rows}</div>` : rows;
 }
 
@@ -518,7 +524,9 @@ export function Sidebar() {
 	const currentFile = useStore((s) => s.snap?.session?.file);
 	// A chat that was clicked is marked at once, while it is still being opened.
 	const openingFile = useStore((s) => s.opening);
-	const shownFile = openingFile || currentFile;
+	// A new chat is listed while the service is still creating it: a stand-in row, current, in the group it goes to.
+	const freshRow = useStore((s) => (s.switching?.fresh && !s.switching.error ? s.switching.freshRow : null));
+	const shownFile = openingFile || currentFile || freshRow?.key || null;
 	// Saved drafts of this mode, by chat: a blank chat that holds one stays on the list.
 	const drafts = useStore((s) => s.modeState?.[s.view.chatMode]?.drafts);
 	const allSlots = useStore((s) => s.slots);
@@ -563,8 +571,14 @@ export function Sidebar() {
 	// is still empty: a chat that was just created is the current row of the place it belongs to.
 	const unsaved = useMemo(() => {
 		const archivedPaths = new Set((ws.archived || []).map((info) => pathKey(info.path)));
+		// A chat that was listed under a stand-in key keeps it, also once its saved row replaces this one (rowKeyOf).
+		const aliasOf = (slot) => {
+			const key = freshRowKey(slot.slot);
+			if (key && slot.sessionFile) rowAliases.set(pathKey(slot.sessionFile), key);
+			return key;
+		};
 		const listable = (slot) => !!slot.sessionFile && !archivedPaths.has(pathKey(slot.sessionFile)) && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
-		const row = (slot) => ({ path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, copy: !!slot.copy, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
+		const row = (slot) => ({ rowKey: aliasOf(slot), path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, copy: !!slot.copy, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();
 		const savedByRoot = new Map(ws.list.map((workspace) => [pathKey(workspace.rootPath), new Set((ws.sessions[workspace.rootPath] || []).map((info) => pathKey(info.path)))]));
 		for (const slot of slots) {
@@ -579,8 +593,14 @@ export function Sidebar() {
 		}
 		const listed = new Set((ws.unbound || []).map((info) => pathKey(info.path)));
 		const unbound = slots.filter((slot) => slot.unbound && listable(slot) && !listed.has(pathKey(slot.sessionFile))).map(row);
+		// The stand-in row of a new chat, until the chat's real row (which takes over its key) is listed.
+		if (freshRow && !slots.some((slot) => freshRowKey(slot.slot) === freshRow.key && listable(slot))) {
+			const standIn = { rowKey: freshRow.key, path: freshRow.key, name: "", modified: Date.now(), unsaved: true, copy: false, empty: true };
+			if (freshRow.group === GENERAL_KEY) unbound.unshift(standIn);
+			else byRoot.set(pathKey(freshRow.group), [standIn, ...(byRoot.get(pathKey(freshRow.group)) || [])]);
+		}
 		return { byRoot, unbound };
-	}, [slots, ws, activeSlot]);
+	}, [slots, ws, activeSlot, freshRow]);
 	const unboundChats = useMemo(() => (ws.unbound === undefined ? undefined : [...unsaved.unbound, ...ws.unbound]), [unsaved, ws.unbound]);
 	// The chats one workspace group lists: the saved ones, plus an open chat that is not saved yet. Shared by the
 	// rendered group and the virtualized list's height estimates, so both always agree.

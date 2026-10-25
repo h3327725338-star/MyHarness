@@ -19,6 +19,7 @@ import { FloatingQuoteToolbar } from "./quote-toolbar.js";
 import { ImageLightboxHost } from "./lightbox.js";
 import { useWorkspaceTitle } from "./workspace-title.js";
 import { WindowControls } from "./window-controls.js";
+import { AppZoomBadge } from "./app-zoom.js";
 import { SourcesPageHost } from "./sources-page.js";
 import { clip, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
@@ -392,6 +393,7 @@ export function App() {
 			${exportReadOnly() ? null : html`<${Composer} />`}
 			${exportReadOnly() ? null : html`<${SourcesPageHost} />`}
 			<${Toasts} />
+			<${AppZoomBadge} />
 			${exportReadOnly() ? null : html`<${FloatingQuoteToolbar} />`}
 		</main>
 		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}

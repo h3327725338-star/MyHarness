@@ -34,6 +34,11 @@ material they cover:
   `@lydell/node-pty` (MIT; Christopher Jeffrey, Daniel Imms and Microsoft
   Corporation), a repackaging of node-pty with prebuilt binaries. It is
   installed from the npm registry and not copied into this source tree.
+- The desktop host's dark mode for websites runs the npm package
+  `darkreader` 4.9.133 (MIT, Dark Reader Ltd.) unmodified in each
+  website tab. It is installed from the npm registry, not copied into this
+  source tree; the desktop build copies its `darkreader.js`, `LICENSE` and
+  `package.json` into the packaged app (`runtime/node_modules/darkreader`).
 - `packages/agent/src/harness/compaction/CODEX-NOTICE.md` and
   `CODEX-LICENSE` identify the adapted OpenAI Codex source and its Apache-2.0
   terms.

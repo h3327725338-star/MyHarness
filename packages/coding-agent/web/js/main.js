@@ -4,6 +4,8 @@ import { App } from "./app.js";
 import { boot, state, subscribe, version } from "./store.js";
 import { installWorkspaceHost } from "./workspace-host.js";
 import { installLinkRouting } from "./link-target.js";
+import { installPagePresence, reportPresence } from "./page-presence.js";
+import { installBrowserDarkSync } from "./browser-dark.js";
 import { t } from "./i18n.js";
 
 // A rendering bug must never leave a blank page: show the error and let the user reload.
@@ -53,4 +55,9 @@ render(h(Root, null), document.getElementById("app"));
 installWorkspaceHost();
 // Web links open where Settings → Interface says (built-in browser or the system browser).
 installLinkRouting();
+// The server skips its own task-end popup for the chat a focused page shows.
+installPagePresence(() => state.activeSlot);
+subscribe(() => reportPresence());
+// Websites in the built-in browser follow the app's dark mode (desktop app).
+installBrowserDarkSync();
 boot();

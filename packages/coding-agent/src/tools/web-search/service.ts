@@ -590,46 +590,62 @@ export class WebSearchService {
 		if (signal?.aborted) onParentAbort();
 		else signal?.addEventListener("abort", onParentAbort, { once: true });
 		let budgetSpent = false;
-		const timer = setTimeout(() => {
-			budgetSpent = true;
-			budget.abort(new WebSearchError("timeout", "搜索后读取网页的时间用完了。"));
-		}, readBudgetMs);
 		const pages = new Map<number, WebFetchedPage>();
 		const failures = new Map<number, WebSearchFailure>();
 		const unfinished: string[] = [];
+		/** Pages still being read, by result index; what is left here when the time is up is reported as skipped. */
+		const reading = new Map<number, string>();
 		let next = 0;
-		let inFlight = 0;
+		let finish: (() => void) | undefined;
+		let fail: ((error: unknown) => void) | undefined;
+		// The budget is a promise to the Agent, so the search answers when it runs out (or at once on a stop) even
+		// when a read does not give up on its own: such a read finishes in the background and is not waited for.
+		const timer = setTimeout(() => {
+			budgetSpent = true;
+			budget.abort(new WebSearchError("timeout", "搜索后读取网页的时间用完了。"));
+			finish?.();
+		}, readBudgetMs);
+		const onStop = () => fail?.(abortError(signal));
+		signal?.addEventListener("abort", onStop, { once: true });
 		try {
 			await new Promise<void>((resolve, reject) => {
+				finish = resolve;
+				fail = reject;
+				if (signal?.aborted) {
+					reject(abortError(signal));
+					return;
+				}
 				const launch = () => {
-					while (!budget.signal.aborted && next < urls.length && pages.size + inFlight < wanted) {
+					while (!budget.signal.aborted && next < urls.length && pages.size + reading.size < wanted) {
 						const index = next++;
 						const url = urls[index]!;
-						inFlight += 1;
+						reading.set(index, url);
 						this.readCachedPage(url, fresh, budget.signal, undefined, false)
 							.then(
 								(page) => {
-									pages.set(index, page);
+									if (!budgetSpent) pages.set(index, page);
 								},
 								(error) => {
-									if (signal?.aborted) reject(abortError(signal) ?? error);
-									else if (budgetSpent) unfinished.push(url);
-									else failures.set(index, { url, ...failureFromError(error, "网页读取失败。") });
+									if (signal?.aborted || budgetSpent) return;
+									failures.set(index, { url, ...failureFromError(error, "网页读取失败。") });
 								},
 							)
 							.finally(() => {
-								inFlight -= 1;
+								if (budgetSpent || signal?.aborted) return;
+								reading.delete(index);
 								launch();
 							});
 					}
-					if (inFlight === 0) resolve();
+					if (reading.size === 0) resolve();
 				};
 				launch();
 			});
 		} finally {
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onParentAbort);
+			signal?.removeEventListener("abort", onStop);
 		}
+		if (budgetSpent) unfinished.push(...[...reading.entries()].sort((a, b) => a[0] - b[0]).map(([, url]) => url));
 		const ordered = [...pages.entries()].sort((a, b) => a[0] - b[0]).map(([, page]) => page);
 		const reported = [...failures.entries()].sort((a, b) => a[0] - b[0]).map(([, failure]) => failure);
 		if (unfinished.length > 0) {

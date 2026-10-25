@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, noteFreshRow, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
 import { expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -366,7 +366,8 @@ export const actions = {
 		const slot = activeSlotId();
 		const id = clientMessageId || crypto.randomUUID();
 		// While a run is active the server queues everything but an interrupt (steer unless follow-up was asked for).
-		const queued = state.snap?.active && mode !== "interrupt" ? (mode === "followUp" ? "followUp" : "steer") : null;
+		// Compaction is never interrupted by a message, so an interrupt sent during it is queued as well.
+		const queued = state.snap?.active && (mode !== "interrupt" || state.snap?.flags?.compacting) ? (mode === "followUp" ? "followUp" : "steer") : null;
 		addPendingMessage(id, text, images, slot, onRejected, queued);
 		if (state.snap?.active) await new Promise((resolve) => setTimeout(resolve, COMPOSER_QUEUE_DEBOUNCE_MS));
 		const result = await attempt(() => post("/api/prompt", { text, images, attachments, mode, clientMessageId: id }, slot));
@@ -422,11 +423,23 @@ export const actions = {
 		return attempt(() => post("/api/bash/abort"));
 	},
 
+	/**
+	 * The server answers once the run has really ended, which can take a moment (a tool finishing its cleanup). The
+	 * button shows that the stop is under way from the click on, and a second click does not send another one.
+	 */
 	async stop() {
 		const snap = state.snap;
+		const slot = activeSlotId();
 		if (snap?.flags?.compacting) return attempt(() => post("/api/abort-compaction"));
-		if (snap?.flags?.retrying) await attempt(() => post("/api/abort-retry"));
-		return attempt(() => post("/api/abort"));
+		if (state.stopping[slot]) return undefined;
+		set({ stopping: { ...state.stopping, [slot]: true } });
+		try {
+			if (snap?.flags?.retrying) await attempt(() => post("/api/abort-retry", undefined, slot));
+			return await attempt(() => post("/api/abort", undefined, slot));
+		} finally {
+			const { [slot]: _done, ...rest } = state.stopping;
+			set({ stopping: rest });
+		}
 	},
 
 	async clearQueue() {
@@ -485,7 +498,15 @@ export const actions = {
 		// API refuses requests for it.
 		const fromSlot = activeSlotId();
 		const requestSlot = String(fromSlot ?? "").startsWith("pending:") ? "" : fromSlot;
-		const pending = beginSwitch({ mode, retry: () => actions.newSession(rootPath, { unbound }) }, seq);
+		// The workspace the new chat goes to, when the page knows it, so the empty chat names it from the first frame.
+		const current = state.snap?.workspace;
+		const workspace = rootPath ? state.workspaces.list.find((w) => w.rootPath === rootPath) : !unbound && current?.rootPath ? current : undefined;
+		// The group the sidebar lists it in from the click on, when the page knows it (otherwise the service decides).
+		const group = unbound ? GENERAL_KEY : rootPath || workspace?.rootPath || null;
+		const pending = beginSwitch({ mode, fresh: { workspace: workspace ? { name: workspace.name, rootPath: workspace.rootPath } : undefined, group }, retry: () => actions.newSession(rootPath, { unbound }) }, seq);
+		// That group opens at once, so its new row is seen growing in (a folded group would hide it until the answer).
+		const expandKey = expandedKey(mode);
+		if (pending && group && state.view[expandKey]?.[group] !== true) setView({ [expandKey]: { ...state.view[expandKey], [group]: true } });
 		let result;
 		try {
 			result = await post("/api/sessions/new", { rootPath, unbound, mode }, requestSlot, { timeoutMs: REQUEST_TIMEOUT.session });
@@ -499,6 +520,7 @@ export const actions = {
 			return result;
 		}
 		if (isLatestSwitch(seq)) {
+			noteFreshRow(result.slot, pending?.freshRow?.key);
 			const group = unbound ? GENERAL_KEY : rootPath;
 			const key = expandedKey(mode);
 			if (group) setView({ [key]: { ...state.view[key], [group]: true } });
